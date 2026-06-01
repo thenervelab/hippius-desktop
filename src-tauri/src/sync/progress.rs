@@ -89,6 +89,25 @@ pub fn update_file_progress(
     Ok(())
 }
 
+/// Emit a snapshot through the per-file completion throttle (the 100 ms
+/// completion window, same gate `update_file_progress` uses for completion
+/// ticks).
+///
+/// Per-file TERMINAL callbacks (`mark_file_synced` / `mark_file_failed`) fire
+/// once per file the instant each task settles. A cycle finishing N files in a
+/// burst would otherwise trigger N unthrottled `emit_snapshot(true)` calls —
+/// each rebuilding the whole `SyncSnapshot` and (via the bridge) running a
+/// SQLite overlay aggregate — flooding the webview. A terminal event does not
+/// need a synchronous immediate emit: the next throttled tick (≤100 ms)
+/// reflects it, and `finalize_session_for_label` does an unconditional
+/// immediate emit at cycle end so the final state is never lost. Reserve
+/// `emit_snapshot(true)` for genuine session transitions.
+fn emit_throttled_completion(sync: &SyncRunner) {
+    if try_claim_snapshot_emit(&LAST_THROTTLED_EMIT_MS, monotonic_now_ms(), true, SNAPSHOT_THROTTLE_MS) {
+        sync.emit_snapshot(false);
+    }
+}
+
 /// Merge file expectations into the current session, or start a new one.
 pub fn merge_into_session(
     sync: &SyncRunner,
@@ -314,7 +333,7 @@ pub fn mark_file_synced(sync: &SyncRunner, path: &str) -> Result<u64> {
         }
         bytes
     };
-    sync.emit_snapshot(true);
+    emit_throttled_completion(sync);
     Ok(observed_bytes)
 }
 
@@ -372,7 +391,7 @@ pub fn mark_file_failed(sync: &SyncRunner, path: &str, error: &str) -> Result<()
         file.bytes_transferred = 0;
         file.progress = 0;
     }
-    sync.emit_snapshot(true);
+    emit_throttled_completion(sync);
     Ok(())
 }
 

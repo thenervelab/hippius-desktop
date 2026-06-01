@@ -201,6 +201,29 @@ async fn teardown_previous_drive(sync: &SyncRunner, label: &str) {
 /// but short enough that logout doesn't feel sluggish.
 const GRACEFUL_SHUTDOWN: std::time::Duration = std::time::Duration::from_millis(500);
 
+/// Max time `remove_drive` waits for an in-flight sync cycle to release the
+/// per-drive manager lock before wiping the on-disk baseline. The cycle's
+/// cancel token is already tripped, so it exits promptly; this is the
+/// best-effort ceiling for a cycle mid-transfer (the cancel aborts the
+/// transfer, then it saves partial state and releases). On timeout the wipe
+/// proceeds anyway — a surviving stale baseline is the pre-fix state, not a
+/// regression.
+const GRACEFUL_DRIVE_SHUTDOWN: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Block (bounded) until the in-flight holder of a per-drive manager lock
+/// releases it. The sync cycle holds this lock across its cancel-path
+/// `save_sync_state`, so any caller that then mutates the on-disk baseline
+/// MUST drain it first — otherwise a late save re-creates the file the caller
+/// just deleted (the `remove_drive` data-loss window). Returns `true` once the
+/// lock drained, `false` on timeout. Generic over the guarded type so the
+/// ordering is unit-testable without constructing a `DriveManager`.
+async fn drain_drive_lock<T>(manager: Option<&Arc<TokioMutex<T>>>, timeout: std::time::Duration) -> bool {
+    match manager {
+        Some(m) => tokio::time::timeout(timeout, m.lock()).await.is_ok(),
+        None => true,
+    }
+}
+
 /// Cancel every drive's `CancellationToken`. Does NOT remove drives
 /// from the map — that happens later in the teardown sequence. Safe to
 /// call from any context; takes a brief lock on the drives map.
@@ -1214,6 +1237,14 @@ pub async fn remove_drive(app: AppHandle, label: String) -> Result<()> {
     let app_state = app.state::<crate::app_state::AppState>();
     let sync = &app_state.sync;
 
+    // Clone the per-drive manager Arc BEFORE teardown removes its slot, so we
+    // can drain its lock further down before wiping the baseline (F09). Cheap
+    // Arc bump; the brief map-lock is released immediately.
+    let drive_manager = {
+        let guard = sync.drives.lock().await;
+        guard.get(&label).map(|slot| slot.manager.clone())
+    };
+
     let (remaining, _removed_path) = remove_drive_inmemory(sync, &label).await;
 
     // Drop the preparing override for this label so a remove during
@@ -1271,6 +1302,15 @@ pub async fn remove_drive(app: AppHandle, label: String) -> Result<()> {
     // for unlock-failure recovery — same "destructive intent → start fresh"
     // semantics. `pause_drive` deliberately preserves this state because pause
     // is the reversible counterpart to remove.
+    // Drain any in-flight cycle's per-drive lock before deleting the baseline:
+    // the cancel above makes the cycle exit, but its cancel-path
+    // save_sync_state runs UNDER this lock and is async relative to this IPC.
+    // Without the drain, that late save can re-create sync_state.json right
+    // after we delete it, resurrecting the stale `synced` tree this wipe exists
+    // to remove (the data-loss path fixed in 17b8e159). Best-effort on timeout.
+    if !drain_drive_lock(drive_manager.as_ref(), GRACEFUL_DRIVE_SHUTDOWN).await {
+        warn!("remove_drive: in-flight sync of '{}' did not release within the grace window; wiping baseline anyway", label);
+    }
     if let Some(acct) = acct.as_deref() {
         clear_persisted_sync_state(acct, &label);
     }
@@ -2460,6 +2500,57 @@ pub(crate) fn setup_progress_handlers(app: &AppHandle, manager: &mut DriveManage
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    // ── drain_drive_lock (F09: serialize baseline wipe vs in-flight cycle) ──
+
+    /// The drain must not return until the in-flight lock holder releases —
+    /// i.e. the baseline wipe is ordered AFTER the cycle's cancel-path save.
+    /// The holder sets `saved` only just before dropping the guard, so a drain
+    /// that genuinely waits observes `saved == true`; a drain that skipped the
+    /// lock would race and see `false`.
+    #[tokio::test]
+    async fn drain_drive_lock_waits_for_holder_to_release() {
+        let lock = Arc::new(TokioMutex::new(()));
+        let saved = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (holding_tx, holding_rx) = tokio::sync::oneshot::channel();
+
+        let holder = {
+            let lock = Arc::clone(&lock);
+            let saved = Arc::clone(&saved);
+            tokio::spawn(async move {
+                let guard = lock.lock().await;
+                holding_tx.send(()).expect("signal that the lock is held");
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                // Simulate the cancel-path save_sync_state running under the lock.
+                saved.store(true, std::sync::atomic::Ordering::SeqCst);
+                drop(guard);
+            })
+        };
+
+        // Only start draining once the holder definitely holds the lock.
+        holding_rx.await.expect("holder acquired the lock");
+        assert!(drain_drive_lock(Some(&lock), Duration::from_secs(5)).await, "drain should succeed");
+        assert!(
+            saved.load(std::sync::atomic::Ordering::SeqCst),
+            "drain must return only after the in-flight save completed"
+        );
+        holder.await.expect("holder task joined");
+    }
+
+    /// When the holder never releases, the drain returns `false` within the
+    /// bound so `remove_drive` proceeds best-effort instead of hanging.
+    #[tokio::test]
+    async fn drain_drive_lock_times_out_when_holder_never_releases() {
+        let lock = Arc::new(TokioMutex::new(()));
+        let _held = Arc::clone(&lock).lock_owned().await; // held for the whole test
+        assert!(!drain_drive_lock(Some(&lock), Duration::from_millis(50)).await, "must time out, not hang");
+    }
+
+    /// No drive in the map (already removed) → nothing to drain, returns true.
+    #[tokio::test]
+    async fn drain_drive_lock_none_is_immediately_true() {
+        assert!(drain_drive_lock::<()>(None, Duration::from_secs(5)).await);
+    }
 
     // ── TransferDirection ───────────────────────────────────────────
 
