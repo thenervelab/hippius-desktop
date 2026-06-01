@@ -292,7 +292,7 @@ _Risk:_ Low. Switching to a 6s poll increases get_user_credits IPC traffic to th
 
 _Notes:_ No Rust diff this turn (fix is TypeScript query config) — illu Rust gates (preflight / axioms / quality_gate / critique / exemplars / self-review checklist) are N/A for this analysis. Scope correction vs. fixture: mechanism is exactly as claimed (frozen Infinity cache, effect re-runs but with stale `credits`, Rust acts on the passed value, no invalidation anywhere but two manual buttons), so the bug is VALID. Severity downgraded high->medium because the real credit GATE (check_action_eligibility live fetch + require_eligible IPC enforcement, see useFilesUpload/index.ts:102-108) is independent of this cache — the only lost behavior is the proactive low-credit warning notification, not overspend or data loss. Strong corroborating signal: useUserCredits is the lone balance hook using staleTime:Infinity; five siblings poll at LIVE_DATA_REFRESH_MS (6s).
 
-- [ ] **F07 fixed & tested**
+- [x] **F07 fixed & tested** — committed 544e5838
 
 ---
 
@@ -703,7 +703,7 @@ _Risk:_ Low. Behavior-preserving refactor of presentational components. Watch: (
 
 _Notes:_ No Rust in this task; all Rust gates (preflight, data-structure plan, axioms, exemplars, critique, quality_gate, self-review checklist) are N/A. Pure TypeScript/React perf finding. All concrete code claims verify exactly against re-read source (line numbers match). Downgraded severity medium->low because the headline 'N IPC round-trips' overstates impact: getVersion() is a cheap in-process Tauri IPC (plugin:app|version), not a network call, and notification lists are bounded; the worthwhile fix is React.memo + stable handlers to stop re-rendering the whole list on every selection, with the version hoist as a clean secondary win. Same getVersion-per-item anti-pattern also lives in NotificationMenuItem.tsx:63.
 
-- [ ] **F20 fixed & tested**
+- [~] **F20 PARTIAL (getVersion IPC hoisted via useAppVersion; NotificationItem memo + onClick stabilization deferred)** — committed 544e5838
 
 ---
 
@@ -1301,7 +1301,7 @@ _Risk:_ Low. Extra 6s poll of get_user_credits adds one IPC per interval per mou
 
 _Notes:_ Partially valid: the underlying bug (credits tile frozen at staleTime:Infinity next to 6s-polling storage tiles in DetailList, with no invalidation of the user-credits key) is real and the evidence lines are accurate. But the fixture's scope is overstated: it names "Total Credit Used" / useDriveCreditsTotal as a sibling tile, which is NOT in DetailList and is NOT rendered on the home page at all (it lives in credit-usage-trends, used elsewhere). The "never shows a stale total next to a fresh size" doc comment the fixture leans on describes a different tile pair. Severity correctly low: cosmetic UX only, no data loss, the tile already has a manual refresh button, and the storage tiles are backed by an indexer that can lag hours (useDriveStorageStats.ts:32-38), so "live" is already approximate. Fix is entirely in app/ TypeScript; cross_repo=false. No Rust diff this turn so Rust workflow gates (preflight/axioms/quality_gate/self-review checklist) are N/A.
 
-- [ ] **F38 fixed & tested**
+- [x] **F38 fixed & tested** — committed 544e5838
 
 ---
 
@@ -1458,6 +1458,6 @@ _Risk:_ React.memo on a component that renders children via a render-prop (Middl
 
 _Notes:_ No Rust diff this turn (TypeScript analysis only) — preflight/axioms/quality_gate/critique/exemplars/self-review checklist all N/A. Severity downgraded high -> low: the impact multipliers in the finding (2N tooltip providers, full-list render) are both refuted — infinite-scroll slices to 50-row pages (use-infinite-scroll/index.ts:33), the shared-badge provider is dead while shareFeatureEnabledAtom=false (sharesAtoms.ts:41), Radix Provider is a cheap context not a portal, and synced rows render zero providers (NameCell.tsx:125). The valid residue is genuine but minor: an unmemoized cell re-running cheap work for visible rows on sort/selection toggles, plus an unconditional folderUrl allocation. Overlaps F1 (all-rows-render premise) and F4 (parent re-render) — those two are the actual gate on whether this matters; if the table already slices to 50 rows, the practical cost here is negligible. Frontend perf concern; the project's CLAUDE.md pushes business logic to Rust but this is presentation/render perf which legitimately lives in app/.
 
-- [ ] **F43 fixed & tested**
+- [x] **F43 fixed & tested** — committed 544e5838
 
 ---
