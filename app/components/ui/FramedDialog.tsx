@@ -77,8 +77,8 @@ export function FramedDialog({
         >
           <BackgroundContainer
             className={cn("w-full", maxWidth)}
-            fillClassName="fill-[#f9f9f9] dark:fill-[#202020]"
-            strokeClassName="stroke-[#b3b3b3] dark:stroke-[#6c6c6c]"
+            fillClassName="fill-[#f9f9f9] dark:fill-[#262626]"
+            hippoIconClassName="fill-[#989898] dark:fill-[#5e5e5e]"
             borderClassName={borderClassName}
             contentClassName="flex justify-center"
             shellClassName={cn("w-full min-w-0", maxWidth)}

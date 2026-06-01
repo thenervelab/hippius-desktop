@@ -11,7 +11,7 @@ interface Props {
   contentClassName?: string;
   shellClassName?: string;
   cardClassName?: string;
-  strokeClassName?: string;
+  hippoIconClassName?: string;
   fillClassName?: string;
   stopClickPropagation?: boolean;
   hideBackgroundDecorations?: boolean;
@@ -127,7 +127,7 @@ export function BackgroundContainer({
   contentClassName,
   shellClassName,
   cardClassName,
-  strokeClassName,
+  hippoIconClassName,
   fillClassName,
   stopClickPropagation = false,
   hideBackgroundDecorations = false,
@@ -152,13 +152,13 @@ export function BackgroundContainer({
         )}
 
         {/* Corner hippo logos */}
-        <BackgroundHippo fillClassName={fillClassName} strokeClassName={strokeClassName}
+        <BackgroundHippo fillClassName={fillClassName} hippoIconClassName={hippoIconClassName}
           className="absolute top-0 left-0 size-[22px] pointer-events-none z-[30] hidden sm:block -translate-x-1/2 -translate-y-1/2" />
-        <BackgroundHippo fillClassName={fillClassName} strokeClassName={strokeClassName}
+        <BackgroundHippo fillClassName={fillClassName} hippoIconClassName={hippoIconClassName}
           className="absolute top-0 right-0 size-[22px] pointer-events-none z-[30] hidden sm:block translate-x-1/2 -translate-y-1/2" />
-        <BackgroundHippo fillClassName={fillClassName} strokeClassName={strokeClassName}
+        <BackgroundHippo fillClassName={fillClassName} hippoIconClassName={hippoIconClassName}
           className="absolute bottom-0 left-0 size-[22px] pointer-events-none z-[30] hidden sm:block -translate-x-1/2 translate-y-1/2" />
-        <BackgroundHippo fillClassName={fillClassName} strokeClassName={strokeClassName}
+        <BackgroundHippo fillClassName={fillClassName} hippoIconClassName={hippoIconClassName}
           className="absolute bottom-0 right-0 size-[22px] pointer-events-none z-[30] hidden sm:block translate-x-1/2 translate-y-1/2" />
 
         {/* Diagonal-stripe frame — light mode */}

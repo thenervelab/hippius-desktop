@@ -549,8 +549,8 @@ export function RemoteFolderBrowser({
               frame, each side). */}
           <BackgroundContainer
             className="w-full max-w-[741px]"
-            fillClassName="fill-[#f9f9f9] dark:fill-[#202020]"
-            strokeClassName="stroke-[#b3b3b3] dark:stroke-[#6c6c6c]"
+            fillClassName="fill-[#f9f9f9] dark:fill-[#262626]"
+            hippoIconClassName="fill-[#989898] dark:fill-[#5e5e5e]"
             contentClassName="flex justify-center"
             shellClassName="w-full min-w-0 max-w-[741px]"
             cardClassName="w-full min-w-0 max-w-full gap-0 p-0"
