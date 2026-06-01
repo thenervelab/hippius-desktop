@@ -66,7 +66,7 @@ export function FramedDialog({
     <Dialog.Root open={open} onOpenChange={(next) => !next && onClose()}>
       <Dialog.Portal>
         {/* Backdrop */}
-        <Dialog.Overlay className="fixed inset-0 z-[60] bg-white/70 backdrop-blur-[5.75px] dark:bg-[#04040466] dark:backdrop-blur-[11.5px]" />
+        <Dialog.Overlay className="fixed inset-0 z-[60] bg-white/70 backdrop-blur-[5.75px] dark:bg-black-850/40 dark:backdrop-blur-[11.5px]" />
 
         {/* Full-screen positioner — click outside closes */}
         <Dialog.Content
