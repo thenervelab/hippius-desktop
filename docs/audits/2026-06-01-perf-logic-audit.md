@@ -112,7 +112,7 @@ _Risk:_ Low. The only behavioral change is on error paths, which today leak; cle
 
 _Notes:_ Verdict valid, severity high upheld. Re-derived independently: the leak mechanism is exactly as claimed and the blast radius (account-wide sync init block via lifecycle.rs:953 and 1595) is confirmed verbatim. The auditor actually UNDER-stated the trigger reliability: I read the sole FE caller (useMigration.ts:201-261) and its catch block never calls dismiss_migration, so the flag reliably sticks on any start failure rather than "depending on whether the FE catches the error and calls dismiss_migration" — the FE catches it but does NOT clear it. Mitigations that keep this below critical: (1) in-memory only, self-heals on app restart (AtomicBool::new(false) at migration.rs:1005); (2) the user can clear it by clicking Skip in the still-shown prompt (confirmSkip → dismiss_migration); (3) retrying migration start is not itself blocked. What makes it high not medium: the failure is silent for normal sync (no banner tells the user their drives stopped initializing), it is account-wide, and the triggers (server unreachable, expired API token, transient disk-space/mnemonic resolution failures) are realistic. Minor line-number drift in the original evidence noted in evidence_reread; mechanism unaffected. No Rust diff produced this turn (read-only audit) so all Rust workflow gates (preflight, axioms-baseline, data-structure plan, exemplars, critique, quality_gate, seven-item self-review checklist) are N/A.
 
-- [ ] **F02 fixed & tested**
+- [x] **F02 fixed & tested** — committed 1a5a83ea
 
 ---
 
@@ -148,7 +148,7 @@ _Risk:_ Low-to-medium. Behavioral change: rotation now reports failure instead o
 
 _Notes:_ Verdict valid: the auditor's full chain reproduces in the current code with accurate line references. Scope nuance for the fix list: the wedge manifests only via the rotation paths (change_recovery_password / resume_recovery_password_rotation), not signup/fresh-device, because those have no pre-existing folder files. Trigger requires a partial IO failure during the bulk rewrite (disk full, permission, AV file lock, or a spawn_blocking panic) — not an everyday event, which is why this is high not critical: when it fires the impact is a folder permanently locked out of sync with the app falsely reporting rotation complete and no automatic recovery. Fix is local to this repo (mnemonic.rs + recovery.rs); hcfs-client's recover_mnemonic/save_encrypted_mnemonic behavior is correct and unchanged. No Rust diff produced this turn (analysis only): preflight / data-structure plan / axioms / exemplars / critique / quality_gate / self-review checklist all N/A.
 
-- [ ] **F04 fixed & tested**
+- [x] **F04 fixed & tested** — committed 1a5a83ea
 
 ---
 
@@ -180,7 +180,7 @@ _Risk:_ Low. Removing the short-circuit only adds two indexed single-row SELECTs
 
 _Notes:_ The auditor's chain is sound and reproducible; the one thing they missed (the lifecycle.rs:1017-1022 pre-init refresh) does NOT save the finding because that refresh is skipped for the common case of a still-valid restored token (is_token_expiring returns false), which is exactly the state a successful DB restore leaves behind. hcfs-client is not involved — fix is fully local to hippius-desktop. Severity kept at high: a hard, user-facing auth block ("Please log in again") in a supported account-switch / multi-account / boot-ordering flow, recoverable by re-login and data-loss-free, but order-dependent (requires the global flag to be tripped before the restored account's first get_api_token). The order dependence is the only reason it is not critical. No Rust diff produced this turn, so preflight/axioms/exemplars/critique/quality_gate/self-review checklist are all N/A.
 
-- [ ] **F05 fixed & tested**
+- [x] **F05 fixed & tested** — committed 1a5a83ea
 
 ---
 
@@ -210,7 +210,7 @@ _Risk:_ Low-to-medium. Reconnect-storm risk if the endpoint accepts then immedia
 
 _Notes:_ No Rust diff this turn (analysis only). Verified against subxt 0.38.1 vendored source. Fix is entirely in this repo. Larger alternative effort M: switch client.rs to subxt reconnecting RPC client so subxt resubscribes transparently. Severity high: default endpoint is a public WSS where idle and load-balancer graceful closes are routine, the FE has no independent reconnect, and the failure is silent with a falsely-green connectivity indicator.
 
-- [ ] **F06 fixed & tested**
+- [x] **F06 fixed & tested** — committed 1a5a83ea
 
 ---
 
