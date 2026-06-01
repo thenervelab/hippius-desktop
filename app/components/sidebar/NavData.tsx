@@ -47,7 +47,7 @@ export const navSections: NavSection[] = [
     label: "INFRASTRUCTURE",
     items: [
       {
-        label: "My Drive",
+        label: "Drive",
         path: "/files",
         icon: <Icons.Category className={ICON_CLASS} />,
       },
