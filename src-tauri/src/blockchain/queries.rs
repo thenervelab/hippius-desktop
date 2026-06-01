@@ -214,14 +214,11 @@ pub async fn get_block_timestamp(
 
     let client = get_substrate_client(&state).await?;
 
-    // Reuse the cached RPC client instead of opening a new WebSocket
-    let rpc = state
-        .blockchain
-        .rpc_client
-        .read()
-        .map_err(|e| crate::error::AppError::Other(format!("RPC lock failed: {e}")))?
-        .clone()
-        .ok_or_else(|| crate::error::AppError::Other("RPC client not initialized".into()))?;
+    // Get the RPC handle through the connect-aware helper so it can't spuriously
+    // report "RPC client not initialized" when the rpc_client cache was cleared
+    // concurrently while the OnlineClient above stayed cached — both are
+    // re-derived together. See client::get_rpc_client.
+    let rpc = crate::blockchain::client::get_rpc_client(&state).await?;
     let legacy: LegacyRpcMethods<subxt::PolkadotConfig> = LegacyRpcMethods::new(rpc);
 
     let block_hash = legacy
