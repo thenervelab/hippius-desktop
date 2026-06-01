@@ -130,7 +130,17 @@ pub async fn add_file(
     // its native message. Don't `?`-bail here: a missing-file diagnostic
     // is clearer than "insufficient credits because we couldn't size it".
     let account_id = state.current_account_id().map_err(crate::error::AppError::Other)?;
-    let bytes = tokio::fs::metadata(Path::new(&file_path)).await.map_or(0, |m| m.len());
+    // A stat failure falls back to bytes=0, which collapses the byte-priced
+    // credit gate to the legacy `> 0` floor (intentional — see above). Log it
+    // so the under-pricing is observable instead of silent; the server 402
+    // path remains the real backstop.
+    let bytes = match tokio::fs::metadata(Path::new(&file_path)).await {
+        Ok(m) => m.len(),
+        Err(e) => {
+            warn!(file = %file_path, error = %e, "could not size file for credit gate; falling back to legacy >0 floor");
+            0
+        }
+    };
     crate::billing::eligibility::require_eligible(
         &state,
         &account_id,

@@ -155,7 +155,15 @@ pub fn to_plancks(amount: String) -> Result<String, crate::error::AppError> {
     if amount.is_empty() {
         return Err(crate::error::AppError::Other("Invalid amount".into()));
     }
-    amount.parse::<f64>().map_err(|_| "Invalid amount".to_string())?;
+    // Bind the parsed value and enforce the planck domain (a non-negative
+    // integer-of-base-units). Discarding the parse let "-1" through: the later
+    // `trim_start_matches('0')` strips zeros but not the leading '-', so it
+    // returned a malformed negative planck string. f64::parse also accepts
+    // "NaN"/"inf", which are equally out of domain.
+    let value = amount.parse::<f64>().map_err(|_| crate::error::AppError::Validation("Invalid amount".into()))?;
+    if !value.is_finite() || value < 0.0 {
+        return Err(crate::error::AppError::Validation("Amount must be a non-negative number".into()));
+    }
 
     let (whole, fraction) = match amount.split_once('.') {
         Some((w, f)) => (w, f),
@@ -198,6 +206,21 @@ mod tests {
     #[test]
     fn to_plancks_zero() {
         assert_eq!(to_plancks("0".into()).unwrap(), "0");
+    }
+
+    #[test]
+    fn to_plancks_rejects_negative() {
+        // planck is a non-negative integer; "-1" must error, not produce a
+        // malformed "-1000…000" string (the leading '-' survived trim_start).
+        assert!(to_plancks("-1".into()).is_err());
+        assert!(to_plancks("-0.5".into()).is_err());
+    }
+
+    #[test]
+    fn to_plancks_rejects_non_finite() {
+        // f64::parse accepts "NaN"/"inf"; both are outside the domain.
+        assert!(to_plancks("NaN".into()).is_err());
+        assert!(to_plancks("inf".into()).is_err());
     }
 
     #[test]

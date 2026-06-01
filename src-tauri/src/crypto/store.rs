@@ -148,47 +148,55 @@ pub fn decrypt(key: &[u8; 32], encoded: &str) -> Result<Zeroizing<String>, crate
 /// `parent_account_id` column will need to be introduced and this query
 /// scoped accordingly.
 pub async fn migrate_if_needed(pool: &SqlitePool, mnemonic: &str, account_id: &str) -> Result<(), crate::error::AppError> {
-    let sub_key = derive_key(mnemonic, account_id, INFO_SUB_ACCOUNTS)?;
-    let drive_key = derive_key(mnemonic, account_id, INFO_DRIVE_PASSWORD)?;
-
     let mut tx = pool.begin().await?;
 
-    // ── Sub-accounts ───────────────────────────────────────────────
+    // Fetch the unmigrated rows BEFORE deriving any key. derive_key runs BIP-39
+    // PBKDF2-HMAC-SHA512 (2048 iterations) per key, so deriving both up front —
+    // as the previous version did — paid that cost on EVERY login and boot even
+    // though the steady state (everything already at encryption_version = 1)
+    // has nothing to migrate. Each key is now derived lazily only when its row
+    // set is non-empty, so the common path does zero PBKDF2 work.
     let sub_rows: Vec<(i64, String)> =
         sqlx::query_as("SELECT id, sub_account_seed_phrase FROM sub_accounts WHERE encryption_version = 0 AND sub_account_seed_phrase != ''")
             .fetch_all(&mut *tx)
             .await?;
-
-    let sub_count = sub_rows.len();
-    for (id, plaintext) in &sub_rows {
-        if plaintext.trim().is_empty() {
-            continue;
-        }
-        let ciphertext = encrypt(&sub_key, plaintext)?;
-        sqlx::query("UPDATE sub_accounts SET sub_account_seed_phrase = ?, encryption_version = 1 WHERE id = ?")
-            .bind(&ciphertext)
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
-    }
-
-    // ── Drive passwords ────────────────────────────────────────────
     let drive_rows: Vec<(i64, String)> =
         sqlx::query_as("SELECT id, drive_password FROM hcfs_config WHERE encryption_version = 0 AND drive_password != ''")
             .fetch_all(&mut *tx)
             .await?;
 
-    let drive_count = drive_rows.len();
-    for (id, plaintext) in &drive_rows {
-        if plaintext.trim().is_empty() {
-            continue;
+    // ── Sub-accounts ───────────────────────────────────────────────
+    let sub_count = sub_rows.len();
+    if !sub_rows.is_empty() {
+        let sub_key = derive_key(mnemonic, account_id, INFO_SUB_ACCOUNTS)?;
+        for (id, plaintext) in &sub_rows {
+            if plaintext.trim().is_empty() {
+                continue;
+            }
+            let ciphertext = encrypt(&sub_key, plaintext)?;
+            sqlx::query("UPDATE sub_accounts SET sub_account_seed_phrase = ?, encryption_version = 1 WHERE id = ?")
+                .bind(&ciphertext)
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
         }
-        let ciphertext = encrypt(&drive_key, plaintext)?;
-        sqlx::query("UPDATE hcfs_config SET drive_password = ?, encryption_version = 1 WHERE id = ?")
-            .bind(&ciphertext)
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
+    }
+
+    // ── Drive passwords ────────────────────────────────────────────
+    let drive_count = drive_rows.len();
+    if !drive_rows.is_empty() {
+        let drive_key = derive_key(mnemonic, account_id, INFO_DRIVE_PASSWORD)?;
+        for (id, plaintext) in &drive_rows {
+            if plaintext.trim().is_empty() {
+                continue;
+            }
+            let ciphertext = encrypt(&drive_key, plaintext)?;
+            sqlx::query("UPDATE hcfs_config SET drive_password = ?, encryption_version = 1 WHERE id = ?")
+                .bind(&ciphertext)
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+        }
     }
 
     tx.commit().await?;
