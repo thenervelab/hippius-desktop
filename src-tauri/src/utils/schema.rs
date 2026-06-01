@@ -212,6 +212,7 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
                     label TEXT NOT NULL DEFAULT 'default',
                     timestamp INTEGER NOT NULL,
                     is_paused INTEGER NOT NULL DEFAULT 0,
+                    relative_paths_backfilled_at INTEGER,
                     UNIQUE(owner, label)
                 )",
             )
@@ -222,10 +223,17 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             // If a user has both public and private rows with the same
             // owner and label='default', keep only the private one
             // (higher priority). OR IGNORE drops any remaining dupes.
+            //
+            // `is_paused` and `relative_paths_backfilled_at` MUST be carried:
+            // the ALTERs above guarantee both columns exist on the source
+            // before this swap runs, so a paused drive stays paused and the
+            // one-shot backfill breadcrumb is preserved. Omitting them (the
+            // pre-fix bug) silently un-paused drives and re-triggered the
+            // backfill on every DB created with the legacy `UNIQUE(owner,type)`.
             sqlx::query(
                 "INSERT OR IGNORE INTO sync_paths_new
-                     (id, owner, path, type, label, timestamp)
-                 SELECT id, owner, path, type, label, timestamp
+                     (id, owner, path, type, label, timestamp, is_paused, relative_paths_backfilled_at)
+                 SELECT id, owner, path, type, label, timestamp, is_paused, relative_paths_backfilled_at
                  FROM sync_paths
                  ORDER BY CASE type WHEN 'private' THEN 0 ELSE 1 END",
             )
@@ -813,5 +821,63 @@ mod tests {
         for required in ["owner", "path", "type", "label", "timestamp", "is_paused", "relative_paths_backfilled_at"] {
             assert!(names.contains(required), "sync_paths missing column `{required}`; present: {names:?}");
         }
+    }
+
+    /// The `UNIQUE(owner, label)` constraint-swap migration must PRESERVE the
+    /// user's `is_paused` intent and the `relative_paths_backfilled_at` audit
+    /// breadcrumb. The pre-fix swap copied neither (is_paused reset to its
+    /// default 0; the backfill column was absent from the new table entirely),
+    /// so a paused drive was silently un-paused and the one-shot backfill
+    /// re-triggered on a DB created with the legacy `UNIQUE(owner, type)` DDL.
+    #[tokio::test]
+    async fn constraint_swap_preserves_is_paused_and_backfill_timestamp() {
+        let pool = temp_pool().await;
+
+        // Legacy schema: wrong constraint, but the columns already exist (an
+        // installed user who paused a drive before the constraint migration).
+        sqlx::query(
+            "CREATE TABLE sync_paths (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner TEXT NOT NULL DEFAULT '',
+                path TEXT NOT NULL,
+                type TEXT NOT NULL,
+                label TEXT NOT NULL DEFAULT 'default',
+                timestamp INTEGER NOT NULL,
+                is_paused INTEGER NOT NULL DEFAULT 0,
+                relative_paths_backfilled_at INTEGER,
+                UNIQUE(owner, type)
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed legacy sync_paths");
+        sqlx::query(
+            "INSERT INTO sync_paths (owner, path, type, label, timestamp, is_paused, relative_paths_backfilled_at)
+             VALUES ('5Owner', '/data/Hippius', 'private', 'mylabel', 100, 1, 12345)",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed paused row");
+
+        ensure_table_schema(&pool).await.expect("ensure_table_schema failed");
+
+        // Constraint was actually migrated.
+        let ddl: String = sqlx::query_scalar("SELECT sql FROM sqlite_master WHERE type='table' AND name='sync_paths'")
+            .fetch_one(&pool)
+            .await
+            .expect("read migrated DDL");
+        assert!(
+            ddl.contains("UNIQUE(owner, label)") || ddl.contains("UNIQUE (owner, label)"),
+            "migration must install UNIQUE(owner, label); got: {ddl}"
+        );
+
+        // ...and the user's pause intent + backfill breadcrumb survived it.
+        let (is_paused, backfilled): (i64, Option<i64>) =
+            sqlx::query_as("SELECT is_paused, relative_paths_backfilled_at FROM sync_paths WHERE owner = '5Owner'")
+                .fetch_one(&pool)
+                .await
+                .expect("read migrated row");
+        assert_eq!(is_paused, 1, "paused drive must stay paused across the constraint swap");
+        assert_eq!(backfilled, Some(12345), "relative_paths_backfilled_at must survive the constraint swap");
     }
 }
