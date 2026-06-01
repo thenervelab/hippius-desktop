@@ -643,7 +643,7 @@ _Risk:_ A legitimate signup/first-config flow with a stray sync_paths row but no
 
 _Notes:_ Partially valid: the swallow-on-Err mechanism is exactly as quoted and the guard is structurally dead for enc_v1 users, but the auditor's stated highest-risk population (OAuth returning user with a server blob) is diverted to RecoveryFlow::Unlock -> recover_mnemonic by the decision table at recovery.rs:243 and never reaches seal. Real reachable corruption is the narrower Proceed+legacy-migration state (local master undecryptable, blob=Some(false), folders exist) where a fresh wrong master is minted (recovery.rs:572) and sealed. change_recovery_password call site is low risk because its candidate is the authoritative server-blob master. Severity lowered from medium to low. No Rust diff produced this turn; preflight/quality_gate/critique/exemplars/self-review checklist all N/A (read-only validation).
 
-- [ ] **F11 fixed & tested**
+- [x] **F11 fixed & tested** — committed 257bb16d
 
 ---
 
@@ -673,7 +673,7 @@ _Risk:_ Low. The credit gate (fail-closed) is untouched, so the primary refusal 
 
 _Notes:_ No Rust diff produced this turn (read-only validation), so the Rust workflow gates (preflight/axioms/quality_gate/critique/exemplars/self-review) are N/A. Finding is code-accurate and the auditor read the code correctly; downgraded from medium to low and to partially_valid because the framing overstates impact: the chain-balance=0 check is a secondary best-effort pre-flight layered on top of the fail-closed >=10-credit gate, the /vm/spawn server endpoint is the authoritative gate, blast radius is exactly one action (VmCreation), and the worst case is a wasted round-trip + a server-side rejected extrinsic, not a bypass of a fail-closed control. The genuine defect worth fixing is (a) the silent fall-through with zero observability and (b) the create_vm doc comment claiming a hard refusal it cannot guarantee.
 
-- [ ] **F13 fixed & tested**
+- [x] **F13 fixed & tested** — committed 257bb16d
 
 ---
 
@@ -936,7 +936,7 @@ _Risk:_ Low. The change only widens behavior (reconnect instead of error) on a p
 
 _Notes:_ No Rust diff produced this turn (read-only validation), so preflight/axioms/quality_gate/exemplars/critique/self-review checklist are N/A. Severity is correctly low and NOT inflated — the finding itself rated it low and the impact (one transient, self-healing FE error on get_block_timestamp) matches the code. The suggested fix's primary phrasing ("derive from the OnlineClient") is not achievable in subxt 0.38 because OnlineClient::from_rpc_client does not re-expose the owned RpcClient; the actionable fix is the fallback/re-derive variant. get_block_timestamp is FE block-time display; a transient failure there is cosmetic, not data-loss.
 
-- [ ] **F27 fixed & tested**
+- [x] **F27 fixed & tested** — committed 257bb16d
 
 ---
 
