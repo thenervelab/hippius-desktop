@@ -384,7 +384,7 @@ _Risk:_ Low-to-medium. Risk 1: the lookup key must stay byte-identical to today'
 
 _Notes:_ No Rust diff produced this turn (analysis-only validation), so the illu Rust-diff gates (preflight, data-structure plan, axioms baseline, exemplars, critique, quality_gate, and the seven-item self-review checklist) are N/A. The fix is local to hippius-desktop (src-tauri/src/sync/files.rs); build_synced_paths_from_state / get_sync_activity / update_synced_paths_cache are consumed as-is, so cross_repo=false. Severity kept at medium: performance-only waste (no correctness/data-loss impact) but on a hot path (FE staleTime:0, refetch on every sync_files_completed event) scaling with total synced-file count, which can reach tens of thousands. The finding is accurate; my one correction is that it omits get_synced_file_metadata's cache-warming side effect, which widens the fix's design space rather than refuting it.
 
-- [ ] **F10 fixed & tested**
+- [x] **F10 fixed & tested** — committed d295ed60
 
 ---
 
