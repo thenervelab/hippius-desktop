@@ -254,7 +254,7 @@ _Risk:_ Throttling the failure emit could delay the failure banner by up to the 
 
 _Notes:_ No Rust diff produced this turn (analysis only): preflight / data-structure-plan / axioms-baseline / exemplars / critique / quality_gate / self-review checklist all N/A. The fix lands entirely in this repo (hippius-desktop), NOT cross-repo: the unthrottled emit_snapshot(true) calls and the DB-before-dedup ordering both live in src-tauri; hcfs-client's emit_snapshot(true)/build_full_snapshot behave exactly as documented and need no change. Key correction for the fix list: severity downgraded high->medium because the auditor's primary scenario (thousands of small-file SUCCESS completions) is guarded by the progress.rs:304 early-return and the upstream final-chunk Completed flip; the genuine residual is the failure-storm path (mark_file_failed unthrottled per failing file, e.g. an account-wide 402 wave mid-migration) plus zero-byte-file bursts. Cross-repo fact-checked via illu against /Users/georgiosdelkos/Documents/GitHub/Bitensor/hcfs (runner.rs emit_snapshot/throttle_window_elapsed/build_full_snapshot, tracker.rs update_file_progress).
 
-- [ ] **F03 fixed & tested**
+- [~] **F03 PARTIAL (failure-path throttle done; spawn_snapshot_emit dedup-before-DB deferred)** — committed b827e7da
 
 ---
 
@@ -354,7 +354,7 @@ _Risk:_ Low-to-medium. The added bounded lock().await can delay remove_drive by 
 
 _Notes:_ No Rust diff this turn (read-only validation) — preflight/axioms/quality_gate/critique/exemplars/self-review gates N/A. Severity kept medium (not high) because the catastrophic full-wipe is backstopped by hcfs SuspiciousEmptyRemote (sync_flow.rs:623-633); residual harm is partial local deletes on same-label re-add against a diverged remote. The race is genuinely untested. Two fixture inaccuracies corrected: teardown_previous_drive L982 does NOT wipe the baseline (wipe is exclusive to remove_drive), and the 'files nuked' framing overstates current impact given the guard. Fix lands entirely in hippius-desktop; a cleaner long-term option is hcfs-client exposing a per-drive 'cycle finished' awaitable, but the desktop-side manager-lock serialization is self-contained and sufficient.
 
-- [ ] **F09 fixed & tested**
+- [x] **F09 fixed & tested** — committed b827e7da
 
 ---
 
