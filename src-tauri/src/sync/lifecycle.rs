@@ -1263,10 +1263,6 @@ pub async fn remove_drive(app: AppHandle, label: String) -> Result<()> {
         sync.emit_snapshot(true);
     }
 
-    // Wake any waiters in remove_drive_and_wait so they can re-check without
-    // sleeping through the full polling interval.
-    app_state.drive_removed_notify.notify_waiters();
-
     // Delete the DB row so the drive isn't resurrected on app restart, and
     // drop the intent-manifest rows for this drive so the snapshot overlay
     // doesn't keep showing stale "X of Y" totals for a folder the user just
@@ -1369,10 +1365,6 @@ pub async fn pause_drive(app: AppHandle, label: String) -> Result<()> {
     let sync = &app_state.sync;
 
     let (remaining, removed_path) = remove_drive_inmemory(sync, &label).await;
-
-    // Wake any waiters in remove_drive_and_wait so they can re-check without
-    // sleeping through the full polling interval.
-    app_state.drive_removed_notify.notify_waiters();
 
     // Mark as paused in DB (keep the row, unlike stop_drive which deletes it).
     // Capture pool/account for both the persist call AND the path

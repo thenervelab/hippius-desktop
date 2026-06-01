@@ -69,9 +69,6 @@ pub struct AppState {
     pub health_client: reqwest::Client,
     /// HTTP client for Hippius API calls (reuses connection pool + TLS cache).
     pub api_client: reqwest::Client,
-    /// Notified when a drive is removed from the registry, allowing
-    /// `remove_drive_and_wait` to wake without polling.
-    pub drive_removed_notify: tokio::sync::Notify,
     /// Per-file consecutive failure counters and session-skip state.
     pub file_failures: crate::sync::failure_tracking::FileFailureState,
     /// Last emitted `DriveStatus` per drive label. The single source of
@@ -160,7 +157,6 @@ impl AppState {
                 .timeout(std::time::Duration::from_secs(30))
                 .build()
                 .expect("Failed to build API HTTP client"),
-            drive_removed_notify: tokio::sync::Notify::new(),
             file_failures: crate::sync::failure_tracking::FileFailureState::new(),
             drive_status_cache: Mutex::new(HashMap::new()),
             // Default `Skipped` — non-OAuth login paths (mnemonic login,

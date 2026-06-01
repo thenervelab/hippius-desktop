@@ -273,7 +273,15 @@ pub(crate) async fn check_action_eligibility_inner(
     let client = ApiClient::new(state.api_client.clone(), pool.clone());
     let resp: crate::billing::credits::CreditBalanceResponse = client.get("/api/billing/credits/balance/", account_id).await?;
     let credit_str = resp.balance.as_deref().unwrap_or("0");
-    let credits: f64 = credit_str.parse().unwrap_or(0.0);
+    // An unparseable balance from a 200 response is NOT the same as an empty
+    // wallet, but both previously collapsed to 0.0 and silently refused every
+    // gated action with no diagnostic. Keep the fail-closed 0.0 (safe default)
+    // but log it so a malformed billing-API balance is traceable rather than
+    // presenting to the user as "insufficient credits".
+    let credits: f64 = credit_str.parse::<f64>().unwrap_or_else(|_| {
+        tracing::warn!(balance = %credit_str, %account_id, "unparseable credit balance from billing API; treating as 0");
+        0.0
+    });
 
     // 2. Threshold comparison. The user must always have a strictly
     //    positive balance (matches legacy `credits <= BigInt(0)` blocks
