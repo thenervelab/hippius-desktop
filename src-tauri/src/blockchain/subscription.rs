@@ -44,16 +44,22 @@ pub async fn start_block_subscription(app: tauri::AppHandle) -> Result<(), Strin
     let app_state = app.state::<crate::app_state::AppState>();
     let bsub = &app_state.block_sub;
 
-    if bsub.running.load(Ordering::SeqCst) {
+    // Atomic claim: exactly one caller flips false→true and proceeds; a
+    // concurrent caller loses the compare_exchange and returns. The previous
+    // load-then-store had a gap spanning the `.await` on `handle.lock()`, so
+    // two overlapping invocations could both pass the running check and both
+    // spawn a subscription task — the second's JoinHandle overwrote the first
+    // at the store below, leaking the first task (never aborted) and doubling
+    // per-block processing for the rest of the process lifetime.
+    if bsub.running.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
         return Ok(());
     }
 
-    // Abort previous task if any
+    // Abort a leftover handle from a prior run that already reset `running`.
+    // Only the CAS winner reaches here, so this runs at most once.
     if let Some(handle) = bsub.handle.lock().await.take() {
         handle.abort();
     }
-
-    bsub.running.store(true, Ordering::SeqCst);
 
     // Clone the handle so `app` can be moved into the spawned task while we
     // keep a reference for storing the JoinHandle afterwards.

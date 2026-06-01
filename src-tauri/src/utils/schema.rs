@@ -462,6 +462,16 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         .execute(&mut *tx)
         .await?;
 
+    // Credit-dedup and low-credit-warning probes filter on
+    // (notification_type, notification_subtype) with NO user_address predicate,
+    // so neither user-keyed index above can serve them — every probe was a full
+    // table scan. This composite index covers the `type = 'Credits' AND
+    // subtype = ?` equality probes and the leading-column equality for the
+    // `subtype LIKE 'LowCreditWarning-%'` prefix probes.
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_notifications_type_subtype ON notifications(notification_type, notification_subtype)")
+        .execute(&mut *tx)
+        .await?;
+
     // App state (singleton, replaces frontend app_state table)
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS app_state (
@@ -921,5 +931,20 @@ mod tests {
                 .expect("read migrated row");
         assert_eq!(is_paused, 1, "paused drive must stay paused across the constraint swap");
         assert_eq!(backfilled, Some(12345), "relative_paths_backfilled_at must survive the constraint swap");
+    }
+
+    /// The credit-dedup / low-credit probes filter on
+    /// (notification_type, notification_subtype) with no user_address, so they
+    /// need a composite index leading with those columns or they full-scan.
+    #[tokio::test]
+    async fn notifications_has_type_subtype_index() {
+        let pool = temp_pool().await;
+        ensure_table_schema(&pool).await.expect("ensure_table_schema failed");
+        let idx: Option<String> =
+            sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_notifications_type_subtype'")
+                .fetch_optional(&pool)
+                .await
+                .expect("query index");
+        assert_eq!(idx.as_deref(), Some("idx_notifications_type_subtype"));
     }
 }
