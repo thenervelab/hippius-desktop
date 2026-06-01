@@ -553,7 +553,7 @@ _Risk:_ Low. Resetting driveStatusesLoadedAtom->false momentarily flips hasConfi
 
 _Notes:_ TypeScript/frontend-only finding; no Rust diff, so the Rust workflow gates (preflight/plan/axioms/exemplars/critique/quality_gate/self-review checklist) are N/A. The fixture's verify_notes were accurate on the core mechanism. Corrected scope: the blanket 'all leak into the next session' is overstated - only failedFilesAtom leaks with no self-heal; creditsExhausted/metadataStale/pendingConflicts/driveStatuses self-heal once account B emits its first sync event or the listener remounts and re-fetches. The longest-lived non-self-healing leak besides failedFiles is the tray 'Sync Folders' submenu, which persists A's drives because useTraySync runs above the auth guard and its logout effect does not clear driveSubmenu. The Rust side correctly does NOT emit hcfs_drive_removed on logout (stop_sync is intentional cleanup-only), so the cleanup must happen on the FE - confirming the fix belongs in this repo.
 
-- [ ] **F17 fixed & tested**
+- [x] **F17 fixed & tested** — committed 54d40446
 
 ---
 
@@ -583,7 +583,7 @@ _Risk:_ Low. The reset runs on logout only; the only consumers re-read via the l
 
 _Notes:_ Pure TypeScript/frontend finding — no Rust involved, so all Rust workflow gates (preflight, axioms, exemplars, critique, quality_gate, 7-item self-review) are N/A this turn. The finding's verify_notes were cut off mid-sentence at point 3 but the three claims I could read (single writer, appStore persistence, logout-only-resets-syncRequiresReauth) all reproduce exactly. Severity kept at medium because the wrong direction can suppress a data-safety guard (upload to an account with no configured sync folder), but the practical exposure is narrower than a flat 'medium logic bug' implies: it is a sub-second post-login window requiring immediate user interaction and self-corrects on fetch — reasonable reviewers could call it low. The fix is genuinely small (S) and the minimal form matches the existing syncRequiresReauthAtom reset pattern already in logout.
 
-- [ ] **F18 fixed & tested**
+- [x] **F18 fixed & tested** — committed 54d40446
 
 ---
 
@@ -1421,7 +1421,7 @@ _Risk:_ Very low. Removing the hook's cleanup cannot regress correctness because
 
 _Notes:_ Fixture verify_notes are truncated mid-sentence ("(1) useStagedChanges") but the author had clearly started to walk back the harm framing — my independent re-derivation confirms that intent. Code claims are exact; the downgrade from medium to low is purely about reachability: the dangerous race needs the hook to unmount while drives are active, which the current mount topology (single mount in the persistent authenticated layout, logout tears down sync before unmount) does not produce. Worth fixing as defensive correctness + to delete the false 'no-op' comment, and as a cheap guard against a future second consumer or a future code path that unmounts ConflictsBanner mid-session. Flagged a genuinely separate cross-drive clobber in the same file (cancelReview/handleDismiss dismiss path uses global clear_all_reviews) that should be tracked as its own finding — the per-label primitive clear_drive_review already exists in hcfs-client and is already used by sync_with_conflict_resolutions, so neither fix is cross-repo. No Rust diff produced this turn (read-only validation), so the Rust workflow gates are N/A.
 
-- [ ] **F42 fixed & tested**
+- [x] **F42 fixed & tested** — committed 54d40446
 
 ---
 
