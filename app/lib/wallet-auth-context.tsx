@@ -23,6 +23,7 @@ import { appStore } from "./store/jotaiStore";
 import { migrationCheckAtom, DEFAULT_MIGRATION_CHECK_STATE } from "./global-atoms/migrationAtoms";
 import { splashCompleteAtom } from "./global-atoms/splashAtoms";
 import { syncRequiresReauthAtom } from "./global-atoms/unpinAtoms";
+import { resetSyncSession } from "./store/resetSyncSession";
 import { scheduleOAuthSyncInit } from "./auth/scheduleOAuthSyncInit";
 import { isMasterMnemonicUnrecoverable } from "./utils/dispatchTauriError";
 import { useAtomValue } from "jotai";
@@ -177,9 +178,11 @@ export function WalletAuthProvider({
       setIsAuthenticated(false);
       setSessionTimeRemaining(null);
       syncInitialized.current = false;
-      // Clear the reauth banner on logout so a brand-new login
-      // session starts with a clean slate.
-      appStore.set(syncRequiresReauthAtom, false);
+      // Reset ALL session-scoped sync atoms (drive statuses, failed files,
+      // conflicts, credits banner, health, loaded-latch, reauth) so the
+      // previous account's state can't leak into the next login — these atoms
+      // live in the root appStore and survive the logout navigation.
+      resetSyncSession();
 
       if (redirectPath && typeof window !== "undefined") {
         router.push(redirectPath);
@@ -323,8 +326,9 @@ export function WalletAuthProvider({
           await logout("/login");
         }
         setSessionTimeRemaining(null);
-        // Not authenticated → banner state is irrelevant, clear it.
-        appStore.set(syncRequiresReauthAtom, false);
+        // Not authenticated → clear all session-scoped sync state (covers the
+        // boot path where redirectTo isn't "/login" so logout() didn't run).
+        resetSyncSession();
         return;
       }
 

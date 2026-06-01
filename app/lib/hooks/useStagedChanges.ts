@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { StagedChanges, ConflictResolution } from "@/lib/types/syncTypes";
 
@@ -66,12 +66,12 @@ export function useStagedChanges(
     setError(null);
   }, []);
 
-  // Safety net: cancel review on unmount (no-op if not in review mode — Rust handles it)
-  useEffect(() => {
-    return () => {
-      invoke("cancel_review").catch(() => {});
-    };
-  }, []);
+  // NOTE: cancel-on-unmount is intentionally NOT done here. `cancel_review` is
+  // a GLOBAL reset (it clears every drive's review and arms a 60s cooldown that
+  // suppresses fresh conflict dialogs on ALL drives). Firing it unconditionally
+  // on every unmount swallowed conflicts. The sole consumer, `ConflictsBanner`,
+  // owns a `reviewActiveRef`-guarded unmount cancel that only runs when a review
+  // is genuinely active — so this hook must not duplicate it unguarded.
 
   return {
     stagedChanges,
