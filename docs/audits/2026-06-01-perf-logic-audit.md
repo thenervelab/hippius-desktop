@@ -703,7 +703,7 @@ _Risk:_ Low. Behavior-preserving refactor of presentational components. Watch: (
 
 _Notes:_ No Rust in this task; all Rust gates (preflight, data-structure plan, axioms, exemplars, critique, quality_gate, self-review checklist) are N/A. Pure TypeScript/React perf finding. All concrete code claims verify exactly against re-read source (line numbers match). Downgraded severity medium->low because the headline 'N IPC round-trips' overstates impact: getVersion() is a cheap in-process Tauri IPC (plugin:app|version), not a network call, and notification lists are bounded; the worthwhile fix is React.memo + stable handlers to stop re-rendering the whole list on every selection, with the version hoist as a clean secondary win. Same getVersion-per-item anti-pattern also lives in NotificationMenuItem.tsx:63.
 
-- [~] **F20 PARTIAL (getVersion IPC hoisted via useAppVersion; NotificationItem memo + onClick stabilization deferred)** — committed 544e5838
+- [~] **F20 PARTIAL (getVersion IPC hoisted via useAppVersion; NotificationItem memo + onClick WONTFIX (low-value, user opted to skip))** — committed 544e5838
 
 ---
 
@@ -846,7 +846,7 @@ _Risk:_ Removal is low risk because the deleted symbols have zero non-test calle
 
 _Notes:_ Verdict partially_valid (not fully valid) because the core dead-code claim is correct and verified, but three secondary claims in the description are inaccurate: it is HKDF-SHA256 not PBKDF2; the UPDATE runs once-per-row not on every auth event (only two HKDF derivations recur); and the mutation is reversible-in-principle since the key re-derives from the mnemonic. Severity stays low — this is a code-hygiene / phantom-feature issue with no security, data-loss, or correctness impact. Notably decrypt_or_plaintext is dead even for the live drive_password column because the reader at sync/config.rs:165-176 inlines its own version branch; if the feature is kept, that reader should be refactored to call decrypt_or_plaintext so the helper earns its existence. No Rust diff produced this turn (read-only validation), so the Rust workflow gates (preflight/axioms/quality_gate/critique/exemplars/self-review checklist) are N/A.
 
-- [ ] **F24 fixed & tested**
+- [x] **F24 fixed & tested** — committed 47979825 (deleted dead crypto + retargeted tests)
 
 ---
 
@@ -1229,7 +1229,7 @@ _Risk:_ Stale-closure regression is the main risk: the four functions reference 
 
 _Notes:_ No Rust this task; preflight/axioms/quality_gate/critique/exemplars/self-review checklist all N/A (TypeScript-only analysis, no Rust diff). The finding is structurally accurate in every specific claim (unmemoized value, 2 stable / 4 unstable functions, bare useContext, 66 call sites — all independently re-read and confirmed). Downgraded from the description's implied high-impact framing to partially_valid because the impact narrative ("single biggest runtime cost in the auth subsystem", "full app-wide re-render cascade on every render") is overstated: there is no high-frequency render trigger in this provider (no interval, no per-tick setState — verified via rg), so re-renders occur only in rare login/logout/boot bursts where the dominant cost is awaited Rust IPCs, not React reconciliation. The fixture's assigned severity (low) is already correct; only the prose oversells it. The suggested fix is sound and worth doing as cheap render hygiene (effort S), with the one caveat that useCallback dep arrays must reuse the existing polkadotAddressRef stale-closure guard.
 
-- [ ] **F36 fixed & tested**
+- [WONTFIX] **F36** — low-impact render-perf; useCallback on 4 auth fns risks stale-closure auth bugs; user opted to skip
 
 ---
 
