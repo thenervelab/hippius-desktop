@@ -733,7 +733,7 @@ _Risk:_ Low. Single-file change in delete_files. Regression to watch: the fallba
 
 _Notes:_ No Rust diff produced this turn (read-only validation), so the Rust workflow gates are N/A: no Rust this task — preflight N/A; data-structure plan, axioms-baseline, exemplars, critique, quality_gate, and the seven-item self-review checklist all N/A. Verdict is partially_valid rather than valid only because the impact framing ('hundreds of DB round-trips while the user waits') overstates the N+1's share of wall-clock time — sync_paths is a tiny indexed table and the per-file filesystem delete dominates each iteration. The code pattern itself matches the finding exactly and the suggested fix is correct and cheap (effort S, fully in-repo). No dedicated delete_files test exists today in src-tauri/tests/, so the locking test is net-new coverage.
 
-- [ ] **F21 fixed & tested**
+- [x] **F21 fixed & tested** — committed 36693219
 
 ---
 
@@ -767,7 +767,7 @@ _Risk:_ Low. Behavior must stay identical to the two existing walks. The count w
 
 _Notes:_ Pure performance finding, correctly rated low. No correctness, data-loss, or security impact -- only redundant metadata syscalls on the pre-copy phase. Material only on large (tens of thousands of files) or high-latency/network filesystems; on local SSDs the doubled metadata pass is negligible relative to the subsequent content copy + network upload, which the finding does not claim to fix. The fix is entirely local to src-tauri/src/sync/files.rs (this repo); the third walk lives in hcfs-client but is the actual content copy and is not part of the optimization. Scope note: add_local_sync_folder also calls sum_regular_file_bytes but does not pair it with a count walk, so the double-walk is specific to the two upload paths the finding names -- its scope is accurate.
 
-- [ ] **F22 fixed & tested**
+- [x] **F22 fixed & tested** — committed 36693219
 
 ---
 
@@ -906,7 +906,7 @@ _Risk:_ Very low. Behavior change is strictly a tightening (fewer, never more, s
 
 _Notes:_ No Rust diff was produced this turn (analysis only), so the Rust workflow gates (preflight, axioms, quality_gate, critique, exemplars, self-review checklist) are N/A. The fix itself, when implemented, would be a Rust diff and should run those gates. Severity stays low: realistic trigger window is narrow (requires a full provider remount overlapping the first invoke's sub-line-56 window — StrictMode and a second caller path do NOT trigger it), shared throttle gates contain the FE-visible symptom, and the only durable harm is a leaked finalized-block subscription doubling per-block work. Worth fixing because the correct fix (compare_exchange) is a one-line, near-zero-risk change.
 
-- [ ] **F26 fixed & tested**
+- [x] **F26 fixed & tested** — committed 36693219
 
 ---
 
@@ -1129,7 +1129,7 @@ _Risk:_ Very low. CREATE INDEX IF NOT EXISTS is idempotent and ensure_table_sche
 
 _Notes:_ Core claim (unindexed full scans on credit-dedup probes) is factually correct and verified verbatim. Downgraded from a clean "valid" to "partially_valid" because: (a) the O(n)/large-table impact is overstated for single-user desktop SQLite row counts (real impact negligible - this is hygiene, not a measurable bottleneck), and (b) the secondary list-ordering composite-index recommendation does not work as claimed because the (user_address = ? OR user_address = 'system') OR-predicate prevents SQLite from using the index for the creation_time DESC ordering. Severity correctly stays low. Adjacent issue not in the finding: credits.rs:117/137 are verbatim duplicates of crud.rs:451/465. No Rust diff this turn (validation only); preflight/axioms/quality_gate/self-review checklist all N/A.
 
-- [ ] **F33 fixed & tested**
+- [x] **F33 fixed & tested** — committed 36693219
 
 ---
 
