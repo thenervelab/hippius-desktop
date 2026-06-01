@@ -637,6 +637,44 @@ pub async fn start_migration_flow(state: tauri::State<'_, crate::app_state::AppS
     }
 }
 
+/// RAII guard for `MigrationState::in_progress`.
+///
+/// `start_server_migration` flips the flag `true` up front, then performs a
+/// long chain of fallible steps that each early-return via `?`. Without a
+/// guard, any transient failure (server unreachable, expired token, low disk,
+/// unrecoverable mnemonic) leaves the flag stuck `true`, which wedges ALL sync
+/// for the account — `initialize_sync_inner` and `auto_init_sync_inner` refuse
+/// to run while a migration is "in progress" — until the app is restarted.
+///
+/// The guard clears the flag on `Drop` (covering `?`-returns and panic unwind)
+/// unless [`commit`](Self::commit) was called on a success path, where the
+/// migration genuinely is in progress and the flag must persist.
+struct MigrationInProgressGuard<'a> {
+    flag: &'a std::sync::atomic::AtomicBool,
+    armed: bool,
+}
+
+impl<'a> MigrationInProgressGuard<'a> {
+    /// Set the flag `true` and arm the reset-on-drop.
+    fn engage(flag: &'a std::sync::atomic::AtomicBool) -> Self {
+        flag.store(true, Ordering::SeqCst);
+        Self { flag, armed: true }
+    }
+
+    /// Disarm the reset so the flag stays `true`. Call on the success path.
+    fn commit(mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for MigrationInProgressGuard<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.flag.store(false, Ordering::SeqCst);
+        }
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 #[tauri::command]
 pub async fn start_server_migration(
@@ -647,7 +685,9 @@ pub async fn start_server_migration(
 ) -> Result<StartServerMigrationResult> {
     let label = derive_migration_label(sync_path.as_deref());
     tracing::info!("[Migration] Starting server migration for account {account_id}, label={label}, total_size={total_size}");
-    state.migration.in_progress.store(true, Ordering::SeqCst);
+    // RAII: every `?`-driven early return below clears the flag; only the
+    // success paths call `.commit()` to keep it set.
+    let in_progress_guard = MigrationInProgressGuard::engage(&state.migration.in_progress);
     state.migration.poll_failure_count.store(0, Ordering::SeqCst);
 
     let folder_hash = hcfs_client::drive::keys::folder_hash(&label);
@@ -826,6 +866,7 @@ pub async fn start_server_migration(
             let result: StartServerMigrationResult = retry_resp.json().await?;
             let _ = upsert_migration_status(pool, &account_id, "in_progress", 0, 0, "[]", "", &server_url).await;
             tracing::info!("[Migration] Server migration started successfully (after cancel+retry)");
+            in_progress_guard.commit();
             return Ok(result);
         }
 
@@ -840,6 +881,7 @@ pub async fn start_server_migration(
     let _ = upsert_migration_status(pool, &account_id, "in_progress", 0, 0, "[]", "", &server_url).await;
 
     tracing::info!("[Migration] Server migration started successfully");
+    in_progress_guard.commit();
     Ok(result)
 }
 
@@ -1142,6 +1184,31 @@ mod tests {
         assert!(ms.in_progress.load(Ordering::SeqCst));
         ms.in_progress.store(false, Ordering::SeqCst);
         assert!(!ms.in_progress.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn in_progress_guard_resets_flag_on_drop() {
+        // Models start_server_migration's error paths: the guard is engaged
+        // (flag → true) but never committed, so dropping it (a `?`-return or
+        // panic unwind) must clear the flag — not leave sync wedged.
+        let flag = std::sync::atomic::AtomicBool::new(false);
+        {
+            let _guard = super::MigrationInProgressGuard::engage(&flag);
+            assert!(flag.load(Ordering::SeqCst), "engage sets the flag");
+        }
+        assert!(!flag.load(Ordering::SeqCst), "drop without commit must reset the flag");
+    }
+
+    #[test]
+    fn in_progress_guard_keeps_flag_when_committed() {
+        // Models the success path: a committed guard leaves the flag set so
+        // auto_init_sync sees the genuinely-running migration.
+        let flag = std::sync::atomic::AtomicBool::new(false);
+        {
+            let guard = super::MigrationInProgressGuard::engage(&flag);
+            guard.commit();
+        }
+        assert!(flag.load(Ordering::SeqCst), "commit must preserve the flag past drop");
     }
 
     // -----------------------------------------------------------------------

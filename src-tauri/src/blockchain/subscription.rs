@@ -164,7 +164,32 @@ async fn subscribe_blocks(app: &tauri::AppHandle) -> Result<(), String> {
         }
     }
 
-    Ok(())
+    // The `while let Some(..)` above exits for one of two reasons: an
+    // intentional stop (the in-loop `break` after observing `running == false`)
+    // or the stream yielding `None`. A `None` is a graceful server-side
+    // WebSocket close (idle timeout, load-balancer recycle, proxy drop) that
+    // subxt's non-reconnecting legacy backend does NOT resubscribe. Re-read
+    // `running` and let `classify_stream_exit` decide whether this exit is a
+    // clean shutdown (Ok) or a disconnect the caller must reconnect (Err).
+    let running = app.state::<crate::app_state::AppState>().block_sub.running.load(Ordering::SeqCst);
+    classify_stream_exit(running)
+}
+
+/// Decide whether a finalized-block stream exit is an intentional shutdown
+/// or a reconnectable disconnect.
+///
+/// `running == false` means [`start_block_subscription`] cleared the flag to
+/// stop the task — that is a clean `Ok(())` and the reconnect loop exits. A
+/// stream that ends while `running` is still `true` ended on its own (a
+/// graceful WebSocket `None`); returning `Err` routes it through the caller's
+/// backoff-and-reconnect arm, which also emits `is_connected = false` so the
+/// FE connectivity indicator stays honest.
+fn classify_stream_exit(running: bool) -> Result<(), String> {
+    if running {
+        Err("block stream ended unexpectedly (graceful disconnect)".to_string())
+    } else {
+        Ok(())
+    }
 }
 
 /// Spawn a one-shot deferred task that emits `latest_block` when the
@@ -277,6 +302,28 @@ mod tests {
         let last = AtomicU64::new(100);
         assert!(try_claim_block_emit(&last, 1100, 1000));
         assert_eq!(last.load(Ordering::Acquire), 1100);
+    }
+
+    #[test]
+    fn graceful_stream_end_while_running_is_reconnectable_error() {
+        // A `None` from the block stream while the task is still meant to be
+        // running is a graceful disconnect — it must surface as Err so the
+        // caller reconnects instead of treating it as a clean shutdown.
+        assert!(
+            classify_stream_exit(true).is_err(),
+            "stream ending while running=true must be a reconnectable error"
+        );
+    }
+
+    #[test]
+    fn intentional_stop_is_clean_exit() {
+        // The in-loop break clears nothing; `running == false` means the user
+        // (logout/stop) asked the task to end. That is a clean Ok, not a
+        // reconnect.
+        assert!(
+            classify_stream_exit(false).is_ok(),
+            "stream ending after running=false must be a clean shutdown"
+        );
     }
 
     #[test]

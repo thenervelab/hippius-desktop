@@ -7,8 +7,6 @@
 //! and is auto-migrated to the keychain on first read when the OS store
 //! is available. See [`crate::auth::token_keychain`] for the backend.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-
 use sqlx::Row;
 use sqlx::sqlite::SqlitePool;
 use tracing::{debug, warn};
@@ -21,11 +19,6 @@ use crate::auth::token_keychain::{self, TokenKeychainResult};
 pub const TOKEN_REFRESH_MARGIN_SECS: i64 = 14400;
 
 const AUTH_ROW_ID: i64 = 1;
-
-/// Once set, skips the legacy `objectstore_auth` and `auth_session` fallback
-/// queries in [`get_api_token`]. The migration only needs to run once per
-/// process lifetime — after that the scoped table is authoritative.
-static LEGACY_TOKEN_MIGRATED: AtomicBool = AtomicBool::new(false);
 
 // ── API Token (used everywhere) ─────────────────────────────────────────
 
@@ -139,12 +132,15 @@ pub async fn get_api_token(pool: &SqlitePool, account_id: &str) -> Result<Option
         return Ok(Some(token));
     }
 
-    // After the first full pass through the legacy fallback paths (whether or
-    // not data was found), the scoped table is authoritative — skip the two
-    // extra SQLite round-trips on every subsequent call.
-    if LEGACY_TOKEN_MIGRATED.load(Ordering::Relaxed) {
-        return Ok(None);
-    }
+    // No process-global "already migrated" short-circuit here: it was a
+    // per-account-incorrect optimization. A single global flag, tripped by
+    // ANY account reaching a terminal miss, suppressed the per-account
+    // `auth_session` fallback below for every OTHER account — starving a
+    // second account whose token lives only in `auth_session` (the shape a
+    // DB-restore leaves behind). The two fallback queries are cheap
+    // single-row indexed reads on the cold path (keychain + scoped both
+    // missed), and the `auth_session` hit self-heals into the scoped table
+    // via `save_api_token` below, so steady-state cost is unchanged.
 
     // Legacy single-row fallback — auto-migrate
     let legacy = sqlx::query("SELECT temp_auth_key FROM objectstore_auth WHERE id = ?")
@@ -181,10 +177,6 @@ pub async fn get_api_token(pool: &SqlitePool, account_id: &str) -> Result<Option
         return Ok(Some(token));
     }
 
-    // We have now completed one full pass through both legacy fallback paths.
-    // Mark as migrated so future calls skip straight to Ok(None) after stage 1.
-    LEGACY_TOKEN_MIGRATED.store(true, Ordering::Relaxed);
-
     Ok(None)
 }
 
@@ -200,5 +192,82 @@ pub async fn is_token_expiring(pool: &SqlitePool, account_id: &str, margin_secs:
         }
         // No row, no expiry, or DB error → assume we need to refresh.
         _ => true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::auth::auth_session_repo::{self, UpsertSession};
+
+    /// In-memory pool with the three tables `get_api_token` consults, plus
+    /// `HIPPIUS_DISABLE_TOKEN_KEYCHAIN=1` so the keychain misses
+    /// deterministically and tokens resolve from the DB columns.
+    async fn setup_db() -> SqlitePool {
+        // SAFETY: test-only, unconditionally set to the same value, so the
+        // process-global env var is deterministic. Rust 2024 requires the
+        // unsafe block for `std::env::set_var`.
+        unsafe {
+            std::env::set_var("HIPPIUS_DISABLE_TOKEN_KEYCHAIN", "1");
+        }
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        for ddl in [
+            "CREATE TABLE IF NOT EXISTS objectstore_auth (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                temp_auth_key TEXT, master_access_key_id TEXT, master_secret TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
+            "CREATE TABLE IF NOT EXISTS objectstore_auth_scoped (
+                owner TEXT PRIMARY KEY,
+                temp_auth_key TEXT, master_access_key_id TEXT, master_secret TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
+            "CREATE TABLE IF NOT EXISTS auth_session (
+                owner TEXT PRIMARY KEY, auth_token TEXT, token_expiry INTEGER,
+                user_id INTEGER, username TEXT, provider TEXT, substrate_address TEXT,
+                logout_time_minutes INTEGER DEFAULT 1440, last_login_at TEXT,
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')))",
+        ] {
+            sqlx::query(ddl).execute(&pool).await.unwrap();
+        }
+        pool
+    }
+
+    const ACCOUNT_A: &str = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
+    const ACCOUNT_B: &str = "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty";
+
+    /// Regression for the process-global `LEGACY_TOKEN_MIGRATED` flag: one
+    /// account walking `get_api_token` to a terminal miss must not suppress a
+    /// second account's `auth_session` token — the only store populated by the
+    /// DB-fallback restore path. Account A (nothing anywhere) is resolved
+    /// first; account B's `auth_session`-only token must still be found.
+    #[tokio::test]
+    async fn second_account_auth_session_token_survives_first_account_miss() {
+        let pool = setup_db().await;
+
+        // Account B's token lives ONLY in auth_session (the shape a DB-restore
+        // leaves behind: token in auth_session, scoped/keychain empty).
+        auth_session_repo::upsert(
+            &pool,
+            UpsertSession {
+                substrate_address: ACCOUNT_B,
+                token: "bob-token",
+                token_expiry_ms: chrono::Utc::now().timestamp_millis() + 86_400_000,
+                user_id: Some(2),
+                username: "bob",
+                provider: "mnemonic",
+                logout_time_minutes: Some(1440),
+            },
+        )
+        .await
+        .unwrap();
+
+        // Account A has no token in any store → terminal miss.
+        assert_eq!(get_api_token(&pool, ACCOUNT_A).await.unwrap(), None);
+
+        // Account B must still resolve via the auth_session fallback.
+        assert_eq!(
+            get_api_token(&pool, ACCOUNT_B).await.unwrap().as_deref(),
+            Some("bob-token"),
+            "second account's auth_session token must not be starved by the first account's miss"
+        );
     }
 }
