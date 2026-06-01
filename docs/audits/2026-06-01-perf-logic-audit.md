@@ -414,7 +414,7 @@ _Risk:_ Low-to-medium. The try_lock change turns a previously-blocking 'eventual
 
 _Notes:_ No Rust diff produced this turn (read-only validation): preflight / data-structure plan / axioms-baseline / quality_gate / critique / exemplars / self-review checklist all N/A. Confirmed entirely in this repo's src-tauri (client.rs, state.rs, subscription.rs) — the retry loop lives here, NOT in the hcfs cross-repo dep, so the fix is local (cross_repo=false). Auditor's two minor overstatements: (a) "17 call sites" — I count ~14 distinct invoke sites; (b) "~60s normal" — actual normal-unreachable backoff is ~190s of sleeps, an understatement that makes the finding worse, not better. Neither weakens the verdict. Severity kept at medium: outage-only responsiveness/UX degradation, no data loss, no crash, and Tauri commands run on a worker pool so the UI thread isn't frozen — but every blockchain command serializes behind the guard during an outage.
 
-- [ ] **F12 fixed & tested**
+- [x] **F12 fixed & tested** — committed cb9361a4
 
 ---
 
@@ -474,7 +474,7 @@ _Risk:_ Low. Change is confined to the migration copy path that runs once per ol
 
 _Notes:_ No Rust diff produced this turn (read-only validation) — Rust workflow gates (preflight, data-structure plan, axioms-baseline, exemplars, critique, quality_gate, adversarial self-review checklist) are N/A. Scope correction vs. original: is_paused loss = real silent un-pause (the medium-severity core, violates CLAUDE.md's "is_paused represents user intent and must survive"); relative_paths_backfilled_at reset = real but only redundant backfill work, not data loss. One-time-per-DB loss (swap self-disables after first run). The suggested gating on the line-144 HashSet is correct, but the original suggested_fix missed that sync_paths_new (lines 207-216) has no relative_paths_backfilled_at column at all — that column must be added to the CREATE for the copy to carry it.
 
-- [ ] **F15 fixed & tested**
+- [x] **F15 fixed & tested** — committed cb9361a4
 
 ---
 
