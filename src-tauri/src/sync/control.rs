@@ -184,15 +184,19 @@ pub async fn sync_with_conflict_resolutions(app: AppHandle, label: String, resol
     }
 }
 
-/// Cancel the review dialog and resume auto-sync without syncing.
+/// Cancel ONE drive's review dialog and resume that drive's auto-sync without
+/// syncing. Scoped to `label` via `clear_drive_review` — `clear_all_reviews`
+/// (which iterates every drive and arms a 60s cooldown on each) is reserved for
+/// true global resets (logout/teardown in `lifecycle.rs`). Cancelling one
+/// drive's review must not suppress conflict dialogs on the others.
 #[tauri::command]
-pub async fn cancel_review(app: tauri::AppHandle) -> Result<()> {
+pub async fn cancel_review(app: tauri::AppHandle, label: String) -> Result<()> {
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
     let sync = &app_state.sync;
 
-    sync.clear_all_reviews();
-    info!("Review cancelled, auto-sync resumed");
+    sync.clear_drive_review(&label);
+    info!("Review cancelled for '{}', auto-sync resumed", label);
     Ok(())
 }
 

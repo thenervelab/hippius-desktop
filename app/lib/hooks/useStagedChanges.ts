@@ -58,13 +58,15 @@ export function useStagedChanges(
 
   const cancelReview = useCallback(async () => {
     try {
-      await invoke("cancel_review");
+      // Scope the cancel to THIS drive — cancel_review clears only `label`'s
+      // review state, not every drive's (which would arm a global cooldown).
+      await invoke("cancel_review", { label });
     } catch (e) {
       console.error("Failed to cancel review:", e);
     }
     setStagedChanges(null);
     setError(null);
-  }, []);
+  }, [label]);
 
   // NOTE: cancel-on-unmount is intentionally NOT done here. `cancel_review` is
   // a GLOBAL reset (it clears every drive's review and arms a 60s cooldown that

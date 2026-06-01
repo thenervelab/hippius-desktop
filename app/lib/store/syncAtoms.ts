@@ -1,8 +1,12 @@
 import { atom } from "jotai";
 import type { StagedChanges } from "@/lib/types/syncTypes";
 
-// Stores pending conflicts detected during auto-sync (null when no conflicts)
-export const pendingConflictsAtom = atom<StagedChanges | null>(null);
+// Per-drive pending conflicts detected during auto-sync, keyed by drive label.
+// The multi-drive engine emits conflict-review events per drive (each carries a
+// `label`) and syncs drives concurrently, so a single global StagedChanges let
+// one drive's conflicts overwrite another's, and any drive's completion cleared
+// them all. Keyed by label, each drive's review is independent.
+export const pendingConflictsAtom = atom<Map<string, StagedChanges>>(new Map());
 
 // Tracks whether we've already updated the tray for the current percentage
 export const lastUpdatedPercentAtom = atom<number | null>(null);

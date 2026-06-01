@@ -23,7 +23,10 @@ describe("resetSyncSession", () => {
 
   it("clears every session-scoped sync atom so account A cannot leak into the next login", () => {
     // Seed account A's session state across all the leak-prone atoms.
-    appStore.set(pendingConflictsAtom, { uploads: [], downloads: [], conflicts: [] } as unknown as StagedChanges);
+    appStore.set(
+      pendingConflictsAtom,
+      new Map([["a", { uploads: [], downloads: [], conflicts: [] } as unknown as StagedChanges]])
+    );
     appStore.set(failedFilesAtom, [
       { label: "a", path: "/a/p", fileName: "p", error: "boom", failureCount: 5 },
     ]);
@@ -43,7 +46,7 @@ describe("resetSyncSession", () => {
 
     resetSyncSession();
 
-    expect(appStore.get(pendingConflictsAtom)).toBeNull();
+    expect(appStore.get(pendingConflictsAtom).size).toBe(0);
     expect(appStore.get(failedFilesAtom)).toBeNull();
     expect(appStore.get(creditsExhaustedAtom)).toBeNull();
     expect(appStore.get(syncEngineHealthAtom)).toEqual(DEFAULT_SYNC_ENGINE_HEALTH);

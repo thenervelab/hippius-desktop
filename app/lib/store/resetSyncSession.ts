@@ -34,7 +34,7 @@ import {
  * Call on logout and on a boot-time "not authenticated" restore.
  */
 export function resetSyncSession(): void {
-  appStore.set(pendingConflictsAtom, null);
+  appStore.set(pendingConflictsAtom, new Map());
   appStore.set(failedFilesAtom, null);
   appStore.set(creditsExhaustedAtom, null);
   appStore.set(syncEngineHealthAtom, DEFAULT_SYNC_ENGINE_HEALTH);
