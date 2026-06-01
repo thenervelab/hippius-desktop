@@ -81,6 +81,7 @@ use crate::sync::files::{
     list_sync_folder, list_sync_folder_grouped, resolve_file_info, resolve_file_path, search_user_files_recursive,
 };
 use crate::sync::folders::{delete_remote_folder, get_sync_folders_with_stats, list_remote_folders, restore_remote_folders};
+use crate::sync::recent_uploads::get_recent_uploads;
 use crate::sync::lifecycle::{
     add_local_sync_folder, auto_init_sync, change_sync_folder, initialize_sync, pause_drive, remove_drive, resume_drive, setup_and_init_sync,
     stop_sync,
@@ -194,6 +195,7 @@ fn main() {
             list_sync_folder,
             list_sync_folder_grouped,
             get_recent_files,
+            get_recent_uploads,
             get_user_files,
             filter_file_entries,
             search_user_files_recursive,
