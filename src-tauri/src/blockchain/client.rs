@@ -62,6 +62,31 @@ pub async fn get_substrate_client(app_state: &crate::app_state::AppState) -> Res
     connect_and_cache(app_state).await
 }
 
+/// Get the cached RPC client, connecting if necessary. Mirrors
+/// [`get_substrate_client`] so the RPC handle is always tied to the SAME
+/// connect path as the `OnlineClient`. `get_block_timestamp` previously read
+/// the `rpc_client` cache directly and errored "RPC client not initialized"
+/// whenever it had been concurrently cleared even though the `OnlineClient` was
+/// still cached (the two caches are populated together but can be cleared
+/// independently). This re-derives both together via `connect_and_cache`.
+pub async fn get_rpc_client(app_state: &crate::app_state::AppState) -> Result<RpcClient, String> {
+    if let Some(rpc) = read_cached_rpc_client(app_state)? {
+        return Ok(rpc);
+    }
+    let Ok(_guard) = app_state.blockchain.connect_guard.try_lock() else {
+        if let Some(rpc) = read_cached_rpc_client(app_state)? {
+            return Ok(rpc);
+        }
+        return Err("Substrate client is connecting; retry shortly".to_string());
+    };
+    if let Some(rpc) = read_cached_rpc_client(app_state)? {
+        return Ok(rpc);
+    }
+    // connect_and_cache repopulates BOTH the OnlineClient and the RPC caches.
+    connect_and_cache(app_state).await?;
+    read_cached_rpc_client(app_state)?.ok_or_else(|| "RPC client unavailable after connect".to_string())
+}
+
 /// One bounded connection attempt. Always returns within
 /// [`CONNECT_ATTEMPT_TIMEOUT_SECS`] — a stalled `from_url`/`from_rpc_client`
 /// on a dead endpoint surfaces as a timeout `Err` rather than hanging while
@@ -77,6 +102,16 @@ async fn connect_once(wss_endpoint: &str) -> Result<(RpcClient, OnlineClient<Pol
         Ok(inner) => inner,
         Err(_elapsed) => Err(format!("connection attempt timed out after {CONNECT_ATTEMPT_TIMEOUT_SECS}s")),
     }
+}
+
+/// Read the cached RPC client without modifying state.
+fn read_cached_rpc_client(app_state: &crate::app_state::AppState) -> Result<Option<RpcClient>, String> {
+    let rpc = app_state
+        .blockchain
+        .rpc_client
+        .read()
+        .map_err(|e| format!("RPC client lock failed: {e}"))?;
+    Ok(rpc.clone())
 }
 
 /// Read the cached client without modifying state.

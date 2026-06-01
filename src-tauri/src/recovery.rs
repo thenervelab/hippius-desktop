@@ -479,15 +479,36 @@ async fn validate_master_against_existing_folders(pool: &SqlitePool, account_id:
         return Ok(());
     }
 
-    let drive_password = match crate::sync::config::get_drive_password(pool, account_id, None).await {
-        Ok(pw) if !pw.is_empty() => pw,
-        _ => {
-            // No usable drive password yet — we can't decrypt folder
-            // mnemonics to compare. Allow the seal so the fresh-signup
-            // path keeps working; once a drive password exists, future
-            // calls hit the real check.
-            return Ok(());
-        }
+    // Inspect the drive-password row directly so we can tell three cases apart —
+    // get_drive_password(None) collapsed the last two into a silent skip, which
+    // let a WRONG master be sealed over an account that already had encrypted
+    // key material (leaving its uploads undecryptable):
+    //   (a) no row / empty password  → pre-config, nothing to compare → allow
+    //   (b) plaintext (version 0)     → compare folders against it
+    //   (c) encrypted (version 1)     → the candidate master MUST decrypt it;
+    //                                   if it can't, it's the wrong master → refuse
+    let row: Option<(String, i32)> = sqlx::query_as(
+        "SELECT drive_password, COALESCE(encryption_version, 0) FROM hcfs_config WHERE owner = ?",
+    )
+    .bind(&owner)
+    .fetch_optional(pool)
+    .await?;
+    let drive_password = match row {
+        None => return Ok(()),
+        Some((pw, _)) if pw.is_empty() => return Ok(()),
+        Some((pw, 0)) => pw,
+        Some((_, 1)) => match crate::sync::config::get_drive_password(pool, account_id, Some(candidate_master)).await {
+            Ok(pw) => pw,
+            Err(_) => {
+                return Err(AppError::Validation(
+                    "Cannot seal recovery blob: the provided master mnemonic does not match this \
+                     account's existing encrypted drive password. Unlock with your original recovery \
+                     password first, then retry."
+                        .into(),
+                ));
+            }
+        },
+        Some((_, v)) => return Err(AppError::Other(format!("unknown drive password encryption_version: {v}"))),
     };
 
     for (_path, label) in &folders {
@@ -1286,6 +1307,79 @@ mod tests {
         // with the system still consistent on the OLD password.
         let pw = crate::sync::config::get_drive_password(&pool, account, Some(&master)).await.unwrap();
         assert_eq!(pw, "old canonical password", "DB password must stay OLD when a folder rewrite fails");
+    }
+
+    /// Minimal hcfs_config + sync_paths schema for the recovery-validation
+    /// tests, with `HOME` pointed at a tempdir (caller holds HOME_LOCK).
+    async fn setup_validation_pool() -> sqlx::SqlitePool {
+        use sqlx::sqlite::SqlitePoolOptions;
+        let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.expect("in-memory pool");
+        sqlx::query(
+            "CREATE TABLE hcfs_config (owner TEXT PRIMARY KEY, server_url TEXT NOT NULL DEFAULT '', drive_password TEXT NOT NULL DEFAULT '', encryption_version INTEGER NOT NULL DEFAULT 0, updated_at TIMESTAMP)",
+        )
+        .execute(&pool)
+        .await
+        .expect("create hcfs_config");
+        sqlx::query("CREATE TABLE sync_paths (owner TEXT NOT NULL, path TEXT NOT NULL, label TEXT NOT NULL, is_paused INTEGER NOT NULL DEFAULT 0)")
+            .execute(&pool)
+            .await
+            .expect("create sync_paths");
+        pool
+    }
+
+    const VALIDATION_MASTER: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+    #[tokio::test]
+    async fn validate_master_refuses_wrong_master_against_encrypted_drive_password() {
+        let _home = crate::test_helpers::HOME_LOCK.lock().expect("HOME_LOCK");
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        // SAFETY: test-only; HOME is serialized by HOME_LOCK and Rust 2024
+        // requires the unsafe block for std::env::set_var.
+        unsafe {
+            std::env::set_var("HOME", tmp.path());
+        }
+        let account = "5TestValidateWrongMaster";
+        let pool = setup_validation_pool().await;
+        let owner = crate::auth::account_key::account_key(account);
+        // A folder row so validation doesn't take the empty-folders early return.
+        sqlx::query("INSERT INTO sync_paths (owner, path, label) VALUES (?, '/tmp/x', 'default')")
+            .bind(&owner)
+            .execute(&pool)
+            .await
+            .expect("seed sync_paths");
+        // Seal an encrypted (version=1) drive password under the real master.
+        crate::sync::config::save_hcfs_config_internal(&pool, account, "https://example.invalid", "drive pw", Some(VALIDATION_MASTER))
+            .await
+            .expect("seal encrypted drive password");
+
+        // A DIFFERENT master can't decrypt that drive password → must be refused,
+        // not silently skipped (the pre-fix bug that allowed sealing a wrong master).
+        let wrong = "legal winner thank year wave sausage worth useful legal winner thank yellow";
+        let err = super::validate_master_against_existing_folders(&pool, account, wrong).await.unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)), "wrong master must be refused, got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn validate_master_allows_when_no_drive_password_config() {
+        let _home = crate::test_helpers::HOME_LOCK.lock().expect("HOME_LOCK");
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        // SAFETY: test-only; HOME is serialized by HOME_LOCK and Rust 2024
+        // requires the unsafe block for std::env::set_var.
+        unsafe {
+            std::env::set_var("HOME", tmp.path());
+        }
+        let account = "5TestValidateNoConfig";
+        let pool = setup_validation_pool().await;
+        let owner = crate::auth::account_key::account_key(account);
+        sqlx::query("INSERT INTO sync_paths (owner, path, label) VALUES (?, '/tmp/x', 'default')")
+            .bind(&owner)
+            .execute(&pool)
+            .await
+            .expect("seed sync_paths");
+        // No hcfs_config row → pre-config → vacuously allowed.
+        super::validate_master_against_existing_folders(&pool, account, VALIDATION_MASTER)
+            .await
+            .expect("validation allows pre-config");
     }
 
     #[tokio::test]
