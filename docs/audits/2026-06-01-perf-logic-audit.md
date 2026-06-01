@@ -322,7 +322,7 @@ _Test to add:_ Vitest plus React Testing Library render FilesTable with 200 rows
 
 _Risk:_ Low to medium. Sort must run over the full set before slicing. Select all header already uses the displayed slice so its semantics are unchanged. Enrichment memo and folder nav still see the full list. getRowId stability is unaffected by slicing.
 
-- [ ] **F08 fixed & tested**
+- [x] **F08 fixed & tested** — committed f03a9311
 
 ---
 
