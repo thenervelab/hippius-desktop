@@ -13,7 +13,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import useUserFiles, {
   FormattedUserFile,
 } from "@/app/lib/hooks/use-user-files";
-import useRecentFiles from "@/lib/hooks/use-recent-files";
+import { useUploadFeed } from "@/app/lib/hooks/useUploadFeed";
 import * as Typography from "@/components/ui/typography";
 import FilesTableSkeleton from "./files-table/FilesTableSkeleton";
 import CardViewSkeleton from "./card-view/CardViewSkeleton";
@@ -85,13 +85,16 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     error,
   } = useUserFiles();
 
-  // Recent files hook
+  // Recent files: account-wide "last uploads" (same source as the search
+  // palette) overlaid with this device's live sync progress, so files that
+  // are currently uploading or failed appear alongside completed uploads.
+  // Capped at 50; ordered uploading → failed → completed by `mergeUploadFeed`.
   const {
     data: recentFilesData,
     isLoading: isRecentFilesLoading,
     isFetching: isRecentFilesFetching,
     refetch: refetchRecentFiles,
-  } = useRecentFiles();
+  } = useUploadFeed(50);
 
   // Loading + fetching flags are computed AFTER nested-mode resolution
   // below (so they can branch on `isNested`). See `isLoading` / `isFetching`

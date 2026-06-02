@@ -1,0 +1,145 @@
+import { describe, expect, it } from "vitest";
+import { mergeUploadFeed } from "../mergeUploadFeed";
+import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
+import type { FileProgress } from "@/app/lib/types/syncSnapshot";
+
+function completed(
+  name: string,
+  opts: Partial<FormattedUserFile> = {},
+): FormattedUserFile {
+  return {
+    name,
+    actualFileName: name,
+    size: 100,
+    createdAt: 1_000,
+    arionHash: name,
+    arionCid: "",
+    minerIds: [],
+    isAssigned: true,
+    lastChargedAt: 0,
+    isErasureCoded: false,
+    mainReqHash: "",
+    label: "Docs",
+    syncStatus: "synced",
+    ...opts,
+  };
+}
+
+function progress(
+  path: string,
+  status: FileProgress["status"],
+  opts: Partial<FileProgress> = {},
+): FileProgress {
+  return {
+    path,
+    fileName: path,
+    label: "Docs",
+    action: "upload",
+    status,
+    progressPercent: 0,
+    bytesEncrypted: 0,
+    bytesTransferred: 0,
+    totalBytes: 200,
+    ...opts,
+  };
+}
+
+describe("mergeUploadFeed", () => {
+  it("returns the server completed list when nothing is in flight", () => {
+    const out = mergeUploadFeed({
+      recentUploads: [completed("a.png"), completed("b.png")],
+      snapshotFiles: [],
+      limit: 50,
+    });
+    expect(out.map((f) => f.name)).toEqual(["a.png", "b.png"]);
+    expect(out.every((f) => f.feedStatus === "completed")).toBe(true);
+  });
+
+  it("orders uploading first, then failed, then completed", () => {
+    const out = mergeUploadFeed({
+      recentUploads: [completed("done.png")],
+      snapshotFiles: [
+        progress("fail.png", "error", { error: "402" }),
+        progress("up.png", "inProgress", { progressPercent: 40 }),
+      ],
+      limit: 50,
+    });
+    expect(out.map((f) => f.feedStatus)).toEqual([
+      "uploading",
+      "failed",
+      "completed",
+    ]);
+    expect(out.map((f) => f.name)).toEqual(["up.png", "fail.png", "done.png"]);
+  });
+
+  it("maps live statuses and carries progress + error through", () => {
+    const out = mergeUploadFeed({
+      recentUploads: [],
+      snapshotFiles: [
+        progress("up.png", "inProgress", { progressPercent: 73 }),
+        progress("enc.png", "encrypting", { progressPercent: 12 }),
+        progress("wait.png", "pending"),
+        progress("bad.png", "error", { error: "Insufficient credits" }),
+      ],
+      limit: 50,
+    });
+    const by = (n: string) => out.find((f) => f.name === n)!;
+    expect(by("up.png").feedStatus).toBe("uploading");
+    expect(by("up.png").progressPercent).toBe(73);
+    expect(by("enc.png").feedStatus).toBe("uploading"); // encrypting reads as uploading
+    expect(by("wait.png").feedStatus).toBe("pending");
+    expect(by("bad.png").feedStatus).toBe("failed");
+    expect(by("bad.png").errorMessage).toBe("Insufficient credits");
+  });
+
+  it("dedups a file present both in flight and on the server (live wins)", () => {
+    const out = mergeUploadFeed({
+      recentUploads: [completed("report.pdf", { actualFileName: "report.pdf" })],
+      snapshotFiles: [progress("report.pdf", "inProgress", { progressPercent: 50 })],
+      limit: 50,
+    });
+    expect(out).toHaveLength(1);
+    expect(out[0].feedStatus).toBe("uploading");
+    expect(out[0].progressPercent).toBe(50);
+  });
+
+  it("treats the same name in different drives as distinct rows", () => {
+    const out = mergeUploadFeed({
+      recentUploads: [completed("x.png", { label: "Docs" })],
+      snapshotFiles: [progress("x.png", "inProgress", { label: "Photos" })],
+      limit: 50,
+    });
+    expect(out).toHaveLength(2);
+  });
+
+  it("ignores non-upload snapshot entries (downloads/deletes)", () => {
+    const out = mergeUploadFeed({
+      recentUploads: [],
+      snapshotFiles: [
+        progress("down.png", "inProgress", { action: "download" }),
+        progress("del.png", "completed", { action: "remote_delete" }),
+      ],
+      limit: 50,
+    });
+    expect(out).toHaveLength(0);
+  });
+
+  it("derives the display name from the basename of a nested path", () => {
+    const out = mergeUploadFeed({
+      recentUploads: [],
+      snapshotFiles: [progress("Work/2024/report.pdf", "inProgress")],
+      limit: 50,
+    });
+    expect(out[0].name).toBe("report.pdf");
+    expect(out[0].actualFileName).toBe("Work/2024/report.pdf");
+  });
+
+  it("caps the result at the limit, keeping the highest-priority rows", () => {
+    const out = mergeUploadFeed({
+      recentUploads: [completed("c1.png"), completed("c2.png"), completed("c3.png")],
+      snapshotFiles: [progress("live.png", "inProgress")],
+      limit: 2,
+    });
+    expect(out.map((f) => f.name)).toEqual(["live.png", "c1.png"]);
+  });
+});
