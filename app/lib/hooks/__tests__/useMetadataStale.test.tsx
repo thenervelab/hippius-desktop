@@ -67,15 +67,34 @@ describe("useMetadataStale", () => {
     expect(map.size).toBe(1);
   });
 
-  it("ignores activity for a label that isn't stale", async () => {
+  it("ignores activity for a label that isn't stale and preserves identity", async () => {
     const { store } = renderWithStore();
     await seedTwoStaleLabels(store);
 
+    const before = store.get(metadataStaleLabelsAtom);
     const activity = listenHandlers.get("hcfs_activity_updated")!;
     await act(async () => {
       activity({ payload: { label: "ghost" } });
     });
 
-    expect(store.get(metadataStaleLabelsAtom).size).toBe(2);
+    const after = store.get(metadataStaleLabelsAtom);
+    expect(after.size).toBe(2);
+    // No-op must return the same Map reference so Jotai skips the re-render
+    // (the banner's anti-flicker contract).
+    expect(Object.is(before, after)).toBe(true);
+  });
+
+  it("falls back to clearing all entries when the event carries no label", async () => {
+    // Defensive branch: a legacy/untyped label-less event must not strand a
+    // banner — it clears the whole map.
+    const { store } = renderWithStore();
+    await seedTwoStaleLabels(store);
+
+    const activity = listenHandlers.get("hcfs_activity_updated")!;
+    await act(async () => {
+      activity({ payload: {} });
+    });
+
+    expect(store.get(metadataStaleLabelsAtom).size).toBe(0);
   });
 });
