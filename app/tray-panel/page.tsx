@@ -9,6 +9,7 @@ import { Upload } from "lucide-react";
 import "./tray-panel.css";
 import { useTrayPanelData } from "@/app/lib/tray/useTrayPanelData";
 import type { UploadFeedItem } from "@/app/lib/upload-feed/mergeUploadFeed";
+import { groupUploadFeed } from "@/app/lib/upload-feed/groupUploadFeed";
 import { getFileTypeFromExtension } from "@/app/lib/utils/getTileTypeFromExtension";
 import { getFileIcon, DIRECTORY_SUFFIX } from "@/app/lib/utils/fileTypeUtils";
 import { formatBytes } from "@/app/lib/utils/formatBytes";
@@ -44,6 +45,9 @@ const Avatar = dynamic(() => import("boring-avatars"), { ssr: false });
  */
 export default function TrayPanelPage() {
   const { menu, feed, blockNumber, isConnected, unreadCount } = useTrayPanelData();
+  // Date-bucketed for the headed list (Today / Yesterday / This Week / …).
+  // Live uploading/failed rows carry createdAt=now, so they lead "Today".
+  const groups = groupUploadFeed(feed);
 
   return (
     // Transparent full-window shell. Its padding gives the card's drop shadow
@@ -86,13 +90,21 @@ export default function TrayPanelPage() {
             </div>
           </div>
         ) : (
-          // Flat list ordered by `mergeUploadFeed`: uploading → failed →
-          // completed. No day-grouping — status order is the priority here.
-          <ul>
-            {feed.map((item) => (
-              <UploadRowItem key={uploadRowKey(item)} item={item} />
-            ))}
-          </ul>
+          // Date-grouped sections. `mergeUploadFeed` order (uploading → failed
+          // → completed) is preserved within each bucket, so active rows lead
+          // the "Today" group.
+          groups.map((group) => (
+            <section key={group.label} className="mb-1">
+              <h3 className="mb-1 mt-3 font-mono text-[14px] font-medium uppercase leading-5 tracking-[-0.28px] text-grey-70">
+                {group.label}
+              </h3>
+              <ul>
+                {group.items.map((item) => (
+                  <UploadRowItem key={uploadRowKey(item)} item={item} />
+                ))}
+              </ul>
+            </section>
+          ))
         )}
       </div>
 
