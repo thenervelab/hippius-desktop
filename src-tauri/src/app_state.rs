@@ -92,6 +92,13 @@ pub struct AppState {
     /// disk — an Error state is transient and should not survive app
     /// restart.
     pub drive_status_cache: Mutex<HashMap<String, DriveStatus>>,
+    /// Per-account async locks serializing auth-token refreshes. Two concurrent
+    /// `refresh_auth_token_internal` calls for the same account previously raced
+    /// a parallel challenge-response (double session upsert + token save); the
+    /// second caller now awaits the first on this per-account `tokio::Mutex`.
+    /// The outer std `Mutex` only guards the map insert (never held across an
+    /// await); the inner tokio `Mutex` guard is held across the refresh.
+    pub refresh_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// Recovery dialog gate. `ensure_sync_mnemonic` awaits a non-`Pending`
     /// value before touching the local mnemonic store, preventing a race
     /// where a fresh-device sync init mints a new mnemonic before the
@@ -172,6 +179,7 @@ impl AppState {
                 .build()
                 .expect("Failed to build API HTTP client"),
             file_failures: crate::sync::failure_tracking::FileFailureState::new(),
+            refresh_locks: Mutex::new(HashMap::new()),
             drive_status_cache: Mutex::new(HashMap::new()),
             // Default `Skipped` — non-OAuth login paths (mnemonic login,
             // session restore for a returning user) never need the dialog,
