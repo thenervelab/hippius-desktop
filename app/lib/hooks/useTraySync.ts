@@ -144,6 +144,66 @@ async function refreshLoginStatus(): Promise<boolean> {
   return data.loggedIn;
 }
 
+/* ─ Right-click context menu ──────────────────────────────────── */
+//
+// The tray icon's LEFT click opens the custom popover window (see
+// `handleTrayClick`). Its RIGHT click shows this small native menu —
+// Open Files, Open Virtual Machines, Quit Hippius. "Open Hippius" is
+// deliberately omitted because the popover already has an Open Hippius
+// button. The menu is attached with `showMenuOnLeftClick: false` so it
+// never hijacks the left click.
+//
+// This is a separate, minimal menu from the (now-unattached) full menu
+// still built in `useTrayInit` for the icon-state machinery/tests. The
+// builder points the module-level `openFilesItem` / `openVmItem` at ITS
+// items so the existing login-status watcher (`updateOpenFilesMenuItem`
+// / `updateOpenVmMenuItem`) enables/disables the entries the user
+// actually sees.
+const CTX_OPEN_FILES_ID = "tray-ctx-open-files";
+const CTX_OPEN_VM_ID = "tray-ctx-open-vm";
+const CTX_QUIT_ID = "tray-ctx-quit";
+
+async function buildTrayContextMenu(): Promise<Menu> {
+  const loggedIn = await refreshLoginStatus();
+
+  const openFiles = await MenuItem.new({
+    id: CTX_OPEN_FILES_ID,
+    text: "Open Files",
+    enabled: loggedIn,
+    action: async () => {
+      // Guard against a stale `enabled` if login changed between renders.
+      if (!isUserLoggedIn() && !(await refreshLoginStatus())) return;
+      await openFilesPage();
+    },
+  });
+
+  const openVm = await MenuItem.new({
+    id: CTX_OPEN_VM_ID,
+    text: "Open Virtual Machines",
+    enabled: loggedIn,
+    action: async () => {
+      if (!isUserLoggedIn() && !(await refreshLoginStatus())) return;
+      await openVirtualMachinesPage();
+    },
+  });
+
+  const separator = await PredefinedMenuItem.new({ item: "Separator" });
+
+  const quit = await MenuItem.new({
+    id: CTX_QUIT_ID,
+    text: "Quit Hippius",
+    action: async () => {
+      await invoke("app_close");
+    },
+  });
+
+  // Track the visible (attached) items for the login-status watcher.
+  openFilesItem = openFiles;
+  openVmItem = openVm;
+
+  return Menu.new({ items: [openFiles, openVm, separator, quit] });
+}
+
 // Mirror of the auth context's `isAuthenticated`, kept at module scope so the
 // tray `action` callback (a plain closure, not a React component) can read the
 // current value synchronously. This is the SAME flag that decides whether the
@@ -315,16 +375,20 @@ export function useTrayInit(isAuthenticated: boolean) {
       });
 
       if (!existingTray) {
-        // No `menu` is attached: the native tray menu has been replaced by the
-        // custom popover window. Left-click is routed to `handleTrayClick`,
-        // which toggles that window. (The in-memory `menu`/submenu objects are
-        // still maintained below to keep the icon-state machinery and its tests
-        // intact; deleting that now-unused code is a tracked follow-up.)
+        // Left-click → custom popover (via `handleTrayClick`); right-click →
+        // the small native context menu (Open Files / Open VM / Quit).
+        // `showMenuOnLeftClick: false` keeps the left click on the popover.
+        // (The full `menu` built above is still maintained in memory for the
+        // icon-state machinery and its tests; deleting that now-unused code is
+        // a tracked follow-up.)
+        const contextMenu = await buildTrayContextMenu();
         await TrayIcon.new({
           id: TRAY_ID,
           icon: defaultIconPath!,
           iconAsTemplate: false,
           tooltip: "Hippius Cloud",
+          menu: contextMenu,
+          showMenuOnLeftClick: false,
           action: handleTrayClick,
         });
         trayIconState = "default";
@@ -754,11 +818,17 @@ async function setTrayIconSyncing(
 
       if (currentTray) await currentTray.close();
 
+      // Rebuild + re-attach the right-click context menu (a fresh menu, since
+      // the previous one belonged to the closed icon). Left-click still toggles
+      // the popover via `handleTrayClick`.
+      const contextMenu = await buildTrayContextMenu();
       await TrayIcon.new({
         id: TRAY_ID,
         icon: iconPath,
         iconAsTemplate: false,
         tooltip: "Hippius Cloud",
+        menu: contextMenu,
+        showMenuOnLeftClick: false,
         action: handleTrayClick,
       });
 
