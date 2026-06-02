@@ -141,6 +141,7 @@ const Sidebar: React.FC = () => {
                           comingSoon={item?.comingSoon}
                           collapsed={collapsed}
                           subMenuItems={item?.subMenuItems}
+                          external={item?.external}
                         />
                       );
                     })}

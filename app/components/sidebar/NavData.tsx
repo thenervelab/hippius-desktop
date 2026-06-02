@@ -17,6 +17,10 @@ export interface NavItemData {
   isActive?: boolean;
   comingSoon?: boolean;
   subMenuItems?: SubMenuItemData[];
+  // When true, `path` is a full external URL opened in the user's system
+  // browser via the Tauri opener plugin instead of being navigated to with
+  // the in-app router. Mirrors hippius-web's `newTab` flag.
+  external?: boolean;
   // Capability gate consulted by the sidebar before rendering this
   // item. `"shares"` hides the entry until the connected hcfs-server
   // advertises `shares: true` (see `shareFeatureEnabledAtom`). Adding
@@ -88,6 +92,12 @@ export const navSections: NavSection[] = [
   {
     label: "SUPPORT",
     items: [
+      {
+        label: "Documentation",
+        path: "https://docs.hippius.com/",
+        icon: <Icons.DocumentNormal className={ICON_CLASS} />,
+        external: true,
+      },
       {
         label: "Help & Support",
         path: "/support",

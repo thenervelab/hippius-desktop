@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import cn from "@/app/lib/utils/cn";
 import { RevealTextLine } from "@/components/ui";
 import { ChevronDown } from "lucide-react";
@@ -20,6 +21,8 @@ interface NavItemProps {
   comingSoon?: boolean;
   onClick?: () => void;
   subMenuItems?: SubMenuItemData[];
+  // When true, `href` is a full external URL opened in the system browser.
+  external?: boolean;
 }
 
 const NavItem: React.FC<NavItemProps> = ({
@@ -33,6 +36,7 @@ const NavItem: React.FC<NavItemProps> = ({
   comingSoon,
   onClick,
   subMenuItems = [],
+  external,
 }) => {
   const hasSubMenu = subMenuItems.length > 0;
   const setActiveSubMenuItem = useSetAtom(activeSubMenuItemAtom);
@@ -204,6 +208,21 @@ const NavItem: React.FC<NavItemProps> = ({
           </div>
         </div>
       </div>
+    );
+  }
+
+  if (external) {
+    return (
+      <button
+        type="button"
+        onClick={() => void openUrl(href)}
+        className={cn(
+          "transition-all duration-300 relative group w-full text-left",
+          className,
+        )}
+      >
+        {itemContent}
+      </button>
     );
   }
 
