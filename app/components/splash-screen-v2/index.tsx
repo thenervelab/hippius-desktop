@@ -20,6 +20,7 @@ import {
   PHASE_CONTENT,
   AppSetupPhaseContent,
   MIN_PHASE_DURATION,
+  UPDATE_CHECK_MIN_DURATION,
   PHASE_PROGRESS_EVENT,
 } from "./SplashContent";
 import { listen } from "@tauri-apps/api/event";
@@ -203,9 +204,11 @@ export default function SplashWrapper({
         }, 10000);
       });
 
-      // Held to MIN_PHASE_DURATION so the splash never flickers off in <1.5s
-      // when the updater resolves immediately (cached / offline).
-      await runWithMinDuration(updateCheckPromise, MIN_PHASE_DURATION);
+      // Held to UPDATE_CHECK_MIN_DURATION (longer than the cosmetic main
+      // phases) so the "Checking for Updates" beat never flickers off in <1.5s
+      // when the updater resolves immediately (cached / offline) — it needs to
+      // stay up long enough to actually read.
+      await runWithMinDuration(updateCheckPromise, UPDATE_CHECK_MIN_DURATION);
 
       // If an update dialog opened, wait for the user to resolve it
       // (install / skip / cancel) before continuing to the main
@@ -370,32 +373,44 @@ export default function SplashWrapper({
         <div
           className={cn(
             "fixed inset-0 z-40 flex flex-col items-center justify-center w-full h-full overflow-hidden",
-            // Once the handoff starts, paint the overlay with the same
-            // background PageLoader uses so the splash lands directly on the
-            // real app surface in both light and dark mode.
-            isReady &&
-              "pointer-events-none bg-grey-100 dark:bg-black-primary-bg",
+            isReady && "pointer-events-none",
           )}
-          style={{ backgroundColor: isReady ? undefined : SPLASH_BG }}
+          // The overlay stays blue throughout the handoff; the PageLoader layer
+          // below carries its own opaque app-background and fades in on top, so
+          // blue+hippo dissolve into grey/black+lock as a single cross-fade
+          // instead of a hard cut.
+          style={{ backgroundColor: SPLASH_BG }}
         >
-          {!isReady ? (
-            <>
-              <GrainTexture />
-              <PixelateTransition
-                key="intro"
-                color="black"
-                gridSize={gridSize}
-                // Stretched from 1.1s so the opening dissolve reads at a
-                // similar pace to the ~2s phase beats below it instead of
-                // snapping away faster than the rest of the splash.
-                duration={1.8}
-                delay={0.05}
-                from="random"
-              />
-              <LoadingScreen />
-            </>
-          ) : (
-            <PageLoader ringFill="once" />
+          {/* Splash layer (blue card + hippo). Fades out on the handoff so the
+              lock underneath it is revealed gradually. */}
+          <div
+            className={cn(
+              "absolute inset-0 flex flex-col items-center justify-center transition-opacity duration-500 ease-out",
+              isReady && "opacity-0",
+            )}
+          >
+            <GrainTexture />
+            <PixelateTransition
+              key="intro"
+              color="black"
+              gridSize={gridSize}
+              // Stretched from 1.1s so the opening dissolve reads at a
+              // similar pace to the ~2s phase beats below it instead of
+              // snapping away faster than the rest of the splash.
+              duration={1.8}
+              delay={0.05}
+              from="random"
+            />
+            <LoadingScreen />
+          </div>
+
+          {/* Lock layer (PageLoader). Mounted only on handoff and faded in over
+              the blue so the decrypting-lock animation arrives smoothly rather
+              than snapping in. */}
+          {isReady && (
+            <div className="absolute inset-0 opacity-0 animate-fade-in-0.5">
+              <PageLoader ringFill="once" />
+            </div>
           )}
         </div>
       )}
