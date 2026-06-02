@@ -312,7 +312,7 @@ function Footer({ address, blockNumber, isConnected }: { address: string | null;
                 <BoxSimple className="size-[13px] shrink-0 text-black/60 dark:text-white/60" />
                 {isConnected && blockNumber !== null && (
                   <span className="font-geist text-[10px] font-medium leading-[14px] tracking-[-0.2px] text-primary-50 dark:text-primary-brand-dark">
-                    #&nbsp;{blockNumber.toLocaleString()}
+                    #&nbsp;{blockNumber}
                   </span>
                 )}
               </span>
