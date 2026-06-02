@@ -1189,7 +1189,7 @@ _Risk:_ Cross-repo enum change: SyncEvent is consumed via match in tauri_bridge.
 
 _Notes:_ No Rust diff produced this turn (analysis-only validation); the illu Rust gates (preflight, data-structure plan, axioms baseline, exemplars, critique, quality_gate, and the seven-item self-review checklist) are N/A for this read-only assessment. Verdict valid at low severity: the bug is real and the auditor's one-shot-reconcile reasoning is correct (even understated re: re-fire), but impact is bounded to premature dismissal of a cosmetic, self-healing informational banner with no data or gating consequence. The clean fix requires a cross-repo hcfs-client change to add a label to the payload-less ActivityUpdated event; a desktop-only stopgap (clear on the already-labeled sync_completed event) is available if the cross-repo bump must be deferred.
 
-- [UPSTREAM] **F35** — cross-repo hcfs fix; spec in 'Cross-repo (hcfs) upstream work' section below (document-only this session, per user)
+- [x] **F35 fixed & tested** — landed both sides (2026-06-02): hcfs adds `SyncEvent::ActivityUpdated { label }` (PR thenervelab/hcfs#198, merged as `41954d7`); desktop forwards it as `LabelPayload` (`tauri_bridge.rs`, `lifecycle.rs`) and `useMetadataStale.ts` now clears only the event's label. Pinned hcfs rev bumped to `41954d7`. vitest `useMetadataStale.test.tsx` covers per-label clear + unknown-label no-op + label-less fallback.
 
 ---
 
@@ -1466,11 +1466,12 @@ _Notes:_ No Rust diff this turn (TypeScript analysis only) — preflight/axioms/
 
 ## Cross-repo (hcfs) upstream work — F01, F35, F41
 
-These three findings live in the pinned `hcfs` crate (`hcfs-client`), not in this
-repo. They were **not applied this session** (decision: document-only; bumping
-the `Cargo.toml` git rev requires the hcfs branch to be pushed first). Each is a
-ready-to-implement upstream PR spec. After landing them in hcfs and pushing,
-bump the `hcfs-client` / `hcfs-shared` rev in `src-tauri/Cargo.toml` and rebuild.
+These three findings lived in the pinned `hcfs` crate (`hcfs-client`), not in this
+repo. **Status: ALL LANDED (2026-06-02)** in hcfs PR thenervelab/hcfs#198 (merged
+to hcfs `main` as `41954d7`); the `hcfs-client` / `hcfs-shared` rev in
+`src-tauri/Cargo.toml` is bumped to `41954d7`. F35 additionally required the
+desktop consumer change (see the F35 entry above). The original PR specs are
+retained below for reference.
 
 ### F01 — stall watchdog cancels any sync cycle exceeding ~3 min (HIGH)
 **Root cause:** `SyncRunner::is_progress_stalled` (runner.rs) compares wall-clock

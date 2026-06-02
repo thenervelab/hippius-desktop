@@ -864,7 +864,13 @@ pub async fn start_server_migration(
             }
 
             let result: StartServerMigrationResult = retry_resp.json().await?;
-            let _ = upsert_migration_status(pool, &account_id, "in_progress", 0, 0, "[]", "", &server_url).await;
+            // Best-effort local persist — the server migration is already running
+            // (guard committed below). Log on failure so a missing local
+            // "in_progress" row (which would let a post-restart check_migration
+            // re-show "Start Migration") is at least diagnosable.
+            if let Err(e) = upsert_migration_status(pool, &account_id, "in_progress", 0, 0, "[]", "", &server_url).await {
+                tracing::warn!("[Migration] failed to persist in_progress status locally (after retry): {e}");
+            }
             tracing::info!("[Migration] Server migration started successfully (after cancel+retry)");
             in_progress_guard.commit();
             return Ok(result);
@@ -878,7 +884,13 @@ pub async fn start_server_migration(
 
     // Save "in_progress" locally so check_migration can detect a completed
     // server migration that was never transitioned (e.g. app restarted).
-    let _ = upsert_migration_status(pool, &account_id, "in_progress", 0, 0, "[]", "", &server_url).await;
+    // Best-effort: the server migration is already running and the guard is
+    // committed below, so a local-write failure must not abort — but log it,
+    // because a missing row would let a post-restart check_migration re-show
+    // "Start Migration".
+    if let Err(e) = upsert_migration_status(pool, &account_id, "in_progress", 0, 0, "[]", "", &server_url).await {
+        tracing::warn!("[Migration] failed to persist in_progress status locally: {e}");
+    }
 
     tracing::info!("[Migration] Server migration started successfully");
     in_progress_guard.commit();

@@ -398,7 +398,7 @@ pub(super) async fn walk_regular_files_stats(root: &std::path::Path) -> (u64, u6
 /// total upload payload BEFORE invoking
 /// `crate::billing::eligibility::require_eligible`.
 ///
-/// Same invariants as [`count_regular_files`]:
+/// Same invariants as [`walk_regular_files_stats`]:
 /// - Iterative depth-first walk via explicit stack (no recursive async
 ///   boxing); cap depth at [`FOLDER_BYTE_WALK_MAX_DEPTH`] entries on the
 ///   stack to defend against symlink-cycle pathological cases. The cap
@@ -412,7 +412,7 @@ pub(super) async fn walk_regular_files_stats(root: &std::path::Path) -> (u64, u6
 ///   surviving bytes. A wholly-unreadable root returns `0`, which
 ///   correctly falls back to the static `> 0` threshold floor.
 /// - Symlinks are NOT followed (`DirEntry::file_type` is lstat-shaped),
-///   matching `count_regular_files` and avoiding loops.
+///   matching `walk_regular_files_stats` and avoiding loops.
 /// - Each per-file size comes from `DirEntry::metadata`, which calls
 ///   `stat` on the entry itself (NOT the symlink target, since `ft`
 ///   already classified it as a regular file). Sizes are summed via
@@ -471,8 +471,8 @@ async fn sum_and_count_batch(paths: &[String]) -> (u64, u64) {
         if p.is_dir() {
             let (b, c) = walk_regular_files_stats(p).await;
             bytes = bytes.saturating_add(b);
-            // Floor a directory's count at 1 so an unwalkable subdir still
-            // raises the banner (mirrors the prior `count_regular_files().max(1)`).
+            // Floor a directory's count at 1 so an empty or unwalkable subdir
+            // still raises the banner.
             count = count.saturating_add(c.max(1));
         } else {
             bytes = bytes.saturating_add(tokio::fs::metadata(p).await.map_or(0, |m| m.len()));
