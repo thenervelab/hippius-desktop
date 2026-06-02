@@ -1,47 +1,19 @@
 "use client";
 import React from "react";
-import { HippiusLogo } from "@/components/ui/icons";
+import DecryptingAnimation from "@/app/components/DecryptingAnimation";
 
-export default function PageLoader() {
+export default function PageLoader({
+  ringFill = "loop",
+}: {
+  // `"once"` makes the progress ring fill a single quick revolution and hold
+  // full — used by the splash outro so it reads as "complete" instead of
+  // looping. Defaults to the continuous loop used for ordinary page loads.
+  ringFill?: "loop" | "once";
+} = {}) {
   return (
     <div className="flex items-center justify-center min-h-screen h-screen w-screen bg-grey-100 dark:bg-black-primary-bg">
-      <div
-        role="status"
-        aria-live="polite"
-        className="flex flex-col items-center gap-4"
-      >
-        <div className="relative h-24 w-24">
-          {/* soft glow */}
-          <div className="absolute -inset-4 rounded-full bg-primary-50/15 blur-2xl animate-pulse" />
-
-          {/* outer spinning ring */}
-          <div
-            className="absolute inset-0 rounded-full border-2 border-primary-50/30 border-t-primary-50 animate-spin"
-            style={{ animationDuration: "1.2s" }}
-          />
-
-          {/* inner counter-rotating ring */}
-          <div
-            className="absolute inset-2 rounded-full border-2 border-primary-50/20 border-b-primary-50"
-            style={{ animation: "spin 2s linear infinite reverse" }}
-          />
-
-          {/* orbiting dots */}
-          <div
-            className="absolute inset-0 animate-spin"
-            style={{ animationDuration: "2.8s" }}
-          >
-            <span className="absolute left-1/2 top-0 -translate-x-1/2 size-2 rounded-full bg-primary-50" />
-            <span className="absolute right-0 top-1/2 -translate-y-1/2 size-2 rounded-full bg-primary-50/80" />
-            <span className="absolute left-1/2 bottom-0 -translate-x-1/2 size-2 rounded-full bg-primary-50/60" />
-            <span className="absolute left-0 top-1/2 -translate-y-1/2 size-2 rounded-full bg-primary-50/40" />
-          </div>
-
-          {/* logo tile */}
-          <div className="absolute inset-0 flex items-center justify-center z-10">
-            <HippiusLogo className="size-9 text-primary-50" />
-          </div>
-        </div>
+      <div role="status" aria-live="polite" className="flex flex-col items-center">
+        <DecryptingAnimation ringFill={ringFill} />
       </div>
     </div>
   );

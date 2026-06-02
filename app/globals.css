@@ -287,6 +287,53 @@ html {
   }
 }
 
+/* Decryption animation keyframes (PageLoader / DecryptingAnimation) */
+@keyframes decrypt-unlock {
+  0%,
+  15% {
+    d: path("M24 30V24C24 18.48 28.48 14 34 14V14");
+    opacity: 1;
+  }
+  35%,
+  65% {
+    d: path("M24 30V24C24 18.48 28.48 10 34 10V10");
+    opacity: 1;
+  }
+  85%,
+  100% {
+    d: path("M24 30V24C24 18.48 28.48 14 34 14V14");
+    opacity: 1;
+  }
+}
+
+@keyframes decrypt-progress {
+  0% {
+    stroke-dashoffset: 352;
+  }
+  100% {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes decrypt-burst {
+  0%,
+  15% {
+    transform: translateY(0);
+    opacity: 0;
+  }
+  30% {
+    opacity: 0.7;
+  }
+  60% {
+    transform: translateY(-32px);
+    opacity: 0;
+  }
+  100% {
+    transform: translateY(-32px);
+    opacity: 0;
+  }
+}
+
 @keyframes dotPulse {
   0% {
     opacity: 0;

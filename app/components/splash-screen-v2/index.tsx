@@ -26,6 +26,7 @@ import { listen } from "@tauri-apps/api/event";
 import LoadingScreen from "./LoadingScreen";
 import PixelateTransition from "./PixelateTransition";
 import GrainTexture from "./GrainTexture";
+import PageLoader from "@/app/components/PageLoader";
 
 // Splash background blue, shared by the loader card and the outro pixel grid so
 // the dissolve into the app reads as one continuous colour wash.
@@ -37,8 +38,8 @@ function getGridSize() {
   return Math.max(
     7,
     Math.floor(
-      (typeof window !== "undefined" ? window.innerWidth : 1024) / 100
-    )
+      (typeof window !== "undefined" ? window.innerWidth : 1024) / 100,
+    ),
   );
 }
 
@@ -57,9 +58,9 @@ export default function SplashWrapper({
   const setPhaseInternalProgress = useSetAtom(phaseInternalProgressAtom);
   const [keepSplashscreenInDom, setKeepSplacescreenInDom] = useState(true);
   const [isFullyComplete, setIsFullyComplete] = useState(false);
-  // True once the outro pixel dissolve has finished. Gates mounting `children`
-  // so the page loader (their Suspense fallback) never overlaps the dissolving
-  // pixels.
+  // True once the 1.5s page-loading handoff has finished. Children mount while
+  // this loader is still covering the app, which lets route/auth guards settle
+  // without showing another full-screen loader after the splash.
   const [outroDone, setOutroDone] = useState(false);
   const setSplashComplete = useSetAtom(splashCompleteAtom);
   const setupStartedRef = useRef(false);
@@ -108,16 +109,20 @@ export default function SplashWrapper({
           if (!mounted) return;
 
           const { phase: eventPhase, progress } = event.payload;
-          console.log(`[Progress Event] Phase: ${eventPhase}, Progress: ${progress}%`);
+          console.log(
+            `[Progress Event] Phase: ${eventPhase}, Progress: ${progress}%`,
+          );
 
           // Only update if this event is for the current phase
           if (currentPhaseRef.current === eventPhase) {
             const clampedProgress = Math.max(0, Math.min(100, progress));
             setPhaseInternalProgress(clampedProgress);
           } else {
-            console.log(`[Progress Event] Ignoring - current phase is ${currentPhaseRef.current}`);
+            console.log(
+              `[Progress Event] Ignoring - current phase is ${currentPhaseRef.current}`,
+            );
           }
-        }
+        },
       );
 
       return unlisten;
@@ -156,14 +161,14 @@ export default function SplashWrapper({
   // Helper function to ensure minimum phase duration
   const runWithMinDuration = async (
     promise: Promise<unknown>,
-    minDuration: number = MIN_PHASE_DURATION
+    minDuration: number = MIN_PHASE_DURATION,
   ) => {
     const startTime = Date.now();
     const result = await promise;
     const elapsed = Date.now() - startTime;
     if (elapsed < minDuration) {
       await new Promise((resolve) =>
-        setTimeout(resolve, minDuration - elapsed)
+        setTimeout(resolve, minDuration - elapsed),
       );
     }
     return result;
@@ -219,14 +224,17 @@ export default function SplashWrapper({
       // visible dialog.
       const DIALOG_WAIT_CAP_MS = 60_000;
       const dialogWaitStart = Date.now();
-      while (updateDialogOpenRef.current && Date.now() - dialogWaitStart < DIALOG_WAIT_CAP_MS) {
+      while (
+        updateDialogOpenRef.current &&
+        Date.now() - dialogWaitStart < DIALOG_WAIT_CAP_MS
+      ) {
         await wait(100);
       }
       if (updateDialogOpenRef.current) {
         console.warn(
           "[Setup] Update dialog still open after",
           DIALOG_WAIT_CAP_MS,
-          "ms — proceeding past update-check phase anyway to avoid stranding splash."
+          "ms — proceeding past update-check phase anyway to avoid stranding splash.",
         );
       }
 
@@ -237,7 +245,9 @@ export default function SplashWrapper({
 
       for (let i = 0; i < phaseNames.length; i++) {
         const phaseName = phaseNames[i];
-        console.log(`[Setup] Starting phase ${i + 1}/${phaseNames.length}: ${phaseName}`);
+        console.log(
+          `[Setup] Starting phase ${i + 1}/${phaseNames.length}: ${phaseName}`,
+        );
 
         setPhase(phaseName);
         setCurrentPhaseIndex(i);
@@ -260,7 +270,7 @@ export default function SplashWrapper({
           let currentProgress = 0;
 
           progressIntervalId = setInterval(() => {
-            currentProgress += 3;
+            currentProgress += 4;
             if (currentProgress <= 100) {
               setPhaseInternalProgress(currentProgress);
             } else {
@@ -269,7 +279,7 @@ export default function SplashWrapper({
                 progressIntervalId = null;
               }
             }
-          }, 80);
+          }, 75);
 
           await new Promise<void>((resolve) => {
             const checkInterval = setInterval(() => {
@@ -285,7 +295,7 @@ export default function SplashWrapper({
           });
 
           setPhaseInternalProgress(100);
-          await wait(150);
+          await wait(100);
 
           console.log(`[Setup] Completed phase: ${phaseName}`);
         } catch (error) {
@@ -327,19 +337,17 @@ export default function SplashWrapper({
   ]);
 
   // `isReady` flips when setup finishes (unless the splash is pinned open via
-  // preventClose). It triggers the outro pixel dissolve.
+  // preventClose). It triggers the one-shot page-loading handoff.
   const isReady = isFullyComplete && !preventClose;
 
-  // Defer mounting `children` AND removing the overlay until the outro
-  // PixelateTransition has finished dissolving. If `children` mounted the moment
-  // `isReady` flipped, their Suspense fallback (PageLoader) would show THROUGH
-  // the dissolving pixels — two loaders on screen at once. Waiting the outro's
-  // duration (delay 0.05 + ~1.1s dissolve + tail fade) means the page loader
-  // only appears once the pixels are gone.
+  // When setup finishes, swap the splash for the app's PageLoader with a
+  // single-shot ring (`ringFill="once"`) that sweeps full in 1.2s and holds
+  // there (`forwards`) — it never restarts from empty. Hold a touch past the
+  // fill so the user registers the completed circle, then reveal the page.
   useEffect(() => {
     if (!isReady) return;
 
-    const OUTRO_DURATION_MS = 1400;
+    const OUTRO_DURATION_MS = MIN_PHASE_DURATION;
     const timeout = setTimeout(() => {
       setOutroDone(true);
       setKeepSplacescreenInDom(false);
@@ -350,21 +358,23 @@ export default function SplashWrapper({
 
   return (
     <>
-      {outroDone && children}
+      {isReady && (
+        <div
+          aria-hidden={!outroDone}
+          className={cn(!outroDone && "invisible pointer-events-none")}
+        >
+          {children}
+        </div>
+      )}
       {keepSplashscreenInDom && (
         <div
           className={cn(
             "fixed inset-0 z-40 flex flex-col items-center justify-center w-full h-full overflow-hidden",
-            // Once the outro starts, paint the overlay with the SAME background
-            // the app shows next — these are the exact classes PageLoader uses.
-            // So the blue dissolve lands on the real app surface (dark on a dark
-            // system, light on a light one) instead of the <body>'s hard-coded
-            // light grey, which on a dark system flashed white before the dark
-            // page loader cut in. This keeps the dark intro and the outro reveal
-            // consistent and removes the white flash. The blue outro grid covers
-            // this background until it dissolves, so swapping the colour here is
-            // never visible as a flash.
-            isReady && "pointer-events-none bg-grey-100 dark:bg-black-primary-bg"
+            // Once the handoff starts, paint the overlay with the same
+            // background PageLoader uses so the splash lands directly on the
+            // real app surface in both light and dark mode.
+            isReady &&
+              "pointer-events-none bg-grey-100 dark:bg-black-primary-bg",
           )}
           style={{ backgroundColor: isReady ? undefined : SPLASH_BG }}
         >
@@ -375,21 +385,17 @@ export default function SplashWrapper({
                 key="intro"
                 color="black"
                 gridSize={gridSize}
-                duration={1.1}
+                // Stretched from 1.1s so the opening dissolve reads at a
+                // similar pace to the ~2s phase beats below it instead of
+                // snapping away faster than the rest of the splash.
+                duration={1.8}
                 delay={0.05}
                 from="random"
               />
               <LoadingScreen />
             </>
           ) : (
-            <PixelateTransition
-              key="outro"
-              color={SPLASH_BG}
-              gridSize={gridSize}
-              duration={1.1}
-              delay={0.05}
-              from="random"
-            />
+            <PageLoader ringFill="once" />
           )}
         </div>
       )}

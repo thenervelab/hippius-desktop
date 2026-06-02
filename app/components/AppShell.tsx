@@ -54,7 +54,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               <TrayNavigationListener />
               <ZoomController />
               <SplashWrapper preventClose={false}>
-                <Suspense fallback={<PageLoader />}>
+                <Suspense fallback={<PageLoader ringFill="once" />}>
                   <div className="flex min-h-screen h-screen">{children}</div>
                 </Suspense>
               </SplashWrapper>

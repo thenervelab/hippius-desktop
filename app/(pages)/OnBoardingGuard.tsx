@@ -39,7 +39,7 @@ export default function OnBoardingGuard({
   }, [isAuthenticated, isLoading]);
 
   if (isLoading || (isAuthenticated && checking)) {
-    return <PageLoader />;
+    return <PageLoader ringFill="once" />;
   }
   if (!isAuthenticated) return null;
   if (done === false) {
