@@ -1,7 +1,16 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
+import {
+  type SyncSnapshot,
+  EMPTY_SNAPSHOT,
+} from "@/app/lib/types/syncSnapshot";
+import {
+  mergeUploadFeed,
+  type UploadFeedItem,
+} from "@/app/lib/upload-feed/mergeUploadFeed";
 
 /**
  * Account / credits summary for the tray popover header + footer.
@@ -13,39 +22,31 @@ export interface TrayMenuData {
   substrateAddress: string | null;
 }
 
-/**
- * One pre-normalized upload/activity row, as produced by the Rust
- * `get_sync_activity_rows` command (dedup/sort/status-mapping already done).
- * `fileName` is the shortened display name; `rawName` is the full name.
- */
-export interface SyncActivityRow {
-  id: string;
-  file_name: string;
-  raw_name: string;
-  status: string;
-  size: number;
-  timestamp: number | null;
-  deleted: boolean;
-}
+/** Max upload-feed rows the popover shows. */
+const FEED_LIMIT = 20;
 
-/** Max activity rows to request for the popover list. */
-const ACTIVITY_LIMIT = 40;
-
-/** Background refresh cadence while the popover window stays mounted. */
+/** Background refresh cadence for the server-backed slices (credits, recent
+ *  uploads, unread). Live upload progress is event-driven, not polled. */
 const REFRESH_INTERVAL_MS = 5000;
 
 /**
  * Data feed for the tray popover.
  *
- * All values are computed in Rust — this hook only fetches and keeps them
- * fresh. It refetches on mount, on a light interval (the window is created
- * once and reused, so it stays mounted while hidden), and whenever the popover
- * regains focus (i.e. each time it is re-shown), so a freshly opened panel
- * always reflects current credits and uploads.
+ * The popover webview mounts no app providers (see `AppShell`), so it cannot
+ * use react-query or Jotai — it talks to the backend only through raw `invoke`
+ * / `listen`. It assembles the SAME upload feed the main window's Recent Files
+ * section shows: the account-wide "last uploads" (`get_recent_uploads`)
+ * overlaid with this device's live sync progress (`sp_get_snapshot` +
+ * `sync_progress_snapshot` events), joined by the pure `mergeUploadFeed`.
+ *
+ * Server slices refresh on mount, on a light interval, and whenever the
+ * popover regains focus (each re-show). The live snapshot updates from its
+ * event stream, so uploading rows animate without polling.
  */
 export function useTrayPanelData() {
   const [menu, setMenu] = useState<TrayMenuData | null>(null);
-  const [activity, setActivity] = useState<SyncActivityRow[]>([]);
+  const [recentUploads, setRecentUploads] = useState<FormattedUserFile[]>([]);
+  const [snapshot, setSnapshot] = useState<SyncSnapshot>(EMPTY_SNAPSHOT);
   // Latest finalized block + chain connectivity, mirrored from the Rust block
   // subscription's `block_number_updated` broadcast (the same feed the main
   // window's ProfileCard reads). `null` until the first block arrives.
@@ -54,25 +55,37 @@ export function useTrayPanelData() {
   // Unread notification count for the header bell badge — same DB-backed value
   // the main window's top-bar bell shows (`get_unread_count`).
   const [unreadCount, setUnreadCount] = useState(0);
+  // Tracks the snapshot's last completion state so we refresh the server list
+  // only on the rising edge (session finishes), not on every snapshot tick.
+  const prevCompletedRef = useRef(false);
 
   const refresh = useCallback(async () => {
     try {
-      const [menuData, rows] = await Promise.all([
-        invoke<TrayMenuData>("get_tray_menu_data"),
-        invoke<SyncActivityRow[]>("get_sync_activity_rows", { limit: ACTIVITY_LIMIT }),
-      ]);
+      const menuData = await invoke<TrayMenuData>("get_tray_menu_data");
       setMenu(menuData);
-      setActivity(rows);
 
-      // Unread count is keyed by the active account address.
-      if (menuData.substrateAddress) {
-        try {
-          const count = await invoke<number>("get_unread_count", { userAddress: menuData.substrateAddress });
-          setUnreadCount(count);
-        } catch (error) {
-          console.error("[TrayPanel] Failed to load unread count:", error);
-        }
+      const address = menuData.substrateAddress;
+      if (address) {
+        // Recent uploads + unread are keyed by the active account address.
+        const [uploads, count] = await Promise.all([
+          invoke<FormattedUserFile[]>("get_recent_uploads", {
+            accountId: address,
+            limit: FEED_LIMIT,
+          }).catch((error) => {
+            console.error("[TrayPanel] Failed to load recent uploads:", error);
+            return [] as FormattedUserFile[];
+          }),
+          invoke<number>("get_unread_count", { userAddress: address }).catch(
+            (error) => {
+              console.error("[TrayPanel] Failed to load unread count:", error);
+              return 0;
+            },
+          ),
+        ]);
+        setRecentUploads(uploads);
+        setUnreadCount(count);
       } else {
+        setRecentUploads([]);
         setUnreadCount(0);
       }
     } catch (error) {
@@ -82,6 +95,12 @@ export function useTrayPanelData() {
 
   useEffect(() => {
     void refresh();
+    // Seed the live snapshot once; subsequent updates arrive via the event.
+    void invoke<SyncSnapshot>("sp_get_snapshot")
+      .then(setSnapshot)
+      .catch((error) =>
+        console.error("[TrayPanel] Failed to seed snapshot:", error),
+      );
 
     const interval = window.setInterval(() => void refresh(), REFRESH_INTERVAL_MS);
 
@@ -95,6 +114,28 @@ export function useTrayPanelData() {
         unlistenFocus = un;
       })
       .catch((error) => console.error("[TrayPanel] focus listener failed:", error));
+
+    // Live sync progress (uploading / failed). Events reach every window.
+    // The `sync_files_completed_changed` DOM event the main window uses to
+    // refresh the server list is window-local (dispatched by `useSyncEvents`,
+    // which the provider-less popover never mounts), so we can't rely on it
+    // here. Instead, refresh the server-backed recent uploads on the rising
+    // edge of the snapshot's completion — when a session finishes, pull the
+    // authoritative completed rows. Until then the live overlay keeps the
+    // just-finished file visible, and the 5s interval is the backstop.
+    let unlistenSnapshot: (() => void) | undefined;
+    void listen<SyncSnapshot>("sync_progress_snapshot", (event) => {
+      const completed = event.payload.effectiveCompleted;
+      if (completed && !prevCompletedRef.current) {
+        void refresh();
+      }
+      prevCompletedRef.current = completed;
+      setSnapshot(event.payload);
+    })
+      .then((un) => {
+        unlistenSnapshot = un;
+      })
+      .catch((error) => console.error("[TrayPanel] snapshot listener failed:", error));
 
     // Mirror the chain block + connectivity broadcast (app.emit reaches every
     // window, so this works even though the subscription runs for the main one).
@@ -111,9 +152,20 @@ export function useTrayPanelData() {
     return () => {
       window.clearInterval(interval);
       unlistenFocus?.();
+      unlistenSnapshot?.();
       unlistenBlock?.();
     };
   }, [refresh]);
 
-  return { menu, activity, blockNumber, isConnected, unreadCount, refresh };
+  const feed: UploadFeedItem[] = useMemo(
+    () =>
+      mergeUploadFeed({
+        recentUploads,
+        snapshotFiles: snapshot.files,
+        limit: FEED_LIMIT,
+      }),
+    [recentUploads, snapshot.files],
+  );
+
+  return { menu, feed, blockNumber, isConnected, unreadCount, refresh };
 }
