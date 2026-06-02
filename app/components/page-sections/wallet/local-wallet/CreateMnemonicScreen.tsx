@@ -106,8 +106,8 @@ const CreateMnemonicScreen: React.FC<CreateMnemonicScreenProps> = ({
 
         <BackgroundContainer
           className="relative w-full max-w-[594px]"
-          fillClassName="fill-[#f9f9f9] dark:fill-[#202020]"
-          strokeClassName="stroke-[#b3b3b3] dark:stroke-[#6c6c6c]"
+          fillClassName="fill-[#f9f9f9] dark:fill-[#262626]"
+          hippoIconClassName="fill-[#989898] dark:fill-[#5e5e5e]"
           borderClassName="bg-transparent dark:bg-transparent p-0 sm:p-0"
           contentClassName="flex justify-center"
           decorationLineColor="rgba(151, 151, 151, 0.17)"

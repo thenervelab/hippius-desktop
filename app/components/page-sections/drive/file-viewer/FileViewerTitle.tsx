@@ -30,11 +30,11 @@ const FileViewerTitle: React.FC<FileViewerTitleProps> = ({
         className,
       )}
     >
-      <FileIcon className={cn("size-[20px] shrink-0", fileIconColor)} />
+      <FileIcon className={cn("size-[24px] shrink-0", fileIconColor)} />
       <span
         title={file.name}
         className={cn(
-          "font-semibold text-[12px] leading-[20px] tracking-[-0.24px]",
+          "font-semibold text-[14px] leading-[22px] tracking-[-0.28px]",
           "text-grey-10 dark:text-grey-light-100",
           "truncate",
         )}

@@ -436,8 +436,8 @@ const AccessKeyLoginGate: React.FC = () => {
 
       <BackgroundContainer
         className="relative w-full max-w-[613px]"
-        fillClassName="fill-[#f9f9f9] dark:fill-[#202020]"
-        strokeClassName="stroke-[#b3b3b3] dark:stroke-[#6c6c6c]"
+        fillClassName="fill-[#f9f9f9] dark:fill-[#262626]"
+        hippoIconClassName="fill-[#989898] dark:fill-[#5e5e5e]"
         contentClassName="flex justify-center"
         shellClassName="w-full min-w-0 max-w-[613px]"
         cardClassName="w-full min-w-0 max-w-full p-[min(1rem,16px)] gap-[min(0.75rem,12px)] items-center"

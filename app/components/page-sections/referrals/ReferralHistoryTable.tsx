@@ -1,296 +1,291 @@
-import AbstractIconWrapper from "@/components/ui/abstract-icon-wrapper";
-import { P } from "@/components/ui/typography";
-import { AlertCircle, Hourglass, Loader2, Send } from "lucide-react";
-import {
-  TableWrapper,
-  Table,
-  Tr,
-  Td,
-  Th,
-  THead,
-  TBody,
-} from "@/components/ui/alt-table";
+"use client";
+
+import React, { useMemo, useState } from "react";
+import { createPortal } from "react-dom";
+import { Download } from "lucide-react";
 import {
   createColumnHelper,
   getCoreRowModel,
   useReactTable,
-  getSortedRowModel,
 } from "@tanstack/react-table";
+
 import {
-  ReferralEvent,
-} from "@/app/lib/hooks/api/useUserReferrals";
-import { useState, useMemo, useCallback, useEffect } from "react";
+  MiniPaginationControl,
+  Pagination,
+  SkeletonTableRow,
+  TBody,
+  THead,
+  Table,
+  TableWrapper,
+  Td,
+  Th,
+  Tr,
+} from "@/components/ui/table";
+import { CopyableCell } from "@/components/ui/alt-table";
+import { Button } from "@/components/ui/button";
+import NoEntriesFound from "@/components/ui/NoEntriesFound";
+
+import {
+  useUserReferrals,
+  type ReferralEvent,
+} from "@/lib/hooks/api/useUserReferrals";
+import { formatDate } from "@/app/lib/utils/formatters/formatDate";
+import { cn } from "@/lib/utils";
+
+/* "Referral History" table.
+ *
+ * Restyled to mirror BillingnHistoryTable / TransactionHistoryTable:
+ * same Th/Td primitives, same #E3E3E3 / #313131 border palette, banded
+ * #fbfbfb / #f5f5f5 (light) and #161616 / #1e1e1e (dark) row fills,
+ * SkeletonTableRow on load, NoEntriesFound empty state, and the
+ * MiniPaginationControl-in-header / full-Pagination-below pair. */
 
 const columnHelper = createColumnHelper<ReferralEvent>();
+const DEFAULT_PAGE_SIZE = 10;
 
-// Column order for referral history table
-const COLUMN_ORDER = ["address", "reward", "date", "status"] as const;
+const HEADERS = ["USER ID", "CREDIT EARNED", "DATE CREATED", "INVOICE"];
+const SKELETON_WIDTHS = ["70%", "100px", "120px", "100px"];
+const MIN_W = "min-w-[680px]";
 
-// Default column widths for referral history table (percentages)
-const DEFAULT_COLUMN_WIDTHS: Record<(typeof COLUMN_ORDER)[number], number> = {
-  address: 40,
-  reward: 25,
-  date: 20,
-  status: 15,
-};
+interface ReferralHistoryTableProps {
+  headerPortalTarget?: HTMLElement | null;
+  devData?: ReferralEvent[];
+  isRefreshing?: boolean;
+}
 
-const MIN_COLUMN_WIDTHS: Record<(typeof COLUMN_ORDER)[number], number> = {
-  address: 30,
-  reward: 20,
-  date: 15,
-  status: 10,
-};
+const ReferralHistoryTable: React.FC<ReferralHistoryTableProps> = ({
+  headerPortalTarget,
+  devData,
+  isRefreshing = false,
+}) => {
+  const { data: realData, isPending: realIsPending, isError } =
+    useUserReferrals();
 
-const normalizeColumnWidths = (maybeStored?: Record<string, number>) => {
-  const merged: Record<string, number> = { ...DEFAULT_COLUMN_WIDTHS, ...(maybeStored || {}) };
-  const normalized: Record<string, number> = {};
+  /* devData (from the page-level Dev Tools panel) overrides the live
+   * hook so we can stress-test the layout with N rows without touching
+   * chain state. */
+  const data = devData
+    ? {
+        referralHistory: devData,
+        totalReferrals: devData.length,
+        totalRewards: "0",
+        referralCodes: [],
+      }
+    : realData;
+  const isPending = devData ? false : realIsPending || isRefreshing;
 
-  // Keep only expected keys with numeric values; fall back to defaults
-  COLUMN_ORDER.forEach((key) => {
-    const v = Number(merged[key]);
-    normalized[key] = Number.isFinite(v) ? v : DEFAULT_COLUMN_WIDTHS[key];
-  });
-
-  // Keep total ≈ 100%
-  const total = COLUMN_ORDER.reduce((acc, k) => acc + normalized[k], 0);
-  if (total !== 100) {
-    const factor = 100 / total;
-    COLUMN_ORDER.forEach((k) => {
-      normalized[k] = Math.round(normalized[k] * factor * 100) / 100;
-    });
-  }
-  return normalized as Record<string, number>;
-};
-
-const getStoredColumnWidths = () => {
-  if (typeof window === "undefined") return normalizeColumnWidths();
-  try {
-    const stored = localStorage.getItem("referralHistoryTable_columnWidths");
-    return normalizeColumnWidths(stored ? JSON.parse(stored) : undefined);
-  } catch {
-    return normalizeColumnWidths();
-  }
-};
-
-const saveColumnWidths = (columnWidths: Record<string, number>) => {
-  if (typeof window === "undefined") return;
-  try {
-    localStorage.setItem("referralHistoryTable_columnWidths", JSON.stringify(columnWidths));
-  } catch { }
-};
-
-const ReferralHistoryTable: React.FC = () => {
-  // Feature disabled - use static empty data to prevent app hanging
-  // The useUserReferrals hook depends on mnemonic which may not be available
-  const data = { referralHistory: [] as ReferralEvent[], totalReferrals: 0, totalRewards: "0", referralCodes: [] };
-  const isPending = false;
-  const isError = false;
-
-  // Column resizing state
-  const [columnWidths, setColumnWidths] = useState<Record<string, number>>(
-    () => getStoredColumnWidths()
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
+  const allRows = data?.referralHistory || [];
+  const totalCount = allRows.length;
+  const totalPages = useMemo(
+    () => Math.max(1, Math.ceil(totalCount / pageSize)),
+    [totalCount, pageSize],
   );
-  const [isResizing, setIsResizing] = useState(false);
-  const [resizeData, setResizeData] = useState<{
-    columnId: string;
-    startX: number;
-    startWidth: number;
-    nextColumnId?: string;
-    nextStartWidth: number;
-  } | null>(null);
-
-  // Save column widths to localStorage
-  useEffect(() => {
-    saveColumnWidths(columnWidths);
-  }, [columnWidths]);
-
-  // Real visible order derived from the columns
-  const visibleColumnOrder = useMemo<string[]>(
-    () => ["address", "reward", "date", "status"],
-    []
+  const pageData = useMemo(
+    () => allRows.slice((currentPage - 1) * pageSize, currentPage * pageSize),
+    [allRows, currentPage, pageSize],
   );
 
-  // Column resize handlers
-  const handleResizeStart = useCallback(
-    (columnId: string, startX: number) => {
-      const columnIds = visibleColumnOrder;
-      const currentIndex = columnIds.indexOf(columnId);
-      if (currentIndex === -1) return;
-
-      const nextColumnId = columnIds[currentIndex + 1] ?? columnIds[currentIndex - 1];
-      if (!nextColumnId) return;
-
-      setIsResizing(true);
-      setResizeData({
-        columnId,
-        startX,
-        startWidth:
-          columnWidths[columnId] ?? DEFAULT_COLUMN_WIDTHS[columnId as (typeof COLUMN_ORDER)[number]],
-        nextColumnId,
-        nextStartWidth:
-          columnWidths[nextColumnId] ??
-          DEFAULT_COLUMN_WIDTHS[nextColumnId as (typeof COLUMN_ORDER)[number]],
-      });
-    },
-    [columnWidths, visibleColumnOrder]
+  const columns = useMemo(
+    () => [
+      columnHelper.accessor("address", {
+        header: "USER ID",
+        cell: (info) => (
+          <CopyableCell
+            copyAbleText={info.getValue()}
+            title="Copy User ID"
+            toastMessage="User ID Copied Successfully!"
+            textColor="text-grey-20 dark:text-grey-dark-200"
+            isTable
+          />
+        ),
+        meta: {
+          headerClassName: "min-w-[200px]",
+          cellClassName: "min-w-[200px]",
+        },
+      }),
+      columnHelper.accessor("reward", {
+        header: "CREDIT EARNED",
+        cell: (info) => (
+          <span className="font-medium text-grey-20 dark:text-grey-dark-200">
+            {info.getValue()}
+          </span>
+        ),
+        meta: {
+          headerClassName: "w-[140px]",
+          cellClassName: "w-[140px]",
+        },
+      }),
+      columnHelper.accessor("date", {
+        header: "DATE CREATED",
+        cell: (d) => {
+          const raw = d.getValue();
+          const parsed = new Date(raw);
+          const formatted = !isNaN(parsed.getTime()) ? formatDate(parsed) : raw;
+          return (
+            <span className="font-medium text-grey-dark-800 dark:text-grey-dark-800">
+              {formatted}
+            </span>
+          );
+        },
+      }),
+      columnHelper.display({
+        id: "invoice",
+        header: "INVOICE",
+        cell: () => (
+          <Button
+            variant="primaryLight"
+            size="auto"
+            className="h-7 px-3 text-[12px] gap-1.5"
+          >
+            <Download className="size-3.5" />
+            Download
+          </Button>
+        ),
+        meta: {
+          headerClassName: "w-[140px]",
+          cellClassName: "w-[140px]",
+        },
+      }),
+    ],
+    [],
   );
-
-  const handleResizeMove = useCallback(
-    (clientX: number) => {
-      if (!resizeData || !isResizing) return;
-
-      requestAnimationFrame(() => {
-        const diff = clientX - resizeData.startX;
-        const tableWidth = 1200;
-        const sensitivity = 2.2;
-        const diffPercent = (diff / tableWidth) * 100 * sensitivity;
-
-        // push/pull against the neighbor (right by default)
-        const proposedCurrentWidth = resizeData.startWidth + diffPercent;
-        const proposedNextWidth = resizeData.nextStartWidth - diffPercent;
-
-        const currentMin =
-          MIN_COLUMN_WIDTHS[resizeData.columnId as (typeof COLUMN_ORDER)[number]] ?? 5;
-        const nextMin =
-          MIN_COLUMN_WIDTHS[resizeData.nextColumnId as (typeof COLUMN_ORDER)[number]] ?? 5;
-
-        const newCurrent = Math.max(currentMin, Math.min(80, proposedCurrentWidth));
-        const newNext = Math.max(nextMin, Math.min(80, proposedNextWidth));
-
-        if (newCurrent >= currentMin && newNext >= nextMin && resizeData.nextColumnId) {
-          setColumnWidths((prev) => {
-            const updated = {
-              ...prev,
-              [resizeData.columnId]: newCurrent,
-              [resizeData.nextColumnId!]: newNext,
-            };
-            // Normalize to keep total at 100%
-            const total = COLUMN_ORDER.reduce((sum, key) => sum + updated[key], 0);
-            if (total !== 100) {
-              const factor = 100 / total;
-              COLUMN_ORDER.forEach(key => {
-                updated[key] = Math.round(updated[key] * factor * 100) / 100;
-              });
-            }
-            return updated;
-          });
-        }
-      });
-    },
-    [resizeData, isResizing]
-  );
-
-  const handleResizeEnd = useCallback(() => {
-    setIsResizing(false);
-    setResizeData(null);
-  }, []);
-
-  useEffect(() => {
-    if (!isResizing) return;
-
-    const handleMouseMove = (e: MouseEvent) => handleResizeMove(e.clientX);
-    const handleMouseUp = () => handleResizeEnd();
-
-    document.addEventListener("mousemove", handleMouseMove);
-    document.addEventListener("mouseup", handleMouseUp);
-
-    return () => {
-      document.removeEventListener("mousemove", handleMouseMove);
-      document.removeEventListener("mouseup", handleMouseUp);
-    };
-  }, [isResizing, handleResizeMove, handleResizeEnd]);
-  const columns = [
-    columnHelper.accessor("address", {
-      header: "ADDRESS",
-      cell: (d) => d.getValue(),
-      enableSorting: false,
-    }),
-    columnHelper.accessor("reward", {
-      header: "REWARD",
-      enableSorting: true,
-    }),
-    columnHelper.accessor("date", {
-      header: "DATE",
-      enableSorting: true,
-    }),
-    columnHelper.accessor("status", {
-      header: "STATUS",
-      enableSorting: true,
-    }),
-  ];
 
   const table = useReactTable({
+    data: pageData,
     columns,
-    data: data?.referralHistory || [],
     getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
   });
 
-  return (
-    <div>
-      <div className="flex items-center gap-x-2 mb-4">
-        <AbstractIconWrapper className="size-10">
-          <Hourglass className="absolute size-6 text-primary-50" />
-        </AbstractIconWrapper>
-        <P size="lg">Referral History</P>
-      </div>
-      {/* <TransactionHistory /> */}
-
-      <TableWrapper className="mt-5 overflow-x-hidden">
-        <Table>
-          <THead>
-            {table.getHeaderGroups().map((headerGroup) => (
-              <Tr key={headerGroup.id}>
-                {headerGroup.headers.map((header) => (
-                  <Th key={header.id} header={header} onResizeStart={handleResizeStart} />
+  if (isPending) {
+    return (
+      <TableWrapper className="border-0 shadow-none bg-transparent dark:bg-transparent dark:border-0 dark:shadow-none rounded-none">
+        <div className="overflow-x-auto custom-scrollbar-thin">
+          <Table className={MIN_W}>
+            <THead>
+              <Tr>
+                {HEADERS.map((h) => (
+                  <th
+                    key={h}
+                    className="h-[var(--table-row-height,36px)] border-b border-r border-[#E3E3E3] bg-white px-[var(--table-cell-padding-x,10px)] py-0 text-left text-[length:var(--table-header-font-size,10px)] font-semibold uppercase text-grey-dark-600 last:border-r-0 dark:border-[#313131] dark:!bg-[#111111] dark:text-grey-dark-700"
+                  >
+                    {h}
+                  </th>
                 ))}
               </Tr>
-            ))}
-          </THead>
+            </THead>
+            <TBody>
+              <SkeletonTableRow
+                rows={DEFAULT_PAGE_SIZE}
+                columns={HEADERS.length}
+                columnWidths={SKELETON_WIDTHS}
+                rowClassName="odd:bg-[#fbfbfb] even:bg-[#f5f5f5] dark:odd:bg-[#161616] dark:even:bg-[#1e1e1e]"
+                cellClassName="!border-[#E3E3E3] dark:!border-[#313131]"
+              />
+            </TBody>
+          </Table>
+        </div>
+      </TableWrapper>
+    );
+  }
 
-          <TBody>
-            {table.getRowModel().rows?.map((row) => {
-              return (
-                <Tr key={row.id} transparent>
-                  {row.getVisibleCells().map((cell) => (
-                    <Td className="text-grey-20" key={cell.id} cell={cell} columnWidth={columnWidths[cell.column.id]} />
+  if (isError && !data) {
+    return (
+      <div className="p-3">
+        <NoEntriesFound
+          title="Failed to load"
+          description="Referral history is temporarily unavailable."
+          cardView={false}
+          className="p-6 sm:p-10 rounded-[8px]"
+        />
+      </div>
+    );
+  }
+
+  if (totalCount === 0) {
+    return (
+      <div className="p-3">
+        <NoEntriesFound
+          title="No referrals yet"
+          description="You have not made any referrals yet."
+          cardView={false}
+          className="p-6 sm:p-10 rounded-[8px]"
+        />
+      </div>
+    );
+  }
+
+  const showPagination = totalCount > DEFAULT_PAGE_SIZE;
+
+  const miniPaginationEl = showPagination ? (
+    <MiniPaginationControl
+      currentPage={currentPage}
+      totalPages={totalPages}
+      pageSize={pageSize}
+      totalCount={totalCount}
+      onPrev={() => setCurrentPage((p) => Math.max(1, p - 1))}
+      onNext={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+    />
+  ) : null;
+
+  return (
+    <>
+      {headerPortalTarget && miniPaginationEl
+        ? createPortal(miniPaginationEl, headerPortalTarget)
+        : null}
+
+      <TableWrapper className="border-0 shadow-none bg-transparent dark:bg-transparent dark:border-0 dark:shadow-none rounded-none">
+        <div className="overflow-x-auto custom-scrollbar-thin">
+          <Table className={MIN_W}>
+            <THead>
+              {table.getHeaderGroups().map((headerGroup) => (
+                <Tr key={headerGroup.id}>
+                  {headerGroup.headers.map((header) => (
+                    <Th
+                      key={header.id}
+                      header={header}
+                      className="bg-white dark:!bg-[#111111] !border-[#E3E3E3] dark:!border-[#313131]"
+                    />
                   ))}
                 </Tr>
-              );
-            })}
-          </TBody>
-        </Table>
-        {isError && !data && (
-          <div className="p-6 w-full h-[21.875rem] flex items-center justify-center">
-            <div className="flex flex-col animate-fade-in-0.5 items-center opacity-0">
-              <AbstractIconWrapper className="size-10 rounded-2xl flex items-center justify-center bg-grey-40/20 mb-2">
-                <AlertCircle className="absolute size-6 text-red-400" />
-              </AbstractIconWrapper>
-              <span className="text-grey-60 text-sm font-medium max-w-[11.875rem] text-center">
-                Failed to get data
-              </span>
-            </div>
-          </div>
-        )}
-        {isPending && (
-          <div className="w-full animate-fade-in-0.3 opacity-0 h-[21.875rem] flex items-center justify-center p-6">
-            <Loader2 className="size-6 animate-spin text-grey-50" />
-          </div>
-        )}
-        {data && !data.referralHistory.length && (
-          <div className="w-full h-[21.875rem] flex items-center justify-center p-6">
-            <div className="flex flex-col animate-fade-in-0.5 items-center opacity-0">
-              <AbstractIconWrapper className="size-10 rounded-2xl flex items-center justify-center bg-grey-40/20 mb-2">
-                <Send className="absolute size-6 text-primary-50" />
-              </AbstractIconWrapper>
-              <span className="text-grey-60 text-sm font-medium max-w-[11.875rem] text-center">
-                You have not made any referrals yet
-              </span>
-            </div>
-          </div>
-        )}
+              ))}
+            </THead>
+            <TBody>
+              {table.getRowModel().rows.map((row) => (
+                <Tr key={row.id}>
+                  {row.getVisibleCells().map((cell) => (
+                    <Td
+                      key={cell.id}
+                      cell={cell}
+                      className={cn(
+                        "!border-[#E3E3E3] dark:!border-[#313131]",
+                        row.index % 2 === 0
+                          ? "bg-[#fbfbfb] dark:bg-[#161616]"
+                          : "bg-[#f5f5f5] dark:bg-[#1e1e1e]",
+                      )}
+                    />
+                  ))}
+                </Tr>
+              ))}
+            </TBody>
+          </Table>
+        </div>
       </TableWrapper>
-    </div>
+
+      {showPagination && (
+        <div className="px-3 pb-3 mt-3">
+          <Pagination
+            currentPage={currentPage}
+            totalPages={totalPages}
+            setPage={setCurrentPage}
+            totalCount={totalCount}
+            pageSize={pageSize}
+            setPageSize={setPageSize}
+          />
+        </div>
+      )}
+    </>
   );
 };
 

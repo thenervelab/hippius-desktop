@@ -11,7 +11,12 @@ import { ArrowDown, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
-import { GasStation, HippiusLogo } from "@/components/ui/icons";
+import {
+  AlphaCoinLogo,
+  GasStation,
+  HAlphaCoinLogo,
+  HippiusLogo,
+} from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
 
 import { WalletDialogShell } from "./shared/WalletDesign";
@@ -21,7 +26,6 @@ import TransactionFlowToast, {
 } from "./shared/TransactionFlowToast";
 
 import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
-import { useHippiusBalance } from "@/lib/hooks/api/useHippiusBalance";
 import { useBridge, type BridgeDirection } from "@/lib/hooks/api/useBridge";
 
 /* ── Constants ────────────────────────────────────────────── */
@@ -90,12 +94,11 @@ const TokenBadge: React.FC<{
             : "border border-[#d0d0d0] bg-white",
         )}
       >
-        <HippiusLogo
-          className={cn(
-            logoSize,
-            token === "ALPHA" ? "text-white" : "text-[#3167dd]",
-          )}
-        />
+        {token === "ALPHA" ? (
+          <AlphaCoinLogo className={logoSize} />
+        ) : (
+          <HAlphaCoinLogo className={logoSize} />
+        )}
       </span>
       <span
         className={cn(
@@ -124,7 +127,7 @@ const BridgeDialog: React.FC<BridgeDialogProps> = ({
 }) => {
   const bridge = useBridge();
   const { activeWallet, verifyPassword } = useLocalWallet();
-  const { data: balanceInfo, refetch: refetchBalance } = useHippiusBalance();
+  const { balances, balancesLoading, refetchBalances, stakedHotkeys } = bridge;
 
   const [bridgeDirection, setBridgeDirection] =
     useState<BridgeDirection>("alpha-to-halpha");
@@ -144,14 +147,14 @@ const BridgeDialog: React.FC<BridgeDialogProps> = ({
   const [submittedAmount, setSubmittedAmount] = useState("");
   const isProcessingRef = useRef(false);
 
-  /* Refresh balance whenever the dialog opens — keeps MAX honest if a
-   * transfer landed since the last close. */
+  /* Refresh balances whenever the dialog opens — keeps MAX honest if
+   * a transfer landed since the last close. */
   useEffect(() => {
     if (!open) return;
-    void refetchBalance();
+    void refetchBalances();
     setAmount("");
     setActiveButton(null);
-  }, [open, refetchBalance]);
+  }, [open, refetchBalances]);
 
   /* Reset password whenever the confirm step opens so a stale value
    * can't leak across submissions. */
@@ -167,35 +170,49 @@ const BridgeDialog: React.FC<BridgeDialogProps> = ({
   const destToken: "ALPHA" | "hALPHA" = isAlphaToHAlpha ? "hALPHA" : "ALPHA";
   const sourceDecimals = isAlphaToHAlpha ? 9 : 18;
 
-  /* Source balance. hAlpha is known from `useHippiusBalance`. Alpha
-   * lives on Bittensor; the desktop doesn't fetch it yet, so the
-   * source-side shows "—" and MAX/50/25 are disabled in that
-   * direction. */
+  /* Source / destination balances come from the bridge hook — Alpha
+   * stake on Bittensor (netuid 75) and free hAlpha on Hippius testnet.
+   * Same wallet address, but the two chains live at separate testnet
+   * endpoints so we can't reuse the per-account `useHippiusBalance`
+   * (which targets the user's configured wss endpoint, defaulting to
+   * mainnet).
+   *
+   *  alpha-to-halpha : source = staked Alpha, dest = free hAlpha
+   *  halpha-to-alpha : source = free hAlpha (minus gas buffer), dest = staked Alpha
+   */
   const sourceBalanceNumber = useMemo<number | null>(() => {
-    if (isAlphaToHAlpha) return null;
-    const free = balanceInfo?.data?.free;
-    if (free === null || free === undefined) return 0;
+    if (!balances) return null;
+    if (isAlphaToHAlpha) {
+      try {
+        return Number(balances.alphaStake) / 1e9;
+      } catch {
+        return 0;
+      }
+    }
     try {
-      const freeBI = typeof free === "bigint" ? free : BigInt(String(free));
-      const after = freeBI - MAX_GAS_FEE_BUFFER_PLANCK;
+      const after = balances.hAlpha - MAX_GAS_FEE_BUFFER_PLANCK;
       if (after <= BigInt(0)) return 0;
       return Number(after) / 1e18;
     } catch {
       return 0;
     }
-  }, [balanceInfo, isAlphaToHAlpha]);
+  }, [balances, isAlphaToHAlpha]);
 
   const destBalanceNumber = useMemo<number | null>(() => {
-    if (!isAlphaToHAlpha) return null;
-    const free = balanceInfo?.data?.free;
-    if (free === null || free === undefined) return 0;
+    if (!balances) return null;
+    if (isAlphaToHAlpha) {
+      try {
+        return Number(balances.hAlpha) / 1e18;
+      } catch {
+        return 0;
+      }
+    }
     try {
-      const freeBI = typeof free === "bigint" ? free : BigInt(String(free));
-      return Number(freeBI) / 1e18;
+      return Number(balances.alphaStake) / 1e9;
     } catch {
       return 0;
     }
-  }, [balanceInfo, isAlphaToHAlpha]);
+  }, [balances, isAlphaToHAlpha]);
 
   /* Per-direction minimum sourced from the Rust BridgeConfig so the
    * hint matches the chain-enforced floor. */
@@ -316,7 +333,16 @@ const BridgeDialog: React.FC<BridgeDialogProps> = ({
         if (!planck) throw new Error("Invalid amount");
 
         if (isAlphaToHAlpha) {
-          await bridge.submitAlphaToHalpha({ amount: planck, password });
+          // Auto-pick the hotkey with the most stake — same heuristic
+          // hippius-web uses before the picker selection lands. Falls
+          // back to undefined (= BRIDGE_CONFIG default) if the wallet
+          // has no stake on the configured netuid.
+          const hotkey = stakedHotkeys[0]?.hotkey;
+          await bridge.submitAlphaToHalpha({
+            amount: planck,
+            hotkey,
+            password,
+          });
         } else {
           // Bridge back to the same SS58 on Bittensor by default —
           // mirrors web's `recipientAddress || senderAddress`.
@@ -328,7 +354,7 @@ const BridgeDialog: React.FC<BridgeDialogProps> = ({
         }
 
         setFlowState("success");
-        await refetchBalance();
+        await refetchBalances();
         onSuccess?.();
       } catch (e: unknown) {
         const msg = parseBridgeError(e);
@@ -343,7 +369,8 @@ const BridgeDialog: React.FC<BridgeDialogProps> = ({
       bridge,
       isAlphaToHAlpha,
       onSuccess,
-      refetchBalance,
+      refetchBalances,
+      stakedHotkeys,
       toPlanckString,
     ],
   );
@@ -501,7 +528,9 @@ const BridgeDialog: React.FC<BridgeDialogProps> = ({
               </span>
               <span className="text-[13px] font-medium text-[#0a0a0a] dark:text-white">
                 You have:{" "}
-                {sourceBalanceNumber === null ? (
+                {balancesLoading ? (
+                  <span className="inline-block h-3 w-16 animate-pulse rounded bg-[#dcdcdc] align-middle dark:bg-[#3a3a3a]" />
+                ) : sourceBalanceNumber === null ? (
                   <span className="text-[#7d7d7d]">— {sourceToken}</span>
                 ) : (
                   <>
@@ -528,7 +557,7 @@ const BridgeDialog: React.FC<BridgeDialogProps> = ({
                     key={key}
                     type="button"
                     onClick={() => handlePercentClick(pct, key)}
-                    disabled={sourceBalanceNumber === null}
+                    disabled={sourceBalanceNumber === null || balancesLoading}
                     className={cn(
                       "rounded-full border px-2.5 py-0.5 text-[13px] font-semibold leading-5 tracking-[-0.26px] transition-colors disabled:opacity-60",
                       activeButton === key
@@ -566,7 +595,9 @@ const BridgeDialog: React.FC<BridgeDialogProps> = ({
             <div className="mt-2 flex items-end justify-end">
               <span className="text-[13px] font-medium text-[#0a0a0a] dark:text-white">
                 You have:{" "}
-                {destBalanceNumber === null ? (
+                {balancesLoading ? (
+                  <span className="inline-block h-3 w-16 animate-pulse rounded bg-[#dcdcdc] align-middle dark:bg-[#3a3a3a]" />
+                ) : destBalanceNumber === null ? (
                   <span className="text-[#7d7d7d]">— {destToken}</span>
                 ) : (
                   <>

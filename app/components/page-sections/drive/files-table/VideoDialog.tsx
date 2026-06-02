@@ -1,14 +1,11 @@
 import React, { ReactNode, useState, useEffect } from "react";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
-import { Icons } from "@/components/ui";
+import { Video } from "lucide-react";
 import VideoPlayer from "./VideoPlayer";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { cn } from "@/lib/utils";
 import { getFileUrl } from "@/app/lib/utils/fileUrlResolver";
-import {
-  FileViewerLayout,
-  FileViewerTitle,
-} from "@/app/components/page-sections/drive/file-viewer";
+import { FileViewerLayout } from "@/app/components/page-sections/drive/file-viewer";
 
 export const VideoDialogTrigger: React.FC<{
   children: ReactNode;
@@ -26,8 +23,8 @@ export const VideoDialogTrigger: React.FC<{
     >
       <span className="flex-1 min-w-0">{children}</span>
       {/* Play icon on hover */}
-      <div className="absolute pointer-events-none pl-16 bg-gradient-to-r from-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100 to-white dark:to-black-300 right-4 inset-y-0 flex items-center">
-        <Icons.PlayCircle className="size-5 text-primary-60 [&>path]:stroke-[0.25rem]" />
+      <div className="absolute pointer-events-none opacity-0 transition-opacity duration-300 group-hover:opacity-100 right-4 inset-y-0 flex items-center">
+        <Video className="size-4 text-primary-60" />
       </div>
     </button>
   );
@@ -63,34 +60,28 @@ const VideoDialog: React.FC<{
       onNavigate={onNavigate}
       handleFileDownload={handleFileDownload}
     >
-      {/* Title row + media row. Video fills the available width, so the
-          title at the wrapper's left edge naturally sits at the video's
-          left edge. */}
-      <div className="w-full h-full flex flex-col gap-2">
-        <FileViewerTitle file={file} />
-        <div
-          className={cn(
-            "relative flex-1 min-h-0 min-w-0 w-full flex flex-col rounded-[8px] overflow-hidden",
-            "shadow-[0_14px_31px_rgba(0,0,0,0.06),0_56px_56px_rgba(0,0,0,0.05)]",
-            "animate-scale-in-95-0.4",
-          )}
-        >
-          {resolvedUrl ? (
-            <VideoPlayer
-              key={resolvedUrl}
-              videoUrl={resolvedUrl}
-              isFromIpfs={false}
-              isFromLocal={true}
-              fileFormat={fileFormat}
-              file={file}
-              handleFileDownload={handleFileDownload}
-            />
-          ) : (
-            <div className="flex items-center justify-center w-full h-full">
-              <div className="animate-spin rounded-full size-8 border-b-2 border-primary-50" />
-            </div>
-          )}
-        </div>
+      <div
+        className={cn(
+          "relative w-full h-full min-h-0 min-w-0 flex flex-col rounded-[8px] overflow-hidden",
+          "shadow-[0_14px_31px_rgba(0,0,0,0.06),0_56px_56px_rgba(0,0,0,0.05)]",
+          "animate-scale-in-95-0.4",
+        )}
+      >
+        {resolvedUrl ? (
+          <VideoPlayer
+            key={resolvedUrl}
+            videoUrl={resolvedUrl}
+            isFromIpfs={false}
+            isFromLocal={true}
+            fileFormat={fileFormat}
+            file={file}
+            handleFileDownload={handleFileDownload}
+          />
+        ) : (
+          <div className="flex items-center justify-center w-full h-full">
+            <div className="animate-spin rounded-full size-8 border-b-2 border-primary-50" />
+          </div>
+        )}
       </div>
     </FileViewerLayout>
   );

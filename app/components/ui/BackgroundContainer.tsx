@@ -11,11 +11,11 @@ interface Props {
   contentClassName?: string;
   shellClassName?: string;
   cardClassName?: string;
-  strokeClassName?: string;
+  hippoIconClassName?: string;
   fillClassName?: string;
   stopClickPropagation?: boolean;
   hideBackgroundDecorations?: boolean;
-  hideBackgroundGradient?: boolean;
+  noDots?: boolean;
   addDotWithBlurryEffect?: boolean;
   isDialog?: boolean;
   borderClassName?: string;
@@ -84,38 +84,62 @@ function DecorationLines({
       {/* Top line */}
       <div
         className="absolute top-0 left-1/2 h-px -translate-x-1/2 dark:hidden"
-        style={{ width: "100vw", background: gradientLine("horizontal", lightColor) }}
+        style={{
+          width: "100vw",
+          background: gradientLine("horizontal", lightColor),
+        }}
       />
       <div
         className="absolute top-0 left-1/2 h-px -translate-x-1/2 hidden dark:block"
-        style={{ width: "100vw", background: gradientLine("horizontal", darkColor, 14, 86) }}
+        style={{
+          width: "100vw",
+          background: gradientLine("horizontal", darkColor, 14, 86),
+        }}
       />
       {/* Bottom line */}
       <div
         className="absolute bottom-0 left-1/2 h-px -translate-x-1/2 dark:hidden"
-        style={{ width: "100vw", background: gradientLine("horizontal", lightColor) }}
+        style={{
+          width: "100vw",
+          background: gradientLine("horizontal", lightColor),
+        }}
       />
       <div
         className="absolute bottom-0 left-1/2 h-px -translate-x-1/2 hidden dark:block"
-        style={{ width: "100vw", background: gradientLine("horizontal", darkColor, 14, 86) }}
+        style={{
+          width: "100vw",
+          background: gradientLine("horizontal", darkColor, 14, 86),
+        }}
       />
       {/* Left line */}
       <div
         className="absolute top-1/2 left-0 w-px -translate-y-1/2 dark:hidden"
-        style={{ height: "200vh", background: gradientLine("vertical", lightColor) }}
+        style={{
+          height: "200vh",
+          background: gradientLine("vertical", lightColor),
+        }}
       />
       <div
         className="absolute top-1/2 left-0 w-px -translate-y-1/2 hidden dark:block"
-        style={{ height: vLen, background: gradientLine("vertical", darkColor, 14, 86) }}
+        style={{
+          height: vLen,
+          background: gradientLine("vertical", darkColor, 14, 86),
+        }}
       />
       {/* Right line */}
       <div
         className="absolute top-1/2 right-0 w-px -translate-y-1/2 dark:hidden"
-        style={{ height: "200vh", background: gradientLine("vertical", lightColor) }}
+        style={{
+          height: "200vh",
+          background: gradientLine("vertical", lightColor),
+        }}
       />
       <div
         className="absolute top-1/2 right-0 w-px -translate-y-1/2 hidden dark:block"
-        style={{ height: vLen, background: gradientLine("vertical", darkColor, 14, 86) }}
+        style={{
+          height: vLen,
+          background: gradientLine("vertical", darkColor, 14, 86),
+        }}
       />
     </div>
   );
@@ -127,10 +151,11 @@ export function BackgroundContainer({
   contentClassName,
   shellClassName,
   cardClassName,
-  strokeClassName,
+  hippoIconClassName,
   fillClassName,
   stopClickPropagation = false,
   hideBackgroundDecorations = false,
+  noDots = false,
   addDotWithBlurryEffect = false,
   isDialog = false,
   borderClassName,
@@ -142,7 +167,6 @@ export function BackgroundContainer({
       onClick={stopClickPropagation ? (e) => e.stopPropagation() : undefined}
     >
       <div className="relative isolate overflow-visible">
-
         {/* Guide lines */}
         {!hideBackgroundDecorations && (
           <DecorationLines
@@ -152,41 +176,78 @@ export function BackgroundContainer({
         )}
 
         {/* Corner hippo logos */}
-        <BackgroundHippo fillClassName={fillClassName} strokeClassName={strokeClassName}
-          className="absolute top-0 left-0 size-[22px] pointer-events-none z-[30] hidden sm:block -translate-x-1/2 -translate-y-1/2" />
-        <BackgroundHippo fillClassName={fillClassName} strokeClassName={strokeClassName}
-          className="absolute top-0 right-0 size-[22px] pointer-events-none z-[30] hidden sm:block translate-x-1/2 -translate-y-1/2" />
-        <BackgroundHippo fillClassName={fillClassName} strokeClassName={strokeClassName}
-          className="absolute bottom-0 left-0 size-[22px] pointer-events-none z-[30] hidden sm:block -translate-x-1/2 translate-y-1/2" />
-        <BackgroundHippo fillClassName={fillClassName} strokeClassName={strokeClassName}
-          className="absolute bottom-0 right-0 size-[22px] pointer-events-none z-[30] hidden sm:block translate-x-1/2 translate-y-1/2" />
+        <BackgroundHippo
+          fillClassName={fillClassName}
+          hippoIconClassName={hippoIconClassName}
+          className="absolute top-0 left-0 size-[22px] pointer-events-none z-[30] hidden sm:block -translate-x-1/2 -translate-y-1/2"
+        />
+        <BackgroundHippo
+          fillClassName={fillClassName}
+          hippoIconClassName={hippoIconClassName}
+          className="absolute top-0 right-0 size-[22px] pointer-events-none z-[30] hidden sm:block translate-x-1/2 -translate-y-1/2"
+        />
+        <BackgroundHippo
+          fillClassName={fillClassName}
+          hippoIconClassName={hippoIconClassName}
+          className="absolute bottom-0 left-0 size-[22px] pointer-events-none z-[30] hidden sm:block -translate-x-1/2 translate-y-1/2"
+        />
+        <BackgroundHippo
+          fillClassName={fillClassName}
+          hippoIconClassName={hippoIconClassName}
+          className="absolute bottom-0 right-0 size-[22px] pointer-events-none z-[30] hidden sm:block translate-x-1/2 translate-y-1/2"
+        />
 
         {/* Diagonal-stripe frame — light mode */}
-        <BackgroundContainerFrame
-          className="absolute inset-0 h-full w-full pointer-events-none dark:hidden hidden sm:block"
-        />
+        <BackgroundContainerFrame className="absolute inset-0 h-full w-full pointer-events-none dark:hidden hidden sm:block" />
         {/* Diagonal-stripe frame — dark mode */}
         <BackgroundContainerFrame
           tone="dark"
           className="absolute inset-0 hidden h-full w-full pointer-events-none dark:sm:block"
         />
 
-        {/* Dot pattern + edge blur (opt-in) */}
+        {/* Dot pattern + edge blur (opt-in). Two variants per layer so
+            the same Figma-style dotted backdrop renders in both themes:
+            `#d4d4d4` dots on the light backdrop, `#2c2c2c` dots that
+            stay legible against the dialog's `bg-[#04040466]` dark
+            overlay. The radial-mask blur sits on top in both modes to
+            soften the dots into the dialog's edge. */}
         {addDotWithBlurryEffect && (
           <>
-            <div
-              className="pointer-events-none absolute top-1/2 left-1/2 z-[-1] h-[100vh] w-[100vw] -translate-x-1/2 -translate-y-1/2 dark:hidden block"
-              aria-hidden="true"
-            >
-              <div
-                className="w-full h-full"
-                style={{
-                  backgroundImage:
-                    "radial-gradient(circle, #d4d4d4 1.5px, transparent 1.5px)",
-                  backgroundSize: "18px 18px",
-                }}
-              />
-            </div>
+            {!noDots && (
+              <>
+                {/* Light-mode dots */}
+                <div
+                  className="pointer-events-none absolute top-1/2 left-1/2 z-[-1] h-[100vh] w-[100vw] -translate-x-1/2 -translate-y-1/2 dark:hidden hidden sm:block"
+                  aria-hidden="true"
+                >
+                  <div
+                    className="w-full h-full"
+                    style={{
+                      backgroundImage:
+                        "radial-gradient(circle, #d4d4d4 1.5px, transparent 1.5px)",
+                      backgroundSize: "18px 18px",
+                      backgroundRepeat: "repeat",
+                    }}
+                  />
+                </div>
+                {/* Dark-mode dots */}
+                <div
+                  className="pointer-events-none absolute top-1/2 left-1/2 z-[-1] h-[100vh] w-[100vw] -translate-x-1/2 -translate-y-1/2 hidden dark:sm:block"
+                  aria-hidden="true"
+                >
+                  <div
+                    className="w-full h-full"
+                    style={{
+                      backgroundImage:
+                        "radial-gradient(circle, #2c2c2c 1.5px, transparent 1.5px)",
+                      backgroundSize: "18px 18px",
+                      backgroundRepeat: "repeat",
+                    }}
+                  />
+                </div>
+              </>
+            )}
+            {/* Light-mode edge blur */}
             <div
               className="pointer-events-none absolute top-1/2 left-1/2 z-[11] -translate-x-1/2 -translate-y-1/2 dark:hidden block"
               aria-hidden="true"
@@ -200,11 +261,35 @@ export function BackgroundContainer({
                   "radial-gradient(ellipse 60vw 75vh at 50% 50%, transparent 0%, transparent 60%, black 61%)",
               }}
             />
+            {/* Dark-mode edge blur */}
+            <div
+              className="pointer-events-none absolute top-1/2 left-1/2 z-[11] -translate-x-1/2 -translate-y-1/2 hidden dark:sm:block"
+              aria-hidden="true"
+              style={{
+                height: "100vh",
+                width: "100vw",
+                backdropFilter: "blur(1.5px)",
+                // Gradual ramp (not a hard 60%→61% step): the blur eases
+                // in from 40% to the 70ge so it dissolves into the page
+                // instead of cutting a visible "spotlight" ellipse against
+                // the dark overlay tint. Both mask props use the same
+                // geometry so Chromium (Tauri) renders one consistent fade.
+                maskImage:
+                  "radial-gradient(ellipse 60vw 75vh at 50% 50%, transparent 0%, transparent 40%, black 70%)",
+                WebkitMaskImage:
+                  "radial-gradient(ellipse 60vw 75vh at 50% 50%, transparent 0%, transparent 40%, black 70%)",
+              }}
+            />
           </>
         )}
 
         {/* Content layers: gray ring → colored border → white card */}
-        <div className={cn("relative z-[20] px-0 py-0 sm:px-[60px] sm:py-[51px]", contentClassName)}>
+        <div
+          className={cn(
+            "relative z-[20] px-0 py-0 sm:px-[60px] sm:py-[51px]",
+            contentClassName,
+          )}
+        >
           {/* Gray outer ring */}
           <div
             className={cn(
@@ -213,7 +298,12 @@ export function BackgroundContainer({
             )}
           >
             {/* Colored accent border */}
-            <div className={cn("p-2 sm:p-3 rounded-[10px] sm:rounded-[16px]", borderClassName ?? "bg-[#3167dd]")}>
+            <div
+              className={cn(
+                "p-2 sm:p-3 rounded-[10px] sm:rounded-[16px]",
+                borderClassName ?? "bg-[#3167dd]",
+              )}
+            >
               {/* White / dark card */}
               <div
                 className={cn(
@@ -227,7 +317,6 @@ export function BackgroundContainer({
             </div>
           </div>
         </div>
-
       </div>
     </div>
   );

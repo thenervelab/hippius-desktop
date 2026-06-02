@@ -99,6 +99,7 @@ export default {
           600: "rgb(var(--black-600) / <alpha-value>)",
           700: "rgb(var(--black-700) / <alpha-value>)",
           800: "rgb(var(--black-800) / <alpha-value>)",
+          850: "rgb(var(--black-850) / <alpha-value>)",
           900: "rgb(var(--black-900) / <alpha-value>)",
         },
         grey: {

@@ -220,7 +220,7 @@ function SyncFileStatusBadge({
   } else if (variant === "active") {
     icon = <SyncFileStatusDot outerColor="#D3DFF8" innerColor="#3167DD" />;
   } else if (variant === "neutral") {
-    icon = <SyncFileStatusDot outerColor="#E5E7EB" innerColor="#9CA3AF" />;
+    icon = <SyncFileStatusDot outerColor="#FEE4E2" innerColor="#F04438" />;
   } else {
     icon = <SyncFileStatusDot outerColor="#FAEED1" innerColor="#FEB101" />;
   }
@@ -583,10 +583,10 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
         className={cn(
           "inline-flex w-fit items-center rounded-full px-[4.45px] py-[2.25px] text-[10px] font-medium leading-none tracking-[-0.2px]",
           tone === "error"
-            ? "bg-error-100/70 text-error-40"
+            ? "bg-error-100/70 text-error-40 dark:bg-error-50/15 dark:text-error-50"
             : tone === "success"
-              ? "bg-success-100/70 text-success-40"
-              : "bg-primary-100/70 text-primary-40",
+              ? "bg-success-100/70 text-success-40 dark:bg-success-50/15 dark:text-success-50"
+              : "bg-primary-100/70 text-primary-40 dark:bg-primary-50/20 dark:text-primary-80",
         )}
       >
         {headerBadgeText}

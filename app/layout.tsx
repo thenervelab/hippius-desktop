@@ -2,20 +2,9 @@
 import { Inter as InterFont, Geist, Geist_Mono } from "next/font/google";
 import localFont from "next/font/local";
 import "@/app/globals.css";
-import Providers from "@/components/providers";
-import { Toaster } from "sonner";
 import "sonner/dist/styles.css";
 import "react-circular-progressbar/dist/styles.css";
-import NextTopLoader from "nextjs-toploader";
-import { WalletAuthProvider } from "./lib/wallet-auth-context";
-import PreAuthProvider from "@/app/components/auth/PreAuthProvider";
-import { Suspense } from "react";
-import PageLoader from "@/app/components/PageLoader";
-// import SplashWrapper from "./components/splash-screen";
-import { NavigationLoaderProvider } from "./lib/hooks/useNavigationLoader";
-import UpdateChecker from "@/components/updater/UpdateChecker";
-import TrayNavigationListener from "@/app/components/tray/TrayNavigationListener";
-import ZoomController from "@/app/components/ZoomController";
+import AppShell from "@/app/components/AppShell";
 import { cn } from "./lib/utils";
 const inter = InterFont({
   subsets: ["latin"],
@@ -56,32 +45,11 @@ export default function RootLayout({
           "bg-grey-100 text-grey-10 antialiased font-geist",
         )}
       >
-        <Providers>
-          <WalletAuthProvider>
-            <UpdateChecker>
-              <PreAuthProvider>
-                <NextTopLoader color="#3167DD" showSpinner={false} />
-                <NavigationLoaderProvider>
-                  <TrayNavigationListener />
-                  <ZoomController />
-                  {/* <SplashWrapper preventClose={false}> */}
-                  <Suspense fallback={<PageLoader />}>
-                    <div className="flex min-h-screen h-screen">{children}</div>
-                  </Suspense>
-                  {/* </SplashWrapper> */}
-
-                  <Toaster
-                    position="top-center"
-                    className="toaster-auth-aware"
-                    toastOptions={{
-                      style: { fontFamily: "var(--font-geist-sans)" },
-                    }}
-                  />
-                </NavigationLoaderProvider>
-              </PreAuthProvider>
-            </UpdateChecker>
-          </WalletAuthProvider>
-        </Providers>
+        {/* AppShell decides which provider tree to mount per window:
+         *  the full app for the main window, or a minimal self-contained
+         *  tree for the borderless system-tray popover (the `/tray-panel`
+         *  route). See app/components/AppShell.tsx. */}
+        <AppShell>{children}</AppShell>
       </body>
     </html>
   );

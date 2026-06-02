@@ -5,7 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
-import { HippiusLogo } from "@/components/ui/icons";
+import { HAlphaCoinLogo, HippiusLogo } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
 
 import {
@@ -220,7 +220,7 @@ const UnstakeDialog: React.FC<UnstakeDialogProps> = ({
             />
             <div className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-[#d5d5d5] bg-[#ececec] px-2.5 py-1 dark:border-[#494949] dark:bg-[#363636]">
               <span className="flex size-5 items-center justify-center rounded-full border border-[#d0d0d0] bg-white">
-                <HippiusLogo className="size-3 text-[#3167dd]" />
+                <HAlphaCoinLogo className="size-3" />
               </span>
               <span className="text-[14px] font-semibold leading-[16.8px] text-[#171717] dark:text-white">
                 hALPHA
@@ -309,7 +309,7 @@ const UnstakeDialog: React.FC<UnstakeDialogProps> = ({
                   {amount} hALPHA
                 </span>
                 <span className="flex size-4 items-center justify-center rounded-full border border-[#d0d0d0] bg-white">
-                  <HippiusLogo className="size-2.5 text-[#3167dd]" />
+                  <HAlphaCoinLogo className="size-2.5" />
                 </span>
               </div>
             </div>

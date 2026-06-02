@@ -65,6 +65,13 @@ pub struct AppState {
     /// AFTER an `add_file`/`add_files`/`add_folder` call from events
     /// that belong to a cycle that was already running.
     pub sync_session_epoch: AtomicU64,
+    /// Unix-millis timestamp of the last time the tray panel was hidden by a
+    /// focus-loss (blur) event. Read by `tray::panel::toggle_tray_panel` to
+    /// suppress the immediate re-open that would otherwise happen when the
+    /// user clicks the already-open tray icon: the click first blurs+hides the
+    /// panel, then fires the toggle, which would see it hidden and re-show it.
+    /// `0` means "never hidden by blur". See `tray::panel` for the cooldown.
+    pub tray_panel_hidden_at: AtomicU64,
     /// HTTP client for HCFS health checks (accepts self-signed certs in debug).
     pub health_client: reqwest::Client,
     /// HTTP client for Hippius API calls (reuses connection pool + TLS cache).
@@ -111,6 +118,12 @@ pub struct AppState {
     /// Mutex held only for the snapshot read at revoke time and the
     /// snapshot write at end of list — lock duration is microseconds.
     pub share_active_list_cache: Mutex<HashMap<String, Vec<hcfs_client::client::share::ShareSummary>>>,
+    /// Per-wallet rate limiter for password operations. See
+    /// `crate::wallet::rate_limit` for the policy. Process-local — no
+    /// persistence across app restarts (intentional: against a
+    /// stolen-DB attacker this layer adds nothing; its job is to clamp
+    /// online IPC abuse during a single session).
+    pub wallet_rate_limit: Arc<crate::wallet::rate_limit::RateLimitState>,
 }
 
 impl Default for AppState {
@@ -149,6 +162,7 @@ impl AppState {
             preparing: std::sync::Arc::new(crate::sync::preparing::PreparingState::new()),
             credits_exhausted: std::sync::Arc::new(crate::sync::credits_exhausted::CreditsExhaustedState::new()),
             sync_session_epoch: AtomicU64::new(0),
+            tray_panel_hidden_at: AtomicU64::new(0),
             health_client,
             // Explicit timeouts. Without them a hung connection (e.g. a
             // billing-server blip during `check_action_eligibility`) would
@@ -170,6 +184,7 @@ impl AppState {
             // the dialog gets a chance to run before any sync init races in.
             recovery_gate: tokio::sync::watch::channel(RecoveryGateState::Skipped).0,
             share_active_list_cache: Mutex::new(HashMap::new()),
+            wallet_rate_limit: Arc::new(crate::wallet::rate_limit::RateLimitState::new()),
         }
     }
 

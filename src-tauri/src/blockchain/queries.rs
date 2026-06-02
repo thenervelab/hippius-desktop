@@ -242,6 +242,31 @@ pub async fn get_block_timestamp(
     Ok(BlockTimestampResult { timestamp })
 }
 
+/// Substrate storage key layout for a `Blake2_128Concat`-hashed map
+/// with a bytes-typed key is
+///   `[twox_128(pallet)(16) | twox_128(storage)(16) | blake2_128(key)(16) | raw_key(N)]`.
+/// The first 48 bytes are deterministic prefix; the remainder is the
+/// raw key — i.e. the actual referral code string.
+const REFERRAL_KEY_PREFIX_LEN: usize = 48;
+
+/// Extract the raw referral code bytes from a Substrate storage map
+/// entry key. Returns `None` when the key is shorter than the
+/// 48-byte prefix (shouldn't happen with a real on-chain entry; the
+/// guard exists so we can't accidentally panic-slice on malformed
+/// data). The earlier implementation grabbed the LAST 32 bytes of the
+/// storage key, which only matched the raw key when the code happened
+/// to be exactly 32 bytes long. For shorter codes (`HIPPIUS<N-digit-id>`
+/// is typically 26–27 bytes), that slice bled the trailing bytes of
+/// the Blake2_128 hash into the front of the result, which then
+/// surfaced in the UI as `�` Unicode replacement characters after a
+/// lossy UTF-8 decode.
+fn extract_referral_code_bytes(key_bytes: &[u8]) -> Option<&[u8]> {
+    if key_bytes.len() <= REFERRAL_KEY_PREFIX_LEN {
+        return None;
+    }
+    Some(&key_bytes[REFERRAL_KEY_PREFIX_LEN..])
+}
+
 /// Fetch referral links (codes + rewards) for the given address.
 #[tauri::command]
 pub async fn get_referral_links(
@@ -272,13 +297,25 @@ pub async fn get_referral_links(
     // a user with K matches paid K serial RPC round-trips on top of the
     // O(N) iteration. Now the K reward fetches run in parallel against
     // the same `at_latest()` snapshot.
+    //
+    // For each match we recover the raw code bytes from the storage
+    // key (see `extract_referral_code_bytes`) and accept the entry
+    // only if those bytes decode as valid UTF-8 — referral codes are
+    // ASCII strings of the form `HIPPIUS<digits>`, so anything else is
+    // a malformed on-chain row we'd rather skip than render with `�`
+    // replacement chars.
     let mut matched_codes: Vec<(Vec<u8>, String)> = Vec::new();
     while let Some(Ok(entry)) = entries.next().await {
-        if entry.value == target_account {
-            let code_bytes = entry.key_bytes[entry.key_bytes.len().saturating_sub(32)..].to_vec();
-            let code = String::from_utf8_lossy(code_bytes.iter().copied().skip_while(|b| *b == 0).collect::<Vec<u8>>().as_slice()).to_string();
-            matched_codes.push((code_bytes, code));
+        if entry.value != target_account {
+            continue;
         }
+        let Some(code_slice) = extract_referral_code_bytes(&entry.key_bytes) else {
+            continue;
+        };
+        let Ok(code) = std::str::from_utf8(code_slice) else {
+            continue;
+        };
+        matched_codes.push((code_slice.to_vec(), code.to_string()));
     }
 
     let storage_ref = &storage;
@@ -310,4 +347,60 @@ pub async fn get_referral_links(
 #[tauri::command]
 pub fn validate_address(address: String) -> bool {
     address.parse::<subxt::utils::AccountId32>().is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{extract_referral_code_bytes, REFERRAL_KEY_PREFIX_LEN};
+
+    /// Pins the on-chain storage-key layout assumption. If the
+    /// `credits.referral_codes` map ever changes its hasher (e.g. from
+    /// `Blake2_128Concat` to `Twox64Concat`) the prefix length changes
+    /// and this test starts failing — that's the signal to update
+    /// `REFERRAL_KEY_PREFIX_LEN` rather than ship `�`-corrupted codes
+    /// to the UI again.
+    #[test]
+    fn extract_strips_pallet_storage_blake2_128_prefix() {
+        let code = b"HIPPIUS6559825516876025567";
+        let mut key_bytes = vec![0xAA; 16]; // twox_128(pallet_name)
+        key_bytes.extend(std::iter::repeat(0xBB).take(16)); // twox_128(storage_name)
+        key_bytes.extend(std::iter::repeat(0xCC).take(16)); // blake2_128(key)
+        key_bytes.extend_from_slice(code);
+
+        let recovered =
+            extract_referral_code_bytes(&key_bytes).expect("non-empty key");
+        assert_eq!(recovered, code);
+        assert_eq!(REFERRAL_KEY_PREFIX_LEN, 48);
+    }
+
+    #[test]
+    fn extract_returns_none_for_truncated_key() {
+        // 47-byte key (one short of the deterministic prefix) — nothing
+        // sensible to extract, so we expect None and the iteration
+        // skips this entry instead of slicing into adjacent memory.
+        let short = vec![0u8; REFERRAL_KEY_PREFIX_LEN - 1];
+        assert!(extract_referral_code_bytes(&short).is_none());
+
+        // Exactly 48 bytes — prefix with no raw key. Also None, since
+        // an empty code isn't a valid referral row.
+        let exact = vec![0u8; REFERRAL_KEY_PREFIX_LEN];
+        assert!(extract_referral_code_bytes(&exact).is_none());
+    }
+
+    #[test]
+    fn extract_handles_variable_length_codes() {
+        // Reproduces the original bug: with a 26-byte code, the previous
+        // implementation grabbed the LAST 32 bytes and ended up with
+        // 6 hash bytes followed by the code. The new implementation
+        // returns the full code regardless of length.
+        for code in [
+            b"HIPPIUS6559825516876025567".as_slice(),
+            b"HIPPIUS16817098965507737959".as_slice(),
+            b"HIPPIUS18099738829974267908".as_slice(),
+        ] {
+            let mut key = vec![0xFFu8; REFERRAL_KEY_PREFIX_LEN];
+            key.extend_from_slice(code);
+            assert_eq!(extract_referral_code_bytes(&key), Some(code));
+        }
+    }
 }

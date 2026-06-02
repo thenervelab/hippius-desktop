@@ -2791,6 +2791,8 @@ mod tests {
             date_filter: None,
             file_sizes: None,
             folder_tab: None,
+            date_range: None,
+            file_extensions: None,
         };
         let out = filter_file_entries(files, criteria);
         assert_eq!(out.len(), 1);
@@ -2810,6 +2812,8 @@ mod tests {
             date_filter: None,
             file_sizes: None,
             folder_tab: Some("drive-one".into()),
+            date_range: None,
+            file_extensions: None,
         };
         let out = filter_file_entries(files, criteria);
         assert_eq!(out.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), vec!["a.txt", "c.txt"]);
@@ -2830,6 +2834,8 @@ mod tests {
             date_filter: None,
             file_sizes: Some(vec![1_000_000, 1_000_000_000]),
             folder_tab: None,
+            date_range: None,
+            file_extensions: None,
         };
         let out = filter_file_entries(files, criteria);
         assert_eq!(out.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), vec!["medium.zip", "huge.iso"]);
@@ -2849,6 +2855,8 @@ mod tests {
             date_filter: None,
             file_sizes: None,
             folder_tab: None,
+            date_range: None,
+            file_extensions: None,
         };
         let out = filter_file_entries(files, criteria);
         assert_eq!(out.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), vec!["pic.png", "subfolder"]);
@@ -2863,6 +2871,8 @@ mod tests {
             date_filter: Some(String::new()),
             file_sizes: Some(Vec::new()),
             folder_tab: None,
+            date_range: None,
+            file_extensions: None,
         };
         assert!(criteria.is_empty());
         let out = filter_file_entries(files, criteria);

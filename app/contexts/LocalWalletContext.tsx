@@ -1,6 +1,7 @@
 "use client";
 
 import { invoke } from "@tauri-apps/api/core";
+import { useAtomValue } from "jotai";
 import React, {
   createContext,
   useCallback,
@@ -10,6 +11,7 @@ import React, {
   useState,
 } from "react";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
+import { bridgeInFlightAtom } from "@/lib/global-atoms/bridgeAtoms";
 
 /** Mirrors `PublicLocalWallet` in `src-tauri/src/wallet/repo.rs`. */
 export interface LocalWallet {
@@ -391,6 +393,45 @@ export function LocalWalletProvider({
   const lockWallet = useCallback(() => {
     setIsUnlocked(false);
   }, []);
+
+  /* ── Idle auto-lock ──────────────────────────────────────────────────
+   *
+   * The wallet "unlocked" flag is a soft FE gate — every signing flow
+   * (Send / Stake / Unstake / Withdraw / Bridge) re-prompts for the
+   * password and re-derives the keypair in Rust, so there's no
+   * long-lived secret in renderer memory for an idle attacker to
+   * grab. Auto-lock here is mostly UX-defensive: if the laptop is
+   * left unattended after the user viewed their recovery phrase, the
+   * next user-action requiring "unlocked" state should re-prompt.
+   *
+   * Timeline: 5 min of idle (no successful unlock-refreshing call)
+   * → flip isUnlocked back to false. The user can re-unlock with the
+   * usual password prompt; the timer resets on every
+   * `setIsUnlocked(true)` (handled by the watcher below).
+   *
+   * Pause condition: when a bridge submit is in progress
+   * (`bridgeInFlight > 0`), the timer is suspended. A multi-step
+   * bridge can legitimately take longer than the idle window
+   * (slow testnet block production + several signs), and silently
+   * flipping the soft-lock during the user's "watch the wizard
+   * tick" experience is confusing. The bridge submit closure holds
+   * its password independently so signing continues either way —
+   * pausing the timer is purely a UX correctness fix.
+   */
+  const IDLE_LOCK_MS = 5 * 60 * 1000;
+  const bridgeInFlight = useAtomValue(bridgeInFlightAtom);
+  useEffect(() => {
+    if (!isUnlocked) return;
+    if (bridgeInFlight > 0) return;
+    const t = window.setTimeout(() => {
+      setIsUnlocked(false);
+    }, IDLE_LOCK_MS);
+    return () => window.clearTimeout(t);
+    // Re-arm the timer every time the unlocked state flips to true,
+    // and re-evaluate the pause-during-bridge condition when the
+    // in-flight count changes (so the timer restarts as soon as a
+    // bridge submit settles, not after the next isUnlocked toggle).
+  }, [isUnlocked, IDLE_LOCK_MS, bridgeInFlight]);
 
   /* ── Backup / recovery ─────────────────────────────────────────────── */
 

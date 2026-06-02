@@ -6,10 +6,7 @@ import { cn } from "@/lib/utils";
 import { motion } from "framer-motion";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { getFileUrl } from "@/app/lib/utils/fileUrlResolver";
-import {
-  FileViewerLayout,
-  FileViewerTitle,
-} from "@/app/components/page-sections/drive/file-viewer";
+import { FileViewerLayout } from "@/app/components/page-sections/drive/file-viewer";
 
 export const ImageDialogTrigger: React.FC<{
   children: ReactNode;
@@ -27,8 +24,8 @@ export const ImageDialogTrigger: React.FC<{
     >
       <span className="flex-1 min-w-0">{children}</span>
       {/* Eye icon on hover */}
-      <div className="absolute pointer-events-none pl-16 bg-gradient-to-r from-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100 to-white dark:to-black-300 right-4 inset-y-0 flex items-center">
-        <Icons.Eye className="size-5 text-primary-60 [&>path]:stroke-[0.1875rem]" />
+      <div className="absolute pointer-events-none opacity-0 transition-opacity duration-300 group-hover:opacity-100 right-4 inset-y-0 flex items-center">
+        <Icons.EyeOutline className="size-4 text-primary-60" />
       </div>
     </button>
   );
@@ -99,80 +96,59 @@ const ImageDialog: React.FC<{
       onNavigate={onNavigate}
       handleFileDownload={handleFileDownload}
     >
-      {/* Shrink-wrap container so the title row always sits at the
-          rendered image's left edge. w-fit collapses the wrapper's width
-          to its widest child (the image's natural width capped by
-          max-w-full); the title then left-aligns inside that same box.
-          grid-rows-[auto_minmax(0,1fr)] gives the title its intrinsic
-          height and lets the image consume the remaining vertical space. */}
-      <div
-        className={cn(
-          "grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-2",
-          "max-w-full max-h-full",
-          // w-fit shrinks the wrapper to its widest grid item — the
-          // image's natural width — so the title aligns with the image
-          // edge regardless of viewport size. For images larger than the
-          // padded box, max-w-full caps the wrapper and object-contain
-          // on the <img> below preserves aspect ratio.
-          "w-fit",
+      <div className="relative w-full h-full min-h-0 min-w-0 flex items-center justify-center">
+        {!imageLoaded && !imageError && resolvedUrl && (
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <Loader2 className="size-6 text-primary-50 animate-spin" />
+          </div>
         )}
-      >
-        <FileViewerTitle file={file} />
 
-        <div className="relative min-h-0 min-w-0 flex items-center justify-center">
-          {!imageLoaded && !imageError && resolvedUrl && (
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <Loader2 className="size-6 text-primary-50 animate-spin" />
-            </div>
-          )}
-
-          {!imageError && resolvedUrl && (
-            <motion.div
-              key={file.actualFileName || file.name}
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{
-                opacity: imageLoaded ? 1 : 0,
-                scale: imageLoaded ? 1 : 1.0,
+        {!imageError && resolvedUrl && (
+          <motion.div
+            key={file.actualFileName || file.name}
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{
+              opacity: imageLoaded ? 1 : 0,
+              scale: imageLoaded ? 1 : 1.0,
+            }}
+            transition={{ duration: 0.3, ease: "easeInOut" }}
+            className="relative w-full h-full min-h-0 min-w-0 flex items-center justify-center"
+          >
+            <img
+              key={resolvedUrl}
+              onLoad={() => {
+                setImageLoaded(true);
+                setImageError(null);
               }}
-              transition={{ duration: 0.3, ease: "easeInOut" }}
-              className="relative w-full h-full flex items-center justify-center"
-            >
-              <img
-                key={resolvedUrl}
-                onLoad={() => {
-                  setImageLoaded(true);
-                  setImageError(null);
-                }}
-                onError={() => {
-                  setImageLoaded(false);
-                  setImageError("Failed to load image");
-                }}
-                src={resolvedUrl}
-                alt={file.name}
-                className={cn(
-                  "max-h-full max-w-full w-auto h-auto object-contain rounded-[8px]",
-                  "shadow-[0_14px_31px_rgba(0,0,0,0.06),0_56px_56px_rgba(0,0,0,0.05)]",
-                  "duration-300 opacity-0",
-                  imageLoaded && "opacity-100",
-                )}
-              />
-            </motion.div>
-          )}
+              onError={() => {
+                setImageLoaded(false);
+                setImageError("Failed to load image");
+              }}
+              src={resolvedUrl}
+              alt={file.name}
+              className={cn(
+                "max-h-full max-w-full w-auto h-auto object-contain rounded-[8px]",
+                "shadow-[0_14px_31px_rgba(0,0,0,0.06),0_56px_56px_rgba(0,0,0,0.05)]",
+                "duration-300 opacity-0",
+                imageLoaded && "opacity-100",
+              )}
+            />
+          </motion.div>
+        )}
 
-          {imageError && (
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              transition={{ duration: 0.3, ease: "easeInOut" }}
-            >
-              <ImageError
-                handleFileDownload={handleFileDownload}
-                message={imageError}
-                file={file}
-              />
-            </motion.div>
-          )}
-        </div>
+        {imageError && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ duration: 0.3, ease: "easeInOut" }}
+          >
+            <ImageError
+              handleFileDownload={handleFileDownload}
+              message={imageError}
+              file={file}
+            />
+          </motion.div>
+        )}
       </div>
     </FileViewerLayout>
   );

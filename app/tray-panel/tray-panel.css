@@ -1,0 +1,32 @@
+/*
+ * The tray popover is a borderless, transparent Tauri window. The shared root
+ * layout paints a solid background on <html>/<body>; clear it here so the
+ * rounded frosted card shows the desktop behind it.
+ *
+ * This must win over Tailwind's `bg-grey-100` body utility AND apply at
+ * stylesheet-parse time (it ships in this route's <head>), before the first
+ * paint. The previous approach set the background from a `useEffect`, which
+ * ran *after* first paint and produced the opaque grey flash / "sometimes
+ * transparent, sometimes not" race the user reported.
+ */
+html,
+body {
+  background: transparent !important;
+}
+
+body {
+  /* The popover is a fixed-size window; never show window-level scrollbars. */
+  overflow: hidden;
+}
+
+/* Exact Figma elevation for the popover card (identical in light/dark). Kept
+ * in CSS rather than a Tailwind arbitrary value because the multi-layer shadow
+ * with rgba() commas is unwieldy and error-prone inline. */
+.tray-panel-card {
+  box-shadow:
+    0 410px 115px 0 rgba(0, 0, 0, 0),
+    0 262px 105px 0 rgba(0, 0, 0, 0.02),
+    0 147px 88px 0 rgba(0, 0, 0, 0.06),
+    0 66px 66px 0 rgba(0, 0, 0, 0.11),
+    0 16px 36px 0 rgba(0, 0, 0, 0.12);
+}

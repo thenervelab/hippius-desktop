@@ -2,7 +2,8 @@
 
 import { useCreditsNotification } from "@/app/lib/hooks/useCreditsNotification";
 import { useFilesNotification } from "@/app/lib/hooks/useFilesNotification";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { useAtom } from "jotai";
 import * as Menubar from "@radix-ui/react-menubar";
 
@@ -25,6 +26,19 @@ export default function NotificationMenu({ className = "delay-500" }: Props) {
   useNotifications();
   const [count] = useAtom(unreadCountAtom);
   const [menuValue, setMenuValue] = useState<string>("");
+
+  // Open this dropdown when the tray popover's bell is clicked. The popover is
+  // a separate webview, so it focuses this window and emits the event rather
+  // than rendering the notifications portal itself (which would duplicate the
+  // notification-generator hooks above). See `app/tray-panel/page.tsx`.
+  useEffect(() => {
+    const unlisten = listen("hippius:tray-open-notifications", () => {
+      setMenuValue("notifications");
+    });
+    return () => {
+      void unlisten.then((fn) => fn());
+    };
+  }, []);
 
   return (
     <Menubar.Root

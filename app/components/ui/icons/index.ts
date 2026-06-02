@@ -1,4 +1,10 @@
 export { default as HippiusLogo } from "./HippiusLogo";
+export { default as AlphaCoinLogo } from "./AlphaCoinLogo";
+export { default as HAlphaCoinLogo } from "./HAlphaCoinLogo";
+export { default as ReferralGrip } from "./ReferralGrip";
+export { default as MousePointerClick } from "./MousePointerClick";
+export { default as Tickets } from "./Tickets";
+export { default as RefreshCcwDot } from "./RefreshCcwDot";
 export { default as SquareDashedKanban } from "./SquareDashedKanban";
 export { default as Lock } from "./Lock";
 export { default as CircularBittensor } from "./CircularBittensor";

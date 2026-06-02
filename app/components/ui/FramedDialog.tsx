@@ -66,7 +66,7 @@ export function FramedDialog({
     <Dialog.Root open={open} onOpenChange={(next) => !next && onClose()}>
       <Dialog.Portal>
         {/* Backdrop */}
-        <Dialog.Overlay className="fixed inset-0 z-[60] bg-white/70 backdrop-blur-[5.75px] dark:bg-[#04040466] dark:backdrop-blur-[11.5px]" />
+        <Dialog.Overlay className="fixed inset-0 z-[60] bg-white/70 backdrop-blur-[5.75px] dark:bg-black-850/40 dark:backdrop-blur-[11.5px]" />
 
         {/* Full-screen positioner — click outside closes */}
         <Dialog.Content
@@ -77,8 +77,8 @@ export function FramedDialog({
         >
           <BackgroundContainer
             className={cn("w-full", maxWidth)}
-            fillClassName="fill-[#f9f9f9] dark:fill-[#202020]"
-            strokeClassName="stroke-[#b3b3b3] dark:stroke-[#6c6c6c]"
+            fillClassName="fill-[#f9f9f9] dark:fill-[#262626]"
+            hippoIconClassName="fill-[#989898] dark:fill-[#5e5e5e]"
             borderClassName={borderClassName}
             contentClassName="flex justify-center"
             shellClassName={cn("w-full min-w-0", maxWidth)}

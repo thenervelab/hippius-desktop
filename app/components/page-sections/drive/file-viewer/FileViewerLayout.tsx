@@ -5,12 +5,12 @@ import React, {
   useEffect,
   useMemo,
   useCallback,
+  useState,
 } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useAtomValue, useSetAtom } from "jotai";
 import { Share2, Download, Trash2, X, ArrowLeft, ArrowRight } from "lucide-react";
 
-import TopBarLogoMenu from "@/app/components/top-bar/TopBarLogoMenu";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { cn } from "@/app/lib/utils";
@@ -26,6 +26,7 @@ import {
 import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 
 import FileViewerThumbnailStrip from "./FileViewerThumbnailStrip";
+import FileViewerTitle from "./FileViewerTitle";
 
 interface FileViewerLayoutProps {
   file: FormattedUserFile;
@@ -103,6 +104,13 @@ const FileViewerLayout: React.FC<FileViewerLayoutProps> = ({
   const shareEnabled = useAtomValue(shareFeatureEnabledAtom);
   const setShareModalFile = useSetAtom(shareModalFileAtom);
   const { enterSelectionModeAndSelectFile } = useFileSelection();
+
+  const [isMac] = useState(() => {
+    if (typeof navigator === "undefined") return false;
+    const platform = (navigator.platform || "").toLowerCase();
+    const ua = (navigator.userAgent || "").toLowerCase();
+    return platform.includes("mac") || ua.includes("mac os");
+  });
 
   const navigationOptions = useMemo(() => ({ localOnly: true }), []);
 
@@ -215,16 +223,23 @@ const FileViewerLayout: React.FC<FileViewerLayoutProps> = ({
 
             {/* All visible content lives above the frosted layer */}
             <div className="relative z-10 flex flex-col h-full">
-              {/* Top bar: logo on the left, action buttons on the right.
+              {/* Top bar: filename on the left, action buttons on the right.
                   Outer header is drag-region so window dragging still works
                   from the empty band; individual buttons stop the drag via
-                  pointer events. */}
+                  pointer events. Left padding reserves space for the macOS
+                  traffic-light controls. */}
               <header
                 data-tauri-drag-region
                 className="relative flex items-center justify-between w-full select-none shrink-0 h-[54px]"
               >
-                <div data-tauri-drag-region className="flex items-center">
-                  <TopBarLogoMenu />
+                <div
+                  data-tauri-drag-region
+                  className={cn(
+                    "flex items-center select-none h-full shrink-0 min-w-0",
+                    isMac ? "pl-[80px]" : "pl-[12px]",
+                  )}
+                >
+                  <FileViewerTitle file={file} />
                 </div>
                 <div className="flex items-center gap-[13px] pr-[19px]">
                   {canShare && (
@@ -249,12 +264,9 @@ const FileViewerLayout: React.FC<FileViewerLayoutProps> = ({
                 </div>
               </header>
 
-              {/* Dialog.Title is rendered visibly by each Dialog (next to
-                  its media so it aligns with the rendered image edge).
-                  Keep an sr-only Title here to satisfy Radix's a11y
-                  contract; the visible title is duplicated inside
-                  children but is not announced because it isn't wrapped
-                  in Dialog.Title. */}
+              {/* sr-only title for Radix's a11y contract; the visible
+                  filename in the top bar is not wrapped in Dialog.Title
+                  so screen readers only announce it once. */}
               <Dialog.Title className="sr-only">{file.name}</Dialog.Title>
 
               {/* Preview area — laid out as side rails plus a flexible
@@ -262,7 +274,7 @@ const FileViewerLayout: React.FC<FileViewerLayoutProps> = ({
                   always ends 60px above the thumbnail strip, while
                   preserving the 40px gap from the side nav buttons and the
                   30px gap below the top actions. */}
-              <div className="flex-1 min-h-0 px-[24px] pt-[30px] pb-[60px]">
+              <div className="flex-1 min-h-0 px-[24px] pt-[34px] pb-[60px]">
                 <div className="flex h-full min-h-0 items-stretch gap-x-[40px]">
                   <div className="flex w-[44px] shrink-0 items-center justify-center">
                     {prevFile ? (

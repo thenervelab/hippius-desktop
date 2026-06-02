@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
-import { HippiusLogo } from "@/components/ui/icons";
+import { HAlphaCoinLogo, HippiusLogo } from "@/components/ui/icons";
 
 import {
   WalletDialogShell,
@@ -157,7 +157,7 @@ const WithdrawDialog: React.FC<WithdrawDialogProps> = ({
                   {withdrawableHip} hALPHA
                 </span>
                 <span className="flex size-4 items-center justify-center rounded-full border border-[#d0d0d0] bg-white">
-                  <HippiusLogo className="size-2.5 text-[#3167dd]" />
+                  <HAlphaCoinLogo className="size-2.5" />
                 </span>
               </div>
             </div>

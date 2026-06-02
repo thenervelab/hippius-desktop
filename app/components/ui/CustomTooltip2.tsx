@@ -58,13 +58,14 @@ const CustomTooltip2: React.FC<InfoTooltipProps> = ({
               max-w-[16.25rem] w-max whitespace-normal break-words
               transition-opacity duration-200
               data-[state=closed]:opacity-0 data-[state=open]:opacity-100
-              dark:border-[#494949] dark:bg-[#2c2c2c] dark:text-[#a3a3a3]
-              dark:shadow-black/25
+              dark:border-white/10 dark:bg-[#1c1c1e] dark:text-grey-dark-100
+              dark:shadow-[0_8px_28px_-8px_rgba(0,0,0,0.55)]
+              dark:ring-1 dark:ring-inset dark:ring-white/[0.04]
             "
             sideOffset={4}
           >
             {tooltipContent}
-            <Tooltip.Arrow className="fill-white dark:fill-[#2c2c2c]" />
+            <Tooltip.Arrow className="fill-white dark:fill-[#1c1c1e]" />
           </Tooltip.Content>
         </Tooltip.Portal>
       </Tooltip.Root>

@@ -207,6 +207,37 @@ pub async fn set_active(pool: &SqlitePool, owner: &str, id: i64) -> Result<(), A
     Ok(())
 }
 
+/// Atomically replace a wallet row's `encrypted_mnemonic` + `password_hash`
+/// (and bump `updated_at`). Used by the Argon2id migration path in
+/// `commands::local_wallet_get_decrypted_mnemonic`: after a successful
+/// legacy decrypt, we re-encrypt under the new KDF and call this to
+/// persist the upgraded ciphertext.
+///
+/// The update is owner-scoped — a stale `id` from another account is a
+/// no-op rather than a cross-account leak.
+pub async fn update_secrets(
+    pool: &SqlitePool,
+    owner: &str,
+    id: i64,
+    encrypted_mnemonic: &str,
+    password_hash: &str,
+) -> Result<(), AppError> {
+    let now = now_ms();
+    sqlx::query(
+        "UPDATE local_wallets
+            SET encrypted_mnemonic = ?, password_hash = ?, updated_at = ?
+            WHERE id = ? AND owner = ?",
+    )
+    .bind(encrypted_mnemonic)
+    .bind(password_hash)
+    .bind(now)
+    .bind(id)
+    .bind(owner)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 pub async fn rename(pool: &SqlitePool, owner: &str, id: i64, name: &str) -> Result<(), AppError> {
     let now = now_ms();
     sqlx::query("UPDATE local_wallets SET name = ?, updated_at = ? WHERE id = ? AND owner = ?")

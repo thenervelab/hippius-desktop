@@ -15,7 +15,6 @@ mod app_state;
 pub mod auth;
 pub mod billing;
 pub mod blockchain;
-pub mod bridge;
 pub mod console_access;
 pub mod crypto;
 pub mod error;
@@ -27,6 +26,7 @@ pub mod splash;
 pub mod sync;
 #[cfg(test)]
 mod test_helpers;
+pub mod tray;
 mod utils;
 pub mod wallet;
 
@@ -55,9 +55,6 @@ use crate::blockchain::staking::{stake_bond, stake_claim_rewards, stake_unbond, 
 use crate::blockchain::subscription::start_block_subscription;
 use crate::blockchain::transfers::compute_max_transferable;
 use crate::blockchain::transfers::{transfer_balance, validate_send_balance};
-use crate::bridge::commands::{
-    bridge_get_config, bridge_get_transactions, bridge_submit_alpha_to_halpha, bridge_submit_halpha_to_alpha,
-};
 use crate::console_access::validate_recovery_password;
 use crate::infra::vm::{
     create_vm, get_vm_instance, list_vm_applications, list_vm_flavors, list_vm_images, list_vm_instances, reboot_vm, start_vm, stop_vm, terminate_vm,
@@ -85,6 +82,7 @@ use crate::sync::files::{
     list_sync_folder, list_sync_folder_grouped, resolve_file_info, resolve_file_path, search_user_files_recursive,
 };
 use crate::sync::folders::{delete_remote_folder, get_sync_folders_with_stats, list_remote_folders, restore_remote_folders};
+use crate::sync::recent_uploads::get_recent_uploads;
 use crate::sync::lifecycle::{
     add_local_sync_folder, auto_init_sync, change_sync_folder, initialize_sync, pause_drive, remove_drive, resume_drive, setup_and_init_sync,
     stop_sync,
@@ -94,6 +92,7 @@ use crate::sync::paths::{get_sync_path, remove_sync_path, set_sync_path};
 use crate::sync::progress::{sp_clear_all_data, sp_dismiss_sync_widget, sp_get_snapshot};
 use crate::sync::remote::{download_remote_file, list_remote_folder_files};
 use crate::sync::status::{app_close, get_all_drive_statuses, get_sync_activity_rows, get_sync_engine_health};
+use crate::tray::panel::{hide_tray_panel, toggle_tray_panel};
 use crate::utils::platform_info::get_platform_info;
 use crate::utils::preferences::{get_user_preference, is_onboarding_done, save_user_preference, set_onboarding_done};
 use crate::utils::support::{
@@ -103,9 +102,10 @@ use crate::utils::tray_menu::get_tray_menu_data;
 use crate::wallet::commands::{
     local_wallet_create, local_wallet_delete, local_wallet_derive_address, local_wallet_export_backup,
     local_wallet_export_backup_zip, local_wallet_generate_mnemonic, local_wallet_get_active,
-    local_wallet_get_decrypted_mnemonic, local_wallet_has_any, local_wallet_import_encrypted_backup,
-    local_wallet_import_encrypted_backup_from_zip, local_wallet_list, local_wallet_rename,
-    local_wallet_set_active, local_wallet_validate_mnemonic, local_wallet_verify_password,
+    local_wallet_get_decrypted_mnemonic, local_wallet_get_public_key, local_wallet_has_any,
+    local_wallet_import_encrypted_backup, local_wallet_import_encrypted_backup_from_zip,
+    local_wallet_list, local_wallet_rename, local_wallet_set_active, local_wallet_sign,
+    local_wallet_validate_mnemonic, local_wallet_verify_password,
 };
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous};
 use tauri::{Builder, Emitter, Manager, Wry, path::BaseDirectory};
@@ -197,6 +197,7 @@ fn main() {
             list_sync_folder,
             list_sync_folder_grouped,
             get_recent_files,
+            get_recent_uploads,
             get_user_files,
             filter_file_entries,
             search_user_files_recursive,
@@ -282,11 +283,6 @@ fn main() {
             to_plancks,
             planck_to_hip_full,
             compute_max_transferable,
-            // Alpha ⇆ hAlpha bridge
-            bridge_get_config,
-            bridge_get_transactions,
-            bridge_submit_halpha_to_alpha,
-            bridge_submit_alpha_to_halpha,
             // Console access
             // Account recovery (OAuth-based)
             validate_recovery_password,
@@ -354,6 +350,9 @@ fn main() {
             logout_full,
             is_token_valid,
             get_tray_menu_data,
+            // Tray popover panel (replaces the native tray menu)
+            toggle_tray_panel,
+            hide_tray_panel,
             get_platform_info,
             // Local DB (notifications, address book, onboarding, preferences, app state)
             add_notification,
@@ -399,6 +398,8 @@ fn main() {
             local_wallet_delete,
             local_wallet_verify_password,
             local_wallet_get_decrypted_mnemonic,
+            local_wallet_get_public_key,
+            local_wallet_sign,
             local_wallet_export_backup,
             local_wallet_export_backup_zip,
             local_wallet_import_encrypted_backup,
@@ -466,6 +467,16 @@ fn main() {
 /// On Windows/Linux, closing the window exits the app via `app.exit(0)`.
 pub fn on_window_event(builder: Builder<Wry>) -> Builder<Wry> {
     builder.on_window_event(|window, event| {
+        // Click-outside dismissal for the tray popover: when the panel loses
+        // focus, hide it. Centralized here (rather than in the FE) so the
+        // re-open cooldown timestamp is recorded against the same `AppState`
+        // that `toggle_tray_panel` reads.
+        if let tauri::WindowEvent::Focused(false) = event {
+            if window.label() == crate::tray::panel::PANEL_LABEL {
+                crate::tray::panel::on_panel_blur(window.app_handle());
+            }
+        }
+
         if let tauri::WindowEvent::CloseRequested { api, .. } = event {
             // Only intercept the main window. If a future refactor adds a
             // secondary window (e.g. a settings popup), its close button
@@ -556,6 +567,11 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
         app_handle.manage(app_state);
         crate::sync::upload_processing::spawn_watchdog(upload_processing_weak, app_handle.clone());
         crate::sync::preparing::spawn_watchdog(preparing_weak, sync_weak);
+
+        // Pre-create the (hidden) tray popover so the first tray click shows it
+        // instantly instead of paying webview + route load cost on click.
+        crate::tray::panel::prewarm(&app_handle);
+
         let win = app.get_webview_window("main").expect("main window not found");
 
         // Open devtools on startup when `HIPPIUS_DEVTOOLS=1` is set in the

@@ -21,6 +21,7 @@ pub mod mnemonic;
 pub mod paths;
 pub mod preparing;
 pub mod progress;
+pub mod recent_uploads;
 pub mod region;
 pub mod relative_path_backfill;
 pub mod relative_path_backfill_reset;

@@ -1,5 +1,5 @@
 "use client";
-import { TrayIcon } from "@tauri-apps/api/tray";
+import { TrayIcon, type TrayIconEvent } from "@tauri-apps/api/tray";
 import {
   Menu,
   MenuItem,
@@ -144,9 +144,54 @@ async function refreshLoginStatus(): Promise<boolean> {
   return data.loggedIn;
 }
 
+// Mirror of the auth context's `isAuthenticated`, kept at module scope so the
+// tray `action` callback (a plain closure, not a React component) can read the
+// current value synchronously. This is the SAME flag that decides whether the
+// app shows its login screen, so the tray matches the visible UI exactly —
+// unlike Rust's `AuthInfo.substrate_address`, which stays set for a session
+// restored from disk even while the UI is logged out. Updated by `useTrayInit`.
+let isAuthenticatedLatest = false;
+
+/**
+ * Tray-icon click handler. When signed in, a left-click forwards the icon's
+ * screen rectangle (`event.rect`) to the Rust `toggle_tray_panel` command,
+ * which anchors and toggles the popover (it replaced the old native menu).
+ * When signed out, the popover (credits/uploads/account) is meaningless, so the
+ * click reveals the main window's login screen instead.
+ *
+ * Right/middle clicks are ignored. Tray click events are unsupported on Linux
+ * (the `action` never fires there), so the popover is effectively
+ * macOS/Windows-only — see the CLAUDE.md note.
+ */
+async function handleTrayClick(event: TrayIconEvent) {
+  if (event.type !== "Click" || event.button !== "Left" || event.buttonState !== "Up") {
+    return;
+  }
+  try {
+    if (!isAuthenticatedLatest) {
+      await openAppWindow();
+      return;
+    }
+    await invoke("toggle_tray_panel", {
+      rect: {
+        x: event.rect.position.x,
+        y: event.rect.position.y,
+        width: event.rect.size.width,
+        height: event.rect.size.height,
+      },
+    });
+  } catch (e) {
+    logTrayAction("Failed to toggle tray panel", e);
+  }
+}
+
 /* ─ Public: create tray once ──────────────────────────────────── */
 
 export function useTrayInit(isAuthenticated: boolean) {
+  // Keep the module-level mirror in sync so `handleTrayClick` (the tray
+  // `action` closure) sees the current auth state synchronously.
+  isAuthenticatedLatest = isAuthenticated;
+
   // Use atom to watch for sync percentage changes
   const [lastUpdatedPercent, setLastUpdatedPercent] = useAtom(
     lastUpdatedPercentAtom,
@@ -270,13 +315,17 @@ export function useTrayInit(isAuthenticated: boolean) {
       });
 
       if (!existingTray) {
+        // No `menu` is attached: the native tray menu has been replaced by the
+        // custom popover window. Left-click is routed to `handleTrayClick`,
+        // which toggles that window. (The in-memory `menu`/submenu objects are
+        // still maintained below to keep the icon-state machinery and its tests
+        // intact; deleting that now-unused code is a tracked follow-up.)
         await TrayIcon.new({
           id: TRAY_ID,
           icon: defaultIconPath!,
           iconAsTemplate: false,
           tooltip: "Hippius Cloud",
-          menu,
-          menuOnLeftClick: true,
+          action: handleTrayClick,
         });
         trayIconState = "default";
       }
@@ -697,11 +746,11 @@ async function setTrayIconSyncing(
       }
     }
 
-    // Fallback: Recreate the tray completely
+    // Fallback: Recreate the tray completely. Like the initial creation, no
+    // native menu is attached — left-click toggles the custom popover.
     try {
       logTrayAction("Recreating tray with new icon");
       const currentTray = await TrayIcon.getById(TRAY_ID);
-      const menu = await (menuPromise || Promise.resolve(null));
 
       if (currentTray) await currentTray.close();
 
@@ -710,8 +759,7 @@ async function setTrayIconSyncing(
         icon: iconPath,
         iconAsTemplate: false,
         tooltip: "Hippius Cloud",
-        menu: menu || undefined,
-        menuOnLeftClick: true,
+        action: handleTrayClick,
       });
 
       trayIconState = newState;

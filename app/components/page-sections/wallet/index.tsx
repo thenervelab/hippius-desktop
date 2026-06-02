@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import { Info, Plus } from "lucide-react";
 
@@ -58,6 +58,20 @@ export default function Wallet() {
     }>
   >([]);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
+
+  /* Portal target for the bridge tab's filter + mini-pagination
+   * controls. We render an empty div in the tab bar header and let
+   * BridgeTransactionHistoryTable inject the controls into it via
+   * createPortal — same pattern hippius-web uses. */
+  const bridgeHeaderRef = useRef<HTMLDivElement | null>(null);
+  const [bridgeHeaderEl, setBridgeHeaderEl] = useState<HTMLDivElement | null>(
+    null,
+  );
+  // Sync the ref-callback into state so the table re-portals when the
+  // div mounts/unmounts as the tab changes.
+  useEffect(() => {
+    setBridgeHeaderEl(bridgeHeaderRef.current);
+  }, [activeTab]);
 
   useEffect(() => {
     if (activeTab !== "Address Book") return;
@@ -158,6 +172,9 @@ export default function Wallet() {
                   New Address
                 </Button>
               )}
+              {activeTab === "Bridge Transactions" && (
+                <div ref={bridgeHeaderRef} />
+              )}
             </div>
             <div className="flex flex-col w-full flex-1 rounded-tl-[8px] rounded-tr-[8px] border-t border-grey-dark-100 bg-white dark:bg-black-600 dark:border-black-300 overflow-hidden">
               {activeTab === "Transaction History" && (
@@ -167,7 +184,9 @@ export default function Wallet() {
                 />
               )}
               {activeTab === "Bridge Transactions" && (
-                <BridgeTransactionHistoryTable />
+                <BridgeTransactionHistoryTable
+                  headerPortalTarget={bridgeHeaderEl}
+                />
               )}
               {activeTab === "Address Book" && (
                 <AddressBookTable

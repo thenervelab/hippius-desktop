@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useRef, useState } from "react";
+import React, { useCallback, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { AlertCircle } from "lucide-react";
 import { toast } from "sonner";
@@ -86,6 +86,39 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
     setActiveButton(null);
     if (amountError) setAmountError(undefined);
   };
+
+  /* Client-side "amount > available" guard.
+   *
+   * The server-side `validate_send_balance` IPC also catches this, but
+   * it only fires once the user clicks Send — by then they've already
+   * typed an invalid number and clicked through, which reads as
+   * surprise-rejection. Computing the error from the current input
+   * lets the message appear as they type and the Send button can
+   * disable immediately.
+   *
+   * We compare against the user-visible "Available" (transferable
+   * balance, already net of frozen funds). The Rust IPC also subtracts
+   * an additional gas-fee buffer; a number that's under the visible
+   * available but over the gas-adjusted max still reaches the IPC,
+   * which surfaces the precise "you can only send X after fees"
+   * error. That two-layer fallback is intentional. */
+  const numericAvailable = useMemo(() => {
+    const s = (availableBalanceHip || "0").replace(/,/g, "").trim();
+    const n = Number.parseFloat(s);
+    return Number.isFinite(n) ? n : 0;
+  }, [availableBalanceHip]);
+
+  const overBalance = useMemo(() => {
+    const trimmed = amount.trim();
+    if (!trimmed) return false;
+    const n = Number.parseFloat(trimmed);
+    if (!Number.isFinite(n) || n <= 0) return false;
+    return n > numericAvailable;
+  }, [amount, numericAvailable]);
+
+  const displayedAmountError = overBalance
+    ? "Amount exceeds available balance"
+    : amountError;
 
   // Calls validate_send_balance, which fetches the on-chain balance,
   // checks address + amount + fee, and returns the planck integer for
@@ -235,7 +268,9 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
               variant="primary"
               className="h-[40px] flex-1 rounded-[6px] px-4 text-[14px] font-medium tracking-[-0.28px]"
               onClick={handleOpenConfirmation}
-              disabled={loading || !address.trim() || !amount.trim()}
+              disabled={
+                loading || !address.trim() || !amount.trim() || overBalance
+              }
             >
               {loading ? "Sending..." : "Send"}
             </Button>
@@ -290,9 +325,9 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
                   handleAmountChange(e);
                 }
               }}
-              aria-invalid={!!amountError}
+              aria-invalid={!!displayedAmountError}
               disabled={loading}
-              className={cn(amountError && "border-error-50")}
+              className={cn(displayedAmountError && "border-error-50")}
               endAdornment={
                 <div className="flex items-center gap-2 pr-1 text-[13px] font-medium tracking-[-0.26px] text-[#171717] dark:text-white sm:text-[14px] sm:tracking-[-0.28px]">
                   <span>hALPHA</span>
@@ -312,10 +347,10 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
                 </div>
               }
             />
-            {amountError ? (
+            {displayedAmountError ? (
               <div className="flex items-center gap-2 text-error-70 text-sm font-medium">
                 <AlertCircle className="size-4" />
-                <span>{amountError}</span>
+                <span>{displayedAmountError}</span>
               </div>
             ) : null}
           </div>

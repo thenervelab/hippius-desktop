@@ -27,7 +27,15 @@ const AuthLayout = ({ children }: AuthLayoutProps) => {
         </RevealTextLine>
       </div>
 
-      <div className="w-[58%] shrink-0 grow-0 h-full flex items-center justify-center px-[min(2rem,32px)]">
+      <div className="relative w-[58%] shrink-0 grow-0 h-full flex items-center justify-center px-[min(2rem,32px)]">
+        {/* Mirror the left panel's AuthTitleBar drag region so the window is
+            draggable from the right half's title-bar strip too. Kept to the
+            top 44px (above the vertically-centered card) so it never blocks
+            the sign-in buttons. */}
+        <div
+          data-tauri-drag-region
+          className="absolute inset-x-0 top-0 h-[44px] z-0"
+        />
         <Suspense
           fallback={
             <div className="flex h-full w-full items-center justify-center opacity-0 grow animate-fade-in-0.5">
