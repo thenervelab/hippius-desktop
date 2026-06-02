@@ -82,7 +82,7 @@ _Risk:_ Low-to-medium. Threading the progress hook into file_op_ctx touches the 
 
 _Notes:_ No Rust diff produced this turn (read-only validation): rust_preflight / data-structure plan / axioms-baseline / quality_gate / critique / exemplars / seven-item self-review checklist are all N/A. Verdict partially_valid, not valid, because the auditor's "thousands of small files / large file never completes" framing is refuted by the partial-state-save + per-file cancel granularity (sync_flow.rs:514-519, 920-940, 1108-1120): completed files persist and resumed cycles skip them, so aggregate workloads complete incrementally. The genuine, narrower bug is that a SINGLE file requiring >180s of its own transfer is permanently stranded and silently retried forever, with consecutive_failures climbing. Severity corrected critical->high: it does not block all sync, it silently strands a class of files (large files / slow links). The fix lands cross-repo in hcfs (hcfs-client), pinned by Cargo.toml git rev in this repo. The desktop side is correct as-is; the events.rs::cancelled_marker_matches_upstream test already pins the marker. touch_progress_time having zero real callers is verified dead-on-arrival watchdog instrumentation — the intended wiring was never completed.
 
-- [ ] **F01 fixed & tested**
+- [UPSTREAM] **F01** — cross-repo hcfs fix; spec in 'Cross-repo (hcfs) upstream work' section below (document-only this session, per user)
 
 ---
 
@@ -806,7 +806,7 @@ _Risk:_ Low. Holding a per-account async mutex across challenge_response (a ~hun
 
 _Notes:_ Pure analysis task; no Rust written, so Rust workflow gates (preflight, axioms, quality_gate, self-review checklist) are N/A this turn. The structural bug is real and verified verbatim. Severity stays low: worst realistic outcome is a wasted challenge-response round-trip or a single transient 401 that the runner's existing needs_auth_refresh handler auto-recovers from — no persistent session breakage, no data loss. The DB/keychain last-writer-wins mechanism is confirmed, but its user-visible harm depends on hcfs-server token-invalidation semantics not determinable from this repo (a needs_human sub-question on harm magnitude only, not on the bug's existence). Fix is desktop-only (AppState + service.rs); the runner correctly delegates refresh to the desktop callback so no hcfs change is needed.
 
-- [ ] **F23 fixed & tested**
+- [x] **F23 fixed & tested** — committed a924a3c4
 
 ---
 
@@ -1086,7 +1086,7 @@ _Risk:_ Holding a write transaction across `tokio::fs::canonicalize` (async real
 
 _Notes:_ No Rust diff was produced this turn (analysis only), so the Rust workflow gates (preflight, data-structure plan, axioms baseline, exemplars, critique, quality_gate, and the 7-item self-review checklist) are N/A. Verdict VALID at low severity. The original finding is technically accurate on the mechanism (no tx around check-then-act; only UNIQUE(owner,label) protects the table; multithreaded tokio + 8-conn WAL pool permits statement interleaving; second un-serialized writer in add_local_sync_folder). One correction: exploitability is narrower than a generic "concurrent IPC writes" framing implies — both writers are single-dialog user UI flows, so two simultaneous same-account adds are unlikely in normal use; the race is reachable mainly via scripted/direct IPC or a rapid double-submit. Impact is a redundant overlapping drive (wasted re-upload, confusing dual roots), not data loss, so "low" stands. Fix is small and entirely in-repo (hippius-desktop); does NOT land in hcfs. The fix's most important non-obvious detail: pool.begin() defaults to DEFERRED and will NOT close the window — must use BEGIN IMMEDIATE.
 
-- [ ] **F32 fixed & tested**
+- [x] **F32 fixed & tested** — committed a924a3c4
 
 ---
 
@@ -1189,7 +1189,7 @@ _Risk:_ Cross-repo enum change: SyncEvent is consumed via match in tauri_bridge.
 
 _Notes:_ No Rust diff produced this turn (analysis-only validation); the illu Rust gates (preflight, data-structure plan, axioms baseline, exemplars, critique, quality_gate, and the seven-item self-review checklist) are N/A for this read-only assessment. Verdict valid at low severity: the bug is real and the auditor's one-shot-reconcile reasoning is correct (even understated re: re-fire), but impact is bounded to premature dismissal of a cosmetic, self-healing informational banner with no data or gating consequence. The clean fix requires a cross-repo hcfs-client change to add a label to the payload-less ActivityUpdated event; a desktop-only stopgap (clear on the already-labeled sync_completed event) is available if the cross-repo bump must be deferred.
 
-- [ ] **F35 fixed & tested**
+- [UPSTREAM] **F35** — cross-repo hcfs fix; spec in 'Cross-repo (hcfs) upstream work' section below (document-only this session, per user)
 
 ---
 
@@ -1391,7 +1391,7 @@ _Risk:_ Very low. resolve_rename_hints returns () and feeds nothing, so removing
 
 _Notes:_ Validated entirely against the hcfs cross-repo index (hcfs-client is a pinned git dep of hippius-desktop, not in this repo). Severity correctly low: fires only on rename-bearing cycles (user-paced, not a hot loop), clone bounded by one drive's synced-file count, no correctness/data-loss impact — purely wasted CPU + a misleading log. The finding's concrete claims all check out verbatim; the only correction is the fix-note's mechanism for the activity path (push-time apply_rename_to_activity, not drain-time), which does not change the verdict or the recommended fix.
 
-- [ ] **F41 fixed & tested**
+- [UPSTREAM] **F41** — cross-repo hcfs fix; spec in 'Cross-repo (hcfs) upstream work' section below (document-only this session, per user)
 
 ---
 
@@ -1461,3 +1461,61 @@ _Notes:_ No Rust diff this turn (TypeScript analysis only) — preflight/axioms/
 - [x] **F43 fixed & tested** — committed 544e5838
 
 ---
+
+---
+
+## Cross-repo (hcfs) upstream work — F01, F35, F41
+
+These three findings live in the pinned `hcfs` crate (`hcfs-client`), not in this
+repo. They were **not applied this session** (decision: document-only; bumping
+the `Cargo.toml` git rev requires the hcfs branch to be pushed first). Each is a
+ready-to-implement upstream PR spec. After landing them in hcfs and pushing,
+bump the `hcfs-client` / `hcfs-shared` rev in `src-tauri/Cargo.toml` and rebuild.
+
+### F01 — stall watchdog cancels any sync cycle exceeding ~3 min (HIGH)
+**Root cause:** `SyncRunner::is_progress_stalled` (runner.rs) compares wall-clock
+to `last_progress_time`, which is only `reset_progress_time()`-ed once per cycle;
+`touch_progress_time()` has zero callers in the Rust sync path, so the watchdog
+is a hard 180s ceiling on a single cycle/file rather than a real stall detector.
+A single file whose own transfer exceeds 180s (multi-GB / slow link) is
+cancelled mid-flight, never persisted, and retried from scratch forever while
+`consecutive_failures` climbs.
+**Fix:** thread `touch_progress_time()` into the per-chunk byte-progress path
+(`file_op_ctx` → `upload_file_standalone` / `download_file_standalone` chunk
+emits in `drive/sync_flow.rs` + `drive/file_ops`) so the stall timer reflects
+real I/O; keep the 180s threshold. Secondary: in `dispatch_sync_result` /
+`handle_sync_error`, do NOT count `SyncError::Cancelled` toward
+`record_sync_failure`/backoff (a cancel is not a server/auth failure).
+**Files:** hcfs-client/src/engine/runner.rs, drive/sync_flow.rs, drive/file_ops.
+**Test:** integration test streaming chunks slowly (>180s total, a chunk every
+<180s) with the watchdog active → cycle returns Ok and the file lands in
+`state.synced`; plus a true-stall test (no chunk >180s) still cancels.
+
+### F35 — `SyncEvent::ActivityUpdated` carries no label; FE over-clears (LOW)
+**Root cause:** `metadataStaleLabelsAtom` is per-label, but the unit
+`ActivityUpdated` event has no label, so `useMetadataStale.ts` wipes EVERY
+drive's entry on any drive's activity.
+**Fix (cross-repo + desktop):** add `label: String` to `SyncEvent::ActivityUpdated`
+(hcfs-client events.rs) and pass it at both emit sites (apply_rename_to_activity
+already has `label`); in desktop `tauri_bridge.rs` forward it as a `LabelPayload`
+(reconcile-success emit at lifecycle.rs already has `label`); in `useMetadataStale.ts`
+make the listener typed and delete only `p.label`.
+**Files:** hcfs-client events.rs + runner.rs; src-tauri sync/tauri_bridge.rs +
+sync/lifecycle.rs + sync/events.rs; app/lib/hooks/useMetadataStale.ts.
+**Test:** vitest — seed two stale labels, fire ACTIVITY_UPDATED {label:'b'},
+assert only 'b' is removed.
+
+### F41 — `resolve_rename_hints` computes then discards the result (LOW)
+**Root cause:** after the empty-check, it clones the full synced-paths cache,
+builds `known_from_cache`, runs the expand/scan loop, then `let _ = file_hints;`
+throws it away (rename passthrough is pending hcfs#52).
+**Fix (option b, recommended now):** after the `is_empty` early-return, keep ONLY
+the cheap `drain_rename_hints_for_root` drain (it also GCs orphaned hints past
+`RENAME_HINT_MAX_AGE` — must stay), drop the cache clone / `known_from_cache` /
+expand loop, delete `let _ = file_hints;`, and downgrade the misleading
+`info!("Rename hints resolved")` to a `debug!` ("drained N rename hints
+(passthrough pending hcfs#52)").
+**Files:** hcfs-client/src/engine/runner.rs.
+**Test:** alongside `drain_rename_hints_drops_orphans_past_max_age`, assert
+`resolve_rename_hints` still drains/GCs the hint (rename_hints empty after) while
+no longer doing the discarded scan.
