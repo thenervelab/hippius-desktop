@@ -9,6 +9,7 @@ import { ChevronLeft } from "lucide-react";
 import SidebarFooter from "./SidebarFooter";
 import SidebarSearch from "./SidebarSearch";
 import CustomTooltip2 from "@/components/ui/CustomTooltip2";
+import { VPN_FEATURE_ENABLED } from "@/app/lib/featureFlags";
 
 const ICON_CLASS = "size-[18px]";
 
@@ -108,7 +109,12 @@ const SettingsSidebar: React.FC = () => {
           )}
 
           <div className="flex flex-col w-full gap-y-0.5">
-            {settingsNavItems.map((item) => {
+            {settingsNavItems
+              // VPN is hidden behind a feature flag (entry kept in the array).
+              .filter(
+                (item) => VPN_FEATURE_ENABLED || item.section !== "vpn",
+              )
+              .map((item) => {
               const isActive = activeSection === item.section;
               return (
                 <CustomTooltip2

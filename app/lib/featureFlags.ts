@@ -24,3 +24,18 @@
  * needs no other code changes.
  */
 export const DRIVE_SCOPED_CREDITS_ENABLED = true;
+
+/**
+ * VPN feature. When `false`, every VPN UI surface is hidden:
+ *   - the top-bar VPN menu/button (`TopBarActions`),
+ *   - the "VPN Settings" item in the settings sidebar (`SettingsSidebar`),
+ *   - the VPN section on the settings page (`app/(pages)/settings/page.tsx`).
+ *
+ * No VPN code is deleted — all components, atoms and styles remain under
+ * `app/components/dashboard-title-wrapper/vpn-menu/` and
+ * `app/components/page-sections/settings/VPNSettings.tsx`. Flip to `true` to
+ * restore VPN. The backend `get_vpn_status` command must also be registered
+ * for the menu to work — its absence is why the (now-hidden) menu's status
+ * fetch logged "Command get_vpn_status not found".
+ */
+export const VPN_FEATURE_ENABLED = false;
