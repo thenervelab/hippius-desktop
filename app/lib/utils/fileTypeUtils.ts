@@ -74,7 +74,11 @@ export const getFileIcon = (fileType: FileTypes | undefined, isFolder: boolean):
         case "code":
             return { icon: Terminal, color: "text-[#4285F4]" };
         case "svg":
-            return { icon: SVG, color: "text-black" };
+            // SVG icon paints with `fill="currentColor"`, so the text color is
+            // the icon color. Plain `text-black` is invisible on dark surfaces
+            // (sidebar search palette, dark file rows) — pair it with a light
+            // dark-mode variant so the icon stays legible in both themes.
+            return { icon: SVG, color: "text-black dark:text-white" };
         case "doc":
             return { icon: Document, color: "text-[#4285F4]" };
         case "image":

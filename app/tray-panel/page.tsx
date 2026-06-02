@@ -7,10 +7,12 @@ import { emit } from "@tauri-apps/api/event";
 import { Window } from "@tauri-apps/api/window";
 import { Upload } from "lucide-react";
 import "./tray-panel.css";
-import { useTrayPanelData, type SyncActivityRow } from "@/app/lib/tray/useTrayPanelData";
+import { useTrayPanelData } from "@/app/lib/tray/useTrayPanelData";
+import type { UploadFeedItem } from "@/app/lib/upload-feed/mergeUploadFeed";
 import { getFileTypeFromExtension } from "@/app/lib/utils/getTileTypeFromExtension";
 import { getFileIcon, DIRECTORY_SUFFIX } from "@/app/lib/utils/fileTypeUtils";
 import { formatBytes } from "@/app/lib/utils/formatBytes";
+import { formatUploadedDate } from "@/app/lib/utils/formatUploadedDate";
 import Button from "@/app/components/ui/button";
 import HippiusLogo from "@/app/components/ui/icons/HippiusLogo";
 import Search from "@/app/components/ui/icons/Search";
@@ -41,18 +43,24 @@ const Avatar = dynamic(() => import("boring-avatars"), { ssr: false });
  * sidebar's search styling.
  */
 export default function TrayPanelPage() {
-  const { menu, activity, blockNumber, isConnected, unreadCount } = useTrayPanelData();
-  const groups = groupByDay(activity);
+  const { menu, feed, blockNumber, isConnected, unreadCount } = useTrayPanelData();
 
   return (
-    <div className="tray-panel-card flex h-screen w-screen flex-col overflow-hidden rounded-[16px] bg-white font-geist text-black dark:bg-[#1e1e1e] dark:text-white">
-      <Header credits={menu?.credits ?? null} unreadCount={unreadCount} />
-      <SearchBar />
+    // Transparent full-window shell. Its padding gives the card's drop shadow
+    // room to render INSIDE the window (instead of bleeding into the window's
+    // square corners as dark notches) and keeps the card's rounded corners
+    // clear of the window edge. Padding is asymmetric — small on top so the
+    // card still hugs the tray icon, larger on the sides/bottom where the
+    // downward shadow actually casts. The card fills the padded area via flex.
+    <div className="tray-panel-shell flex h-screen w-screen pt-[10px] pl-4 pr-4 pb-6">
+      <div className="tray-panel-card flex min-h-0 flex-1 flex-col overflow-hidden rounded-[16px] bg-white font-geist text-black dark:bg-[#1e1e1e] dark:text-white">
+        <Header credits={menu?.credits ?? null} unreadCount={unreadCount} />
+        <SearchBar />
 
-      <div className="flex flex-1 flex-col overflow-y-auto px-5 pb-2">
+        <div className="flex flex-1 flex-col overflow-y-auto px-5 pb-2">
         <h2 className="py-2 font-geist text-[16px] font-medium leading-8 text-grey-10 dark:text-white">Your Uploads</h2>
 
-        {activity.length === 0 ? (
+        {feed.length === 0 ? (
           // Empty state: a single simple rounded card (no graphsheet / guide
           // lines / corner textures) with copy + the Upload CTA that opens the
           // Drive page.
@@ -78,20 +86,18 @@ export default function TrayPanelPage() {
             </div>
           </div>
         ) : (
-          groups.map((group) => (
-            <section key={group.label} className="mb-1">
-              <h3 className="mb-1 mt-3 font-mono text-[14px] font-medium uppercase leading-5 tracking-[-0.28px] text-grey-70">{group.label}</h3>
-              <ul>
-                {group.rows.map((row) => (
-                  <ActivityRowItem key={row.id} row={row} />
-                ))}
-              </ul>
-            </section>
-          ))
+          // Flat list ordered by `mergeUploadFeed`: uploading → failed →
+          // completed. No day-grouping — status order is the priority here.
+          <ul>
+            {feed.map((item) => (
+              <UploadRowItem key={uploadRowKey(item)} item={item} />
+            ))}
+          </ul>
         )}
       </div>
 
-      <Footer address={menu?.substrateAddress ?? null} blockNumber={blockNumber} isConnected={isConnected} />
+        <Footer address={menu?.substrateAddress ?? null} blockNumber={blockNumber} isConnected={isConnected} />
+      </div>
     </div>
   );
 }
@@ -164,30 +170,58 @@ function SearchBar() {
 
 /** A single upload row. Layout mirrors the Figma: the file-type icon aligns
  *  with the filename on the top line, and the size sits below — sharing that
- *  bottom line with the right-aligned status, so size and status line up. */
-function ActivityRowItem({ row }: { row: SyncActivityRow }) {
-  const ext = row.raw_name.includes(".") ? row.raw_name.split(".").pop() ?? null : null;
+ *  bottom line with the right-aligned status, so size and status line up.
+ *
+ *  Completed rows show the uploaded time (like the search palette the product
+ *  liked); in-flight and failed rows show a live status pill (with a progress
+ *  ring while uploading). */
+function UploadRowItem({ item }: { item: UploadFeedItem }) {
+  const rawName = item.actualFileName || item.name;
+  const ext = rawName.includes(".") ? rawName.split(".").pop() ?? null : null;
   const fileType = getFileTypeFromExtension(ext);
   const { icon: Icon, color } = getFileIcon(fileType ?? undefined, false);
 
+  const sizeText =
+    typeof item.size === "number" && item.size > 0
+      ? formatBytes(item.size)
+      : "—";
+  const uploadedText =
+    item.feedStatus === "completed" ? formatUploadedDate(item.createdAt) : null;
+
   return (
     <li className="flex items-start gap-3 py-2.5">
-      <span className={`mt-px flex size-4 shrink-0 items-center justify-center ${color}`}>
+      {/* Icon column is as tall as the filename's line box and centers the
+          icon within it, so the icon lines up with the filename row (not the
+          very top of the list item). */}
+      <span className={`flex h-5 w-4 shrink-0 items-center justify-center ${color}`}>
         <Icon className="size-4" />
       </span>
       <div className="min-w-0 flex-1">
-        <p className="truncate font-geist text-[14px] font-medium leading-normal tracking-[-0.28px] text-[#1d1d1d] dark:text-white">
-          {displayFileName(row.raw_name)}
+        <p className="truncate font-geist text-[14px] font-medium leading-5 tracking-[-0.28px] text-[#1d1d1d] dark:text-white">
+          {displayFileName(item.name)}
         </p>
         <div className="mt-1 flex items-center justify-between gap-2">
           <span className="truncate font-geist text-[12px] font-medium leading-normal tracking-[-0.24px] text-grey-10 dark:text-white">
-            {formatBytes(row.size)}
+            {sizeText}
           </span>
-          <StatusLabel status={row.deleted ? "deleted" : row.status} />
+          {uploadedText ? (
+            <span className="shrink-0 font-geist text-[12px] font-medium tracking-[-0.24px] text-grey-10 dark:text-white/50">
+              {uploadedText}
+            </span>
+          ) : (
+            <StatusLabel status={item.feedStatus} progress={item.progressPercent} />
+          )}
         </div>
       </div>
     </li>
   );
+}
+
+/** Stable React key: drive label + relative path keeps a row identity across
+ *  the uploading → completed transition (avoids a remount that would restart
+ *  the row's transitions). */
+function uploadRowKey(item: UploadFeedItem): string {
+  return `${item.label ?? ""}::${item.actualFileName || item.name}`;
 }
 
 /** Small circular progress ring shown beside the "time left" status while a
@@ -209,24 +243,25 @@ function ProgressRing({ value }: { value: number }) {
  *  current backend feed only emits "uploaded"/"deleted"; the other states
  *  (pending/failed/uploading + a time-left ring) are styled for when richer
  *  per-file progress is wired in. */
-function StatusLabel({ status, timeLeft, progress }: { status: string; timeLeft?: string | null; progress?: number | null }) {
+function StatusLabel({ status, progress }: { status: string; progress?: number | null }) {
   const base = "shrink-0 font-mono text-[10px] font-medium uppercase leading-none tracking-[-0.2px]";
 
-  // Uploading with an ETA: brand-blue ring + "X mins left".
-  if (status === "uploading" && timeLeft) {
+  // Uploading: brand-blue progress ring + live percent (falls back to the
+  // "UPLOADING" word before the first percent arrives).
+  if (status === "uploading") {
     return (
       <span className={`flex items-center gap-1.5 text-[#3167DD] ${base}`}>
         <ProgressRing value={progress ?? 0} />
-        {timeLeft}
+        {typeof progress === "number" ? `${Math.round(progress)}%` : "UPLOADING"}
       </span>
     );
   }
 
   const map: Record<string, { label: string; className: string }> = {
+    completed: { label: "UPLOADED", className: "text-[#04C870]" },
     uploaded: { label: "UPLOADED", className: "text-[#04C870]" },
     pending: { label: "PENDING", className: "text-[#FEB101]" },
     failed: { label: "FAILED", className: "text-[#FF6D61]" },
-    uploading: { label: "UPLOADING", className: "text-[#3167DD]" },
     deleted: { label: "DELETED", className: "text-black/40 dark:text-white/40" },
   };
   const entry = map[status] ?? { label: status.toUpperCase(), className: "text-black/40 dark:text-white/40" };
@@ -277,7 +312,7 @@ function Footer({ address, blockNumber, isConnected }: { address: string | null;
                 <BoxSimple className="size-[13px] shrink-0 text-black/60 dark:text-white/60" />
                 {isConnected && blockNumber !== null && (
                   <span className="font-geist text-[10px] font-medium leading-[14px] tracking-[-0.2px] text-primary-50 dark:text-primary-brand-dark">
-                    #&nbsp;{blockNumber.toLocaleString()}
+                    #&nbsp;{blockNumber}
                   </span>
                 )}
               </span>
@@ -372,41 +407,6 @@ async function revealMain() {
 }
 
 // ── Presentation helpers ────────────────────────────────────────────────────
-
-interface DayGroup {
-  label: string;
-  rows: SyncActivityRow[];
-}
-
-/** Group activity rows into Today / Yesterday / Earlier buckets, newest first. */
-function groupByDay(rows: SyncActivityRow[]): DayGroup[] {
-  const now = new Date();
-  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  const startOfYesterday = startOfToday - 86_400_000;
-
-  const today: SyncActivityRow[] = [];
-  const yesterday: SyncActivityRow[] = [];
-  const earlier: SyncActivityRow[] = [];
-
-  for (const row of rows) {
-    const ms = normalizeTimestamp(row.timestamp);
-    if (ms >= startOfToday) today.push(row);
-    else if (ms >= startOfYesterday) yesterday.push(row);
-    else earlier.push(row);
-  }
-
-  return [
-    { label: "Today", rows: today },
-    { label: "Yesterday", rows: yesterday },
-    { label: "Earlier", rows: earlier },
-  ].filter((g) => g.rows.length > 0);
-}
-
-/** Activity timestamps may arrive in seconds or milliseconds; normalize to ms. */
-function normalizeTimestamp(ts: number | null): number {
-  if (ts === null) return 0;
-  return ts < 1e12 ? ts * 1000 : ts;
-}
 
 /** Display name for an upload row: strip the internal `.ec_metadata` folder
  *  suffix, but do NOT length-truncate — CSS `truncate` ellipsizes based on the
