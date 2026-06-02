@@ -145,7 +145,14 @@ function Header({ credits, unreadCount }: { credits: number | null; unreadCount:
           {unreadCount > 0 && (
             <span
               data-testid="tray-unread-count"
-              className="absolute -right-0.5 -top-0.5 flex h-3 min-w-3 items-center justify-center rounded-full bg-primary-50 px-[3px] text-[7px] font-medium leading-none text-white"
+              // A single-digit count gets a larger circle + font so a lone "1"
+              // reads clearly; once the count needs two/three glyphs (≥10) we
+              // fall back to the compact pill so the wider text still fits.
+              className={`absolute -right-0.5 -top-0.5 flex items-center justify-center rounded-full bg-primary-50 font-medium leading-none text-white ${
+                unreadCount < 10
+                  ? "h-4 min-w-4 text-[10px]"
+                  : "h-3 min-w-3 px-[3px] text-[7px]"
+              }`}
             >
               {unreadCount > 99 ? "99+" : unreadCount}
             </span>
