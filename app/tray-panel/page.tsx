@@ -61,7 +61,7 @@ export default function TrayPanelPage() {
         <Header credits={menu?.credits ?? null} unreadCount={unreadCount} />
         <SearchBar />
 
-        <div className="flex flex-1 flex-col overflow-y-auto px-5 pb-2">
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-5 pb-2">
         <h2 className="py-2 font-geist text-[16px] font-medium leading-8 text-grey-10 dark:text-white">Your Uploads</h2>
 
         {feed.length === 0 ? (
@@ -280,8 +280,9 @@ function StatusLabel({ status, progress }: { status: string; progress?: number |
   return <span className={`${base} ${entry.className}`}>{entry.label}</span>;
 }
 
-/** Bottom bar: a single rounded box (Figma tokens — 12px padding, 8px gap,
- *  16px radius, 6%-opacity fill) holding the account chip (identicon + short
+/** Bottom bar: a single rounded box (Figma tokens — 8px gap, 16px radius,
+ *  6%-opacity fill) inset 16px from the card edges, holding the account chip
+ *  (identicon + short
  *  address + live chain block) on the left and the official `Button` CTA on the
  *  right. The identicon, address and block typography all match ProfileCard. */
 function Footer({ address, blockNumber, isConnected }: { address: string | null; blockNumber: number | null; isConnected: boolean }) {
@@ -301,7 +302,7 @@ function Footer({ address, blockNumber, isConnected }: { address: string | null;
   };
 
   return (
-    <footer className="px-3 pb-3">
+    <footer className="px-4 pb-4">
       <div className="flex w-full items-center justify-between gap-2 rounded-[16px] bg-black/[0.06] p-3 dark:bg-white/[0.06]">
         <button
           type="button"
