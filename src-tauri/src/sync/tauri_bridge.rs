@@ -574,8 +574,10 @@ impl SyncEventHandler for TauriSyncBridge {
             SyncEvent::ReviewModeTimeout { label } => {
                 let _ = app.emit(events::REVIEW_MODE_TIMEOUT, events::LabelPayload { label });
             }
-            SyncEvent::ActivityUpdated => {
-                let _ = app.emit(events::ACTIVITY_UPDATED, ());
+            SyncEvent::ActivityUpdated { label } => {
+                // Forward the drive label (F35) so the FE clears only that
+                // drive's stale-metadata entry instead of every drive's.
+                let _ = app.emit(events::ACTIVITY_UPDATED, events::LabelPayload { label });
             }
             SyncEvent::AuthRequired { error } => {
                 let _ = app.emit(events::AUTH_RELOGIN_REQUIRED, events::AuthRequiredPayload { error });
