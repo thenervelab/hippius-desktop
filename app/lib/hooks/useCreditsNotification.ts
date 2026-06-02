@@ -16,7 +16,9 @@ import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 
 export function useCreditsNotification() {
   const { data: creditEvents, isSuccess } = useAddCreditEvent({ limit: 50 });
-  const { data: credits, isLoading: isCreditsLoading } = useUserCredits();
+  // Live so the "running low on credits" check re-evaluates as the balance
+  // moves during a session, not just against the initial load.
+  const { data: credits, isLoading: isCreditsLoading } = useUserCredits({ live: true });
   const refreshUnread = useSetAtom(refreshUnreadCountAtom);
   const [enabledTypes] = useAtom(enabledNotificationTypesAtom);
   const pathname = usePathname(); // Track route changes

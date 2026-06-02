@@ -130,7 +130,17 @@ pub async fn add_file(
     // its native message. Don't `?`-bail here: a missing-file diagnostic
     // is clearer than "insufficient credits because we couldn't size it".
     let account_id = state.current_account_id().map_err(crate::error::AppError::Other)?;
-    let bytes = tokio::fs::metadata(Path::new(&file_path)).await.map_or(0, |m| m.len());
+    // A stat failure falls back to bytes=0, which collapses the byte-priced
+    // credit gate to the legacy `> 0` floor (intentional — see above). Log it
+    // so the under-pricing is observable instead of silent; the server 402
+    // path remains the real backstop.
+    let bytes = match tokio::fs::metadata(Path::new(&file_path)).await {
+        Ok(m) => m.len(),
+        Err(e) => {
+            warn!(file = %file_path, error = %e, "could not size file for credit gate; falling back to legacy >0 floor");
+            0
+        }
+    };
     crate::billing::eligibility::require_eligible(
         &state,
         &account_id,
@@ -203,7 +213,11 @@ pub async fn add_folder(
     // which under-charges rather than over-charging the user — the
     // server's 402 path is still the last line of defense.
     let account_id = state.current_account_id().map_err(crate::error::AppError::Other)?;
-    let bytes = sum_regular_file_bytes(Path::new(&folder_path)).await;
+    // One walk of the source tree for BOTH the credit-gate byte total and the
+    // banner file count (previously two separate full traversals). The byte
+    // total is a best-effort lower bound on permission-denied subdirs, which
+    // under-charges rather than over-charges — the server 402 is the backstop.
+    let (bytes, count) = walk_regular_files_stats(Path::new(&folder_path)).await;
     crate::billing::eligibility::require_eligible(
         &state,
         &account_id,
@@ -231,7 +245,6 @@ pub async fn add_folder(
     // banner that the sync engine will never clear (an empty plan
     // can complete without firing `SyncCompleted` in some hcfs-client
     // configurations).
-    let count = count_regular_files(Path::new(&folder_path)).await;
     if count > 0
         && let Some(label) = label_opt.as_deref()
     {
@@ -346,12 +359,23 @@ async fn add_folder_with_app_inner(sync_path: &str, folder_path: &str, subfolder
 /// async-fn boxing. Does not read file contents — only iterates
 /// directory entries — so the cost is bounded by what `copy_dir_recursive`
 /// is about to do anyway.
-async fn count_regular_files(root: &std::path::Path) -> u64 {
+/// Single-pass walk returning `(total_bytes, regular_file_count)` for the tree
+/// under `root`. Folder uploads previously walked the identical tree TWICE —
+/// once for the credit-gate byte total and once for the banner count — before
+/// `copy_dir_recursive` walked it a third time; this collapses the first two
+/// into one traversal. Same invariants as [`sum_regular_file_bytes`]: symlinks
+/// are not followed, per-subdir I/O errors are skipped, the stack is capped at
+/// [`FOLDER_BYTE_WALK_MAX_DEPTH`], and both accumulators use `saturating_add`.
+pub(super) async fn walk_regular_files_stats(root: &std::path::Path) -> (u64, u64) {
     use tokio::fs;
 
+    let mut bytes: u64 = 0;
     let mut count: u64 = 0;
     let mut stack: Vec<std::path::PathBuf> = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
+        if stack.len() > FOLDER_BYTE_WALK_MAX_DEPTH {
+            break;
+        }
         let Ok(mut entries) = fs::read_dir(&dir).await else { continue };
         while let Ok(Some(entry)) = entries.next_entry().await {
             let Ok(ft) = entry.file_type().await else { continue };
@@ -359,10 +383,13 @@ async fn count_regular_files(root: &std::path::Path) -> u64 {
                 stack.push(entry.path());
             } else if ft.is_file() {
                 count = count.saturating_add(1);
+                if let Ok(meta) = entry.metadata().await {
+                    bytes = bytes.saturating_add(meta.len());
+                }
             }
         }
     }
-    count
+    (bytes, count)
 }
 
 /// Sum the byte size of regular files (non-directory, non-symlink) under
@@ -428,25 +455,31 @@ pub(super) async fn sum_regular_file_bytes(root: &std::path::Path) -> u64 {
 /// to walk further is consistent with the rest of the module.
 const FOLDER_BYTE_WALK_MAX_DEPTH: usize = 4096;
 
-/// Recursively sum the byte size of a heterogeneous batch of paths
-/// (a mix of regular files and directories). Used by `add_files` to
-/// compute the credit-eligibility byte total. Each direct file path is
-/// sized via `tokio::fs::metadata`; each directory is walked through
-/// [`sum_regular_file_bytes`]. Per-path metadata failures degrade to
-/// zero so a missing or unreadable entry doesn't reject the rest of
-/// the batch — the subsequent copy loop surfaces the real I/O error.
-async fn sum_batch_bytes(paths: &[String]) -> u64 {
-    let mut total: u64 = 0;
+/// Single pass over a heterogeneous batch of paths (a mix of regular files and
+/// directories) returning `(total_bytes, regular_file_count)`. Used by
+/// `add_files` for both the credit-eligibility byte total and the banner count
+/// — previously two separate passes that each walked every directory. Each
+/// file is sized via `tokio::fs::metadata`; each directory is walked once via
+/// [`walk_regular_files_stats`]. Per-path metadata failures degrade to zero so
+/// a missing/unreadable entry doesn't reject the rest of the batch — the copy
+/// loop surfaces the real I/O error.
+async fn sum_and_count_batch(paths: &[String]) -> (u64, u64) {
+    let mut bytes: u64 = 0;
+    let mut count: u64 = 0;
     for fp in paths {
         let p = std::path::Path::new(fp);
-        let add = if p.is_dir() {
-            sum_regular_file_bytes(p).await
+        if p.is_dir() {
+            let (b, c) = walk_regular_files_stats(p).await;
+            bytes = bytes.saturating_add(b);
+            // Floor a directory's count at 1 so an unwalkable subdir still
+            // raises the banner (mirrors the prior `count_regular_files().max(1)`).
+            count = count.saturating_add(c.max(1));
         } else {
-            tokio::fs::metadata(p).await.map_or(0, |m| m.len())
-        };
-        total = total.saturating_add(add);
+            bytes = bytes.saturating_add(tokio::fs::metadata(p).await.map_or(0, |m| m.len()));
+            count = count.saturating_add(1);
+        }
     }
-    total
+    (bytes, count)
 }
 
 /// Internal folder copy — no sync trigger (caller handles it).
@@ -527,18 +560,28 @@ pub async fn delete_files(
     files: Vec<FileDeleteRequest>,
 ) -> Result<DeleteFilesResult> {
     let pool = state.pool()?;
+    // Resolve every drive's label→path ONCE (a single query) instead of one
+    // (often two, via the default fallback) SELECT per file in the batch.
+    let label_to_path: std::collections::HashMap<String, String> = crate::sync::folders::get_all_sync_paths_internal(pool, &account_id)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|sp| (sp.label, sp.path))
+        .collect();
+    let default_path = label_to_path.get("default").cloned();
+
     let mut deleted = 0u32;
     let mut failed = Vec::new();
 
     for file in &files {
         let effective_label = file.label.as_deref().unwrap_or("default");
-        let sync_path = match crate::sync::config::get_sync_path_for_label(pool, &account_id, effective_label).await {
-            Ok(p) => p,
-            Err(_) if effective_label != "default" => crate::sync::config::get_sync_path_for_label(pool, &account_id, "default")
-                .await
-                .unwrap_or_default(),
-            Err(_) => String::new(),
-        };
+        // Prefer the file's own drive path; fall back to the "default" drive's
+        // path (mirrors the prior per-file default fallback); else empty.
+        let sync_path = label_to_path
+            .get(effective_label)
+            .or(default_path.as_ref())
+            .cloned()
+            .unwrap_or_default();
 
         let relative_name = derive_relative_name(&sync_path, file.source.as_deref(), &file.name);
 
@@ -650,41 +693,23 @@ pub async fn add_files(
     // below do NOT re-check — there's no point hammering the billing
     // API once per file when the batch is treated as a single unit.
     //
-    // The byte sum drives the price: each direct file path is sized via
-    // `tokio::fs::metadata`, each directory path is walked recursively
-    // via `sum_regular_file_bytes`. Per-path metadata failures degrade
-    // to 0 so a missing file in the input list doesn't reject the rest
-    // of the batch — the subsequent copy loop surfaces the I/O error.
+    // One pass over the batch yields BOTH the credit-gate byte total and the
+    // banner file count (previously two passes that each walked every directory
+    // in the batch). Each file path counts as 1; each directory contributes its
+    // recursive count floored at 1 so an unwalkable subdir still raises the
+    // banner. Per-path metadata failures degrade to 0 so a missing entry
+    // doesn't reject the rest — the copy loop surfaces the real I/O error. An
+    // empty `file_paths` yields count 0, which skips `begin` so an empty IPC
+    // doesn't raise a banner nothing will clear.
     let account_id = state.current_account_id().map_err(crate::error::AppError::Other)?;
     let action = if for_folder {
         crate::billing::eligibility::InsufficientCreditsAction::FolderUpload
     } else {
         crate::billing::eligibility::InsufficientCreditsAction::FileUpload
     };
-    let total_bytes = sum_batch_bytes(&file_paths).await;
+    let (total_bytes, total_count) = sum_and_count_batch(&file_paths).await;
     crate::billing::eligibility::require_eligible(&state, &account_id, action, total_bytes).await?;
 
-    // Sum the file count for the banner. Each direct file path counts
-    // as 1; each directory path gets a recursive walk via
-    // `count_regular_files` (introduced in Task 7). Released either by
-    // the first upload chunk (success), the early-return error paths
-    // below (failure), or the all-failed-batch guard after the loop.
-    //
-    // Per-directory counts use `.max(1)` so that an unwalkable subdir
-    // (permission denied) still bumps the total by 1 — we know there's
-    // a directory there, even if we can't enumerate it. Per-batch
-    // count is NOT clamped: an empty `file_paths` skips `begin` so
-    // that an empty IPC call doesn't raise a banner that nothing
-    // will ever clear.
-    let mut total_count: u64 = 0;
-    for fp in &file_paths {
-        let p = Path::new(fp);
-        if p.is_dir() {
-            total_count = total_count.saturating_add(count_regular_files(p).await.max(1));
-        } else {
-            total_count = total_count.saturating_add(1);
-        }
-    }
     // Resolve `sync_path` → drive label once before any banner write
     // so the per-label state (Task 4.1) can route every `begin`/`reset`
     // for this IPC to the right drive. Banner writes degrade to no-op
@@ -969,43 +994,76 @@ pub struct SyncedFileMetadata {
 /// Return sync metadata (arion hashes, CIDs, timestamps) for all synced
 /// files across all drives. Used internally by `get_user_files` to look
 /// up arion hashes without needing to list every subfolder from disk.
-pub async fn get_synced_file_metadata(state: tauri::State<'_, crate::app_state::AppState>) -> Result<Vec<SyncedFileMetadata>> {
-    let sync = &state.sync;
-    let mut result = Vec::new();
-
-    // Collect labels + cached paths in one pass
-    let label_maps: Vec<(String, HashMap<String, SyncedFileInfo>)> = {
-        let drive_arcs: Vec<(String, std::sync::Arc<tokio::sync::Mutex<DriveManager>>)> = {
-            match sync.drives.try_lock() {
-                Ok(guard) => guard.iter().map(|(k, slot)| (k.clone(), slot.manager.clone())).collect(),
-                Err(_) => Vec::new(),
-            }
-        };
-        if drive_arcs.is_empty() {
-            // All locks held by sync — use cached data
-            if let Ok(cache) = sync.synced_paths_cache.lock() {
-                cache.iter().map(|(l, m)| (l.clone(), m.clone())).collect()
-            } else {
-                Vec::new()
-            }
-        } else {
-            let mut out = Vec::new();
-            for (label, arc) in &drive_arcs {
-                if let Ok(manager) = arc.try_lock() {
-                    if let Ok(st) = manager.load_sync_state().await {
-                        let paths = build_synced_paths_from_state(&st);
-                        sync.update_synced_paths_cache(label, paths.clone());
-                        out.push((label.clone(), paths));
-                    }
-                } else if let Some(cached) = sync.get_cached_synced_paths(label) {
-                    // Drive is syncing — fall back to cached snapshot so
-                    // arion hashes remain visible while downloads are active.
-                    out.push((label.clone(), cached));
-                }
-            }
-            out
-        }
+/// Acquire each drive's synced-paths map: live per-drive lock first (cache
+/// warmed on success), falling back to the cached snapshot when a drive is
+/// mid-sync (or all drives are busy). Shared by the whole-corpus
+/// [`get_synced_file_metadata`] and the bounded recent-files lookup.
+async fn collect_label_maps(sync: &SyncRunner) -> Vec<(String, HashMap<String, SyncedFileInfo>)> {
+    let drive_arcs: Vec<(String, std::sync::Arc<tokio::sync::Mutex<DriveManager>>)> = match sync.drives.try_lock() {
+        Ok(guard) => guard.iter().map(|(k, slot)| (k.clone(), slot.manager.clone())).collect(),
+        Err(_) => Vec::new(),
     };
+    if drive_arcs.is_empty() {
+        // All locks held by sync — use cached data.
+        return match sync.synced_paths_cache.lock() {
+            Ok(cache) => cache.iter().map(|(l, m)| (l.clone(), m.clone())).collect(),
+            Err(_) => Vec::new(),
+        };
+    }
+    let mut out = Vec::new();
+    for (label, arc) in &drive_arcs {
+        if let Ok(manager) = arc.try_lock() {
+            if let Ok(st) = manager.load_sync_state().await {
+                let paths = build_synced_paths_from_state(&st);
+                sync.update_synced_paths_cache(label, paths.clone());
+                out.push((label.clone(), paths));
+            }
+        } else if let Some(cached) = sync.get_cached_synced_paths(label) {
+            // Drive is syncing — fall back to cached snapshot so arion
+            // hashes remain visible while downloads are active.
+            out.push((label.clone(), cached));
+        }
+    }
+    out
+}
+
+/// Bounded variant of the synced-paths walk for the recent-files view.
+///
+/// `get_synced_file_metadata` materializes a `SyncedFileMetadata` (and several
+/// string/hash allocations) for EVERY synced file across all drives, even
+/// though `get_recent_files` only ever looks up at most `limit` (~50) keys.
+/// This allocates a `MetadataBundle` only for keys in `wanted`, so the
+/// per-row cost (hex-encoding the 32-byte hash, cloning the CID) is paid for
+/// the activity window, not the whole corpus. Pure (no `SyncRunner`) so the
+/// allocation bound is unit-testable.
+fn bundles_for_wanted_keys(
+    label_maps: Vec<(String, HashMap<String, SyncedFileInfo>)>,
+    wanted: &std::collections::HashSet<String>,
+) -> HashMap<String, MetadataBundle> {
+    let mut out = HashMap::with_capacity(wanted.len());
+    for (label, paths) in label_maps {
+        for (rel_path, info) in paths {
+            let key = format!("{rel_path}::{label}");
+            if !wanted.contains(&key) {
+                continue;
+            }
+            out.insert(
+                key,
+                MetadataBundle {
+                    arion_hash: info.path_hash_hex(),
+                    arion_cid: info.arion_cid.to_string(),
+                    uploaded_at: info.uploaded_at,
+                    updated_at: info.updated_at,
+                },
+            );
+        }
+    }
+    out
+}
+
+pub async fn get_synced_file_metadata(state: tauri::State<'_, crate::app_state::AppState>) -> Result<Vec<SyncedFileMetadata>> {
+    let mut result = Vec::new();
+    let label_maps = collect_label_maps(&state.sync).await;
 
     for (label, paths) in label_maps {
         // Move out of the HashMap so we can take ownership of `rel_path`
@@ -1092,23 +1150,8 @@ pub async fn get_recent_files(
         .map(|sp| (sp.label.clone(), sp.path.clone()))
         .collect();
 
-    // 3. Get synced file metadata → build lookup map
-    let metadata = get_synced_file_metadata(state.clone()).await.unwrap_or_default();
-    let mut meta_map: HashMap<String, MetadataBundle> = HashMap::with_capacity(metadata.len());
-    for entry in &metadata {
-        let key = format!("{}::{}", entry.file_name, entry.label);
-        meta_map.insert(
-            key,
-            MetadataBundle {
-                arion_hash: entry.arion_hash.clone(),
-                arion_cid: entry.arion_cid.clone(),
-                uploaded_at: entry.uploaded_at,
-                updated_at: entry.updated_at,
-            },
-        );
-    }
-
-    // 4. Filter deleted files
+    // 3. Filter deleted files FIRST so the metadata lookup below is bounded by
+    //    the (<= limit) surviving activity rows, not the whole synced corpus.
     let deleted_names: std::collections::HashSet<String> = items
         .iter()
         .filter(|item| item.action == SyncActivityAction::Deleted)
@@ -1123,6 +1166,15 @@ pub async fn get_recent_files(
     if non_deleted.is_empty() {
         return Ok(Vec::new());
     }
+
+    // 4. Look up synced metadata for ONLY the surviving keys. Allocation scales
+    //    with the activity window, not the total number of synced files.
+    let wanted: std::collections::HashSet<String> = non_deleted
+        .iter()
+        .map(|item| format!("{}::{}", item.file_name, item.label))
+        .collect();
+    let label_maps = collect_label_maps(&state.sync).await;
+    let mut meta_map = bundles_for_wanted_keys(label_maps, &wanted);
 
     // 5. Map to RecentFile with path resolution and timestamp priority
     let now_ms = chrono::Utc::now().timestamp_millis();
@@ -2236,6 +2288,77 @@ async fn copy_dir_recursive(src: &Path, dst: &Path, depth: u32) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- bundles_for_wanted_keys (F10: bounded recent-files metadata) ---
+
+    /// The bounded lookup must allocate a `MetadataBundle` only for keys in the
+    /// `wanted` set, regardless of how large the synced corpus is. Seeds 1000
+    /// synced files but asks for 3 keys (2 present, 1 absent) and asserts the
+    /// result holds exactly the 2 present-and-wanted entries — not 1000.
+    #[test]
+    fn bundles_for_wanted_keys_allocates_only_for_wanted() {
+        use std::collections::HashSet;
+        use std::sync::Arc;
+
+        let mut corpus: HashMap<String, SyncedFileInfo> = HashMap::new();
+        for i in 0..1000 {
+            corpus.insert(
+                format!("file{i}.txt"),
+                SyncedFileInfo {
+                    path_hash: [0u8; 32],
+                    arion_cid: Arc::from("cid"),
+                    uploaded_at: 1,
+                    updated_at: 2,
+                },
+            );
+        }
+        let label_maps = vec![("drive".to_string(), corpus)];
+
+        let wanted: HashSet<String> = ["file3.txt::drive", "file7.txt::drive", "missing.txt::drive"]
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+
+        let out = bundles_for_wanted_keys(label_maps, &wanted);
+
+        assert_eq!(out.len(), 2, "only present-and-wanted keys produce bundles, not the whole corpus");
+        assert!(out.contains_key("file3.txt::drive"));
+        assert!(out.contains_key("file7.txt::drive"));
+        assert!(!out.contains_key("missing.txt::drive"), "a wanted-but-absent key must not appear");
+    }
+
+    /// One walk yields both the byte total and the regular-file count across
+    /// nested directories — the single-pass replacement for the prior two
+    /// separate traversals in the folder-upload credit gate + banner.
+    #[tokio::test]
+    async fn walk_regular_files_stats_counts_and_sizes_nested_tree() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        tokio::fs::write(root.join("a.txt"), b"hello").await.unwrap(); // 5 bytes
+        tokio::fs::write(root.join("b.txt"), b"hi").await.unwrap(); // 2 bytes
+        let sub = root.join("sub");
+        tokio::fs::create_dir(&sub).await.unwrap();
+        tokio::fs::write(sub.join("c.txt"), b"xyz").await.unwrap(); // 3 bytes
+
+        let (bytes, count) = walk_regular_files_stats(root).await;
+        assert_eq!(count, 3, "all three regular files counted across the nested dir");
+        assert_eq!(bytes, 10, "byte total summed across the nested dir (5+2+3)");
+    }
+
+    /// An empty wanted set yields an empty map — the recent-files path returns
+    /// early on no surviving activity, but the helper must be safe regardless.
+    #[test]
+    fn bundles_for_wanted_keys_empty_wanted_is_empty() {
+        use std::collections::HashSet;
+        use std::sync::Arc;
+        let mut corpus: HashMap<String, SyncedFileInfo> = HashMap::new();
+        corpus.insert(
+            "a.txt".to_string(),
+            SyncedFileInfo { path_hash: [1u8; 32], arion_cid: Arc::from("x"), uploaded_at: 0, updated_at: 0 },
+        );
+        let out = bundles_for_wanted_keys(vec![("d".to_string(), corpus)], &HashSet::new());
+        assert!(out.is_empty());
+    }
 
     // --- macos_name_cmp ---
 

@@ -3,7 +3,16 @@ import { useMemo, useState, useEffect, useRef, useCallback } from "react";
 const INITIAL_COUNT = 50;
 const LOAD_MORE_COUNT = 50;
 
-export const useInfiniteScroll = <T>(data: T[]) => {
+export const useInfiniteScroll = <T>(
+  data: T[],
+  // Cheap, O(1) key for a row used to detect "the data source changed" and
+  // reset the scroll window. Pass primitive fields only — NEVER serialize the
+  // whole row. Omitting it falls back to a length-only signature (callers that
+  // already call resetScroll() explicitly on source swaps don't strictly need
+  // it). The previous JSON.stringify-per-sample ran on every refetch tick
+  // during an active sync; this avoids that hot-path cost.
+  keyFn?: (item: T) => string | number
+) => {
   const [visibleCount, setVisibleCount] = useState(INITIAL_COUNT);
 
   // Track data signature to reset on data source changes
@@ -11,13 +20,11 @@ export const useInfiniteScroll = <T>(data: T[]) => {
 
   const dataSignature = useMemo(() => {
     if (data.length === 0) return "";
-    const samples: unknown[] = [data[0]];
-    if (data.length > 2) samples.push(data[Math.floor(data.length / 2)]);
-    if (data.length > 1) samples.push(data[data.length - 1]);
-    return samples
-      .map((item) => JSON.stringify(item).substring(0, 50))
-      .join("|");
-  }, [data]);
+    const sample = (i: number) => (keyFn ? String(keyFn(data[i])) : "");
+    const mid = data.length > 2 ? sample(Math.floor(data.length / 2)) : "";
+    const last = data.length > 1 ? sample(data.length - 1) : "";
+    return `${data.length}|${sample(0)}|${mid}|${last}`;
+  }, [data, keyFn]);
 
   // Reset visible count when data source changes significantly
   useEffect(() => {

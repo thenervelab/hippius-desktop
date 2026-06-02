@@ -395,10 +395,15 @@ pub async fn create_encrypted_backup(mnemonic: String, password: String, output_
 /// — rotation brings every folder that has a `sync_paths` row up to date,
 /// whether or not it had been realised on disk before.
 ///
-/// Every per-folder step is best-effort: derivation or save failures are
-/// warn-logged with their `label` and skipped so a single bad folder
-/// doesn't block rotating the rest. Returns `Err` only when the
-/// `sync_paths` read itself fails.
+/// Each folder is rewritten independently and a per-folder failure is
+/// warn-logged with its `label`, but — unlike the original best-effort
+/// version — the function returns `Err` listing every folder that could not
+/// be rewritten. A swallowed failure here is a silent data-loss bug: the
+/// caller [`align_drive_password`](crate::recovery) would commit the new
+/// `drive_password` while a folder file stayed under the old one, wedging that
+/// drive on the next sync init. Surfacing the `Err` lets the rotation flow
+/// keep its retry sidecar and converge (re-derivation is deterministic and
+/// idempotent). Also returns `Err` when the `sync_paths` read itself fails.
 pub(crate) async fn reencrypt_all_folder_mnemonics(
     pool: &sqlx::SqlitePool,
     account_id: &str,
@@ -448,9 +453,9 @@ pub(crate) async fn reencrypt_all_folder_mnemonics(
                         tracing::warn!(
                             label = %label,
                             error = %e,
-                            "reencrypt_all_folder_mnemonics: failed to compute folder dir; continuing"
+                            "reencrypt_all_folder_mnemonics: failed to compute folder dir"
                         );
-                        return;
+                        return Err(label.clone());
                     }
                 };
                 let folder_enc = folder_dir.join("enc_mnemonic.json");
@@ -464,9 +469,9 @@ pub(crate) async fn reencrypt_all_folder_mnemonics(
                         tracing::warn!(
                             label = %label,
                             error = %e,
-                            "reencrypt_all_folder_mnemonics: failed to derive folder mnemonic; continuing"
+                            "reencrypt_all_folder_mnemonics: failed to derive folder mnemonic"
                         );
-                        return;
+                        return Err(label.clone());
                     }
                 };
 
@@ -476,9 +481,9 @@ pub(crate) async fn reencrypt_all_folder_mnemonics(
                     tracing::warn!(
                         label = %label,
                         error = %e,
-                        "reencrypt_all_folder_mnemonics: failed to create folder dir; continuing"
+                        "reencrypt_all_folder_mnemonics: failed to create folder dir"
                     );
-                    return;
+                    return Err(label.clone());
                 }
 
                 // save_encrypted_mnemonic is sync + blocking; wrap in
@@ -493,26 +498,39 @@ pub(crate) async fn reencrypt_all_folder_mnemonics(
                 .await;
 
                 match result {
-                    Ok(Ok(())) => {}
+                    Ok(Ok(())) => Ok(()),
                     Ok(Err(e)) => {
                         tracing::warn!(
                             label = %label_for_task,
                             error = %e,
-                            "reencrypt_all_folder_mnemonics: failed to save folder mnemonic; continuing"
+                            "reencrypt_all_folder_mnemonics: failed to save folder mnemonic"
                         );
+                        Err(label_for_task.clone())
                     }
                     Err(e) => {
                         tracing::warn!(
                             label = %label_for_task,
                             error = %e,
-                            "reencrypt_all_folder_mnemonics: spawn_blocking join error; continuing"
+                            "reencrypt_all_folder_mnemonics: spawn_blocking join error"
                         );
+                        Err(label_for_task.clone())
                     }
                 }
             }
         });
 
-    futures_util::future::join_all(futures).await;
+    // Collect per-folder outcomes. Healthy folders are rewritten regardless of
+    // a sibling's failure (so a retry only re-touches the broken ones), but any
+    // failure surfaces as an aggregate `Err` so the caller does not commit a
+    // new drive password over a folder still under the old one.
+    let results = futures_util::future::join_all(futures).await;
+    let failed: Vec<String> = results.into_iter().filter_map(|r| r.err()).collect();
+    if !failed.is_empty() {
+        return Err(crate::error::AppError::Other(format!(
+            "failed to re-encrypt folder mnemonics for: {}",
+            failed.join(", ")
+        )));
+    }
 
     Ok(())
 }
@@ -801,7 +819,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reencrypt_with_invalid_master_warn_skips_all() {
+    async fn reencrypt_with_invalid_master_returns_err_naming_all_folders() {
         use sqlx::sqlite::SqlitePoolOptions;
 
         let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
@@ -828,12 +846,15 @@ mod tests {
                 .unwrap();
         }
 
-        // Invalid master — every folder's derive step will fail. Under the
-        // warn+continue policy the helper must still return Ok and NOT
-        // write any file.
-        reencrypt_all_folder_mnemonics(&pool, account, "not a bip39 mnemonic", "any-password")
+        // Invalid master — every folder's derive step fails. The new contract
+        // surfaces this as an aggregate Err naming every failed folder (a
+        // swallowed Ok here would let the caller flip the drive password while
+        // no folder was rewritten), and still writes no file.
+        let err = reencrypt_all_folder_mnemonics(&pool, account, "not a bip39 mnemonic", "any-password")
             .await
-            .unwrap();
+            .unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("alpha") && msg.contains("beta"), "error must name every failed folder, got: {msg}");
 
         for label in ["alpha", "beta"] {
             let enc = config_dir_for_folder(account, label).unwrap().join("enc_mnemonic.json");

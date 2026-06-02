@@ -1,4 +1,4 @@
-import { FC } from "react";
+import { FC, memo } from "react";
 import Link from "next/link";
 import { FileTypes } from "@/lib/types/fileTypes";
 import { getFileIcon } from "@/lib/utils/fileTypeUtils";
@@ -141,40 +141,42 @@ const NameCell: FC<NameCellProps> = ({
   const { icon: Icon, color } = getFileIcon(fileType, isFolder);
   const { getParam } = useUrlParams();
 
-  const mainFolderHash = getParam("mainFolderCid", "");
-  const folderActualName = isFolder ? actualName || "" : "";
-  const mainFolderActualName = getParam("mainFolderActualName", isFolder ? actualName || "" : "");
-  const subFolderPath = getParam("subFolderPath", "");
-
-  const effectiveMainFolderHash = mainFolderHash || arionHash;
-
-  // Build the folder path for navigation
-  const { mainFolderActualName: newMainFolder, subFolderPath: newSubFolderPath } = buildFolderPath(
-    folderActualName,
-    effectiveMainFolderHash,
-    mainFolderActualName || folderActualName,
-    subFolderPath
-  );
-
-
-  const folderUrl = {
-    pathname: "/files",
-    query: {
-      mainFolderCid: effectiveMainFolderHash ?? "",
-      folderCid: arionHash ?? "",
-      folderName: rawName ?? "",
-      folderActualName: actualName ?? "",
-      mainFolderActualName: newMainFolder ?? "",
-      subFolderPath: newSubFolderPath ?? "",
-      folderSource: source || "",
-      mainReqHash: mainReqHash
-    },
-  };
-
+  // Only folder rows navigate, so the param reads + path build + object literal
+  // are computed ONLY for folders — regular file rows (the vast majority) skip
+  // all of it. Combined with React.memo below, a sort/selection-mode toggle no
+  // longer re-runs this for unchanged rows.
+  const folderUrl = isFolder
+    ? (() => {
+        const mainFolderHash = getParam("mainFolderCid", "");
+        const folderActualName = actualName || "";
+        const mainFolderActualName = getParam("mainFolderActualName", actualName || "");
+        const subFolderPath = getParam("subFolderPath", "");
+        const effectiveMainFolderHash = mainFolderHash || arionHash;
+        const { mainFolderActualName: newMainFolder, subFolderPath: newSubFolderPath } = buildFolderPath(
+          folderActualName,
+          effectiveMainFolderHash,
+          mainFolderActualName || folderActualName,
+          subFolderPath
+        );
+        return {
+          pathname: "/files",
+          query: {
+            mainFolderCid: effectiveMainFolderHash ?? "",
+            folderCid: arionHash ?? "",
+            folderName: rawName ?? "",
+            folderActualName: actualName ?? "",
+            mainFolderActualName: newMainFolder ?? "",
+            subFolderPath: newSubFolderPath ?? "",
+            folderSource: source || "",
+            mainReqHash: mainReqHash,
+          },
+        };
+      })()
+    : null;
 
   return (
     <div className={cn("w-full min-w-0", className)} draggable={false}>
-      {isFolder ? (
+      {isFolder && folderUrl ? (
         <Link href={folderUrl} prefetch={false} draggable={false} className="cursor-pointer">
           <div className="flex items-center min-w-0">
             <Icon className={cn("size-5 mr-2 flex-shrink-0", color)} />
@@ -212,4 +214,7 @@ const NameCell: FC<NameCellProps> = ({
   );
 };
 
-export default NameCell;
+// Memoized: rows re-render on every tableBody recompute (sort, selection-mode,
+// columnWidths). Props are primitives/stable strings, so a shallow compare
+// skips re-running getParam/buildFolderPath/folderUrl for unchanged rows.
+export default memo(NameCell);

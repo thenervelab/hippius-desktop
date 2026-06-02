@@ -17,7 +17,9 @@ export default function DetailList() {
     isLoading: isCreditsLoading,
     error: creditsError,
     refetch: refetchCredits,
-  } = useUserCredits();
+    // Live so the home credits tile tracks charges on the same 6s cadence as
+    // its sibling storage tiles instead of lagging until a manual refresh.
+  } = useUserCredits({ live: true });
 
   // Single drive-scoped query feeds both the storage and file-count cards.
   // Loading state is shared so the two cards never flash inconsistent values.

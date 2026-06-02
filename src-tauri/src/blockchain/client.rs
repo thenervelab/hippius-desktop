@@ -25,6 +25,11 @@ const MAX_RETRIES: usize = 10;
 /// Fewer retries for 429 — the endpoint is actively rejecting us,
 /// so hammering it with 10 attempts over 5+ minutes is wasteful.
 const MAX_RETRIES_RATE_LIMITED: usize = 3;
+/// Per-attempt connect cap. Without it a single `from_url`/`from_rpc_client`
+/// to a dead-but-not-refusing endpoint can block indefinitely while holding
+/// `connect_guard`, freezing every blockchain command. Mirrors the 10s bound
+/// already used by [`test_rpc_endpoint`].
+const CONNECT_ATTEMPT_TIMEOUT_SECS: u64 = 10;
 
 /// Get or create the shared Substrate RPC client from `AppState.blockchain.client`.
 ///
@@ -37,7 +42,17 @@ pub async fn get_substrate_client(app_state: &crate::app_state::AppState) -> Res
     }
 
     // Slow path: acquire the connection guard so only one task retries.
-    let _guard = app_state.blockchain.connect_guard.lock().await;
+    // try_lock (not lock().await): if another task is already mid-connect, do
+    // NOT queue behind its multi-minute retry budget. Re-check the cache (it
+    // may have just connected) and otherwise fail fast with a transient error
+    // the FE retries — keeping every other blockchain command responsive
+    // during an outage instead of serializing them all behind one connect.
+    let Ok(_guard) = app_state.blockchain.connect_guard.try_lock() else {
+        if let Some(client) = read_cached_client(app_state)? {
+            return Ok(client);
+        }
+        return Err("Substrate client is connecting; retry shortly".to_string());
+    };
 
     // Re-check: another task may have connected while we waited.
     if let Some(client) = read_cached_client(app_state)? {
@@ -45,6 +60,58 @@ pub async fn get_substrate_client(app_state: &crate::app_state::AppState) -> Res
     }
 
     connect_and_cache(app_state).await
+}
+
+/// Get the cached RPC client, connecting if necessary. Mirrors
+/// [`get_substrate_client`] so the RPC handle is always tied to the SAME
+/// connect path as the `OnlineClient`. `get_block_timestamp` previously read
+/// the `rpc_client` cache directly and errored "RPC client not initialized"
+/// whenever it had been concurrently cleared even though the `OnlineClient` was
+/// still cached (the two caches are populated together but can be cleared
+/// independently). This re-derives both together via `connect_and_cache`.
+pub async fn get_rpc_client(app_state: &crate::app_state::AppState) -> Result<RpcClient, String> {
+    if let Some(rpc) = read_cached_rpc_client(app_state)? {
+        return Ok(rpc);
+    }
+    let Ok(_guard) = app_state.blockchain.connect_guard.try_lock() else {
+        if let Some(rpc) = read_cached_rpc_client(app_state)? {
+            return Ok(rpc);
+        }
+        return Err("Substrate client is connecting; retry shortly".to_string());
+    };
+    if let Some(rpc) = read_cached_rpc_client(app_state)? {
+        return Ok(rpc);
+    }
+    // connect_and_cache repopulates BOTH the OnlineClient and the RPC caches.
+    connect_and_cache(app_state).await?;
+    read_cached_rpc_client(app_state)?.ok_or_else(|| "RPC client unavailable after connect".to_string())
+}
+
+/// One bounded connection attempt. Always returns within
+/// [`CONNECT_ATTEMPT_TIMEOUT_SECS`] — a stalled `from_url`/`from_rpc_client`
+/// on a dead endpoint surfaces as a timeout `Err` rather than hanging while
+/// `connect_guard` is held.
+async fn connect_once(wss_endpoint: &str) -> Result<(RpcClient, OnlineClient<PolkadotConfig>), String> {
+    let attempt = tokio::time::timeout(Duration::from_secs(CONNECT_ATTEMPT_TIMEOUT_SECS), async {
+        let rpc = RpcClient::from_url(wss_endpoint).await.map_err(|e| e.to_string())?;
+        let client = OnlineClient::<PolkadotConfig>::from_rpc_client(rpc.clone()).await.map_err(|e| e.to_string())?;
+        Ok::<_, String>((rpc, client))
+    })
+    .await;
+    match attempt {
+        Ok(inner) => inner,
+        Err(_elapsed) => Err(format!("connection attempt timed out after {CONNECT_ATTEMPT_TIMEOUT_SECS}s")),
+    }
+}
+
+/// Read the cached RPC client without modifying state.
+fn read_cached_rpc_client(app_state: &crate::app_state::AppState) -> Result<Option<RpcClient>, String> {
+    let rpc = app_state
+        .blockchain
+        .rpc_client
+        .read()
+        .map_err(|e| format!("RPC client lock failed: {e}"))?;
+    Ok(rpc.clone())
 }
 
 /// Read the cached client without modifying state.
@@ -82,66 +149,47 @@ async fn connect_and_cache(app_state: &crate::app_state::AppState) -> Result<Arc
     let mut attempt = 0;
     loop {
         attempt += 1;
-        match RpcClient::from_url(&wss_endpoint).await {
-            Ok(rpc) => match OnlineClient::<PolkadotConfig>::from_rpc_client(rpc.clone()).await {
-                Ok(client) => {
-                    let arc = Arc::new(client);
+        // A from_url failure and a from_rpc_client failure are handled
+        // identically (retry with backoff), so connect_once collapses both —
+        // and a hung attempt is bounded by the per-attempt timeout.
+        let err_str = match connect_once(&wss_endpoint).await {
+            Ok((rpc, client)) => {
+                let arc = Arc::new(client);
+                {
                     let mut client_lock = app_state
                         .blockchain
                         .client
                         .write()
                         .map_err(|e| format!("Substrate client lock failed: {e}"))?;
                     *client_lock = Some(arc.clone());
+                }
 
-                    if let Ok(mut rpc_lock) = app_state.blockchain.rpc_client.write() {
-                        *rpc_lock = Some(rpc);
-                    } else {
-                        warn!("Failed to acquire write lock to cache RPC client");
-                    }
+                if let Ok(mut rpc_lock) = app_state.blockchain.rpc_client.write() {
+                    *rpc_lock = Some(rpc);
+                } else {
+                    warn!("Failed to acquire write lock to cache RPC client");
+                }
 
-                    info!(
-                        attempt,
-                        endpoint = %wss_endpoint,
-                        "Connected to Substrate node"
-                    );
-                    return Ok(arc);
-                }
-                Err(e) => {
-                    let err_str = e.to_string();
-                    let rate_limited = is_rate_limited(&err_str);
-                    let max = if rate_limited { MAX_RETRIES_RATE_LIMITED } else { MAX_RETRIES };
-                    warn!(
-                        attempt,
-                        max_retries = max,
-                        endpoint = %wss_endpoint,
-                        error = %err_str,
-                        rate_limited,
-                        "Failed to build OnlineClient from RPC"
-                    );
-                    if attempt >= max {
-                        return Err(format!("Failed to connect to Substrate node after {max} attempts: {err_str}"));
-                    }
-                    sleep(retry_delay(attempt, rate_limited)).await;
-                }
-            },
-            Err(e) => {
-                let err_str = e.to_string();
-                let rate_limited = is_rate_limited(&err_str);
-                let max = if rate_limited { MAX_RETRIES_RATE_LIMITED } else { MAX_RETRIES };
-                warn!(
-                    attempt,
-                    max_retries = max,
-                    endpoint = %wss_endpoint,
-                    error = %err_str,
-                    rate_limited,
-                    "Failed to connect to Substrate node"
-                );
-                if attempt >= max {
-                    return Err(format!("Failed to connect to Substrate node after {max} attempts: {err_str}"));
-                }
-                sleep(retry_delay(attempt, rate_limited)).await;
+                info!(attempt, endpoint = %wss_endpoint, "Connected to Substrate node");
+                return Ok(arc);
             }
+            Err(e) => e,
+        };
+
+        let rate_limited = is_rate_limited(&err_str);
+        let max = if rate_limited { MAX_RETRIES_RATE_LIMITED } else { MAX_RETRIES };
+        warn!(
+            attempt,
+            max_retries = max,
+            endpoint = %wss_endpoint,
+            error = %err_str,
+            rate_limited,
+            "Failed to connect to Substrate node"
+        );
+        if attempt >= max {
+            return Err(format!("Failed to connect to Substrate node after {max} attempts: {err_str}"));
         }
+        sleep(retry_delay(attempt, rate_limited)).await;
     }
 }
 
@@ -221,5 +269,31 @@ pub async fn update_wss_endpoint(app_state: &crate::app_state::AppState, new_end
         Ok(())
     } else {
         Err("Failed to update WSS endpoint".to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A single connection attempt to an unreachable endpoint must return an
+    /// `Err` rather than hang. Before the per-attempt timeout, `connect_once`'s
+    /// inner `from_url` could block indefinitely on a dead-but-not-refusing
+    /// endpoint while `connect_guard` was held, freezing every blockchain
+    /// command. `start_paused` auto-advances virtual time to the timeout, so
+    /// this runs instantly; 192.0.2.1 is RFC 5737 TEST-NET-1 (unroutable), so
+    /// the connect stalls and the timeout — not a real network wait — ends it.
+    #[tokio::test(start_paused = true)]
+    async fn connect_once_returns_err_on_unreachable_endpoint_without_hanging() {
+        let result = connect_once("ws://192.0.2.1:9944").await;
+        assert!(result.is_err(), "unreachable endpoint must surface as Err, not block forever");
+    }
+
+    /// A malformed endpoint fails fast through the same Err path (no timeout
+    /// needed) — `connect_once` never panics on bad input.
+    #[tokio::test]
+    async fn connect_once_returns_err_on_malformed_endpoint() {
+        let result = connect_once("not-a-websocket-url").await;
+        assert!(result.is_err(), "malformed endpoint must be an Err");
     }
 }

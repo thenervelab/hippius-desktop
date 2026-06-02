@@ -81,47 +81,80 @@ pub(crate) async fn set_sync_path_internal(pool: &SqlitePool, account_id: &str, 
     let timestamp = Utc::now().timestamp();
     let owner = account_key(account_id);
 
-    let rows = sqlx::query("SELECT label, path FROM sync_paths WHERE owner = ?")
-        .bind(&owner)
-        .fetch_all(pool)
+    // Run the overlap check and the writes inside ONE `BEGIN IMMEDIATE`
+    // transaction so the read-then-act is serialized against concurrent
+    // writers. A default `pool.begin()` is DEFERRED — it takes the write lock
+    // only on the first write, leaving the SELECT-then-INSERT window open — so
+    // we issue `BEGIN IMMEDIATE` to acquire the write lock up front. All errors
+    // are routed through the inner block so the connection is never returned to
+    // the pool with an open transaction (every path COMMITs or ROLLBACKs).
+    let mut conn = pool.acquire().await.map_err(crate::error::AppError::Db)?;
+    sqlx::query("BEGIN IMMEDIATE")
+        .execute(&mut *conn)
         .await
-        .map_err(|e| crate::error::AppError::Other(format!("DB error checking path overlap: {e}")))?;
+        .map_err(crate::error::AppError::Db)?;
 
-    let existing: Vec<(String, String)> = rows.iter().map(|r| (r.get("label"), r.get("path"))).collect();
-
-    validate_no_path_overlap(Path::new(path), label, &existing).await?;
-
-    if let Ok(Some(legacy_id)) = sqlx::query_scalar::<_, i64>("SELECT id FROM sync_paths WHERE owner = '' AND type = ? LIMIT 1")
-        .bind(path_type)
-        .fetch_optional(pool)
-        .await
-        && let Err(e) = sqlx::query("REPLACE INTO sync_paths (id, owner, path, type, label, timestamp) VALUES (?, ?, ?, ?, ?, ?)")
-            .bind(legacy_id)
+    let res: Result<()> = async {
+        let rows = sqlx::query("SELECT label, path FROM sync_paths WHERE owner = ?")
             .bind(&owner)
-            .bind(path)
-            .bind(path_type)
-            .bind(label)
-            .bind(timestamp)
-            .execute(pool)
+            .fetch_all(&mut *conn)
             .await
-    {
-        warn!("Failed to replace legacy sync_paths row: {e}");
-    }
+            .map_err(|e| crate::error::AppError::Other(format!("DB error checking path overlap: {e}")))?;
 
-    let res = sqlx::query(
-        "INSERT INTO sync_paths (owner, path, type, label, timestamp) VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(owner, label) DO UPDATE SET path=excluded.path, type=excluded.type, timestamp=excluded.timestamp",
-    )
-    .bind(&owner)
-    .bind(path)
-    .bind(path_type)
-    .bind(label)
-    .bind(timestamp)
-    .execute(pool)
+        let existing: Vec<(String, String)> = rows.iter().map(|r| (r.get("label"), r.get("path"))).collect();
+
+        validate_no_path_overlap(Path::new(path), label, &existing).await?;
+
+        if let Ok(Some(legacy_id)) = sqlx::query_scalar::<_, i64>("SELECT id FROM sync_paths WHERE owner = '' AND type = ? LIMIT 1")
+            .bind(path_type)
+            .fetch_optional(&mut *conn)
+            .await
+            && let Err(e) = sqlx::query("REPLACE INTO sync_paths (id, owner, path, type, label, timestamp) VALUES (?, ?, ?, ?, ?, ?)")
+                .bind(legacy_id)
+                .bind(&owner)
+                .bind(path)
+                .bind(path_type)
+                .bind(label)
+                .bind(timestamp)
+                .execute(&mut *conn)
+                .await
+        {
+            warn!("Failed to replace legacy sync_paths row: {e}");
+        }
+
+        sqlx::query(
+            "INSERT INTO sync_paths (owner, path, type, label, timestamp) VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(owner, label) DO UPDATE SET path=excluded.path, type=excluded.type, timestamp=excluded.timestamp",
+        )
+        .bind(&owner)
+        .bind(path)
+        .bind(path_type)
+        .bind(label)
+        .bind(timestamp)
+        .execute(&mut *conn)
+        .await
+        .map_err(crate::error::AppError::Db)?;
+        Ok(())
+    }
     .await;
 
+    let res = match res {
+        Ok(()) => {
+            sqlx::query("COMMIT").execute(&mut *conn).await.map(|_| ())
+        }
+        Err(e) => {
+            // Best-effort rollback; surface the original error regardless.
+            let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+            return Err(e);
+        }
+    };
+
+    // Release the transaction's connection before store_bookmark acquires its
+    // own from the pool (avoids contention on a small pool).
+    drop(conn);
+
     match res {
-        Ok(_) => {
+        Ok(()) => {
             info!("Sync path for '{}' set successfully in DB", path_type);
 
             #[cfg(target_os = "macos")]
