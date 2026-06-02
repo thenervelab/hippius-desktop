@@ -1,6 +1,7 @@
 import cn from "@/app/lib/utils/cn";
 import { Icons } from "@/components/ui";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { useAtomValue } from "jotai";
 import SearchShortcutHint from "./SearchShortcutHint";
 import SidebarSearchModal from "./SidebarSearchModal";
@@ -64,6 +65,19 @@ const SidebarSearch: React.FC<SidebarSearchProps> = ({ collapsed = false }) => {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  // Open the search palette when the tray popover's "Search Files" field is
+  // clicked. The popover is a separate webview, so it emits this event instead
+  // of reaching into the sidebar. The field is now a trigger for the centered
+  // command palette, so we open that palette — same as ⌘/Ctrl+F above.
+  useEffect(() => {
+    const unlisten = listen("hippius:tray-focus-search", () => {
+      setSearchOpen(true);
+    });
+    return () => {
+      void unlisten.then((fn) => fn());
+    };
   }, []);
 
   const handleSelect = useCallback(

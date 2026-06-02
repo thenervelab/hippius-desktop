@@ -34,6 +34,7 @@
     }
   },
   "app": {
+    "macOSPrivateApi": true,
     "windows": [
       {
         "dragDropEnabled": true,

@@ -65,6 +65,13 @@ pub struct AppState {
     /// AFTER an `add_file`/`add_files`/`add_folder` call from events
     /// that belong to a cycle that was already running.
     pub sync_session_epoch: AtomicU64,
+    /// Unix-millis timestamp of the last time the tray panel was hidden by a
+    /// focus-loss (blur) event. Read by `tray::panel::toggle_tray_panel` to
+    /// suppress the immediate re-open that would otherwise happen when the
+    /// user clicks the already-open tray icon: the click first blurs+hides the
+    /// panel, then fires the toggle, which would see it hidden and re-show it.
+    /// `0` means "never hidden by blur". See `tray::panel` for the cooldown.
+    pub tray_panel_hidden_at: AtomicU64,
     /// HTTP client for HCFS health checks (accepts self-signed certs in debug).
     pub health_client: reqwest::Client,
     /// HTTP client for Hippius API calls (reuses connection pool + TLS cache).
@@ -155,6 +162,7 @@ impl AppState {
             preparing: std::sync::Arc::new(crate::sync::preparing::PreparingState::new()),
             credits_exhausted: std::sync::Arc::new(crate::sync::credits_exhausted::CreditsExhaustedState::new()),
             sync_session_epoch: AtomicU64::new(0),
+            tray_panel_hidden_at: AtomicU64::new(0),
             health_client,
             // Explicit timeouts. Without them a hung connection (e.g. a
             // billing-server blip during `check_action_eligibility`) would

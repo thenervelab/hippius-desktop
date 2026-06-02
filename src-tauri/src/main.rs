@@ -26,6 +26,7 @@ pub mod splash;
 pub mod sync;
 #[cfg(test)]
 mod test_helpers;
+pub mod tray;
 mod utils;
 pub mod wallet;
 
@@ -91,6 +92,7 @@ use crate::sync::paths::{get_sync_path, remove_sync_path, set_sync_path};
 use crate::sync::progress::{sp_clear_all_data, sp_dismiss_sync_widget, sp_get_snapshot};
 use crate::sync::remote::{download_remote_file, list_remote_folder_files};
 use crate::sync::status::{app_close, get_all_drive_statuses, get_sync_activity_rows, get_sync_engine_health};
+use crate::tray::panel::{hide_tray_panel, toggle_tray_panel};
 use crate::utils::platform_info::get_platform_info;
 use crate::utils::preferences::{get_user_preference, is_onboarding_done, save_user_preference, set_onboarding_done};
 use crate::utils::support::{
@@ -348,6 +350,9 @@ fn main() {
             logout_full,
             is_token_valid,
             get_tray_menu_data,
+            // Tray popover panel (replaces the native tray menu)
+            toggle_tray_panel,
+            hide_tray_panel,
             get_platform_info,
             // Local DB (notifications, address book, onboarding, preferences, app state)
             add_notification,
@@ -462,6 +467,16 @@ fn main() {
 /// On Windows/Linux, closing the window exits the app via `app.exit(0)`.
 pub fn on_window_event(builder: Builder<Wry>) -> Builder<Wry> {
     builder.on_window_event(|window, event| {
+        // Click-outside dismissal for the tray popover: when the panel loses
+        // focus, hide it. Centralized here (rather than in the FE) so the
+        // re-open cooldown timestamp is recorded against the same `AppState`
+        // that `toggle_tray_panel` reads.
+        if let tauri::WindowEvent::Focused(false) = event {
+            if window.label() == crate::tray::panel::PANEL_LABEL {
+                crate::tray::panel::on_panel_blur(window.app_handle());
+            }
+        }
+
         if let tauri::WindowEvent::CloseRequested { api, .. } = event {
             // Only intercept the main window. If a future refactor adds a
             // secondary window (e.g. a settings popup), its close button
@@ -552,6 +567,11 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
         app_handle.manage(app_state);
         crate::sync::upload_processing::spawn_watchdog(upload_processing_weak, app_handle.clone());
         crate::sync::preparing::spawn_watchdog(preparing_weak, sync_weak);
+
+        // Pre-create the (hidden) tray popover so the first tray click shows it
+        // instantly instead of paying webview + route load cost on click.
+        crate::tray::panel::prewarm(&app_handle);
+
         let win = app.get_webview_window("main").expect("main window not found");
 
         // Open devtools on startup when `HIPPIUS_DEVTOOLS=1` is set in the

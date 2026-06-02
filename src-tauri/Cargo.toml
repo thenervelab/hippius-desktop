@@ -23,6 +23,10 @@ tauri = { version = "2", features = [
     'tray-icon',
     'image-ico',
     'image-png',
+    # Required for the transparent tray-panel popover window
+    # (`macOSPrivateApi: true` in tauri.conf.json). Enables the private
+    # macOS APIs Tauri uses to render a borderless, see-through webview.
+    'macos-private-api',
     # Enable devtools even in release builds so we can debug OAuth/recovery
     # without rebuilding a debug DMG. Gated at runtime via the HIPPIUS_DEVTOOLS
     # env var — see `main.rs` setup hook. Remove once we stop shipping dev
