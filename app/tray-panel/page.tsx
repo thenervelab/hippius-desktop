@@ -126,7 +126,7 @@ function Header({ credits, unreadCount }: { credits: number | null; unreadCount:
       </div>
 
       <div className="flex items-center gap-3 rounded-xl bg-black/[0.06] py-1.5 pl-4 pr-2 dark:bg-white/[0.06]">
-        <div className="flex flex-col text-center">
+        <div className="flex flex-col text-left">
           <span className="font-mono text-[10px] font-medium leading-[18px] tracking-[-0.2px] text-[#1F51BE] dark:text-primary-brand-dark">
             CREDITS
           </span>
