@@ -1,0 +1,398 @@
+"use client";
+import { useEffect, useState, useRef } from "react";
+import { useAtom, useAtomValue, useSetAtom } from "jotai";
+import {
+  phaseAtom,
+  completedPhasesAtom,
+  currentPhaseIndexAtom,
+  phaseCommandRunningAtom,
+  isUpdateCheckPhaseAtom,
+  phaseInternalProgressAtom,
+  splashCompleteAtom,
+} from "./atoms";
+import {
+  updateCheckCompleteAtom,
+  updateDialogOpenAtom,
+  updateStore,
+} from "@/app/components/updater/updateStore";
+import { cn } from "@/app/lib/utils";
+import {
+  PHASE_CONTENT,
+  AppSetupPhaseContent,
+  MIN_PHASE_DURATION,
+  PHASE_PROGRESS_EVENT,
+} from "./SplashContent";
+import { listen } from "@tauri-apps/api/event";
+import LoadingScreen from "./LoadingScreen";
+import PixelateTransition from "./PixelateTransition";
+import GrainTexture from "./GrainTexture";
+
+// Splash background blue, shared by the loader card and the outro pixel grid so
+// the dissolve into the app reads as one continuous colour wash.
+const SPLASH_BG = "#3167DD";
+
+// Derive a square pixel grid from the viewport width so cells stay roughly
+// uniform across window sizes (mirrors the mockup's `getGridSize`).
+function getGridSize() {
+  return Math.max(
+    7,
+    Math.floor(
+      (typeof window !== "undefined" ? window.innerWidth : 1024) / 100
+    )
+  );
+}
+
+export default function SplashWrapper({
+  children,
+  preventClose = false,
+}: {
+  children: React.ReactNode;
+  preventClose?: boolean;
+}) {
+  const [phase, setPhase] = useAtom(phaseAtom);
+  const setCompletedPhases = useSetAtom(completedPhasesAtom);
+  const setCurrentPhaseIndex = useSetAtom(currentPhaseIndexAtom);
+  const setPhaseCommandRunning = useSetAtom(phaseCommandRunningAtom);
+  const setIsUpdateCheckPhase = useSetAtom(isUpdateCheckPhaseAtom);
+  const setPhaseInternalProgress = useSetAtom(phaseInternalProgressAtom);
+  const [keepSplashscreenInDom, setKeepSplacescreenInDom] = useState(true);
+  const [isFullyComplete, setIsFullyComplete] = useState(false);
+  // True once the outro pixel dissolve has finished. Gates mounting `children`
+  // so the page loader (their Suspense fallback) never overlaps the dissolving
+  // pixels.
+  const [outroDone, setOutroDone] = useState(false);
+  const setSplashComplete = useSetAtom(splashCompleteAtom);
+  const setupStartedRef = useRef(false);
+
+  // Pixel grid dimension for the intro/outro transitions; recomputed on resize
+  // so the outro grid matches the current window.
+  const [gridSize, setGridSize] = useState(() => getGridSize());
+
+  // Track update status
+  const updateCheckComplete = useAtomValue(updateCheckCompleteAtom);
+  const updateDialogOpen = useAtomValue(updateDialogOpenAtom, {
+    store: updateStore,
+  });
+
+  // Refs to track latest values for async access
+  const updateCheckCompleteRef = useRef(updateCheckComplete);
+  const updateDialogOpenRef = useRef(updateDialogOpen);
+  const currentPhaseRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    updateCheckCompleteRef.current = updateCheckComplete;
+  }, [updateCheckComplete]);
+
+  useEffect(() => {
+    updateDialogOpenRef.current = updateDialogOpen;
+  }, [updateDialogOpen]);
+
+  useEffect(() => {
+    currentPhaseRef.current = phase;
+  }, [phase]);
+
+  // Keep the transition grid sized to the window.
+  useEffect(() => {
+    const onResize = () => setGridSize(getGridSize());
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  // Listen for phase progress events from backend (download/install progress)
+  useEffect(() => {
+    let mounted = true;
+    const setupListener = async () => {
+      const unlisten = await listen<{ phase: string; progress: number }>(
+        PHASE_PROGRESS_EVENT,
+        (event) => {
+          if (!mounted) return;
+
+          const { phase: eventPhase, progress } = event.payload;
+          console.log(`[Progress Event] Phase: ${eventPhase}, Progress: ${progress}%`);
+
+          // Only update if this event is for the current phase
+          if (currentPhaseRef.current === eventPhase) {
+            const clampedProgress = Math.max(0, Math.min(100, progress));
+            setPhaseInternalProgress(clampedProgress);
+          } else {
+            console.log(`[Progress Event] Ignoring - current phase is ${currentPhaseRef.current}`);
+          }
+        }
+      );
+
+      return unlisten;
+    };
+
+    const unlistenPromise = setupListener();
+
+    return () => {
+      mounted = false;
+      unlistenPromise.then((fn) => fn());
+    };
+  }, [setPhaseInternalProgress]);
+
+  // Reset phase and completed phases when update dialog is open
+  useEffect(() => {
+    if (updateDialogOpen && phase) {
+      setPhase(null);
+      setCompletedPhases(new Set());
+      setCurrentPhaseIndex(0);
+      setPhaseCommandRunning(false);
+      setIsUpdateCheckPhase(true);
+      setIsFullyComplete(false);
+      setPhaseInternalProgress(0);
+    }
+  }, [
+    updateDialogOpen,
+    phase,
+    setPhase,
+    setCompletedPhases,
+    setCurrentPhaseIndex,
+    setPhaseCommandRunning,
+    setIsUpdateCheckPhase,
+    setPhaseInternalProgress,
+  ]);
+
+  // Helper function to ensure minimum phase duration
+  const runWithMinDuration = async (
+    promise: Promise<unknown>,
+    minDuration: number = MIN_PHASE_DURATION
+  ) => {
+    const startTime = Date.now();
+    const result = await promise;
+    const elapsed = Date.now() - startTime;
+    if (elapsed < minDuration) {
+      await new Promise((resolve) =>
+        setTimeout(resolve, minDuration - elapsed)
+      );
+    }
+    return result;
+  };
+
+  // Helper to wait for a duration
+  const wait = (ms: number) =>
+    new Promise((resolve) => setTimeout(resolve, ms));
+
+  // Execute setup phases sequentially
+  useEffect(() => {
+    if (setupStartedRef.current) return;
+
+    setupStartedRef.current = true;
+
+    const runSetupPhases = async () => {
+      // ========== UPDATE CHECK PHASE (at 0% - before main phases) ==========
+      setIsUpdateCheckPhase(true);
+      setPhase("checking_updates");
+
+      const updateCheckPromise = new Promise<void>((resolve) => {
+        const checkInterval = setInterval(() => {
+          if (updateCheckCompleteRef.current || updateDialogOpenRef.current) {
+            clearInterval(checkInterval);
+            resolve();
+          }
+        }, 50);
+
+        setTimeout(() => {
+          clearInterval(checkInterval);
+          resolve();
+        }, 10000);
+      });
+
+      // Held to MIN_PHASE_DURATION so the splash never flickers off in <1.5s
+      // when the updater resolves immediately (cached / offline).
+      await runWithMinDuration(updateCheckPromise, MIN_PHASE_DURATION);
+
+      // If an update dialog opened, wait for the user to resolve it
+      // (install / skip / cancel) before continuing to the main
+      // phases. The PRIOR code did `return;` here, which left
+      // `setupStartedRef.current` permanently `true` so `runSetupPhases`
+      // never resumed — `setSplashComplete(true)` at the bottom was
+      // never called, and any consumer gated on the atom (historically
+      // `wallet-auth-context.tsx`'s `initSync`) was stranded forever.
+      // Spinning here resumes naturally once `updateDialogOpenRef`
+      // flips, after which the main phases run and the splash
+      // completes normally. The interval is cheap (a single ref read
+      // every 100ms); the cap is a safety net in case the dialog
+      // state somehow gets stuck — at that point we proceed anyway
+      // because the cost of an orphaned splash overlay is worse than
+      // the cost of the main phases running concurrently with a
+      // visible dialog.
+      const DIALOG_WAIT_CAP_MS = 60_000;
+      const dialogWaitStart = Date.now();
+      while (updateDialogOpenRef.current && Date.now() - dialogWaitStart < DIALOG_WAIT_CAP_MS) {
+        await wait(100);
+      }
+      if (updateDialogOpenRef.current) {
+        console.warn(
+          "[Setup] Update dialog still open after",
+          DIALOG_WAIT_CAP_MS,
+          "ms — proceeding past update-check phase anyway to avoid stranding splash."
+        );
+      }
+
+      setIsUpdateCheckPhase(false);
+
+      // ========== MAIN PHASES (quick animation, no blocking) ==========
+      const phaseNames = Object.keys(PHASE_CONTENT);
+
+      for (let i = 0; i < phaseNames.length; i++) {
+        const phaseName = phaseNames[i];
+        console.log(`[Setup] Starting phase ${i + 1}/${phaseNames.length}: ${phaseName}`);
+
+        setPhase(phaseName);
+        setCurrentPhaseIndex(i);
+        setPhaseInternalProgress(0);
+        setPhaseCommandRunning(true);
+
+        const phaseContent: AppSetupPhaseContent | undefined =
+          PHASE_CONTENT[phaseName];
+
+        if (!phaseContent) {
+          console.warn(`Unknown phase: ${phaseName}`);
+          setPhaseCommandRunning(false);
+          continue;
+        }
+
+        let progressIntervalId: NodeJS.Timeout | null = null;
+
+        try {
+          // Smooth fake progress for all phases — no blocking backend calls
+          let currentProgress = 0;
+
+          progressIntervalId = setInterval(() => {
+            currentProgress += 3;
+            if (currentProgress <= 100) {
+              setPhaseInternalProgress(currentProgress);
+            } else {
+              if (progressIntervalId) {
+                clearInterval(progressIntervalId);
+                progressIntervalId = null;
+              }
+            }
+          }, 80);
+
+          await new Promise<void>((resolve) => {
+            const checkInterval = setInterval(() => {
+              if (currentProgress >= 100) {
+                clearInterval(checkInterval);
+                if (progressIntervalId) {
+                  clearInterval(progressIntervalId);
+                  progressIntervalId = null;
+                }
+                resolve();
+              }
+            }, 50);
+          });
+
+          setPhaseInternalProgress(100);
+          await wait(150);
+
+          console.log(`[Setup] Completed phase: ${phaseName}`);
+        } catch (error) {
+          console.error(`[Setup] Error during phase ${phaseName}:`, error);
+
+          if (progressIntervalId) {
+            clearInterval(progressIntervalId);
+          }
+
+          setPhaseInternalProgress(100);
+        } finally {
+          if (progressIntervalId) {
+            clearInterval(progressIntervalId);
+          }
+
+          setPhaseCommandRunning(false);
+        }
+
+        setCompletedPhases((prev: Set<string>) => {
+          const newSet = new Set(prev);
+          newSet.add(phaseName);
+          return newSet;
+        });
+      }
+
+      setIsFullyComplete(true);
+      setSplashComplete(true);
+    };
+
+    runSetupPhases();
+  }, [
+    setPhase,
+    setCompletedPhases,
+    setCurrentPhaseIndex,
+    setPhaseCommandRunning,
+    setIsUpdateCheckPhase,
+    setPhaseInternalProgress,
+    setSplashComplete,
+  ]);
+
+  // `isReady` flips when setup finishes (unless the splash is pinned open via
+  // preventClose). It triggers the outro pixel dissolve.
+  const isReady = isFullyComplete && !preventClose;
+
+  // Defer mounting `children` AND removing the overlay until the outro
+  // PixelateTransition has finished dissolving. If `children` mounted the moment
+  // `isReady` flipped, their Suspense fallback (PageLoader) would show THROUGH
+  // the dissolving pixels — two loaders on screen at once. Waiting the outro's
+  // duration (delay 0.05 + ~1.1s dissolve + tail fade) means the page loader
+  // only appears once the pixels are gone.
+  useEffect(() => {
+    if (!isReady) return;
+
+    const OUTRO_DURATION_MS = 1400;
+    const timeout = setTimeout(() => {
+      setOutroDone(true);
+      setKeepSplacescreenInDom(false);
+    }, OUTRO_DURATION_MS);
+
+    return () => clearTimeout(timeout);
+  }, [isReady]);
+
+  return (
+    <>
+      {outroDone && children}
+      {keepSplashscreenInDom && (
+        <div
+          className={cn(
+            "fixed inset-0 z-40 flex flex-col items-center justify-center w-full h-full overflow-hidden",
+            // Once the outro starts, paint the overlay with the SAME background
+            // the app shows next — these are the exact classes PageLoader uses.
+            // So the blue dissolve lands on the real app surface (dark on a dark
+            // system, light on a light one) instead of the <body>'s hard-coded
+            // light grey, which on a dark system flashed white before the dark
+            // page loader cut in. This keeps the dark intro and the outro reveal
+            // consistent and removes the white flash. The blue outro grid covers
+            // this background until it dissolves, so swapping the colour here is
+            // never visible as a flash.
+            isReady && "pointer-events-none bg-grey-100 dark:bg-black-primary-bg"
+          )}
+          style={{ backgroundColor: isReady ? undefined : SPLASH_BG }}
+        >
+          {!isReady ? (
+            <>
+              <GrainTexture />
+              <PixelateTransition
+                key="intro"
+                color="black"
+                gridSize={gridSize}
+                duration={1.1}
+                delay={0.05}
+                from="random"
+              />
+              <LoadingScreen />
+            </>
+          ) : (
+            <PixelateTransition
+              key="outro"
+              color={SPLASH_BG}
+              gridSize={gridSize}
+              duration={1.1}
+              delay={0.05}
+              from="random"
+            />
+          )}
+        </div>
+      )}
+    </>
+  );
+}

@@ -58,6 +58,7 @@
     "date-fns": "^4.1.0",
     "flubber": "^0.4.2",
     "framer-motion": "^12.19.1",
+    "gsap": "^3.13.0",
     "jotai": "^2.12.3",
     "jotai-history": "^0.4.3",
     "jotai-tanstack-query": "^0.9.0",

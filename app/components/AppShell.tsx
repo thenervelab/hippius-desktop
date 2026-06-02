@@ -12,6 +12,7 @@ import { NavigationLoaderProvider } from "@/app/lib/hooks/useNavigationLoader";
 import UpdateChecker from "@/components/updater/UpdateChecker";
 import TrayNavigationListener from "@/app/components/tray/TrayNavigationListener";
 import ZoomController from "@/app/components/ZoomController";
+import SplashWrapper from "./splash-screen-v2";
 
 /**
  * Route prefix served inside the borderless system-tray popover window.
@@ -52,9 +53,11 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             <NavigationLoaderProvider>
               <TrayNavigationListener />
               <ZoomController />
-              <Suspense fallback={<PageLoader />}>
-                <div className="flex min-h-screen h-screen">{children}</div>
-              </Suspense>
+              <SplashWrapper preventClose={false}>
+                <Suspense fallback={<PageLoader />}>
+                  <div className="flex min-h-screen h-screen">{children}</div>
+                </Suspense>
+              </SplashWrapper>
 
               {/* Toast styling mirrors hippius-web's SonnerToaster setup:
                *  explicit dark-mode classNames so the toast doesn't stay
