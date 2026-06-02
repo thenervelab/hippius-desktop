@@ -1159,7 +1159,7 @@ _Risk:_ Documentation-only change: zero runtime risk. If the optional IPC-skip i
 
 _Notes:_ No Rust diff this turn; all Rust gates N/A (this is a TypeScript finding; I only read Rust as supporting evidence). Verdict downgraded from the fixture's framing: the mechanical assertions are accurate, but two load-bearing claims are wrong — (1) it is a single process-lifetime singleton, NOT a leak that grows across account switches (the menuPromise guard makes the IIFE run exactly once); (2) the snapshot listener does not meaningfully 'process events for a logged-out account' because tick short-circuits on !isUserLoggedIn() and the backend stops emitting after logout_full→stop_sync. The 2s interval is real but cache-gated to ~1 lightweight SQLite read per 5s, and the poll is the INTENTIONAL logout-detection mechanism (wallet-auth-context.tsx:172 comment). Severity stays low; the actionable work is documentation + an optional poll-skip-while-logged-out micro-opt. Suggested-fix option in the fixture to 'tear down on logout and re-start on login' is actively wrong: menuPromise never re-runs, so a torn-down watcher would never re-arm and re-login would silently lose tray sync/login updates.
 
-- [ ] **F34 fixed & tested**
+- [x] **F34 documented** — committed (comments-only; deep-eval: intentional singleton, not a leak)
 
 ---
 
