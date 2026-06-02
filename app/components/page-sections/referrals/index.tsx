@@ -44,7 +44,7 @@ import { API_CONFIG, REFERRAL_CODE_CONFIG } from "@/lib/config";
  *
  * Flip to `false` when the feature is ready to ship.
  */
-const REFERRALS_COMING_SOON = true;
+const REFERRALS_COMING_SOON = false;
 
 /* Seed values used to fill the sparkline buckets on each stat card —
  * same constants web uses so the two clients render an identical demo
