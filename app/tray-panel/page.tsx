@@ -145,7 +145,9 @@ function Header({ credits, unreadCount }: { credits: number | null; unreadCount:
           logo read as the brand rather than a solid blue tile. */}
       <HippiusLogo className="h-11 w-11" />
 
-      <div className="flex items-center gap-3 rounded-xl bg-black/[0.06] py-1.5 pl-4 pr-2 dark:bg-white/[0.06]">
+      {/* Explicit rgba fill, not the `bg-black/[0.06]` opacity-modifier, which
+          rendered no box in light mode (same issue fixed on the footer). */}
+      <div className="flex items-center gap-3 rounded-xl bg-[rgba(0,0,0,0.06)] py-1.5 pl-4 pr-2 dark:bg-[rgba(255,255,255,0.06)]">
         <div className="flex flex-col text-left">
           <span className="font-mono text-[10px] font-medium leading-[18px] tracking-[-0.2px] text-[#1F51BE] dark:text-primary-brand-dark">
             CREDITS
@@ -330,7 +332,15 @@ function Footer({ address, blockNumber, isConnected }: { address: string | null;
 
   return (
     <footer className="px-4 pb-4">
-      <div className="flex w-full items-center justify-between gap-2 rounded-[16px] bg-black/[0.06] p-3 dark:bg-white/[0.06]">
+      {/* Figma footer box: width 428 (w-full inside the 16px-inset footer),
+          padding 12 (p-3), gap 8 (gap-2), radius 16, align-items flex-start,
+          and a 56px height that the row hugs (32px content + 24px padding).
+          The fill uses an EXPLICIT rgba rather than the `bg-black/[0.06]`
+          opacity-modifier: that modifier form rendered no box in light mode
+          here (the search pill above already worked around the same issue with
+          an explicit `bg-[#0000000F]`), which is why the footer looked unstyled
+          in light mode while dark was fine. */}
+      <div className="flex w-full items-start justify-between gap-2 rounded-[16px] bg-[rgba(0,0,0,0.06)] p-3 dark:bg-[rgba(255,255,255,0.06)]">
         <button
           type="button"
           onClick={handleCopyAddress}
@@ -338,8 +348,8 @@ function Footer({ address, blockNumber, isConnected }: { address: string | null;
           aria-label="Copy address"
           className="flex min-w-0 items-center gap-2.5 rounded-xl transition-colors hover:opacity-80"
         >
-          <span className="size-[30px] shrink-0 overflow-hidden rounded-full">
-            <Avatar colors={["#D3DFF8", "#183E91", "#3167DE", "#A6F4C5"]} name={address ?? "hippius"} size={30} variant="pixel" />
+          <span className="size-8 shrink-0 overflow-hidden rounded-full">
+            <Avatar colors={["#D3DFF8", "#183E91", "#3167DE", "#A6F4C5"]} name={address ?? "hippius"} size={32} variant="pixel" />
           </span>
           <div className="flex min-w-0 flex-col items-start gap-0.5">
             <span className="truncate font-inter text-[14px] font-medium leading-none tracking-[-0.4px] text-black dark:text-white">
@@ -363,7 +373,7 @@ function Footer({ address, blockNumber, isConnected }: { address: string | null;
           variant="primary"
           size="auto"
           onClick={() => void openMainWindow()}
-          className="flex h-[30px] shrink-0 items-center justify-center gap-1 rounded-lg px-3 text-[14px] font-semibold"
+          className="flex h-8 shrink-0 items-center justify-center gap-1 rounded-lg px-3 text-[14px] font-semibold"
         >
           Open Hippius
           <ArrowRight className="size-4" />
