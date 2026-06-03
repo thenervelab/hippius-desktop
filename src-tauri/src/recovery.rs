@@ -205,7 +205,7 @@ pub async fn check_recovery_state(state: tauri::State<'_, crate::app_state::AppS
 /// and the API client). Callable from other commands (notably the OAuth
 /// callback) without the `#[tauri::command]` boundary in the way.
 pub(crate) async fn check_recovery_state_inner(state: &tauri::State<'_, crate::app_state::AppState>) -> Result<RecoveryCheck> {
-    let account_id = state.current_account_id().map_err(AppError::Other)?;
+    let account_id = state.current_account_id()?;
     let pool = state.pool()?;
     seed_hcfs_server_url_if_missing(pool, &account_id).await?;
 
@@ -318,7 +318,7 @@ async fn probe_server_blob(state: &tauri::State<'_, crate::app_state::AppState>)
 #[tauri::command]
 pub async fn recover_mnemonic(state: tauri::State<'_, crate::app_state::AppState>, password: String) -> Result<()> {
     let password = Zeroizing::new(password);
-    let account_id = state.current_account_id().map_err(AppError::Other)?;
+    let account_id = state.current_account_id()?;
     let pool = state.pool()?;
     seed_hcfs_server_url_if_missing(pool, &account_id).await?;
 
@@ -625,7 +625,7 @@ async fn align_drive_password(pool: &SqlitePool, account_id: &str, server_url: &
 #[tauri::command]
 pub async fn seal_and_upload_mnemonic(state: tauri::State<'_, crate::app_state::AppState>, password: String) -> Result<()> {
     let password = Zeroizing::new(password);
-    let account_id = state.current_account_id().map_err(AppError::Other)?;
+    let account_id = state.current_account_id()?;
     let pool = state.pool()?;
     seed_hcfs_server_url_if_missing(pool, &account_id).await?;
 
@@ -722,7 +722,7 @@ pub async fn change_recovery_password(state: tauri::State<'_, crate::app_state::
     validate_new_password_inputs(&current, &new)?;
     reject_if_weak(&new)?;
 
-    let account_id = state.current_account_id().map_err(AppError::Other)?;
+    let account_id = state.current_account_id()?;
     let pool = state.pool()?;
     seed_hcfs_server_url_if_missing(pool, &account_id).await?;
 
@@ -834,7 +834,7 @@ pub async fn change_recovery_password(state: tauri::State<'_, crate::app_state::
 #[tauri::command]
 pub async fn resume_recovery_password_rotation(state: tauri::State<'_, crate::app_state::AppState>, password: String) -> Result<()> {
     let password = Zeroizing::new(password);
-    let account_id = state.current_account_id().map_err(AppError::Other)?;
+    let account_id = state.current_account_id()?;
     let pool = state.pool()?;
     seed_hcfs_server_url_if_missing(pool, &account_id).await?;
 
@@ -897,7 +897,7 @@ pub async fn resume_recovery_password_rotation(state: tauri::State<'_, crate::ap
 /// the "finish rotation" prompt.
 #[tauri::command]
 pub async fn has_pending_rotation(state: tauri::State<'_, crate::app_state::AppState>) -> Result<bool> {
-    let account_id = state.current_account_id().map_err(AppError::Other)?;
+    let account_id = state.current_account_id()?;
     let path = rotation_sidecar_path(&account_id)?;
     Ok(path.exists())
 }

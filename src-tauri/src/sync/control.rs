@@ -233,7 +233,7 @@ pub(crate) fn resolve_drive_path(paths: Vec<crate::sync::paths::SyncPathResult>,
 #[tauri::command]
 pub async fn reveal_drive_in_finder(state: tauri::State<'_, crate::app_state::AppState>, label: String) -> Result<()> {
     let pool = state.pool()?;
-    let account_id = state.current_account_id().map_err(crate::error::AppError::Other)?;
+    let account_id = state.current_account_id()?;
 
     let paths = crate::sync::folders::get_all_sync_paths_internal(pool, &account_id).await?;
     let path = resolve_drive_path(paths, &label)?;

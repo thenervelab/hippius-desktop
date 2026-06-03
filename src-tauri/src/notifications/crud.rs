@@ -223,7 +223,7 @@ pub async fn list_notifications(state: tauri::State<'_, AppState>, limit: Option
     // Scope to the session account, not a caller-supplied address — otherwise an
     // authenticated user could list another account's notifications by passing
     // its ss58. Matches the per-row mutation commands.
-    let user_address = state.current_account_id().map_err(AppError::Other)?;
+    let user_address = state.current_account_id()?;
     let pool = state.pool()?;
     let limit = limit.unwrap_or(50);
 
@@ -329,7 +329,7 @@ async fn soft_delete_notification_inner(pool: &sqlx::SqlitePool, user_address: &
 /// `'system'` rows remain actionable, matching `list_notifications`/`mark_all`.
 #[tauri::command]
 pub async fn mark_notification_read(state: tauri::State<'_, AppState>, id: i64) -> Result<(), AppError> {
-    let user_address = state.current_account_id().map_err(AppError::Other)?;
+    let user_address = state.current_account_id()?;
     set_unread_flag_inner(state.pool()?, &user_address, id, 0).await?;
     Ok(())
 }
@@ -338,7 +338,7 @@ pub async fn mark_notification_read(state: tauri::State<'_, AppState>, id: i64) 
 /// `mark_notification_read`).
 #[tauri::command]
 pub async fn mark_notification_unread(state: tauri::State<'_, AppState>, id: i64) -> Result<(), AppError> {
-    let user_address = state.current_account_id().map_err(AppError::Other)?;
+    let user_address = state.current_account_id()?;
     set_unread_flag_inner(state.pool()?, &user_address, id, 1).await?;
     Ok(())
 }
@@ -346,7 +346,7 @@ pub async fn mark_notification_unread(state: tauri::State<'_, AppState>, id: i64
 /// Mark all non-deleted notifications as read for a user (includes system).
 #[tauri::command]
 pub async fn mark_all_notifications_read(state: tauri::State<'_, AppState>) -> Result<(), AppError> {
-    let user_address = state.current_account_id().map_err(AppError::Other)?;
+    let user_address = state.current_account_id()?;
     let pool = state.pool()?;
 
     sqlx::query("UPDATE notifications SET is_unread = 0 WHERE (user_address = ? OR user_address = 'system') AND is_deleted = 0")
@@ -361,7 +361,7 @@ pub async fn mark_all_notifications_read(state: tauri::State<'_, AppState>) -> R
 /// `mark_notification_read`) so one account cannot delete another's row.
 #[tauri::command]
 pub async fn delete_notification(state: tauri::State<'_, AppState>, id: i64) -> Result<(), AppError> {
-    let user_address = state.current_account_id().map_err(AppError::Other)?;
+    let user_address = state.current_account_id()?;
     soft_delete_notification_inner(state.pool()?, &user_address, id).await?;
 
     Ok(())
@@ -376,7 +376,7 @@ pub async fn delete_notification(state: tauri::State<'_, AppState>, id: i64) -> 
 /// "Update Available" notification re-surfaces on the next refresh.
 #[tauri::command]
 pub async fn delete_all_notifications(state: tauri::State<'_, AppState>) -> Result<(), AppError> {
-    let user_address = state.current_account_id().map_err(AppError::Other)?;
+    let user_address = state.current_account_id()?;
     let pool = state.pool()?;
 
     sqlx::query(
@@ -438,7 +438,7 @@ pub async fn unread_count_inner(pool: &sqlx::SqlitePool, user_address: &str) -> 
 pub async fn get_unread_count(state: tauri::State<'_, AppState>) -> Result<i64, AppError> {
     // Session-scoped (see list_notifications) so one account can't read another's
     // unread count. unread_count_inner keeps its explicit-address param for tests.
-    let user_address = state.current_account_id().map_err(AppError::Other)?;
+    let user_address = state.current_account_id()?;
     unread_count_inner(state.pool()?, &user_address).await
 }
 
@@ -475,7 +475,7 @@ pub async fn low_credit_subtype_exists(state: tauri::State<'_, AppState>, subtyp
 /// `check_low_credit_notification` via the `credits` helper.
 #[tauri::command]
 pub async fn has_active_low_credit_notification(state: tauri::State<'_, AppState>) -> Result<bool, AppError> {
-    let user_address = state.current_account_id().map_err(AppError::Other)?;
+    let user_address = state.current_account_id()?;
     let pool = state.pool()?;
     Ok(crate::notifications::credits::active_low_credit_count(pool, &user_address).await? > 0)
 }
@@ -485,7 +485,7 @@ pub async fn has_active_low_credit_notification(state: tauri::State<'_, AppState
 /// `has_active_low_credit_notification`).
 #[tauri::command]
 pub async fn get_last_deleted_low_credit_time(state: tauri::State<'_, AppState>) -> Result<Option<i64>, AppError> {
-    let user_address = state.current_account_id().map_err(AppError::Other)?;
+    let user_address = state.current_account_id()?;
     let pool = state.pool()?;
     crate::notifications::credits::last_deleted_low_credit_at(pool, &user_address).await
 }
