@@ -22,9 +22,15 @@ export const MIN_PHASE_DURATION = 1500;
 // updater resolved instantly from cache/offline).
 export const UPDATE_CHECK_MIN_DURATION = 3500;
 
-// Update check is shown at 0% before main progress kicks in. It blocks until
-// `updateCheckCompleteAtom` flips, so it has no weight in the phased progress
-// math.
+// The update-check beat fills the progress bar from 0% up to this ceiling
+// (instead of sitting frozen at 0%) over UPDATE_CHECK_MIN_DURATION, then the
+// main phases continue from here to 100%.
+export const UPDATE_CHECK_CEILING = 20;
+
+// Update check is shown from 0% up to UPDATE_CHECK_CEILING before the main
+// phases kick in. It blocks until `updateCheckCompleteAtom` flips, so it has
+// no weight in the main phased progress math (its slice is carved out
+// separately in `progressAtom`).
 export const UPDATE_CHECK_CONTENT: AppSetupPhaseContent = {
   icon: (
     <Icons.CentralizedDataBase className="h-[min(140px,20vh)] w-[min(230px,32vh)]" />

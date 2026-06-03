@@ -33,6 +33,14 @@ import PageLoader from "@/app/components/PageLoader";
 // the dissolve into the app reads as one continuous colour wash.
 const SPLASH_BG = "#3167DD";
 
+// Intro PixelateTransition timing (seconds). The setup progress bar holds at
+// 0% until the opening dissolve completes so the percentage never moves while
+// the intro is still playing; these are the single source of truth for both
+// the <PixelateTransition> props and that hold.
+const INTRO_DELAY_S = 0.05;
+const INTRO_DURATION_S = 1.8;
+const INTRO_TOTAL_MS = (INTRO_DELAY_S + INTRO_DURATION_S) * 1000;
+
 // Derive a square pixel grid from the viewport width so cells stay roughly
 // uniform across window sizes (mirrors the mockup's `getGridSize`).
 function getGridSize() {
@@ -204,11 +212,32 @@ export default function SplashWrapper({
         }, 10000);
       });
 
-      // Held to UPDATE_CHECK_MIN_DURATION (longer than the cosmetic main
-      // phases) so the "Checking for Updates" beat never flickers off in <1.5s
+      // Hold the bar at 0% while the opening dissolve plays so the percentage
+      // doesn't move behind the still-animating intro. The check itself polls
+      // in the background (updateCheckPromise) the whole time.
+      setPhaseInternalProgress(0);
+      await wait(INTRO_TOTAL_MS);
+
+      // After the intro, animate the beat's internal progress 0->100 over the
+      // remaining update-check window. `progressAtom` maps that onto
+      // 0->UPDATE_CHECK_CEILING (15%), so the bar visibly fills, then the main
+      // phases resume from the ceiling. Keeping the total window at
+      // UPDATE_CHECK_MIN_DURATION means the intro just eats into the front of
+      // it rather than lengthening the splash.
+      const rampDuration = Math.max(0, UPDATE_CHECK_MIN_DURATION - INTRO_TOTAL_MS);
+      let updateCheckProgress = 0;
+      const updateCheckProgressInterval = setInterval(() => {
+        updateCheckProgress = Math.min(100, updateCheckProgress + 4);
+        setPhaseInternalProgress(updateCheckProgress);
+      }, rampDuration / 25);
+
+      // Held so the "Checking for Updates" beat never flickers off too fast
       // when the updater resolves immediately (cached / offline) — it needs to
       // stay up long enough to actually read.
-      await runWithMinDuration(updateCheckPromise, UPDATE_CHECK_MIN_DURATION);
+      await runWithMinDuration(updateCheckPromise, rampDuration);
+
+      clearInterval(updateCheckProgressInterval);
+      setPhaseInternalProgress(100);
 
       // If an update dialog opened, wait for the user to resolve it
       // (install / skip / cancel) before continuing to the main
@@ -396,9 +425,10 @@ export default function SplashWrapper({
               gridSize={gridSize}
               // Stretched from 1.1s so the opening dissolve reads at a
               // similar pace to the ~2s phase beats below it instead of
-              // snapping away faster than the rest of the splash.
-              duration={1.8}
-              delay={0.05}
+              // snapping away faster than the rest of the splash. Kept in sync
+              // with the progress-bar hold via the shared INTRO_* constants.
+              duration={INTRO_DURATION_S}
+              delay={INTRO_DELAY_S}
               from="random"
             />
             <LoadingScreen />
