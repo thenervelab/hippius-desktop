@@ -112,14 +112,12 @@ pub async fn check_low_credit_notification(
         sqlx::query("UPDATE app_state SET is_first_time = 0 WHERE id = 1").execute(pool).await?;
     }
 
-    // Check if there's already an active low-credit notification
-    let active_count = sqlx::query_as::<_, (i64,)>(
-        "SELECT COUNT(*) FROM notifications WHERE notification_type = 'Credits' AND notification_subtype LIKE 'LowCreditWarning-%' AND is_deleted = 0",
-    )
-    .fetch_one(pool)
-    .await?;
+    // Check if there's already an active low-credit notification FOR THIS USER.
+    // Scoping by user_address keeps account A's active warning from suppressing
+    // account B's notification on a shared multi-account device.
+    let active_count = active_low_credit_count(pool, &account_id).await?;
 
-    if active_count.0 > 0 {
+    if active_count > 0 {
         // Already showing a notification — just update state
         if above_half {
             sqlx::query("UPDATE app_state SET is_above_half_credit = 0 WHERE id = 1")
@@ -132,13 +130,9 @@ pub async fn check_low_credit_notification(
         });
     }
 
-    // No active notification — check one-per-day rule
-    let last_deleted = sqlx::query_as::<_, (Option<i64>,)>(
-        "SELECT deleted_at FROM notifications WHERE notification_type = 'Credits' AND notification_subtype LIKE 'LowCreditWarning-%' AND is_deleted = 1 ORDER BY deleted_at DESC LIMIT 1",
-    )
-    .fetch_optional(pool)
-    .await?
-    .and_then(|(v,)| v);
+    // No active notification — check the one-per-day rule, also scoped to this
+    // user so account A's deletion timestamp can't throttle account B.
+    let last_deleted = last_deleted_low_credit_at(pool, &account_id).await?;
 
     let now = chrono::Utc::now().timestamp_millis();
     let can_notify = match last_deleted {
@@ -161,11 +155,43 @@ pub async fn check_low_credit_notification(
     }
 
     // Build notification data — frontend creates the notification via add_notification
-    let _ = &account_id; // used for future per-user scoping
     Ok(CreditNotificationCheck {
         should_notify: true,
         credit_balance,
     })
+}
+
+/// Count active (non-deleted) low-credit warnings for a single user.
+///
+/// Scoped by `user_address` so one account's warning never suppresses another's
+/// on a shared multi-account install. `user_address` is the account's ss58
+/// address — the same value bound as `user_address` everywhere in this table.
+pub(crate) async fn active_low_credit_count(pool: &sqlx::SqlitePool, user_address: &str) -> Result<i64, AppError> {
+    let row = sqlx::query_as::<_, (i64,)>(
+        "SELECT COUNT(*) FROM notifications \
+         WHERE user_address = ? AND notification_type = 'Credits' \
+         AND notification_subtype LIKE 'LowCreditWarning-%' AND is_deleted = 0",
+    )
+    .bind(user_address)
+    .fetch_one(pool)
+    .await?;
+    Ok(row.0)
+}
+
+/// `deleted_at` of the most recently deleted low-credit warning for a single
+/// user, or `None` if this user has never deleted one. Drives the one-per-day
+/// throttle; scoping prevents one account's deletion from throttling another.
+pub(crate) async fn last_deleted_low_credit_at(pool: &sqlx::SqlitePool, user_address: &str) -> Result<Option<i64>, AppError> {
+    let row = sqlx::query_as::<_, (Option<i64>,)>(
+        "SELECT deleted_at FROM notifications \
+         WHERE user_address = ? AND notification_type = 'Credits' \
+         AND notification_subtype LIKE 'LowCreditWarning-%' AND is_deleted = 1 \
+         ORDER BY deleted_at DESC LIMIT 1",
+    )
+    .bind(user_address)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.and_then(|(v,)| v))
 }
 
 /// A credit event to process for notifications.
@@ -231,8 +257,13 @@ pub async fn process_credit_events(
 
     // Batch dedup: single query with IN clause instead of N per-event queries
     let placeholders: String = candidates.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
-    let query_str = format!("SELECT notification_subtype FROM notifications WHERE notification_subtype IN ({placeholders})");
-    let mut query = sqlx::query_scalar::<_, String>(&query_str);
+    // Scope the dedup to THIS user: a `MintedAccountCredits-<timestamp>` subtype
+    // can collide across accounts that received a credit in the same block, so
+    // without `user_address = ?` account A's row would dedup away account B's
+    // legitimate notification. account_id is the user_address (see the welcome
+    // lookup above).
+    let query_str = format!("SELECT notification_subtype FROM notifications WHERE user_address = ? AND notification_subtype IN ({placeholders})");
+    let mut query = sqlx::query_scalar::<_, String>(&query_str).bind(&account_id);
     for (_, subtype) in &candidates {
         query = query.bind(subtype);
     }
@@ -435,4 +466,58 @@ pub async fn create_credit_notifications(
     notifications: Vec<NotificationInput>,
 ) -> Result<u32, AppError> {
     create_credit_notifications_inner(state.pool()?, &account_id, &notifications).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use std::str::FromStr;
+    use tempfile::TempDir;
+
+    async fn fresh_pool() -> (TempDir, sqlx::SqlitePool) {
+        let dir = TempDir::new().expect("tempdir");
+        let db_path = dir.path().join("test.db");
+        let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))
+            .expect("opts")
+            .create_if_missing(true);
+        let pool = SqlitePoolOptions::new().max_connections(1).connect_with(opts).await.expect("pool");
+        crate::utils::schema::ensure_table_schema(&pool).await.expect("schema");
+        (dir, pool)
+    }
+
+    async fn insert_low_credit(pool: &sqlx::SqlitePool, user: &str, is_deleted: i64, deleted_at: Option<i64>) {
+        sqlx::query(
+            "INSERT INTO notifications (user_address, notification_type, notification_subtype, is_deleted, deleted_at, creation_time) \
+             VALUES (?, 'Credits', 'LowCreditWarning-123', ?, ?, 1)",
+        )
+        .bind(user)
+        .bind(is_deleted)
+        .bind(deleted_at)
+        .execute(pool)
+        .await
+        .expect("insert");
+    }
+
+    // The cross-account isolation property: account A's ACTIVE low-credit
+    // warning must not suppress account B. Pre-fix the COUNT(*) had no
+    // user_address predicate, so A's warning made B's count non-zero and B was
+    // silently denied a notification.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn active_low_credit_count_is_scoped_per_user() {
+        let (_dir, pool) = fresh_pool().await;
+        insert_low_credit(&pool, "addrA", 0, None).await;
+        assert_eq!(active_low_credit_count(&pool, "addrA").await.unwrap(), 1);
+        assert_eq!(active_low_credit_count(&pool, "addrB").await.unwrap(), 0);
+    }
+
+    // The one-per-day throttle must read each user's OWN deletion history.
+    // Pre-fix A's deletion timestamp fed B's throttle.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn last_deleted_low_credit_is_scoped_per_user() {
+        let (_dir, pool) = fresh_pool().await;
+        insert_low_credit(&pool, "addrA", 1, Some(1_000_000)).await;
+        assert_eq!(last_deleted_low_credit_at(&pool, "addrA").await.unwrap(), Some(1_000_000));
+        assert_eq!(last_deleted_low_credit_at(&pool, "addrB").await.unwrap(), None);
+    }
 }

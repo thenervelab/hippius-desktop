@@ -219,7 +219,11 @@ pub async fn add_notification(
 /// List notifications for a user (includes system notifications).
 /// Soft-deleted notifications are excluded. Default limit is 50.
 #[tauri::command]
-pub async fn list_notifications(state: tauri::State<'_, AppState>, user_address: String, limit: Option<i64>) -> Result<Vec<Notification>, AppError> {
+pub async fn list_notifications(state: tauri::State<'_, AppState>, limit: Option<i64>) -> Result<Vec<Notification>, AppError> {
+    // Scope to the session account, not a caller-supplied address — otherwise an
+    // authenticated user could list another account's notifications by passing
+    // its ss58. Matches the per-row mutation commands.
+    let user_address = state.current_account_id().map_err(AppError::Other)?;
     let pool = state.pool()?;
     let limit = limit.unwrap_or(50);
 
@@ -292,35 +296,57 @@ pub async fn list_notifications(state: tauri::State<'_, AppState>, user_address:
         .collect())
 }
 
-/// Mark a single notification as read.
-#[tauri::command]
-pub async fn mark_notification_read(state: tauri::State<'_, AppState>, id: i64) -> Result<(), AppError> {
-    let pool = state.pool()?;
-
-    sqlx::query("UPDATE notifications SET is_unread = 0 WHERE id = ?")
+/// Set the unread flag on one notification, scoped to the caller. Returns rows
+/// affected — `0` means the `id` was not the caller's (nor a shared `'system'`
+/// row), i.e. a blocked cross-account mutation. The scoping predicate lives here
+/// so read/unread share exactly one definition.
+async fn set_unread_flag_inner(pool: &sqlx::SqlitePool, user_address: &str, id: i64, is_unread: i64) -> Result<u64, AppError> {
+    let r = sqlx::query("UPDATE notifications SET is_unread = ? WHERE id = ? AND (user_address = ? OR user_address = 'system')")
+        .bind(is_unread)
         .bind(id)
+        .bind(user_address)
         .execute(pool)
         .await?;
+    Ok(r.rows_affected())
+}
 
+/// Soft-delete one notification, scoped to the caller. Returns rows affected
+/// (`0` = not the caller's row).
+async fn soft_delete_notification_inner(pool: &sqlx::SqlitePool, user_address: &str, id: i64) -> Result<u64, AppError> {
+    let r = sqlx::query(
+        "UPDATE notifications SET is_deleted = 1, deleted_at = CAST(strftime('%s','now') * 1000 AS INTEGER) \
+         WHERE id = ? AND (user_address = ? OR user_address = 'system')",
+    )
+    .bind(id)
+    .bind(user_address)
+    .execute(pool)
+    .await?;
+    Ok(r.rows_affected())
+}
+
+/// Mark a single notification as read. Scoped to the caller so an `id`
+/// belonging to another account is a no-op (no cross-account mutation); shared
+/// `'system'` rows remain actionable, matching `list_notifications`/`mark_all`.
+#[tauri::command]
+pub async fn mark_notification_read(state: tauri::State<'_, AppState>, id: i64) -> Result<(), AppError> {
+    let user_address = state.current_account_id().map_err(AppError::Other)?;
+    set_unread_flag_inner(state.pool()?, &user_address, id, 0).await?;
     Ok(())
 }
 
-/// Mark a single notification as unread.
+/// Mark a single notification as unread. Scoped to the caller (see
+/// `mark_notification_read`).
 #[tauri::command]
 pub async fn mark_notification_unread(state: tauri::State<'_, AppState>, id: i64) -> Result<(), AppError> {
-    let pool = state.pool()?;
-
-    sqlx::query("UPDATE notifications SET is_unread = 1 WHERE id = ?")
-        .bind(id)
-        .execute(pool)
-        .await?;
-
+    let user_address = state.current_account_id().map_err(AppError::Other)?;
+    set_unread_flag_inner(state.pool()?, &user_address, id, 1).await?;
     Ok(())
 }
 
 /// Mark all non-deleted notifications as read for a user (includes system).
 #[tauri::command]
-pub async fn mark_all_notifications_read(state: tauri::State<'_, AppState>, user_address: String) -> Result<(), AppError> {
+pub async fn mark_all_notifications_read(state: tauri::State<'_, AppState>) -> Result<(), AppError> {
+    let user_address = state.current_account_id().map_err(AppError::Other)?;
     let pool = state.pool()?;
 
     sqlx::query("UPDATE notifications SET is_unread = 0 WHERE (user_address = ? OR user_address = 'system') AND is_deleted = 0")
@@ -331,15 +357,12 @@ pub async fn mark_all_notifications_read(state: tauri::State<'_, AppState>, user
     Ok(())
 }
 
-/// Soft-delete a single notification.
+/// Soft-delete a single notification. Scoped to the caller (see
+/// `mark_notification_read`) so one account cannot delete another's row.
 #[tauri::command]
 pub async fn delete_notification(state: tauri::State<'_, AppState>, id: i64) -> Result<(), AppError> {
-    let pool = state.pool()?;
-
-    sqlx::query("UPDATE notifications SET is_deleted = 1, deleted_at = CAST(strftime('%s','now') * 1000 AS INTEGER) WHERE id = ?")
-        .bind(id)
-        .execute(pool)
-        .await?;
+    let user_address = state.current_account_id().map_err(AppError::Other)?;
+    soft_delete_notification_inner(state.pool()?, &user_address, id).await?;
 
     Ok(())
 }
@@ -352,7 +375,8 @@ pub async fn delete_notification(state: tauri::State<'_, AppState>, id: i64) -> 
 /// "Delete All" silently misses what the list shows, and a deleted
 /// "Update Available" notification re-surfaces on the next refresh.
 #[tauri::command]
-pub async fn delete_all_notifications(state: tauri::State<'_, AppState>, user_address: String) -> Result<(), AppError> {
+pub async fn delete_all_notifications(state: tauri::State<'_, AppState>) -> Result<(), AppError> {
+    let user_address = state.current_account_id().map_err(AppError::Other)?;
     let pool = state.pool()?;
 
     sqlx::query(
@@ -411,7 +435,10 @@ pub async fn unread_count_inner(pool: &sqlx::SqlitePool, user_address: &str) -> 
 /// Thin IPC wrapper over [`unread_count_inner`] so the SQL is exercised
 /// directly by the integration tests in `tests/local_db_commands.rs`.
 #[tauri::command]
-pub async fn get_unread_count(state: tauri::State<'_, AppState>, user_address: String) -> Result<i64, AppError> {
+pub async fn get_unread_count(state: tauri::State<'_, AppState>) -> Result<i64, AppError> {
+    // Session-scoped (see list_notifications) so one account can't read another's
+    // unread count. unread_count_inner keeps its explicit-address param for tests.
+    let user_address = state.current_account_id().map_err(AppError::Other)?;
     unread_count_inner(state.pool()?, &user_address).await
 }
 
@@ -442,32 +469,25 @@ pub async fn low_credit_subtype_exists(state: tauri::State<'_, AppState>, subtyp
     Ok(row.0 > 0)
 }
 
-/// Check if there is any active (non-deleted) low-credit warning notification.
+/// Check if there is any active (non-deleted) low-credit warning notification
+/// FOR THE CALLER. Scoped by the session account so one account's warning never
+/// leaks into another's gate. Shares the scoped query with
+/// `check_low_credit_notification` via the `credits` helper.
 #[tauri::command]
 pub async fn has_active_low_credit_notification(state: tauri::State<'_, AppState>) -> Result<bool, AppError> {
+    let user_address = state.current_account_id().map_err(AppError::Other)?;
     let pool = state.pool()?;
-
-    let row = sqlx::query_as::<_, (i64,)>(
-        "SELECT COUNT(*) FROM notifications WHERE notification_type = 'Credits' AND notification_subtype LIKE 'LowCreditWarning-%' AND is_deleted = 0",
-    )
-    .fetch_one(pool)
-    .await?;
-
-    Ok(row.0 > 0)
+    Ok(crate::notifications::credits::active_low_credit_count(pool, &user_address).await? > 0)
 }
 
-/// Get the deleted_at timestamp of the most recently deleted low-credit warning.
+/// Get the deleted_at timestamp of the caller's most recently deleted low-credit
+/// warning. Scoped by the session account (see
+/// `has_active_low_credit_notification`).
 #[tauri::command]
 pub async fn get_last_deleted_low_credit_time(state: tauri::State<'_, AppState>) -> Result<Option<i64>, AppError> {
+    let user_address = state.current_account_id().map_err(AppError::Other)?;
     let pool = state.pool()?;
-
-    let row = sqlx::query_as::<_, (Option<i64>,)>(
-        "SELECT deleted_at FROM notifications WHERE notification_type = 'Credits' AND notification_subtype LIKE 'LowCreditWarning-%' AND is_deleted = 1 ORDER BY deleted_at DESC LIMIT 1",
-    )
-    .fetch_optional(pool)
-    .await?;
-
-    Ok(row.and_then(|(v,)| v))
+    crate::notifications::credits::last_deleted_low_credit_at(pool, &user_address).await
 }
 
 /// Check if a Hippius system notification with the given version already exists.
@@ -574,3 +594,49 @@ pub async fn get_local_enabled_notification_types(state: tauri::State<'_, AppSta
 }
 
 // ── App State ───────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use std::str::FromStr;
+    use tempfile::TempDir;
+
+    async fn fresh_pool() -> (TempDir, sqlx::SqlitePool) {
+        let dir = TempDir::new().expect("tempdir");
+        let db_path = dir.path().join("test.db");
+        let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))
+            .expect("opts")
+            .create_if_missing(true);
+        let pool = SqlitePoolOptions::new().max_connections(1).connect_with(opts).await.expect("pool");
+        crate::utils::schema::ensure_table_schema(&pool).await.expect("schema");
+        (dir, pool)
+    }
+
+    async fn insert_notif(pool: &sqlx::SqlitePool, user: &str) -> i64 {
+        sqlx::query("INSERT INTO notifications (user_address, is_unread, is_deleted, creation_time) VALUES (?, 1, 0, 1)")
+            .bind(user)
+            .execute(pool)
+            .await
+            .expect("insert")
+            .last_insert_rowid()
+    }
+
+    // A by-id mutation must not cross accounts: B cannot mark or delete A's
+    // personal row (0 rows affected), but shared 'system' rows stay actionable
+    // for everyone — matching list_notifications/mark_all visibility.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn by_id_mutations_are_scoped_to_caller() {
+        let (_dir, pool) = fresh_pool().await;
+        let a_id = insert_notif(&pool, "addrA").await;
+        let sys_id = insert_notif(&pool, "system").await;
+
+        // B cannot touch A's personal notification.
+        assert_eq!(set_unread_flag_inner(&pool, "addrB", a_id, 0).await.unwrap(), 0);
+        assert_eq!(soft_delete_notification_inner(&pool, "addrB", a_id).await.unwrap(), 0);
+        // A can.
+        assert_eq!(set_unread_flag_inner(&pool, "addrA", a_id, 0).await.unwrap(), 1);
+        // System rows remain actionable by any account.
+        assert_eq!(set_unread_flag_inner(&pool, "addrB", sys_id, 0).await.unwrap(), 1);
+    }
+}
