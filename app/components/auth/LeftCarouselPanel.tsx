@@ -86,8 +86,25 @@ const LeftCarouselPanel = () => {
         .auth-carousel-bullet-active {
           opacity: 1 !important;
         }
-        .dark .auth-carousel-bullet {
-          background: #ebebeb !important;
+        /*
+         * Dark mode uses prefers-color-scheme, NOT a .dark class: this app's
+         * Tailwind runs the default media strategy (darkMode is commented out
+         * in tailwind.config.ts) and nothing adds a .dark class at runtime. A
+         * .dark selector here would never match, leaving the active bullet at
+         * the light-mode solid black — invisible on the dark panel.
+         *
+         * The active rule must be re-declared AFTER the inactive override so it
+         * wins on source order: both selectors are equal specificity/!important,
+         * so without this the inactive opacity would dim the active dot too.
+         */
+        @media (prefers-color-scheme: dark) {
+          .auth-carousel-bullet {
+            background: #ebebeb !important;
+            opacity: 0.2 !important;
+          }
+          .auth-carousel-bullet-active {
+            opacity: 1 !important;
+          }
         }
       `}</style>
     </div>
