@@ -33,15 +33,19 @@ const Avatar = dynamic(() => import("boring-avatars"), { ssr: false });
  * NOT mount the app's providers (see `AppShell`) and talks to the backend only
  * through `invoke`. All data shown here is computed in Rust.
  *
- * The window is transparent (so the card's rounded corners show through), but
- * the card itself is an OPAQUE solid fill — `bg-white` / dark `bg-[#1e1e1e]`.
- * A translucent fill + `backdrop-filter: blur()` was tried to match the Figma
- * "frosted" look, but WebKit does not blur the desktop behind a transparent
- * macOS window (it just alpha-blends), so the content behind showed straight
- * through. A true frost would need native vibrancy (window effects), not CSS.
- * Light/dark follow the OS via Tailwind's media strategy (`darkMode: "class"`
- * is off), exactly like the rest of the app. The search field mirrors the
- * sidebar's search styling.
+ * The Figma "frosted" look (translucent card over a blurred background) is
+ * produced by NATIVE macOS vibrancy — a `Popover` window effect applied in
+ * `build_panel` (`src-tauri/src/tray/panel.rs`). CSS `backdrop-filter: blur()`
+ * was tried first but WebKit does not blur the desktop behind a transparent
+ * macOS window (it just alpha-blends it), so the desktop showed straight
+ * through. With the native material doing the real blur, the card itself is a
+ * TRANSLUCENT tint (`rgba(255,255,255,0.7)` light / `rgba(30,30,30,0.7)` dark —
+ * the Figma value) so the frost shows through it. The card fills the window
+ * edge-to-edge (the window IS the 460×672 Figma card) and its rounded corners
+ * line up with the material's 16px radius; the native window shadow provides
+ * elevation. Light/dark follow the OS via Tailwind's media strategy
+ * (`darkMode: "class"` is off), exactly like the rest of the app. The search
+ * field mirrors the sidebar's search styling.
  */
 export default function TrayPanelPage() {
   const { menu, feed, blockNumber, isConnected, unreadCount } = useTrayPanelData();
@@ -50,14 +54,14 @@ export default function TrayPanelPage() {
   const groups = groupUploadFeed(feed);
 
   return (
-    // Transparent full-window shell. Its padding gives the card's drop shadow
-    // room to render INSIDE the window (instead of bleeding into the window's
-    // square corners as dark notches) and keeps the card's rounded corners
-    // clear of the window edge. Padding is asymmetric — small on top so the
-    // card still hugs the tray icon, larger on the sides/bottom where the
-    // downward shadow actually casts. The card fills the padded area via flex.
-    <div className="tray-panel-shell flex h-screen w-screen pt-[10px] pl-4 pr-4 pb-6">
-      <div className="tray-panel-card flex min-h-0 flex-1 flex-col overflow-hidden rounded-[16px] bg-white font-geist text-black dark:bg-[#1e1e1e] dark:text-white">
+    // The card fills the window edge-to-edge: the window IS the 460×672 Figma
+    // card, the native vibrancy material (applied in `build_panel`) frosts the
+    // background, and the native window shadow provides elevation — so there is
+    // no longer a transparent padded shell whose only job was to give a CSS
+    // drop-shadow room to render. The card's 16px corners line up with the
+    // material's radius.
+    <div className="tray-panel-shell flex h-screen w-screen">
+      <div className="tray-panel-card flex min-h-0 flex-1 flex-col overflow-hidden rounded-[16px] bg-[rgba(255,255,255,0.7)] font-geist text-black dark:bg-[rgba(30,30,30,0.7)] dark:text-white">
         <Header credits={menu?.credits ?? null} unreadCount={unreadCount} />
         <SearchBar />
 

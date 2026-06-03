@@ -20,24 +20,10 @@ body {
 }
 
 /*
- * Soft elevation for the popover card (identical in light/dark).
- *
- * The card does NOT fill the transparent window edge-to-edge — it sits inside
- * a transparent padded wrapper (`.tray-panel-shell`). That padding is what
- * makes this shadow work: a `box-shadow` renders OUTSIDE the element's box, so
- * when the card matched the window exactly the shadow was clipped everywhere
- * except the four rounded-corner notches, and (every layer offsetting downward)
- * the bottom corners filled with dark triangles — the artifact the user saw.
- *
- * With the wrapper's padding the shadow now renders into transparent space
- * inside the window, as real elevation, and the rounded corners sit clear of
- * the window's square corners. The shadow's reach (offset + blur) is kept
- * within the wrapper padding on each side so it is never hard-clipped at the
- * window edge: blur 16 ≤ side/bottom padding; upward reach (16 − 8 = 8) ≤ top
- * padding. See `.tray-panel-shell` for those padding values.
+ * Elevation is now provided by the NATIVE macOS window shadow (re-enabled in
+ * `build_panel` via `.shadow(true)`), which macOS draws around the rounded
+ * vibrancy material. The card fills the window edge-to-edge, so a CSS
+ * `box-shadow` here would render outside the window and be clipped (the old
+ * dark-corner artifact); the native shadow renders outside the window frame
+ * correctly instead. No CSS box-shadow is needed.
  */
-.tray-panel-card {
-  box-shadow:
-    0 8px 16px 0 rgba(0, 0, 0, 0.18),
-    0 2px 6px 0 rgba(0, 0, 0, 0.1);
-}

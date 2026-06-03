@@ -15,6 +15,7 @@ use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
+use tauri::window::{Effect, EffectState, EffectsBuilder};
 use tauri::{AppHandle, Manager, PhysicalPosition, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tracing::warn;
 
@@ -31,6 +32,10 @@ pub const PANEL_LABEL: &str = "tray-panel";
 /// against the target monitor's scale factor before positioning.
 const PANEL_WIDTH: f64 = 460.0;
 const PANEL_HEIGHT: f64 = 672.0;
+/// Corner radius of the panel card, matched by the native vibrancy material's
+/// `radius` and the card's CSS `rounded-[16px]` so the frosted material and the
+/// card edge line up exactly.
+const PANEL_RADIUS: f64 = 16.0;
 /// Logical breathing room between the tray icon and the panel's near edge.
 const GAP: f64 = 8.0;
 /// Logical inset kept between the panel and the work-area edges.
@@ -186,11 +191,26 @@ fn build_panel(app: &AppHandle) -> Result<WebviewWindow> {
         .inner_size(PANEL_WIDTH, PANEL_HEIGHT)
         .decorations(false)
         .transparent(true)
-        // The OS window shadow is computed from the rectangular window bounds,
-        // not the rounded CSS card — on a transparent window that renders as a
-        // dark rectangle around the corners. Disable it and let the card's own
-        // CSS `box-shadow` (which follows the border-radius) provide the shadow.
-        .shadow(false)
+        // Native macOS vibrancy ("Popover" material) frosts whatever is behind
+        // the window — the real blur the Figma frost calls for, which CSS
+        // `backdrop-filter` cannot do on a transparent WebKit window (there it
+        // only alpha-blends the desktop through). `radius` rounds the material
+        // to the 16px card; the translucent CSS card sits on top so the frost
+        // shows through it. The material follows the system light/dark
+        // appearance automatically. No-ops on platforms without the effect.
+        .effects(
+            EffectsBuilder::new()
+                .effect(Effect::Popover)
+                .state(EffectState::Active)
+                .radius(PANEL_RADIUS)
+                .build(),
+        )
+        // With the rounded vibrancy material filling the window, macOS draws the
+        // window shadow around that rounded shape, so the native shadow is used
+        // again. (It was previously disabled because a transparent window with
+        // NO material made macOS shadow the rectangular bounds — a dark frame
+        // around the rounded corners — which is why the shadow was done in CSS.)
+        .shadow(true)
         .always_on_top(true)
         .skip_taskbar(true)
         .resizable(false)
