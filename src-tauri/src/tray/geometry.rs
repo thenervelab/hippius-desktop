@@ -212,19 +212,20 @@ mod tests {
     }
 
     #[test]
-    fn cursor_point_anchor_stays_on_screen() {
+    fn no_rect_top_right_anchor_lands_top_right_on_screen() {
         // Linux has no tray-icon bounds, so the popover anchors to a zero-size
-        // rect at the cursor (a bare point near the top-bar tray). The panel
-        // must still land fully inside the work area on every edge.
-        let cursor = Rect {
-            x: 1500,
-            y: 12,
+        // rect at the TOP-RIGHT corner of the work area (where the tray lives).
+        // The panel must right-align to the margin, drop just under the top
+        // inset, and stay fully inside the work area on every edge.
+        let corner = Rect {
+            x: MAC_WORK_AREA.right(),
+            y: MAC_WORK_AREA.y,
             width: 0,
             height: 0,
         };
-        let (x, y) = compute_panel_position(cursor, PANEL_W, PANEL_H, MAC_WORK_AREA, GAP, MARGIN);
-        assert!(x >= MAC_WORK_AREA.x + MARGIN, "panel left within work area: {x}");
-        assert!(x + PANEL_W <= MAC_WORK_AREA.right() - MARGIN, "panel right within work area: {x}");
+        let (x, y) = compute_panel_position(corner, PANEL_W, PANEL_H, MAC_WORK_AREA, GAP, MARGIN);
+        // Centred on the right edge then clamped → flush to the right margin.
+        assert_eq!(x, MAC_WORK_AREA.right() - PANEL_W - MARGIN, "panel right-aligned: {x}");
         assert!(y >= MAC_WORK_AREA.y + MARGIN, "panel top within work area: {y}");
         assert!(y + PANEL_H <= MAC_WORK_AREA.bottom() - MARGIN, "panel bottom within work area: {y}");
     }

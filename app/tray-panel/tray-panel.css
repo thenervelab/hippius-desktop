@@ -20,10 +20,13 @@ body {
 }
 
 /*
- * Elevation is now provided by the NATIVE macOS window shadow (re-enabled in
- * `build_panel` via `.shadow(true)`), which macOS draws around the rounded
- * vibrancy material. The card fills the window edge-to-edge, so a CSS
- * `box-shadow` here would render outside the window and be clipped (the old
- * dark-corner artifact); the native shadow renders outside the window frame
- * correctly instead. No CSS box-shadow is needed.
+ * Elevation on macOS comes from the NATIVE window shadow (`build_panel` enables
+ * it only there, via `.shadow(cfg!(target_os = "macos"))`), which macOS draws
+ * around the rounded vibrancy material. The card fills the window edge-to-edge,
+ * so a CSS `box-shadow` here would render outside the window and be clipped (the
+ * old dark-corner artifact); the native shadow renders outside the window frame
+ * correctly instead. On Linux/Windows there is no native shadow (it would
+ * shadow the rectangular bounds with no material), so the opaque card's hairline
+ * border supplies edge definition — see `cardSurface` in `page.tsx`. No CSS
+ * box-shadow is needed on any platform.
  */

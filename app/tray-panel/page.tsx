@@ -68,15 +68,33 @@ export default function TrayPanelPage() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
+  // Only macOS gets the translucent "frosted" card, because only there does the
+  // window sit over native vibrancy (the `Popover` material in `build_panel`).
+  // On Linux/Windows there is no material, so a 0.7-alpha card over the
+  // transparent window shows the desktop straight through (the "very
+  // transparent" popover reported on Linux). Off macOS we therefore paint an
+  // OPAQUE card with a hairline border (no vibrancy/shadow to separate it from
+  // whatever is behind). Default to opaque so non-macOS never flashes
+  // see-through; macOS flips to translucent once detected — the window is
+  // prewarmed at boot, so this resolves long before it is ever shown.
+  const [isMac, setIsMac] = useState(false);
+  useEffect(() => {
+    invoke<{ os: string }>("get_platform_info")
+      .then((info) => setIsMac(info?.os === "macos"))
+      .catch(() => {});
+  }, []);
+  const cardSurface = isMac
+    ? "bg-[rgba(255,255,255,0.7)] dark:bg-[rgba(30,30,30,0.7)]"
+    : "bg-white dark:bg-[#1e1e1e] border border-[rgba(0,0,0,0.08)] dark:border-[rgba(255,255,255,0.1)]";
+
   return (
     // The card fills the window edge-to-edge: the window IS the 460×672 Figma
-    // card, the native vibrancy material (applied in `build_panel`) frosts the
-    // background, and the native window shadow provides elevation — so there is
-    // no longer a transparent padded shell whose only job was to give a CSS
-    // drop-shadow room to render. The card's 16px corners line up with the
-    // material's radius.
+    // card. On macOS the native vibrancy material (applied in `build_panel`)
+    // frosts the background and the native window shadow provides elevation; on
+    // Linux/Windows the card is opaque with a hairline border instead (see
+    // `cardSurface`). The card's 16px corners line up with the window radius.
     <div className="tray-panel-shell flex h-screen w-screen">
-      <div className="tray-panel-card flex min-h-0 flex-1 flex-col overflow-hidden rounded-[16px] bg-[rgba(255,255,255,0.7)] font-geist text-black dark:bg-[rgba(30,30,30,0.7)] dark:text-white">
+      <div className={`tray-panel-card flex min-h-0 flex-1 flex-col overflow-hidden rounded-[16px] ${cardSurface} font-geist text-black dark:text-white`}>
         <Header credits={menu?.credits ?? null} unreadCount={unreadCount} />
         <SearchBar />
 
