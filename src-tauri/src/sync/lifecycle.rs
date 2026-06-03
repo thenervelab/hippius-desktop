@@ -178,9 +178,14 @@ async fn teardown_previous_drive(sync: &SyncRunner, label: &str) {
             old_slot.cancel_token.cancel();
             debug!("Dropped previous drive instance for label '{}'", label);
         }
-        sync.discard_pending_activity_for_label(label);
-        sync.remove_state(label);
-    }
+    } // release the tokio drives Mutex BEFORE the std::sync::Mutex calls below
+
+    // discard_pending_activity_for_label and remove_state lock std::sync::Mutex
+    // fields; holding the tokio drives guard across them risked stalling the
+    // executor thread under contention (axiom rust_quality_74). The tokio guard
+    // is dropped first now.
+    sync.discard_pending_activity_for_label(label);
+    sync.remove_state(label);
     {
         let mut state = sync.progress.lock();
         if let Some(session) = state.current_session.as_mut() {
@@ -298,16 +303,35 @@ async fn teardown_last_drive(sync: &SyncRunner, app: &AppHandle) {
     let _ = app.emit(crate::sync::events::SYNC_STOPPED, ());
 }
 
+/// Best-effort lookup of a label's on-disk sync path from the `sync_paths` DB
+/// row. Used as the `path_hint` for [`remove_drive_inmemory`] so the file
+/// watcher can be unwatched even when the per-drive lock is momentarily held.
+async fn sync_path_for_label(app_state: &crate::app_state::AppState, account: &str, label: &str) -> Option<PathBuf> {
+    let pool = app_state.pool().ok()?;
+    crate::sync::folders::get_all_sync_paths_internal(pool, account)
+        .await
+        .ok()?
+        .into_iter()
+        .find(|p| p.label == label)
+        .map(|p| PathBuf::from(p.path))
+}
+
 /// Remove a drive from the in-memory registry: cancel its token, unwatch
 /// its path, and discard associated state. Returns `(remaining_count, removed_path)`.
 /// Does NOT touch the database — the caller decides whether to delete or
-/// mark-paused the DB row.
-async fn remove_drive_inmemory(sync: &SyncRunner, label: &str) -> (usize, Option<PathBuf>) {
+/// mark-paused the DB row. `path_hint` is the DB-resolved sync path used when
+/// the in-memory read can't get it (see below).
+async fn remove_drive_inmemory(sync: &SyncRunner, label: &str, path_hint: Option<PathBuf>) -> (usize, Option<PathBuf>) {
     let (remaining, removed_path) = {
         let mut guard = sync.drives.lock().await;
+        // Read the sync path for the unwatch below. `try_lock` returns None when
+        // an in-flight reconcile holds the per-drive lock across its HTTP await;
+        // fall back to the caller-supplied DB path so the watcher is still
+        // unwatched — otherwise the OS watch leaks until app restart.
         let path = guard
             .get(label)
-            .and_then(|slot| slot.manager.try_lock().ok().map(|m| m.sync_path().to_path_buf()));
+            .and_then(|slot| slot.manager.try_lock().ok().map(|m| m.sync_path().to_path_buf()))
+            .or(path_hint);
         if let Some(slot) = guard.remove(label) {
             slot.cancel_token.cancel();
         }
@@ -1291,7 +1315,13 @@ pub(crate) async fn remove_drive_for_account(app: AppHandle, label: String, expl
         guard.get(&label).map(|slot| slot.manager.clone())
     };
 
-    let (remaining, _removed_path) = remove_drive_inmemory(sync, &label).await;
+    // Resolve the on-disk path from the DB so remove_drive_inmemory can unwatch
+    // the folder even when the per-drive lock is held by an in-flight reconcile.
+    let path_hint = match explicit_account.clone().or_else(|| app_state.current_account_id().ok()) {
+        Some(acct) => sync_path_for_label(&app_state, &acct, &label).await,
+        None => None,
+    };
+    let (remaining, _removed_path) = remove_drive_inmemory(sync, &label, path_hint).await;
 
     // Drop the preparing override for this label so a remove during
     // the SyncStarted → plan_ready window cannot leave a stuck
@@ -1416,15 +1446,22 @@ pub async fn pause_drive(app: AppHandle, label: String) -> Result<()> {
     let app_state = app.state::<crate::app_state::AppState>();
     let sync = &app_state.sync;
 
-    let (remaining, removed_path) = remove_drive_inmemory(sync, &label).await;
-
-    // Mark as paused in DB (keep the row, unlike stop_drive which deletes it).
-    // Capture pool/account for both the persist call AND the path
-    // lookup used by the per-drive status emit below.
+    // Capture pool/account up front: used both to mark the row paused AND to
+    // resolve the sync path passed as a hint to remove_drive_inmemory, so the
+    // watcher is unwatched even when the per-drive lock is held by an in-flight
+    // reconcile (try_lock would otherwise return None and leak the watch).
     let pool_and_acct = match (app_state.pool(), app_state.current_account_id()) {
         (Ok(pool), Ok(acct)) => Some((pool, acct)),
         _ => None,
     };
+    let path_hint = match &pool_and_acct {
+        Some((_, acct)) => sync_path_for_label(&app_state, acct, &label).await,
+        None => None,
+    };
+
+    let (remaining, removed_path) = remove_drive_inmemory(sync, &label, path_hint).await;
+
+    // Mark as paused in DB (keep the row, unlike stop_drive which deletes it).
     if let Some((pool, acct)) = &pool_and_acct
         && let Err(e) = crate::sync::paths::set_sync_path_paused(pool, acct, &label, true).await
     {
@@ -1435,23 +1472,10 @@ pub async fn pause_drive(app: AppHandle, label: String) -> Result<()> {
         teardown_last_drive(sync, &app).await;
     }
 
-    // Resolve the on-disk path so the per-drive status payload carries
-    // it (the FE relies on that field to keep its drive entry hydrated
-    // — see `useDriveStatuses`). Prefer the path captured by
-    // `remove_drive_inmemory`; fall back to a DB lookup when the drive
-    // wasn't in the in-memory map (e.g. pausing an already-removed
-    // drive after a crash recovery).
-    let drive_path = if let Some(path) = removed_path.as_ref() {
-        path.to_string_lossy().into_owned()
-    } else if let Some((pool, acct)) = &pool_and_acct {
-        crate::sync::folders::get_all_sync_paths_internal(pool, acct)
-            .await
-            .ok()
-            .and_then(|paths| paths.into_iter().find(|p| p.label == label).map(|p| p.path))
-            .unwrap_or_default()
-    } else {
-        String::new()
-    };
+    // The per-drive status payload carries the on-disk path (the FE relies on it
+    // to keep its drive entry hydrated — see `useDriveStatuses`). `removed_path`
+    // is now reliable thanks to the DB hint resolved above.
+    let drive_path = removed_path.map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
 
     // Emit a per-drive Paused status so the FE updates this single
     // drive without re-fetching the list. Other drives are unaffected.
@@ -2738,7 +2762,7 @@ mod tests {
         // Pre-conditions: drive and label root exist.
         assert!(sync.drives.lock().await.contains_key(label));
 
-        let (remaining, removed_path) = remove_drive_inmemory(&sync, label).await;
+        let (remaining, removed_path) = remove_drive_inmemory(&sync, label, None).await;
 
         assert_eq!(remaining, 0, "map should be empty after removing the only drive");
         assert_eq!(
@@ -2797,7 +2821,7 @@ mod tests {
             "first_reconcile gate map should have a pre-removal entry"
         );
 
-        let _ = remove_drive_inmemory(&sync, label).await;
+        let _ = remove_drive_inmemory(&sync, label, None).await;
 
         assert!(
             sync.get_cached_synced_paths(label).is_none(),
@@ -2837,7 +2861,7 @@ mod tests {
 
         assert!(!token_clone.is_cancelled(), "token should not be cancelled before removal");
 
-        let _ = remove_drive_inmemory(&sync, label).await;
+        let _ = remove_drive_inmemory(&sync, label, None).await;
 
         assert!(token_clone.is_cancelled(), "token should be cancelled after removal");
     }
@@ -2846,7 +2870,7 @@ mod tests {
     async fn remove_drive_inmemory_returns_none_for_nonexistent_label() {
         let sync = test_sync_runner();
 
-        let (remaining, removed_path) = remove_drive_inmemory(&sync, "nonexistent").await;
+        let (remaining, removed_path) = remove_drive_inmemory(&sync, "nonexistent", None).await;
 
         assert_eq!(remaining, 0, "empty map has zero remaining");
         assert!(removed_path.is_none(), "nonexistent label should yield None path");
