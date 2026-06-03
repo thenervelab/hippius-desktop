@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use sqlx::sqlite::SqlitePool;
 use std::path::Path;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 /// Parameters for registering or updating a sync folder via IPC.
 #[derive(Deserialize)]
@@ -375,30 +375,23 @@ pub(crate) async fn remove_sync_path_internal(pool: &SqlitePool, account_id: &st
     Ok(())
 }
 
-/// Remove a sync path and stop the corresponding drive.
+/// Remove a sync path and tear down the corresponding drive.
+///
+/// Delegates entirely to [`crate::sync::lifecycle::remove_drive_for_account`],
+/// passing the caller's explicit `account_id` so the `sync_paths` row delete
+/// AND the on-disk baseline wipe are both scoped to it and run in the safe
+/// drain-then-wipe order. The previous implementation deleted the row here
+/// first and then called `remove_drive`, which re-derived the account from the
+/// session: during an account switch that wiped the baseline under the wrong
+/// account, and a crash between the two left a stale baseline behind. The DB
+/// delete is best-effort inside `remove_drive_for_account` (its long-standing
+/// contract), so a rare pool failure no longer surfaces a distinct IPC error —
+/// the drive is still removed in-memory and the FE updates via the
+/// `hcfs_drive_removed` event.
 #[tauri::command]
-pub async fn remove_sync_path(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    app: tauri::AppHandle,
-    account_id: String,
-    label: String,
-) -> Result<()> {
+pub async fn remove_sync_path(app: tauri::AppHandle, account_id: String, label: String) -> Result<()> {
     info!("Removing sync path for label '{}', account '{}'", label, account_id);
-    let pool = state.pool()?;
-    let owner = account_key(&account_id);
-
-    sqlx::query("DELETE FROM sync_paths WHERE owner = ? AND label = ?")
-        .bind(&owner)
-        .bind(&label)
-        .execute(pool)
-        .await
-        .map_err(|e| {
-            error!("Failed to remove sync path for label '{}': {}", label, e);
-            format!("Failed to remove sync path: {e}")
-        })?;
-
-    crate::sync::lifecycle::remove_drive(app, label.clone()).await?;
-
+    crate::sync::lifecycle::remove_drive_for_account(app, label.clone(), Some(account_id)).await?;
     info!("Sync path removed and drive torn down for label '{}'", label);
     Ok(())
 }
@@ -409,6 +402,51 @@ mod tests {
 
     fn pairs(items: &[(&str, &str)]) -> Vec<(String, String)> {
         items.iter().map(|(l, p)| (l.to_string(), p.to_string())).collect()
+    }
+
+    /// Extract the `{ ... }` body of the first fn whose declaration contains
+    /// `sig`, by brace matching. Mirrors the static-invariant test style in
+    /// `sync::folders` for teardown-ordering contracts that are impractical to
+    /// exercise through the Tauri IPC boundary in a unit test.
+    fn fn_body<'a>(src: &'a str, sig: &str) -> &'a str {
+        let sig_idx = src.find(sig).expect("fn declaration present");
+        let body_start = src[sig_idx..].find('{').expect("fn body opens") + sig_idx;
+        let mut depth = 0usize;
+        let mut body_end = body_start;
+        for (i, ch) in src[body_start..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        body_end = body_start + i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        &src[body_start..=body_end]
+    }
+
+    // remove_sync_path MUST delegate teardown to remove_drive_for_account
+    // (passing the caller's explicit account) and MUST NOT issue its own row
+    // delete. A standalone delete here re-opened two bugs: the baseline wipe in
+    // remove_drive then ran under `current_account_id()` (the wrong account
+    // during an account switch), and a crash between the delete and the wipe
+    // left a stale baseline behind.
+    #[test]
+    fn remove_sync_path_delegates_to_remove_drive_for_account() {
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/paths.rs")).expect("read paths.rs");
+        let body = fn_body(&src, "pub async fn remove_sync_path(");
+        assert!(
+            body.contains("remove_drive_for_account("),
+            "remove_sync_path must delegate teardown to remove_drive_for_account",
+        );
+        assert!(
+            !body.contains("sqlx::query"),
+            "remove_sync_path must NOT run its own SQL — remove_drive_for_account owns the account-scoped, drain-then-wipe teardown",
+        );
     }
 
     #[tokio::test]

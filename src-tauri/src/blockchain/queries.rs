@@ -156,7 +156,17 @@ pub async fn get_staking_info(
     };
 
     let ledger_query = custom_runtime::storage().staking().ledger(&account_id);
-    if let Ok(Some(ledger)) = storage.fetch(&ledger_query).await {
+    // Propagate a ledger RPC failure instead of collapsing it into "no stake":
+    // the previous `if let Ok(Some(_))` treated a network/codec error like a
+    // genuinely unbonded account and returned zeroed StakingInfo as success, so
+    // the FE showed 0 bonded for a real staker. `None` (no ledger = not staking)
+    // still legitimately keeps the zeros; only `Err` now surfaces. Mirrors the
+    // `?` handling of the balance and current_era fetches above.
+    let ledger = storage
+        .fetch(&ledger_query)
+        .await
+        .map_err(|e| crate::error::AppError::Other(format!("Ledger query failed: {e}")))?;
+    if let Some(ledger) = ledger {
         bonded = ledger.active.to_string();
         for chunk in &ledger.unlocking.0 {
             let unlock_era = chunk.era;
@@ -302,7 +312,15 @@ pub async fn get_referral_links(
     // a malformed on-chain row we'd rather skip than render with `�`
     // replacement chars.
     let mut matched_codes: Vec<(Vec<u8>, String)> = Vec::new();
-    while let Some(Ok(entry)) = entries.next().await {
+    // Propagate a mid-iteration RPC error rather than ending the loop silently:
+    // `while let Some(Ok(entry))` stopped on the first `Some(Err(_))` and
+    // returned the codes matched so far as `Ok`, so a dropped subscription
+    // produced a partial referral list that looked complete to the FE. The
+    // body keeps redesign's strict decode path (`extract_referral_code_bytes`
+    // + UTF-8 validation) rather than the audit branch's raw key slicing.
+    while let Some(result) = entries.next().await {
+        let entry = result
+            .map_err(|e| crate::error::AppError::Other(format!("ReferralCodes iteration failed: {e}")))?;
         if entry.value != target_account {
             continue;
         }

@@ -1415,13 +1415,17 @@ async fn list_sync_folder_inner(
             if hcfs_client::engine::classify::is_failed_download_artifact(&name).is_some() {
                 let path = entry.path();
                 info!(artifact = %name, "Removing failed download artifact on list");
-                let _ = tokio::fs::remove_file(&path).await;
+                if let Err(e) = tokio::fs::remove_file(&path).await {
+                    warn!(artifact = %name, error = %e, "Failed to remove failed-download artifact on list — it will be retried on the next listing");
+                }
                 continue;
             }
             if hcfs_client::engine::classify::is_encrypted_name_stub(&name).is_some() && meta.len() == 0 {
                 let path = entry.path();
                 info!(stub = %name, "Removing 0-byte encrypted-name stub on list");
-                let _ = tokio::fs::remove_file(&path).await;
+                if let Err(e) = tokio::fs::remove_file(&path).await {
+                    warn!(stub = %name, error = %e, "Failed to remove 0-byte stub on list — it will be retried on the next listing");
+                }
                 continue;
             }
         }
