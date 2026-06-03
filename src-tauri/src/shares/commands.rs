@@ -268,7 +268,7 @@ async fn create_share_inner(state: &AppState, account_id: &str, folder_label: &s
 /// contains the `#k=<key>` URL fragment.
 #[tauri::command]
 pub async fn hcfs_create_share(state: tauri::State<'_, AppState>, folder_label: String, relative_path: String) -> Result<ShareLink> {
-    let account_id = state.current_account_id().map_err(AppError::Other)?;
+    let account_id = state.current_account_id()?;
 
     // Capability + eligibility gates. The capability call is a single
     // anonymous HTTP request; we accept the round-trip so that an old
@@ -311,7 +311,7 @@ pub async fn hcfs_create_share(state: tauri::State<'_, AppState>, folder_label: 
 /// "I require the old token to be gone".
 #[tauri::command]
 pub async fn hcfs_reshare(state: tauri::State<'_, AppState>, share_token: String) -> Result<ShareLink> {
-    let account_id = state.current_account_id().map_err(AppError::Other)?;
+    let account_id = state.current_account_id()?;
 
     require_shares_supported(&state, &account_id).await?;
     // Sharing's bytes-priced layer is `0` — same rationale as
@@ -375,7 +375,7 @@ pub async fn hcfs_reshare(state: tauri::State<'_, AppState>, share_token: String
 pub async fn hcfs_list_shares(state: tauri::State<'_, AppState>) -> Result<Vec<ShareSummary>> {
     use hcfs_client::client::share::build_share_url;
 
-    let account_id = state.current_account_id().map_err(AppError::Other)?;
+    let account_id = state.current_account_id()?;
     let pool = state.pool()?;
     let client = build_account_client(pool, &account_id).await?;
     let keystore = SqliteShareKeystore::new(pool.clone());
@@ -480,7 +480,7 @@ pub async fn hcfs_list_shares(state: tauri::State<'_, AppState>) -> Result<Vec<S
 /// have to special-case "I just tapped Revoke twice".
 #[tauri::command]
 pub async fn hcfs_revoke_share(state: tauri::State<'_, AppState>, share_token: String) -> Result<()> {
-    let account_id = state.current_account_id().map_err(AppError::Other)?;
+    let account_id = state.current_account_id()?;
     let pool = state.pool()?;
 
     // Snapshot the cached active-list entry for this token BEFORE the
@@ -546,7 +546,7 @@ pub async fn hcfs_revoke_share(state: tauri::State<'_, AppState>, share_token: S
 /// `EndReason` semantics.
 #[tauri::command]
 pub async fn hcfs_list_share_history(state: tauri::State<'_, AppState>) -> Result<Vec<HistoryEntry>> {
-    let account_id = state.current_account_id().map_err(AppError::Other)?;
+    let account_id = state.current_account_id()?;
     let pool = state.pool()?;
     Ok(history::list_for_account(pool, &account_id).await?)
 }
@@ -556,7 +556,7 @@ pub async fn hcfs_list_share_history(state: tauri::State<'_, AppState>) -> Resul
 /// tapped Remove twice".
 #[tauri::command]
 pub async fn hcfs_remove_share_history(state: tauri::State<'_, AppState>, share_token: String) -> Result<()> {
-    let account_id = state.current_account_id().map_err(AppError::Other)?;
+    let account_id = state.current_account_id()?;
     let pool = state.pool()?;
     history::remove_one(pool, &account_id, &share_token).await?;
     Ok(())
@@ -567,7 +567,7 @@ pub async fn hcfs_remove_share_history(state: tauri::State<'_, AppState>, share_
 /// rows.
 #[tauri::command]
 pub async fn hcfs_clear_share_history(state: tauri::State<'_, AppState>) -> Result<()> {
-    let account_id = state.current_account_id().map_err(AppError::Other)?;
+    let account_id = state.current_account_id()?;
     let pool = state.pool()?;
     history::clear_all_for_account(pool, &account_id).await?;
     Ok(())

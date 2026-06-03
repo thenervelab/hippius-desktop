@@ -651,7 +651,7 @@ impl SyncCallbacks for TauriSyncBridge {
             use tauri::Manager;
             let app_state = app.state::<crate::app_state::AppState>();
             let pool = app_state.pool().map_err(|e| e.to_string())?;
-            let acct = app_state.current_account_id().map_err(|e| e.clone())?;
+            let acct = app_state.current_account_id().map_err(|e| e.to_string())?;
 
             crate::auth::service::refresh_auth_token_internal(pool, &app, &acct).await?;
 
@@ -694,7 +694,7 @@ impl SyncCallbacks for TauriSyncBridge {
         Box::pin(async {
             let app = self.app().ok_or_else(|| "AppHandle not available".to_string())?;
             use tauri::Manager;
-            app.state::<crate::app_state::AppState>().current_account_id().map_err(|e| e.clone())
+            app.state::<crate::app_state::AppState>().current_account_id().map_err(|e| e.to_string())
         })
     }
 }

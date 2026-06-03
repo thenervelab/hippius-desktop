@@ -169,7 +169,7 @@ pub(crate) struct HcfsServerCtx {
 
 impl HcfsServerCtx {
     pub(crate) async fn resolve(state: &tauri::State<'_, crate::app_state::AppState>) -> Result<Self> {
-        let account_id = state.current_account_id().map_err(AppError::Other)?;
+        let account_id = state.current_account_id()?;
         let ss58 = state
             .auth
             .lock()?

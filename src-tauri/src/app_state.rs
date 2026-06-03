@@ -239,13 +239,15 @@ impl AppState {
     /// Retrieve the active account ID, or error if no user is logged in.
     ///
     /// Reads from `AuthInfo.substrate_address` — the single source of truth
-    /// for the active account.
-    pub fn current_account_id(&self) -> Result<String, String> {
+    /// for the active account. Returns the crate's `AppError` (lock poison →
+    /// `Lock`, no logged-in account → `Auth`) so the ~30 callers that already
+    /// return `Result<_, AppError>` propagate it with a bare `?` instead of
+    /// wrapping a stringly error in `AppError::Other`.
+    pub fn current_account_id(&self) -> Result<String, crate::error::AppError> {
         self.auth
-            .lock()
-            .map_err(|e| format!("auth lock poisoned: {e}"))?
+            .lock()?
             .substrate_address
             .clone()
-            .ok_or_else(|| "No active account set".to_string())
+            .ok_or_else(|| crate::error::AppError::Auth("No active account set".into()))
     }
 }

@@ -129,7 +129,7 @@ pub async fn add_file(
     // / `tokio::fs::copy` will surface the I/O error to the user with
     // its native message. Don't `?`-bail here: a missing-file diagnostic
     // is clearer than "insufficient credits because we couldn't size it".
-    let account_id = state.current_account_id().map_err(crate::error::AppError::Other)?;
+    let account_id = state.current_account_id()?;
     // A stat failure falls back to bytes=0, which collapses the byte-priced
     // credit gate to the legacy `> 0` floor (intentional — see above). Log it
     // so the under-pricing is observable instead of silent; the server 402
@@ -212,7 +212,7 @@ pub async fn add_folder(
     // returns a best-effort lower bound (see `sum_regular_file_bytes`),
     // which under-charges rather than over-charging the user — the
     // server's 402 path is still the last line of defense.
-    let account_id = state.current_account_id().map_err(crate::error::AppError::Other)?;
+    let account_id = state.current_account_id()?;
     // One walk of the source tree for BOTH the credit-gate byte total and the
     // banner file count (previously two separate full traversals). The byte
     // total is a best-effort lower bound on permission-denied subdirs, which
@@ -701,7 +701,7 @@ pub async fn add_files(
     // doesn't reject the rest — the copy loop surfaces the real I/O error. An
     // empty `file_paths` yields count 0, which skips `begin` so an empty IPC
     // doesn't raise a banner nothing will clear.
-    let account_id = state.current_account_id().map_err(crate::error::AppError::Other)?;
+    let account_id = state.current_account_id()?;
     let action = if for_folder {
         crate::billing::eligibility::InsufficientCreditsAction::FolderUpload
     } else {
@@ -1560,14 +1560,24 @@ fn macos_name_cmp(a: &str, b: &str) -> std::cmp::Ordering {
             (Some(_), None) => return std::cmp::Ordering::Greater,
             (Some(ac), Some(bc)) => {
                 if ac.is_ascii_digit() && bc.is_ascii_digit() {
-                    // Compare digit runs as integers (natural sort).
+                    // Compare digit runs as integers (natural sort). Saturating
+                    // arithmetic: a 20+ digit run is a legal filename that
+                    // overflows u64 — an unchecked `* 10` would panic inside the
+                    // sort comparator (debug) or silently mis-order (release).
+                    // Clamping over-long runs to u64::MAX keeps the ordering
+                    // total and deterministic.
                     let mut an: u64 = 0;
                     let mut bn: u64 = 0;
-                    while ai.peek().map_or(false, |c| c.is_ascii_digit()) {
-                        an = an * 10 + ai.next().unwrap().to_digit(10).unwrap() as u64;
+                    // `peek().and_then(to_digit)` yields the digit and leaves a
+                    // non-digit (or end) unconsumed — same boundary as the old
+                    // `peek().is_ascii_digit()` guard, but with no `unwrap`.
+                    while let Some(d) = ai.peek().and_then(|c| c.to_digit(10)) {
+                        ai.next();
+                        an = an.saturating_mul(10).saturating_add(u64::from(d));
                     }
-                    while bi.peek().map_or(false, |c| c.is_ascii_digit()) {
-                        bn = bn * 10 + bi.next().unwrap().to_digit(10).unwrap() as u64;
+                    while let Some(d) = bi.peek().and_then(|c| c.to_digit(10)) {
+                        bi.next();
+                        bn = bn.saturating_mul(10).saturating_add(u64::from(d));
                     }
                     match an.cmp(&bn) {
                         std::cmp::Ordering::Equal => continue,
@@ -2147,7 +2157,7 @@ pub async fn export_file(
     // Gate 1: sync_path must be a registered sync folder for the active
     // user. This prevents the broad `ensure_within` guard from being
     // bypassed via an attacker-controlled parent directory.
-    let account_id = state.current_account_id().map_err(crate::error::AppError::Other)?;
+    let account_id = state.current_account_id()?;
     let owner = account_key(&account_id);
     let registered: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM sync_paths WHERE owner = ? AND path = ? LIMIT 1")
         .bind(&owner)
@@ -2416,6 +2426,26 @@ mod tests {
         let mut names = vec!["Zebra", "apple", "Mango", "banana"];
         names.sort_by(|a, b| macos_name_cmp(a, b));
         assert_eq!(names, vec!["apple", "banana", "Mango", "Zebra"]);
+    }
+
+    #[test]
+    fn macos_name_cmp_handles_overflowing_digit_runs() {
+        // Digit runs longer than 20 chars overflow u64; the comparator must not
+        // panic (debug) on the accumulator overflow. Saturating arithmetic
+        // clamps over-long runs to u64::MAX, keeping the ordering total.
+        let huge = format!("file{}", "9".repeat(30)); // run clamps to u64::MAX
+        let huge2 = format!("file{}", "8".repeat(30)); // also clamps to u64::MAX
+
+        // Two distinct over-long runs both clamp to u64::MAX -> Equal numeric
+        // run, then both strings end -> Equal overall (and crucially: no panic).
+        assert_eq!(macos_name_cmp(&huge, &huge2), std::cmp::Ordering::Equal);
+        // A clamped huge run still orders after a small number (u64::MAX > 2).
+        assert_eq!(macos_name_cmp(&huge, "file2"), std::cmp::Ordering::Greater);
+
+        // A full sort containing an overflowing run completes without panic.
+        let mut names = vec![huge.as_str(), "file2", "file1", "file10"];
+        names.sort_by(|a, b| macos_name_cmp(a, b));
+        assert_eq!(names, vec!["file1", "file2", "file10", huge.as_str()]);
     }
 
     // --- derive_relative_name ---

@@ -94,5 +94,13 @@ pub async fn logout_full(app: tauri::AppHandle, account_id: String) -> Result<()
         Err(e) => warn!("pool unavailable during logout clear_account: {e}"),
     }
 
+    // 5. Drop this account's cached share list so another user's share
+    //    metadata (filenames, mime types, timestamps) does not linger in
+    //    memory after logout. Account-scoped, mirroring step 4 — a second
+    //    account sharing the process keeps its own entry.
+    if let Ok(mut cache) = state.share_active_list_cache.lock() {
+        cache.remove(&account_id);
+    }
+
     Ok(())
 }

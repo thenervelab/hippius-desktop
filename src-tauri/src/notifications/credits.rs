@@ -82,7 +82,18 @@ pub async fn check_low_credit_notification(
     let pool = state.pool()?;
     // Convert planck to credit value for threshold comparison.
     // f64 precision is fine for comparing against 0.5.
-    let planck: u128 = credit_balance_planck.parse().unwrap_or(0);
+    //
+    // A malformed planck string must NOT fabricate a low-credit warning: the
+    // old `.unwrap_or(0)` mapped garbage to 0 credits (< 0.5), which fell
+    // straight into the notify branch. Mirror `billing::eligibility` — log and
+    // skip (no notification) rather than invent a zero balance.
+    let Ok(planck) = credit_balance_planck.parse::<u128>() else {
+        tracing::warn!(balance = %credit_balance_planck, account_id = %account_id, "unparseable planck in low-credit check; skipping");
+        return Ok(CreditNotificationCheck {
+            should_notify: false,
+            credit_balance: 0.0,
+        });
+    };
     let credit_balance = planck as f64 / 1e18;
 
     // Read both state flags in a single query (1 round-trip instead of 2)

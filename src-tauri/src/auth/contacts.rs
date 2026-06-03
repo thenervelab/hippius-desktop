@@ -18,7 +18,7 @@ pub struct Contact {
 /// account, matching the convention used by `sync_paths`. Every contacts query
 /// scopes by this so one account can never read or mutate another's contacts.
 fn caller_owner(state: &tauri::State<'_, AppState>) -> Result<String, AppError> {
-    Ok(account_key(&state.current_account_id().map_err(AppError::Other)?))
+    Ok(account_key(&state.current_account_id()?))
 }
 
 /// Adopt every legacy (pre-`owner`-column) contact for `owner`.
