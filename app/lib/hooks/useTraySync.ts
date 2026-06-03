@@ -164,26 +164,43 @@ const CTX_OPEN_FILES_ID = "tray-ctx-open-files";
 const CTX_OPEN_VM_ID = "tray-ctx-open-vm";
 const CTX_QUIT_ID = "tray-ctx-quit";
 
-// True on Linux, where the tray icon emits no left-click `action` event (a
-// `tray-icon` crate limitation), so the popover cannot be opened by clicking
-// the icon as on macOS/Windows. The native menu — shown on left-click there —
-// becomes the only affordance, and it carries an explicit "Open Hippius" entry.
-// Set once during `useTrayInit` from the Rust `get_platform_info` command.
+// True on Linux. The tray icon emits no left-click `action` event there (a
+// `tray-icon` crate limitation), so the native menu — shown on left-click — is
+// the only affordance, and it carries an explicit "Open Hippius" entry.
+//
+// Detected SYNCHRONOUSLY from the webview user-agent (`detectLinuxPlatform`),
+// not the async `get_platform_info` IPC: the menu is built off this value, and
+// a late/failed async lookup previously left it `false` on Linux — which dropped
+// the "Open Hippius" item AND left `showMenuOnLeftClick` off, so a left-click
+// did nothing and the menu was missing its only entry point. A synchronous,
+// can't-fail check removes that race entirely.
 let isLinuxPlatform = false;
 
 /**
- * Open the popover from the Linux native menu's "Open Hippius" item. Mirrors
- * `handleTrayClick`: signed-in opens the popover (with no icon rect — Rust
- * anchors it to the cursor), signed-out reveals the main login window instead.
+ * Synchronous, never-throwing Linux check from the webview user-agent. The three
+ * desktop webviews set a standard UA — webkit2gtk (Linux) contains "Linux",
+ * while WKWebView (macOS) and WebView2 (Windows) do not — so this reliably
+ * identifies Linux with no IPC round-trip. Android is excluded for safety (this
+ * is a desktop app and never runs there).
+ */
+function detectLinuxPlatform(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent;
+  return /linux/i.test(ua) && !/android/i.test(ua);
+}
+
+/**
+ * Linux "Open Hippius" menu action: reveal the MAIN window.
+ *
+ * The rich popover is a macOS/Windows feature only. On Linux it proved
+ * unreliable — the icon fires no left-click event, the app cannot position its
+ * own window under Wayland, and there is no native vibrancy — so rather than
+ * pop a half-broken, see-through, mis-placed window, the stable behaviour is to
+ * just bring up the main app window (exactly what "Open Files"/"Open VM" do).
  */
 async function openHippiusFromTray() {
   try {
-    if (!isAuthenticatedLatest) {
-      await openAppWindow();
-      return;
-    }
-    // No icon rect on Linux; Rust falls back to the cursor as the anchor.
-    await invoke("toggle_tray_panel", { rect: null });
+    await openAppWindow();
   } catch (e) {
     logTrayAction("Failed to open Hippius from tray menu", e);
   }
@@ -192,9 +209,10 @@ async function openHippiusFromTray() {
 async function buildTrayContextMenu(): Promise<Menu> {
   const loggedIn = await refreshLoginStatus();
 
-  // On Linux this menu is the only way to reach the popover (the icon fires no
-  // left-click event), so it leads with "Open Hippius". macOS/Windows omit it:
-  // their left-click already toggles the popover, whose header has the button.
+  // On Linux the menu is the tray's only affordance (the icon fires no
+  // left-click event), so it leads with "Open Hippius" → reveal the main window.
+  // macOS/Windows omit it: their left-click already opens the popover, whose
+  // header has its own Open Hippius button.
   const leadingItems: MenuItem[] = [];
   if (isLinuxPlatform) {
     leadingItems.push(
@@ -260,9 +278,9 @@ let isAuthenticatedLatest = false;
  * click reveals the main window's login screen instead.
  *
  * Right/middle clicks are ignored. Tray click events never fire on Linux, so
- * this handler is a no-op there; the popover is instead opened from the native
- * menu's "Open Hippius" item (`openHippiusFromTray`), which anchors to the
- * cursor because no icon rect is available — see the CLAUDE.md note.
+ * this handler is a no-op there; on Linux the native menu's "Open Hippius" item
+ * (`openHippiusFromTray`) reveals the main window instead of the popover — see
+ * the CLAUDE.md note.
  */
 async function handleTrayClick(event: TrayIconEvent) {
   if (event.type !== "Click" || event.button !== "Left" || event.buttonState !== "Up") {
@@ -322,15 +340,10 @@ export function useTrayInit(isAuthenticated: boolean) {
     if (menuPromise) return;
 
     menuPromise = (async () => {
-      // Detect Linux once so the tray is built with the menu-on-left-click +
-      // "Open Hippius" fallback (the icon emits no left-click event there).
-      // Done before the tray is created so the first context menu is correct.
-      try {
-        const info = await invoke<{ os: string }>("get_platform_info");
-        isLinuxPlatform = info?.os === "linux";
-      } catch (e) {
-        logTrayAction("Failed to resolve platform for tray", e);
-      }
+      // Detect Linux synchronously (no IPC) so the tray is always built with the
+      // menu-on-left-click + "Open Hippius" fallback there. Set before the tray
+      // is created so the first context menu is correct on every launch.
+      isLinuxPlatform = detectLinuxPlatform();
 
       // resolve all three icons once
       const [defPath, syncPath, completedPath] = await Promise.all([
