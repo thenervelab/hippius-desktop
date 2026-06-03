@@ -335,7 +335,13 @@ pub async fn recover_mnemonic(state: tauri::State<'_, crate::app_state::AppState
         }
     };
 
-    let mnemonic = open_mnemonic(&blob, &password, &ctx.ss58).map_err(crypto_to_err)?;
+    // Argon2id (~1.5 s) off the executor — see run_kdf. Owned, zeroizing copies
+    // of the secrets move into the closure; `blob` is moved (unused afterward),
+    // `password`/`ss58` are cloned because the function reuses them below.
+    let blob_k = blob;
+    let password_k = password.clone();
+    let ss58_k = ctx.ss58.clone();
+    let mnemonic = run_kdf(move || open_mnemonic(&blob_k, &password_k, &ss58_k).map_err(crypto_to_err)).await?;
 
     // Persist the recovered mnemonic to the local store so subsequent
     // sync init picks it up without re-fetching. The file password is
@@ -357,6 +363,25 @@ pub async fn recover_mnemonic(state: tauri::State<'_, crate::app_state::AppState
         "recovery: unlock complete — mnemonic decrypted and installed locally (no upload performed)"
     );
     Ok(())
+}
+
+/// Run a CPU-bound key-derivation closure off the Tokio executor.
+///
+/// Argon2id (`open_mnemonic` / `seal_mnemonic`, ~1.5 s) and PBKDF2 (folder
+/// `recover_mnemonic`, 600k iterations) are blocking; running them inline stalls
+/// every other task on this worker thread (axiom r4r_ch10_01). The closure runs
+/// on the blocking pool and must own `'static` copies of its secrets — wrap them
+/// in `Zeroizing` so they are scrubbed when it drops. A `JoinError` (the task
+/// panicked or was cancelled) maps to `AppError::Other`; the closure's own
+/// `Result` error passes straight through.
+async fn run_kdf<T, F>(f: F) -> Result<T>
+where
+    F: FnOnce() -> Result<T> + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| AppError::Other(format!("KDF task failed to join: {e}")))?
 }
 
 /// Write the recovered mnemonic to `master_enc_mnemonic.json` under the
@@ -517,7 +542,16 @@ async fn validate_master_against_existing_folders(pool: &SqlitePool, account_id:
         if !folder_enc.exists() {
             continue;
         }
-        let stored = match hcfs_client::auth::recover_mnemonic(&folder_enc, &drive_password) {
+        // PBKDF2 (600k iterations) off the executor, once per folder — see
+        // run_kdf. Owned copies move into the closure; the drive-password copy is
+        // zeroizing (the source String is not — pre-existing, tracked for Phase 6).
+        let folder_enc_k = folder_enc.clone();
+        let drive_password_k = Zeroizing::new(drive_password.clone());
+        let recovered = run_kdf(move || {
+            hcfs_client::auth::recover_mnemonic(&folder_enc_k, &drive_password_k).map_err(|e| AppError::Other(format!("recover folder mnemonic: {e}")))
+        })
+        .await;
+        let stored = match recovered {
             Ok(m) => Zeroizing::new(m.to_string()),
             Err(e) => {
                 warn!(
@@ -622,7 +656,12 @@ pub async fn seal_and_upload_mnemonic(state: tauri::State<'_, crate::app_state::
     validate_master_against_existing_folders(pool, &account_id, &mnemonic).await?;
 
     let ctx = HcfsServerCtx::resolve(&state).await?;
-    let blob = seal_mnemonic(&mnemonic, &password, &ctx.ss58).map_err(crypto_to_err)?;
+    // Argon2id off the executor. `mnemonic` is reused after sealing (installed
+    // locally once the upload commits), so clone a zeroizing copy for the closure.
+    let mnemonic_k = Zeroizing::new(mnemonic.to_string());
+    let password_k = password.clone();
+    let ss58_k = ctx.ss58.clone();
+    let blob = run_kdf(move || seal_mnemonic(&mnemonic_k, &password_k, &ss58_k).map_err(crypto_to_err)).await?;
 
     // Server upload is the commit point: if it fails on the fresh-signup
     // path, leaving a local `master_enc_mnemonic.json` behind would make
@@ -703,14 +742,22 @@ pub async fn change_recovery_password(state: tauri::State<'_, crate::app_state::
     };
 
     // 2. Decrypt with `current`. Wrong password → Validation("Wrong passphrase.").
-    let mnemonic = open_mnemonic(&blob, &current, &ctx.ss58).map_err(crypto_to_err)?;
+    //    Argon2id off the executor (see run_kdf).
+    let blob_k = blob;
+    let current_k = current.clone();
+    let ss58_open_k = ctx.ss58.clone();
+    let mnemonic = run_kdf(move || open_mnemonic(&blob_k, &current_k, &ss58_open_k).map_err(crypto_to_err)).await?;
 
     // 3. Derivation guard — refuse to rotate under a master that can't
     //    reproduce existing folder mnemonics.
     validate_master_against_existing_folders(pool, &account_id, &mnemonic).await?;
 
-    // 4. Reseal under `new`.
-    let new_blob = seal_mnemonic(&mnemonic, &new, &ctx.ss58).map_err(crypto_to_err)?;
+    // 4. Reseal under `new`. Argon2id off the executor (see run_kdf); clone a
+    //    zeroizing copy of the mnemonic for the closure.
+    let mnemonic_k = Zeroizing::new(mnemonic.to_string());
+    let new_k = new.clone();
+    let ss58_seal_k = ctx.ss58.clone();
+    let new_blob = run_kdf(move || seal_mnemonic(&mnemonic_k, &new_k, &ss58_seal_k).map_err(crypto_to_err)).await?;
 
     // 5. Commit point: POST upsert.
     post_json_discard(&ctx, "/v1/mnemonic-blob", &new_blob).await?;
@@ -813,7 +860,11 @@ pub async fn resume_recovery_password_rotation(state: tauri::State<'_, crate::ap
     // current. If we ever need stricter semantics, store `updated_at`
     // in the sidecar and require it to match the server's before
     // accepting the resume.
-    let mnemonic = open_mnemonic(&blob, &password, &ctx.ss58).map_err(crypto_to_err)?;
+    // Argon2id off the executor (see run_kdf).
+    let blob_k = blob;
+    let password_k = password.clone();
+    let ss58_k = ctx.ss58.clone();
+    let mnemonic = run_kdf(move || open_mnemonic(&blob_k, &password_k, &ss58_k).map_err(crypto_to_err)).await?;
 
     install_recovered_mnemonic(&account_id, &mnemonic, &password).await?;
 
