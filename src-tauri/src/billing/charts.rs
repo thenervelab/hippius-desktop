@@ -267,11 +267,15 @@ fn map_to_range_carry_forward(
     let first_key = date_range[0];
     let mut last_balance: f64 = 0.0;
     let mut last_credit: Option<f64> = if include_credit { Some(0.0) } else { None };
+    // Seed the carry-forward with the LAST balance at or before the range start,
+    // not the maximum. `points` is sorted ascending by date (accounts_to_raw_points),
+    // so iterating and assigning unconditionally leaves the most recent pre-range
+    // value. The old `if p.balance > last_balance` guard took the historical peak,
+    // so a wallet that dropped (e.g. 100 -> 50 HIP) before the window opened
+    // charted as starting at 100.
     for p in points {
         if p.date <= first_key {
-            if p.balance > last_balance {
-                last_balance = p.balance;
-            }
+            last_balance = p.balance;
             if include_credit && let Some(c) = p.credit {
                 last_credit = Some(c);
             }
@@ -730,6 +734,35 @@ mod tests {
         assert!(last.credit.is_some());
         assert!((last.credit.unwrap() - 0.5).abs() < f64::EPSILON);
         assert!(last.formatted_credit.is_some());
+    }
+
+    #[test]
+    fn carry_forward_seeds_with_last_pre_range_balance_not_max() {
+        // Two pre-range points: 100 then 50 HIP — a drop before the window opens.
+        // The carry-forward seed must be the LAST value (50), not the historical
+        // peak (100); the old `if p.balance > last_balance` guard charted 100.
+        let points = vec![
+            RawPoint {
+                date: NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
+                balance: 100.0,
+                credit: None,
+            },
+            RawPoint {
+                date: NaiveDate::from_ymd_opt(2025, 1, 2).unwrap(),
+                balance: 50.0,
+                credit: None,
+            },
+        ];
+        let date_range = get_all_dates_in_range(
+            NaiveDate::from_ymd_opt(2025, 1, 5).unwrap(),
+            NaiveDate::from_ymd_opt(2025, 1, 6).unwrap(),
+        );
+        let result = map_to_range_carry_forward(&points, &date_range, "last30days", true, false);
+        assert!(
+            (result[0].balance - 50.0).abs() < f64::EPSILON,
+            "seed should carry the last pre-range balance (50), got {}",
+            result[0].balance
+        );
     }
 
     #[test]
