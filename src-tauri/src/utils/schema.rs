@@ -512,9 +512,16 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .await?;
 
     // Address book (replaces frontend addressBookDb.ts)
+    //
+    // `owner` scopes contacts to one account (account_key hash, same convention
+    // as sync_paths). Pre-existing installs created the table without it; the
+    // migration below adds it with DEFAULT '' so legacy rows are owner-empty
+    // until the first account to open the address book claims them (see
+    // `contacts::claim_legacy_contacts`).
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS address_book (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner TEXT NOT NULL DEFAULT '',
             name TEXT NOT NULL,
             wallet_address TEXT NOT NULL,
             date_added INTEGER DEFAULT (strftime('%s','now') * 1000)
@@ -522,6 +529,16 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     )
     .execute(&mut *tx)
     .await?;
+
+    // Migration: add `owner` to existing address_book tables. Without this the
+    // four contacts IPCs queried the table globally — every account saw every
+    // contact, and delete/update by `id` could hit another account's row (IDOR).
+    if !table_columns(&mut *tx, "address_book").await?.contains("owner") {
+        info!("Adding owner column to address_book");
+        sqlx::query("ALTER TABLE address_book ADD COLUMN owner TEXT NOT NULL DEFAULT ''")
+            .execute(&mut *tx)
+            .await?;
+    }
 
     // Onboarding (replaces frontend onboardingDb.ts)
     sqlx::query(
@@ -743,6 +760,43 @@ mod tests {
             .connect("sqlite::memory:")
             .await
             .expect("failed to create in-memory SQLite pool")
+    }
+
+    /// Migration guard: a legacy `address_book` created before the `owner`
+    /// column must gain it (DEFAULT '') when `ensure_table_schema` runs, and
+    /// pre-existing rows keep `owner = ''` so the first account can later claim
+    /// them (see `auth::contacts::claim_legacy_contacts`). Without the ALTER,
+    /// the four contacts IPCs would query a non-existent column and fail.
+    #[tokio::test]
+    async fn address_book_owner_added_to_legacy_table() {
+        let pool = temp_pool().await;
+
+        // Legacy install: address_book WITHOUT the owner column, one seeded row.
+        sqlx::query(
+            "CREATE TABLE address_book (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                wallet_address TEXT NOT NULL,
+                date_added INTEGER
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create legacy table");
+        sqlx::query("INSERT INTO address_book (name, wallet_address) VALUES ('Legacy', 'addrL')")
+            .execute(&pool)
+            .await
+            .expect("seed legacy row");
+
+        ensure_table_schema(&pool).await.expect("schema");
+
+        // If the migration didn't add `owner`, this SELECT errors. The value
+        // proves both the column's existence and its '' default (claimable).
+        let (owner,): (String,) = sqlx::query_as("SELECT owner FROM address_book WHERE name = 'Legacy'")
+            .fetch_one(&pool)
+            .await
+            .expect("legacy row must have an owner column after migration");
+        assert_eq!(owner, "", "legacy rows must default to empty owner for first-account claim");
     }
 
     /// Regression guard: verifies that [`ensure_table_schema`] creates every
