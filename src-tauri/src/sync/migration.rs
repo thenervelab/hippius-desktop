@@ -985,10 +985,16 @@ pub async fn start_migration_polling(app: tauri::AppHandle, account_id: String) 
         }
     });
 
-    // Store the handle so it can be cancelled
-    let state = app.state::<crate::app_state::AppState>();
-    let mut guard = state.migration.poll_task.lock().await;
-    *guard = Some(handle);
+    // Store the handle so it can be cancelled. Scope the guard so the tokio
+    // Mutex on poll_task is released BEFORE the immediate poll's HTTP await
+    // below — otherwise a concurrent dismiss_migration / stop_migration_polling
+    // would block on this lock for the entire poll round-trip (up to the
+    // reqwest read timeout).
+    {
+        let state = app.state::<crate::app_state::AppState>();
+        let mut guard = state.migration.poll_task.lock().await;
+        *guard = Some(handle);
+    }
 
     // Also poll immediately (don't wait 3s for the first result)
     let immediate = poll_migration_status_internal(&app.state::<crate::app_state::AppState>(), &account_id).await?;
