@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
@@ -52,6 +52,21 @@ export default function TrayPanelPage() {
   // Date-bucketed for the headed list (Today / Yesterday / This Week / …).
   // Live uploading/failed rows carry createdAt=now, so they lead "Today".
   const groups = groupUploadFeed(feed);
+
+  // ⌘/Ctrl+F mirrors clicking the "Search Files" field (`openMainSearch`): the
+  // popover has no search of its own, so the shortcut reveals the main window
+  // and opens its command palette. Key check matches the main window's
+  // `SidebarSearch` so the behaviour is identical from either window.
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() !== "f") return;
+      if (!event.ctrlKey && !event.metaKey) return;
+      event.preventDefault();
+      void openMainSearch();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
 
   return (
     // The card fills the window edge-to-edge: the window IS the 460×672 Figma
@@ -125,9 +140,10 @@ export default function TrayPanelPage() {
 function Header({ credits, unreadCount }: { credits: number | null; unreadCount: number }) {
   return (
     <header className="flex items-center justify-between px-5 pt-5">
-      <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary-50">
-        <HippiusLogo className="size-7 text-white" />
-      </div>
+      {/* The Hippius mark shown directly (its own blue + white outline), with
+          no blue badge box behind it — a cleaner, simpler header that lets the
+          logo read as the brand rather than a solid blue tile. */}
+      <HippiusLogo className="h-11 w-11" />
 
       <div className="flex items-center gap-3 rounded-xl bg-black/[0.06] py-1.5 pl-4 pr-2 dark:bg-white/[0.06]">
         <div className="flex flex-col text-left">
