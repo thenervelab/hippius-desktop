@@ -20,14 +20,14 @@ if (typeof window !== 'undefined' && process.env.NODE_ENV === 'development') {
     console.log('All notifications cleared from database!');
   };
 
-  (window as unknown as Record<string, unknown>).__debugNotifications = async (userAddress?: string) => {
+  (window as unknown as Record<string, unknown>).__debugNotifications = async () => {
     try {
+      // Rust scopes `list_notifications` to the session account; there is no
+      // longer a per-address filter to pass from a debug shim.
       const notifications = await invoke<NotificationRow[]>("list_notifications", {
-        userAddress: userAddress || "system",
         limit: 1000,
       });
-      console.log("=== NOTIFICATIONS DEBUG ===");
-      console.log(`Filter: ${userAddress || "ALL USERS"}`);
+      console.log("=== NOTIFICATIONS DEBUG (session account) ===");
       console.log(`Total notifications: ${notifications.length}`);
       notifications.forEach((n: NotificationRow, idx: number) => {
         console.log(`[${idx}]`, n);
@@ -69,8 +69,9 @@ export const refreshNotificationsAtom = atom(null, async (get, set) => {
   const enabledTypes = await getEnabledNotificationTypes();
   set(enabledNotificationTypesAtom, enabledTypes);
 
-  // Fetch all notifications for this user (Rust returns objects, not raw rows)
-  const rows = await listNotifications(userAddress, 100);
+  // Fetch all notifications for the session account (Rust returns objects, not
+  // raw rows). The `userAddress` guard above only gates whether we fetch at all.
+  const rows = await listNotifications(100);
 
   const mapped = rows.map((r: NotificationRow) => {
     const timestamp = Number(r.creationTime);
@@ -136,7 +137,7 @@ export const markAllReadAtom = atom(null, async (get, set) => {
   const userAddress = get(userAddressAtom);
   if (!userAddress) return;
 
-  await markAllRead(userAddress);
+  await markAllRead();
   set(
     notificationsAtom,
     get(notificationsAtom).map((n) => ({ ...n, unread: false }))

@@ -95,9 +95,14 @@ export async function addNotification({
   }
 }
 
-export async function listNotifications(userAddress: string, limit = 50) {
+// `list_notifications` — like the other session-scoped commands below
+// (`mark_all_notifications_read`, `delete_all_notifications`) — derives the
+// account from the authenticated session in Rust. The FE no longer passes an
+// address: it was ignored, and supplying one implied a cross-account read the
+// backend now deliberately refuses (per-account isolation, audit Phase 2).
+export async function listNotifications(limit = 50) {
   try {
-    return await invoke<NotificationRow[]>("list_notifications", { userAddress, limit });
+    return await invoke<NotificationRow[]>("list_notifications", { limit });
   } catch (error) {
     console.error("Failed to list notifications:", error);
     return [];
@@ -120,22 +125,13 @@ export async function markUnread(id: number) {
   }
 }
 
-export async function markAllRead(userAddress: string) {
+export async function markAllRead() {
   try {
-    await invoke("mark_all_notifications_read", { userAddress });
+    await invoke("mark_all_notifications_read");
     return true;
   } catch (error) {
     console.error("Failed to mark all notifications as read:", error);
     return false;
-  }
-}
-
-export async function unreadCount(userAddress: string): Promise<number> {
-  try {
-    return await invoke<number>("get_unread_count", { userAddress });
-  } catch (error) {
-    console.error("Failed to get unread count:", error);
-    return 0;
   }
 }
 
@@ -149,9 +145,9 @@ export async function deleteNotification(id: number) {
   }
 }
 
-export async function deleteAllNotifications(userAddress: string) {
+export async function deleteAllNotifications() {
   try {
-    await invoke("delete_all_notifications", { userAddress });
+    await invoke("delete_all_notifications");
     return true;
   } catch (error) {
     console.error("Failed to delete all notifications:", error);
