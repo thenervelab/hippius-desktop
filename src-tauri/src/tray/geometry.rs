@@ -212,6 +212,24 @@ mod tests {
     }
 
     #[test]
+    fn cursor_point_anchor_stays_on_screen() {
+        // Linux has no tray-icon bounds, so the popover anchors to a zero-size
+        // rect at the cursor (a bare point near the top-bar tray). The panel
+        // must still land fully inside the work area on every edge.
+        let cursor = Rect {
+            x: 1500,
+            y: 12,
+            width: 0,
+            height: 0,
+        };
+        let (x, y) = compute_panel_position(cursor, PANEL_W, PANEL_H, MAC_WORK_AREA, GAP, MARGIN);
+        assert!(x >= MAC_WORK_AREA.x + MARGIN, "panel left within work area: {x}");
+        assert!(x + PANEL_W <= MAC_WORK_AREA.right() - MARGIN, "panel right within work area: {x}");
+        assert!(y >= MAC_WORK_AREA.y + MARGIN, "panel top within work area: {y}");
+        assert!(y + PANEL_H <= MAC_WORK_AREA.bottom() - MARGIN, "panel bottom within work area: {y}");
+    }
+
+    #[test]
     fn panel_larger_than_work_area_does_not_panic() {
         // Degenerate: panel bigger than the whole work area. Must clamp to the
         // top-left inset without panicking on an inverted clamp range.

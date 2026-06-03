@@ -159,12 +159,52 @@ async function refreshLoginStatus(): Promise<boolean> {
 // items so the existing login-status watcher (`updateOpenFilesMenuItem`
 // / `updateOpenVmMenuItem`) enables/disables the entries the user
 // actually sees.
+const CTX_OPEN_HIPPIUS_ID = "tray-ctx-open-hippius";
 const CTX_OPEN_FILES_ID = "tray-ctx-open-files";
 const CTX_OPEN_VM_ID = "tray-ctx-open-vm";
 const CTX_QUIT_ID = "tray-ctx-quit";
 
+// True on Linux, where the tray icon emits no left-click `action` event (a
+// `tray-icon` crate limitation), so the popover cannot be opened by clicking
+// the icon as on macOS/Windows. The native menu — shown on left-click there —
+// becomes the only affordance, and it carries an explicit "Open Hippius" entry.
+// Set once during `useTrayInit` from the Rust `get_platform_info` command.
+let isLinuxPlatform = false;
+
+/**
+ * Open the popover from the Linux native menu's "Open Hippius" item. Mirrors
+ * `handleTrayClick`: signed-in opens the popover (with no icon rect — Rust
+ * anchors it to the cursor), signed-out reveals the main login window instead.
+ */
+async function openHippiusFromTray() {
+  try {
+    if (!isAuthenticatedLatest) {
+      await openAppWindow();
+      return;
+    }
+    // No icon rect on Linux; Rust falls back to the cursor as the anchor.
+    await invoke("toggle_tray_panel", { rect: null });
+  } catch (e) {
+    logTrayAction("Failed to open Hippius from tray menu", e);
+  }
+}
+
 async function buildTrayContextMenu(): Promise<Menu> {
   const loggedIn = await refreshLoginStatus();
+
+  // On Linux this menu is the only way to reach the popover (the icon fires no
+  // left-click event), so it leads with "Open Hippius". macOS/Windows omit it:
+  // their left-click already toggles the popover, whose header has the button.
+  const leadingItems: MenuItem[] = [];
+  if (isLinuxPlatform) {
+    leadingItems.push(
+      await MenuItem.new({
+        id: CTX_OPEN_HIPPIUS_ID,
+        text: "Open Hippius",
+        action: openHippiusFromTray,
+      }),
+    );
+  }
 
   const openFiles = await MenuItem.new({
     id: CTX_OPEN_FILES_ID,
@@ -201,7 +241,7 @@ async function buildTrayContextMenu(): Promise<Menu> {
   openFilesItem = openFiles;
   openVmItem = openVm;
 
-  return Menu.new({ items: [openFiles, openVm, separator, quit] });
+  return Menu.new({ items: [...leadingItems, openFiles, openVm, separator, quit] });
 }
 
 // Mirror of the auth context's `isAuthenticated`, kept at module scope so the
@@ -219,9 +259,10 @@ let isAuthenticatedLatest = false;
  * When signed out, the popover (credits/uploads/account) is meaningless, so the
  * click reveals the main window's login screen instead.
  *
- * Right/middle clicks are ignored. Tray click events are unsupported on Linux
- * (the `action` never fires there), so the popover is effectively
- * macOS/Windows-only — see the CLAUDE.md note.
+ * Right/middle clicks are ignored. Tray click events never fire on Linux, so
+ * this handler is a no-op there; the popover is instead opened from the native
+ * menu's "Open Hippius" item (`openHippiusFromTray`), which anchors to the
+ * cursor because no icon rect is available — see the CLAUDE.md note.
  */
 async function handleTrayClick(event: TrayIconEvent) {
   if (event.type !== "Click" || event.button !== "Left" || event.buttonState !== "Up") {
@@ -281,6 +322,16 @@ export function useTrayInit(isAuthenticated: boolean) {
     if (menuPromise) return;
 
     menuPromise = (async () => {
+      // Detect Linux once so the tray is built with the menu-on-left-click +
+      // "Open Hippius" fallback (the icon emits no left-click event there).
+      // Done before the tray is created so the first context menu is correct.
+      try {
+        const info = await invoke<{ os: string }>("get_platform_info");
+        isLinuxPlatform = info?.os === "linux";
+      } catch (e) {
+        logTrayAction("Failed to resolve platform for tray", e);
+      }
+
       // resolve all three icons once
       const [defPath, syncPath, completedPath] = await Promise.all([
         resolveResource(DEFAULT_TRAY_ICON),
@@ -375,9 +426,14 @@ export function useTrayInit(isAuthenticated: boolean) {
       });
 
       if (!existingTray) {
-        // Left-click → custom popover (via `handleTrayClick`); right-click →
-        // the small native context menu (Open Files / Open VM / Quit).
-        // `showMenuOnLeftClick: false` keeps the left click on the popover.
+        // macOS/Windows: left-click → custom popover (via `handleTrayClick`);
+        // right-click → the small native context menu (Open Files / Open VM /
+        // Quit). `showMenuOnLeftClick: false` keeps the left click on the
+        // popover. Linux: the icon fires no left-click event, so the menu must
+        // show on left-click (`showMenuOnLeftClick: isLinuxPlatform`) and it
+        // includes an "Open Hippius" entry (added by `buildTrayContextMenu`) as
+        // the only way to reach the popover there. `action` stays attached
+        // (harmless no-op on Linux).
         // (The full `menu` built above is still maintained in memory for the
         // icon-state machinery and its tests; deleting that now-unused code is
         // a tracked follow-up.)
@@ -388,7 +444,7 @@ export function useTrayInit(isAuthenticated: boolean) {
           iconAsTemplate: false,
           tooltip: "Hippius Cloud",
           menu: contextMenu,
-          showMenuOnLeftClick: false,
+          showMenuOnLeftClick: isLinuxPlatform,
           action: handleTrayClick,
         });
         trayIconState = "default";
@@ -818,9 +874,10 @@ async function setTrayIconSyncing(
 
       if (currentTray) await currentTray.close();
 
-      // Rebuild + re-attach the right-click context menu (a fresh menu, since
-      // the previous one belonged to the closed icon). Left-click still toggles
-      // the popover via `handleTrayClick`.
+      // Rebuild + re-attach the context menu (a fresh menu, since the previous
+      // one belonged to the closed icon). Left-click toggles the popover via
+      // `handleTrayClick` on macOS/Windows; on Linux it shows the menu (whose
+      // "Open Hippius" entry opens the popover) — see the creation path.
       const contextMenu = await buildTrayContextMenu();
       await TrayIcon.new({
         id: TRAY_ID,
@@ -828,7 +885,7 @@ async function setTrayIconSyncing(
         iconAsTemplate: false,
         tooltip: "Hippius Cloud",
         menu: contextMenu,
-        showMenuOnLeftClick: false,
+        showMenuOnLeftClick: isLinuxPlatform,
         action: handleTrayClick,
       });
 

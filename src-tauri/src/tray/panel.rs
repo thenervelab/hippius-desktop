@@ -80,14 +80,21 @@ fn now_ms() -> u64 {
 /// Toggle the tray panel: show it anchored to the tray icon, or hide it if it
 /// is already visible.
 ///
+/// `rect` is the tray icon's screen rectangle on macOS/Windows, where the
+/// left-click `action` event carries it. On **Linux** the `tray-icon` crate
+/// fires no left-click event, so the popover is opened from the native menu's
+/// "Open Hippius" item instead, which has no icon bounds to forward — there
+/// `rect` is `None` and the panel anchors to the cursor (see [`cursor_anchor`]).
+///
 /// Runs as a **synchronous** command so the window operations execute on the
 /// main thread, which macOS requires for `show`/`set_position`/`set_focus`.
 ///
 /// # Errors
-/// Returns [`AppError::Other`] if the window cannot be built, no monitor can be
-/// resolved, or a window operation (position/show/focus/hide) fails.
+/// Returns [`AppError::Other`] if the window cannot be built, the cursor or a
+/// monitor cannot be resolved, or a window operation (position/show/focus/hide)
+/// fails.
 #[tauri::command]
-pub fn toggle_tray_panel(app: AppHandle, state: tauri::State<'_, AppState>, rect: TrayIconRect) -> Result<()> {
+pub fn toggle_tray_panel(app: AppHandle, state: tauri::State<'_, AppState>, rect: Option<TrayIconRect>) -> Result<()> {
     // NOTE: the signed-in/out decision is made by the frontend before calling
     // this command (it gates on the auth context's `isAuthenticated`, the same
     // value that decides whether the app shows its login screen). Rust's
@@ -113,7 +120,14 @@ pub fn toggle_tray_panel(app: AppHandle, state: tauri::State<'_, AppState>, rect
         return Ok(());
     }
 
-    let icon = rect.to_rect();
+    // macOS/Windows forward the tray icon's screen rect; Linux forwards `None`
+    // (no left-click tray event there) and we fall back to the cursor, which is
+    // on the "Open Hippius" menu the click came from — right next to the icon.
+    // Either way the result is a physical-pixel rect fed to the same geometry.
+    let icon = match rect {
+        Some(r) => r.to_rect(),
+        None => cursor_anchor(&app)?,
+    };
     let (work_area, scale) = target_work_area(&app, icon)?;
 
     // Convert the logical panel/gap/margin to physical pixels for the target
@@ -218,6 +232,30 @@ fn build_panel(app: &AppHandle) -> Result<WebviewWindow> {
         .focused(false)
         .build()
         .map_err(|e| AppError::Other(format!("failed to build tray panel window: {e}")))
+}
+
+/// Anchor [`Rect`] for the popover when the tray click carries no icon bounds
+/// (Linux, where the `tray-icon` crate emits no left-click event and the panel
+/// is opened from the native menu instead).
+///
+/// The cursor is on the tray menu the click came from — adjacent to the icon —
+/// so it is a good stand-in anchor. Returned as a zero-size rect (a point) in
+/// the same physical-pixel, desktop-relative space as the icon rect, so it
+/// flows through [`geometry::compute_panel_position`] unchanged: the position
+/// math reads its centre as that point and clamps the panel fully on-screen.
+///
+/// # Errors
+/// Returns [`AppError::Other`] if the cursor position cannot be read.
+fn cursor_anchor(app: &AppHandle) -> Result<Rect> {
+    let pos = app
+        .cursor_position()
+        .map_err(|e| AppError::Other(format!("cursor_position failed: {e}")))?;
+    Ok(Rect {
+        x: pos.x.round() as i32,
+        y: pos.y.round() as i32,
+        width: 0,
+        height: 0,
+    })
 }
 
 /// Resolve the work area (and scale factor) of the monitor containing the tray
