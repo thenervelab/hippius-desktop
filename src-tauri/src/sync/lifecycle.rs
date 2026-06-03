@@ -998,8 +998,8 @@ pub(crate) async fn initialize_sync_inner(
             .get::<crate::billing::credits::CreditBalanceResponse>("/api/billing/credits/balance/", &acct)
             .await
         {
-            let balance: f64 = resp.balance.as_deref().and_then(|s| s.parse().ok()).unwrap_or(0.0);
-            if balance <= 0.0 {
+            // Unparseable balance is inconclusive, not zero — see balance_blocks_sync.
+            if balance_blocks_sync(resp.balance.as_deref()) {
                 return Err(crate::error::AppError::Validation(
                     "Insufficient credits. Please add credits to your account before syncing.".into(),
                 ));
@@ -1236,8 +1236,49 @@ pub async fn stop_sync(app: AppHandle) -> Result<()> {
 /// Used for the 3-dot menu's "Remove from sync" action and for
 /// `change_sync_folder`'s teardown step before re-initializing with a
 /// new path.
+/// Resolve which account a drive teardown scopes its `sync_paths` row delete
+/// and on-disk baseline wipe to. The caller's explicit account (when known —
+/// e.g. the `remove_sync_path` IPC carries it in its params) takes precedence
+/// over the session's `current_account_id`, so a teardown that races an account
+/// switch wipes the baseline for the account that actually owns the drive
+/// rather than whichever account happens to be current. `None` means neither is
+/// available and the persistent cleanup must be skipped (the caller logs it).
+fn teardown_account(explicit: Option<String>, current: Option<String>) -> Option<String> {
+    explicit.or(current)
+}
+
+/// Decide whether a fetched credit balance should BLOCK sync.
+///
+/// A balance that parses to `<= 0.0` blocks; a positive balance allows. An
+/// UNPARSEABLE balance is INCONCLUSIVE and must NOT block (returns `false`):
+/// the previous `parse().ok()).unwrap_or(0.0)` treated any value f64 couldn't
+/// parse — a currency suffix like "10.00 USD", a localized "1.000,00", or a
+/// future API format change — as zero, locking paying users out of sync. Fail
+/// open on "unknown"; block only on a definitively non-positive balance.
+fn balance_blocks_sync(raw_balance: Option<&str>) -> bool {
+    match raw_balance.and_then(|s| s.trim().parse::<f64>().ok()) {
+        Some(balance) => balance <= 0.0,
+        None => false,
+    }
+}
+
+/// Remove a drive for the session's current account.
+///
+/// Thin wrapper over [`remove_drive_for_account`] with no explicit account.
+/// Internal callers that already hold the owning account (the
+/// `remove_sync_path` IPC) call the inner form directly so the baseline wipe
+/// stays account-correct even during an account switch.
 #[tauri::command]
 pub async fn remove_drive(app: AppHandle, label: String) -> Result<()> {
+    remove_drive_for_account(app, label, None).await
+}
+
+/// Tear down a drive: cancel any in-flight sync, drop it from the in-memory
+/// map, delete its `sync_paths` row, clear its intent rows, and wipe its
+/// on-disk sync baseline — in that drain-then-wipe order. `explicit_account`
+/// scopes the DB delete and baseline wipe: pass `Some` when the caller knows
+/// the owning account, `None` to fall back to the current session account.
+pub(crate) async fn remove_drive_for_account(app: AppHandle, label: String, explicit_account: Option<String>) -> Result<()> {
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
     let sync = &app_state.sync;
@@ -1279,7 +1320,13 @@ pub async fn remove_drive(app: AppHandle, label: String) -> Result<()> {
     // the next manifest GC pass even if this call fails. `pause_drive`
     // deliberately does NOT clear intent because pause is reversible and the
     // in-flight totals must survive a resume.
-    let acct = app_state.current_account_id().ok();
+    let acct = teardown_account(explicit_account, app_state.current_account_id().ok());
+    if acct.is_none() {
+        warn!(
+            label = %label,
+            "remove_drive: no account context — sync_paths row and on-disk baseline left intact; in-memory drive still removed",
+        );
+    }
     if let (Ok(pool), Some(acct)) = (app_state.pool(), acct.as_deref()) {
         if let Err(e) = crate::sync::paths::remove_sync_path_internal(pool, acct, &label).await {
             warn!("Failed to remove sync path for '{}' from DB: {e}", label);
@@ -1783,8 +1830,8 @@ async fn auto_init_sync_inner(
             .get::<crate::billing::credits::CreditBalanceResponse>("/api/billing/credits/balance/", &acct)
             .await
         {
-            let balance: f64 = resp.balance.as_deref().and_then(|s| s.parse().ok()).unwrap_or(0.0);
-            if balance <= 0.0 {
+            // Unparseable balance is inconclusive, not zero — see balance_blocks_sync.
+            if balance_blocks_sync(resp.balance.as_deref()) {
                 return Err(crate::error::AppError::Validation(
                     "Insufficient credits. Please add credits to your account before syncing.".into(),
                 ));
@@ -2815,6 +2862,63 @@ mod tests {
     // files" → emits `local_deletes` → the user's local files are nuked
     // on the next sync cycle. Clearing the on-disk baseline on remove
     // forces a fresh start so the next sync uploads instead of deleting.
+
+    // teardown_account decides which account scopes the `sync_paths` row delete
+    // and the on-disk baseline wipe. The explicit account (carried by the
+    // `remove_sync_path` IPC) MUST win over the session's current account so a
+    // teardown that races an account switch never wipes the wrong account's
+    // baseline — the correctness bug this helper closes.
+    #[test]
+    fn teardown_account_prefers_explicit_over_current() {
+        assert_eq!(
+            teardown_account(Some("explicit".into()), Some("current".into())).as_deref(),
+            Some("explicit"),
+        );
+    }
+
+    #[test]
+    fn teardown_account_falls_back_to_current_without_explicit() {
+        assert_eq!(teardown_account(None, Some("current".into())).as_deref(), Some("current"));
+        assert_eq!(teardown_account(Some("explicit".into()), None).as_deref(), Some("explicit"));
+    }
+
+    #[test]
+    fn teardown_account_none_when_neither_available() {
+        // No account context at all → the caller skips persistent cleanup and warns.
+        assert_eq!(teardown_account(None, None), None);
+    }
+
+    // balance_blocks_sync must block only on a definitively non-positive value.
+    #[test]
+    fn balance_blocks_sync_only_on_nonpositive() {
+        assert!(balance_blocks_sync(Some("0")));
+        assert!(balance_blocks_sync(Some("0.0")));
+        assert!(balance_blocks_sync(Some("-5")));
+        assert!(!balance_blocks_sync(Some("5")));
+        assert!(!balance_blocks_sync(Some("0.5")));
+    }
+
+    // The regression: an unparseable balance (currency suffix, localized decimal,
+    // format change, empty, or absent) is INCONCLUSIVE and must NOT block — the
+    // old unwrap_or(0.0) treated these as zero and locked paying users out.
+    #[test]
+    fn balance_blocks_sync_treats_unparseable_as_inconclusive() {
+        assert!(!balance_blocks_sync(Some("1000.00 USD")));
+        assert!(!balance_blocks_sync(Some("1.000,00")));
+        assert!(!balance_blocks_sync(Some("")));
+        assert!(!balance_blocks_sync(Some("   ")));
+        assert!(!balance_blocks_sync(None));
+    }
+
+    // f64::from_str accepts "NaN"/"inf"/"-inf". Pin the resulting decisions:
+    // NaN <= 0.0 is false (IEEE-754, every NaN comparison is false) so NaN fails
+    // OPEN (no block — inconclusive); -inf is non-positive so it blocks; +inf allows.
+    #[test]
+    fn balance_blocks_sync_handles_float_specials() {
+        assert!(!balance_blocks_sync(Some("NaN")));
+        assert!(!balance_blocks_sync(Some("inf")));
+        assert!(balance_blocks_sync(Some("-inf")));
+    }
 
     #[test]
     fn clear_persisted_sync_state_removes_baseline_files() {
