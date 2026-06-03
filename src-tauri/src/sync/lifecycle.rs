@@ -1084,7 +1084,9 @@ pub(crate) async fn initialize_sync_inner(
         account_id: &account_id,
         fhash: &fhash,
         label: &label,
-        drive_password: &cfg.drive_password,
+        // `cfg.drive_password` is `Zeroizing<String>`; the context borrows it as
+        // `&str` (it is never moved/owned here, so no second secret copy).
+        drive_password: cfg.drive_password.as_str(),
         existing_mnemonic: Some(&mnemonic_for_config),
     };
     let (manager, user_id, mnemonic, is_new_setup) = init_or_unlock_drive(

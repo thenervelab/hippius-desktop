@@ -521,7 +521,7 @@ async fn validate_master_against_existing_folders(pool: &SqlitePool, account_id:
     let drive_password = match row {
         None => return Ok(()),
         Some((pw, _)) if pw.is_empty() => return Ok(()),
-        Some((pw, 0)) => pw,
+        Some((pw, 0)) => Zeroizing::new(pw),
         Some((_, 1)) => match crate::sync::config::get_drive_password(pool, account_id, Some(candidate_master)).await {
             Ok(pw) => pw,
             Err(_) => {
@@ -543,10 +543,12 @@ async fn validate_master_against_existing_folders(pool: &SqlitePool, account_id:
             continue;
         }
         // PBKDF2 (600k iterations) off the executor, once per folder — see
-        // run_kdf. Owned copies move into the closure; the drive-password copy is
-        // zeroizing (the source String is not — pre-existing, tracked for Phase 6).
+        // run_kdf. Owned copies move into the closure. `drive_password` is now
+        // `Zeroizing<String>` at its source, so cloning it yields another
+        // scrubbed-on-drop copy for the 'static closure — no bare-String copy
+        // of the secret remains anywhere in this function.
         let folder_enc_k = folder_enc.clone();
-        let drive_password_k = Zeroizing::new(drive_password.clone());
+        let drive_password_k = drive_password.clone();
         let recovered = run_kdf(move || {
             hcfs_client::auth::recover_mnemonic(&folder_enc_k, &drive_password_k).map_err(|e| AppError::Other(format!("recover folder mnemonic: {e}")))
         })
@@ -1262,7 +1264,7 @@ mod tests {
 
         // hcfs_config row exists, decrypts back to the new password.
         let recovered = crate::sync::config::get_drive_password(&pool, account, Some(master)).await.unwrap();
-        assert_eq!(recovered, "new canonical password");
+        assert_eq!(*recovered, "new canonical password");
 
         // Folder file re-encrypted under the new password.
         let folder_check = hcfs_client::auth::recover_mnemonic(&alpha_enc, "new canonical password").unwrap();
@@ -1357,7 +1359,7 @@ mod tests {
         // rewritten BEFORE the DB row is committed, so a folder failure aborts
         // with the system still consistent on the OLD password.
         let pw = crate::sync::config::get_drive_password(&pool, account, Some(&master)).await.unwrap();
-        assert_eq!(pw, "old canonical password", "DB password must stay OLD when a folder rewrite fails");
+        assert_eq!(*pw, "old canonical password", "DB password must stay OLD when a folder rewrite fails");
     }
 
     /// Minimal hcfs_config + sync_paths schema for the recovery-validation
