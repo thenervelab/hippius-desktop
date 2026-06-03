@@ -88,7 +88,10 @@ export default function TrayPanelPage() {
           // lines / corner textures) with copy + the Upload CTA that opens the
           // Drive page.
           <div className="flex flex-1 items-center justify-center py-2">
-            <div className="flex w-full flex-col gap-4 rounded-2xl border border-black/[0.08] bg-black/[0.02] p-5 shadow-sm dark:border-white/10 dark:bg-white/[0.03]">
+            {/* Explicit rgba fills/borders, not the arbitrary opacity-modifier
+                form (border-black/[0.08] etc.), which didn't render in light
+                mode here — same fix applied to the footer and credits pill. */}
+            <div className="flex w-full flex-col gap-4 rounded-2xl border border-[rgba(0,0,0,0.08)] bg-[rgba(0,0,0,0.02)] p-5 shadow-sm dark:border-white/10 dark:bg-[rgba(255,255,255,0.03)]">
               <div className="flex flex-col gap-1.5">
                 <h3 className="font-geist text-[18px] font-medium leading-6 tracking-[-0.54px] text-grey-10 dark:text-white">
                   No files yet
