@@ -1575,9 +1575,13 @@ pub async fn change_sync_folder(
 ) -> Result<InitSyncResult> {
     let pool = state.pool()?;
 
-    // Tear down the existing drive (fire and forget if it doesn't
-    // exist) so we can re-initialize it with the new path.
-    let _ = remove_drive(app.clone(), label.clone()).await;
+    // Tear down the existing drive (fire and forget if it doesn't exist) so we
+    // can re-initialize it with the new path. Thread the explicit `account_id`
+    // (parity with `remove_sync_path`) so the baseline wipe stays account-correct
+    // if the session flips mid-call — the session-deriving `remove_drive` would
+    // scope the wipe to the wrong account during an account switch, which is the
+    // stale-baseline-survives precondition `clear_persisted_sync_state` guards.
+    let _ = remove_drive_for_account(app.clone(), label.clone(), Some(account_id.clone())).await;
 
     // Set the new sync path in the DB
     crate::sync::paths::set_sync_path_internal(pool, &account_id, &new_path, false, Some(&label)).await?;
@@ -2907,6 +2911,43 @@ mod tests {
     fn teardown_account_none_when_neither_available() {
         // No account context at all → the caller skips persistent cleanup and warns.
         assert_eq!(teardown_account(None, None), None);
+    }
+
+    // change_sync_folder holds an explicit account_id, so its teardown MUST go
+    // through remove_drive_for_account (threading that account) and NOT the
+    // session-deriving remove_drive wrapper — otherwise an account flip mid-call
+    // would wipe the wrong account's baseline (or leave A's stale baseline alive
+    // across a path change, the clear_persisted_sync_state data-loss precondition).
+    // Static source assertion mirrors remove_sync_path_delegates_to_remove_drive_for_account.
+    #[test]
+    fn change_sync_folder_tears_down_with_explicit_account() {
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/lifecycle.rs")).expect("read lifecycle.rs");
+        let sig = src.find("pub async fn change_sync_folder(").expect("change_sync_folder present");
+        let body_start = src[sig..].find('{').expect("fn body opens") + sig;
+        let mut depth = 0usize;
+        let mut body_end = body_start;
+        for (i, ch) in src[body_start..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        body_end = body_start + i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let body = &src[body_start..=body_end];
+        assert!(
+            body.contains("remove_drive_for_account(app.clone(), label.clone(), Some(account_id.clone()))"),
+            "change_sync_folder must tear down via remove_drive_for_account with the explicit account",
+        );
+        assert!(
+            !body.contains("remove_drive(app"),
+            "change_sync_folder must NOT use the session-deriving remove_drive wrapper",
+        );
     }
 
     // balance_blocks_sync must block only on a definitively non-positive value.
