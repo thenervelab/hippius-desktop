@@ -53,37 +53,48 @@ pub(crate) fn derive_folder_mnemonic(master_mnemonic: &str, label: &str) -> Resu
 /// marker (so `initialize_sync_inner` purges stale remote files), and wipes local
 /// sync state to force re-upload with the correct key.
 pub(crate) fn ensure_derived_mnemonic(folder_dir: &Path, master_path: &Path, password: &str, label: &str) -> Result<()> {
-    use zeroize::Zeroize;
+    use zeroize::Zeroizing;
 
     let folder_enc = folder_dir.join("enc_mnemonic.json");
     if !folder_enc.exists() || !master_path.exists() {
         return Ok(());
     }
 
+    // Each decrypted/derived mnemonic is held in `Zeroizing` so its heap copy
+    // is scrubbed by `Drop` on *every* exit — including every `?` below (the
+    // folder `recover_mnemonic`, `derive_folder_mnemonic`, the marker
+    // `File::create`, and `save_encrypted_mnemonic`). The prior bare-`String` +
+    // manual `.zeroize()` form leaked the plaintext on those early returns: the
+    // manual wipes only sat on the happy paths, so a `?` unwound past them.
+    // (axiom rust_quality_167). The `==` comparisons below are variable-time,
+    // which is acceptable here: both operands are locally derived (decrypted
+    // from disk / derived from the local master), never an attacker-timed oracle.
     let master = hcfs_client::auth::recover_mnemonic(master_path, password).map_err(|e| crate::error::AppError::Hcfs(e.to_string()))?;
-    let mut master_str = master.to_string();
+    let master_str = Zeroizing::new(master.to_string());
 
     let folder = hcfs_client::auth::recover_mnemonic(&folder_enc, password).map_err(|e| crate::error::AppError::Hcfs(e.to_string()))?;
-    let mut folder_str = folder.to_string();
+    let folder_str = Zeroizing::new(folder.to_string());
 
-    let mut expected = derive_folder_mnemonic(&master_str, label)?;
+    let expected = Zeroizing::new(derive_folder_mnemonic(&master_str, label)?);
 
-    if folder_str == expected {
-        // Already correct — nothing to do.
-        master_str.zeroize();
-        folder_str.zeroize();
-        expected.zeroize();
+    if *folder_str == *expected {
+        // Already correct — nothing to do (secrets scrubbed on drop).
         return Ok(());
     }
 
     // Folder mnemonic is wrong — either raw master or derived from an old master.
-    if folder_str == master_str {
+    if *folder_str == *master_str {
         info!("Folder '{}' uses raw master mnemonic — re-deriving", label);
     } else {
         info!("Folder '{}' uses wrong derived mnemonic (old master?) — re-deriving", label);
     }
-    folder_str.zeroize();
-    master_str.zeroize();
+
+    // `master_str`/`folder_str` are unused past this comparison; scrub them now —
+    // before the marker + save I/O — so the plaintext window stays as narrow as
+    // the pre-Zeroizing code's explicit early wipe. `expected` is still needed
+    // for the save below and is scrubbed at end of scope.
+    drop(folder_str);
+    drop(master_str);
 
     // Create the rekey marker BEFORE saving the new mnemonic. If the
     // process crashes after the mnemonic is saved but before the marker
@@ -93,7 +104,6 @@ pub(crate) fn ensure_derived_mnemonic(folder_dir: &Path, master_path: &Path, pas
     std::fs::File::create(&marker)?;
 
     hcfs_client::auth::save_encrypted_mnemonic(&folder_enc, &expected, password).map_err(|e| crate::error::AppError::Hcfs(e.to_string()))?;
-    expected.zeroize();
 
     // Wipe sync state so files get re-uploaded with the new key
     let state_path = folder_dir.join("sync_state.json");
