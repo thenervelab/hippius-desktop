@@ -13,8 +13,15 @@ describe("formatUploadedDate", () => {
     expect(formatUploadedDate(-1, NOW)).toBe("");
   });
 
-  it("shows 'Just now' under a minute", () => {
-    expect(formatUploadedDate(ago(30_000), NOW)).toBe("Just now");
+  it("shows 'Just now' only within the first ~20 seconds", () => {
+    expect(formatUploadedDate(ago(5_000), NOW)).toBe("Just now");
+    expect(formatUploadedDate(ago(19_999), NOW)).toBe("Just now");
+  });
+
+  it("shows seconds between ~20s and a minute (floored)", () => {
+    expect(formatUploadedDate(ago(20_000), NOW)).toBe("20s ago");
+    expect(formatUploadedDate(ago(30_000), NOW)).toBe("30s ago");
+    expect(formatUploadedDate(ago(59_999), NOW)).toBe("59s ago");
   });
 
   it("shows minutes within the hour (floored)", () => {

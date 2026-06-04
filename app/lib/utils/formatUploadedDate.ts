@@ -1,7 +1,12 @@
+const SECOND_MS = 1_000;
 const MINUTE_MS = 60_000;
 const HOUR_MS = 3_600_000;
 const DAY_MS = 86_400_000;
 const WEEK_MS = 7 * DAY_MS;
+
+/** "Just now" window. Past this, the label switches to a counting "Ns ago"
+ *  so a row visibly ages instead of sitting on "Just now" for a full minute. */
+const JUST_NOW_MS = 20_000;
 
 const MONTHS = [
   "Jan",
@@ -21,8 +26,8 @@ const MONTHS = [
 /**
  * User-friendly "uploaded at" label for a millisecond epoch timestamp.
  *
- * Recent uploads read as relative time ("Just now", "5m ago", "3h ago",
- * "2d ago"); anything a week or older falls back to a short absolute date
+ * Recent uploads read as relative time ("Just now" for the first ~20s, then
+ * "45s ago", "5m ago", "3h ago", "2d ago"); anything a week or older falls back to a short absolute date
  * ("5 Jan" within the current year, "5 Jan 2026" otherwise) so the label
  * stays compact and unambiguous. A future timestamp (clock skew) also uses
  * the absolute form rather than a nonsensical negative "ago".
@@ -45,7 +50,8 @@ export function formatUploadedDate(
 
   const diff = now - msTimestamp;
   if (diff >= 0 && diff < WEEK_MS) {
-    if (diff < MINUTE_MS) return "Just now";
+    if (diff < JUST_NOW_MS) return "Just now";
+    if (diff < MINUTE_MS) return `${Math.floor(diff / SECOND_MS)}s ago`;
     if (diff < HOUR_MS) return `${Math.floor(diff / MINUTE_MS)}m ago`;
     if (diff < DAY_MS) return `${Math.floor(diff / HOUR_MS)}h ago`;
     return `${Math.floor(diff / DAY_MS)}d ago`;
