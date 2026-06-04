@@ -121,7 +121,7 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
           {truncatedAddress}
         </span>
         {withChevron && (
-          <ChevronDown className="size-[12px] shrink-0 text-black-700/60 dark:text-grey-light-300/60" />
+          <ChevronDown className="size-[12px] shrink-0 text-black-700/60 dark:text-grey-light-300/60 transition-transform duration-200 group-data-[state=open]:rotate-180" />
         )}
       </span>
       <span className="flex items-center gap-1 mt-1 whitespace-nowrap">
@@ -157,7 +157,7 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
             type="button"
             aria-label="Open account menu"
             className={cn(
-              "flex items-center gap-1.5 rounded-lg py-2 hover:bg-black/5 transition-colors duration-200 min-w-0 overflow-hidden",
+              "group flex items-center gap-1.5 rounded-lg py-2 hover:bg-black/5 transition-colors duration-200 min-w-0 overflow-hidden",
               "dark:hover:bg-white/10 data-[state=open]:bg-black/5 dark:data-[state=open]:bg-white/10",
               collapsed ? "px-1" : "flex-1 pr-1",
             )}
