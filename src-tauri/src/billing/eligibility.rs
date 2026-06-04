@@ -281,6 +281,23 @@ async fn chain_free_balance(state: &crate::app_state::AppState, account_id: &str
     Ok(info.map_or(0, |i| i.data.free))
 }
 
+/// Decide whether `account_id` can afford `action` for a payload of `bytes`,
+/// returning a structured `ActionEligibility` for the frontend's proactive gate.
+///
+/// Performs a **live** marketplace-balance fetch with no caching — that is the
+/// whole reason credit checks live in Rust rather than reusing the frontend's
+/// `staleTime: Infinity` display hook. Fail-closed: an unparseable balance from
+/// a 200 response is logged and treated as `0.0`, so a malformed billing-API
+/// response refuses the action instead of over-granting. `required` combines
+/// the static per-action threshold with the per-byte upload price via
+/// `required_credits`, so a single comparison covers both the legacy and the
+/// bytes-priced paths.
+///
+/// # Errors
+///
+/// Returns an error if the DB pool is unavailable or the billing-API balance
+/// request fails. A zero or unparseable balance is *not* an error — it
+/// resolves to `eligible: false`.
 pub(crate) async fn check_action_eligibility_inner(
     state: &crate::app_state::AppState,
     account_id: &str,

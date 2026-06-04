@@ -69,6 +69,21 @@ async fn drop_legacy_nebula_tables(pool: &SqlitePool) -> Result<(), sqlx::Error>
     Ok(())
 }
 
+/// Create or migrate every SQLite table the desktop backend relies on.
+///
+/// This is the single source of truth for the local schema — the project
+/// maintains the database via this function instead of migration files (see
+/// CLAUDE.md). Idempotent, so it is safe to run on every startup. The whole
+/// initializer runs in one transaction so the ~30 CREATE/ALTER/INSERT
+/// statements share a single commit-time fsync (≈10x faster cold-start on
+/// WAL-mode SQLite). Legacy Nebula tables are dropped first, *outside* the
+/// transaction, so that cleanup stays durable even if a later schema step
+/// fails.
+///
+/// # Errors
+///
+/// Returns `sqlx::Error` if any DDL/DML statement or the commit fails; the
+/// transaction is rolled back, leaving the existing schema unchanged.
 #[expect(
     clippy::too_many_lines,
     reason = "Large but straightforward schema initializer: declarative TABLE_SCHEMAS loop plus one complex sync_paths migration (label column, is_paused column, UNIQUE constraint recreation) that must stay co-located to be auditable in a single transaction. Coverage is provided by the `ensure_table_schema_creates_all_expected_tables` smoke test against EXPECTED_TABLES."
