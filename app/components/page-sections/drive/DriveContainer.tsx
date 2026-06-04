@@ -469,9 +469,12 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
       ? nestedListing.isLoading || isFiltering || isRecursiveSearching
       : isRegularFilesLoading || isFiltering || isRecursiveSearching;
 
-  // Infinite scroll state for list and card views
-  const { visibleData, hasMore, loadMore, resetScroll } =
-    useInfiniteScroll(filteredData);
+  // Infinite scroll state for list and card views. Cheap keyFn (no row
+  // serialization) so the source-changed check stays O(1) during sync refetches.
+  const { visibleData, hasMore, loadMore, resetScroll } = useInfiniteScroll(
+    filteredData,
+    (f) => `${f.label ?? ""}::${f.actualFileName ?? f.arionHash}::${f.lastChargedAt}`
+  );
 
   // Batch update helper to prevent multiple rapid filter updates
   const updateFilters = useCallback(

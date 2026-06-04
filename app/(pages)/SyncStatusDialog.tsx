@@ -732,9 +732,16 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
             )}
 
             <div className="max-h-[11.5rem] overflow-y-auto px-[10px] py-1.5 flex flex-col gap-1.5">
-              {snapshot.files.map((file) => (
-                <SyncFileItem key={file.path} file={file} />
-              ))}
+              {/* Only build the per-file rows when the body is actually visible.
+                  The collapsed body is CSS-hidden (max-height:0) but the dialog
+                  re-renders up to ~4x/sec during a sync; mapping the whole file
+                  list each time was wasted reconciliation. The wrapper stays
+                  mounted so the open/close transition still animates, and the
+                  list renders synchronously on first expand (no empty flash). */}
+              {isExpanded &&
+                snapshot.files.map((file) => (
+                  <SyncFileItem key={file.path} file={file} />
+                ))}
             </div>
           </div>
         </div>
