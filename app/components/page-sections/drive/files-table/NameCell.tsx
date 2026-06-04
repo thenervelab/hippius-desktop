@@ -133,7 +133,7 @@ const FileStatusBadge: FC<{
   const pillLabel =
     "font-geist text-[10px] font-medium leading-none tracking-[-0.2px] whitespace-nowrap";
 
-  // Hover tooltips mirror the wording from the legacy SyncStatusHandler2
+  // Hover tooltips mirror the wording from the SyncStatusDialog
   // header so the user gets the same "where is this file in the sync
   // pipeline" cue even though the per-row badge has no inline text for
   // the progress states. The percent on uploading/downloading is the
