@@ -403,6 +403,7 @@ const DriveContent: FC<DriveContentProps> = ({
             filteredData.length > 0 &&
             !isRecentFiles &&
             "mt-[11px]",
+          isRecentFiles && "-mt-3",
           isDragging &&
             "after:absolute after:inset-0 after:bg-gray-50/50 after:border-2 after:border-primary-50 after:border-dashed after:rounded-lg after:z-10",
         )}

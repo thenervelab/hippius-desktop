@@ -1384,7 +1384,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
               // Recent Files card — unchanged. DriveContent sits as a sibling
               // of DriveHeader inside the outer card.
               return (
-                <div className="bg-grey-light-300 border border-grey-dark-100 rounded-[8px] shadow-[0px_1px_1.1px_0px_rgba(0,0,0,0.04)] dark:bg-black-primary-bg dark:border-black-300 dark:shadow-[0px_1px_1.1px_0px_rgba(0,0,0,0.4)]">
+                <div className="bg-grey-light-300  shadow-[0px_1px_1.1px_0px_rgba(0,0,0,0.04)] dark:bg-black-primary-bg  dark:shadow-[0px_1px_1.1px_0px_rgba(0,0,0,0.4)]">
                   {driveHeader}
                   {driveContent}
                 </div>
