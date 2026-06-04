@@ -5,9 +5,14 @@ import dynamic from "next/dynamic";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { Window } from "@tauri-apps/api/window";
-import { Upload } from "lucide-react";
+import { Upload, Check, AlertCircle } from "lucide-react";
 import "./tray-panel.css";
 import { useTrayPanelData } from "@/app/lib/tray/useTrayPanelData";
+import {
+  getTraySyncSummary,
+  type TraySyncTone,
+} from "@/app/lib/tray/traySyncSummary";
+import type { SyncSnapshot } from "@/app/lib/types/syncSnapshot";
 import type { UploadFeedItem } from "@/app/lib/upload-feed/mergeUploadFeed";
 import { groupUploadFeed } from "@/app/lib/upload-feed/groupUploadFeed";
 import { getFileTypeFromExtension } from "@/app/lib/utils/getTileTypeFromExtension";
@@ -48,7 +53,7 @@ const Avatar = dynamic(() => import("boring-avatars"), { ssr: false });
  * field mirrors the sidebar's search styling.
  */
 export default function TrayPanelPage() {
-  const { menu, feed, blockNumber, isConnected, unreadCount } = useTrayPanelData();
+  const { menu, feed, snapshot, blockNumber, isConnected, unreadCount } = useTrayPanelData();
   // Date-bucketed for the headed list (Today / Yesterday / This Week / …).
   // Live uploading/failed rows carry createdAt=now, so they lead "Today".
   const groups = groupUploadFeed(feed);
@@ -100,6 +105,11 @@ export default function TrayPanelPage() {
 
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-5 pb-2">
         <h2 className="py-2 font-geist text-[16px] font-medium leading-8 text-grey-10 dark:text-white">Your Uploads</h2>
+
+        {/* Live sync-progress summary (percent + status + synced/remaining),
+            mirroring the sidebar sync widget. Renders only while a session is
+            active or just finished; getTraySyncSummary returns null when idle. */}
+        <SyncSummary snapshot={snapshot} />
 
         {feed.length === 0 ? (
           // Empty state: a single simple rounded card (no graphsheet / guide
@@ -226,6 +236,60 @@ function SearchBar() {
           <span>F</span>
         </span>
       </button>
+    </div>
+  );
+}
+
+/** Per-tone accent color for the sync summary (matches `StatusLabel`'s tokens
+ *  and the sidebar widget). */
+const TRAY_SYNC_TONE_TEXT: Record<TraySyncTone, string> = {
+  active: "text-[#3167DD]",
+  preparing: "text-[#3167DD]",
+  completed: "text-[#04C870]",
+  failed: "text-[#FF6D61]",
+};
+
+/**
+ * Sync-progress summary shown above the upload list — the popover counterpart
+ * of the sidebar's sync widget. Top line: a status icon + overall percent on
+ * the left, the status word on the right. Bottom line: synced vs. remaining
+ * counts. Renders nothing when there's no active/recent session (the resolver
+ * returns null), so the list sits directly under the heading when idle.
+ */
+function SyncSummary({ snapshot }: { snapshot: SyncSnapshot }) {
+  const summary = getTraySyncSummary(snapshot);
+  if (!summary) return null;
+
+  const accent = TRAY_SYNC_TONE_TEXT[summary.tone];
+
+  return (
+    <div className="mb-2 mt-1 flex flex-col gap-2 rounded-[12px] border border-[rgba(0,0,0,0.08)] bg-[rgba(0,0,0,0.02)] p-3 dark:border-white/10 dark:bg-[rgba(255,255,255,0.03)]">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          {summary.tone === "completed" ? (
+            <Check className="size-4 shrink-0 text-[#04C870]" strokeWidth={3} />
+          ) : summary.tone === "failed" ? (
+            <AlertCircle className="size-4 shrink-0 text-[#FF6D61]" />
+          ) : (
+            <span className={`flex ${accent}`}>
+              <ProgressRing value={summary.percent} />
+            </span>
+          )}
+          <span className={`font-geist text-[14px] font-semibold leading-none ${accent}`}>
+            {summary.percent}%
+          </span>
+        </div>
+        <span
+          className={`font-mono text-[10px] font-medium uppercase leading-none tracking-[-0.2px] ${
+            summary.tone === "completed" ? "text-grey-70 dark:text-white/50" : accent
+          }`}
+        >
+          {summary.statusLabel}
+        </span>
+      </div>
+      <span className="font-geist text-[12px] font-medium tracking-[-0.24px] text-grey-70 dark:text-white/50">
+        {summary.detail}
+      </span>
     </div>
   );
 }

@@ -167,5 +167,5 @@ export function useTrayPanelData() {
     [recentUploads, snapshot.files],
   );
 
-  return { menu, feed, blockNumber, isConnected, unreadCount, refresh };
+  return { menu, feed, snapshot, blockNumber, isConnected, unreadCount, refresh };
 }
