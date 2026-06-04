@@ -3,7 +3,7 @@
 import { AppVersion } from "@/components/ui";
 import cn from "@/app/lib/utils/cn";
 import ProfileCard from "@/components/dashboard-title-wrapper/ProfileCard";
-// import SyncWidgetPlayground from "@/app/(pages)/SyncWidgetPlayground";
+
 import SyncStatusHandler from "@/app/(pages)/SyncStatusHandler";
 
 interface SidebarFooterProps {
@@ -26,12 +26,15 @@ const SidebarFooter: React.FC<SidebarFooterProps> = ({ collapsed }) => {
         aria-hidden="true"
       />
 
-      {!collapsed && (
-        <div className="-mx-3">
-          {/* <SyncWidgetPlayground liveHost="sidebar" /> */}
-          <SyncStatusHandler host="sidebar" />
-        </div>
-      )}
+      {/* Rendered in BOTH sidebar states. Collapsed → the compact circular ring
+          (left-aligned under the avatar) so the widget no longer vanishes;
+          expanded → the full card. The widget owns its own -mx-3 bleed (full
+          card / dev panel only, never the ring), so the ring stays aligned
+          under the avatar and no footer-level margin is needed here.
+          LIVE swap:  */}
+      <SyncStatusHandler host="sidebar" collapsed={collapsed} />
+      {/* <SyncWidgetPlayground liveHost="sidebar" collapsed={collapsed} /> */}
+
       <ProfileCard collapsed={collapsed} />
 
       <div

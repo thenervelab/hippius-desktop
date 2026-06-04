@@ -13,7 +13,7 @@
  */
 
 import React, { useEffect, useMemo, useState } from "react";
-import { Provider as JotaiProvider, createStore } from "jotai";
+import { Provider as JotaiProvider, createStore, useSetAtom } from "jotai";
 
 import SyncStatusDialog from "./SyncStatusDialog";
 import SyncStatusHandler from "./SyncStatusHandler";
@@ -26,6 +26,7 @@ import {
   DEFAULT_SYNC_ENGINE_HEALTH,
   type SyncEngineHealthState,
 } from "../lib/store/syncAtoms";
+import { sidebarCollapsedAtom } from "@/app/components/sidebar/sideBarAtoms";
 
 const LIVE = "__live__";
 
@@ -582,13 +583,28 @@ const PRESETS: Preset[] = [
 
 interface SyncWidgetPlaygroundProps {
   liveHost?: "portal" | "sidebar";
+  /**
+   * Sidebar collapse state (sidebar host only). When collapsed the playground
+   * forces the compact ring and hides its dev controls — mirroring how the
+   * live handler behaves in the narrow rail — so the collapsed-sidebar mini
+   * can be previewed with dummy data.
+   */
+  collapsed?: boolean;
 }
 
 const SyncWidgetPlayground: React.FC<SyncWidgetPlaygroundProps> = ({
   liveHost = "portal",
+  collapsed = false,
 }) => {
   const [selected, setSelected] = useState<string>(PRESETS[0].id);
   const [dismissed, setDismissed] = useState(false);
+  // Preview the compact circular form (sidebar-collapsed / minimized state).
+  const [minified, setMinified] = useState(false);
+  const setSidebarCollapsed = useSetAtom(sidebarCollapsedAtom);
+
+  // The sidebar being collapsed forces the ring regardless of the checkbox,
+  // matching the live handler's `collapsed || minimized` rule.
+  const effectiveMinified = collapsed || minified;
 
   const preset = useMemo(
     () => PRESETS.find((p) => p.id === selected),
@@ -613,43 +629,73 @@ const SyncWidgetPlayground: React.FC<SyncWidgetPlaygroundProps> = ({
 
   const isLive = selected === LIVE;
 
-  return (
-    <div className="flex flex-col items-end gap-2 ">
-      <div className="bg-grey-100 border border-grey-80 w-[235px] shadow-menu rounded-md px-3 py-2 flex  flex-col gap-2">
-        <div>
-          <span className="text-[0.625rem] uppercase tracking-wide font-semibold text-warning-50">
-            DEV
-          </span>
-          <span className="text-xs text-grey-30 font-medium">
-            Sync widget preview
-          </span>
-        </div>
-        <div className="w-full">
-          <select
-            value={selected}
-            onChange={(e) => setSelected(e.target.value)}
-            className="text-xs w-full bg-grey-95 border border-grey-80 rounded px-2 py-1 text-grey-10 focus:outline-none focus:ring-1 focus:ring-primary-50"
-          >
-            <option value={LIVE}>Live (real backend)</option>
-            {PRESETS.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.label}
-              </option>
-            ))}
-          </select>
-        </div>
-      </div>
+  const expandOrigin = liveHost === "sidebar" ? "bottom-left" : "bottom-right";
 
+  return (
+    <div className="flex flex-col items-start gap-2">
+      {/* Dev controls don't fit the collapsed rail — hide them and let the
+          forced ring stand alone, just like the live handler. The -mx-3 lets
+          the 235px panel bleed past the padded sidebar. */}
+      {!collapsed && (
+        <div className="-mx-3">
+          <div className="bg-grey-100 border border-grey-80 w-[235px] shadow-menu rounded-md px-3 py-2 flex  flex-col gap-2">
+            <div>
+              <span className="text-[0.625rem] uppercase tracking-wide font-semibold text-warning-50">
+                DEV
+              </span>
+              <span className="text-xs text-grey-30 font-medium">
+                Sync widget preview
+              </span>
+            </div>
+            <div className="w-full">
+              <select
+                value={selected}
+                onChange={(e) => setSelected(e.target.value)}
+                className="text-xs w-full bg-grey-95 border border-grey-80 rounded px-2 py-1 text-grey-10 focus:outline-none focus:ring-1 focus:ring-primary-50"
+              >
+                <option value={LIVE}>Live (real backend)</option>
+                {PRESETS.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {!isLive && (
+              <label className="flex items-center gap-1.5 text-xs text-grey-30 font-medium">
+                <input
+                  type="checkbox"
+                  checked={minified}
+                  onChange={(e) => setMinified(e.target.checked)}
+                />
+                Minified (collapsed) form
+              </label>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* The live handler owns its own -mx-3 (full card only); the dummy
+          dialog does not, so we apply the bleed here for the full card and
+          drop it for the ring so the ring stays aligned under the avatar. */}
       {isLive || !preset || !store ? (
-        <SyncStatusHandler host={liveHost} />
+        <SyncStatusHandler host={liveHost} collapsed={collapsed} />
       ) : dismissed ? null : (
-        <JotaiProvider store={store}>
-          <SyncStatusDialog
-            snapshot={preset.snapshot}
-            open={true}
-            onClose={() => setDismissed(true)}
-          />
-        </JotaiProvider>
+        <div className={effectiveMinified ? "" : "-mx-3"}>
+          <JotaiProvider store={store}>
+            <SyncStatusDialog
+              snapshot={preset.snapshot}
+              open={true}
+              minimized={effectiveMinified}
+              expandOrigin={expandOrigin}
+              onExpand={() => {
+                setMinified(false);
+                setSidebarCollapsed(false);
+              }}
+              onClose={() => setMinified(true)}
+            />
+          </JotaiProvider>
+        </div>
       )}
     </div>
   );

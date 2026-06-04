@@ -275,6 +275,20 @@ export default {
             transform: "scale(1)",
           },
         },
+        // Sync widget collapse/expand. Paired with `origin-bottom-left`
+        // (sidebar) or `origin-bottom-right` (portal) so the mini ring and the
+        // full card appear to grow out of that corner, mirroring the old
+        // SyncStatusDialog2 expand.
+        ["widget-grow"]: {
+          "0%": {
+            opacity: "0",
+            transform: "scale(0.8)",
+          },
+          "100%": {
+            opacity: "1",
+            transform: "scale(1)",
+          },
+        },
         ["tooltip-reveal-left"]: {
           "0%": {
             opacity: "0",
@@ -395,6 +409,7 @@ export default {
           "tooltip-reveal-right 0.3s ease-in-out forwards",
         "scale-in-95-0.2": "scale-in-95 0.2s ease-in-out forwards",
         "scale-out-95-0.2": "scale-out-95 0.2s ease-in-out forwards",
+        "widget-grow-0.3": "widget-grow 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards",
         ["slideDown"]: "slide-down 0.3s ease-out",
         ["slideUp"]: "slide-up 0.3s ease-out",
         ["translate-from-bottom"]:

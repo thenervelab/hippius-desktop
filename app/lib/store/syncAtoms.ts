@@ -7,6 +7,24 @@ export const pendingConflictsAtom = atom<StagedChanges | null>(null);
 // Tracks whether we've already updated the tray for the current percentage
 export const lastUpdatedPercentAtom = atom<number | null>(null);
 
+/**
+ * UI-only flag: the user collapsed the floating sync widget into its compact
+ * circular form by clicking the close (✕) icon. This is pure presentation
+ * state (the same category as the widget's expand/collapse of its file list),
+ * so it lives in the frontend rather than Rust.
+ *
+ * `true` → the widget renders {@link SyncStatusMini} (a percentage ring) instead
+ * of the full card. Clicking the ring (or a new sync session starting) clears
+ * it. It deliberately does NOT call `sp_dismiss_sync_widget`: minimizing keeps
+ * the widget reachable, whereas dismissing tells Rust to hide it entirely
+ * (still used by the `hcfs_sync_stopped` path).
+ *
+ * The sidebar's own collapsed state ALSO forces the mini form, but that is
+ * driven by `sidebarCollapsedAtom`, not this atom — the two are OR'd together
+ * at the render site so either trigger produces the compact view.
+ */
+export const syncWidgetMinimizedAtom = atom<boolean>(false);
+
 // Connectivity health state from periodic backend health checks
 export type ConnectivityStatusType =
   | "connected"

@@ -23,6 +23,7 @@ import {
 } from "../lib/types/syncSnapshot";
 import { getFileIcon } from "../lib/utils/fileTypeUtils";
 import SyncQueueOverallProgress from "./SyncQueueOverallProgress";
+import SyncStatusMini from "./SyncStatusMini";
 
 const BODY_MAX_HEIGHT_REM = 11.5;
 const RATE_WINDOW = 10;
@@ -38,6 +39,20 @@ interface SyncStatusDialogProps {
   snapshot: SyncSnapshot;
   open: boolean;
   onClose?: () => void;
+  /**
+   * Render the compact circular form ({@link SyncStatusMini}) instead of the
+   * full card. Set when the sidebar is collapsed or the user minimized the
+   * widget via the ✕ icon. See {@link syncWidgetMinimizedAtom}.
+   */
+  minimized?: boolean;
+  /** Invoked when the minimized ring is clicked — expands back to full. */
+  onExpand?: () => void;
+  /**
+   * Corner the collapse/expand grow animation anchors to: `bottom-left` for
+   * the sidebar footer, `bottom-right` for the portal overlay (the default,
+   * matching the old bottom-right widget).
+   */
+  expandOrigin?: "bottom-left" | "bottom-right";
 }
 
 interface SyncFileItemProps {
@@ -330,6 +345,9 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
   snapshot,
   open,
   onClose,
+  minimized = false,
+  onExpand,
+  expandOrigin = "bottom-right",
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const engineHealth = useAtomValue(syncEngineHealthAtom);
@@ -505,6 +523,23 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
     isUnhealthy ? connectivityLabel : "Connected",
   );
 
+  // Compact circular form: shown when the sidebar is collapsed or the user
+  // minimized the widget. Built after the percentage/tone/badge text so the
+  // ring, its label, and the tooltip are driven by the exact same values as
+  // the full card — they can never disagree.
+  if (minimized) {
+    return (
+      <SyncStatusMini
+        percentage={displayPercentage}
+        tone={tone}
+        indeterminate={displayPercentage === null}
+        statusText={headerBadgeText}
+        onExpand={onExpand}
+        expandOrigin={expandOrigin}
+      />
+    );
+  }
+
   const hasTransferringFile = snapshot.files.some(
     (file) => file.status === "inProgress",
   );
@@ -611,7 +646,12 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
   return (
     <div
       onClick={(event: React.MouseEvent) => event.stopPropagation()}
-      className="w-[239px] "
+      className={cn(
+        "w-[239px] animate-widget-grow-0.3",
+        expandOrigin === "bottom-left"
+          ? "origin-bottom-left"
+          : "origin-bottom-right",
+      )}
     >
       <div className="w-full overflow-hidden rounded-[12px] shadow-lg bg-[#d8d8d9] dark:bg-[#4b4b4c]">
         <div className="flex items-start gap-[6px] p-[10px]">

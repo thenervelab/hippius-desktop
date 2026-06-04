@@ -333,6 +333,54 @@ describe("SyncStatusDialog", () => {
     expect(summaryTexts).not.toContain("0B/0B");
   });
 
+  it("renders the compact ring instead of the full card when minimized", () => {
+    const files = [
+      makeFileProgress("data.csv", {
+        status: "inProgress",
+        progressPercent: 60,
+        bytesTransferred: 600,
+        totalBytes: 1000,
+      }),
+    ];
+    const snapshot = makeSnapshot(files);
+
+    renderWithJotai(
+      <SyncStatusDialog snapshot={snapshot} open={true} minimized={true} />,
+    );
+
+    // Compact ring is shown…
+    expect(screen.getByTestId("sync-status-mini")).toBeInTheDocument();
+    expect(screen.getByTestId("sync-status-mini-label")).toHaveTextContent("60%");
+    // …and the full card's expand toggle / file list are not rendered.
+    expect(screen.queryByTestId("sync-status-toggle")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("file-item")).not.toBeInTheDocument();
+  });
+
+  it("calls onExpand when the minimized ring is clicked", () => {
+    const onExpand = vi.fn();
+    const files = [
+      makeFileProgress("data.csv", {
+        status: "inProgress",
+        progressPercent: 40,
+        bytesTransferred: 400,
+        totalBytes: 1000,
+      }),
+    ];
+    const snapshot = makeSnapshot(files);
+
+    renderWithJotai(
+      <SyncStatusDialog
+        snapshot={snapshot}
+        open={true}
+        minimized={true}
+        onExpand={onExpand}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("sync-status-mini"));
+    expect(onExpand).toHaveBeenCalledTimes(1);
+  });
+
   it("shows Complete when Rust fixes stalled active session at 100%", () => {
     // Reproduces the bug scenario: hcfs-client leaves is_active=true due to
     // its file watcher detecting self-generated writes (changes_pending stuck).
