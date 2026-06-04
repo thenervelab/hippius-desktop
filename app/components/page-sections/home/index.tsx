@@ -41,7 +41,13 @@ const Home: React.FC = () => {
               <StorageUsageCard />
             </div>
 
-            <div id="recent-files">
+            {/* `pb-10` mirrors the drive page's bottom gap: the recent-files
+                card is the last block in the page scroll, so without it the
+                card sits flush against the bottom edge when fully scrolled.
+                It belongs here (the recent-files card's own wrapper in the
+                page scroll) rather than inside DriveContainer, whose
+                isRecentFiles branch intentionally skips its `pb-10`. */}
+            <div id="recent-files" className="pb-10">
               <Drive isRecentFiles />
             </div>
           </div>

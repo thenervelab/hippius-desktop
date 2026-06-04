@@ -1271,7 +1271,14 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
 
     content = (
       <FileSelectionProvider>
-        <div className={cn("w-full relative", !isRecentFiles && "px-3")}>
+        {/* `pb-10` keeps a long, fully-scrolled drive list from sitting flush
+            against the bottom of the page scroll. Applied on this outermost
+            drive-content wrapper (a plain block in the page scroll) rather than
+            inside the table — the table lives in `TableWrapper`, whose
+            `overflow-y-auto` clips any padding added below it. Recent Files is
+            excluded here: it renders on the Overview/home page, which owns the
+            equivalent bottom gap on its `#recent-files` wrapper. */}
+        <div className={cn("w-full relative", !isRecentFiles && "px-3 pb-10")}>
           {/* Sync Paused Alert */}
           {IS_SYNC_PAUSED && !isRecentFiles && (
             <div className="mb-4">
