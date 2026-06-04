@@ -46,8 +46,11 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
   const displayAddress =
     oauthSession?.substrateAddress || polkadotAddress || null;
 
+  // Center truncation with an equal number of leading/trailing characters.
+  // The address span is never CSS-clipped, so the trailing half always
+  // survives — only this middle ellipsis shortens the address.
   const truncatedAddress = displayAddress
-    ? `${displayAddress.slice(0, 8)}...${displayAddress.slice(
+    ? `${displayAddress.slice(0, 6)}...${displayAddress.slice(
         displayAddress.length - 6,
       )}`
     : "";
@@ -108,12 +111,18 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
     </span>
   );
 
-  // Shared avatar + address + block-number block. Reused verbatim in the row
-  // trigger and the menu header so the menu reads as a continuation of the row.
-  const identity = (
-    <span className="flex flex-col items-start min-w-0 flex-1 whitespace-nowrap">
-      <span className="text-sm font-medium font-inter leading-none text-zinc-800 dark:text-grey-light-600 tracking-[-0.4px] truncate w-full text-left">
-        {truncatedAddress}
+  // Shared avatar + address + block-number block. The chevron, when present,
+  // sits on the address line itself so it aligns with the address rather than
+  // floating in the vertical centre of the two-line card.
+  const renderIdentity = (withChevron: boolean) => (
+    <span className="flex flex-col items-start min-w-0 flex-1">
+      <span className="flex items-center gap-1.5">
+        <span className="text-sm font-medium font-inter leading-none text-zinc-800 dark:text-grey-light-600 tracking-[-0.4px] whitespace-nowrap text-left">
+          {truncatedAddress}
+        </span>
+        {withChevron && (
+          <ChevronDown className="size-[12px] shrink-0 text-black-700/60 dark:text-grey-light-300/60" />
+        )}
       </span>
       <span className="flex items-center gap-1 mt-1 whitespace-nowrap">
         <BoxSimple className="size-[13px] text-black-700 dark:text-grey-light-600 flex-shrink-0" />
@@ -154,12 +163,7 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
             )}
           >
             {avatarNode}
-            {!collapsed && (
-              <>
-                {identity}
-                <ChevronDown className="size-[12px] shrink-0 text-black-700/60 dark:text-grey-light-300/60" />
-              </>
-            )}
+            {!collapsed && renderIdentity(true)}
           </button>
         </DropdownMenuTrigger>
 
@@ -199,7 +203,7 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
           className="flex items-center gap-1.5 w-full px-2 py-2 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 transition-colors duration-200 text-left"
         >
           {avatarNode}
-          {identity}
+          {renderIdentity(false)}
         </button>
 
         <DropdownMenuSeparator className="my-1 bg-grey-dark-100 dark:bg-[#313131]" />
