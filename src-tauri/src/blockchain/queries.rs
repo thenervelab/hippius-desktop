@@ -173,9 +173,12 @@ pub async fn get_staking_info(
             let amount = chunk.value;
             let remaining = unlock_era.saturating_sub(current_era);
             if remaining == 0 {
-                withdrawable_total += amount;
+                // Defensive arithmetic mirroring `available`'s `saturating_sub`
+                // below: these accumulate on-chain ledger values, so clamp at
+                // u128::MAX instead of wrapping silently in release builds.
+                withdrawable_total = withdrawable_total.saturating_add(amount);
             } else {
-                unbonding_total += amount;
+                unbonding_total = unbonding_total.saturating_add(amount);
                 let amount_str = amount.to_string();
                 unbonding_periods.push(UnbondingPeriod {
                     amount_hip: planck_to_hip(&amount_str),

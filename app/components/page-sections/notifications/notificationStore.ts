@@ -111,6 +111,16 @@ export const refreshNotificationsAtom = atom(null, async (get, set) => {
   set(unreadCountAtom, unreadCount);
 });
 
+// Clear the in-memory notification view immediately (no I/O). Used on account
+// switch / logout so a previous account's cached notifications cannot render
+// under the new session while the async refresh is still in flight. Per-account
+// isolation is enforced in Rust (`list_notifications` is session-scoped); this
+// only prevents a stale flash in the UI.
+export const clearNotificationsAtom = atom(null, (_get, set) => {
+  set(notificationsAtom, []);
+  set(unreadCountAtom, 0);
+});
+
 // write-only atoms for actions
 export const markReadAtom = atom(null, async (get, set, id: number) => {
   await markRead(id);
