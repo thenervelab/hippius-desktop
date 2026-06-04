@@ -2,23 +2,13 @@
 
 import { useState } from "react";
 import { useAtomValue } from "jotai";
-import { useRouter } from "next/navigation";
-import { ChevronDown, Setting, Logout, TrendUp } from "@/components/ui/icons";
 import { HippiusBrandMark } from "@/components/ui/HippiusBrandMark";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { sidebarCollapsedAtom } from "@/components/sidebar/sideBarAtoms";
-import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { cn } from "@/app/lib/utils";
-import {
-  updateDialogOpenAtom,
-  updateStore,
-} from "@/app/components/updater/updateStore";
 
+// The Hippius brand mark in the top bar. The account menu (Update App /
+// Settings / Sign out) now lives on the bottom-left profile row
+// (`ProfileCard`), so this is purely a static, drag-region logo.
 const TopBarLogoMenu = () => {
   const [isMac] = useState(() => {
     if (typeof navigator === "undefined") return false;
@@ -27,24 +17,6 @@ const TopBarLogoMenu = () => {
     return platform.includes("mac") || ua.includes("mac os");
   });
   const collapsed = useAtomValue(sidebarCollapsedAtom);
-  const router = useRouter();
-  const { logout } = useWalletAuth();
-
-  const handleOpenSettings = () => {
-    router.push("/settings?section=sync");
-  };
-
-  // Manual "Check for Updates" — route through the same store atom the
-  // auto-trigger uses. UpdateDialogWrapper (mounted in UpdateChecker)
-  // observes the atom and renders the unified dialog. The dialog runs
-  // tauri's check() itself on open and handles all six states.
-  const handleOpenUpdate = () => {
-    updateStore.set(updateDialogOpenAtom, true);
-  };
-
-  const handleSignOut = () => {
-    void logout();
-  };
 
   return (
     <div
@@ -55,84 +27,20 @@ const TopBarLogoMenu = () => {
         collapsed ? "min-w-0" : "min-w-[243px]",
       )}
     >
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <button
-            type="button"
-            aria-label="Open Hippius menu"
-            title="Hippius"
-            className={cn(
-              "flex items-center gap-[8px] px-[4px] py-[5px] rounded-[9px]",
-              "transition-colors duration-150",
-              "hover:bg-white/30 data-[state=open]:bg-white/30",
-              "dark:hover:bg-white/10 dark:data-[state=open]:bg-white/10",
-            )}
-          >
-            <HippiusBrandMark
-              logoClassName="shrink-0"
-              textClassName={cn(
-                "overflow-hidden whitespace-nowrap transition-all duration-300 ease-in-out",
-                collapsed
-                  ? "max-w-0 opacity-0 -ml-[8px]"
-                  : "max-w-[120px] opacity-100",
-              )}
-            />
-            <span className="flex items-center justify-center w-[25px] h-[24px] shrink-0">
-              <ChevronDown className="size-[12px] text-black-700/60 dark:text-grey-light-300/60" />
-            </span>
-          </button>
-        </DropdownMenuTrigger>
-
-        <DropdownMenuContent
-          align="start"
-          side="bottom"
-          sideOffset={8}
-          className={cn(
-            "w-[222px] rounded-[8px] border border-grey-dark-100 bg-white p-1 z-[1100]",
-            "shadow-[0_4px_24px_0_rgba(0,0,0,0.08)]",
-            "dark:border-[#313131] dark:bg-[#161616]",
+      <div
+        data-tauri-drag-region
+        className="flex items-center gap-[8px] px-[4px] py-[5px]"
+      >
+        <HippiusBrandMark
+          logoClassName="shrink-0"
+          textClassName={cn(
+            "overflow-hidden whitespace-nowrap transition-all duration-300 ease-in-out",
+            collapsed
+              ? "max-w-0 opacity-0 -ml-[8px]"
+              : "max-w-[120px] opacity-100",
           )}
-        >
-          <DropdownMenuItem
-            onSelect={handleOpenUpdate}
-            className={cn(
-              "h-8 rounded-[8px] px-3 py-1.5 gap-2",
-              "text-[14px] font-medium leading-4 tracking-[-0.4px]",
-              "text-[#52525c] hover:!text-grey-10 hover:!bg-grey-light-700",
-              "dark:text-[#a3a3a3] dark:hover:!text-white dark:hover:!bg-[#2c2c2c]",
-            )}
-          >
-            <TrendUp className="size-4 shrink-0" />
-            <span>Update App</span>
-          </DropdownMenuItem>
-
-          <DropdownMenuItem
-            onSelect={handleOpenSettings}
-            className={cn(
-              "h-8 rounded-[8px] px-3 py-1.5 gap-2",
-              "text-[14px] font-medium leading-4 tracking-[-0.4px]",
-              "text-[#52525c] hover:!text-grey-10 hover:!bg-grey-light-700",
-              "dark:text-[#a3a3a3] dark:hover:!text-white dark:hover:!bg-[#2c2c2c]",
-            )}
-          >
-            <Setting className="size-4 shrink-0" />
-            <span>Settings</span>
-          </DropdownMenuItem>
-
-          <DropdownMenuItem
-            onSelect={handleSignOut}
-            className={cn(
-              "h-8 rounded-[8px] px-3 py-1.5 gap-2",
-              "text-[14px] font-medium leading-4 tracking-[-0.4px]",
-              "!text-[#fc7d73] hover:!text-[#fc7d73] hover:!bg-grey-light-700",
-              "dark:hover:!bg-[#2c2c2c]",
-            )}
-          >
-            <Logout className="size-4 shrink-0" />
-            <span>Sign out</span>
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+        />
+      </div>
     </div>
   );
 };
