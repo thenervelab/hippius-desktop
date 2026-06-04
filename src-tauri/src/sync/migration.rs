@@ -675,7 +675,10 @@ impl Drop for MigrationInProgressGuard<'_> {
     }
 }
 
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Linear migration-start flow: key derivation -> request signing -> S3-cred + API-token fetch -> POST with a job_exists cancel-and-retry path, all gated by the RAII MigrationInProgressGuard whose early-return clears and success-path commit must stay in one body. Covered by tests/migration_server_mock.rs."
+)]
 #[tauri::command]
 pub async fn start_server_migration(
     state: tauri::State<'_, crate::app_state::AppState>,
@@ -793,23 +796,28 @@ pub async fn start_server_migration(
     let url = format!("{}/migration/start", server_base.trim_end_matches('/'));
     tracing::info!("[Migration] Posting to {url}");
 
+    // Built once and reused for the initial request and the job_exists retry
+    // below — identical payloads, so a single construction avoids drift and
+    // recomputing the signature / verifying-key byte vectors twice.
+    let request_body = serde_json::json!({
+        "ss58_address": account_id,
+        "folder_hash": folder_hash,
+        "encryption_key_hex": encryption_key_hex,
+        "path_prefix": path_prefix,
+        "s3_access_key": s3_access_key,
+        "s3_secret_key": s3_secret_key,
+        "signature": signature.to_bytes().to_vec(),
+        "signing_key": signing_key.verifying_key().to_bytes().to_vec(),
+        "label": label,
+    });
+
     let resp = state
         .migration
         .client
         .post(&url)
         .header("Authorization", format!("Bearer {api_token}"))
         .timeout(std::time::Duration::from_secs(120))
-        .json(&serde_json::json!({
-            "ss58_address": account_id,
-            "folder_hash": folder_hash,
-            "encryption_key_hex": encryption_key_hex,
-            "path_prefix": path_prefix,
-            "s3_access_key": s3_access_key,
-            "s3_secret_key": s3_secret_key,
-            "signature": signature.to_bytes().to_vec(),
-            "signing_key": signing_key.verifying_key().to_bytes().to_vec(),
-            "label": label,
-        }))
+        .json(&request_body)
         .send()
         .await
         .map_err(|e| {
@@ -839,17 +847,7 @@ pub async fn start_server_migration(
                 .post(&url)
                 .header("Authorization", format!("Bearer {api_token}"))
                 .timeout(std::time::Duration::from_secs(120))
-                .json(&serde_json::json!({
-                    "ss58_address": account_id,
-                    "folder_hash": folder_hash,
-                    "encryption_key_hex": encryption_key_hex,
-                    "path_prefix": path_prefix,
-                    "s3_access_key": s3_access_key,
-                    "s3_secret_key": s3_secret_key,
-                    "signature": signature.to_bytes().to_vec(),
-                    "signing_key": signing_key.verifying_key().to_bytes().to_vec(),
-                    "label": label,
-                }))
+                .json(&request_body)
                 .send()
                 .await
                 .map_err(|e| {
