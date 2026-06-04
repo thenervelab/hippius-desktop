@@ -20,6 +20,7 @@ import { getFileIcon, DIRECTORY_SUFFIX } from "@/app/lib/utils/fileTypeUtils";
 import { formatBytes } from "@/app/lib/utils/formatBytes";
 import { formatUploadedDate } from "@/app/lib/utils/formatUploadedDate";
 import Button from "@/app/components/ui/button";
+import MiddleTruncatedName from "@/app/components/ui/MiddleTruncatedName";
 import HippiusLogo from "@/app/components/ui/icons/HippiusLogo";
 import Search from "@/app/components/ui/icons/Search";
 import Command from "@/app/components/ui/icons/Command";
@@ -323,9 +324,14 @@ function UploadRowItem({ item }: { item: UploadFeedItem }) {
         <Icon className="size-4" />
       </span>
       <div className="min-w-0 flex-1">
-        <p className="truncate font-geist text-[14px] font-medium leading-5 tracking-[-0.28px] text-[#1d1d1d] dark:text-white">
-          {displayFileName(item.name)}
-        </p>
+        {/* Center-truncate long names (keep start + extension) instead of the
+            end-only CSS `truncate`, so e.g. a long "…scene.mp4" still shows its
+            extension. MiddleTruncatedName measures the row width and updates on
+            resize; it works in this provider-free webview (self-contained). */}
+        <MiddleTruncatedName
+          name={displayFileName(item.name)}
+          className="block font-geist text-[14px] font-medium leading-5 tracking-[-0.28px] text-[#1d1d1d] dark:text-white"
+        />
         <div className="mt-1 flex items-center justify-between gap-2">
           <span className="truncate font-geist text-[12px] font-medium leading-normal tracking-[-0.24px] text-grey-10 dark:text-white">
             {sizeText}
