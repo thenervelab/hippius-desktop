@@ -585,7 +585,12 @@ impl SyncEventHandler for TauriSyncBridge {
             SyncEvent::ReviewModeTimeout { label } => {
                 let _ = app.emit(events::REVIEW_MODE_TIMEOUT, events::LabelPayload { label });
             }
-            SyncEvent::ActivityUpdated => {
+            // hcfs 41954d7 made ActivityUpdated carry the originating drive
+            // label (upstream F35). redesign's FE clears stale metadata for all
+            // drives on this signal, so the label is intentionally ignored here
+            // to preserve existing behavior; adopting the per-drive scoping is a
+            // separate FE+BE change.
+            SyncEvent::ActivityUpdated { label: _ } => {
                 let _ = app.emit(events::ACTIVITY_UPDATED, ());
             }
             SyncEvent::AuthRequired { error } => {
