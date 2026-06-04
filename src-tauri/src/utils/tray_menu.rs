@@ -51,7 +51,9 @@ pub async fn get_tray_menu_data(state: tauri::State<'_, crate::app_state::AppSta
         {
             Ok(data) => {
                 let balance = data.get("balance").and_then(|v| v.as_str()).unwrap_or("0");
-                Some(balance.parse::<f64>().unwrap_or(0.0))
+                // `.ok()` not `.unwrap_or(0.0)`: a malformed balance is "unknown"
+                // (None), not "zero credits" — matching the `Err(_) => None` arm.
+                balance.parse::<f64>().ok()
             }
             Err(_) => None,
         }

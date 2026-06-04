@@ -213,19 +213,6 @@ impl SyncCompletedPayload {
             files: Vec::new(),
         }
     }
-
-    pub fn zeros(label: &str) -> Self {
-        Self {
-            label: label.to_string(),
-            files_uploaded: 0,
-            files_downloaded: 0,
-            files_deleted_locally: 0,
-            files_deleted_remotely: 0,
-            conflicts_resolved: 0,
-            conflicts_skipped: 0,
-            files: Vec::new(),
-        }
-    }
 }
 
 /// Emitted when a sync cycle fails.
@@ -305,22 +292,6 @@ pub struct SyncStartedPayload {
     pub local_delete_files: Vec<String>,
     #[serde(rename = "remoteDeleteFiles")]
     pub remote_delete_files: Vec<String>,
-}
-
-impl SyncStartedPayload {
-    pub fn empty(label: &str) -> Self {
-        Self {
-            label: label.to_string(),
-            uploads: 0,
-            downloads: 0,
-            local_deletes: 0,
-            remote_deletes: 0,
-            upload_files: Vec::new(),
-            download_files: Vec::new(),
-            local_delete_files: Vec::new(),
-            remote_delete_files: Vec::new(),
-        }
-    }
 }
 
 /// Emitted when the backend detects credentials are invalid and re-login is needed.

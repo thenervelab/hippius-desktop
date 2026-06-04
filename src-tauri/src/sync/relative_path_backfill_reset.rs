@@ -106,9 +106,7 @@ pub async fn reset_stale_backfill_flags(pool: &SqlitePool) -> Result<u64, sqlx::
 pub async fn run_at_startup(pool: &SqlitePool) {
     match reset_stale_backfill_flags(pool).await {
         Ok(_) => {}
-        Err(e) => warn!(
-            "relative_path backfill NFC reset failed (will retry on next launch): {e}"
-        ),
+        Err(e) => warn!("relative_path backfill NFC reset failed (will retry on next launch): {e}"),
     }
 }
 
@@ -157,16 +155,14 @@ mod tests {
     }
 
     async fn insert_path(pool: &SqlitePool, owner: &str, label: &str, backfilled_at: Option<i64>) {
-        sqlx::query(
-            "INSERT INTO sync_paths (owner, path, type, label, relative_paths_backfilled_at) VALUES (?, ?, 'private', ?, ?)",
-        )
-        .bind(owner)
-        .bind(format!("/tmp/{label}"))
-        .bind(label)
-        .bind(backfilled_at)
-        .execute(pool)
-        .await
-        .unwrap();
+        sqlx::query("INSERT INTO sync_paths (owner, path, type, label, relative_paths_backfilled_at) VALUES (?, ?, 'private', ?, ?)")
+            .bind(owner)
+            .bind(format!("/tmp/{label}"))
+            .bind(label)
+            .bind(backfilled_at)
+            .execute(pool)
+            .await
+            .unwrap();
     }
 
     async fn sentinel_present(pool: &SqlitePool) -> bool {
@@ -225,11 +221,7 @@ mod tests {
 
         let second = reset_stale_backfill_flags(&pool).await.unwrap();
         assert_eq!(second, 0, "second run must not touch the DB");
-        assert_eq!(
-            backfilled_non_null_count(&pool).await,
-            1,
-            "the post-fix flag must survive"
-        );
+        assert_eq!(backfilled_non_null_count(&pool).await, 1, "the post-fix flag must survive");
     }
 
     #[tokio::test]
@@ -243,10 +235,7 @@ mod tests {
         let cleared = reset_stale_backfill_flags(&pool).await.unwrap();
 
         assert_eq!(cleared, 0);
-        assert!(
-            sentinel_present(&pool).await,
-            "sentinel must be written even on a clean-install path"
-        );
+        assert!(sentinel_present(&pool).await, "sentinel must be written even on a clean-install path");
     }
 
     #[tokio::test]

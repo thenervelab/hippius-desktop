@@ -72,16 +72,29 @@ pub async fn get_staking_info(state: tauri::State<'_, crate::app_state::AppState
         .unwrap_or(0);
 
     let ledger_query = custom_runtime::storage().staking().ledger(&account_id);
-    if let Ok(Some(ledger)) = storage.fetch(&ledger_query).await {
+    // Propagate a ledger RPC failure instead of collapsing it into "no stake":
+    // the previous `if let Ok(Some(_))` treated a network/codec error like a
+    // genuinely unbonded account and returned zeroed StakingInfo as success, so
+    // the FE showed 0 bonded for a real staker. `None` (no ledger = not staking)
+    // still legitimately keeps the zeros; only `Err` now surfaces. Mirrors the
+    // `?` handling of the balance and current_era fetches above.
+    let ledger = storage
+        .fetch(&ledger_query)
+        .await
+        .map_err(|e| crate::error::AppError::Other(format!("Ledger query failed: {e}")))?;
+    if let Some(ledger) = ledger {
         bonded = ledger.active.to_string();
         for chunk in &ledger.unlocking.0 {
             let unlock_era = chunk.era;
             let amount = chunk.value;
             let remaining = unlock_era.saturating_sub(current_era);
             if remaining == 0 {
-                withdrawable_total += amount;
+                // Defensive arithmetic mirroring `available`'s `saturating_sub`
+                // below: these accumulate on-chain ledger values, so clamp at
+                // u128::MAX instead of wrapping silently in release builds.
+                withdrawable_total = withdrawable_total.saturating_add(amount);
             } else {
-                unbonding_total += amount;
+                unbonding_total = unbonding_total.saturating_add(amount);
                 let amount_str = amount.to_string();
                 unbonding_periods.push(UnbondingPeriod {
                     amount_hip: planck_to_hip(&amount_str),
@@ -185,7 +198,12 @@ pub async fn get_referral_links(
     // O(N) iteration. Now the K reward fetches run in parallel against
     // the same `at_latest()` snapshot.
     let mut matched_codes: Vec<(Vec<u8>, String)> = Vec::new();
-    while let Some(Ok(entry)) = entries.next().await {
+    // Propagate a mid-iteration RPC error rather than ending the loop silently:
+    // `while let Some(Ok(entry))` stopped on the first `Some(Err(_))` and
+    // returned the codes matched so far as `Ok`, so a dropped subscription
+    // produced a partial referral list that looked complete to the FE.
+    while let Some(result) = entries.next().await {
+        let entry = result.map_err(|e| crate::error::AppError::Other(format!("ReferralCodes iteration failed: {e}")))?;
         if entry.value == target_account {
             let code_bytes = entry.key_bytes[entry.key_bytes.len().saturating_sub(32)..].to_vec();
             let code = String::from_utf8_lossy(code_bytes.iter().copied().skip_while(|b| *b == 0).collect::<Vec<u8>>().as_slice()).to_string();

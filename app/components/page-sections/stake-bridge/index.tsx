@@ -8,6 +8,7 @@ import TokenForm from "../wallet/shared/TokenForm";
 import { toast } from "sonner";
 import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
 import { useStaking } from "@/app/lib/hooks/useStaking";
+import StakingErrorNotice from "../wallet/shared/StakingErrorNotice";
 import { invoke } from "@tauri-apps/api/core";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { dispatchSigningError } from "@/lib/utils/dispatchTauriError";
@@ -17,7 +18,7 @@ const StakeBridge = () => {
     const searchParams = useSearchParams();
     const router = useRouter();
     const tabParam = searchParams.get("tab");
-    const { stakingInfo, operations } = useStaking();
+    const { stakingInfo, operations, refetch } = useStaking();
     const { logout } = useWalletAuth();
 
     // Set initial tab based on URL parameter, default to "Stake hAlpha"
@@ -134,6 +135,12 @@ const StakeBridge = () => {
                         gap="gap-1"
                     />
                 </div>
+
+                <StakingErrorNotice
+                    message={stakingInfo.isLoading ? null : stakingInfo.error}
+                    onRetry={() => refetch()}
+                    className="mb-6 justify-center"
+                />
 
                 {/* Content */}
                 {activeTab === "Stake hAlpha" && (

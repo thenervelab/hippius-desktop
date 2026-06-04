@@ -1,6 +1,6 @@
 //! SQLite schema initialization and migration.
 
-use sqlx::sqlite::SqlitePool;
+use sqlx::sqlite::{SqliteConnection, SqlitePool};
 use sqlx::{Acquire, Row};
 use std::collections::HashSet;
 use tracing::{debug, info, warn};
@@ -68,10 +68,27 @@ async fn drop_legacy_nebula_tables(pool: &SqlitePool) -> Result<(), sqlx::Error>
     Ok(())
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "Large but straightforward schema initializer: declarative TABLE_SCHEMAS loop plus one complex sync_paths migration (label column, is_paused column, UNIQUE constraint recreation) that must stay co-located to be auditable in a single transaction. Coverage is provided by the `ensure_table_schema_creates_all_expected_tables` smoke test against EXPECTED_TABLES."
-)]
+/// Create or migrate every SQLite table the desktop backend relies on.
+///
+/// This is the single source of truth for the local schema — the project
+/// maintains the database via this function instead of migration files (see
+/// CLAUDE.md). Idempotent, so it is safe to run on every startup. The whole
+/// initializer runs in one transaction so the ~30 CREATE/ALTER/INSERT
+/// statements share a single commit-time fsync (≈10x faster cold-start on
+/// WAL-mode SQLite). Legacy Nebula tables are dropped first, *outside* the
+/// transaction, so that cleanup stays durable even if a later schema step
+/// fails.
+///
+/// Each table (or cohesive group) is created/migrated by its own
+/// `ensure_*` helper below, all sharing the one transaction — so this stays a
+/// readable manifest while every individual table's DDL is auditable in
+/// isolation. The set of tables created here is pinned by the
+/// `ensure_table_schema_creates_all_expected_tables` smoke test.
+///
+/// # Errors
+///
+/// Returns `sqlx::Error` if any DDL/DML statement or the commit fails; the
+/// transaction is rolled back, leaving the existing schema unchanged.
 pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // Drop legacy Nebula tables first, outside the schema-init transaction, so
     // the cleanup is durable even if a later schema step fails. Idempotent —
@@ -80,15 +97,45 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
 
     // Wrap the entire initializer in one transaction so all CREATE/ALTER/INSERT
     // statements share a single fsync at commit time instead of ~30 separate
-    // ones. On SQLite (especially WAL mode) this drops cold-start schema-init
-    // latency by ~10x. The pre-existing inner sync_paths swap (line 218 in
-    // history) now calls `tx.begin()` to nest as a savepoint — see
-    // https://www.sqlite.org/lang_savepoint.html. `migrate_account_keys`
-    // (called separately from `main.rs` after `ensure_table_schema` returns)
-    // intentionally keeps its own `pool.begin()`; it runs only when legacy
-    // 8-char owners exist and is decoupled from the schema-init lifecycle.
+    // ones (≈10x faster cold-start on WAL-mode SQLite). Every `ensure_*` helper
+    // below runs against this shared transaction; `ensure_sync_paths` opens a
+    // nested savepoint for its table rebuild (see
+    // https://www.sqlite.org/lang_savepoint.html). `migrate_account_keys`
+    // (called separately from `main.rs` after this returns) keeps its own
+    // `pool.begin()`; it runs only when legacy 8-char owners exist and is
+    // decoupled from the schema-init lifecycle.
     let mut tx = pool.begin().await?;
 
+    ensure_sub_accounts(&mut tx).await?;
+    ensure_sync_paths(&mut tx).await?;
+    ensure_sync_intent(&mut tx).await?;
+    ensure_wss_endpoint(&mut tx).await?;
+    ensure_security_scoped_bookmarks(&mut tx).await?;
+    ensure_auth_session(&mut tx).await?;
+    ensure_hcfs_config(&mut tx).await?;
+    ensure_encryption_version_columns(&mut tx).await?;
+    ensure_objectstore_auth(&mut tx).await?;
+    ensure_device_settings(&mut tx).await?;
+    ensure_migration_status(&mut tx).await?;
+    ensure_notifications(&mut tx).await?;
+    ensure_app_state(&mut tx).await?;
+    ensure_notification_preferences(&mut tx).await?;
+    ensure_address_book(&mut tx).await?;
+    ensure_onboarding(&mut tx).await?;
+    ensure_user_preferences(&mut tx).await?;
+    ensure_share_keystore(&mut tx).await?;
+    ensure_share_origin(&mut tx).await?;
+    ensure_shared_link_history(&mut tx).await?;
+
+    tx.commit().await?;
+    Ok(())
+}
+
+/// `sub_accounts` — create the table and add any columns missing on older DBs.
+///
+/// Driven by a declarative schema table so a new column is added by editing
+/// one tuple; the create-then-add-missing-columns loop is idempotent.
+async fn ensure_sub_accounts(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
     // Define the expected table schemas (only tables still needed)
     const TABLE_SCHEMAS: &[(&str, &[(&str, &str)])] = &[(
         "sub_accounts",
@@ -108,21 +155,32 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             table_name,
             columns.iter().map(|(name, typ)| format!("{name} {typ}")).collect::<Vec<_>>().join(", ")
         );
-        sqlx::query(&create_table).execute(&mut *tx).await?;
+        sqlx::query(&create_table).execute(&mut *conn).await?;
 
         // Check and add any missing columns
-        let existing_cols = table_columns(&mut *tx, table_name).await?;
+        let existing_cols = table_columns(&mut *conn, table_name).await?;
 
         for (column_name, column_type) in *columns {
             if !existing_cols.contains(*column_name) {
                 info!("Adding column {} to table {}", column_name, table_name);
                 sqlx::query(&format!("ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"))
-                    .execute(&mut *tx)
+                    .execute(&mut *conn)
                     .await?;
             }
         }
     }
+    Ok(())
+}
 
+/// `sync_paths` — create the table, add columns missing on older DBs, and swap
+/// the table to a `UNIQUE(owner, label)` constraint when an older DDL is found.
+///
+/// The constraint swap recreates the table (SQLite cannot `ALTER TABLE DROP
+/// CONSTRAINT`) inside a nested savepoint so a failed swap rolls back to the
+/// savepoint without aborting the rest of schema init. Co-located here so the
+/// column-add migrations and the swap that depends on them stay auditable
+/// together.
+async fn ensure_sync_paths(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
     // sync_paths table (kept for path storage)
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS sync_paths (
@@ -136,18 +194,18 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             UNIQUE(owner, label)
         )",
     )
-    .execute(&mut *tx)
+    .execute(&mut *conn)
     .await?;
 
     // Read sync_paths columns ONCE and reuse across the three column-add
     // migration blocks below. Saves three round-trips on every cold start.
-    let sync_paths_cols = table_columns(&mut *tx, "sync_paths").await?;
+    let sync_paths_cols = table_columns(&mut *conn, "sync_paths").await?;
 
     // Migration: add label column if missing (existing dev databases)
     if !sync_paths_cols.contains("label") {
         info!("Adding label column to sync_paths");
         sqlx::query("ALTER TABLE sync_paths ADD COLUMN label TEXT NOT NULL DEFAULT 'default'")
-            .execute(&mut *tx)
+            .execute(&mut *conn)
             .await?;
     }
 
@@ -155,7 +213,7 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     if !sync_paths_cols.contains("is_paused") {
         info!("Adding is_paused column to sync_paths");
         sqlx::query("ALTER TABLE sync_paths ADD COLUMN is_paused INTEGER NOT NULL DEFAULT 0")
-            .execute(&mut *tx)
+            .execute(&mut *conn)
             .await?;
     }
 
@@ -170,103 +228,107 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     if !sync_paths_cols.contains("relative_paths_backfilled_at") {
         info!("Adding relative_paths_backfilled_at column to sync_paths");
         sqlx::query("ALTER TABLE sync_paths ADD COLUMN relative_paths_backfilled_at INTEGER")
-            .execute(&mut *tx)
+            .execute(&mut *conn)
             .await?;
     }
 
-    // Migration: ensure the table has UNIQUE(owner, label).
-    // Old schemas may have UNIQUE(owner, type) inline, or a separate unique index
-    // on (owner, type) from the main branch migration. Either way, if the DDL
-    // doesn't contain UNIQUE(owner, label), we recreate the table.
-    // SQLite doesn't support ALTER TABLE DROP CONSTRAINT, so we recreate.
-    // The whole swap nests as a savepoint inside the outer schema-init tx so
-    // a failed swap rolls back to the savepoint without aborting the rest of
-    // schema initialization.
-    {
-        let table_sql = sqlx::query("SELECT sql FROM sqlite_master WHERE type='table' AND name='sync_paths'")
-            .fetch_optional(&mut *tx)
-            .await?;
-        let has_correct_constraint = table_sql
-            .as_ref()
-            .and_then(|row| row.try_get::<String, _>("sql").ok())
-            .is_some_and(|sql| sql.contains("UNIQUE(owner, label)") || sql.contains("UNIQUE (owner, label)"));
+    // Older DDLs (e.g. `UNIQUE(owner, type)`) get rebuilt to the correct
+    // constraint — SQLite cannot ALTER a constraint in place.
+    ensure_sync_paths_unique_constraint(&mut *conn).await?;
+    Ok(())
+}
 
-        if has_correct_constraint {
-            debug!("sync_paths already has UNIQUE(owner, label), skipping migration");
-        } else {
-            info!("Migrating sync_paths to add UNIQUE(owner, label) constraint");
-            // Clean up any leftover temp table from a previous failed attempt
-            sqlx::query("DROP TABLE IF EXISTS sync_paths_new").execute(&mut *tx).await?;
+/// Rebuild `sync_paths` with `UNIQUE(owner, label)` when an older DDL (e.g.
+/// `UNIQUE(owner, type)`) is detected; no-op when the constraint is already
+/// correct.
+///
+/// SQLite cannot `ALTER TABLE DROP CONSTRAINT`, so the table is recreated
+/// inside a nested savepoint — `begin()` on a connection already in a
+/// transaction issues a `SAVEPOINT`, so a failed swap rolls back to it without
+/// aborting the rest of schema init. The copy MUST carry `is_paused` and
+/// `relative_paths_backfilled_at` (the caller's ALTERs guarantee both exist on
+/// the source) so a paused drive stays paused and the one-shot backfill
+/// breadcrumb survives — omitting them silently un-paused drives and
+/// re-triggered the backfill on legacy `UNIQUE(owner, type)` DBs.
+async fn ensure_sync_paths_unique_constraint(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
+    let table_sql = sqlx::query("SELECT sql FROM sqlite_master WHERE type='table' AND name='sync_paths'")
+        .fetch_optional(&mut *conn)
+        .await?;
+    let has_correct_constraint = table_sql
+        .as_ref()
+        .and_then(|row| row.try_get::<String, _>("sql").ok())
+        .is_some_and(|sql| sql.contains("UNIQUE(owner, label)") || sql.contains("UNIQUE (owner, label)"));
 
-            // Nested savepoint so the swap is atomic without grabbing a
-            // second pool connection (which would deadlock under contention
-            // and break the outer-tx atomicity guarantee).
-            let mut sp = tx.begin().await?;
-
-            sqlx::query(
-                "CREATE TABLE sync_paths_new (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    owner TEXT NOT NULL DEFAULT '',
-                    path TEXT NOT NULL,
-                    type TEXT NOT NULL,
-                    label TEXT NOT NULL DEFAULT 'default',
-                    timestamp INTEGER NOT NULL,
-                    is_paused INTEGER NOT NULL DEFAULT 0,
-                    relative_paths_backfilled_at INTEGER,
-                    UNIQUE(owner, label)
-                )",
-            )
-            .execute(&mut *sp)
-            .await?;
-
-            // Copy data, skipping duplicates on (owner, label).
-            // If a user has both public and private rows with the same
-            // owner and label='default', keep only the private one
-            // (higher priority). OR IGNORE drops any remaining dupes.
-            //
-            // `is_paused` and `relative_paths_backfilled_at` MUST be carried:
-            // the ALTERs above guarantee both columns exist on the source
-            // before this swap runs, so a paused drive stays paused and the
-            // one-shot backfill breadcrumb is preserved. Omitting them (the
-            // pre-fix bug) silently un-paused drives and re-triggered the
-            // backfill on every DB created with the legacy `UNIQUE(owner,type)`.
-            sqlx::query(
-                "INSERT OR IGNORE INTO sync_paths_new
-                     (id, owner, path, type, label, timestamp, is_paused, relative_paths_backfilled_at)
-                 SELECT id, owner, path, type, label, timestamp, is_paused, relative_paths_backfilled_at
-                 FROM sync_paths
-                 ORDER BY CASE type WHEN 'private' THEN 0 ELSE 1 END",
-            )
-            .execute(&mut *sp)
-            .await?;
-
-            sqlx::query("DROP TABLE sync_paths").execute(&mut *sp).await?;
-
-            sqlx::query("ALTER TABLE sync_paths_new RENAME TO sync_paths").execute(&mut *sp).await?;
-
-            sp.commit().await?;
-            info!("sync_paths constraint migration completed");
-        }
+    if has_correct_constraint {
+        debug!("sync_paths already has UNIQUE(owner, label), skipping migration");
+        return Ok(());
     }
 
-    // sync_intent — persistent upload-intent manifest for the sync widget.
-    //
-    // The sync widget previously reset progress on app restart after a partial
-    // bulk upload (drag 10 GB → close at 5 GB → reopen shows "0 / 5 GB" instead
-    // of "5 / 10 GB") because the in-memory snapshot was the only source of
-    // truth. This table is the durable shadow: every queued file is recorded
-    // here when its plan lands, and `completed_at_ms` is set when the file
-    // finishes uploading. The composite primary key `(account_id, drive_label,
-    // relative_path)` makes "same file enqueued twice for the same drive"
-    // unrepresentable at the storage layer; subsequent tasks decide the
-    // ON CONFLICT policy when wiring `record_plan`.
-    //
-    // `completed_at_ms` is NULLABLE on purpose: NULL is the canonical "still
-    // pending" marker. The covering index `(account_id, drive_label,
-    // completed_at_ms)` keeps the per-drive "pending count" and totals queries
-    // (Task 2) off a full table scan as the table grows across long-running
-    // sync sessions. `added_at_ms` is non-NULL so age-based prune policies have
-    // a deterministic ordering key.
+    info!("Migrating sync_paths to add UNIQUE(owner, label) constraint");
+    // Clean up any leftover temp table from a previous failed attempt
+    sqlx::query("DROP TABLE IF EXISTS sync_paths_new").execute(&mut *conn).await?;
+
+    // Nested savepoint so the swap is atomic without grabbing a second pool
+    // connection (which would deadlock under contention and break the outer-tx
+    // atomicity guarantee).
+    let mut sp = conn.begin().await?;
+
+    sqlx::query(
+        "CREATE TABLE sync_paths_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner TEXT NOT NULL DEFAULT '',
+            path TEXT NOT NULL,
+            type TEXT NOT NULL,
+            label TEXT NOT NULL DEFAULT 'default',
+            timestamp INTEGER NOT NULL,
+            is_paused INTEGER NOT NULL DEFAULT 0,
+            relative_paths_backfilled_at INTEGER,
+            UNIQUE(owner, label)
+        )",
+    )
+    .execute(&mut *sp)
+    .await?;
+
+    // Copy data, skipping duplicates on (owner, label). If a user has both
+    // public and private rows with the same owner and label='default', keep
+    // only the private one (higher priority). OR IGNORE drops remaining dupes.
+    sqlx::query(
+        "INSERT OR IGNORE INTO sync_paths_new
+             (id, owner, path, type, label, timestamp, is_paused, relative_paths_backfilled_at)
+         SELECT id, owner, path, type, label, timestamp, is_paused, relative_paths_backfilled_at
+         FROM sync_paths
+         ORDER BY CASE type WHEN 'private' THEN 0 ELSE 1 END",
+    )
+    .execute(&mut *sp)
+    .await?;
+
+    sqlx::query("DROP TABLE sync_paths").execute(&mut *sp).await?;
+    sqlx::query("ALTER TABLE sync_paths_new RENAME TO sync_paths").execute(&mut *sp).await?;
+
+    sp.commit().await?;
+    info!("sync_paths constraint migration completed");
+    Ok(())
+}
+
+/// `sync_intent` — persistent upload-intent manifest for the sync widget.
+///
+/// The sync widget previously reset progress on app restart after a partial
+/// bulk upload (drag 10 GB → close at 5 GB → reopen shows "0 / 5 GB" instead
+/// of "5 / 10 GB") because the in-memory snapshot was the only source of
+/// truth. This table is the durable shadow: every queued file is recorded
+/// here when its plan lands, and `completed_at_ms` is set when the file
+/// finishes uploading. The composite primary key `(account_id, drive_label,
+/// relative_path)` makes "same file enqueued twice for the same drive"
+/// unrepresentable at the storage layer; subsequent tasks decide the
+/// ON CONFLICT policy when wiring `record_plan`.
+///
+/// `completed_at_ms` is NULLABLE on purpose: NULL is the canonical "still
+/// pending" marker. The covering index `(account_id, drive_label,
+/// completed_at_ms)` keeps the per-drive "pending count" and totals queries
+/// (Task 2) off a full table scan as the table grows across long-running
+/// sync sessions. `added_at_ms` is non-NULL so age-based prune policies have
+/// a deterministic ordering key.
+async fn ensure_sync_intent(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS sync_intent (
             account_id      TEXT    NOT NULL,
@@ -278,16 +340,21 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             PRIMARY KEY (account_id, drive_label, relative_path)
         )",
     )
-    .execute(&mut *tx)
+    .execute(&mut *conn)
     .await?;
 
     sqlx::query(
         "CREATE INDEX IF NOT EXISTS idx_sync_intent_drive
             ON sync_intent (account_id, drive_label, completed_at_ms)",
     )
-    .execute(&mut *tx)
+    .execute(&mut *conn)
     .await?;
+    Ok(())
+}
 
+/// `wss_endpoint` — singleton row holding the active blockchain WSS endpoint,
+/// seeded with the compiled-in default on first run.
+async fn ensure_wss_endpoint(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS wss_endpoint (
             id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -295,14 +362,19 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )",
     )
-    .execute(&mut *tx)
+    .execute(&mut *conn)
     .await?;
 
     sqlx::query("INSERT OR IGNORE INTO wss_endpoint (id, endpoint) VALUES (1, ?)")
         .bind(crate::blockchain::client::WSS_ENDPOINT)
-        .execute(&mut *tx)
+        .execute(&mut *conn)
         .await?;
+    Ok(())
+}
 
+/// `security_scoped_bookmarks` — macOS file-access persistence (sandbox
+/// security-scoped bookmark blobs keyed by path).
+async fn ensure_security_scoped_bookmarks(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
     // Create security_scoped_bookmarks table for macOS file access persistence
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS security_scoped_bookmarks (
@@ -314,9 +386,14 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             last_accessed TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )",
     )
-    .execute(&mut *tx)
+    .execute(&mut *conn)
     .await?;
+    Ok(())
+}
 
+/// `auth_session` — replaces the frontend IndexedDB "session" table +
+/// localStorage tokens; one row per `owner` (account key hash).
+async fn ensure_auth_session(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
     // Auth session — replaces frontend IndexedDB "session" table + localStorage tokens
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS auth_session (
@@ -332,9 +409,13 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         )",
     )
-    .execute(&mut *tx)
+    .execute(&mut *conn)
     .await?;
+    Ok(())
+}
 
+/// `hcfs_config` — per-owner HCFS server URL and drive password.
+async fn ensure_hcfs_config(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
     // HCFS config table
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS hcfs_config (
@@ -345,9 +426,15 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )",
     )
-    .execute(&mut *tx)
+    .execute(&mut *conn)
     .await?;
+    Ok(())
+}
 
+/// Encryption-at-rest: add `encryption_version` to `sub_accounts` and
+/// `hcfs_config` on older DBs (idempotent — "duplicate column" is expected
+/// and suppressed).
+async fn ensure_encryption_version_columns(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
     // Encryption-at-rest: add encryption_version to sub_accounts and hcfs_config.
     // ALTER TABLE ADD COLUMN is idempotent in SQLite — the "duplicate column"
     // error is expected and suppressed for databases that already have the column.
@@ -355,14 +442,19 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         "ALTER TABLE sub_accounts ADD COLUMN encryption_version INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE hcfs_config ADD COLUMN encryption_version INTEGER NOT NULL DEFAULT 0",
     ] {
-        if let Err(e) = sqlx::query(stmt).execute(&mut *tx).await {
+        if let Err(e) = sqlx::query(stmt).execute(&mut *conn).await {
             let msg = e.to_string();
             if !msg.contains("duplicate column name") {
                 warn!("Schema migration failed: {msg}");
             }
         }
     }
+    Ok(())
+}
 
+/// `objectstore_auth` + `objectstore_auth_scoped` — API auth token
+/// (`temp_auth_key`) and S3 credentials, global and per-owner.
+async fn ensure_objectstore_auth(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
     // Auth token + S3 credential tables (API auth token stored as temp_auth_key,
     // S3 credentials stored as master_access_key_id/master_secret for migration)
     sqlx::query(
@@ -374,7 +466,7 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )",
     )
-    .execute(&mut *tx)
+    .execute(&mut *conn)
     .await?;
 
     sqlx::query(
@@ -386,9 +478,14 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )",
     )
-    .execute(&mut *tx)
+    .execute(&mut *conn)
     .await?;
+    Ok(())
+}
 
+/// `device_settings` — singleton row holding the friendly device name, seeded
+/// from the OS hostname on first run.
+async fn ensure_device_settings(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
     // Device settings table (singleton row, stores friendly device name)
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS device_settings (
@@ -397,24 +494,28 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )",
     )
-    .execute(&mut *tx)
+    .execute(&mut *conn)
     .await?;
 
     // Seed with OS hostname if no row exists yet
     {
         let existing = sqlx::query("SELECT id FROM device_settings WHERE id = 1")
-            .fetch_optional(&mut *tx)
+            .fetch_optional(&mut *conn)
             .await?;
         if existing.is_none() {
             let hostname = hostname::get().map_or_else(|_| "My Device".to_string(), |h| h.to_string_lossy().into_owned());
             sqlx::query("INSERT INTO device_settings (id, device_name) VALUES (1, ?)")
                 .bind(&hostname)
-                .execute(&mut *tx)
+                .execute(&mut *conn)
                 .await?;
             info!("Device name seeded: {}", hostname);
         }
     }
+    Ok(())
+}
 
+/// `migration_status` — per-account S3→HCFS migration progress record.
+async fn ensure_migration_status(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
     sqlx::query(
         r"
         CREATE TABLE IF NOT EXISTS migration_status (
@@ -429,9 +530,15 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         )
         ",
     )
-    .execute(&mut *tx)
+    .execute(&mut *conn)
     .await?;
+    Ok(())
+}
 
+/// `notifications` — replaces frontend `notificationsDb.ts`, with the
+/// user-keyed and `(type, subtype)` covering indexes the dedup/low-credit
+/// probes need to avoid full table scans.
+async fn ensure_notifications(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
     // Notifications (replaces frontend notificationsDb.ts)
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS notifications (
@@ -450,15 +557,15 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             release_notes TEXT
         )",
     )
-    .execute(&mut *tx)
+    .execute(&mut *conn)
     .await?;
 
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_address)")
-        .execute(&mut *tx)
+        .execute(&mut *conn)
         .await?;
 
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_notifications_user_deleted ON notifications(user_address, is_deleted)")
-        .execute(&mut *tx)
+        .execute(&mut *conn)
         .await?;
 
     // Credit-dedup and low-credit-warning probes filter on
@@ -468,9 +575,14 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // subtype = ?` equality probes and the leading-column equality for the
     // `subtype LIKE 'LowCreditWarning-%'` prefix probes.
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_notifications_type_subtype ON notifications(notification_type, notification_subtype)")
-        .execute(&mut *tx)
+        .execute(&mut *conn)
         .await?;
+    Ok(())
+}
 
+/// `app_state` — singleton app flags (`is_first_time`, `is_above_half_credit`),
+/// seeded on first run.
+async fn ensure_app_state(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
     // App state (singleton, replaces frontend app_state table)
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS app_state (
@@ -479,13 +591,18 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             is_above_half_credit INTEGER DEFAULT 0
         )",
     )
-    .execute(&mut *tx)
+    .execute(&mut *conn)
     .await?;
 
     sqlx::query("INSERT OR IGNORE INTO app_state (id, is_first_time, is_above_half_credit) VALUES (1, 1, 0)")
-        .execute(&mut *tx)
+        .execute(&mut *conn)
         .await?;
+    Ok(())
+}
 
+/// `notification_preferences` — replaces the frontend table, seeded with the
+/// default `credits` and `files` categories (both enabled).
+async fn ensure_notification_preferences(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
     // Notification preferences (replaces frontend notification_preferences table)
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS notification_preferences (
@@ -495,33 +612,59 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             enabled INTEGER DEFAULT 1
         )",
     )
-    .execute(&mut *tx)
+    .execute(&mut *conn)
     .await?;
 
     sqlx::query(
         "INSERT OR IGNORE INTO notification_preferences (id, label, description, enabled) VALUES ('credits', 'Credits', 'Account credit notifications', 1)",
     )
-    .execute(&mut *tx)
+    .execute(&mut *conn)
     .await?;
 
     sqlx::query(
         "INSERT OR IGNORE INTO notification_preferences (id, label, description, enabled) VALUES ('files', 'Files', 'File sync notifications', 1)",
     )
-    .execute(&mut *tx)
+    .execute(&mut *conn)
     .await?;
+    Ok(())
+}
 
+/// `address_book` — replaces frontend `addressBookDb.ts`, plus the `owner`
+/// column migration that scopes contacts per account.
+async fn ensure_address_book(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
     // Address book (replaces frontend addressBookDb.ts)
+    //
+    // `owner` scopes contacts to one account (account_key hash, same convention
+    // as sync_paths). Pre-existing installs created the table without it; the
+    // migration below adds it with DEFAULT '' so legacy rows are owner-empty
+    // until the first account to open the address book claims them (see
+    // `contacts::claim_legacy_contacts`).
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS address_book (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner TEXT NOT NULL DEFAULT '',
             name TEXT NOT NULL,
             wallet_address TEXT NOT NULL,
             date_added INTEGER DEFAULT (strftime('%s','now') * 1000)
         )",
     )
-    .execute(&mut *tx)
+    .execute(&mut *conn)
     .await?;
 
+    // Migration: add `owner` to existing address_book tables. Without this the
+    // four contacts IPCs queried the table globally — every account saw every
+    // contact, and delete/update by `id` could hit another account's row (IDOR).
+    if !table_columns(&mut *conn, "address_book").await?.contains("owner") {
+        info!("Adding owner column to address_book");
+        sqlx::query("ALTER TABLE address_book ADD COLUMN owner TEXT NOT NULL DEFAULT ''")
+            .execute(&mut *conn)
+            .await?;
+    }
+    Ok(())
+}
+
+/// `onboarding` — singleton "is onboarding done" flag, seeded on first run.
+async fn ensure_onboarding(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
     // Onboarding (replaces frontend onboardingDb.ts)
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS onboarding (
@@ -529,13 +672,18 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             is_done INTEGER DEFAULT 0
         )",
     )
-    .execute(&mut *tx)
+    .execute(&mut *conn)
     .await?;
 
     sqlx::query("INSERT OR IGNORE INTO onboarding (id, is_done) VALUES (1, 0)")
-        .execute(&mut *tx)
+        .execute(&mut *conn)
         .await?;
+    Ok(())
+}
 
+/// `user_preferences` — generic key/value store replacing frontend
+/// `userPreferencesDb.ts`.
+async fn ensure_user_preferences(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
     // User preferences (replaces frontend userPreferencesDb.ts)
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS user_preferences (
@@ -544,14 +692,17 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             updated_at INTEGER NOT NULL
         )",
     )
-    .execute(&mut *tx)
+    .execute(&mut *conn)
     .await?;
+    Ok(())
+}
 
-    // Per-share key material for the file-sharing feature. One row per
-    // active share-token this device created. The
-    // `CHECK (length(share_key) = 32)` is defence-in-depth: a wrong-sized
-    // key would otherwise surface as an opaque AEAD failure several
-    // layers up the stack — see crate::shares::keystore.
+/// `share_keystore` — per-share AEAD key material for the file-sharing feature.
+///
+/// The `CHECK (length(share_key) = 32)` is defence-in-depth: a wrong-sized
+/// key would otherwise surface as an opaque AEAD failure several layers up the
+/// stack — see `crate::shares::keystore`.
+async fn ensure_share_keystore(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS share_keystore (
             share_token TEXT PRIMARY KEY,
@@ -559,21 +710,19 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             created_at INTEGER NOT NULL DEFAULT (unixepoch())
         )",
     )
-    .execute(&mut *tx)
+    .execute(&mut *conn)
     .await?;
+    Ok(())
+}
 
-    // Sidecar of `share_keystore` that records which local file each
-    // share was minted from. We need this so the UI can answer two
-    // questions the keystore can't: "is this file currently shared?"
-    // (per-row badge in the file list) and "reshare the same file with
-    // a fresh TTL" (the Reshare button on the My Shares page).
-    //
-    // Lives in the desktop and never leaves it: the server only sees
-    // ciphertext, and exposing `(folder_label, relative_path)` upstream
-    // would break the share_keystore trait we share with the WASM
-    // recipient. `owner` is the same `account_key` hash `sync_paths`
-    // uses, so a per-account prune in `hcfs_list_shares` can scope
-    // safely without touching another account's rows.
+/// `share_origin` — sidecar of `share_keystore` recording which local file each
+/// share was minted from (never leaves the device).
+///
+/// Lets the UI answer "is this file currently shared?" and "reshare the same
+/// file with a fresh TTL" — questions the keystore can't. `owner` is the same
+/// `account_key` hash `sync_paths` uses, so a per-account prune in
+/// `hcfs_list_shares` can scope safely without touching another account's rows.
+async fn ensure_share_origin(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS share_origin (
             share_token TEXT PRIMARY KEY,
@@ -583,19 +732,22 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             created_at INTEGER NOT NULL DEFAULT (unixepoch())
         )",
     )
-    .execute(&mut *tx)
+    .execute(&mut *conn)
     .await?;
     sqlx::query("CREATE INDEX IF NOT EXISTS share_origin_owner_idx ON share_origin (owner, folder_label)")
-        .execute(&mut *tx)
+        .execute(&mut *conn)
         .await?;
+    Ok(())
+}
 
-    // Per-device snapshot of share tokens that have left the active set
-    // (expired server-side, revoked locally, or revoked from another
-    // device). The composite PRIMARY KEY makes `record_event` idempotent
-    // under repeat diffs without per-device coordination, and the
-    // (account_id, ended_at) index keeps the DESC list query off a full
-    // scan once the table grows. See `crate::shares::history` for the
-    // module-level rationale and lifecycle.
+/// `shared_link_history` — per-device snapshot of share tokens that have left
+/// the active set (expired/revoked).
+///
+/// The composite PRIMARY KEY makes `record_event` idempotent under repeat
+/// diffs without per-device coordination, and the `(account_id, ended_at)`
+/// index keeps the DESC list query off a full scan as the table grows. See
+/// `crate::shares::history` for the module-level rationale and lifecycle.
+async fn ensure_shared_link_history(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS shared_link_history (
             account_id     TEXT NOT NULL,
@@ -612,13 +764,11 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             PRIMARY KEY (account_id, share_token)
         )",
     )
-    .execute(&mut *tx)
+    .execute(&mut *conn)
     .await?;
     sqlx::query("CREATE INDEX IF NOT EXISTS shared_link_history_account_ended_idx ON shared_link_history (account_id, ended_at DESC)")
-        .execute(&mut *tx)
+        .execute(&mut *conn)
         .await?;
-
-    tx.commit().await?;
     Ok(())
 }
 
@@ -703,6 +853,43 @@ mod tests {
             .expect("failed to create in-memory SQLite pool")
     }
 
+    /// Migration guard: a legacy `address_book` created before the `owner`
+    /// column must gain it (DEFAULT '') when `ensure_table_schema` runs, and
+    /// pre-existing rows keep `owner = ''` so the first account can later claim
+    /// them (see `auth::contacts::claim_legacy_contacts`). Without the ALTER,
+    /// the four contacts IPCs would query a non-existent column and fail.
+    #[tokio::test]
+    async fn address_book_owner_added_to_legacy_table() {
+        let pool = temp_pool().await;
+
+        // Legacy install: address_book WITHOUT the owner column, one seeded row.
+        sqlx::query(
+            "CREATE TABLE address_book (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                wallet_address TEXT NOT NULL,
+                date_added INTEGER
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create legacy table");
+        sqlx::query("INSERT INTO address_book (name, wallet_address) VALUES ('Legacy', 'addrL')")
+            .execute(&pool)
+            .await
+            .expect("seed legacy row");
+
+        ensure_table_schema(&pool).await.expect("schema");
+
+        // If the migration didn't add `owner`, this SELECT errors. The value
+        // proves both the column's existence and its '' default (claimable).
+        let (owner,): (String,) = sqlx::query_as("SELECT owner FROM address_book WHERE name = 'Legacy'")
+            .fetch_one(&pool)
+            .await
+            .expect("legacy row must have an owner column after migration");
+        assert_eq!(owner, "", "legacy rows must default to empty owner for first-account claim");
+    }
+
     /// Regression guard: verifies that [`ensure_table_schema`] creates every
     /// table listed in [`EXPECTED_TABLES`] and only those tables. Protects
     /// against silent drops during refactoring — the same class of bug that
@@ -754,12 +941,7 @@ mod tests {
     /// `ensure_table_schema`. Kept in sync with the array in
     /// [`drop_legacy_nebula_tables`] — if those names diverge, this test
     /// stops exercising the helper.
-    const LEGACY_NEBULA_TABLES: &[&str] = &[
-        "vpn_status",
-        "nebula_binary_status",
-        "nebula_certificate",
-        "autoconnect_vpn_enabled",
-    ];
+    const LEGACY_NEBULA_TABLES: &[&str] = &["vpn_status", "nebula_binary_status", "nebula_certificate", "autoconnect_vpn_enabled"];
 
     /// Regression guard for the one-shot Nebula drop. Without this test the
     /// helper could silently become a no-op (empty array, renamed tables,
@@ -898,11 +1080,10 @@ mod tests {
     async fn notifications_has_type_subtype_index() {
         let pool = temp_pool().await;
         ensure_table_schema(&pool).await.expect("ensure_table_schema failed");
-        let idx: Option<String> =
-            sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_notifications_type_subtype'")
-                .fetch_optional(&pool)
-                .await
-                .expect("query index");
+        let idx: Option<String> = sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_notifications_type_subtype'")
+            .fetch_optional(&pool)
+            .await
+            .expect("query index");
         assert_eq!(idx.as_deref(), Some("idx_notifications_type_subtype"));
     }
 }

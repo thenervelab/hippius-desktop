@@ -122,13 +122,23 @@ fn seed_one_file_session(sync: &SyncRunner, path: &str, label: &str, total_bytes
     });
 }
 
-/// Read `src/sync/lifecycle.rs` and return its full source.
+/// Read the lifecycle module source and return it concatenated.
 ///
-/// Pinned via `CARGO_MANIFEST_DIR` so the test stays runnable from any
-/// cwd (CI, `cargo test --workspace`, IDE runners, etc.).
+/// The module is split across `lifecycle.rs` and its `callbacks` submodule
+/// (structure-audit Phase 4); the byte-progress and file-synced callbacks
+/// live in the latter. Both are concatenated so the static-shape checks
+/// below find the function bodies wherever they live. Pinned via
+/// `CARGO_MANIFEST_DIR` so the test stays runnable from any cwd.
 fn lifecycle_source() -> String {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/lifecycle.rs");
-    std::fs::read_to_string(path).expect("read src/sync/lifecycle.rs")
+    let base = concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/lifecycle.rs");
+    let callbacks = concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/lifecycle/callbacks.rs");
+    // callbacks first: the real `build_file_synced_callback` / `handle_transfer_progress`
+    // definitions live there, and `lifecycle.rs`'s test module contains functions
+    // named `build_file_synced_callback_*` that would otherwise be matched first by
+    // the substring `find` in `extract_fn_body`.
+    let mut src = std::fs::read_to_string(callbacks).expect("read src/sync/lifecycle/callbacks.rs");
+    src.push_str(&std::fs::read_to_string(base).expect("read src/sync/lifecycle.rs"));
+    src
 }
 
 /// Extract the balanced `{ ... }` body of a function whose signature

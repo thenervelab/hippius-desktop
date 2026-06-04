@@ -129,7 +129,7 @@ pub async fn add_file(
     // / `tokio::fs::copy` will surface the I/O error to the user with
     // its native message. Don't `?`-bail here: a missing-file diagnostic
     // is clearer than "insufficient credits because we couldn't size it".
-    let account_id = state.current_account_id().map_err(crate::error::AppError::Other)?;
+    let account_id = state.current_account_id()?;
     // A stat failure falls back to bytes=0, which collapses the byte-priced
     // credit gate to the legacy `> 0` floor (intentional — see above). Log it
     // so the under-pricing is observable instead of silent; the server 402
@@ -212,7 +212,7 @@ pub async fn add_folder(
     // returns a best-effort lower bound (see `sum_regular_file_bytes`),
     // which under-charges rather than over-charging the user — the
     // server's 402 path is still the last line of defense.
-    let account_id = state.current_account_id().map_err(crate::error::AppError::Other)?;
+    let account_id = state.current_account_id()?;
     // One walk of the source tree for BOTH the credit-gate byte total and the
     // banner file count (previously two separate full traversals). The byte
     // total is a best-effort lower bound on permission-denied subdirs, which
@@ -577,11 +577,7 @@ pub async fn delete_files(
         let effective_label = file.label.as_deref().unwrap_or("default");
         // Prefer the file's own drive path; fall back to the "default" drive's
         // path (mirrors the prior per-file default fallback); else empty.
-        let sync_path = label_to_path
-            .get(effective_label)
-            .or(default_path.as_ref())
-            .cloned()
-            .unwrap_or_default();
+        let sync_path = label_to_path.get(effective_label).or(default_path.as_ref()).cloned().unwrap_or_default();
 
         let relative_name = derive_relative_name(&sync_path, file.source.as_deref(), &file.name);
 
@@ -592,7 +588,7 @@ pub async fn delete_files(
                 let size_bytes = if target.is_dir() {
                     0
                 } else {
-                    tokio::fs::metadata(&target).await.map(|m| m.len()).unwrap_or(0)
+                    tokio::fs::metadata(&target).await.map_or(0, |m| m.len())
                 };
 
                 let remove_result = if target.is_dir() {
@@ -701,7 +697,7 @@ pub async fn add_files(
     // doesn't reject the rest — the copy loop surfaces the real I/O error. An
     // empty `file_paths` yields count 0, which skips `begin` so an empty IPC
     // doesn't raise a banner nothing will clear.
-    let account_id = state.current_account_id().map_err(crate::error::AppError::Other)?;
+    let account_id = state.current_account_id()?;
     let action = if for_folder {
         crate::billing::eligibility::InsufficientCreditsAction::FolderUpload
     } else {
@@ -866,9 +862,7 @@ use hcfs_client::engine::types::{SyncedFileInfo, build_synced_paths_from_state};
 /// timestamps on cold start. See
 /// [`synced_paths_and_excludes_for_label`] for the full rationale.
 async fn synced_paths_for_label(sync: &SyncRunner, label: &str) -> Option<HashMap<String, SyncedFileInfo>> {
-    let _ = sync
-        .wait_for_first_reconcile(label, FIRST_RECONCILE_WAIT_BUDGET)
-        .await;
+    let _ = sync.wait_for_first_reconcile(label, FIRST_RECONCILE_WAIT_BUDGET).await;
     let arc = match acquire_drive_arc(sync, label) {
         DriveArcOutcome::Acquired(arc) => arc,
         DriveArcOutcome::CacheFallback => return sync.get_cached_synced_paths(label),
@@ -913,9 +907,7 @@ async fn synced_paths_and_excludes_for_label(sync: &SyncRunner, label: &str) -> 
     // `Timeout` / `NotRegistered` falls through to whatever stale
     // state we have, matching the existing graceful-degradation
     // contract.
-    let _ = sync
-        .wait_for_first_reconcile(label, FIRST_RECONCILE_WAIT_BUDGET)
-        .await;
+    let _ = sync.wait_for_first_reconcile(label, FIRST_RECONCILE_WAIT_BUDGET).await;
 
     let arc = match acquire_drive_arc(sync, label) {
         DriveArcOutcome::Acquired(arc) => arc,
@@ -972,32 +964,13 @@ fn acquire_drive_arc(sync: &SyncRunner, label: &str) -> DriveArcOutcome {
     }
 }
 
-/// Sync metadata for a single file, returned by `get_synced_file_metadata`.
-#[derive(Serialize)]
-pub struct SyncedFileMetadata {
-    /// File name (basename only, e.g. "photo.jpg")
-    pub file_name: String,
-    /// Relative path from sync root (e.g. "subfolder/photo.jpg")
-    pub relative_path: String,
-    /// Drive label this file belongs to
-    pub label: String,
-    /// Hex-encoded BLAKE3 path hash
-    pub arion_hash: String,
-    /// Arion CID from storage backend (empty if not available)
-    pub arion_cid: String,
-    /// Unix timestamp when file was first uploaded (0 if unknown)
-    pub uploaded_at: i64,
-    /// Unix timestamp when file was last updated (0 if unknown)
-    pub updated_at: i64,
-}
-
 /// Return sync metadata (arion hashes, CIDs, timestamps) for all synced
 /// files across all drives. Used internally by `get_user_files` to look
 /// up arion hashes without needing to list every subfolder from disk.
 /// Acquire each drive's synced-paths map: live per-drive lock first (cache
 /// warmed on success), falling back to the cached snapshot when a drive is
-/// mid-sync (or all drives are busy). Shared by the whole-corpus
-/// [`get_synced_file_metadata`] and the bounded recent-files lookup.
+/// mid-sync (or all drives are busy). Used by the bounded recent-files
+/// lookup (`get_recent_files`).
 async fn collect_label_maps(sync: &SyncRunner) -> Vec<(String, HashMap<String, SyncedFileInfo>)> {
     let drive_arcs: Vec<(String, std::sync::Arc<tokio::sync::Mutex<DriveManager>>)> = match sync.drives.try_lock() {
         Ok(guard) => guard.iter().map(|(k, slot)| (k.clone(), slot.manager.clone())).collect(),
@@ -1029,9 +1002,9 @@ async fn collect_label_maps(sync: &SyncRunner) -> Vec<(String, HashMap<String, S
 
 /// Bounded variant of the synced-paths walk for the recent-files view.
 ///
-/// `get_synced_file_metadata` materializes a `SyncedFileMetadata` (and several
-/// string/hash allocations) for EVERY synced file across all drives, even
-/// though `get_recent_files` only ever looks up at most `limit` (~50) keys.
+/// A whole-corpus walk would materialize metadata (and several string/hash
+/// allocations) for EVERY synced file across all drives, even though
+/// `get_recent_files` only ever looks up at most `limit` (~50) keys.
 /// This allocates a `MetadataBundle` only for keys in `wanted`, so the
 /// per-row cost (hex-encoding the 32-byte hash, cloning the CID) is paid for
 /// the activity window, not the whole corpus. Pure (no `SyncRunner`) so the
@@ -1059,33 +1032,6 @@ fn bundles_for_wanted_keys(
         }
     }
     out
-}
-
-pub async fn get_synced_file_metadata(state: tauri::State<'_, crate::app_state::AppState>) -> Result<Vec<SyncedFileMetadata>> {
-    let mut result = Vec::new();
-    let label_maps = collect_label_maps(&state.sync).await;
-
-    for (label, paths) in label_maps {
-        // Move out of the HashMap so we can take ownership of `rel_path`
-        // and only clone once per row (used to be twice — once each for
-        // `file_name` and `relative_path`, both of which always carry
-        // identical content).
-        for (rel_path, info) in paths {
-            // Use the full relative path so lookups match activity items
-            // that also use relative paths (e.g. "bucket/photo.jpg").
-            result.push(SyncedFileMetadata {
-                file_name: rel_path.clone(),
-                relative_path: rel_path,
-                label: label.clone(),
-                arion_hash: info.path_hash_hex(),
-                arion_cid: info.arion_cid.to_string(),
-                uploaded_at: info.uploaded_at,
-                updated_at: info.updated_at,
-            });
-        }
-    }
-
-    Ok(result)
 }
 
 /// A recent file ready for UI rendering. Matches the frontend `FormattedUserFile`
@@ -1169,10 +1115,7 @@ pub async fn get_recent_files(
 
     // 4. Look up synced metadata for ONLY the surviving keys. Allocation scales
     //    with the activity window, not the total number of synced files.
-    let wanted: std::collections::HashSet<String> = non_deleted
-        .iter()
-        .map(|item| format!("{}::{}", item.file_name, item.label))
-        .collect();
+    let wanted: std::collections::HashSet<String> = non_deleted.iter().map(|item| format!("{}::{}", item.file_name, item.label)).collect();
     let label_maps = collect_label_maps(&state.sync).await;
     let mut meta_map = bundles_for_wanted_keys(label_maps, &wanted);
 
@@ -1241,7 +1184,7 @@ pub async fn get_recent_files(
     }
 
     // 6. Sort by timestamp (newest first)
-    result.sort_by(|a, b| b.last_charged_at.cmp(&a.last_charged_at));
+    result.sort_by_key(|b| std::cmp::Reverse(b.last_charged_at));
 
     Ok(result)
 }
@@ -1358,7 +1301,6 @@ pub async fn list_sync_folder(
     list_sync_folder_inner(&state, sync_path, subfolder, label).await
 }
 
-#[expect(clippy::too_many_lines, reason = "1 line over; extracting hurts readability")]
 async fn list_sync_folder_inner(
     state: &crate::app_state::AppState,
     sync_path: String,
@@ -1415,13 +1357,17 @@ async fn list_sync_folder_inner(
             if hcfs_client::engine::classify::is_failed_download_artifact(&name).is_some() {
                 let path = entry.path();
                 info!(artifact = %name, "Removing failed download artifact on list");
-                let _ = tokio::fs::remove_file(&path).await;
+                if let Err(e) = tokio::fs::remove_file(&path).await {
+                    warn!(artifact = %name, error = %e, "Failed to remove failed-download artifact on list — it will be retried on the next listing");
+                }
                 continue;
             }
             if hcfs_client::engine::classify::is_encrypted_name_stub(&name).is_some() && meta.len() == 0 {
                 let path = entry.path();
                 info!(stub = %name, "Removing 0-byte encrypted-name stub on list");
-                let _ = tokio::fs::remove_file(&path).await;
+                if let Err(e) = tokio::fs::remove_file(&path).await {
+                    warn!(stub = %name, error = %e, "Failed to remove 0-byte stub on list — it will be retried on the next listing");
+                }
                 continue;
             }
         }
@@ -1556,26 +1502,57 @@ fn macos_name_cmp(a: &str, b: &str) -> std::cmp::Ordering {
             (Some(_), None) => return std::cmp::Ordering::Greater,
             (Some(ac), Some(bc)) => {
                 if ac.is_ascii_digit() && bc.is_ascii_digit() {
-                    // Compare digit runs as integers (natural sort).
-                    let mut an: u64 = 0;
-                    let mut bn: u64 = 0;
-                    while ai.peek().map_or(false, |c| c.is_ascii_digit()) {
-                        an = an * 10 + ai.next().unwrap().to_digit(10).unwrap() as u64;
+                    // Natural-sort the two digit runs by numeric value, comparing
+                    // them as digit *sequences* rather than parsing into an
+                    // integer: a 20+ digit run is a legal filename that overflows
+                    // any fixed-width integer. The earlier u64 parse saturated
+                    // every over-long run to the same u64::MAX, so two *distinct*
+                    // huge runs compared Equal — a non-total order, which
+                    // `slice::sort_by` documents as "May panic if `compare` does
+                    // not implement a total order" (std slice sort_by). Sequence
+                    // comparison stays a genuine total order with no overflow.
+                    //
+                    // Skip leading zeros first so "007" == "7" (numeric
+                    // equality); then the run with more significant digits is the
+                    // larger number, and for equal lengths the first differing
+                    // digit decides.
+                    while ai.peek() == Some(&'0') {
+                        ai.next();
                     }
-                    while bi.peek().map_or(false, |c| c.is_ascii_digit()) {
-                        bn = bn * 10 + bi.next().unwrap().to_digit(10).unwrap() as u64;
+                    while bi.peek() == Some(&'0') {
+                        bi.next();
                     }
-                    match an.cmp(&bn) {
+                    let mut run_order = std::cmp::Ordering::Equal;
+                    loop {
+                        let ad = ai.peek().copied().filter(char::is_ascii_digit);
+                        let bd = bi.peek().copied().filter(char::is_ascii_digit);
+                        match (ad, bd) {
+                            (Some(da), Some(db)) => {
+                                ai.next();
+                                bi.next();
+                                // First differing digit at equal length decides;
+                                // hold it until we know both runs are equal-length.
+                                if run_order == std::cmp::Ordering::Equal {
+                                    run_order = da.cmp(&db);
+                                }
+                            }
+                            // A remaining significant digit means the longer —
+                            // hence numerically larger — run.
+                            (Some(_), None) => return std::cmp::Ordering::Greater,
+                            (None, Some(_)) => return std::cmp::Ordering::Less,
+                            (None, None) => break,
+                        }
+                    }
+                    match run_order {
                         std::cmp::Ordering::Equal => continue,
                         ord => return ord,
                     }
-                } else {
-                    ai.next();
-                    bi.next();
-                    match ac.cmp(&bc) {
-                        std::cmp::Ordering::Equal => continue,
-                        ord => return ord,
-                    }
+                }
+                ai.next();
+                bi.next();
+                match ac.cmp(&bc) {
+                    std::cmp::Ordering::Equal => {}
+                    ord => return ord,
                 }
             }
         }
@@ -1981,7 +1958,7 @@ pub async fn get_user_files(
     }
 
     // Sort by timestamp (newest first)
-    all_files.sort_by(|a, b| b.last_charged_at.cmp(&a.last_charged_at));
+    all_files.sort_by_key(|b| std::cmp::Reverse(b.last_charged_at));
 
     // Convert the borrowed-key map to owned-key for the result. One
     // allocation per label instead of one per file (the previous
@@ -2143,7 +2120,7 @@ pub async fn export_file(
     // Gate 1: sync_path must be a registered sync folder for the active
     // user. This prevents the broad `ensure_within` guard from being
     // bypassed via an attacker-controlled parent directory.
-    let account_id = state.current_account_id().map_err(crate::error::AppError::Other)?;
+    let account_id = state.current_account_id()?;
     let owner = account_key(&account_id);
     let registered: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM sync_paths WHERE owner = ? AND path = ? LIMIT 1")
         .bind(&owner)
@@ -2288,6 +2265,7 @@ async fn copy_dir_recursive(src: &Path, dst: &Path, depth: u32) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     // --- bundles_for_wanted_keys (F10: bounded recent-files metadata) ---
 
@@ -2354,7 +2332,12 @@ mod tests {
         let mut corpus: HashMap<String, SyncedFileInfo> = HashMap::new();
         corpus.insert(
             "a.txt".to_string(),
-            SyncedFileInfo { path_hash: [1u8; 32], arion_cid: Arc::from("x"), uploaded_at: 0, updated_at: 0 },
+            SyncedFileInfo {
+                path_hash: [1u8; 32],
+                arion_cid: Arc::from("x"),
+                uploaded_at: 0,
+                updated_at: 0,
+            },
         );
         let out = bundles_for_wanted_keys(vec![("d".to_string(), corpus)], &HashSet::new());
         assert!(out.is_empty());
@@ -2412,6 +2395,75 @@ mod tests {
         let mut names = vec!["Zebra", "apple", "Mango", "banana"];
         names.sort_by(|a, b| macos_name_cmp(a, b));
         assert_eq!(names, vec!["apple", "banana", "Mango", "Zebra"]);
+    }
+
+    #[test]
+    fn macos_name_cmp_handles_overflowing_digit_runs() {
+        // Digit runs longer than 20 chars overflow u64 (39 chars overflow u128):
+        // the comparator must neither panic nor lose its total order. It compares
+        // runs as digit sequences, so two *distinct* over-long runs order by
+        // magnitude instead of both collapsing to a saturated MAX.
+        let huge9 = format!("file{}", "9".repeat(30));
+        let huge8 = format!("file{}", "8".repeat(30));
+
+        // Equal-length runs: the larger leading digit wins (9… > 8…). The old
+        // u64-saturating comparator wrongly returned Equal here, making the order
+        // non-total — `slice::sort_by`'s documented "May panic" territory.
+        assert_eq!(macos_name_cmp(&huge9, &huge8), std::cmp::Ordering::Greater);
+        assert_eq!(macos_name_cmp(&huge8, &huge9), std::cmp::Ordering::Less);
+        // Identical over-long runs still compare Equal.
+        assert_eq!(macos_name_cmp(&huge9, &huge9), std::cmp::Ordering::Equal);
+        // More significant digits is the larger number even with smaller digits:
+        // 31 ones (≥ 10^30) outranks 30 nines (< 10^30).
+        let longer = format!("file{}", "1".repeat(31));
+        assert_eq!(macos_name_cmp(&longer, &huge9), std::cmp::Ordering::Greater);
+        // An over-long run still orders after a small number.
+        assert_eq!(macos_name_cmp(&huge9, "file2"), std::cmp::Ordering::Greater);
+        // Leading zeros are not significant: "007" == "7" within a run.
+        assert_eq!(macos_name_cmp("file007", "file7"), std::cmp::Ordering::Equal);
+
+        // A full sort containing over-long runs completes without panic and is
+        // correctly ordered by magnitude.
+        let mut names = vec![huge9.as_str(), "file2", "file1", "file10", huge8.as_str()];
+        names.sort_by(|a, b| macos_name_cmp(a, b));
+        assert_eq!(names, vec!["file1", "file2", "file10", huge8.as_str(), huge9.as_str()]);
+    }
+
+    proptest! {
+        // `macos_name_cmp` feeds `slice::sort_by`, which documents "May panic if
+        // `compare` does not implement a total order". These properties pin the
+        // total-order contract the old u64-saturating comparator broke for 20+
+        // digit runs.
+
+        // Antisymmetry: cmp(a, b) is always the reverse of cmp(b, a).
+        #[test]
+        fn macos_name_cmp_is_antisymmetric(a in "[0-9A-Za-z._-]{0,30}", b in "[0-9A-Za-z._-]{0,30}") {
+            prop_assert_eq!(macos_name_cmp(&a, &b), macos_name_cmp(&b, &a).reverse());
+        }
+
+        // Reflexivity: every name compares Equal to itself.
+        #[test]
+        fn macos_name_cmp_is_reflexive(a in "[0-9A-Za-z._-]{0,30}") {
+            prop_assert_eq!(macos_name_cmp(&a, &a), std::cmp::Ordering::Equal);
+        }
+
+        // Digit runs order by true numeric value whenever the run fits in u128 —
+        // the oracle is plain integer comparison, so this is not a tautology.
+        #[test]
+        fn macos_name_cmp_digit_runs_match_numeric(x in any::<u128>(), y in any::<u128>()) {
+            prop_assert_eq!(macos_name_cmp(&x.to_string(), &y.to_string()), x.cmp(&y));
+        }
+
+        // A sort over arbitrarily long digit runs (well past u64/u128) completes
+        // without panic and yields a non-decreasing sequence under the
+        // comparator — only possible if the comparator is a genuine total order.
+        #[test]
+        fn macos_name_cmp_sorts_long_digit_runs_total(mut names in proptest::collection::vec("[0-9]{0,40}", 0..15)) {
+            names.sort_by(|a, b| macos_name_cmp(a, b));
+            for pair in names.windows(2) {
+                prop_assert_ne!(macos_name_cmp(&pair[0], &pair[1]), std::cmp::Ordering::Greater);
+            }
+        }
     }
 
     // --- derive_relative_name ---
@@ -2813,9 +2865,7 @@ mod tests {
         });
 
         let start = Instant::now();
-        let outcome = sync
-            .wait_for_first_reconcile(label, Duration::from_millis(500))
-            .await;
+        let outcome = sync.wait_for_first_reconcile(label, Duration::from_millis(500)).await;
         let elapsed = start.elapsed();
 
         match outcome {
@@ -2860,9 +2910,7 @@ mod tests {
         ));
 
         let start = Instant::now();
-        let outcome = sync
-            .wait_for_first_reconcile("does-not-exist", Duration::from_secs(5))
-            .await;
+        let outcome = sync.wait_for_first_reconcile("does-not-exist", Duration::from_secs(5)).await;
         let elapsed = start.elapsed();
 
         assert!(matches!(outcome, WaitOutcome::NotRegistered), "got {outcome:?}");

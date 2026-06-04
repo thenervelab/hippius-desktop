@@ -126,6 +126,33 @@ pub async fn start_block_subscription(app: tauri::AppHandle) -> Result<(), Strin
     Ok(())
 }
 
+/// Stop the background block subscription. Idempotent.
+///
+/// Sets `running = false` so the reconnect loop won't restart, then aborts the
+/// in-flight task so it stops immediately instead of waiting out a backoff
+/// sleep (up to 60s) or the next finalized block. Without this the task
+/// outlived logout: it kept reconnecting and emitting `block_number_updated`
+/// against a stale session, and a subsequent login's `start_block_subscription`
+/// CAS could observe `running == true` and refuse to start a fresh one.
+pub(crate) async fn stop_block_subscription_inner(app: &tauri::AppHandle) {
+    use tauri::Manager;
+    let app_state = app.state::<crate::app_state::AppState>();
+    let bsub = &app_state.block_sub;
+    bsub.running.store(false, Ordering::SeqCst);
+    if let Some(handle) = bsub.handle.lock().await.take() {
+        handle.abort();
+    }
+    bsub.is_connected.store(false, Ordering::SeqCst);
+    info!("Block subscription stopped");
+}
+
+/// Stop the background block subscription (IPC wrapper). Idempotent.
+#[tauri::command]
+pub async fn stop_block_subscription(app: tauri::AppHandle) -> Result<(), String> {
+    stop_block_subscription_inner(&app).await;
+    Ok(())
+}
+
 async fn subscribe_blocks(app: &tauri::AppHandle) -> Result<(), String> {
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
@@ -215,7 +242,9 @@ fn schedule_trailing_block_emit(app: tauri::AppHandle) {
         // latest block when it wakes.
         return;
     }
-    drop(app_state_check);
+    // `app_state_check` borrows `app`; NLL ends that borrow at its last use
+    // (the `swap` above), so `app` moves freely into the spawn below — no
+    // explicit drop needed (`tauri::State` is a reference wrapper, not `Drop`).
 
     tokio::spawn(async move {
         // Sleep until the throttle window has had a chance to close. We
@@ -260,10 +289,7 @@ fn try_claim_block_emit(last_emit_ms: &AtomicU64, now_ms: u64, min_interval_ms: 
         if prev != 0 && now_ms.saturating_sub(prev) < min_interval_ms {
             return false;
         }
-        if last_emit_ms
-            .compare_exchange(prev, now_ms, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
-        {
+        if last_emit_ms.compare_exchange(prev, now_ms, Ordering::AcqRel, Ordering::Acquire).is_ok() {
             return true;
         }
         // Lost the race — re-read and re-evaluate.
@@ -340,10 +366,7 @@ mod tests {
         // sentinel doesn't fire on subsequent attempts.
         let last = AtomicU64::new(0);
         let attempts = [100, 200, 300, 400, 500, 600];
-        let wins = attempts
-            .iter()
-            .filter(|&&ts| try_claim_block_emit(&last, ts, 1000))
-            .count();
+        let wins = attempts.iter().filter(|&&ts| try_claim_block_emit(&last, ts, 1000)).count();
         // Only the first attempt wins; the next five fall inside the
         // 1000 ms throttle window after ts=100.
         assert_eq!(wins, 1, "expected exactly one win in a 500 ms burst against a 1000 ms gate");

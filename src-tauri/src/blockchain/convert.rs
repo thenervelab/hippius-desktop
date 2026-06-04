@@ -91,7 +91,16 @@ pub fn normalize_decimal_digits(raw: &str) -> String {
     // integer boundary truncate to zero (planck is an integer).
     let digits: String = int_part.chars().chain(frac_part.chars()).collect();
     let current_int_len = int_part.len() as i32;
-    let target_int_len = current_int_len + exp;
+    // saturating_add: a garbage exponent (e.g. "1e2000000000") must not overflow
+    // i32. And cap the resulting integer length — a 40+-digit integer exceeds any
+    // real balance (u128 is ~39 digits) and would otherwise make the zero-padding
+    // below allocate a multi-gigabyte string (OOM). Garbage clamps to "0", like
+    // the other malformed-input paths in this function.
+    let target_int_len = current_int_len.saturating_add(exp);
+    const MAX_PLANCK_DIGITS: i32 = 40;
+    if target_int_len > MAX_PLANCK_DIGITS {
+        return "0".to_string();
+    }
 
     let mut result = if target_int_len >= digits.len() as i32 {
         let pad = target_int_len as usize - digits.len();
@@ -160,9 +169,21 @@ pub fn to_plancks(amount: String) -> Result<String, crate::error::AppError> {
     // `trim_start_matches('0')` strips zeros but not the leading '-', so it
     // returned a malformed negative planck string. f64::parse also accepts
     // "NaN"/"inf", which are equally out of domain.
-    let value = amount.parse::<f64>().map_err(|_| crate::error::AppError::Validation("Invalid amount".into()))?;
+    let value = amount
+        .parse::<f64>()
+        .map_err(|_| crate::error::AppError::Validation("Invalid amount".into()))?;
     if !value.is_finite() || value < 0.0 {
         return Err(crate::error::AppError::Validation("Amount must be a non-negative number".into()));
+    }
+
+    // The conversion below is pure string-shifting that assumes a plain
+    // non-negative decimal ("123" or "123.45"). f64::parse is lenient — it
+    // accepts "1e18", "+1", and (above) "inf"/"NaN" — and those slip past the
+    // domain check only to be mangled by the digit concatenation below (e.g.
+    // "1e18" became "1e18000000000000000000"). Reject anything that isn't ASCII
+    // digits and at most one '.'.
+    if amount.matches('.').count() > 1 || !amount.bytes().all(|b| b.is_ascii_digit() || b == b'.') {
+        return Err(crate::error::AppError::Validation("Amount must be a plain decimal number".into()));
     }
 
     let (whole, fraction) = match amount.split_once('.') {
@@ -192,6 +213,7 @@ pub fn to_plancks(amount: String) -> Result<String, crate::error::AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[test]
     fn to_plancks_integer() {
@@ -323,5 +345,67 @@ mod tests {
         assert_eq!(normalize_decimal_digits("abc"), "0");
         assert_eq!(normalize_decimal_digits("1e"), "0");
         assert_eq!(normalize_decimal_digits("-5"), "0");
+    }
+
+    #[test]
+    fn to_plancks_rejects_scientific_notation_fixture() {
+        // f64 accepts "1e18"; the string path used to emit "1e18000…000".
+        assert!(to_plancks("1e18".into()).is_err());
+        assert!(to_plancks("1E18".into()).is_err());
+        assert!(to_plancks("+1".into()).is_err());
+    }
+
+    #[test]
+    fn normalize_huge_exponent_clamps_not_panics() {
+        // i32::MAX exponent: `current_int_len + exp` would overflow i32 without
+        // saturating_add; an exponent past the planck-digit cap clamps to "0"
+        // instead of panicking (debug) or OOM-allocating a giant zero pad (release).
+        assert_eq!(normalize_decimal_digits("5e2147483647"), "0");
+        assert_eq!(normalize_decimal_digits("9e100"), "0");
+    }
+
+    proptest! {
+        // to_plancks must never emit a mangled value: whatever it accepts, the
+        // output is a pure digit string — no leftover 'e'/'+'/'-'/'.', never
+        // "1e18000…" or "+1000…". This is the invariant the sci-notation bug broke.
+        #[test]
+        fn to_plancks_output_is_pure_digits(s in ".*") {
+            if let Ok(planck) = to_plancks(s.clone()) {
+                prop_assert!(planck.bytes().all(|b| b.is_ascii_digit()), "to_plancks({s:?}) = {planck:?}");
+            }
+        }
+
+        // An integer N converts to exactly N * 10^18 planck (round-trip through the
+        // digit string). u64::MAX * 10^18 < u128::MAX, so the product is exact.
+        #[test]
+        fn to_plancks_integer_is_n_times_1e18(n in 0u64..=u64::MAX) {
+            let planck = to_plancks(n.to_string()).expect("integer converts");
+            let got: u128 = planck.parse().expect("pure digits");
+            prop_assert_eq!(got, u128::from(n) * 1_000_000_000_000_000_000u128); // 10^DECIMALS (18)
+        }
+
+        // Scientific notation is rejected for any base/exponent.
+        #[test]
+        fn to_plancks_rejects_sci(base in 0u64..1_000_000u64, exp in 1u32..30) {
+            let lower = format!("{base}e{exp}");
+            let upper = format!("{base}E{exp}");
+            prop_assert!(to_plancks(lower).is_err());
+            prop_assert!(to_plancks(upper).is_err());
+        }
+
+        // normalize_decimal_digits never panics/OOMs even at the i32 exponent
+        // boundary, and always returns a pure digit string.
+        #[test]
+        fn normalize_handles_huge_exponents(base in 1u32..1000, exp in 0i64..=2_147_483_647i64) {
+            let out = normalize_decimal_digits(&format!("{base}e{exp}"));
+            prop_assert!(out.bytes().all(|b| b.is_ascii_digit()));
+        }
+
+        // For arbitrary number-ish strings the output is always pure digits.
+        #[test]
+        fn normalize_output_is_always_digits(s in r"[-+]?[0-9]{0,18}\.?[0-9]{0,18}([eE][-+]?[0-9]{0,9})?") {
+            let out = normalize_decimal_digits(&s);
+            prop_assert!(out.bytes().all(|b| b.is_ascii_digit()));
+        }
     }
 }

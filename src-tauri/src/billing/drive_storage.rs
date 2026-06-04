@@ -19,7 +19,9 @@
 //! unchanged.
 
 use crate::api::indexer::IndexerClient;
-use crate::billing::charts::{ChartPoint, date_to_iso, dd_mon_label, format_bytes, get_all_dates_in_range, normalize_date, range_start, weekday_name};
+use crate::billing::charts::{
+    ChartPoint, date_to_iso, dd_mon_label, format_bytes, get_all_dates_in_range, normalize_date, range_start, weekday_name,
+};
 use crate::error::AppError;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use serde::Deserialize;
@@ -168,7 +170,10 @@ fn parse_timestamp(ts: &str) -> Option<DateTime<Utc>> {
 /// full datetime fixes this — last-insert-wins on a chronologically
 /// ascending stream collapses each day to its latest snapshot.
 fn snapshots_sorted(snapshots: &[DriveStorageSnapshot]) -> Vec<(DateTime<Utc>, &DriveStorageSnapshot)> {
-    let mut typed: Vec<(DateTime<Utc>, &DriveStorageSnapshot)> = snapshots.iter().filter_map(|s| parse_timestamp(&s.processed_timestamp).map(|dt| (dt, s))).collect();
+    let mut typed: Vec<(DateTime<Utc>, &DriveStorageSnapshot)> = snapshots
+        .iter()
+        .filter_map(|s| parse_timestamp(&s.processed_timestamp).map(|dt| (dt, s)))
+        .collect();
     typed.sort_by_key(|(dt, _)| *dt);
     typed
 }
@@ -362,14 +367,15 @@ mod tests {
         // value, not 0 — that was the original bug fix the credits
         // chart shipped with and the new storage path must preserve.
         let today = chrono::Utc::now().date_naive();
-        let pre = today
-            .checked_sub_signed(chrono::Duration::days(30))
-            .expect("subtract 30 days from today");
+        let pre = today.checked_sub_signed(chrono::Duration::days(30)).expect("subtract 30 days from today");
         let ts = format!("{pre}T00:00:00Z");
         let snaps = vec![snap("12345", &ts)];
 
         let out = build_storage_chart(&snaps, "last7days");
         assert!(!out.is_empty());
-        assert!(out.iter().all(|p| (p.balance - 12345.0).abs() < f64::EPSILON), "expected all points to seed from pre-window snapshot, got {out:?}");
+        assert!(
+            out.iter().all(|p| (p.balance - 12345.0).abs() < f64::EPSILON),
+            "expected all points to seed from pre-window snapshot, got {out:?}"
+        );
     }
 }

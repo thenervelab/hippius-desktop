@@ -86,6 +86,15 @@ fn bits_to_percent(bits: f64) -> u8 {
     raw.clamp(5.0, 100.0).round() as u8
 }
 
+/// Score a recovery passphrase for the UI strength meter.
+///
+/// Passphrases shorter than `MIN_PASSPHRASE_LEN` short-circuit to a
+/// zero-entropy `TooShort` verdict (never `acceptable_for_submit`) before the
+/// estimator runs. Otherwise entropy is derived from zxcvbn's guess count
+/// (`guesses_log10` converted to bits) and bucketed Weak / Ok / Strong against
+/// `MIN_ENTROPY_BITS`; zxcvbn's own warning and suggestions are surfaced as
+/// user hints. Length is measured in Unicode scalar values
+/// (`chars().count()`), not bytes, so multi-byte characters count once.
 pub(crate) fn score_passphrase(passphrase: &str) -> PassphraseStrength {
     if passphrase.chars().count() < MIN_PASSPHRASE_LEN {
         let verdict = PassphraseVerdict::TooShort;
@@ -169,7 +178,7 @@ pub(crate) struct HcfsServerCtx {
 
 impl HcfsServerCtx {
     pub(crate) async fn resolve(state: &tauri::State<'_, crate::app_state::AppState>) -> Result<Self> {
-        let account_id = state.current_account_id().map_err(AppError::Other)?;
+        let account_id = state.current_account_id()?;
         let ss58 = state
             .auth
             .lock()?
@@ -288,9 +297,7 @@ pub(crate) async fn post_json_discard<B: Serialize>(ctx: &HcfsServerCtx, path: &
 async fn http_err(status: StatusCode, resp: reqwest::Response, path: &str) -> AppError {
     let body = resp.text().await.unwrap_or_default();
     if status == StatusCode::TOO_MANY_REQUESTS {
-        return AppError::Validation(
-            "You've hit the rate limit for recovery operations. Please wait a few minutes and try again.".into(),
-        );
+        return AppError::Validation("You've hit the rate limit for recovery operations. Please wait a few minutes and try again.".into());
     }
     AppError::Api {
         status: status.as_u16(),

@@ -4,13 +4,14 @@ import { FC, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AbstractIconWrapper, CardButton, Icons } from "@/components/ui";
 import { useStaking } from "@/app/lib/hooks/useStaking";
+import StakingErrorNotice from "./shared/StakingErrorNotice";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { dispatchSigningError } from "@/lib/utils/dispatchTauriError";
 import { toast } from "sonner";
 
 const StakeWidget: FC = () => {
     const router = useRouter();
-    const { stakingInfo, operations } = useStaking();
+    const { stakingInfo, operations, refetch } = useStaking();
     const { logout } = useWalletAuth();
     const [isWithdrawing, setIsWithdrawing] = useState(false);
 
@@ -142,6 +143,11 @@ const StakeWidget: FC = () => {
                     )}
                 </div>
             </div>
+            <StakingErrorNotice
+                message={stakingInfo.isLoading ? null : stakingInfo.error}
+                onRetry={() => refetch()}
+                className="mt-3"
+            />
             <div className="flex flex-col">
                 {/* Withdraw Button - Higher priority if withdrawable funds exist */}
                 {hasWithdrawable && (

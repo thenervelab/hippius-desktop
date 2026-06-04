@@ -345,7 +345,7 @@ mod tests {
         let json_err: serde_json::Error = serde_json::from_str::<String>("not valid json").unwrap_err();
         let app_err = AppError::from(json_err);
         assert!(matches!(app_err, AppError::Json(_)));
-        assert!(app_err.to_string().contains("JSON error"), "display: {app_err}",);
+        assert!(app_err.to_string().contains("JSON error"), "display: {app_err}");
     }
 
     #[test]
@@ -382,7 +382,7 @@ mod tests {
         ];
         for (kind, expected) in cases {
             let json = serde_json::to_value(&kind).expect("serialize");
-            assert_eq!(json, expected, "variant {kind:?} should serialize to {expected}",);
+            assert_eq!(json, expected, "variant {kind:?} should serialize to {expected}");
         }
     }
 
@@ -400,7 +400,7 @@ mod tests {
     #[test]
     fn display_io_error_has_prefix() {
         let err = AppError::Io(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "no access"));
-        assert!(err.to_string().starts_with("I/O error:"), "got: {err}",);
+        assert!(err.to_string().starts_with("I/O error:"), "got: {err}");
     }
 
     #[test]
@@ -470,9 +470,7 @@ mod tests {
             AppError::NotReady(NotReadyKind::ConfigMissing),
             AppError::Progress("tracker".into()),
             AppError::Lock("poisoned".into()),
-            AppError::Intent(crate::sync::intent::IntentError::Db(sqlx::Error::ColumnNotFound(
-                "test_col".into(),
-            ))),
+            AppError::Intent(crate::sync::intent::IntentError::Db(sqlx::Error::ColumnNotFound("test_col".into()))),
             AppError::Other("misc".into()),
         ];
         let expected_kinds = [

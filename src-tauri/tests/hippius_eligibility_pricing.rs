@@ -127,9 +127,7 @@ fn bytes_just_over(balance: f64) -> u64 {
     let mut bytes: u64 = 1;
     while cost_for_bytes(bytes) <= balance {
         bytes = bytes.saturating_mul(2);
-        if bytes == 0 {
-            panic!("u64 overflow: no byte count produces cost > {balance}");
-        }
+        assert!(bytes != 0, "u64 overflow: no byte count produces cost > {balance}");
     }
     bytes
 }

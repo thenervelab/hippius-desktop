@@ -204,7 +204,7 @@ pub(crate) async fn fetch_migration_summary(client: &reqwest::Client, server_url
     let resp = client
         .get(&url)
         // Old servers may take a while enumerating large buckets
-        .timeout(std::time::Duration::from_secs(600))
+        .timeout(std::time::Duration::from_mins(10))
         .send()
         .await?;
 
@@ -320,7 +320,8 @@ pub async fn check_migration(state: tauri::State<'_, crate::app_state::AppState>
 
     if has_local_in_progress && let Ok(job_status) = poll_migration_status_internal(&state, &account_id).await {
         if job_status.status == "in_progress" {
-            let logical_total = job_status.logical_file_count
+            let logical_total = job_status
+                .logical_file_count
                 .filter(|&c| c > 0)
                 .map_or(job_status.total as u64, |c| c as u64);
             info!(
@@ -471,8 +472,7 @@ pub async fn dismiss_migration(state: tauri::State<'_, crate::app_state::AppStat
 /// exists, a numeric suffix is appended (`-2`, `-3`, ...) to guarantee
 /// uniqueness.
 pub(crate) fn compute_default_sync_path() -> Result<PathBuf> {
-    let base = dirs::home_dir()
-        .ok_or_else(|| crate::error::AppError::Other("Could not determine a suitable directory for sync folder".into()))?;
+    let base = dirs::home_dir().ok_or_else(|| crate::error::AppError::Other("Could not determine a suitable directory for sync folder".into()))?;
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let stem = format!("Hippius-Migration-{today}");
     let candidate = base.join(&stem);
@@ -675,7 +675,10 @@ impl Drop for MigrationInProgressGuard<'_> {
     }
 }
 
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Linear migration-start flow: key derivation -> request signing -> S3-cred + API-token fetch -> POST with a job_exists cancel-and-retry path, all gated by the RAII MigrationInProgressGuard whose early-return clears and success-path commit must stay in one body. Covered by tests/migration_server_mock.rs."
+)]
 #[tauri::command]
 pub async fn start_server_migration(
     state: tauri::State<'_, crate::app_state::AppState>,
@@ -793,23 +796,28 @@ pub async fn start_server_migration(
     let url = format!("{}/migration/start", server_base.trim_end_matches('/'));
     tracing::info!("[Migration] Posting to {url}");
 
+    // Built once and reused for the initial request and the job_exists retry
+    // below — identical payloads, so a single construction avoids drift and
+    // recomputing the signature / verifying-key byte vectors twice.
+    let request_body = serde_json::json!({
+        "ss58_address": account_id,
+        "folder_hash": folder_hash,
+        "encryption_key_hex": encryption_key_hex,
+        "path_prefix": path_prefix,
+        "s3_access_key": s3_access_key,
+        "s3_secret_key": s3_secret_key,
+        "signature": signature.to_bytes().to_vec(),
+        "signing_key": signing_key.verifying_key().to_bytes().to_vec(),
+        "label": label,
+    });
+
     let resp = state
         .migration
         .client
         .post(&url)
         .header("Authorization", format!("Bearer {api_token}"))
-        .timeout(std::time::Duration::from_secs(120))
-        .json(&serde_json::json!({
-            "ss58_address": account_id,
-            "folder_hash": folder_hash,
-            "encryption_key_hex": encryption_key_hex,
-            "path_prefix": path_prefix,
-            "s3_access_key": s3_access_key,
-            "s3_secret_key": s3_secret_key,
-            "signature": signature.to_bytes().to_vec(),
-            "signing_key": signing_key.verifying_key().to_bytes().to_vec(),
-            "label": label,
-        }))
+        .timeout(std::time::Duration::from_mins(2))
+        .json(&request_body)
         .send()
         .await
         .map_err(|e| {
@@ -838,18 +846,8 @@ pub async fn start_server_migration(
                 .client
                 .post(&url)
                 .header("Authorization", format!("Bearer {api_token}"))
-                .timeout(std::time::Duration::from_secs(120))
-                .json(&serde_json::json!({
-                    "ss58_address": account_id,
-                    "folder_hash": folder_hash,
-                    "encryption_key_hex": encryption_key_hex,
-                    "path_prefix": path_prefix,
-                    "s3_access_key": s3_access_key,
-                    "s3_secret_key": s3_secret_key,
-                    "signature": signature.to_bytes().to_vec(),
-                    "signing_key": signing_key.verifying_key().to_bytes().to_vec(),
-                    "label": label,
-                }))
+                .timeout(std::time::Duration::from_mins(2))
+                .json(&request_body)
                 .send()
                 .await
                 .map_err(|e| {
@@ -997,10 +995,16 @@ pub async fn start_migration_polling(app: tauri::AppHandle, account_id: String) 
         }
     });
 
-    // Store the handle so it can be cancelled
-    let state = app.state::<crate::app_state::AppState>();
-    let mut guard = state.migration.poll_task.lock().await;
-    *guard = Some(handle);
+    // Store the handle so it can be cancelled. Scope the guard so the tokio
+    // Mutex on poll_task is released BEFORE the immediate poll's HTTP await
+    // below — otherwise a concurrent dismiss_migration / stop_migration_polling
+    // would block on this lock for the entire poll round-trip (up to the
+    // reqwest read timeout).
+    {
+        let state = app.state::<crate::app_state::AppState>();
+        let mut guard = state.migration.poll_task.lock().await;
+        *guard = Some(handle);
+    }
 
     // Also poll immediately (don't wait 3s for the first result)
     let immediate = poll_migration_status_internal(&app.state::<crate::app_state::AppState>(), &account_id).await?;
@@ -1073,7 +1077,10 @@ mod tests {
 
     #[test]
     fn derive_label_uses_last_path_component() {
-        assert_eq!(derive_migration_label(Some("/Users/alice/Documents/Hippius-Migration")), "Hippius-Migration");
+        assert_eq!(
+            derive_migration_label(Some("/Users/alice/Documents/Hippius-Migration")),
+            "Hippius-Migration"
+        );
     }
 
     #[test]
@@ -1281,13 +1288,11 @@ mod tests {
         let home_dir = dirs::home_dir().expect("home dir should exist on test runner");
         assert_eq!(parent, home_dir.as_path(), "Expected parent to be Home, got {parent:?}");
 
-        for protected in [dirs::document_dir(), dirs::desktop_dir(), dirs::download_dir()] {
-            if let Some(p) = protected {
-                assert!(
-                    !path.starts_with(&p),
-                    "default sync path must not live under TCC-protected folder {p:?}, got {path:?}",
-                );
-            }
+        for p in [dirs::document_dir(), dirs::desktop_dir(), dirs::download_dir()].into_iter().flatten() {
+            assert!(
+                !path.starts_with(&p),
+                "default sync path must not live under TCC-protected folder {p:?}, got {path:?}",
+            );
         }
     }
 
