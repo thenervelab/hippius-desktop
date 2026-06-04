@@ -20,7 +20,6 @@ import { getFileIcon, DIRECTORY_SUFFIX } from "@/app/lib/utils/fileTypeUtils";
 import { formatBytes } from "@/app/lib/utils/formatBytes";
 import { formatUploadedDate } from "@/app/lib/utils/formatUploadedDate";
 import Button from "@/app/components/ui/button";
-import MiddleTruncatedName from "@/app/components/ui/MiddleTruncatedName";
 import HippiusLogo from "@/app/components/ui/icons/HippiusLogo";
 import Search from "@/app/components/ui/icons/Search";
 import Command from "@/app/components/ui/icons/Command";
@@ -324,14 +323,7 @@ function UploadRowItem({ item }: { item: UploadFeedItem }) {
         <Icon className="size-4" />
       </span>
       <div className="min-w-0 flex-1">
-        {/* Center-truncate long names (keep start + extension) instead of the
-            end-only CSS `truncate`, so e.g. a long "…scene.mp4" still shows its
-            extension. MiddleTruncatedName measures the row width and updates on
-            resize; it works in this provider-free webview (self-contained). */}
-        <MiddleTruncatedName
-          name={displayFileName(item.name)}
-          className="block font-geist text-[14px] font-medium leading-5 tracking-[-0.28px] text-[#1d1d1d] dark:text-white"
-        />
+        <MiddleEllipsisName name={displayFileName(item.name)} />
         <div className="mt-1 flex items-center justify-between gap-2">
           <span className="truncate font-geist text-[12px] font-medium leading-normal tracking-[-0.24px] text-grey-10 dark:text-white">
             {sizeText}
@@ -346,6 +338,41 @@ function UploadRowItem({ item }: { item: UploadFeedItem }) {
         </div>
       </div>
     </li>
+  );
+}
+
+/**
+ * Center-truncate a filename with PURE CSS — no width measurement, so it is
+ * immune to the webfont-load timing that left the canvas-measuring
+ * `MiddleTruncatedName` clipping the extension in this provider-free webview.
+ *
+ * The head span truncates with the browser's own end-ellipsis; the tail span
+ * (the last `TAIL_CHARS` — extension plus a little context) is `shrink-0`, so it
+ * is always rendered in full. When the whole name fits, head sizes to its
+ * content (no `flex-1`), so there's no gap before the tail and it reads as one
+ * contiguous string; when it doesn't, only the head shrinks. The native `title`
+ * shows the full name on hover.
+ */
+function MiddleEllipsisName({ name }: { name: string }) {
+  const TAIL_CHARS = 10;
+  const textClass =
+    "font-geist text-[14px] font-medium leading-5 tracking-[-0.28px] text-[#1d1d1d] dark:text-white";
+
+  if (name.length <= TAIL_CHARS + 1) {
+    return (
+      <p className={`truncate ${textClass}`} title={name}>
+        {name}
+      </p>
+    );
+  }
+
+  const head = name.slice(0, name.length - TAIL_CHARS);
+  const tail = name.slice(name.length - TAIL_CHARS);
+  return (
+    <p className={`flex min-w-0 ${textClass}`} title={name}>
+      <span className="min-w-0 truncate">{head}</span>
+      <span className="shrink-0 whitespace-pre">{tail}</span>
+    </p>
   );
 }
 
