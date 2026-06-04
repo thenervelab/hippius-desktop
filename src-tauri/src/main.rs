@@ -484,6 +484,13 @@ async fn open_db_pool(db_path: &std::path::Path) -> Result<SqlitePool, sqlx::Err
     SqlitePoolOptions::new().max_connections(8).connect_with(connect_opts).await
 }
 
+/// Attach the Tauri `setup` hook to `builder` and return it for chaining.
+///
+/// The hook fires once at startup, before the window is shown: it loads the
+/// bundled `.env` resource, registers deep links at runtime on Linux (required
+/// for dev), constructs the single `AppState` (the app holds no statics), and
+/// wires the sync bridge's app handle. Returning the builder lets this compose
+/// in `main()`'s builder chain.
 pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
     builder.setup(|app| {
         debug!(".setup() closure called in setup.rs");

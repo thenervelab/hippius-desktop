@@ -86,6 +86,15 @@ fn bits_to_percent(bits: f64) -> u8 {
     raw.clamp(5.0, 100.0).round() as u8
 }
 
+/// Score a recovery passphrase for the UI strength meter.
+///
+/// Passphrases shorter than `MIN_PASSPHRASE_LEN` short-circuit to a
+/// zero-entropy `TooShort` verdict (never `acceptable_for_submit`) before the
+/// estimator runs. Otherwise entropy is derived from zxcvbn's guess count
+/// (`guesses_log10` converted to bits) and bucketed Weak / Ok / Strong against
+/// `MIN_ENTROPY_BITS`; zxcvbn's own warning and suggestions are surfaced as
+/// user hints. Length is measured in Unicode scalar values
+/// (`chars().count()`), not bytes, so multi-byte characters count once.
 pub(crate) fn score_passphrase(passphrase: &str) -> PassphraseStrength {
     if passphrase.chars().count() < MIN_PASSPHRASE_LEN {
         let verdict = PassphraseVerdict::TooShort;
