@@ -47,10 +47,29 @@ const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 ///
 /// `label_to_path` maps a drive label to its local sync-root path. A hit
 /// whose `folder_label` is configured on this device gets a real `source`
-/// path and `synced` status, so preview/download resolve locally. A hit for
-/// a drive not configured here (e.g. uploaded from another device) gets an
-/// empty `source` and `pending` status — mirroring the server-overlay rows
-/// `search_user_files_recursive` produces.
+/// path so preview/download resolve locally.
+///
+/// `sync_status` is the badge the Recent-Files / search UI renders. It is
+/// deliberately conservative about `pending`, which the table renders as a
+/// "Waiting in the sync queue" pill: `pending` is reserved for a *genuine*
+/// queued-for-local-download state — the drive is configured on this device
+/// but the file isn't on disk yet (e.g. it was uploaded from another device
+/// into the same drive and the next cycle will pull it down). Every other
+/// hit is `synced`:
+///   - the file's drive isn't configured on this device at all (uploaded
+///     under a removed/renamed label, or from a drive this device never
+///     joined) — it lives only on the server, which is a settled state, NOT
+///     something queued for transfer; and
+///   - the drive IS configured and the file already exists on disk.
+///
+/// The previous logic stamped `pending` purely on "drive label not configured
+/// here", which mislabeled stable server-only files as perpetually "waiting in
+/// the sync queue" even though nothing was ever going to transfer them.
+///
+/// `path_exists` is injected (rather than calling [`std::path::Path::exists`]
+/// inline) so the mapper stays a pure function the unit tests can drive
+/// without touching the filesystem. The production caller passes a closure
+/// backed by `Path::exists`.
 ///
 /// Returns `None` for a hit with neither a plaintext relative path nor a file
 /// name (a pre-backfill row we can neither display nor resolve), so callers
@@ -58,6 +77,7 @@ const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 fn map_search_hit_to_entry(
     hit: &SearchFileHit,
     label_to_path: &HashMap<String, String>,
+    path_exists: &dyn Fn(&str) -> bool,
 ) -> Option<UserFileEntry> {
     // Prefer the plaintext relative path — it carries the full in-folder path
     // the FE needs to resolve the file for preview/download. The server stores
@@ -89,14 +109,19 @@ fn map_search_hit_to_entry(
         .unwrap_or(&actual_file_name)
         .to_string();
 
-    let local_path = label_to_path.get(&hit.folder_label);
+    let local_path = label_to_path.get(&hit.folder_label).filter(|p| !p.is_empty());
     let source = match local_path {
-        Some(path) if !path.is_empty() => format!("{path}/{actual_file_name}"),
-        _ => String::new(),
+        Some(path) => format!("{path}/{actual_file_name}"),
+        None => String::new(),
     };
-    // Drive configured locally → treat as synced so the FE attempts a normal
-    // preview/download; otherwise it's a server-only row.
-    let sync_status = if local_path.is_some() { "synced" } else { "pending" };
+    // `pending` only when the drive is configured here AND the file isn't on
+    // disk yet (a real download-queued state). Server-only files (label not
+    // configured) and already-on-disk files are `synced`. See the fn doc for
+    // why the old "label not configured ⇒ pending" rule was wrong.
+    let sync_status = match local_path {
+        Some(_) if !path_exists(&source) => "pending",
+        _ => "synced",
+    };
 
     // The server reports timestamps in Unix *seconds*; `UserFileEntry`
     // (matching the disk-walk path) carries *milliseconds*.
@@ -214,10 +239,14 @@ pub async fn get_recent_uploads(
         .map(|sp| (sp.label.clone(), sp.path.clone()))
         .collect();
 
+    // Real filesystem probe for the "configured drive but not yet downloaded"
+    // pending case. `limit` is small (interactive palette), so ≤ MAX_LIMIT
+    // stats per call is negligible.
+    let path_exists = |p: &str| std::path::Path::new(p).exists();
     let entries = result
         .files
         .iter()
-        .filter_map(|hit| map_search_hit_to_entry(hit, &label_to_path))
+        .filter_map(|hit| map_search_hit_to_entry(hit, &label_to_path, &path_exists))
         .collect();
     Ok(entries)
 }
@@ -263,12 +292,22 @@ mod tests {
         pairs.iter().map(|(l, p)| ((*l).to_string(), (*p).to_string())).collect()
     }
 
+    /// Test predicate that reports every path as present on disk.
+    fn on_disk(_p: &str) -> bool {
+        true
+    }
+    /// Test predicate that reports every path as absent from disk.
+    fn off_disk(_p: &str) -> bool {
+        false
+    }
+
     #[test]
-    fn maps_local_drive_hit_with_source_and_synced_status() {
+    fn maps_local_drive_hit_on_disk_as_synced() {
         let map = label_map(&[("Docs", "/home/me/Docs")]);
         let entry = map_search_hit_to_entry(
             &hit("Docs", Some("Work/report.pdf"), Some("report.pdf"), 1_700_000_000, 1_700_000_005),
             &map,
+            &on_disk,
         )
         .expect("local hit maps");
 
@@ -276,6 +315,7 @@ mod tests {
         assert_eq!(entry.name, "report.pdf"); // basename, not the full path
         assert_eq!(entry.label, "Docs");
         assert_eq!(entry.source, "/home/me/Docs/Work/report.pdf");
+        // Drive configured here AND file present on disk → settled.
         assert_eq!(entry.sync_status, "synced");
         assert_eq!(entry.size, 2048);
         // Seconds → milliseconds.
@@ -285,26 +325,53 @@ mod tests {
         assert!(!entry.is_folder);
     }
 
+    /// A configured drive whose file isn't on disk yet is the ONE genuine
+    /// `pending` case (uploaded from another device; this device will pull it
+    /// down on the next cycle).
     #[test]
-    fn marks_non_local_drive_pending_with_empty_source() {
+    fn marks_configured_drive_pending_when_file_absent_on_disk() {
+        let map = label_map(&[("Docs", "/home/me/Docs")]);
+        let entry = map_search_hit_to_entry(
+            &hit("Docs", Some("Work/report.pdf"), Some("report.pdf"), 1_700_000_000, 0),
+            &map,
+            &off_disk,
+        )
+        .expect("local hit maps");
+
+        assert_eq!(entry.source, "/home/me/Docs/Work/report.pdf");
+        assert_eq!(entry.sync_status, "pending");
+    }
+
+    /// Regression for the reported bug: a server file whose drive label is NOT
+    /// configured on this device (uploaded from another device / under an
+    /// old/removed label) is `synced`, not a perpetual misleading `pending`
+    /// "waiting in the sync queue" pill. Nothing is queued for it locally.
+    #[test]
+    fn marks_non_local_drive_synced_with_empty_source() {
         let map = label_map(&[("Docs", "/home/me/Docs")]);
         let entry = map_search_hit_to_entry(
             &hit("OtherDevice", Some("a/b.txt"), Some("b.txt"), 1_700_000_000, 0),
             &map,
+            // `off_disk` proves the empty source short-circuits to synced
+            // regardless of the on-disk probe (source is "" so it never runs).
+            &off_disk,
         )
         .expect("non-local hit still maps");
 
         assert_eq!(entry.source, "");
-        assert_eq!(entry.sync_status, "pending");
+        assert_eq!(entry.sync_status, "synced");
         // updated_at == 0 falls back to created_at for last_charged_at.
         assert_eq!(entry.last_charged_at, 1_700_000_000_000);
     }
 
     #[test]
     fn falls_back_to_file_name_when_relative_path_absent() {
-        let entry =
-            map_search_hit_to_entry(&hit("Docs", None, Some("loose.png"), 1, 1), &label_map(&[]))
-                .expect("file_name-only hit maps");
+        let entry = map_search_hit_to_entry(
+            &hit("Docs", None, Some("loose.png"), 1, 1),
+            &label_map(&[]),
+            &on_disk,
+        )
+        .expect("file_name-only hit maps");
         assert_eq!(entry.actual_file_name, "loose.png");
         assert_eq!(entry.name, "loose.png");
     }
@@ -312,7 +379,7 @@ mod tests {
     #[test]
     fn strips_leading_slash_from_relative_path() {
         let map = label_map(&[("Docs", "/root")]);
-        let entry = map_search_hit_to_entry(&hit("Docs", Some("/x/y.txt"), None, 1, 1), &map)
+        let entry = map_search_hit_to_entry(&hit("Docs", Some("/x/y.txt"), None, 1, 1), &map, &on_disk)
             .expect("leading-slash hit maps");
         assert_eq!(entry.actual_file_name, "x/y.txt");
         assert_eq!(entry.source, "/root/x/y.txt");
@@ -320,6 +387,9 @@ mod tests {
 
     #[test]
     fn skips_pre_backfill_rows_with_no_name_or_path() {
-        assert!(map_search_hit_to_entry(&hit("Docs", None, None, 1, 1), &label_map(&[])).is_none());
+        assert!(
+            map_search_hit_to_entry(&hit("Docs", None, None, 1, 1), &label_map(&[]), &on_disk)
+                .is_none()
+        );
     }
 }
