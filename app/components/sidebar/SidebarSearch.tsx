@@ -2,11 +2,9 @@ import cn from "@/app/lib/utils/cn";
 import { Icons } from "@/components/ui";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { useAtomValue } from "jotai";
 import SearchShortcutHint from "./SearchShortcutHint";
 import SidebarSearchModal from "./SidebarSearchModal";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { driveStatusesAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import VideoDialog from "@/app/components/page-sections/drive/files-table/VideoDialog";
 import ImageDialog from "@/app/components/page-sections/drive/files-table/ImageDialog";
@@ -15,6 +13,9 @@ import { downloadFile } from "@/app/lib/utils/downloadFile";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
 import { FileSelectionProvider } from "@/app/contexts/FileSelectionContext";
+import { useDeleteFile } from "@/app/lib/hooks/use-delete-file";
+import ConfirmationDialog from "@/app/components/ConfirmationDialog";
+import { Trash2 } from "lucide-react";
 
 interface SidebarSearchProps {
   collapsed?: boolean;
@@ -35,14 +36,6 @@ const SidebarSearch: React.FC<SidebarSearchProps> = ({ collapsed = false }) => {
   const [previewList, setPreviewList] = useState<FormattedUserFile[]>([]);
 
   const { polkadotAddress } = useWalletAuth();
-  const driveStatuses = useAtomValue(driveStatusesAtom);
-
-  // The palette searches every configured drive in parallel — the sidebar
-  // sits outside any drive context, so it can't lean on a single active label.
-  const labels = useMemo(
-    () => Array.from(driveStatuses.keys()),
-    [driveStatuses],
-  );
 
   // Resolve which preview dialog to render for the selected file. Mirrors
   // `getFileType` in `useFileViewShared`: name → extension → FileType. Only
@@ -98,6 +91,34 @@ const SidebarSearch: React.FC<SidebarSearchProps> = ({ collapsed = false }) => {
     [],
   );
 
+  // Delete from the preview viewer. The drive page routes its viewer delete
+  // through selection mode + the bottom action bar; the sidebar has neither, so
+  // it deletes directly through the SAME `delete_files` call (`useDeleteFile`)
+  // behind its own confirm dialog.
+  const [fileToDelete, setFileToDelete] = useState<FormattedUserFile | null>(
+    null,
+  );
+  const deleteMutation = useDeleteFile({
+    files: fileToDelete ? [fileToDelete] : [],
+  });
+  const isDeleting = deleteMutation.isPending;
+
+  const handleViewerDelete = useCallback((file: FormattedUserFile) => {
+    setSelectedFile(null); // close the viewer; the confirm dialog takes over
+    setFileToDelete(file);
+  }, []);
+
+  const closeDeleteConfirm = useCallback(() => {
+    if (isDeleting) return;
+    setFileToDelete(null);
+  }, [isDeleting]);
+
+  const handleConfirmDelete = useCallback(() => {
+    deleteMutation.mutate(undefined, {
+      onSettled: () => setFileToDelete(null),
+    });
+  }, [deleteMutation]);
+
   return (
     <>
       {collapsed ? (
@@ -142,7 +163,6 @@ const SidebarSearch: React.FC<SidebarSearchProps> = ({ collapsed = false }) => {
         <SidebarSearchModal
           onClose={() => setSearchOpen(false)}
           accountId={polkadotAddress}
-          labels={labels}
           onSelect={handleSelect}
         />
       )}
@@ -161,6 +181,7 @@ const SidebarSearch: React.FC<SidebarSearchProps> = ({ collapsed = false }) => {
               onCloseClicked={handleClosePreview}
               onNavigate={setSelectedFile}
               handleFileDownload={handleFileDownload}
+              onDelete={handleViewerDelete}
             />
           )}
           {selectedFileType === "image" && (
@@ -170,6 +191,7 @@ const SidebarSearch: React.FC<SidebarSearchProps> = ({ collapsed = false }) => {
               onCloseClicked={handleClosePreview}
               onNavigate={setSelectedFile}
               handleFileDownload={handleFileDownload}
+              onDelete={handleViewerDelete}
             />
           )}
           {selectedFileType === "PDF" && (
@@ -179,9 +201,36 @@ const SidebarSearch: React.FC<SidebarSearchProps> = ({ collapsed = false }) => {
               onCloseClicked={handleClosePreview}
               onNavigate={setSelectedFile}
               handleFileDownload={handleFileDownload}
+              onDelete={handleViewerDelete}
             />
           )}
         </FileSelectionProvider>
+      )}
+
+      {/* Direct delete for a previewed search result — same `delete_files`
+          backend call the drive page uses, just triggered without the
+          selection-mode action bar (which the sidebar doesn't render). */}
+      {fileToDelete && (
+        <ConfirmationDialog
+          open={!!fileToDelete}
+          onClose={closeDeleteConfirm}
+          onBack={closeDeleteConfirm}
+          onConfirm={handleConfirmDelete}
+          heading="Delete File"
+          text={
+            <>
+              Are you sure you want to delete &quot;
+              {fileToDelete.actualFileName || fileToDelete.name}&quot;? This
+              action cannot be undone.
+            </>
+          }
+          button={isDeleting ? "Deleting..." : "Delete File"}
+          icon={<Trash2 className="size-[18px] text-white" strokeWidth={2.5} />}
+          iconBgColor="bg-[#fc7d73]"
+          confirmVariant="destructive"
+          disableButton={isDeleting}
+          disableBackButton={isDeleting}
+        />
       )}
     </>
   );

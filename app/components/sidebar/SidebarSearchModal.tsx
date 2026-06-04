@@ -18,7 +18,7 @@ import {
   NoEntriesIllustrationDark,
 } from "@/components/ui/icons";
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
-import { useGlobalRecursiveFileSearch } from "@/app/lib/hooks/useGlobalRecursiveFileSearch";
+import { useGlobalFileSearch } from "@/app/lib/hooks/useGlobalFileSearch";
 import useRecentUploads from "@/app/lib/hooks/useRecentUploads";
 import { getFileIcon } from "@/lib/utils/fileTypeUtils";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
@@ -35,10 +35,8 @@ import { getSidebarSearchView } from "./sidebarSearchState";
 interface SidebarSearchModalProps {
   /** Close the palette (Esc, overlay click, or after selecting a file). */
   onClose: () => void;
-  /** Owner account used by the cross-drive search IPC. */
+  /** Owner account (ss58) used to scope the cloud `search_files` query. */
   accountId: string | null | undefined;
-  /** Drive labels to fan the search across. */
-  labels: string[];
   /**
    * Open a file. Receives the file plus the list it was chosen from so the
    * preview dialog's prev/next navigation walks the same set the user saw
@@ -104,7 +102,6 @@ const EmptyState: FC<{ title: string; description: string }> = ({
 const SidebarSearchModal: FC<SidebarSearchModalProps> = ({
   onClose,
   accountId,
-  labels,
   onSelect,
 }) => {
   const [value, setValue] = useState("");
@@ -117,10 +114,9 @@ const SidebarSearchModal: FC<SidebarSearchModalProps> = ({
   const trimmed = value.trim();
   const hasQuery = trimmed.length > 0;
 
-  const { data: results, isFetching } = useGlobalRecursiveFileSearch({
+  const { data: results, isFetching } = useGlobalFileSearch({
     accountId,
-    labels,
-    criteria: { searchTerm: value },
+    searchTerm: value,
     enabled: hasQuery,
   });
 

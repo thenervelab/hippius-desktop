@@ -1,9 +1,10 @@
 /**
  * Pure view-state resolver for the sidebar search palette.
  *
- * The palette draws from two data sources — the cross-drive search
- * (`useGlobalRecursiveFileSearch`) once the user types, and the "last
- * uploads" list (`useRecentFiles`) shown while the query is empty — each
+ * The palette draws from two data sources — the account-wide cloud search
+ * (`useGlobalFileSearch`, the HCFS `/search_files` endpoint) once the user
+ * types, and the "last uploads" list (`useRecentUploads`) shown while the
+ * query is empty — each
  * with its own loading and empty states. Centralising the branching here
  * keeps `SidebarSearchModal` declarative (it maps one enum to one rendered
  * block) and lets the precedence rules be unit-tested without mounting React.

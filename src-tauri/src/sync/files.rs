@@ -1765,6 +1765,13 @@ pub struct UserFileEntry {
     pub created_at: i64,
     pub arion_hash: String,
     pub arion_cid: String,
+    /// Hex of the server-side `path_hash` — the file's unique id on Arion.
+    /// Used to download + decrypt a file that isn't synced to this device, via
+    /// `download_remote_file` / `cache_remote_file`. Empty for local disk-walk
+    /// entries (they preview/download straight from `source`); populated only
+    /// for `/search_files` hits so cloud-only results can be opened.
+    #[serde(default)]
+    pub file_id: String,
     pub source: String,
     pub miner_ids: Vec<String>,
     pub is_assigned: bool,
@@ -1941,6 +1948,7 @@ pub async fn get_user_files(
                 created_at: created_at_ms,
                 arion_hash: entry.arion_hash.clone(),
                 arion_cid: entry.arion_cid.clone(),
+                file_id: String::new(),
                 source: format!("{folder_path}/{}", entry.name),
                 miner_ids: Vec::new(),
                 is_assigned: true,
@@ -2101,6 +2109,7 @@ async fn walk_disk_files_recursive(
             created_at: created_at_ms,
             arion_hash: info.map_or_else(String::new, hcfs_client::engine::types::SyncedFileInfo::path_hash_hex),
             arion_cid: info.map_or_else(String::new, |i| i.arion_cid.to_string()),
+            file_id: String::new(),
             source: format!("{folder_path}/{rel_path}"),
             miner_ids: Vec::new(),
             is_assigned: true,
@@ -2225,6 +2234,7 @@ pub async fn search_user_files_recursive(
                 created_at: uploaded_at_ms,
                 arion_hash: info.path_hash_hex(),
                 arion_cid: info.arion_cid.to_string(),
+                file_id: String::new(),
                 source: format!("{}/{}", sp.path, rel),
                 miner_ids: Vec::new(),
                 is_assigned: true,
@@ -2764,6 +2774,7 @@ mod tests {
             created_at,
             arion_hash: String::new(),
             arion_cid: String::new(),
+            file_id: String::new(),
             source: String::new(),
             miner_ids: Vec::new(),
             is_assigned: false,

@@ -153,3 +153,95 @@ pub async fn download_remote_file(
     info!(file_id = %file_id, "File downloaded and decrypted successfully");
     Ok(())
 }
+
+/// Download + decrypt a single remote file into a local preview cache and
+/// return its absolute path, so the preview dialogs (image / video / PDF) can
+/// display a file that isn't synced to this device — exactly like a synced
+/// file resolved through the frontend's `convertFileSrc`.
+///
+/// The decrypted copy is cached under the OS cache dir
+/// (`{cache}/hippius/preview/`). The cache key is the file's content hash
+/// (`arion_hash`) when present — so an edit (new content) produces a new entry
+/// and a re-open never serves a stale copy — falling back to `file_id` (the
+/// path hash) otherwise. The download lands on a `.part` sibling first and is
+/// renamed in atomically, so an interrupted transfer never leaves a
+/// half-written file the webview would render as broken.
+///
+/// Decryption uses the same `hcfs_config.drive_password` → master-mnemonic →
+/// folder-key path as [`download_remote_file`]; no password prompt is needed
+/// because the drive password lives in the DB and the mnemonic in the session.
+///
+/// # Errors
+///
+/// - [`AppError::NotReady`] when no session mnemonic is loaded (re-auth needed).
+/// - [`AppError::Hcfs`] / [`AppError::Crypto`] on download or decrypt failure.
+/// - [`AppError::Io`] when the cache directory or file cannot be created.
+#[tauri::command]
+pub async fn cache_remote_file(
+    state: tauri::State<'_, AppState>,
+    account_id: String,
+    label: String,
+    file_id: String,
+    file_name: String,
+    arion_hash: String,
+) -> Result<String> {
+    info!(label = %label, file_id = %file_id, "Caching remote file for preview");
+
+    // Must live under the asset-protocol scope (`$HOME/.hippius/**` in
+    // tauri.conf.json) so the webview can load the decrypted file via
+    // `convertFileSrc`. The OS cache dir is OUTSIDE that scope, so a preview
+    // pointed there is blocked by the asset protocol even though the download
+    // + decrypt succeeded — which is why download worked but preview didn't.
+    let cache_root = dirs::home_dir()
+        .ok_or_else(|| AppError::Other("could not determine home directory".into()))?
+        .join(".hippius")
+        .join("preview-cache");
+    tokio::fs::create_dir_all(&cache_root).await?;
+
+    // Content-addressed when we have it (never stale across edits); else keyed
+    // by the path hash. Both values are hex/base-N, so filename-safe. Keep the
+    // original extension so the webview infers the right MIME type.
+    let key = if arion_hash.is_empty() { &file_id } else { &arion_hash };
+    let ext = std::path::Path::new(&file_name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+    let cache_name = if ext.is_empty() { key.clone() } else { format!("{key}.{ext}") };
+    let target = cache_root.join(&cache_name);
+
+    // Cache hit: reuse the already-decrypted copy.
+    if matches!(tokio::fs::metadata(&target).await, Ok(meta) if meta.len() > 0) {
+        return target
+            .to_str()
+            .map(str::to_string)
+            .ok_or_else(|| AppError::Other("preview cache path is not valid UTF-8".into()));
+    }
+
+    let pool = state.pool()?;
+    let mnemonic = session_mnemonic(&state)?;
+    let encryption_key = encryption_key_for_label(pool, &account_id, &label, &mnemonic).await?;
+    let client = build_client(pool, &account_id, &label).await?;
+    let fhash = folder_hash(&label);
+
+    let part = cache_root.join(format!("{cache_name}.part"));
+    hcfs_client::drive::remote::download_remote_file(
+        &client,
+        &account_id,
+        &fhash,
+        &file_id,
+        &part,
+        &encryption_key,
+        // No progress events: preview is a one-shot interactive fetch.
+        Some(|_: u64, _: u64| {}),
+    )
+    .await
+    .map_err(|e| AppError::Hcfs(e.to_string()))?;
+
+    tokio::fs::rename(&part, &target).await?;
+
+    info!(file_id = %file_id, "Remote file cached for preview");
+    target
+        .to_str()
+        .map(str::to_string)
+        .ok_or_else(|| AppError::Other("preview cache path is not valid UTF-8".into()))
+}
