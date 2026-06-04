@@ -1175,11 +1175,15 @@ function startSyncActivityWatcher() {
       // note in `CLAUDE.md` ("Stalled completion fixup").
       //
       // `isPreparing` covers the file-watcher-triggered window between
-      // `SyncStarted` and the first session-populated snapshot. Rust
-      // sets `widgetState="preparing"` in `progress.rs::apply_preparing_override`;
-      // including it in `isActive` here makes the tray icon switch to
-      // syncing immediately when the user drops a folder via Finder,
-      // not only after `on_sync_plan_ready` fires several seconds later.
+      // `PlanReady` (the point the cycle's plan is known to contain real
+      // work) and the first session-populated snapshot. Rust sets
+      // `widgetState="preparing"` in `progress.rs::apply_preparing_override`;
+      // including it in `isActive` here surfaces the "⟳ Preparing sync…"
+      // tray state once a Finder-drop's plan is confirmed. The override is
+      // deliberately NOT raised at `SyncStarted` anymore: that fires before
+      // the plan exists, so it used to flash the tray red for the whole
+      // indexing window of every periodic no-op cycle (the user-reported
+      // looping-red-icon bug). See `src-tauri/src/sync/preparing.rs`.
       const isPreparing = progress.widgetState === "preparing";
       const isActive = isPreparing ||
         progress.effectiveInProgress ||

@@ -1,7 +1,15 @@
 //! Per-label "preparing" state for file-watcher-triggered sync cycles.
 //!
-//! Bridges the visibility gap between `SyncEvent::SyncStarted` and the
-//! first `ProgressSnapshot` that has files in the session.
+//! Bridges the visibility gap between `SyncEvent::PlanReady` (the point a
+//! cycle's plan is known to contain real work) and the first
+//! `ProgressSnapshot` that has files in the session.
+//!
+//! NOTE: this used to be marked at `SyncEvent::SyncStarted`, but that fires
+//! BEFORE the plan is computed, so it painted the red "Preparing sync…" state
+//! across the scan + remote-fetch window of EVERY cycle — including periodic
+//! no-op cycles with zero work, which made the tray icon flash red on a loop.
+//! It is now marked at `PlanReady`, gated on a non-empty plan, so it only ever
+//! appears for cycles that actually have work to do.
 //!
 //! ## Why this exists
 //!
@@ -23,11 +31,11 @@
 //! ## Lifecycle
 //!
 //! - [`PreparingState::mark_preparing`] — called from the
-//!   `SyncEvent::SyncStarted` handler when the upload-processing
-//!   banner is NOT active (i.e. this is a file-watcher cycle, not an
-//!   IPC-initiated one). The banner check avoids double-signalling
-//!   for IPC uploads — those already have their own "we're working"
-//!   indicator.
+//!   `SyncEvent::PlanReady` handler when the plan has real work AND the
+//!   upload-processing banner is NOT active (i.e. this is a file-watcher
+//!   cycle, not an IPC-initiated one). The banner check avoids
+//!   double-signalling for IPC uploads — those already have their own
+//!   "we're working" indicator.
 //! - [`PreparingState::clear`] — called from `SyncCompleted`,
 //!   `SyncError`, and `SyncStopped` handlers; and from the
 //!   `ProgressSnapshot` handler when the snapshot has files for that
@@ -167,7 +175,7 @@ impl PreparingState {
     /// return value is `bool`, not the guard). This non-extending-the-
     /// guard contract is load-bearing for the
     /// [`crate::sync::tauri_bridge::TauriSyncBridge::on_event`]
-    /// `SyncStarted` arm: that arm calls this method and then invokes
+    /// `PlanReady` arm: that arm calls this method and then invokes
     /// `emit_snapshot`, which synchronously re-enters `on_event` with
     /// `ProgressSnapshot` — and that re-entry reacquires this same
     /// mutex via `clear` / `is_any_preparing`. Since `std::sync::Mutex`

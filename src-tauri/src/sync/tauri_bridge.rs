@@ -198,37 +198,17 @@ impl SyncEventHandler for TauriSyncBridge {
                     // before the user sees it.
                     app_state.credits_exhausted.clear(&label);
 
-                    // Per-label check (Task 4.1): an IPC-initiated
-                    // upload banner is only an "already signalling"
-                    // affordance for ITS OWN drive. A banner active
-                    // on drive A must not suppress the preparing
-                    // widget for drive B — the pre-Task-4.1 global
-                    // `snapshot()` did exactly that and was Bug 4
-                    // in the original 402 diagnosis.
-                    let banner_active_for_label = app_state.upload_processing.is_active_for(&label);
-                    if !banner_active_for_label && app_state.preparing.mark_preparing(&label) {
-                        // Newly inserted — push a snapshot so the
-                        // widget reflects preparing within one tick
-                        // of `SyncStarted`. Subsequent SyncStarted
-                        // for the same label inside the same window
-                        // (rapid file-watcher re-triggers) return
-                        // false from `mark_preparing` and skip this
-                        // re-emit.
-                        //
-                        // `emit_snapshot` synchronously re-enters this
-                        // same `on_event` with `ProgressSnapshot`;
-                        // that path will reacquire the preparing
-                        // mutex. Safe because `PreparingState::mark_preparing`
-                        // drops its `MutexGuard` at its function
-                        // boundary (the return value is a `bool`, not
-                        // a guard), so the lock is released before
-                        // we get here. A future refactor that inlines
-                        // `mark_preparing` and accidentally extends
-                        // the guard's scope would deadlock on the
-                        // non-reentrant `std::sync::Mutex` — keep
-                        // the boundary.
-                        app_state.sync.emit_snapshot(true);
-                    }
+                    // The "preparing" override is deliberately NOT marked here
+                    // anymore. `SyncStarted` fires before the plan is known, so
+                    // marking preparing at this point painted the red
+                    // "Preparing sync…" widget/tray state for the entire
+                    // scan + remote-fetch (indexing) window of EVERY cycle —
+                    // including periodic no-op cycles that turn out to have
+                    // zero work. Users saw the tray icon flash red on a loop
+                    // even though nothing was ever transferred. The override is
+                    // now marked in the `PlanReady` arm, gated on a non-empty
+                    // plan, so it only appears once there is real work to do.
+                    // See the `PlanReady` arm below and `sync::preparing`.
                 }
                 cap_file_list(&mut upload_files);
                 cap_file_list(&mut download_files);
@@ -439,6 +419,37 @@ impl SyncEventHandler for TauriSyncBridge {
                 mut local_delete_files,
                 mut remote_delete_files,
             } => {
+                // Mark the "preparing" override now that the plan is known and
+                // confirms real work. Moved here from `SyncStarted` (which
+                // fires before the plan exists) so periodic no-op cycles —
+                // whose plan is empty — never flash the red "Preparing sync…"
+                // state during their indexing window. A genuine Finder-drop
+                // still surfaces the indicator: its plan is non-empty, and the
+                // override bridges the small gap from here until the first
+                // files-populated snapshot (after `merge_into_session`), at
+                // which point the `ProgressSnapshot` arm clears it.
+                {
+                    use tauri::Manager;
+                    let app_state = app.state::<crate::app_state::AppState>();
+                    let has_work = uploads + downloads + local_deletes + remote_deletes > 0;
+                    // An IPC-initiated upload already shows its own top-of-page
+                    // banner for this drive, so suppress the override to avoid
+                    // double-signalling. Per-label (not global) so a banner on
+                    // drive A can't suppress drive B's preparing widget.
+                    let banner_active_for_label = app_state.upload_processing.is_active_for(&label);
+                    if has_work && !banner_active_for_label && app_state.preparing.mark_preparing(&label) {
+                        // Newly inserted — push one snapshot so the widget
+                        // reflects preparing immediately. `emit_snapshot`
+                        // synchronously re-enters this same `on_event` with
+                        // `ProgressSnapshot`, which reacquires the preparing
+                        // mutex; safe because `mark_preparing` returns a `bool`
+                        // (its `MutexGuard` is dropped at the fn boundary), so
+                        // the lock is already released here. Keep that boundary
+                        // — extending the guard across this emit would deadlock
+                        // the non-reentrant `std::sync::Mutex`.
+                        app_state.sync.emit_snapshot(true);
+                    }
+                }
                 cap_file_list(&mut upload_files);
                 cap_file_list(&mut download_files);
                 cap_file_list(&mut local_delete_files);
