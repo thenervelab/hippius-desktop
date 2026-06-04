@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { StagedChanges, ConflictResolution } from "@/lib/types/syncTypes";
 
@@ -58,20 +58,22 @@ export function useStagedChanges(
 
   const cancelReview = useCallback(async () => {
     try {
-      await invoke("cancel_review");
+      // Scope the cancel to THIS drive — cancel_review clears only `label`'s
+      // review state, not every drive's (which would arm a per-drive cooldown
+      // across all of them).
+      await invoke("cancel_review", { label });
     } catch (e) {
       console.error("Failed to cancel review:", e);
     }
     setStagedChanges(null);
     setError(null);
-  }, []);
+  }, [label]);
 
-  // Safety net: cancel review on unmount (no-op if not in review mode — Rust handles it)
-  useEffect(() => {
-    return () => {
-      invoke("cancel_review").catch(() => {});
-    };
-  }, []);
+  // NOTE: cancel-on-unmount is intentionally NOT done here (upstream F16/F42).
+  // `cancel_review` arms a per-drive cooldown that suppresses fresh conflict
+  // dialogs; firing it on every unmount would re-arm that cooldown after a
+  // normal resolution. Explicit dismiss/resolve cancels this drive's review;
+  // navigate-away is covered by the engine's 5-minute REVIEW_MODE_TIMEOUT.
 
   return {
     stagedChanges,
