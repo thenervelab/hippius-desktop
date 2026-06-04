@@ -34,6 +34,12 @@ interface MetadataStalePayload {
   reason: string;
 }
 
+// Mirror of Rust's `events::LabelPayload`. ACTIVITY_UPDATED now carries the
+// drive label (F35). Optional so a legacy label-less event degrades safely.
+interface LabelPayload {
+  label?: string;
+}
+
 export function useMetadataStale() {
   const setStale = useSetAtom(metadataStaleLabelsAtom);
 
@@ -61,20 +67,28 @@ export function useMetadataStale() {
       }
       unlistenStale = staleHandle;
 
-      // 2. ACTIVITY_UPDATED — clear the stale entry for any label whose
-      //    activity changed. The Rust event currently has no payload
-      //    (it's a "kick" signal), so we conservatively clear the
-      //    entire map. In practice only a successful reconcile or sync
-      //    cycle emits this, so clearing all entries on any kick is
-      //    the right behavior: each cleared entry will re-fire its
-      //    METADATA_STALE event on the next bounded-retry failure.
-      const activityHandle = await listen(ACTIVITY_UPDATED, () => {
-        if (cancelled) return;
-        setStale((prev) => {
-          if (prev.size === 0) return prev;
-          return new Map();
-        });
-      });
+      // 2. ACTIVITY_UPDATED — clear the stale entry for the one drive whose
+      //    activity changed (F35). The Rust event now carries the drive
+      //    `label`, so a successful reconcile/sync for drive B no longer
+      //    wipes drive A's banner; if a label re-enters the stale state it
+      //    re-fires its own METADATA_STALE on the next bounded-retry
+      //    failure. Defensive fallback: a label-less event (legacy/untyped)
+      //    clears the whole map so a banner can't get stuck.
+      const activityHandle = await listen<LabelPayload>(
+        ACTIVITY_UPDATED,
+        (event) => {
+          if (cancelled) return;
+          const label = event.payload?.label;
+          setStale((prev) => {
+            if (prev.size === 0) return prev;
+            if (label === undefined) return new Map();
+            if (!prev.has(label)) return prev;
+            const next = new Map(prev);
+            next.delete(label);
+            return next;
+          });
+        }
+      );
       if (cancelled) {
         activityHandle();
         return;

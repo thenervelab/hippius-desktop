@@ -493,7 +493,12 @@ fn spawn_reconcile_timestamps(app: &AppHandle, sync: Arc<SyncRunner>, manager_ar
                     let paths = build_synced_paths_from_state(&state);
                     sync.update_synced_paths_cache(&label, paths);
                     drop(manager);
-                    let _ = app.emit(crate::sync::events::ACTIVITY_UPDATED, ());
+                    // Carry the drive label (F35) so the FE scopes its
+                    // metadata-stale clear to this drive instead of every drive.
+                    let _ = app.emit(
+                        crate::sync::events::ACTIVITY_UPDATED,
+                        crate::sync::events::LabelPayload { label: label.clone() },
+                    );
                     info!(label = %label, duration_ms = duration_ms, "reconcile: cache refreshed");
                 }
                 Err(e) => {

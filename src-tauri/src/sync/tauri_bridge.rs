@@ -586,12 +586,10 @@ impl SyncEventHandler for TauriSyncBridge {
                 let _ = app.emit(events::REVIEW_MODE_TIMEOUT, events::LabelPayload { label });
             }
             // hcfs 41954d7 made ActivityUpdated carry the originating drive
-            // label (upstream F35). redesign's FE clears stale metadata for all
-            // drives on this signal, so the label is intentionally ignored here
-            // to preserve existing behavior; adopting the per-drive scoping is a
-            // separate FE+BE change.
-            SyncEvent::ActivityUpdated { label: _ } => {
-                let _ = app.emit(events::ACTIVITY_UPDATED, ());
+            // label (upstream F35). Forward it so the FE clears only that
+            // drive's stale-metadata banner instead of every drive's.
+            SyncEvent::ActivityUpdated { label } => {
+                let _ = app.emit(events::ACTIVITY_UPDATED, events::LabelPayload { label });
             }
             SyncEvent::AuthRequired { error } => {
                 let _ = app.emit(events::AUTH_RELOGIN_REQUIRED, events::AuthRequiredPayload { error });
