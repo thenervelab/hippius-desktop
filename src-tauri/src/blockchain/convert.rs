@@ -169,7 +169,9 @@ pub fn to_plancks(amount: String) -> Result<String, crate::error::AppError> {
     // `trim_start_matches('0')` strips zeros but not the leading '-', so it
     // returned a malformed negative planck string. f64::parse also accepts
     // "NaN"/"inf", which are equally out of domain.
-    let value = amount.parse::<f64>().map_err(|_| crate::error::AppError::Validation("Invalid amount".into()))?;
+    let value = amount
+        .parse::<f64>()
+        .map_err(|_| crate::error::AppError::Validation("Invalid amount".into()))?;
     if !value.is_finite() || value < 0.0 {
         return Err(crate::error::AppError::Validation("Amount must be a non-negative number".into()));
     }

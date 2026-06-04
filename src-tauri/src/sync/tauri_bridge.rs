@@ -1069,15 +1069,9 @@ mod tests {
             completed_bytes: Some(500),
             active: Some(true),
         };
-        assert_ne!(
-            snapshot_fingerprint(&a, empty),
-            snapshot_fingerprint(&a, with_totals),
-        );
+        assert_ne!(snapshot_fingerprint(&a, empty), snapshot_fingerprint(&a, with_totals),);
         // Sanity: identical overlays produce identical fingerprints.
-        assert_eq!(
-            snapshot_fingerprint(&a, with_totals),
-            snapshot_fingerprint(&a, with_totals),
-        );
+        assert_eq!(snapshot_fingerprint(&a, with_totals), snapshot_fingerprint(&a, with_totals),);
     }
 
     /// Wire-format contract: serializing `SyncSnapshotWire` must

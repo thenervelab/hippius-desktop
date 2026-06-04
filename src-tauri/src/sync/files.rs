@@ -577,11 +577,7 @@ pub async fn delete_files(
         let effective_label = file.label.as_deref().unwrap_or("default");
         // Prefer the file's own drive path; fall back to the "default" drive's
         // path (mirrors the prior per-file default fallback); else empty.
-        let sync_path = label_to_path
-            .get(effective_label)
-            .or(default_path.as_ref())
-            .cloned()
-            .unwrap_or_default();
+        let sync_path = label_to_path.get(effective_label).or(default_path.as_ref()).cloned().unwrap_or_default();
 
         let relative_name = derive_relative_name(&sync_path, file.source.as_deref(), &file.name);
 
@@ -866,9 +862,7 @@ use hcfs_client::engine::types::{SyncedFileInfo, build_synced_paths_from_state};
 /// timestamps on cold start. See
 /// [`synced_paths_and_excludes_for_label`] for the full rationale.
 async fn synced_paths_for_label(sync: &SyncRunner, label: &str) -> Option<HashMap<String, SyncedFileInfo>> {
-    let _ = sync
-        .wait_for_first_reconcile(label, FIRST_RECONCILE_WAIT_BUDGET)
-        .await;
+    let _ = sync.wait_for_first_reconcile(label, FIRST_RECONCILE_WAIT_BUDGET).await;
     let arc = match acquire_drive_arc(sync, label) {
         DriveArcOutcome::Acquired(arc) => arc,
         DriveArcOutcome::CacheFallback => return sync.get_cached_synced_paths(label),
@@ -913,9 +907,7 @@ async fn synced_paths_and_excludes_for_label(sync: &SyncRunner, label: &str) -> 
     // `Timeout` / `NotRegistered` falls through to whatever stale
     // state we have, matching the existing graceful-degradation
     // contract.
-    let _ = sync
-        .wait_for_first_reconcile(label, FIRST_RECONCILE_WAIT_BUDGET)
-        .await;
+    let _ = sync.wait_for_first_reconcile(label, FIRST_RECONCILE_WAIT_BUDGET).await;
 
     let arc = match acquire_drive_arc(sync, label) {
         DriveArcOutcome::Acquired(arc) => arc,
@@ -1123,10 +1115,7 @@ pub async fn get_recent_files(
 
     // 4. Look up synced metadata for ONLY the surviving keys. Allocation scales
     //    with the activity window, not the total number of synced files.
-    let wanted: std::collections::HashSet<String> = non_deleted
-        .iter()
-        .map(|item| format!("{}::{}", item.file_name, item.label))
-        .collect();
+    let wanted: std::collections::HashSet<String> = non_deleted.iter().map(|item| format!("{}::{}", item.file_name, item.label)).collect();
     let label_maps = collect_label_maps(&state.sync).await;
     let mut meta_map = bundles_for_wanted_keys(label_maps, &wanted);
 
@@ -2343,7 +2332,12 @@ mod tests {
         let mut corpus: HashMap<String, SyncedFileInfo> = HashMap::new();
         corpus.insert(
             "a.txt".to_string(),
-            SyncedFileInfo { path_hash: [1u8; 32], arion_cid: Arc::from("x"), uploaded_at: 0, updated_at: 0 },
+            SyncedFileInfo {
+                path_hash: [1u8; 32],
+                arion_cid: Arc::from("x"),
+                uploaded_at: 0,
+                updated_at: 0,
+            },
         );
         let out = bundles_for_wanted_keys(vec![("d".to_string(), corpus)], &HashSet::new());
         assert!(out.is_empty());
@@ -2871,9 +2865,7 @@ mod tests {
         });
 
         let start = Instant::now();
-        let outcome = sync
-            .wait_for_first_reconcile(label, Duration::from_millis(500))
-            .await;
+        let outcome = sync.wait_for_first_reconcile(label, Duration::from_millis(500)).await;
         let elapsed = start.elapsed();
 
         match outcome {
@@ -2918,9 +2910,7 @@ mod tests {
         ));
 
         let start = Instant::now();
-        let outcome = sync
-            .wait_for_first_reconcile("does-not-exist", Duration::from_secs(5))
-            .await;
+        let outcome = sync.wait_for_first_reconcile("does-not-exist", Duration::from_secs(5)).await;
         let elapsed = start.elapsed();
 
         assert!(matches!(outcome, WaitOutcome::NotRegistered), "got {outcome:?}");

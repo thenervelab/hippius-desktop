@@ -288,9 +288,7 @@ pub(crate) async fn post_json_discard<B: Serialize>(ctx: &HcfsServerCtx, path: &
 async fn http_err(status: StatusCode, resp: reqwest::Response, path: &str) -> AppError {
     let body = resp.text().await.unwrap_or_default();
     if status == StatusCode::TOO_MANY_REQUESTS {
-        return AppError::Validation(
-            "You've hit the rate limit for recovery operations. Please wait a few minutes and try again.".into(),
-        );
+        return AppError::Validation("You've hit the rate limit for recovery operations. Please wait a few minutes and try again.".into());
     }
     AppError::Api {
         status: status.as_u16(),

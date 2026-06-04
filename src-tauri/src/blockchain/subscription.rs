@@ -289,10 +289,7 @@ fn try_claim_block_emit(last_emit_ms: &AtomicU64, now_ms: u64, min_interval_ms: 
         if prev != 0 && now_ms.saturating_sub(prev) < min_interval_ms {
             return false;
         }
-        if last_emit_ms
-            .compare_exchange(prev, now_ms, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
-        {
+        if last_emit_ms.compare_exchange(prev, now_ms, Ordering::AcqRel, Ordering::Acquire).is_ok() {
             return true;
         }
         // Lost the race — re-read and re-evaluate.
@@ -369,10 +366,7 @@ mod tests {
         // sentinel doesn't fire on subsequent attempts.
         let last = AtomicU64::new(0);
         let attempts = [100, 200, 300, 400, 500, 600];
-        let wins = attempts
-            .iter()
-            .filter(|&&ts| try_claim_block_emit(&last, ts, 1000))
-            .count();
+        let wins = attempts.iter().filter(|&&ts| try_claim_block_emit(&last, ts, 1000)).count();
         // Only the first attempt wins; the next five fall inside the
         // 1000 ms throttle window after ts=100.
         assert_eq!(wins, 1, "expected exactly one win in a 500 ms burst against a 1000 ms gate");

@@ -94,7 +94,9 @@ pub async fn get_rpc_client(app_state: &crate::app_state::AppState) -> Result<Rp
 async fn connect_once(wss_endpoint: &str) -> Result<(RpcClient, OnlineClient<PolkadotConfig>), String> {
     let attempt = tokio::time::timeout(Duration::from_secs(CONNECT_ATTEMPT_TIMEOUT_SECS), async {
         let rpc = RpcClient::from_url(wss_endpoint).await.map_err(|e| e.to_string())?;
-        let client = OnlineClient::<PolkadotConfig>::from_rpc_client(rpc.clone()).await.map_err(|e| e.to_string())?;
+        let client = OnlineClient::<PolkadotConfig>::from_rpc_client(rpc.clone())
+            .await
+            .map_err(|e| e.to_string())?;
         Ok::<_, String>((rpc, client))
     })
     .await;

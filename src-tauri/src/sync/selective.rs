@@ -34,7 +34,9 @@ fn validate_pattern(pattern: &str) -> Result<String> {
         return Err(AppError::Validation("Pattern cannot contain newlines (one pattern per call)".into()));
     }
     if trimmed.split(['/', '\\']).any(|component| component == "..") {
-        return Err(AppError::Validation("Pattern cannot contain '..' path components (path traversal)".into()));
+        return Err(AppError::Validation(
+            "Pattern cannot contain '..' path components (path traversal)".into(),
+        ));
     }
     Ok(trimmed)
 }

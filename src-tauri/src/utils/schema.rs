@@ -808,12 +808,7 @@ mod tests {
     /// `ensure_table_schema`. Kept in sync with the array in
     /// [`drop_legacy_nebula_tables`] — if those names diverge, this test
     /// stops exercising the helper.
-    const LEGACY_NEBULA_TABLES: &[&str] = &[
-        "vpn_status",
-        "nebula_binary_status",
-        "nebula_certificate",
-        "autoconnect_vpn_enabled",
-    ];
+    const LEGACY_NEBULA_TABLES: &[&str] = &["vpn_status", "nebula_binary_status", "nebula_certificate", "autoconnect_vpn_enabled"];
 
     /// Regression guard for the one-shot Nebula drop. Without this test the
     /// helper could silently become a no-op (empty array, renamed tables,
@@ -952,11 +947,10 @@ mod tests {
     async fn notifications_has_type_subtype_index() {
         let pool = temp_pool().await;
         ensure_table_schema(&pool).await.expect("ensure_table_schema failed");
-        let idx: Option<String> =
-            sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_notifications_type_subtype'")
-                .fetch_optional(&pool)
-                .await
-                .expect("query index");
+        let idx: Option<String> = sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_notifications_type_subtype'")
+            .fetch_optional(&pool)
+            .await
+            .expect("query index");
         assert_eq!(idx.as_deref(), Some("idx_notifications_type_subtype"));
     }
 }

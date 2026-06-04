@@ -111,9 +111,7 @@ pub async fn clear_migrated_paused_flags(pool: &SqlitePool) -> Result<u64, sqlx:
 pub async fn run_at_startup(pool: &SqlitePool) {
     match clear_migrated_paused_flags(pool).await {
         Ok(_) => {}
-        Err(e) => warn!(
-            "user_stopped reversal failed (will retry on next launch): {e}"
-        ),
+        Err(e) => warn!("user_stopped reversal failed (will retry on next launch): {e}"),
     }
 }
 
@@ -227,11 +225,7 @@ mod tests {
 
         let second = clear_migrated_paused_flags(&pool).await.unwrap();
         assert_eq!(second, 0, "second run must not touch the DB");
-        assert_eq!(
-            paused_count(&pool).await,
-            1,
-            "user-initiated pause must survive the next launch"
-        );
+        assert_eq!(paused_count(&pool).await, 1, "user-initiated pause must survive the next launch");
     }
 
     #[tokio::test]
@@ -245,10 +239,7 @@ mod tests {
         let cleared = clear_migrated_paused_flags(&pool).await.unwrap();
 
         assert_eq!(cleared, 0);
-        assert!(
-            sentinel_present(&pool).await,
-            "sentinel must be written even on a clean-install path"
-        );
+        assert!(sentinel_present(&pool).await, "sentinel must be written even on a clean-install path");
     }
 
     #[tokio::test]

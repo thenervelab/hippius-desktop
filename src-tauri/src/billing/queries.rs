@@ -200,16 +200,16 @@ fn parse_indexer_u64(field: &str, raw: &str) -> u64 {
 /// is not valid JSON. An empty `data` array is *not* an error — it returns
 /// `{ totalBytes: 0, fileCount: 0 }`.
 #[tauri::command]
-pub async fn get_drive_storage_stats(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
-) -> Result<DriveStorageStats, AppError> {
+pub async fn get_drive_storage_stats(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<DriveStorageStats, AppError> {
     let indexer = IndexerClient::from_env(state.api_client.clone())?;
     let params = [("account_id", account_id.as_str()), ("storage", "drive"), ("limit", "1")];
     let response: IndexerResponse<DriveStorageRow> = indexer.get("/user-extended-storage-metrics", &params).await?;
 
     let Some(row) = response.data.into_iter().next() else {
-        return Ok(DriveStorageStats { total_bytes: 0, file_count: 0 });
+        return Ok(DriveStorageStats {
+            total_bytes: 0,
+            file_count: 0,
+        });
     };
 
     Ok(DriveStorageStats {

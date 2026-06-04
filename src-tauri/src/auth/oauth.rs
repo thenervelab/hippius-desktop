@@ -645,10 +645,7 @@ mod tests {
     #[test]
     fn state_lookup_fails_after_ttl_purge() {
         let mut states = HashMap::new();
-        states.insert(
-            "csrf-token-old".to_string(),
-            make_state(PKCE_STATE_TTL + Duration::from_secs(1)),
-        );
+        states.insert("csrf-token-old".to_string(), make_state(PKCE_STATE_TTL + Duration::from_secs(1)));
 
         // Mirror `complete_oauth_flow`: purge_expired runs BEFORE the
         // state lookup. A deep link that surfaces after the 5-minute

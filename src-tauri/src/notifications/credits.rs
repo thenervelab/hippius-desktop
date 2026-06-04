@@ -448,9 +448,7 @@ pub async fn create_credit_notifications_inner(
             if i > 0 {
                 sql.push_str(", ");
             }
-            sql.push_str(
-                "(?, 'Credits', ?, ?, ?, 'Jump to Files', '/files', 1, CAST(strftime('%s','now') * 1000 AS INTEGER), 0)",
-            );
+            sql.push_str("(?, 'Credits', ?, ?, ?, 'Jump to Files', '/files', 1, CAST(strftime('%s','now') * 1000 AS INTEGER), 0)");
         }
 
         let mut q = sqlx::query(&sql);

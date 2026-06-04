@@ -753,10 +753,7 @@ mod tests {
                 credit: None,
             },
         ];
-        let date_range = get_all_dates_in_range(
-            NaiveDate::from_ymd_opt(2025, 1, 5).unwrap(),
-            NaiveDate::from_ymd_opt(2025, 1, 6).unwrap(),
-        );
+        let date_range = get_all_dates_in_range(NaiveDate::from_ymd_opt(2025, 1, 5).unwrap(), NaiveDate::from_ymd_opt(2025, 1, 6).unwrap());
         let result = map_to_range_carry_forward(&points, &date_range, "last30days", true, false);
         assert!(
             (result[0].balance - 50.0).abs() < f64::EPSILON,

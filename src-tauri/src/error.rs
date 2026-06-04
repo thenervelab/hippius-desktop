@@ -470,9 +470,7 @@ mod tests {
             AppError::NotReady(NotReadyKind::ConfigMissing),
             AppError::Progress("tracker".into()),
             AppError::Lock("poisoned".into()),
-            AppError::Intent(crate::sync::intent::IntentError::Db(sqlx::Error::ColumnNotFound(
-                "test_col".into(),
-            ))),
+            AppError::Intent(crate::sync::intent::IntentError::Db(sqlx::Error::ColumnNotFound("test_col".into()))),
             AppError::Other("misc".into()),
         ];
         let expected_kinds = [

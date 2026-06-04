@@ -15,7 +15,7 @@
 //!    filter the notifications page; any drift here is a user-visible bug.
 
 use sqlx::sqlite::SqlitePool;
-use tauri_project_lib::notifications::credits::{create_sync_notification_inner, SyncNotificationOutcome};
+use tauri_project_lib::notifications::credits::{SyncNotificationOutcome, create_sync_notification_inner};
 use tauri_project_lib::sync::events::CANCELLED_MARKER;
 
 /// Mirrors `utils::schema::ensure_table_schema` for the `notifications` table,
@@ -58,15 +58,9 @@ async fn cancelled_marker_matches_upstream_stringification() {
 async fn success_notification_uses_sync_complete_title() {
     let pool = setup_notifications_db().await;
 
-    let id = create_sync_notification_inner(
-        &pool,
-        "5Ft4uvTEST",
-        "1 file uploaded.",
-        "",
-        SyncNotificationOutcome::Success,
-    )
-    .await
-    .expect("insert success notification");
+    let id = create_sync_notification_inner(&pool, "5Ft4uvTEST", "1 file uploaded.", "", SyncNotificationOutcome::Success)
+        .await
+        .expect("insert success notification");
 
     let (title, subtype): (String, String) = sqlx::query_as("SELECT title_text, notification_subtype FROM notifications WHERE id = ?")
         .bind(id)

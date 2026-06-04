@@ -320,7 +320,8 @@ pub async fn check_migration(state: tauri::State<'_, crate::app_state::AppState>
 
     if has_local_in_progress && let Ok(job_status) = poll_migration_status_internal(&state, &account_id).await {
         if job_status.status == "in_progress" {
-            let logical_total = job_status.logical_file_count
+            let logical_total = job_status
+                .logical_file_count
                 .filter(|&c| c > 0)
                 .map_or(job_status.total as u64, |c| c as u64);
             info!(
@@ -471,8 +472,7 @@ pub async fn dismiss_migration(state: tauri::State<'_, crate::app_state::AppStat
 /// exists, a numeric suffix is appended (`-2`, `-3`, ...) to guarantee
 /// uniqueness.
 pub(crate) fn compute_default_sync_path() -> Result<PathBuf> {
-    let base = dirs::home_dir()
-        .ok_or_else(|| crate::error::AppError::Other("Could not determine a suitable directory for sync folder".into()))?;
+    let base = dirs::home_dir().ok_or_else(|| crate::error::AppError::Other("Could not determine a suitable directory for sync folder".into()))?;
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let stem = format!("Hippius-Migration-{today}");
     let candidate = base.join(&stem);
@@ -1079,7 +1079,10 @@ mod tests {
 
     #[test]
     fn derive_label_uses_last_path_component() {
-        assert_eq!(derive_migration_label(Some("/Users/alice/Documents/Hippius-Migration")), "Hippius-Migration");
+        assert_eq!(
+            derive_migration_label(Some("/Users/alice/Documents/Hippius-Migration")),
+            "Hippius-Migration"
+        );
     }
 
     #[test]

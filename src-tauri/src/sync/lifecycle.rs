@@ -1393,7 +1393,10 @@ pub(crate) async fn remove_drive_for_account(app: AppHandle, label: String, expl
     // after we delete it, resurrecting the stale `synced` tree this wipe exists
     // to remove (the data-loss path fixed in 17b8e159). Best-effort on timeout.
     if !drain_drive_lock(drive_manager.as_ref(), GRACEFUL_DRIVE_SHUTDOWN).await {
-        warn!("remove_drive: in-flight sync of '{}' did not release within the grace window; wiping baseline anyway", label);
+        warn!(
+            "remove_drive: in-flight sync of '{}' did not release within the grace window; wiping baseline anyway",
+            label
+        );
     }
     if let Some(acct) = acct.as_deref() {
         clear_persisted_sync_state(acct, &label);
@@ -2301,11 +2304,7 @@ fn build_fetch_callback(sync: Arc<SyncRunner>, app: AppHandle, label: Arc<str>) 
 /// soon as its individual AEAD verification has succeeded — instead of
 /// waiting for the entire sync cycle to finish. See
 /// [`crate::sync::progress::mark_file_synced`] for the full reasoning.
-pub fn build_file_synced_callback<R: tauri::Runtime>(
-    app: &AppHandle<R>,
-    sync: Arc<SyncRunner>,
-    label: Arc<str>,
-) -> hcfs_client::sync::FileSyncedFn {
+pub fn build_file_synced_callback<R: tauri::Runtime>(app: &AppHandle<R>, sync: Arc<SyncRunner>, label: Arc<str>) -> hcfs_client::sync::FileSyncedFn {
     // Clone once at construction time; the closure (`Arc<dyn Fn(...)>`)
     // captures the owned `AppHandle<R>`. Per-fire we `.clone()` again to
     // hand an owned handle to the `'static`-bound spawn future. Both

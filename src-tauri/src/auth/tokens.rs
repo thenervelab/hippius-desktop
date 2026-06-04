@@ -118,12 +118,10 @@ pub async fn get_api_token(pool: &SqlitePool, account_id: &str) -> Result<Option
         // request succeeds. The next call will retry the upgrade.
         if let Err(e) = token_keychain::store_token(account_id, &token) {
             debug!(error = %e, "keychain upgrade skipped; leaving plaintext column intact");
-        } else if let Err(e) = sqlx::query(
-            "UPDATE objectstore_auth_scoped SET temp_auth_key = NULL, updated_at = CURRENT_TIMESTAMP WHERE owner = ?",
-        )
-        .bind(account_id)
-        .execute(pool)
-        .await
+        } else if let Err(e) = sqlx::query("UPDATE objectstore_auth_scoped SET temp_auth_key = NULL, updated_at = CURRENT_TIMESTAMP WHERE owner = ?")
+            .bind(account_id)
+            .execute(pool)
+            .await
         {
             warn!(error = %e, "Failed to scrub plaintext token after keychain upgrade");
         } else {
