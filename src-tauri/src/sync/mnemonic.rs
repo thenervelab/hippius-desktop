@@ -534,7 +534,7 @@ pub(crate) async fn reencrypt_all_folder_mnemonics(
     // failure surfaces as an aggregate `Err` so the caller does not commit a
     // new drive password over a folder still under the old one.
     let results = futures_util::future::join_all(futures).await;
-    let failed: Vec<String> = results.into_iter().filter_map(|r| r.err()).collect();
+    let failed: Vec<String> = results.into_iter().filter_map(std::result::Result::err).collect();
     if !failed.is_empty() {
         return Err(crate::error::AppError::Other(format!(
             "failed to re-encrypt folder mnemonics for: {}",

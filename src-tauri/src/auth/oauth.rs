@@ -42,7 +42,7 @@ use tauri::Emitter;
 /// opens browser → signs in → redirected back) while short enough that
 /// a dormant entry can't be weaponized hours after the user abandoned
 /// their login attempt.
-const PKCE_STATE_TTL: Duration = Duration::from_secs(5 * 60);
+const PKCE_STATE_TTL: Duration = Duration::from_mins(5);
 
 /// In-flight OAuth flow states, keyed by the random `state` CSRF token.
 ///

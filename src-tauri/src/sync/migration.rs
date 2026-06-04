@@ -204,7 +204,7 @@ pub(crate) async fn fetch_migration_summary(client: &reqwest::Client, server_url
     let resp = client
         .get(&url)
         // Old servers may take a while enumerating large buckets
-        .timeout(std::time::Duration::from_secs(600))
+        .timeout(std::time::Duration::from_mins(10))
         .send()
         .await?;
 
@@ -798,7 +798,7 @@ pub async fn start_server_migration(
         .client
         .post(&url)
         .header("Authorization", format!("Bearer {api_token}"))
-        .timeout(std::time::Duration::from_secs(120))
+        .timeout(std::time::Duration::from_mins(2))
         .json(&serde_json::json!({
             "ss58_address": account_id,
             "folder_hash": folder_hash,
@@ -838,7 +838,7 @@ pub async fn start_server_migration(
                 .client
                 .post(&url)
                 .header("Authorization", format!("Bearer {api_token}"))
-                .timeout(std::time::Duration::from_secs(120))
+                .timeout(std::time::Duration::from_mins(2))
                 .json(&serde_json::json!({
                     "ss58_address": account_id,
                     "folder_hash": folder_hash,
@@ -1287,13 +1287,11 @@ mod tests {
         let home_dir = dirs::home_dir().expect("home dir should exist on test runner");
         assert_eq!(parent, home_dir.as_path(), "Expected parent to be Home, got {parent:?}");
 
-        for protected in [dirs::document_dir(), dirs::desktop_dir(), dirs::download_dir()] {
-            if let Some(p) = protected {
-                assert!(
-                    !path.starts_with(&p),
-                    "default sync path must not live under TCC-protected folder {p:?}, got {path:?}",
-                );
-            }
+        for p in [dirs::document_dir(), dirs::desktop_dir(), dirs::download_dir()].into_iter().flatten() {
+            assert!(
+                !path.starts_with(&p),
+                "default sync path must not live under TCC-protected folder {p:?}, got {path:?}",
+            );
         }
     }
 

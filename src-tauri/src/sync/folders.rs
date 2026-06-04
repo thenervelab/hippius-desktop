@@ -489,7 +489,7 @@ pub async fn get_sync_folders_with_stats(state: tauri::State<'_, crate::app_stat
             }
         })
         .collect();
-    remote_display.sort_by(|a, b| b.last_modified.cmp(&a.last_modified));
+    remote_display.sort_by_key(|b| std::cmp::Reverse(b.last_modified));
 
     Ok(SyncFoldersResult {
         local,

@@ -94,16 +94,14 @@ pub async fn create_support_ticket(
     });
     // Only include resource_type/resource_id if they are non-empty;
     // the API rejects null values for these fields.
-    if let Some(ref rt) = params.resource_type {
-        if !rt.is_empty() {
+    if let Some(ref rt) = params.resource_type
+        && !rt.is_empty() {
             body["resource_type"] = serde_json::json!(rt);
         }
-    }
-    if let Some(ref ri) = params.resource_id {
-        if !ri.is_empty() {
+    if let Some(ref ri) = params.resource_id
+        && !ri.is_empty() {
             body["resource_id"] = serde_json::json!(ri);
         }
-    }
     Ok(client.post::<serde_json::Value, _>("/api/support/tickets/", &body, &account_id).await?)
 }
 

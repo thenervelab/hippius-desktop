@@ -242,7 +242,9 @@ fn schedule_trailing_block_emit(app: tauri::AppHandle) {
         // latest block when it wakes.
         return;
     }
-    drop(app_state_check);
+    // `app_state_check` borrows `app`; NLL ends that borrow at its last use
+    // (the `swap` above), so `app` moves freely into the spawn below — no
+    // explicit drop needed (`tauri::State` is a reference wrapper, not `Drop`).
 
     tokio::spawn(async move {
         // Sleep until the throttle window has had a chance to close. We

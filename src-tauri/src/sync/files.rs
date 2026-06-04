@@ -592,7 +592,7 @@ pub async fn delete_files(
                 let size_bytes = if target.is_dir() {
                     0
                 } else {
-                    tokio::fs::metadata(&target).await.map(|m| m.len()).unwrap_or(0)
+                    tokio::fs::metadata(&target).await.map_or(0, |m| m.len())
                 };
 
                 let remove_result = if target.is_dir() {
@@ -1195,7 +1195,7 @@ pub async fn get_recent_files(
     }
 
     // 6. Sort by timestamp (newest first)
-    result.sort_by(|a, b| b.last_charged_at.cmp(&a.last_charged_at));
+    result.sort_by_key(|b| std::cmp::Reverse(b.last_charged_at));
 
     Ok(result)
 }
@@ -1312,7 +1312,6 @@ pub async fn list_sync_folder(
     list_sync_folder_inner(&state, sync_path, subfolder, label).await
 }
 
-#[expect(clippy::too_many_lines, reason = "1 line over; extracting hurts readability")]
 async fn list_sync_folder_inner(
     state: &crate::app_state::AppState,
     sync_path: String,
@@ -1559,13 +1558,12 @@ fn macos_name_cmp(a: &str, b: &str) -> std::cmp::Ordering {
                         std::cmp::Ordering::Equal => continue,
                         ord => return ord,
                     }
-                } else {
-                    ai.next();
-                    bi.next();
-                    match ac.cmp(&bc) {
-                        std::cmp::Ordering::Equal => continue,
-                        ord => return ord,
-                    }
+                }
+                ai.next();
+                bi.next();
+                match ac.cmp(&bc) {
+                    std::cmp::Ordering::Equal => {}
+                    ord => return ord,
                 }
             }
         }
@@ -1971,7 +1969,7 @@ pub async fn get_user_files(
     }
 
     // Sort by timestamp (newest first)
-    all_files.sort_by(|a, b| b.last_charged_at.cmp(&a.last_charged_at));
+    all_files.sort_by_key(|b| std::cmp::Reverse(b.last_charged_at));
 
     // Convert the borrowed-key map to owned-key for the result. One
     // allocation per label instead of one per file (the previous

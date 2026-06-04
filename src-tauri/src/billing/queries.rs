@@ -309,7 +309,7 @@ pub async fn get_credits(
             date: chrono::DateTime::from_timestamp_millis(ts).map_or_else(|| date.format("%Y-%m-%d").to_string(), |d| d.to_rfc3339()),
         })
         .collect();
-    results.sort_by(|a, b| b.block.cmp(&a.block));
+    results.sort_by_key(|b| std::cmp::Reverse(b.block));
     Ok(results)
 }
 
@@ -372,7 +372,7 @@ pub async fn get_system_balance(
             }
         })
         .collect();
-    results.sort_by(|a, b| b.block_number.cmp(&a.block_number));
+    results.sort_by_key(|b| std::cmp::Reverse(b.block_number));
     Ok(results)
 }
 

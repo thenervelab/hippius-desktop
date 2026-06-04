@@ -77,7 +77,7 @@ fn normalize_activity_rows(items: &[SyncActivityItem]) -> Vec<SyncActivityRow> {
         });
     }
 
-    rows.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    rows.sort_by_key(|b| std::cmp::Reverse(b.timestamp));
     rows
 }
 

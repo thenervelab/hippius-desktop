@@ -403,7 +403,7 @@ pub fn collect_cycle_files_for_label(sync: &SyncRunner, label: &str, max_files: 
     // Most recently completed first, so a truncation to `max_files`
     // always keeps the cycle that just finished. `completed_at` is
     // `Option<i64>`; treat `None` as 0 so unmarked files sort last.
-    matching.sort_by(|a, b| b.completed_at.unwrap_or(0).cmp(&a.completed_at.unwrap_or(0)));
+    matching.sort_by_key(|b| std::cmp::Reverse(b.completed_at.unwrap_or(0)));
     matching
         .into_iter()
         .take(max_files)
@@ -422,8 +422,7 @@ pub fn get_snapshot(sync: &SyncRunner, preparing: &crate::sync::preparing::Prepa
     if retry_at > 0 {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
+            .map_or(0, |d| d.as_secs() as i64);
         snapshot.retry_in_secs = (retry_at - now).max(0) as u64;
     }
     snapshot.last_error = sync.last_error.lock().ok().and_then(|g| g.clone());
