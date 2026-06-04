@@ -121,7 +121,7 @@ const AvailableCreditsCard: React.FC<{ className?: string }> = ({
   return (
     <div
       className={cn(
-        "flex flex-col items-center w-full rounded-[8px] border",
+        "flex flex-col items-center w-full rounded-[8px] border overflow-hidden",
         "bg-grey-light-300 border-grey-dark-100",
         "dark:bg-black-primary-bg dark:border-black-300",
         "shadow-[0px_1px_1.1px_rgba(0,0,0,0.04)]",
@@ -163,8 +163,8 @@ const AvailableCreditsCard: React.FC<{ className?: string }> = ({
 
       <div
         className={cn(
-          "flex flex-col items-start w-full flex-1 rounded-[8px] border",
-          "bg-white border-grey-dark-100",
+          "flex flex-col items-start w-full flex-1 rounded-tl-[8px] rounded-tr-[8px] border-t border-grey-dark-100",
+          "bg-white",
           "dark:bg-black-600 dark:border-black-300",
         )}
       >

@@ -374,7 +374,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
         // the file content (passed in as children).
         <div
           className={cn(
-            "w-full flex flex-col items-stretch mb-2.5",
+            "w-full flex flex-col items-stretch mb-2.5 overflow-hidden",
             "bg-grey-light-300 border border-grey-dark-100 rounded-[8px]",
             "shadow-[0px_1px_1.1px_0px_rgba(0,0,0,0.04)]",
             "dark:bg-black-primary-bg dark:border-black-300",
@@ -406,7 +406,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
           <div
             className={cn(
               "w-full flex flex-col",
-              "bg-white border-t border-grey-dark-100 rounded-[12px]",
+              "bg-white border-t border-grey-dark-100 rounded-[8px]",
               "dark:bg-black-primary-bg dark:border-black-300",
             )}
           >
