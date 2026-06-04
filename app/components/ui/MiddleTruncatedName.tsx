@@ -42,6 +42,10 @@ function resolveFont(el: Element): string {
 /* ------------------------------------------------------------------ */
 const ELLIPSIS = "\u2026"; // …
 
+/** Sub-pixel guard subtracted from the available width so a candidate that
+ *  measures exactly at the edge doesn't clip its final glyph after layout. */
+const SAFETY_MARGIN_PX = 1;
+
 function middleTruncate(
   name: string,
   maxWidth: number,
@@ -110,14 +114,22 @@ const MiddleTruncatedName: FC<MiddleTruncatedNameProps> = ({
     const textEl = textRef.current;
     if (!container || !textEl) return;
 
-    fontRef.current = resolveFont(container);
+    let cancelled = false;
 
     const update = () => {
+      if (cancelled) return;
       const w = container.clientWidth;
       if (w <= 0) return;
-      // Reserve space for the suffix (icon) so truncation doesn't overlap it
+      // Resolve the font on every pass, not once: the first measurement can run
+      // before the webfont (e.g. Geist) has loaded, so `resolveFont` would
+      // capture a fallback family whose metrics differ from the final render.
+      fontRef.current = resolveFont(container);
+      // Reserve space for the suffix (icon) so truncation doesn't overlap it,
+      // plus a 1px guard against sub-pixel rounding between canvas measurement
+      // and layout — without it a candidate can measure as "fits" yet clip its
+      // last glyph.
       const suffixW = suffixRef.current?.offsetWidth ?? 0;
-      const available = w - suffixW;
+      const available = w - suffixW - SAFETY_MARGIN_PX;
       const truncated = middleTruncate(name, available, fontRef.current);
       const wasTruncated = truncated !== name;
       if (textEl.textContent !== truncated) {
@@ -131,10 +143,21 @@ const MiddleTruncatedName: FC<MiddleTruncatedNameProps> = ({
 
     update();
 
+    // Re-measure once webfonts finish loading. The initial pass can use a
+    // fallback metric (FOUT), which under-measures and leaves a glyph or two of
+    // the tail clipped once the real font swaps in — the reported tray bug.
+    // ResizeObserver does NOT fire on a font swap, so this is a separate hook.
+    if (typeof document !== "undefined" && "fonts" in document) {
+      document.fonts.ready.then(update).catch(() => {});
+    }
+
     const ro = new ResizeObserver(() => update());
     ro.observe(container);
 
-    return () => ro.disconnect();
+    return () => {
+      cancelled = true;
+      ro.disconnect();
+    };
   }, [name]);
 
   return (
