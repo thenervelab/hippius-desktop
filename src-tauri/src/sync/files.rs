@@ -1514,26 +1514,48 @@ fn macos_name_cmp(a: &str, b: &str) -> std::cmp::Ordering {
             (Some(_), None) => return std::cmp::Ordering::Greater,
             (Some(ac), Some(bc)) => {
                 if ac.is_ascii_digit() && bc.is_ascii_digit() {
-                    // Compare digit runs as integers (natural sort). Saturating
-                    // arithmetic: a 20+ digit run is a legal filename that
-                    // overflows u64 — an unchecked `* 10` would panic inside the
-                    // sort comparator (debug) or silently mis-order (release).
-                    // Clamping over-long runs to u64::MAX keeps the ordering
-                    // total and deterministic.
-                    let mut an: u64 = 0;
-                    let mut bn: u64 = 0;
-                    // `peek().and_then(to_digit)` yields the digit and leaves a
-                    // non-digit (or end) unconsumed — same boundary as the old
-                    // `peek().is_ascii_digit()` guard, but with no `unwrap`.
-                    while let Some(d) = ai.peek().and_then(|c| c.to_digit(10)) {
+                    // Natural-sort the two digit runs by numeric value, comparing
+                    // them as digit *sequences* rather than parsing into an
+                    // integer: a 20+ digit run is a legal filename that overflows
+                    // any fixed-width integer. The earlier u64 parse saturated
+                    // every over-long run to the same u64::MAX, so two *distinct*
+                    // huge runs compared Equal — a non-total order, which
+                    // `slice::sort_by` documents as "May panic if `compare` does
+                    // not implement a total order" (std slice sort_by). Sequence
+                    // comparison stays a genuine total order with no overflow.
+                    //
+                    // Skip leading zeros first so "007" == "7" (numeric
+                    // equality); then the run with more significant digits is the
+                    // larger number, and for equal lengths the first differing
+                    // digit decides.
+                    while ai.peek() == Some(&'0') {
                         ai.next();
-                        an = an.saturating_mul(10).saturating_add(u64::from(d));
                     }
-                    while let Some(d) = bi.peek().and_then(|c| c.to_digit(10)) {
+                    while bi.peek() == Some(&'0') {
                         bi.next();
-                        bn = bn.saturating_mul(10).saturating_add(u64::from(d));
                     }
-                    match an.cmp(&bn) {
+                    let mut run_order = std::cmp::Ordering::Equal;
+                    loop {
+                        let ad = ai.peek().copied().filter(char::is_ascii_digit);
+                        let bd = bi.peek().copied().filter(char::is_ascii_digit);
+                        match (ad, bd) {
+                            (Some(da), Some(db)) => {
+                                ai.next();
+                                bi.next();
+                                // First differing digit at equal length decides;
+                                // hold it until we know both runs are equal-length.
+                                if run_order == std::cmp::Ordering::Equal {
+                                    run_order = da.cmp(&db);
+                                }
+                            }
+                            // A remaining significant digit means the longer —
+                            // hence numerically larger — run.
+                            (Some(_), None) => return std::cmp::Ordering::Greater,
+                            (None, Some(_)) => return std::cmp::Ordering::Less,
+                            (None, None) => break,
+                        }
+                    }
+                    match run_order {
                         std::cmp::Ordering::Equal => continue,
                         ord => return ord,
                     }
@@ -2256,6 +2278,7 @@ async fn copy_dir_recursive(src: &Path, dst: &Path, depth: u32) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     // --- bundles_for_wanted_keys (F10: bounded recent-files metadata) ---
 
@@ -2384,22 +2407,71 @@ mod tests {
 
     #[test]
     fn macos_name_cmp_handles_overflowing_digit_runs() {
-        // Digit runs longer than 20 chars overflow u64; the comparator must not
-        // panic (debug) on the accumulator overflow. Saturating arithmetic
-        // clamps over-long runs to u64::MAX, keeping the ordering total.
-        let huge = format!("file{}", "9".repeat(30)); // run clamps to u64::MAX
-        let huge2 = format!("file{}", "8".repeat(30)); // also clamps to u64::MAX
+        // Digit runs longer than 20 chars overflow u64 (39 chars overflow u128):
+        // the comparator must neither panic nor lose its total order. It compares
+        // runs as digit sequences, so two *distinct* over-long runs order by
+        // magnitude instead of both collapsing to a saturated MAX.
+        let huge9 = format!("file{}", "9".repeat(30));
+        let huge8 = format!("file{}", "8".repeat(30));
 
-        // Two distinct over-long runs both clamp to u64::MAX -> Equal numeric
-        // run, then both strings end -> Equal overall (and crucially: no panic).
-        assert_eq!(macos_name_cmp(&huge, &huge2), std::cmp::Ordering::Equal);
-        // A clamped huge run still orders after a small number (u64::MAX > 2).
-        assert_eq!(macos_name_cmp(&huge, "file2"), std::cmp::Ordering::Greater);
+        // Equal-length runs: the larger leading digit wins (9… > 8…). The old
+        // u64-saturating comparator wrongly returned Equal here, making the order
+        // non-total — `slice::sort_by`'s documented "May panic" territory.
+        assert_eq!(macos_name_cmp(&huge9, &huge8), std::cmp::Ordering::Greater);
+        assert_eq!(macos_name_cmp(&huge8, &huge9), std::cmp::Ordering::Less);
+        // Identical over-long runs still compare Equal.
+        assert_eq!(macos_name_cmp(&huge9, &huge9), std::cmp::Ordering::Equal);
+        // More significant digits is the larger number even with smaller digits:
+        // 31 ones (≥ 10^30) outranks 30 nines (< 10^30).
+        let longer = format!("file{}", "1".repeat(31));
+        assert_eq!(macos_name_cmp(&longer, &huge9), std::cmp::Ordering::Greater);
+        // An over-long run still orders after a small number.
+        assert_eq!(macos_name_cmp(&huge9, "file2"), std::cmp::Ordering::Greater);
+        // Leading zeros are not significant: "007" == "7" within a run.
+        assert_eq!(macos_name_cmp("file007", "file7"), std::cmp::Ordering::Equal);
 
-        // A full sort containing an overflowing run completes without panic.
-        let mut names = vec![huge.as_str(), "file2", "file1", "file10"];
+        // A full sort containing over-long runs completes without panic and is
+        // correctly ordered by magnitude.
+        let mut names = vec![huge9.as_str(), "file2", "file1", "file10", huge8.as_str()];
         names.sort_by(|a, b| macos_name_cmp(a, b));
-        assert_eq!(names, vec!["file1", "file2", "file10", huge.as_str()]);
+        assert_eq!(names, vec!["file1", "file2", "file10", huge8.as_str(), huge9.as_str()]);
+    }
+
+    proptest! {
+        // `macos_name_cmp` feeds `slice::sort_by`, which documents "May panic if
+        // `compare` does not implement a total order". These properties pin the
+        // total-order contract the old u64-saturating comparator broke for 20+
+        // digit runs.
+
+        // Antisymmetry: cmp(a, b) is always the reverse of cmp(b, a).
+        #[test]
+        fn macos_name_cmp_is_antisymmetric(a in "[0-9A-Za-z._-]{0,30}", b in "[0-9A-Za-z._-]{0,30}") {
+            prop_assert_eq!(macos_name_cmp(&a, &b), macos_name_cmp(&b, &a).reverse());
+        }
+
+        // Reflexivity: every name compares Equal to itself.
+        #[test]
+        fn macos_name_cmp_is_reflexive(a in "[0-9A-Za-z._-]{0,30}") {
+            prop_assert_eq!(macos_name_cmp(&a, &a), std::cmp::Ordering::Equal);
+        }
+
+        // Digit runs order by true numeric value whenever the run fits in u128 —
+        // the oracle is plain integer comparison, so this is not a tautology.
+        #[test]
+        fn macos_name_cmp_digit_runs_match_numeric(x in any::<u128>(), y in any::<u128>()) {
+            prop_assert_eq!(macos_name_cmp(&x.to_string(), &y.to_string()), x.cmp(&y));
+        }
+
+        // A sort over arbitrarily long digit runs (well past u64/u128) completes
+        // without panic and yields a non-decreasing sequence under the
+        // comparator — only possible if the comparator is a genuine total order.
+        #[test]
+        fn macos_name_cmp_sorts_long_digit_runs_total(mut names in proptest::collection::vec("[0-9]{0,40}", 0..15)) {
+            names.sort_by(|a, b| macos_name_cmp(a, b));
+            for pair in names.windows(2) {
+                prop_assert_ne!(macos_name_cmp(&pair[0], &pair[1]), std::cmp::Ordering::Greater);
+            }
+        }
     }
 
     // --- derive_relative_name ---
