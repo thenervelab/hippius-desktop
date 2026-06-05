@@ -29,7 +29,7 @@ export const SWIPE_CONTENT: SwipeSlide[] = [
       "A global network of independent nodes. Your files stay safe and accessible even if part of the network goes offline.",
     video: "/assets/signin/1-light.mp4",
     videoDark: "/assets/signin/1-dark.mp4",
-    cropX: -15,
+    cropX: 0,
   },
   {
     title: "Confidential Computing",
@@ -37,7 +37,7 @@ export const SWIPE_CONTENT: SwipeSlide[] = [
       "Hardware-encrypted virtual machines. Not even the host can read your code or your data.",
     video: "/assets/signin/2-light.mp4",
     videoDark: "/assets/signin/2-dark.mp4",
-    cropX: -30,
+    cropX: -25,
   },
   {
     title: "Bridge & Staking",
@@ -45,7 +45,7 @@ export const SWIPE_CONTENT: SwipeSlide[] = [
       "Stake your tokens and earn as the Hippius network grows. Transparent, non-custodial, on-chain.",
     video: "/assets/signin/3-light.mp4",
     videoDark: "/assets/signin/3-dark.mp4",
-    cropX: -30,
+    cropX: -20,
   },
   {
     title: "Referrals",
