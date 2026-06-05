@@ -519,7 +519,19 @@ pub async fn complete_migration_transition(
     let label = derive_migration_label(custom_sync_path.as_deref());
     let pool = state.pool()?;
 
-    // 1. Clear migration-in-progress flag so initialize_sync isn't blocked.
+    // 1. Clear the migration-in-progress flag so initialize_sync isn't blocked.
+    //
+    // `in_progress` is an ADVISORY flag: auto_init_sync reads it to avoid racing
+    // an active server migration after a restart. It is NOT a lock, so this
+    // store is intentionally unsynchronized w.r.t. check_migration's
+    // `store(true)` — both are SeqCst, so there is no memory race, only a
+    // benign logical interleaving. If a concurrent check_migration re-arms the
+    // flag from a server status it read as "in_progress" just before step 4
+    // commits "completed", the stale `true` self-corrects: this function's own
+    // initialize_sync below does not consult the flag, and the next
+    // check_migration reads the now-"completed" server status and won't re-arm
+    // it. A Mutex here would be over-engineering for an advisory flag (audit
+    // 2026-06-05, finding F1).
     state.migration.in_progress.store(false, Ordering::SeqCst);
 
     // 2. Ensure a sync path exists for the label. New migration users won't
