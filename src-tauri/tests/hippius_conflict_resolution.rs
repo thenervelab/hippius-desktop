@@ -40,8 +40,8 @@ fn reviewed_sync_routes_completion_through_the_bridge_helper() {
 
 /// The reviewed path MUST NOT emit `SYNC_COMPLETED` directly — that is the
 /// exact bypass finding A1 fixed. `control.rs` still legitimately emits
-/// `SYNC_STARTED`/`SYNC_ERROR` directly, so this pin is scoped to the
-/// completion event only.
+/// `SYNC_STARTED` directly (with the full `SyncStartedPayload`), so this pin is
+/// scoped to the completion event only.
 #[test]
 fn reviewed_sync_does_not_emit_sync_completed_directly() {
     assert!(
@@ -49,5 +49,25 @@ fn reviewed_sync_does_not_emit_sync_completed_directly() {
         "control.rs must not reference SYNC_COMPLETED — completion is owned by \
          tauri_bridge::handle_sync_completed; a direct emit here skips the \
          per-label cleanup the bridge performs (audit finding A1)"
+    );
+}
+
+/// A1 follow-up: the reviewed path's error/None arms MUST route through the
+/// shared `handle_sync_error` helper (so a cancel during a reviewed sync is
+/// dropped instead of surfacing a spurious "Sync Failed", and the per-label
+/// defensive clears run) and MUST NOT emit the `SYNC_ERROR` event directly.
+#[test]
+fn reviewed_sync_routes_errors_through_the_bridge_helper() {
+    assert!(
+        CONTROL_RS.contains("handle_sync_error"),
+        "sync_with_conflict_resolutions must route its error/None arms through \
+         tauri_bridge::handle_sync_error so cancels are dropped and the defensive \
+         clears run, same as the auto-sync path (audit A1 follow-up)"
+    );
+    assert!(
+        !CONTROL_RS.contains("SYNC_ERROR"),
+        "control.rs must not reference the SYNC_ERROR event constant — error \
+         emission is owned by tauri_bridge::handle_sync_error; a direct emit here \
+         skips the cancel-drop and the per-label defensive clears (audit A1 follow-up)"
     );
 }

@@ -207,6 +207,51 @@ pub(crate) fn handle_sync_completed(app: &AppHandle, mut payload: events::SyncCo
     let _ = app.emit(events::SYNC_COMPLETED, payload);
 }
 
+/// Single source of truth for the sync-ERROR transition, shared by the auto-sync
+/// bridge ([`SyncEventHandler::on_event`]'s `SyncError` arm) and the
+/// reviewed-conflict command ([`crate::sync::control::sync_with_conflict_resolutions`]).
+///
+/// Like [`handle_sync_completed`], this exists so the two paths can't drift. It:
+/// 1. DROPS cancels — any error equal to [`events::CANCELLED_MARKER`] (every
+///    user-initiated pause/remove/logout teardown and the stall-watchdog
+///    self-cancel stringifies to it) is silenced so it never becomes a persisted
+///    "Sync Failed" notification; the preparing widget is still cleared.
+/// 2. For a REAL error, runs the epoch-gated, per-label defensive clears
+///    (upload-processing banner, preparing override, 402 credits counter) so an
+///    abort mid-cycle can't leak a stuck banner, then emits `SYNC_ERROR`.
+///
+/// Before this was extracted, the reviewed-conflict path emitted `SYNC_ERROR`
+/// directly, so a cancel during a reviewed sync surfaced a spurious "Sync
+/// Failed" and skipped the defensive clears (audit 2026-06-05, A1 follow-up).
+pub(crate) fn handle_sync_error(app: &AppHandle, payload: events::SyncErrorPayload) {
+    use tauri::Manager;
+    let app_state = app.state::<crate::app_state::AppState>();
+
+    // 1. Cancels are never user-actionable — silence them, but still clear the
+    //    preparing widget (a paused/removed drive would otherwise leak a stuck
+    //    "Preparing sync…" badge). Banner clear is skipped for cancels (handled
+    //    by stop_sync).
+    if payload.error == events::CANCELLED_MARKER {
+        if app_state.preparing.clear(&payload.label) {
+            app_state.sync.emit_snapshot(true);
+        }
+        tracing::debug!(label = %payload.label, "Silenced sync cancel (not emitted as error)");
+        return;
+    }
+
+    // 2. Real error: epoch-gated, label-scoped defensive clears so an abort
+    //    mid-encryption (before the first-chunk path raised the banner) can't
+    //    leave a stuck banner / preparing override / 402 counter.
+    {
+        let epoch = app_state.sync_session_epoch.load(std::sync::atomic::Ordering::SeqCst);
+        app_state.upload_processing.clear_if_session_advanced(app, &payload.label, epoch);
+        app_state.preparing.clear(&payload.label);
+        app_state.credits_exhausted.clear(&payload.label);
+    }
+
+    let _ = app.emit(events::SYNC_ERROR, payload);
+}
+
 impl SyncEventHandler for TauriSyncBridge {
     #[expect(
         clippy::too_many_lines,
@@ -322,58 +367,11 @@ impl SyncEventHandler for TauriSyncBridge {
                 retry_in_secs,
                 consecutive_failures,
             } => {
-                // Cancels (pause, remove, logout teardown, stall watchdog
-                // self-cancel) are never user-actionable and must not produce
-                // persisted "Sync Failed" notifications. The upstream library
-                // routes every cancellation through `SyncError::Cancelled`,
-                // which stringifies to `events::CANCELLED_MARKER` — silence
-                // at the bridge so the `hcfs_sync_error` channel only
-                // carries real failures (network, auth, rate limit, etc.).
-                if error == events::CANCELLED_MARKER {
-                    // Cancels still need to clear the preparing widget
-                    // for this label — otherwise a paused/removed drive
-                    // would leak a stuck "Preparing sync…" badge until
-                    // the next sync cycle (which may never come for a
-                    // paused drive). Banner clear is intentionally
-                    // skipped for cancels (handled by `stop_sync`).
-                    use tauri::Manager;
-                    let app_state = app.state::<crate::app_state::AppState>();
-                    if app_state.preparing.clear(&label) {
-                        app_state.sync.emit_snapshot(true);
-                    }
-                    tracing::debug!(label = %label, "Silenced sync cancel (not emitted as error)");
-                    return;
-                }
-                // Defensive clear on real (non-cancel) errors: if the
-                // session aborted mid-encryption the first-chunk path
-                // never ran and the banner would stay raised. Cancels
-                // are intentionally skipped above — those go through
-                // `stop_sync`'s reset path. Epoch-gated so an error
-                // emitted by an in-flight cycle that started BEFORE
-                // a fresh `begin` cannot clear that begin's banner.
-                //
-                // Preparing override also cleared here: an error
-                // before plan_ready leaves nothing in the session, so
-                // the override would stay raised otherwise.
-                {
-                    use tauri::Manager;
-                    let app_state = app.state::<crate::app_state::AppState>();
-                    let epoch = app_state.sync_session_epoch.load(std::sync::atomic::Ordering::SeqCst);
-                    // Scoped to THIS label (Task 4.1) — an error on
-                    // drive A must not silently clear drive B's
-                    // pending upload banner.
-                    app_state.upload_processing.clear_if_session_advanced(&app, &label, epoch);
-                    app_state.preparing.clear(&label);
-                    // The cycle ended in a real error; the next
-                    // cycle should reset the 402 counter so its
-                    // banner shows only the new cycle's failures.
-                    // Cancels do NOT clear here — they early-return
-                    // above. A pause/resume/remove flow goes through
-                    // `SyncStopped`, which has its own clear.
-                    app_state.credits_exhausted.clear(&label);
-                }
-                let _ = app.emit(
-                    events::SYNC_ERROR,
+                // Cancel-drop + epoch-gated defensive clears + emit all live in
+                // `handle_sync_error`, shared with the reviewed-conflict command
+                // so the two paths can't drift (audit 2026-06-05, A1 follow-up).
+                handle_sync_error(
+                    &app,
                     events::SyncErrorPayload {
                         label,
                         error,

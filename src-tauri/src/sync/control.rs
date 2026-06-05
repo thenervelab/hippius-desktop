@@ -89,9 +89,23 @@ pub async fn sync_with_conflict_resolutions(app: AppHandle, label: String, resol
         s.is_syncing = true;
     });
 
+    // Emit the SAME SyncStartedPayload shape the auto-sync bridge emits, so FE
+    // listeners that read the plan fields get an empty plan (the reviewed sync's
+    // plan isn't known until sync_with_resolutions runs) rather than `undefined`
+    // from a bare LabelPayload (audit 2026-06-05, A1 follow-up).
     let _ = app.emit(
         crate::sync::events::SYNC_STARTED,
-        crate::sync::events::LabelPayload { label: label.clone() },
+        crate::sync::events::SyncStartedPayload {
+            label: label.clone(),
+            uploads: 0,
+            downloads: 0,
+            local_deletes: 0,
+            remote_deletes: 0,
+            upload_files: Vec::new(),
+            download_files: Vec::new(),
+            local_delete_files: Vec::new(),
+            remote_delete_files: Vec::new(),
+        },
     );
 
     // Suppress file watcher during sync to prevent feedback loops
@@ -174,8 +188,12 @@ pub async fn sync_with_conflict_resolutions(app: AppHandle, label: String, resol
             Ok(())
         }
         Some(Err(e)) => {
-            let _ = app.emit(
-                crate::sync::events::SYNC_ERROR,
+            // Route through the shared bridge helper so a cancel during a
+            // reviewed sync is dropped (not surfaced as a spurious "Sync
+            // Failed") and the per-label defensive clears run — same as the
+            // auto-sync path (audit 2026-06-05, A1 follow-up).
+            crate::sync::tauri_bridge::handle_sync_error(
+                &app,
                 crate::sync::events::SyncErrorPayload {
                     label: label.clone(),
                     error: e.clone(),
@@ -187,8 +205,8 @@ pub async fn sync_with_conflict_resolutions(app: AppHandle, label: String, resol
         }
         None => {
             let msg = "Drive not initialized or not unlocked";
-            let _ = app.emit(
-                crate::sync::events::SYNC_ERROR,
+            crate::sync::tauri_bridge::handle_sync_error(
+                &app,
                 crate::sync::events::SyncErrorPayload {
                     label: label.clone(),
                     error: msg.to_string(),

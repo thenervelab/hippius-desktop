@@ -454,6 +454,10 @@ pub async fn dismiss_migration(state: tauri::State<'_, crate::app_state::AppStat
     // need a separate stop_migration_polling round-trip.
     {
         let mut guard = state.migration.poll_task.lock().await;
+        // Bump the stop-generation under the lock (same as stop_migration_polling)
+        // so a start racing its setup aborts its new loop instead of storing it
+        // (D2 follow-up).
+        state.migration.poll_epoch.fetch_add(1, Ordering::SeqCst);
         if let Some(handle) = guard.take() {
             handle.abort();
         }
@@ -1033,14 +1037,17 @@ const TERMINAL_STATUSES: &[&str] = &["completed", "failed", "cancelled"];
 pub async fn start_migration_polling(app: tauri::AppHandle, account_id: String) -> Result<()> {
     use tauri::{Emitter, Manager};
 
-    // Cancel any existing poll task
-    {
+    // Cancel any existing poll task, and capture the stop-generation under the
+    // same lock so a concurrent stop/dismiss during our setup window below is
+    // detectable at store time (D2 follow-up).
+    let start_epoch = {
         let state = app.state::<crate::app_state::AppState>();
         let mut guard = state.migration.poll_task.lock().await;
         if let Some(handle) = guard.take() {
             handle.abort();
         }
-    }
+        state.migration.poll_epoch.load(Ordering::SeqCst)
+    };
 
     // Poll immediately (don't wait 3s for the first result) BEFORE spawning the
     // background loop. The immediate poll uses `?`, so a pool/config failure
@@ -1093,11 +1100,23 @@ pub async fn start_migration_polling(app: tauri::AppHandle, account_id: String) 
     });
 
     // Store the handle so a later dismiss_migration / stop_migration_polling can
-    // cancel it. The guard scope ends immediately; no await happens under it.
+    // cancel it — UNLESS a stop/dismiss bumped poll_epoch during our setup
+    // window. In that race the stop ran while poll_task was empty (we hadn't
+    // stored yet), so it aborted nothing; storing now would orphan the loop the
+    // user just asked to stop. The compare happens under the same lock the stop
+    // bumps the epoch under, so the two serialize (D2 follow-up). The guard
+    // scope ends immediately; no await happens under it.
     {
         let state = app.state::<crate::app_state::AppState>();
         let mut guard = state.migration.poll_task.lock().await;
-        *guard = Some(handle);
+        if state.migration.poll_epoch.load(Ordering::SeqCst) == start_epoch {
+            *guard = Some(handle);
+        } else {
+            // A stop/dismiss bumped the epoch during setup — don't orphan a loop
+            // the user asked to stop.
+            handle.abort();
+            tracing::debug!("start_migration_polling: a stop raced setup — aborting the new poll loop instead of storing it");
+        }
     }
 
     Ok(())
@@ -1109,6 +1128,9 @@ pub async fn stop_migration_polling(app: tauri::AppHandle) -> Result<()> {
     use tauri::Manager;
     let state = app.state::<crate::app_state::AppState>();
     let mut guard = state.migration.poll_task.lock().await;
+    // Bump the stop-generation under the lock so a start racing its setup window
+    // sees the change and aborts its new loop instead of storing it (D2 follow-up).
+    state.migration.poll_epoch.fetch_add(1, Ordering::SeqCst);
     if let Some(handle) = guard.take() {
         handle.abort();
     }
@@ -1117,7 +1139,7 @@ pub async fn stop_migration_polling(app: tauri::AppHandle) -> Result<()> {
 
 // --- Migration State ---
 
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 
 /// State for the server-side migration workflow.
 ///
@@ -1130,6 +1152,12 @@ pub struct MigrationState {
     pub client: reqwest::Client,
     /// Handle for the background migration polling task (if running).
     pub poll_task: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// Monotonic "stop generation". `stop_migration_polling` / `dismiss_migration`
+    /// bump this (under the `poll_task` lock) so `start_migration_polling` can
+    /// detect a stop that raced its setup window and abort the freshly-spawned
+    /// loop instead of storing (and orphaning) it — the start-vs-dismiss race
+    /// (audit 2026-06-05, D2 follow-up).
+    pub poll_epoch: AtomicU64,
 }
 
 impl Default for MigrationState {
@@ -1157,6 +1185,7 @@ impl MigrationState {
             in_progress: AtomicBool::new(false),
             client,
             poll_task: tokio::sync::Mutex::new(None),
+            poll_epoch: AtomicU64::new(0),
         }
     }
 }
@@ -1457,6 +1486,35 @@ mod tests {
         assert!(
             body.contains("MAX_MIGRATION_START_RETRIES") && body.contains("migration_retry_backoff"),
             "the retry must be a bounded backoff loop (audit finding D4)"
+        );
+    }
+
+    /// D2 follow-up: the start-vs-stop race guard must be wired up — stop and
+    /// dismiss bump `poll_epoch` (so a racing start can detect them), and
+    /// `start_migration_polling` compares `poll_epoch` against the value it
+    /// captured at setup before storing its handle. Without the compare, a
+    /// dismiss that runs while `poll_task` is momentarily empty (after the
+    /// immediate poll, before the store) aborts nothing and the start then
+    /// orphans the loop the user asked to stop.
+    #[test]
+    fn start_polling_guards_against_a_racing_stop_via_poll_epoch() {
+        const SRC: &str = include_str!("migration.rs");
+        let stop = SRC.split("pub async fn stop_migration_polling").nth(1).expect("stop fn present");
+        let stop_body = &stop[..stop.find("\npub ").unwrap_or(stop.len())];
+        assert!(
+            stop_body.contains("poll_epoch.fetch_add"),
+            "stop_migration_polling must bump poll_epoch so a racing start aborts its loop (D2 follow-up)"
+        );
+        let dismiss = SRC.split("pub async fn dismiss_migration").nth(1).expect("dismiss fn present");
+        let dismiss_body = &dismiss[..dismiss.find("\npub ").unwrap_or(dismiss.len())];
+        assert!(
+            dismiss_body.contains("poll_epoch.fetch_add"),
+            "dismiss_migration must bump poll_epoch so a racing start aborts its loop (D2 follow-up)"
+        );
+        let start = SRC.split("pub async fn start_migration_polling").nth(1).expect("start fn present");
+        assert!(
+            start.contains("poll_epoch.load") && start.contains("start_epoch"),
+            "start_migration_polling must compare poll_epoch against the captured start_epoch before storing (D2 follow-up)"
         );
     }
 
