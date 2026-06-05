@@ -423,6 +423,9 @@ pub async fn create_sync_notification(
     file_details_json: String,
     outcome: SyncNotificationOutcome,
 ) -> Result<i64, AppError> {
+    // Scope the write to the signed-in account; never trust the caller-supplied
+    // address (audit 2026-06-05, finding E1).
+    let user_address = crate::notifications::session_scoped_notification_account(state.inner(), &user_address)?;
     let pool = state.pool()?;
     create_sync_notification_inner(pool, &user_address, &description, &file_details_json, outcome).await
 }
@@ -509,6 +512,9 @@ pub async fn create_credit_notifications(
     account_id: String,
     notifications: Vec<NotificationInput>,
 ) -> Result<u32, AppError> {
+    // Scope the write to the signed-in account; never trust the caller-supplied
+    // address (audit 2026-06-05, finding E1).
+    let account_id = crate::notifications::session_scoped_notification_account(state.inner(), &account_id)?;
     create_credit_notifications_inner(state.pool()?, &account_id, &notifications).await
 }
 
