@@ -18,6 +18,7 @@ const EXPECTED_TABLES: &[&str] = &[
     // Imperative CREATE TABLE statements (17 tables)
     "sync_paths",
     "sync_intent",
+    "sync_file_failures",
     "wss_endpoint",
     "security_scoped_bookmarks",
     "auth_session",
@@ -110,6 +111,7 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     ensure_sub_accounts(&mut tx).await?;
     ensure_sync_paths(&mut tx).await?;
     ensure_sync_intent(&mut tx).await?;
+    ensure_sync_file_failures(&mut tx).await?;
     ensure_wss_endpoint(&mut tx).await?;
     ensure_security_scoped_bookmarks(&mut tx).await?;
     ensure_auth_session(&mut tx).await?;
@@ -356,6 +358,39 @@ async fn ensure_sync_intent(conn: &mut SqliteConnection) -> Result<(), sqlx::Err
     sqlx::query(
         "CREATE INDEX IF NOT EXISTS idx_sync_intent_drive
             ON sync_intent (account_id, drive_label, completed_at_ms)",
+    )
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
+
+/// `sync_file_failures` — durable per-file sync-failure records so the FE can
+/// show *why* a file failed (and offer retry) in any listing view, even across
+/// restarts. Keyed by `(owner, label, relative_path)`; one row per file, bumped
+/// on repeat failures and deleted on success. See `sync::failure_repo`.
+async fn ensure_sync_file_failures(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS sync_file_failures (
+            owner          TEXT    NOT NULL,
+            label          TEXT    NOT NULL,
+            relative_path  TEXT    NOT NULL,
+            file_name      TEXT    NOT NULL,
+            kind           TEXT    NOT NULL,
+            message        TEXT,
+            http_status    INTEGER,
+            balance_cents  INTEGER,
+            required_cents INTEGER,
+            failure_count  INTEGER NOT NULL DEFAULT 1,
+            last_failed_at INTEGER NOT NULL,
+            PRIMARY KEY (owner, label, relative_path)
+        )",
+    )
+    .execute(&mut *conn)
+    .await?;
+
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_sync_file_failures_drive
+            ON sync_file_failures (owner, label, last_failed_at DESC)",
     )
     .execute(&mut *conn)
     .await?;

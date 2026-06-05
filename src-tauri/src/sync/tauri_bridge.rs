@@ -85,6 +85,19 @@ impl TauriSyncBridge {
     }
 }
 
+/// Resolve `(pool, owner)` for durably persisting file failures, or `None` when
+/// no account / DB pool is available (logged out, pool not yet ready) — in which
+/// case persistence is simply skipped. `owner` is the hashed account key, the
+/// same scoping `sync_paths` uses, so failure rows stay private to the account.
+fn failure_persist_ctx(
+    app_state: &crate::app_state::AppState,
+) -> Option<(sqlx::SqlitePool, String)> {
+    let account_id = app_state.current_account_id().ok()?;
+    let owner = crate::auth::account_key::account_key(&account_id);
+    let pool = app_state.pool().ok()?.clone();
+    Some((pool, owner))
+}
+
 /// Inspect the progress tracker after a sync cycle completes to update
 /// per-file failure counters. If any file reaches the threshold, emit
 /// the `FILES_FAILED_REPEATEDLY` event to trigger the frontend modal.
@@ -122,12 +135,32 @@ fn update_failure_counts(app: &AppHandle, label: &str) {
     if failed_files.is_empty() {
         // All files succeeded for this label -- clear counters.
         failure_state.clear_all_for_label(label);
+        // Mirror the clear into the durable store (best-effort, off the
+        // sync thread since this fn is sync and DB writes are async).
+        if let Some((pool, owner)) = failure_persist_ctx(&app_state) {
+            let label = label.to_string();
+            tauri::async_runtime::spawn(async move {
+                let _ = super::failure_repo::clear_failures_for_label(&pool, &owner, &label).await;
+            });
+        }
         return;
     }
 
     // Clear counters for files that succeeded this cycle.
     for path in &succeeded_paths {
         failure_state.clear_failure(label, path);
+    }
+    // Mirror the per-file success clears into the durable store.
+    if !succeeded_paths.is_empty()
+        && let Some((pool, owner)) = failure_persist_ctx(&app_state)
+    {
+        let label = label.to_string();
+        let paths = succeeded_paths.clone();
+        tauri::async_runtime::spawn(async move {
+            for p in &paths {
+                let _ = super::failure_repo::clear_failure(&pool, &owner, &label, p).await;
+            }
+        });
     }
 
     // Increment counters for failed files.
@@ -557,13 +590,41 @@ impl SyncEventHandler for TauriSyncBridge {
                     None
                 };
 
+                // Persist the failure durably so the FE can show *why* it failed
+                // (and offer retry) in any listing view — Recent Files, the Drive
+                // table, the tray — even across restarts. The structured `kind` is
+                // only available here at the failure site. `on_event` is sync, so
+                // the DB write is spawned off-thread; skipped when logged out.
+                let kind_payload = events::FileFailureKindPayload::from(&kind);
+                {
+                    use tauri::Manager;
+                    let app_state = app.state::<crate::app_state::AppState>();
+                    if let Some((pool, owner)) = failure_persist_ctx(&app_state) {
+                        let label = label.clone();
+                        let path = path.clone();
+                        let file_name =
+                            path.rsplit('/').next().unwrap_or(path.as_str()).to_string();
+                        let kind_for_db = kind_payload.clone();
+                        let now_ms = chrono::Utc::now().timestamp_millis();
+                        tauri::async_runtime::spawn(async move {
+                            if let Err(e) = super::failure_repo::upsert_failure(
+                                &pool, &owner, &label, &path, &file_name, &kind_for_db, now_ms,
+                            )
+                            .await
+                            {
+                                tracing::warn!("[failure_repo] persist failed for {label}/{path}: {e}");
+                            }
+                        });
+                    }
+                }
+
                 let _ = app.emit(
                     events::FILE_FAILED,
                     events::FileFailedPayload {
                         label,
                         path,
                         file_id,
-                        kind: events::FileFailureKindPayload::from(&kind),
+                        kind: kind_payload,
                         http_status,
                     },
                 );
