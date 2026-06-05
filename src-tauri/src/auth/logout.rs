@@ -22,6 +22,14 @@ use tracing::{info, warn};
 pub async fn auth_logout_internal(state: &crate::app_state::AppState, account_id: &str) -> Result<(), AppError> {
     info!(account_id = %account_id, "Logout initiated");
 
+    // Clear the PERSISTED session first. If this fails we return Err with the
+    // in-memory AuthInfo still intact, leaving the app in a consistent
+    // "still logged in" state. The old order wiped memory first, so a failed DB
+    // clear left a live on-disk token that silently rehydrated the session on
+    // the next restore while the UI believed it had logged out (audit
+    // 2026-06-05, finding D6).
+    crate::auth::auth_session_repo::clear(state.pool()?, account_id).await?;
+
     {
         let mut auth = state.auth.lock()?;
         auth.capabilities = crate::auth::state::AuthCapabilities::None;
@@ -30,8 +38,6 @@ pub async fn auth_logout_internal(state: &crate::app_state::AppState, account_id
         auth.eth_address = None;
         auth.mnemonic = None;
     }
-
-    crate::auth::auth_session_repo::clear(state.pool()?, account_id).await?;
 
     // Best-effort OS keychain cleanup so the next user on this machine
     // doesn't inherit credentials. Non-fatal — the user is already
