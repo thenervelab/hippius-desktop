@@ -10,7 +10,7 @@ live code via illu (line numbers drift), applying the fix, and running the
 Rust gate sequence (`rust_preflight` → `axioms` → implement → `quality_gate`)
 before committing.
 
-## DONE (15 findings, 9 commits)
+## DONE (19 findings, 13 commits)
 
 | Commit | Findings | Summary |
 |--------|----------|---------|
@@ -22,14 +22,14 @@ before committing.
 | `710c6f56` | C3, C4, C5, C6, **F2** | Logged/saturating parses (drive credits, chart amounts), frozen-aware transfer affordability, include-pattern trim/observe, gap-day own date |
 | `746feb35` | D5, D6 | Token-expiry `0 = never expires` unified; logout clears persisted session before wiping in-memory auth |
 | `f898720d` | E2 | Corrected `migrate_if_needed` doc (migrates only drive passwords, not `sub_accounts`) |
+| `2b312f79` | D1 | `change_recovery_password`: when local rewrite AND sidecar both fail, return Err (was silent Ok) so the failure surfaces; static pin |
+| `4c0b1417` | D2 | `start_migration_polling`: immediate poll before spawning the loop (no orphaned task on failed start); skip loop if first poll terminal; static pin |
+| `bc815240` | D3 | Per-caller `&mut i32` failure streak (removed shared `poll_failure_count` atomic so callers don't corrupt each other's give-up); pure `poll_failure_flags` + edge tests. Wire format & FE unchanged; `should_abort` already resumable so no behavior change |
+| _(this commit)_ | D4 | `start_server_migration` job_exists branch: cancel is awaited+inspected (was fire-and-forget); single immediate retry replaced by a bounded backoff loop (`MAX_MIGRATION_START_RETRIES`=3, linear `migration_retry_backoff`); pure backoff test + static pin |
 
-## REMAINING (16 items: 12 includable + 2 droppable + D9 deferred)
+## REMAINING (12 items: 8 includable + 2 droppable + D9 deferred)
 
 ### Batch D (error-surfacing) — remaining
-- **D1** `recovery.rs::change_recovery_password` (~718-825): in the install-failed `Err(e)` arm, when `write_rotation_sidecar` ALSO fails, return `Err` instead of `Ok(())` — otherwise `has_pending_rotation()` stays false and the boot-time resume self-heal never fires. Server rotation is already durable so returning Err is safe. Test: non-writable account dir after install failure → Err (needs a writable-dir injection; may be construction-only per axiom 111).
-- **D2** `sync/migration.rs::start_migration_polling` (~949-1002): run the immediate `poll_migration_status_internal(...).await?` BEFORE spawning/storing the loop `JoinHandle` (or abort the stored handle on the immediate Err), so a failed start leaves no orphaned task.
-- **D3** `sync/migration.rs::poll_migration_status_internal` (~887-939) + loop break: replace the overloaded `status:"poll_error"`/`should_abort` with an explicit enum; on give-up signal a *retryable* state (don't terminate tracking), and move `poll_failure_count` off the shared process-wide atomic into per-task/per-account state.
-- **D4** `sync/migration.rs::start_server_migration` (~683-884, `job_exists` branch): the fire-and-forget cancel (`let _ = client.post(cancel_url)...`) + single retry is fragile — await/check the cancel response and bound the retry with backoff.
 - **D7** `auth/contacts.rs::claim_legacy_contacts` (~38-44): `UPDATE address_book SET owner=? WHERE owner=''` assigns ALL legacy rows to whichever account opens its book first. Add a test documenting the multi-account claim semantics + a `// why` comment (consider scoping the claim if a recoverable key exists). Primarily test + comment.
 - **D8** `utils/schema.rs::migrate_account_keys` (~823-883): per-table UPDATE errors are `warn!`-swallowed while the tx still commits → partial owner migration on a UNIQUE collision. Make a per-table failure roll back the transaction (propagate Err) or resolve the collision deterministically. Test: forced collision on the first table asserts no partial commit.
 - **D9** `app_state.rs::pool` (233-235): returns `sqlx::Error::PoolClosed` for an *uninitialized* pool (semantic mislabel). **DEFERRED** — the proper fix adds a `NotReadyKind` variant which cascades to the FE TS union (`app/lib/utils/dispatchTauriError.ts`) + the round-trip test. After B3 the early-call window is essentially closed, so this LOW is near-unreachable; do it only alongside the FE change. Decide with the user.

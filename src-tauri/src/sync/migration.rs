@@ -610,6 +610,18 @@ pub struct ServerMigrationStatus {
 const WARN_AFTER_POLL_FAILURES: i32 = 3;
 const ABORT_AFTER_POLL_FAILURES: i32 = 10;
 
+/// Max attempts to (re)start a server migration after cancelling a pre-existing
+/// job. The first attempt races the server's cancellation, so we retry a bounded
+/// number of times with backoff rather than giving up after a single try.
+const MAX_MIGRATION_START_RETRIES: u32 = 3;
+
+/// Backoff before the Nth (1-based) post-cancel start retry. Linear —
+/// 500ms / 1s / 1.5s — enough headroom for the server to release the cancelled
+/// job without stalling the user for long. Pure so the schedule is unit-testable.
+fn migration_retry_backoff(attempt: u32) -> std::time::Duration {
+    std::time::Duration::from_millis(500 * u64::from(attempt))
+}
+
 /// Result of `start_migration_flow` — tells the frontend which step to show.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -830,44 +842,76 @@ pub async fn start_server_migration(
     if !resp.status().is_success() {
         let text = resp.text().await.unwrap_or_default();
 
-        // If a previous job is still active, cancel it and retry once.
+        // If a previous job is still active, cancel it and retry with backoff.
         if text.contains("job_exists") {
             tracing::warn!("[Migration] Existing job found — cancelling and retrying");
             let cancel_url = format!("{}/migration/cancel", server_base.trim_end_matches('/'));
-            let _ = state
+
+            // Await AND inspect the cancel. The old `let _ = …send().await`
+            // discarded the outcome, so a failed cancel was invisible and the
+            // single immediate retry below just raced — and lost — against a job
+            // the server had not yet released. Log a non-success cancel but still
+            // proceed: the server may finish the cancellation during the backoff
+            // between retries (audit 2026-06-05, finding D4).
+            match state
                 .migration
                 .client
                 .post(&cancel_url)
                 .json(&serde_json::json!({ "ss58_address": account_id }))
                 .send()
-                .await;
-
-            // Retry the start request
-            let retry_resp = state
-                .migration
-                .client
-                .post(&url)
-                .header("Authorization", format!("Bearer {api_token}"))
-                .timeout(std::time::Duration::from_secs(120))
-                .json(&request_body)
-                .send()
                 .await
-                .map_err(|e| {
-                    tracing::error!("[Migration] Retry HTTP request failed: {e}");
-                    e
-                })?;
-
-            if !retry_resp.status().is_success() {
-                let retry_text = retry_resp.text().await.unwrap_or_default();
-                tracing::error!("[Migration] Retry also failed: {retry_text}");
-                return Err(crate::error::AppError::Other(format!("Migration start failed after retry: {retry_text}")));
+            {
+                Ok(cancel_resp) if cancel_resp.status().is_success() => {
+                    tracing::info!("[Migration] Cancel accepted by server");
+                }
+                Ok(cancel_resp) => {
+                    let status = cancel_resp.status();
+                    let body = cancel_resp.text().await.unwrap_or_default();
+                    tracing::warn!("[Migration] Cancel returned {status}: {body} — retrying anyway");
+                }
+                Err(e) => {
+                    tracing::warn!("[Migration] Cancel request failed: {e} — retrying anyway");
+                }
             }
 
-            let result: StartServerMigrationResult = retry_resp.json().await?;
-            let _ = upsert_migration_status(pool, &account_id, "in_progress", 0, 0, "[]", "", &server_url).await;
-            tracing::info!("[Migration] Server migration started successfully (after cancel+retry)");
-            in_progress_guard.commit();
-            return Ok(result);
+            // Bounded retry with backoff instead of one immediate attempt, so the
+            // server has time to release the cancelled job. A transport error
+            // still aborts via `?`; only a non-success *response* (the job is
+            // still there) is retried.
+            let mut last_error = String::new();
+            for attempt in 1..=MAX_MIGRATION_START_RETRIES {
+                tokio::time::sleep(migration_retry_backoff(attempt)).await;
+
+                let retry_resp = state
+                    .migration
+                    .client
+                    .post(&url)
+                    .header("Authorization", format!("Bearer {api_token}"))
+                    .timeout(std::time::Duration::from_secs(120))
+                    .json(&request_body)
+                    .send()
+                    .await
+                    .map_err(|e| {
+                        tracing::error!("[Migration] Retry HTTP request failed (attempt {attempt}): {e}");
+                        e
+                    })?;
+
+                if retry_resp.status().is_success() {
+                    let result: StartServerMigrationResult = retry_resp.json().await?;
+                    let _ = upsert_migration_status(pool, &account_id, "in_progress", 0, 0, "[]", "", &server_url).await;
+                    tracing::info!("[Migration] Server migration started successfully (after cancel+retry, attempt {attempt})");
+                    in_progress_guard.commit();
+                    return Ok(result);
+                }
+
+                last_error = retry_resp.text().await.unwrap_or_default();
+                tracing::warn!("[Migration] Retry attempt {attempt}/{MAX_MIGRATION_START_RETRIES} failed: {last_error}");
+            }
+
+            tracing::error!("[Migration] Retry exhausted after {MAX_MIGRATION_START_RETRIES} attempts: {last_error}");
+            return Err(crate::error::AppError::Other(format!(
+                "Migration start failed after {MAX_MIGRATION_START_RETRIES} retries: {last_error}"
+            )));
         }
 
         tracing::error!("[Migration] Server returned error: {text}");
@@ -1359,6 +1403,49 @@ mod tests {
     fn poll_failure_flags_aborts_at_abort_threshold() {
         assert_eq!(poll_failure_flags(ABORT_AFTER_POLL_FAILURES), (true, true));
         assert_eq!(poll_failure_flags(ABORT_AFTER_POLL_FAILURES + 5), (true, true));
+    }
+
+    // -----------------------------------------------------------------------
+    // migration_retry_backoff (D4 — bounded post-cancel start retry schedule)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn retry_backoff_is_linear_and_increasing() {
+        assert_eq!(migration_retry_backoff(1), std::time::Duration::from_millis(500));
+        assert_eq!(migration_retry_backoff(2), std::time::Duration::from_millis(1000));
+        assert_eq!(migration_retry_backoff(3), std::time::Duration::from_millis(1500));
+        // Strictly increasing across the bounded range so each retry waits longer.
+        for attempt in 1..MAX_MIGRATION_START_RETRIES {
+            assert!(migration_retry_backoff(attempt) < migration_retry_backoff(attempt + 1));
+        }
+    }
+
+    /// Static pin for audit finding D4: the `job_exists` branch of
+    /// `start_server_migration` must (a) NOT fire-and-forget the cancel with
+    /// `let _ = …post(&cancel_url)`, and (b) retry with a bounded backoff loop
+    /// rather than a single immediate attempt. The command is AppHandle/server-
+    /// bound (covered only by tests/migration_server_mock.rs at the endpoint
+    /// level), so this pins the structure at the source level (axiom 111).
+    #[test]
+    fn job_exists_cancel_is_checked_and_retry_is_bounded() {
+        const SRC: &str = include_str!("migration.rs");
+        let branch_at = SRC.find("Existing job found").expect("job_exists branch present");
+        // Scope to the branch body, up to the start of the next sibling check.
+        let branch = &SRC[branch_at..];
+        let body = &branch[..branch.find("Server returned error").unwrap_or(branch.len())];
+        // The cancel response is inspected via `match` (awaited + branched on
+        // status), not discarded — the `post(&cancel_url)` lives inside it.
+        let cancel_at = body.find(".post(&cancel_url)").expect("cancel request present");
+        let match_at = body.find("match state").expect("cancel must be matched on, not fire-and-forget (audit finding D4)");
+        assert!(
+            match_at < cancel_at,
+            "the cancel `.post(&cancel_url)` must sit inside the `match` that inspects it (audit finding D4)"
+        );
+        // The retry is a bounded backoff loop, not a single immediate attempt.
+        assert!(
+            body.contains("MAX_MIGRATION_START_RETRIES") && body.contains("migration_retry_backoff"),
+            "the retry must be a bounded backoff loop (audit finding D4)"
+        );
     }
 
     /// Static pin for audit finding D2: `start_migration_polling` must run its
