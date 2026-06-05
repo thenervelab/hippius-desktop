@@ -82,6 +82,28 @@ pub async fn sp_retry_file(label: String, path: String, state: tauri::State<'_, 
     Ok(())
 }
 
+/// Read every persisted file-failure record for a drive so the FE can show
+/// *why* each failed file failed (and offer retry) in any listing view.
+///
+/// Scoped to the current account via the hashed `owner` key. Returns an empty
+/// vec when logged out or when the drive has no recorded failures — a missing
+/// account is a normal "nothing to show" state, not an error.
+///
+/// # Errors
+/// Returns an error only if the database read itself fails.
+#[tauri::command]
+pub async fn get_drive_failures(
+    label: String,
+    state: tauri::State<'_, crate::app_state::AppState>,
+) -> Result<Vec<crate::sync::failure_repo::FileFailureRecord>> {
+    let Ok(account_id) = state.current_account_id() else {
+        return Ok(Vec::new());
+    };
+    let owner = crate::auth::account_key::account_key(&account_id);
+    let pool = state.pool()?;
+    crate::sync::failure_repo::list_failures_for_label(pool, &owner, &label).await
+}
+
 /// Clean up session-skip patterns on teardown.
 ///
 /// Called from `stop_sync` to remove exclude patterns that
