@@ -232,6 +232,24 @@ const LeftCarouselPanel = () => {
           display: none !important;
           -webkit-appearance: none;
         }
+        /*
+         * macOS WKWebView color-manages <video> to the display profile via
+         * ColorSync, so the clip's dark background renders at a slightly
+         * different tone than the CSS dark:bg-black-500 panel around it — a
+         * visible rectangle where the video sits. Linux's WebKitGTK doesn't
+         * color-manage the clip, so there it matches the panel exactly.
+         *
+         * Any CSS filter pulls the video off its CoreVideo display layer and
+         * rasterizes it through a filter buffer, which is sRGB (CSS filter
+         * operations are defined in sRGB). The clip's pixels are then composited
+         * the same way as CSS colors, so the ColorSync tone shift disappears and
+         * macOS matches Linux. saturate(0.99) is visually identity (a 1% change
+         * is imperceptible) but non-trivial, so WebKit can't optimize the filter
+         * — and its sRGB buffer — away.
+         */
+        .auth-carousel-swiper video {
+          filter: saturate(0.99);
+        }
         .auth-carousel-swiper .swiper-pagination {
           bottom: 22px !important;
           display: flex;
