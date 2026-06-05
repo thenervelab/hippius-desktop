@@ -157,8 +157,19 @@ async fn fetch_all_drive_events(state: &crate::app_state::AppState, account_id: 
 }
 
 /// Parse a (possibly fractional) planck string into HIP credits.
+///
+/// A malformed value is logged (not silently dropped) and treated as `0.0`:
+/// the credit total is a display figure that must not fail, but coercing an
+/// unparseable amount to zero with no trace undercounts the user's usage, so
+/// the offending value is surfaced at warn level (audit 2026-06-05, finding C3).
 fn planck_str_to_credits(raw: &str) -> f64 {
-    raw.parse::<f64>().unwrap_or(0.0) / 1e18
+    raw.parse::<f64>().map_or_else(
+        |_| {
+            tracing::warn!(value = %raw, "unparseable planck amount in drive-credit total; treating as 0");
+            0.0
+        },
+        |v| v / 1e18,
+    )
 }
 
 /// Filter to `CreditsConsumed` rows, parse timestamps, sort ascending.
