@@ -47,6 +47,25 @@ pub async fn stage_changes(app: tauri::AppHandle, label: String) -> Result<Stage
     Ok(changes)
 }
 
+/// Validate a frontend-supplied conflict-resolution map.
+///
+/// Every value must be one of the four resolution verbs hcfs-client
+/// understands. Extracted as a pure free function so the validation contract is
+/// unit-testable without a Tauri `AppHandle` or a live drive (project axiom 111
+/// — exercise the logic through a testable surface, not a mocked runtime).
+///
+/// # Errors
+/// Returns [`crate::error::AppError::Other`] naming the offending value and its
+/// file id on the first invalid entry. An empty map is vacuously valid.
+pub(crate) fn validate_resolutions(resolutions: &HashMap<String, String>) -> Result<()> {
+    for (file_id, resolution) in resolutions {
+        if !matches!(resolution.as_str(), "keep_local" | "accept_remote" | "keep_both" | "skip") {
+            return Err(crate::error::AppError::Other(format!("Invalid resolution '{resolution}' for file {file_id}")));
+        }
+    }
+    Ok(())
+}
+
 /// Sync with user-provided conflict resolutions, then resume auto-sync.
 ///
 /// The `label` parameter identifies which drive to resolve conflicts for.
@@ -62,14 +81,8 @@ pub async fn sync_with_conflict_resolutions(app: AppHandle, label: String, resol
     let app_state = app.state::<crate::app_state::AppState>();
     let sync = &app_state.sync;
 
-    // Validate resolution values before proceeding
-    for (file_id, resolution) in &resolutions {
-        if !matches!(resolution.as_str(), "keep_local" | "accept_remote" | "keep_both" | "skip") {
-            return Err(crate::error::AppError::Other(format!(
-                "Invalid resolution '{resolution}' for file {file_id}"
-            )));
-        }
-    }
+    // Validate resolution values before proceeding (pure, unit-tested below).
+    validate_resolutions(&resolutions)?;
 
     // Mark syncing in shared state
     sync.update_state(&label, |s| {
@@ -150,10 +163,14 @@ pub async fn sync_with_conflict_resolutions(app: AppHandle, label: String, resol
                 outcome.conflicts_resolved,
                 outcome.conflicts_skipped,
             );
-            let _ = app.emit(
-                crate::sync::events::SYNC_COMPLETED,
-                crate::sync::events::SyncCompletedPayload::from_outcome(&label, &outcome),
-            );
+            // Route through the shared bridge helper so the reviewed-sync
+            // completion runs the SAME per-label cleanup as the auto-sync
+            // loop (preparing-clear, banner-clear, failure-counter recompute)
+            // and ships the completion notification with its per-file detail,
+            // instead of emitting the completion event directly and skipping
+            // all of it (audit 2026-06-05, finding A1). A reviewed sync has no
+            // cycle-level failure count, so `files_failed = 0`.
+            crate::sync::tauri_bridge::handle_sync_completed(&app, crate::sync::events::SyncCompletedPayload::from_outcome(&label, &outcome), 0);
             Ok(())
         }
         Some(Err(e)) => {
@@ -286,5 +303,41 @@ mod tests {
     fn resolve_drive_path_errors_on_empty_list() {
         let err = resolve_drive_path(Vec::new(), "anything").unwrap_err();
         assert!(err.to_string().contains("anything"));
+    }
+
+    fn resolutions(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs.iter().map(|(k, v)| ((*k).to_string(), (*v).to_string())).collect()
+    }
+
+    #[test]
+    fn validate_resolutions_accepts_every_valid_verb() {
+        // All four verbs hcfs-client understands must pass.
+        let map = resolutions(&[("a", "keep_local"), ("b", "accept_remote"), ("c", "keep_both"), ("d", "skip")]);
+        assert!(validate_resolutions(&map).is_ok());
+    }
+
+    #[test]
+    fn validate_resolutions_accepts_empty_map() {
+        // A drive with no conflicts hands in an empty map; that is vacuously valid.
+        assert!(validate_resolutions(&HashMap::new()).is_ok());
+    }
+
+    #[test]
+    fn validate_resolutions_rejects_invalid_verb_naming_value_and_file() {
+        // The error must name BOTH the bad value and its file id so the FE
+        // toast and the logs are unambiguous about which entry was wrong.
+        let map = resolutions(&[("deadbeef", "overwrite")]);
+        let err = validate_resolutions(&map).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("overwrite"), "error must name the bad value; got {msg}");
+        assert!(msg.contains("deadbeef"), "error must name the file id; got {msg}");
+    }
+
+    #[test]
+    fn validate_resolutions_rejects_when_one_entry_in_a_valid_set_is_bad() {
+        // A single bad entry among valid ones must still fail closed —
+        // partial application of resolutions would risk the wrong merge.
+        let map = resolutions(&[("a", "keep_local"), ("b", "definitely_not_a_verb")]);
+        assert!(validate_resolutions(&map).is_err());
     }
 }

@@ -151,6 +151,62 @@ fn update_failure_counts(app: &AppHandle, label: &str) {
     }
 }
 
+/// Run the canonical post-cycle cleanup for a successfully completed sync
+/// cycle, then emit `SYNC_COMPLETED`.
+///
+/// This is the single source of truth for the "a sync cycle finished
+/// successfully" transition. Both the auto-sync engine (`on_event`'s
+/// `SyncCompleted` arm) and the reviewed-conflict command
+/// (`crate::sync::control::sync_with_conflict_resolutions`) route through here,
+/// so the per-label cleanup cannot drift between the two completion paths.
+/// Before this helper existed the reviewed path emitted `SYNC_COMPLETED`
+/// directly and skipped every step below, leaving a stuck "Preparing sync…"
+/// widget, a stale pending-upload banner, and stale repeated-failure counters
+/// after a reviewed sync, and shipping a detail-less completion notification
+/// (audit 2026-06-05, finding A1).
+///
+/// `payload.files` is ignored on input and replaced with the cycle's completed
+/// files collected from session state — callers pass `Vec::new()`. `files_failed`
+/// is logged only (per-file detail already flowed through `SyncEvent::FileFailed`);
+/// the reviewed path, which has no cycle-level failure count, passes `0`.
+pub(crate) fn handle_sync_completed(app: &AppHandle, mut payload: events::SyncCompletedPayload, files_failed: usize) {
+    use tauri::Manager;
+
+    if files_failed > 0 {
+        tracing::warn!(label = %payload.label, files_failed = files_failed, "sync cycle completed with per-file failures");
+    }
+
+    let app_state = app.state::<crate::app_state::AppState>();
+    // Clear the preparing override for this label BEFORE the snapshot emit so a
+    // cycle that completes with an empty plan (no merge_into_session) doesn't
+    // leak a stuck "Preparing sync…" widget after the cycle ends.
+    app_state.preparing.clear(&payload.label);
+    app_state.sync.emit_snapshot(true);
+
+    // Defensive banner clear, scoped to THIS label and epoch-gated so an
+    // overlapping in-flight cycle's completion cannot prematurely clear a NEW
+    // upload's banner. Idempotent — the common case (a real upload already
+    // cleared it) is a no-op.
+    {
+        let epoch = app_state.sync_session_epoch.load(std::sync::atomic::Ordering::SeqCst);
+        app_state.upload_processing.clear_if_session_advanced(app, &payload.label, epoch);
+    }
+
+    // Update per-file failure counters from the finalized session.
+    update_failure_counts(app, &payload.label);
+
+    // Snapshot the cycle's completed files from session state before the next
+    // cycle starts. Capped by MAX_NOTIFICATION_FILES and again by the reported
+    // completion counts so a multi-cycle residue of stale Completed files can't
+    // over-report.
+    let reported_count =
+        payload.files_uploaded + payload.files_downloaded + payload.files_deleted_locally + payload.files_deleted_remotely;
+    let max_files = reported_count.min(crate::sync::progress::MAX_NOTIFICATION_FILES);
+    payload.files = crate::sync::progress::collect_cycle_files_for_label(&app_state.sync, &payload.label, max_files);
+
+    let _ = app.emit(events::SYNC_COMPLETED, payload);
+}
+
 impl SyncEventHandler for TauriSyncBridge {
     #[expect(
         clippy::too_many_lines,
@@ -239,71 +295,14 @@ impl SyncEventHandler for TauriSyncBridge {
                 conflicts_skipped,
                 files_failed,
             } => {
-                // Cycle-level failure counter is observable here only for
-                // logging — the per-file detail already flowed through
-                // `SyncEvent::FileFailed` (one event per failing file) and
-                // the snapshot's `failed_files` aggregate. Surfacing it
-                // again as a Tauri event would duplicate signals the FE
-                // already consumes; a warn-level log preserves the
-                // operability signal for backend operators.
-                if files_failed > 0 {
-                    tracing::warn!(
-                        label = %label,
-                        files_failed = files_failed,
-                        "sync cycle completed with per-file failures"
-                    );
-                }
-                use tauri::Manager;
-
-                // Belt-and-suspenders snapshot emit. As of hcfs >= a26f4296,
-                // `finalize_session_for_label` already emits a snapshot at
-                // its exit, so the success and conflicts-skipped code paths
-                // are covered upstream. This emit additionally covers the
-                // `ConflictsPending` branch in `dispatch_sync_result` which
-                // fires `SyncCompleted` without calling
-                // `finalize_session_for_label` — without it the UI would
-                // miss the conflict-pending transition. Idempotent if the
-                // upstream emit already fired this cycle.
-                let app_state = app.state::<crate::app_state::AppState>();
-                // Clear the preparing override for this label BEFORE
-                // the snapshot emit so a cycle that completes with an
-                // empty plan (no merge_into_session) doesn't leak a
-                // stuck "Preparing sync…" widget after the cycle ends.
-                app_state.preparing.clear(&label);
-                app_state.sync.emit_snapshot(true);
-
-                // Defensive clear: if the cycle finished without ever
-                // emitting a non-zero upload tick (empty plan,
-                // already-synced batch, downloads/deletes only), the
-                // first-chunk path in `handle_transfer_progress` never
-                // ran and the banner would otherwise stay raised for
-                // this label. `clear_if_session_advanced` is idempotent
-                // and gated on the per-cycle epoch, so the common case
-                // (real upload already cleared it) is a no-op and an
-                // overlapping in-flight cycle's completion cannot
-                // prematurely clear a NEW upload's banner. Scoped to
-                // THIS label (Task 4.1) — completion on drive A must
-                // not touch drive B's banner state.
-                {
-                    let epoch = app_state.sync_session_epoch.load(std::sync::atomic::Ordering::SeqCst);
-                    app_state.upload_processing.clear_if_session_advanced(&app, &label, epoch);
-                }
-
-                // Update per-file failure counters from the finalized session.
-                update_failure_counts(&app, &label);
-
-                // Snapshot the cycle's completed files from the session
-                // state BEFORE the next cycle starts. `MAX_NOTIFICATION_FILES`
-                // caps the payload so a 10k-file migration doesn't blow up
-                // the webview. The second cap — the reported completion
-                // counts — prevents a multi-cycle residue of stale
-                // Completed files in the session map from over-reporting.
-                let reported_count = files_uploaded + files_downloaded + files_deleted_locally + files_deleted_remotely;
-                let max_files = reported_count.min(crate::sync::progress::MAX_NOTIFICATION_FILES);
-                let files = crate::sync::progress::collect_cycle_files_for_label(&app_state.sync, &label, max_files);
-
-                let _ = app.emit(
-                    events::SYNC_COMPLETED,
+                // Single source of truth for the completion transition: the
+                // cleanup (preparing-clear, banner-clear, failure-counter
+                // recompute) and the per-file detail collection live in
+                // `handle_sync_completed`, shared with the reviewed-conflict
+                // command so the two paths can't drift. `files: Vec::new()` is
+                // a placeholder the helper overwrites from session state.
+                handle_sync_completed(
+                    &app,
                     events::SyncCompletedPayload {
                         label,
                         files_uploaded,
@@ -312,8 +311,9 @@ impl SyncEventHandler for TauriSyncBridge {
                         files_deleted_remotely,
                         conflicts_resolved,
                         conflicts_skipped,
-                        files,
+                        files: Vec::new(),
                     },
+                    files_failed,
                 );
             }
             SyncEvent::SyncError {
