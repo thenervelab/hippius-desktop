@@ -12,6 +12,7 @@ use hcfs_client::drive::keys::folder_hash;
 use hcfs_client::drive::remote::RemoteFileInfo;
 use sqlx::sqlite::SqlitePool;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{error, info};
 use zeroize::Zeroize;
 
@@ -89,6 +90,26 @@ async fn build_client(pool: &SqlitePool, account_id: &str, label: &str) -> Resul
     hcfs_client::client::HcfsClient::new(config).map_err(|e| AppError::Hcfs(format!("Failed to create HCFS client: {e}")))
 }
 
+/// Build a per-attempt-unique temp path for a preview download.
+///
+/// The final cache entry is the deterministic `cache_name`, but the in-flight
+/// download MUST land on a unique sibling. Two preview surfaces opening the same
+/// uncached file near-simultaneously (e.g. the search palette and the files
+/// table both resolving the same cloud-only hit) would otherwise share one
+/// `{cache_name}.part` and either interleave their writes into one file (a
+/// corrupt cache entry served stale forever, since the cache-hit check only
+/// asserts non-zero length) or race the rename (the second loser hits ENOENT
+/// because the first already moved the shared part away) — audit 2026-06-05
+/// finding B2. The process id plus a monotonic counter make every attempt's
+/// temp path distinct within this process and across processes; the rename into
+/// `cache_name` stays atomic and idempotent (a racing winner's copy has the
+/// same content hash, so replacing it is harmless).
+fn unique_part_path(cache_root: &std::path::Path, cache_name: &str) -> PathBuf {
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    cache_root.join(format!("{cache_name}.{}.{n}.part", std::process::id()))
+}
+
 // ─── Tauri Commands ────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -163,9 +184,11 @@ pub async fn download_remote_file(
 /// (`{cache}/hippius/preview/`). The cache key is the file's content hash
 /// (`arion_hash`) when present — so an edit (new content) produces a new entry
 /// and a re-open never serves a stale copy — falling back to `file_id` (the
-/// path hash) otherwise. The download lands on a `.part` sibling first and is
-/// renamed in atomically, so an interrupted transfer never leaves a
-/// half-written file the webview would render as broken.
+/// path hash) otherwise. The download lands on a per-attempt-unique `.part`
+/// sibling first (see [`unique_part_path`]) and is renamed into place
+/// atomically, so an interrupted transfer never leaves a half-written file the
+/// webview would render as broken, a failed transfer cleans up its partial, and
+/// two concurrent previews of the same file can't collide on one temp path.
 ///
 /// Decryption uses the same `hcfs_config.drive_password` → master-mnemonic →
 /// folder-key path as [`download_remote_file`]; no password prompt is needed
@@ -223,8 +246,8 @@ pub async fn cache_remote_file(
     let client = build_client(pool, &account_id, &label).await?;
     let fhash = folder_hash(&label);
 
-    let part = cache_root.join(format!("{cache_name}.part"));
-    hcfs_client::drive::remote::download_remote_file(
+    let part = unique_part_path(&cache_root, &cache_name);
+    if let Err(e) = hcfs_client::drive::remote::download_remote_file(
         &client,
         &account_id,
         &fhash,
@@ -235,13 +258,50 @@ pub async fn cache_remote_file(
         Some(|_: u64, _: u64| {}),
     )
     .await
-    .map_err(|e| AppError::Hcfs(e.to_string()))?;
+    {
+        // Best-effort cleanup of the partially-written download so a failed or
+        // interrupted transfer doesn't leak a `.part` file into the cache dir
+        // (the doc comment's "never leaves a half-written file" invariant). The
+        // unlink result is intentionally discarded — a missing/already-gone
+        // partial must not mask the real download error.
+        let _ = tokio::fs::remove_file(&part).await;
+        return Err(AppError::Hcfs(e.to_string()));
+    }
 
-    tokio::fs::rename(&part, &target).await?;
+    tokio::fs::rename(&part, &target).await.map_err(|e| {
+        AppError::Other(format!("failed to promote preview cache {} -> {}: {e}", part.display(), target.display()))
+    })?;
 
     info!(file_id = %file_id, "Remote file cached for preview");
     target
         .to_str()
         .map(str::to_string)
         .ok_or_else(|| AppError::Other("preview cache path is not valid UTF-8".into()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unique_part_path_is_distinct_per_attempt_but_keeps_the_cache_name_stem() {
+        let root = std::path::Path::new("/tmp/hippius-preview-cache");
+        let cache_name = "abc123def.png";
+        let a = unique_part_path(root, cache_name);
+        let b = unique_part_path(root, cache_name);
+
+        // The core of the B2 race fix: two concurrent previews of the SAME
+        // uncached file must download to DIFFERENT temp paths so they can't
+        // interleave into one file or race the rename.
+        assert_ne!(a, b, "two attempts on the same cache_name must produce distinct temp paths");
+
+        for p in [&a, &b] {
+            let s = p.to_str().expect("temp path is UTF-8");
+            assert!(s.ends_with(".part"), "temp file must end in .part: {s}");
+            // The deterministic cache_name stem is preserved so the file keeps
+            // its extension (MIME inference) and is recognisably a sibling.
+            assert!(s.contains(cache_name), "temp path must carry the cache_name stem: {s}");
+            assert!(s.starts_with(root.to_str().unwrap()), "temp path must live under the cache root: {s}");
+        }
+    }
 }

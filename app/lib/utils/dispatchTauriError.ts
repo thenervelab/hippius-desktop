@@ -17,7 +17,8 @@ export type NotReadyKind =
   | "MASTER_MNEMONIC_UNRECOVERABLE"
   | "NOT_ENOUGH_DISK_SPACE"
   | "SIGNING_KEY_UNAVAILABLE"
-  | "INSUFFICIENT_CREDITS";
+  | "INSUFFICIENT_CREDITS"
+  | "DATABASE_NOT_READY";
 
 /**
  * Shape of an `AppError` returned by Tauri commands. The `kind` field

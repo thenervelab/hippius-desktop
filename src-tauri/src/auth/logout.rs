@@ -22,6 +22,14 @@ use tracing::{info, warn};
 pub async fn auth_logout_internal(state: &crate::app_state::AppState, account_id: &str) -> Result<(), AppError> {
     info!(account_id = %account_id, "Logout initiated");
 
+    // Clear the PERSISTED session first. If this fails we return Err with the
+    // in-memory AuthInfo still intact, leaving the app in a consistent
+    // "still logged in" state. The old order wiped memory first, so a failed DB
+    // clear left a live on-disk token that silently rehydrated the session on
+    // the next restore while the UI believed it had logged out (audit
+    // 2026-06-05, finding D6).
+    crate::auth::auth_session_repo::clear(state.pool()?, account_id).await?;
+
     {
         let mut auth = state.auth.lock()?;
         auth.capabilities = crate::auth::state::AuthCapabilities::None;
@@ -30,8 +38,6 @@ pub async fn auth_logout_internal(state: &crate::app_state::AppState, account_id
         auth.eth_address = None;
         auth.mnemonic = None;
     }
-
-    crate::auth::auth_session_repo::clear(state.pool()?, account_id).await?;
 
     // Best-effort OS keychain cleanup so the next user on this machine
     // doesn't inherit credentials. Non-fatal — the user is already
@@ -65,11 +71,18 @@ pub async fn logout_full(app: tauri::AppHandle, account_id: String) -> Result<()
     //     CAS refuse to start a fresh subscription.
     crate::blockchain::subscription::stop_block_subscription_inner(&app).await;
 
-    // 2. Clear auth state
+    // 2. Clear auth state. PROPAGATE a failure here instead of swallowing it:
+    //    `auth_logout_internal` clears the persisted `auth_session` row BEFORE
+    //    wiping in-memory `AuthInfo`, so on failure it returns Err with the
+    //    session left intact and consistent ("still logged in"). Reporting
+    //    Ok(()) would make the frontend clear its local state and show the login
+    //    screen while the live on-disk token silently rehydrates the session on
+    //    the next boot — the exact bug D6 targets. The earlier `warn!`-and-
+    //    continue defeated the fix (PR review 2026-06-05). The post-logout
+    //    cleanups below are best-effort and only run once the session is
+    //    genuinely cleared.
     let state = app.state::<crate::app_state::AppState>();
-    if let Err(e) = auth_logout_internal(&state, &account_id).await {
-        warn!("auth_logout during logout failed: {e}");
-    }
+    auth_logout_internal(&state, &account_id).await?;
 
     // 3. Clear sync progress data
     if let Err(e) = crate::sync::progress::clear_all_data(&state.sync) {
