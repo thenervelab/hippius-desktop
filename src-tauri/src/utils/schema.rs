@@ -848,29 +848,30 @@ pub async fn migrate_account_keys(pool: &SqlitePool) -> Result<(), sqlx::Error> 
 
             let mut tx = pool.begin().await?;
 
-            // Update owner in all tables that use it
-            let tables = [
-                "auth_session",
-                "objectstore_auth_scoped",
-                "sync_paths",
-                "user_preferences",
-                "address_book",
-                "notifications",
-                "hcfs_config",
-            ];
+            // Tables that actually carry an `owner` column keyed by the
+            // account hash. ONLY these are renamed legacy→new. `notifications`
+            // (keyed by `user_address` = raw ss58) and `user_preferences`
+            // (keyed by `preference_key`, a global k/v store) have NO `owner`
+            // column, so `UPDATE … SET owner` on them errors with "no such
+            // column: owner". The old warn-swallow tolerated that; the D8
+            // `?`-propagation below would otherwise roll the migration back on
+            // that guaranteed error EVERY run, permanently breaking every
+            // legacy account. They are excluded here, not skipped at runtime
+            // (PR review 2026-06-05).
+            let tables = ["auth_session", "objectstore_auth_scoped", "sync_paths", "address_book", "hcfs_config"];
 
             for table in tables {
-                // Use explicit per-table queries to avoid SQL injection
+                // Use explicit per-table queries to avoid SQL injection.
                 let query = format!("UPDATE {table} SET owner = ? WHERE owner = ?");
                 // Propagate any error via `?` so the whole transaction rolls
-                // back. Every table here is created by ensure_table_schema,
-                // which runs before this migration in main.rs setup (and is
-                // guarded by the EXPECTED_TABLES test), so an error is NOT a
-                // "table doesn't exist yet" case — it's a genuine failure such
-                // as a UNIQUE(owner, label) collision on sync_paths. The old
-                // code warn-swallowed it and still committed the other tables,
-                // splitting one account across the legacy and new owner keys
-                // (audit 2026-06-05, finding D8).
+                // back. Every table in the list above carries an `owner` column
+                // and is created by ensure_table_schema before this migration
+                // runs (main.rs setup, guarded by the EXPECTED_TABLES test), so
+                // an error here is a genuine failure — e.g. a UNIQUE(owner,
+                // label) collision on sync_paths — not a missing table/column.
+                // The old code warn-swallowed it and still committed the other
+                // tables, splitting one account across the legacy and new owner
+                // keys (audit 2026-06-05, finding D8).
                 let r = sqlx::query(&query).bind(&new_key).bind(&legacy).execute(&mut *tx).await?;
                 if r.rows_affected() > 0 {
                     info!("Updated {} row(s) in {}", r.rows_affected(), table);
@@ -1191,5 +1192,60 @@ mod tests {
             .await
             .expect("session row still present");
         assert_eq!(owner, legacy, "auth_session must NOT be partially migrated when a later table collides");
+    }
+
+    /// D8 regression (PR review 2026-06-05): the no-collision happy path must
+    /// COMMIT — every owner-bearing table moves legacy→new. This guards the
+    /// blocker where `notifications`/`user_preferences` (which have no `owner`
+    /// column) were in the migration list: with `?`-propagation, the guaranteed
+    /// "no such column: owner" error rolled the whole migration back every run,
+    /// so a legacy account was never migrated. This test FAILS on that code
+    /// (migrate returns Err) and passes only once the columnless tables are
+    /// excluded from the loop.
+    #[tokio::test]
+    async fn account_key_migration_commits_clean_owner_bearing_tables() {
+        use crate::auth::account_key::{account_key, account_key_legacy};
+
+        let pool = temp_pool().await;
+        ensure_table_schema(&pool).await.expect("schema");
+
+        let addr = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
+        let legacy = account_key_legacy(addr);
+        let new_key = account_key(addr);
+
+        // Legacy-keyed rows across three owner-bearing tables, no collisions.
+        sqlx::query("INSERT INTO auth_session (owner, substrate_address) VALUES (?, ?)")
+            .bind(&legacy)
+            .bind(addr)
+            .execute(&pool)
+            .await
+            .expect("seed session");
+        sqlx::query("INSERT INTO sync_paths (owner, path, type, label, timestamp) VALUES (?, '/p', 'folder', 'L', 0)")
+            .bind(&legacy)
+            .execute(&pool)
+            .await
+            .expect("seed sync_path");
+        sqlx::query("INSERT INTO address_book (owner, name, wallet_address) VALUES (?, 'Alice', 'addr1')")
+            .bind(&legacy)
+            .execute(&pool)
+            .await
+            .expect("seed contact");
+
+        // Must COMMIT, not roll back on a phantom columnless-table error.
+        migrate_account_keys(&pool).await.expect("clean migration must commit");
+
+        // Every owner-bearing table moved legacy → new_key.
+        for (table, where_col, where_val) in [
+            ("auth_session", "substrate_address", addr),
+            ("sync_paths", "path", "/p"),
+            ("address_book", "name", "Alice"),
+        ] {
+            let (owner,): (String,) = sqlx::query_as(&format!("SELECT owner FROM {table} WHERE {where_col} = ?"))
+                .bind(where_val)
+                .fetch_one(&pool)
+                .await
+                .unwrap_or_else(|e| panic!("row in {table} must exist: {e}"));
+            assert_eq!(owner, new_key, "{table}.owner must be migrated to the new key");
+        }
     }
 }
