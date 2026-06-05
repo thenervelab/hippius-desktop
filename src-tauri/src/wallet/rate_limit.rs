@@ -23,7 +23,7 @@
 //! abuse from inside a misbehaving renderer or test harness".
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// Sliding-window size for counting failures.
@@ -90,11 +90,35 @@ impl Default for State {
 #[derive(Default)]
 pub struct RateLimitState {
     inner: Mutex<HashMap<i64, State>>,
+    /// Per-wallet serialization gates. A password attempt acquires its
+    /// wallet's gate for the WHOLE `check` → verify → `record_*` sequence
+    /// (see [`attempt_gate`]). Without it, a burst of concurrent IPC calls
+    /// on one wallet all clear [`check`] before any [`record_failure`] runs,
+    /// so they slip past the lockout threshold together and Argon2id's
+    /// per-attempt cost becomes the only throttle (audit 2026-06-05, finding
+    /// B1). The registry `Mutex` is held only briefly to clone out the `Arc`;
+    /// the actual serialization is the per-wallet `tokio::sync::Mutex`, which
+    /// is an async lock so attempts queue without blocking a runtime thread.
+    attempt_gates: Mutex<HashMap<i64, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 impl RateLimitState {
     pub fn new() -> Self {
         RateLimitState::default()
+    }
+
+    /// Acquire `wallet_id`'s serialization gate, returning a guard that the
+    /// caller MUST hold for the entire `check` → verify → `record_*`
+    /// sequence. Concurrent attempts on the same wallet queue behind the
+    /// guard, so the lockout threshold can no longer be outrun by a burst
+    /// (audit 2026-06-05, finding B1). Attempts on *different* wallets never
+    /// contend — each id has its own gate.
+    pub async fn attempt_gate(&self, wallet_id: i64) -> tokio::sync::OwnedMutexGuard<()> {
+        let gate = {
+            let mut gates = self.attempt_gates.lock().expect("rate-limit gate mutex poisoned");
+            Arc::clone(gates.entry(wallet_id).or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))))
+        };
+        gate.lock_owned().await
     }
 
     /// Check whether a password attempt is currently allowed for
@@ -247,5 +271,52 @@ mod tests {
             retry_after: Duration::from_secs(180),
         };
         assert!(err.message().contains("minute"));
+    }
+
+    /// A burst of concurrent attempts on one wallet must NOT all slip past
+    /// the lockout. With the per-wallet `attempt_gate` serializing
+    /// check → record, exactly `FAIL_THRESHOLD_SOFT` attempts clear `check`
+    /// before the threshold-th `record_failure` arms the lockout; every
+    /// later attempt sees `Locked`. Without the gate (the audit B1 bug) all
+    /// N would clear `check` before any failure recorded. The `yield_now`
+    /// between check and record widens the window so a missing gate would
+    /// reliably let the burst through (axiom rust_quality_123 — the bug is
+    /// interleaving-dependent and invisible to a serial test).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_burst_cannot_outrun_the_lockout_threshold() {
+        let rl = Arc::new(RateLimitState::new());
+        let wallet_id = 99;
+        let attempts = (FAIL_THRESHOLD_SOFT + 5) as usize;
+
+        let mut handles = Vec::with_capacity(attempts);
+        for _ in 0..attempts {
+            let rl = Arc::clone(&rl);
+            handles.push(tokio::spawn(async move {
+                let _gate = rl.attempt_gate(wallet_id).await;
+                if rl.check(wallet_id).is_ok() {
+                    // Simulate the slow Argon2id verify window between the
+                    // gate-protected check and the failure record.
+                    tokio::task::yield_now().await;
+                    rl.record_failure(wallet_id);
+                    true
+                } else {
+                    false
+                }
+            }));
+        }
+
+        let mut passed = 0usize;
+        for h in handles {
+            if h.await.expect("attempt task panicked") {
+                passed += 1;
+            }
+        }
+
+        assert_eq!(
+            passed, FAIL_THRESHOLD_SOFT as usize,
+            "exactly FAIL_THRESHOLD_SOFT attempts may clear `check` before the lockout arms; \
+             {passed} cleared, which means the burst outran the threshold (gate not serializing)"
+        );
+        assert!(rl.check(wallet_id).is_err(), "wallet must be locked out after the burst");
     }
 }

@@ -606,20 +606,39 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
 
             win.set_size(tauri::Size::Physical(tauri::PhysicalSize { width: w, height: h }))?;
             win.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x: pos_x, y: pos_y }))?;
-            win.show()?;
+            // NOTE: the window is sized/positioned here but deliberately NOT
+            // shown yet. Showing it synchronously let the webview boot and fire
+            // its first IPC calls before the async task below installs the DB
+            // pool, so those calls raced to a transient PoolClosed error (audit
+            // finding B3). The reveal is deferred into the init task and happens
+            // once the schema is ready (or once init has definitively failed).
         }
         // Spawn async task for database initialization.
         tauri::async_runtime::spawn(async move {
             debug!("Async block started in setup.rs");
+
+            // Reveal the (sized-but-hidden) main window. Deferred out of the
+            // synchronous setup so it never appears before the pool+schema are
+            // ready. Idempotent (Tauri `show` on an already-visible window is a
+            // no-op), and called on EVERY exit path — including the fatal DB
+            // failures below — so a broken database still surfaces a window the
+            // FE can render its error state in, rather than an invisible,
+            // seemingly-hung app.
+            let show_main = || {
+                if let Some(win) = app_handle.get_webview_window("main") {
+                    let _ = win.show();
+                }
+            };
 
             // Database initialization. A failure here is fatal, but it must NOT
             // panic: a panic inside `tauri::async_runtime::spawn` is swallowed by
             // the runtime, so `set_pool` would never run and EVERY IPC command
             // would fail with PoolClosed for the whole session, with no error
             // shown. Handle both failure modes the way the open_db_pool branch
-            // below already does — log FATAL and return.
+            // below already does — log FATAL, reveal the window, and return.
             let Some(home_dir) = dirs::home_dir() else {
                 error!("FATAL: could not determine home directory; database not initialized");
+                show_main();
                 return;
             };
             let db_dir = home_dir.join(".hippius");
@@ -632,10 +651,12 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => {
                     error!("FATAL: failed to create {}: {e}", db_dir.display());
+                    show_main();
                     return;
                 }
                 Err(e) => {
                     error!("FATAL: directory-creation task failed to join: {e}");
+                    show_main();
                     return;
                 }
             }
@@ -646,6 +667,7 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                 Ok(pool) => pool,
                 Err(e) => {
                     error!("FATAL: Failed to open database at {}: {e}", db_path.display());
+                    show_main();
                     return; // cannot propagate from spawned task; error is logged
                 }
             };
@@ -654,8 +676,15 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
             // Ensure all tables and columns exist
             if let Err(e) = crate::utils::schema::ensure_table_schema(&pool).await {
                 error!("FATAL: Failed to ensure table schema: {}", e);
+                show_main();
                 return;
             }
+
+            // Pool installed AND schema ensured — the backend can now service
+            // IPC, so it is safe to reveal the window. Done before the
+            // idempotent background migrations below so the user sees the app
+            // the moment it is usable, not after the data fixups finish.
+            show_main();
 
             // Migrate account keys from 8-char to 16-char format
             if let Err(e) = crate::utils::schema::migrate_account_keys(&pool).await {

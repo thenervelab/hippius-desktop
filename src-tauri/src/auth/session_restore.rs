@@ -221,9 +221,15 @@ pub async fn restore_session(
                     // Validate token in Rust DB
                     if let Some(ref addr) = substrate_address {
                         let token_row = auth_session_repo::get_token_and_expiry(pool, addr).await?;
+                        // `expiry_ms == 0` means "never expires" — the same
+                        // convention the DB-fallback check (`expiry > 0 && expiry
+                        // < now`) and `is_token_valid` use. This branch used to
+                        // treat 0 as already-expired (`0 > now` is false), so a
+                        // non-expiring token was wrongly dropped on restore here
+                        // but accepted everywhere else (audit 2026-06-05, D5).
                         let token_valid = matches!(
                             token_row,
-                            Some(TokenStatus { token: Some(_), expiry_ms: Some(exp) }) if exp > now_ms
+                            Some(TokenStatus { token: Some(_), expiry_ms: Some(exp) }) if exp == 0 || exp > now_ms
                         );
                         if !token_valid {
                             info!("OAuth token expired in DB, clearing session");

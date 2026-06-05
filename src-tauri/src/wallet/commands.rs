@@ -185,6 +185,11 @@ pub async fn local_wallet_verify_password(state: State<'_, AppState>, id: i64, p
         Some(w) => w,
         None => return Err(AppError::Other(format!("Wallet {id} not found"))),
     };
+    // Serialize attempts on this wallet so a concurrent IPC burst can't all
+    // clear `check` before any `record_failure` runs and thereby outrun the
+    // lockout threshold (audit finding B1). Held to fn end — covers
+    // check → verify → record.
+    let _attempt_gate = state.wallet_rate_limit.attempt_gate(id).await;
     if let Err(rl) = state.wallet_rate_limit.check(id) {
         return Err(AppError::Other(rl.message()));
     }
@@ -216,6 +221,11 @@ pub async fn local_wallet_get_decrypted_mnemonic(state: State<'_, AppState>, id:
         Some(w) => w,
         None => return Err(AppError::Other(format!("Wallet {id} not found"))),
     };
+    // Serialize attempts on this wallet so a concurrent IPC burst can't all
+    // clear `check` before any `record_failure` runs and thereby outrun the
+    // lockout threshold (audit finding B1). Held to fn end — covers
+    // check → verify → record.
+    let _attempt_gate = state.wallet_rate_limit.attempt_gate(id).await;
     // Rate-limit BEFORE the verifier so a locked-out attacker can't
     // measure Argon2id timing to distinguish "wrong password" from
     // "lockout" — both surface as a plain error string now.
@@ -534,6 +544,11 @@ pub async fn local_wallet_sign(
         None => return Err(AppError::Other(format!("Wallet {id} not found"))),
     };
 
+    // Serialize attempts on this wallet so a concurrent IPC burst can't all
+    // clear `check` before any `record_failure` runs and thereby outrun the
+    // lockout threshold (audit finding B1). Held to fn end — covers
+    // check → verify → record.
+    let _attempt_gate = state.wallet_rate_limit.attempt_gate(id).await;
     if let Err(rl) = state.wallet_rate_limit.check(id) {
         return Err(AppError::Other(rl.message()));
     }
