@@ -236,6 +236,8 @@ fn main() {
             crate::sync::failure_commands::sp_exclude_file,
             crate::sync::failure_commands::sp_retry_file,
             crate::sync::failure_commands::get_drive_failures,
+            crate::sync::failure_commands::retry_file_failure,
+            crate::sync::failure_commands::retry_all_failures,
             // Stage & conflict resolution
             crate::sync::control::stage_changes,
             crate::sync::control::sync_with_conflict_resolutions,

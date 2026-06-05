@@ -104,6 +104,89 @@ pub async fn get_drive_failures(
     crate::sync::failure_repo::list_failures_for_label(pool, &owner, &label).await
 }
 
+/// Retry a single failed file: clear its durable + in-memory failure state,
+/// drop any session-skip / exclude pattern, and trigger a sync so it is
+/// re-attempted now rather than waiting for the next cycle.
+///
+/// This is the "Retry" action behind a failed-file badge. It is a superset of
+/// [`sp_retry_file`] that also deletes the persisted `sync_file_failures` row so
+/// the reason/badge clears immediately.
+///
+/// # Errors
+/// Returns an error if the database write fails.
+#[tauri::command]
+pub async fn retry_file_failure(
+    label: String,
+    path: String,
+    state: tauri::State<'_, crate::app_state::AppState>,
+) -> Result<()> {
+    if let Ok(account_id) = state.current_account_id() {
+        let owner = crate::auth::account_key::account_key(&account_id);
+        let pool = state.pool()?;
+        crate::sync::failure_repo::clear_failure(pool, &owner, &label, &path).await?;
+    }
+
+    // Mirror sp_retry_file's in-memory reset + exclude removal.
+    state.file_failures.clear_failure(&label, &path);
+    state.file_failures.unskip_file(&label, &path);
+    let drive_arc = {
+        let guard = state.sync.drives.lock().await;
+        guard.get(&label).map(|slot| slot.manager.clone())
+    };
+    if let Some(arc) = drive_arc {
+        let m = arc.lock().await;
+        let _ = m.remove_exclude_pattern(&path);
+    }
+
+    hcfs_client::engine::runner::trigger_sync(&state.sync).await;
+    state.sync.emit_snapshot(true);
+    Ok(())
+}
+
+/// Retry every failed file on a drive — e.g. after a credit top-up fixes a
+/// batch of `InsufficientBalance` failures at once. Clears all durable +
+/// in-memory failures for the drive, removes their exclude patterns, and
+/// triggers one sync.
+///
+/// # Errors
+/// Returns an error if the database read/write fails.
+#[tauri::command]
+pub async fn retry_all_failures(
+    label: String,
+    state: tauri::State<'_, crate::app_state::AppState>,
+) -> Result<()> {
+    // Snapshot the persisted failures (we need their paths to drop excludes),
+    // then delete them durably — both scoped to the current account.
+    let records = if let Ok(account_id) = state.current_account_id() {
+        let owner = crate::auth::account_key::account_key(&account_id);
+        let pool = state.pool()?;
+        let recs = crate::sync::failure_repo::list_failures_for_label(pool, &owner, &label).await?;
+        crate::sync::failure_repo::clear_failures_for_label(pool, &owner, &label).await?;
+        recs
+    } else {
+        Vec::new()
+    };
+
+    state.file_failures.clear_all_for_label(&label);
+    for rec in &records {
+        state.file_failures.unskip_file(&label, &rec.relative_path);
+    }
+    let drive_arc = {
+        let guard = state.sync.drives.lock().await;
+        guard.get(&label).map(|slot| slot.manager.clone())
+    };
+    if let Some(arc) = drive_arc {
+        let m = arc.lock().await;
+        for rec in &records {
+            let _ = m.remove_exclude_pattern(&rec.relative_path);
+        }
+    }
+
+    hcfs_client::engine::runner::trigger_sync(&state.sync).await;
+    state.sync.emit_snapshot(true);
+    Ok(())
+}
+
 /// Clean up session-skip patterns on teardown.
 ///
 /// Called from `stop_sync` to remove exclude patterns that
