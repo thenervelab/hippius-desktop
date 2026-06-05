@@ -268,7 +268,7 @@ async fn create_share_inner(state: &AppState, account_id: &str, folder_label: &s
 /// contains the `#k=<key>` URL fragment.
 #[tauri::command]
 pub async fn hcfs_create_share(state: tauri::State<'_, AppState>, folder_label: String, relative_path: String) -> Result<ShareLink> {
-    let account_id = state.current_account_id().map_err(AppError::Other)?;
+    let account_id = state.current_account_id()?;
 
     // Capability + eligibility gates. The capability call is a single
     // anonymous HTTP request; we accept the round-trip so that an old
@@ -300,15 +300,18 @@ pub async fn hcfs_create_share(state: tauri::State<'_, AppState>, folder_label: 
 /// silently fail.
 ///
 /// The new link gets a fresh expiry from the server (same TTL policy
-/// as `hcfs_create_share`); the old token is revoked first so the
-/// caller can hand out the new URL with confidence the old one stops
-/// working. If the revoke fails (e.g. the token already expired
-/// server-side), we still proceed with the new share — the FE's
-/// reshare intent is "give me a working link from this file", not "I
-/// require the old token to be alive".
+/// as `hcfs_create_share`). The new share is minted FIRST; only after
+/// it succeeds do we best-effort revoke + forget the old token. That
+/// ordering means a create failure (network, billing, server 5xx)
+/// leaves the old token and its origin sidecar fully intact, so the
+/// user keeps a working link instead of being stranded with a revoked
+/// token and no replacement. If the revoke later fails (e.g. the token
+/// already expired server-side), we still return the new link — the
+/// FE's reshare intent is "give me a working link from this file", not
+/// "I require the old token to be gone".
 #[tauri::command]
 pub async fn hcfs_reshare(state: tauri::State<'_, AppState>, share_token: String) -> Result<ShareLink> {
-    let account_id = state.current_account_id().map_err(AppError::Other)?;
+    let account_id = state.current_account_id()?;
 
     require_shares_supported(&state, &account_id).await?;
     // Sharing's bytes-priced layer is `0` — same rationale as
@@ -326,20 +329,30 @@ pub async fn hcfs_reshare(state: tauri::State<'_, AppState>, share_token: String
         return Err(AppError::Validation("Reshare is unavailable for this link on this device.".into()));
     };
 
-    // Best-effort revoke of the old token. The server's revoke is
-    // idempotent (already-missing tokens succeed), so we tolerate any
-    // error here and proceed — see the doc comment for the rationale.
+    // Build the revoke client + keystore BEFORE minting. They are fallible
+    // (config / token lookup) but read-only, so a build failure here aborts
+    // before any server mutation. Building them AFTER the mint (the first cut)
+    // meant a build failure left the freshly-minted token live on the server
+    // while the IPC returned Err — a dangling token the user could never reach.
+    // Building first also avoids a second fallible lookup on the retire path.
     let client = build_account_client(pool, &account_id).await?;
     let keystore = SqliteShareKeystore::new(pool.clone());
+
+    // Mint the new share. If THIS fails, the old token and its origin sidecar
+    // are left fully intact (revoke/forget below haven't run), so the user
+    // keeps a working link — the property the create-before-retire order keeps.
+    let new_link = create_share_inner(&state, &account_id, &origin.folder_label, &origin.relative_path).await?;
+
+    // New link is live. Best-effort retire of the old token: revoke it
+    // server-side (idempotent — already-missing tokens succeed) and drop its
+    // local origin sidecar. Failures here are non-fatal.
     if let Err(e) = client.revoke_share(&share_token, &keystore).await {
         warn!(
             share_token = %share_token,
             error = %e,
-            "Reshare: revoke of old token failed; continuing with new share"
+            "Reshare: revoke of old token failed; new link is already live"
         );
     }
-    // Drop the sidecar row for the old token regardless — the new
-    // share will write its own. Best-effort.
     if let Err(e) = origin::forget(pool, &share_token).await {
         warn!(
             share_token = %share_token,
@@ -348,7 +361,7 @@ pub async fn hcfs_reshare(state: tauri::State<'_, AppState>, share_token: String
         );
     }
 
-    create_share_inner(&state, &account_id, &origin.folder_label, &origin.relative_path).await
+    Ok(new_link)
 }
 
 /// List all of this caller's currently-active shares, newest first.
@@ -362,7 +375,7 @@ pub async fn hcfs_reshare(state: tauri::State<'_, AppState>, share_token: String
 pub async fn hcfs_list_shares(state: tauri::State<'_, AppState>) -> Result<Vec<ShareSummary>> {
     use hcfs_client::client::share::build_share_url;
 
-    let account_id = state.current_account_id().map_err(AppError::Other)?;
+    let account_id = state.current_account_id()?;
     let pool = state.pool()?;
     let client = build_account_client(pool, &account_id).await?;
     let keystore = SqliteShareKeystore::new(pool.clone());
@@ -467,7 +480,7 @@ pub async fn hcfs_list_shares(state: tauri::State<'_, AppState>) -> Result<Vec<S
 /// have to special-case "I just tapped Revoke twice".
 #[tauri::command]
 pub async fn hcfs_revoke_share(state: tauri::State<'_, AppState>, share_token: String) -> Result<()> {
-    let account_id = state.current_account_id().map_err(AppError::Other)?;
+    let account_id = state.current_account_id()?;
     let pool = state.pool()?;
 
     // Snapshot the cached active-list entry for this token BEFORE the
@@ -533,7 +546,7 @@ pub async fn hcfs_revoke_share(state: tauri::State<'_, AppState>, share_token: S
 /// `EndReason` semantics.
 #[tauri::command]
 pub async fn hcfs_list_share_history(state: tauri::State<'_, AppState>) -> Result<Vec<HistoryEntry>> {
-    let account_id = state.current_account_id().map_err(AppError::Other)?;
+    let account_id = state.current_account_id()?;
     let pool = state.pool()?;
     Ok(history::list_for_account(pool, &account_id).await?)
 }
@@ -543,7 +556,7 @@ pub async fn hcfs_list_share_history(state: tauri::State<'_, AppState>) -> Resul
 /// tapped Remove twice".
 #[tauri::command]
 pub async fn hcfs_remove_share_history(state: tauri::State<'_, AppState>, share_token: String) -> Result<()> {
-    let account_id = state.current_account_id().map_err(AppError::Other)?;
+    let account_id = state.current_account_id()?;
     let pool = state.pool()?;
     history::remove_one(pool, &account_id, &share_token).await?;
     Ok(())
@@ -554,7 +567,7 @@ pub async fn hcfs_remove_share_history(state: tauri::State<'_, AppState>, share_
 /// rows.
 #[tauri::command]
 pub async fn hcfs_clear_share_history(state: tauri::State<'_, AppState>) -> Result<()> {
-    let account_id = state.current_account_id().map_err(AppError::Other)?;
+    let account_id = state.current_account_id()?;
     let pool = state.pool()?;
     history::clear_all_for_account(pool, &account_id).await?;
     Ok(())
@@ -564,6 +577,46 @@ pub async fn hcfs_clear_share_history(state: tauri::State<'_, AppState>) -> Resu
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    /// Extract the `{ ... }` body of the first fn whose declaration contains
+    /// `sig`, by brace matching. Same static-invariant style as `sync::folders`
+    /// uses for teardown ordering — the reshare ordering is impractical to
+    /// exercise end-to-end (real account client + server) in a unit test.
+    fn fn_body<'a>(src: &'a str, sig: &str) -> &'a str {
+        let sig_idx = src.find(sig).expect("fn declaration present");
+        let body_start = src[sig_idx..].find('{').expect("fn body opens") + sig_idx;
+        let mut depth = 0usize;
+        let mut body_end = body_start;
+        for (i, ch) in src[body_start..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        body_end = body_start + i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        &src[body_start..=body_end]
+    }
+
+    // hcfs_reshare MUST mint the new share before retiring the old token. If
+    // create_share_inner ran after revoke/forget, a create failure would leave
+    // the user with a dead (revoked) link and a forgotten origin row — stranded
+    // with no working link and no way to reshare from this device. Pin the order.
+    #[test]
+    fn reshare_creates_new_share_before_retiring_old_token() {
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/shares/commands.rs")).expect("read commands.rs");
+        let body = fn_body(&src, "pub async fn hcfs_reshare(");
+        let create_idx = body.find("create_share_inner(").expect("hcfs_reshare must call create_share_inner");
+        let revoke_idx = body.find(".revoke_share(").expect("hcfs_reshare must revoke the old token");
+        let forget_idx = body.find("origin::forget(").expect("hcfs_reshare must forget the old origin");
+        assert!(create_idx < revoke_idx, "new share must be minted before the old token is revoked");
+        assert!(create_idx < forget_idx, "new share must be minted before the old origin is forgotten");
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn resolve_rejects_absolute_paths() {

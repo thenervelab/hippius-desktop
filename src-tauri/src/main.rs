@@ -52,7 +52,7 @@ use crate::blockchain::convert::{planck_to_hip_full, to_plancks};
 use crate::blockchain::queries::{get_account_balance, get_block_timestamp, get_referral_links, get_staking_info, validate_address};
 use crate::blockchain::runtime::{get_wss_endpoint, test_rpc_endpoint_command, update_wss_endpoint_command};
 use crate::blockchain::staking::{stake_bond, stake_claim_rewards, stake_unbond, stake_withdraw_unbonded};
-use crate::blockchain::subscription::start_block_subscription;
+use crate::blockchain::subscription::{start_block_subscription, stop_block_subscription};
 use crate::blockchain::transfers::compute_max_transferable;
 use crate::blockchain::transfers::{transfer_balance, validate_send_balance};
 use crate::console_access::validate_recovery_password;
@@ -297,6 +297,7 @@ fn main() {
             has_pending_rotation,
             // Block subscription
             start_block_subscription,
+            stop_block_subscription,
             // VM management
             list_vm_flavors,
             list_vm_images,
@@ -531,6 +532,13 @@ async fn open_db_pool(db_path: &std::path::Path) -> Result<SqlitePool, sqlx::Err
     SqlitePoolOptions::new().max_connections(8).connect_with(connect_opts).await
 }
 
+/// Attach the Tauri `setup` hook to `builder` and return it for chaining.
+///
+/// The hook fires once at startup, before the window is shown: it loads the
+/// bundled `.env` resource, registers deep links at runtime on Linux (required
+/// for dev), constructs the single `AppState` (the app holds no statics), and
+/// wires the sync bridge's app handle. Returning the builder lets this compose
+/// in `main()`'s builder chain.
 pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
     builder.setup(|app| {
         debug!(".setup() closure called in setup.rs");
@@ -604,13 +612,33 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
         tauri::async_runtime::spawn(async move {
             debug!("Async block started in setup.rs");
 
-            // Database initialization
-            let home_dir = dirs::home_dir().expect("Failed to get home directory");
+            // Database initialization. A failure here is fatal, but it must NOT
+            // panic: a panic inside `tauri::async_runtime::spawn` is swallowed by
+            // the runtime, so `set_pool` would never run and EVERY IPC command
+            // would fail with PoolClosed for the whole session, with no error
+            // shown. Handle both failure modes the way the open_db_pool branch
+            // below already does — log FATAL and return.
+            let Some(home_dir) = dirs::home_dir() else {
+                error!("FATAL: could not determine home directory; database not initialized");
+                return;
+            };
             let db_dir = home_dir.join(".hippius");
             let db_path = db_dir.join("hippius.db");
             debug!("DB path: {}", db_path.display());
 
-            std::fs::create_dir_all(&db_dir).expect("Failed to create .hippius directory");
+            // create_dir_all is blocking std::fs — run it off the async executor.
+            let db_dir_for_mkdir = db_dir.clone();
+            match tokio::task::spawn_blocking(move || std::fs::create_dir_all(&db_dir_for_mkdir)).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    error!("FATAL: failed to create {}: {e}", db_dir.display());
+                    return;
+                }
+                Err(e) => {
+                    error!("FATAL: directory-creation task failed to join: {e}");
+                    return;
+                }
+            }
 
             // The DB file itself is created by `SqliteConnectOptions::create_if_missing(true)`
             // inside `open_db_pool`, so no explicit `File::create` is needed here.

@@ -89,6 +89,25 @@ pub fn update_file_progress(
     Ok(())
 }
 
+/// Emit a snapshot through the per-file completion throttle (the 100 ms
+/// completion window, same gate `update_file_progress` uses for completion
+/// ticks).
+///
+/// Per-file TERMINAL callbacks (`mark_file_synced` / `mark_file_failed`) fire
+/// once per file the instant each task settles. A cycle finishing N files in a
+/// burst would otherwise trigger N unthrottled `emit_snapshot(true)` calls —
+/// each rebuilding the whole `SyncSnapshot` and (via the bridge) running a
+/// SQLite overlay aggregate — flooding the webview. A terminal event does not
+/// need a synchronous immediate emit: the next throttled tick (≤100 ms)
+/// reflects it, and `finalize_session_for_label` does an unconditional
+/// immediate emit at cycle end so the final state is never lost. Reserve
+/// `emit_snapshot(true)` for genuine session transitions.
+fn emit_throttled_completion(sync: &SyncRunner) {
+    if try_claim_snapshot_emit(&LAST_THROTTLED_EMIT_MS, monotonic_now_ms(), true, SNAPSHOT_THROTTLE_MS) {
+        sync.emit_snapshot(false);
+    }
+}
+
 /// Merge file expectations into the current session, or start a new one.
 pub fn merge_into_session(
     sync: &SyncRunner,
@@ -127,75 +146,11 @@ pub fn clear_all_data(sync: &SyncRunner) -> Result<()> {
     Ok(())
 }
 
-/// Start a new sync session.
-pub fn start_session(
-    sync: &SyncRunner,
-    expected_uploads: u32,
-    expected_downloads: u32,
-    expected_local_deletes: u32,
-    expected_remote_deletes: u32,
-    file_list: Option<SessionFileList>,
-    label: Option<String>,
-) -> Result<SyncSessionHandle> {
-    let result = sync
-        .progress
-        .start_session(
-            expected_uploads,
-            expected_downloads,
-            expected_local_deletes,
-            expected_remote_deletes,
-            file_list,
-            label.as_deref(),
-        )
-        .map_err(AppError::Progress)?;
-    sync.emit_snapshot(true);
-    Ok(result)
-}
-
-/// Complete the current session.
-pub fn complete_session(sync: &SyncRunner, files_uploaded: u32, files_downloaded: u32) -> Result<()> {
-    sync.progress
-        .complete_session(files_uploaded, files_downloaded)
-        .map_err(AppError::Progress)?;
-    sync.emit_snapshot(true);
-    Ok(())
-}
-
-/// Stop the current session.
-pub fn stop_session(sync: &SyncRunner) -> Result<()> {
-    sync.progress.stop_session().map_err(AppError::Progress)?;
-    sync.emit_snapshot(true);
-    Ok(())
-}
-
-/// Force-complete all pending files for a label.
-pub fn complete_pending_files(sync: &SyncRunner, label: &str) -> Result<()> {
-    sync.progress.complete_pending_files(label).map_err(AppError::Progress)?;
-    sync.emit_snapshot(true);
-    Ok(())
-}
-
 /// Mark excess pending files as failed.
 pub fn mark_pending_files_as_failed(sync: &SyncRunner, actual_uploads: u32, actual_downloads: u32, label: &str) -> Result<()> {
     sync.progress
         .mark_pending_files_as_failed(actual_uploads, actual_downloads, label)
         .map_err(AppError::Progress)?;
-    sync.emit_snapshot(true);
-    Ok(())
-}
-
-/// Mark every pending/in-progress file as failed.
-pub fn mark_all_pending_files_as_failed(sync: &SyncRunner, error_message: String) -> Result<()> {
-    sync.progress
-        .mark_all_pending_files_as_failed(error_message)
-        .map_err(AppError::Progress)?;
-    sync.emit_snapshot(true);
-    Ok(())
-}
-
-/// Mark a specific file as errored.
-pub fn mark_file_error(sync: &SyncRunner, path: String, error: String) -> Result<()> {
-    sync.progress.mark_file_error(path, error).map_err(AppError::Progress)?;
     sync.emit_snapshot(true);
     Ok(())
 }
@@ -314,7 +269,7 @@ pub fn mark_file_synced(sync: &SyncRunner, path: &str) -> Result<u64> {
         }
         bytes
     };
-    sync.emit_snapshot(true);
+    emit_throttled_completion(sync);
     Ok(observed_bytes)
 }
 
@@ -372,13 +327,8 @@ pub fn mark_file_failed(sync: &SyncRunner, path: &str, error: &str) -> Result<()
         file.bytes_transferred = 0;
         file.progress = 0;
     }
-    sync.emit_snapshot(true);
+    emit_throttled_completion(sync);
     Ok(())
-}
-
-/// Compute overall progress.
-pub fn get_overall_progress(sync: &SyncRunner) -> Result<OverallProgress> {
-    sync.progress.get_overall_progress().map_err(AppError::Progress)
 }
 
 /// Maximum number of per-file or per-path entries sent to the frontend in a
@@ -559,13 +509,6 @@ fn fixup_stalled_completion(snapshot: &mut SyncSnapshot) {
     }
 }
 
-/// Record a deleted file in recent files.
-pub fn record_deleted_file(sync: &SyncRunner, file_name: String, size_bytes: u64) -> Result<()> {
-    sync.progress.record_deleted_file(file_name, size_bytes).map_err(AppError::Progress)?;
-    sync.emit_snapshot(true);
-    Ok(())
-}
-
 // ── Tauri IPC Wrappers ─────────────────────────────────────────────────
 //
 // Only three `sp_*` commands remain exposed to the frontend:
@@ -575,14 +518,16 @@ pub fn record_deleted_file(sync: &SyncRunner, file_name: String, size_bytes: u64
 // - `sp_dismiss_sync_widget` — user closes the floating sync widget.
 // - `sp_clear_all_data` — full reset path during logout / `hcfs_sync_reset`.
 //
-// The rest of the session-management primitives (`start_session`,
-// `merge_into_session`, `complete_session`, `update_file_progress`, the
-// `mark_*` family, `record_deleted_file`, `remove_files_for_label`, etc.)
-// used to be exposed as `sp_*` IPCs back when the frontend drove session
-// lifecycle. hcfs-client now owns the session lifecycle entirely — those
-// inner functions are still called from `lifecycle.rs` and the
-// hcfs-client callback wiring, but their Tauri wrappers were dead and
-// have been removed (2026-04-09).
+// The session-management primitives used to be exposed as `sp_*` IPCs back
+// when the frontend drove session lifecycle. hcfs-client now owns the
+// session lifecycle entirely. The wrappers still called from `lifecycle.rs`
+// and the hcfs-client callback wiring (`mark_file_synced`,
+// `mark_pending_files_as_failed`, and the live update/merge helpers) remain;
+// the wrappers the frontend used to drive directly (`start_session`,
+// `complete_session`, `stop_session`, `complete_pending_files`,
+// `mark_all_pending_files_as_failed`, `mark_file_error`,
+// `get_overall_progress`, `record_deleted_file`) became dead once hcfs-client
+// took over and have been removed.
 
 #[tauri::command]
 pub fn sp_clear_all_data(state: tauri::State<'_, crate::app_state::AppState>) -> Result<()> {

@@ -156,16 +156,29 @@ pub async fn get_staking_info(
     };
 
     let ledger_query = custom_runtime::storage().staking().ledger(&account_id);
-    if let Ok(Some(ledger)) = storage.fetch(&ledger_query).await {
+    // Propagate a ledger RPC failure instead of collapsing it into "no stake":
+    // the previous `if let Ok(Some(_))` treated a network/codec error like a
+    // genuinely unbonded account and returned zeroed StakingInfo as success, so
+    // the FE showed 0 bonded for a real staker. `None` (no ledger = not staking)
+    // still legitimately keeps the zeros; only `Err` now surfaces. Mirrors the
+    // `?` handling of the balance and current_era fetches above.
+    let ledger = storage
+        .fetch(&ledger_query)
+        .await
+        .map_err(|e| crate::error::AppError::Other(format!("Ledger query failed: {e}")))?;
+    if let Some(ledger) = ledger {
         bonded = ledger.active.to_string();
         for chunk in &ledger.unlocking.0 {
             let unlock_era = chunk.era;
             let amount = chunk.value;
             let remaining = unlock_era.saturating_sub(current_era);
             if remaining == 0 {
-                withdrawable_total += amount;
+                // Defensive arithmetic mirroring `available`'s `saturating_sub`
+                // below: these accumulate on-chain ledger values, so clamp at
+                // u128::MAX instead of wrapping silently in release builds.
+                withdrawable_total = withdrawable_total.saturating_add(amount);
             } else {
-                unbonding_total += amount;
+                unbonding_total = unbonding_total.saturating_add(amount);
                 let amount_str = amount.to_string();
                 unbonding_periods.push(UnbondingPeriod {
                     amount_hip: planck_to_hip(&amount_str),
@@ -214,14 +227,11 @@ pub async fn get_block_timestamp(
 
     let client = get_substrate_client(&state).await?;
 
-    // Reuse the cached RPC client instead of opening a new WebSocket
-    let rpc = state
-        .blockchain
-        .rpc_client
-        .read()
-        .map_err(|e| crate::error::AppError::Other(format!("RPC lock failed: {e}")))?
-        .clone()
-        .ok_or_else(|| crate::error::AppError::Other("RPC client not initialized".into()))?;
+    // Get the RPC handle through the connect-aware helper so it can't spuriously
+    // report "RPC client not initialized" when the rpc_client cache was cleared
+    // concurrently while the OnlineClient above stayed cached — both are
+    // re-derived together. See client::get_rpc_client.
+    let rpc = crate::blockchain::client::get_rpc_client(&state).await?;
     let legacy: LegacyRpcMethods<subxt::PolkadotConfig> = LegacyRpcMethods::new(rpc);
 
     let block_hash = legacy
@@ -305,7 +315,15 @@ pub async fn get_referral_links(
     // a malformed on-chain row we'd rather skip than render with `�`
     // replacement chars.
     let mut matched_codes: Vec<(Vec<u8>, String)> = Vec::new();
-    while let Some(Ok(entry)) = entries.next().await {
+    // Propagate a mid-iteration RPC error rather than ending the loop silently:
+    // `while let Some(Ok(entry))` stopped on the first `Some(Err(_))` and
+    // returned the codes matched so far as `Ok`, so a dropped subscription
+    // produced a partial referral list that looked complete to the FE. The
+    // body keeps redesign's strict decode path (`extract_referral_code_bytes`
+    // + UTF-8 validation) rather than the audit branch's raw key slicing.
+    while let Some(result) = entries.next().await {
+        let entry = result
+            .map_err(|e| crate::error::AppError::Other(format!("ReferralCodes iteration failed: {e}")))?;
         if entry.value != target_account {
             continue;
         }

@@ -8,19 +8,33 @@ use crate::app_state::AppState;
 use crate::error::{AppError, Result};
 use hcfs_client::engine::runner::trigger_sync;
 use tauri::AppHandle;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// Validate and trim an exclusion pattern.
 ///
-/// Rejects empty/whitespace-only patterns and patterns containing `../`
-/// (path traversal). Returns the trimmed pattern on success.
+/// Rejects empty/whitespace-only patterns and any pattern containing a `..`
+/// path component (path traversal). Returns the trimmed pattern on success.
+///
+/// The component check splits on both `/` and `\` so it catches the cases a
+/// bare `contains("../")` substring test missed: the Windows separator
+/// (`..\`), a trailing `foo/..`, and a bare `..`. Exclusion patterns are
+/// gitignore-style globs matched against relative paths, so a `..` component
+/// can never be legitimate — rejecting all of them is both safe and complete.
+///
+/// Embedded newlines are rejected too: hcfs-client's `ExcludeRules::parse`
+/// splits the on-disk exclude file with `lines()`, so a single call must carry
+/// exactly one pattern — a `"foo\n..\nbar"` string would otherwise smuggle a
+/// standalone `..` rule past this per-pattern check onto its own line.
 fn validate_pattern(pattern: &str) -> Result<String> {
     let trimmed = pattern.trim().to_string();
     if trimmed.is_empty() {
         return Err(AppError::Validation("Pattern cannot be empty".into()));
     }
-    if trimmed.contains("../") {
-        return Err(AppError::Validation("Pattern cannot contain '../' (path traversal)".into()));
+    if trimmed.contains(['\n', '\r']) {
+        return Err(AppError::Validation("Pattern cannot contain newlines (one pattern per call)".into()));
+    }
+    if trimmed.split(['/', '\\']).any(|component| component == "..") {
+        return Err(AppError::Validation("Pattern cannot contain '..' path components (path traversal)".into()));
     }
     Ok(trimmed)
 }
@@ -141,8 +155,14 @@ pub async fn apply_sync_selection(
         let _ = manager.remove_exclude_pattern(path).map_err(AppError::Hcfs)?;
     }
     for path in &exclude {
-        if let Ok(trimmed) = validate_pattern(path) {
-            let _ = manager.add_exclude_pattern(&trimmed).map_err(AppError::Hcfs)?;
+        match validate_pattern(path) {
+            Ok(trimmed) => {
+                let _ = manager.add_exclude_pattern(&trimmed).map_err(AppError::Hcfs)?;
+            }
+            // Unlike `add_exclude_pattern`, a batch tolerates a bad entry rather
+            // than aborting the whole selection — but log it so a silently
+            // dropped exclusion is observable instead of vanishing.
+            Err(e) => warn!(pattern = %path, error = %e, "Skipping invalid exclude pattern in batch"),
         }
     }
 
@@ -168,6 +188,7 @@ pub async fn apply_sync_selection(
 #[cfg(test)]
 mod tests {
     use super::validate_pattern;
+    use proptest::prelude::*;
 
     #[test]
     fn test_validate_empty_pattern_rejected() {
@@ -183,22 +204,58 @@ mod tests {
 
     #[test]
     fn test_validate_traversal_pattern_rejected() {
-        let result = validate_pattern("../secret");
-        assert!(result.is_err());
+        // Leading, nested, trailing, bare, and Windows-separator forms must
+        // all be rejected — the prior `contains("../")` check only caught the
+        // first two.
+        for bad in ["../secret", "foo/../bar", "foo/..", "..", "..\\secret", "a\\..\\b"] {
+            assert!(validate_pattern(bad).is_err(), "expected rejection for {bad:?}");
+        }
+    }
 
-        let nested = validate_pattern("foo/../bar");
-        assert!(nested.is_err());
+    #[test]
+    fn test_validate_embedded_newline_rejected() {
+        // The consumer (`ExcludeRules::parse`) splits on `lines()`, so an
+        // interior newline would smuggle a second pattern (here a bare `..`)
+        // onto its own line. A trailing newline is fine — `trim()` removes it.
+        assert!(validate_pattern("foo\n..\nbar").is_err());
+        assert!(validate_pattern("foo\nbar").is_err());
+        assert!(validate_pattern("foo\r\nbar").is_err());
+        assert_eq!(validate_pattern("foo\n").unwrap(), "foo");
     }
 
     #[test]
     fn test_validate_normal_pattern_accepted() {
+        // A leading `..` only counts as traversal when it is a whole path
+        // component; `..foo` / `foo..bar` are ordinary glob text.
         assert_eq!(validate_pattern("*.log").unwrap(), "*.log");
         assert_eq!(validate_pattern("node_modules/").unwrap(), "node_modules/");
         assert_eq!(validate_pattern(".DS_Store").unwrap(), ".DS_Store");
+        assert_eq!(validate_pattern("..foo").unwrap(), "..foo");
+        assert_eq!(validate_pattern("foo..bar").unwrap(), "foo..bar");
     }
 
     #[test]
     fn test_validate_trims_whitespace() {
         assert_eq!(validate_pattern("  *.tmp  ").unwrap(), "*.tmp");
+    }
+
+    proptest! {
+        /// Full contract, both directions: an accepted pattern equals the
+        /// trimmed input and carries neither a newline nor a `..` component, and
+        /// any rejection is justified by emptiness, a newline, or a `..`
+        /// component. `(?s)` makes `.` match newlines so the shrinker can reach
+        /// the multi-line case the default `.*` (newline-excluding) strategy
+        /// never generates. The `invalid` oracle mirrors `validate_pattern`'s
+        /// three rejection conditions exactly.
+        #[test]
+        fn validated_pattern_is_single_line_trimmed_without_dotdot(s in "(?s).*") {
+            let invalid = |t: &str| t.is_empty() || t.contains(['\n', '\r']) || t.split(['/', '\\']).any(|p| p == "..");
+            if let Ok(out) = validate_pattern(&s) {
+                prop_assert_eq!(out.as_str(), s.trim());
+                prop_assert!(!invalid(&out));
+            } else {
+                prop_assert!(invalid(s.trim()));
+            }
+        }
     }
 }

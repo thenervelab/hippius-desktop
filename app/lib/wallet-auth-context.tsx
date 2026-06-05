@@ -20,6 +20,7 @@ import { invokeWithTimeout } from "./utils/invokeWithTimeout";
 import { useTrayInit, clearLoginStatusCache } from "./hooks/useTraySync";
 import { tryAutoInitSync } from "./hooks/useHcfsSync";
 import { appStore } from "./store/jotaiStore";
+import { resetSyncSession } from "./store/resetSyncSession";
 import { migrationCheckAtom, DEFAULT_MIGRATION_CHECK_STATE } from "./global-atoms/migrationAtoms";
 import { splashCompleteAtom } from "./global-atoms/splashAtoms";
 import { syncRequiresReauthAtom } from "./global-atoms/unpinAtoms";
@@ -77,7 +78,6 @@ interface WalletContextType {
   ) => Promise<boolean>;
   logout: (redirectPath?: string) => Promise<void>;
   resetHippiusDesktop: () => Promise<void>;
-  sessionTimeRemaining: number | null;
 }
 const MAX_DELAY = 2_147_483_647; // ~24.8 days
 
@@ -97,10 +97,6 @@ export function WalletAuthProvider({
   const [oauthSession, setOAuthSessionState] = useState<
     import("@/app/lib/types/oAuth").OAuthSession | null
   >(null);
-  const [sessionTimeRemaining, setSessionTimeRemaining] = useState<
-    number | null
-  >(null);
-
   const syncInitialized = useRef(false);
   const pendingSyncInit = useRef<{ accountId: string } | null>(null);
   const splashComplete = useAtomValue(splashCompleteAtom);
@@ -175,11 +171,12 @@ export function WalletAuthProvider({
       setAuthType(null);
       setOAuthSessionState(null);
       setIsAuthenticated(false);
-      setSessionTimeRemaining(null);
       syncInitialized.current = false;
-      // Clear the reauth banner on logout so a brand-new login
-      // session starts with a clean slate.
-      appStore.set(syncRequiresReauthAtom, false);
+      // Reset ALL session-scoped sync atoms (drive statuses, failed files,
+      // conflicts, credits banner, health, loaded-latch, reauth) so the
+      // previous account's state can't leak into the next login — these atoms
+      // live in the root appStore and survive the logout navigation (F17/F18).
+      resetSyncSession();
 
       if (redirectPath && typeof window !== "undefined") {
         router.push(redirectPath);
@@ -322,9 +319,9 @@ export function WalletAuthProvider({
         if (result.redirectTo === "/login") {
           await logout("/login");
         }
-        setSessionTimeRemaining(null);
-        // Not authenticated → banner state is irrelevant, clear it.
-        appStore.set(syncRequiresReauthAtom, false);
+        // Not authenticated → clear all session-scoped sync state (covers the
+        // boot path where redirectTo isn't "/login" so logout() didn't run).
+        resetSyncSession();
         return;
       }
 
@@ -345,7 +342,6 @@ export function WalletAuthProvider({
 
       // Schedule logout timer (browser setTimeout — can't do in Rust)
       if (result.logoutTimeMs !== null) {
-        setSessionTimeRemaining(result.logoutTimeMs);
         scheduleLogout(result.logoutTimeMs);
       }
 
@@ -451,7 +447,6 @@ export function WalletAuthProvider({
 
       const effMinutes = logoutTimeInMinutes ?? 1440;
       const timeRemaining = effMinutes === -1 ? Infinity : effMinutes * 60_000;
-      setSessionTimeRemaining(timeRemaining === Infinity ? null : timeRemaining);
       scheduleLogout(timeRemaining);
 
       initSync(result.substrateAddress);
@@ -574,7 +569,6 @@ export function WalletAuthProvider({
         setSession,
         logout,
         resetHippiusDesktop,
-        sessionTimeRemaining,
       }}
     >
       {children}

@@ -585,8 +585,11 @@ impl SyncEventHandler for TauriSyncBridge {
             SyncEvent::ReviewModeTimeout { label } => {
                 let _ = app.emit(events::REVIEW_MODE_TIMEOUT, events::LabelPayload { label });
             }
-            SyncEvent::ActivityUpdated => {
-                let _ = app.emit(events::ACTIVITY_UPDATED, ());
+            // hcfs 41954d7 made ActivityUpdated carry the originating drive
+            // label (upstream F35). Forward it so the FE clears only that
+            // drive's stale-metadata banner instead of every drive's.
+            SyncEvent::ActivityUpdated { label } => {
+                let _ = app.emit(events::ACTIVITY_UPDATED, events::LabelPayload { label });
             }
             SyncEvent::AuthRequired { error } => {
                 let _ = app.emit(events::AUTH_RELOGIN_REQUIRED, events::AuthRequiredPayload { error });
@@ -660,7 +663,7 @@ impl SyncCallbacks for TauriSyncBridge {
             use tauri::Manager;
             let app_state = app.state::<crate::app_state::AppState>();
             let pool = app_state.pool().map_err(|e| e.to_string())?;
-            let acct = app_state.current_account_id().map_err(|e| e.clone())?;
+            let acct = app_state.current_account_id().map_err(|e| e.to_string())?;
 
             crate::auth::service::refresh_auth_token_internal(pool, &app, &acct).await?;
 
@@ -703,7 +706,7 @@ impl SyncCallbacks for TauriSyncBridge {
         Box::pin(async {
             let app = self.app().ok_or_else(|| "AppHandle not available".to_string())?;
             use tauri::Manager;
-            app.state::<crate::app_state::AppState>().current_account_id().map_err(|e| e.clone())
+            app.state::<crate::app_state::AppState>().current_account_id().map_err(|e| e.to_string())
         })
     }
 }

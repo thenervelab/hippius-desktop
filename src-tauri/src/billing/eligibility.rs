@@ -256,6 +256,48 @@ pub struct ActionEligibility {
 /// of which check fails. The chain-balance check happens AFTER and only
 /// for actions that need to sign an extrinsic — and even then, an
 /// already-failed credit check short-circuits.
+/// Best-effort on-chain free-balance probe for the VM-creation gate. Returns
+/// the account's free balance, or an `Err` (with a human reason) when the
+/// pre-flight could not run — client not connected, unparseable account id, or
+/// an RPC failure. Callers treat `Err` as "skip the chain check" because the
+/// spawn endpoint is the authoritative gate; the reason is logged, not silently
+/// dropped.
+async fn chain_free_balance(state: &crate::app_state::AppState, account_id: &str) -> std::result::Result<u128, String> {
+    let client = {
+        let guard = state.blockchain.client.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.clone()
+    }
+    .ok_or_else(|| "substrate client not connected".to_string())?;
+    let acct = account_id
+        .parse::<subxt::utils::AccountId32>()
+        .map_err(|e| format!("unparseable account id: {e}"))?;
+    let query = crate::blockchain::runtime::custom_runtime::storage().system().account(&acct);
+    let storage = client
+        .storage()
+        .at_latest()
+        .await
+        .map_err(|e| format!("storage at_latest failed: {e}"))?;
+    let info = storage.fetch(&query).await.map_err(|e| format!("account fetch failed: {e}"))?;
+    Ok(info.map_or(0, |i| i.data.free))
+}
+
+/// Decide whether `account_id` can afford `action` for a payload of `bytes`,
+/// returning a structured `ActionEligibility` for the frontend's proactive gate.
+///
+/// Performs a **live** marketplace-balance fetch with no caching — that is the
+/// whole reason credit checks live in Rust rather than reusing the frontend's
+/// `staleTime: Infinity` display hook. Fail-closed: an unparseable balance from
+/// a 200 response is logged and treated as `0.0`, so a malformed billing-API
+/// response refuses the action instead of over-granting. `required` combines
+/// the static per-action threshold with the per-byte upload price via
+/// `required_credits`, so a single comparison covers both the legacy and the
+/// bytes-priced paths.
+///
+/// # Errors
+///
+/// Returns an error if the DB pool is unavailable or the billing-API balance
+/// request fails. A zero or unparseable balance is *not* an error — it
+/// resolves to `eligible: false`.
 pub(crate) async fn check_action_eligibility_inner(
     state: &crate::app_state::AppState,
     account_id: &str,
@@ -273,7 +315,15 @@ pub(crate) async fn check_action_eligibility_inner(
     let client = ApiClient::new(state.api_client.clone(), pool.clone());
     let resp: crate::billing::credits::CreditBalanceResponse = client.get("/api/billing/credits/balance/", account_id).await?;
     let credit_str = resp.balance.as_deref().unwrap_or("0");
-    let credits: f64 = credit_str.parse().unwrap_or(0.0);
+    // An unparseable balance from a 200 response is NOT the same as an empty
+    // wallet, but both previously collapsed to 0.0 and silently refused every
+    // gated action with no diagnostic. Keep the fail-closed 0.0 (safe default)
+    // but log it so a malformed billing-API balance is traceable rather than
+    // presenting to the user as "insufficient credits".
+    let credits: f64 = credit_str.parse::<f64>().unwrap_or_else(|_| {
+        tracing::warn!(balance = %credit_str, %account_id, "unparseable credit balance from billing API; treating as 0");
+        0.0
+    });
 
     // 2. Threshold comparison. The user must always have a strictly
     //    positive balance (matches legacy `credits <= BigInt(0)` blocks
@@ -297,30 +347,26 @@ pub(crate) async fn check_action_eligibility_inner(
     //    `check_sync_eligibility` substrate path. Clone the Arc and
     //    drop the lock guard before any .await.
     if action.requires_chain_balance() {
-        let substrate_client = {
-            let guard = state.blockchain.client.read().unwrap_or_else(std::sync::PoisonError::into_inner);
-            guard.clone()
-        };
-        if let Some(client) = substrate_client
-            && let Ok(acct) = account_id.parse::<subxt::utils::AccountId32>()
-        {
-            let query = crate::blockchain::runtime::custom_runtime::storage().system().account(&acct);
-            if let Ok(storage) = client.storage().at_latest().await
-                && let Ok(info) = storage.fetch(&query).await
-            {
-                let free = info.map_or(0, |i| i.data.free);
-                if free == 0 {
-                    return Ok(ActionEligibility {
-                        eligible: false,
-                        reason: Some("balance_zero".into()),
-                        // `current_balance` correctly reflects the
-                        // marketplace credit balance (not zero) — the
-                        // user has credits, they just don't have chain
-                        // balance to pay the extrinsic fee.
-                        current_balance: credits,
-                        required_balance: required,
-                    });
-                }
+        // Best-effort: the spawn endpoint is the authoritative gate, so any
+        // failure here (client not connected, RPC error, etc.) is a SKIP, not a
+        // refusal. But the skip must be observable — previously every fallible
+        // step fell through silently to `eligible: true`, so an unreachable node
+        // looked identical to a funded account.
+        match chain_free_balance(state, account_id).await {
+            Ok(0) => {
+                return Ok(ActionEligibility {
+                    eligible: false,
+                    reason: Some("balance_zero".into()),
+                    // `current_balance` correctly reflects the marketplace credit
+                    // balance (not zero) — the user has credits, they just don't
+                    // have chain balance to pay the extrinsic fee.
+                    current_balance: credits,
+                    required_balance: required,
+                });
+            }
+            Ok(_) => {}
+            Err(reason) => {
+                tracing::warn!(%account_id, %reason, "VM chain-balance pre-flight skipped (best-effort); spawn endpoint remains the authoritative gate");
             }
         }
     }

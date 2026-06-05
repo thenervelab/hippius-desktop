@@ -44,16 +44,22 @@ pub async fn start_block_subscription(app: tauri::AppHandle) -> Result<(), Strin
     let app_state = app.state::<crate::app_state::AppState>();
     let bsub = &app_state.block_sub;
 
-    if bsub.running.load(Ordering::SeqCst) {
+    // Atomic claim: exactly one caller flips false→true and proceeds; a
+    // concurrent caller loses the compare_exchange and returns. The previous
+    // load-then-store had a gap spanning the `.await` on `handle.lock()`, so
+    // two overlapping invocations could both pass the running check and both
+    // spawn a subscription task — the second's JoinHandle overwrote the first
+    // at the store below, leaking the first task (never aborted) and doubling
+    // per-block processing for the rest of the process lifetime.
+    if bsub.running.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
         return Ok(());
     }
 
-    // Abort previous task if any
+    // Abort a leftover handle from a prior run that already reset `running`.
+    // Only the CAS winner reaches here, so this runs at most once.
     if let Some(handle) = bsub.handle.lock().await.take() {
         handle.abort();
     }
-
-    bsub.running.store(true, Ordering::SeqCst);
 
     // Clone the handle so `app` can be moved into the spawned task while we
     // keep a reference for storing the JoinHandle afterwards.
@@ -120,6 +126,33 @@ pub async fn start_block_subscription(app: tauri::AppHandle) -> Result<(), Strin
     Ok(())
 }
 
+/// Stop the background block subscription. Idempotent.
+///
+/// Sets `running = false` so the reconnect loop won't restart, then aborts the
+/// in-flight task so it stops immediately instead of waiting out a backoff
+/// sleep (up to 60s) or the next finalized block. Without this the task
+/// outlived logout: it kept reconnecting and emitting `block_number_updated`
+/// against a stale session, and a subsequent login's `start_block_subscription`
+/// CAS could observe `running == true` and refuse to start a fresh one.
+pub(crate) async fn stop_block_subscription_inner(app: &tauri::AppHandle) {
+    use tauri::Manager;
+    let app_state = app.state::<crate::app_state::AppState>();
+    let bsub = &app_state.block_sub;
+    bsub.running.store(false, Ordering::SeqCst);
+    if let Some(handle) = bsub.handle.lock().await.take() {
+        handle.abort();
+    }
+    bsub.is_connected.store(false, Ordering::SeqCst);
+    info!("Block subscription stopped");
+}
+
+/// Stop the background block subscription (IPC wrapper). Idempotent.
+#[tauri::command]
+pub async fn stop_block_subscription(app: tauri::AppHandle) -> Result<(), String> {
+    stop_block_subscription_inner(&app).await;
+    Ok(())
+}
+
 async fn subscribe_blocks(app: &tauri::AppHandle) -> Result<(), String> {
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
@@ -164,7 +197,32 @@ async fn subscribe_blocks(app: &tauri::AppHandle) -> Result<(), String> {
         }
     }
 
-    Ok(())
+    // The `while let Some(..)` above exits for one of two reasons: an
+    // intentional stop (the in-loop `break` after observing `running == false`)
+    // or the stream yielding `None`. A `None` is a graceful server-side
+    // WebSocket close (idle timeout, load-balancer recycle, proxy drop) that
+    // subxt's non-reconnecting legacy backend does NOT resubscribe. Re-read
+    // `running` and let `classify_stream_exit` decide whether this exit is a
+    // clean shutdown (Ok) or a disconnect the caller must reconnect (Err).
+    let running = app.state::<crate::app_state::AppState>().block_sub.running.load(Ordering::SeqCst);
+    classify_stream_exit(running)
+}
+
+/// Decide whether a finalized-block stream exit is an intentional shutdown
+/// or a reconnectable disconnect.
+///
+/// `running == false` means [`start_block_subscription`] cleared the flag to
+/// stop the task — that is a clean `Ok(())` and the reconnect loop exits. A
+/// stream that ends while `running` is still `true` ended on its own (a
+/// graceful WebSocket `None`); returning `Err` routes it through the caller's
+/// backoff-and-reconnect arm, which also emits `is_connected = false` so the
+/// FE connectivity indicator stays honest.
+fn classify_stream_exit(running: bool) -> Result<(), String> {
+    if running {
+        Err("block stream ended unexpectedly (graceful disconnect)".to_string())
+    } else {
+        Ok(())
+    }
 }
 
 /// Spawn a one-shot deferred task that emits `latest_block` when the
@@ -277,6 +335,28 @@ mod tests {
         let last = AtomicU64::new(100);
         assert!(try_claim_block_emit(&last, 1100, 1000));
         assert_eq!(last.load(Ordering::Acquire), 1100);
+    }
+
+    #[test]
+    fn graceful_stream_end_while_running_is_reconnectable_error() {
+        // A `None` from the block stream while the task is still meant to be
+        // running is a graceful disconnect — it must surface as Err so the
+        // caller reconnects instead of treating it as a clean shutdown.
+        assert!(
+            classify_stream_exit(true).is_err(),
+            "stream ending while running=true must be a reconnectable error"
+        );
+    }
+
+    #[test]
+    fn intentional_stop_is_clean_exit() {
+        // The in-loop break clears nothing; `running == false` means the user
+        // (logout/stop) asked the task to end. That is a clean Ok, not a
+        // reconnect.
+        assert!(
+            classify_stream_exit(false).is_ok(),
+            "stream ending after running=false must be a clean shutdown"
+        );
     }
 
     #[test]

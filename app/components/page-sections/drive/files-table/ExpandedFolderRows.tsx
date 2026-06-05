@@ -254,7 +254,10 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
     });
   }, [data, sortBy, sortDir]);
 
-  const { visibleData, hasMore, loadMore } = useInfiniteScroll(sortedChildRows);
+  const { visibleData, hasMore, loadMore } = useInfiniteScroll(
+    sortedChildRows,
+    (f) => `${f.label ?? ""}::${f.actualFileName ?? f.arionHash}::${f.lastChargedAt}`
+  );
   const sentinelRef = useRef<HTMLTableRowElement | null>(null);
 
   useEffect(() => {

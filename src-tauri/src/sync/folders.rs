@@ -12,7 +12,7 @@ use crate::auth::tokens::get_api_token;
 use crate::error::Result;
 use crate::sync::config::{ACCEPT_INVALID_CERTS, get_hcfs_config_internal, normalize_for_region_probe};
 use crate::sync::lifecycle::start_sync_loop;
-use crate::sync::lifecycle::{initialize_sync_inner, remove_drive};
+use crate::sync::lifecycle::{initialize_sync_inner, remove_drive_for_account};
 use crate::sync::mnemonic::{config_dir_for_folder, folder_hash};
 use hcfs_client::client::HcfsClientConfig;
 use sqlx::sqlite::SqlitePool;
@@ -332,18 +332,18 @@ pub async fn restore_remote_folders(
 /// is still active and the sync loop fires (either an in-flight cycle or the
 /// next tick), it sees "remote is empty" and mirrors that back onto disk —
 /// deleting every local file the user actually wants to keep. By calling
-/// `remove_drive` first we cancel any in-flight sync, drop the drive from the
+/// `remove_drive_for_account` first we cancel any in-flight sync, drop the drive from the
 /// in-memory map (so no new sync cycle can pick it up), and delete the
 /// `sync_paths` row so cold restarts don't resurrect it. Files on disk are
 /// left untouched.
 ///
-/// If `remove_drive` fails we bail before touching the server — that way the
+/// If `remove_drive_for_account` fails we bail before touching the server — that way the
 /// user's local state is exactly as they found it and they can retry. If the
 /// server call fails after a successful local teardown, the user's files are
 /// still safe on disk; they can re-add the folder pointing at the same path
 /// and the next sync will reconcile against whatever is left on the server,
 /// and they can retry the remote deletion once it's reachable. Note that
-/// `remove_drive` now also wipes the on-disk sync baseline, so the re-add
+/// `remove_drive_for_account` now also wipes the on-disk sync baseline, so the re-add
 /// runs a full reconciliation pass instead of resuming from the prior
 /// `synced` tree — see the `clear_persisted_sync_state` helper in
 /// `lifecycle.rs` for the data-loss bug that motivated that change.
@@ -376,7 +376,9 @@ pub async fn delete_remote_folder(
     };
 
     if was_local {
-        remove_drive(app, label.clone()).await?;
+        // Pass the explicit account (parity with `remove_sync_path`) so the
+        // baseline wipe stays account-correct even if the session flips mid-call.
+        remove_drive_for_account(app, label.clone(), Some(account_id.clone())).await?;
     }
 
     let client_config = HcfsClientConfig {
@@ -566,8 +568,8 @@ mod tests {
         }
         let body = &src[body_start..=body_end];
 
-        let remove_idx = body.find("remove_drive(").expect(
-            "delete_remote_folder must call remove_drive — it's the only thing that cancels an in-flight sync and takes the drive off the map before the server wipe",
+        let remove_idx = body.find("remove_drive_for_account(").expect(
+            "delete_remote_folder must call remove_drive_for_account — it's the only thing that cancels an in-flight sync and takes the drive off the map before the server wipe, threading the explicit account so the baseline wipe stays account-correct",
         );
         let unregister_idx = body
             .find(".unregister_folder(")
@@ -575,7 +577,7 @@ mod tests {
 
         assert!(
             remove_idx < unregister_idx,
-            "remove_drive MUST be called before .unregister_folder so the local drive is dead before the server reports zero files",
+            "remove_drive_for_account MUST be called before .unregister_folder so the local drive is dead before the server reports zero files",
         );
     }
 }

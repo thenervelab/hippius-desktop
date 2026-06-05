@@ -12,6 +12,7 @@ use crate::crypto::store;
 use crate::error::Result;
 use hcfs_client::client::HcfsClientConfig;
 use sqlx::sqlite::SqlitePool;
+use zeroize::Zeroizing;
 
 /// Whether HCFS clients should accept invalid TLS certificates.
 ///
@@ -59,7 +60,10 @@ pub struct HcfsConfigResult {
 /// Loaded sync configuration from the database for a single label.
 pub(crate) struct SyncConfig {
     pub sync_path: String,
-    pub drive_password: String,
+    /// Plaintext drive password (the user's unified recovery password). Held in
+    /// `Zeroizing` so it is scrubbed from the heap on drop rather than lingering
+    /// for the lifetime of the config across the whole sync-init call graph.
+    pub drive_password: Zeroizing<String>,
     pub server_url: String,
 }
 
@@ -146,7 +150,11 @@ pub async fn get_hcfs_config(state: tauri::State<'_, crate::app_state::AppState>
 /// returned — encrypted rows produce an error. This allows mnemonic-recovery
 /// code paths (which don't yet have the mnemonic) to still read pre-migration
 /// plaintext passwords.
-pub(crate) async fn get_drive_password(pool: &SqlitePool, account_id: &str, mnemonic: Option<&str>) -> Result<String> {
+///
+/// Returns the plaintext in `Zeroizing` so callers hold the secret in
+/// scrubbed-on-drop memory; the decrypt path forwards `store::decrypt`'s own
+/// `Zeroizing` directly instead of cloning it into a bare `String`.
+pub(crate) async fn get_drive_password(pool: &SqlitePool, account_id: &str, mnemonic: Option<&str>) -> Result<Zeroizing<String>> {
     let db = pool;
     let owner = account_key(account_id);
 
@@ -163,11 +171,10 @@ pub(crate) async fn get_drive_password(pool: &SqlitePool, account_id: &str, mnem
     let (raw_password, enc_ver) = result.ok_or_else(|| crate::error::AppError::Other("HCFS config not found".into()))?;
 
     match (enc_ver, mnemonic) {
-        (0, _) => Ok(raw_password),
+        (0, _) => Ok(Zeroizing::new(raw_password)),
         (1, Some(m)) => {
             let key = store::drive_password_key(m, account_id)?;
-            let plaintext = store::decrypt(&key, &raw_password)?;
-            Ok((*plaintext).clone())
+            Ok(store::decrypt(&key, &raw_password)?)
         }
         (1, None) => Err(crate::error::AppError::Crypto(
             "Drive password is encrypted but no mnemonic available for decryption".into(),
