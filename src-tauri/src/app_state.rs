@@ -230,8 +230,15 @@ impl AppState {
     }
 
     /// Get a reference to the database pool.
+    ///
+    /// Returns [`crate::error::NotReadyKind::DatabaseNotReady`] when the pool
+    /// has not been installed yet (early startup, before the boot-time DB-init
+    /// task runs `set_pool`). The previous `Db(PoolClosed)` conflated "never
+    /// initialized" with a live pool that was later closed (audit 2026-06-05, D9).
     pub fn pool(&self) -> Result<&SqlitePool, crate::error::AppError> {
-        self.db.get().ok_or_else(|| crate::error::AppError::Db(sqlx::Error::PoolClosed))
+        self.db
+            .get()
+            .ok_or(crate::error::AppError::NotReady(crate::error::NotReadyKind::DatabaseNotReady))
     }
 
     /// Set the active account by populating `AuthInfo.substrate_address`
