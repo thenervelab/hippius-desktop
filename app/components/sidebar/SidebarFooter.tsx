@@ -33,7 +33,6 @@ const SidebarFooter: React.FC<SidebarFooterProps> = ({ collapsed }) => {
           under the avatar and no footer-level margin is needed here.
           LIVE swap:  */}
       <SyncStatusHandler host="sidebar" collapsed={collapsed} />
-      {/* <SyncWidgetPlayground liveHost="sidebar" collapsed={collapsed} /> */}
 
       <ProfileCard collapsed={collapsed} />
 
