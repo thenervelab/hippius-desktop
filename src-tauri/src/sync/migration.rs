@@ -958,6 +958,25 @@ pub async fn start_migration_polling(app: tauri::AppHandle, account_id: String) 
         }
     }
 
+    // Poll immediately (don't wait 3s for the first result) BEFORE spawning the
+    // background loop. The immediate poll uses `?`, so a pool/config failure
+    // returns Err here — and the previous order stored the loop handle FIRST,
+    // which meant that Err was returned to the caller while a spawned task kept
+    // emitting `migration_progress` every 3s with nothing tracking the start
+    // failure. Polling first means a failed start spawns nothing at all (audit
+    // 2026-06-05, finding D2). No poll_task lock is held across this await, so
+    // a concurrent dismiss/stop can't be blocked on the round-trip either.
+    let immediate = poll_migration_status_internal(&app.state::<crate::app_state::AppState>(), &account_id).await?;
+    let immediate_is_terminal = immediate.is_terminal || immediate.should_abort;
+    let _ = app.emit("migration_progress", &immediate);
+
+    // If the very first poll already reached a terminal/abort state there is
+    // nothing left to watch — don't spawn a loop that would poll once more and
+    // immediately break.
+    if immediate_is_terminal {
+        return Ok(());
+    }
+
     let app_clone = app.clone();
     let account_id_clone = account_id.clone();
 
@@ -983,20 +1002,13 @@ pub async fn start_migration_polling(app: tauri::AppHandle, account_id: String) 
         }
     });
 
-    // Store the handle so it can be cancelled. Scope the guard so the tokio
-    // Mutex on poll_task is released BEFORE the immediate poll's HTTP await
-    // below — otherwise a concurrent dismiss_migration / stop_migration_polling
-    // would block on this lock for the entire poll round-trip (up to the
-    // reqwest read timeout).
+    // Store the handle so a later dismiss_migration / stop_migration_polling can
+    // cancel it. The guard scope ends immediately; no await happens under it.
     {
         let state = app.state::<crate::app_state::AppState>();
         let mut guard = state.migration.poll_task.lock().await;
         *guard = Some(handle);
     }
-
-    // Also poll immediately (don't wait 3s for the first result)
-    let immediate = poll_migration_status_internal(&app.state::<crate::app_state::AppState>(), &account_id).await?;
-    let _ = app.emit("migration_progress", &immediate);
 
     Ok(())
 }
@@ -1288,5 +1300,32 @@ mod tests {
         let path_str = get_default_migration_path().expect("should return a path string");
         assert!(!path_str.is_empty());
         assert!(path_str.contains("Hippius-Migration-"));
+    }
+
+    /// Static pin for audit finding D2: `start_migration_polling` must run its
+    /// immediate poll (the `?`-propagating `poll_migration_status_internal`
+    /// call) BEFORE `tokio::spawn`ing the background loop. Otherwise an
+    /// immediate-poll Err returns to the caller while a spawned task keeps
+    /// emitting `migration_progress` with nothing tracking the start failure.
+    ///
+    /// The command is AppHandle-bound (needs a running app + managed AppState),
+    /// so it can't be driven under the no-`tauri::test` policy (axiom 111);
+    /// this pins the ordering at the source level like
+    /// `hippius_startup_window.rs`.
+    #[test]
+    fn immediate_poll_precedes_loop_spawn() {
+        const SRC: &str = include_str!("migration.rs");
+        let body = SRC
+            .split("pub async fn start_migration_polling")
+            .nth(1)
+            .expect("start_migration_polling present");
+        let immediate_poll = body
+            .find("poll_migration_status_internal(&app.state")
+            .expect("immediate poll present");
+        let spawn = body.find("tokio::spawn").expect("background loop spawned");
+        assert!(
+            immediate_poll < spawn,
+            "the immediate `?` poll must run before tokio::spawn so a failed start spawns no task (audit finding D2)"
+        );
     }
 }
