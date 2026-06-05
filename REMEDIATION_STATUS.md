@@ -10,7 +10,7 @@ live code via illu (line numbers drift), applying the fix, and running the
 Rust gate sequence (`rust_preflight` → `axioms` → implement → `quality_gate`)
 before committing.
 
-## DONE (27 findings, 22 commits)
+## DONE (27 findings, 20 fix commits + 1 ledger + 3 PR-review fixes)
 
 | Commit | Findings | Summary |
 |--------|----------|---------|
@@ -33,7 +33,23 @@ before committing.
 | `387332a8` | F3 | `IndexerClient::get`: logs the failing request path on a non-success response (matches `api::client::handle_response`); `ApiError` shape unchanged |
 | `9465f1dc` | F1 | `complete_migration_transition`: comment explaining why the advisory `in_progress` store is intentionally unsynchronized vs `check_migration` (self-correcting; both SeqCst). Comment-only |
 | `3ef962e0` | D9 | `AppState::pool`: returns `NotReady(DatabaseNotReady)` for an uninitialized pool (was misleading `Db(PoolClosed)`); new `NotReadyKind` variant mirrored into the FE TS union; behavioral round-trip test + the variant-coverage test upgraded to an exhaustive-match drift guard |
-| _(this commit)_ | F4 | `blockchain/subscription.rs`: consecutive-failure ceiling — past `RECONNECT_CEILING_ATTEMPTS`=10 the loop falls back to a 5-min slow re-probe instead of retrying every 60s forever (never stops; a wallet must auto-recover). Pure `reconnect_delay_secs` + 3 edge tests; logs the transition once |
+| `6fa51c18` | F4 | `blockchain/subscription.rs`: consecutive-failure ceiling — past `RECONNECT_CEILING_ATTEMPTS`=10 the loop falls back to a 5-min slow re-probe instead of retrying every 60s forever (never stops; a wallet must auto-recover). Pure `reconnect_delay_secs` + 3 edge tests; logs the transition once |
+
+### PR-review fixes (post-remediation, 2026-06-05)
+
+A 5-agent adversarial PR review (4 domain reviewers + 1 cross-cutting) found two real defects in the commits above plus one consistency gap; all fixed:
+
+| Commit | Fixes | Summary |
+|--------|-------|---------|
+| `44749af5` | D8 (BLOCKER), D6 (MAJOR) | **D8**: `migrate_account_keys` listed `notifications` + `user_preferences`, which have NO `owner` column — the `?`-propagation rolled the migration back on the guaranteed "no such column" error every run, breaking every legacy account. The collision test passed only by loop-ordering luck. Trimmed to the 5 owner-bearing tables + happy-path commit test (mutation-verified). **D6**: `logout_full` swallowed the new `auth_logout_internal` Err into `warn!` and returned Ok, so a failed session clear still rehydrated on next boot — now propagated via `?`. |
+| `cbb91d79` | D5 (MINOR) | `is_token_expiring` didn't honor `expiry==0`=never-expires, so a never-expiring token was force-refreshed every cycle; guarded + tested. Completes the D5 convention across validity AND refresh-policy checks. |
+
+**Review verdict:** READY (after the above fixes). Remaining open items are tracked follow-ups, not blockers (see below).
+
+### Tracked follow-ups (non-blocking, surfaced by the review)
+- **FE logout handler**: now that `logout_full` can return `Err`, the frontend logout handler must clear local React/localStorage state ONLY on a resolved `logout_full` (else a failed logout still blanks the UI while Rust keeps the session). Frontend change, paired with D6.
+- **A1 error/start arms still forked**: `sync_with_conflict_resolutions` routes its *completion* through the shared bridge (A1) but its `SYNC_ERROR` and `SYNC_STARTED` arms still `app.emit` directly, bypassing the bridge's cancel-drop (CANCELLED_MARKER) and full payload. Narrow edge (a stall-cancel during a reviewed-conflict sync would surface a spurious "Sync Failed"); a sibling `handle_sync_error` helper would close it.
+- **D2 start-vs-dismiss race**: a precisely-timed `dismiss_migration` during the immediate poll's lock-free window can orphan the freshly-spawned loop. Re-check the `poll_task` slot under the store lock to abort instead of store.
 
 ## REMAINING (1 item — dropped by user decision)
 
