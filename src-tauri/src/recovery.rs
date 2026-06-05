@@ -811,14 +811,29 @@ pub async fn change_recovery_password(state: tauri::State<'_, crate::app_state::
             );
             // mnemonic is unchanged; AuthInfo cache still holds a valid value,
             // so we intentionally skip cache_session_mnemonic on this branch.
+            //
+            // The local master_enc_mnemonic.json is still sealed under the OLD
+            // password while the server blob is under the NEW one. The sidecar
+            // is the ONLY signal that lets the boot-time resume self-heal this
+            // gap (has_pending_rotation reads it). If even the sidecar write
+            // fails there is no automatic recovery path left, so the failure
+            // MUST surface — returning Ok here left a stale local file that
+            // silently broke decryption on the next launch with no marker for
+            // the resume path to act on (audit 2026-06-05, finding D1).
             if let Err(sidecar_err) = write_rotation_sidecar(&account_id).await {
                 warn!(
                     error = %sidecar_err,
                     account = %crate::console_access::short_ss58(&account_id),
-                    "recovery: sidecar write also failed; boot-time retry will be unavailable. Rotation is still durable on the server; user may need to change password again if the local file stays stale."
+                    "recovery: sidecar write also failed; boot-time retry unavailable. Rotation is durable on the server — surfacing the error so the user can re-run the change."
                 );
+                return Err(AppError::Other(format!(
+                    "Recovery password was changed on the server, but this device's key file could \
+                     not be updated and no retry marker could be saved ({e}; sidecar: {sidecar_err}). \
+                     Please run the password change again to finish updating this device."
+                )));
             }
-            // Still Ok — the rotation is durable on the server.
+            // Sidecar written → has_pending_rotation is now true and the
+            // boot-time resume will finish the local rewrite; report success.
             Ok(())
         }
     }
@@ -1458,6 +1473,36 @@ mod tests {
 
         // Idempotent clear.
         super::clear_rotation_sidecar(account).await;
+    }
+
+    /// Static pin for audit finding D1: when the post-commit local rewrite
+    /// fails AND the rotation sidecar also fails to write, the install-failed
+    /// arm of `change_recovery_password` must `return Err`, not `Ok(())`.
+    ///
+    /// `change_recovery_password` is a `tauri::command` that needs a running
+    /// hcfs-server and a managed `AppState`, so the doubly-failed branch can't
+    /// be driven from a unit test under the project's no-`tauri::test` policy
+    /// (axiom 111). A regression would silently restore the unconditional
+    /// `Ok(())`; this pins that the sidecar-failure path inside the `Err(e)`
+    /// arm carries a `return Err`, mirroring the `hippius_startup_window.rs`
+    /// static-pin convention.
+    #[test]
+    fn local_rewrite_and_sidecar_double_failure_surfaces_an_error() {
+        const SRC: &str = include_str!("recovery.rs");
+        // Anchor on the warn unique to the install-failure `Err(e)` arm (the
+        // align-branch shares the "sidecar write also failed" wording but
+        // legitimately returns Ok, so we must not match on that).
+        let anchor = "server rotated but local rewrite failed";
+        let at = SRC.find(anchor).expect("install-failure arm warn present");
+        let after = &SRC[at..];
+        let next_return_err = after.find("return Err").expect("double failure must return Err, not fall through to Ok(())");
+        // The `return Err` (sidecar-failure bail-out) must come before the
+        // arm's closing `Ok(())`, i.e. it surfaces instead of reporting success.
+        let next_ok = after.find("Ok(())").unwrap_or(usize::MAX);
+        assert!(
+            next_return_err < next_ok,
+            "the sidecar-write-failure path must `return Err` before the arm's `Ok(())` (audit finding D1)"
+        );
     }
 
     /// After `seed_hcfs_server_url_if_missing`, the recovery base-URL
