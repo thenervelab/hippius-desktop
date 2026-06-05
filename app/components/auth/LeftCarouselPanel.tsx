@@ -18,13 +18,19 @@ const LeftCarouselPanel = () => {
   // The active slide is React state because we mount the <video> for ONLY that
   // slide. Linux's WebKitGTK webview has a small simultaneous-video-decoder
   // pool; mounting all four clips at once exhausts it and later slides freeze
-  // on their first frame. Keeping exactly one <video> alive sidesteps that.
+  // on their first frame. We therefore keep at most TWO clips alive: the active
+  // one, plus the outgoing one for the brief duration of the crossfade so the
+  // fade-out shows its real last frame instead of an empty panel.
   const [activeIndex, setActiveIndex] = useState(0);
+  // The slide we're transitioning AWAY from; non-null only while the crossfade
+  // is in flight. Dropped on transition end so we settle back to one decoder.
+  const [prevIndex, setPrevIndex] = useState<number | null>(null);
 
   const swiperRef = useRef<SwiperClass | null>(null);
   // Once the user interacts (clicks a pagination dot or swipes), we stop
   // auto-advancing and just loop whatever slide they landed on.
   const manualLoopRef = useRef(false);
+  const [manualLoop, setManualLoop] = useState(false);
   // Set right before our own programmatic slideTo() so onSlideChange can tell
   // an auto-advance apart from a user-initiated change.
   const autoAdvancingRef = useRef(false);
@@ -44,15 +50,27 @@ const LeftCarouselPanel = () => {
       autoAdvancingRef.current = false;
     } else {
       manualLoopRef.current = true;
+      setManualLoop(true);
     }
     setActiveIndex(swiper.activeIndex);
+  }, []);
+
+  // Keep the outgoing slide's <video> mounted for the duration of the crossfade
+  // so it fades out on its last decoded frame rather than an empty panel.
+  const handleTransitionStart = useCallback((swiper: SwiperClass) => {
+    if (swiper.previousIndex !== swiper.activeIndex) {
+      setPrevIndex(swiper.previousIndex);
+    }
+  }, []);
+
+  // Crossfade finished: drop the outgoing clip so we hold a single decoder.
+  const handleTransitionEnd = useCallback(() => {
+    setPrevIndex(null);
   }, []);
 
   const handleEnded = useCallback((video: HTMLVideoElement, index: number) => {
     // After interaction we loop the current clip in place instead of moving on.
     if (manualLoopRef.current) {
-      video.currentTime = 0;
-      void video.play().catch(() => {});
       return;
     }
     const swiper = swiperRef.current;
@@ -71,10 +89,16 @@ const LeftCarouselPanel = () => {
               modules={[Pagination, EffectFade]}
               effect="fade"
               fadeEffect={{ crossFade: true }}
+              // A longer fade reads as a deliberate crossfade and gives the
+              // incoming clip time to decode its first frame before it is fully
+              // opaque, so the new slide doesn't flash blank mid-transition.
+              speed={600}
               onSwiper={(swiper) => {
                 swiperRef.current = swiper;
               }}
               onSlideChange={handleSlideChange}
+              onSlideChangeTransitionStart={handleTransitionStart}
+              onSlideChangeTransitionEnd={handleTransitionEnd}
               pagination={{
                 clickable: true,
                 bulletClass: "swiper-pagination-bullet auth-carousel-bullet",
@@ -101,25 +125,32 @@ const LeftCarouselPanel = () => {
 
                     <div className="flex-1 min-h-0 w-full relative overflow-hidden">
                       {/*
-                       * Only the active slide mounts a <video> (decoder-pool
-                       * limit, see activeIndex above). The clip is center-framed
+                       * Only the active slide — plus the outgoing one while a
+                       * crossfade is in flight — mounts a <video> (decoder-pool
+                       * limit, see activeIndex/prevIndex above). Keying the
+                       * element by its own slide index (not activeIndex) lets
+                       * React preserve the outgoing element so it fades out on
+                       * its real last frame instead of being remounted blank.
+                       * The clip is center-framed
                        * and wider than the panel, so we center it and size to the
                        * container height (h-full w-auto max-w-none); the surplus
                        * width spills past the edges and is clipped by the parent's
                        * overflow-hidden, cropping the empty side margins. `cropX`
                        * scales from the centre: negative zooms out to contain
                        * more of the sides, positive crops more (see SwipeContent).
-                       * No `loop` attribute — it would suppress the `ended` event we
-                       * use to advance. autoPlay + the onCanPlay nudge start it
-                       * reliably even when the clip needs a moment to buffer.
+                       * We only enable `loop` after manual interaction so the
+                       * `ended` event can still drive auto-advance otherwise.
+                       * autoPlay + the onCanPlay nudge start it reliably even
+                       * when the clip needs a moment to buffer.
                        */}
-                      {index === activeIndex && (
+                      {(index === activeIndex || index === prevIndex) && (
                         <video
-                          key={`${activeIndex}-${prefersDark}`}
+                          key={`${index}-${prefersDark}`}
                           src={prefersDark ? item.videoDark : item.video}
                           autoPlay
                           muted
                           playsInline
+                          loop={manualLoop && index === activeIndex}
                           preload="auto"
                           onCanPlay={(e) => {
                             if (e.currentTarget.paused)
