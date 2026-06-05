@@ -318,7 +318,10 @@ pub async fn check_migration(state: tauri::State<'_, crate::app_state::AppState>
     // Migration" prompt even though migration is already in progress.
     let has_local_in_progress = local_status.as_ref().is_some_and(|(s, ..)| s.eq_ignore_ascii_case("in_progress"));
 
-    if has_local_in_progress && let Ok(job_status) = poll_migration_status_internal(&state, &account_id).await {
+    // One-shot probe: a throwaway failure counter — this call doesn't drive a
+    // retry loop, so its streak is irrelevant and must not touch the loop's.
+    let mut probe_failures = 0;
+    if has_local_in_progress && let Ok(job_status) = poll_migration_status_internal(&state, &account_id, &mut probe_failures).await {
         if job_status.status == "in_progress" {
             let logical_total = job_status.logical_file_count
                 .filter(|&c| c > 0)
@@ -691,7 +694,6 @@ pub async fn start_server_migration(
     // RAII: every `?`-driven early return below clears the flag; only the
     // success paths call `.commit()` to keep it set.
     let in_progress_guard = MigrationInProgressGuard::engage(&state.migration.in_progress);
-    state.migration.poll_failure_count.store(0, Ordering::SeqCst);
 
     let folder_hash = hcfs_client::drive::keys::folder_hash(&label);
     let pool = state.pool()?;
@@ -883,8 +885,34 @@ pub async fn start_server_migration(
     Ok(result)
 }
 
+/// Maps a running count of consecutive poll failures to the
+/// `(should_warn, should_abort)` flags the frontend acts on (warn at 3,
+/// give up at 10). Pure and total so the threshold edges are unit-testable
+/// without a live server.
+fn poll_failure_flags(consecutive_failures: i32) -> (bool, bool) {
+    (
+        consecutive_failures >= WARN_AFTER_POLL_FAILURES,
+        consecutive_failures >= ABORT_AFTER_POLL_FAILURES,
+    )
+}
+
 /// Internal poll — callable from both the IPC command and the background task.
-async fn poll_migration_status_internal(state: &crate::app_state::AppState, account_id: &str) -> Result<ServerMigrationStatus> {
+///
+/// `failures` is the CALLER's running count of consecutive poll failures, owned
+/// by whoever drives the poll: the background loop in `start_migration_polling`
+/// keeps a single `i32` across its iterations, while the one-shot
+/// `check_migration` passes a throwaway. Threading it per-caller replaced a
+/// single process-wide `MigrationState.poll_failure_count` atomic that let two
+/// independent poll callers corrupt each other's give-up decision — e.g. a
+/// transient failure in `check_migration` could push the loop toward abort, and
+/// `start_server_migration`'s reset could zero the loop's progress (audit
+/// 2026-06-05, finding D3). A per-task `&mut i32` is the lightest primitive that
+/// fits the now-correctly-unshared sharing pattern (axiom 73).
+async fn poll_migration_status_internal(
+    state: &crate::app_state::AppState,
+    account_id: &str,
+    failures: &mut i32,
+) -> Result<ServerMigrationStatus> {
     let pool = state.pool()?;
     let server_url = get_server_url(pool, account_id).await?;
     // Same auto-detect-empty-string handling as `fetch_migration_summary`.
@@ -902,7 +930,8 @@ async fn poll_migration_status_internal(state: &crate::app_state::AppState, acco
     .await;
 
     if let Ok(raw) = result {
-        state.migration.poll_failure_count.store(0, Ordering::SeqCst);
+        // A reachable server clears THIS caller's failure streak.
+        *failures = 0;
         let is_terminal = TERMINAL_STATUSES.contains(&raw.status.as_str());
         Ok(ServerMigrationStatus {
             status: raw.status,
@@ -917,12 +946,11 @@ async fn poll_migration_status_internal(state: &crate::app_state::AppState, acco
             is_terminal,
         })
     } else {
-        let failures = state.migration.poll_failure_count.fetch_add(1, Ordering::SeqCst) + 1;
-        let should_warn = failures >= WARN_AFTER_POLL_FAILURES;
-        let should_abort = failures >= ABORT_AFTER_POLL_FAILURES;
-        if should_abort {
-            state.migration.poll_failure_count.store(0, Ordering::SeqCst);
-        }
+        // No reset on abort: the loop breaks on `should_abort` (dropping its
+        // local counter) and check_migration's throwaway is discarded, so the
+        // streak never needs zeroing here.
+        *failures += 1;
+        let (should_warn, should_abort) = poll_failure_flags(*failures);
         Ok(ServerMigrationStatus {
             status: "poll_error".to_string(),
             total: 0,
@@ -966,7 +994,10 @@ pub async fn start_migration_polling(app: tauri::AppHandle, account_id: String) 
     // failure. Polling first means a failed start spawns nothing at all (audit
     // 2026-06-05, finding D2). No poll_task lock is held across this await, so
     // a concurrent dismiss/stop can't be blocked on the round-trip either.
-    let immediate = poll_migration_status_internal(&app.state::<crate::app_state::AppState>(), &account_id).await?;
+    // The immediate poll is a one-shot, so its failure streak starts and ends
+    // here; the background loop below owns its own persistent counter.
+    let mut immediate_failures = 0;
+    let immediate = poll_migration_status_internal(&app.state::<crate::app_state::AppState>(), &account_id, &mut immediate_failures).await?;
     let immediate_is_terminal = immediate.is_terminal || immediate.should_abort;
     let _ = app.emit("migration_progress", &immediate);
 
@@ -981,11 +1012,14 @@ pub async fn start_migration_polling(app: tauri::AppHandle, account_id: String) 
     let account_id_clone = account_id.clone();
 
     let handle = tokio::spawn(async move {
+        // This loop's own consecutive-failure streak; lives as long as the task
+        // and is never shared with any other poll caller.
+        let mut failures = 0;
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(3)).await;
 
             let state = app_clone.state::<crate::app_state::AppState>();
-            match poll_migration_status_internal(state.inner(), &account_id_clone).await {
+            match poll_migration_status_internal(state.inner(), &account_id_clone, &mut failures).await {
                 Ok(status) => {
                     let is_terminal = TERMINAL_STATUSES.contains(&status.status.as_str());
                     let should_abort = status.should_abort;
@@ -1027,12 +1061,16 @@ pub async fn stop_migration_polling(app: tauri::AppHandle) -> Result<()> {
 
 // --- Migration State ---
 
-use std::sync::atomic::{AtomicBool, AtomicI32};
+use std::sync::atomic::AtomicBool;
 
 /// State for the server-side migration workflow.
+///
+/// Note: there is deliberately no shared poll-failure counter here. Each poll
+/// caller owns its own consecutive-failure streak (a per-task `&mut i32` passed
+/// to `poll_migration_status_internal`); a single shared atomic let independent
+/// callers corrupt each other's give-up decision (audit 2026-06-05, D3).
 pub struct MigrationState {
     pub in_progress: AtomicBool,
-    pub poll_failure_count: AtomicI32,
     pub client: reqwest::Client,
     /// Handle for the background migration polling task (if running).
     pub poll_task: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
@@ -1061,7 +1099,6 @@ impl MigrationState {
         };
         Self {
             in_progress: AtomicBool::new(false),
-            poll_failure_count: AtomicI32::new(0),
             client,
             poll_task: tokio::sync::Mutex::new(None),
         }
@@ -1300,6 +1337,28 @@ mod tests {
         let path_str = get_default_migration_path().expect("should return a path string");
         assert!(!path_str.is_empty());
         assert!(path_str.contains("Hippius-Migration-"));
+    }
+
+    // -----------------------------------------------------------------------
+    // poll_failure_flags (D3 — per-caller failure streak → warn/abort flags)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn poll_failure_flags_below_warn_threshold_is_quiet() {
+        assert_eq!(poll_failure_flags(0), (false, false));
+        assert_eq!(poll_failure_flags(WARN_AFTER_POLL_FAILURES - 1), (false, false));
+    }
+
+    #[test]
+    fn poll_failure_flags_warns_at_warn_threshold_but_not_abort() {
+        assert_eq!(poll_failure_flags(WARN_AFTER_POLL_FAILURES), (true, false));
+        assert_eq!(poll_failure_flags(ABORT_AFTER_POLL_FAILURES - 1), (true, false));
+    }
+
+    #[test]
+    fn poll_failure_flags_aborts_at_abort_threshold() {
+        assert_eq!(poll_failure_flags(ABORT_AFTER_POLL_FAILURES), (true, true));
+        assert_eq!(poll_failure_flags(ABORT_AFTER_POLL_FAILURES + 5), (true, true));
     }
 
     /// Static pin for audit finding D2: `start_migration_polling` must run its
