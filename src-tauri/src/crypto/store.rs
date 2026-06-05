@@ -104,23 +104,6 @@ pub fn decrypt(key: &[u8; 32], encoded: &str) -> Result<Zeroizing<String>, crate
     Ok(Zeroizing::new(plaintext))
 }
 
-/// Encrypts all plaintext sub-account seed phrases for the given account.
-///
-/// Scans `sub_accounts` for rows where `encryption_version = 0`, encrypts
-/// them in a single transaction, and sets `encryption_version = 1`. Safe
-/// to call repeatedly — rows already at version 1 are skipped.
-///
-/// # Single-user assumption
-///
-/// This function selects ALL `sub_accounts` rows with
-/// `encryption_version = 0`, regardless of any parent-account column (the
-/// table has no such column). This is intentional: Hippius Desktop is a
-/// single-user application — each SQLite database belongs to exactly one
-/// logged-in user — so all rows in the database are owned by that user and
-/// should be encrypted with the same derived key. If multi-user support is
-/// ever added, a `parent_account_id` column will need to be introduced and
-/// this query scoped accordingly.
-///
 /// Encrypts all plaintext drive passwords for the given account.
 ///
 /// Scans `hcfs_config` for rows where `encryption_version = 0`, encrypts the
@@ -128,13 +111,21 @@ pub fn decrypt(key: &[u8; 32], encoded: &str) -> Result<Zeroizing<String>, crate
 /// Safe to call repeatedly — rows already at version 1 are skipped, and the key
 /// derivation is performed only when there is at least one row to migrate.
 ///
+/// NOTE: despite living next to the sub-account helpers, this migrates ONLY
+/// `hcfs_config.drive_password`. It does NOT encrypt `sub_accounts` seed
+/// phrases — an earlier version of this doc described a `sub_accounts`
+/// migration the body never performed, misrepresenting an encryption-at-rest
+/// guarantee for a verbatim-stored TEXT column (audit 2026-06-05, finding E2).
+/// If sub-account seed phrases need encryption-at-rest, that is a separate,
+/// currently-unimplemented migration.
+///
 /// # Single-user assumption
 ///
-/// This function selects ALL rows with `encryption_version = 0`, regardless of
-/// any parent-account column. This is intentional: Hippius Desktop is a
-/// single-user application — each SQLite database belongs to exactly one
-/// logged-in user. If multi-user support is ever added, a `parent_account_id`
-/// column will need to be introduced and this query scoped accordingly.
+/// This function selects ALL matching rows regardless of any parent-account
+/// column. This is intentional: Hippius Desktop is a single-user application —
+/// each SQLite database belongs to exactly one logged-in user. If multi-user
+/// support is ever added, a `parent_account_id` column will need to be
+/// introduced and this query scoped accordingly.
 pub async fn migrate_if_needed(pool: &SqlitePool, mnemonic: &str, account_id: &str) -> Result<(), crate::error::AppError> {
     let mut tx = pool.begin().await?;
 
