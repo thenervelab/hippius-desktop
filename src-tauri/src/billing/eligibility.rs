@@ -298,6 +298,31 @@ async fn chain_free_balance(state: &crate::app_state::AppState, account_id: &str
 /// Returns an error if the DB pool is unavailable or the billing-API balance
 /// request fails. A zero or unparseable balance is *not* an error — it
 /// resolves to `eligible: false`.
+/// Parse a marketplace credit-balance string fail-closed.
+///
+/// The balance is a JSON string the billing server controls, so a 200 response
+/// can carry an empty wallet (`"0"`), a malformed value, or — critically — a
+/// non-finite (`"inf"`/`"NaN"`) or negative number. Only a finite, non-negative
+/// value is trusted; everything else resolves to `0.0` so a bad balance REFUSES
+/// the gated action rather than over-granting. Without the finiteness guard an
+/// `"inf"` balance satisfied every threshold (`inf > 0.0` and `inf >= required`)
+/// and silently granted eligibility (audit 2026-06-05, finding C2). The reason
+/// is logged so a malformed balance is traceable rather than surfacing to the
+/// user as a bare "insufficient credits".
+fn parse_credit_balance(credit_str: &str, account_id: &str) -> f64 {
+    match credit_str.parse::<f64>() {
+        Ok(v) if v.is_finite() && v >= 0.0 => v,
+        Ok(v) => {
+            tracing::warn!(balance = %credit_str, parsed = v, %account_id, "non-finite or negative credit balance from billing API; treating as 0");
+            0.0
+        }
+        Err(_) => {
+            tracing::warn!(balance = %credit_str, %account_id, "unparseable credit balance from billing API; treating as 0");
+            0.0
+        }
+    }
+}
+
 pub(crate) async fn check_action_eligibility_inner(
     state: &crate::app_state::AppState,
     account_id: &str,
@@ -315,15 +340,7 @@ pub(crate) async fn check_action_eligibility_inner(
     let client = ApiClient::new(state.api_client.clone(), pool.clone());
     let resp: crate::billing::credits::CreditBalanceResponse = client.get("/api/billing/credits/balance/", account_id).await?;
     let credit_str = resp.balance.as_deref().unwrap_or("0");
-    // An unparseable balance from a 200 response is NOT the same as an empty
-    // wallet, but both previously collapsed to 0.0 and silently refused every
-    // gated action with no diagnostic. Keep the fail-closed 0.0 (safe default)
-    // but log it so a malformed billing-API balance is traceable rather than
-    // presenting to the user as "insufficient credits".
-    let credits: f64 = credit_str.parse::<f64>().unwrap_or_else(|_| {
-        tracing::warn!(balance = %credit_str, %account_id, "unparseable credit balance from billing API; treating as 0");
-        0.0
-    });
+    let credits = parse_credit_balance(credit_str, account_id);
 
     // 2. Threshold comparison. The user must always have a strictly
     //    positive balance (matches legacy `credits <= BigInt(0)` blocks
@@ -472,6 +489,33 @@ mod tests {
         assert!(!InsufficientCreditsAction::FolderSync.requires_chain_balance());
         assert!(InsufficientCreditsAction::VmCreation.requires_chain_balance());
         assert!(!InsufficientCreditsAction::Sharing.requires_chain_balance());
+    }
+
+    #[test]
+    fn parse_credit_balance_accepts_finite_non_negative() {
+        assert!(float_eq(parse_credit_balance("0", "acct"), 0.0));
+        assert!(float_eq(parse_credit_balance("9.99", "acct"), 9.99));
+        assert!(float_eq(parse_credit_balance("100", "acct"), 100.0));
+    }
+
+    #[test]
+    fn parse_credit_balance_rejects_non_finite_and_negative_fail_closed() {
+        // The billing server controls this string. "inf" is the dangerous one:
+        // without the finiteness guard `inf > 0.0 && inf >= required` granted
+        // every gated action (audit C2). All of these must fail closed to 0.0.
+        for bad in ["inf", "Inf", "INF", "infinity", "NaN", "nan", "-inf", "-5", "-0.01"] {
+            assert!(
+                float_eq(parse_credit_balance(bad, "acct"), 0.0),
+                "balance {bad:?} must fail closed to 0.0, not grant eligibility"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_credit_balance_rejects_unparseable_and_blank() {
+        for bad in ["", "  ", "abc", "1.2.3", "$5"] {
+            assert!(float_eq(parse_credit_balance(bad, "acct"), 0.0), "balance {bad:?} must fail closed to 0.0");
+        }
     }
 
     #[test]
