@@ -862,16 +862,18 @@ pub async fn migrate_account_keys(pool: &SqlitePool) -> Result<(), sqlx::Error> 
             for table in tables {
                 // Use explicit per-table queries to avoid SQL injection
                 let query = format!("UPDATE {table} SET owner = ? WHERE owner = ?");
-                let result = sqlx::query(&query).bind(&new_key).bind(&legacy).execute(&mut *tx).await;
-                match result {
-                    Ok(r) if r.rows_affected() > 0 => {
-                        info!("Updated {} row(s) in {}", r.rows_affected(), table);
-                    }
-                    Ok(_) => {} // No rows to update in this table
-                    Err(e) => {
-                        // Table may not exist yet — non-fatal
-                        warn!("Could not update {}: {}", table, e);
-                    }
+                // Propagate any error via `?` so the whole transaction rolls
+                // back. Every table here is created by ensure_table_schema,
+                // which runs before this migration in main.rs setup (and is
+                // guarded by the EXPECTED_TABLES test), so an error is NOT a
+                // "table doesn't exist yet" case — it's a genuine failure such
+                // as a UNIQUE(owner, label) collision on sync_paths. The old
+                // code warn-swallowed it and still committed the other tables,
+                // splitting one account across the legacy and new owner keys
+                // (audit 2026-06-05, finding D8).
+                let r = sqlx::query(&query).bind(&new_key).bind(&legacy).execute(&mut *tx).await?;
+                if r.rows_affected() > 0 {
+                    info!("Updated {} row(s) in {}", r.rows_affected(), table);
                 }
             }
 
@@ -1134,5 +1136,60 @@ mod tests {
                 .await
                 .expect("query index");
         assert_eq!(idx.as_deref(), Some("idx_notifications_type_subtype"));
+    }
+
+    /// D8: a per-table UPDATE failure during account-key migration must roll
+    /// back the WHOLE transaction, not commit the tables that already
+    /// succeeded. We force a `UNIQUE(owner, label)` collision on `sync_paths`
+    /// (updated AFTER `auth_session` in the loop) and assert `auth_session`
+    /// was not partially migrated — proving atomicity. The old code
+    /// warn-swallowed the collision and committed anyway, splitting one
+    /// account across the legacy and new owner keys.
+    #[tokio::test]
+    async fn account_key_migration_rolls_back_on_collision() {
+        use crate::auth::account_key::{account_key, account_key_legacy};
+
+        let pool = temp_pool().await;
+        ensure_table_schema(&pool).await.expect("schema");
+
+        let addr = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
+        let legacy = account_key_legacy(addr);
+        let new_key = account_key(addr);
+        assert_ne!(legacy, new_key, "legacy and new keys must differ for the migration to trigger");
+
+        // A legacy-keyed session is what makes the migration adopt this address.
+        sqlx::query("INSERT INTO auth_session (owner, substrate_address) VALUES (?, ?)")
+            .bind(&legacy)
+            .bind(addr)
+            .execute(&pool)
+            .await
+            .expect("seed legacy session");
+
+        // sync_paths is updated after auth_session. Seed a legacy row AND a
+        // new-key row sharing the label, so renaming the legacy row's owner to
+        // new_key violates UNIQUE(owner, label) mid-transaction.
+        sqlx::query("INSERT INTO sync_paths (owner, path, type, label, timestamp) VALUES (?, '/legacy', 'folder', 'L', 0)")
+            .bind(&legacy)
+            .execute(&pool)
+            .await
+            .expect("seed legacy sync_path");
+        sqlx::query("INSERT INTO sync_paths (owner, path, type, label, timestamp) VALUES (?, '/new', 'folder', 'L', 0)")
+            .bind(&new_key)
+            .execute(&pool)
+            .await
+            .expect("seed colliding new-key sync_path");
+
+        // The migration must surface the collision as Err...
+        let result = migrate_account_keys(&pool).await;
+        assert!(result.is_err(), "a UNIQUE collision must surface as Err, not a silent partial commit");
+
+        // ...and auth_session (updated first) must be rolled back to the legacy
+        // key — if it were new_key, the transaction had partially committed.
+        let (owner,): (String,) = sqlx::query_as("SELECT owner FROM auth_session WHERE substrate_address = ?")
+            .bind(addr)
+            .fetch_one(&pool)
+            .await
+            .expect("session row still present");
+        assert_eq!(owner, legacy, "auth_session must NOT be partially migrated when a later table collides");
     }
 }
