@@ -10,7 +10,7 @@ live code via illu (line numbers drift), applying the fix, and running the
 Rust gate sequence (`rust_preflight` → `axioms` → implement → `quality_gate`)
 before committing.
 
-## DONE (24 findings, 19 commits)
+## DONE (27 findings, 22 commits)
 
 | Commit | Findings | Summary |
 |--------|----------|---------|
@@ -31,13 +31,15 @@ before committing.
 | `cb71cc08` | D10 | `process_credit_events`: pure `parse_event_timestamp_ms` (warn+skip vs coerce-to-0) and `parse_credit_amount_planck` (reject signed/fractional vs `-5`→`5`/`1.5`→`15`); 4 edge tests |
 | `d44257ef` | E1 | Notification writes (`add_notification`, `create_sync_notification`, `create_credit_notifications`) scoped to the session account via shared `session_scoped_notification_account` (ignores caller-supplied address); 2 tests |
 | `387332a8` | F3 | `IndexerClient::get`: logs the failing request path on a non-success response (matches `api::client::handle_response`); `ApiError` shape unchanged |
-| _(this commit)_ | F1 | `complete_migration_transition`: comment explaining why the advisory `in_progress` store is intentionally unsynchronized vs `check_migration` (self-correcting; both SeqCst). Comment-only |
+| `9465f1dc` | F1 | `complete_migration_transition`: comment explaining why the advisory `in_progress` store is intentionally unsynchronized vs `check_migration` (self-correcting; both SeqCst). Comment-only |
+| `3ef962e0` | D9 | `AppState::pool`: returns `NotReady(DatabaseNotReady)` for an uninitialized pool (was misleading `Db(PoolClosed)`); new `NotReadyKind` variant mirrored into the FE TS union; behavioral round-trip test + the variant-coverage test upgraded to an exhaustive-match drift guard |
+| _(this commit)_ | F4 | `blockchain/subscription.rs`: consecutive-failure ceiling — past `RECONNECT_CEILING_ATTEMPTS`=10 the loop falls back to a 5-min slow re-probe instead of retrying every 60s forever (never stops; a wallet must auto-recover). Pure `reconnect_delay_secs` + 3 edge tests; logs the transition once |
 
-## REMAINING (3 items: D9 deferred + F4/F5 droppable — all need a user decision)
+## REMAINING (1 item — dropped by user decision)
 
-- **D9** `app_state.rs::pool` (233-235): returns `sqlx::Error::PoolClosed` for an *uninitialized* pool (semantic mislabel). **DEFERRED** — the proper fix adds a `NotReadyKind` variant which cascades to the FE TS union (`app/lib/utils/dispatchTauriError.ts`) + a round-trip test. After B3 the early-call window is essentially closed, so this LOW is near-unreachable; do it only alongside the FE change. **Decide with the user.**
-- **F4 (DROPPABLE)** `blockchain/subscription.rs` reconnect loop (~70-118): no consecutive-failure ceiling — retries forever every 60s. An infinite chain-reconnect is arguably correct; **confirm intent** before adding a ceiling/backoff cap.
-- **F5 (DROPPABLE)** `billing/drive_credits.rs::cache()` (~104-128): process-wide drive-event cache keyed by `account_id` with a TTL can show stale "Total Credit Used" across account context. Reworking caching risks regressions; key/invalidate on account switch **only if desired.**
+- **F5 (DROPPED)** `billing/drive_credits.rs::cache()` (~104-128): process-wide drive-event cache keyed by `account_id` with a TTL can show a stale "Total Credit Used" briefly across an account switch. **User chose to leave as-is** (2026-06-05): the TTL self-heals within seconds and reworking the cache risks regressions in the credits display. No change.
+
+All 30 actionable findings are resolved or consciously dropped; the single HIGH (OAuth deep-link) remains intentionally untouched per the original scope.
 
 ## Before the PR
 - `cd src-tauri && SQLX_OFFLINE=true cargo test` (full suite).
