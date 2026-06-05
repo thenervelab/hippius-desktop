@@ -848,16 +848,24 @@ pub async fn migrate_account_keys(pool: &SqlitePool) -> Result<(), sqlx::Error> 
 
             let mut tx = pool.begin().await?;
 
-            // Tables that actually carry an `owner` column keyed by the
-            // account hash. ONLY these are renamed legacy→new. `notifications`
-            // (keyed by `user_address` = raw ss58) and `user_preferences`
-            // (keyed by `preference_key`, a global k/v store) have NO `owner`
-            // column, so `UPDATE … SET owner` on them errors with "no such
-            // column: owner". The old warn-swallow tolerated that; the D8
-            // `?`-propagation below would otherwise roll the migration back on
-            // that guaranteed error EVERY run, permanently breaking every
-            // legacy account. They are excluded here, not skipped at runtime
-            // (PR review 2026-06-05).
+            // Selection criterion: a table belongs here iff it BOTH (a) carries
+            // an `owner` column keyed by the account hash AND (b) predates the
+            // legacy 8-char key era, so it can actually hold a row under a legacy
+            // `owner` that needs renaming.
+            //
+            // Excluded for (a): `notifications` (keyed by `user_address` = raw
+            // ss58) and `user_preferences` (keyed by `preference_key`, a global
+            // k/v store) have NO `owner` column, so `UPDATE … SET owner` errors
+            // with "no such column: owner". The old warn-swallow tolerated that;
+            // the D8 `?`-propagation below would otherwise roll the migration
+            // back on that guaranteed error EVERY run, permanently breaking every
+            // legacy account (PR review 2026-06-05).
+            //
+            // Excluded for (b): `local_wallets` and `share_origin` DO have an
+            // `owner` column, but both were introduced AFTER the legacy→16-char
+            // migration shipped, so they only ever stored 16-char keys and hold
+            // no legacy rows to rename. Deliberately omitted — do not "fix" the
+            // list by adding them.
             let tables = ["auth_session", "objectstore_auth_scoped", "sync_paths", "address_book", "hcfs_config"];
 
             for table in tables {
