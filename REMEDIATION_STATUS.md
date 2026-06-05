@@ -44,12 +44,14 @@ A 5-agent adversarial PR review (4 domain reviewers + 1 cross-cutting) found two
 | `44749af5` | D8 (BLOCKER), D6 (MAJOR) | **D8**: `migrate_account_keys` listed `notifications` + `user_preferences`, which have NO `owner` column — the `?`-propagation rolled the migration back on the guaranteed "no such column" error every run, breaking every legacy account. The collision test passed only by loop-ordering luck. Trimmed to the 5 owner-bearing tables + happy-path commit test (mutation-verified). **D6**: `logout_full` swallowed the new `auth_logout_internal` Err into `warn!` and returned Ok, so a failed session clear still rehydrated on next boot — now propagated via `?`. |
 | `cbb91d79` | D5 (MINOR) | `is_token_expiring` didn't honor `expiry==0`=never-expires, so a never-expiring token was force-refreshed every cycle; guarded + tested. Completes the D5 convention across validity AND refresh-policy checks. |
 
-**Review verdict:** READY (after the above fixes). Remaining open items are tracked follow-ups, not blockers (see below).
+**Review verdict:** READY (after the above fixes). All follow-ups below are now also resolved.
 
-### Tracked follow-ups (non-blocking, surfaced by the review)
-- **FE logout handler**: now that `logout_full` can return `Err`, the frontend logout handler must clear local React/localStorage state ONLY on a resolved `logout_full` (else a failed logout still blanks the UI while Rust keeps the session). Frontend change, paired with D6.
-- **A1 error/start arms still forked**: `sync_with_conflict_resolutions` routes its *completion* through the shared bridge (A1) but its `SYNC_ERROR` and `SYNC_STARTED` arms still `app.emit` directly, bypassing the bridge's cancel-drop (CANCELLED_MARKER) and full payload. Narrow edge (a stall-cancel during a reviewed-conflict sync would surface a spurious "Sync Failed"); a sibling `handle_sync_error` helper would close it.
-- **D2 start-vs-dismiss race**: a precisely-timed `dismiss_migration` during the immediate poll's lock-free window can orphan the freshly-spawned loop. Re-check the `poll_task` slot under the store lock to abort instead of store.
+### Tracked follow-ups (surfaced by the review) — ALL RESOLVED in `5263bbf0`
+- **FE logout handler** (D6 follow-up): the frontend logout handler now returns early (toast + keep session) on a `logout_full` rejection instead of clearing local React/localStorage state, so a failed logout no longer blanks the UI while Rust keeps the session.
+- **A1 error/start arms** (A1 follow-up): extracted `tauri_bridge::handle_sync_error` (sibling to `handle_sync_completed`) holding the cancel-drop (`CANCELLED_MARKER`) + epoch-gated defensive clears; both the bridge `SyncError` arm and `sync_with_conflict_resolutions`' `Some(Err)`/`None` arms route through it. `SYNC_STARTED` now emits a full empty-plan `SyncStartedPayload`. A cancel during a reviewed sync no longer surfaces a spurious "Sync Failed".
+- **D2 start-vs-dismiss race** (D2 follow-up): added `MigrationState.poll_epoch`; `stop_migration_polling`/`dismiss_migration` bump it under the `poll_task` lock and `start_migration_polling` aborts its freshly-spawned loop (instead of orphaning it) when a stop raced its setup window. Static pins added for both the error-routing and the epoch guard.
+
+**Residual (knowingly out of scope):** the `poll_epoch` guard covers start-vs-stop, not start-vs-start (two concurrent `start_migration_polling` calls still last-writer-wins, which is benign — only one loop ends up tracked). The single HIGH (OAuth deep-link) remains intentionally untouched.
 
 ## REMAINING (1 item — dropped by user decision)
 
