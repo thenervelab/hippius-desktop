@@ -265,4 +265,176 @@ impl AppState {
             .clone()
             .ok_or_else(|| crate::error::AppError::Auth("No active account set".into()))
     }
+
+    /// Validate that a frontend-supplied `account_id` is the active session
+    /// account, returning the (validated) session account on success.
+    ///
+    /// IPC command arguments come from the webview and are untrusted. On a
+    /// device where more than one account has been configured, a buggy or
+    /// compromised renderer could pass *another* account's address to read,
+    /// download, delete, or write that account's data under its token. Routing
+    /// every account-scoped command through this guard makes the session the
+    /// single authority — the boundary-validation discipline (convert the
+    /// untrusted input into a trusted value once, here, rather than scoping
+    /// raw input deep in each command).
+    ///
+    /// Returns the session account rather than `()` so callers shadow their
+    /// `account_id` parameter with the trusted value and cannot accidentally
+    /// keep using the raw input.
+    ///
+    /// # Errors
+    ///
+    /// - [`crate::error::AppError::Auth`] when no account is logged in, or when
+    ///   `account_id` does not match the active session account.
+    /// - [`crate::error::AppError::Lock`] if the auth mutex is poisoned.
+    pub fn require_session_account(&self, account_id: &str) -> Result<String, crate::error::AppError> {
+        let current = self.current_account_id()?;
+        if current != account_id {
+            return Err(crate::error::AppError::Auth(
+                "Requested account is not the active session account".into(),
+            ));
+        }
+        Ok(current)
+    }
+
+    /// Like [`require_session_account`](Self::require_session_account) but
+    /// returns the proof type [`SessionAccount`].
+    ///
+    /// Use this when a frontend-supplied `account_id` must be handed to a
+    /// token-fetching API (`ApiClient` / `get_auth_token_for_account`), which
+    /// require that proof at compile time. Validates exactly as the string
+    /// form, then mints the proof.
+    ///
+    /// # Errors
+    /// Same as [`require_session_account`](Self::require_session_account).
+    pub fn require_session_account_typed(&self, account_id: &str) -> Result<SessionAccount, crate::error::AppError> {
+        Ok(SessionAccount(self.require_session_account(account_id)?))
+    }
+
+    /// The active session account as a [`SessionAccount`] proof, for internal
+    /// (non-command) token calls that act on the logged-in account itself
+    /// (e.g. the sync engine's credit pre-check). The session account is
+    /// trusted by definition, so this is the mint point that needs no
+    /// frontend input to validate.
+    ///
+    /// # Errors
+    /// [`crate::error::AppError::Auth`] when no account is logged in;
+    /// [`crate::error::AppError::Lock`] if the auth mutex is poisoned.
+    pub fn current_session_account(&self) -> Result<SessionAccount, crate::error::AppError> {
+        Ok(SessionAccount(self.current_account_id()?))
+    }
+}
+
+/// A frontend-supplied account id proven to equal the active session account.
+///
+/// Account-scoped IPC commands take `account_id: SessionAccount` instead of
+/// `account_id: String`. The value is minted ONLY by this type's
+/// [`tauri::ipc::CommandArg`] extraction, which runs
+/// [`AppState::require_session_account`] against the managed [`AppState`] before
+/// the command body runs — so holding a `SessionAccount` is compile-time proof
+/// the cross-account check already passed, and the untrusted raw string never
+/// reaches the body. The inner field is private, so a `SessionAccount` cannot be
+/// forged outside this module; combined with the
+/// `tests/account_authority_guard.rs` check that token-backed commands take
+/// this type (not a raw `String`), a command physically cannot use an
+/// unvalidated account.
+#[derive(Debug, Clone)]
+pub struct SessionAccount(String);
+
+impl SessionAccount {
+    /// The validated SS58 account id.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Consume into the owned validated account id.
+    #[must_use]
+    pub fn into_inner(self) -> String {
+        self.0
+    }
+}
+
+impl std::ops::Deref for SessionAccount {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for SessionAccount {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl<'de, R: tauri::Runtime> tauri::ipc::CommandArg<'de, R> for SessionAccount {
+    /// Pull `account_id` from the IPC payload and validate it against the
+    /// session account before the command body runs.
+    ///
+    /// # Errors
+    ///
+    /// - The managed [`AppState`] missing, or `account_id` absent/not a string.
+    /// - [`crate::error::AppError::Auth`] (serialized to the `{kind,message}`
+    ///   shape the frontend matches on) when the supplied account is not the
+    ///   active session account.
+    fn from_command(command: tauri::ipc::CommandItem<'de, R>) -> Result<Self, tauri::ipc::InvokeError> {
+        use serde::Deserialize;
+        let (name, key) = (command.name, command.key);
+        // `message` is a `Copy` reference, so reading it does not move
+        // `command`, which the deserializer below consumes.
+        let message = command.message;
+        let state = message.state_ref().try_get::<AppState>().ok_or_else(|| {
+            tauri::ipc::InvokeError(serde_json::Value::String(format!("AppState is not managed (command `{name}`, arg `{key}`)")))
+        })?;
+        let account_id = String::deserialize(command)
+            .map_err(|e| tauri::ipc::InvokeError(serde_json::Value::String(format!("command `{name}` arg `{key}`: {e}"))))?;
+        // `?` converts AppError -> InvokeError via `impl<T: Serialize> From<T>`,
+        // preserving AppError's `{kind, message}` JSON for FE error matching.
+        let validated = state.require_session_account(&account_id)?;
+        Ok(SessionAccount(validated))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::auth::state::AuthCapabilities;
+    use crate::error::AppError;
+
+    #[tokio::test]
+    async fn require_session_account_rejects_when_logged_out() {
+        let state = AppState::new();
+        let err = state.require_session_account("addr-A").unwrap_err();
+        assert!(matches!(err, AppError::Auth(_)), "no session must be an Auth error, got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn require_session_account_accepts_matching_account() {
+        let state = AppState::new();
+        state.set_active_account("addr-A", AuthCapabilities::Full).expect("set account");
+        assert_eq!(state.require_session_account("addr-A").expect("match"), "addr-A");
+    }
+
+    #[test]
+    fn session_account_exposes_validated_id() {
+        // The validation path is covered by the require_session_account tests;
+        // this pins the accessor surface commands rely on (as_str / Deref /
+        // into_inner). Constructed via the private ctor, available only here in
+        // the defining module — proving the type cannot be forged elsewhere.
+        let acct = SessionAccount("addr-A".to_string());
+        assert_eq!(acct.as_str(), "addr-A");
+        assert_eq!(&*acct, "addr-A");
+        assert_eq!(acct.clone().into_inner(), "addr-A");
+    }
+
+    #[tokio::test]
+    async fn require_session_account_rejects_other_account() {
+        // The core defense: a session logged in as A must not authorize an
+        // operation requested for B even though B is a valid address string.
+        let state = AppState::new();
+        state.set_active_account("addr-A", AuthCapabilities::Full).expect("set account");
+        let err = state.require_session_account("addr-B").unwrap_err();
+        assert!(matches!(err, AppError::Auth(_)), "cross-account request must be an Auth error, got {err:?}");
+    }
 }

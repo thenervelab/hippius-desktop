@@ -38,23 +38,27 @@ async fn setup_db() -> SqlitePool {
     .await
     .unwrap();
 
+    // Per-account shape (owner, id): mirrors the production schema so the
+    // preference-filtered unread-count query (owner-scoped subquery) resolves.
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS notification_preferences (
-            id TEXT PRIMARY KEY,
+            owner TEXT NOT NULL,
+            id TEXT NOT NULL,
             label TEXT NOT NULL,
             description TEXT NOT NULL,
-            enabled INTEGER DEFAULT 1
+            enabled INTEGER DEFAULT 1,
+            PRIMARY KEY (owner, id)
         )",
     )
     .execute(&pool)
     .await
     .unwrap();
 
-    // Seed default preferences
+    // Seed default preferences for the `alice` account these tests use.
     sqlx::query(
-        "INSERT INTO notification_preferences (id, label, description, enabled) VALUES
-         ('credits', 'Credits', 'Account credit notifications', 1),
-         ('files', 'Files', 'File sync notifications', 1)",
+        "INSERT INTO notification_preferences (owner, id, label, description, enabled) VALUES
+         ('alice', 'credits', 'Credits', 'Account credit notifications', 1),
+         ('alice', 'files', 'Files', 'File sync notifications', 1)",
     )
     .execute(&pool)
     .await

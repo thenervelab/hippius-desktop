@@ -117,6 +117,20 @@ pub(crate) async fn get_all_sync_paths_internal(pool: &SqlitePool, account_id: &
         .collect())
 }
 
+/// [`get_all_sync_paths_internal`] degrading to an empty list on a DB error,
+/// with a `warn!` tagged by `context` so the failure is observable.
+///
+/// Read-only listing/search IPCs prefer "show nothing" over failing the whole
+/// call when the sync-paths query errors; centralizing the degrade here keeps
+/// the policy and log shape consistent across the (5) call sites instead of a
+/// copy-pasted `unwrap_or_else` closure at each.
+pub(crate) async fn get_all_sync_paths_or_warn(pool: &SqlitePool, account_id: &str, context: &str) -> Vec<crate::sync::paths::SyncPathResult> {
+    get_all_sync_paths_internal(pool, account_id).await.unwrap_or_else(|e| {
+        tracing::warn!(error = %e, context, "get_all_sync_paths_internal failed; treating as no configured drives");
+        Vec::new()
+    })
+}
+
 /// Internal helper to list remote folders without Tauri State params.
 pub(crate) async fn list_remote_folders_internal(pool: &SqlitePool, account_id: &str) -> Result<Vec<RemoteFolderInfoResult>> {
     let config = get_hcfs_config_internal(pool, account_id).await?;
@@ -354,6 +368,9 @@ pub async fn delete_remote_folder(
     account_id: String,
     label: String,
 ) -> Result<DeleteRemoteFolderResult> {
+    // Destructive server delete under the account's token; authorize against
+    // the session, not the webview-supplied account_id.
+    let account_id = state.require_session_account(&account_id)?;
     info!("Deleting remote folder '{}' for account '{}'", label, account_id);
     let pool = state.pool()?;
     let config = get_hcfs_config_internal(pool, &account_id).await?;

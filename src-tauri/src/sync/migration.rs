@@ -279,7 +279,14 @@ async fn fetch_s3_credentials(client: &reqwest::Client, pool: &SqlitePool, accou
 #[cfg(unix)]
 fn check_disk_space(path: &std::path::Path, required_bytes: u64) -> Result<()> {
     let stat = nix::sys::statvfs::statvfs(path).map_err(|e| crate::error::AppError::Other(e.to_string()))?;
-    let available = stat.block_size() as u64 * stat.blocks_available() as u64;
+    // POSIX counts f_bavail (`blocks_available`) in units of f_frsize
+    // (`fragment_size`), NOT f_bsize (`block_size`, the preferred I/O transfer
+    // size). nix documents this on `blocks()`: "Units are in units of
+    // fragment_size()". On filesystems where the two differ (common: bsize
+    // 64 KiB–1 MiB vs frsize 4 KiB) multiplying by block_size overstated free
+    // space by the bsize/frsize ratio, letting a too-small disk pass the gate
+    // and then run out mid-download — the exact failure this check prevents.
+    let available = stat.fragment_size() as u64 * stat.blocks_available() as u64;
     if available < required_bytes {
         return Err(crate::error::AppError::NotReady(crate::error::NotReadyKind::NotEnoughDiskSpace));
     }
@@ -564,13 +571,24 @@ pub struct StartServerMigrationResult {
 }
 
 /// Raw response from the server's poll endpoint.
+///
+/// All count/list fields carry `#[serde(default)]` so a thin or partial status
+/// payload (older server, an error body that still parses as an object) maps to
+/// zeros/empties rather than failing deserialization wholesale — which would
+/// otherwise route a reachable, responding server into the synthetic
+/// `poll_error` path and inflate the consecutive-failure abort counter.
 #[derive(Debug, Deserialize)]
 struct RawServerMigrationStatus {
     pub status: String,
+    #[serde(default)]
     pub total: i32,
+    #[serde(default)]
     pub completed: i32,
+    #[serde(default)]
     pub failed: i32,
+    #[serde(default)]
     pub failed_files: Vec<String>,
+    #[serde(default)]
     pub current_file: Option<String>,
     /// Real file count from `file_records`, set when migration completes.
     #[serde(default)]
@@ -832,13 +850,24 @@ pub async fn start_server_migration(
         if text.contains("job_exists") {
             tracing::warn!("[Migration] Existing job found — cancelling and retrying");
             let cancel_url = format!("{}/migration/cancel", server_base.trim_end_matches('/'));
-            let _ = state
+            // The retry below races the server's cancellation; if the cancel
+            // didn't land, the retry hits "job_exists" again and returns the
+            // generic "after retry" error. Log a failed/non-2xx cancel so that
+            // root cause is visible instead of being swallowed.
+            match state
                 .migration
                 .client
                 .post(&cancel_url)
                 .json(&serde_json::json!({ "ss58_address": account_id }))
                 .send()
-                .await;
+                .await
+            {
+                Ok(resp) if !resp.status().is_success() => {
+                    tracing::warn!(status = %resp.status(), "[Migration] cancel before retry returned non-success");
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!(error = %e, "[Migration] cancel before retry failed to send"),
+            }
 
             // Retry the start request
             let retry_resp = state
@@ -862,7 +891,12 @@ pub async fn start_server_migration(
             }
 
             let result: StartServerMigrationResult = retry_resp.json().await?;
-            let _ = upsert_migration_status(pool, &account_id, "in_progress", 0, 0, "[]", "", &server_url).await;
+            if let Err(e) = upsert_migration_status(pool, &account_id, "in_progress", 0, 0, "[]", "", &server_url).await {
+                // Best-effort: the server job already started. A failure here only
+                // weakens restart-resume (check_migration keys off this row), so
+                // log it rather than failing the now-running migration.
+                tracing::warn!("[Migration] failed to persist local in_progress status after retry; restart-resume may miss this job: {e}");
+            }
             tracing::info!("[Migration] Server migration started successfully (after cancel+retry)");
             in_progress_guard.commit();
             return Ok(result);
@@ -876,7 +910,11 @@ pub async fn start_server_migration(
 
     // Save "in_progress" locally so check_migration can detect a completed
     // server migration that was never transitioned (e.g. app restarted).
-    let _ = upsert_migration_status(pool, &account_id, "in_progress", 0, 0, "[]", "", &server_url).await;
+    if let Err(e) = upsert_migration_status(pool, &account_id, "in_progress", 0, 0, "[]", "", &server_url).await {
+        // Best-effort: the server job already started; a failed local write only
+        // weakens restart-resume detection, so log instead of failing.
+        tracing::warn!("[Migration] failed to persist local in_progress status; restart-resume may miss this job: {e}");
+    }
 
     tracing::info!("[Migration] Server migration started successfully");
     in_progress_guard.commit();

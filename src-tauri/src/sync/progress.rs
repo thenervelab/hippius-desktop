@@ -426,7 +426,11 @@ pub fn get_snapshot(sync: &SyncRunner, preparing: &crate::sync::preparing::Prepa
             .unwrap_or(0);
         snapshot.retry_in_secs = (retry_at - now).max(0) as u64;
     }
-    snapshot.last_error = sync.last_error.lock().ok().and_then(|g| g.clone());
+    // Recover a poisoned lock (read the data behind it) instead of `.ok()`-ing
+    // it away — a thread that panicked while holding `last_error` must not make
+    // the user-facing error string vanish from every later snapshot. Mirrors
+    // the deliberate `PoisonError::into_inner` recovery on the watcher mutex.
+    snapshot.last_error.clone_from(&sync.last_error.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
     prepare_snapshot_for_emit(&mut snapshot, preparing);
     Ok(snapshot)
 }

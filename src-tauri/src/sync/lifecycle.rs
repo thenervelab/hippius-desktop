@@ -1019,17 +1019,27 @@ pub(crate) async fn initialize_sync_inner(
     // Validate user has credits/balance before allowing sync.
     // This is skipped when the caller has already performed the check (e.g.
     // `auto_init_sync` checks once before iterating all drives).
-    if !skip_credits_check && let Ok(acct) = app_state.current_account_id() {
+    if !skip_credits_check && let Ok(account) = app_state.current_session_account() {
         let client = crate::api::client::ApiClient::new(app_state.api_client.clone(), pool_owned.clone());
-        if let Ok(resp) = client
-            .get::<crate::billing::credits::CreditBalanceResponse>("/api/billing/credits/balance/", &acct)
+        match client
+            .get::<crate::billing::credits::CreditBalanceResponse>("/api/billing/credits/balance/", &account)
             .await
         {
-            // Unparseable balance is inconclusive, not zero — see balance_blocks_sync.
-            if balance_blocks_sync(resp.balance.as_deref()) {
-                return Err(crate::error::AppError::Validation(
-                    "Insufficient credits. Please add credits to your account before syncing.".into(),
-                ));
+            Ok(resp) => {
+                // Unparseable balance is inconclusive, not zero — see balance_blocks_sync.
+                if balance_blocks_sync(resp.balance.as_deref()) {
+                    return Err(crate::error::AppError::Validation(
+                        "Insufficient credits. Please add credits to your account before syncing.".into(),
+                    ));
+                }
+            }
+            // Fail-open on a transport/HTTP/parse error: this pre-init gate is a
+            // best-effort proactive check. The gated upload IPCs each call the
+            // fail-closed `require_eligible`, and the per-file 402 path is the
+            // authoritative backstop, so a server blip here must not block sync.
+            // Log it so the skipped check is observable instead of silently dropped.
+            Err(e) => {
+                tracing::warn!(account = %account, error = %e, "credit pre-init balance check failed; proceeding (upload IPCs still enforce eligibility)");
             }
         }
     }
@@ -1856,18 +1866,25 @@ async fn auto_init_sync_inner(
     // between drives, so a single HTTP round-trip is sufficient.  If the
     // check fails we return early; individual `initialize_sync_inner` calls
     // below will skip the check via `skip_credits_check = true`.
-    if let Ok(acct) = state.current_account_id() {
+    if let Ok(account) = state.current_session_account() {
         let pool_owned = state.pool()?.clone();
         let client = crate::api::client::ApiClient::new(state.api_client.clone(), pool_owned);
-        if let Ok(resp) = client
-            .get::<crate::billing::credits::CreditBalanceResponse>("/api/billing/credits/balance/", &acct)
+        match client
+            .get::<crate::billing::credits::CreditBalanceResponse>("/api/billing/credits/balance/", &account)
             .await
         {
-            // Unparseable balance is inconclusive, not zero — see balance_blocks_sync.
-            if balance_blocks_sync(resp.balance.as_deref()) {
-                return Err(crate::error::AppError::Validation(
-                    "Insufficient credits. Please add credits to your account before syncing.".into(),
-                ));
+            Ok(resp) => {
+                // Unparseable balance is inconclusive, not zero — see balance_blocks_sync.
+                if balance_blocks_sync(resp.balance.as_deref()) {
+                    return Err(crate::error::AppError::Validation(
+                        "Insufficient credits. Please add credits to your account before syncing.".into(),
+                    ));
+                }
+            }
+            // Fail-open on transport/HTTP/parse error (per-drive init + per-file
+            // 402 are the authoritative backstops), but log the skipped check.
+            Err(e) => {
+                tracing::warn!(account = %account, error = %e, "credit pre-init balance check failed in auto_init; proceeding");
             }
         }
     }

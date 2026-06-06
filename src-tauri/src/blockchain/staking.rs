@@ -15,25 +15,25 @@ pub async fn stake_bond(
     password: String,
 ) -> Result<TxResult, crate::error::AppError> {
     let (signer, address) = get_signer_and_address(&state, &password).await?;
-    let client = get_substrate_client(&state).await?;
+    let client = get_substrate_client(&state).await.map_err(crate::error::AppError::Substrate)?;
 
     let amount: u128 = amount
         .parse()
-        .map_err(|e| crate::error::AppError::Other(format!("Invalid amount: {e}")))?;
+        .map_err(|e| crate::error::AppError::Validation(format!("Invalid amount: {e}")))?;
 
     let account_id = address
         .parse::<subxt::utils::AccountId32>()
-        .map_err(|_| "Invalid address".to_string())?;
+        .map_err(|_| crate::error::AppError::Validation("Invalid address".into()))?;
 
     let ledger_query = custom_runtime::storage().staking().ledger(&account_id);
     let already_bonded = client
         .storage()
         .at_latest()
         .await
-        .map_err(|e| crate::error::AppError::Other(format!("Storage error: {e}")))?
+        .map_err(|e| crate::error::AppError::Substrate(format!("Storage error: {e}")))?
         .fetch(&ledger_query)
         .await
-        .map_err(|e| crate::error::AppError::Other(format!("Ledger query failed: {e}")))?
+        .map_err(|e| crate::error::AppError::Substrate(format!("Ledger query failed: {e}")))?
         .is_some();
 
     let tx_hash = if already_bonded {
@@ -43,10 +43,10 @@ pub async fn stake_bond(
             .tx()
             .sign_and_submit_then_watch_default(&tx, &signer)
             .await
-            .map_err(|e| crate::error::AppError::Other(format!("Submit failed: {e}")))?
+            .map_err(|e| crate::error::AppError::Substrate(format!("Submit failed: {e}")))?
             .wait_for_finalized_success()
             .await
-            .map_err(|e| crate::error::AppError::Other(format!("Transaction failed: {e}")))?
+            .map_err(|e| crate::error::AppError::Substrate(format!("Transaction failed: {e}")))?
             .extrinsic_hash()
     } else {
         info!("Submitting bond transaction...");
@@ -57,10 +57,10 @@ pub async fn stake_bond(
             .tx()
             .sign_and_submit_then_watch_default(&tx, &signer)
             .await
-            .map_err(|e| crate::error::AppError::Other(format!("Submit failed: {e}")))?
+            .map_err(|e| crate::error::AppError::Substrate(format!("Submit failed: {e}")))?
             .wait_for_finalized_success()
             .await
-            .map_err(|e| crate::error::AppError::Other(format!("Transaction failed: {e}")))?
+            .map_err(|e| crate::error::AppError::Substrate(format!("Transaction failed: {e}")))?
             .extrinsic_hash()
     };
 
@@ -80,11 +80,11 @@ pub async fn stake_unbond(
     password: String,
 ) -> Result<TxResult, crate::error::AppError> {
     let signer = get_signer(&state, &password).await?;
-    let client = get_substrate_client(&state).await?;
+    let client = get_substrate_client(&state).await.map_err(crate::error::AppError::Substrate)?;
 
     let amount: u128 = amount
         .parse()
-        .map_err(|e| crate::error::AppError::Other(format!("Invalid amount: {e}")))?;
+        .map_err(|e| crate::error::AppError::Validation(format!("Invalid amount: {e}")))?;
 
     info!("Submitting unbond transaction...");
     let tx = custom_runtime::tx().staking().unbond(amount);
@@ -92,10 +92,10 @@ pub async fn stake_unbond(
         .tx()
         .sign_and_submit_then_watch_default(&tx, &signer)
         .await
-        .map_err(|e| crate::error::AppError::Other(format!("Submit failed: {e}")))?
+        .map_err(|e| crate::error::AppError::Substrate(format!("Submit failed: {e}")))?
         .wait_for_finalized_success()
         .await
-        .map_err(|e| crate::error::AppError::Other(format!("Transaction failed: {e}")))?
+        .map_err(|e| crate::error::AppError::Substrate(format!("Transaction failed: {e}")))?
         .extrinsic_hash();
 
     info!("Unbond tx finalized: {:?}", tx_hash);
@@ -113,21 +113,21 @@ pub async fn stake_withdraw_unbonded(
     password: String,
 ) -> Result<TxResult, crate::error::AppError> {
     let (signer, address) = get_signer_and_address(&state, &password).await?;
-    let client = get_substrate_client(&state).await?;
+    let client = get_substrate_client(&state).await.map_err(crate::error::AppError::Substrate)?;
 
     let account_id = address
         .parse::<subxt::utils::AccountId32>()
-        .map_err(|_| "Invalid address".to_string())?;
+        .map_err(|_| crate::error::AppError::Validation("Invalid address".into()))?;
 
     let spans_query = custom_runtime::storage().staking().slashing_spans(&account_id);
     let num_slashing_spans = match client
         .storage()
         .at_latest()
         .await
-        .map_err(|e| crate::error::AppError::Other(format!("Storage error: {e}")))?
+        .map_err(|e| crate::error::AppError::Substrate(format!("Storage error: {e}")))?
         .fetch(&spans_query)
         .await
-        .map_err(|e| crate::error::AppError::Other(format!("Slashing spans query failed: {e}")))?
+        .map_err(|e| crate::error::AppError::Substrate(format!("Slashing spans query failed: {e}")))?
     {
         Some(spans) => spans.prior.len() as u32,
         None => 0,
@@ -139,10 +139,10 @@ pub async fn stake_withdraw_unbonded(
         .tx()
         .sign_and_submit_then_watch_default(&tx, &signer)
         .await
-        .map_err(|e| crate::error::AppError::Other(format!("Submit failed: {e}")))?
+        .map_err(|e| crate::error::AppError::Substrate(format!("Submit failed: {e}")))?
         .wait_for_finalized_success()
         .await
-        .map_err(|e| crate::error::AppError::Other(format!("Transaction failed: {e}")))?
+        .map_err(|e| crate::error::AppError::Substrate(format!("Transaction failed: {e}")))?
         .extrinsic_hash();
 
     info!("Withdraw tx finalized: {:?}", tx_hash);
@@ -160,21 +160,21 @@ pub async fn stake_claim_rewards(
     password: String,
 ) -> Result<TxResult, crate::error::AppError> {
     let (signer, address) = get_signer_and_address(&state, &password).await?;
-    let client = get_substrate_client(&state).await?;
+    let client = get_substrate_client(&state).await.map_err(crate::error::AppError::Substrate)?;
 
     let account_id = address
         .parse::<subxt::utils::AccountId32>()
-        .map_err(|_| "Invalid address".to_string())?;
+        .map_err(|_| crate::error::AppError::Validation("Invalid address".into()))?;
 
     let era_query = custom_runtime::storage().staking().current_era();
     let current_era = client
         .storage()
         .at_latest()
         .await
-        .map_err(|e| crate::error::AppError::Other(format!("Storage error: {e}")))?
+        .map_err(|e| crate::error::AppError::Substrate(format!("Storage error: {e}")))?
         .fetch(&era_query)
         .await
-        .map_err(|e| crate::error::AppError::Other(format!("Era query failed: {e}")))?
+        .map_err(|e| crate::error::AppError::Substrate(format!("Era query failed: {e}")))?
         .ok_or(crate::error::AppError::Other("Current era not available".into()))?;
 
     if current_era == 0 {
@@ -187,10 +187,10 @@ pub async fn stake_claim_rewards(
         .tx()
         .sign_and_submit_then_watch_default(&tx, &signer)
         .await
-        .map_err(|e| crate::error::AppError::Other(format!("Submit failed: {e}")))?
+        .map_err(|e| crate::error::AppError::Substrate(format!("Submit failed: {e}")))?
         .wait_for_finalized_success()
         .await
-        .map_err(|e| crate::error::AppError::Other(format!("Transaction failed: {e}")))?
+        .map_err(|e| crate::error::AppError::Substrate(format!("Transaction failed: {e}")))?
         .extrinsic_hash();
 
     info!("Payout tx finalized: {:?}", tx_hash);

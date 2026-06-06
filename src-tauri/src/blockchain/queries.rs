@@ -12,17 +12,17 @@ pub async fn get_account_balance(
     state: tauri::State<'_, crate::app_state::AppState>,
     address: String,
 ) -> Result<AccountBalance, crate::error::AppError> {
-    let client = get_substrate_client(&state).await?;
-    let account_id: subxt::utils::AccountId32 = address.parse().map_err(|_| format!("Invalid SS58 address: {address}"))?;
+    let client = get_substrate_client(&state).await.map_err(crate::error::AppError::Substrate)?;
+    let account_id: subxt::utils::AccountId32 = address.parse().map_err(|_| crate::error::AppError::Validation(format!("Invalid SS58 address: {address}")))?;
     let storage_query = custom_runtime::storage().system().account(&account_id);
     let account_info = client
         .storage()
         .at_latest()
         .await
-        .map_err(|e| crate::error::AppError::Other(format!("Storage error: {e}")))?
+        .map_err(|e| crate::error::AppError::Substrate(format!("Storage error: {e}")))?
         .fetch(&storage_query)
         .await
-        .map_err(|e| crate::error::AppError::Other(format!("Query failed: {e}")))?;
+        .map_err(|e| crate::error::AppError::Substrate(format!("Query failed: {e}")))?;
 
     let (free, reserved, frozen) = match account_info {
         Some(info) => (info.data.free.to_string(), info.data.reserved.to_string(), info.data.frozen.to_string()),
@@ -36,6 +36,23 @@ pub async fn get_account_balance(
         reserved,
         frozen,
     })
+}
+
+/// Transferable balance = `free` minus every still-frozen portion.
+///
+/// On pallet_staking, the account's `free` balance includes the active bonded
+/// stake AND every unlocking chunk — both chunks still inside the unbonding
+/// period (`unbonding_total`) and chunks whose era has matured but have not yet
+/// been released by an explicit `withdraw_unbonded` extrinsic
+/// (`withdrawable_total`). All three remain locked and unspendable until
+/// withdrawal, so all three are subtracted. Earlier code omitted
+/// `withdrawable_total`, over-reporting spendable balance for users who
+/// unbonded, waited out the period, but had not yet withdrawn — the chain then
+/// rejects a transfer of the over-reported amount. Saturating so a transiently
+/// inconsistent storage snapshot (locked sum momentarily exceeding free) yields
+/// 0 rather than underflowing.
+fn spendable_balance(free: u128, bonded: u128, unbonding_total: u128, withdrawable_total: u128) -> u128 {
+    free.saturating_sub(bonded).saturating_sub(unbonding_total).saturating_sub(withdrawable_total)
 }
 
 /// Query staking state for the current authenticated user.
@@ -57,21 +74,21 @@ pub async fn get_staking_info(
         Some(a) => a,
         None => get_substrate_address(&state).await?,
     };
-    let client = get_substrate_client(&state).await?;
-    let account_id: subxt::utils::AccountId32 = address.parse().map_err(|_| format!("Invalid SS58 address: {address}"))?;
+    let client = get_substrate_client(&state).await.map_err(crate::error::AppError::Substrate)?;
+    let account_id: subxt::utils::AccountId32 = address.parse().map_err(|_| crate::error::AppError::Validation(format!("Invalid SS58 address: {address}")))?;
 
     // Single RPC call — all queries use the same block snapshot
     let storage = client
         .storage()
         .at_latest()
         .await
-        .map_err(|e| crate::error::AppError::Other(format!("Storage error: {e}")))?;
+        .map_err(|e| crate::error::AppError::Substrate(format!("Storage error: {e}")))?;
 
     let balance_query = custom_runtime::storage().system().account(&account_id);
     let balance_info = storage
         .fetch(&balance_query)
         .await
-        .map_err(|e| crate::error::AppError::Other(format!("Balance query failed: {e}")))?;
+        .map_err(|e| crate::error::AppError::Substrate(format!("Balance query failed: {e}")))?;
     let free_balance = balance_info.map_or_else(|| "0".to_string(), |info| info.data.free.to_string());
 
     let mut bonded = "0".to_string();
@@ -83,7 +100,7 @@ pub async fn get_staking_info(
     let current_era: u32 = storage
         .fetch(&current_era_query)
         .await
-        .map_err(|e| crate::error::AppError::Other(format!("Era query failed: {e}")))?
+        .map_err(|e| crate::error::AppError::Substrate(format!("Era query failed: {e}")))?
         .unwrap_or(0);
 
     // Block-precise countdown data for unbonding chunks. Mirrors the
@@ -165,7 +182,7 @@ pub async fn get_staking_info(
     let ledger = storage
         .fetch(&ledger_query)
         .await
-        .map_err(|e| crate::error::AppError::Other(format!("Ledger query failed: {e}")))?;
+        .map_err(|e| crate::error::AppError::Substrate(format!("Ledger query failed: {e}")))?;
     if let Some(ledger) = ledger {
         bonded = ledger.active.to_string();
         for chunk in &ledger.unlocking.0 {
@@ -194,7 +211,7 @@ pub async fn get_staking_info(
     let rewards = "0".to_string();
     let total: u128 = free_balance.parse().unwrap_or(0);
     let bonded_u128: u128 = bonded.parse().unwrap_or(0);
-    let available = total.saturating_sub(bonded_u128).saturating_sub(unbonding_total);
+    let available = spendable_balance(total, bonded_u128, unbonding_total, withdrawable_total);
 
     let unbonding = unbonding_total.to_string();
     let withdrawable = withdrawable_total.to_string();
@@ -225,19 +242,19 @@ pub async fn get_block_timestamp(
 ) -> Result<BlockTimestampResult, crate::error::AppError> {
     use subxt::backend::legacy::LegacyRpcMethods;
 
-    let client = get_substrate_client(&state).await?;
+    let client = get_substrate_client(&state).await.map_err(crate::error::AppError::Substrate)?;
 
     // Get the RPC handle through the connect-aware helper so it can't spuriously
     // report "RPC client not initialized" when the rpc_client cache was cleared
     // concurrently while the OnlineClient above stayed cached — both are
     // re-derived together. See client::get_rpc_client.
-    let rpc = crate::blockchain::client::get_rpc_client(&state).await?;
+    let rpc = crate::blockchain::client::get_rpc_client(&state).await.map_err(crate::error::AppError::Substrate)?;
     let legacy: LegacyRpcMethods<subxt::PolkadotConfig> = LegacyRpcMethods::new(rpc);
 
     let block_hash = legacy
         .chain_get_block_hash(Some(block_number.into()))
         .await
-        .map_err(|e| crate::error::AppError::Other(format!("Block hash query failed: {e}")))?
+        .map_err(|e| crate::error::AppError::Substrate(format!("Block hash query failed: {e}")))?
         .ok_or_else(|| format!("Block {block_number} not found"))?;
 
     let timestamp_query = custom_runtime::storage().timestamp().now();
@@ -246,8 +263,11 @@ pub async fn get_block_timestamp(
         .at(block_hash)
         .fetch(&timestamp_query)
         .await
-        .map_err(|e| crate::error::AppError::Other(format!("Timestamp query failed: {e}")))?
-        .unwrap_or(0);
+        .map_err(|e| crate::error::AppError::Substrate(format!("Timestamp query failed: {e}")))?
+        // A missing timestamp storage entry is surfaced as an error rather than
+        // collapsed to epoch 0, so the FE can tell "unavailable" from a genuine
+        // 1970 value (the block-hash step above already errors on not-found).
+        .ok_or_else(|| crate::error::AppError::Substrate(format!("No timestamp for block {block_number}")))?;
 
     Ok(BlockTimestampResult { timestamp })
 }
@@ -283,20 +303,20 @@ pub async fn get_referral_links(
     state: tauri::State<'_, crate::app_state::AppState>,
     address: String,
 ) -> Result<Vec<ReferralLink>, crate::error::AppError> {
-    let client = get_substrate_client(&state).await?;
+    let client = get_substrate_client(&state).await.map_err(crate::error::AppError::Substrate)?;
     let target_account: subxt::utils::AccountId32 = address.parse().map_err(|_| "Invalid address".to_string())?;
 
     let storage = client
         .storage()
         .at_latest()
         .await
-        .map_err(|e| crate::error::AppError::Other(format!("Storage error: {e}")))?;
+        .map_err(|e| crate::error::AppError::Substrate(format!("Storage error: {e}")))?;
 
     let query = custom_runtime::storage().credits().referral_codes_iter();
     let mut entries = storage
         .iter(query)
         .await
-        .map_err(|e| crate::error::AppError::Other(format!("ReferralCodes query failed: {e}")))?;
+        .map_err(|e| crate::error::AppError::Substrate(format!("ReferralCodes query failed: {e}")))?;
 
     let decimals = 10u128.pow(18);
 
@@ -323,7 +343,7 @@ pub async fn get_referral_links(
     // + UTF-8 validation) rather than the audit branch's raw key slicing.
     while let Some(result) = entries.next().await {
         let entry = result
-            .map_err(|e| crate::error::AppError::Other(format!("ReferralCodes iteration failed: {e}")))?;
+            .map_err(|e| crate::error::AppError::Substrate(format!("ReferralCodes iteration failed: {e}")))?;
         if entry.value != target_account {
             continue;
         }
@@ -344,7 +364,7 @@ pub async fn get_referral_links(
                 .fetch(&reward_query)
                 .await
                 .map(|opt| opt.unwrap_or(0u128))
-                .map_err(|e| crate::error::AppError::Other(format!("Reward query failed: {e}")))
+                .map_err(|e| crate::error::AppError::Substrate(format!("Reward query failed: {e}")))
         }
     });
     let rewards: Vec<u128> = futures_util::future::try_join_all(reward_futures).await?;
@@ -369,7 +389,44 @@ pub fn validate_address(address: String) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_referral_code_bytes, REFERRAL_KEY_PREFIX_LEN};
+    use super::{extract_referral_code_bytes, spendable_balance, REFERRAL_KEY_PREFIX_LEN};
+    use proptest::prelude::*;
+
+    #[test]
+    fn spendable_excludes_matured_but_unwithdrawn_chunks() {
+        // free = 100 = 40 active bonded + 30 still-unbonding + 20 matured-but-
+        // -unwithdrawn + 10 genuinely free. Only the 10 is spendable; the 20
+        // matured chunk stays locked until withdraw_unbonded (the regression).
+        assert_eq!(spendable_balance(100, 40, 30, 20), 10);
+    }
+
+    #[test]
+    fn spendable_is_zero_when_everything_is_locked() {
+        assert_eq!(spendable_balance(100, 100, 0, 0), 0);
+        assert_eq!(spendable_balance(100, 0, 60, 40), 0);
+    }
+
+    #[test]
+    fn spendable_saturates_instead_of_underflowing() {
+        // Inconsistent snapshot: locked sum exceeds free. Must clamp at 0.
+        assert_eq!(spendable_balance(10, 50, 50, 50), 0);
+    }
+
+    proptest! {
+        // Spendable can never exceed free, and locking more (raising any frozen
+        // component) can never increase it — the core monotonicity invariants.
+        #[test]
+        fn spendable_never_exceeds_free(free in any::<u128>(), bonded in any::<u128>(), unbonding in any::<u128>(), withdrawable in any::<u128>()) {
+            let s = spendable_balance(free, bonded, unbonding, withdrawable);
+            prop_assert!(s <= free);
+        }
+
+        #[test]
+        fn spendable_monotonic_in_withdrawable(free in any::<u128>(), bonded in any::<u128>(), unbonding in any::<u128>(), w1 in any::<u128>(), extra in any::<u128>()) {
+            let w2 = w1.saturating_add(extra);
+            prop_assert!(spendable_balance(free, bonded, unbonding, w2) <= spendable_balance(free, bonded, unbonding, w1));
+        }
+    }
 
     /// Pins the on-chain storage-key layout assumption. If the
     /// `credits.referral_codes` map ever changes its hasher (e.g. from

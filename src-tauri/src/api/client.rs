@@ -98,7 +98,7 @@ pub(crate) fn api_base_url() -> String {
 ///
 /// Routes through [`crate::auth::auth_session_repo::get_token_and_expiry`]
 /// so the repo stays the only direct reader of the table.
-pub async fn get_auth_token_for_account(pool: &SqlitePool, account_id: &str) -> Result<String, ApiError> {
+pub async fn get_auth_token_for_account(pool: &SqlitePool, account_id: &crate::app_state::SessionAccount) -> Result<String, ApiError> {
     let row = crate::auth::auth_session_repo::get_token_and_expiry(pool, account_id)
         .await
         .map_err(|e| ApiError::Other(format!("DB error: {e}")))?;
@@ -131,7 +131,7 @@ impl ApiClient {
     }
 
     /// GET request with auth.
-    pub async fn get<T: DeserializeOwned>(&self, path: &str, account_id: &str) -> Result<T, ApiError> {
+    pub async fn get<T: DeserializeOwned>(&self, path: &str, account_id: &crate::app_state::SessionAccount) -> Result<T, ApiError> {
         let token = get_auth_token_for_account(&self.pool, account_id).await?;
         let url = format!("{}{}", self.base_url, path);
 
@@ -148,7 +148,7 @@ impl ApiClient {
     }
 
     /// GET request with auth and query parameters.
-    pub async fn get_with_params<T: DeserializeOwned>(&self, path: &str, params: &[(&str, &str)], account_id: &str) -> Result<T, ApiError> {
+    pub async fn get_with_params<T: DeserializeOwned>(&self, path: &str, params: &[(&str, &str)], account_id: &crate::app_state::SessionAccount) -> Result<T, ApiError> {
         let token = get_auth_token_for_account(&self.pool, account_id).await?;
         let url = url_with_params(&self.base_url, path, params);
 
@@ -165,7 +165,7 @@ impl ApiClient {
     }
 
     /// POST request with auth and JSON body.
-    pub async fn post<T: DeserializeOwned, B: Serialize>(&self, path: &str, body: &B, account_id: &str) -> Result<T, ApiError> {
+    pub async fn post<T: DeserializeOwned, B: Serialize>(&self, path: &str, body: &B, account_id: &crate::app_state::SessionAccount) -> Result<T, ApiError> {
         let token = get_auth_token_for_account(&self.pool, account_id).await?;
         let url = format!("{}{}", self.base_url, path);
 
@@ -184,7 +184,7 @@ impl ApiClient {
     }
 
     /// PATCH request with auth and JSON body.
-    pub async fn patch<T: DeserializeOwned, B: Serialize>(&self, path: &str, body: &B, account_id: &str) -> Result<T, ApiError> {
+    pub async fn patch<T: DeserializeOwned, B: Serialize>(&self, path: &str, body: &B, account_id: &crate::app_state::SessionAccount) -> Result<T, ApiError> {
         let token = get_auth_token_for_account(&self.pool, account_id).await?;
         let url = format!("{}{}", self.base_url, path);
 
@@ -203,7 +203,7 @@ impl ApiClient {
     }
 
     /// DELETE request with auth.
-    pub async fn delete(&self, path: &str, account_id: &str) -> Result<(), ApiError> {
+    pub async fn delete(&self, path: &str, account_id: &crate::app_state::SessionAccount) -> Result<(), ApiError> {
         let token = get_auth_token_for_account(&self.pool, account_id).await?;
         let url = format!("{}{}", self.base_url, path);
 

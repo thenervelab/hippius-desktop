@@ -305,6 +305,11 @@ pub(crate) async fn check_action_eligibility_inner(
     bytes: u64,
 ) -> Result<ActionEligibility> {
     let pool = state.pool()?;
+    // The token fetch below requires proof the account is the session account.
+    // Minting here also validates the (possibly frontend-supplied) `account_id`
+    // for the proactive `check_action_eligibility` command path, not just the
+    // gated-IPC path that already passes the session account.
+    let account = state.require_session_account_typed(account_id)?;
     let required = action.required_credits(bytes);
 
     // 1. Live marketplace credit fetch. NO caching — the whole point of
@@ -313,7 +318,7 @@ pub(crate) async fn check_action_eligibility_inner(
     //    check fails. Decoded into a typed struct (not `serde_json::Value`)
     //    so we skip the dynamic-Value allocation per call.
     let client = ApiClient::new(state.api_client.clone(), pool.clone());
-    let resp: crate::billing::credits::CreditBalanceResponse = client.get("/api/billing/credits/balance/", account_id).await?;
+    let resp: crate::billing::credits::CreditBalanceResponse = client.get("/api/billing/credits/balance/", &account).await?;
     let credit_str = resp.balance.as_deref().unwrap_or("0");
     // An unparseable balance from a 200 response is NOT the same as an empty
     // wallet, but both previously collapsed to 0.0 and silently refused every

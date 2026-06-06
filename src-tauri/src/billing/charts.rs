@@ -426,7 +426,12 @@ pub fn transform_marketplace_credits(credits: Vec<MarketplaceCreditInput>) -> Re
 
     for credit in &credits {
         let date_key = parse_date_key(&credit.date);
-        let raw_amount = credit.amount.parse::<u128>().unwrap_or(0);
+        // Coerce-to-0 keeps the chart rendering on a malformed amount, but log it
+        // so silent under-counting is traceable (mirrors parse_indexer_u64).
+        let raw_amount = credit.amount.parse::<u128>().unwrap_or_else(|_| {
+            tracing::warn!(amount = %credit.amount, "non-numeric marketplace credit amount; coercing to 0");
+            0
+        });
         let entry = daily.entry(date_key).or_insert((0, credit.date.clone()));
         entry.0 += raw_amount;
     }
