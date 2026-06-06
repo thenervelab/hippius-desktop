@@ -88,6 +88,7 @@ pub async fn setup_and_init_sync(
 ) -> Result<InitSyncResult> {
     use tauri::Manager;
     let state = app.state::<crate::app_state::AppState>();
+    let account_id = state.require_session_account(&account_id)?;
     let pool = state.pool()?;
 
     // 1. Save HCFS config
@@ -124,6 +125,7 @@ pub async fn add_local_sync_folder(
 ) -> Result<String> {
     use tauri::Manager;
     let state = app.state::<crate::app_state::AppState>();
+    let account_id = state.require_session_account(&account_id)?;
     let pool = state.pool()?;
 
     // Enforce credit eligibility at the IPC boundary, priced by the
@@ -1598,6 +1600,7 @@ pub async fn change_sync_folder(
     label: String,
     mnemonic: Option<String>,
 ) -> Result<InitSyncResult> {
+    let account_id = state.require_session_account(&account_id)?;
     let pool = state.pool()?;
 
     // Tear down the existing drive (fire and forget if it doesn't exist) so we

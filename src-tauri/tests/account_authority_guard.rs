@@ -37,6 +37,40 @@ const ALLOWLIST: &[&str] = &[
     "get_add_credit_events",
 ];
 
+/// Commands intentionally NOT session-guarded for the BROADER cross-account
+/// surface (`account_scoped_commands_validate_session`), each a documented
+/// exception. Superset of [`ALLOWLIST`] (the public chain/indexer reads are
+/// exempt here too) plus:
+///
+/// - **indexer/chain reads** keyed by the global indexer API key where the FE
+///   passes the header-selected `activeWallet`, not the session account:
+///   `get_staking_info`, `get_drive_credits_chart/_total`, `get_drive_storage_chart`.
+/// - **bootstrap / teardown** where a strict session match would break the very
+///   flow that establishes or tears down the session:
+///   - `is_token_valid` runs during session *restore*, BEFORE a session exists,
+///     and returns only a bool (no secret) — guarding it fails closed before
+///     there is anything to match against.
+///   - `logout_full` is idempotent teardown; the only "attack" is forcing a
+///     victim's re-login (no secret leak), and a strict match would break
+///     logout if `account_id` drifts during an account switch. Robustness wins.
+/// - **validated one level in**: `check_action_eligibility` delegates to
+///   `check_action_eligibility_inner`, which mints `require_session_account_typed`.
+const BROAD_ALLOWLIST: &[&str] = &[
+    "get_credits",
+    "get_marketplace_credits",
+    "get_drive_storage_stats",
+    "get_system_balance",
+    "get_balance_transfers",
+    "get_add_credit_events",
+    "get_staking_info",
+    "get_drive_credits_chart",
+    "get_drive_credits_total",
+    "get_drive_storage_chart",
+    "is_token_valid",
+    "logout_full",
+    "check_action_eligibility",
+];
+
 /// A command reaches a per-account SECRET if its body references a known
 /// account-keyed accessor: a Hippius API bearer token (`ApiClient` /
 /// `get_api_token` / `get_auth_token_for_account` / `build_client`, the last
@@ -109,6 +143,36 @@ fn collect_rs(dir: &Path, root: &Path, out: &mut Vec<(String, String)>) {
     }
 }
 
+/// Walk `src` and return every real `#[tauri::command]` as (name, signature,
+/// body). "Real" means a line that trims to exactly `#[tauri::command]` — a doc
+/// comment that merely *mentions* `` `#[tauri::command]` `` (as
+/// `create_credit_notifications`'s does) is not an attribute. The prior
+/// `split("#[tauri::command]")` could not tell the two apart and mis-extracted
+/// the helper that followed such a doc comment (`create_credit_notifications_inner`)
+/// as a phantom command — harmless for the secret gate (the helper touches no
+/// secret) but a false positive for the broad gate below.
+fn commands_in(src: &str) -> Vec<(String, String, String)> {
+    let mut out = Vec::new();
+    for (pos, _) in src.match_indices("#[tauri::command]") {
+        let line_start = src[..pos].rfind('\n').map_or(0, |n| n + 1);
+        if !src[line_start..].trim_start().starts_with("#[tauri::command]") {
+            continue; // a `///` mention, not an attribute
+        }
+        if let Some((name, signature, body)) = extract_command(&src[pos..]) {
+            out.push((name, signature.to_string(), body.to_string()));
+        }
+    }
+    out
+}
+
+/// A command is guarded against a frontend-supplied `account_id` if it takes
+/// the validated `SessionAccount` extractor (signature, compiler-enforced) or
+/// calls `require_session_account` (body). A raw `account_id: String` with
+/// neither is the hole.
+fn is_guarded(signature: &str, body: &str) -> bool {
+    signature.contains("SessionAccount") || body.contains("require_session_account")
+}
+
 #[test]
 fn account_secret_commands_validate_session() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -118,23 +182,14 @@ fn account_secret_commands_validate_session() {
 
     let mut offenders = Vec::new();
     let mut checked = 0usize;
-
     for (rel, src) in &files {
-        // Splitting on the command attribute yields one chunk per command
-        // (signature + body, up to the next command). chunk[0] is the
-        // pre-first-command preamble, skipped.
-        for chunk in src.split("#[tauri::command]").skip(1) {
-            let Some((name, signature, body)) = extract_command(chunk) else { continue };
+        for (name, signature, body) in commands_in(src) {
             let takes_account = signature.contains("account_id:");
-            if !takes_account || !touches_account_secret(body) || allow.contains(name.as_str()) {
+            if !takes_account || !touches_account_secret(&body) || allow.contains(name.as_str()) {
                 continue;
             }
             checked += 1;
-            // Guarded if it takes the validated `SessionAccount` extractor type
-            // (signature, compiler-enforced) or calls `require_session_account`
-            // (body). A raw `account_id: String` with neither is the hole.
-            let guarded = signature.contains("SessionAccount") || body.contains("require_session_account");
-            if !guarded {
+            if !is_guarded(&signature, &body) {
                 offenders.push(format!("{rel}::{name}"));
             }
         }
@@ -149,6 +204,46 @@ fn account_secret_commands_validate_session() {
          frontend-supplied account_id but neither take `account_id: SessionAccount` \
          nor call `state.require_session_account(&account_id)?` — add the guard, or \
          if intentionally public add to ALLOWLIST with a rationale:\n  {}",
+        offenders.join("\n  ")
+    );
+}
+
+/// Broader chokepoint: EVERY account-scoped command — not only the
+/// secret-reaching ones — must validate the frontend `account_id` against the
+/// session, OR be listed in [`BROAD_ALLOWLIST`] with a rationale. This covers
+/// the cross-account *read/write* surface (config, sync paths, folder/file
+/// listings, migration state) that scopes a SQLite query by `account_id`
+/// without touching a bearer token: a lower-severity sibling of the secret
+/// surface above, but still a cross-account leak on a multi-account device.
+#[test]
+fn account_scoped_commands_validate_session() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let allow: HashSet<&str> = BROAD_ALLOWLIST.iter().copied().collect();
+    let mut files = Vec::new();
+    collect_rs(&root.join("src"), &root, &mut files);
+
+    let mut offenders = Vec::new();
+    let mut checked = 0usize;
+    for (rel, src) in &files {
+        for (name, signature, body) in commands_in(src) {
+            if !signature.contains("account_id:") || allow.contains(name.as_str()) {
+                continue;
+            }
+            checked += 1;
+            if !is_guarded(&signature, &body) {
+                offenders.push(format!("{rel}::{name}"));
+            }
+        }
+    }
+
+    assert!(checked >= 40, "expected to check >=40 account-scoped commands, only saw {checked} — the detector may be broken");
+    assert!(
+        offenders.is_empty(),
+        "these account-scoped #[tauri::command]s trust a frontend-supplied account_id \
+         without validating it against the session — add `let account_id = \
+         state.require_session_account(&account_id)?;` (or take `account_id: \
+         SessionAccount`), or if intentionally unguarded add to BROAD_ALLOWLIST with a \
+         rationale:\n  {}",
         offenders.join("\n  ")
     );
 }

@@ -1476,6 +1476,7 @@ pub async fn list_sync_folder_grouped(
     subfolder: Option<String>,
     label: Option<String>,
 ) -> Result<GroupedListing> {
+    let account_id = state.require_session_account(&account_id)?;
     list_sync_folder_grouped_inner(&state, account_id, sync_path, subfolder, label).await
 }
 
@@ -2548,6 +2549,7 @@ pub async fn resolve_file_path(
     label: String,
     file_name: String,
 ) -> Result<String> {
+    let account_id = state.require_session_account(&account_id)?;
     // Reject path traversal attempts — slashes are allowed for subfolder access
     if file_name.contains("..") {
         return Err(crate::error::AppError::Other("Invalid file name".into()));
@@ -2605,6 +2607,7 @@ pub async fn resolve_file_info(
     source: Option<String>,
     file_name: String,
 ) -> Result<FilePathInfo> {
+    let account_id = state.require_session_account(&account_id)?;
     let pool = state.pool()?;
     let effective_label = label.as_deref().unwrap_or("default");
 

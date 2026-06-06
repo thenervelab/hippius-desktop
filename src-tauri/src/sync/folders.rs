@@ -281,6 +281,7 @@ pub async fn restore_remote_folders(
     folders: Vec<RestoreFolderRequest>,
     existing_mnemonic: Option<String>,
 ) -> Result<Vec<RestoreResult>> {
+    let account_id = state.require_session_account(&account_id)?;
     info!(
         "Restoring {} remote folder(s) to '{}' for account '{}'",
         folders.len(),
@@ -436,6 +437,7 @@ pub async fn delete_remote_folder(
 /// in TypeScript.
 #[tauri::command]
 pub async fn get_sync_folders_with_stats(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<SyncFoldersResult> {
+    let account_id = state.require_session_account(&account_id)?;
     let pool = state.pool()?;
 
     // Parallel fetch: local paths + remote folders

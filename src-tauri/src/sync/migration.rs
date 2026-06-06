@@ -306,6 +306,7 @@ fn check_disk_space(_path: &std::path::Path, _required_bytes: u64) -> Result<()>
 #[allow(clippy::too_many_lines)]
 #[tauri::command]
 pub async fn check_migration(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<MigrationCheckResult> {
+    let account_id = state.require_session_account(&account_id)?;
     info!("[Migration] check_migration called for account: {}", &account_id);
     let pool = state.pool()?;
 
@@ -448,6 +449,7 @@ pub async fn check_migration(state: tauri::State<'_, crate::app_state::AppState>
 /// it handles label promotion, drive stop, and default drive init atomically.
 #[tauri::command]
 pub async fn dismiss_migration(state: tauri::State<'_, crate::app_state::AppState>, account_id: String, reason: String) -> Result<()> {
+    let account_id = state.require_session_account(&account_id)?;
     let pool = state.pool()?;
     let server_url = get_server_url(pool, &account_id).await.unwrap_or_default();
     let status = if reason.is_empty() { "dismissed" } else { &reason };
@@ -644,6 +646,7 @@ pub struct MigrationFlowResult {
 /// if migration can start immediately.
 #[tauri::command]
 pub async fn start_migration_flow(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<MigrationFlowResult> {
+    let account_id = state.require_session_account(&account_id)?;
     let pool = state.pool()?;
     let config = crate::sync::config::get_hcfs_config_internal(pool, &account_id).await?;
 
@@ -992,6 +995,7 @@ const TERMINAL_STATUSES: &[&str] = &["completed", "failed", "cancelled"];
 #[tauri::command]
 pub async fn start_migration_polling(app: tauri::AppHandle, account_id: String) -> Result<()> {
     use tauri::{Emitter, Manager};
+    let account_id = app.state::<crate::app_state::AppState>().require_session_account(&account_id)?;
 
     // Cancel any existing poll task
     {

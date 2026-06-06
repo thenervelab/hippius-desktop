@@ -101,5 +101,6 @@ pub(crate) async fn fetch_capabilities(state: &crate::app_state::AppState, accou
 /// hide themselves on old servers.
 #[tauri::command]
 pub async fn hcfs_get_capabilities(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<ServerCapabilities> {
+    let account_id = state.require_session_account(&account_id)?;
     fetch_capabilities(&state, &account_id).await
 }
