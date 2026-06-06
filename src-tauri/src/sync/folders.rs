@@ -176,6 +176,9 @@ pub(crate) async fn list_remote_folders_internal(pool: &SqlitePool, account_id: 
 /// List all folders registered for the current account on the remote server.
 #[tauri::command]
 pub async fn list_remote_folders(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<Vec<RemoteFolderInfoResult>> {
+    // Enumerates another account's remote folders under its token; authorize
+    // against the session (sibling delete_remote_folder is already guarded).
+    let account_id = state.require_session_account(&account_id)?;
     info!("Listing remote folders for account '{}'", account_id);
     let pool = state.pool()?;
     let config = get_hcfs_config_internal(pool, &account_id).await?;

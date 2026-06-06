@@ -520,6 +520,9 @@ pub async fn complete_migration_transition(
     account_id: String,
     custom_sync_path: Option<String>,
 ) -> Result<crate::sync::lifecycle::InitSyncResult> {
+    // Reads the account's mnemonic/token to complete its migration + init sync;
+    // authorize against the session.
+    let account_id = state.require_session_account(&account_id)?;
     let label = derive_migration_label(custom_sync_path.as_deref());
     let pool = state.pool()?;
 
@@ -704,6 +707,9 @@ pub async fn start_server_migration(
     total_size: u64,
     sync_path: Option<String>,
 ) -> Result<StartServerMigrationResult> {
+    // Reads the account's S3 credentials + token to start a server migration;
+    // authorize against the session.
+    let account_id = state.require_session_account(&account_id)?;
     let label = derive_migration_label(sync_path.as_deref());
     tracing::info!("[Migration] Starting server migration for account {account_id}, label={label}, total_size={total_size}");
     // RAII: every `?`-driven early return below clears the flag; only the

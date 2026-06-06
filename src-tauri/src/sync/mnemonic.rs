@@ -207,6 +207,9 @@ pub async fn get_mnemonic_for_account(app_state: &crate::app_state::AppState, ac
 /// dropped (and the in-process copy wiped) immediately after the clone.
 #[tauri::command]
 pub async fn get_drive_mnemonic(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<String> {
+    // Returns the account's decrypted master mnemonic; authorize against the
+    // session so a renderer can't read another local account's seed.
+    let account_id = state.require_session_account(&account_id)?;
     let z = get_mnemonic_for_account(&state, &account_id).await?;
     Ok((*z).clone())
 }
@@ -231,6 +234,9 @@ pub async fn get_drive_mnemonic(state: tauri::State<'_, crate::app_state::AppSta
 /// legitimate consumer of the raw string.
 #[tauri::command]
 pub async fn ensure_sync_mnemonic(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<()> {
+    // Generates/persists the account's master mnemonic; authorize against the
+    // session (FE invokes it post-login for the current user).
+    let account_id = state.require_session_account(&account_id)?;
     // Block on the recovery gate before touching the mnemonic store.
     //
     // For OAuth login on a fresh device, `complete_oauth_flow` flips the

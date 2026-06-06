@@ -148,6 +148,11 @@ async fn attempt(
 /// chaining `get_auth_token` → `billing_auth` → `save_auth_session`.
 #[tauri::command]
 pub async fn ensure_billing_auth(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<(), crate::error::AppError> {
+    // Mints + persists an auth-session token for `account_id` from its on-disk
+    // mnemonic; authorize against the session so a renderer can't forge a
+    // session/token for another locally-provisioned account. (The FE invokes
+    // this with the just-logged-in address, so the session is already set.)
+    let account_id = state.require_session_account(&account_id)?;
     let pool = state.pool()?;
 
     // A genuine DB failure here must NOT be silently treated as "no password

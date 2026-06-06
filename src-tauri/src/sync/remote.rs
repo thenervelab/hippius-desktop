@@ -93,6 +93,9 @@ async fn build_client(pool: &SqlitePool, account_id: &str, label: &str) -> Resul
 
 #[tauri::command]
 pub async fn list_remote_folder_files(state: tauri::State<'_, AppState>, account_id: String, label: String) -> Result<Vec<RemoteFileInfo>> {
+    // Lists another account's remote files under its token; authorize against
+    // the session (sibling download/cache commands are already guarded).
+    let account_id = state.require_session_account(&account_id)?;
     info!(account_id = %account_id, label = %label, "Listing remote folder files");
     let pool = state.pool()?;
     let mnemonic = session_mnemonic(&state)?;

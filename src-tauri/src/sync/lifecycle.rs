@@ -169,6 +169,13 @@ pub async fn add_local_sync_folder(
 /// switching folders won't download files from the previous folder.
 #[tauri::command]
 pub async fn initialize_sync(app: tauri::AppHandle, account_id: String, label: String, existing_mnemonic: Option<String>) -> Result<InitSyncResult> {
+    // FE entry that flows account_id into the secret-using inner; authorize
+    // against the session. (Also reached from complete_migration_transition,
+    // itself guarded, with the session account — the re-check is idempotent.)
+    let account_id = {
+        use tauri::Manager;
+        app.state::<crate::app_state::AppState>().require_session_account(&account_id)?
+    };
     initialize_sync_inner(app, account_id, label, existing_mnemonic, true, false).await
 }
 
@@ -1628,6 +1635,9 @@ pub async fn auto_init_sync(
     account_id: String,
     mnemonic: Option<String>,
 ) -> Result<AutoInitResult> {
+    // FE entry that flows account_id into the secret-using inner; authorize
+    // against the session before it reaches the mnemonic/token paths.
+    let account_id = state.require_session_account(&account_id)?;
     auto_init_sync_inner(app.clone(), &state, account_id, mnemonic).await
 }
 
