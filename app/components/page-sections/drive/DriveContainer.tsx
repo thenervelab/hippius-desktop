@@ -80,7 +80,6 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     data: regularFilesData,
     isLoading: isRegularFilesLoading,
     refetch: refetchUserFiles,
-    isRefetching,
     isFetching: isRegularFilesFetching,
     error,
   } = useUserFiles();
@@ -330,6 +329,24 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     : isNested
       ? nestedListing.isRefreshing
       : isRegularFilesFetching;
+
+  // The refresh icon spins ONLY on a manual refresh (user clicked the button),
+  // never on the silent background refetch that fires when a sync cycle
+  // completes (`sync_files_completed_changed`). Set on click; cleared once the
+  // fetch actually settles. The `manualFetchStartedRef` guard handles the click
+  // tick where `isFetching` hasn't flipped to true yet, so the flag isn't
+  // cleared before the fetch even starts.
+  const [isManualRefreshing, setIsManualRefreshing] = useState(false);
+  const manualFetchStartedRef = useRef(false);
+  useEffect(() => {
+    if (!isManualRefreshing) return;
+    if (isFetching) {
+      manualFetchStartedRef.current = true;
+    } else if (manualFetchStartedRef.current) {
+      manualFetchStartedRef.current = false;
+      setIsManualRefreshing(false);
+    }
+  }, [isManualRefreshing, isFetching]);
 
   // Get the appropriate data based on view mode
   const allData = useMemo(() => {
@@ -1339,8 +1356,8 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
             const driveHeader = (
               <DriveHeader
                 isRecentFiles={isRecentFiles}
-                isRefetching={isRefetching}
-                isFetching={isFetching}
+                isRefetching={isManualRefreshing}
+                isFetching={false}
                 formattedStorageSize={formattedStorageSize}
                 allFilteredDataLength={displayedFileCount}
                 viewMode={viewMode}
@@ -1349,7 +1366,10 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 handleSearchChange={handleSearchChange}
                 activeFilters={activeFilters}
                 handleRemoveFilter={handleRemoveFilter}
-                refetchUserFiles={refreshForCurrentView}
+                refetchUserFiles={() => {
+                  setIsManualRefreshing(true);
+                  refreshForCurrentView();
+                }}
                 addButtonRef={addButtonRef}
                 privateFileCount={privateFileCount}
                 isSyncPathEmpty={effectiveSyncPathEmpty}
