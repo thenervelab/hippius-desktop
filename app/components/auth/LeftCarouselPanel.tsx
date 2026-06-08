@@ -16,23 +16,25 @@ const LeftCarouselPanel = () => {
   // Theme: the app uses Tailwind's media dark-mode strategy (no .dark class),
   // so we mirror it by reading prefers-color-scheme directly to pick the clip.
   const [prefersDark, setPrefersDark] = useState(false);
-  // Gate the <video> behind a client-mount flag so it first mounts only AFTER
-  // `prefersDark` is resolved below. Otherwise the SSR/first paint mounts the
-  // light clip, then the theme effect flips `prefersDark`, the keyed <video>
-  // remounts to the dark src mid-autoplay, and WKWebView drops that second
-  // play() — leaving slide 0 paused with the overlay play button (slides 2-4
-  // are unaffected because they first mount after the theme has settled).
+  // Gate the <img> behind a client-mount flag so the theme-keyed GIF first
+  // renders only on the client, after `prefersDark` is resolved — the static
+  // export prerenders with the light src, so without this the first client
+  // paint would hydrate-mismatch (and briefly flash) the wrong theme's clip.
   const [mounted, setMounted] = useState(false);
-  // The active slide is React state because we mount the <video> for ONLY that
-  // slide. Linux's WebKitGTK webview has a small simultaneous-video-decoder
-  // pool; mounting all four clips at once exhausts it and later slides freeze
-  // on their first frame. We therefore keep at most TWO clips alive: the active
-  // one, plus the outgoing one for the brief duration of the crossfade so the
-  // fade-out shows its real last frame instead of an empty panel.
+  // The active slide is React state because we mount the <img> for ONLY that
+  // slide (plus the outgoing one mid-crossfade). A GIF starts animating from
+  // its first frame the moment it mounts, so mounting only the active clip is
+  // what makes each slide restart its animation from the top when you land on
+  // it — and keeps idle slides from holding decoded GIF frames in memory.
   const [activeIndex, setActiveIndex] = useState(0);
   // The slide we're transitioning AWAY from; non-null only while the crossfade
-  // is in flight. Dropped on transition end so we settle back to one decoder.
+  // is in flight. Dropped on transition end so we settle back to one clip.
   const [prevIndex, setPrevIndex] = useState<number | null>(null);
+  // True once the active slide's GIF has decoded its first frame (img onLoad).
+  // The auto-advance timer only starts then, so its countdown measures from
+  // when the clip is actually on screen rather than from the slide change —
+  // the closest a timer can get to "the GIF started playing".
+  const [activeReady, setActiveReady] = useState(false);
 
   const swiperRef = useRef<SwiperClass | null>(null);
   const videoFrameRef = useRef<HTMLDivElement | null>(null);
@@ -49,8 +51,6 @@ const LeftCarouselPanel = () => {
   useEffect(() => {
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
     setPrefersDark(mq.matches);
-    // Batched with setPrefersDark, so the video's first mount already has the
-    // correct theme src — no remount, so autoplay survives on slide 0.
     setMounted(true);
     const onChange = (e: MediaQueryListEvent) => setPrefersDark(e.matches);
     mq.addEventListener("change", onChange);
@@ -76,6 +76,25 @@ const LeftCarouselPanel = () => {
     return () => observer.disconnect();
   }, [activeIndex]);
 
+  // Auto-advance timer — the GIF stand-in for the old <video> `ended` event.
+  // A GIF reports neither its end nor its position, so we advance after the
+  // slide's hand-measured `durationMs` (see SwipeContent). It starts only once
+  // the clip is on screen (`activeReady`) and is suppressed after a manual
+  // interaction (`manualLoop`), letting the infinitely-looping GIF play in
+  // place. Re-running on every activeIndex change clears the previous timer, so
+  // a user landing on a slide can never inherit a stale countdown.
+  useEffect(() => {
+    if (!activeReady || manualLoop) return;
+    const swiper = swiperRef.current;
+    if (!swiper) return;
+    const durationMs = SWIPE_CONTENT[activeIndex]?.durationMs ?? 5000;
+    const timer = window.setTimeout(() => {
+      autoAdvancingRef.current = true;
+      swiper.slideTo((activeIndex + 1) % SWIPE_CONTENT.length);
+    }, durationMs);
+    return () => window.clearTimeout(timer);
+  }, [activeIndex, activeReady, manualLoop]);
+
   const handleSlideChange = useCallback((swiper: SwiperClass) => {
     // A change we didn't trigger ourselves is a user interaction (dot click or
     // swipe): from here on, loop in place rather than auto-advance.
@@ -85,66 +104,23 @@ const LeftCarouselPanel = () => {
       manualLoopRef.current = true;
       setManualLoop(true);
     }
+    // The incoming slide's GIF must load before its timer may start; gate it
+    // shut until this slide's <img> fires onLoad.
+    setActiveReady(false);
     setActiveIndex(swiper.activeIndex);
   }, []);
 
-  // Keep the outgoing slide's <video> mounted for the duration of the crossfade
-  // so it fades out on its last decoded frame rather than an empty panel.
+  // Keep the outgoing slide's <img> mounted for the duration of the crossfade
+  // so it fades out on its current frame rather than an empty panel.
   const handleTransitionStart = useCallback((swiper: SwiperClass) => {
     if (swiper.previousIndex !== swiper.activeIndex) {
       setPrevIndex(swiper.previousIndex);
     }
   }, []);
 
-  // Crossfade finished: drop the outgoing clip so we hold a single decoder.
+  // Crossfade finished: drop the outgoing clip so we hold a single GIF.
   const handleTransitionEnd = useCallback(() => {
     setPrevIndex(null);
-  }, []);
-
-  const handleEnded = useCallback((video: HTMLVideoElement, index: number) => {
-    // After interaction we loop the current clip in place instead of moving on.
-    if (manualLoopRef.current) {
-      return;
-    }
-    const swiper = swiperRef.current;
-    if (!swiper) return;
-    autoAdvancingRef.current = true;
-    swiper.slideTo((index + 1) % SWIPE_CONTENT.length);
-  }, []);
-
-  // Start the clip on mount. We deliberately avoid the `autoplay` ATTRIBUTE:
-  // WKWebView evaluates it at parse time and, because React emits `muted` as a
-  // property (not the HTML attribute), sees an un-muted clip and paints its
-  // "tap to play" overlay. Instead we force the element muted (property AND
-  // attribute) and start it ourselves with a programmatic play().
-  //
-  // Autoplay itself is enabled at the webview level (wry defaults
-  // autoplay=true, and Tauri doesn't override it), so no user gesture is
-  // required. The catch on a COLD load is timing: a play() kicked during the
-  // initial render burst — before the webview is fully presented — is silently
-  // dropped, and a single attempt then leaves slide 0 frozen on its first frame
-  // (re-mounting it after a slide change worked only because the page had since
-  // settled). So we retry on a short interval until the clip is actually
-  // advancing: bounded (~3s) and self-stopping once the element unmounts.
-  const primeVideo = useCallback((video: HTMLVideoElement | null) => {
-    if (!video) return;
-    video.defaultMuted = true;
-    video.muted = true;
-    video.setAttribute("muted", "");
-    let tries = 0;
-    const attempt = () => {
-      if (!video.isConnected) return; // unmounted (slide changed) — stop
-      video
-        .play()
-        .then(() => {
-          // Resolved but somehow still paused: keep nudging until it advances.
-          if (video.paused && tries++ < 25) window.setTimeout(attempt, 120);
-        })
-        .catch(() => {
-          if (tries++ < 25) window.setTimeout(attempt, 120);
-        });
-    };
-    attempt();
   }, []);
 
   const cropLockScale = computeCropLockScale(baseFrameRef.current, frameSize);
@@ -199,38 +175,35 @@ const LeftCarouselPanel = () => {
                     >
                       {/*
                        * Only the active slide — plus the outgoing one while a
-                       * crossfade is in flight — mounts a <video> (decoder-pool
-                       * limit, see activeIndex/prevIndex above). Keying the
-                       * element by its own slide index (not activeIndex) lets
-                       * React preserve the outgoing element so it fades out on
-                       * its real last frame instead of being remounted blank.
-                       * The clip is center-framed and wider than the panel, so we
-                       * center it and size to the container height (h-full w-auto
+                       * crossfade is in flight — mounts an <img> (see
+                       * activeIndex/prevIndex above). Keying the element by its
+                       * own slide index (not activeIndex) lets React preserve
+                       * the outgoing element so it fades out on its current
+                       * frame instead of being remounted blank. The clip is
+                       * center-framed and wider than the panel, so we center it
+                       * and size to the container height (h-full w-auto
                        * max-w-none). `cropX` scales from the centre: negative
                        * zooms out to contain more of the sides, positive crops
                        * more (see SwipeContent). We also apply a resize lock so
                        * panel size changes do not reveal more/less of the clip.
-                       * We only enable `loop` after manual interaction so the
-                       * `ended` event can still drive auto-advance otherwise.
-                       * `primeVideo` (the ref) forces the element muted and
-                       * starts it with a programmatic play(), retried on the
-                       * first readiness event — see its comment for why we avoid
-                       * the `autoplay` attribute.
+                       * Auto-advance is driven by the durationMs timer above
+                       * (GIFs report no `ended` event); after a manual
+                       * interaction that timer is suppressed and the GIF, which
+                       * is exported to loop, keeps playing in place.
                        */}
                       {mounted &&
                         (index === activeIndex || index === prevIndex) && (
-                        <video
+                        <img
                           key={`${index}-${prefersDark}`}
-                          ref={primeVideo}
-                          src={prefersDark ? item.videoDark : item.video}
-                          // No `autoPlay` on purpose — primeVideo starts it via a
-                          // muted programmatic play() so WKWebView can't block the
-                          // first-load autoplay and paint the overlay button.
-                          muted
-                          playsInline
-                          loop={manualLoop && index === activeIndex}
-                          preload="auto"
-                          onEnded={(e) => handleEnded(e.currentTarget, index)}
+                          src={prefersDark ? item.gifDark : item.gif}
+                          alt=""
+                          aria-hidden
+                          draggable={false}
+                          onLoad={
+                            index === activeIndex
+                              ? () => setActiveReady(true)
+                              : undefined
+                          }
                           style={{
                             transform: `translate(-50%, -50%) scale(${
                               (1 + item.cropX / 100) * cropLockScale
@@ -249,39 +222,6 @@ const LeftCarouselPanel = () => {
       </InView>
 
       <style jsx global>{`
-        /*
-         * Suppress WebKit's native media UI on these decorative background
-         * clips. macOS WKWebView paints a central "autoplay prevented" overlay
-         * button on a <video> it won't autoplay; the primeVideo ref makes the
-         * clip play, so this is belt-and-suspenders to keep that button from
-         * flashing in the brief window before play() resolves. The clips are
-         * pointer-events:none and never user-controlled.
-         */
-        .auth-carousel-swiper video::-webkit-media-controls,
-        .auth-carousel-swiper video::-webkit-media-controls-overlay-play-button,
-        .auth-carousel-swiper
-          video::-webkit-media-controls-start-playback-button {
-          display: none !important;
-          -webkit-appearance: none;
-        }
-        /*
-         * macOS WKWebView color-manages <video> to the display profile via
-         * ColorSync, so the clip's dark background renders at a slightly
-         * different tone than the CSS dark:bg-black-500 panel around it — a
-         * visible rectangle where the video sits. Linux's WebKitGTK doesn't
-         * color-manage the clip, so there it matches the panel exactly.
-         *
-         * Any CSS filter pulls the video off its CoreVideo display layer and
-         * rasterizes it through a filter buffer, which is sRGB (CSS filter
-         * operations are defined in sRGB). The clip's pixels are then composited
-         * the same way as CSS colors, so the ColorSync tone shift disappears and
-         * macOS matches Linux. saturate(0.99) is visually identity (a 1% change
-         * is imperceptible) but non-trivial, so WebKit can't optimize the filter
-         * — and its sRGB buffer — away.
-         */
-        .auth-carousel-swiper video {
-          filter: saturate(0.99);
-        }
         .auth-carousel-swiper .swiper-pagination {
           bottom: 22px !important;
           display: flex;
