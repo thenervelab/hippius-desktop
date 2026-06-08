@@ -97,8 +97,8 @@ pub struct RateLimitState {
     /// (see [`attempt_gate`]). Without it, a burst of concurrent IPC calls
     /// on one wallet all clear [`check`] before any [`record_failure`] runs,
     /// so they slip past the lockout threshold together and Argon2id's
-    /// per-attempt cost becomes the only throttle (audit 2026-06-05, finding
-    /// B1). The registry `Mutex` is held only briefly to clone out the `Arc`;
+    /// per-attempt cost becomes the only throttle. The registry `Mutex` is
+    /// held only briefly to clone out the `Arc`;
     /// the actual serialization is the per-wallet `tokio::sync::Mutex`, which
     /// is an async lock so attempts queue without blocking a runtime thread.
     attempt_gates: Mutex<HashMap<i64, Arc<tokio::sync::Mutex<()>>>>,
@@ -112,9 +112,9 @@ impl RateLimitState {
     /// Acquire `wallet_id`'s serialization gate, returning a guard that the
     /// caller MUST hold for the entire `check` → verify → `record_*`
     /// sequence. Concurrent attempts on the same wallet queue behind the
-    /// guard, so the lockout threshold can no longer be outrun by a burst
-    /// (audit 2026-06-05, finding B1). Attempts on *different* wallets never
-    /// contend — each id has its own gate.
+    /// guard, so the lockout threshold can no longer be outrun by a burst.
+    /// Attempts on *different* wallets never contend — each id has its own
+    /// gate.
     pub async fn attempt_gate(&self, wallet_id: i64) -> tokio::sync::OwnedMutexGuard<()> {
         let gate = {
             let mut gates = self.attempt_gates.lock().expect("rate-limit gate mutex poisoned");
@@ -137,7 +137,7 @@ impl RateLimitState {
     /// [`attempt_gate`](Self::attempt_gate), which already serializes the
     /// check→verify→record sequence: the threshold is evaluated against
     /// `failures_in_window + in_flight`, so even a caller that forgot the gate
-    /// cannot outrun the lockout (audit 2026-06-05, finding B1).
+    /// cannot outrun the lockout.
     pub fn check(&self, wallet_id: i64) -> Result<(), RateLimitError> {
         let mut map = self.inner.lock().expect("rate-limit mutex poisoned");
         let entry = map.entry(wallet_id).or_default();
@@ -347,11 +347,11 @@ mod tests {
     /// the lockout. With the per-wallet `attempt_gate` serializing
     /// check → record, exactly `FAIL_THRESHOLD_SOFT` attempts clear `check`
     /// before the threshold-th `record_failure` arms the lockout; every
-    /// later attempt sees `Locked`. Without the gate (the audit B1 bug) all
-    /// N would clear `check` before any failure recorded. The `yield_now`
-    /// between check and record widens the window so a missing gate would
-    /// reliably let the burst through (axiom rust_quality_123 — the bug is
-    /// interleaving-dependent and invisible to a serial test).
+    /// later attempt sees `Locked`. Without the gate all N would clear
+    /// `check` before any failure recorded. The `yield_now` between check
+    /// and record widens the window so a missing gate would reliably let the
+    /// burst through — the bug is interleaving-dependent and invisible to a
+    /// serial test.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn concurrent_burst_cannot_outrun_the_lockout_threshold() {
         let rl = Arc::new(RateLimitState::new());

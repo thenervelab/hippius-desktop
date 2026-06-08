@@ -508,10 +508,10 @@ async fn validate_master_against_existing_folders(pool: &SqlitePool, account_id:
         return Ok(());
     }
 
-    // Inspect the drive-password row directly so we can tell three cases apart —
-    // get_drive_password(None) collapsed the last two into a silent skip, which
-    // let a WRONG master be sealed over an account that already had encrypted
-    // key material (leaving its uploads undecryptable):
+    // Inspect the drive-password row directly so we can tell three cases apart.
+    // Collapsing the last two into a silent skip would let a WRONG master be
+    // sealed over an account that already had encrypted key material, leaving
+    // its uploads undecryptable:
     //   (a) no row / empty password  → pre-config, nothing to compare → allow
     //   (b) plaintext (version 0)     → compare folders against it
     //   (c) encrypted (version 1)     → the candidate master MUST decrypt it;
@@ -598,9 +598,9 @@ async fn validate_master_against_existing_folders(pool: &SqlitePool, account_id:
 /// the DB row is flipped. With folders-first, a systemic failure (server down,
 /// master unrecoverable, disk full) leaves the DB on the OLD password and
 /// nothing is wedged; the rotation flow keeps its retry sidecar and converges
-/// because re-derivation is deterministic and idempotent. The pre-fix
-/// db-row-first order flipped the password and then silently swallowed folder
-/// failures, wedging every folder still under the old password.
+/// because re-derivation is deterministic and idempotent. A db-row-first order
+/// would flip the password and then have to swallow folder failures, wedging
+/// every folder still under the old password.
 ///
 /// Never logs `new_password` or the master mnemonic. The `master` arg is used
 /// both to derive the encryption key for the DB row AND as the input to
@@ -822,7 +822,7 @@ pub async fn change_recovery_password(state: tauri::State<'_, crate::app_state::
             // fails there is no automatic recovery path left, so the failure
             // MUST surface — returning Ok here left a stale local file that
             // silently broke decryption on the next launch with no marker for
-            // the resume path to act on (audit 2026-06-05, finding D1).
+            // the resume path to act on.
             if let Err(sidecar_err) = write_rotation_sidecar(&account_id).await {
                 warn!(
                     error = %sidecar_err,
@@ -1067,7 +1067,7 @@ mod tests {
 
     #[tokio::test]
     async fn drive_password_is_plaintext_false_when_encrypted() {
-        // The canonical post-#308 state: drive_password is encrypted under a
+        // The canonical encrypted state: drive_password is encrypted under a
         // mnemonic-derived key, so callers without the mnemonic cannot read it.
         // This is what routes OAuth returning users to Unlock instead of Proceed.
         let pool = setup_pool().await;
@@ -1082,13 +1082,11 @@ mod tests {
 
     #[tokio::test]
     async fn leaves_empty_url_alone_on_existing_row() {
-        // The pre-region-probe version of `seed_hcfs_server_url_if_missing`
-        // would overwrite an empty `server_url` with the legacy single-region
-        // default. That UPDATE branch is gone — empty IS the new default
-        // (it's the auto-detect sentinel hcfs-client looks for). This test
-        // pins the new contract: an existing row with empty URL is left
-        // alone, so the next call to `get_server_url` returns "" and
-        // hcfs-client races the regional endpoints.
+        // Empty IS the default `server_url` — the auto-detect sentinel
+        // hcfs-client looks for — so `seed_hcfs_server_url_if_missing` must
+        // never overwrite it. This test pins that contract: an existing row
+        // with empty URL is left alone, so the next call to `get_server_url`
+        // returns "" and hcfs-client races the regional endpoints.
         let pool = setup_pool().await;
         let owner = account_key("5TestAccountId");
         sqlx::query("INSERT INTO hcfs_config (owner, server_url, drive_password, encryption_version) VALUES (?, '', '', 0)")
@@ -1428,7 +1426,7 @@ mod tests {
             .expect("seal encrypted drive password");
 
         // A DIFFERENT master can't decrypt that drive password → must be refused,
-        // not silently skipped (the pre-fix bug that allowed sealing a wrong master).
+        // not silently skipped, which would allow sealing a wrong master.
         let wrong = "legal winner thank year wave sausage worth useful legal winner thank yellow";
         let err = super::validate_master_against_existing_folders(&pool, account, wrong).await.unwrap_err();
         assert!(matches!(err, AppError::Validation(_)), "wrong master must be refused, got {err:?}");
@@ -1482,9 +1480,9 @@ mod tests {
         super::clear_rotation_sidecar(account).await;
     }
 
-    /// Static pin for audit finding D1: when the post-commit local rewrite
-    /// fails AND the rotation sidecar also fails to write, the install-failed
-    /// arm of `change_recovery_password` must `return Err`, not `Ok(())`.
+    /// Regression pin: when the post-commit local rewrite fails AND the
+    /// rotation sidecar also fails to write, the install-failed arm of
+    /// `change_recovery_password` must `return Err`, not `Ok(())`.
     ///
     /// `change_recovery_password` is a `tauri::command` that needs a running
     /// hcfs-server and a managed `AppState`, so the doubly-failed branch can't
@@ -1510,7 +1508,7 @@ mod tests {
         let next_ok = after.find("Ok(())").unwrap_or(usize::MAX);
         assert!(
             next_return_err < next_ok,
-            "the sidecar-write-failure path must `return Err` before the arm's `Ok(())` (audit finding D1)"
+            "the sidecar-write-failure path must `return Err` before the arm's `Ok(())`"
         );
     }
 

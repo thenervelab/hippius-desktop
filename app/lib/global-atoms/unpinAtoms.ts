@@ -45,8 +45,7 @@ export interface DriveEntry {
 
 /**
  * Per-drive status map, keyed by drive label. Single source of truth
- * for "is this drive active or paused". Replaces the old global
- * `syncEngineStatusAtom` enum.
+ * for "is this drive active or paused".
  *
  * Owned by `useDriveStatuses` (mounted once at the protected layout
  * root). All transitions originate from Rust — never mutate this atom
@@ -62,8 +61,7 @@ export const driveStatusesAtom = atom<Map<string, DriveEntry>>(new Map());
  * `get_all_drive_statuses` fetch. Lets gating components distinguish
  * "the map is empty because we haven't loaded yet" (treat as configured)
  * from "the map is empty because the user has no sync paths" (show the
- * setup dialog). Equivalent to the old `"initializing" → "stopped"`
- * transition that the previous `syncEngineStatusAtom` modeled.
+ * setup dialog).
  */
 export const driveStatusesLoadedAtom = atom<boolean>(false);
 
@@ -71,16 +69,12 @@ export const driveStatusesLoadedAtom = atom<boolean>(false);
  * Derived: does the user have at least one configured sync drive?
  *
  * - Returns `true` while `driveStatusesLoadedAtom` is still `false`
- *   (i.e. cold-start, before the first fetch). This matches the old
- *   "treat `initializing` like `active`" rule and prevents the
- *   "set up sync" dialog from flashing on every page load.
+ *   (i.e. cold-start, before the first fetch) so the "set up sync"
+ *   dialog doesn't flash on every page load.
  * - Returns `true` once loaded if the per-drive map has any entries
  *   (regardless of whether they're Active or Paused — a paused drive
  *   is still configured).
  * - Returns `false` only after the load completes AND the map is empty.
- *
- * Use this in click handlers that previously gated on
- * `syncEngineStatus === "stopped"`.
  */
 export const hasConfiguredDrivesAtom = atom((get) => {
   const loaded = get(driveStatusesLoadedAtom);
@@ -128,9 +122,8 @@ export const metadataStaleLabelsAtom = atom<Map<string, string>>(new Map());
  * with a call-to-action that routes to `/login` for re-entering the
  * seed phrase — the only recovery path.
  *
- * Parallel to the deleted `SyncStoppedAlert` UI (commit `6f467abe`)
- * but scoped to the specific "mnemonic lost" case rather than the
- * old global engine-stopped state.
+ * Scoped to the specific "mnemonic lost" case, not a global
+ * engine-stopped state.
  */
 export const syncRequiresReauthAtom = atom<boolean>(false);
 

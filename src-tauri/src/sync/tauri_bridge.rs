@@ -190,11 +190,10 @@ fn update_failure_counts(app: &AppHandle, label: &str) {
 /// `SyncCompleted` arm) and the reviewed-conflict command
 /// (`crate::sync::control::sync_with_conflict_resolutions`) route through here,
 /// so the per-label cleanup cannot drift between the two completion paths.
-/// Before this helper existed the reviewed path emitted `SYNC_COMPLETED`
-/// directly and skipped every step below, leaving a stuck "Preparing sync…"
-/// widget, a stale pending-upload banner, and stale repeated-failure counters
-/// after a reviewed sync, and shipping a detail-less completion notification
-/// (audit 2026-06-05, finding A1).
+/// Routing both through here keeps the reviewed path from skipping the cleanup
+/// below — otherwise it would leave a stuck "Preparing sync…" widget, a stale
+/// pending-upload banner, stale repeated-failure counters, and a detail-less
+/// completion notification after a reviewed sync.
 ///
 /// `payload.files` is ignored on input and replaced with the cycle's completed
 /// files collected from session state — callers pass `Vec::new()`. `files_failed`
@@ -250,9 +249,9 @@ pub(crate) fn handle_sync_completed(app: &AppHandle, mut payload: events::SyncCo
 ///    (upload-processing banner, preparing override, 402 credits counter) so an
 ///    abort mid-cycle can't leak a stuck banner, then emits `SYNC_ERROR`.
 ///
-/// Before this was extracted, the reviewed-conflict path emitted `SYNC_ERROR`
-/// directly, so a cancel during a reviewed sync surfaced a spurious "Sync
-/// Failed" and skipped the defensive clears (audit 2026-06-05, A1 follow-up).
+/// Sharing this with the reviewed-conflict path keeps a cancel during a
+/// reviewed sync from surfacing a spurious "Sync Failed" and from skipping the
+/// defensive clears.
 pub(crate) fn handle_sync_error(app: &AppHandle, payload: events::SyncErrorPayload) {
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
@@ -329,17 +328,15 @@ impl SyncEventHandler for TauriSyncBridge {
                     // before the user sees it.
                     app_state.credits_exhausted.clear(&label);
 
-                    // The "preparing" override is deliberately NOT marked here
-                    // anymore. `SyncStarted` fires before the plan is known, so
-                    // marking preparing at this point painted the red
-                    // "Preparing sync…" widget/tray state for the entire
-                    // scan + remote-fetch (indexing) window of EVERY cycle —
-                    // including periodic no-op cycles that turn out to have
-                    // zero work. Users saw the tray icon flash red on a loop
-                    // even though nothing was ever transferred. The override is
-                    // now marked in the `PlanReady` arm, gated on a non-empty
-                    // plan, so it only appears once there is real work to do.
-                    // See the `PlanReady` arm below and `sync::preparing`.
+                    // The "preparing" override is deliberately NOT marked here:
+                    // `SyncStarted` fires before the plan is known, so marking
+                    // it here would paint the red "Preparing sync…" widget/tray
+                    // state for the entire scan + remote-fetch (indexing) window
+                    // of every cycle — including periodic no-op cycles with zero
+                    // work, flashing the tray icon red on a loop. It is marked
+                    // in the `PlanReady` arm instead, gated on a non-empty plan,
+                    // so it only appears once there is real work to do. See the
+                    // `PlanReady` arm below and `sync::preparing`.
                 }
                 cap_file_list(&mut upload_files);
                 cap_file_list(&mut download_files);
@@ -399,7 +396,7 @@ impl SyncEventHandler for TauriSyncBridge {
             } => {
                 // Cancel-drop + epoch-gated defensive clears + emit all live in
                 // `handle_sync_error`, shared with the reviewed-conflict command
-                // so the two paths can't drift (audit 2026-06-05, A1 follow-up).
+                // so the two paths can't drift.
                 handle_sync_error(
                     &app,
                     events::SyncErrorPayload {
@@ -448,7 +445,7 @@ impl SyncEventHandler for TauriSyncBridge {
                 mut remote_delete_files,
             } => {
                 // Mark the "preparing" override now that the plan is known and
-                // confirms real work. Moved here from `SyncStarted` (which
+                // confirms real work. Marked here (not at `SyncStarted`, which
                 // fires before the plan exists) so periodic no-op cycles —
                 // whose plan is empty — never flash the red "Preparing sync…"
                 // state during their indexing window. A genuine Finder-drop
@@ -550,10 +547,10 @@ impl SyncEventHandler for TauriSyncBridge {
                 //     "Sync Failed" rows on `hcfs_sync_error`, which per-file
                 //     failures never trigger. Suppression is architectural,
                 //     not gated on a flag.
-                //   - Activity-item enqueue: Phase 1 Task 1.1 established
-                //     that activity rows only land on server-confirmed
-                //     success. Failures are visible via the snapshot's
-                //     Error status and the FILES_FAILED_REPEATEDLY event.
+                //   - Activity-item enqueue: activity rows only land on
+                //     server-confirmed success. Failures are visible via the
+                //     snapshot's Error status and the FILES_FAILED_REPEATEDLY
+                //     event.
 
                 // InsufficientBalance failures additionally raise the
                 // "Out of credits" banner. The branch reads the typed
@@ -637,9 +634,9 @@ impl SyncEventHandler for TauriSyncBridge {
             SyncEvent::ReviewModeTimeout { label } => {
                 let _ = app.emit(events::REVIEW_MODE_TIMEOUT, events::LabelPayload { label });
             }
-            // hcfs 41954d7 made ActivityUpdated carry the originating drive
-            // label (upstream F35). Forward it so the FE clears only that
-            // drive's stale-metadata banner instead of every drive's.
+            // ActivityUpdated carries the originating drive label, so forward
+            // it and the FE clears only that drive's stale-metadata banner
+            // instead of every drive's.
             SyncEvent::ActivityUpdated { label } => {
                 let _ = app.emit(events::ACTIVITY_UPDATED, events::LabelPayload { label });
             }
@@ -944,7 +941,7 @@ async fn build_intent_overlay<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> S
 /// itself within one frame.
 ///
 /// **Concurrent-claim contract**: pairs with `try_claim_snapshot_fingerprint`'s
-/// `swap` (not `compare_exchange`). The emit path now runs from a
+/// `swap` (not `compare_exchange`). The emit path runs from a
 /// `tokio::spawn` (so multiple emits can race), but `swap` returns the
 /// previous value to each racer — two racers with different fingerprints
 /// both see `prev != fp` and both emit. Two racers with identical
@@ -986,9 +983,9 @@ fn snapshot_fingerprint(s: &SyncSnapshot, overlay: SyncIntentOverlay) -> u64 {
         f.path.as_ref().hash(&mut h);
         // FileAction and FileProgressStatus do NOT derive Hash in
         // hcfs-client (only Debug + Clone + PartialEq + serde). They are
-        // payload-free, so `mem::discriminant` is sufficient and avoids
-        // the per-file `format!("{:?}", …)` allocation pair the original
-        // implementation paid (10k files × 2 strings × every emit).
+        // payload-free, so `mem::discriminant` is sufficient and avoids a
+        // per-file `format!("{:?}", …)` allocation pair (10k files × 2 strings
+        // × every emit).
         std::mem::discriminant(&f.action).hash(&mut h);
         std::mem::discriminant(&f.status).hash(&mut h);
         f.bytes_transferred.hash(&mut h);
@@ -1086,8 +1083,7 @@ mod tests {
     }
 
     /// Regression: the fingerprint MUST change when `progress_bytes`
-    /// changes. Catches the "we forgot to hash field X" class of bug
-    /// the audit's #4 review was specifically about.
+    /// changes. Catches the "we forgot to hash field X" class of bug.
     #[test]
     fn fingerprint_changes_when_progress_bytes_changes() {
         let mut a = fixture_snapshot();
@@ -1101,9 +1097,9 @@ mod tests {
         assert_eq!(snapshot_fingerprint(&a, empty), snapshot_fingerprint(&b, empty));
     }
 
-    /// Regression for the review-flagged `started_at` gap: a session
-    /// that ends and immediately restarts with the same expected counts
-    /// must produce a different fingerprint.
+    /// Regression for the `started_at` gap: a session that ends and
+    /// immediately restarts with the same expected counts must produce a
+    /// different fingerprint.
     #[test]
     fn fingerprint_changes_when_started_at_changes() {
         let mut a = fixture_snapshot();
@@ -1115,7 +1111,7 @@ mod tests {
         assert_eq!(snapshot_fingerprint(&a, empty), snapshot_fingerprint(&b, empty));
     }
 
-    /// Regression for Task 7: an overlay-only change MUST flip the
+    /// Regression: an overlay-only change MUST flip the
     /// fingerprint so an emit fires even if every hcfs-side field is
     /// byte-identical. Without this, `mark_completed` advancing the
     /// intent totals while no transfer is in flight (e.g. the closing

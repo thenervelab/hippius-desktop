@@ -1,9 +1,5 @@
 //! Local database commands for notifications, address book, onboarding,
 //! user preferences, and app state.
-//!
-//! These commands replace the frontend's sql.js (WASM SQLite) databases:
-//! `notificationsDb.ts`, `addressBookDb.ts`, `onboardingDb.ts`,
-//! `userPreferencesDb.ts`, and the app_state table.
 
 use crate::app_state::AppState;
 use crate::error::AppError;
@@ -46,9 +42,8 @@ const WELCOME_SUBTYPE: &str = "Welcome-v1";
 /// Title line shown at the top of the welcome notification card.
 const WELCOME_TITLE: &str = "Hello from Hippius! Here's what's new!";
 
-/// Body text for the welcome notification. Previously lived in the FE
-/// `AccessKeyLoginForm.tsx` / `callback/page.tsx` callers that have now
-/// been deleted in favour of Rust-owned welcome creation.
+/// Body text for the welcome notification. Owned in Rust so welcome creation
+/// has a single source of truth rather than being duplicated across FE callers.
 const WELCOME_DESCRIPTION: &str = "Welcome to Hippius! You're now part of a decentralised storage network. To get started, open the Files tab and upload your data. Each upload uses credits from your balance. You can check your remaining credits at any time in the billing tab, and top up when you need more. When you're ready, tap Check Out to launch your first storage session.";
 
 /// Link label on the welcome notification's call-to-action button.
@@ -65,10 +60,8 @@ const WELCOME_LINK: &str = "/files";
 /// auth — the user-scoped dedup query makes repeat calls a no-op, so
 /// there's no need for an `is_new` flag (which OAuth doesn't expose
 /// anyway). The dedup is deliberately broad: matches bare `Welcome`
-/// (legacy from the broken FE callers that wrote many duplicates
-/// before this fix) OR anything starting with `Welcome-`, so an
-/// existing-install user who already has the legacy bare-subtype
-/// row isn't shown a second welcome after the upgrade.
+/// OR anything starting with `Welcome-`, so a user who already has a
+/// bare-subtype row isn't shown a second welcome.
 ///
 /// Returns `Ok(())` on both "inserted" and "already exists" paths.
 /// DB errors propagate as `AppError::Db`; call sites treat this as
@@ -116,13 +109,9 @@ pub async fn ensure_welcome_notification(pool: &sqlx::SqlitePool, user_address: 
 /// user down to the oldest one. Runs from `main.rs` startup alongside
 /// the other idempotent migrations.
 ///
-/// This exists because the previous FE-driven welcome code was broken:
-/// the dedup guard's `starts_with("Welcome-")` check didn't match the
-/// bare `"Welcome"` subtype the FE actually sent, so every login
-/// inserted a new row. Existing users could have dozens of welcome
-/// notifications in their local DB; this helper hard-deletes the
-/// duplicates while preserving the earliest one (so the timestamp
-/// used by `process_credit_events` for event filtering stays valid).
+/// Existing users can carry duplicate welcome rows in their local DB; this
+/// helper hard-deletes the duplicates while preserving the earliest one so the
+/// timestamp `process_credit_events` uses for event filtering stays valid.
 pub async fn cleanup_duplicate_welcome_notifications(pool: &sqlx::SqlitePool) -> Result<(), AppError> {
     let deleted = sqlx::query(
         "DELETE FROM notifications \
@@ -150,8 +139,8 @@ pub async fn cleanup_duplicate_welcome_notifications(pool: &sqlx::SqlitePool) ->
 /// Insert a new notification. Welcome notifications must be created
 /// via [`ensure_welcome_notification`] — this command's dedup guard
 /// suppresses any stray caller that tries to insert one via the IPC
-/// path directly (defense-in-depth; the FE no longer does this).
-/// Returns the new row id, or `0` if the insert was skipped.
+/// path directly (defense-in-depth). Returns the new row id, or `0`
+/// if the insert was skipped.
 #[tauri::command]
 #[expect(clippy::too_many_arguments)] // Tauri IPC commands take individual params from frontend
 pub async fn add_notification(
@@ -167,13 +156,13 @@ pub async fn add_notification(
     release_notes: Option<String>,
 ) -> Result<i64, AppError> {
     // Scope the write to the signed-in account; never trust the caller-supplied
-    // address (audit 2026-06-05, finding E1). Mirrors list_notifications.
+    // address. Mirrors list_notifications.
     let user_address = crate::notifications::session_scoped_notification_account(state.inner(), &user_address)?;
     let pool = state.pool()?;
 
-    // User-scoped dedup for welcome notifications. The previous guard
-    // only matched `starts_with("Welcome-")` and didn't filter by
-    // user_address — both broken. See `ensure_welcome_notification`
+    // User-scoped dedup for welcome notifications: match both the bare
+    // `Welcome` subtype and `Welcome-%`, scoped by user_address so the guard
+    // only collapses this user's duplicates. See `ensure_welcome_notification`
     // for the canonical path.
     if notification_type.as_deref() == Some("Hippius")
         && let Some(ref subtype) = notification_subtype

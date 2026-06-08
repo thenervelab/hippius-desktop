@@ -51,7 +51,7 @@ export const SWIPE_CONTENT: SwipeSlide[] = [
       "Hardware-encrypted virtual machines. Not even the host can read your code or your data.",
     gif: "/assets/signin/2-light.gif",
     gifDark: "/assets/signin/2-dark.gif",
-    durationMs: 7000,
+    durationMs: 7100,
     cropX: -25,
   },
   {
@@ -60,8 +60,8 @@ export const SWIPE_CONTENT: SwipeSlide[] = [
       "Stake your tokens and earn as the Hippius network grows. Transparent, non-custodial, on-chain.",
     gif: "/assets/signin/3-light.gif",
     gifDark: "/assets/signin/3-dark.gif",
-    durationMs: 8000,
-    cropX: -20,
+    durationMs: 8949,
+    cropX: -25,
   },
   {
     title: "Referrals",
@@ -69,7 +69,7 @@ export const SWIPE_CONTENT: SwipeSlide[] = [
       "Invite friends and earn credits every time they use Hippius. Credits apply directly to your storage and compute.",
     gif: "/assets/signin/4-light.gif",
     gifDark: "/assets/signin/4-dark.gif",
-    durationMs: 7000,
-    cropX: 0,
+    durationMs: 7100,
+    cropX: -10,
   },
 ];

@@ -1,9 +1,7 @@
 //! hcfs-client progress callbacks for the sync lifecycle.
 //!
-//! Extracted verbatim from `lifecycle.rs` (structure-audit Phase 4): the
-//! per-drive `SyncProgress` callback set and its helpers, wired up by
-//! `setup_progress_handlers`. The callback bodies are byte-identical to their
-//! previous form in `lifecycle.rs`; only the imports are restated here.
+//! Holds the per-drive `SyncProgress` callback set and its helpers, wired up by
+//! `setup_progress_handlers`.
 
 use hcfs_client::engine::manager::DriveManager;
 use hcfs_client::engine::runner::SyncRunner;
@@ -34,10 +32,10 @@ struct TransferContext {
 ///
 /// Per-chunk byte progress is surfaced to the frontend exclusively through
 /// the throttled `sync_progress_snapshot` event emitted by
-/// [`crate::sync::progress::update_file_progress`]. The previous separate
-/// `hcfs_upload_progress` / `hcfs_download_progress` Tauri events were
-/// removed after verifying (via grep of `app/`) that zero frontend code
-/// listened to them — they were firing on every chunk for no consumer.
+/// [`crate::sync::progress::update_file_progress`]. There are no separate
+/// per-chunk `hcfs_upload_progress` / `hcfs_download_progress` Tauri events:
+/// no frontend code listens to them, so firing on every chunk would just flood
+/// the webview for no consumer.
 fn handle_transfer_progress(ctx: &TransferContext, bytes: u64, total: u64, path: Option<&str>) {
     ctx.sync.touch_progress_time();
     let (dir_name, file_action) = match ctx.direction {
@@ -47,8 +45,8 @@ fn handle_transfer_progress(ctx: &TransferContext, bytes: u64, total: u64, path:
 
     if let Some(path_str) = path {
         let file_name = Path::new(path_str).file_name().and_then(|n| n.to_str()).unwrap_or(path_str);
-        // Log the first chunk of each transfer. Using bytes == 0 avoids
-        // the old started_set Mutex that was contended on every chunk.
+        // Log the first chunk of each transfer. Keying on bytes == 0 avoids a
+        // started-set Mutex that would be contended on every chunk.
         // Trade-off: resumed transfers (first chunk has bytes > 0) won't
         // get a "started" log — acceptable since the completion log still
         // fires and resume is rare.
@@ -82,7 +80,7 @@ fn handle_transfer_progress(ctx: &TransferContext, bytes: u64, total: u64, path:
             // record a server-rejected upload as a successful one.
             // The enqueue lives in `build_file_synced_callback`, which
             // hcfs-client fires only on per-file `Ok` (server-confirmed
-            // 2xx). See docs/plans/2026-05-13-sync-402-data-integrity.md.
+            // 2xx), so a 402 / 5xx-rejected upload is never logged as success.
             info!("{} complete [{}]: {} ({} bytes)", dir_name, ctx.label, file_name, total);
             let _ = ctx.app.emit(
                 crate::sync::events::FILE_TRANSFER_COMPLETE,
@@ -266,8 +264,8 @@ fn build_plan_ready_callback<R: tauri::Runtime>(app: &AppHandle<R>, label: Arc<s
             Some(label.to_string()),
         );
 
-        // Patch file sizes directly from plan items — eliminates the
-        // intermediate HashMap that previously cloned every path string.
+        // Patch file sizes directly from plan items — avoids an intermediate
+        // HashMap that would clone every path string.
         let mut progress_state = sync.progress.lock();
         if let Some(session) = progress_state.current_session.as_mut() {
             let mut patched = 0u32;
@@ -425,12 +423,9 @@ pub fn build_file_synced_callback<R: tauri::Runtime>(app: &AppHandle<R>, sync: A
         // task returns `Ok` (2xx response parsed for uploads, full
         // chunked download + AEAD verification for downloads), so this
         // is the earliest point a "Uploaded" / "Downloaded" row is true.
-        //
-        // The enqueue ran inside the byte-progress completion-tick
-        // before fix `2026-05-13-sync-402-data-integrity`. That site
-        // fires when the local TCP socket has drained, so a 402 /
-        // 5xx-rejected upload would still appear as "Uploaded" in the
-        // activity log. See docs/plans/2026-05-13-sync-402-data-integrity.md.
+        // Enqueuing from the byte-progress completion-tick instead would fire
+        // when the local TCP socket has drained, so a 402 / 5xx-rejected upload
+        // would wrongly appear as "Uploaded" in the activity log.
         //
         // Action mapping: hcfs-client passes `action` as one of
         // `"uploaded"` / `"downloaded"` / `"deleted"` / `"conflict"`
@@ -438,8 +433,8 @@ pub fn build_file_synced_callback<R: tauri::Runtime>(app: &AppHandle<R>, sync: A
         // produce `None`, which skips the activity enqueue entirely —
         // recording nothing is the truthful choice when we don't know
         // how to categorize the event. Fabricating an `Uploaded` row
-        // for a future hcfs-client variant (e.g. Phase 2's `"failed"`)
-        // is the exact category of lie this task exists to eliminate.
+        // for a future hcfs-client variant (e.g. a `"failed"` action)
+        // would be exactly the kind of activity-log lie this guards against.
         //
         // `size_bytes` comes from `mark_file_synced`'s return value —
         // the in-memory progress tracker's `file.total_bytes` read
@@ -447,10 +442,10 @@ pub fn build_file_synced_callback<R: tauri::Runtime>(app: &AppHandle<R>, sync: A
         // view (`get_recent_files` in `sync/files.rs`) reads
         // `item.size_bytes` directly, so without this thread-through
         // every newly-synced file would render with size 0 / "unknown".
-        // The byte-progress callback used to supply the size; we no
-        // longer trust it for activity rows (see the 402 plan), so the
-        // progress tracker is the authoritative source. The 0 fallback
-        // covers the documented edge cases of `mark_file_synced` —
+        // The byte-progress callback is not trusted for activity rows (it
+        // fires before the server confirms the upload), so the progress
+        // tracker is the authoritative source. The 0 fallback covers the
+        // documented edge cases of `mark_file_synced` —
         // no session, no file entry, or the file was already Completed
         // — where the size isn't observable from this call.
         //
@@ -642,10 +637,10 @@ pub(crate) fn setup_progress_handlers(app: &AppHandle, manager: &mut DriveManage
         on_scan_progress: Some(build_scan_callback(sync.clone(), app.clone(), Arc::clone(&label))),
         on_fetch_state_progress: Some(build_fetch_callback(sync.clone(), app.clone(), Arc::clone(&label))),
         on_file_synced: Some(build_file_synced_callback(app, sync.clone(), Arc::clone(&label))),
-        // Phase 2 / Task 2.7: per-file failure callback fired synchronously
-        // by hcfs-client at the error site. We mutate the in-memory
-        // progress tracker here; the bridge's `SyncEvent::FileFailed` arm
-        // is the user-visible side (Tauri event emit).
+        // Per-file failure callback fired synchronously by hcfs-client at the
+        // error site. We mutate the in-memory progress tracker here; the
+        // bridge's `SyncEvent::FileFailed` arm is the user-visible side (Tauri
+        // event emit).
         on_file_failed: Some(build_file_failed_callback(sync.clone(), Arc::clone(&label))),
     });
 }

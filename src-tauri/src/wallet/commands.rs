@@ -312,8 +312,7 @@ pub async fn local_wallet_verify_password(state: State<'_, AppState>, id: i64, p
     };
     // Serialize attempts on this wallet so a concurrent IPC burst can't all
     // clear `check` before any `record_failure` runs and thereby outrun the
-    // lockout threshold (audit finding B1). Held to fn end — covers
-    // check → verify → record.
+    // lockout threshold. Held to fn end — covers check → verify → record.
     let _attempt_gate = state.wallet_rate_limit.attempt_gate(id).await;
     if let Err(rl) = state.wallet_rate_limit.check(id) {
         return Err(AppError::Other(rl.message()));
@@ -348,8 +347,7 @@ pub async fn local_wallet_get_decrypted_mnemonic(state: State<'_, AppState>, id:
     };
     // Serialize attempts on this wallet so a concurrent IPC burst can't all
     // clear `check` before any `record_failure` runs and thereby outrun the
-    // lockout threshold (audit finding B1). Held to fn end — covers
-    // check → verify → record.
+    // lockout threshold. Held to fn end — covers check → verify → record.
     let _attempt_gate = state.wallet_rate_limit.attempt_gate(id).await;
     // Rate-limit BEFORE the verifier so a locked-out attacker can't
     // measure Argon2id timing to distinguish "wrong password" from
@@ -464,9 +462,9 @@ const MAX_BACKUP_JSON_BYTES: u64 = 64 * 1024;
 /// ChaCha20-Poly1305-encrypted under the wallet password (the
 /// `encryptedMnemonic` ciphertext), and the password is never escrowed
 /// in either the file or the archive. The zip is purely a container
-/// chosen to (a) mirror `feature/wallet-updates` for cross-compat with
-/// the v1 frontend, and (b) give the FE a single binary blob to write
-/// instead of pretty-printed JSON.
+/// chosen to (a) stay cross-compatible with the v1 frontend's backup
+/// format, and (b) give the FE a single binary blob to write instead of
+/// pretty-printed JSON.
 #[tauri::command]
 pub async fn local_wallet_export_backup_zip(state: State<'_, AppState>, id: i64) -> Result<Vec<u8>, AppError> {
     use std::io::{Cursor, Write};
@@ -651,8 +649,7 @@ pub async fn local_wallet_sign(
 
     // Serialize attempts on this wallet so a concurrent IPC burst can't all
     // clear `check` before any `record_failure` runs and thereby outrun the
-    // lockout threshold (audit finding B1). Held to fn end — covers
-    // check → verify → record.
+    // lockout threshold. Held to fn end — covers check → verify → record.
     let _attempt_gate = state.wallet_rate_limit.attempt_gate(id).await;
     if let Err(rl) = state.wallet_rate_limit.check(id) {
         return Err(AppError::Other(rl.message()));

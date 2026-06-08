@@ -43,8 +43,7 @@ fn caller_owner(state: &tauri::State<'_, AppState>) -> Result<String, AppError> 
 /// the same assumption in `crypto::store::migrate_if_needed`), so in practice
 /// the "first account" IS the only account. The claim is verified end-to-end by
 /// the `first_account_claims_legacy_unowned_contacts` test below. If multi-user
-/// support is ever added, this must be re-scoped per the new attribution source
-/// (audit 2026-06-05, finding D7).
+/// support is ever added, this must be re-scoped per the new attribution source.
 async fn claim_legacy_contacts(pool: &SqlitePool, owner: &str) -> Result<(), AppError> {
     sqlx::query("UPDATE address_book SET owner = ? WHERE owner = ''")
         .bind(owner)

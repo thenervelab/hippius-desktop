@@ -94,7 +94,7 @@ pub async fn sync_with_conflict_resolutions(app: AppHandle, label: String, resol
     // Emit the SAME SyncStartedPayload shape the auto-sync bridge emits, so FE
     // listeners that read the plan fields get an empty plan (the reviewed sync's
     // plan isn't known until sync_with_resolutions runs) rather than `undefined`
-    // from a bare LabelPayload (audit 2026-06-05, A1 follow-up).
+    // from a bare LabelPayload.
     let _ = app.emit(
         crate::sync::events::SYNC_STARTED,
         crate::sync::events::SyncStartedPayload {
@@ -184,8 +184,8 @@ pub async fn sync_with_conflict_resolutions(app: AppHandle, label: String, resol
             // loop (preparing-clear, banner-clear, failure-counter recompute)
             // and ships the completion notification with its per-file detail,
             // instead of emitting the completion event directly and skipping
-            // all of it (audit 2026-06-05, finding A1). A reviewed sync has no
-            // cycle-level failure count, so `files_failed = 0`.
+            // all of it. A reviewed sync has no cycle-level failure count, so
+            // `files_failed = 0`.
             crate::sync::tauri_bridge::handle_sync_completed(&app, crate::sync::events::SyncCompletedPayload::from_outcome(&label, &outcome), 0);
             Ok(())
         }
@@ -193,7 +193,7 @@ pub async fn sync_with_conflict_resolutions(app: AppHandle, label: String, resol
             // Route through the shared bridge helper so a cancel during a
             // reviewed sync is dropped (not surfaced as a spurious "Sync
             // Failed") and the per-label defensive clears run — same as the
-            // auto-sync path (audit 2026-06-05, A1 follow-up).
+            // auto-sync path.
             crate::sync::tauri_bridge::handle_sync_error(
                 &app,
                 crate::sync::events::SyncErrorPayload {
@@ -226,7 +226,7 @@ pub async fn sync_with_conflict_resolutions(app: AppHandle, label: String, resol
 /// (which iterates every drive and arms a per-drive cooldown on each) is
 /// reserved for true global resets (logout/teardown in `lifecycle.rs`).
 /// Cancelling one drive's review must not suppress conflict dialogs on the
-/// others (multi-drive correctness, upstream F16).
+/// others (multi-drive correctness).
 #[tauri::command]
 pub async fn cancel_review(app: tauri::AppHandle, label: String) -> Result<()> {
     use tauri::Manager;

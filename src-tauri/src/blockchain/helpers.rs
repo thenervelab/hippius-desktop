@@ -79,9 +79,9 @@ pub(crate) async fn get_signer_and_address(app_state: &crate::app_state::AppStat
 
     // Serialize attempts on this wallet so a concurrent IPC burst can't all
     // clear `check` before any `record_failure` runs and thereby outrun the
-    // lockout threshold (audit finding B1). Held to fn end — covers
-    // check → verify → record. Every on-chain signing IPC funnels through
-    // here, so this is the path an attacker would actually script.
+    // lockout threshold. Held to fn end — covers check → verify → record.
+    // Every on-chain signing IPC funnels through here, so this is the path an
+    // attacker would actually script.
     let _attempt_gate = app_state.wallet_rate_limit.attempt_gate(active.id).await;
     // Rate limiter before the verifier — see commands.rs for the
     // reasoning. Lockouts surface as the same generic error variant a

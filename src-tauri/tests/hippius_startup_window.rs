@@ -1,10 +1,10 @@
 //! Regression pin for the startup window-reveal ordering.
 //!
-//! Audit 2026-06-05 finding B3: `setup` showed the main window synchronously,
-//! before the spawned task installed the DB pool, so the webview booted and
-//! fired its first IPC calls against a pool-less `AppState` and got transient
-//! `PoolClosed` errors. The fix defers the reveal into the init task, after the
-//! pool is installed and the schema ensured.
+//! The main window reveal must be deferred into the spawned init task, after the
+//! DB pool is installed and the schema ensured. Showing the window
+//! synchronously — before the pool exists — lets the webview boot and fire its
+//! first IPC calls against a pool-less `AppState`, producing transient
+//! `PoolClosed` errors.
 //!
 //! # Why a static (source-level) pin
 //!
@@ -24,13 +24,13 @@ fn main_window_is_revealed_in_the_db_init_task_not_synchronously() {
     let spawn = setup.find("async_runtime::spawn").expect("setup spawns the db-init task");
 
     // The synchronous part of setup (everything before the init task is
-    // spawned) must NOT reveal the window — that is the exact early-show the
-    // PoolClosed race needed.
+    // spawned) must NOT reveal the window — an early show races the pool
+    // install and triggers PoolClosed errors.
     let sync_prefix = &setup[..spawn];
     assert!(
         !sync_prefix.contains(".show()"),
         "the main window must not be shown in the synchronous part of setup, before the DB pool \
-         is installed in the spawned task (audit finding B3)"
+         is installed in the spawned task"
     );
 
     // The deferred reveal must live in the init task, alongside the pool install.
@@ -39,6 +39,6 @@ fn main_window_is_revealed_in_the_db_init_task_not_synchronously() {
     assert!(
         task.contains("show_main"),
         "the deferred window reveal (show_main) must live in the db-init task so it runs after \
-         the pool+schema are ready (audit finding B3)"
+         the pool+schema are ready"
     );
 }

@@ -5,15 +5,15 @@
 //! its on-disk master mnemonic / S3 credentials) MUST validate it against the
 //! authenticated session — by taking `account_id: SessionAccount` (preferred,
 //! compiler-enforced) or calling `state.require_session_account(&account_id)?`.
-//! The 2026-06-05 audit found this was applied by hand per command, so the guard
-//! has no framework chokepoint and omissions were invisible.
+//! The guard is applied by hand per command, so there is no framework
+//! chokepoint and omissions would otherwise be invisible.
 //!
 //! This test IS the chokepoint. It walks EVERY `.rs` file under `src/` (not a
-//! hardcoded list — an earlier hardcoded `COMMAND_FILES` missed
-//! `sync/lifecycle.rs`, `auth/billing_auth.rs`, `sync/migration.rs`, etc. and
-//! gave false confidence), finds each `#[tauri::command]` that takes an
-//! `account_id` and touches an account-secret API, and fails if it is not
-//! guarded. A new command that forgets the guard fails CI here.
+//! hardcoded list, which would silently miss files such as `sync/lifecycle.rs`,
+//! `auth/billing_auth.rs`, or `sync/migration.rs`), finds each
+//! `#[tauri::command]` that takes an `account_id` and touches an account-secret
+//! API, and fails if it is not guarded. A new command that forgets the guard
+//! fails CI here.
 //!
 //! Known limitation: the secret-access heuristic keys off named call shapes; a
 //! command that reaches a per-account secret through a differently-named helper
@@ -80,9 +80,9 @@ const BROAD_ALLOWLIST: &[&str] = &[
 /// This is the high-severity surface (token/mnemonic/credential exfiltration).
 /// It intentionally does NOT flag commands that merely scope a DB query by
 /// `account_id` (config/paths/folder-stat reads) — a broader cross-account-read
-/// surface tracked separately — nor thin wrappers that delegate the secret call
-/// to an `_inner` helper (e.g. initialize_sync/auto_init_sync); those are
-/// guarded directly and noted in the module docs.
+/// surface checked by the broad gate below — nor thin wrappers that delegate the
+/// secret call to an `_inner` helper (e.g. initialize_sync/auto_init_sync);
+/// those are guarded directly and noted in the module docs.
 fn touches_account_secret(body: &str) -> bool {
     [
         "ApiClient::new",
@@ -98,12 +98,12 @@ fn touches_account_secret(body: &str) -> bool {
 
 /// From a post-`#[tauri::command]` chunk, extract (name, signature, body) for
 /// the command function, where `body` is precisely the fn's braced block (via
-/// brace matching). This keeps helper fns/structs that sit between this command
-/// and the next out of the analysis — a coarse "split to next command" bled
-/// trailing code in and produced false positives (e.g. create_encrypted_backup,
-/// which takes no account_id). Brace counting is byte-based; `format!` braces
-/// are balanced so they net out, and command bodies don't contain lone brace
-/// char literals.
+/// brace matching). Matching the exact braced block keeps helper fns/structs
+/// that sit between this command and the next out of the analysis, avoiding
+/// false positives from trailing code (e.g. create_encrypted_backup, which
+/// takes no account_id). Brace counting is byte-based; `format!` braces are
+/// balanced so they net out, and command bodies don't contain lone brace char
+/// literals.
 fn extract_command(chunk: &str) -> Option<(String, &str, &str)> {
     let fn_pos = chunk.find("pub async fn ")?;
     let name_start = fn_pos + "pub async fn ".len();
@@ -146,11 +146,10 @@ fn collect_rs(dir: &Path, root: &Path, out: &mut Vec<(String, String)>) {
 /// Walk `src` and return every real `#[tauri::command]` as (name, signature,
 /// body). "Real" means a line that trims to exactly `#[tauri::command]` — a doc
 /// comment that merely *mentions* `` `#[tauri::command]` `` (as
-/// `create_credit_notifications`'s does) is not an attribute. The prior
-/// `split("#[tauri::command]")` could not tell the two apart and mis-extracted
-/// the helper that followed such a doc comment (`create_credit_notifications_inner`)
-/// as a phantom command — harmless for the secret gate (the helper touches no
-/// secret) but a false positive for the broad gate below.
+/// `create_credit_notifications`'s does) is not an attribute. Distinguishing the
+/// two avoids mis-extracting the helper that follows such a doc comment
+/// (`create_credit_notifications_inner`) as a phantom command — a false positive
+/// for the broad gate below.
 fn commands_in(src: &str) -> Vec<(String, String, String)> {
     let mut out = Vec::new();
     for (pos, _) in src.match_indices("#[tauri::command]") {
@@ -174,8 +173,8 @@ fn is_guarded(signature: &str, body: &str) -> bool {
         || body.contains("require_session_account")
         // `session_scoped_notification_account` is the notifications module's
         // session-scoping guard: it derives the owner from the session account
-        // and ignores any caller-supplied address (audit finding E1), which
-        // satisfies the same "never trust the frontend account_id" invariant.
+        // and ignores any caller-supplied address, which satisfies the same
+        // "never trust the frontend account_id" invariant.
         || body.contains("session_scoped_notification_account")
 }
 
