@@ -111,10 +111,7 @@ fn salt_bytes(address: &str) -> Zeroizing<Vec<u8>> {
 /// high-entropy and unique per wallet, so it doubles as a per-wallet
 /// salt for Argon2id. The result: two wallets with identical passwords
 /// land on different AEAD keys.
-fn derive_aead_key_argon2(
-    password: &str,
-    address: &str,
-) -> Result<Zeroizing<[u8; 32]>, AppError> {
+fn derive_aead_key_argon2(password: &str, address: &str) -> Result<Zeroizing<[u8; 32]>, AppError> {
     let salt = salt_bytes(address);
     let mut okm = Zeroizing::new([0u8; 32]);
     Argon2::default()
@@ -129,10 +126,7 @@ fn derive_aead_key_argon2(
 /// solely so existing wallets created before the Argon2id rollout can be
 /// decrypted once and immediately re-encrypted under the new scheme.
 /// New writes never go through this path.
-fn derive_aead_key_hkdf_legacy(
-    password: &str,
-    address: &str,
-) -> Zeroizing<[u8; 32]> {
+fn derive_aead_key_hkdf_legacy(password: &str, address: &str) -> Zeroizing<[u8; 32]> {
     let hk = Hkdf::<Sha256>::new(Some(address.as_bytes()), password.as_bytes());
     let mut okm = Zeroizing::new([0u8; 32]);
     hk.expand(INFO_MNEMONIC, okm.as_mut())
@@ -183,9 +177,7 @@ pub fn verify_password(stored_hash: &str, password: &str, address: &str) -> bool
         return match PasswordHash::new(stored_hash) {
             Ok(parsed) => {
                 let bound = bind_password_to_address(password, address);
-                Argon2::default()
-                    .verify_password(bound.as_slice(), &parsed)
-                    .is_ok()
+                Argon2::default().verify_password(bound.as_slice(), &parsed).is_ok()
             }
             Err(_) => false,
         };
@@ -221,11 +213,7 @@ pub fn password_hash_is_legacy(stored_hash: &str) -> bool {
 /// encryption fails. The AEAD encrypt itself is effectively infallible
 /// for valid inputs — the underlying library only errors on nonce
 /// reuse, which our per-encrypt `OsRng` draw cannot produce.
-pub fn encrypt_mnemonic(
-    mnemonic: &str,
-    password: &str,
-    address: &str,
-) -> Result<String, AppError> {
+pub fn encrypt_mnemonic(mnemonic: &str, password: &str, address: &str) -> Result<String, AppError> {
     let key = derive_aead_key_argon2(password, address)?;
     let cipher = ChaCha20Poly1305::new(key.as_slice().into());
 
@@ -271,11 +259,7 @@ pub fn encrypt_mnemonic(
 /// derivation fails. Wrong-password and tampering both surface as the
 /// generic "wrong password or corrupt data" message — the AEAD layer
 /// can't distinguish them.
-pub fn decrypt_mnemonic(
-    encrypted_b64: &str,
-    password: &str,
-    address: &str,
-) -> Result<(Zeroizing<String>, bool), AppError> {
+pub fn decrypt_mnemonic(encrypted_b64: &str, password: &str, address: &str) -> Result<(Zeroizing<String>, bool), AppError> {
     let raw = B64
         .decode(encrypted_b64)
         .map_err(|e| AppError::Crypto(format!("invalid base64 ciphertext: {e}")))?;
@@ -289,8 +273,7 @@ pub fn decrypt_mnemonic(
         let plaintext = cipher
             .decrypt(nonce_bytes.into(), ct_and_tag)
             .map_err(|_| AppError::Crypto("decrypt failed — wrong password or corrupt data".into()))?;
-        let s = String::from_utf8(plaintext)
-            .map_err(|e| AppError::Crypto(format!("decrypted bytes not UTF-8: {e}")))?;
+        let s = String::from_utf8(plaintext).map_err(|e| AppError::Crypto(format!("decrypted bytes not UTF-8: {e}")))?;
         return Ok((Zeroizing::new(s), false));
     }
 
@@ -304,8 +287,7 @@ pub fn decrypt_mnemonic(
     let plaintext = cipher
         .decrypt(nonce_bytes.into(), ct_and_tag)
         .map_err(|_| AppError::Crypto("decrypt failed — wrong password or corrupt data".into()))?;
-    let s = String::from_utf8(plaintext)
-        .map_err(|e| AppError::Crypto(format!("decrypted bytes not UTF-8: {e}")))?;
+    let s = String::from_utf8(plaintext).map_err(|e| AppError::Crypto(format!("decrypted bytes not UTF-8: {e}")))?;
     Ok((Zeroizing::new(s), true))
 }
 
@@ -366,9 +348,7 @@ mod tests {
         let cipher = ChaCha20Poly1305::new(key.as_slice().into());
         let mut nonce = [0u8; NONCE_LEN];
         rand::thread_rng().fill_bytes(&mut nonce);
-        let ct = cipher
-            .encrypt(nonce.as_slice().into(), mnemonic.as_bytes())
-            .expect("encrypt");
+        let ct = cipher.encrypt(nonce.as_slice().into(), mnemonic.as_bytes()).expect("encrypt");
         let mut out = Vec::with_capacity(NONCE_LEN + ct.len());
         out.extend_from_slice(&nonce);
         out.extend_from_slice(&ct);

@@ -311,11 +311,10 @@ async fn soft_delete_all_includes_system_rows() {
     // hard-deleted, so the "have we ever shown this version?" check
     // (`hippius_version_notification_exists`) keeps returning true and
     // the updater doesn't immediately re-insert the row.
-    let (system_total,): (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM notifications WHERE user_address = 'system'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let (system_total,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM notifications WHERE user_address = 'system'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(system_total, 1, "system row should still exist (soft-deleted)");
 }
 

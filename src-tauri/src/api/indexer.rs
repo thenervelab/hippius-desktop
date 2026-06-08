@@ -24,9 +24,7 @@ fn indexer_base_url() -> &'static str {
 }
 
 fn indexer_api_key() -> Option<&'static str> {
-    INDEXER_API_KEY
-        .get_or_init(|| std::env::var("INDEXER_API_KEY").ok())
-        .as_deref()
+    INDEXER_API_KEY.get_or_init(|| std::env::var("INDEXER_API_KEY").ok()).as_deref()
 }
 
 /// HTTP client for the Hippius indexer. Uses `X-API-KEY` header for authentication.

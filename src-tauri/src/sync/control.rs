@@ -60,7 +60,9 @@ pub async fn stage_changes(app: tauri::AppHandle, label: String) -> Result<Stage
 pub(crate) fn validate_resolutions(resolutions: &HashMap<String, String>) -> Result<()> {
     for (file_id, resolution) in resolutions {
         if !matches!(resolution.as_str(), "keep_local" | "accept_remote" | "keep_both" | "skip") {
-            return Err(crate::error::AppError::Other(format!("Invalid resolution '{resolution}' for file {file_id}")));
+            return Err(crate::error::AppError::Other(format!(
+                "Invalid resolution '{resolution}' for file {file_id}"
+            )));
         }
     }
     Ok(())

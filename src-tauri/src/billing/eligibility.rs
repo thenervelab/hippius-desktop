@@ -272,11 +272,7 @@ async fn chain_free_balance(state: &crate::app_state::AppState, account_id: &str
         .parse::<subxt::utils::AccountId32>()
         .map_err(|e| format!("unparseable account id: {e}"))?;
     let query = crate::blockchain::runtime::custom_runtime::storage().system().account(&acct);
-    let storage = client
-        .storage()
-        .at_latest()
-        .await
-        .map_err(|e| format!("storage at_latest failed: {e}"))?;
+    let storage = client.storage().at_latest().await.map_err(|e| format!("storage at_latest failed: {e}"))?;
     let info = storage.fetch(&query).await.map_err(|e| format!("account fetch failed: {e}"))?;
     Ok(info.map_or(0, |i| i.data.free))
 }
@@ -519,7 +515,10 @@ mod tests {
     #[test]
     fn parse_credit_balance_rejects_unparseable_and_blank() {
         for bad in ["", "  ", "abc", "1.2.3", "$5"] {
-            assert!(float_eq(parse_credit_balance(bad, "acct"), 0.0), "balance {bad:?} must fail closed to 0.0");
+            assert!(
+                float_eq(parse_credit_balance(bad, "acct"), 0.0),
+                "balance {bad:?} must fail closed to 0.0"
+            );
         }
     }
 

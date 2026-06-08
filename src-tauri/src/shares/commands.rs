@@ -380,10 +380,7 @@ pub async fn hcfs_list_shares(state: tauri::State<'_, AppState>) -> Result<Vec<S
     let pool = state.pool()?;
     let client = build_account_client(pool, &account_id).await?;
     let keystore = SqliteShareKeystore::new(pool.clone());
-    let summaries = client
-        .list_shares()
-        .await
-        .map_err(|e| AppError::Hcfs(format!("list_shares: {e}")))?;
+    let summaries = client.list_shares().await.map_err(|e| AppError::Hcfs(format!("list_shares: {e}")))?;
 
     // Rebuild the share URL per row from the keystore. We do this with
     // ONE batched `WHERE share_token IN (...)` SELECT instead of a

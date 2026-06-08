@@ -203,7 +203,10 @@ fn account_secret_commands_validate_session() {
 
     // Guard against the heuristic silently matching nothing (e.g. a refactor
     // renames every accessor) and giving false confidence.
-    assert!(checked >= 25, "expected to check >=25 account-secret commands, only saw {checked} — the detector may be broken");
+    assert!(
+        checked >= 25,
+        "expected to check >=25 account-secret commands, only saw {checked} — the detector may be broken"
+    );
     assert!(
         offenders.is_empty(),
         "these account-scoped #[tauri::command]s reach a per-account secret with a \
@@ -242,7 +245,10 @@ fn account_scoped_commands_validate_session() {
         }
     }
 
-    assert!(checked >= 40, "expected to check >=40 account-scoped commands, only saw {checked} — the detector may be broken");
+    assert!(
+        checked >= 40,
+        "expected to check >=40 account-scoped commands, only saw {checked} — the detector may be broken"
+    );
     assert!(
         offenders.is_empty(),
         "these account-scoped #[tauri::command]s trust a frontend-supplied account_id \

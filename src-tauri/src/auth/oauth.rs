@@ -42,7 +42,7 @@ use tauri::Emitter;
 /// opens browser → signs in → redirected back) while short enough that
 /// a dormant entry can't be weaponized hours after the user abandoned
 /// their login attempt.
-const PKCE_STATE_TTL: Duration = Duration::from_secs(5 * 60);
+const PKCE_STATE_TTL: Duration = Duration::from_mins(5);
 
 /// In-flight OAuth flow states, keyed by the random `state` CSRF token.
 ///
@@ -662,10 +662,7 @@ mod tests {
     #[test]
     fn state_lookup_fails_after_ttl_purge() {
         let mut states = HashMap::new();
-        states.insert(
-            "csrf-token-old".to_string(),
-            make_state(PKCE_STATE_TTL + Duration::from_secs(1)),
-        );
+        states.insert("csrf-token-old".to_string(), make_state(PKCE_STATE_TTL + Duration::from_secs(1)));
 
         // Mirror `complete_oauth_flow`: purge_expired runs BEFORE the
         // state lookup. A deep link that surfaces after the 5-minute

@@ -767,10 +767,7 @@ mod tests {
                 credit: None,
             },
         ];
-        let date_range = get_all_dates_in_range(
-            NaiveDate::from_ymd_opt(2025, 1, 5).unwrap(),
-            NaiveDate::from_ymd_opt(2025, 1, 6).unwrap(),
-        );
+        let date_range = get_all_dates_in_range(NaiveDate::from_ymd_opt(2025, 1, 5).unwrap(), NaiveDate::from_ymd_opt(2025, 1, 6).unwrap());
         let result = map_to_range_carry_forward(&points, &date_range, "last30days", true, false);
         assert!(
             (result[0].balance - 50.0).abs() < f64::EPSILON,
@@ -876,11 +873,20 @@ mod tests {
     #[test]
     fn transform_skips_malformed_amount_and_dates_gap_days_correctly() {
         let credits = vec![
-            MarketplaceCreditInput { amount: "100".into(), date: "2025-03-10T00:00:00.000Z".into() },
+            MarketplaceCreditInput {
+                amount: "100".into(),
+                date: "2025-03-10T00:00:00.000Z".into(),
+            },
             // Malformed amount on the same day must be skipped (treated as 0),
             // not poison the day's sum (audit C4).
-            MarketplaceCreditInput { amount: "not-a-number".into(), date: "2025-03-10T06:00:00.000Z".into() },
-            MarketplaceCreditInput { amount: "50".into(), date: "2025-03-12T00:00:00.000Z".into() },
+            MarketplaceCreditInput {
+                amount: "not-a-number".into(),
+                date: "2025-03-10T06:00:00.000Z".into(),
+            },
+            MarketplaceCreditInput {
+                amount: "50".into(),
+                date: "2025-03-12T00:00:00.000Z".into(),
+            },
         ];
         let result = transform_marketplace_credits(credits).unwrap();
         // 03-10, 03-11 (gap), 03-12.
@@ -898,8 +904,14 @@ mod tests {
     #[test]
     fn transform_saturates_instead_of_overflowing() {
         let credits = vec![
-            MarketplaceCreditInput { amount: u128::MAX.to_string(), date: "2025-03-15T00:00:00.000Z".into() },
-            MarketplaceCreditInput { amount: "10".into(), date: "2025-03-15T01:00:00.000Z".into() },
+            MarketplaceCreditInput {
+                amount: u128::MAX.to_string(),
+                date: "2025-03-15T00:00:00.000Z".into(),
+            },
+            MarketplaceCreditInput {
+                amount: "10".into(),
+                date: "2025-03-15T01:00:00.000Z".into(),
+            },
         ];
         // Summing past u128::MAX must saturate, not wrap — the old `+=` would
         // panic in a debug build on this input (audit C4).
@@ -951,15 +963,9 @@ mod tests {
         let info = calculate_storage_capacity(vec![0.74]);
         assert_eq!(info.len(), 1);
         let display = &info[0].storage_display;
-        assert!(
-            display.ends_with(" GB"),
-            "expected GB unit, got: {display}"
-        );
+        assert!(display.ends_with(" GB"), "expected GB unit, got: {display}");
         // Sanity: must NOT collapse to "0 GB" — the bug we are fixing.
-        assert!(
-            !display.starts_with("0 GB"),
-            "regressed to zero-GB display: {display}"
-        );
+        assert!(!display.starts_with("0 GB"), "regressed to zero-GB display: {display}");
         // Storage capacity itself should be in the hundreds-of-GB range.
         assert!(info[0].storage_gb > 100, "got {} GB", info[0].storage_gb);
     }
@@ -977,14 +983,8 @@ mod tests {
         // the two-decimal TB format.
         let info = calculate_storage_capacity(vec![10.0]);
         let display = &info[0].storage_display;
-        assert!(
-            display.ends_with(" TB"),
-            "expected TB unit, got: {display}"
-        );
-        assert!(
-            display.contains('.'),
-            "expected fractional TB under 10 TB, got: {display}"
-        );
+        assert!(display.ends_with(" TB"), "expected TB unit, got: {display}");
+        assert!(display.contains('.'), "expected fractional TB under 10 TB, got: {display}");
     }
 
     #[test]
@@ -993,13 +993,7 @@ mod tests {
         // an integer TB value with thousands grouping.
         let info = calculate_storage_capacity(vec![1000.0]);
         let display = &info[0].storage_display;
-        assert!(
-            display.ends_with(" TB"),
-            "expected TB unit, got: {display}"
-        );
-        assert!(
-            !display.contains('.'),
-            "expected integer TB above 10 TB, got: {display}"
-        );
+        assert!(display.ends_with(" TB"), "expected TB unit, got: {display}");
+        assert!(!display.contains('.'), "expected integer TB above 10 TB, got: {display}");
     }
 }

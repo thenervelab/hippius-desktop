@@ -126,11 +126,7 @@ pub async fn get_drive_failures(
 /// # Errors
 /// Returns an error if the database write fails.
 #[tauri::command]
-pub async fn retry_file_failure(
-    label: String,
-    path: String,
-    state: tauri::State<'_, crate::app_state::AppState>,
-) -> Result<()> {
+pub async fn retry_file_failure(label: String, path: String, state: tauri::State<'_, crate::app_state::AppState>) -> Result<()> {
     if let Ok(account_id) = state.current_account_id() {
         let owner = crate::auth::account_key::account_key(&account_id);
         let pool = state.pool()?;
@@ -162,10 +158,7 @@ pub async fn retry_file_failure(
 /// # Errors
 /// Returns an error if the database read/write fails.
 #[tauri::command]
-pub async fn retry_all_failures(
-    label: String,
-    state: tauri::State<'_, crate::app_state::AppState>,
-) -> Result<()> {
+pub async fn retry_all_failures(label: String, state: tauri::State<'_, crate::app_state::AppState>) -> Result<()> {
     // Snapshot the persisted failures (we need their paths to drop excludes),
     // then delete them durably — both scoped to the current account.
     let records = if let Ok(account_id) = state.current_account_id() {

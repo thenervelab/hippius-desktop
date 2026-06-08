@@ -528,11 +528,10 @@ pub fn on_window_event(builder: Builder<Wry>) -> Builder<Wry> {
         // focus, hide it. Centralized here (rather than in the FE) so the
         // re-open cooldown timestamp is recorded against the same `AppState`
         // that `toggle_tray_panel` reads.
-        if let tauri::WindowEvent::Focused(false) = event {
-            if window.label() == crate::tray::panel::PANEL_LABEL {
+        if let tauri::WindowEvent::Focused(false) = event
+            && window.label() == crate::tray::panel::PANEL_LABEL {
                 crate::tray::panel::on_panel_blur(window.app_handle());
             }
-        }
 
         if let tauri::WindowEvent::CloseRequested { api, .. } = event {
             // Only intercept the main window. If a future refactor adds a

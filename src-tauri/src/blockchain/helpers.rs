@@ -22,10 +22,7 @@
 use crate::auth::account_key::account_key;
 use crate::error::{AppError, NotReadyKind};
 use crate::wallet::{crypto, repo};
-use subxt_signer::{
-    bip39::Mnemonic as SubxtMnemonic,
-    sr25519::Keypair,
-};
+use subxt_signer::{bip39::Mnemonic as SubxtMnemonic, sr25519::Keypair};
 
 /// Resolve the current account's owner key, returning the unified
 /// `NotReady(SigningKeyUnavailable)` when nobody is logged in. The FE
@@ -73,13 +70,12 @@ pub(crate) async fn get_substrate_address(app_state: &crate::app_state::AppState
 ///
 /// Wrong-password and no-wallet cases both map to
 /// `NotReady(SigningKeyUnavailable)` for FE error unification.
-pub(crate) async fn get_signer_and_address(
-    app_state: &crate::app_state::AppState,
-    password: &str,
-) -> Result<(Keypair, String), AppError> {
+pub(crate) async fn get_signer_and_address(app_state: &crate::app_state::AppState, password: &str) -> Result<(Keypair, String), AppError> {
     let owner = require_owner(app_state)?;
     let pool = app_state.pool()?;
-    let active = repo::get_active(pool, &owner).await?.ok_or(AppError::NotReady(NotReadyKind::SigningKeyUnavailable))?;
+    let active = repo::get_active(pool, &owner)
+        .await?
+        .ok_or(AppError::NotReady(NotReadyKind::SigningKeyUnavailable))?;
 
     // Serialize attempts on this wallet so a concurrent IPC burst can't all
     // clear `check` before any `record_failure` runs and thereby outrun the
@@ -101,8 +97,7 @@ pub(crate) async fn get_signer_and_address(
     }
     app_state.wallet_rate_limit.record_success(active.id);
 
-    let (mnemonic, ciphertext_was_legacy) =
-        crypto::decrypt_mnemonic(&active.encrypted_mnemonic, password, &active.address)?;
+    let (mnemonic, ciphertext_was_legacy) = crypto::decrypt_mnemonic(&active.encrypted_mnemonic, password, &active.address)?;
 
     // Transparent migration: if either the ciphertext or the password
     // hash is in the legacy format, re-encrypt + re-hash and persist.
@@ -111,8 +106,7 @@ pub(crate) async fn get_signer_and_address(
     // old KDF doesn't have to do anything to get the upgrade — the
     // first sign they attempt does it. A migration failure must NOT
     // block the sign: we log and move on.
-    let needs_migration =
-        ciphertext_was_legacy || crypto::password_hash_is_legacy(&active.password_hash);
+    let needs_migration = ciphertext_was_legacy || crypto::password_hash_is_legacy(&active.password_hash);
     if needs_migration {
         migrate_to_argon2(app_state, &owner, &active, &mnemonic, password).await;
     }
@@ -143,8 +137,7 @@ async fn migrate_to_argon2(
     mnemonic: &zeroize::Zeroizing<String>,
     password: &str,
 ) {
-    let Ok(new_ct) = crypto::encrypt_mnemonic(mnemonic.as_str(), password, &active.address)
-    else {
+    let Ok(new_ct) = crypto::encrypt_mnemonic(mnemonic.as_str(), password, &active.address) else {
         tracing::warn!(
             wallet = %active.address,
             "Argon2id re-encrypt failed during signing flow migration"
@@ -152,9 +145,8 @@ async fn migrate_to_argon2(
         return;
     };
     let new_hash = crypto::password_hash(password, &active.address);
-    let pool = match app_state.pool() {
-        Ok(p) => p,
-        Err(_) => return,
+    let Ok(pool) = app_state.pool() else {
+        return;
     };
     match repo::update_secrets(pool, owner, active.id, &new_ct, &new_hash).await {
         Ok(()) => tracing::info!(
@@ -168,4 +160,3 @@ async fn migrate_to_argon2(
         ),
     }
 }
-

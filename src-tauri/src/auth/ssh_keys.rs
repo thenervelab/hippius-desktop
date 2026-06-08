@@ -73,7 +73,11 @@ pub async fn create_ssh_key(
 
 /// Remove an SSH key by ID. Active VMs using this key are unaffected.
 #[tauri::command]
-pub async fn delete_ssh_key(state: tauri::State<'_, crate::app_state::AppState>, account_id: crate::app_state::SessionAccount, key_id: i64) -> Result<(), AppError> {
+pub async fn delete_ssh_key(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: crate::app_state::SessionAccount,
+    key_id: i64,
+) -> Result<(), AppError> {
     info!(key_id = key_id, "Deleting SSH key");
     let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
     let path = format!("/api/ssh-keys/{key_id}/");

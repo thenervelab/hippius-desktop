@@ -163,17 +163,11 @@ impl IntentRepo {
     /// # Errors
     /// Returns [`IntentError::Db`] if any SQLite operation fails (including
     /// transaction commit).
-    pub async fn record_plan(
-        &self,
-        account_id: &str,
-        drive_label: &str,
-        plan_uploads: &[(String, u64)],
-    ) -> Result<(), IntentError> {
+    pub async fn record_plan(&self, account_id: &str, drive_label: &str, plan_uploads: &[(String, u64)]) -> Result<(), IntentError> {
         // Membership check needs O(1) lookup; borrowing into the slice means
         // no per-path String allocation. Lifetime is the function body —
         // dropped before the transaction commits.
-        let new_plan_paths: HashSet<&str> =
-            plan_uploads.iter().map(|(p, _)| p.as_str()).collect();
+        let new_plan_paths: HashSet<&str> = plan_uploads.iter().map(|(p, _)| p.as_str()).collect();
 
         let mut tx = self.pool.begin().await?;
 
@@ -215,9 +209,7 @@ impl IntentRepo {
             // statement matches the bind count exactly. `chunk` is never
             // empty inside this loop (chunks() yields only non-empty slices
             // from a non-empty source), so `placeholders` is never "".
-            let placeholders = std::iter::repeat_n("?", chunk.len())
-                .collect::<Vec<_>>()
-                .join(", ");
+            let placeholders = std::iter::repeat_n("?", chunk.len()).collect::<Vec<_>>().join(", ");
             let sql = format!(
                 "DELETE FROM sync_intent
                   WHERE account_id = ?
@@ -290,13 +282,7 @@ impl IntentRepo {
     ///
     /// # Errors
     /// Returns [`IntentError::Db`] on SQLite I/O failure.
-    pub async fn mark_completed(
-        &self,
-        account_id: &str,
-        drive_label: &str,
-        relative_path: &str,
-        now_ms: i64,
-    ) -> Result<(), IntentError> {
+    pub async fn mark_completed(&self, account_id: &str, drive_label: &str, relative_path: &str, now_ms: i64) -> Result<(), IntentError> {
         // The `AND completed_at_ms IS NULL` predicate is the idempotence
         // anchor — without it a stale callback would overwrite the truthful
         // first timestamp. It is also the WHY this method is not a plain
@@ -331,11 +317,7 @@ impl IntentRepo {
     ///
     /// # Errors
     /// Returns [`IntentError::Db`] on SQLite I/O failure.
-    pub async fn clear_drive(
-        &self,
-        account_id: &str,
-        drive_label: &str,
-    ) -> Result<(), IntentError> {
+    pub async fn clear_drive(&self, account_id: &str, drive_label: &str) -> Result<(), IntentError> {
         sqlx::query(
             "DELETE FROM sync_intent
               WHERE account_id = ? AND drive_label = ?",
@@ -384,12 +366,7 @@ impl IntentRepo {
     ///
     /// # Errors
     /// Returns [`IntentError::Db`] on SQLite I/O failure.
-    pub async fn prune_settled(
-        &self,
-        account_id: &str,
-        drive_label: &str,
-        older_than_ms: i64,
-    ) -> Result<u64, IntentError> {
+    pub async fn prune_settled(&self, account_id: &str, drive_label: &str, older_than_ms: i64) -> Result<u64, IntentError> {
         // `rows_affected()` on the returned `SqliteQueryResult` is `u64`.
         // Source: existing call site `migrate_account_keys` at
         // src-tauri/src/utils/schema.rs:626 uses the same shape.
@@ -432,10 +409,7 @@ impl IntentRepo {
     ///
     /// # Errors
     /// Returns [`IntentError::Db`] on SQLite I/O failure.
-    pub async fn totals_for_account(
-        &self,
-        account_id: &str,
-    ) -> Result<IntentTotals, IntentError> {
+    pub async fn totals_for_account(&self, account_id: &str) -> Result<IntentTotals, IntentError> {
         // The `WHERE` filters by account_id only (drive_label left
         // unrestricted), so SQLite seeks on the leftmost prefix of
         // idx_sync_intent_drive (account_id, …) and walks every
@@ -479,11 +453,7 @@ impl IntentRepo {
     ///
     /// # Errors
     /// Returns [`IntentError::Db`] on SQLite I/O failure.
-    pub async fn totals_for_drive(
-        &self,
-        account_id: &str,
-        drive_label: &str,
-    ) -> Result<IntentTotals, IntentError> {
+    pub async fn totals_for_drive(&self, account_id: &str, drive_label: &str) -> Result<IntentTotals, IntentError> {
         // Each aggregate runs as one index scan over the full
         // idx_sync_intent_drive key (account_id, drive_label,
         // completed_at_ms). NOT covering: size_bytes is not in the
@@ -532,9 +502,7 @@ mod tests {
             .connect("sqlite::memory:")
             .await
             .expect("open in-memory db");
-        crate::utils::schema::ensure_table_schema(&pool)
-            .await
-            .expect("ensure_table_schema");
+        crate::utils::schema::ensure_table_schema(&pool).await.expect("ensure_table_schema");
         pool
     }
 
@@ -543,13 +511,9 @@ mod tests {
         let pool = fresh_pool().await;
         let repo = IntentRepo::new(pool);
 
-        repo.record_plan(
-            "acct",
-            "drive",
-            &[("a.txt".to_string(), 100), ("b.txt".to_string(), 200)],
-        )
-        .await
-        .unwrap();
+        repo.record_plan("acct", "drive", &[("a.txt".to_string(), 100), ("b.txt".to_string(), 200)])
+            .await
+            .unwrap();
 
         let totals = repo.totals_for_drive("acct", "drive").await.unwrap();
         assert_eq!(totals.total_files, 2);
@@ -563,15 +527,11 @@ mod tests {
         let pool = fresh_pool().await;
         let repo = IntentRepo::new(pool.clone());
 
-        repo.record_plan("acct", "drive", &[("a.txt".to_string(), 100)])
+        repo.record_plan("acct", "drive", &[("a.txt".to_string(), 100)]).await.unwrap();
+        let row1: (i64, i64) = sqlx::query_as("SELECT added_at_ms, size_bytes FROM sync_intent WHERE relative_path = 'a.txt'")
+            .fetch_one(&pool)
             .await
             .unwrap();
-        let row1: (i64, i64) = sqlx::query_as(
-            "SELECT added_at_ms, size_bytes FROM sync_intent WHERE relative_path = 'a.txt'",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
 
         // Cross a millisecond boundary so a re-derived "now" would differ
         // if the column ever lost added_at_ms-preservation. With the
@@ -582,15 +542,11 @@ mod tests {
 
         // Same path, different size (file grew). added_at_ms must NOT
         // change; only size_bytes is in the DO UPDATE clause.
-        repo.record_plan("acct", "drive", &[("a.txt".to_string(), 150)])
+        repo.record_plan("acct", "drive", &[("a.txt".to_string(), 150)]).await.unwrap();
+        let row2: (i64, i64) = sqlx::query_as("SELECT added_at_ms, size_bytes FROM sync_intent WHERE relative_path = 'a.txt'")
+            .fetch_one(&pool)
             .await
             .unwrap();
-        let row2: (i64, i64) = sqlx::query_as(
-            "SELECT added_at_ms, size_bytes FROM sync_intent WHERE relative_path = 'a.txt'",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
 
         assert_eq!(row1.0, row2.0, "added_at_ms must be preserved on conflict");
         assert_eq!(row2.1, 150, "size_bytes must be refreshed");
@@ -616,16 +572,12 @@ mod tests {
             // added_at_ms. Sleeping ~3ms between samples spreads the
             // captures across multiple millisecond ticks.
             let path = format!("f{i}.txt");
-            repo.record_plan("acct", "drive", &[(path.clone(), 1)])
+            repo.record_plan("acct", "drive", &[(path.clone(), 1)]).await.unwrap();
+            let row: (i64,) = sqlx::query_as("SELECT added_at_ms FROM sync_intent WHERE relative_path = ?")
+                .bind(&path)
+                .fetch_one(&pool)
                 .await
                 .unwrap();
-            let row: (i64,) = sqlx::query_as(
-                "SELECT added_at_ms FROM sync_intent WHERE relative_path = ?",
-            )
-            .bind(&path)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
             if row.0 % 1000 != 0 {
                 saw_subsecond = true;
                 break;
@@ -776,9 +728,10 @@ mod tests {
         repo.record_plan("acct", "drive", &[("a.txt".into(), 100)]).await.unwrap();
         repo.mark_completed("acct", "drive", "a.txt", 1_000).await.unwrap();
         repo.mark_completed("acct", "drive", "a.txt", 2_000).await.unwrap();
-        let stored: i64 = sqlx::query_scalar(
-            "SELECT completed_at_ms FROM sync_intent WHERE relative_path = 'a.txt'",
-        ).fetch_one(&pool).await.unwrap();
+        let stored: i64 = sqlx::query_scalar("SELECT completed_at_ms FROM sync_intent WHERE relative_path = 'a.txt'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(stored, 1_000, "second mark must not overwrite the first timestamp");
     }
 
@@ -812,7 +765,9 @@ mod tests {
     async fn clear_drive_drops_both_pending_and_completed() {
         let pool = fresh_pool().await;
         let repo = IntentRepo::new(pool);
-        repo.record_plan("acct", "drive", &[("p.txt".into(), 100), ("c.txt".into(), 200)]).await.unwrap();
+        repo.record_plan("acct", "drive", &[("p.txt".into(), 100), ("c.txt".into(), 200)])
+            .await
+            .unwrap();
         repo.mark_completed("acct", "drive", "c.txt", 1_000).await.unwrap();
         repo.clear_drive("acct", "drive").await.unwrap();
         let t = repo.totals_for_drive("acct", "drive").await.unwrap();
@@ -846,11 +801,17 @@ mod tests {
     async fn prune_settled_drops_only_completed_rows_older_than_threshold() {
         let pool = fresh_pool().await;
         let repo = IntentRepo::new(pool);
-        repo.record_plan("acct", "drive", &[
-            ("old_completed.txt".into(), 100),
-            ("new_completed.txt".into(), 200),
-            ("pending.txt".into(), 300),
-        ]).await.unwrap();
+        repo.record_plan(
+            "acct",
+            "drive",
+            &[
+                ("old_completed.txt".into(), 100),
+                ("new_completed.txt".into(), 200),
+                ("pending.txt".into(), 300),
+            ],
+        )
+        .await
+        .unwrap();
         repo.mark_completed("acct", "drive", "old_completed.txt", 500).await.unwrap();
         repo.mark_completed("acct", "drive", "new_completed.txt", 5_000).await.unwrap();
 
