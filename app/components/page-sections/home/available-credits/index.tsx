@@ -5,6 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 
 import { RefreshButton, Select } from "@/components/ui";
+import CustomTooltip2 from "@/components/ui/CustomTooltip2";
 import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
 import {
   useDriveCreditsChart,
@@ -135,6 +136,18 @@ const AvailableCreditsCard: React.FC<{ className?: string }> = ({
             <p className="font-mono font-medium text-[12px] leading-[18px] tracking-[-0.24px] text-primary-40 dark:text-primary-brand-dark uppercase">
               Available Credits
             </p>
+            {/* The usage chart below is DRIVE-scoped (source:
+                `/user-credits-by-storage-history?storage_type=drive`), unlike the
+                web console / the Billing page, which show wallet-wide usage. The
+                info tooltip makes that scope explicit so the per-day values don't
+                read as "wrong" against those wallet-wide views. */}
+            <CustomTooltip2
+              side="top"
+              showInfo
+              iconSize={3.5}
+              iconColor="text-primary-40/60 dark:text-primary-brand-dark/60"
+              tooltipContent="This chart shows credits consumed by Drive storage only. Your total credit usage across all Hippius products is on the Billing page."
+            />
           </div>
           <div className="flex items-center gap-2.5">
             <RefreshButton
@@ -213,7 +226,7 @@ const AvailableCreditsCard: React.FC<{ className?: string }> = ({
             color="#3167DD"
             height="100%"
             isLoading={showSkeleton}
-            tooltipValueLabel="Credits"
+            tooltipValueLabel="Drive credits used"
             formatTooltipValue={(point) => {
               const date = new Date(point.x);
               const dayName = date.toLocaleDateString("en-US", {
