@@ -222,9 +222,7 @@ pub fn clear_substrate_client(app_state: &crate::app_state::AppState) {
 
 /// Get the current WSS endpoint from database.
 pub async fn get_current_wss_endpoint(pool: &SqlitePool) -> crate::error::Result<String> {
-    let row = sqlx::query("SELECT endpoint FROM wss_endpoint WHERE id = 1")
-        .fetch_optional(pool)
-        .await?;
+    let row = sqlx::query("SELECT endpoint FROM wss_endpoint WHERE id = 1").fetch_optional(pool).await?;
 
     match row {
         Some(row) => {

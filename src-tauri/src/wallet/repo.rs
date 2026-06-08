@@ -61,8 +61,7 @@ impl From<WalletRow> for LocalWallet {
     }
 }
 
-const SELECT_COLS: &str =
-    "id, name, address, encrypted_mnemonic, password_hash, is_active, created_at, updated_at";
+const SELECT_COLS: &str = "id, name, address, encrypted_mnemonic, password_hash, is_active, created_at, updated_at";
 
 /// Public projection of `LocalWallet` that excludes the encrypted mnemonic
 /// and password hash. The full struct can leak into FE state via
@@ -146,7 +145,7 @@ pub async fn insert(
     .bind(address)
     .bind(encrypted_mnemonic)
     .bind(password_hash)
-    .bind(i64::from(is_first))
+    .bind(i32::from(is_first))
     .bind(now)
     .bind(now)
     .execute(pool)
@@ -193,7 +192,11 @@ pub async fn get_by_id(pool: &SqlitePool, owner: &str, id: i64) -> Result<Option
 
 pub async fn get_by_address(pool: &SqlitePool, owner: &str, address: &str) -> Result<Option<LocalWallet>, AppError> {
     let sql = format!("SELECT {SELECT_COLS} FROM local_wallets WHERE owner = ? AND address = ?");
-    let row = sqlx::query_as::<_, WalletRow>(&sql).bind(owner).bind(address).fetch_optional(pool).await?;
+    let row = sqlx::query_as::<_, WalletRow>(&sql)
+        .bind(owner)
+        .bind(address)
+        .fetch_optional(pool)
+        .await?;
     Ok(row.map(LocalWallet::from))
 }
 
@@ -227,13 +230,7 @@ pub async fn set_active(pool: &SqlitePool, owner: &str, id: i64) -> Result<(), A
 ///
 /// The update is owner-scoped — a stale `id` from another account is a
 /// no-op rather than a cross-account leak.
-pub async fn update_secrets(
-    pool: &SqlitePool,
-    owner: &str,
-    id: i64,
-    encrypted_mnemonic: &str,
-    password_hash: &str,
-) -> Result<(), AppError> {
+pub async fn update_secrets(pool: &SqlitePool, owner: &str, id: i64, encrypted_mnemonic: &str, password_hash: &str) -> Result<(), AppError> {
     let now = now_ms();
     sqlx::query(
         "UPDATE local_wallets

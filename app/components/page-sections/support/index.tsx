@@ -6,6 +6,7 @@ import { Info } from "lucide-react";
 import { toast } from "sonner";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getVersion } from "@tauri-apps/api/app";
+import { invoke } from "@tauri-apps/api/core";
 import { InView } from "react-intersection-observer";
 import { getDiagonalTextureSvgBackgroundImage } from "@/app/lib/ui-textures";
 
@@ -35,7 +36,7 @@ import { OAuthButtonsGroup } from "../../auth/OAuthButtons";
 const ALL_TICKETS_LIMIT = 1000;
 
 const Support: React.FC = () => {
-  const { oauthSession } = useWalletAuth();
+  const { oauthSession, polkadotAddress } = useWalletAuth();
   const createTicketModalRef = useRef<CreateTicketModalRef>(null);
 
   const [searchTerm, setSearchTerm] = useState("");
@@ -117,35 +118,13 @@ const Support: React.FC = () => {
   };
 
   const handleSubmitTicket = async (ticketData: CreateTicketData) => {
-    const { attachment, ...ticketPayload } = ticketData;
+    const { attachment, includeLogs, ...ticketPayload } = ticketData;
 
     setIsSubmitting(true);
 
-    // If no attachment, just create the ticket normally
-    if (!attachment) {
-      createTicket(
-        {
-          ...ticketPayload,
-          resource_type: "",
-          resource_id: "",
-        },
-        {
-          onSuccess: () => {
-            setIsSubmitting(false);
-            setIsModalOpen(false);
-            createTicketModalRef.current?.resetForm();
-            toast.success("Ticket created successfully!");
-            refetch();
-          },
-          onError: () => {
-            setIsSubmitting(false);
-          },
-        }
-      );
-      return;
-    }
-
-    // If there's an attachment, create ticket first, keep modal open, then upload attachment
+    // Create the ticket, then run the optional post-create steps (image
+    // attachment, log bundle) against its first message. Both attachment and
+    // no-attachment flows share this single path.
     createTicket(
       {
         ...ticketPayload,
@@ -154,34 +133,56 @@ const Support: React.FC = () => {
       },
       {
         onSuccess: async (ticket) => {
-          try {
-            if (ticket.messages && ticket.messages.length > 0) {
-              await uploadAttachment({
-                ticket_id: ticket.id.toString(),
-                message_id: ticket.messages[0].id.toString(),
-                filePath: attachment.path,
-                filename: attachment.name,
-              });
-            } else {
-              throw new Error("No message ID available in ticket response");
-            }
+          const firstMessageId = ticket.messages?.[0]?.id;
 
-            setIsSubmitting(false);
-            setIsModalOpen(false);
-            createTicketModalRef.current?.resetForm();
-            toast.success("Ticket created successfully!");
-            refetch();
-          } catch (error) {
-            setIsSubmitting(false);
-            setIsModalOpen(false);
-            createTicketModalRef.current?.resetForm();
-            toast.error(
-              error instanceof Error
-                ? error.message
-                : "Failed to upload attachment"
-            );
-            refetch();
+          // User-selected image attachment. A failure here IS surfaced — the
+          // user explicitly attached a file and expects it to arrive.
+          let attachmentError: string | null = null;
+          if (attachment) {
+            if (firstMessageId == null) {
+              attachmentError = "No message ID available in ticket response";
+            } else {
+              try {
+                await uploadAttachment({
+                  ticket_id: ticket.id.toString(),
+                  message_id: firstMessageId.toString(),
+                  filePath: attachment.path,
+                  filename: attachment.name,
+                });
+              } catch (error) {
+                attachmentError =
+                  error instanceof Error
+                    ? error.message
+                    : "Failed to upload attachment";
+              }
+            }
           }
+
+          // Best-effort log bundle. Business logic (bundling, redaction, zip,
+          // upload) lives in the `attach_logs_to_ticket` Rust command; here we
+          // only fire it and SWALLOW any failure so it can never fail ticket
+          // creation or show an error toast.
+          if (includeLogs && firstMessageId != null && polkadotAddress) {
+            try {
+              await invoke("attach_logs_to_ticket", {
+                accountId: polkadotAddress,
+                ticketId: ticket.id.toString(),
+                messageId: firstMessageId.toString(),
+              });
+            } catch (error) {
+              console.warn("Failed to attach logs to support ticket", error);
+            }
+          }
+
+          setIsSubmitting(false);
+          setIsModalOpen(false);
+          createTicketModalRef.current?.resetForm();
+          if (attachmentError) {
+            toast.error(attachmentError);
+          } else {
+            toast.success("Ticket created successfully!");
+          }
+          refetch();
         },
         onError: (error) => {
           setIsSubmitting(false);

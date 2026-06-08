@@ -1001,6 +1001,7 @@ fn spawn_folder_registration(server_url: &str, bearer_token: &str, label: &str, 
 /// `skip_credits_check` suppresses the HTTP call to `/api/billing/credits/balance/`.
 /// Pass `true` when the caller has already validated credits (e.g. `auto_init_sync`
 /// checks once before its per-drive loop to avoid N redundant requests).
+#[expect(clippy::too_many_lines, reason = "sequential drive-init steps read better inline than split across helpers")]
 pub(crate) async fn initialize_sync_inner(
     app: tauri::AppHandle,
     account_id: String,
@@ -1411,7 +1412,10 @@ pub(crate) async fn remove_drive_for_account(app: AppHandle, label: String, expl
     // after we delete it, resurrecting the stale `synced` tree this wipe exists
     // to remove (the data-loss path fixed in 17b8e159). Best-effort on timeout.
     if !drain_drive_lock(drive_manager.as_ref(), GRACEFUL_DRIVE_SHUTDOWN).await {
-        warn!("remove_drive: in-flight sync of '{}' did not release within the grace window; wiping baseline anyway", label);
+        warn!(
+            "remove_drive: in-flight sync of '{}' did not release within the grace window; wiping baseline anyway",
+            label
+        );
     }
     if let Some(acct) = acct.as_deref() {
         clear_persisted_sync_state(acct, &label);

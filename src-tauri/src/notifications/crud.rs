@@ -559,8 +559,16 @@ pub struct PreferenceUpdate {
 /// schema-init time — the commands below seed them for the session account on
 /// demand.
 const DEFAULT_PREFERENCES: &[(&str, &str, &str)] = &[
-    ("credits", "Credits", "Notifications for account credits, including low balance warnings and credit additions"),
-    ("files", "Files", "Notifications for file operations including sync completion and failures"),
+    (
+        "credits",
+        "Credits",
+        "Notifications for account credits, including low balance warnings and credit additions",
+    ),
+    (
+        "files",
+        "Files",
+        "Notifications for file operations including sync completion and failures",
+    ),
 ];
 
 /// Seed the default preference rows for `owner` if absent.
@@ -584,10 +592,11 @@ async fn seed_default_preferences(pool: &sqlx::SqlitePool, owner: &str) -> Resul
 /// Account-scoped read of every preference row (defaults seeded first).
 async fn get_preferences_inner(pool: &sqlx::SqlitePool, owner: &str) -> Result<Vec<NotificationPreference>, AppError> {
     seed_default_preferences(pool, owner).await?;
-    let rows = sqlx::query_as::<_, (String, String, String, i32)>("SELECT id, label, description, enabled FROM notification_preferences WHERE owner = ?")
-        .bind(owner)
-        .fetch_all(pool)
-        .await?;
+    let rows =
+        sqlx::query_as::<_, (String, String, String, i32)>("SELECT id, label, description, enabled FROM notification_preferences WHERE owner = ?")
+            .bind(owner)
+            .fetch_all(pool)
+            .await?;
 
     Ok(rows
         .into_iter()
@@ -703,15 +712,28 @@ mod tests {
         let (_dir, pool) = fresh_pool().await;
 
         // A disables Credits.
-        set_preferences_inner(&pool, "addrA", &[PreferenceUpdate { id: "credits".into(), enabled: false }])
-            .await
-            .unwrap();
+        set_preferences_inner(
+            &pool,
+            "addrA",
+            &[PreferenceUpdate {
+                id: "credits".into(),
+                enabled: false,
+            }],
+        )
+        .await
+        .unwrap();
 
         // A sees Credits disabled; B (defaults seeded on read) still enabled.
         let a = get_preferences_inner(&pool, "addrA").await.unwrap();
-        assert!(!a.iter().find(|p| p.id == "credits").expect("A credits row").enabled, "A's Credits must be disabled");
+        assert!(
+            !a.iter().find(|p| p.id == "credits").expect("A credits row").enabled,
+            "A's Credits must be disabled"
+        );
         let b = get_preferences_inner(&pool, "addrB").await.unwrap();
-        assert!(b.iter().find(|p| p.id == "credits").expect("B credits row").enabled, "B's Credits must remain enabled (no cross-account leak)");
+        assert!(
+            b.iter().find(|p| p.id == "credits").expect("B credits row").enabled,
+            "B's Credits must remain enabled (no cross-account leak)"
+        );
 
         // The enabled-labels view used by the FE filter reflects the same scoping.
         let a_enabled = enabled_types_inner(&pool, "addrA").await.unwrap();

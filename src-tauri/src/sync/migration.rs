@@ -204,7 +204,7 @@ pub(crate) async fn fetch_migration_summary(client: &reqwest::Client, server_url
     let resp = client
         .get(&url)
         // Old servers may take a while enumerating large buckets
-        .timeout(std::time::Duration::from_secs(600))
+        .timeout(std::time::Duration::from_mins(10))
         .send()
         .await?;
 
@@ -330,7 +330,8 @@ pub async fn check_migration(state: tauri::State<'_, crate::app_state::AppState>
     let mut probe_failures = 0;
     if has_local_in_progress && let Ok(job_status) = poll_migration_status_internal(&state, &account_id, &mut probe_failures).await {
         if job_status.status == "in_progress" {
-            let logical_total = job_status.logical_file_count
+            let logical_total = job_status
+                .logical_file_count
                 .filter(|&c| c > 0)
                 .map_or(job_status.total as u64, |c| c as u64);
             info!(
@@ -486,8 +487,7 @@ pub async fn dismiss_migration(state: tauri::State<'_, crate::app_state::AppStat
 /// exists, a numeric suffix is appended (`-2`, `-3`, ...) to guarantee
 /// uniqueness.
 pub(crate) fn compute_default_sync_path() -> Result<PathBuf> {
-    let base = dirs::home_dir()
-        .ok_or_else(|| crate::error::AppError::Other("Could not determine a suitable directory for sync folder".into()))?;
+    let base = dirs::home_dir().ok_or_else(|| crate::error::AppError::Other("Could not determine a suitable directory for sync folder".into()))?;
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let stem = format!("Hippius-Migration-{today}");
     let candidate = base.join(&stem);
@@ -837,12 +837,10 @@ pub async fn start_server_migration(
     })?;
 
     // Retrieve API token for authorization
-    let api_token = crate::auth::tokens::get_api_token(pool, &account_id)
-        .await?
-        .ok_or_else(|| {
-            tracing::error!("[Migration] No API token available");
-            crate::error::AppError::Other("No API token available — log in first".into())
-        })?;
+    let api_token = crate::auth::tokens::get_api_token(pool, &account_id).await?.ok_or_else(|| {
+        tracing::error!("[Migration] No API token available");
+        crate::error::AppError::Other("No API token available — log in first".into())
+    })?;
 
     // Call server endpoint — use a longer timeout since the server
     // validates credentials and sets up the migration job.
@@ -871,7 +869,7 @@ pub async fn start_server_migration(
         .client
         .post(&url)
         .header("Authorization", format!("Bearer {api_token}"))
-        .timeout(std::time::Duration::from_secs(120))
+        .timeout(std::time::Duration::from_mins(2))
         .json(&request_body)
         .send()
         .await
@@ -927,7 +925,7 @@ pub async fn start_server_migration(
                     .client
                     .post(&url)
                     .header("Authorization", format!("Bearer {api_token}"))
-                    .timeout(std::time::Duration::from_secs(120))
+                    .timeout(std::time::Duration::from_mins(2))
                     .json(&request_body)
                     .send()
                     .await
@@ -996,11 +994,7 @@ fn poll_failure_flags(consecutive_failures: i32) -> (bool, bool) {
 /// `start_server_migration`'s reset could zero the loop's progress (audit
 /// 2026-06-05, finding D3). A per-task `&mut i32` is the lightest primitive that
 /// fits the now-correctly-unshared sharing pattern (axiom 73).
-async fn poll_migration_status_internal(
-    state: &crate::app_state::AppState,
-    account_id: &str,
-    failures: &mut i32,
-) -> Result<ServerMigrationStatus> {
+async fn poll_migration_status_internal(state: &crate::app_state::AppState, account_id: &str, failures: &mut i32) -> Result<ServerMigrationStatus> {
     let pool = state.pool()?;
     let server_url = get_server_url(pool, account_id).await?;
     // Same auto-detect-empty-string handling as `fetch_migration_summary`.
@@ -1228,7 +1222,10 @@ mod tests {
 
     #[test]
     fn derive_label_uses_last_path_component() {
-        assert_eq!(derive_migration_label(Some("/Users/alice/Documents/Hippius-Migration")), "Hippius-Migration");
+        assert_eq!(
+            derive_migration_label(Some("/Users/alice/Documents/Hippius-Migration")),
+            "Hippius-Migration"
+        );
     }
 
     #[test]
@@ -1506,7 +1503,9 @@ mod tests {
         // The cancel response is inspected via `match` (awaited + branched on
         // status), not discarded — the `post(&cancel_url)` lives inside it.
         let cancel_at = body.find(".post(&cancel_url)").expect("cancel request present");
-        let match_at = body.find("match state").expect("cancel must be matched on, not fire-and-forget (audit finding D4)");
+        let match_at = body
+            .find("match state")
+            .expect("cancel must be matched on, not fire-and-forget (audit finding D4)");
         assert!(
             match_at < cancel_at,
             "the cancel `.post(&cancel_url)` must sit inside the `match` that inspects it (audit finding D4)"
@@ -1564,9 +1563,7 @@ mod tests {
             .split("pub async fn start_migration_polling")
             .nth(1)
             .expect("start_migration_polling present");
-        let immediate_poll = body
-            .find("poll_migration_status_internal(&app.state")
-            .expect("immediate poll present");
+        let immediate_poll = body.find("poll_migration_status_internal(&app.state").expect("immediate poll present");
         let spawn = body.find("tokio::spawn").expect("background loop spawned");
         assert!(
             immediate_poll < spawn,

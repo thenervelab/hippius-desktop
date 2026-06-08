@@ -329,7 +329,7 @@ pub async fn restore_session(
                             None
                         }
                     };
-                    let (_, recovery_result) = tokio::join!(asset_scope_fut, recovery_probe_fut);
+                    let ((), recovery_result) = tokio::join!(asset_scope_fut, recovery_probe_fut);
 
                     if let Some(rc_result) = recovery_result {
                         match rc_result {
@@ -356,7 +356,7 @@ pub async fn restore_session(
 
                     // Notify FE if a rotation is awaiting its local-rewrite step.
                     if let Some(ref addr) = substrate_address
-                        && crate::recovery::rotation_sidecar_path(addr).map(|p| p.exists()).unwrap_or(false)
+                        && crate::recovery::rotation_sidecar_path(addr).is_ok_and(|p| p.exists())
                     {
                         info!(
                             account = %crate::console_access::short_ss58(addr),

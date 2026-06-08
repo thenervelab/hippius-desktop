@@ -59,13 +59,7 @@ pub struct ShareOrigin {
 /// `hcfs_create_share` downgrades this to a warn-level log because
 /// the share itself has already been created on the server — the
 /// user-facing operation has already succeeded.
-pub async fn record(
-    pool: &SqlitePool,
-    share_token: &str,
-    owner: &str,
-    folder_label: &str,
-    relative_path: &str,
-) -> Result<()> {
+pub async fn record(pool: &SqlitePool, share_token: &str, owner: &str, folder_label: &str, relative_path: &str) -> Result<()> {
     sqlx::query(
         "INSERT INTO share_origin (share_token, owner, folder_label, relative_path) \
          VALUES (?, ?, ?, ?) \
@@ -161,10 +155,7 @@ pub async fn fetch_for_tokens(pool: &SqlitePool, owner: &str, tokens: &[&str]) -
 /// best-effort cleanup, never a reason to fail a user-facing list call.
 pub async fn prune(pool: &SqlitePool, owner: &str, active_tokens: &[&str]) {
     let result = if active_tokens.is_empty() {
-        sqlx::query("DELETE FROM share_origin WHERE owner = ?")
-            .bind(owner)
-            .execute(pool)
-            .await
+        sqlx::query("DELETE FROM share_origin WHERE owner = ?").bind(owner).execute(pool).await
     } else {
         let placeholders = vec!["?"; active_tokens.len()].join(", ");
         let sql = format!("DELETE FROM share_origin WHERE owner = ? AND share_token NOT IN ({placeholders})");

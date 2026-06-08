@@ -102,7 +102,9 @@ pub async fn validate_send_balance(
 
     let address = get_substrate_address(&state).await?;
     let client = get_substrate_client(&state).await?;
-    let account_id: subxt::utils::AccountId32 = address.parse().map_err(|_| crate::error::AppError::Validation(format!("Invalid sender address: {address}")))?;
+    let account_id: subxt::utils::AccountId32 = address
+        .parse()
+        .map_err(|_| crate::error::AppError::Validation(format!("Invalid sender address: {address}")))?;
     let storage_query = custom_runtime::storage().system().account(&account_id);
     let account_info = client
         .storage()

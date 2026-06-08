@@ -148,7 +148,12 @@ impl ApiClient {
     }
 
     /// GET request with auth and query parameters.
-    pub async fn get_with_params<T: DeserializeOwned>(&self, path: &str, params: &[(&str, &str)], account_id: &crate::app_state::SessionAccount) -> Result<T, ApiError> {
+    pub async fn get_with_params<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        params: &[(&str, &str)],
+        account_id: &crate::app_state::SessionAccount,
+    ) -> Result<T, ApiError> {
         let token = get_auth_token_for_account(&self.pool, account_id).await?;
         let url = url_with_params(&self.base_url, path, params);
 
@@ -165,7 +170,12 @@ impl ApiClient {
     }
 
     /// POST request with auth and JSON body.
-    pub async fn post<T: DeserializeOwned, B: Serialize>(&self, path: &str, body: &B, account_id: &crate::app_state::SessionAccount) -> Result<T, ApiError> {
+    pub async fn post<T: DeserializeOwned, B: Serialize>(
+        &self,
+        path: &str,
+        body: &B,
+        account_id: &crate::app_state::SessionAccount,
+    ) -> Result<T, ApiError> {
         let token = get_auth_token_for_account(&self.pool, account_id).await?;
         let url = format!("{}{}", self.base_url, path);
 
@@ -184,7 +194,12 @@ impl ApiClient {
     }
 
     /// PATCH request with auth and JSON body.
-    pub async fn patch<T: DeserializeOwned, B: Serialize>(&self, path: &str, body: &B, account_id: &crate::app_state::SessionAccount) -> Result<T, ApiError> {
+    pub async fn patch<T: DeserializeOwned, B: Serialize>(
+        &self,
+        path: &str,
+        body: &B,
+        account_id: &crate::app_state::SessionAccount,
+    ) -> Result<T, ApiError> {
         let token = get_auth_token_for_account(&self.pool, account_id).await?;
         let url = format!("{}{}", self.base_url, path);
 

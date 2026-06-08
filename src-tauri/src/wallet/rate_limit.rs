@@ -27,7 +27,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// Sliding-window size for counting failures.
-pub const WINDOW: Duration = Duration::from_secs(60);
+pub const WINDOW: Duration = Duration::from_mins(1);
 /// Soft threshold: first lockout tier.
 pub const FAIL_THRESHOLD_SOFT: u32 = 5;
 /// Hard threshold: longer lockout.
@@ -36,7 +36,7 @@ pub const FAIL_THRESHOLD_HARD: u32 = 10;
 pub const LOCKOUT_SOFT: Duration = Duration::from_secs(30);
 /// Second-tier lockout duration. Long enough that an attacker
 /// scripting attempts isn't burning meaningful guesses per minute.
-pub const LOCKOUT_HARD: Duration = Duration::from_secs(5 * 60);
+pub const LOCKOUT_HARD: Duration = Duration::from_mins(5);
 
 #[derive(Debug, Clone, Copy)]
 pub enum RateLimitError {
@@ -144,9 +144,7 @@ impl RateLimitState {
         let now = Instant::now();
         if let Some(until) = entry.locked_until {
             if now < until {
-                return Err(RateLimitError::Locked {
-                    retry_after: until - now,
-                });
+                return Err(RateLimitError::Locked { retry_after: until - now });
             }
             // Lockout has elapsed — reset the counter so the user gets a fresh
             // window starting now. Also clear any in_flight that a non-pairing

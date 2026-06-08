@@ -229,7 +229,10 @@ pub(crate) async fn load_sync_config(pool: &SqlitePool, account_id: &str, label:
     // the faster one" sentinel. We rewrite the legacy single-region URL
     // to empty too — see normalize_for_region_probe.
     let server_url = normalize_for_region_probe(&config.server_url);
-    debug!("Server URL: {}", if server_url.is_empty() { "<auto-detect>" } else { server_url.as_str() });
+    debug!(
+        "Server URL: {}",
+        if server_url.is_empty() { "<auto-detect>" } else { server_url.as_str() }
+    );
 
     Ok(SyncConfig {
         sync_path,
@@ -328,9 +331,18 @@ mod tests {
     /// user override — pass through verbatim.
     #[test]
     fn normalize_passes_explicit_overrides_through() {
-        assert_eq!(normalize_for_region_probe("https://eu-central-1-arion.hippius.com"), "https://eu-central-1-arion.hippius.com");
-        assert_eq!(normalize_for_region_probe("https://us-east-1-arion.hippius.com"), "https://us-east-1-arion.hippius.com");
-        assert_eq!(normalize_for_region_probe("https://my-self-hosted.example"), "https://my-self-hosted.example");
+        assert_eq!(
+            normalize_for_region_probe("https://eu-central-1-arion.hippius.com"),
+            "https://eu-central-1-arion.hippius.com"
+        );
+        assert_eq!(
+            normalize_for_region_probe("https://us-east-1-arion.hippius.com"),
+            "https://us-east-1-arion.hippius.com"
+        );
+        assert_eq!(
+            normalize_for_region_probe("https://my-self-hosted.example"),
+            "https://my-self-hosted.example"
+        );
         assert_eq!(normalize_for_region_probe("http://localhost:8080"), "http://localhost:8080");
     }
 

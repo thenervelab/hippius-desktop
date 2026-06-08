@@ -47,7 +47,10 @@ pub async fn get_tray_menu_data(state: tauri::State<'_, crate::app_state::AppSta
     // The credits fetch needs a `SessionAccount` proof. `addr` is the auth_session
     // row's address; validate it against the active session before the token call
     // (a mismatch — or no live session — yields unknown credits, not a leak).
-    let credits = match substrate_address.as_deref().and_then(|addr| state.require_session_account_typed(addr).ok()) {
+    let credits = match substrate_address
+        .as_deref()
+        .and_then(|addr| state.require_session_account_typed(addr).ok())
+    {
         Some(account) => match crate::api::client::ApiClient::new(state.api_client.clone(), pool.clone())
             .get::<serde_json::Value>("/api/billing/credits/balance/", &account)
             .await
