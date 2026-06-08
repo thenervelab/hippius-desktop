@@ -2,10 +2,13 @@
 
 import { FC, useCallback, useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
-import useMarketplaceCredits from "@/app/lib/hooks/api/useMarketplaceCredits";
+import {
+  useDriveCreditsChart,
+  CreditsChartRange,
+} from "@/app/lib/hooks/api/useDriveCreditsChart";
 import AvailableCreditsChart from "@/components/page-sections/home/available-credits/AvailableCreditsChart";
-import { formatCreditsForChart, totalCreditsUsed, CreditChartRange } from "@/lib/utils/formatCreditChart";
 import { Select, RefreshButton } from "@/components/ui";
+import CustomTooltip2 from "@/components/ui/CustomTooltip2";
 import { GripIcon } from "@/components/ui/icons";
 
 const TIME_RANGE_OPTIONS = [
@@ -21,15 +24,18 @@ interface CreditGraphProps {
 }
 
 const CreditGraph: FC<CreditGraphProps> = ({ className }) => {
-  const [timeRange, setTimeRange] = useState<CreditChartRange>("last7days");
-  // Billing page only: opt out of the hook's default 6 s refetchInterval
-  // so the chart doesn't silently re-poll. Manual refresh via the
-  // RefreshButton still works through refetch().
+  const [timeRange, setTimeRange] = useState<CreditsChartRange>("last7days");
+  // Drive-scoped usage, identical source to the home page's Available Credits
+  // chart (`/user-credits-by-storage-history?storage_type=drive`). Previously
+  // this page used the wallet-wide marketplace feed, which showed a LARGER
+  // per-day value than home and confused users — both desktop charts now show
+  // the same "credits used by Drive storage" figure. Wallet-wide / all-product
+  // usage lives on the web console; see the title's info tooltip.
   const {
-    data: credits,
+    data: chartData,
     isLoading,
     refetch,
-  } = useMarketplaceCredits(undefined, { refetchInterval: false });
+  } = useDriveCreditsChart(timeRange);
 
   const [isRefreshing, setIsRefreshing] = useState(false);
   const handleRefresh = useCallback(async () => {
@@ -43,19 +49,18 @@ const CreditGraph: FC<CreditGraphProps> = ({ className }) => {
   }, [isRefreshing, refetch]);
 
   // Skeleton shows on (1) the first fetch when no data is cached yet, and
-  // (2) while the user-triggered refresh is in flight. Background
-  // isFetching is intentionally ignored — there's no automatic polling on
-  // this page anymore, and any other refetch source (window focus, etc.)
-  // should keep the existing data via keepPreviousData rather than flash.
-  const hasData = Array.isArray(credits);
+  // (2) while the user-triggered refresh is in flight. Background isFetching is
+  // intentionally ignored — there's no automatic polling on this page.
+  const hasData = Array.isArray(chartData);
   const showSkeleton = (isLoading && !hasData) || isRefreshing;
 
-  const chartData = useMemo(
-    () => formatCreditsForChart(credits ?? [], timeRange),
-    [credits, timeRange],
-  );
+  const points = useMemo(() => chartData ?? [], [chartData]);
 
-  const usedTotal = useMemo(() => totalCreditsUsed(credits ?? []), [credits]);
+  // The chart is cumulative and seeded by all spend strictly before the
+  // window, so its LAST point is the all-time drive credits-used total —
+  // range-independent and guaranteed to agree with the chart line. No
+  // separate total fetch needed.
+  const usedTotal = points.length ? points[points.length - 1].balance : 0;
 
   return (
     <div
@@ -72,19 +77,28 @@ const CreditGraph: FC<CreditGraphProps> = ({ className }) => {
         <div className="flex items-center gap-1">
           <GripIcon className="size-[14px] text-primary-40 dark:text-primary-brand-dark" />
           <p className="font-mono font-medium text-[12px] leading-[18px] tracking-[-0.24px] text-primary-40 dark:text-primary-brand-dark uppercase">
-            Credit Overview
+            Drive Credit Usage
           </p>
+          {/* Same clarifier as the home Available Credits card: this chart is
+              DRIVE-scoped, unlike the web console's wallet-wide usage view. */}
+          <CustomTooltip2
+            side="top"
+            showInfo
+            iconSize={3.5}
+            iconColor="text-primary-40/60 dark:text-primary-brand-dark/60"
+            tooltipContent="This chart shows credits consumed by Drive storage only — the same figure as the home page. Your total credit usage across all Hippius products is shown on the web console."
+          />
         </div>
         <div className="flex items-center gap-2.5">
           <RefreshButton
             onClick={handleRefresh}
             refetching={isRefreshing}
-            ariaLabel="Refresh credit overview"
+            ariaLabel="Refresh drive credit usage"
           />
           <Select
             options={TIME_RANGE_OPTIONS}
             value={timeRange}
-            onValueChange={(v) => setTimeRange(v as CreditChartRange)}
+            onValueChange={(v) => setTimeRange(v as CreditsChartRange)}
             triggerClassName={cn(
               "h-auto min-h-0 px-2 py-1.5 rounded-[7px]",
               "font-mono font-medium text-[12px] leading-5 tracking-[-0.24px] uppercase",
@@ -119,7 +133,7 @@ const CreditGraph: FC<CreditGraphProps> = ({ className }) => {
                     : usedTotal.toFixed(usedTotal < 0.01 && usedTotal > 0 ? 4 : 2)}
               </span>
               <span className="font-mono font-medium text-[12px] leading-[18px] tracking-[-0.48px] text-grey-10/50 dark:text-white/50 pb-[3px]">
-                credits used
+                drive credits used
               </span>
             </>
           )}
@@ -127,17 +141,17 @@ const CreditGraph: FC<CreditGraphProps> = ({ className }) => {
 
         {/* Chart */}
         <div className="relative w-full h-[180px] px-4 py-3">
-          {!showSkeleton && chartData.length === 0 ? (
+          {!showSkeleton && points.length === 0 ? (
             <div className="h-full flex items-center justify-center">
               <span className="text-[13px] text-grey-dark-600 font-medium">No credits data available</span>
             </div>
           ) : (
             <AvailableCreditsChart
-              data={chartData}
+              data={points}
               color="#3167DD"
               height="100%"
               isLoading={showSkeleton}
-              tooltipValueLabel="Credits Used"
+              tooltipValueLabel="Drive credits used"
               formatTooltipValue={(point) => {
                 const date = new Date(point.x);
                 const dayName = date.toLocaleDateString("en-US", { weekday: "long" });
