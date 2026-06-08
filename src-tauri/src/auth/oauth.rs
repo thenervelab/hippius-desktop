@@ -501,9 +501,7 @@ pub async fn complete_oauth_flow(
         // Persist the API token via the existing helper so there's one
         // writer for `objectstore_auth_scoped` (shared with the mnemonic
         // login flow).
-        crate::auth::tokens::save_api_token(pool, &substrate_address, &token)
-            .await
-            .map_err(AppError::Other)?;
+        crate::auth::tokens::save_api_token(pool, &substrate_address, &token).await?;
 
         // Populate AuthInfo so OAuth users participate in the same
         // get_mnemonic_for_account cache path as mnemonic-login users.

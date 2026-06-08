@@ -292,8 +292,7 @@ async fn fetch_search_files(
     let server_url = crate::sync::remote::get_server_url(pool, account_id).await?;
     let base = crate::sync::region::resolve_base_url(&server_url);
     let token = crate::auth::tokens::get_api_token(pool, account_id)
-        .await
-        .map_err(AppError::Other)?
+        .await?
         .ok_or_else(|| AppError::Auth("No authentication token found. Please log in again.".into()))?;
 
     // ss58 addresses are base58 (URL-safe), so they go into the path verbatim

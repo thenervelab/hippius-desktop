@@ -233,8 +233,7 @@ pub(crate) async fn fetch_migration_summary(client: &reqwest::Client, server_url
 /// user's files from the legacy S3 storage (s3.hippius.com).
 async fn fetch_s3_credentials(client: &reqwest::Client, pool: &SqlitePool, account_id: &str) -> Result<(String, String)> {
     let api_token = crate::auth::tokens::get_api_token(pool, account_id)
-        .await
-        .map_err(crate::error::AppError::Other)?
+        .await?
         .ok_or_else(|| crate::error::AppError::Other("No API token available — log in first".into()))?;
 
     let api_base = std::env::var("HIPPIUS_API_BASE_URL").unwrap_or_else(|_| "https://api.hippius.com/api".to_string());
@@ -809,8 +808,7 @@ pub async fn start_server_migration(
 
     // Retrieve API token for authorization
     let api_token = crate::auth::tokens::get_api_token(pool, &account_id)
-        .await
-        .map_err(crate::error::AppError::Other)?
+        .await?
         .ok_or_else(|| {
             tracing::error!("[Migration] No API token available");
             crate::error::AppError::Other("No API token available — log in first".into())

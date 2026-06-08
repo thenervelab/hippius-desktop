@@ -205,9 +205,7 @@ pub async fn ensure_billing_auth(state: tauri::State<'_, crate::app_state::AppSt
     }
     let result = result.ok_or(last_err)?;
 
-    save_api_token(pool, &account_id, &result.token)
-        .await
-        .map_err(|e| crate::error::AppError::Other(format!("Failed to persist billing auth token: {e}")))?;
+    save_api_token(pool, &account_id, &result.token).await?;
 
     // Token expiry: 30 days from now. The server doesn't include expiry in
     // the response, so we assume 30 days to match the auth service's default.
