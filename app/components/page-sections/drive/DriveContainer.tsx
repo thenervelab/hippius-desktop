@@ -326,6 +326,24 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // too fast to otherwise see), and a background refetch never clicks it — so it
   // stays silent. We therefore don't drive `refetching` from any fetch flag.
 
+  // On a MANUAL refresh we also want the files table/card to show their
+  // skeleton — not just the icon. The refetch resolves in tens of ms, so we
+  // hold this flag for a fixed window and OR it into `isLoading` below. Only a
+  // user click sets it (see `refetchUserFiles` wiring), so background sync
+  // refetches stay silent.
+  const [isManualRefreshing, setIsManualRefreshing] = useState(false);
+  const manualRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  useEffect(
+    () => () => {
+      if (manualRefreshTimerRef.current) {
+        clearTimeout(manualRefreshTimerRef.current);
+      }
+    },
+    [],
+  );
+
   // Get the appropriate data based on view mode
   const allData = useMemo(() => {
     if (isRecentFiles) {
@@ -458,11 +476,13 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // typed into search and we're still waiting on the new IPC. Folding it
   // in keeps the loading shell consistent whether the active filter
   // path is in-memory or recursive.
-  const isLoading = isRecentFiles
-    ? isRecentFilesLoading || isFiltering
-    : isNested
-      ? nestedListing.isLoading || isFiltering || isRecursiveSearching
-      : isRegularFilesLoading || isFiltering || isRecursiveSearching;
+  const isLoading =
+    isManualRefreshing ||
+    (isRecentFiles
+      ? isRecentFilesLoading || isFiltering
+      : isNested
+        ? nestedListing.isLoading || isFiltering || isRecursiveSearching
+        : isRegularFilesLoading || isFiltering || isRecursiveSearching);
 
   // Infinite scroll state for list and card views. Cheap keyFn (no row
   // serialization) so the source-changed check stays O(1) during sync refetches.
@@ -1344,7 +1364,17 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 handleSearchChange={handleSearchChange}
                 activeFilters={activeFilters}
                 handleRemoveFilter={handleRemoveFilter}
-                refetchUserFiles={refreshForCurrentView}
+                refetchUserFiles={() => {
+                  if (manualRefreshTimerRef.current) {
+                    clearTimeout(manualRefreshTimerRef.current);
+                  }
+                  setIsManualRefreshing(true);
+                  refreshForCurrentView();
+                  manualRefreshTimerRef.current = setTimeout(
+                    () => setIsManualRefreshing(false),
+                    600,
+                  );
+                }}
                 addButtonRef={addButtonRef}
                 privateFileCount={privateFileCount}
                 isSyncPathEmpty={effectiveSyncPathEmpty}

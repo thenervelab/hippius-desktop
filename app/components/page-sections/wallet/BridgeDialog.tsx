@@ -154,6 +154,22 @@ const BridgeDialog: React.FC<BridgeDialogProps> = ({
     void refetchBalances();
     setAmount("");
     setActiveButton(null);
+    // Reopening the dialog after a FINISHED bridge (success/error) clears that
+    // bridge's lingering minimized toast so the new attempt starts on a clean
+    // dialog. A still-running ("pending") bridge is intentionally left alone:
+    // its progress toast must survive until it resolves, and a second
+    // concurrent bridge is blocked at the confirm step below.
+    if (flowState === "success" || flowState === "error") {
+      setFlowState("idle");
+      setIsMinimized(false);
+      setSubmittedAmount("");
+      setPendingBridgeAmount("");
+      bridge.clearWizardSteps();
+    }
+    // Intentionally react ONLY to the dialog opening — reading `flowState` at
+    // that moment is correct, and re-running on every `flowState`/`bridge`
+    // change would wipe the amount field mid-edit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, refetchBalances]);
 
   /* Reset password whenever the confirm step opens so a stale value
@@ -380,6 +396,15 @@ const BridgeDialog: React.FC<BridgeDialogProps> = ({
       setShowConfirmation(false);
       return;
     }
+    // Guard against a second concurrent bridge while one is still in flight —
+    // the dialog can now be opened during a "pending" bridge, but submitting
+    // another (multi-signature) bridge in parallel is unsafe.
+    if (flowState === "pending") {
+      setConfirmError(
+        "A bridge is already in progress. Please wait for it to finish.",
+      );
+      return;
+    }
     if (!confirmPassword) {
       setConfirmError("Enter your wallet password.");
       return;
@@ -440,7 +465,11 @@ const BridgeDialog: React.FC<BridgeDialogProps> = ({
   };
 
   const showFlowToast = flowState !== "idle" && isMinimized;
-  const showMainDialog = open && !showConfirmation && flowState === "idle";
+  // The dialog must open whenever the user asks (`open`), independent of any
+  // in-flight/finished bridge whose toast is showing. Gating this on
+  // `flowState === "idle"` was the bug that made "Bridge Tokens" do nothing
+  // while a progress toast was visible.
+  const showMainDialog = open && !showConfirmation;
 
   /* ── Render ──────────────────────────────────────────────── */
 
@@ -615,7 +644,7 @@ const BridgeDialog: React.FC<BridgeDialogProps> = ({
 
       {/* Confirmation dialog */}
       <WalletDialogShell
-        open={showConfirmation && flowState === "idle"}
+        open={showConfirmation}
         onClose={handleCloseBridgeConfirmation}
         title={
           isAlphaToHAlpha ? "Bridge Alpha to hAlpha" : "Bridge hAlpha to Alpha"
