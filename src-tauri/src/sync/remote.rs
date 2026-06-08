@@ -114,6 +114,9 @@ fn unique_part_path(cache_root: &std::path::Path, cache_name: &str) -> PathBuf {
 
 #[tauri::command]
 pub async fn list_remote_folder_files(state: tauri::State<'_, AppState>, account_id: String, label: String) -> Result<Vec<RemoteFileInfo>> {
+    // Lists another account's remote files under its token; authorize against
+    // the session (sibling download/cache commands are already guarded).
+    let account_id = state.require_session_account(&account_id)?;
     info!(account_id = %account_id, label = %label, "Listing remote folder files");
     let pool = state.pool()?;
     let mnemonic = session_mnemonic(&state)?;
@@ -141,6 +144,9 @@ pub async fn download_remote_file(
     use tauri::Emitter;
     info!(label = %label, file_id = %file_id, "Downloading remote file");
 
+    // The account is the authority for the bearer token and encryption key
+    // used below; trust the session, not the webview-supplied argument.
+    let account_id = state.require_session_account(&account_id)?;
     let pool = state.pool()?;
     let mnemonic = session_mnemonic(&state)?;
     let encryption_key = encryption_key_for_label(pool, &account_id, &label, &mnemonic).await?;
@@ -209,6 +215,10 @@ pub async fn cache_remote_file(
     arion_hash: String,
 ) -> Result<String> {
     info!(label = %label, file_id = %file_id, "Caching remote file for preview");
+
+    // Decrypts another-account's file under the session's token/key path, so
+    // the requested account must be the active session account.
+    let account_id = state.require_session_account(&account_id)?;
 
     // Must live under the asset-protocol scope (`$HOME/.hippius/**` in
     // tauri.conf.json) so the webview can load the decrypted file via

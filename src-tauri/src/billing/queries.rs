@@ -174,7 +174,7 @@ fn credits_raw_to_display(raw: &str) -> String {
 
 /// Fetch the on-chain deposit address for adding credits via Substrate transfer.
 #[tauri::command]
-pub async fn get_deposit_address(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<serde_json::Value, AppError> {
+pub async fn get_deposit_address(state: tauri::State<'_, crate::app_state::AppState>, account_id: crate::app_state::SessionAccount) -> Result<serde_json::Value, AppError> {
     let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
     Ok(client.get::<serde_json::Value>("/api/billing/substrate-address/", &account_id).await?)
 }
@@ -549,7 +549,7 @@ pub struct BillingTransactionObject {
 #[tauri::command]
 pub async fn get_billing_transactions(
     state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
+    account_id: crate::app_state::SessionAccount,
     page: Option<i64>,
     limit: Option<i64>,
 ) -> Result<Vec<BillingTransactionObject>, AppError> {
@@ -567,7 +567,10 @@ pub async fn get_billing_transactions(
             let tx_type = if payment_type.to_lowercase().contains("stripe") { "card" } else { "tao" };
             let amount = t.amount.as_ref().map_or(0.0, |v| {
                 if let Some(s) = v.as_str() {
-                    s.parse::<f64>().unwrap_or(0.0)
+                    s.parse::<f64>().unwrap_or_else(|_| {
+                        tracing::warn!(amount = %s, "non-numeric billing transaction amount; coercing to 0");
+                        0.0
+                    })
                 } else {
                     v.as_f64().unwrap_or(0.0)
                 }

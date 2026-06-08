@@ -98,8 +98,14 @@ function formatCompactBytes(value: number): string {
 function getStatusTone(options: {
   isUnhealthy: boolean;
   hasFailed: boolean;
+  isComplete: boolean;
 }): StatusTone {
   if (options.isUnhealthy || options.hasFailed) return "error";
+  // A successfully-finished sync gets the green "success" tone (collapsed ring
+  // check + tooltip). Without this branch tone could only be "error"/"progress",
+  // so a completed sync rendered as a blue in-progress ring and the success
+  // palette in SyncStatusMini/the tooltip was unreachable.
+  if (options.isComplete) return "success";
   return "progress";
 }
 
@@ -371,6 +377,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
   const tone = getStatusTone({
     isUnhealthy,
     hasFailed,
+    isComplete: effectiveCompleted || isCompleted,
   });
   const canExpand = snapshot.files.length > 0 || Boolean(snapshot.lastError);
 

@@ -74,6 +74,7 @@ pub async fn save_hcfs_config(
     server_url: String,
     drive_password: String,
 ) -> Result<()> {
+    let account_id = state.require_session_account(&account_id)?;
     let db = state.pool()?;
     let owner = account_key(&account_id);
 
@@ -140,6 +141,7 @@ pub(crate) async fn get_hcfs_config_internal(pool: &SqlitePool, account_id: &str
 
 #[tauri::command]
 pub async fn get_hcfs_config(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<HcfsConfigResult> {
+    let account_id = state.require_session_account(&account_id)?;
     get_hcfs_config_internal(state.pool()?, &account_id).await
 }
 

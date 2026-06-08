@@ -416,17 +416,26 @@ pub async fn delete_system_notification_by_version(state: tauri::State<'_, AppSt
 /// notification badge counter — which is polled on every screen — costs
 /// one pool acquire and one prepared statement.
 ///
-/// Counts notifications whose `notification_type` matches an enabled
-/// preference label, plus any "Hippius" system notifications which are
-/// always shown regardless of preferences.
+/// Counts notifications whose `notification_type` is not explicitly disabled
+/// in this account's preferences, plus any "Hippius" system notifications which
+/// are always shown regardless of preferences.
+///
+/// The preference subquery is scoped to `user_address` (the `owner` column) so
+/// a category another account disabled cannot suppress this account's badge.
+/// It uses an "absent means enabled" rule (`NOT IN (... enabled = 0)`) rather
+/// than `IN (... enabled = 1)`: preference rows are seeded lazily, so a fresh
+/// account with no rows yet must still count its notifications — only an
+/// explicit disable removes a category. This keeps the hot, every-screen badge
+/// poll read-only (no seed write).
 pub async fn unread_count_inner(pool: &sqlx::SqlitePool, user_address: &str) -> Result<i64, AppError> {
     let (count,): (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM notifications \
          WHERE (user_address = ? OR user_address = 'system') \
          AND is_unread = 1 AND is_deleted = 0 \
          AND (notification_type = 'Hippius' \
-              OR notification_type IN (SELECT label FROM notification_preferences WHERE enabled = 1))",
+              OR notification_type NOT IN (SELECT label FROM notification_preferences WHERE owner = ? AND enabled = 0))",
     )
+    .bind(user_address)
     .bind(user_address)
     .fetch_one(pool)
     .await?;
@@ -543,12 +552,40 @@ pub struct PreferenceUpdate {
     pub enabled: bool,
 }
 
-/// Get all notification preference entries.
-#[tauri::command]
-pub async fn get_local_notification_preferences(state: tauri::State<'_, AppState>) -> Result<Vec<NotificationPreference>, AppError> {
-    let pool = state.pool()?;
+/// Default notification categories, seeded per account on first use.
+///
+/// Each tuple is `(id, label, description)`. These live here rather than in the
+/// schema because the rows are per-account and the account set isn't known at
+/// schema-init time — the commands below seed them for the session account on
+/// demand.
+const DEFAULT_PREFERENCES: &[(&str, &str, &str)] = &[
+    ("credits", "Credits", "Notifications for account credits, including low balance warnings and credit additions"),
+    ("files", "Files", "Notifications for file operations including sync completion and failures"),
+];
 
-    let rows = sqlx::query_as::<_, (String, String, String, i32)>("SELECT id, label, description, enabled FROM notification_preferences")
+/// Seed the default preference rows for `owner` if absent.
+///
+/// Idempotent via `INSERT OR IGNORE` on the `(owner, id)` primary key, so a
+/// user's existing toggles are never reset by a later seed call. Runs as a
+/// single multi-row statement (one round-trip) because the read commands call
+/// it on every preferences fetch — one statement, not one per default. (A
+/// larger follow-up could move seeding to login and keep the reads pure.)
+async fn seed_default_preferences(pool: &sqlx::SqlitePool, owner: &str) -> Result<(), AppError> {
+    let rows = DEFAULT_PREFERENCES.iter().map(|_| "(?, ?, ?, ?, 1)").collect::<Vec<_>>().join(", ");
+    let sql = format!("INSERT OR IGNORE INTO notification_preferences (owner, id, label, description, enabled) VALUES {rows}");
+    let mut q = sqlx::query(&sql);
+    for (id, label, description) in DEFAULT_PREFERENCES {
+        q = q.bind(owner).bind(id).bind(label).bind(description);
+    }
+    q.execute(pool).await?;
+    Ok(())
+}
+
+/// Account-scoped read of every preference row (defaults seeded first).
+async fn get_preferences_inner(pool: &sqlx::SqlitePool, owner: &str) -> Result<Vec<NotificationPreference>, AppError> {
+    seed_default_preferences(pool, owner).await?;
+    let rows = sqlx::query_as::<_, (String, String, String, i32)>("SELECT id, label, description, enabled FROM notification_preferences WHERE owner = ?")
+        .bind(owner)
         .fetch_all(pool)
         .await?;
 
@@ -563,37 +600,53 @@ pub async fn get_local_notification_preferences(state: tauri::State<'_, AppState
         .collect())
 }
 
-/// Update notification preferences in a transaction.
-#[tauri::command]
-pub async fn update_local_notification_preferences(state: tauri::State<'_, AppState>, preferences: Vec<PreferenceUpdate>) -> Result<(), AppError> {
-    let pool = state.pool()?;
-
+/// Account-scoped preference toggle update (defaults seeded first so toggling a
+/// not-yet-seeded category persists instead of being a silent no-op UPDATE).
+async fn set_preferences_inner(pool: &sqlx::SqlitePool, owner: &str, preferences: &[PreferenceUpdate]) -> Result<(), AppError> {
+    seed_default_preferences(pool, owner).await?;
     let mut tx = pool.begin().await?;
-
-    for pref in &preferences {
+    for pref in preferences {
         let enabled_val: i32 = i32::from(pref.enabled);
-        sqlx::query("UPDATE notification_preferences SET enabled = ? WHERE id = ?")
+        sqlx::query("UPDATE notification_preferences SET enabled = ? WHERE owner = ? AND id = ?")
             .bind(enabled_val)
+            .bind(owner)
             .bind(&pref.id)
             .execute(&mut *tx)
             .await?;
     }
-
     tx.commit().await?;
-
     Ok(())
 }
 
-/// Get the labels of all enabled notification types.
-#[tauri::command]
-pub async fn get_local_enabled_notification_types(state: tauri::State<'_, AppState>) -> Result<Vec<String>, AppError> {
-    let pool = state.pool()?;
-
-    let rows = sqlx::query_as::<_, (String,)>("SELECT label FROM notification_preferences WHERE enabled = 1")
+/// Account-scoped labels of enabled categories (defaults seeded first).
+async fn enabled_types_inner(pool: &sqlx::SqlitePool, owner: &str) -> Result<Vec<String>, AppError> {
+    seed_default_preferences(pool, owner).await?;
+    let rows = sqlx::query_as::<_, (String,)>("SELECT label FROM notification_preferences WHERE owner = ? AND enabled = 1")
+        .bind(owner)
         .fetch_all(pool)
         .await?;
-
     Ok(rows.into_iter().map(|(label,)| label).collect())
+}
+
+/// Get all notification preference entries for the active account.
+#[tauri::command]
+pub async fn get_local_notification_preferences(state: tauri::State<'_, AppState>) -> Result<Vec<NotificationPreference>, AppError> {
+    let owner = state.current_account_id()?;
+    get_preferences_inner(state.pool()?, &owner).await
+}
+
+/// Update notification preferences for the active account in a transaction.
+#[tauri::command]
+pub async fn update_local_notification_preferences(state: tauri::State<'_, AppState>, preferences: Vec<PreferenceUpdate>) -> Result<(), AppError> {
+    let owner = state.current_account_id()?;
+    set_preferences_inner(state.pool()?, &owner, &preferences).await
+}
+
+/// Get the labels of all enabled notification types for the active account.
+#[tauri::command]
+pub async fn get_local_enabled_notification_types(state: tauri::State<'_, AppState>) -> Result<Vec<String>, AppError> {
+    let owner = state.current_account_id()?;
+    enabled_types_inner(state.pool()?, &owner).await
 }
 
 // ── App State ───────────────────────────────────────────────────────────
@@ -641,5 +694,29 @@ mod tests {
         assert_eq!(set_unread_flag_inner(&pool, "addrA", a_id, 0).await.unwrap(), 1);
         // System rows remain actionable by any account.
         assert_eq!(set_unread_flag_inner(&pool, "addrB", sys_id, 0).await.unwrap(), 1);
+    }
+
+    // The cross-account bug: one account's category toggle must not change
+    // another account's preferences on a shared multi-account device.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn preferences_are_scoped_per_account() {
+        let (_dir, pool) = fresh_pool().await;
+
+        // A disables Credits.
+        set_preferences_inner(&pool, "addrA", &[PreferenceUpdate { id: "credits".into(), enabled: false }])
+            .await
+            .unwrap();
+
+        // A sees Credits disabled; B (defaults seeded on read) still enabled.
+        let a = get_preferences_inner(&pool, "addrA").await.unwrap();
+        assert!(!a.iter().find(|p| p.id == "credits").expect("A credits row").enabled, "A's Credits must be disabled");
+        let b = get_preferences_inner(&pool, "addrB").await.unwrap();
+        assert!(b.iter().find(|p| p.id == "credits").expect("B credits row").enabled, "B's Credits must remain enabled (no cross-account leak)");
+
+        // The enabled-labels view used by the FE filter reflects the same scoping.
+        let a_enabled = enabled_types_inner(&pool, "addrA").await.unwrap();
+        assert!(!a_enabled.iter().any(|l| l == "Credits"), "A's enabled set must exclude Credits");
+        let b_enabled = enabled_types_inner(&pool, "addrB").await.unwrap();
+        assert!(b_enabled.iter().any(|l| l == "Credits"), "B's enabled set must include Credits");
     }
 }

@@ -56,9 +56,15 @@ use rand::RngCore;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
-/// Domain-separation tag for the AEAD key derivation. Folded into
-/// Argon2id's `associated_data` so the same password + salt + Argon
-/// params can never accidentally produce a key for some other purpose.
+/// Domain-separation tag for the AEAD key derivation.
+///
+/// Used ONLY by the legacy HKDF derivation (`derive_aead_key_hkdf_legacy` via
+/// `hk.expand(INFO_MNEMONIC, ..)`). The current Argon2id path does NOT consume
+/// it — `Argon2::default().hash_password_into(password, salt, out)` takes no
+/// associated data — so domain separation for current ciphertext rests on the
+/// per-wallet address salt plus this key being single-purpose, not on an
+/// Argon2 AD binding. (The earlier doc claimed it was folded into Argon2id's
+/// `associated_data`, which the code never did.)
 const INFO_MNEMONIC: &[u8] = b"hippius-local-wallet-mnemonic";
 
 const NONCE_LEN: usize = 12;

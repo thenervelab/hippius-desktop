@@ -47,6 +47,27 @@ fn derive_address(mnemonic: &str) -> Result<String, AppError> {
     Ok(pair.public_key().to_account_id().to_string())
 }
 
+/// Reject a backup whose stored `address` does not actually correspond to its
+/// `encrypted_mnemonic`.
+///
+/// Password verification alone (`verify_password`) only proves the typed
+/// password matches the backup's hash for the backup's address — it does not
+/// prove the ciphertext decrypts to a mnemonic that *derives* that address. A
+/// tampered or malformed backup could therefore persist a row whose advertised
+/// `address` differs from its key material, so later signing
+/// (`get_signer_and_address` / `local_wallet_sign`) would act on a different
+/// address than the UI displays. The decrypt uses `address` as the AEAD salt,
+/// so a consistent backup round-trips; we then derive the address from the
+/// plaintext and require it to match. Costs one AEAD decrypt + key derivation,
+/// at import time only.
+fn verify_backup_address_binding(encrypted_mnemonic: &str, password: &str, address: &str) -> Result<(), AppError> {
+    let (mnemonic, _legacy) = crypto::decrypt_mnemonic(encrypted_mnemonic, password, address)?;
+    if derive_address(&mnemonic)? != address {
+        return Err(AppError::Validation("Backup address does not match its mnemonic".into()));
+    }
+    Ok(())
+}
+
 /// Generate a fresh 12-word mnemonic. The mnemonic is returned to the FE
 /// only so the user can write it down during the create flow — it must be
 /// immediately re-submitted via `create` (along with the password) to be
@@ -334,6 +355,9 @@ pub async fn local_wallet_import_encrypted_backup(
     if !crypto::verify_password(&password_hash, &password, address.trim()) {
         return Err(AppError::Other("Incorrect password for this backup".into()));
     }
+    // Reject a backup whose address doesn't derive from its mnemonic, so a
+    // tampered file can't persist a row that later signs under a different key.
+    verify_backup_address_binding(&encrypted_mnemonic, &password, address.trim())?;
     let owner = require_owner(&state)?;
     let pool = state.pool()?;
     let row = repo::insert(pool, &owner, name.trim(), address.trim(), &encrypted_mnemonic, &password_hash).await?;
@@ -453,6 +477,9 @@ pub async fn local_wallet_import_encrypted_backup_from_zip(
     if !crypto::verify_password(&password_hash, &password, &address) {
         return Err(AppError::Other("Incorrect password for this backup".into()));
     }
+    // Reject a backup whose address doesn't derive from its mnemonic (see the
+    // JSON import path) so a tampered zip can't persist a mismatched row.
+    verify_backup_address_binding(&encrypted_mnemonic, &password, &address)?;
 
     let owner = require_owner(&state)?;
     let pool = state.pool()?;

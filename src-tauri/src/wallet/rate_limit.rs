@@ -69,6 +69,18 @@ struct State {
     window_started_at: Option<Instant>,
     /// Failure count in the current window.
     failures_in_window: u32,
+    /// Attempts admitted by [`RateLimitState::check`] that have not yet
+    /// recorded a result. Closes the check/verify/record TOCTOU: the
+    /// password verify (Argon2id, ~50–100 ms) runs *outside* the lock, so on
+    /// a multi-threaded runtime N attempts could each pass `check` before any
+    /// recorded a failure and bypass the cap. Counting in-flight attempts
+    /// toward the threshold (`failures_in_window + in_flight`) makes
+    /// concurrent callers see one another, so at most the threshold number of
+    /// verifies run before `check` starts rejecting. Decremented by
+    /// `record_failure` / `record_success`; self-heals to 0 on lockout expiry
+    /// so a caller that returns without recording cannot leak a reservation
+    /// past one lockout cycle.
+    in_flight: u32,
     /// Lockout deadline. `Some(t)` means "any attempt before `t` is
     /// rejected"; `None` means "no active lockout".
     locked_until: Option<Instant>,
@@ -79,6 +91,7 @@ impl Default for State {
         State {
             window_started_at: None,
             failures_in_window: 0,
+            in_flight: 0,
             locked_until: None,
         }
     }
@@ -121,25 +134,55 @@ impl RateLimitState {
         gate.lock_owned().await
     }
 
-    /// Check whether a password attempt is currently allowed for
-    /// `wallet_id`. Returns `Ok(())` if the call should proceed,
-    /// [`RateLimitError`] if the wallet is locked out.
+    /// Check whether a password attempt is allowed for `wallet_id`, and
+    /// reserve it.
+    ///
+    /// Returns `Ok(())` if the call should proceed (and counts it as in-flight)
+    /// or [`RateLimitError`] if the wallet is locked out or too many attempts
+    /// are already outstanding. The caller MUST follow an `Ok(())` with exactly
+    /// one of [`record_success`](Self::record_success) /
+    /// [`record_failure`](Self::record_failure) to release the reservation; all
+    /// three current call sites in `wallet::commands` do.
+    ///
+    /// The `in_flight` reservation is belt-and-suspenders under the per-wallet
+    /// [`attempt_gate`](Self::attempt_gate), which already serializes the
+    /// check→verify→record sequence: the threshold is evaluated against
+    /// `failures_in_window + in_flight`, so even a caller that forgot the gate
+    /// cannot outrun the lockout (audit 2026-06-05, finding B1).
     pub fn check(&self, wallet_id: i64) -> Result<(), RateLimitError> {
         let mut map = self.inner.lock().expect("rate-limit mutex poisoned");
         let entry = map.entry(wallet_id).or_default();
+        let now = Instant::now();
         if let Some(until) = entry.locked_until {
-            let now = Instant::now();
             if now < until {
                 return Err(RateLimitError::Locked {
                     retry_after: until - now,
                 });
             }
-            // Lockout has elapsed — reset the counter so the user gets
-            // a fresh window starting now.
+            // Lockout has elapsed — reset the counter so the user gets a fresh
+            // window starting now. Also clear any in_flight that a non-pairing
+            // caller may have leaked: after a full lockout no attempt is
+            // genuinely still running, so this bounds a leak to one cycle.
             entry.locked_until = None;
             entry.window_started_at = None;
             entry.failures_in_window = 0;
+            entry.in_flight = 0;
         }
+
+        // Outstanding = already-recorded failures this window + attempts admitted
+        // but not yet resolved. Reject (and latch a lockout) once it reaches a
+        // threshold so a burst of parallel attempts cannot exceed the cap.
+        let outstanding = entry.failures_in_window.saturating_add(entry.in_flight);
+        if outstanding >= FAIL_THRESHOLD_HARD {
+            entry.locked_until = Some(now + LOCKOUT_HARD);
+            return Err(RateLimitError::Locked { retry_after: LOCKOUT_HARD });
+        }
+        if outstanding >= FAIL_THRESHOLD_SOFT {
+            entry.locked_until = Some(now + LOCKOUT_SOFT);
+            return Err(RateLimitError::Locked { retry_after: LOCKOUT_SOFT });
+        }
+
+        entry.in_flight = entry.in_flight.saturating_add(1);
         Ok(())
     }
 
@@ -150,6 +193,10 @@ impl RateLimitState {
         let mut map = self.inner.lock().expect("rate-limit mutex poisoned");
         let entry = map.entry(wallet_id).or_default();
         let now = Instant::now();
+
+        // Release the reservation taken by `check`; the failure now counts
+        // toward `failures_in_window` instead.
+        entry.in_flight = entry.in_flight.saturating_sub(1);
 
         match entry.window_started_at {
             Some(started) if now.duration_since(started) <= WINDOW => {
@@ -177,6 +224,9 @@ impl RateLimitState {
         if let Some(entry) = map.get_mut(&wallet_id) {
             entry.window_started_at = None;
             entry.failures_in_window = 0;
+            // Release this attempt's reservation. Decrement (not zero) so a
+            // concurrent in-flight attempt on the same wallet keeps its slot.
+            entry.in_flight = entry.in_flight.saturating_sub(1);
             entry.locked_until = None;
         }
     }
@@ -243,6 +293,39 @@ mod tests {
         // has been wiped.
         rl.record_failure(42);
         assert!(rl.check(42).is_ok());
+    }
+
+    #[test]
+    fn parallel_in_flight_attempts_capped_at_threshold() {
+        // The TOCTOU fix: each `check` that returns Ok reserves an in-flight
+        // slot, so a burst of attempts that pass `check` before any records a
+        // result (the race window on a multi-threaded runtime) cannot exceed
+        // the cap. Simulate 50 concurrent admits with no record in between.
+        let rl = RateLimitState::new();
+        let admitted = (0..50).filter(|_| rl.check(7).is_ok()).count();
+        assert_eq!(
+            admitted as u32, FAIL_THRESHOLD_SOFT,
+            "at most the soft threshold of concurrent in-flight attempts may be admitted"
+        );
+        // Further attempts stay locked out.
+        assert!(rl.check(7).is_err());
+    }
+
+    #[test]
+    fn in_flight_reservation_released_on_record() {
+        // A normal serial failure (check reserves, record_failure releases)
+        // nets exactly one counted failure, so the cap is reached after
+        // exactly FAIL_THRESHOLD_SOFT real attempts — not sooner.
+        let rl = RateLimitState::new();
+        for _ in 0..(FAIL_THRESHOLD_SOFT - 1) {
+            assert!(rl.check(9).is_ok(), "attempt under the cap must be admitted");
+            rl.record_failure(9);
+        }
+        // One slot left.
+        assert!(rl.check(9).is_ok());
+        rl.record_failure(9);
+        // Now at the cap: next attempt rejected.
+        assert!(rl.check(9).is_err());
     }
 
     #[test]

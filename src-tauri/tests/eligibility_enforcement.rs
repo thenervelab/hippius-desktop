@@ -143,6 +143,12 @@ async fn require_eligible_enforces_thresholds_against_mock_billing_api() {
     let pool = setup_pool_with_token(account_id).await;
     let state = AppState::new();
     state.set_pool(pool);
+    // Eligibility now mints a SessionAccount for the token fetch, so the checked
+    // account must be the active session account (it always is in production —
+    // eligibility is "can the current user afford this action").
+    state
+        .set_active_account(account_id, tauri_project_lib::auth::state::AuthCapabilities::Full)
+        .expect("set session account");
 
     // -----------------------------------------------------------------
     // Case 1: zero balance — every action must be rejected with

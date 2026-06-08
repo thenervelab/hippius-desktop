@@ -88,6 +88,7 @@ pub async fn setup_and_init_sync(
 ) -> Result<InitSyncResult> {
     use tauri::Manager;
     let state = app.state::<crate::app_state::AppState>();
+    let account_id = state.require_session_account(&account_id)?;
     let pool = state.pool()?;
 
     // 1. Save HCFS config
@@ -124,6 +125,7 @@ pub async fn add_local_sync_folder(
 ) -> Result<String> {
     use tauri::Manager;
     let state = app.state::<crate::app_state::AppState>();
+    let account_id = state.require_session_account(&account_id)?;
     let pool = state.pool()?;
 
     // Enforce credit eligibility at the IPC boundary, priced by the
@@ -169,6 +171,13 @@ pub async fn add_local_sync_folder(
 /// switching folders won't download files from the previous folder.
 #[tauri::command]
 pub async fn initialize_sync(app: tauri::AppHandle, account_id: String, label: String, existing_mnemonic: Option<String>) -> Result<InitSyncResult> {
+    // FE entry that flows account_id into the secret-using inner; authorize
+    // against the session. (Also reached from complete_migration_transition,
+    // itself guarded, with the session account — the re-check is idempotent.)
+    let account_id = {
+        use tauri::Manager;
+        app.state::<crate::app_state::AppState>().require_session_account(&account_id)?
+    };
     initialize_sync_inner(app, account_id, label, existing_mnemonic, true, false).await
 }
 
@@ -1019,17 +1028,27 @@ pub(crate) async fn initialize_sync_inner(
     // Validate user has credits/balance before allowing sync.
     // This is skipped when the caller has already performed the check (e.g.
     // `auto_init_sync` checks once before iterating all drives).
-    if !skip_credits_check && let Ok(acct) = app_state.current_account_id() {
+    if !skip_credits_check && let Ok(account) = app_state.current_session_account() {
         let client = crate::api::client::ApiClient::new(app_state.api_client.clone(), pool_owned.clone());
-        if let Ok(resp) = client
-            .get::<crate::billing::credits::CreditBalanceResponse>("/api/billing/credits/balance/", &acct)
+        match client
+            .get::<crate::billing::credits::CreditBalanceResponse>("/api/billing/credits/balance/", &account)
             .await
         {
-            // Unparseable balance is inconclusive, not zero — see balance_blocks_sync.
-            if balance_blocks_sync(resp.balance.as_deref()) {
-                return Err(crate::error::AppError::Validation(
-                    "Insufficient credits. Please add credits to your account before syncing.".into(),
-                ));
+            Ok(resp) => {
+                // Unparseable balance is inconclusive, not zero — see balance_blocks_sync.
+                if balance_blocks_sync(resp.balance.as_deref()) {
+                    return Err(crate::error::AppError::Validation(
+                        "Insufficient credits. Please add credits to your account before syncing.".into(),
+                    ));
+                }
+            }
+            // Fail-open on a transport/HTTP/parse error: this pre-init gate is a
+            // best-effort proactive check. The gated upload IPCs each call the
+            // fail-closed `require_eligible`, and the per-file 402 path is the
+            // authoritative backstop, so a server blip here must not block sync.
+            // Log it so the skipped check is observable instead of silently dropped.
+            Err(e) => {
+                tracing::warn!(account = %account, error = %e, "credit pre-init balance check failed; proceeding (upload IPCs still enforce eligibility)");
             }
         }
     }
@@ -1581,6 +1600,7 @@ pub async fn change_sync_folder(
     label: String,
     mnemonic: Option<String>,
 ) -> Result<InitSyncResult> {
+    let account_id = state.require_session_account(&account_id)?;
     let pool = state.pool()?;
 
     // Tear down the existing drive (fire and forget if it doesn't exist) so we
@@ -1618,6 +1638,9 @@ pub async fn auto_init_sync(
     account_id: String,
     mnemonic: Option<String>,
 ) -> Result<AutoInitResult> {
+    // FE entry that flows account_id into the secret-using inner; authorize
+    // against the session before it reaches the mnemonic/token paths.
+    let account_id = state.require_session_account(&account_id)?;
     auto_init_sync_inner(app.clone(), &state, account_id, mnemonic).await
 }
 
@@ -1856,18 +1879,25 @@ async fn auto_init_sync_inner(
     // between drives, so a single HTTP round-trip is sufficient.  If the
     // check fails we return early; individual `initialize_sync_inner` calls
     // below will skip the check via `skip_credits_check = true`.
-    if let Ok(acct) = state.current_account_id() {
+    if let Ok(account) = state.current_session_account() {
         let pool_owned = state.pool()?.clone();
         let client = crate::api::client::ApiClient::new(state.api_client.clone(), pool_owned);
-        if let Ok(resp) = client
-            .get::<crate::billing::credits::CreditBalanceResponse>("/api/billing/credits/balance/", &acct)
+        match client
+            .get::<crate::billing::credits::CreditBalanceResponse>("/api/billing/credits/balance/", &account)
             .await
         {
-            // Unparseable balance is inconclusive, not zero — see balance_blocks_sync.
-            if balance_blocks_sync(resp.balance.as_deref()) {
-                return Err(crate::error::AppError::Validation(
-                    "Insufficient credits. Please add credits to your account before syncing.".into(),
-                ));
+            Ok(resp) => {
+                // Unparseable balance is inconclusive, not zero — see balance_blocks_sync.
+                if balance_blocks_sync(resp.balance.as_deref()) {
+                    return Err(crate::error::AppError::Validation(
+                        "Insufficient credits. Please add credits to your account before syncing.".into(),
+                    ));
+                }
+            }
+            // Fail-open on transport/HTTP/parse error (per-drive init + per-file
+            // 402 are the authoritative backstops), but log the skipped check.
+            Err(e) => {
+                tracing::warn!(account = %account, error = %e, "credit pre-init balance check failed in auto_init; proceeding");
             }
         }
     }

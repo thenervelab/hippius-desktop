@@ -292,8 +292,7 @@ async fn fetch_search_files(
     let server_url = crate::sync::remote::get_server_url(pool, account_id).await?;
     let base = crate::sync::region::resolve_base_url(&server_url);
     let token = crate::auth::tokens::get_api_token(pool, account_id)
-        .await
-        .map_err(AppError::Other)?
+        .await?
         .ok_or_else(|| AppError::Auth("No authentication token found. Please log in again.".into()))?;
 
     // ss58 addresses are base58 (URL-safe), so they go into the path verbatim
@@ -346,9 +345,7 @@ async fn fetch_search_files(
 
     // Build label → local sync-root map so previews/downloads resolve for
     // drives configured on this device.
-    let sync_paths = crate::sync::folders::get_all_sync_paths_internal(pool, account_id)
-        .await
-        .unwrap_or_default();
+    let sync_paths = crate::sync::folders::get_all_sync_paths_or_warn(pool, account_id, "fetch_search_files").await;
     let label_to_path: HashMap<String, String> = sync_paths
         .iter()
         .filter(|sp| !sp.path.is_empty() && !sp.label.is_empty())
@@ -385,6 +382,9 @@ pub async fn get_recent_uploads(
     account_id: String,
     limit: Option<usize>,
 ) -> Result<Vec<UserFileEntry>> {
+    // Uses the account's bearer token to query its uploads; authorize against
+    // the session account.
+    let account_id = state.require_session_account(&account_id)?;
     let limit = limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     debug!(account_id = %account_id, limit, "Fetching recent uploads from HCFS server");
 
@@ -417,6 +417,9 @@ pub async fn search_files(
     account_id: String,
     params: SearchFilesParams,
 ) -> Result<Vec<UserFileEntry>> {
+    // Uses the account's bearer token to search its files; authorize against
+    // the session account.
+    let account_id = state.require_session_account(&account_id)?;
     debug!(account_id = %account_id, ?params, "Cross-folder file search via HCFS /search_files");
     let query = build_search_query(&params);
     fetch_search_files(state.inner(), &account_id, &query).await
