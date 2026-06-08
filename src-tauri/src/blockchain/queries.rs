@@ -12,7 +12,7 @@ pub async fn get_account_balance(
     state: tauri::State<'_, crate::app_state::AppState>,
     address: String,
 ) -> Result<AccountBalance, crate::error::AppError> {
-    let client = get_substrate_client(&state).await.map_err(crate::error::AppError::Substrate)?;
+    let client = get_substrate_client(&state).await?;
     let account_id: subxt::utils::AccountId32 = address.parse().map_err(|_| crate::error::AppError::Validation(format!("Invalid SS58 address: {address}")))?;
     let storage_query = custom_runtime::storage().system().account(&account_id);
     let account_info = client
@@ -74,7 +74,7 @@ pub async fn get_staking_info(
         Some(a) => a,
         None => get_substrate_address(&state).await?,
     };
-    let client = get_substrate_client(&state).await.map_err(crate::error::AppError::Substrate)?;
+    let client = get_substrate_client(&state).await?;
     let account_id: subxt::utils::AccountId32 = address.parse().map_err(|_| crate::error::AppError::Validation(format!("Invalid SS58 address: {address}")))?;
 
     // Single RPC call — all queries use the same block snapshot
@@ -242,13 +242,13 @@ pub async fn get_block_timestamp(
 ) -> Result<BlockTimestampResult, crate::error::AppError> {
     use subxt::backend::legacy::LegacyRpcMethods;
 
-    let client = get_substrate_client(&state).await.map_err(crate::error::AppError::Substrate)?;
+    let client = get_substrate_client(&state).await?;
 
     // Get the RPC handle through the connect-aware helper so it can't spuriously
     // report "RPC client not initialized" when the rpc_client cache was cleared
     // concurrently while the OnlineClient above stayed cached — both are
     // re-derived together. See client::get_rpc_client.
-    let rpc = crate::blockchain::client::get_rpc_client(&state).await.map_err(crate::error::AppError::Substrate)?;
+    let rpc = crate::blockchain::client::get_rpc_client(&state).await?;
     let legacy: LegacyRpcMethods<subxt::PolkadotConfig> = LegacyRpcMethods::new(rpc);
 
     let block_hash = legacy
@@ -303,7 +303,7 @@ pub async fn get_referral_links(
     state: tauri::State<'_, crate::app_state::AppState>,
     address: String,
 ) -> Result<Vec<ReferralLink>, crate::error::AppError> {
-    let client = get_substrate_client(&state).await.map_err(crate::error::AppError::Substrate)?;
+    let client = get_substrate_client(&state).await?;
     let target_account: subxt::utils::AccountId32 = address.parse().map_err(|_| "Invalid address".to_string())?;
 
     let storage = client

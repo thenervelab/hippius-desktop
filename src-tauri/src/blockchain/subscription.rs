@@ -39,7 +39,7 @@ pub struct BlockUpdate {
 
 /// Start the background block subscription. Idempotent — does nothing if already running.
 #[tauri::command]
-pub async fn start_block_subscription(app: tauri::AppHandle) -> Result<(), String> {
+pub async fn start_block_subscription(app: tauri::AppHandle) -> crate::error::Result<()> {
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
     let bsub = &app_state.block_sub;
@@ -85,7 +85,7 @@ pub async fn start_block_subscription(app: tauri::AppHandle) -> Result<(), Strin
                     let delay_secs = 5u64
                         .saturating_mul(2u64.saturating_pow(consecutive_failures.saturating_sub(1).min(4)))
                         .min(60);
-                    let is_rate_limited = e.contains("429");
+                    let is_rate_limited = e.to_string().contains("429");
                     let delay_secs = if is_rate_limited { delay_secs.max(30) } else { delay_secs };
 
                     warn!(
@@ -148,12 +148,12 @@ pub(crate) async fn stop_block_subscription_inner(app: &tauri::AppHandle) {
 
 /// Stop the background block subscription (IPC wrapper). Idempotent.
 #[tauri::command]
-pub async fn stop_block_subscription(app: tauri::AppHandle) -> Result<(), String> {
+pub async fn stop_block_subscription(app: tauri::AppHandle) -> crate::error::Result<()> {
     stop_block_subscription_inner(&app).await;
     Ok(())
 }
 
-async fn subscribe_blocks(app: &tauri::AppHandle) -> Result<(), String> {
+async fn subscribe_blocks(app: &tauri::AppHandle) -> crate::error::Result<()> {
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
     let client = get_substrate_client(&app_state).await?;
@@ -163,7 +163,7 @@ async fn subscribe_blocks(app: &tauri::AppHandle) -> Result<(), String> {
         .blocks()
         .subscribe_finalized()
         .await
-        .map_err(|e| format!("Block subscription failed: {e}"))?;
+        .map_err(|e| crate::error::AppError::Substrate(format!("Block subscription failed: {e}")))?;
 
     info!("Subscribed to finalized blocks");
 
@@ -173,7 +173,7 @@ async fn subscribe_blocks(app: &tauri::AppHandle) -> Result<(), String> {
             break;
         }
 
-        let block = result.map_err(|e| format!("Block error: {e}"))?;
+        let block = result.map_err(|e| crate::error::AppError::Substrate(format!("Block error: {e}")))?;
         let number = block.number() as u64;
         app_state.block_sub.latest_block.store(number, Ordering::SeqCst);
 
@@ -217,9 +217,11 @@ async fn subscribe_blocks(app: &tauri::AppHandle) -> Result<(), String> {
 /// graceful WebSocket `None`); returning `Err` routes it through the caller's
 /// backoff-and-reconnect arm, which also emits `is_connected = false` so the
 /// FE connectivity indicator stays honest.
-fn classify_stream_exit(running: bool) -> Result<(), String> {
+fn classify_stream_exit(running: bool) -> crate::error::Result<()> {
     if running {
-        Err("block stream ended unexpectedly (graceful disconnect)".to_string())
+        Err(crate::error::AppError::Substrate(
+            "block stream ended unexpectedly (graceful disconnect)".into(),
+        ))
     } else {
         Ok(())
     }
@@ -346,6 +348,16 @@ mod tests {
             classify_stream_exit(true).is_err(),
             "stream ending while running=true must be a reconnectable error"
         );
+    }
+
+    #[test]
+    fn graceful_disconnect_is_classified_as_substrate_error() {
+        // The reconnectable disconnect must carry the blockchain taxonomy
+        // (`AppError::Substrate`), so the start loop's 429 detection
+        // (`e.to_string().contains("429")`) and the FE's kind-based dispatch
+        // both see a chain error rather than the old stringly-typed `Other`.
+        let err = classify_stream_exit(true).unwrap_err();
+        assert!(matches!(err, crate::error::AppError::Substrate(_)), "expected Substrate, got {err:?}");
     }
 
     #[test]

@@ -57,7 +57,7 @@ pub async fn transfer_balance(
     password: String,
 ) -> Result<TxResult, crate::error::AppError> {
     let signer = get_signer(&state, &password).await?;
-    let client = get_substrate_client(&state).await.map_err(crate::error::AppError::Substrate)?;
+    let client = get_substrate_client(&state).await?;
 
     let amount: u128 = amount
         .parse()
@@ -101,7 +101,7 @@ pub async fn validate_send_balance(
     }
 
     let address = get_substrate_address(&state).await?;
-    let client = get_substrate_client(&state).await.map_err(crate::error::AppError::Substrate)?;
+    let client = get_substrate_client(&state).await?;
     let account_id: subxt::utils::AccountId32 = address.parse().map_err(|_| crate::error::AppError::Validation(format!("Invalid sender address: {address}")))?;
     let storage_query = custom_runtime::storage().system().account(&account_id);
     let account_info = client

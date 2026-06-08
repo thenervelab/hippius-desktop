@@ -15,7 +15,7 @@ pub async fn stake_bond(
     password: String,
 ) -> Result<TxResult, crate::error::AppError> {
     let (signer, address) = get_signer_and_address(&state, &password).await?;
-    let client = get_substrate_client(&state).await.map_err(crate::error::AppError::Substrate)?;
+    let client = get_substrate_client(&state).await?;
 
     let amount: u128 = amount
         .parse()
@@ -80,7 +80,7 @@ pub async fn stake_unbond(
     password: String,
 ) -> Result<TxResult, crate::error::AppError> {
     let signer = get_signer(&state, &password).await?;
-    let client = get_substrate_client(&state).await.map_err(crate::error::AppError::Substrate)?;
+    let client = get_substrate_client(&state).await?;
 
     let amount: u128 = amount
         .parse()
@@ -113,7 +113,7 @@ pub async fn stake_withdraw_unbonded(
     password: String,
 ) -> Result<TxResult, crate::error::AppError> {
     let (signer, address) = get_signer_and_address(&state, &password).await?;
-    let client = get_substrate_client(&state).await.map_err(crate::error::AppError::Substrate)?;
+    let client = get_substrate_client(&state).await?;
 
     let account_id = address
         .parse::<subxt::utils::AccountId32>()
@@ -160,7 +160,7 @@ pub async fn stake_claim_rewards(
     password: String,
 ) -> Result<TxResult, crate::error::AppError> {
     let (signer, address) = get_signer_and_address(&state, &password).await?;
-    let client = get_substrate_client(&state).await.map_err(crate::error::AppError::Substrate)?;
+    let client = get_substrate_client(&state).await?;
 
     let account_id = address
         .parse::<subxt::utils::AccountId32>()
