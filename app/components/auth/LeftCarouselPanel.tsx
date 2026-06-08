@@ -126,7 +126,14 @@ const LeftCarouselPanel = () => {
   const cropLockScale = computeCropLockScale(baseFrameRef.current, frameSize);
 
   return (
-    <div className="relative w-full h-full min-h-full max-h-full rounded-[11px] bg-grey-light-100 dark:bg-black-500 overflow-hidden flex flex-col">
+    // Both backgrounds are set to each theme's GIF's own flat background color
+    // (#fffdff light, #161416 dark) rather than the grey-light-100 / black-500
+    // tokens (#ffffff / #161616). The clips are wider than the panel and, on
+    // slides with negative cropX, zoomed out — so the panel background shows
+    // through as a letterbox right next to the GIF's background. Matching them
+    // exactly makes that seam vanish. Re-sample (convert <gif>[0] -format
+    // '%[pixel:p{2,2}]' info:) and update here if the GIF backgrounds change.
+    <div className="relative w-full h-full min-h-full max-h-full rounded-[11px] bg-[#fffdff] dark:bg-[#161416] overflow-hidden flex flex-col">
       <AuthTitleBar />
       <InView triggerOnce>
         {({ inView, ref }) => (
