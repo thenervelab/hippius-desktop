@@ -268,6 +268,9 @@ const SyncFileItem = memo<SyncFileItemProps>(
       isCompleted &&
       (file.action === "local_delete" || file.action === "remote_delete");
     const isError = file.status === "error";
+    // Trim to undefined (not "") so a blank reason falls back to the size meta
+    // via `??`. Rust always sends non-blank copy, but stay defensive.
+    const errorReason = (isError && file.error?.trim()) || undefined;
     const isEncrypting = file.status === "encrypting";
     const isDecrypting = file.status === "decrypting";
     const isInProgress = file.status === "inProgress";
@@ -316,8 +319,19 @@ const SyncFileItem = memo<SyncFileItemProps>(
           </div>
 
           <div className="flex items-end justify-between gap-2 font-geist">
-            <span className="min-w-0 text-[10px] font-medium leading-none tracking-[-0.2px] text-grey-10/50 dark:text-white/50 ">
-              {getFileMetaText(file)}
+            {/* Error rows surface the *why* (Rust-authored reason from the
+                snapshot's `error` field) in red instead of the byte size; it
+                may wrap to two lines, with the "Error" badge staying bottom-
+                aligned. All other rows keep the size meta. */}
+            <span
+              className={cn(
+                "min-w-0 text-[10px] font-medium tracking-[-0.2px]",
+                errorReason
+                  ? "leading-[1.3] text-error-50 line-clamp-2 break-words"
+                  : "leading-none text-grey-10/50 dark:text-white/50",
+              )}
+            >
+              {errorReason ?? getFileMetaText(file)}
             </span>
 
             <SyncFileStatusBadge

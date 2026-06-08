@@ -579,13 +579,13 @@ fn build_file_failed_callback(sync: Arc<SyncRunner>, label: Arc<str>) -> hcfs_cl
             "per-file sync failure reported by hcfs-client"
         );
 
-        // Best-effort display string for the snapshot row's `error` field.
-        // The frontend already discriminates failure CATEGORY via the
-        // separate `hcfs_file_failed` Tauri event (typed
-        // `FileFailureKindPayload`); this string is only used as a
-        // tooltip/details fallback in the file list, so a `Debug` render
-        // is acceptable.
-        let error_msg = format!("{kind:?}");
+        // User-facing reason for the snapshot row's `error` field. The sidebar
+        // sync widget and the tray popover render this string directly, so it
+        // must read as product copy — not the `Debug` form. The frontend still
+        // discriminates failure CATEGORY (for the icon/banner) via the separate
+        // `hcfs_file_failed` Tauri event's typed `FileFailureKindPayload`; this
+        // string is only the human "why" shown in the file list and tray.
+        let error_msg = crate::sync::events::FileFailureKindPayload::from(kind).display_reason();
         if let Err(e) = crate::sync::progress::mark_file_failed(&sync, rel_path, &error_msg) {
             warn!(
                 label = %label,

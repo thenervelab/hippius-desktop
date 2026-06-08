@@ -129,6 +129,45 @@ mod tests {
     fn cancelled_marker_matches_upstream() {
         assert_eq!(hcfs_client::sync::SyncError::Cancelled.to_string(), CANCELLED_MARKER);
     }
+
+    #[test]
+    fn display_reason_insufficient_balance_formats_cents_as_dollars() {
+        // 12¢ / 100¢ → "$0.12" / "$1.00"; integer math, no float rounding.
+        let kind = FileFailureKindPayload::InsufficientBalance {
+            balance_cents: 12,
+            required_cents: 100,
+        };
+        assert_eq!(kind.display_reason(), "Insufficient credits — needs $1.00, you have $0.12.");
+    }
+
+    #[test]
+    fn display_reason_server_error_includes_status() {
+        let kind = FileFailureKindPayload::ServerError { status: 500 };
+        assert_eq!(kind.display_reason(), "Server error (500). Please try again.");
+    }
+
+    #[test]
+    fn display_reason_network_is_generic_connectivity_copy() {
+        assert_eq!(
+            FileFailureKindPayload::Network.display_reason(),
+            "Network error — couldn't reach the server. Check your connection."
+        );
+    }
+
+    #[test]
+    fn display_reason_other_uses_message_or_falls_back_when_blank() {
+        let with_msg = FileFailureKindPayload::Other {
+            message: "  disk full  ".to_string(),
+        };
+        assert_eq!(with_msg.display_reason(), "disk full", "trims and uses the message");
+
+        let blank = FileFailureKindPayload::Other { message: "   ".to_string() };
+        assert_eq!(
+            blank.display_reason(),
+            "Sync failed. Please try again.",
+            "blank message falls back to a generic line, never an empty reason"
+        );
+    }
 }
 
 // ── Payload structs for direct Tauri emission ──────────────────────────
@@ -344,6 +383,51 @@ pub enum FileFailureKindPayload {
     /// Fallback for failures we have not categorised. `message` is for
     /// display only — the FE MUST NOT parse it as a stable contract.
     Other { message: String },
+}
+
+impl FileFailureKindPayload {
+    /// User-facing reason for this failure, written into the live snapshot
+    /// row's `FileProgress.error` field (the sidebar sync widget and the
+    /// provider-free tray popover render it directly — they read only the
+    /// snapshot, so the phrasing has to be produced here in Rust, not the FE).
+    ///
+    /// The wording is kept word-aligned with the frontend
+    /// `failureMessage()` (`app/lib/utils/failureMessage.ts`), which phrases
+    /// the *persisted* `FileFailureRecord` for the Drive-table badge. The two
+    /// cover different data sources (live in-memory string vs. typed DB row)
+    /// but must read identically to the user — update both together.
+    pub fn display_reason(&self) -> String {
+        match self {
+            Self::InsufficientBalance {
+                balance_cents,
+                required_cents,
+            } => format!(
+                "Insufficient credits — needs {}, you have {}.",
+                dollars(*required_cents),
+                dollars(*balance_cents),
+            ),
+            Self::ServerError { status } => format!("Server error ({status}). Please try again."),
+            Self::Network => "Network error — couldn't reach the server. Check your connection.".to_string(),
+            // `Other` already carries upstream display text; fall back to a
+            // generic line when it's empty/whitespace so the row never shows a
+            // blank reason.
+            Self::Other { message } => {
+                let trimmed = message.trim();
+                if trimmed.is_empty() {
+                    "Sync failed. Please try again.".to_string()
+                } else {
+                    trimmed.to_string()
+                }
+            }
+        }
+    }
+}
+
+/// Format a cents amount as `$x.xx` using integer math — no `f64` cast, so the
+/// value is exact and the `clippy::cast_precision_loss` lint never fires.
+/// Mirrors the frontend's `dollars()` in `failureMessage.ts`.
+fn dollars(cents: u64) -> String {
+    format!("${}.{:02}", cents / 100, cents % 100)
 }
 
 impl From<&hcfs_client::engine::events::FileFailureKind> for FileFailureKindPayload {

@@ -123,6 +123,29 @@ describe("SyncStatusDialog", () => {
     expect(fileItems).toHaveLength(3);
   });
 
+  it("shows the failure reason on an error row instead of the byte size", () => {
+    const reason = "Insufficient credits — needs $1.00, you have $0.12.";
+    const files = [
+      makeFileProgress("invoice.pdf", {
+        status: "error",
+        totalBytes: 2048,
+        error: reason,
+      }),
+    ];
+    const snapshot = makeSnapshot(files);
+
+    renderWithJotai(<SyncStatusDialog snapshot={snapshot} open={true} />);
+
+    fireEvent.click(screen.getByTestId("sync-status-toggle"));
+
+    const item = screen.getByTestId("file-item");
+    // The Rust-authored reason replaces the size meta; the "Error" pill stays.
+    expect(item).toHaveTextContent(reason);
+    expect(item).toHaveTextContent("Error");
+    // 2048 bytes would render as "2.05 KB" — the reason takes its place.
+    expect(item).not.toHaveTextContent("2.05 KB");
+  });
+
   it("shows percentage in collapsed state", () => {
     const files = [
       makeFileProgress("data.csv", {
