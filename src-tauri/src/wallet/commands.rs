@@ -110,6 +110,55 @@ async fn maybe_migrate_secrets(
     }
 }
 
+/// Minimum local-wallet password length. Mirrors the create screen's `MIN_LEN`
+/// (`app/components/page-sections/wallet/local-wallet/CreatePasswordScreen.tsx`).
+const MIN_WALLET_PASSWORD_LEN: usize = 8;
+
+/// Enforce the create-time password policy: a length floor plus at least one
+/// each of lowercase, uppercase, digit, and non-alphanumeric character.
+///
+/// This deliberately mirrors the frontend `CreatePasswordScreen` rules so the
+/// backend gate is **authoritative** — a direct IPC call (bypassing the UI)
+/// cannot set a weaker password than the create screen permits.
+///
+/// Applied ONLY at wallet creation. The import paths intentionally skip it:
+/// they accept an existing backup's password verbatim, and rejecting a wallet
+/// the user already owns because its password predates this policy would lock
+/// them out of their own funds. Character classes are matched against ASCII
+/// (`[a-z]`/`[A-Z]`/`[0-9]`/non-alnum) to line up exactly with the FE regexes.
+///
+/// # Errors
+///
+/// Returns [`AppError::Validation`] naming what the password is missing, so the
+/// FE can surface the same guidance it shows inline.
+fn validate_new_password(password: &str) -> Result<(), AppError> {
+    if password.chars().count() < MIN_WALLET_PASSWORD_LEN {
+        return Err(AppError::Validation(format!(
+            "Password must be at least {MIN_WALLET_PASSWORD_LEN} characters"
+        )));
+    }
+    let mut missing: Vec<&str> = Vec::new();
+    if !password.chars().any(|c| c.is_ascii_lowercase()) {
+        missing.push("a lowercase letter");
+    }
+    if !password.chars().any(|c| c.is_ascii_uppercase()) {
+        missing.push("an uppercase letter");
+    }
+    if !password.chars().any(|c| c.is_ascii_digit()) {
+        missing.push("a number");
+    }
+    if !password.chars().any(|c| !c.is_ascii_alphanumeric()) {
+        missing.push("a special character");
+    }
+    if !missing.is_empty() {
+        return Err(AppError::Validation(format!(
+            "Password must contain {}",
+            missing.join(", ")
+        )));
+    }
+    Ok(())
+}
+
 /// Generate a fresh 12-word mnemonic. The mnemonic is returned to the FE
 /// only so the user can write it down during the create flow — it must be
 /// immediately re-submitted via `create` (along with the password) to be
@@ -190,6 +239,9 @@ pub async fn local_wallet_create(state: State<'_, AppState>, name: String, mnemo
     if password.is_empty() {
         return Err(AppError::Other("Password is required".into()));
     }
+    // Enforce the password policy server-side so the create gate is
+    // authoritative even for direct IPC calls (see `validate_new_password`).
+    validate_new_password(&password)?;
 
     let owner = require_owner(&state)?;
     let address = derive_address(&mnemonic)?;
@@ -652,4 +704,48 @@ pub async fn local_wallet_sign(
     // with it.
     let sig = keypair.sign(&payload);
     Ok(B64.encode(sig.0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_a_strong_password() {
+        assert!(validate_new_password("Abcdef1!").is_ok());
+        assert!(validate_new_password("Str0ng#Passw0rd").is_ok());
+    }
+
+    #[test]
+    fn rejects_too_short_even_if_all_classes_present() {
+        // 7 chars, every class present — still under MIN_WALLET_PASSWORD_LEN.
+        let err = validate_new_password("Aa1!aa").unwrap_err();
+        assert!(matches!(err, AppError::Validation(m) if m.contains("at least")));
+    }
+
+    #[test]
+    fn rejects_missing_character_classes() {
+        // Each is length-8 but missing exactly one required class.
+        for (pw, want) in [
+            ("abcdef1!", "an uppercase letter"),
+            ("ABCDEF1!", "a lowercase letter"),
+            ("Abcdefg!", "a number"),
+            ("Abcdefg1", "a special character"),
+        ] {
+            match validate_new_password(pw) {
+                Err(AppError::Validation(m)) => assert!(
+                    m.contains(want),
+                    "password {pw:?} should report missing {want:?}, got {m:?}"
+                ),
+                other => panic!("expected Validation error for {pw:?}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn special_class_matches_fe_non_ascii_alnum_rule() {
+        // A non-ASCII-alphanumeric char satisfies the "special" rule, matching
+        // the FE regex `[^A-Za-z0-9]`.
+        assert!(validate_new_password("Abcdefg1€").is_ok());
+    }
 }

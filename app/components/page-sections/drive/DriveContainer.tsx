@@ -80,7 +80,6 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     data: regularFilesData,
     isLoading: isRegularFilesLoading,
     refetch: refetchUserFiles,
-    isFetching: isRegularFilesFetching,
     error,
   } = useUserFiles();
 
@@ -91,7 +90,6 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   const {
     data: recentFilesData,
     isLoading: isRecentFilesLoading,
-    isFetching: isRecentFilesFetching,
     refetch: refetchRecentFiles,
   } = useUploadFeed(50);
 
@@ -317,36 +315,16 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     setNestedRefreshKey((prev) => prev + 1);
   }, []);
 
-  // Loading + fetching flags branched across the three view modes:
-  //   - recent files (read-only): use the recent-files query flags
-  //   - nested folder browsing: use the nested-listing hook's flags
-  //   - root drive view: use the regular useUserFiles flags
-  // `isLoading` itself is computed *after* `useFilteredFiles` below so it
-  // can fold in `isFiltering`, which surfaces the debounce/IPC window
-  // during transitions like nested→root and sync-folder switches.
-  const isFetching = isRecentFiles
-    ? isRecentFilesFetching
-    : isNested
-      ? nestedListing.isRefreshing
-      : isRegularFilesFetching;
+  // `isLoading` (computed after `useFilteredFiles` below so it can fold in
+  // `isFiltering`) branches across the three view modes — recent files, nested
+  // browsing, root drive — and surfaces the skeleton only on first load. The
+  // background-fetch flags are no longer tracked here: background refetches are
+  // intentionally silent (see the manual-refresh handling below).
 
-  // The refresh icon spins ONLY on a manual refresh (user clicked the button),
-  // never on the silent background refetch that fires when a sync cycle
-  // completes (`sync_files_completed_changed`). Set on click; cleared once the
-  // fetch actually settles. The `manualFetchStartedRef` guard handles the click
-  // tick where `isFetching` hasn't flipped to true yet, so the flag isn't
-  // cleared before the fetch even starts.
-  const [isManualRefreshing, setIsManualRefreshing] = useState(false);
-  const manualFetchStartedRef = useRef(false);
-  useEffect(() => {
-    if (!isManualRefreshing) return;
-    if (isFetching) {
-      manualFetchStartedRef.current = true;
-    } else if (manualFetchStartedRef.current) {
-      manualFetchStartedRef.current = false;
-      setIsManualRefreshing(false);
-    }
-  }, [isManualRefreshing, isFetching]);
+  // The refresh icon's spin is owned by `RefreshButton` itself: any click shows
+  // a fixed-duration spinner (the manual refetch is a local IPC that resolves
+  // too fast to otherwise see), and a background refetch never clicks it — so it
+  // stays silent. We therefore don't drive `refetching` from any fetch flag.
 
   // Get the appropriate data based on view mode
   const allData = useMemo(() => {
@@ -1356,7 +1334,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
             const driveHeader = (
               <DriveHeader
                 isRecentFiles={isRecentFiles}
-                isRefetching={isManualRefreshing}
+                isRefetching={false}
                 isFetching={false}
                 formattedStorageSize={formattedStorageSize}
                 allFilteredDataLength={displayedFileCount}
@@ -1366,10 +1344,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 handleSearchChange={handleSearchChange}
                 activeFilters={activeFilters}
                 handleRemoveFilter={handleRemoveFilter}
-                refetchUserFiles={() => {
-                  setIsManualRefreshing(true);
-                  refreshForCurrentView();
-                }}
+                refetchUserFiles={refreshForCurrentView}
                 addButtonRef={addButtonRef}
                 privateFileCount={privateFileCount}
                 isSyncPathEmpty={effectiveSyncPathEmpty}
