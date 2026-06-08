@@ -113,11 +113,8 @@ pub fn decrypt(key: &[u8; 32], encoded: &str) -> Result<Zeroizing<String>, crate
 ///
 /// NOTE: despite living next to the sub-account helpers, this migrates ONLY
 /// `hcfs_config.drive_password`. It does NOT encrypt `sub_accounts` seed
-/// phrases — an earlier version of this doc described a `sub_accounts`
-/// migration the body never performed, misrepresenting an encryption-at-rest
-/// guarantee for a verbatim-stored TEXT column (audit 2026-06-05, finding E2).
-/// If sub-account seed phrases need encryption-at-rest, that is a separate,
-/// currently-unimplemented migration.
+/// phrases. If sub-account seed phrases need encryption-at-rest, that is a
+/// separate, currently-unimplemented migration.
 ///
 /// # Single-user assumption
 ///

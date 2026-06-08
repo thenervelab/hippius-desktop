@@ -137,9 +137,10 @@ fn load_env() {
 /// no-op `Layer` when `None`, so the registry wiring is identical either way.
 ///
 /// Retention: `max_log_files(7)` prunes on the rotation/write path, not at
-/// startup (tokio-rs/tracing#2937), so a long-idle install may briefly keep
-/// more than seven files until the next write. The log-bundling step caps the
-/// number and size of files it ships independently, so this is harmless here.
+/// startup (a known tracing-appender limitation), so a long-idle install may
+/// briefly keep more than seven files until the next write. The log-bundling
+/// step caps the number and size of files it ships independently, so this is
+/// harmless here.
 ///
 /// [`WorkerGuard`]: tracing_appender::non_blocking::WorkerGuard
 fn init_logging() -> Option<tracing_appender::non_blocking::WorkerGuard> {
@@ -661,11 +662,11 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
             win.set_size(tauri::Size::Physical(tauri::PhysicalSize { width: w, height: h }))?;
             win.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x: pos_x, y: pos_y }))?;
             // NOTE: the window is sized/positioned here but deliberately NOT
-            // shown yet. Showing it synchronously let the webview boot and fire
-            // its first IPC calls before the async task below installs the DB
-            // pool, so those calls raced to a transient PoolClosed error (audit
-            // finding B3). The reveal is deferred into the init task and happens
-            // once the schema is ready (or once init has definitively failed).
+            // shown yet. Showing it synchronously would let the webview boot and
+            // fire its first IPC calls before the async task below installs the
+            // DB pool, racing those calls to a transient PoolClosed error. The
+            // reveal is deferred into the init task and happens once the schema
+            // is ready (or once init has definitively failed).
         }
         // Spawn async task for database initialization.
         tauri::async_runtime::spawn(async move {
@@ -767,13 +768,12 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
             // See `sync::relative_path_backfill_reset` for details.
             crate::sync::relative_path_backfill_reset::run_at_startup(&pool).await;
 
-            // Collapse duplicate welcome notifications from the pre-fix
-            // era (the FE sent bare `"Welcome"` which bypassed the
-            // `starts_with("Welcome-")` dedup guard, so every login
-            // inserted a new row). Keeps the oldest per user so the
-            // timestamp used by `process_credit_events` for event
-            // filtering stays valid. Idempotent — a one-time sweep
-            // that finds nothing to delete on subsequent launches.
+            // Collapse duplicate welcome notifications: a bare `"Welcome"`
+            // subtype bypasses the `starts_with("Welcome-")` dedup guard, so
+            // such rows can accumulate one per login. Keeps the oldest per
+            // user so the timestamp used by `process_credit_events` for event
+            // filtering stays valid. Idempotent — a one-time sweep that finds
+            // nothing to delete on subsequent launches.
             if let Err(e) = crate::notifications::crud::cleanup_duplicate_welcome_notifications(&pool).await {
                 warn!("Welcome notification cleanup failed (non-fatal): {}", e);
             }

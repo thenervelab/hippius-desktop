@@ -229,7 +229,7 @@ async fn ensure_sync_paths(conn: &mut SqliteConnection) -> Result<(), sqlx::Erro
             .await?;
     }
 
-    // Migration: add `relative_paths_backfilled_at` column if missing (PR 7 Task 7.3).
+    // Migration: add `relative_paths_backfilled_at` column if missing.
     //
     // Unix epoch timestamp marking when the one-shot `relative_path` backfill
     // succeeded for this drive. NULL means "not yet backfilled"; any non-NULL
@@ -324,22 +324,20 @@ async fn ensure_sync_paths_unique_constraint(conn: &mut SqliteConnection) -> Res
 
 /// `sync_intent` — persistent upload-intent manifest for the sync widget.
 ///
-/// The sync widget previously reset progress on app restart after a partial
-/// bulk upload (drag 10 GB → close at 5 GB → reopen shows "0 / 5 GB" instead
-/// of "5 / 10 GB") because the in-memory snapshot was the only source of
-/// truth. This table is the durable shadow: every queued file is recorded
-/// here when its plan lands, and `completed_at_ms` is set when the file
-/// finishes uploading. The composite primary key `(account_id, drive_label,
+/// This table is the durable shadow of the in-memory progress snapshot, so a
+/// partial bulk upload survives an app restart (drag 10 GB → close at 5 GB →
+/// reopen still shows "5 / 10 GB"). Every queued file is recorded here when
+/// its plan lands, and `completed_at_ms` is set when the file finishes
+/// uploading. The composite primary key `(account_id, drive_label,
 /// relative_path)` makes "same file enqueued twice for the same drive"
-/// unrepresentable at the storage layer; subsequent tasks decide the
-/// ON CONFLICT policy when wiring `record_plan`.
+/// unrepresentable at the storage layer.
 ///
 /// `completed_at_ms` is NULLABLE on purpose: NULL is the canonical "still
 /// pending" marker. The covering index `(account_id, drive_label,
 /// completed_at_ms)` keeps the per-drive "pending count" and totals queries
-/// (Task 2) off a full table scan as the table grows across long-running
-/// sync sessions. `added_at_ms` is non-NULL so age-based prune policies have
-/// a deterministic ordering key.
+/// off a full table scan as the table grows across long-running sync
+/// sessions. `added_at_ms` is non-NULL so age-based prune policies have a
+/// deterministic ordering key.
 async fn ensure_sync_intent(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS sync_intent (
@@ -906,10 +904,9 @@ pub async fn migrate_account_keys(pool: &SqlitePool) -> Result<(), sqlx::Error> 
             // Excluded for (a): `notifications` (keyed by `user_address` = raw
             // ss58) and `user_preferences` (keyed by `preference_key`, a global
             // k/v store) have NO `owner` column, so `UPDATE … SET owner` errors
-            // with "no such column: owner". The old warn-swallow tolerated that;
-            // the D8 `?`-propagation below would otherwise roll the migration
-            // back on that guaranteed error EVERY run, permanently breaking every
-            // legacy account (PR review 2026-06-05).
+            // with "no such column: owner". Including them would make the
+            // `?`-propagation below roll the migration back on that guaranteed
+            // error EVERY run, permanently breaking every legacy account.
             //
             // Excluded for (b): `local_wallets` and `share_origin` DO have an
             // `owner` column, but both were introduced AFTER the legacy→16-char
@@ -927,9 +924,9 @@ pub async fn migrate_account_keys(pool: &SqlitePool) -> Result<(), sqlx::Error> 
                 // runs (main.rs setup, guarded by the EXPECTED_TABLES test), so
                 // an error here is a genuine failure — e.g. a UNIQUE(owner,
                 // label) collision on sync_paths — not a missing table/column.
-                // The old code warn-swallowed it and still committed the other
-                // tables, splitting one account across the legacy and new owner
-                // keys (audit 2026-06-05, finding D8).
+                // Propagating it (rather than swallowing) keeps the whole
+                // migration atomic: swallowing would commit the other tables
+                // and split one account across the legacy and new owner keys.
                 let r = sqlx::query(&query).bind(&new_key).bind(&legacy).execute(&mut *tx).await?;
                 if r.rows_affected() > 0 {
                     info!("Updated {} row(s) in {}", r.rows_affected(), table);
@@ -1121,10 +1118,9 @@ mod tests {
 
     /// The `UNIQUE(owner, label)` constraint-swap migration must PRESERVE the
     /// user's `is_paused` intent and the `relative_paths_backfilled_at` audit
-    /// breadcrumb. The pre-fix swap copied neither (is_paused reset to its
-    /// default 0; the backfill column was absent from the new table entirely),
-    /// so a paused drive was silently un-paused and the one-shot backfill
-    /// re-triggered on a DB created with the legacy `UNIQUE(owner, type)` DDL.
+    /// breadcrumb across the table rebuild. If the swap dropped either, a paused
+    /// drive would be silently un-paused and the one-shot backfill would
+    /// re-trigger on a DB created with the legacy `UNIQUE(owner, type)` DDL.
     #[tokio::test]
     async fn constraint_swap_preserves_is_paused_and_backfill_timestamp() {
         let pool = temp_pool().await;
@@ -1191,13 +1187,13 @@ mod tests {
         assert_eq!(idx.as_deref(), Some("idx_notifications_type_subtype"));
     }
 
-    /// D8: a per-table UPDATE failure during account-key migration must roll
-    /// back the WHOLE transaction, not commit the tables that already
-    /// succeeded. We force a `UNIQUE(owner, label)` collision on `sync_paths`
-    /// (updated AFTER `auth_session` in the loop) and assert `auth_session`
-    /// was not partially migrated — proving atomicity. The old code
-    /// warn-swallowed the collision and committed anyway, splitting one
-    /// account across the legacy and new owner keys.
+    /// Regression pin: a per-table UPDATE failure during account-key migration
+    /// must roll back the WHOLE transaction, not commit the tables that already
+    /// succeeded. Forces a `UNIQUE(owner, label)` collision on `sync_paths`
+    /// (updated AFTER `auth_session` in the loop) and asserts `auth_session`
+    /// was not partially migrated — proving atomicity. Without it, a swallowed
+    /// collision would commit anyway, splitting one account across the legacy
+    /// and new owner keys.
     #[tokio::test]
     async fn account_key_migration_rolls_back_on_collision() {
         use crate::auth::account_key::{account_key, account_key_legacy};
@@ -1246,14 +1242,12 @@ mod tests {
         assert_eq!(owner, legacy, "auth_session must NOT be partially migrated when a later table collides");
     }
 
-    /// D8 regression (PR review 2026-06-05): the no-collision happy path must
-    /// COMMIT — every owner-bearing table moves legacy→new. This guards the
-    /// blocker where `notifications`/`user_preferences` (which have no `owner`
-    /// column) were in the migration list: with `?`-propagation, the guaranteed
-    /// "no such column: owner" error rolled the whole migration back every run,
-    /// so a legacy account was never migrated. This test FAILS on that code
-    /// (migrate returns Err) and passes only once the columnless tables are
-    /// excluded from the loop.
+    /// Regression pin: the no-collision happy path must COMMIT — every
+    /// owner-bearing table moves legacy→new. Only tables that actually have an
+    /// `owner` column may be in the migration list; including a columnless
+    /// table like `notifications`/`user_preferences` would make `?`-propagation
+    /// roll the whole migration back every run on a guaranteed "no such column:
+    /// owner" error, so a legacy account would never be migrated.
     #[tokio::test]
     async fn account_key_migration_commits_clean_owner_bearing_tables() {
         use crate::auth::account_key::{account_key, account_key_legacy};

@@ -62,8 +62,8 @@ const SUPPORTED_VIDEO_MIME_TYPES: Record<string, string> = {
   ogg: "video/ogg",
   ogv: "video/ogg",
   // Real .mov MIME — Chromium / WebKit play H.264-in-QuickTime fine when
-  // told it's `video/quicktime`. Lying about it as `video/mp4` (the old
-  // desktop behavior) can confuse some decoders.
+  // told it's `video/quicktime`. Lying about it as `video/mp4` can
+  // confuse some decoders.
   mov: "video/quicktime",
   "3gp": "video/3gpp",
   // mkv generally isn't natively decodable; the hint lets the player
@@ -114,12 +114,11 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const stallTimerRef = useRef<number | null>(null);
   const stallStartedAtRef = useRef<number | null>(null);
 
-  // 120s everywhere. The old 10s Linux ceiling was meant to surface the
-  // "missing codec" fallback fast, but it also tripped on perfectly
-  // healthy videos that simply take a moment to load from disk or the
-  // asset:// protocol — which is what the user was hitting. Linux
-  // installations without H.264 codecs will instead surface an `onError`
-  // from the underlying media element.
+  // 120s everywhere, including Linux: a shorter ceiling trips on
+  // perfectly healthy videos that simply take a moment to load from
+  // disk or the asset:// protocol. Linux installations without H.264
+  // codecs surface an `onError` from the underlying media element
+  // instead, so they don't need a fast-fail timeout.
   const LOAD_TIMEOUT = 120_000;
 
   const clearLoadTimer = () => {
@@ -340,8 +339,7 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
   // the load timeout fires. Falling back early gives the user the
   // system-player + download buttons without the wait. macOS / Windows
   // (Chromium / WebView2 / WKWebView) continue through the normal
-  // player path below. Restores the behavior from commit a45e30e7 —
-  // see also `VideoPlayerError` for the fallback UI.
+  // player path below. See `VideoPlayerError` for the fallback UI.
   if (isTauri && _isLinux) {
     return (
       <div

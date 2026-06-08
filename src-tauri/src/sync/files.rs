@@ -1819,8 +1819,7 @@ pub struct UserFileEntry {
 /// Whether a given `sync_status` value should contribute to per-label
 /// stats. Centralised so the inline accumulator in `get_user_files` and
 /// the test-definition `compute_label_stats` cannot disagree on the
-/// filter rule (only one of them being changed silently was the
-/// drift hazard the perf-audit review flagged).
+/// filter rule if only one of them is changed.
 fn is_counted_for_label_stats(sync_status: &str) -> bool {
     sync_status != "excluded"
 }

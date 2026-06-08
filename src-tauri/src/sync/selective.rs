@@ -15,9 +15,9 @@ use tracing::{debug, info, warn};
 /// Rejects empty/whitespace-only patterns and any pattern containing a `..`
 /// path component (path traversal). Returns the trimmed pattern on success.
 ///
-/// The component check splits on both `/` and `\` so it catches the cases a
-/// bare `contains("../")` substring test missed: the Windows separator
-/// (`..\`), a trailing `foo/..`, and a bare `..`. Exclusion patterns are
+/// The component check splits on both `/` and `\` so it catches cases a bare
+/// `contains("../")` substring test cannot: the Windows separator (`..\`), a
+/// trailing `foo/..`, and a bare `..`. Exclusion patterns are
 /// gitignore-style globs matched against relative paths, so a `..` component
 /// can never be legitimate — rejecting all of them is both safe and complete.
 ///
@@ -165,8 +165,8 @@ pub async fn apply_sync_selection(
         // Trim for parity with the exclude branch (validate_pattern trims before
         // storing), so an entry with surrounding whitespace actually matches the
         // stored rule instead of silently no-op'ing, and observe the returned
-        // bool so a no-match is logged rather than vanishing (audit 2026-06-05,
-        // finding C6). A remove can only delete a stored rule — it cannot escape
+        // bool so a no-match is logged rather than vanishing. A remove can only
+        // delete a stored rule — it cannot escape
         // the sync root — so the full validate_pattern (`..`/newline rejection)
         // the add side needs is unnecessary here.
         let trimmed = path.trim();
@@ -230,7 +230,7 @@ mod tests {
     #[test]
     fn test_validate_traversal_pattern_rejected() {
         // Leading, nested, trailing, bare, and Windows-separator forms must
-        // all be rejected — the prior `contains("../")` check only caught the
+        // all be rejected — a bare `contains("../")` check would only catch the
         // first two.
         for bad in ["../secret", "foo/../bar", "foo/..", "..", "..\\secret", "a\\..\\b"] {
             assert!(validate_pattern(bad).is_err(), "expected rejection for {bad:?}");

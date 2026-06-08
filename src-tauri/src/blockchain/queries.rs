@@ -279,13 +279,11 @@ const REFERRAL_KEY_PREFIX_LEN: usize = 48;
 /// entry key. Returns `None` when the key is shorter than the
 /// 48-byte prefix (shouldn't happen with a real on-chain entry; the
 /// guard exists so we can't accidentally panic-slice on malformed
-/// data). The earlier implementation grabbed the LAST 32 bytes of the
-/// storage key, which only matched the raw key when the code happened
-/// to be exactly 32 bytes long. For shorter codes (`HIPPIUS<N-digit-id>`
-/// is typically 26–27 bytes), that slice bled the trailing bytes of
-/// the Blake2_128 hash into the front of the result, which then
-/// surfaced in the UI as `�` Unicode replacement characters after a
-/// lossy UTF-8 decode.
+/// data). Slicing off the fixed prefix (rather than taking the last 32
+/// bytes) keeps codes shorter than 32 bytes intact — `HIPPIUS<N-digit-id>`
+/// is typically 26–27 bytes, so a last-32 slice would bleed trailing
+/// Blake2_128 hash bytes into the front and surface as `�` replacement
+/// characters after a lossy UTF-8 decode.
 fn extract_referral_code_bytes(key_bytes: &[u8]) -> Option<&[u8]> {
     if key_bytes.len() <= REFERRAL_KEY_PREFIX_LEN {
         return None;
@@ -318,11 +316,9 @@ pub async fn get_referral_links(
 
     // Walk the iterator sequentially (subxt requires &mut self for next).
     // Collect matching codes first, then fan out the per-code reward
-    // fetches concurrently with `try_join_all`. Previously each match's
-    // reward fetch was awaited inline before pulling the next entry, so
-    // a user with K matches paid K serial RPC round-trips on top of the
-    // O(N) iteration. Now the K reward fetches run in parallel against
-    // the same `at_latest()` snapshot.
+    // fetches concurrently with `try_join_all` so the K reward fetches run
+    // in parallel against the same `at_latest()` snapshot instead of paying
+    // K serial RPC round-trips on top of the O(N) iteration.
     //
     // For each match we recover the raw code bytes from the storage
     // key (see `extract_referral_code_bytes`) and accept the entry
@@ -332,11 +328,9 @@ pub async fn get_referral_links(
     // replacement chars.
     let mut matched_codes: Vec<(Vec<u8>, String)> = Vec::new();
     // Propagate a mid-iteration RPC error rather than ending the loop silently:
-    // `while let Some(Ok(entry))` stopped on the first `Some(Err(_))` and
-    // returned the codes matched so far as `Ok`, so a dropped subscription
-    // produced a partial referral list that looked complete to the FE. The
-    // body keeps redesign's strict decode path (`extract_referral_code_bytes`
-    // + UTF-8 validation) rather than the audit branch's raw key slicing.
+    // matching only `Some(Ok(entry))` would stop on the first `Some(Err(_))`
+    // and return the codes matched so far as `Ok`, so a dropped subscription
+    // would produce a partial referral list that looks complete to the FE.
     while let Some(result) = entries.next().await {
         let entry = result.map_err(|e| crate::error::AppError::Substrate(format!("ReferralCodes iteration failed: {e}")))?;
         if entry.value != target_account {
@@ -369,8 +363,8 @@ pub async fn get_referral_links(
         .zip(rewards)
         .map(|((_, code), reward_raw)| ReferralLink {
             // Convert planck → HIP via the precision-preserving string divmod
-            // instead of integer `reward_raw / 10^18`, which truncated every
-            // sub-1-HIP reward to "0" (audit 2026-06-05, finding C1).
+            // instead of integer `reward_raw / 10^18`, which truncates every
+            // sub-1-HIP reward to "0".
             code,
             reward: crate::blockchain::convert::planck_to_hip(&reward_raw.to_string()),
         })

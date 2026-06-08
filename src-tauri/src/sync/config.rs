@@ -317,9 +317,8 @@ mod tests {
     }
 
     /// The legacy single-region URL gets rewritten to empty so existing
-    /// users transparently opt into auto-detect — the whole point of
-    /// option (c) from the audit. Without this, every upgrading user
-    /// stays pinned to the legacy region forever.
+    /// users transparently opt into auto-detect. Without this, every
+    /// upgrading user stays pinned to the legacy region forever.
     #[test]
     fn normalize_rewrites_legacy_single_region_to_empty() {
         assert_eq!(normalize_for_region_probe(LEGACY_SINGLE_REGION_URL), "");

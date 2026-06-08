@@ -98,12 +98,11 @@ pub enum NotReadyKind {
     /// The database pool has not been initialized yet. Raised by
     /// [`crate::app_state::AppState::pool`] when a command runs before the
     /// boot-time DB-init task installs the pool. This is distinct from a
-    /// genuine `sqlx::Error::PoolClosed` on a live-then-closed pool — the old
-    /// code returned `Db(PoolClosed)`, conflating "never initialized" with
-    /// "was open, now closed". After the B3 startup-ordering fix (the main
-    /// window is revealed only once the pool is ready) this is effectively
-    /// unreachable from the UI, but it stays a precise machine-readable signal
-    /// for any early-startup path that reaches `pool()` (audit 2026-06-05, D9).
+    /// genuine `sqlx::Error::PoolClosed` on a live-then-closed pool, so the
+    /// frontend can tell "never initialized" apart from "was open, now closed".
+    /// The main window is revealed only once the pool is ready, so this is
+    /// effectively unreachable from the UI, but it stays a precise
+    /// machine-readable signal for any early-startup path that reaches `pool()`.
     DatabaseNotReady,
 }
 
@@ -312,9 +311,9 @@ mod tests {
         assert_eq!(json, "DRIVE_NOT_INITIALIZED");
     }
 
-    /// D9: an uninitialized pool surfaces as `NotReady(DatabaseNotReady)` and
-    /// serializes with the `subkind` the frontend dispatches on — not the old
-    /// misleading `Db(PoolClosed)`.
+    /// Regression pin: an uninitialized pool surfaces as
+    /// `NotReady(DatabaseNotReady)` and serializes with the `subkind` the
+    /// frontend dispatches on, rather than the misleading `Db(PoolClosed)`.
     #[test]
     fn pool_uninitialized_is_not_ready_database_not_ready() {
         let state = crate::app_state::AppState::new();

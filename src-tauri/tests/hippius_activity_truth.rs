@@ -1,24 +1,19 @@
 //! Activity-log truth invariants for sync.
 //!
-//! Phase 1 / Task 1.1 of `docs/plans/2026-05-13-sync-402-data-integrity.md`.
-//!
 //! # Why this suite exists
 //!
-//! The desktop used to enqueue `SyncActivityItem { action: Uploaded, .. }`
-//! from inside the byte-progress callback's completion-tick branch
-//! (`bytes == total`). That callback fires when the request body's last
-//! chunk has left the local TCP socket — *before* the HTTP response
-//! status (200 / 402 / 5xx) is parsed by `hcfs_client::client::upload`.
+//! Activity rows must be enqueued only after a per-file upload (or
+//! download + AEAD-verifying decrypt) is server-confirmed. The
+//! byte-progress callback fires when the request body's last chunk has
+//! left the local TCP socket — *before* the HTTP response status
+//! (200 / 402 / 5xx) is parsed by `hcfs_client::client::upload` — so an
+//! enqueue there would surface a 402 (Insufficient balance) rejection as
+//! an "(uploaded)" row, making the activity log lie to the user.
 //!
-//! Symptom: a 402 (Insufficient balance) response would still leave a
-//! "(uploaded)" row in the recent-activity log because the enqueue had
-//! already happened. The activity log lied to the user.
-//!
-//! Fix: the enqueue moved to `build_file_synced_callback`, which
-//! hcfs-client invokes *only* after the per-file upload (or
-//! download + AEAD-verifying decrypt) returns `Ok`. The two tests below
-//! pin both halves of that invariant from outside the crate so a future
-//! refactor cannot quietly regress either half.
+//! The enqueue therefore lives in `build_file_synced_callback`, which
+//! hcfs-client invokes *only* after the per-file transfer returns `Ok`.
+//! The two tests below pin both halves of that invariant from outside the
+//! crate so a future refactor cannot quietly regress either half.
 //!
 //! # What each test pins
 //!
@@ -124,11 +119,11 @@ fn seed_one_file_session(sync: &SyncRunner, path: &str, label: &str, total_bytes
 
 /// Read the lifecycle module source and return it concatenated.
 ///
-/// The module is split across `lifecycle.rs` and its `callbacks` submodule
-/// (structure-audit Phase 4); the byte-progress and file-synced callbacks
-/// live in the latter. Both are concatenated so the static-shape checks
-/// below find the function bodies wherever they live. Pinned via
-/// `CARGO_MANIFEST_DIR` so the test stays runnable from any cwd.
+/// The module is split across `lifecycle.rs` and its `callbacks` submodule;
+/// the byte-progress and file-synced callbacks live in the latter. Both are
+/// concatenated so the static-shape checks below find the function bodies
+/// wherever they live. Pinned via `CARGO_MANIFEST_DIR` so the test stays
+/// runnable from any cwd.
 fn lifecycle_source() -> String {
     let base = concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/lifecycle.rs");
     let callbacks = concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/lifecycle/callbacks.rs");
@@ -201,20 +196,19 @@ fn byte_progress_does_not_enqueue_pending_activity() {
         "handle_transfer_progress MUST NOT call add_pending_activity — \
          byte-progress is pre-server-confirmation and would lie about \
          402/5xx-rejected uploads. The enqueue belongs in \
-         build_file_synced_callback. See \
-         docs/plans/2026-05-13-sync-402-data-integrity.md Task 1.1."
+         build_file_synced_callback."
     );
 
-    // Marker omits the `(` so the substring match still works after
-    // the signature gained a `<R: tauri::Runtime>` generic parameter
-    // in Task 6 (intent manifest wiring). The brace scanner below
-    // jumps from the marker to the first `{`, so the runtime
-    // generic between the name and `(` doesn't affect body extraction.
+    // Marker omits the `(` so the substring match tolerates the
+    // signature's `<R: tauri::Runtime>` generic parameter. The brace
+    // scanner below jumps from the marker to the first `{`, so the
+    // runtime generic between the name and `(` doesn't affect body
+    // extraction.
     let synced_body = extract_fn_body(&src, "fn build_file_synced_callback").expect("build_file_synced_callback declaration present");
     assert!(
         synced_body.contains("add_pending_activity"),
         "build_file_synced_callback MUST call add_pending_activity — \
-         this is the server-confirmed enqueue site after the move."
+         this is the server-confirmed enqueue site."
     );
 }
 
@@ -225,10 +219,9 @@ fn byte_progress_does_not_enqueue_pending_activity() {
 /// `SyncRunner::new` constructor — no test-only helpers, no
 /// `#[cfg(test)] pub` shims.
 ///
-/// Runs under `#[tokio::test]` because the closure now also fires a
-/// `tokio::spawn` (Task 6: fire-and-forget `mark_intent_completed`)
-/// on the `uploaded` action; without a Tokio reactor that spawn
-/// panics. The spawn itself is fire-and-forget and falls through the
+/// Runs under `#[tokio::test]` because the closure fires a fire-and-forget
+/// `tokio::spawn` (`mark_intent_completed`) on the `uploaded` action;
+/// without a Tokio reactor that spawn panics. The spawn falls through the
 /// "no `AppState` managed" branch silently, so it doesn't affect the
 /// assertions below.
 #[tokio::test]
@@ -271,10 +264,8 @@ async fn on_file_synced_enqueues_uploaded_activity() {
 }
 
 /// Runtime invariant: a `Downloaded`-shaped server confirmation
-/// enqueues with `action = Downloaded`. The byte-progress site
-/// previously branched on `TransferDirection` to pick the right action;
-/// after the move, the action must come from the `action` parameter
-/// hcfs-client passes to `FileSyncedFn`.
+/// enqueues with `action = Downloaded`. The action must come from the
+/// `action` parameter hcfs-client passes to `FileSyncedFn`.
 #[test]
 fn on_file_synced_enqueues_downloaded_activity_for_download_action() {
     let sync = make_sync_runner();
@@ -302,14 +293,12 @@ fn on_file_synced_enqueues_downloaded_activity_for_download_action() {
 }
 
 /// Truth invariant: an `action` string that hcfs-client may introduce
-/// in the future (Phase 2 may add `"failed"`) MUST NOT produce a
-/// fabricated `Uploaded` row. The match arm for unknown action values
-/// maps to `None`, which skips the `add_pending_activity` call
-/// entirely. The `warn!` log still fires so the unknown variant is
-/// observable in operator logs, but the activity log itself stays
-/// truthful.
+/// in the future (e.g. `"failed"`) MUST NOT produce a fabricated
+/// `Uploaded` row. The match arm for unknown action values maps to
+/// `None`, which skips the `add_pending_activity` call entirely. The
+/// `warn!` log still fires so the unknown variant is observable in
+/// operator logs, but the activity log itself stays truthful.
 ///
-/// Pins issue I-3 from the Task 1.1 code review.
 /// Edge case: when the progress tracker has no entry for `rel_path`
 /// (no session seeded, or a race where the file vanished from the
 /// session between the per-chunk callback and `on_file_synced`),
@@ -319,10 +308,10 @@ fn on_file_synced_enqueues_downloaded_activity_for_download_action() {
 /// "unknown"/"--" placeholder rather than fabricating a fake count.
 /// Pins the contract that the helper never panics on a missing entry.
 ///
-/// Runs under `#[tokio::test]` because the "uploaded" branch now
-/// spawns a fire-and-forget `mark_intent_completed` (Task 6) and a
-/// Tokio reactor is required for `tokio::spawn` not to panic. The
-/// spawn falls through silently — no `AppState` managed in this test.
+/// Runs under `#[tokio::test]` because the "uploaded" branch spawns a
+/// fire-and-forget `mark_intent_completed` and a Tokio reactor is
+/// required for `tokio::spawn` not to panic. The spawn falls through
+/// silently — no `AppState` managed in this test.
 #[tokio::test]
 async fn on_file_synced_without_progress_entry_falls_back_to_zero_size() {
     let sync = make_sync_runner();

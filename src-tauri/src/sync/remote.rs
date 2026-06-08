@@ -55,9 +55,9 @@ pub(crate) async fn get_server_url(pool: &SqlitePool, account_id: &str) -> Resul
 /// when its `encryption_version = 1`. Without this, the raw base64
 /// ciphertext from the column would be passed to `recover_mnemonic`
 /// as if it were the plaintext password — which fails with
-/// "Decryption failed - wrong password?" and was the long-standing bug
-/// behind the "Failed to load remote files" error in the browse-folder
-/// dialog (and the matching failure in `download_remote_file`).
+/// "Decryption failed - wrong password?" and surfaces as "Failed to load
+/// remote files" in the browse-folder dialog (and the matching failure in
+/// `download_remote_file`).
 async fn encryption_key_for_label(pool: &SqlitePool, account_id: &str, label: &str, mnemonic: &str) -> Result<[u8; 32]> {
     let password = crate::sync::config::get_drive_password(pool, account_id, Some(mnemonic)).await?;
     let master_path = master_mnemonic_path(account_id)?;
@@ -99,8 +99,8 @@ async fn build_client(pool: &SqlitePool, account_id: &str, label: &str) -> Resul
 /// `{cache_name}.part` and either interleave their writes into one file (a
 /// corrupt cache entry served stale forever, since the cache-hit check only
 /// asserts non-zero length) or race the rename (the second loser hits ENOENT
-/// because the first already moved the shared part away) — audit 2026-06-05
-/// finding B2. The process id plus a monotonic counter make every attempt's
+/// because the first already moved the shared part away). The process id plus a
+/// monotonic counter make every attempt's
 /// temp path distinct within this process and across processes; the rename into
 /// `cache_name` stays atomic and idempotent (a racing winner's copy has the
 /// same content hash, so replacing it is harmless).
@@ -297,7 +297,7 @@ mod tests {
         let a = unique_part_path(root, cache_name);
         let b = unique_part_path(root, cache_name);
 
-        // The core of the B2 race fix: two concurrent previews of the SAME
+        // The core of the race guard: two concurrent previews of the SAME
         // uncached file must download to DIFFERENT temp paths so they can't
         // interleave into one file or race the rename.
         assert_ne!(a, b, "two attempts on the same cache_name must produce distinct temp paths");

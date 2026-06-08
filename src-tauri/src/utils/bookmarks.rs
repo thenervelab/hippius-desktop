@@ -16,11 +16,10 @@ use objc::{class, msg_send, sel, sel_impl};
 use tracing::error;
 
 // Every `unsafe` block below is scoped to a single Objective-C message send (or
-// the one raw-pointer read at the end) with its own `// SAFETY:` note, per the
-// unsafe-block-discipline + unsafe-block-scope axioms. All the safe logic — null
-// checks, `CString` construction, error formatting, logging, the `.to_vec()`
-// copy — lives outside the unsafe blocks. The behaviour is identical to the
-// prior single ~50-line `unsafe { … }`; only the auditability changed.
+// the one raw-pointer read at the end) with its own `// SAFETY:` note. All the
+// safe logic — null checks, `CString` construction, error formatting, logging,
+// the `.to_vec()` copy — lives outside the unsafe blocks so each unsafe region
+// is minimal and individually auditable.
 //
 // Note on miri: this path cannot be exercised under `cargo miri` — every unsafe
 // operation is a live-runtime ObjC `msg_send!` (foreign function call), which

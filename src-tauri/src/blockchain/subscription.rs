@@ -42,7 +42,7 @@ pub struct BlockUpdate {
 /// own when connectivity returns — but past this many failures it stops the
 /// aggressive ~60s retry and falls back to a slow re-probe so a long outage
 /// (closed laptop, no network for hours) doesn't hammer the endpoint or spam
-/// the logs every minute (audit 2026-06-05, finding F4).
+/// the logs every minute.
 const RECONNECT_CEILING_ATTEMPTS: u32 = 10;
 
 /// Slow re-probe interval (seconds) used once past [`RECONNECT_CEILING_ATTEMPTS`].
@@ -390,7 +390,7 @@ mod tests {
         // The reconnectable disconnect must carry the blockchain taxonomy
         // (`AppError::Substrate`), so the start loop's 429 detection
         // (`e.to_string().contains("429")`) and the FE's kind-based dispatch
-        // both see a chain error rather than the old stringly-typed `Other`.
+        // both see a chain error rather than a stringly-typed `Other`.
         let err = classify_stream_exit(true).unwrap_err();
         assert!(matches!(err, crate::error::AppError::Substrate(_)), "expected Substrate, got {err:?}");
     }

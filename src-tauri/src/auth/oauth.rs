@@ -219,8 +219,7 @@ pub async fn start_oauth_flow(state: tauri::State<'_, crate::app_state::AppState
     // can match the returned deep link to this in-progress flow. The
     // Hippius `/get-token/` endpoint passes `callback_url` through
     // untouched, so anything we append here survives the OAuth
-    // provider redirect round-trip (verified via a direct HTTP probe
-    // during the C4 audit).
+    // provider redirect round-trip.
     let callback = format!("{CALLBACK_URL}?source=desktop&state={}", crate::api::client::urlencoding(&oauth_state));
     let next = format!("/get-token/?callback_url={}", crate::api::client::urlencoding(&callback));
 
@@ -232,8 +231,8 @@ pub async fn start_oauth_flow(state: tauri::State<'_, crate::app_state::AppState
 /// Parse an OAuth deep link URL and extract callback parameters.
 ///
 /// Handles malformed URLs (extra `?` chars), JSON `session` parameter,
-/// and determines whether the URL is an OAuth callback at all. Replaces
-/// the 60+ lines of URL parsing that used to live in `LoginForm.tsx`.
+/// and determines whether the URL is an OAuth callback at all. Keeping the
+/// URL parsing in Rust avoids duplicating it in the frontend.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ParsedDeepLink {
@@ -424,8 +423,8 @@ pub async fn complete_oauth_flow(
         // The matched provider from the state lookup becomes the
         // `code_verifier` placeholder the Hippius server currently
         // expects on `/api/auth/exchange/`. (It ignores the value in
-        // practice — see the C4 audit probe — but we keep the shape
-        // the server already accepts to avoid surprising the backend.)
+        // practice, but we keep the shape the server already accepts to
+        // avoid surprising the backend.)
         let base = api_base_url();
         let resp = state
             .api_client
@@ -470,11 +469,9 @@ pub async fn complete_oauth_flow(
     };
     let token_expiry_ms = chrono::Utc::now().timestamp_millis() + 30 * 24 * 60 * 60 * 1000;
 
-    // Both OAuth grant paths persist the same provider tag; the earlier
-    // `map_or("oauth", |_| "oauth")` branched on params.token but both arms
-    // yielded "oauth" — dead computation that read as a real distinction. If
-    // per-provider tagging is ever needed, derive it from the matched
-    // PkceState.provider instead.
+    // Both OAuth grant paths persist the same provider tag. If per-provider
+    // tagging is ever needed, derive it from the matched PkceState.provider
+    // instead.
     let provider_name = "oauth".to_string();
 
     if !substrate_address.is_empty() {
@@ -482,8 +479,8 @@ pub async fn complete_oauth_flow(
 
         // Route through the repo so OAuth sessions get the same
         // COALESCE-on-NULL behavior for logout_time_minutes as mnemonic
-        // logins. Previously this raw INSERT silently nuked the user's
-        // logout-timeout preference on every OAuth callback.
+        // logins, preserving the user's logout-timeout preference across
+        // OAuth callbacks.
         crate::auth::auth_session_repo::upsert(
             pool,
             crate::auth::auth_session_repo::UpsertSession {

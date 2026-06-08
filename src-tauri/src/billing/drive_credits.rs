@@ -4,9 +4,8 @@
 //! Both commands hit a single indexer endpoint
 //! (`/user-credits-by-storage-history?storage_type=drive`) and project
 //! a different view onto the same response. The Storage Usage chart
-//! used to share this endpoint too, but moved to the snapshot-driven
-//! `/user-extended-storage-metrics` on 2026-05-08 — see
-//! [`crate::billing::drive_storage`] — because the credits-history
+//! reads the snapshot-driven `/user-extended-storage-metrics` instead
+//! (see [`crate::billing::drive_storage`]) because this credits-history
 //! endpoint only updates on a `CreditsConsumed` block, leaving the
 //! chart hours behind reality after a deletion.
 //!
@@ -32,10 +31,9 @@ const DRIVE_STORAGE_TYPE: &str = "drive";
 const PAGE_LIMIT: u32 = 100;
 
 /// Defensive page cap. At 100 events/page that's 5000 events, orders of
-/// magnitude above what a heavily-billed account produces in a year
-/// (the reference 5Ft4… account had 68 events total when this was
-/// written). The cap is a safety net against a runaway `total_pages`
-/// from the indexer, not a real expected ceiling.
+/// magnitude above what a heavily-billed account produces in a year.
+/// The cap is a safety net against a runaway `total_pages` from the
+/// indexer, not a real expected ceiling.
 const MAX_PAGES: u32 = 50;
 
 /// The actual debit half of the paired `(CreditsConsumed,
@@ -163,7 +161,7 @@ async fn fetch_all_drive_events(state: &crate::app_state::AppState, account_id: 
 /// A malformed value is logged (not silently dropped) and treated as `0.0`:
 /// the credit total is a display figure that must not fail, but coercing an
 /// unparseable amount to zero with no trace undercounts the user's usage, so
-/// the offending value is surfaced at warn level (audit 2026-06-05, finding C3).
+/// the offending value is surfaced at warn level.
 fn planck_str_to_credits(raw: &str) -> f64 {
     raw.parse::<f64>().map_or_else(
         |_| {
@@ -191,8 +189,8 @@ fn consumed_events_by_date(events: &[DriveCreditEvent]) -> Vec<(NaiveDate, &Driv
 ///
 /// Sum daily spend, then accumulate through the range, seeded by all
 /// spend strictly before the window so the first point reflects "spent
-/// so far" rather than "spent in window so far". Mirrors the prior
-/// wallet-wide chart's semantics, just scoped to drive.
+/// so far" rather than "spent in window so far". Matches the wallet-wide
+/// chart's semantics, just scoped to drive.
 fn build_credits_chart(events: &[DriveCreditEvent], range: &str) -> Vec<ChartPoint> {
     let consumed = consumed_events_by_date(events);
     if consumed.is_empty() {
@@ -236,9 +234,9 @@ fn render_credit_points(dates: &[NaiveDate], cumulative: &BTreeMap<NaiveDate, f6
             let band_label = if is_last7 { Some(weekday_name(date).to_string()) } else { None };
             // The chart's stack-formatter expects an integer planck
             // string (`format_balance` contract). Convert through the
-            // same `value * 1e18 as u128` round-trip the existing
-            // wallet-wide chart uses so the formatted output stays
-            // visually identical to what users saw before this swap.
+            // same `value * 1e18 as u128` round-trip the wallet-wide
+            // chart uses so the formatted output is identical across
+            // both charts.
             let clamped = value.max(0.0).min(u128::MAX as f64 / 1e18);
             let planck_str = format!("{}", (clamped * 1e18) as u128);
             ChartPoint {
@@ -391,11 +389,11 @@ mod tests {
 
     #[test]
     fn history_page_deserializes_real_indexer_shape() {
-        // Trimmed-down copy of one row from the live response (account
-        // 5Ft4…6Q on 2026-05-06). Pins both the field set and the
-        // fractional-planck handling end-to-end. `drive_files_size`
-        // remains in the wire payload — Serde silently ignores it
-        // since DriveCreditEvent stopped reading it.
+        // Trimmed-down copy of one row from the live response. Pins
+        // both the field set and the fractional-planck handling
+        // end-to-end. `drive_files_size` remains in the wire payload —
+        // Serde silently ignores it because DriveCreditEvent does not
+        // read it.
         let json = r#"{
             "data":[{
                 "credits_amount":"93189525824488.31",

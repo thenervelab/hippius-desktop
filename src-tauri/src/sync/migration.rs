@@ -10,8 +10,7 @@
 
 use crate::error::Result;
 // Single source of truth for "look up this account's HCFS server URL".
-// Migration used to carry its own copy that diverged only in error-wrapping
-// wording; routing through `sync::remote` keeps the default URL + empty-string
+// Routing through `sync::remote` keeps the default URL + empty-string
 // fallback + schema in exactly one place.
 use crate::sync::remote::get_server_url;
 use ed25519_dalek::Signer;
@@ -31,10 +30,8 @@ use tracing::{info, warn};
 /// The rule is: take the path's last non-empty component (the directory
 /// name the user chose for migrated files), sanitize it for filesystem
 /// safety, and fall back to `"default"` when no path is given or the
-/// sanitized name is empty. Previously both `launchServerMigration` and
-/// `closeMigration` in `useMigration.ts` had their own copy of this
-/// snippet — keeping it in Rust closes the "what if the two diverge?"
-/// class of bug and lets the frontend stop threading a redundant
+/// sanitized name is empty. Keeping it in Rust closes the "what if the two
+/// diverge?" class of bug and lets the frontend stop threading a redundant
 /// `label` argument through every migration IPC.
 pub(crate) fn derive_migration_label(sync_path: Option<&str>) -> String {
     let candidate = sync_path
@@ -143,7 +140,7 @@ pub(crate) async fn get_migration_status_db(pool: &SqlitePool, account_id: &str)
     }
 }
 
-#[expect(clippy::too_many_arguments)] // bundling into struct deferred to Phase 4
+#[expect(clippy::too_many_arguments)] // bundling these into a struct is deferred
 pub(crate) async fn upsert_migration_status(
     pool: &SqlitePool,
     account_id: &str,
@@ -463,9 +460,8 @@ pub async fn dismiss_migration(state: tauri::State<'_, crate::app_state::AppStat
     // need a separate stop_migration_polling round-trip.
     {
         let mut guard = state.migration.poll_task.lock().await;
-        // Bump the stop-generation under the lock (same as stop_migration_polling)
-        // so a start racing its setup aborts its new loop instead of storing it
-        // (D2 follow-up).
+        // Bump the stop-generation under the lock so a start racing its setup
+        // aborts its new loop instead of storing it.
         state.migration.poll_epoch.fetch_add(1, Ordering::SeqCst);
         if let Some(handle) = guard.take() {
             handle.abort();
@@ -545,8 +541,7 @@ pub async fn complete_migration_transition(
     // commits "completed", the stale `true` self-corrects: this function's own
     // initialize_sync below does not consult the flag, and the next
     // check_migration reads the now-"completed" server status and won't re-arm
-    // it. A Mutex here would be over-engineering for an advisory flag (audit
-    // 2026-06-05, finding F1).
+    // it. A Mutex here would be over-engineering for an advisory flag.
     state.migration.in_progress.store(false, Ordering::SeqCst);
 
     // 2. Ensure a sync path exists for the label. New migration users won't
@@ -621,8 +616,7 @@ struct RawServerMigrationStatus {
 /// Poll result returned to the frontend, enriched with retry flags.
 ///
 /// `should_warn` and `should_abort` are computed from consecutive poll
-/// failure tracking in Rust, replacing the retry logic that was in
-/// `useMigration.ts`.
+/// failure tracking in Rust so the frontend just reacts to the flags.
 #[derive(Debug, Serialize)]
 pub struct ServerMigrationStatus {
     pub status: String,
@@ -671,7 +665,6 @@ pub struct MigrationFlowResult {
 
 /// Check if HCFS config exists and decide the next migration step.
 ///
-/// Replaces the config check + step transition in `useMigration.ts:startMigration`.
 /// Returns "setup" if the user needs to set up encryption first, or "progress"
 /// if migration can start immediately.
 #[tauri::command]
@@ -758,10 +751,9 @@ pub async fn start_server_migration(
     })?;
     tracing::info!("[Migration] Server URL: {server_url}");
 
-    // The server derives path_prefix from its migration_records table.
-    // Previously the desktop extracted this from the file list, but the
-    // server no longer returns individual files. Send empty and let the
-    // server's worker use the full key path.
+    // The server derives path_prefix from its migration_records table; it no
+    // longer returns individual files for the desktop to extract it from. Send
+    // empty and let the server's worker use the full key path.
     // TODO: have server include path_prefix in the summary response
     let path_prefix = String::new();
 
@@ -885,12 +877,10 @@ pub async fn start_server_migration(
         if text.contains("job_exists") {
             tracing::warn!("[Migration] Existing job found — cancelling and retrying");
             let cancel_url = format!("{}/migration/cancel", server_base.trim_end_matches('/'));
-            // Await AND inspect the cancel. The old `let _ = …send().await`
-            // discarded the outcome, so a failed cancel was invisible and the
-            // single immediate retry below just raced — and lost — against a job
-            // the server had not yet released. Log a non-success cancel but still
-            // proceed: the server may finish the cancellation during the backoff
-            // between retries (audit 2026-06-05, finding D4).
+            // Await AND inspect the cancel so a failed cancel is visible rather
+            // than letting the retry below race a job the server hasn't released.
+            // Log a non-success cancel but still proceed: the server may finish
+            // the cancellation during the backoff between retries.
             match state
                 .migration
                 .client
@@ -912,10 +902,9 @@ pub async fn start_server_migration(
                 }
             }
 
-            // Bounded retry with backoff instead of one immediate attempt, so the
-            // server has time to release the cancelled job. A transport error
-            // still aborts via `?`; only a non-success *response* (the job is
-            // still there) is retried.
+            // Bounded retry with backoff so the server has time to release the
+            // cancelled job. A transport error still aborts via `?`; only a
+            // non-success *response* (the job is still there) is retried.
             let mut last_error = String::new();
             for attempt in 1..=MAX_MIGRATION_START_RETRIES {
                 tokio::time::sleep(migration_retry_backoff(attempt)).await;
@@ -987,13 +976,12 @@ fn poll_failure_flags(consecutive_failures: i32) -> (bool, bool) {
 /// `failures` is the CALLER's running count of consecutive poll failures, owned
 /// by whoever drives the poll: the background loop in `start_migration_polling`
 /// keeps a single `i32` across its iterations, while the one-shot
-/// `check_migration` passes a throwaway. Threading it per-caller replaced a
-/// single process-wide `MigrationState.poll_failure_count` atomic that let two
-/// independent poll callers corrupt each other's give-up decision — e.g. a
-/// transient failure in `check_migration` could push the loop toward abort, and
-/// `start_server_migration`'s reset could zero the loop's progress (audit
-/// 2026-06-05, finding D3). A per-task `&mut i32` is the lightest primitive that
-/// fits the now-correctly-unshared sharing pattern (axiom 73).
+/// `check_migration` passes a throwaway. Threading it per-caller keeps two
+/// independent poll callers from corrupting each other's give-up decision — a
+/// shared counter would let a transient failure in `check_migration` push the
+/// loop toward abort, and `start_server_migration`'s reset zero the loop's
+/// progress. A per-task `&mut i32` is the lightest primitive that fits this
+/// unshared sharing pattern.
 async fn poll_migration_status_internal(state: &crate::app_state::AppState, account_id: &str, failures: &mut i32) -> Result<ServerMigrationStatus> {
     let pool = state.pool()?;
     let server_url = get_server_url(pool, account_id).await?;
@@ -1053,8 +1041,7 @@ const TERMINAL_STATUSES: &[&str] = &["completed", "failed", "cancelled"];
 
 /// Start background migration polling. Emits `migration_progress` events every 3s.
 ///
-/// Replaces the `setInterval` polling loop in `useMigration.ts`. The frontend
-/// listens for events instead of driving the poll loop.
+/// The frontend listens for events instead of driving the poll loop.
 #[tauri::command]
 pub async fn start_migration_polling(app: tauri::AppHandle, account_id: String) -> Result<()> {
     use tauri::{Emitter, Manager};
@@ -1062,7 +1049,7 @@ pub async fn start_migration_polling(app: tauri::AppHandle, account_id: String) 
 
     // Cancel any existing poll task, and capture the stop-generation under the
     // same lock so a concurrent stop/dismiss during our setup window below is
-    // detectable at store time (D2 follow-up).
+    // detectable at store time.
     let start_epoch = {
         let state = app.state::<crate::app_state::AppState>();
         let mut guard = state.migration.poll_task.lock().await;
@@ -1074,14 +1061,12 @@ pub async fn start_migration_polling(app: tauri::AppHandle, account_id: String) 
 
     // Poll immediately (don't wait 3s for the first result) BEFORE spawning the
     // background loop. The immediate poll uses `?`, so a pool/config failure
-    // returns Err here — and the previous order stored the loop handle FIRST,
-    // which meant that Err was returned to the caller while a spawned task kept
-    // emitting `migration_progress` every 3s with nothing tracking the start
-    // failure. Polling first means a failed start spawns nothing at all (audit
-    // 2026-06-05, finding D2). No poll_task lock is held across this await, so
-    // a concurrent dismiss/stop can't be blocked on the round-trip either.
-    // The immediate poll is a one-shot, so its failure streak starts and ends
-    // here; the background loop below owns its own persistent counter.
+    // returns Err here; polling first means a failed start spawns no task that
+    // would keep emitting `migration_progress` with nothing tracking the start
+    // failure. No poll_task lock is held across this await, so a concurrent
+    // dismiss/stop can't be blocked on the round-trip either. The immediate poll
+    // is a one-shot, so its failure streak starts and ends here; the background
+    // loop below owns its own persistent counter.
     let mut immediate_failures = 0;
     let immediate = poll_migration_status_internal(&app.state::<crate::app_state::AppState>(), &account_id, &mut immediate_failures).await?;
     let immediate_is_terminal = immediate.is_terminal || immediate.should_abort;
@@ -1127,8 +1112,8 @@ pub async fn start_migration_polling(app: tauri::AppHandle, account_id: String) 
     // window. In that race the stop ran while poll_task was empty (we hadn't
     // stored yet), so it aborted nothing; storing now would orphan the loop the
     // user just asked to stop. The compare happens under the same lock the stop
-    // bumps the epoch under, so the two serialize (D2 follow-up). The guard
-    // scope ends immediately; no await happens under it.
+    // bumps the epoch under, so the two serialize. The guard scope ends
+    // immediately; no await happens under it.
     {
         let state = app.state::<crate::app_state::AppState>();
         let mut guard = state.migration.poll_task.lock().await;
@@ -1152,7 +1137,7 @@ pub async fn stop_migration_polling(app: tauri::AppHandle) -> Result<()> {
     let state = app.state::<crate::app_state::AppState>();
     let mut guard = state.migration.poll_task.lock().await;
     // Bump the stop-generation under the lock so a start racing its setup window
-    // sees the change and aborts its new loop instead of storing it (D2 follow-up).
+    // sees the change and aborts its new loop instead of storing it.
     state.migration.poll_epoch.fetch_add(1, Ordering::SeqCst);
     if let Some(handle) = guard.take() {
         handle.abort();
@@ -1168,8 +1153,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64};
 ///
 /// Note: there is deliberately no shared poll-failure counter here. Each poll
 /// caller owns its own consecutive-failure streak (a per-task `&mut i32` passed
-/// to `poll_migration_status_internal`); a single shared atomic let independent
-/// callers corrupt each other's give-up decision (audit 2026-06-05, D3).
+/// to `poll_migration_status_internal`); a single shared atomic would let
+/// independent callers corrupt each other's give-up decision.
 pub struct MigrationState {
     pub in_progress: AtomicBool,
     pub client: reqwest::Client,
@@ -1178,8 +1163,7 @@ pub struct MigrationState {
     /// Monotonic "stop generation". `stop_migration_polling` / `dismiss_migration`
     /// bump this (under the `poll_task` lock) so `start_migration_polling` can
     /// detect a stop that raced its setup window and abort the freshly-spawned
-    /// loop instead of storing (and orphaning) it — the start-vs-dismiss race
-    /// (audit 2026-06-05, D2 follow-up).
+    /// loop instead of storing (and orphaning) it — the start-vs-dismiss race.
     pub poll_epoch: AtomicU64,
 }
 
@@ -1451,7 +1435,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // poll_failure_flags (D3 — per-caller failure streak → warn/abort flags)
+    // poll_failure_flags (per-caller failure streak → warn/abort flags)
     // -----------------------------------------------------------------------
 
     #[test]
@@ -1473,7 +1457,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // migration_retry_backoff (D4 — bounded post-cancel start retry schedule)
+    // migration_retry_backoff (bounded post-cancel start retry schedule)
     // -----------------------------------------------------------------------
 
     #[test]
@@ -1487,12 +1471,12 @@ mod tests {
         }
     }
 
-    /// Static pin for audit finding D4: the `job_exists` branch of
-    /// `start_server_migration` must (a) NOT fire-and-forget the cancel with
-    /// `let _ = …post(&cancel_url)`, and (b) retry with a bounded backoff loop
-    /// rather than a single immediate attempt. The command is AppHandle/server-
-    /// bound (covered only by tests/migration_server_mock.rs at the endpoint
-    /// level), so this pins the structure at the source level (axiom 111).
+    /// Regression pin: the `job_exists` branch of `start_server_migration` must
+    /// (a) NOT fire-and-forget the cancel with `let _ = …post(&cancel_url)`, and
+    /// (b) retry with a bounded backoff loop rather than a single immediate
+    /// attempt. The command is AppHandle/server-bound (covered only by
+    /// tests/migration_server_mock.rs at the endpoint level), so this pins the
+    /// structure at the source level.
     #[test]
     fn job_exists_cancel_is_checked_and_retry_is_bounded() {
         const SRC: &str = include_str!("migration.rs");
@@ -1505,19 +1489,19 @@ mod tests {
         let cancel_at = body.find(".post(&cancel_url)").expect("cancel request present");
         let match_at = body
             .find("match state")
-            .expect("cancel must be matched on, not fire-and-forget (audit finding D4)");
+            .expect("cancel must be matched on, not fire-and-forget");
         assert!(
             match_at < cancel_at,
-            "the cancel `.post(&cancel_url)` must sit inside the `match` that inspects it (audit finding D4)"
+            "the cancel `.post(&cancel_url)` must sit inside the `match` that inspects it"
         );
         // The retry is a bounded backoff loop, not a single immediate attempt.
         assert!(
             body.contains("MAX_MIGRATION_START_RETRIES") && body.contains("migration_retry_backoff"),
-            "the retry must be a bounded backoff loop (audit finding D4)"
+            "the retry must be a bounded backoff loop"
         );
     }
 
-    /// D2 follow-up: the start-vs-stop race guard must be wired up — stop and
+    /// Regression pin: the start-vs-stop race guard must be wired up — stop and
     /// dismiss bump `poll_epoch` (so a racing start can detect them), and
     /// `start_migration_polling` compares `poll_epoch` against the value it
     /// captured at setup before storing its handle. Without the compare, a
@@ -1531,31 +1515,30 @@ mod tests {
         let stop_body = &stop[..stop.find("\npub ").unwrap_or(stop.len())];
         assert!(
             stop_body.contains("poll_epoch.fetch_add"),
-            "stop_migration_polling must bump poll_epoch so a racing start aborts its loop (D2 follow-up)"
+            "stop_migration_polling must bump poll_epoch so a racing start aborts its loop"
         );
         let dismiss = SRC.split("pub async fn dismiss_migration").nth(1).expect("dismiss fn present");
         let dismiss_body = &dismiss[..dismiss.find("\npub ").unwrap_or(dismiss.len())];
         assert!(
             dismiss_body.contains("poll_epoch.fetch_add"),
-            "dismiss_migration must bump poll_epoch so a racing start aborts its loop (D2 follow-up)"
+            "dismiss_migration must bump poll_epoch so a racing start aborts its loop"
         );
         let start = SRC.split("pub async fn start_migration_polling").nth(1).expect("start fn present");
         assert!(
             start.contains("poll_epoch.load") && start.contains("start_epoch"),
-            "start_migration_polling must compare poll_epoch against the captured start_epoch before storing (D2 follow-up)"
+            "start_migration_polling must compare poll_epoch against the captured start_epoch before storing"
         );
     }
 
-    /// Static pin for audit finding D2: `start_migration_polling` must run its
-    /// immediate poll (the `?`-propagating `poll_migration_status_internal`
-    /// call) BEFORE `tokio::spawn`ing the background loop. Otherwise an
-    /// immediate-poll Err returns to the caller while a spawned task keeps
-    /// emitting `migration_progress` with nothing tracking the start failure.
+    /// Regression pin: `start_migration_polling` must run its immediate poll
+    /// (the `?`-propagating `poll_migration_status_internal` call) BEFORE
+    /// `tokio::spawn`ing the background loop. Otherwise an immediate-poll Err
+    /// returns to the caller while a spawned task keeps emitting
+    /// `migration_progress` with nothing tracking the start failure.
     ///
     /// The command is AppHandle-bound (needs a running app + managed AppState),
-    /// so it can't be driven under the no-`tauri::test` policy (axiom 111);
-    /// this pins the ordering at the source level like
-    /// `hippius_startup_window.rs`.
+    /// so it can't be driven under the no-`tauri::test` policy; this pins the
+    /// ordering at the source level like `hippius_startup_window.rs`.
     #[test]
     fn immediate_poll_precedes_loop_spawn() {
         const SRC: &str = include_str!("migration.rs");
@@ -1567,7 +1550,7 @@ mod tests {
         let spawn = body.find("tokio::spawn").expect("background loop spawned");
         assert!(
             immediate_poll < spawn,
-            "the immediate `?` poll must run before tokio::spawn so a failed start spawns no task (audit finding D2)"
+            "the immediate `?` poll must run before tokio::spawn so a failed start spawns no task"
         );
     }
 }
