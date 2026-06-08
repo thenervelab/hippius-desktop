@@ -369,6 +369,10 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
 
         const { fileFormat } = getFilePartsFromFileName(childFile.name);
         const fileType = getFileTypeFromExtension(fileFormat || null);
+        // Failed rows show a persistent "Failed" pill at the name cell's right
+        // edge; suppress the trigger's floating hover icon so it doesn't fade
+        // in on top of that pill (mirrors the top-level FilesTable).
+        const hideHoverIcon = childFile.syncStatus === "failed";
         // Annotate child row with its parent path so all selection /
         // deletion keys downstream are unambiguous.
         const annotatedChild: FormattedUserFile = {
@@ -451,6 +455,7 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
             <VideoDialogTrigger
               onClick={() => onSelectFile(childFile)}
               className="min-w-0 px-0 py-0"
+              hideHoverIcon={hideHoverIcon}
             >
               {nameNode}
             </VideoDialogTrigger>
@@ -458,6 +463,7 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
             <ImageDialogTrigger
               onClick={() => onSelectFile(childFile)}
               className="min-w-0 px-0 py-0"
+              hideHoverIcon={hideHoverIcon}
             >
               {nameNode}
             </ImageDialogTrigger>
@@ -465,6 +471,7 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
             <PdfDialogTrigger
               onClick={() => onSelectFile(childFile)}
               className="min-w-0 px-0 py-0"
+              hideHoverIcon={hideHoverIcon}
             >
               {nameNode}
             </PdfDialogTrigger>
