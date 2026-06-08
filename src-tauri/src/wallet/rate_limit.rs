@@ -52,7 +52,7 @@ impl RateLimitError {
             RateLimitError::Locked { retry_after } => {
                 let secs = retry_after.as_secs().max(1);
                 if secs >= 60 {
-                    let mins = (secs + 59) / 60;
+                    let mins = secs.div_ceil(60);
                     format!("Too many failed attempts. Try again in {mins} minute(s).")
                 } else {
                     format!("Too many failed attempts. Try again in {secs} second(s).")
@@ -62,7 +62,7 @@ impl RateLimitError {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct State {
     /// First failure timestamp in the current window. `None` between
     /// windows / immediately after a successful unlock.
@@ -84,17 +84,6 @@ struct State {
     /// Lockout deadline. `Some(t)` means "any attempt before `t` is
     /// rejected"; `None` means "no active lockout".
     locked_until: Option<Instant>,
-}
-
-impl Default for State {
-    fn default() -> Self {
-        State {
-            window_started_at: None,
-            failures_in_window: 0,
-            in_flight: 0,
-            locked_until: None,
-        }
-    }
 }
 
 /// Process-wide per-wallet rate-limit state. Lives behind a `Mutex` —

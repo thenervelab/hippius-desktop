@@ -97,14 +97,16 @@ fn now_ms() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or_else(|e| {
-            // A pre-epoch system clock is near-impossible, but log rather than
-            // silently stamp 0 — a 0 created_at would distort the oldest-first
-            // ordering below and the auto-promote-on-delete target.
-            tracing::warn!(error = %e, "system clock is before the Unix epoch; using 0 for wallet timestamp");
-            0
-        })
+        .map_or_else(
+            |e| {
+                // A pre-epoch system clock is near-impossible, but log rather than
+                // silently stamp 0 — a 0 created_at would distort the oldest-first
+                // ordering below and the auto-promote-on-delete target.
+                tracing::warn!(error = %e, "system clock is before the Unix epoch; using 0 for wallet timestamp");
+                0
+            },
+            |d| d.as_millis() as i64,
+        )
 }
 
 /// Insert a wallet row under `owner`. Returns the newly-created row.
@@ -144,7 +146,7 @@ pub async fn insert(
     .bind(address)
     .bind(encrypted_mnemonic)
     .bind(password_hash)
-    .bind(if is_first { 1 } else { 0 })
+    .bind(i64::from(is_first))
     .bind(now)
     .bind(now)
     .execute(pool)
@@ -264,9 +266,8 @@ pub async fn rename(pool: &SqlitePool, owner: &str, id: i64, name: &str) -> Resu
 /// remaining wallet under the same owner (by creation order) to active so
 /// the UI never has zero-active-and-non-empty state for that account.
 pub async fn delete(pool: &SqlitePool, owner: &str, id: i64) -> Result<(), AppError> {
-    let target = match get_by_id(pool, owner, id).await? {
-        Some(w) => w,
-        None => return Ok(()),
+    let Some(target) = get_by_id(pool, owner, id).await? else {
+        return Ok(());
     };
 
     sqlx::query("DELETE FROM local_wallets WHERE id = ? AND owner = ?")
