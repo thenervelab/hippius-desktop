@@ -255,7 +255,7 @@ pub async fn get_block_timestamp(
         .chain_get_block_hash(Some(block_number.into()))
         .await
         .map_err(|e| crate::error::AppError::Substrate(format!("Block hash query failed: {e}")))?
-        .ok_or_else(|| format!("Block {block_number} not found"))?;
+        .ok_or_else(|| crate::error::AppError::Substrate(format!("Block {block_number} not found")))?;
 
     let timestamp_query = custom_runtime::storage().timestamp().now();
     let timestamp: u64 = client
@@ -304,7 +304,9 @@ pub async fn get_referral_links(
     address: String,
 ) -> Result<Vec<ReferralLink>, crate::error::AppError> {
     let client = get_substrate_client(&state).await?;
-    let target_account: subxt::utils::AccountId32 = address.parse().map_err(|_| "Invalid address".to_string())?;
+    let target_account: subxt::utils::AccountId32 = address
+        .parse()
+        .map_err(|_| crate::error::AppError::Validation(format!("Invalid SS58 address: {address}")))?;
 
     let storage = client
         .storage()
