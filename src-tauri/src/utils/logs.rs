@@ -104,19 +104,29 @@ static LINE_REDACTORS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
             "[REDACTED_ADDRESS]",
         ),
         // Home-directory paths: collapse everything after the `/Users/` or
-        // `/home/` root, which removes BOTH the OS username AND any user
-        // file/folder names downstream of it in one shot. `[^\s:"']+` stops at
-        // whitespace, a `:` (so `…/foo.rs:42` line refs keep their line), and the
-        // quote chars `tracing`'s `?debug` formatting wraps paths in. Re-running
-        // maps `/Users/[REDACTED_PATH]` to itself, preserving idempotence.
+        // `/home/` root — removing the OS username AND every user file/folder
+        // name below it. The tail is non-greedy and ALLOWS internal spaces
+        // (sync folders are routinely named "My Drive"), stopping only at a real
+        // boundary captured in group 2 and restored verbatim:
+        //   ` ident=` → the next `tracing` field, so a sibling like `count=3`
+        //               survives instead of being swallowed into the path;
+        //   `:`       → a `…/foo.rs:42` line ref keeps its line number;
+        //   `"`/`'`   → the closing quote of a `{:?}`-formatted path;
+        //   `$`       → end of line.
+        // An earlier `[^\s:"']+` tail stopped at the FIRST space, leaking every
+        // folder name that followed one; the boundary capture is what closes
+        // that hole without eating trailing log context. The `regex` engine is
+        // linear-time, so the non-greedy quantifier carries no backtracking
+        // cost. Re-running maps `/Users/[REDACTED_PATH]<boundary>` to itself, so
+        // idempotence holds.
         (
-            Regex::new(r#"(/(?:Users|home)/)[^\s:"']+"#).expect("unix home-path regex"),
-            "${1}[REDACTED_PATH]",
+            Regex::new(r#"(/(?:Users|home)/)[^"'\n]*?( +[A-Za-z_][A-Za-z0-9_]*=|:|["']|$)"#).expect("unix home-path regex"),
+            "${1}[REDACTED_PATH]${2}",
         ),
-        // Windows equivalent (`C:\Users\name\…`). Case-insensitive drive letter.
+        // Windows equivalent (`C:\Users\name\…`), same boundary handling.
         (
-            Regex::new(r#"(?i)([A-Za-z]:\\Users\\)[^\s:"']+"#).expect("windows home-path regex"),
-            "${1}[REDACTED_PATH]",
+            Regex::new(r#"(?i)([A-Za-z]:\\Users\\)[^"'\n]*?( +[A-Za-z_][A-Za-z0-9_]*=|:|["']|$)"#).expect("windows home-path regex"),
+            "${1}[REDACTED_PATH]${2}",
         ),
         // File/folder name as the leaf of a non-home path token (e.g. a temp dir
         // upload `/tmp/report.pdf`). Keeps the separator, drops the name. Bounded
@@ -420,6 +430,48 @@ mod tests {
         let out = redact_log_line(line);
         assert!(!out.contains("alice"), "username leaked: {out}");
         assert!(out.contains(":128"), "line number should survive: {out}");
+    }
+
+    #[test]
+    fn redacts_home_folder_names_containing_spaces() {
+        // The leak the boundary capture fixes: a tail char class that stopped at
+        // the first space left every later folder name exposed. Unquoted, EOL.
+        let line = "INFO sync folder added path=/Users/bob/My Secret Project/notes";
+        let out = redact_log_line(line);
+        assert!(!out.contains("bob"), "username leaked: {out}");
+        assert!(!out.contains("Secret"), "folder name leaked: {out}");
+        assert!(!out.contains("notes"), "leaf folder leaked: {out}");
+        assert!(out.contains("/Users/[REDACTED_PATH]"), "got: {out}");
+    }
+
+    #[test]
+    fn home_path_preserves_following_tracing_field() {
+        // The ` ident=` boundary keeps a sibling structured field rather than
+        // swallowing it into the path — the cost of allowing spaces in the tail.
+        let line = "INFO done path=/Users/bob/My Drive/x count=3 ok=true";
+        let out = redact_log_line(line);
+        assert!(!out.contains("bob") && !out.contains("Drive"), "path leaked: {out}");
+        assert!(out.contains("count=3"), "sibling field swallowed: {out}");
+        assert!(out.contains("ok=true"), "sibling field swallowed: {out}");
+    }
+
+    #[test]
+    fn redacts_quoted_home_path_with_spaces() {
+        // `{:?}` formatting wraps the path in quotes; the closing quote bounds
+        // the redaction losslessly even with spaces inside.
+        let line = r#"DEBUG opening "/Users/bob/My Secret/plan.pdf" now"#;
+        let out = redact_log_line(line);
+        assert!(!out.contains("bob") && !out.contains("Secret") && !out.contains("plan.pdf"), "leak: {out}");
+        assert!(out.contains(r#""/Users/[REDACTED_PATH]""#), "got: {out}");
+        assert!(out.contains("now"), "trailing context after the quote should survive: {out}");
+    }
+
+    #[test]
+    fn redacts_windows_home_path_with_spaces() {
+        let line = r"ERROR open C:\Users\Bob\My Documents\budget.xlsx failed";
+        let out = redact_log_line(line);
+        assert!(!out.contains("Bob") && !out.contains("Documents") && !out.contains("budget"), "leak: {out}");
+        assert!(out.contains(r"C:\Users\[REDACTED_PATH]"), "got: {out}");
     }
 
     #[test]
