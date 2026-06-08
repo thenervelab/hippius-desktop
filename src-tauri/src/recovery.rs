@@ -213,7 +213,11 @@ pub(crate) async fn check_recovery_state_inner(state: &tauri::State<'_, crate::a
     debug!(account = %short, "recovery: checking recovery state (probing server for sealed mnemonic blob)");
 
     let local = has_local_mnemonic(&account_id);
-    let can_decrypt = if local { can_decrypt_local_mnemonic(state, &account_id, pool).await } else { true };
+    let can_decrypt = if local {
+        can_decrypt_local_mnemonic(state, &account_id, pool).await
+    } else {
+        true
+    };
     let (has_server_blob, updated_at) = probe_server_blob(state).await;
 
     // Decision table (extended to distinguish "local file exists" from
@@ -512,12 +516,10 @@ async fn validate_master_against_existing_folders(pool: &SqlitePool, account_id:
     //   (b) plaintext (version 0)     → compare folders against it
     //   (c) encrypted (version 1)     → the candidate master MUST decrypt it;
     //                                   if it can't, it's the wrong master → refuse
-    let row: Option<(String, i32)> = sqlx::query_as(
-        "SELECT drive_password, COALESCE(encryption_version, 0) FROM hcfs_config WHERE owner = ?",
-    )
-    .bind(&owner)
-    .fetch_optional(pool)
-    .await?;
+    let row: Option<(String, i32)> = sqlx::query_as("SELECT drive_password, COALESCE(encryption_version, 0) FROM hcfs_config WHERE owner = ?")
+        .bind(&owner)
+        .fetch_optional(pool)
+        .await?;
     let drive_password = match row {
         None => return Ok(()),
         Some((pw, _)) if pw.is_empty() => return Ok(()),
@@ -550,7 +552,8 @@ async fn validate_master_against_existing_folders(pool: &SqlitePool, account_id:
         let folder_enc_k = folder_enc.clone();
         let drive_password_k = drive_password.clone();
         let recovered = run_kdf(move || {
-            hcfs_client::auth::recover_mnemonic(&folder_enc_k, &drive_password_k).map_err(|e| AppError::Other(format!("recover folder mnemonic: {e}")))
+            hcfs_client::auth::recover_mnemonic(&folder_enc_k, &drive_password_k)
+                .map_err(|e| AppError::Other(format!("recover folder mnemonic: {e}")))
         })
         .await;
         let stored = match recovered {
@@ -1054,13 +1057,11 @@ mod tests {
     async fn drive_password_is_plaintext_true_when_enc_ver_zero() {
         let pool = setup_pool().await;
         let owner = account_key("5PlaintextAccount");
-        sqlx::query(
-            "INSERT INTO hcfs_config (owner, server_url, drive_password, encryption_version) VALUES (?, 'https://x', 'plaintext-pw', 0)",
-        )
-        .bind(&owner)
-        .execute(&pool)
-        .await
-        .unwrap();
+        sqlx::query("INSERT INTO hcfs_config (owner, server_url, drive_password, encryption_version) VALUES (?, 'https://x', 'plaintext-pw', 0)")
+            .bind(&owner)
+            .execute(&pool)
+            .await
+            .unwrap();
         assert!(super::drive_password_is_plaintext(&pool, "5PlaintextAccount").await);
     }
 
@@ -1071,13 +1072,11 @@ mod tests {
         // This is what routes OAuth returning users to Unlock instead of Proceed.
         let pool = setup_pool().await;
         let owner = account_key("5EncryptedAccount");
-        sqlx::query(
-            "INSERT INTO hcfs_config (owner, server_url, drive_password, encryption_version) VALUES (?, 'https://x', 'ciphertext', 1)",
-        )
-        .bind(&owner)
-        .execute(&pool)
-        .await
-        .unwrap();
+        sqlx::query("INSERT INTO hcfs_config (owner, server_url, drive_password, encryption_version) VALUES (?, 'https://x', 'ciphertext', 1)")
+            .bind(&owner)
+            .execute(&pool)
+            .await
+            .unwrap();
         assert!(!super::drive_password_is_plaintext(&pool, "5EncryptedAccount").await);
     }
 
@@ -1346,7 +1345,11 @@ mod tests {
         let alpha_dir = crate::sync::mnemonic::config_dir_for_folder(account, "alpha").unwrap();
         let alpha_fm = hcfs_client::drive::keys::derive_folder_mnemonic(&master, "alpha").unwrap();
         let check = hcfs_client::auth::recover_mnemonic(&alpha_dir.join("enc_mnemonic.json"), "new canonical password").unwrap();
-        assert_eq!(check.to_string(), alpha_fm, "the good folder is still rewritten despite the bad one failing");
+        assert_eq!(
+            check.to_string(),
+            alpha_fm,
+            "the good folder is still rewritten despite the bad one failing"
+        );
     }
 
     #[tokio::test]
@@ -1381,7 +1384,11 @@ mod tests {
     /// tests, with `HOME` pointed at a tempdir (caller holds HOME_LOCK).
     async fn setup_validation_pool() -> sqlx::SqlitePool {
         use sqlx::sqlite::SqlitePoolOptions;
-        let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.expect("in-memory pool");
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory pool");
         sqlx::query(
             "CREATE TABLE hcfs_config (owner TEXT PRIMARY KEY, server_url TEXT NOT NULL DEFAULT '', drive_password TEXT NOT NULL DEFAULT '', encryption_version INTEGER NOT NULL DEFAULT 0, updated_at TIMESTAMP)",
         )
@@ -1495,7 +1502,9 @@ mod tests {
         let anchor = "server rotated but local rewrite failed";
         let at = SRC.find(anchor).expect("install-failure arm warn present");
         let after = &SRC[at..];
-        let next_return_err = after.find("return Err").expect("double failure must return Err, not fall through to Ok(())");
+        let next_return_err = after
+            .find("return Err")
+            .expect("double failure must return Err, not fall through to Ok(())");
         // The `return Err` (sidecar-failure bail-out) must come before the
         // arm's closing `Ok(())`, i.e. it surfaces instead of reporting success.
         let next_ok = after.find("Ok(())").unwrap_or(usize::MAX);
@@ -1514,9 +1523,7 @@ mod tests {
     async fn seeded_row_is_accepted_by_base_url_resolver() {
         let pool = crate::console_access::tests_support_make_hcfs_config_pool().await;
         let account = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
-        seed_hcfs_server_url_if_missing(&pool, account)
-            .await
-            .expect("seed must succeed");
+        seed_hcfs_server_url_if_missing(&pool, account).await.expect("seed must succeed");
         let url = crate::console_access::resolve_hcfs_base_url_for_test(&pool, account)
             .await
             .expect("seeded empty row must resolve to the sentinel, not error");

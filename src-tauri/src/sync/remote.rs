@@ -235,10 +235,7 @@ pub async fn cache_remote_file(
     // by the path hash. Both values are hex/base-N, so filename-safe. Keep the
     // original extension so the webview infers the right MIME type.
     let key = if arion_hash.is_empty() { &file_id } else { &arion_hash };
-    let ext = std::path::Path::new(&file_name)
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("");
+    let ext = std::path::Path::new(&file_name).extension().and_then(|e| e.to_str()).unwrap_or("");
     let cache_name = if ext.is_empty() { key.clone() } else { format!("{key}.{ext}") };
     let target = cache_root.join(&cache_name);
 
@@ -278,9 +275,9 @@ pub async fn cache_remote_file(
         return Err(AppError::Hcfs(e.to_string()));
     }
 
-    tokio::fs::rename(&part, &target).await.map_err(|e| {
-        AppError::Other(format!("failed to promote preview cache {} -> {}: {e}", part.display(), target.display()))
-    })?;
+    tokio::fs::rename(&part, &target)
+        .await
+        .map_err(|e| AppError::Other(format!("failed to promote preview cache {} -> {}: {e}", part.display(), target.display())))?;
 
     info!(file_id = %file_id, "Remote file cached for preview");
     target

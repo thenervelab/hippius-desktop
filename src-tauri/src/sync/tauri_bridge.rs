@@ -89,9 +89,7 @@ impl TauriSyncBridge {
 /// no account / DB pool is available (logged out, pool not yet ready) — in which
 /// case persistence is simply skipped. `owner` is the hashed account key, the
 /// same scoping `sync_paths` uses, so failure rows stay private to the account.
-fn failure_persist_ctx(
-    app_state: &crate::app_state::AppState,
-) -> Option<(sqlx::SqlitePool, String)> {
+fn failure_persist_ctx(app_state: &crate::app_state::AppState) -> Option<(sqlx::SqlitePool, String)> {
     let account_id = app_state.current_account_id().ok()?;
     let owner = crate::auth::account_key::account_key(&account_id);
     let pool = app_state.pool().ok()?.clone();
@@ -232,8 +230,7 @@ pub(crate) fn handle_sync_completed(app: &AppHandle, mut payload: events::SyncCo
     // cycle starts. Capped by MAX_NOTIFICATION_FILES and again by the reported
     // completion counts so a multi-cycle residue of stale Completed files can't
     // over-report.
-    let reported_count =
-        payload.files_uploaded + payload.files_downloaded + payload.files_deleted_locally + payload.files_deleted_remotely;
+    let reported_count = payload.files_uploaded + payload.files_downloaded + payload.files_deleted_locally + payload.files_deleted_remotely;
     let max_files = reported_count.min(crate::sync::progress::MAX_NOTIFICATION_FILES);
     payload.files = crate::sync::progress::collect_cycle_files_for_label(&app_state.sync, &payload.label, max_files);
 
@@ -600,15 +597,11 @@ impl SyncEventHandler for TauriSyncBridge {
                     if let Some((pool, owner)) = failure_persist_ctx(&app_state) {
                         let label = label.clone();
                         let path = path.clone();
-                        let file_name =
-                            path.rsplit('/').next().unwrap_or(path.as_str()).to_string();
+                        let file_name = path.rsplit('/').next().unwrap_or(path.as_str()).to_string();
                         let kind_for_db = kind_payload.clone();
                         let now_ms = chrono::Utc::now().timestamp_millis();
                         tauri::async_runtime::spawn(async move {
-                            if let Err(e) = super::failure_repo::upsert_failure(
-                                &pool, &owner, &label, &path, &file_name, &kind_for_db, now_ms,
-                            )
-                            .await
+                            if let Err(e) = super::failure_repo::upsert_failure(&pool, &owner, &label, &path, &file_name, &kind_for_db, now_ms).await
                             {
                                 tracing::warn!("[failure_repo] persist failed for {label}/{path}: {e}");
                             }
@@ -1140,15 +1133,9 @@ mod tests {
             completed_bytes: Some(500),
             active: Some(true),
         };
-        assert_ne!(
-            snapshot_fingerprint(&a, empty),
-            snapshot_fingerprint(&a, with_totals),
-        );
+        assert_ne!(snapshot_fingerprint(&a, empty), snapshot_fingerprint(&a, with_totals),);
         // Sanity: identical overlays produce identical fingerprints.
-        assert_eq!(
-            snapshot_fingerprint(&a, with_totals),
-            snapshot_fingerprint(&a, with_totals),
-        );
+        assert_eq!(snapshot_fingerprint(&a, with_totals), snapshot_fingerprint(&a, with_totals),);
     }
 
     /// Wire-format contract: serializing `SyncSnapshotWire` must

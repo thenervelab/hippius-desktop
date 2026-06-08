@@ -27,7 +27,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// Sliding-window size for counting failures.
-pub const WINDOW: Duration = Duration::from_secs(60);
+pub const WINDOW: Duration = Duration::from_mins(1);
 /// Soft threshold: first lockout tier.
 pub const FAIL_THRESHOLD_SOFT: u32 = 5;
 /// Hard threshold: longer lockout.
@@ -36,7 +36,7 @@ pub const FAIL_THRESHOLD_HARD: u32 = 10;
 pub const LOCKOUT_SOFT: Duration = Duration::from_secs(30);
 /// Second-tier lockout duration. Long enough that an attacker
 /// scripting attempts isn't burning meaningful guesses per minute.
-pub const LOCKOUT_HARD: Duration = Duration::from_secs(5 * 60);
+pub const LOCKOUT_HARD: Duration = Duration::from_mins(5);
 
 #[derive(Debug, Clone, Copy)]
 pub enum RateLimitError {
@@ -52,7 +52,7 @@ impl RateLimitError {
             RateLimitError::Locked { retry_after } => {
                 let secs = retry_after.as_secs().max(1);
                 if secs >= 60 {
-                    let mins = (secs + 59) / 60;
+                    let mins = secs.div_ceil(60);
                     format!("Too many failed attempts. Try again in {mins} minute(s).")
                 } else {
                     format!("Too many failed attempts. Try again in {secs} second(s).")
@@ -63,6 +63,7 @@ impl RateLimitError {
 }
 
 #[derive(Debug)]
+#[derive(Default)]
 struct State {
     /// First failure timestamp in the current window. `None` between
     /// windows / immediately after a successful unlock.
@@ -86,16 +87,6 @@ struct State {
     locked_until: Option<Instant>,
 }
 
-impl Default for State {
-    fn default() -> Self {
-        State {
-            window_started_at: None,
-            failures_in_window: 0,
-            in_flight: 0,
-            locked_until: None,
-        }
-    }
-}
 
 /// Process-wide per-wallet rate-limit state. Lives behind a `Mutex` —
 /// contention is negligible: each call holds the lock for a few
@@ -155,9 +146,7 @@ impl RateLimitState {
         let now = Instant::now();
         if let Some(until) = entry.locked_until {
             if now < until {
-                return Err(RateLimitError::Locked {
-                    retry_after: until - now,
-                });
+                return Err(RateLimitError::Locked { retry_after: until - now });
             }
             // Lockout has elapsed — reset the counter so the user gets a fresh
             // window starting now. Also clear any in_flight that a non-pairing

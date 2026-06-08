@@ -500,11 +500,7 @@ mod tests {
 
         assert_eq!(out.len(), 2);
         for entry in &out {
-            assert!(
-                is_nfc(&entry.relative_path),
-                "entry relative_path not NFC: {:?}",
-                entry.relative_path
-            );
+            assert!(is_nfc(&entry.relative_path), "entry relative_path not NFC: {:?}", entry.relative_path);
         }
 
         // Tight assertion on the exact NFC output so a regression where the

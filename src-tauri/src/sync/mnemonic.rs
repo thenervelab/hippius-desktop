@@ -454,93 +454,90 @@ pub(crate) async fn reencrypt_all_folder_mnemonics(
     let master_mnemonic = std::sync::Arc::new(zeroize::Zeroizing::new(master_mnemonic.to_string()));
     let new_password = std::sync::Arc::new(zeroize::Zeroizing::new(new_password.to_string()));
 
-    let futures = labels
-        .iter()
-        .filter(|l| l.as_str() != "migration")
-        .map(|label| {
-            let label = label.clone();
-            let account_id = account_id.to_string();
-            let master_mnemonic = std::sync::Arc::clone(&master_mnemonic);
-            let new_password = std::sync::Arc::clone(&new_password);
-            async move {
-                let folder_dir = match config_dir_for_folder(&account_id, &label) {
-                    Ok(dir) => dir,
-                    Err(e) => {
-                        tracing::warn!(
-                            label = %label,
-                            error = %e,
-                            "reencrypt_all_folder_mnemonics: failed to compute folder dir"
-                        );
-                        return Err(label.clone());
-                    }
-                };
-                let folder_enc = folder_dir.join("enc_mnemonic.json");
-
-                // Re-derive deterministically from the master. Folder files
-                // that don't exist yet on disk are created here under the
-                // new password.
-                let folder_mnemonic_owned = match hcfs_client::drive::keys::derive_folder_mnemonic(master_mnemonic.as_str(), &label) {
-                    Ok(s) => zeroize::Zeroizing::new(s),
-                    Err(e) => {
-                        tracing::warn!(
-                            label = %label,
-                            error = %e,
-                            "reencrypt_all_folder_mnemonics: failed to derive folder mnemonic"
-                        );
-                        return Err(label.clone());
-                    }
-                };
-
-                if let Some(parent) = folder_enc.parent()
-                    && let Err(e) = tokio::fs::create_dir_all(parent).await
-                {
+    let futures = labels.iter().filter(|l| l.as_str() != "migration").map(|label| {
+        let label = label.clone();
+        let account_id = account_id.to_string();
+        let master_mnemonic = std::sync::Arc::clone(&master_mnemonic);
+        let new_password = std::sync::Arc::clone(&new_password);
+        async move {
+            let folder_dir = match config_dir_for_folder(&account_id, &label) {
+                Ok(dir) => dir,
+                Err(e) => {
                     tracing::warn!(
                         label = %label,
                         error = %e,
-                        "reencrypt_all_folder_mnemonics: failed to create folder dir"
+                        "reencrypt_all_folder_mnemonics: failed to compute folder dir"
                     );
                     return Err(label.clone());
                 }
+            };
+            let folder_enc = folder_dir.join("enc_mnemonic.json");
 
-                // save_encrypted_mnemonic is sync + blocking; wrap in
-                // spawn_blocking to match install_recovered_mnemonic.
-                // Owned copy of the password for the 'static spawn_blocking
-                // closure, kept in a Zeroizing wrapper so it scrubs on drop.
-                let password_owned: zeroize::Zeroizing<String> = zeroize::Zeroizing::new(new_password.as_str().to_owned());
-                let label_for_task = label.clone();
-                let result = tokio::task::spawn_blocking(move || {
-                    hcfs_client::auth::save_encrypted_mnemonic(&folder_enc, &folder_mnemonic_owned, &password_owned).map_err(|e| e.to_string())
-                })
-                .await;
+            // Re-derive deterministically from the master. Folder files
+            // that don't exist yet on disk are created here under the
+            // new password.
+            let folder_mnemonic_owned = match hcfs_client::drive::keys::derive_folder_mnemonic(master_mnemonic.as_str(), &label) {
+                Ok(s) => zeroize::Zeroizing::new(s),
+                Err(e) => {
+                    tracing::warn!(
+                        label = %label,
+                        error = %e,
+                        "reencrypt_all_folder_mnemonics: failed to derive folder mnemonic"
+                    );
+                    return Err(label.clone());
+                }
+            };
 
-                match result {
-                    Ok(Ok(())) => Ok(()),
-                    Ok(Err(e)) => {
-                        tracing::warn!(
-                            label = %label_for_task,
-                            error = %e,
-                            "reencrypt_all_folder_mnemonics: failed to save folder mnemonic"
-                        );
-                        Err(label_for_task.clone())
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            label = %label_for_task,
-                            error = %e,
-                            "reencrypt_all_folder_mnemonics: spawn_blocking join error"
-                        );
-                        Err(label_for_task.clone())
-                    }
+            if let Some(parent) = folder_enc.parent()
+                && let Err(e) = tokio::fs::create_dir_all(parent).await
+            {
+                tracing::warn!(
+                    label = %label,
+                    error = %e,
+                    "reencrypt_all_folder_mnemonics: failed to create folder dir"
+                );
+                return Err(label.clone());
+            }
+
+            // save_encrypted_mnemonic is sync + blocking; wrap in
+            // spawn_blocking to match install_recovered_mnemonic.
+            // Owned copy of the password for the 'static spawn_blocking
+            // closure, kept in a Zeroizing wrapper so it scrubs on drop.
+            let password_owned: zeroize::Zeroizing<String> = zeroize::Zeroizing::new(new_password.as_str().to_owned());
+            let label_for_task = label.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                hcfs_client::auth::save_encrypted_mnemonic(&folder_enc, &folder_mnemonic_owned, &password_owned).map_err(|e| e.to_string())
+            })
+            .await;
+
+            match result {
+                Ok(Ok(())) => Ok(()),
+                Ok(Err(e)) => {
+                    tracing::warn!(
+                        label = %label_for_task,
+                        error = %e,
+                        "reencrypt_all_folder_mnemonics: failed to save folder mnemonic"
+                    );
+                    Err(label_for_task.clone())
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        label = %label_for_task,
+                        error = %e,
+                        "reencrypt_all_folder_mnemonics: spawn_blocking join error"
+                    );
+                    Err(label_for_task.clone())
                 }
             }
-        });
+        }
+    });
 
     // Collect per-folder outcomes. Healthy folders are rewritten regardless of
     // a sibling's failure (so a retry only re-touches the broken ones), but any
     // failure surfaces as an aggregate `Err` so the caller does not commit a
     // new drive password over a folder still under the old one.
     let results = futures_util::future::join_all(futures).await;
-    let failed: Vec<String> = results.into_iter().filter_map(|r| r.err()).collect();
+    let failed: Vec<String> = results.into_iter().filter_map(std::result::Result::err).collect();
     if !failed.is_empty() {
         return Err(crate::error::AppError::Other(format!(
             "failed to re-encrypt folder mnemonics for: {}",
@@ -870,7 +867,10 @@ mod tests {
             .await
             .unwrap_err();
         let msg = format!("{err}");
-        assert!(msg.contains("alpha") && msg.contains("beta"), "error must name every failed folder, got: {msg}");
+        assert!(
+            msg.contains("alpha") && msg.contains("beta"),
+            "error must name every failed folder, got: {msg}"
+        );
 
         for label in ["alpha", "beta"] {
             let enc = config_dir_for_folder(account, label).unwrap().join("enc_mnemonic.json");

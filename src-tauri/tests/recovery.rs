@@ -25,10 +25,7 @@ fn seal_then_open_recovers_mnemonic() {
 fn wrong_password_returns_aead_tag() {
     let sealed = seal_mnemonic(SAMPLE_MNEMONIC, "correct horse battery staple", SAMPLE_SS58).expect("seal should succeed");
     let err = open_mnemonic(&sealed, "wrong password", SAMPLE_SS58).expect_err("open must fail with wrong password");
-    assert!(
-        matches!(err, MnemonicBlobError::AeadTag),
-        "expected AeadTag, got {err:?}"
-    );
+    assert!(matches!(err, MnemonicBlobError::AeadTag), "expected AeadTag, got {err:?}");
 }
 
 #[test]
@@ -41,10 +38,7 @@ fn wrong_ss58_returns_aead_tag() {
     let sealed = seal_mnemonic(SAMPLE_MNEMONIC, "correct horse battery staple", SAMPLE_SS58).expect("seal should succeed");
     let other_ss58 = "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty";
     let err = open_mnemonic(&sealed, "correct horse battery staple", other_ss58).expect_err("open must fail with wrong SS58");
-    assert!(
-        matches!(err, MnemonicBlobError::AeadTag),
-        "expected AeadTag, got {err:?}"
-    );
+    assert!(matches!(err, MnemonicBlobError::AeadTag), "expected AeadTag, got {err:?}");
 }
 
 #[test]

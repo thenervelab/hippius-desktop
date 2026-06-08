@@ -564,11 +564,12 @@ pub async fn delete_files(
     let pool = state.pool()?;
     // Resolve every drive's label→path ONCE (a single query) instead of one
     // (often two, via the default fallback) SELECT per file in the batch.
-    let label_to_path: std::collections::HashMap<String, String> = crate::sync::folders::get_all_sync_paths_or_warn(pool, &account_id, "delete_files")
-        .await
-        .into_iter()
-        .map(|sp| (sp.label, sp.path))
-        .collect();
+    let label_to_path: std::collections::HashMap<String, String> =
+        crate::sync::folders::get_all_sync_paths_or_warn(pool, &account_id, "delete_files")
+            .await
+            .into_iter()
+            .map(|sp| (sp.label, sp.path))
+            .collect();
     let default_path = label_to_path.get("default").cloned();
 
     let mut deleted = 0u32;
@@ -578,11 +579,7 @@ pub async fn delete_files(
         let effective_label = file.label.as_deref().unwrap_or("default");
         // Prefer the file's own drive path; fall back to the "default" drive's
         // path (mirrors the prior per-file default fallback); else empty.
-        let sync_path = label_to_path
-            .get(effective_label)
-            .or(default_path.as_ref())
-            .cloned()
-            .unwrap_or_default();
+        let sync_path = label_to_path.get(effective_label).or(default_path.as_ref()).cloned().unwrap_or_default();
 
         let relative_name = derive_relative_name(&sync_path, file.source.as_deref(), &file.name);
 
@@ -593,7 +590,7 @@ pub async fn delete_files(
                 let size_bytes = if target.is_dir() {
                     0
                 } else {
-                    tokio::fs::metadata(&target).await.map(|m| m.len()).unwrap_or(0)
+                    tokio::fs::metadata(&target).await.map_or(0, |m| m.len())
                 };
 
                 let remove_result = if target.is_dir() {
@@ -867,9 +864,7 @@ use hcfs_client::engine::types::{SyncedFileInfo, build_synced_paths_from_state};
 /// timestamps on cold start. See
 /// [`synced_paths_and_excludes_for_label`] for the full rationale.
 async fn synced_paths_for_label(sync: &SyncRunner, label: &str) -> Option<HashMap<String, SyncedFileInfo>> {
-    let _ = sync
-        .wait_for_first_reconcile(label, FIRST_RECONCILE_WAIT_BUDGET)
-        .await;
+    let _ = sync.wait_for_first_reconcile(label, FIRST_RECONCILE_WAIT_BUDGET).await;
     let arc = match acquire_drive_arc(sync, label) {
         DriveArcOutcome::Acquired(arc) => arc,
         DriveArcOutcome::CacheFallback => return sync.get_cached_synced_paths(label),
@@ -914,9 +909,7 @@ async fn synced_paths_and_excludes_for_label(sync: &SyncRunner, label: &str) -> 
     // `Timeout` / `NotRegistered` falls through to whatever stale
     // state we have, matching the existing graceful-degradation
     // contract.
-    let _ = sync
-        .wait_for_first_reconcile(label, FIRST_RECONCILE_WAIT_BUDGET)
-        .await;
+    let _ = sync.wait_for_first_reconcile(label, FIRST_RECONCILE_WAIT_BUDGET).await;
 
     let arc = match acquire_drive_arc(sync, label) {
         DriveArcOutcome::Acquired(arc) => arc,
@@ -1124,10 +1117,7 @@ pub async fn get_recent_files(
 
     // 4. Look up synced metadata for ONLY the surviving keys. Allocation scales
     //    with the activity window, not the total number of synced files.
-    let wanted: std::collections::HashSet<String> = non_deleted
-        .iter()
-        .map(|item| format!("{}::{}", item.file_name, item.label))
-        .collect();
+    let wanted: std::collections::HashSet<String> = non_deleted.iter().map(|item| format!("{}::{}", item.file_name, item.label)).collect();
     let label_maps = collect_label_maps(&state.sync).await;
     let mut meta_map = bundles_for_wanted_keys(label_maps, &wanted);
 
@@ -1196,7 +1186,7 @@ pub async fn get_recent_files(
     }
 
     // 6. Sort by timestamp (newest first)
-    result.sort_by(|a, b| b.last_charged_at.cmp(&a.last_charged_at));
+    result.sort_by_key(|b| std::cmp::Reverse(b.last_charged_at));
 
     Ok(result)
 }
@@ -1313,7 +1303,6 @@ pub async fn list_sync_folder(
     list_sync_folder_inner(&state, sync_path, subfolder, label).await
 }
 
-#[expect(clippy::too_many_lines, reason = "1 line over; extracting hurts readability")]
 async fn list_sync_folder_inner(
     state: &crate::app_state::AppState,
     sync_path: String,
@@ -1561,13 +1550,12 @@ fn macos_name_cmp(a: &str, b: &str) -> std::cmp::Ordering {
                         std::cmp::Ordering::Equal => continue,
                         ord => return ord,
                     }
-                } else {
-                    ai.next();
-                    bi.next();
-                    match ac.cmp(&bc) {
-                        std::cmp::Ordering::Equal => continue,
-                        ord => return ord,
-                    }
+                }
+                ai.next();
+                bi.next();
+                match ac.cmp(&bc) {
+                    std::cmp::Ordering::Equal => {}
+                    ord => return ord,
                 }
             }
         }
@@ -1729,7 +1717,7 @@ pub struct DateRangeFilter {
 pub struct FileFilterCriteria {
     pub search_term: Option<String>,
     pub file_types: Option<Vec<String>>,
-    /// Explicit file extensions to match (e.g. ["mp4", "jpg"]). Independent
+    /// Explicit file extensions to match (e.g. `["mp4", "jpg"]`). Independent
     /// from `file_types` (coarse categories) — present so the web-console
     /// style "specific extension" dropdown can request exact matches without
     /// re-encoding into category groups. Matched case-insensitively against
@@ -1756,10 +1744,7 @@ impl FileFilterCriteria {
     pub fn is_empty(&self) -> bool {
         self.search_term.as_deref().is_none_or(str::is_empty)
             && self.file_types.as_ref().is_none_or(std::vec::Vec::is_empty)
-            && self
-                .file_extensions
-                .as_ref()
-                .is_none_or(std::vec::Vec::is_empty)
+            && self.file_extensions.as_ref().is_none_or(std::vec::Vec::is_empty)
             && self.date_filter.as_deref().is_none_or(str::is_empty)
             && self.date_range.is_none()
             && self.file_sizes.as_ref().is_none_or(std::vec::Vec::is_empty)
@@ -2014,7 +1999,7 @@ pub async fn get_user_files(
     }
 
     // Sort by timestamp (newest first)
-    all_files.sort_by(|a, b| b.last_charged_at.cmp(&a.last_charged_at));
+    all_files.sort_by_key(|b| std::cmp::Reverse(b.last_charged_at));
 
     // Convert the borrowed-key map to owned-key for the result. One
     // allocation per label instead of one per file (the previous
@@ -2078,16 +2063,7 @@ async fn walk_disk_files_recursive(
 
         if meta.is_dir() {
             // Recurse — folders themselves are never emitted.
-            Box::pin(walk_disk_files_recursive(
-                base,
-                &rel_path,
-                label,
-                folder_path,
-                synced,
-                excluded,
-                out,
-            ))
-            .await;
+            Box::pin(walk_disk_files_recursive(base, &rel_path, label, folder_path, synced, excluded, out)).await;
             continue;
         }
 
@@ -2096,9 +2072,7 @@ async fn walk_disk_files_recursive(
         if hcfs_client::engine::classify::is_failed_download_artifact(&name).is_some() {
             continue;
         }
-        if hcfs_client::engine::classify::is_encrypted_name_stub(&name).is_some()
-            && meta.len() == 0
-        {
+        if hcfs_client::engine::classify::is_encrypted_name_stub(&name).is_some() && meta.len() == 0 {
             continue;
         }
 
@@ -2129,13 +2103,8 @@ async fn walk_disk_files_recursive(
             .modified()
             .ok()
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| i64::try_from(d.as_millis()).unwrap_or(0))
-            .unwrap_or(0);
-        let created_at_ms = if uploaded_at_ms != 0 {
-            uploaded_at_ms
-        } else {
-            local_modified_ms
-        };
+            .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(0));
+        let created_at_ms = if uploaded_at_ms != 0 { uploaded_at_ms } else { local_modified_ms };
         let last_charged_at_ms = if updated_at_ms != 0 { updated_at_ms } else { uploaded_at_ms };
 
         let display_name = if hcfs_client::engine::classify::is_encrypted_name_stub(&name).is_some()
@@ -2232,16 +2201,7 @@ pub async fn search_user_files_recursive(
     let mut out: Vec<UserFileEntry> = Vec::new();
 
     // 1. On-disk walk — collects everything physically present locally.
-    walk_disk_files_recursive(
-        &base,
-        &rel_prefix,
-        &label,
-        &sp.path,
-        synced.as_ref(),
-        &excluded,
-        &mut out,
-    )
-    .await;
+    walk_disk_files_recursive(&base, &rel_prefix, &label, &sp.path, synced.as_ref(), &excluded, &mut out).await;
 
     // 2. Server-only overlay — files known on the server that haven't
     // downloaded to this device yet. We surface them as `sync_status =
@@ -2297,7 +2257,7 @@ pub async fn search_user_files_recursive(
 
     // Newest-first by upload/charge timestamp — mirrors `get_user_files`'s
     // default ordering so the UI sees the same shape across both paths.
-    out.sort_by(|a, b| b.last_charged_at.cmp(&a.last_charged_at));
+    out.sort_by_key(|b| std::cmp::Reverse(b.last_charged_at));
 
     Ok(out)
 }
@@ -2309,6 +2269,7 @@ pub async fn search_user_files_recursive(
 /// refetch). Owning the filter rules in a single function keeps the
 /// folder view and the files page from drifting — previously both
 /// reimplemented the logic in TypeScript.
+#[expect(clippy::too_many_lines, reason = "flat per-criterion filter cascade; splitting into helpers hurts readability")]
 fn apply_file_filters(files: &mut Vec<UserFileEntry>, f: &FileFilterCriteria) {
     let search_lower = f.search_term.as_ref().and_then(|s| {
         let low = s.to_lowercase();
@@ -2723,7 +2684,12 @@ mod tests {
         let mut corpus: HashMap<String, SyncedFileInfo> = HashMap::new();
         corpus.insert(
             "a.txt".to_string(),
-            SyncedFileInfo { path_hash: [1u8; 32], arion_cid: Arc::from("x"), uploaded_at: 0, updated_at: 0 },
+            SyncedFileInfo {
+                path_hash: [1u8; 32],
+                arion_cid: Arc::from("x"),
+                uploaded_at: 0,
+                updated_at: 0,
+            },
         );
         let out = bundles_for_wanted_keys(vec![("d".to_string(), corpus)], &HashSet::new());
         assert!(out.is_empty());
@@ -3262,9 +3228,7 @@ mod tests {
         });
 
         let start = Instant::now();
-        let outcome = sync
-            .wait_for_first_reconcile(label, Duration::from_millis(500))
-            .await;
+        let outcome = sync.wait_for_first_reconcile(label, Duration::from_millis(500)).await;
         let elapsed = start.elapsed();
 
         match outcome {
@@ -3309,9 +3273,7 @@ mod tests {
         ));
 
         let start = Instant::now();
-        let outcome = sync
-            .wait_for_first_reconcile("does-not-exist", Duration::from_secs(5))
-            .await;
+        let outcome = sync.wait_for_first_reconcile("does-not-exist", Duration::from_secs(5)).await;
         let elapsed = start.elapsed();
 
         assert!(matches!(outcome, WaitOutcome::NotRegistered), "got {outcome:?}");

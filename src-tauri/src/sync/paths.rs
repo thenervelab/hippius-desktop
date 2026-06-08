@@ -139,9 +139,7 @@ pub(crate) async fn set_sync_path_internal(pool: &SqlitePool, account_id: &str, 
     .await;
 
     let res = match res {
-        Ok(()) => {
-            sqlx::query("COMMIT").execute(&mut *conn).await.map(|_| ())
-        }
+        Ok(()) => sqlx::query("COMMIT").execute(&mut *conn).await.map(|_| ()),
         Err(e) => {
             // Best-effort rollback; surface the original error regardless.
             let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;

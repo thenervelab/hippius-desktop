@@ -21,7 +21,10 @@ pub struct SubscriptionData {
 
 /// Fetch subscription data in a single call: active subscription + plans + derived flags.
 #[tauri::command]
-pub async fn get_subscription_data(state: tauri::State<'_, crate::app_state::AppState>, account_id: crate::app_state::SessionAccount) -> Result<SubscriptionData, AppError> {
+pub async fn get_subscription_data(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: crate::app_state::SessionAccount,
+) -> Result<SubscriptionData, AppError> {
     let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
 
     // Parallel fetch

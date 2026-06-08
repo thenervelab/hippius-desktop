@@ -82,7 +82,6 @@ use crate::sync::files::{
     list_sync_folder, list_sync_folder_grouped, resolve_file_info, resolve_file_path, search_user_files_recursive,
 };
 use crate::sync::folders::{delete_remote_folder, get_sync_folders_with_stats, list_remote_folders, restore_remote_folders};
-use crate::sync::recent_uploads::{get_recent_uploads, search_files};
 use crate::sync::lifecycle::{
     add_local_sync_folder, auto_init_sync, change_sync_folder, initialize_sync, pause_drive, remove_drive, resume_drive, setup_and_init_sync,
     stop_sync,
@@ -90,9 +89,11 @@ use crate::sync::lifecycle::{
 use crate::sync::mnemonic::{ensure_sync_mnemonic, get_drive_mnemonic};
 use crate::sync::paths::{get_sync_path, remove_sync_path, set_sync_path};
 use crate::sync::progress::{sp_clear_all_data, sp_dismiss_sync_widget, sp_get_snapshot};
+use crate::sync::recent_uploads::{get_recent_uploads, search_files};
 use crate::sync::remote::{cache_remote_file, download_remote_file, list_remote_folder_files};
 use crate::sync::status::{app_close, get_all_drive_statuses, get_sync_activity_rows, get_sync_engine_health};
 use crate::tray::panel::{hide_tray_panel, toggle_tray_panel};
+use crate::utils::logs::attach_logs_to_ticket;
 use crate::utils::platform_info::get_platform_info;
 use crate::utils::preferences::{get_user_preference, is_onboarding_done, save_user_preference, set_onboarding_done};
 use crate::utils::support::{
@@ -100,12 +101,10 @@ use crate::utils::support::{
 };
 use crate::utils::tray_menu::get_tray_menu_data;
 use crate::wallet::commands::{
-    local_wallet_create, local_wallet_delete, local_wallet_derive_address, local_wallet_export_backup,
-    local_wallet_export_backup_zip, local_wallet_generate_mnemonic, local_wallet_get_active,
-    local_wallet_get_decrypted_mnemonic, local_wallet_get_public_key, local_wallet_has_any,
-    local_wallet_import_encrypted_backup, local_wallet_import_encrypted_backup_from_zip,
-    local_wallet_list, local_wallet_rename, local_wallet_set_active, local_wallet_sign,
-    local_wallet_validate_mnemonic, local_wallet_verify_password,
+    local_wallet_create, local_wallet_delete, local_wallet_derive_address, local_wallet_export_backup, local_wallet_export_backup_zip,
+    local_wallet_generate_mnemonic, local_wallet_get_active, local_wallet_get_decrypted_mnemonic, local_wallet_get_public_key, local_wallet_has_any,
+    local_wallet_import_encrypted_backup, local_wallet_import_encrypted_backup_from_zip, local_wallet_list, local_wallet_rename,
+    local_wallet_set_active, local_wallet_sign, local_wallet_validate_mnemonic, local_wallet_verify_password,
 };
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous};
 use tauri::{Builder, Emitter, Manager, Wry, path::BaseDirectory};
@@ -122,19 +121,71 @@ fn load_env() {
     let _ = dotenvy::from_filename(env_path);
 }
 
+/// Initializes tracing with a stdout layer plus a daily rolling-file layer
+/// under `$HOME/.hippius/logs/` (files named `hippius.YYYY-MM-DD.log`).
+///
+/// Returns `Some(WorkerGuard)` when the rolling-file writer is enabled, or
+/// `None` when file logging was skipped (see below). When present, the caller
+/// MUST hold the guard for the whole process lifetime: dropping it flushes the
+/// background writer thread and then stops it, so any log emitted afterwards
+/// is silently lost. Binding it to a `main`-scoped local is the crate's
+/// documented idiom and keeps it alive exactly as long as the app runs.
+///
+/// File logging is best-effort — if the home directory can't be resolved or
+/// the appender can't be created, the file layer is skipped and logging falls
+/// back to stdout-only rather than aborting startup. `Option<Layer>` is a
+/// no-op `Layer` when `None`, so the registry wiring is identical either way.
+///
+/// Retention: `max_log_files(7)` prunes on the rotation/write path, not at
+/// startup (tokio-rs/tracing#2937), so a long-idle install may briefly keep
+/// more than seven files until the next write. The log-bundling step caps the
+/// number and size of files it ships independently, so this is harmless here.
+///
+/// [`WorkerGuard`]: tracing_appender::non_blocking::WorkerGuard
+fn init_logging() -> Option<tracing_appender::non_blocking::WorkerGuard> {
+    use tracing_subscriber::{EnvFilter, fmt, prelude::*};
+
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn,hcfs_client=info,Hippius=info"));
+    let stdout_layer = fmt::layer().with_target(true).with_file(false).with_line_number(false);
+
+    let (file_layer, guard) = match dirs::home_dir() {
+        Some(home) => {
+            let log_dir = home.join(".hippius").join("logs");
+            match tracing_appender::rolling::RollingFileAppender::builder()
+                .rotation(tracing_appender::rolling::Rotation::DAILY)
+                .filename_prefix("hippius")
+                .filename_suffix("log")
+                .max_log_files(7)
+                .build(&log_dir)
+            {
+                Ok(appender) => {
+                    let (non_blocking, guard) = tracing_appender::non_blocking(appender);
+                    // `with_ansi(false)`: files are read as plain text (and shipped to
+                    // support), so colour escape codes would be noise.
+                    let layer = fmt::layer().with_ansi(false).with_target(true).with_writer(non_blocking);
+                    (Some(layer), Some(guard))
+                }
+                // Tracing isn't initialized yet and `print_stderr` is denied, so the
+                // setup error can't be surfaced here; degrade quietly to stdout-only.
+                Err(_) => (None, None),
+            }
+        }
+        None => (None, None),
+    };
+
+    tracing_subscriber::registry().with(filter).with(stdout_layer).with(file_layer).init();
+
+    guard
+}
+
 #[expect(clippy::too_many_lines, reason = "Tauri builder chain: handler registration must stay together")]
 fn main() {
     load_env();
 
-    // Initialize tracing subscriber to capture hcfs-client library logs.
-    // Filter to show WARN and ERROR from hcfs-client, INFO and above from our code.
-    // Set RUST_LOG env var to customize (e.g., RUST_LOG=hcfs_client=debug).
-    use tracing_subscriber::{EnvFilter, fmt, prelude::*};
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn,hcfs_client=info,Hippius=info"));
-    tracing_subscriber::registry()
-        .with(fmt::layer().with_target(true).with_file(false).with_line_number(false))
-        .with(filter)
-        .init();
+    // Initialize tracing (stdout + daily rolling file under ~/.hippius/logs/).
+    // The guard must outlive the app so the non-blocking file writer keeps
+    // flushing — see `init_logging`. Holding it in this `main` local does that.
+    let _log_guard = init_logging();
 
     info!("Application starting...");
     info!("Tracing subscriber initialized - hcfs-client logs now visible");
@@ -343,6 +394,7 @@ fn main() {
             create_support_ticket,
             update_support_ticket,
             upload_ticket_attachment,
+            attach_logs_to_ticket,
             post_ticket_message,
             // OAuth
             start_oauth_flow,
@@ -477,11 +529,10 @@ pub fn on_window_event(builder: Builder<Wry>) -> Builder<Wry> {
         // focus, hide it. Centralized here (rather than in the FE) so the
         // re-open cooldown timestamp is recorded against the same `AppState`
         // that `toggle_tray_panel` reads.
-        if let tauri::WindowEvent::Focused(false) = event {
-            if window.label() == crate::tray::panel::PANEL_LABEL {
+        if let tauri::WindowEvent::Focused(false) = event
+            && window.label() == crate::tray::panel::PANEL_LABEL {
                 crate::tray::panel::on_panel_blur(window.app_handle());
             }
-        }
 
         if let tauri::WindowEvent::CloseRequested { api, .. } = event {
             // Only intercept the main window. If a future refactor adds a

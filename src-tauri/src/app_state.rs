@@ -297,9 +297,7 @@ impl AppState {
     pub fn require_session_account(&self, account_id: &str) -> Result<String, crate::error::AppError> {
         let current = self.current_account_id()?;
         if current != account_id {
-            return Err(crate::error::AppError::Auth(
-                "Requested account is not the active session account".into(),
-            ));
+            return Err(crate::error::AppError::Auth("Requested account is not the active session account".into()));
         }
         Ok(current)
     }
@@ -392,7 +390,9 @@ impl<'de, R: tauri::Runtime> tauri::ipc::CommandArg<'de, R> for SessionAccount {
         // `command`, which the deserializer below consumes.
         let message = command.message;
         let state = message.state_ref().try_get::<AppState>().ok_or_else(|| {
-            tauri::ipc::InvokeError(serde_json::Value::String(format!("AppState is not managed (command `{name}`, arg `{key}`)")))
+            tauri::ipc::InvokeError(serde_json::Value::String(format!(
+                "AppState is not managed (command `{name}`, arg `{key}`)"
+            )))
         })?;
         let account_id = String::deserialize(command)
             .map_err(|e| tauri::ipc::InvokeError(serde_json::Value::String(format!("command `{name}` arg `{key}`: {e}"))))?;
@@ -442,6 +442,9 @@ mod tests {
         let state = AppState::new();
         state.set_active_account("addr-A", AuthCapabilities::Full).expect("set account");
         let err = state.require_session_account("addr-B").unwrap_err();
-        assert!(matches!(err, AppError::Auth(_)), "cross-account request must be an Auth error, got {err:?}");
+        assert!(
+            matches!(err, AppError::Auth(_)),
+            "cross-account request must be an Auth error, got {err:?}"
+        );
     }
 }

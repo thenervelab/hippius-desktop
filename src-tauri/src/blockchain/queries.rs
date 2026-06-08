@@ -13,7 +13,9 @@ pub async fn get_account_balance(
     address: String,
 ) -> Result<AccountBalance, crate::error::AppError> {
     let client = get_substrate_client(&state).await?;
-    let account_id: subxt::utils::AccountId32 = address.parse().map_err(|_| crate::error::AppError::Validation(format!("Invalid SS58 address: {address}")))?;
+    let account_id: subxt::utils::AccountId32 = address
+        .parse()
+        .map_err(|_| crate::error::AppError::Validation(format!("Invalid SS58 address: {address}")))?;
     let storage_query = custom_runtime::storage().system().account(&account_id);
     let account_info = client
         .storage()
@@ -52,7 +54,9 @@ pub async fn get_account_balance(
 /// inconsistent storage snapshot (locked sum momentarily exceeding free) yields
 /// 0 rather than underflowing.
 fn spendable_balance(free: u128, bonded: u128, unbonding_total: u128, withdrawable_total: u128) -> u128 {
-    free.saturating_sub(bonded).saturating_sub(unbonding_total).saturating_sub(withdrawable_total)
+    free.saturating_sub(bonded)
+        .saturating_sub(unbonding_total)
+        .saturating_sub(withdrawable_total)
 }
 
 /// Query staking state for the current authenticated user.
@@ -66,6 +70,7 @@ fn spendable_balance(free: u128, bonded: u128, unbonding_total: u128, withdrawab
 /// wallets in `/wallet`) pass the auth SS58 explicitly. Same data
 /// shape returned either way.
 #[tauri::command]
+#[expect(clippy::too_many_lines, reason = "snapshot-consistent staking read; sequential RPC steps read better inline")]
 pub async fn get_staking_info(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: Option<String>,
@@ -75,7 +80,9 @@ pub async fn get_staking_info(
         None => get_substrate_address(&state).await?,
     };
     let client = get_substrate_client(&state).await?;
-    let account_id: subxt::utils::AccountId32 = address.parse().map_err(|_| crate::error::AppError::Validation(format!("Invalid SS58 address: {address}")))?;
+    let account_id: subxt::utils::AccountId32 = address
+        .parse()
+        .map_err(|_| crate::error::AppError::Validation(format!("Invalid SS58 address: {address}")))?;
 
     // Single RPC call — all queries use the same block snapshot
     let storage = client
@@ -117,14 +124,8 @@ pub async fn get_staking_info(
     // `client.constants().at(&addr)` reads a runtime constant; both
     // queries return `Result` so we collapse to `Option<u64>` and skip
     // the rest of the era-progress math if either is missing.
-    let epoch_duration_blocks: Option<u64> = client
-        .constants()
-        .at(&custom_runtime::constants().babe().epoch_duration())
-        .ok();
-    let sessions_per_era: Option<u32> = client
-        .constants()
-        .at(&custom_runtime::constants().staking().sessions_per_era())
-        .ok();
+    let epoch_duration_blocks: Option<u64> = client.constants().at(&custom_runtime::constants().babe().epoch_duration()).ok();
+    let sessions_per_era: Option<u32> = client.constants().at(&custom_runtime::constants().staking().sessions_per_era()).ok();
     let era_length: Option<u64> = match (epoch_duration_blocks, sessions_per_era) {
         (Some(ed), Some(spe)) => Some(ed.saturating_mul(spe as u64)),
         _ => None,
@@ -132,9 +133,7 @@ pub async fn get_staking_info(
 
     let era_progress: Option<u64> = match (era_length, epoch_duration_blocks) {
         (Some(era_len), Some(epoch_duration)) if era_len > 0 && epoch_duration > 0 => {
-            let era_start_session_query = custom_runtime::storage()
-                .staking()
-                .eras_start_session_index(current_era);
+            let era_start_session_query = custom_runtime::storage().staking().eras_start_session_index(current_era);
             let era_start_session = storage.fetch(&era_start_session_query).await.ok().flatten();
 
             let current_session_query = custom_runtime::storage().session().current_index();
@@ -148,11 +147,8 @@ pub async fn get_staking_info(
             match (era_start_session, current_session, current_slot, genesis_slot) {
                 (Some(ess), Some(cs), Some(slot), Some(gen_slot)) => {
                     let sessions_into_era = (cs as u64).saturating_sub(ess as u64);
-                    let slot_in_epoch =
-                        (slot.0.saturating_sub(gen_slot.0)) % epoch_duration;
-                    let progress = sessions_into_era
-                        .saturating_mul(epoch_duration)
-                        .saturating_add(slot_in_epoch);
+                    let slot_in_epoch = (slot.0.saturating_sub(gen_slot.0)) % epoch_duration;
+                    let progress = sessions_into_era.saturating_mul(epoch_duration).saturating_add(slot_in_epoch);
                     Some(progress.min(era_len))
                 }
                 _ => None,
@@ -342,8 +338,7 @@ pub async fn get_referral_links(
     // body keeps redesign's strict decode path (`extract_referral_code_bytes`
     // + UTF-8 validation) rather than the audit branch's raw key slicing.
     while let Some(result) = entries.next().await {
-        let entry = result
-            .map_err(|e| crate::error::AppError::Substrate(format!("ReferralCodes iteration failed: {e}")))?;
+        let entry = result.map_err(|e| crate::error::AppError::Substrate(format!("ReferralCodes iteration failed: {e}")))?;
         if entry.value != target_account {
             continue;
         }
@@ -392,7 +387,7 @@ pub fn validate_address(address: String) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_referral_code_bytes, spendable_balance, REFERRAL_KEY_PREFIX_LEN};
+    use super::{REFERRAL_KEY_PREFIX_LEN, extract_referral_code_bytes, spendable_balance};
     use proptest::prelude::*;
 
     #[test]
@@ -445,8 +440,7 @@ mod tests {
         key_bytes.extend(std::iter::repeat(0xCC).take(16)); // blake2_128(key)
         key_bytes.extend_from_slice(code);
 
-        let recovered =
-            extract_referral_code_bytes(&key_bytes).expect("non-empty key");
+        let recovered = extract_referral_code_bytes(&key_bytes).expect("non-empty key");
         assert_eq!(recovered, code);
         assert_eq!(REFERRAL_KEY_PREFIX_LEN, 48);
     }

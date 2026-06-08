@@ -15,8 +15,8 @@
 use crate::error::Result;
 use crate::sync::events::FileFailureKindPayload;
 use serde::Serialize;
-use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
+use sqlx::sqlite::SqlitePool;
 
 /// A persisted failure row, shaped for the frontend.
 ///
@@ -147,20 +147,13 @@ pub async fn upsert_failure(
 ///
 /// # Errors
 /// Returns [`crate::error::AppError::Db`] if the database write fails.
-pub async fn clear_failure(
-    pool: &SqlitePool,
-    owner: &str,
-    label: &str,
-    relative_path: &str,
-) -> Result<()> {
-    sqlx::query(
-        "DELETE FROM sync_file_failures WHERE owner = ? AND label = ? AND relative_path = ?",
-    )
-    .bind(owner)
-    .bind(label)
-    .bind(relative_path)
-    .execute(pool)
-    .await?;
+pub async fn clear_failure(pool: &SqlitePool, owner: &str, label: &str, relative_path: &str) -> Result<()> {
+    sqlx::query("DELETE FROM sync_file_failures WHERE owner = ? AND label = ? AND relative_path = ?")
+        .bind(owner)
+        .bind(label)
+        .bind(relative_path)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -182,12 +175,7 @@ pub async fn clear_failures_for_label(pool: &SqlitePool, owner: &str, label: &st
 ///
 /// # Errors
 /// Returns [`crate::error::AppError::Db`] if the database read fails.
-pub async fn get_failure(
-    pool: &SqlitePool,
-    owner: &str,
-    label: &str,
-    relative_path: &str,
-) -> Result<Option<FileFailureRecord>> {
+pub async fn get_failure(pool: &SqlitePool, owner: &str, label: &str, relative_path: &str) -> Result<Option<FileFailureRecord>> {
     let row = sqlx::query(
         "SELECT label, relative_path, file_name, kind, message, http_status,
                 balance_cents, required_cents, failure_count, last_failed_at
@@ -207,11 +195,7 @@ pub async fn get_failure(
 ///
 /// # Errors
 /// Returns [`crate::error::AppError::Db`] if the database read fails.
-pub async fn list_failures_for_label(
-    pool: &SqlitePool,
-    owner: &str,
-    label: &str,
-) -> Result<Vec<FileFailureRecord>> {
+pub async fn list_failures_for_label(pool: &SqlitePool, owner: &str, label: &str) -> Result<Vec<FileFailureRecord>> {
     let rows = sqlx::query(
         "SELECT label, relative_path, file_name, kind, message, http_status,
                 balance_cents, required_cents, failure_count, last_failed_at
@@ -252,9 +236,7 @@ mod tests {
     /// independently covered by the schema smoke test; keeping this test's setup
     /// local means it doesn't depend on the full schema bring-up.
     async fn test_pool() -> SqlitePool {
-        let pool = SqlitePool::connect("sqlite::memory:")
-            .await
-            .expect("open in-memory sqlite");
+        let pool = SqlitePool::connect("sqlite::memory:").await.expect("open in-memory sqlite");
         sqlx::query(
             "CREATE TABLE sync_file_failures (
                 owner          TEXT    NOT NULL,
@@ -283,20 +265,13 @@ mod tests {
         let network = FileFailureKindPayload::Network;
         let server = FileFailureKindPayload::ServerError { status: 500 };
 
-        let c1 = upsert_failure(&pool, "o", "drive", "a/b.txt", "b.txt", &network, 100)
-            .await
-            .unwrap();
+        let c1 = upsert_failure(&pool, "o", "drive", "a/b.txt", "b.txt", &network, 100).await.unwrap();
         assert_eq!(c1, 1, "first failure starts the count at 1");
 
-        let c2 = upsert_failure(&pool, "o", "drive", "a/b.txt", "b.txt", &server, 200)
-            .await
-            .unwrap();
+        let c2 = upsert_failure(&pool, "o", "drive", "a/b.txt", "b.txt", &server, 200).await.unwrap();
         assert_eq!(c2, 2, "same file bumps rather than duplicating");
 
-        let rec = get_failure(&pool, "o", "drive", "a/b.txt")
-            .await
-            .unwrap()
-            .expect("row exists");
+        let rec = get_failure(&pool, "o", "drive", "a/b.txt").await.unwrap().expect("row exists");
         assert_eq!(rec.failure_count, 2);
         assert_eq!(rec.kind, "serverError", "latest kind wins");
         assert_eq!(rec.http_status, Some(500));

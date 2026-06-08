@@ -166,15 +166,16 @@ fn credits_raw_to_display(raw: &str) -> String {
         let frac_4 = frac / 100_000_000_000_000u128;
         format!("{whole}.{frac_4:04}")
     } else {
-        s.parse::<f64>()
-            .map(|v| format!("{:.4}", v / 1e18))
-            .unwrap_or_else(|_| "0.0000".to_string())
+        s.parse::<f64>().map_or_else(|_| "0.0000".to_string(), |v| format!("{:.4}", v / 1e18))
     }
 }
 
 /// Fetch the on-chain deposit address for adding credits via Substrate transfer.
 #[tauri::command]
-pub async fn get_deposit_address(state: tauri::State<'_, crate::app_state::AppState>, account_id: crate::app_state::SessionAccount) -> Result<serde_json::Value, AppError> {
+pub async fn get_deposit_address(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: crate::app_state::SessionAccount,
+) -> Result<serde_json::Value, AppError> {
     let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
     Ok(client.get::<serde_json::Value>("/api/billing/substrate-address/", &account_id).await?)
 }
@@ -205,15 +206,19 @@ pub async fn get_marketplace_credits(
         ("limit", limit_str.as_str()),
     ];
     let resp: MarketplaceCreditsApiResponse = indexer.get("/marketplace/credit", &params).await?;
-    let events = resp.events.into_iter().map(|e| MarketplaceCreditEventObject {
-        block_number: e.block_number.unwrap_or(0),
-        event_index: e.event_index.unwrap_or(0),
-        account_id: e.account_id.unwrap_or_default(),
-        event_name: e.event_name.unwrap_or_default(),
-        credits_amount: credits_raw_to_display(e.credits_amount.as_deref().unwrap_or("0")),
-        transaction_type: e.transaction_type,
-        processed_timestamp: e.processed_timestamp.unwrap_or_default(),
-    }).collect();
+    let events = resp
+        .events
+        .into_iter()
+        .map(|e| MarketplaceCreditEventObject {
+            block_number: e.block_number.unwrap_or(0),
+            event_index: e.event_index.unwrap_or(0),
+            account_id: e.account_id.unwrap_or_default(),
+            event_name: e.event_name.unwrap_or_default(),
+            credits_amount: credits_raw_to_display(e.credits_amount.as_deref().unwrap_or("0")),
+            transaction_type: e.transaction_type,
+            processed_timestamp: e.processed_timestamp.unwrap_or_default(),
+        })
+        .collect();
     Ok(MarketplaceCreditsResult { events })
 }
 
@@ -276,16 +281,16 @@ fn parse_indexer_u64(field: &str, raw: &str) -> u64 {
 /// is not valid JSON. An empty `data` array is *not* an error — it returns
 /// `{ totalBytes: 0, fileCount: 0 }`.
 #[tauri::command]
-pub async fn get_drive_storage_stats(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
-) -> Result<DriveStorageStats, AppError> {
+pub async fn get_drive_storage_stats(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<DriveStorageStats, AppError> {
     let indexer = IndexerClient::from_env(state.api_client.clone())?;
     let params = [("account_id", account_id.as_str()), ("storage", "drive"), ("limit", "1")];
     let response: IndexerResponse<DriveStorageRow> = indexer.get("/user-extended-storage-metrics", &params).await?;
 
     let Some(row) = response.data.into_iter().next() else {
-        return Ok(DriveStorageStats { total_bytes: 0, file_count: 0 });
+        return Ok(DriveStorageStats {
+            total_bytes: 0,
+            file_count: 0,
+        });
     };
 
     Ok(DriveStorageStats {
@@ -385,7 +390,7 @@ pub async fn get_credits(
             date: chrono::DateTime::from_timestamp_millis(ts).map_or_else(|| date.format("%Y-%m-%d").to_string(), |d| d.to_rfc3339()),
         })
         .collect();
-    results.sort_by(|a, b| b.block.cmp(&a.block));
+    results.sort_by_key(|b| std::cmp::Reverse(b.block));
     Ok(results)
 }
 
@@ -448,7 +453,7 @@ pub async fn get_system_balance(
             }
         })
         .collect();
-    results.sort_by(|a, b| b.block_number.cmp(&a.block_number));
+    results.sort_by_key(|b| std::cmp::Reverse(b.block_number));
     Ok(results)
 }
 
@@ -578,7 +583,7 @@ pub async fn get_billing_transactions(
 
             // Coerce UUID strings or integer IDs to a String.
             let id = t.id.as_ref().map_or_else(String::new, |v| {
-                v.as_str().map(|s| s.to_string()).unwrap_or_else(|| v.as_i64().map_or_else(String::new, |n| n.to_string()))
+                v.as_str().map_or_else(|| v.as_i64().map_or_else(String::new, |n| n.to_string()), std::string::ToString::to_string)
             });
             BillingTransactionObject {
                 id,

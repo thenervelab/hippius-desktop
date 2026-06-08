@@ -97,12 +97,7 @@ fn map_search_hit_to_entry(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(|s| s.trim_start_matches('/').to_string());
-    let file_name = hit
-        .file
-        .file_name
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
+    let file_name = hit.file.file_name.as_deref().map(str::trim).filter(|s| !s.is_empty());
 
     let actual_file_name = match (rel_path, file_name) {
         (Some(rel), _) => rel,
@@ -110,11 +105,7 @@ fn map_search_hit_to_entry(
         (None, None) => return None,
     };
 
-    let display_name = actual_file_name
-        .rsplit('/')
-        .next()
-        .unwrap_or(&actual_file_name)
-        .to_string();
+    let display_name = actual_file_name.rsplit('/').next().unwrap_or(&actual_file_name).to_string();
 
     let local_path = label_to_path.get(&hit.folder_label).filter(|p| !p.is_empty());
     let source = match local_path {
@@ -221,9 +212,7 @@ fn map_sort_column(ui: &str) -> &'static str {
 fn build_search_query(params: &SearchFilesParams) -> Vec<(&'static str, String)> {
     let mut pairs: Vec<(&'static str, String)> = Vec::new();
 
-    let trimmed = |opt: &Option<String>| -> Option<String> {
-        opt.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string)
-    };
+    let trimmed = |opt: &Option<String>| -> Option<String> { opt.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string) };
 
     if let Some(q) = trimmed(&params.query) {
         pairs.push(("q", q));
@@ -279,11 +268,7 @@ fn build_search_query(params: &SearchFilesParams) -> Vec<(&'static str, String)>
 /// - [`AppError::Auth`] when the account has no stored bearer token (logged out).
 /// - [`AppError::Hcfs`] on a transport failure, a non-success HTTP status, an
 ///   unparseable body, or a server `Error`/`Conflict` envelope.
-async fn fetch_search_files(
-    state: &AppState,
-    account_id: &str,
-    query: &[(&'static str, String)],
-) -> Result<Vec<UserFileEntry>> {
+async fn fetch_search_files(state: &AppState, account_id: &str, query: &[(&'static str, String)]) -> Result<Vec<UserFileEntry>> {
     let pool = state.pool()?;
 
     // `server_url` is empty in auto-detect mode; `resolve_base_url` collapses
@@ -301,13 +286,9 @@ async fn fetch_search_files(
     // (user-supplied) values just like the console's `URLSearchParams`. This
     // reqwest build doesn't expose `RequestBuilder::query`, so we assemble the
     // URL up front — the same approach `auth::oauth` uses.
-    let mut url = reqwest::Url::parse(&format!(
-        "{base}/search_files/{account_id}",
-        base = base.trim_end_matches('/'),
-    ))
-    .map_err(|e| AppError::Hcfs(format!("invalid search_files URL: {e}")))?;
-    url.query_pairs_mut()
-        .extend_pairs(query.iter().map(|(k, v)| (*k, v.as_str())));
+    let mut url = reqwest::Url::parse(&format!("{base}/search_files/{account_id}", base = base.trim_end_matches('/')))
+        .map_err(|e| AppError::Hcfs(format!("invalid search_files URL: {e}")))?;
+    url.query_pairs_mut().extend_pairs(query.iter().map(|(k, v)| (*k, v.as_str())));
 
     debug!(account_id = %account_id, ?query, "Querying HCFS /search_files");
 
@@ -377,11 +358,7 @@ async fn fetch_search_files(
 ///
 /// Propagates [`fetch_search_files`] errors ([`AppError::Auth`] / [`AppError::Hcfs`]).
 #[tauri::command]
-pub async fn get_recent_uploads(
-    state: tauri::State<'_, AppState>,
-    account_id: String,
-    limit: Option<usize>,
-) -> Result<Vec<UserFileEntry>> {
+pub async fn get_recent_uploads(state: tauri::State<'_, AppState>, account_id: String, limit: Option<usize>) -> Result<Vec<UserFileEntry>> {
     // Uses the account's bearer token to query its uploads; authorize against
     // the session account.
     let account_id = state.require_session_account(&account_id)?;
@@ -412,11 +389,7 @@ pub async fn get_recent_uploads(
 ///
 /// Propagates [`fetch_search_files`] errors ([`AppError::Auth`] / [`AppError::Hcfs`]).
 #[tauri::command]
-pub async fn search_files(
-    state: tauri::State<'_, AppState>,
-    account_id: String,
-    params: SearchFilesParams,
-) -> Result<Vec<UserFileEntry>> {
+pub async fn search_files(state: tauri::State<'_, AppState>, account_id: String, params: SearchFilesParams) -> Result<Vec<UserFileEntry>> {
     // Uses the account's bearer token to search its files; authorize against
     // the session account.
     let account_id = state.require_session_account(&account_id)?;
@@ -434,13 +407,7 @@ mod tests {
     /// Constructed via JSON so the test isn't coupled to every
     /// `RemoteFileEntry` field (most are `#[serde(default)]`); the 32-byte
     /// hash arrays are the only structurally-required extras.
-    fn hit(
-        folder_label: &str,
-        relative_path: Option<&str>,
-        file_name: Option<&str>,
-        created_at: i64,
-        updated_at: i64,
-    ) -> SearchFileHit {
+    fn hit(folder_label: &str, relative_path: Option<&str>, file_name: Option<&str>, created_at: i64, updated_at: i64) -> SearchFileHit {
         let mut value = json!({
             "folder_hash": "fh",
             "folder_label": folder_label,
@@ -543,12 +510,7 @@ mod tests {
 
     #[test]
     fn falls_back_to_file_name_when_relative_path_absent() {
-        let entry = map_search_hit_to_entry(
-            &hit("Docs", None, Some("loose.png"), 1, 1),
-            &label_map(&[]),
-            &on_disk,
-        )
-        .expect("file_name-only hit maps");
+        let entry = map_search_hit_to_entry(&hit("Docs", None, Some("loose.png"), 1, 1), &label_map(&[]), &on_disk).expect("file_name-only hit maps");
         assert_eq!(entry.actual_file_name, "loose.png");
         assert_eq!(entry.name, "loose.png");
     }
@@ -556,18 +518,14 @@ mod tests {
     #[test]
     fn strips_leading_slash_from_relative_path() {
         let map = label_map(&[("Docs", "/root")]);
-        let entry = map_search_hit_to_entry(&hit("Docs", Some("/x/y.txt"), None, 1, 1), &map, &on_disk)
-            .expect("leading-slash hit maps");
+        let entry = map_search_hit_to_entry(&hit("Docs", Some("/x/y.txt"), None, 1, 1), &map, &on_disk).expect("leading-slash hit maps");
         assert_eq!(entry.actual_file_name, "x/y.txt");
         assert_eq!(entry.source, "/root/x/y.txt");
     }
 
     #[test]
     fn skips_pre_backfill_rows_with_no_name_or_path() {
-        assert!(
-            map_search_hit_to_entry(&hit("Docs", None, None, 1, 1), &label_map(&[]), &on_disk)
-                .is_none()
-        );
+        assert!(map_search_hit_to_entry(&hit("Docs", None, None, 1, 1), &label_map(&[]), &on_disk).is_none());
     }
 
     // ── build_search_query ──────────────────────────────────────────────
@@ -654,13 +612,22 @@ mod tests {
 
     #[test]
     fn limit_is_clamped_and_offset_passes_through() {
-        let zero = build_search_query(&SearchFilesParams { limit: Some(0), ..Default::default() });
+        let zero = build_search_query(&SearchFilesParams {
+            limit: Some(0),
+            ..Default::default()
+        });
         assert_eq!(query_value(&zero, "limit"), Some("1"));
 
-        let huge = build_search_query(&SearchFilesParams { limit: Some(99_999), ..Default::default() });
+        let huge = build_search_query(&SearchFilesParams {
+            limit: Some(99_999),
+            ..Default::default()
+        });
         assert_eq!(query_value(&huge, "limit"), Some(MAX_LIMIT.to_string().as_str()));
 
-        let off = build_search_query(&SearchFilesParams { offset: Some(25), ..Default::default() });
+        let off = build_search_query(&SearchFilesParams {
+            offset: Some(25),
+            ..Default::default()
+        });
         assert_eq!(query_value(&off, "offset"), Some("25"));
     }
 

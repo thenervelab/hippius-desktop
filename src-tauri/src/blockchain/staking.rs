@@ -155,10 +155,7 @@ pub async fn stake_withdraw_unbonded(
 /// Claim staking rewards via `payout_stakers` for the previous era.
 /// Requires the active local wallet's password.
 #[tauri::command]
-pub async fn stake_claim_rewards(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    password: String,
-) -> Result<TxResult, crate::error::AppError> {
+pub async fn stake_claim_rewards(state: tauri::State<'_, crate::app_state::AppState>, password: String) -> Result<TxResult, crate::error::AppError> {
     let (signer, address) = get_signer_and_address(&state, &password).await?;
     let client = get_substrate_client(&state).await?;
 
