@@ -20,7 +20,10 @@ export const Y_AXIS_GAP = 12;
 
 export function computeYAxisWidth(values: number[]): number {
   if (!values.length) return 36;
-  const maxVal = Math.max(...values, 0.01);
+  // Small floor (not 0.01) so the axis tracks the real data: credit-usage
+  // values are often ~0.003, and a 0.01 floor pinned the line near the bottom.
+  // Must stay in sync with the `maxValue` floor in the `yTicks` memo below.
+  const maxVal = Math.max(...values, 0.0001);
   if (maxVal <= 0) return 36;
 
   const rawStep = maxVal / (Y_TICK_COUNT - 1);
@@ -34,7 +37,10 @@ export function computeYAxisWidth(values: number[]): number {
   else if (stepFrac <= 5) nsf = 5;
   else nsf = 10;
   const niceStep = nsf * stepMag;
-  const niceMax = Math.ceil(maxVal / niceStep) * niceStep;
+  let niceMax = Math.ceil(maxVal / niceStep) * niceStep;
+  // Headroom so the topmost tick sits above the data (the line never renders
+  // flush against the top gridline). Mirrors the `yTicks` memo.
+  if (niceMax <= maxVal) niceMax += niceStep;
 
   let prec = 0;
   if (niceStep > 0 && niceStep < 1) {
@@ -148,7 +154,11 @@ const AvailableCreditsChart: React.FC<AvailableCreditsChartProps> = ({
     [displayData],
   );
   const maxValue = useMemo(
-    () => (values.length ? Math.max(...values, 0.01) : 1),
+    // Small floor (not 0.01) so the axis scales to the real data instead of
+    // pinning a ~0.003 line to the bottom. The all-zero / empty cases are
+    // handled separately below (fixed 0–100 axis). Keep in sync with
+    // `computeYAxisWidth`.
+    () => (values.length ? Math.max(...values, 0.0001) : 1),
     [values],
   );
 
@@ -170,7 +180,11 @@ const AvailableCreditsChart: React.FC<AvailableCreditsChartProps> = ({
     else if (stepFrac <= 5) nsf = 5;
     else nsf = 10;
     const niceStep = nsf * stepMag;
-    const niceMax = Math.ceil(maxValue / niceStep) * niceStep;
+    let niceMax = Math.ceil(maxValue / niceStep) * niceStep;
+    // Headroom so the line never sits flush against the top gridline — bump one
+    // step when the data peak lands exactly on a nice boundary (e.g. a flat
+    // line at 0.002). Mirrors `computeYAxisWidth`.
+    if (niceMax <= maxValue) niceMax += niceStep;
 
     const ticks: number[] = [];
     for (let v = 0; v <= niceMax + niceStep * 0.001; v += niceStep) {

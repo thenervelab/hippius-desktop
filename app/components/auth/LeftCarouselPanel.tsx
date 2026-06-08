@@ -57,34 +57,6 @@ const LeftCarouselPanel = () => {
     return () => mq.removeEventListener("change", onChange);
   }, []);
 
-  // Tauri's WKWebView requires a user gesture before it will start media
-  // playback (its default), so the muted programmatic play() in `primeVideo` is
-  // refused on a cold load and slide 0 freezes on its first frame until the
-  // user interacts — after which everything (including auto-advance) works.
-  // Kickstart the active slide's <video> on the very first interaction ANYWHERE
-  // in the window (a mouse move/click/scroll/key, which happens within moments
-  // of the login screen appearing). One-shot: each listener removes itself.
-  useEffect(() => {
-    const playActive = () => {
-      const video = videoFrameRef.current?.querySelector("video");
-      if (video) void video.play().catch(() => {});
-      cleanup();
-    };
-    const events = [
-      "pointerdown",
-      "pointermove",
-      "keydown",
-      "wheel",
-      "touchstart",
-    ] as const;
-    const cleanup = () =>
-      events.forEach((e) => window.removeEventListener(e, playActive));
-    events.forEach((e) =>
-      window.addEventListener(e, playActive, { once: true, passive: true }),
-    );
-    return cleanup;
-  }, []);
-
   useEffect(() => {
     const node = videoFrameRef.current;
     if (!node) return;
@@ -140,31 +112,39 @@ const LeftCarouselPanel = () => {
     swiper.slideTo((index + 1) % SWIPE_CONTENT.length);
   }, []);
 
-  // Autoplay on the very first page load is the tricky case (after any
-  // navigation the document has a user gesture, so play() always works).
+  // Start the clip on mount. We deliberately avoid the `autoplay` ATTRIBUTE:
+  // WKWebView evaluates it at parse time and, because React emits `muted` as a
+  // property (not the HTML attribute), sees an un-muted clip and paints its
+  // "tap to play" overlay. Instead we force the element muted (property AND
+  // attribute) and start it ourselves with a programmatic play().
   //
-  // We deliberately do NOT use the `autoplay` attribute. WKWebView evaluates it
-  // at parse time, and because React emits `muted` as a *property* (not the HTML
-  // attribute), it sees an un-muted clip, blocks the autoplay, and paints its
-  // native "tap to play" overlay. Once blocked, a later programmatic play() is
-  // refused (no user gesture) — so slide 0 stays paused on first load while
-  // slides 2-4 (mounted after a gesture) are fine.
-  //
-  // Instead we force the element muted (property AND attribute, so the gate can
-  // never see it un-muted) and start it ourselves: a *muted* programmatic
-  // play() is allowed with no user gesture. The play() is retried on the first
-  // readiness event in case the ref attaches before the media can play.
+  // Autoplay itself is enabled at the webview level (wry defaults
+  // autoplay=true, and Tauri doesn't override it), so no user gesture is
+  // required. The catch on a COLD load is timing: a play() kicked during the
+  // initial render burst — before the webview is fully presented — is silently
+  // dropped, and a single attempt then leaves slide 0 frozen on its first frame
+  // (re-mounting it after a slide change worked only because the page had since
+  // settled). So we retry on a short interval until the clip is actually
+  // advancing: bounded (~3s) and self-stopping once the element unmounts.
   const primeVideo = useCallback((video: HTMLVideoElement | null) => {
     if (!video) return;
     video.defaultMuted = true;
     video.muted = true;
     video.setAttribute("muted", "");
-    const play = () => void video.play().catch(() => {});
-    play();
-    // One-shot retries: harmless no-ops if it's already playing, and the
-    // listeners die with the element on the next remount/unmount.
-    video.addEventListener("loadeddata", play, { once: true });
-    video.addEventListener("canplay", play, { once: true });
+    let tries = 0;
+    const attempt = () => {
+      if (!video.isConnected) return; // unmounted (slide changed) — stop
+      video
+        .play()
+        .then(() => {
+          // Resolved but somehow still paused: keep nudging until it advances.
+          if (video.paused && tries++ < 25) window.setTimeout(attempt, 120);
+        })
+        .catch(() => {
+          if (tries++ < 25) window.setTimeout(attempt, 120);
+        });
+    };
+    attempt();
   }, []);
 
   const cropLockScale = computeCropLockScale(baseFrameRef.current, frameSize);
