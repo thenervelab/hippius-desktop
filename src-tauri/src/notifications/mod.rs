@@ -11,14 +11,13 @@ use crate::error::AppError;
 /// signed-in account, never a caller-supplied address.
 ///
 /// The read path ([`crud::list_notifications`]) and the per-row mutation
-/// commands already derive the account from the session and ignore any
-/// caller-supplied ss58. The write commands ([`crud::add_notification`],
+/// commands derive the account from the session and ignore any caller-supplied
+/// ss58. Without this, the write commands ([`crud::add_notification`],
 /// [`credits::create_sync_notification`], [`credits::create_credit_notifications`])
-/// historically trusted a caller-supplied `user_address`, so an authenticated
-/// caller could plant a notification row in another account's feed. This
-/// returns the session account and ignores `claimed`, warning when they differ
-/// so a genuine mismatch (a frontend bug or direct-IPC misuse) is diagnosable
-/// (audit 2026-06-05, finding E1).
+/// would trust a caller-supplied `user_address`, letting an authenticated caller
+/// plant a notification row in another account's feed. This returns the session
+/// account and ignores `claimed`, warning when they differ so a genuine mismatch
+/// (a frontend bug or direct-IPC misuse) is diagnosable.
 pub(crate) fn session_scoped_notification_account(state: &AppState, claimed: &str) -> Result<String, AppError> {
     let session = state.current_account_id()?;
     if !claimed.is_empty() && claimed != session {

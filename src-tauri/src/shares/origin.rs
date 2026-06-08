@@ -113,10 +113,10 @@ pub async fn fetch_for_tokens(pool: &SqlitePool, owner: &str, tokens: &[&str]) -
     if tokens.is_empty() {
         return Ok(HashMap::new());
     }
-    // sqlx 0.8 doesn't expand `Vec<T>` into an IN-list (see
-    // launchbadge/sqlx#875), so build placeholders by hand. The token
-    // count is bounded by the upstream "My Shares" page size, which
-    // is well below SQLite's 999-parameter ceiling.
+    // sqlx 0.8 doesn't expand `Vec<T>` into an IN-list, so build
+    // placeholders by hand. The token count is bounded by the upstream
+    // "My Shares" page size, which is well below SQLite's 999-parameter
+    // ceiling.
     let placeholders = vec!["?"; tokens.len()].join(", ");
     let sql = format!(
         "SELECT share_token, folder_label, relative_path \

@@ -115,10 +115,10 @@ pub async fn validate_send_balance(
         .await
         .map_err(|e| crate::error::AppError::Substrate(format!("Query failed: {e}")))?;
     // Transferable balance excludes the frozen portion (locks/holds from
-    // staking, vesting, etc.). Using `free` alone over-counted what the user
-    // can actually send, so a transfer that looked affordable could be rejected
-    // on-chain (audit 2026-06-05, finding C5). `saturating_sub` because frozen
-    // can momentarily exceed free during reconfiguration.
+    // staking, vesting, etc.). `free` alone over-counts what the user can
+    // actually send, so a transfer that looks affordable could be rejected
+    // on-chain. `saturating_sub` because frozen can momentarily exceed free
+    // during reconfiguration.
     let available: u128 = account_info.map_or(0, |i| i.data.free.saturating_sub(i.data.frozen));
 
     let planck_str = to_plancks(amount)?;

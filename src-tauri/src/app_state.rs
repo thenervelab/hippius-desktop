@@ -93,9 +93,9 @@ pub struct AppState {
     /// restart.
     pub drive_status_cache: Mutex<HashMap<String, DriveStatus>>,
     /// Per-account async locks serializing auth-token refreshes. Two concurrent
-    /// `refresh_auth_token_internal` calls for the same account previously raced
-    /// a parallel challenge-response (double session upsert + token save); the
-    /// second caller now awaits the first on this per-account `tokio::Mutex`.
+    /// `refresh_auth_token_internal` calls for the same account would otherwise
+    /// race a parallel challenge-response (double session upsert + token save);
+    /// the second caller awaits the first on this per-account `tokio::Mutex`.
     /// The outer std `Mutex` only guards the map insert (never held across an
     /// await); the inner tokio `Mutex` guard is held across the refresh.
     pub refresh_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
@@ -233,8 +233,9 @@ impl AppState {
     ///
     /// Returns [`crate::error::NotReadyKind::DatabaseNotReady`] when the pool
     /// has not been installed yet (early startup, before the boot-time DB-init
-    /// task runs `set_pool`). The previous `Db(PoolClosed)` conflated "never
-    /// initialized" with a live pool that was later closed (audit 2026-06-05, D9).
+    /// task runs `set_pool`). This is a distinct signal from `Db(PoolClosed)`,
+    /// so callers can tell "never initialized" apart from a live pool that was
+    /// later closed.
     pub fn pool(&self) -> Result<&SqlitePool, crate::error::AppError> {
         self.db
             .get()

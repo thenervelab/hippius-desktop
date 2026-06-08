@@ -154,12 +154,12 @@ export function WalletAuthProvider({
         const currentAddress = polkadotAddressRef.current;
         await invoke("logout_full", { accountId: currentAddress || "" });
       } catch (err) {
-        // logout_full now rejects when the persisted session could NOT be
+        // logout_full rejects when the persisted session could NOT be
         // cleared (Rust leaves the in-memory session intact). Clearing local
         // state and redirecting here would blank the UI while the backend stays
         // logged in, and the live on-disk token would silently rehydrate the
         // session on the next boot. Keep the user logged in and surface the
-        // failure so they can retry (audit 2026-06-05, D6 follow-up).
+        // failure so they can retry.
         logger.warn("[WalletAuth] logout_full failed; keeping session:", err);
         toast.error("Logout failed — your session is still active. Please try again.");
         return;
@@ -184,7 +184,7 @@ export function WalletAuthProvider({
       // Reset ALL session-scoped sync atoms (drive statuses, failed files,
       // conflicts, credits banner, health, loaded-latch, reauth) so the
       // previous account's state can't leak into the next login — these atoms
-      // live in the root appStore and survive the logout navigation (F17/F18).
+      // live in the root appStore and survive the logout navigation.
       resetSyncSession();
 
       if (redirectPath && typeof window !== "undefined") {
@@ -209,26 +209,23 @@ export function WalletAuthProvider({
 
   /** Start sync for the given account, called after any successful auth.
    *
-   *  No longer takes a mnemonic argument — Rust's `auto_init_sync` resolves
-   *  the mnemonic from `AuthInfo` via the 5-stage `get_mnemonic_for_account`
+   *  Takes no mnemonic argument — Rust's `auto_init_sync` resolves the
+   *  mnemonic from `AuthInfo` via the 5-stage `get_mnemonic_for_account`
    *  fallback chain, and `login_with_mnemonic` / `ensure_sync_mnemonic`
    *  populate `AuthInfo` before this is called. Passing the phrase through
-   *  JavaScript added no capability and kept it alive in heap memory longer
+   *  JavaScript adds no capability and keeps it alive in heap memory longer
    *  than necessary.
    *
-   *  Previously this gated on `splashCompleteAtom` to "defer sync init
-   *  until the splash screen finishes." The gate stranded init forever
-   *  on cold starts where the splash bailed early (the update-dialog
-   *  branch in `splash-screen/index.tsx:174` returns from
-   *  `runSetupPhases` without ever calling `setSplashComplete(true)`),
-   *  so `auto_init_sync` was never invoked, `runner.drives` stayed
-   *  empty, and every user upload sat on the 60 s
-   *  `upload_processing` watchdog because `trigger_sync` found no
-   *  drives. The gate is unnecessary anyway: `auto_init_sync` runs in
-   *  the Rust backend and doesn't render UI, and the splash component
-   *  renders over its children (`isReady && children`) until it's
-   *  ready — so backend sync events can't visibly "race the loading
-   *  screen". */
+   *  Init is NOT gated on `splashCompleteAtom`: such a gate strands init
+   *  forever on cold starts where the splash bails early (the update-dialog
+   *  branch in `splash-screen/index.tsx` returns from `runSetupPhases`
+   *  without ever calling `setSplashComplete(true)`), leaving
+   *  `runner.drives` empty so every upload sits on the 60 s
+   *  `upload_processing` watchdog. The gate is unnecessary anyway:
+   *  `auto_init_sync` runs in the Rust backend and renders no UI, and the
+   *  splash component renders over its children (`isReady && children`)
+   *  until it's ready — so backend sync events can't visibly race the
+   *  loading screen. */
   function initSync(accountId: string) {
     if (syncInitialized.current) return;
     syncInitialized.current = true;
@@ -252,12 +249,9 @@ export function WalletAuthProvider({
     triggerMigrationCheck();
   }
 
-  // Backward-compat: a previous version deferred init via
-  // `pendingSyncInit.current` when the splash wasn't ready. The gate
-  // is gone now, but this effect stays as a safety net — if any
-  // legacy code path stashes a pending init, fire it once
-  // `splashComplete` flips. In the steady state, `pendingSyncInit`
-  // is always null and this is a no-op.
+  // Safety net: if any code path stashes a pending init in
+  // `pendingSyncInit.current`, fire it once `splashComplete` flips. In
+  // the steady state `pendingSyncInit` is null and this is a no-op.
   useEffect(() => {
     if (splashComplete && pendingSyncInit.current && !syncInitialized.current) {
       const { accountId } = pendingSyncInit.current;
@@ -358,29 +352,24 @@ export function WalletAuthProvider({
       //
       // `ensure_sync_mnemonic` parks on Rust's recovery gate
       // (`sync/mnemonic.rs::await_recovery_resolved`) when the gate
-      // is `Pending` — set by `session_restore.rs:311` for OAuth
-      // users whose recommended recovery flow is anything other
-      // than `Proceed`. Awaiting this IPC before `initSync` meant
-      // any stall in the recovery dialog (it never renders, the
-      // user dismisses it without resolving, the event listener
-      // missed `oauth_recovery_check_needed`) stranded `initSync`
-      // forever — auto_init_sync was never invoked,
-      // `runner.drives` stayed empty, every upload hit the 60s
-      // `upload_processing` watchdog.
+      // is `Pending` — set by `session_restore.rs` for OAuth users
+      // whose recommended recovery flow is anything other than
+      // `Proceed`. So fire `ensure_sync_mnemonic` in the background
+      // and call `initSync` immediately: awaiting it inline would
+      // strand `initSync` whenever the recovery dialog stalls (never
+      // renders, dismissed without resolving, missed
+      // `oauth_recovery_check_needed`), leaving `runner.drives` empty
+      // so every upload hits the 60s `upload_processing` watchdog.
       //
-      // Fix: fire `ensure_sync_mnemonic` in the background and call
-      // `initSync` immediately. Rust's `auto_init_sync` already has
-      // a retry ladder gated on the `hippius_auth_ready` event
-      // (subscribed BEFORE its first attempt, see
-      // `useHcfsSync.ts::tryAutoInitSync`). Both success paths of
-      // `ensure_sync_mnemonic` now emit `hippius_auth_ready` so
-      // when the mnemonic finally lands in `AuthInfo` (either from
-      // the cache hit, the recovery branch, or the freshly
-      // generated branch), the next retry picks it up. If
-      // `ensure_sync_mnemonic` fails with
+      // Rust's `auto_init_sync` has a retry ladder gated on the
+      // `hippius_auth_ready` event (subscribed BEFORE its first
+      // attempt, see `useHcfsSync.ts::tryAutoInitSync`). Both success
+      // paths of `ensure_sync_mnemonic` emit `hippius_auth_ready` so
+      // when the mnemonic finally lands in `AuthInfo` (cache hit,
+      // recovery branch, or freshly generated branch), the next retry
+      // picks it up. If `ensure_sync_mnemonic` fails with
       // `MasterMnemonicUnrecoverable` (encrypted state exists but
-      // can't be decrypted), the catch flips the reauth banner —
-      // same UX as before, just without the gate.
+      // can't be decrypted), the catch flips the reauth banner.
       if (result.substrateAddress) {
         if (result.needsSyncMnemonic) {
           // Fire-and-forget. NOT awaited.

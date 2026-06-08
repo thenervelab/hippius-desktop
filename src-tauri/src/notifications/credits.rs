@@ -70,7 +70,6 @@ pub struct CreditNotificationCheck {
 /// Check whether a low-credit notification should be shown and update
 /// internal state (first-time flag, above-half-credit tracking).
 ///
-/// Replaces the complex business logic tree in `useCreditsNotification.ts`.
 /// All DB queries and decisions happen in Rust. The frontend just calls
 /// this on credit balance change and acts on the result.
 #[tauri::command]
@@ -86,10 +85,10 @@ pub async fn check_low_credit_notification(
     // Convert planck to credit value for threshold comparison.
     // f64 precision is fine for comparing against 0.5.
     //
-    // A malformed planck string must NOT fabricate a low-credit warning: the
-    // old `.unwrap_or(0)` mapped garbage to 0 credits (< 0.5), which fell
-    // straight into the notify branch. Mirror `billing::eligibility` — log and
-    // skip (no notification) rather than invent a zero balance.
+    // A malformed planck string must NOT fabricate a low-credit warning:
+    // mapping garbage to 0 credits (< 0.5) would fall straight into the notify
+    // branch. Mirror `billing::eligibility` — log and skip (no notification)
+    // rather than invent a zero balance.
     let Ok(planck) = credit_balance_planck.parse::<u128>() else {
         tracing::warn!(balance = %credit_balance_planck, account_id = %account_id, "unparseable planck in low-credit check; skipping");
         return Ok(CreditNotificationCheck {
@@ -229,7 +228,7 @@ pub struct CreditEventNotification {
 ///
 /// Returns `None` for an unparseable value so the caller can warn + skip
 /// rather than silently coercing it to `0` — which sorts before every welcome
-/// time and so dropped the event without a trace (audit 2026-06-05, D10).
+/// time and so would drop the event without a trace.
 fn parse_event_timestamp_ms(timestamp: &str) -> Option<i64> {
     chrono::DateTime::parse_from_rfc3339(timestamp)
         .map(|d| d.timestamp_millis())
@@ -240,12 +239,11 @@ fn parse_event_timestamp_ms(timestamp: &str) -> Option<i64> {
 /// Parse a raw planck credit amount (an unsigned integer string) into whole HIP.
 ///
 /// Returns `None` for a value that is empty, signed, fractional, or otherwise
-/// non-integer. The previous code stripped every non-digit character, which
-/// turned `"-5"` into `5` and `"1.5"` into `15` — silently fabricating a wrong
-/// positive amount instead of rejecting malformed input (audit 2026-06-05, D10).
-/// A mint amount is an unsigned integer in planck, so a sign or decimal point is
-/// malformed, not a value to coerce. Parsed as `u128` (planck exceeds f64's
-/// exact-integer range) before the display divide.
+/// non-integer. Stripping non-digit characters would turn `"-5"` into `5` and
+/// `"1.5"` into `15` — silently fabricating a wrong positive amount instead of
+/// rejecting malformed input. A mint amount is an unsigned integer in planck, so
+/// a sign or decimal point is malformed, not a value to coerce. Parsed as `u128`
+/// (planck exceeds f64's exact-integer range) before the display divide.
 fn parse_credit_amount_planck(raw: &str) -> Option<f64> {
     let trimmed = raw.trim();
     if trimmed.is_empty() || trimmed.starts_with('-') || trimmed.contains('.') {
@@ -258,8 +256,7 @@ fn parse_credit_amount_planck(raw: &str) -> Option<f64> {
 /// Process credit events and return which ones need notifications.
 ///
 /// Handles: welcome timestamp lookup, event filtering, dedup checking,
-/// amount formatting. Replaces the event processing loop in
-/// `useCreditsNotification.ts`.
+/// amount formatting.
 #[tauri::command]
 pub async fn process_credit_events(
     state: tauri::State<'_, AppState>,
@@ -430,7 +427,7 @@ pub async fn create_sync_notification(
     outcome: SyncNotificationOutcome,
 ) -> Result<i64, AppError> {
     // Scope the write to the signed-in account; never trust the caller-supplied
-    // address (audit 2026-06-05, finding E1).
+    // address.
     let user_address = crate::notifications::session_scoped_notification_account(state.inner(), &user_address)?;
     let pool = state.pool()?;
     create_sync_notification_inner(pool, &user_address, &description, &file_details_json, outcome).await
@@ -438,8 +435,7 @@ pub async fn create_sync_notification(
 
 /// Persist multiple credit event notifications in a single call.
 ///
-/// Replaces the `for` loop in `useCreditsNotification.ts` that called
-/// `add_notification` per event. Returns the count of notifications added.
+/// Returns the count of notifications added.
 /// Input for creating a notification with frontend-formatted text.
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -517,7 +513,7 @@ pub async fn create_credit_notifications(
     notifications: Vec<NotificationInput>,
 ) -> Result<u32, AppError> {
     // Scope the write to the signed-in account; never trust the caller-supplied
-    // address (audit 2026-06-05, finding E1).
+    // address.
     let account_id = crate::notifications::session_scoped_notification_account(state.inner(), &account_id)?;
     create_credit_notifications_inner(state.pool()?, &account_id, &notifications).await
 }
@@ -554,9 +550,9 @@ mod tests {
     }
 
     // The cross-account isolation property: account A's ACTIVE low-credit
-    // warning must not suppress account B. Pre-fix the COUNT(*) had no
-    // user_address predicate, so A's warning made B's count non-zero and B was
-    // silently denied a notification.
+    // warning must not suppress account B. Without a user_address predicate on
+    // the COUNT(*), A's warning makes B's count non-zero and B is silently
+    // denied a notification.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn active_low_credit_count_is_scoped_per_user() {
         let (_dir, pool) = fresh_pool().await;
@@ -565,8 +561,8 @@ mod tests {
         assert_eq!(active_low_credit_count(&pool, "addrB").await.unwrap(), 0);
     }
 
-    // The one-per-day throttle must read each user's OWN deletion history.
-    // Pre-fix A's deletion timestamp fed B's throttle.
+    // The one-per-day throttle must read each user's OWN deletion history, so
+    // account A's deletion timestamp can't throttle account B.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn last_deleted_low_credit_is_scoped_per_user() {
         let (_dir, pool) = fresh_pool().await;
@@ -576,7 +572,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // D10: defensive credit-event timestamp / amount parsing
+    // Defensive credit-event timestamp / amount parsing
     // -----------------------------------------------------------------------
 
     #[test]
@@ -605,7 +601,7 @@ mod tests {
 
     #[test]
     fn parse_credit_amount_rejects_signed_fractional_and_garbage() {
-        // The exact mangling the old digit-strip introduced:
+        // A digit-strip would mangle these; rejection is required:
         assert_eq!(parse_credit_amount_planck("-5"), None, "negative must not become +5");
         assert_eq!(parse_credit_amount_planck("1.5"), None, "fractional must not become 15");
         assert_eq!(parse_credit_amount_planck(""), None);

@@ -24,10 +24,9 @@ pub async fn auth_logout_internal(state: &crate::app_state::AppState, account_id
 
     // Clear the PERSISTED session first. If this fails we return Err with the
     // in-memory AuthInfo still intact, leaving the app in a consistent
-    // "still logged in" state. The old order wiped memory first, so a failed DB
-    // clear left a live on-disk token that silently rehydrated the session on
-    // the next restore while the UI believed it had logged out (audit
-    // 2026-06-05, finding D6).
+    // "still logged in" state. Wiping memory first would let a failed DB clear
+    // leave a live on-disk token that silently rehydrates the session on the
+    // next restore while the UI believes it has logged out.
     crate::auth::auth_session_repo::clear(state.pool()?, account_id).await?;
 
     {
@@ -52,8 +51,8 @@ pub async fn auth_logout_internal(state: &crate::app_state::AppState, account_id
 
 /// Full logout: stops sync, clears auth state, clears sync progress.
 ///
-/// Replaces the 3-sequential-invoke pattern in wallet-auth-context.tsx.
-/// The frontend still needs to clear localStorage and React state.
+/// Bundles sync teardown, auth-state clearing, and progress cleanup into one
+/// command. The frontend still needs to clear localStorage and React state.
 #[tauri::command]
 pub async fn logout_full(app: tauri::AppHandle, account_id: String) -> Result<(), AppError> {
     use tauri::Manager;
@@ -77,10 +76,9 @@ pub async fn logout_full(app: tauri::AppHandle, account_id: String) -> Result<()
     //    session left intact and consistent ("still logged in"). Reporting
     //    Ok(()) would make the frontend clear its local state and show the login
     //    screen while the live on-disk token silently rehydrates the session on
-    //    the next boot — the exact bug D6 targets. The earlier `warn!`-and-
-    //    continue defeated the fix (PR review 2026-06-05). The post-logout
-    //    cleanups below are best-effort and only run once the session is
-    //    genuinely cleared.
+    //    the next boot. A `warn!`-and-continue here would defeat that guarantee.
+    //    The post-logout cleanups below are best-effort and only run once the
+    //    session is genuinely cleared.
     let state = app.state::<crate::app_state::AppState>();
     auth_logout_internal(&state, &account_id).await?;
 
