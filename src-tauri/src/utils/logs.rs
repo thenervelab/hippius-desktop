@@ -2,11 +2,19 @@
 //!
 //! When a user opts in while filing a support ticket, the desktop collects the
 //! most recent rolling log files (written under `$HOME/.hippius/logs/` by the
-//! file appender wired up in `main::init_logging`), redacts any secrets that may
-//! have leaked into them, zips them, and uploads the archive as a ticket
-//! attachment — so support staff get info-rich diagnostics without a
-//! back-and-forth. The whole flow is best-effort: a missing logs directory or a
-//! failed upload must never block ticket creation (see `attach_logs_to_ticket`).
+//! file appender wired up in `main::init_logging`), scrubs them, zips them, and
+//! uploads the archive as a ticket attachment — so support staff get info-rich
+//! diagnostics without a back-and-forth. The whole flow is best-effort: a
+//! missing logs directory or a failed upload must never block ticket creation
+//! (see `attach_logs_to_ticket`).
+//!
+//! Scrubbing has two layers: **secret redaction** (mnemonics, API tokens, JWTs,
+//! PEM private keys, labelled `key=value` secrets, 0x-64 hex keys) so no
+//! credential leaves the machine, and **identity anonymization** so a shipped
+//! bundle can't be tied back to a person — the user's SS58 wallet address, the
+//! OS username inside home-directory paths, user file/folder names, and email
+//! addresses are all replaced with inert markers. IPFS CIDs are deliberately
+//! kept: they carry no identity and are load-bearing for support debugging.
 
 use crate::error::AppError;
 use crate::utils::support::TicketAttachment;
@@ -72,6 +80,63 @@ static LINE_REDACTORS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
         // 0x-prefixed 32-byte hex (private keys / signatures). The exact 64-hex
         // bound avoids nuking shorter hex IDs or IPFS CIDs that aid debugging.
         (Regex::new(r"\b0x[0-9a-fA-F]{64}\b").expect("hex-key regex"), "[REDACTED_KEY]"),
+        // ---- identity anonymization (below) -------------------------------
+        // These run after the secret passes; the secret tokens above contain no
+        // `@`, no 47-48-char base58 run, and no `/Users|home/` prefix, so the two
+        // layers never fight. Every replacement token is inert to every pattern
+        // here, which is what keeps `redact_log_text` idempotent (proptest pins
+        // it). Anonymization favours over-redaction: losing a wallet address from
+        // a support log is free, leaking one is not.
+
+        // Email address. Catches the reporter's own address if it ever lands in
+        // a log line; ordinary prose has no `@…tld` shape so this is low-noise.
+        (
+            Regex::new(r"(?i)\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b").expect("email regex"),
+            "[REDACTED_EMAIL]",
+        ),
+        // SS58 wallet/account address: a standalone base58 run of 47-48 chars
+        // (32-byte account id + 1-byte network prefix). The length bound is the
+        // whole point — IPFS CIDv0 is exactly 46 and CIDv1-base58btc ~49, so both
+        // fall outside and survive for debugging while every real address is hit.
+        // base58 alphabet excludes 0/O/I/l, so `\b` boundaries are exact.
+        (
+            Regex::new(r"\b[1-9A-HJ-NP-Za-km-z]{47,48}\b").expect("ss58 address regex"),
+            "[REDACTED_ADDRESS]",
+        ),
+        // Home-directory paths: collapse everything after the `/Users/` or
+        // `/home/` root — removing the OS username AND every user file/folder
+        // name below it. The tail is non-greedy and ALLOWS internal spaces
+        // (sync folders are routinely named "My Drive"), stopping only at a real
+        // boundary captured in group 2 and restored verbatim:
+        //   ` ident=` → the next `tracing` field, so a sibling like `count=3`
+        //               survives instead of being swallowed into the path;
+        //   `:`       → a `…/foo.rs:42` line ref keeps its line number;
+        //   `"`/`'`   → the closing quote of a `{:?}`-formatted path;
+        //   `$`       → end of line.
+        // An earlier `[^\s:"']+` tail stopped at the FIRST space, leaking every
+        // folder name that followed one; the boundary capture is what closes
+        // that hole without eating trailing log context. The `regex` engine is
+        // linear-time, so the non-greedy quantifier carries no backtracking
+        // cost. Re-running maps `/Users/[REDACTED_PATH]<boundary>` to itself, so
+        // idempotence holds.
+        (
+            Regex::new(r#"(/(?:Users|home)/)[^"'\n]*?( +[A-Za-z_][A-Za-z0-9_]*=|:|["']|$)"#).expect("unix home-path regex"),
+            "${1}[REDACTED_PATH]${2}",
+        ),
+        // Windows equivalent (`C:\Users\name\…`), same boundary handling.
+        (
+            Regex::new(r#"(?i)([A-Za-z]:\\Users\\)[^"'\n]*?( +[A-Za-z_][A-Za-z0-9_]*=|:|["']|$)"#).expect("windows home-path regex"),
+            "${1}[REDACTED_PATH]${2}",
+        ),
+        // File/folder name as the leaf of a non-home path token (e.g. a temp dir
+        // upload `/tmp/report.pdf`). Keeps the separator, drops the name. Bounded
+        // to a single path component (`[^/\\…]`) and to a 1-12 char extension so
+        // it can't run across separators. Home paths are already collapsed above,
+        // so this only catches leaves the home passes didn't reach.
+        (
+            Regex::new(r#"([/\\])[^/\\\s:"']*\.[A-Za-z0-9]{1,12}\b"#).expect("filename-leaf regex"),
+            "${1}[REDACTED_FILENAME]",
+        ),
     ]
 });
 
@@ -82,7 +147,8 @@ fn logs_dir() -> Result<PathBuf, AppError> {
         .ok_or_else(|| AppError::Other("Could not determine home directory".into()))
 }
 
-/// Redacts a single log line, scrubbing any secrets the patterns recognize.
+/// Redacts a single log line, scrubbing any secret or identifying value the
+/// patterns recognize (see `LINE_REDACTORS` for the secret + anonymization set).
 ///
 /// Returns `Cow::Borrowed` unchanged when the line is clean (the common case),
 /// allocating only when a redaction actually fires.
@@ -290,6 +356,122 @@ mod tests {
         assert!(out.contains("[REDACTED_PRIVATE_KEY]"), "got: {out}");
         assert!(!out.contains("MIIBVgIBADAN"), "key body leaked: {out}");
         assert!(out.contains("before") && out.contains("after"), "surrounding text should survive: {out}");
+    }
+
+    #[test]
+    fn redacts_ss58_wallet_address() {
+        // Substrate's well-known public Alice address (48-char base58).
+        let addr = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
+        let line = format!("INFO auth: refreshed token for {addr}");
+        let out = redact_log_line(&line);
+        assert!(out.contains("[REDACTED_ADDRESS]"), "got: {out}");
+        assert!(!out.contains("5Grwva"), "address leaked: {out}");
+        assert!(out.contains("INFO auth"), "context should survive: {out}");
+    }
+
+    #[test]
+    fn preserves_ipfs_cid() {
+        // CIDv0 is exactly 46 chars — outside the 47-48 address bound, so a CID
+        // (no identity, useful for support) must pass through untouched.
+        let cid = "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG";
+        assert_eq!(cid.len(), 46, "test fixture must be a real 46-char CIDv0");
+        let line = format!("INFO pinned content {cid} ok");
+        let out = redact_log_line(&line);
+        assert_eq!(out, line, "IPFS CID must not be redacted: {out}");
+    }
+
+    #[test]
+    fn redacts_email_address() {
+        let line = "WARN bounce sending to ourovorosio@gmail.com failed";
+        let out = redact_log_line(line);
+        assert!(out.contains("[REDACTED_EMAIL]"), "got: {out}");
+        assert!(!out.contains("ourovorosio"), "email leaked: {out}");
+    }
+
+    #[test]
+    fn redacts_macos_home_username_and_tail() {
+        let line = r#"INFO sync folder added path="/Users/georgiosdelkos/Documents/TopSecret/plan.pdf""#;
+        let out = redact_log_line(line);
+        assert!(!out.contains("georgiosdelkos"), "username leaked: {out}");
+        assert!(!out.contains("TopSecret"), "folder name leaked: {out}");
+        assert!(!out.contains("plan.pdf"), "file name leaked: {out}");
+        assert!(out.contains("/Users/[REDACTED_PATH]"), "expected collapsed home path: {out}");
+    }
+
+    #[test]
+    fn redacts_linux_home_path() {
+        let line = "DEBUG master mnemonic at /home/alice/.hippius/master_enc_mnemonic.json";
+        let out = redact_log_line(line);
+        assert!(!out.contains("alice"), "username leaked: {out}");
+        assert!(out.contains("/home/[REDACTED_PATH]"), "got: {out}");
+    }
+
+    #[test]
+    fn redacts_windows_home_path() {
+        let line = r"ERROR open C:\Users\Bob\AppData\hippius.db failed";
+        let out = redact_log_line(line);
+        assert!(!out.contains("Bob"), "username leaked: {out}");
+        assert!(out.contains(r"C:\Users\[REDACTED_PATH]"), "got: {out}");
+    }
+
+    #[test]
+    fn redacts_filename_in_nonhome_path() {
+        let line = "INFO bundling /tmp/quarterly-report.pdf for upload";
+        let out = redact_log_line(line);
+        assert!(!out.contains("quarterly-report"), "file name leaked: {out}");
+        assert!(out.contains("/tmp/[REDACTED_FILENAME]"), "got: {out}");
+    }
+
+    #[test]
+    fn home_path_line_ref_keeps_line_number() {
+        // The `:` boundary stops the home-path match so a `path:line` style ref
+        // keeps its line number, which is what makes such a hit worth shipping.
+        let line = "WARN failed at /home/alice/work:128";
+        let out = redact_log_line(line);
+        assert!(!out.contains("alice"), "username leaked: {out}");
+        assert!(out.contains(":128"), "line number should survive: {out}");
+    }
+
+    #[test]
+    fn redacts_home_folder_names_containing_spaces() {
+        // The leak the boundary capture fixes: a tail char class that stopped at
+        // the first space left every later folder name exposed. Unquoted, EOL.
+        let line = "INFO sync folder added path=/Users/bob/My Secret Project/notes";
+        let out = redact_log_line(line);
+        assert!(!out.contains("bob"), "username leaked: {out}");
+        assert!(!out.contains("Secret"), "folder name leaked: {out}");
+        assert!(!out.contains("notes"), "leaf folder leaked: {out}");
+        assert!(out.contains("/Users/[REDACTED_PATH]"), "got: {out}");
+    }
+
+    #[test]
+    fn home_path_preserves_following_tracing_field() {
+        // The ` ident=` boundary keeps a sibling structured field rather than
+        // swallowing it into the path — the cost of allowing spaces in the tail.
+        let line = "INFO done path=/Users/bob/My Drive/x count=3 ok=true";
+        let out = redact_log_line(line);
+        assert!(!out.contains("bob") && !out.contains("Drive"), "path leaked: {out}");
+        assert!(out.contains("count=3"), "sibling field swallowed: {out}");
+        assert!(out.contains("ok=true"), "sibling field swallowed: {out}");
+    }
+
+    #[test]
+    fn redacts_quoted_home_path_with_spaces() {
+        // `{:?}` formatting wraps the path in quotes; the closing quote bounds
+        // the redaction losslessly even with spaces inside.
+        let line = r#"DEBUG opening "/Users/bob/My Secret/plan.pdf" now"#;
+        let out = redact_log_line(line);
+        assert!(!out.contains("bob") && !out.contains("Secret") && !out.contains("plan.pdf"), "leak: {out}");
+        assert!(out.contains(r#""/Users/[REDACTED_PATH]""#), "got: {out}");
+        assert!(out.contains("now"), "trailing context after the quote should survive: {out}");
+    }
+
+    #[test]
+    fn redacts_windows_home_path_with_spaces() {
+        let line = r"ERROR open C:\Users\Bob\My Documents\budget.xlsx failed";
+        let out = redact_log_line(line);
+        assert!(!out.contains("Bob") && !out.contains("Documents") && !out.contains("budget"), "leak: {out}");
+        assert!(out.contains(r"C:\Users\[REDACTED_PATH]"), "got: {out}");
     }
 
     #[test]

@@ -99,7 +99,7 @@ All frontend-to-backend calls go through Tauri IPC via `invoke()` from `@tauri-a
 - **`notifications/`** — Notification management commands.
 - **`infra/`** — VM provisioning and support ticket commands.
 - **`tray/`** — System-tray popover window (replaces the native tray menu): `geometry.rs` (pure, OS-agnostic anchoring math — which screen edge the panel drops from, on-screen clamping, fully unit-tested), `panel.rs` (the borderless `tray-panel` window lifecycle + `toggle_tray_panel` / `hide_tray_panel` IPC commands). See the "Tray popover panel" key pattern below.
-- **`utils/`** — Schema management (`schema.rs` with `ensure_table_schema()`), bookmarks, preferences, platform info, tray menu data (`tray_menu.rs`: `get_tray_menu_data` — credits/address/login for the popover), support helpers.
+- **`utils/`** — Schema management (`schema.rs` with `ensure_table_schema()`), bookmarks, preferences, platform info, tray menu data (`tray_menu.rs`: `get_tray_menu_data` — credits/address/login for the popover), support helpers, and **support-log scrubbing** (`logs.rs`: `attach_logs_to_ticket` bundles recent `~/.hippius/logs/` files into a redacted zip). `logs.rs` has two layers: **secret redaction** (mnemonics, API tokens, JWTs, PEM keys, labelled `key=value` secrets, 0x-64 hex) and **identity anonymization** (SS58 wallet addresses → `[REDACTED_ADDRESS]`, home-dir/username paths collapsed to `/Users|/home/[REDACTED_PATH]`, non-home filename leaves → `[REDACTED_FILENAME]`, emails → `[REDACTED_EMAIL]`). IPFS CIDs are deliberately preserved (the 47–48-char address bound excludes them) — they carry no identity and aid debugging. Redaction is idempotent (proptest-pinned in `logs.rs::tests::redaction_is_idempotent`).
 
 ### Key Patterns
 
