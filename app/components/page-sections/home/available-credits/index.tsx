@@ -145,7 +145,7 @@ const AvailableCreditsCard: React.FC<{ className?: string }> = ({
               side="top"
               showInfo
               iconSize={3.5}
-              iconColor="text-primary-40/60 dark:text-primary-brand-dark/60"
+              iconColor="text-primary-40 dark:text-primary-brand-dark"
               tooltipContent="This chart shows credits consumed by Drive storage only. Your total credit usage across all Hippius products is on the Billing page."
             />
           </div>
