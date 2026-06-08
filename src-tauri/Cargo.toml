@@ -115,6 +115,13 @@ mime_guess = "2.0"
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Daily rolling-file log appender so the app's tracing output lands on disk
+# (~/.hippius/logs/) and can be bundled into support tickets. Pairs with
+# tracing-subscriber's non-blocking writer + WorkerGuard.
+tracing-appender = "0.2"
+# Pattern-based redaction of secrets (mnemonics, auth tokens, private keys)
+# from log text before it is zipped and uploaded with a support ticket.
+regex = "1"
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.31.2", features = ["fs"] }

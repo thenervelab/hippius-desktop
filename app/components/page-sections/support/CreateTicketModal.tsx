@@ -22,6 +22,9 @@ export interface CreateTicketData {
   category: string;
   description: string;
   attachment?: { path: string; name: string } | null;
+  // When true, the backend bundles the app's recent (redacted) logs and
+  // attaches them to the new ticket so support gets diagnostics up front.
+  includeLogs: boolean;
 }
 
 type Props = {
@@ -92,6 +95,9 @@ const CreateTicketModal = forwardRef<CreateTicketModalRef, Props>(
       path: string;
       name: string;
     } | null>(null);
+    // Opt-out (default on): most users benefit from sending logs, and the
+    // backend redacts secrets before upload. They can untick to keep logs local.
+    const [includeLogs, setIncludeLogs] = useState(true);
 
     const resetForm = () => {
       setSubject("");
@@ -99,6 +105,7 @@ const CreateTicketModal = forwardRef<CreateTicketModalRef, Props>(
       setSeverity("");
       setDescription("");
       setAttachment(null);
+      setIncludeLogs(true);
     };
 
     useImperativeHandle(ref, () => ({
@@ -116,6 +123,7 @@ const CreateTicketModal = forwardRef<CreateTicketModalRef, Props>(
         category,
         description,
         attachment,
+        includeLogs,
       });
     };
 
@@ -259,6 +267,22 @@ const CreateTicketModal = forwardRef<CreateTicketModalRef, Props>(
               )}
             </button>
           </div>
+
+          {/* Consent for sending logs. Default on; the backend redacts secrets
+              (mnemonics, tokens, keys) before the bundle is uploaded. */}
+          <label className="flex cursor-pointer items-start gap-2.5 pt-0.5">
+            <input
+              type="checkbox"
+              checked={includeLogs}
+              onChange={(e) => setIncludeLogs(e.target.checked)}
+              disabled={isLoading}
+              className="mt-0.5 size-4 shrink-0 cursor-pointer accent-primary-50 disabled:cursor-not-allowed"
+            />
+            <span className="text-[13px] leading-[18px] tracking-[-0.26px] text-grey-dark-800 dark:text-[#a3a3a3]">
+              Include application logs to help us debug (recommended). Secrets
+              are removed before they are sent.
+            </span>
+          </label>
         </div>
 
         <div className="mt-6 space-y-3">

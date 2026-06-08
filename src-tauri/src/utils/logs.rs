@@ -1,0 +1,384 @@
+//! Bundling of recent application logs for support tickets.
+//!
+//! When a user opts in while filing a support ticket, the desktop collects the
+//! most recent rolling log files (written under `$HOME/.hippius/logs/` by the
+//! file appender wired up in `main::init_logging`), redacts any secrets that may
+//! have leaked into them, zips them, and uploads the archive as a ticket
+//! attachment — so support staff get info-rich diagnostics without a
+//! back-and-forth. The whole flow is best-effort: a missing logs directory or a
+//! failed upload must never block ticket creation (see `attach_logs_to_ticket`).
+
+use crate::error::AppError;
+use crate::utils::support::TicketAttachment;
+use regex::Regex;
+use std::borrow::Cow;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
+use std::time::SystemTime;
+use tracing::info;
+use zip::CompressionMethod;
+use zip::write::{FileOptions, ZipWriter};
+
+/// Newest log files to include. Matches the appender's `max_log_files(7)` so a
+/// week of daily rotations is the natural upper bound.
+const MAX_FILES: usize = 7;
+/// Skip any single log file larger than this — a runaway file would bloat the
+/// upload without adding diagnostic value over its tail.
+const MAX_BYTES_PER_FILE: u64 = 5 * 1024 * 1024;
+/// Stop adding files once the (pre-compression) total reaches this, so the
+/// attachment stays a reasonable size on the support backend.
+const MAX_TOTAL_BYTES: u64 = 20 * 1024 * 1024;
+
+/// Multi-line PEM private-key blocks. Run over the whole file text because a
+/// per-line scan cannot see a block that spans many lines. `(?s)` lets `.`
+/// match newlines; the lazy `.*?` stops at the first matching `END` line.
+static PEM_PRIVATE_KEY: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----").expect("static PEM regex is valid"));
+
+/// Per-line redaction patterns, applied in order. Each entry is
+/// `(pattern, replacement)`; `replace_all` runs only when `is_match` first
+/// confirms a hit, so a clean line keeps its borrowed `Cow` (no allocation).
+static LINE_REDACTORS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
+    vec![
+        // BIP-39 mnemonic: a run of 12+ lowercase words (each 3-8 letters)
+        // joined by single spaces. Ordinary log prose rarely strings 12 such
+        // words together without a capital, digit, or punctuation breaking the
+        // run, so this favours catching a leaked seed over preserving an
+        // unusually word-dense sentence.
+        (
+            Regex::new(r"\b[a-z]{3,8}(?:[ ][a-z]{3,8}){11,}\b").expect("mnemonic regex"),
+            "[REDACTED_MNEMONIC]",
+        ),
+        // `key: value` / `key=value` for known secret-bearing keys — redact the
+        // value through end of line. The explicit `:`/`=` requirement keeps
+        // benign prose that merely mentions the word ("refresh the token soon")
+        // intact. `${1}` preserves the original key (and its case).
+        (
+            Regex::new(r"(?i)\b(authorization|bearer|token|api[_-]?key|secret|password|passphrase|seed|mnemonic|private[_-]?key)\b\s*[:=]\s*\S.*")
+                .expect("labeled-secret regex"),
+            "${1}=[REDACTED]",
+        ),
+        // Bare `Bearer <token>` / `Token <token>` header values (no separator).
+        (
+            Regex::new(r"(?i)\b(?:bearer|token)\s+[A-Za-z0-9._=+/-]{16,}").expect("bearer regex"),
+            "[REDACTED_TOKEN]",
+        ),
+        // JSON Web Tokens (header.payload[.signature]).
+        (
+            Regex::new(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]*)?").expect("jwt regex"),
+            "[REDACTED_TOKEN]",
+        ),
+        // 0x-prefixed 32-byte hex (private keys / signatures). The exact 64-hex
+        // bound avoids nuking shorter hex IDs or IPFS CIDs that aid debugging.
+        (Regex::new(r"\b0x[0-9a-fA-F]{64}\b").expect("hex-key regex"), "[REDACTED_KEY]"),
+    ]
+});
+
+/// Resolves the log directory (`$HOME/.hippius/logs`).
+fn logs_dir() -> Result<PathBuf, AppError> {
+    dirs::home_dir()
+        .map(|h| h.join(".hippius").join("logs"))
+        .ok_or_else(|| AppError::Other("Could not determine home directory".into()))
+}
+
+/// Redacts a single log line, scrubbing any secrets the patterns recognize.
+///
+/// Returns `Cow::Borrowed` unchanged when the line is clean (the common case),
+/// allocating only when a redaction actually fires.
+fn redact_log_line(line: &str) -> Cow<'_, str> {
+    let mut current = Cow::Borrowed(line);
+    for (re, replacement) in LINE_REDACTORS.iter() {
+        if re.is_match(&current) {
+            current = Cow::Owned(re.replace_all(&current, *replacement).into_owned());
+        }
+    }
+    current
+}
+
+/// Redacts an entire log file's text: a whole-text pass for multi-line PEM
+/// private-key blocks, then a per-line pass for single-line secrets.
+///
+/// Idempotent — running it on already-redacted text yields the same text, since
+/// every replacement token (`[REDACTED…]`) is inert to all patterns. Note that
+/// line endings are normalized to `\n`.
+fn redact_log_text(input: &str) -> String {
+    let pem_stripped = PEM_PRIVATE_KEY.replace_all(input, "[REDACTED_PRIVATE_KEY]");
+
+    let mut out = String::with_capacity(pem_stripped.len());
+    for line in pem_stripped.lines() {
+        out.push_str(&redact_log_line(line));
+        out.push('\n');
+    }
+    out
+}
+
+/// Owns a temporary zip file and removes it on drop.
+///
+/// RAII guarantees the transient upload artifact is cleaned up on every exit
+/// path — normal return, an early `?`, an upload failure, or an unwind — so no
+/// caller has to remember to delete it.
+struct TempZip(PathBuf);
+
+impl TempZip {
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TempZip {
+    fn drop(&mut self) {
+        // Best-effort: a missing file or a permissions error must not panic
+        // during unwind. The OS temp dir is reclaimed regardless.
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+/// Builds a redacted zip of the most recent log files in `dir`.
+///
+/// `dir` is a parameter (not hard-coded) so the bundling logic is unit-testable
+/// against a fixture directory. Returns `Ok(None)` when there is nothing to
+/// ship — the directory is absent (fresh install) or no eligible file remained
+/// after the size caps — so the caller can skip the upload cleanly.
+fn build_log_bundle(dir: &Path) -> Result<Option<TempZip>, AppError> {
+    if !dir.exists() {
+        return Ok(None);
+    }
+
+    // (path, mtime, size) for every regular file, newest first.
+    let mut entries: Vec<(PathBuf, SystemTime, u64)> = Vec::new();
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let Ok(meta) = entry.metadata() else { continue };
+        if !meta.is_file() {
+            continue;
+        }
+        let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+        entries.push((entry.path(), modified, meta.len()));
+    }
+    entries.sort_by_key(|e| std::cmp::Reverse(e.1));
+
+    // Unique name per bundle (UUID, not PID) so two overlapping bundles — a
+    // double-submit, or parallel tests in one process — never share a path
+    // where one's `TempZip` drop would delete the other's file mid-read.
+    let zip_path = std::env::temp_dir().join(format!("hippius-logs-{}.zip", uuid::Uuid::new_v4()));
+    let temp = TempZip(zip_path.clone());
+
+    let file = std::fs::File::create(&zip_path)?;
+    let mut zip = ZipWriter::new(file);
+    let options: FileOptions<'_, ()> = FileOptions::default().compression_method(CompressionMethod::Deflated);
+
+    let mut total: u64 = 0;
+    let mut wrote_any = false;
+    for (path, _, len) in entries.into_iter().take(MAX_FILES) {
+        if len > MAX_BYTES_PER_FILE || total.saturating_add(len) > MAX_TOTAL_BYTES {
+            continue;
+        }
+        // Skip unreadable or non-UTF-8 files rather than aborting the whole
+        // bundle; tracing writes UTF-8, so this only trips on foreign files.
+        let Ok(raw) = std::fs::read_to_string(&path) else { continue };
+        let redacted = redact_log_text(&raw);
+        let name = path
+            .file_name()
+            .map_or_else(|| "log.txt".to_string(), |n| n.to_string_lossy().into_owned());
+        zip.start_file(name, options)
+            .map_err(|e| AppError::Other(format!("zip start_file: {e}")))?;
+        zip.write_all(redacted.as_bytes())?;
+        total = total.saturating_add(redacted.len() as u64);
+        wrote_any = true;
+    }
+    zip.finish().map_err(|e| AppError::Other(format!("zip finish: {e}")))?;
+
+    // No eligible files: let `temp` drop (removing the empty zip) and signal
+    // "nothing to attach" so the caller skips the upload.
+    Ok(if wrote_any { Some(temp) } else { None })
+}
+
+/// Bundles recent (redacted) logs and uploads them to a support ticket message.
+///
+/// Best-effort by contract: returns `Ok(None)` when there are no logs to ship,
+/// and the temporary zip is always removed (RAII), including on upload failure.
+/// The frontend calls this after `create_support_ticket` returns the new
+/// ticket's first message id, wrapped in its own error handling so a log-bundle
+/// failure never fails the ticket itself.
+#[tauri::command]
+pub async fn attach_logs_to_ticket(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: crate::app_state::SessionAccount,
+    ticket_id: String,
+    message_id: String,
+) -> Result<Option<TicketAttachment>, AppError> {
+    info!(ticket_id = %ticket_id, message_id = %message_id, "Bundling logs for support ticket");
+
+    let dir = logs_dir()?;
+    // File enumeration, reads, redaction, and zipping are blocking; keep them
+    // off the async runtime. `build_log_bundle` owns all the blocking work.
+    let bundle = tokio::task::spawn_blocking(move || build_log_bundle(&dir))
+        .await
+        .map_err(|e| AppError::Other(format!("Log bundling task failed: {e}")))??;
+
+    let Some(bundle) = bundle else {
+        info!("No log files to attach; skipping log upload");
+        return Ok(None);
+    };
+
+    let bytes = tokio::fs::read(bundle.path())
+        .await
+        .map_err(|e| AppError::Other(format!("Failed to read log bundle: {e}")))?;
+
+    let attachment =
+        crate::utils::support::upload_attachment_bytes(&state, &account_id, &ticket_id, &message_id, bytes, "hippius-logs.zip".to_string()).await?;
+
+    // `bundle` (TempZip) drops here, removing the temp zip from disk.
+    Ok(Some(attachment))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Read;
+
+    // A valid 12-word BIP-39 mnemonic (all-`a` prefix words from the wordlist).
+    const MNEMONIC_12: &str = "abandon ability able about above absent absorb abstract absurd abuse access accident";
+
+    #[test]
+    fn redacts_twelve_word_mnemonic() {
+        let line = format!("2026-06-08 INFO key import {MNEMONIC_12}");
+        let out = redact_log_line(&line);
+        assert!(out.contains("[REDACTED_MNEMONIC]"), "got: {out}");
+        assert!(!out.contains("abandon"), "mnemonic leaked: {out}");
+        assert!(out.contains("INFO"), "non-secret context should survive: {out}");
+    }
+
+    #[test]
+    fn redacts_twenty_four_word_mnemonic() {
+        let m24 = format!("{MNEMONIC_12} {MNEMONIC_12}");
+        let out = redact_log_line(&m24);
+        assert!(out.contains("[REDACTED_MNEMONIC]"), "got: {out}");
+        assert!(!out.contains("abandon"), "mnemonic leaked: {out}");
+    }
+
+    #[test]
+    fn redacts_authorization_token() {
+        let line = "DEBUG header Authorization: Token eyJabc123.def456.ghi789tail";
+        let out = redact_log_line(line);
+        assert!(!out.contains("eyJabc123"), "token leaked: {out}");
+        assert!(out.contains("[REDACTED]"), "expected redaction marker: {out}");
+    }
+
+    #[test]
+    fn redacts_password_key_value() {
+        let line = "config password=hunter2supersecret loaded ok";
+        let out = redact_log_line(line);
+        assert!(!out.contains("hunter2supersecret"), "password leaked: {out}");
+        assert!(out.contains("password=[REDACTED]"), "got: {out}");
+    }
+
+    #[test]
+    fn redacts_hex_private_key() {
+        let key = "0x".to_string() + &"a1b2c3d4".repeat(8); // 0x + 64 hex chars
+        let line = format!("signing with {key} now");
+        let out = redact_log_line(&line);
+        assert!(out.contains("[REDACTED_KEY]"), "got: {out}");
+        assert!(!out.contains("a1b2c3d4a1b2"), "key leaked: {out}");
+    }
+
+    #[test]
+    fn redacts_pem_private_key_block() {
+        let text = "before\n-----BEGIN PRIVATE KEY-----\nMIIBVgIBADANBg\nkqhkiG9w0BAQEFAA==\n-----END PRIVATE KEY-----\nafter";
+        let out = redact_log_text(text);
+        assert!(out.contains("[REDACTED_PRIVATE_KEY]"), "got: {out}");
+        assert!(!out.contains("MIIBVgIBADAN"), "key body leaked: {out}");
+        assert!(out.contains("before") && out.contains("after"), "surrounding text should survive: {out}");
+    }
+
+    #[test]
+    fn clean_line_is_borrowed_and_unchanged() {
+        let line = "2026-06-08T10:00:00Z INFO hippius: started sync for three drives";
+        let out = redact_log_line(line);
+        assert!(matches!(out, Cow::Borrowed(_)), "clean line must not allocate");
+        assert_eq!(out, line);
+    }
+
+    #[test]
+    fn ordinary_prose_is_not_over_redacted() {
+        let line = "INFO uploaded file report.pdf to drive Documents and finished cleanly";
+        let out = redact_log_line(line);
+        assert_eq!(out, line, "ordinary log prose must pass through unchanged");
+    }
+
+    #[test]
+    fn empty_dir_returns_none() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let bundle = build_log_bundle(dir.path()).expect("bundle");
+        assert!(bundle.is_none(), "empty dir should yield no bundle");
+    }
+
+    #[test]
+    fn missing_dir_returns_none() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = dir.path().join("does-not-exist");
+        let bundle = build_log_bundle(&missing).expect("bundle");
+        assert!(bundle.is_none(), "missing dir should yield no bundle");
+    }
+
+    #[test]
+    fn bundle_produces_valid_zip_without_secrets() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("hippius.2026-06-08.log"), format!("INFO ok\nimport {MNEMONIC_12}\n")).expect("write log");
+        std::fs::write(dir.path().join("hippius.2026-06-07.log"), "INFO previous day\n").expect("write log");
+
+        let bundle = build_log_bundle(dir.path()).expect("bundle").expect("expected a bundle");
+        let file = std::fs::File::open(bundle.path()).expect("open zip");
+        let mut archive = zip::ZipArchive::new(file).expect("read zip");
+        assert!(archive.len() >= 2, "expected both log files zipped, got {}", archive.len());
+
+        let mut combined = String::new();
+        for i in 0..archive.len() {
+            let mut entry = archive.by_index(i).expect("entry");
+            let mut contents = String::new();
+            entry.read_to_string(&mut contents).expect("read entry");
+            combined.push_str(&contents);
+        }
+        assert!(!combined.contains("abandon"), "mnemonic leaked into zip: {combined}");
+        assert!(combined.contains("[REDACTED_MNEMONIC]"), "redaction missing from zip: {combined}");
+    }
+
+    #[test]
+    fn oversized_file_is_skipped() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // One oversized file (skipped) and one normal file (kept).
+        let big = vec![b'x'; (MAX_BYTES_PER_FILE + 1) as usize];
+        std::fs::write(dir.path().join("hippius.big.log"), &big).expect("write big");
+        std::fs::write(dir.path().join("hippius.small.log"), "INFO small\n").expect("write small");
+
+        let bundle = build_log_bundle(dir.path()).expect("bundle").expect("expected a bundle");
+        let file = std::fs::File::open(bundle.path()).expect("open zip");
+        let archive = zip::ZipArchive::new(file).expect("read zip");
+        assert_eq!(archive.len(), 1, "oversized file should be skipped, only the small one kept");
+    }
+
+    #[test]
+    fn temp_zip_drop_removes_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("artifact.zip");
+        std::fs::write(&path, b"zip").expect("write");
+        assert!(path.exists());
+        {
+            let _guard = TempZip(path.clone());
+        }
+        assert!(!path.exists(), "TempZip drop should remove the file");
+    }
+
+    proptest::proptest! {
+        /// Redaction is idempotent: a second pass over already-redacted text is
+        /// a no-op. The generator covers printable ASCII plus newlines — the
+        /// shape real log text takes.
+        #[test]
+        fn redaction_is_idempotent(s in "[ -~\n]{0,300}") {
+            let once = redact_log_text(&s);
+            let twice = redact_log_text(&once);
+            proptest::prop_assert_eq!(once, twice);
+        }
+    }
+}
