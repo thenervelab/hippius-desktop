@@ -16,6 +16,13 @@ const LeftCarouselPanel = () => {
   // Theme: the app uses Tailwind's media dark-mode strategy (no .dark class),
   // so we mirror it by reading prefers-color-scheme directly to pick the clip.
   const [prefersDark, setPrefersDark] = useState(false);
+  // Gate the <video> behind a client-mount flag so it first mounts only AFTER
+  // `prefersDark` is resolved below. Otherwise the SSR/first paint mounts the
+  // light clip, then the theme effect flips `prefersDark`, the keyed <video>
+  // remounts to the dark src mid-autoplay, and WKWebView drops that second
+  // play() — leaving slide 0 paused with the overlay play button (slides 2-4
+  // are unaffected because they first mount after the theme has settled).
+  const [mounted, setMounted] = useState(false);
   // The active slide is React state because we mount the <video> for ONLY that
   // slide. Linux's WebKitGTK webview has a small simultaneous-video-decoder
   // pool; mounting all four clips at once exhausts it and later slides freeze
@@ -42,9 +49,40 @@ const LeftCarouselPanel = () => {
   useEffect(() => {
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
     setPrefersDark(mq.matches);
+    // Batched with setPrefersDark, so the video's first mount already has the
+    // correct theme src — no remount, so autoplay survives on slide 0.
+    setMounted(true);
     const onChange = (e: MediaQueryListEvent) => setPrefersDark(e.matches);
     mq.addEventListener("change", onChange);
     return () => mq.removeEventListener("change", onChange);
+  }, []);
+
+  // Tauri's WKWebView requires a user gesture before it will start media
+  // playback (its default), so the muted programmatic play() in `primeVideo` is
+  // refused on a cold load and slide 0 freezes on its first frame until the
+  // user interacts — after which everything (including auto-advance) works.
+  // Kickstart the active slide's <video> on the very first interaction ANYWHERE
+  // in the window (a mouse move/click/scroll/key, which happens within moments
+  // of the login screen appearing). One-shot: each listener removes itself.
+  useEffect(() => {
+    const playActive = () => {
+      const video = videoFrameRef.current?.querySelector("video");
+      if (video) void video.play().catch(() => {});
+      cleanup();
+    };
+    const events = [
+      "pointerdown",
+      "pointermove",
+      "keydown",
+      "wheel",
+      "touchstart",
+    ] as const;
+    const cleanup = () =>
+      events.forEach((e) => window.removeEventListener(e, playActive));
+    events.forEach((e) =>
+      window.addEventListener(e, playActive, { once: true, passive: true }),
+    );
+    return cleanup;
   }, []);
 
   useEffect(() => {
@@ -102,18 +140,31 @@ const LeftCarouselPanel = () => {
     swiper.slideTo((index + 1) % SWIPE_CONTENT.length);
   }, []);
 
-  // React assigns the `muted` JSX prop as a DOM *property*, and on first mount
-  // that assignment can land *after* WebKit has already evaluated its autoplay
-  // policy. macOS WKWebView then sees an un-muted clip, refuses to autoplay it,
-  // and paints its native "tap to play" overlay button — the macOS-only symptom
-  // (Linux's WebKitGTK autoplays regardless, so it never appears there). Forcing
-  // muted on the node itself, then kicking play() once the ref attaches,
-  // guarantees WKWebView evaluates a muted clip and autoplays it.
+  // Autoplay on the very first page load is the tricky case (after any
+  // navigation the document has a user gesture, so play() always works).
+  //
+  // We deliberately do NOT use the `autoplay` attribute. WKWebView evaluates it
+  // at parse time, and because React emits `muted` as a *property* (not the HTML
+  // attribute), it sees an un-muted clip, blocks the autoplay, and paints its
+  // native "tap to play" overlay. Once blocked, a later programmatic play() is
+  // refused (no user gesture) — so slide 0 stays paused on first load while
+  // slides 2-4 (mounted after a gesture) are fine.
+  //
+  // Instead we force the element muted (property AND attribute, so the gate can
+  // never see it un-muted) and start it ourselves: a *muted* programmatic
+  // play() is allowed with no user gesture. The play() is retried on the first
+  // readiness event in case the ref attaches before the media can play.
   const primeVideo = useCallback((video: HTMLVideoElement | null) => {
     if (!video) return;
     video.defaultMuted = true;
     video.muted = true;
-    void video.play().catch(() => {});
+    video.setAttribute("muted", "");
+    const play = () => void video.play().catch(() => {});
+    play();
+    // One-shot retries: harmless no-ops if it's already playing, and the
+    // listeners die with the element on the next remount/unmount.
+    video.addEventListener("loadeddata", play, { once: true });
+    video.addEventListener("canplay", play, { once: true });
   }, []);
 
   const cropLockScale = computeCropLockScale(baseFrameRef.current, frameSize);
@@ -181,23 +232,24 @@ const LeftCarouselPanel = () => {
                        * panel size changes do not reveal more/less of the clip.
                        * We only enable `loop` after manual interaction so the
                        * `ended` event can still drive auto-advance otherwise.
-                       * autoPlay + the onCanPlay nudge start it reliably even
-                       * when the clip needs a moment to buffer.
+                       * `primeVideo` (the ref) forces the element muted and
+                       * starts it with a programmatic play(), retried on the
+                       * first readiness event — see its comment for why we avoid
+                       * the `autoplay` attribute.
                        */}
-                      {(index === activeIndex || index === prevIndex) && (
+                      {mounted &&
+                        (index === activeIndex || index === prevIndex) && (
                         <video
                           key={`${index}-${prefersDark}`}
                           ref={primeVideo}
                           src={prefersDark ? item.videoDark : item.video}
-                          autoPlay
+                          // No `autoPlay` on purpose — primeVideo starts it via a
+                          // muted programmatic play() so WKWebView can't block the
+                          // first-load autoplay and paint the overlay button.
                           muted
                           playsInline
                           loop={manualLoop && index === activeIndex}
                           preload="auto"
-                          onCanPlay={(e) => {
-                            if (e.currentTarget.paused)
-                              void e.currentTarget.play().catch(() => {});
-                          }}
                           onEnded={(e) => handleEnded(e.currentTarget, index)}
                           style={{
                             transform: `translate(-50%, -50%) scale(${
