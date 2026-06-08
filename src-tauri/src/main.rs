@@ -124,8 +124,9 @@ fn load_env() {
 /// Initializes tracing with a stdout layer plus a daily rolling-file layer
 /// under `$HOME/.hippius/logs/` (files named `hippius.YYYY-MM-DD.log`).
 ///
-/// Returns the [`WorkerGuard`] for the non-blocking file writer. The caller
-/// MUST hold it for the whole process lifetime: dropping it flushes the
+/// Returns `Some(WorkerGuard)` when the rolling-file writer is enabled, or
+/// `None` when file logging was skipped (see below). When present, the caller
+/// MUST hold the guard for the whole process lifetime: dropping it flushes the
 /// background writer thread and then stops it, so any log emitted afterwards
 /// is silently lost. Binding it to a `main`-scoped local is the crate's
 /// documented idiom and keeps it alive exactly as long as the app runs.
