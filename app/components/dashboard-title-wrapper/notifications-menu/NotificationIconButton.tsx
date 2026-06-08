@@ -1,15 +1,27 @@
 "use client";
 
+import * as React from "react";
 import { Icons } from "@/app/components/ui";
 import { Button } from "@/components/ui/button";
 import cn from "@/app/lib/utils/cn";
 
-const NotificationIconButton: React.FC<{
+type NotificationIconButtonProps = {
   className?: string;
   count: number;
-}> = ({ className, count }) => {
+} & React.ButtonHTMLAttributes<HTMLButtonElement>;
+
+// forwardRef so a Radix `Trigger asChild` (the notifications Menubar) can clone
+// this and merge its menu-item behavior — role, aria, ref, pointer handlers —
+// straight onto the single underlying <button>. Without forwarding, the trigger
+// needed its own wrapper <button>, which nested two buttons and produced a
+// hydration error ("<button> cannot be a descendant of <button>").
+const NotificationIconButton = React.forwardRef<
+  HTMLButtonElement,
+  NotificationIconButtonProps
+>(({ className, count, ...props }, ref) => {
   return (
     <Button
+      ref={ref}
       type="button"
       variant="ghost"
       size="noStyle"
@@ -20,6 +32,7 @@ const NotificationIconButton: React.FC<{
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-50 focus-visible:ring-offset-2",
         className,
       )}
+      {...props}
     >
       <Icons.Notification className="size-4 text-grey-10 opacity-40 dark:text-grey-light-100 dark:opacity-100" />
       {count > 0 && (
@@ -35,6 +48,8 @@ const NotificationIconButton: React.FC<{
       )}
     </Button>
   );
-};
+});
+
+NotificationIconButton.displayName = "NotificationIconButton";
 
 export default NotificationIconButton;

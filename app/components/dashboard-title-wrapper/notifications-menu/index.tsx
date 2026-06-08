@@ -48,9 +48,7 @@ export default function NotificationMenu({ className = "delay-500" }: Props) {
     >
       <Menubar.Menu value="notifications">
         <Menubar.Trigger asChild>
-          <button>
-            <NotificationIconButton className={className} count={count} />
-          </button>
+          <NotificationIconButton className={className} count={count} />
         </Menubar.Trigger>
 
         <Menubar.Portal>
