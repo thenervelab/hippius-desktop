@@ -58,6 +58,27 @@ async fn probe_recovery_state_bounded<E: std::fmt::Display>(
     }
 }
 
+/// Decide the recovery-gate transition for an OAuth session restore from the
+/// probe result.
+///
+/// `Some(Proceed)` is the only state that lets sync run straight away
+/// (`Skipped`); every other resolved flow is `Pending` because the recovery
+/// dialog must run first. Crucially, a **`None`** probe result (timeout or
+/// error) is also `Pending`, not `Skipped`: a failed probe means we do not
+/// know whether this device needs the server-sealed mnemonic, so the gate
+/// must keep `ensure_sync_mnemonic` parked rather than let it mint a fresh
+/// mnemonic on a fresh device — minting there collides with the server blob
+/// the user later unlocks and corrupts the drive password (the race the gate
+/// guards, see `ensure_sync_mnemonic`). The gate's startup default is
+/// `Skipped` (`AppState::new`), so leaving it untouched on a `None` probe is
+/// exactly the unsafe behavior this funnels away from.
+fn recovery_gate_target(check: Option<&crate::recovery::RecoveryCheck>) -> crate::recovery::RecoveryGateState {
+    match check {
+        Some(c) if matches!(c.recommended_flow, crate::recovery::RecoveryFlow::Proceed) => crate::recovery::RecoveryGateState::Skipped,
+        _ => crate::recovery::RecoveryGateState::Pending,
+    }
+}
+
 /// Re-arm the Tauri asset protocol scope for every configured sync path
 /// of `account_id`.
 ///
@@ -381,19 +402,26 @@ pub async fn restore_session(
                     };
                     let ((), recovery_check) = tokio::join!(asset_scope_fut, recovery_probe_fut);
 
-                    if let Some(recovery_check) = recovery_check {
-                        let gate_target = match recovery_check.recommended_flow {
-                            crate::recovery::RecoveryFlow::Proceed => crate::recovery::RecoveryGateState::Skipped,
-                            _ => crate::recovery::RecoveryGateState::Pending,
-                        };
+                    // For OAuth restore the gate MUST be set even when the probe
+                    // produced no result: a `None` (timeout/error) leaves it
+                    // `Pending` so `ensure_sync_mnemonic` parks instead of
+                    // minting a mnemonic on a device that may need the server
+                    // blob. Non-OAuth restore never touches the gate (its
+                    // startup default `Skipped` is correct for mnemonic users).
+                    if auth_type == "oauth" {
+                        let gate_target = recovery_gate_target(recovery_check.as_ref());
                         state.set_recovery_state(gate_target);
-                        info!(
-                            flow = ?recovery_check.recommended_flow,
-                            gate = ?gate_target,
-                            "session_restore: emitting oauth_recovery_check_needed so FE can render dialog"
-                        );
-                        if let Err(e) = app.emit("oauth_recovery_check_needed", &recovery_check) {
-                            warn!(error = %e, "session_restore: failed to emit oauth_recovery_check_needed");
+                        if let Some(recovery_check) = recovery_check {
+                            info!(
+                                flow = ?recovery_check.recommended_flow,
+                                gate = ?gate_target,
+                                "session_restore: emitting oauth_recovery_check_needed so FE can render dialog"
+                            );
+                            if let Err(e) = app.emit("oauth_recovery_check_needed", &recovery_check) {
+                                warn!(error = %e, "session_restore: failed to emit oauth_recovery_check_needed");
+                            }
+                        } else {
+                            warn!("session_restore: recovery probe unavailable; gate left Pending so sync waits for next launch");
                         }
                     }
 
@@ -598,7 +626,7 @@ pub async fn is_token_valid(state: tauri::State<'_, crate::app_state::AppState>,
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::recovery::{RecoveryCheck, RecoveryFlow};
+    use crate::recovery::{RecoveryCheck, RecoveryFlow, RecoveryGateState};
 
     fn sample_check() -> RecoveryCheck {
         RecoveryCheck {
@@ -636,5 +664,37 @@ mod tests {
     async fn recovery_probe_returns_none_on_error() {
         let out = probe_recovery_state_bounded(async { Err::<RecoveryCheck, _>("probe failed") }).await;
         assert!(out.is_none(), "a probe error must collapse to None");
+    }
+
+    fn check_with(flow: RecoveryFlow) -> RecoveryCheck {
+        RecoveryCheck { recommended_flow: flow, ..sample_check() }
+    }
+
+    // Only a resolved Proceed lets sync run immediately.
+    #[test]
+    fn gate_target_proceed_is_skipped() {
+        let check = check_with(RecoveryFlow::Proceed);
+        assert_eq!(recovery_gate_target(Some(&check)), RecoveryGateState::Skipped);
+    }
+
+    // Every flow that needs the recovery dialog parks the gate.
+    #[test]
+    fn gate_target_recovery_flows_are_pending() {
+        for flow in [RecoveryFlow::Unlock, RecoveryFlow::Signup, RecoveryFlow::Unknown] {
+            let check = check_with(flow);
+            assert_eq!(
+                recovery_gate_target(Some(&check)),
+                RecoveryGateState::Pending,
+                "{flow:?} must keep the gate Pending"
+            );
+        }
+    }
+
+    // The regression guard: a failed/timed-out probe (None) must NOT leave the
+    // gate at its Skipped default — that would let ensure_sync_mnemonic mint a
+    // mnemonic on a fresh device and corrupt the drive once the user unlocks.
+    #[test]
+    fn gate_target_absent_probe_is_pending() {
+        assert_eq!(recovery_gate_target(None), RecoveryGateState::Pending);
     }
 }
