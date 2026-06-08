@@ -13,6 +13,51 @@ use crate::error::AppError;
 use tauri::Emitter;
 use tracing::{info, warn};
 
+/// Wall-clock bound for the OAuth-branch recovery-state network probe.
+///
+/// `restore_session` itself is deliberately *not* given an outer
+/// deadline. It performs a synchronous OS-keychain read
+/// (`rehydrate_or_restored` → `keychain::load_mnemonic`) which, on macOS,
+/// blocks on a system password prompt the user may take minutes to
+/// answer. A wall-clock cap over the whole call is exactly what surfaced
+/// the "restore_session timed out" toast and abandoned boot when a user
+/// typed slowly — waiting on a human is not a hang. The only step that
+/// can hang on something *other than the user* is the network probe to
+/// hcfs-server, so the deadline is scoped to just that probe.
+const RECOVERY_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Run the best-effort recovery-state probe under [`RECOVERY_PROBE_TIMEOUT`].
+///
+/// Returns `Some(check)` when the probe completes in time, and `None`
+/// when it errors or the deadline elapses. Both non-success cases
+/// collapse to `None` on purpose: the probe is best-effort, so the caller
+/// simply skips the `oauth_recovery_check_needed` emit and the dialog
+/// re-fires on the next launch.
+///
+/// The probe future is dropped on timeout. That is cancellation-safe
+/// (axiom `rust_quality_128`): `check_recovery_state_inner` is a
+/// read-mostly server probe whose only write
+/// (`seed_hcfs_server_url_if_missing`) is idempotent, so a drop mid-flight
+/// loses no durable state.
+async fn probe_recovery_state_bounded<E: std::fmt::Display>(
+    fut: impl std::future::Future<Output = Result<crate::recovery::RecoveryCheck, E>>,
+) -> Option<crate::recovery::RecoveryCheck> {
+    match tokio::time::timeout(RECOVERY_PROBE_TIMEOUT, fut).await {
+        Ok(Ok(check)) => Some(check),
+        Ok(Err(e)) => {
+            warn!(error = %e, "session_restore: recovery probe failed; skipping oauth_recovery_check_needed emit");
+            None
+        }
+        Err(_elapsed) => {
+            warn!(
+                timeout_secs = RECOVERY_PROBE_TIMEOUT.as_secs(),
+                "session_restore: recovery probe timed out; skipping emit (dialog re-fires next launch)"
+            );
+            None
+        }
+    }
+}
+
 /// Re-arm the Tauri asset protocol scope for every configured sync path
 /// of `account_id`.
 ///
@@ -323,33 +368,32 @@ pub async fn restore_session(
                     };
                     let recovery_probe_fut = async {
                         if auth_type == "oauth" {
-                            Some(crate::recovery::check_recovery_state_inner(&state).await)
+                            // Bound ONLY this network probe — never the
+                            // keychain read above. An unreachable hcfs-server
+                            // must not hang boot, but a slow user
+                            // keychain-password prompt legitimately takes
+                            // minutes and stays unbounded. Timeout and error
+                            // both collapse to `None` inside the helper.
+                            probe_recovery_state_bounded(crate::recovery::check_recovery_state_inner(&state)).await
                         } else {
                             None
                         }
                     };
-                    let ((), recovery_result) = tokio::join!(asset_scope_fut, recovery_probe_fut);
+                    let ((), recovery_check) = tokio::join!(asset_scope_fut, recovery_probe_fut);
 
-                    if let Some(rc_result) = recovery_result {
-                        match rc_result {
-                            Ok(recovery_check) => {
-                                let gate_target = match recovery_check.recommended_flow {
-                                    crate::recovery::RecoveryFlow::Proceed => crate::recovery::RecoveryGateState::Skipped,
-                                    _ => crate::recovery::RecoveryGateState::Pending,
-                                };
-                                state.set_recovery_state(gate_target);
-                                info!(
-                                    flow = ?recovery_check.recommended_flow,
-                                    gate = ?gate_target,
-                                    "session_restore: emitting oauth_recovery_check_needed so FE can render dialog"
-                                );
-                                if let Err(e) = app.emit("oauth_recovery_check_needed", &recovery_check) {
-                                    warn!(error = %e, "session_restore: failed to emit oauth_recovery_check_needed");
-                                }
-                            }
-                            Err(e) => {
-                                warn!(error = %e, "session_restore: check_recovery_state_inner failed; skipping emit");
-                            }
+                    if let Some(recovery_check) = recovery_check {
+                        let gate_target = match recovery_check.recommended_flow {
+                            crate::recovery::RecoveryFlow::Proceed => crate::recovery::RecoveryGateState::Skipped,
+                            _ => crate::recovery::RecoveryGateState::Pending,
+                        };
+                        state.set_recovery_state(gate_target);
+                        info!(
+                            flow = ?recovery_check.recommended_flow,
+                            gate = ?gate_target,
+                            "session_restore: emitting oauth_recovery_check_needed so FE can render dialog"
+                        );
+                        if let Err(e) = app.emit("oauth_recovery_check_needed", &recovery_check) {
+                            warn!(error = %e, "session_restore: failed to emit oauth_recovery_check_needed");
                         }
                     }
 
@@ -549,4 +593,48 @@ pub async fn is_token_valid(state: tauri::State<'_, crate::app_state::AppState>,
         Some(TokenStatus { token: Some(_), expiry_ms: Some(expiry) })
             if expiry == 0 || expiry > chrono::Utc::now().timestamp_millis()
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::recovery::{RecoveryCheck, RecoveryFlow};
+
+    fn sample_check() -> RecoveryCheck {
+        RecoveryCheck {
+            has_server_blob: false,
+            has_local_mnemonic: true,
+            updated_at: None,
+            recommended_flow: RecoveryFlow::Proceed,
+            should_prompt_legacy_migration: false,
+        }
+    }
+
+    // A probe that completes within the deadline surfaces its result.
+    #[tokio::test(start_paused = true)]
+    async fn recovery_probe_returns_some_when_fast() {
+        let out = probe_recovery_state_bounded(async { Ok::<_, String>(sample_check()) }).await;
+        assert!(out.is_some(), "a fast probe must surface its RecoveryCheck");
+    }
+
+    // Fault injection (axiom rust_quality_30): a probe that stalls past the
+    // deadline is dropped and collapses to `None` so boot proceeds rather
+    // than hanging. `start_paused` auto-advances virtual time to the
+    // timeout, so this resolves instantly instead of sleeping 20s.
+    #[tokio::test(start_paused = true)]
+    async fn recovery_probe_returns_none_on_timeout() {
+        let out = probe_recovery_state_bounded(async {
+            tokio::time::sleep(RECOVERY_PROBE_TIMEOUT * 2).await;
+            Ok::<_, String>(sample_check())
+        })
+        .await;
+        assert!(out.is_none(), "a stalled probe must time out to None, not hang boot");
+    }
+
+    // A probe error is best-effort: it collapses to `None`, never aborting restore.
+    #[tokio::test(start_paused = true)]
+    async fn recovery_probe_returns_none_on_error() {
+        let out = probe_recovery_state_bounded(async { Err::<RecoveryCheck, _>("probe failed") }).await;
+        assert!(out.is_none(), "a probe error must collapse to None");
+    }
 }
