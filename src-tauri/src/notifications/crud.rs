@@ -166,9 +166,9 @@ pub async fn add_notification(
     creation_time: Option<i64>,
     release_notes: Option<String>,
 ) -> Result<i64, AppError> {
-    // Inserts a notification row under `user_address`; authorize against the
-    // session account so a caller can't inject rows into another account.
-    let user_address = state.require_session_account(&user_address)?;
+    // Scope the write to the signed-in account; never trust the caller-supplied
+    // address (audit 2026-06-05, finding E1). Mirrors list_notifications.
+    let user_address = crate::notifications::session_scoped_notification_account(state.inner(), &user_address)?;
     let pool = state.pool()?;
 
     // User-scoped dedup for welcome notifications. The previous guard

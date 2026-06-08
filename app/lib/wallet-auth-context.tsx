@@ -13,6 +13,7 @@ import {
 } from "./helpers/hippiusDesktopDB";
 
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import { logger } from "@/lib/utils/logger";
 
 import { invoke } from "@tauri-apps/api/core";
@@ -153,7 +154,15 @@ export function WalletAuthProvider({
         const currentAddress = polkadotAddressRef.current;
         await invoke("logout_full", { accountId: currentAddress || "" });
       } catch (err) {
-        console.warn("[WalletAuth] logout_full failed:", err);
+        // logout_full now rejects when the persisted session could NOT be
+        // cleared (Rust leaves the in-memory session intact). Clearing local
+        // state and redirecting here would blank the UI while the backend stays
+        // logged in, and the live on-disk token would silently rehydrate the
+        // session on the next boot. Keep the user logged in and surface the
+        // failure so they can retry (audit 2026-06-05, D6 follow-up).
+        logger.warn("[WalletAuth] logout_full failed; keeping session:", err);
+        toast.error("Logout failed — your session is still active. Please try again.");
+        return;
       }
 
       // Clear browser-side OAuth session (Rust can't access localStorage)

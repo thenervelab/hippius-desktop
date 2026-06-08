@@ -65,6 +65,9 @@ import { NameCellExpander } from "./FolderRail";
 import { preserveClosestScrollPosition } from "./preserveClosestScrollPosition";
 
 import { toast } from "sonner";
+import { invoke } from "@tauri-apps/api/core";
+import { useQueryClient } from "@tanstack/react-query";
+import { Refresh } from "@/components/ui/icons";
 
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
 const columnHelper = createColumnHelper<FormattedUserFile>();
@@ -229,6 +232,9 @@ const FilesTable: FC<FilesTableProps> = memo(
       () => drivePathsByLabel ?? {},
       [drivePathsByLabel],
     );
+    // For the row "Retry sync" action: invalidate the drive's failures query
+    // after a retry so the badge/reason clears immediately.
+    const queryClient = useQueryClient();
     const normalizedSubfolderPath = useMemo(() => {
       if (!currentSubfolderPath) return "";
       return currentSubfolderPath.replace(/^\/+|\/+$/g, "");
@@ -678,6 +684,32 @@ const FilesTable: FC<FilesTableProps> = memo(
             onItemClick: () => handleDownload(file),
             disabled: itemDeleting,
           },
+          ...(!file.isFolder && file.syncStatus === "failed" && file.label
+            ? [
+                {
+                  icon: <Refresh className="size-4" />,
+                  itemTitle: "Retry sync",
+                  onItemClick: () => {
+                    const relativePath = resolveRelativePath(
+                      parentSubFolderPath ?? normalizedSubfolderPath,
+                      file.actualFileName || file.name,
+                    );
+                    void invoke("retry_file_failure", {
+                      label: file.label,
+                      path: relativePath,
+                    })
+                      .then(() => {
+                        void queryClient.invalidateQueries({
+                          queryKey: ["drive-failures", file.label],
+                        });
+                        toast.success("Retrying sync…");
+                      })
+                      .catch((e) => toast.error(`Retry failed: ${e}`));
+                  },
+                  disabled: itemDeleting,
+                },
+              ]
+            : []),
           ...((fileType === "video" ||
             fileType === "image" ||
             fileType === "PDF") &&
@@ -788,6 +820,8 @@ const FilesTable: FC<FilesTableProps> = memo(
         setShareModalFile,
         isItemDeleting,
         normalizedSubfolderPath,
+        resolveRelativePath,
+        queryClient,
       ],
     );
 

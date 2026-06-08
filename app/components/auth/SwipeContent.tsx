@@ -28,31 +28,31 @@ export const SWIPE_CONTENT: SwipeSlide[] = [
     description:
       "A global network of independent nodes. Your files stay safe and accessible even if part of the network goes offline.",
     video: "/assets/signin/1-light.mp4",
-    videoDark: "/assets/signin/1-light.mp4",
-    cropX: -15,
+    videoDark: "/assets/signin/1-dark-srgb.mp4",
+    cropX: 0,
   },
   {
     title: "Confidential Computing",
     description:
       "Hardware-encrypted virtual machines. Not even the host can read your code or your data.",
     video: "/assets/signin/2-light.mp4",
-    videoDark: "/assets/signin/2-light.mp4",
-    cropX: -30,
+    videoDark: "/assets/signin/2-dark-srgb.mp4",
+    cropX: -25,
   },
   {
     title: "Bridge & Staking",
     description:
       "Stake your tokens and earn as the Hippius network grows. Transparent, non-custodial, on-chain.",
     video: "/assets/signin/3-light.mp4",
-    videoDark: "/assets/signin/3-light.mp4",
-    cropX: -30,
+    videoDark: "/assets/signin/3-dark-srgb.mp4",
+    cropX: -20,
   },
   {
     title: "Referrals",
     description:
       "Invite friends and earn credits every time they use Hippius. Credits apply directly to your storage and compute.",
     video: "/assets/signin/4-light.mp4",
-    videoDark: "/assets/signin/4-light.mp4",
+    videoDark: "/assets/signin/4-dark-srgb.mp4",
     cropX: 0,
   },
 ];

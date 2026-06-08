@@ -13,6 +13,12 @@ import {
   useFileLiveProgress,
   type LiveFileStatus,
 } from "@/app/lib/hooks/useFileLiveProgress";
+import {
+  useFileFailure,
+  useRetryFailure,
+} from "@/app/lib/hooks/useFileFailure";
+import { failureMessage } from "@/app/lib/utils/failureMessage";
+import type { FileFailureRecord } from "@/app/lib/types/fileFailure";
 
 // Mirrors `FormattedUserFile.syncStatus`. `failed` is the FE-facing label for a
 // snapshot file whose Rust-side `FileProgressStatus` is `Error` — e.g. an
@@ -97,7 +103,12 @@ const FileStatusBadge: FC<{
   status: BadgeStatus | null;
   progressPercent: number | null;
   syncedBadgeMs: number;
-}> = ({ status, progressPercent, syncedBadgeMs }) => {
+  /** Persisted failure for this row, if any — drives the "why" tooltip. */
+  failure?: FileFailureRecord | null;
+  /** Retry handler; when present the Failed pill becomes click-to-retry. */
+  onRetry?: () => void;
+  retrying?: boolean;
+}> = ({ status, progressPercent, syncedBadgeMs, failure, onRetry, retrying }) => {
   // Tracks whether the live `synced` indicator is still within its
   // post-completion window. We start at `null` so the initial mount
   // doesn't count as a transition (already-synced rows shouldn't flash).
@@ -172,27 +183,41 @@ const FileStatusBadge: FC<{
 
   if (status === "failed") {
     // Dark mode mirrors Figma node 5225:131500: #FF6D61 at 20% opacity
-    // with solid #FF6D61 text.
+    // with solid #FF6D61 text. The tooltip now shows the *reason* (from the
+    // persisted failure record) and the pill is click-to-retry when a retry
+    // handler is available.
+    const reason = failure
+      ? failureMessage(failure)
+      : "This file failed to sync. Please try again.";
+    const canRetry = Boolean(onRetry) && !retrying;
     return (
       <CustomTooltip2
         side="top"
-        tooltipContent="This file failed to sync. Please try again."
+        tooltipContent={canRetry ? `${reason} Click to retry.` : reason}
       >
         <span
           data-testid="sync-status-failed"
-          aria-label="Upload failed"
+          role={onRetry ? "button" : undefined}
+          tabIndex={onRetry ? 0 : undefined}
+          aria-label={onRetry ? "Upload failed — click to retry" : "Upload failed"}
+          onClick={
+            onRetry
+              ? (e) => {
+                  // Don't let the retry click bubble into the row's open/preview.
+                  e.stopPropagation();
+                  e.preventDefault();
+                  if (canRetry) onRetry();
+                }
+              : undefined
+          }
           className={cn(
             pillBase,
             "bg-[#FF6D61] dark:bg-[#FF6D61]/20",
+            onRetry && "cursor-pointer",
           )}
         >
-          <span
-            className={cn(
-              pillLabel,
-              "text-white dark:text-[#FF6D61]",
-            )}
-          >
-            Failed
+          <span className={cn(pillLabel, "text-white dark:text-[#FF6D61]")}>
+            {retrying ? "Retrying…" : "Failed"}
           </span>
         </span>
       </CustomTooltip2>
@@ -271,6 +296,12 @@ const NameCell: FC<NameCellProps> = ({
   const badgeStatus = isFolder
     ? null
     : resolveBadgeStatus(live.status, syncStatus);
+
+  // The persisted "why it failed" record + a retry handler for this row. The
+  // drive query is shared across all rows (TanStack dedupe); folders never
+  // match, so they read it for free.
+  const failure = useFileFailure(label, actualName ?? rawName);
+  const { retryFile } = useRetryFailure(label);
 
   const mainFolderHash = getParam("mainFolderCid", "");
   const folderActualName = isFolder ? actualName || "" : "";
@@ -364,6 +395,11 @@ const NameCell: FC<NameCellProps> = ({
             status={badgeStatus}
             progressPercent={live.progressPercent}
             syncedBadgeMs={syncedBadgeMs}
+            failure={failure}
+            onRetry={
+              failure ? () => retryFile.mutate(failure.relativePath) : undefined
+            }
+            retrying={retryFile.isPending}
           />
         </div>
       )}

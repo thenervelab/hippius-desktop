@@ -181,6 +181,13 @@ pub async fn get_api_token(pool: &SqlitePool, account_id: &str) -> crate::error:
 pub async fn is_token_expiring(pool: &SqlitePool, account_id: &str, margin_secs: i64) -> bool {
     match crate::auth::auth_session_repo::get_token_and_expiry(pool, account_id).await {
         Ok(Some(crate::auth::auth_session_repo::TokenStatus { expiry_ms: Some(expiry), .. })) => {
+            // Convention (unified in D5): expiry == 0 means "never expires", so a
+            // never-expiring token never needs proactive refresh. Without this
+            // guard `0 - now` is a large negative < margin and would force a
+            // pointless refresh every cycle (PR review 2026-06-05).
+            if expiry == 0 {
+                return false;
+            }
             let now = chrono::Utc::now().timestamp_millis();
             expiry - now < margin_secs * 1000
         }
@@ -278,5 +285,49 @@ mod tests {
         let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
         let err = get_api_token(&pool, ACCOUNT_A).await.unwrap_err();
         assert!(matches!(err, crate::error::AppError::Db(_)), "expected Db, got {err:?}");
+    }
+
+    /// D5 convention: a token with `expiry == 0` ("never expires") must NOT be
+    /// reported as expiring — otherwise the sync loop force-refreshes a
+    /// never-expiring token every cycle (PR review 2026-06-05).
+    #[tokio::test]
+    async fn never_expiring_token_is_not_reported_as_expiring() {
+        let pool = setup_db().await;
+        auth_session_repo::upsert(
+            &pool,
+            UpsertSession {
+                substrate_address: ACCOUNT_A,
+                token: "eternal",
+                token_expiry_ms: 0, // never expires
+                user_id: Some(1),
+                username: "alice",
+                provider: "mnemonic",
+                logout_time_minutes: Some(1440),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            !is_token_expiring(&pool, ACCOUNT_A, 300).await,
+            "expiry==0 means never-expires; it must not be treated as expiring"
+        );
+
+        // Sanity: an already-past expiry IS reported as expiring.
+        auth_session_repo::upsert(
+            &pool,
+            UpsertSession {
+                substrate_address: ACCOUNT_B,
+                token: "stale",
+                token_expiry_ms: 1, // 1970 — long past
+                user_id: Some(2),
+                username: "bob",
+                provider: "mnemonic",
+                logout_time_minutes: Some(1440),
+            },
+        )
+        .await
+        .unwrap();
+        assert!(is_token_expiring(&pool, ACCOUNT_B, 300).await, "a past expiry must be reported as expiring");
     }
 }

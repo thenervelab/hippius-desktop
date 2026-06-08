@@ -278,6 +278,17 @@ mod tests {
     }
 
     #[test]
+    fn planck_to_hip_sub_one_hip_referral_reward_is_not_zero() {
+        // Referral rewards are frequently sub-1-HIP. `get_referral_links` used
+        // integer division (`reward_raw / 10^18`), which truncated these to "0";
+        // routing the planck value through this converter preserves the
+        // fraction (audit 2026-06-05, finding C1).
+        assert_eq!(planck_to_hip("500000000000000000"), "0.5");
+        assert_eq!(planck_to_hip("12345000000000000"), "0.012345");
+        assert_eq!(planck_to_hip("1"), "0"); // genuinely below the 6-decimal display floor
+    }
+
+    #[test]
     fn planck_to_hip_sub_unit() {
         // 0.000001 HIP — exactly at the 6-decimal display boundary.
         assert_eq!(planck_to_hip("1000000000000"), "0.000001");

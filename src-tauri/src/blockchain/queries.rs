@@ -320,8 +320,6 @@ pub async fn get_referral_links(
         .await
         .map_err(|e| crate::error::AppError::Substrate(format!("ReferralCodes query failed: {e}")))?;
 
-    let decimals = 10u128.pow(18);
-
     // Walk the iterator sequentially (subxt requires &mut self for next).
     // Collect matching codes first, then fan out the per-code reward
     // fetches concurrently with `try_join_all`. Previously each match's
@@ -375,8 +373,11 @@ pub async fn get_referral_links(
         .into_iter()
         .zip(rewards)
         .map(|((_, code), reward_raw)| ReferralLink {
+            // Convert planck → HIP via the precision-preserving string divmod
+            // instead of integer `reward_raw / 10^18`, which truncated every
+            // sub-1-HIP reward to "0" (audit 2026-06-05, finding C1).
             code,
-            reward: (reward_raw / decimals).to_string(),
+            reward: crate::blockchain::convert::planck_to_hip(&reward_raw.to_string()),
         })
         .collect();
 

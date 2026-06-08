@@ -170,7 +170,13 @@ fn commands_in(src: &str) -> Vec<(String, String, String)> {
 /// calls `require_session_account` (body). A raw `account_id: String` with
 /// neither is the hole.
 fn is_guarded(signature: &str, body: &str) -> bool {
-    signature.contains("SessionAccount") || body.contains("require_session_account")
+    signature.contains("SessionAccount")
+        || body.contains("require_session_account")
+        // `session_scoped_notification_account` is the notifications module's
+        // session-scoping guard: it derives the owner from the session account
+        // and ignores any caller-supplied address (audit finding E1), which
+        // satisfies the same "never trust the frontend account_id" invariant.
+        || body.contains("session_scoped_notification_account")
 }
 
 #[test]

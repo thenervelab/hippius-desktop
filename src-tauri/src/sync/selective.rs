@@ -160,7 +160,22 @@ pub async fn apply_sync_selection(
     let manager = arc.lock().await;
 
     for path in &include {
-        let _ = manager.remove_exclude_pattern(path).map_err(AppError::Hcfs)?;
+        // Trim for parity with the exclude branch (validate_pattern trims before
+        // storing), so an entry with surrounding whitespace actually matches the
+        // stored rule instead of silently no-op'ing, and observe the returned
+        // bool so a no-match is logged rather than vanishing (audit 2026-06-05,
+        // finding C6). A remove can only delete a stored rule — it cannot escape
+        // the sync root — so the full validate_pattern (`..`/newline rejection)
+        // the add side needs is unnecessary here.
+        let trimmed = path.trim();
+        if trimmed.is_empty() {
+            warn!(pattern = %path, "Skipping empty include entry in batch");
+            continue;
+        }
+        let removed = manager.remove_exclude_pattern(trimmed).map_err(AppError::Hcfs)?;
+        if !removed {
+            debug!(label = %label, pattern = %trimmed, "Include entry matched no stored exclude rule (already included)");
+        }
     }
     for path in &exclude {
         match validate_pattern(path) {

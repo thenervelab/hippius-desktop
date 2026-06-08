@@ -426,14 +426,15 @@ pub fn transform_marketplace_credits(credits: Vec<MarketplaceCreditInput>) -> Re
 
     for credit in &credits {
         let date_key = parse_date_key(&credit.date);
-        // Coerce-to-0 keeps the chart rendering on a malformed amount, but log it
-        // so silent under-counting is traceable (mirrors parse_indexer_u64).
+        // A malformed amount is logged rather than silently coerced to 0, so a
+        // bad event doesn't quietly understate the cumulative total (audit C4).
         let raw_amount = credit.amount.parse::<u128>().unwrap_or_else(|_| {
-            tracing::warn!(amount = %credit.amount, "non-numeric marketplace credit amount; coercing to 0");
+            tracing::warn!(amount = %credit.amount, date = %credit.date, "unparseable marketplace credit amount; treating as 0");
             0
         });
         let entry = daily.entry(date_key).or_insert((0, credit.date.clone()));
-        entry.0 += raw_amount;
+        // saturating_add: a daily sum near u128::MAX must not wrap silently (audit C4).
+        entry.0 = entry.0.saturating_add(raw_amount);
     }
 
     if daily.is_empty() {
@@ -454,15 +455,17 @@ pub fn transform_marketplace_credits(credits: Vec<MarketplaceCreditInput>) -> Re
     let mut results = Vec::new();
     let mut cumulative: u128 = 0;
     let mut current = start_date;
-    let fallback_ts = credits[0].date.clone();
 
     while current <= end_date {
         let key = current.format("%Y-%m-%d").to_string();
         let timestamp = if let Some((amount, ts)) = daily.get(&key) {
-            cumulative += amount;
+            cumulative = cumulative.saturating_add(*amount);
             ts.clone()
         } else {
-            fallback_ts.clone()
+            // Gap day (no credits): carry THIS day's date, not the series-start
+            // date the old `fallback_ts` used — every empty day otherwise shared
+            // the first day's timestamp (audit 2026-06-05, finding F2).
+            key.clone()
         };
 
         results.push(MarketplaceCreditOutput {
@@ -868,6 +871,40 @@ mod tests {
         }];
         let result = transform_marketplace_credits(credits).unwrap();
         assert_eq!(result[0].total_balance, "999999999999999999999");
+    }
+
+    #[test]
+    fn transform_skips_malformed_amount_and_dates_gap_days_correctly() {
+        let credits = vec![
+            MarketplaceCreditInput { amount: "100".into(), date: "2025-03-10T00:00:00.000Z".into() },
+            // Malformed amount on the same day must be skipped (treated as 0),
+            // not poison the day's sum (audit C4).
+            MarketplaceCreditInput { amount: "not-a-number".into(), date: "2025-03-10T06:00:00.000Z".into() },
+            MarketplaceCreditInput { amount: "50".into(), date: "2025-03-12T00:00:00.000Z".into() },
+        ];
+        let result = transform_marketplace_credits(credits).unwrap();
+        // 03-10, 03-11 (gap), 03-12.
+        assert_eq!(result.len(), 3);
+        // Malformed amount skipped: day 1's total is exactly 100, not poisoned.
+        assert_eq!(result[0].total_balance, "100");
+        // The gap day carries ITS OWN date, not the series-start timestamp the
+        // old fallback_ts used (audit F2).
+        assert_eq!(result[1].processed_timestamp, "2025-03-11");
+        // Cumulative carries across the gap and adds day 3.
+        assert_eq!(result[1].total_balance, "100");
+        assert_eq!(result[2].total_balance, "150");
+    }
+
+    #[test]
+    fn transform_saturates_instead_of_overflowing() {
+        let credits = vec![
+            MarketplaceCreditInput { amount: u128::MAX.to_string(), date: "2025-03-15T00:00:00.000Z".into() },
+            MarketplaceCreditInput { amount: "10".into(), date: "2025-03-15T01:00:00.000Z".into() },
+        ];
+        // Summing past u128::MAX must saturate, not wrap — the old `+=` would
+        // panic in a debug build on this input (audit C4).
+        let result = transform_marketplace_credits(credits).unwrap();
+        assert_eq!(result[0].total_balance, u128::MAX.to_string());
     }
 
     #[test]

@@ -63,6 +63,15 @@ vi.mock("@/app/lib/hooks/useFileLiveProgress", () => ({
   useFileLiveProgress: () => ({ status: null, progressPercent: null }),
 }));
 
+// The failed badge now reads the persisted failure (via TanStack Query) and a
+// retry mutation. Stub both so the badge-contract test stays hermetic (no
+// QueryClient needed) — the failure→message mapping is covered by its own unit
+// test, and the persist/retry path by the Rust tests.
+vi.mock("@/app/lib/hooks/useFileFailure", () => ({
+  useFileFailure: () => null,
+  useRetryFailure: () => ({ retryFile: { mutate: () => {}, isPending: false } }),
+}));
+
 // Stub the file-type icon to a no-op so we don't pull in the full
 // `getFileIcon` table — the row's leading icon isn't what we're asserting.
 vi.mock("@/lib/utils/fileTypeUtils", () => ({
