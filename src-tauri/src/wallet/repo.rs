@@ -98,7 +98,13 @@ fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
+        .unwrap_or_else(|e| {
+            // A pre-epoch system clock is near-impossible, but log rather than
+            // silently stamp 0 — a 0 created_at would distort the oldest-first
+            // ordering below and the auto-promote-on-delete target.
+            tracing::warn!(error = %e, "system clock is before the Unix epoch; using 0 for wallet timestamp");
+            0
+        })
 }
 
 /// Insert a wallet row under `owner`. Returns the newly-created row.
@@ -150,7 +156,11 @@ pub async fn insert(
 }
 
 pub async fn list_all(pool: &SqlitePool, owner: &str) -> Result<Vec<LocalWallet>, AppError> {
-    let sql = format!("SELECT {SELECT_COLS} FROM local_wallets WHERE owner = ? ORDER BY created_at ASC");
+    // `id ASC` tiebreaks equal `created_at` (possible if two wallets are created
+    // in the same millisecond, or both stamped 0 by a clock fault) so the
+    // oldest-first order — which drives active-wallet selection and the
+    // promote-on-delete target — is deterministic.
+    let sql = format!("SELECT {SELECT_COLS} FROM local_wallets WHERE owner = ? ORDER BY created_at ASC, id ASC");
     let rows = sqlx::query_as::<_, WalletRow>(&sql).bind(owner).fetch_all(pool).await?;
     Ok(rows.into_iter().map(LocalWallet::from).collect())
 }

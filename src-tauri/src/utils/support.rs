@@ -13,7 +13,7 @@ use tracing::info;
 #[tauri::command]
 pub async fn list_support_tickets(
     state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
+    account_id: crate::app_state::SessionAccount,
     page: Option<i64>,
     limit: Option<i64>,
     search: Option<String>,
@@ -40,7 +40,7 @@ pub async fn list_support_tickets(
 #[tauri::command]
 pub async fn get_support_ticket_messages(
     state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
+    account_id: crate::app_state::SessionAccount,
     ticket_id: i64,
     page: Option<i64>,
     limit: Option<i64>,
@@ -77,7 +77,7 @@ pub struct CreateTicketParams {
 #[tauri::command]
 pub async fn create_support_ticket(
     state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
+    account_id: crate::app_state::SessionAccount,
     params: CreateTicketParams,
 ) -> Result<serde_json::Value, AppError> {
     info!(
@@ -111,7 +111,7 @@ pub async fn create_support_ticket(
 #[tauri::command]
 pub async fn post_ticket_message(
     state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
+    account_id: crate::app_state::SessionAccount,
     ticket_id: i64,
     message_type: String,
     body: String,
@@ -145,7 +145,7 @@ pub struct TicketAttachment {
 #[tauri::command]
 pub async fn upload_ticket_attachment(
     state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
+    account_id: crate::app_state::SessionAccount,
     ticket_id: String,
     message_id: String,
     file_path: String,
@@ -180,7 +180,11 @@ pub async fn upload_ticket_attachment(
         .await
         .map_err(|e| AppError::Other(format!("Failed to read attachment file: {e}")))?;
 
-    let file_name = filename.unwrap_or_else(|| path.file_name().and_then(|n| n.to_str()).unwrap_or("attachment").to_string());
+    // `to_string_lossy` (not `to_str().unwrap_or("attachment")`) so a non-UTF-8
+    // final path component (legal on macOS/Linux) degrades to a recognizable
+    // lossy name keeping the extension, instead of collapsing every such file to
+    // the generic "attachment".
+    let file_name = filename.unwrap_or_else(|| path.file_name().map_or_else(|| "attachment".to_string(), |n| n.to_string_lossy().into_owned()));
 
     // Build multipart form
     let file_part = reqwest::multipart::Part::bytes(file_bytes)
@@ -215,7 +219,7 @@ pub async fn upload_ticket_attachment(
 #[tauri::command]
 pub async fn update_support_ticket(
     state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
+    account_id: crate::app_state::SessionAccount,
     ticket_id: i64,
     updates: serde_json::Value,
 ) -> Result<serde_json::Value, AppError> {

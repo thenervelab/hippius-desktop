@@ -79,6 +79,9 @@ pub async fn check_low_credit_notification(
     account_id: String,
     credit_balance_planck: String,
 ) -> Result<CreditNotificationCheck, AppError> {
+    // Reads/mutates this account's notification state; authorize against the
+    // session account so a caller can't drive another account's flags.
+    let account_id = state.require_session_account(&account_id)?;
     let pool = state.pool()?;
     // Convert planck to credit value for threshold comparison.
     // f64 precision is fine for comparing against 0.5.
@@ -263,6 +266,9 @@ pub async fn process_credit_events(
     account_id: String,
     events: Vec<CreditEventInput>,
 ) -> Result<Vec<CreditEventNotification>, AppError> {
+    // Reads/dedups this account's notification rows; authorize against the
+    // session account.
+    let account_id = state.require_session_account(&account_id)?;
     let pool = state.pool()?;
 
     // Find welcome notification timestamp

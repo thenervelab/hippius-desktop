@@ -162,7 +162,7 @@ pub(crate) fn planck_to_hip_with_decimals(planck: &str, max_fraction_digits: usi
 #[tauri::command]
 pub fn to_plancks(amount: String) -> Result<String, crate::error::AppError> {
     if amount.is_empty() {
-        return Err(crate::error::AppError::Other("Invalid amount".into()));
+        return Err(crate::error::AppError::Validation("Invalid amount".into()));
     }
     // Bind the parsed value and enforce the planck domain (a non-negative
     // integer-of-base-units). Discarding the parse let "-1" through: the later

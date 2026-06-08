@@ -233,8 +233,7 @@ pub(crate) async fn fetch_migration_summary(client: &reqwest::Client, server_url
 /// user's files from the legacy S3 storage (s3.hippius.com).
 async fn fetch_s3_credentials(client: &reqwest::Client, pool: &SqlitePool, account_id: &str) -> Result<(String, String)> {
     let api_token = crate::auth::tokens::get_api_token(pool, account_id)
-        .await
-        .map_err(crate::error::AppError::Other)?
+        .await?
         .ok_or_else(|| crate::error::AppError::Other("No API token available — log in first".into()))?;
 
     let api_base = std::env::var("HIPPIUS_API_BASE_URL").unwrap_or_else(|_| "https://api.hippius.com/api".to_string());
@@ -279,7 +278,14 @@ async fn fetch_s3_credentials(client: &reqwest::Client, pool: &SqlitePool, accou
 #[cfg(unix)]
 fn check_disk_space(path: &std::path::Path, required_bytes: u64) -> Result<()> {
     let stat = nix::sys::statvfs::statvfs(path).map_err(|e| crate::error::AppError::Other(e.to_string()))?;
-    let available = stat.block_size() as u64 * stat.blocks_available() as u64;
+    // POSIX counts f_bavail (`blocks_available`) in units of f_frsize
+    // (`fragment_size`), NOT f_bsize (`block_size`, the preferred I/O transfer
+    // size). nix documents this on `blocks()`: "Units are in units of
+    // fragment_size()". On filesystems where the two differ (common: bsize
+    // 64 KiB–1 MiB vs frsize 4 KiB) multiplying by block_size overstated free
+    // space by the bsize/frsize ratio, letting a too-small disk pass the gate
+    // and then run out mid-download — the exact failure this check prevents.
+    let available = stat.fragment_size() as u64 * stat.blocks_available() as u64;
     if available < required_bytes {
         return Err(crate::error::AppError::NotReady(crate::error::NotReadyKind::NotEnoughDiskSpace));
     }
@@ -299,6 +305,7 @@ fn check_disk_space(_path: &std::path::Path, _required_bytes: u64) -> Result<()>
 #[allow(clippy::too_many_lines)]
 #[tauri::command]
 pub async fn check_migration(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<MigrationCheckResult> {
+    let account_id = state.require_session_account(&account_id)?;
     info!("[Migration] check_migration called for account: {}", &account_id);
     let pool = state.pool()?;
 
@@ -444,6 +451,7 @@ pub async fn check_migration(state: tauri::State<'_, crate::app_state::AppState>
 /// it handles label promotion, drive stop, and default drive init atomically.
 #[tauri::command]
 pub async fn dismiss_migration(state: tauri::State<'_, crate::app_state::AppState>, account_id: String, reason: String) -> Result<()> {
+    let account_id = state.require_session_account(&account_id)?;
     let pool = state.pool()?;
     let server_url = get_server_url(pool, &account_id).await.unwrap_or_default();
     let status = if reason.is_empty() { "dismissed" } else { &reason };
@@ -520,6 +528,9 @@ pub async fn complete_migration_transition(
     account_id: String,
     custom_sync_path: Option<String>,
 ) -> Result<crate::sync::lifecycle::InitSyncResult> {
+    // Reads the account's mnemonic/token to complete its migration + init sync;
+    // authorize against the session.
+    let account_id = state.require_session_account(&account_id)?;
     let label = derive_migration_label(custom_sync_path.as_deref());
     let pool = state.pool()?;
 
@@ -583,13 +594,24 @@ pub struct StartServerMigrationResult {
 }
 
 /// Raw response from the server's poll endpoint.
+///
+/// All count/list fields carry `#[serde(default)]` so a thin or partial status
+/// payload (older server, an error body that still parses as an object) maps to
+/// zeros/empties rather than failing deserialization wholesale — which would
+/// otherwise route a reachable, responding server into the synthetic
+/// `poll_error` path and inflate the consecutive-failure abort counter.
 #[derive(Debug, Deserialize)]
 struct RawServerMigrationStatus {
     pub status: String,
+    #[serde(default)]
     pub total: i32,
+    #[serde(default)]
     pub completed: i32,
+    #[serde(default)]
     pub failed: i32,
+    #[serde(default)]
     pub failed_files: Vec<String>,
+    #[serde(default)]
     pub current_file: Option<String>,
     /// Real file count from `file_records`, set when migration completes.
     #[serde(default)]
@@ -654,6 +676,7 @@ pub struct MigrationFlowResult {
 /// if migration can start immediately.
 #[tauri::command]
 pub async fn start_migration_flow(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<MigrationFlowResult> {
+    let account_id = state.require_session_account(&account_id)?;
     let pool = state.pool()?;
     let config = crate::sync::config::get_hcfs_config_internal(pool, &account_id).await?;
 
@@ -717,6 +740,9 @@ pub async fn start_server_migration(
     total_size: u64,
     sync_path: Option<String>,
 ) -> Result<StartServerMigrationResult> {
+    // Reads the account's S3 credentials + token to start a server migration;
+    // authorize against the session.
+    let account_id = state.require_session_account(&account_id)?;
     let label = derive_migration_label(sync_path.as_deref());
     tracing::info!("[Migration] Starting server migration for account {account_id}, label={label}, total_size={total_size}");
     // RAII: every `?`-driven early return below clears the flag; only the
@@ -812,8 +838,7 @@ pub async fn start_server_migration(
 
     // Retrieve API token for authorization
     let api_token = crate::auth::tokens::get_api_token(pool, &account_id)
-        .await
-        .map_err(crate::error::AppError::Other)?
+        .await?
         .ok_or_else(|| {
             tracing::error!("[Migration] No API token available");
             crate::error::AppError::Other("No API token available — log in first".into())
@@ -862,7 +887,6 @@ pub async fn start_server_migration(
         if text.contains("job_exists") {
             tracing::warn!("[Migration] Existing job found — cancelling and retrying");
             let cancel_url = format!("{}/migration/cancel", server_base.trim_end_matches('/'));
-
             // Await AND inspect the cancel. The old `let _ = …send().await`
             // discarded the outcome, so a failed cancel was invisible and the
             // single immediate retry below just raced — and lost — against a job
@@ -938,7 +962,11 @@ pub async fn start_server_migration(
 
     // Save "in_progress" locally so check_migration can detect a completed
     // server migration that was never transitioned (e.g. app restarted).
-    let _ = upsert_migration_status(pool, &account_id, "in_progress", 0, 0, "[]", "", &server_url).await;
+    if let Err(e) = upsert_migration_status(pool, &account_id, "in_progress", 0, 0, "[]", "", &server_url).await {
+        // Best-effort: the server job already started; a failed local write only
+        // weakens restart-resume detection, so log instead of failing.
+        tracing::warn!("[Migration] failed to persist local in_progress status; restart-resume may miss this job: {e}");
+    }
 
     tracing::info!("[Migration] Server migration started successfully");
     in_progress_guard.commit();
@@ -1036,6 +1064,7 @@ const TERMINAL_STATUSES: &[&str] = &["completed", "failed", "cancelled"];
 #[tauri::command]
 pub async fn start_migration_polling(app: tauri::AppHandle, account_id: String) -> Result<()> {
     use tauri::{Emitter, Manager};
+    let account_id = app.state::<crate::app_state::AppState>().require_session_account(&account_id)?;
 
     // Cancel any existing poll task, and capture the stop-generation under the
     // same lock so a concurrent stop/dismiss during our setup window below is

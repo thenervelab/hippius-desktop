@@ -324,7 +324,8 @@ pub async fn hcfs_reshare(state: tauri::State<'_, AppState>, share_token: String
     // Look up the source file. A miss here is a hard "this device
     // can't reshare this token" — caller must use Copy/Revoke
     // instead.
-    let mut origins = origin::fetch_for_tokens(pool, &[share_token.as_str()]).await?;
+    let owner = account_key(&account_id);
+    let mut origins = origin::fetch_for_tokens(pool, &owner, &[share_token.as_str()]).await?;
     let Some(origin) = origins.remove(&share_token) else {
         return Err(AppError::Validation("Reshare is unavailable for this link on this device.".into()));
     };
@@ -400,7 +401,8 @@ pub async fn hcfs_list_shares(state: tauri::State<'_, AppState>) -> Result<Vec<S
     // Same batched-IN trick as the keystore: one round-trip for the
     // whole page so the per-file badge and Reshare button can resolve
     // origin in O(1) per row.
-    let origin_map = origin::fetch_for_tokens(pool, &tokens).await.unwrap_or_else(|e| {
+    let owner = account_key(&account_id);
+    let origin_map = origin::fetch_for_tokens(pool, &owner, &tokens).await.unwrap_or_else(|e| {
         // A sidecar miss is never fatal — fall back to "no origin
         // known" for every row so the page still renders.
         warn!(error = %e, "share_origin fetch failed; rendering without origins");
@@ -416,7 +418,7 @@ pub async fn hcfs_list_shares(state: tauri::State<'_, AppState>) -> Result<Vec<S
     // the complete unpaged list of this owner's active shares — see
     // `origin::prune`'s "Caller invariant" doc. If hcfs-server ever
     // paginates `list_shares`, swap this prune for a TTL-based reaper.
-    let owner = account_key(&account_id);
+    // `owner` is computed above (shared with the origin fetch).
     origin::prune(pool, &owner, &tokens).await;
 
     // Diff the previous active-list snapshot against the current one

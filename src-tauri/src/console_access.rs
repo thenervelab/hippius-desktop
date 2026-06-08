@@ -204,8 +204,7 @@ impl HcfsServerCtx {
 
         let pool = state.pool()?;
         let bearer = get_api_token(pool, &account_id)
-            .await
-            .map_err(AppError::Other)?
+            .await?
             .ok_or_else(|| AppError::Other("No authentication token — please log in again.".into()))?;
 
         let base_url = resolve_hcfs_base_url(pool, &account_id).await?;

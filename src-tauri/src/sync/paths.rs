@@ -390,6 +390,8 @@ pub(crate) async fn remove_sync_path_internal(pool: &SqlitePool, account_id: &st
 /// `hcfs_drive_removed` event.
 #[tauri::command]
 pub async fn remove_sync_path(app: tauri::AppHandle, account_id: String, label: String) -> Result<()> {
+    use tauri::Manager;
+    let account_id = app.state::<crate::app_state::AppState>().require_session_account(&account_id)?;
     info!("Removing sync path for label '{}', account '{}'", label, account_id);
     crate::sync::lifecycle::remove_drive_for_account(app, label.clone(), Some(account_id)).await?;
     info!("Sync path removed and drive torn down for label '{}'", label);

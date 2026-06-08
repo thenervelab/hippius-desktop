@@ -18,9 +18,16 @@ pub async fn sp_skip_file(label: String, path: String, state: tauri::State<'_, c
         let guard = state.sync.drives.lock().await;
         guard.get(&label).map(|slot| slot.manager.clone())
     };
+    // The exclude pattern is the actual sync-time enforcement of a skip (the
+    // in-memory session-skip set is consulted only on teardown, not during a
+    // sync cycle), so a failed write must surface — otherwise the FE reports
+    // "skipped" while the file resurfaces next cycle. Same bug class the
+    // `sp_exclude_file` comment documents. Missing drive stays tolerant: a skip
+    // is a session-scoped best-effort op, unlike permanent exclude.
     if let Some(arc) = drive_arc {
         let m = arc.lock().await;
-        let _ = m.add_exclude_pattern(&path);
+        m.add_exclude_pattern(&path)
+            .map_err(|e| crate::error::AppError::Hcfs(format!("add_exclude_pattern failed: {e}")))?;
     }
 
     state.sync.emit_snapshot(true);
@@ -73,9 +80,13 @@ pub async fn sp_retry_file(label: String, path: String, state: tauri::State<'_, 
         let guard = state.sync.drives.lock().await;
         guard.get(&label).map(|slot| slot.manager.clone())
     };
+    // A failed removal leaves the file excluded after the user clicked Retry,
+    // so it would never re-sync with no signal — propagate it. Missing drive
+    // stays tolerant (the failure counter / session-skip were already cleared).
     if let Some(arc) = drive_arc {
         let m = arc.lock().await;
-        let _ = m.remove_exclude_pattern(&path);
+        m.remove_exclude_pattern(&path)
+            .map_err(|e| crate::error::AppError::Hcfs(format!("remove_exclude_pattern failed: {e}")))?;
     }
 
     state.sync.emit_snapshot(true);

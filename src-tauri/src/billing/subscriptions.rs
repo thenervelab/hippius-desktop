@@ -21,7 +21,7 @@ pub struct SubscriptionData {
 
 /// Fetch subscription data in a single call: active subscription + plans + derived flags.
 #[tauri::command]
-pub async fn get_subscription_data(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<SubscriptionData, AppError> {
+pub async fn get_subscription_data(state: tauri::State<'_, crate::app_state::AppState>, account_id: crate::app_state::SessionAccount) -> Result<SubscriptionData, AppError> {
     let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
 
     // Parallel fetch
@@ -68,7 +68,7 @@ pub async fn get_subscription_data(state: tauri::State<'_, crate::app_state::App
 #[tauri::command]
 pub async fn create_subscription(
     state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
+    account_id: crate::app_state::SessionAccount,
     price_id: String,
     success_url: Option<String>,
     cancel_url: Option<String>,
@@ -89,7 +89,7 @@ pub async fn create_subscription(
 #[tauri::command]
 pub async fn get_customer_portal_url(
     state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
+    account_id: crate::app_state::SessionAccount,
     return_url: Option<String>,
 ) -> Result<serde_json::Value, AppError> {
     let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());

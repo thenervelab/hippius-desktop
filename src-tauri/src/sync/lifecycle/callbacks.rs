@@ -140,6 +140,16 @@ fn spawn_record_intent_plan<R: tauri::Runtime>(app: AppHandle<R>, label: String,
         if let Err(e) = repo.record_plan(&account_id, &label, &plan_uploads).await {
             warn!(label = %label, error = %e, "intent record_plan failed");
         }
+        // Age out long-settled rows for this drive so the durable manifest stays
+        // bounded for users who rarely log out. Best-effort: a prune failure must
+        // not disrupt the cycle (the overlay is a UX nicety, and logout's
+        // clear_account is the other reclaim).
+        let cutoff_ms = chrono::Utc::now().timestamp_millis() - crate::sync::intent::SETTLED_RETENTION_MS;
+        match repo.prune_settled(&account_id, &label, cutoff_ms).await {
+            Ok(n) if n > 0 => debug!(label = %label, pruned = n, "pruned settled intent rows past retention"),
+            Ok(_) => {}
+            Err(e) => warn!(label = %label, error = %e, "intent prune_settled failed"),
+        }
     });
 }
 

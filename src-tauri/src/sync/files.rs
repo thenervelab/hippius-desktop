@@ -559,12 +559,13 @@ pub async fn delete_files(
     account_id: String,
     files: Vec<FileDeleteRequest>,
 ) -> Result<DeleteFilesResult> {
+    // Deletes files under the account's drives; authorize against the session.
+    let account_id = state.require_session_account(&account_id)?;
     let pool = state.pool()?;
     // Resolve every drive's label→path ONCE (a single query) instead of one
     // (often two, via the default fallback) SELECT per file in the batch.
-    let label_to_path: std::collections::HashMap<String, String> = crate::sync::folders::get_all_sync_paths_internal(pool, &account_id)
+    let label_to_path: std::collections::HashMap<String, String> = crate::sync::folders::get_all_sync_paths_or_warn(pool, &account_id, "delete_files")
         .await
-        .unwrap_or_default()
         .into_iter()
         .map(|sp| (sp.label, sp.path))
         .collect();
@@ -1085,6 +1086,8 @@ pub async fn get_recent_files(
     account_id: String,
     limit: Option<usize>,
 ) -> Result<Vec<RecentFile>> {
+    // Account-scoped listing; authorize against the session account.
+    let account_id = state.require_session_account(&account_id)?;
     let sync = &state.sync;
     let pool = state.pool()?;
 
@@ -1095,9 +1098,7 @@ pub async fn get_recent_files(
     }
 
     // 2. Get sync paths → build label→path lookup
-    let sync_paths = crate::sync::folders::get_all_sync_paths_internal(pool, &account_id)
-        .await
-        .unwrap_or_default();
+    let sync_paths = crate::sync::folders::get_all_sync_paths_or_warn(pool, &account_id, "get_recent_files").await;
     let label_to_path: HashMap<String, String> = sync_paths
         .iter()
         .filter(|sp| !sp.path.is_empty() && !sp.label.is_empty())
@@ -1475,6 +1476,7 @@ pub async fn list_sync_folder_grouped(
     subfolder: Option<String>,
     label: Option<String>,
 ) -> Result<GroupedListing> {
+    let account_id = state.require_session_account(&account_id)?;
     list_sync_folder_grouped_inner(&state, account_id, sync_path, subfolder, label).await
 }
 
@@ -1885,10 +1887,10 @@ pub async fn get_user_files(
     account_id: String,
     filters: Option<FileFilterCriteria>,
 ) -> Result<UserFilesResult> {
+    // Account-scoped listing; authorize against the session account.
+    let account_id = state.require_session_account(&account_id)?;
     let pool = state.pool()?;
-    let sync_paths = crate::sync::folders::get_all_sync_paths_internal(pool, &account_id)
-        .await
-        .unwrap_or_default();
+    let sync_paths = crate::sync::folders::get_all_sync_paths_or_warn(pool, &account_id, "get_user_files").await;
 
     let mut all_files: Vec<UserFileEntry> = Vec::new();
     let mut total_private_size: u64 = 0;
@@ -2195,20 +2197,18 @@ pub async fn search_user_files_recursive(
     subfolder: Option<String>,
     filters: FileFilterCriteria,
 ) -> Result<Vec<UserFileEntry>> {
+    // Account-scoped search; authorize against the session account.
+    let account_id = state.require_session_account(&account_id)?;
     let pool = state.pool()?;
-    let owner = account_key(&account_id);
-    let sync_paths = crate::sync::folders::get_all_sync_paths_internal(pool, &account_id)
-        .await
-        .unwrap_or_default();
-    // Drive must be a real registered sync path for this user. Defends
-    // against a caller-supplied label that points at a different account's
-    // drive (the synced_paths_for_label lookup itself is in-memory keyed
-    // by label and doesn't enforce ownership).
+    let sync_paths = crate::sync::folders::get_all_sync_paths_or_warn(pool, &account_id, "search_user_files_recursive").await;
+    // Drive must be a real registered sync path for this user — the
+    // `sync_paths` membership check below is the ownership guard (the
+    // in-memory `synced_paths_for_label` lookup is keyed by label only and
+    // does not enforce ownership on its own).
     let Some(sp) = sync_paths.iter().find(|sp| sp.label == label && !sp.path.is_empty()) else {
         // Unknown label / not yet initialised — surface as empty rather
         // than failing the IPC. Matches `get_user_files` which silently
         // skips drives that fail to list.
-        let _ = owner; // suppress unused-var warning when the branch is taken
         return Ok(Vec::new());
     };
 
@@ -2549,6 +2549,7 @@ pub async fn resolve_file_path(
     label: String,
     file_name: String,
 ) -> Result<String> {
+    let account_id = state.require_session_account(&account_id)?;
     // Reject path traversal attempts — slashes are allowed for subfolder access
     if file_name.contains("..") {
         return Err(crate::error::AppError::Other("Invalid file name".into()));
@@ -2606,6 +2607,7 @@ pub async fn resolve_file_info(
     source: Option<String>,
     file_name: String,
 ) -> Result<FilePathInfo> {
+    let account_id = state.require_session_account(&account_id)?;
     let pool = state.pool()?;
     let effective_label = label.as_deref().unwrap_or("default");
 

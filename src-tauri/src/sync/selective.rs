@@ -127,11 +127,19 @@ pub async fn remove_exclude_pattern(label: String, pattern: String, app_state: t
     Ok(removed)
 }
 
-/// Apply a batch of inclusion/exclusion pattern changes atomically.
+/// Apply a batch of inclusion/exclusion pattern changes, then trigger sync.
 ///
-/// Removes exclusion patterns for paths the user wants included, adds
-/// patterns for paths the user wants excluded, then triggers sync.
-/// Replaces the paired loops in `RemoteFolderBrowser.tsx`.
+/// Removes exclusion patterns for paths the user wants included, adds patterns
+/// for paths the user wants excluded. Replaces the paired loops in
+/// `RemoteFolderBrowser.tsx`.
+///
+/// Semantics are **best-effort, not atomic**: the changes are applied under the
+/// drive lock in order, and a drive-side `add`/`remove` failure returns `Err`
+/// immediately, leaving the changes applied so far in place (there is no
+/// rollback — SQLite-style transactional patterns don't apply to the in-memory
+/// exclude set). An invalid exclude *pattern* is the one exception: it is
+/// logged and skipped rather than aborting the batch. On `Err` the caller
+/// should re-fetch the selection to see which changes landed.
 #[tauri::command]
 pub async fn apply_sync_selection(
     app_state: tauri::State<'_, AppState>,

@@ -470,7 +470,12 @@ pub async fn complete_oauth_flow(
     };
     let token_expiry_ms = chrono::Utc::now().timestamp_millis() + 30 * 24 * 60 * 60 * 1000;
 
-    let provider_name = params.token.as_ref().map_or("oauth", |_| "oauth").to_string();
+    // Both OAuth grant paths persist the same provider tag; the earlier
+    // `map_or("oauth", |_| "oauth")` branched on params.token but both arms
+    // yielded "oauth" — dead computation that read as a real distinction. If
+    // per-provider tagging is ever needed, derive it from the matched
+    // PkceState.provider instead.
+    let provider_name = "oauth".to_string();
 
     if !substrate_address.is_empty() {
         let pool = state.pool()?;
@@ -496,9 +501,7 @@ pub async fn complete_oauth_flow(
         // Persist the API token via the existing helper so there's one
         // writer for `objectstore_auth_scoped` (shared with the mnemonic
         // login flow).
-        crate::auth::tokens::save_api_token(pool, &substrate_address, &token)
-            .await
-            .map_err(AppError::Other)?;
+        crate::auth::tokens::save_api_token(pool, &substrate_address, &token).await?;
 
         // Populate AuthInfo so OAuth users participate in the same
         // get_mnemonic_for_account cache path as mnemonic-login users.

@@ -645,32 +645,47 @@ async fn ensure_app_state(conn: &mut SqliteConnection) -> Result<(), sqlx::Error
     Ok(())
 }
 
-/// `notification_preferences` — replaces the frontend table, seeded with the
-/// default `credits` and `files` categories (both enabled).
+/// Per-account `notification_preferences` table, in one place so the fresh-DB
+/// create and the legacy-table rebuild can never drift.
+const NOTIFICATION_PREFERENCES_DDL: &str = "CREATE TABLE notification_preferences (
+    owner TEXT NOT NULL,
+    id TEXT NOT NULL,
+    label TEXT NOT NULL,
+    description TEXT NOT NULL,
+    enabled INTEGER DEFAULT 1,
+    PRIMARY KEY (owner, id)
+)";
+
+/// `notification_preferences` — per-account notification-category toggles.
+///
+/// Scoped by `owner` (the session ss58 address, matching the sibling
+/// `notifications` table) with a composite `(owner, id)` primary key so one
+/// account's toggle can't change another account's preferences on a
+/// multi-account device. The default `credits`/`files` rows are seeded
+/// per-account on demand by the notification commands — NOT here — because the
+/// account set isn't known at schema-init time.
+///
+/// One owning code path for the schema: if a table with an `owner` column
+/// already exists we are current and do nothing. Otherwise — the table is
+/// absent (fresh DB) or is the legacy global `id`-only table (upgrade) — we
+/// (re)create it in the per-account shape. SQLite cannot add a column to a
+/// primary key in place, so the legacy table must be dropped and rebuilt; this
+/// runs in a nested savepoint (`begin()` on an in-transaction connection issues
+/// a `SAVEPOINT`) so a failed rebuild rolls back without aborting schema init.
+/// Legacy rows are dropped rather than migrated — they cannot be attributed to
+/// a specific account, and the commands re-seed enabled defaults per account on
+/// next use, so the only user-visible effect on upgrade is that a
+/// previously-disabled category returns to enabled once.
 async fn ensure_notification_preferences(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
-    // Notification preferences (replaces frontend notification_preferences table)
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS notification_preferences (
-            id TEXT PRIMARY KEY,
-            label TEXT NOT NULL,
-            description TEXT NOT NULL,
-            enabled INTEGER DEFAULT 1
-        )",
-    )
-    .execute(&mut *conn)
-    .await?;
+    if table_columns(&mut *conn, "notification_preferences").await?.contains("owner") {
+        return Ok(());
+    }
 
-    sqlx::query(
-        "INSERT OR IGNORE INTO notification_preferences (id, label, description, enabled) VALUES ('credits', 'Credits', 'Notifications for account credits, including low balance warnings and credit additions', 1)",
-    )
-    .execute(&mut *conn)
-    .await?;
-
-    sqlx::query(
-        "INSERT OR IGNORE INTO notification_preferences (id, label, description, enabled) VALUES ('files', 'Files', 'Notifications for file operations including sync completion and failures', 1)",
-    )
-    .execute(&mut *conn)
-    .await?;
+    info!("Creating/migrating notification_preferences to per-account (owner, id) scoping");
+    let mut sp = conn.begin().await?;
+    sqlx::query("DROP TABLE IF EXISTS notification_preferences").execute(&mut *sp).await?;
+    sqlx::query(NOTIFICATION_PREFERENCES_DDL).execute(&mut *sp).await?;
+    sp.commit().await?;
     Ok(())
 }
 
