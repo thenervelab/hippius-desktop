@@ -1,5 +1,4 @@
 export { default as useGraphSheet } from "./use-graphsheet";
-export { default as useFps } from "./use-fps";
 export { default as useBreakpoint } from "./use-breakpoint";
 export { default as usePagination } from "./use-pagination";
 export { default as useUserFiles } from "./use-user-files";
