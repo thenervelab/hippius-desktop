@@ -13,10 +13,7 @@ import {
 import NoNotificationsFound from "@/components/page-sections/notifications/NoNotificationsFound";
 import NoNotificationsEnabled from "@/components/page-sections/notifications/NoNotificationsEnabled";
 import NotificationMenuFooter from "./NotificationMenuFooter";
-
-const CATEGORY_DISPLAY: Record<string, string> = {
-  Files: "Storage",
-};
+import { notificationCategoryLabel } from "@/app/lib/helpers/notificationCategories";
 
 interface Props {
   count: number;
@@ -50,7 +47,7 @@ const NotificationMenuContent: React.FC<Props> = ({ count, onClose }) => {
     { value: "All", label: "All" },
     ...enabledTypes.map((type) => ({
       value: type,
-      label: CATEGORY_DISPLAY[type] ?? type,
+      label: notificationCategoryLabel(type),
     })),
   ], [enabledTypes]);
 

@@ -8,6 +8,7 @@ import { Icons } from "@/components/ui";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { useNotificationPreferences } from "@/app/lib/hooks/useNotificationPreferences";
+import { notificationCategoryLabel } from "@/app/lib/helpers/notificationCategories";
 import { useSetAtom } from "jotai";
 import {
   refreshEnabledTypesAtom,
@@ -95,7 +96,7 @@ const NotificationsSettingsDialog: React.FC<NotificationsSettingsDialogProps> = 
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-0.5">
                 <span className="text-[14px] font-medium text-grey-10 dark:text-white">
-                  {item.label}
+                  {notificationCategoryLabel(item.label)}
                 </span>
               </div>
               <p className="text-[12px] text-grey-50 dark:text-grey-dark-700 leading-[1.4]">

@@ -20,6 +20,7 @@ import { UiNotification } from "./types";
 import { useNotifications } from "@/lib/hooks/useNotifications";
 import { useSearchParams } from "next/navigation";
 import { iconMap } from "@/app/lib/helpers/notificationIcons";
+import { notificationCategoryLabel } from "@/app/lib/helpers/notificationCategories";
 import { deleteAllNotifications } from "@/app/lib/helpers/notificationsDb";
 import ArchiveAllConfirmationDialog from "./ArchiveAllConfirmationDialog";
 import PageHeader from "@/components/ui/page-header";
@@ -40,16 +41,12 @@ const Notifications = () => {
   const { notifications, refresh, markRead, markUnread, markAllRead } =
     useNotifications();
 
-  const CATEGORY_DISPLAY: Record<string, string> = {
-    Files: "Storage",
-  };
-
   const tabs = useMemo(
     () => [
       ...(enabledTypes.length > 0 ? [{ tabName: "All", displayName: "All" }] : []),
       ...enabledTypes.map((type) => ({
         tabName: type,
-        displayName: CATEGORY_DISPLAY[type] ?? type,
+        displayName: notificationCategoryLabel(type),
       })),
     ],
     [enabledTypes]
