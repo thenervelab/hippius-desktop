@@ -60,7 +60,7 @@ use crate::infra::vm::{
     create_vm, get_vm_instance, list_vm_applications, list_vm_flavors, list_vm_images, list_vm_instances, reboot_vm, start_vm, stop_vm, terminate_vm,
 };
 use crate::notifications::credits::{
-    check_low_credit_notification, create_credit_notifications, create_sync_notification, get_is_above_half_credit, is_first_time,
+    check_low_credit_notification, check_low_credit_notification_live, create_credit_notifications, create_sync_notification, get_is_above_half_credit, is_first_time,
     mark_first_time_seen, process_credit_events, update_is_above_half_credit,
 };
 use crate::notifications::crud::{
@@ -427,6 +427,7 @@ fn main() {
             low_credit_subtype_exists,
             has_active_low_credit_notification,
             check_low_credit_notification,
+            check_low_credit_notification_live,
             process_credit_events,
             create_credit_notifications,
             create_sync_notification,
