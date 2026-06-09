@@ -112,6 +112,15 @@ unicode-normalization = "0.1"
 # magic-byte sniffer in the desktop. The crate has no transitive
 # deps beyond `unicase` and is what hcfs-server itself uses.
 mime_guess = "2.0"
+# Decode/resize/encode for server-side thumbnail generation (sync/remote.rs).
+# Capped below 0.25.9: image 0.25.9 bumped its `jpeg` feature to require
+# `zune-core ^0.5.0` / `zune-jpeg ^0.5.5`, and `zune-core 0.5.0` has no STABLE
+# release on crates.io yet (only 0.5.0-rc*), so 0.25.9/0.25.10 + `jpeg` are
+# currently unbuildable. ≤0.25.8 resolves the published `zune-core 0.4.12`.
+# `default-features = false` keeps the heavy/optional decoders (exr, avif, gif,
+# tiff) out; jpeg+png+bmp cover the common cloud image types (webp is a
+# follow-up — it pulls `image-webp`). Lift the cap once `zune-core 0.5.0` ships.
+image = { version = ">=0.25.0, <0.25.9", default-features = false, features = ["jpeg", "png", "bmp"] }
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
