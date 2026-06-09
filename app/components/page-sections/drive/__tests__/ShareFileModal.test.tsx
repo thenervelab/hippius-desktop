@@ -76,6 +76,18 @@ describe("ShareFileModal", () => {
     expect(invokeMock).toHaveBeenCalledWith("hcfs_create_share", { folderLabel: "Drive", relativePath: "doc.pdf" });
   });
 
+  it("renders an indeterminate placeholder progress bar while running", async () => {
+    // Hang the IPC so the modal stays in `running` long enough to inspect.
+    invokeMock.mockReturnValueOnce(new Promise(() => {}));
+
+    render(withProvider(<ShareFileModal />, { name: "doc.pdf", actualFileName: "doc.pdf", label: "Drive" }));
+
+    const bar = await screen.findByRole("progressbar");
+    // No backend progress yet, so the bar must be indeterminate — a
+    // determinate `aria-valuenow` here would be a faked percentage.
+    expect(bar).not.toHaveAttribute("aria-valuenow");
+  });
+
   it("renders the error state when the IPC throws", async () => {
     invokeMock.mockRejectedValueOnce({ kind: "Hcfs", message: "create_share: server unhappy" });
 

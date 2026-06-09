@@ -31,6 +31,26 @@ export interface ShareLink {
   expiresAt: string;
 }
 
+/** Phase of an in-flight share creation. */
+export type SharePhase = "encrypting" | "uploading" | "finalizing";
+
+/**
+ * Progress for an in-flight `hcfs_create_share`. Mirrors the backend
+ * `ShareProgress` shape from the file-sharing design doc
+ * (`docs/plans/2026-04-28-file-sharing-design.md`).
+ *
+ * NOT emitted yet: the backend's `create_share` exposes no progress
+ * callback in v1, so the share modal renders an indeterminate placeholder
+ * bar. When the backend wires a `tauri::ipc::Channel<ShareProgress>` (or
+ * events) into `hcfs_create_share`, feed those updates to the modal's
+ * `running` state and the same bar becomes determinate with no UI rework.
+ */
+export interface ShareProgress {
+  bytesDone: number;
+  bytesTotal: number;
+  phase: SharePhase;
+}
+
 /**
  * One row of the owner's "My Shares" list. The server only returns
  * currently-active shares (revoked rows are reaped before they could

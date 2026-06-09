@@ -2,16 +2,21 @@
 //
 // Lifecycle:
 //
-//   `running`  — `hcfs_create_share` IPC in flight. Spinner + filename.
+//   `running`  — `hcfs_create_share` IPC in flight. Progress bar +
+//                filename. The bar is indeterminate (a sweeping
+//                placeholder) until real progress is available.
 //   `done`     — link is ready. Read-only URL with an inline copy
 //                button, auto-copied to clipboard, Open / Close /
 //                Revoke actions.
 //   `error`    — IPC failed. Inline error message + Try again / Close.
 //
-// We picked a coarse three-state machine over per-byte progress because
-// hcfs-client's share API does not expose a progress callback in v1
-// (see `docs/plans/2026-04-28-file-sharing-design.md`). Faking smooth
-// percentages would be a UX trap.
+// Progress: hcfs-client's share API exposes no progress callback in v1
+// (see `docs/plans/2026-04-28-file-sharing-design.md`), so we never fake
+// a percentage — the placeholder bar is honestly indeterminate. The
+// `running` state already carries an optional `ShareProgress`, so when the
+// backend wires a `tauri::ipc::Channel<ShareProgress>` into
+// `hcfs_create_share`, feeding those updates here flips the SAME bar to a
+// real determinate percentage with no further UI work.
 
 "use client";
 
@@ -23,7 +28,7 @@ import React, {
   useState,
 } from "react";
 import { useAtom } from "jotai";
-import { AlertCircle, Check, Loader2 } from "lucide-react";
+import { AlertCircle, Check } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { toast } from "sonner";
 
@@ -35,11 +40,15 @@ import {
   createShare,
   revokeShare,
   type ShareLink,
+  type ShareProgress,
 } from "@/app/lib/tauri/shares";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
 
 type ModalState =
-  | { kind: "running" }
+  // `progress` is undefined until the backend reports it; the bar stays
+  // indeterminate in that case. Wiring the future `ShareProgress` channel
+  // is just `setState({ kind: "running", progress })` from its callback.
+  | { kind: "running"; progress?: ShareProgress }
   | { kind: "done"; link: ShareLink }
   | { kind: "error"; message: string };
 
@@ -135,7 +144,11 @@ export default function ShareFileModal() {
       maxWidth="max-w-[585px]"
     >
       {state.kind === "running" && (
-        <RunningBody filename={filename} onCancel={close} />
+        <RunningBody
+          filename={filename}
+          progress={state.progress}
+          onCancel={close}
+        />
       )}
 
       {state.kind === "done" && (
@@ -161,26 +174,40 @@ export default function ShareFileModal() {
 
 function RunningBody({
   filename,
+  progress,
   onCancel,
 }: {
   filename: string;
+  progress?: ShareProgress;
   onCancel: () => void;
 }) {
+  const pct = sharePercent(progress);
+
   return (
     <div className="font-geist">
-      <div className="mb-6 flex flex-col items-center gap-3">
-        <Loader2 className="size-6 animate-spin text-primary-50" />
-        <div className="flex flex-col items-center gap-1 px-2 text-center">
+      <div className="mb-6 flex flex-col gap-3">
+        <div className="flex items-baseline justify-between gap-2">
           <p className="text-sm font-medium text-grey-20 dark:text-grey-dark-800">
-            Encrypting and uploading…
+            {runningLabel(progress)}
           </p>
-          <p
-            className="font-mono text-xs text-grey-50 dark:text-grey-dark-600 break-all"
-            title={filename}
-          >
-            {filename}
-          </p>
+          {pct !== null && (
+            <span className="font-mono text-sm font-medium tabular-nums text-primary-50">
+              {pct}%
+            </span>
+          )}
         </div>
+
+        <ShareProgressBar pct={pct} />
+
+        <p
+          className="font-mono text-xs text-grey-50 dark:text-grey-dark-600 break-all"
+          title={filename}
+        >
+          {filename}
+        </p>
+        <p className="text-xs text-grey-50 dark:text-grey-dark-600">
+          Large files can take a while to encrypt and upload.
+        </p>
       </div>
 
       <Button
@@ -194,6 +221,53 @@ function RunningBody({
       </Button>
     </div>
   );
+}
+
+/**
+ * Share progress bar. Determinate when `pct` is a number (the future
+ * backend-reported percentage); a sweeping indeterminate placeholder
+ * otherwise. The two modes share the same track so wiring real progress
+ * later needs no layout change.
+ */
+function ShareProgressBar({ pct }: { pct: number | null }) {
+  return (
+    <div
+      className="relative h-2 w-full overflow-hidden rounded-full bg-blue-500/10"
+      role="progressbar"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      {...(pct !== null ? { "aria-valuenow": pct } : {})}
+    >
+      {pct !== null ? (
+        <div
+          className="h-full rounded-full bg-gradient-to-r from-blue-500 to-blue-600 transition-[width] duration-300"
+          style={{ width: `${pct}%` }}
+        />
+      ) : (
+        <div className="absolute inset-y-0 left-0 w-1/3 rounded-full bg-gradient-to-r from-blue-500 to-blue-600 animate-indeterminate-sweep" />
+      )}
+    </div>
+  );
+}
+
+/** Percentage `0..100`, or `null` when progress is unknown (indeterminate). */
+function sharePercent(progress?: ShareProgress): number | null {
+  if (!progress || progress.bytesTotal <= 0) return null;
+  return Math.min(100, Math.round((progress.bytesDone / progress.bytesTotal) * 100));
+}
+
+/** Phase-aware status line; the indeterminate copy doubles as the v1 placeholder. */
+function runningLabel(progress?: ShareProgress): string {
+  switch (progress?.phase) {
+    case "encrypting":
+      return "Encrypting…";
+    case "uploading":
+      return "Uploading…";
+    case "finalizing":
+      return "Finishing up…";
+    default:
+      return "Encrypting and uploading…";
+  }
 }
 
 function ErrorBody({

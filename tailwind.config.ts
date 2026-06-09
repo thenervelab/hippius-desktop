@@ -385,6 +385,12 @@ export default {
           "25%": { transform: "translateX(-4px)" },
           "75%": { transform: "translateX(4px)" },
         },
+        // Indeterminate progress: a short fill that sweeps across the track.
+        // Used by the share modal while it has no real byte progress yet.
+        "indeterminate-sweep": {
+          "0%": { transform: "translateX(-100%)" },
+          "100%": { transform: "translateX(300%)" },
+        },
       },
       backgroundSize: {
         full: "100% 100%",
@@ -426,6 +432,7 @@ export default {
         "panel-in": "panel-in 0.2s ease-out",
         "panel-out": "panel-out 0.2s ease-in",
         shake: "shake 0.3s ease-in-out",
+        "indeterminate-sweep": "indeterminate-sweep 1.2s ease-in-out infinite",
       },
     },
   },
