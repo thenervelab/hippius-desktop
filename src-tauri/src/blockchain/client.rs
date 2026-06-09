@@ -87,6 +87,22 @@ pub async fn get_rpc_client(app_state: &crate::app_state::AppState) -> crate::er
     read_cached_rpc_client(app_state)?.ok_or_else(|| crate::error::AppError::Substrate("RPC client unavailable after connect".into()))
 }
 
+/// Hippius Mainnet genesis hash, fetched live from `wss://rpc.hippius.network`
+/// (`system_chain` = "Hippius Mainnet", `chain_getBlockHash(0)`). A connected
+/// node whose genesis differs is a *different chain* — we refuse it before it
+/// can be used to sign anything (audit R-11). subxt's `CheckGenesis` already
+/// binds this into every signature, so a wrong-chain node could never produce a
+/// usable one; this explicit check just fails fast with a clear error instead
+/// of letting an extrinsic silently fail at submission.
+///
+/// Decoded on the cold connect path (not hot), so the hex string stays the
+/// single source of truth — no risk of a hand-transcribed byte array drifting.
+fn hippius_mainnet_genesis() -> subxt::utils::H256 {
+    let bytes = hex::decode("28a6b54823f786c5dd8520ef7bdb0ee2639173815bfbb7719bcf58ef9eb5e1f9")
+        .expect("pinned Hippius Mainnet genesis hex is valid");
+    subxt::utils::H256::from_slice(&bytes)
+}
+
 /// One bounded connection attempt. Always returns within
 /// [`CONNECT_ATTEMPT_TIMEOUT_SECS`] — a stalled `from_url`/`from_rpc_client`
 /// on a dead endpoint surfaces as a timeout `Err` rather than hanging while
@@ -99,6 +115,15 @@ async fn connect_once(wss_endpoint: &str) -> crate::error::Result<(RpcClient, On
         let client = OnlineClient::<PolkadotConfig>::from_rpc_client(rpc.clone())
             .await
             .map_err(|e| crate::error::AppError::Substrate(e.to_string()))?;
+        // Refuse a node that isn't the Hippius chain before any signing path can
+        // reach it (audit R-11). `genesis_hash()` is the value subxt cached at
+        // connect — no extra round-trip.
+        let genesis = client.genesis_hash();
+        if genesis != hippius_mainnet_genesis() {
+            return Err(crate::error::AppError::Substrate(format!(
+                "Refusing node at {wss_endpoint}: genesis 0x{genesis:x} is not the Hippius Mainnet chain"
+            )));
+        }
         Ok::<_, crate::error::AppError>((rpc, client))
     })
     .await;
@@ -329,6 +354,15 @@ pub async fn update_wss_endpoint(app_state: &crate::app_state::AppState, new_end
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pinned_genesis_is_hippius_mainnet() {
+        // The genesis fetched live from wss://rpc.hippius.network (R-11). Pinned
+        // as lower-hex so a typo or a future edit that breaks decoding / length
+        // fails here rather than silently rejecting every node at runtime.
+        let g = hippius_mainnet_genesis();
+        assert_eq!(format!("{g:x}"), "28a6b54823f786c5dd8520ef7bdb0ee2639173815bfbb7719bcf58ef9eb5e1f9");
+    }
 
     #[test]
     fn endpoint_scheme_rejects_remote_plaintext_ws() {
