@@ -21,7 +21,6 @@ import { useNotifications } from "@/lib/hooks/useNotifications";
 import { useSearchParams } from "next/navigation";
 import { iconMap } from "@/app/lib/helpers/notificationIcons";
 import { deleteAllNotifications } from "@/app/lib/helpers/notificationsDb";
-import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import ArchiveAllConfirmationDialog from "./ArchiveAllConfirmationDialog";
 import PageHeader from "@/components/ui/page-header";
 
@@ -36,7 +35,6 @@ const Notifications = () => {
   const refreshEnabledTypes = useSetAtom(refreshEnabledTypesAtom);
 
   const searchParams = useSearchParams();
-  const { polkadotAddress, oauthSession } = useWalletAuth();
   const refreshUnread = useSetAtom(refreshUnreadCountAtom);
 
   const { notifications, refresh, markRead, markUnread, markAllRead } =
@@ -136,11 +134,10 @@ const Notifications = () => {
   };
 
   const handleArchiveAllConfirm = async () => {
-    const userAddress = oauthSession?.substrateAddress || polkadotAddress;
-    if (!userAddress) { setIsArchiveDialogOpen(false); return; }
+    // Deletion is scoped to the session account in Rust; no frontend address gate.
     setIsArchiving(true);
     try {
-      await deleteAllNotifications(userAddress);
+      await deleteAllNotifications();
       await refresh();
       await refreshUnread();
       toast.success("All notifications deleted");

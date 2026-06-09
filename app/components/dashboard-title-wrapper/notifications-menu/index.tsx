@@ -21,8 +21,8 @@ export default function NotificationMenu({ className = "delay-500" }: Props) {
   useCreditsNotification();
   useNotificationPreferences();
   useFilesNotification();
-  // useNotifications sets userAddressAtom and refreshes notifications on mount,
-  // ensuring unread count is available immediately when page loads
+  // useNotifications refreshes notifications on mount (Rust scopes the read to
+  // the session account), ensuring the unread count is available immediately.
   useNotifications();
   const [count] = useAtom(unreadCountAtom);
   const [menuValue, setMenuValue] = useState<string>("");

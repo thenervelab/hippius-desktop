@@ -95,9 +95,11 @@ export async function addNotification({
   }
 }
 
-export async function listNotifications(userAddress: string, limit = 50) {
+// Rust's `list_notifications` derives the account from the signed-in session and
+// ignores any caller-supplied address, so we pass none.
+export async function listNotifications(limit = 50) {
   try {
-    return await invoke<NotificationRow[]>("list_notifications", { userAddress, limit });
+    return await invoke<NotificationRow[]>("list_notifications", { limit });
   } catch (error) {
     console.error("Failed to list notifications:", error);
     return [];
@@ -120,9 +122,10 @@ export async function markUnread(id: number) {
   }
 }
 
-export async function markAllRead(userAddress: string) {
+// Session-scoped in Rust; no caller address needed.
+export async function markAllRead() {
   try {
-    await invoke("mark_all_notifications_read", { userAddress });
+    await invoke("mark_all_notifications_read");
     return true;
   } catch (error) {
     console.error("Failed to mark all notifications as read:", error);
@@ -149,9 +152,10 @@ export async function deleteNotification(id: number) {
   }
 }
 
-export async function deleteAllNotifications(userAddress: string) {
+// Session-scoped in Rust; no caller address needed.
+export async function deleteAllNotifications() {
   try {
-    await invoke("delete_all_notifications", { userAddress });
+    await invoke("delete_all_notifications");
     return true;
   } catch (error) {
     console.error("Failed to delete all notifications:", error);
