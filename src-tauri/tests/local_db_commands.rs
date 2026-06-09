@@ -1016,6 +1016,23 @@ async fn unread_count_respects_disabled_files_preference() {
 }
 
 #[tokio::test]
+async fn unread_count_excludes_types_outside_preference_categories() {
+    let pool = setup_db().await;
+    let alice = "alice";
+
+    // Credits + Files are default preference categories (counted). A
+    // notification whose type has no enabled preference row (here "VM") must
+    // NOT be counted — it mirrors the frontend list, which shows only enabled
+    // categories + Hippius. The old "absent means enabled" rule counted it, so
+    // the tray badge read higher (e.g. "99+") than the 97 the bell list showed.
+    insert_notification(&pool, alice, Some("Credits"), None, "credit-n1").await;
+    insert_notification(&pool, alice, Some("Files"), None, "file-n1").await;
+    insert_notification(&pool, alice, Some("VM"), None, "vm-n1").await;
+
+    assert_eq!(preference_filtered_unread_count(&pool, alice).await, 2);
+}
+
+#[tokio::test]
 async fn unread_count_always_includes_hippius_system_notifications() {
     let pool = setup_db().await;
     let alice = "alice";

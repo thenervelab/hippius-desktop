@@ -401,28 +401,31 @@ pub async fn delete_system_notification_by_version(state: tauri::State<'_, AppSt
 
 /// Pool-scoped implementation of [`get_unread_count`], extracted so the
 /// integration tests can exercise the production query directly instead
-/// of mirroring it. Single round-trip via a correlated subquery so the
-/// notification badge counter — which is polled on every screen — costs
-/// one pool acquire and one prepared statement.
+/// of mirroring it.
 ///
-/// Counts notifications whose `notification_type` is not explicitly disabled
-/// in this account's preferences, plus any "Hippius" system notifications which
-/// are always shown regardless of preferences.
+/// Counts the unread notifications the user actually sees in the list: rows
+/// whose `notification_type` is an ENABLED preference category, plus any
+/// "Hippius" system notifications (always shown regardless of preferences).
+/// This mirrors the frontend `buildNotificationView` (`type IN enabledTypes
+/// OR type == 'Hippius'`) so the tray badge matches the main-window bell.
+///
+/// Defaults are seeded first (idempotent `INSERT OR IGNORE`) so the `enabled =
+/// 1` set exists for a fresh account; only the tray popover polls this, so the
+/// extra write is negligible. The earlier rule — `NOT IN (... enabled = 0)`,
+/// "absent means enabled" — over-counted: notifications of types outside the
+/// preference categories (e.g. non-Credits/Files) were tallied here but hidden
+/// in the list, so the badge read higher than the visible unread count.
 ///
 /// The preference subquery is scoped to `user_address` (the `owner` column) so
 /// a category another account disabled cannot suppress this account's badge.
-/// It uses an "absent means enabled" rule (`NOT IN (... enabled = 0)`) rather
-/// than `IN (... enabled = 1)`: preference rows are seeded lazily, so a fresh
-/// account with no rows yet must still count its notifications — only an
-/// explicit disable removes a category. This keeps the hot, every-screen badge
-/// poll read-only (no seed write).
 pub async fn unread_count_inner(pool: &sqlx::SqlitePool, user_address: &str) -> Result<i64, AppError> {
+    seed_default_preferences(pool, user_address).await?;
     let (count,): (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM notifications \
          WHERE (user_address = ? OR user_address = 'system') \
          AND is_unread = 1 AND is_deleted = 0 \
          AND (notification_type = 'Hippius' \
-              OR notification_type NOT IN (SELECT label FROM notification_preferences WHERE owner = ? AND enabled = 0))",
+              OR notification_type IN (SELECT label FROM notification_preferences WHERE owner = ? AND enabled = 1))",
     )
     .bind(user_address)
     .bind(user_address)
