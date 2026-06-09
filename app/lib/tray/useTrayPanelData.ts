@@ -20,6 +20,12 @@ export interface TrayMenuData {
   loggedIn: boolean;
   credits: number | null;
   substrateAddress: string | null;
+  /** Whether the in-memory backend session is hydrated for `substrateAddress`.
+   *  `loggedIn` flips true from the persisted session row at boot, but the
+   *  account-scoped IPC calls below authorize against in-memory auth state that
+   *  only `restore_session` populates. Gating on this flag (not just an address)
+   *  keeps the prewarmed popover from polling them during that boot gap. */
+  sessionReady: boolean;
 }
 
 /** Max upload-feed rows the popover shows. */
@@ -65,7 +71,12 @@ export function useTrayPanelData() {
       setMenu(menuData);
 
       const address = menuData.substrateAddress;
-      if (address) {
+      // Only the in-memory session can authorize the account-scoped calls below.
+      // At boot the persisted session reports an address before `restore_session`
+      // hydrates that in-memory state; firing during the gap rejects with
+      // `AppError::Auth`. `sessionReady` is the backend's "those calls will
+      // authorize now" signal, so we defer until it flips true (the next poll).
+      if (address && menuData.sessionReady) {
         // Recent uploads + unread are keyed by the active account address.
         const [uploads, count] = await Promise.all([
           invoke<FormattedUserFile[]>("get_recent_uploads", {
