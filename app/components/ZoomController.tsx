@@ -18,7 +18,10 @@ export default function ZoomController() {
       className="fixed inset-0 pointer-events-none flex items-center justify-center"
       style={{ zIndex: 9999 }}
     >
-      <div className="bg-black/70 text-white text-lg font-semibold px-5 py-2.5 rounded-xl shadow-lg animate-fade-in-0.2">
+      {/* Explicit rgba (not bg-black/70): the black palette has no DEFAULT key,
+          so bg-black/<alpha> compiles to nothing — leaving white text on the
+          page with no pill, invisible in light mode. */}
+      <div className="bg-[rgba(0,0,0,0.7)] text-white text-lg font-semibold px-5 py-2.5 rounded-xl shadow-lg animate-fade-in-0.2">
         {zoom}%{limitLabel}
       </div>
     </div>
