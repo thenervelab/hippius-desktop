@@ -29,6 +29,13 @@ pub async fn auth_logout_internal(state: &crate::app_state::AppState, account_id
     // next restore while the UI believes it has logged out.
     crate::auth::auth_session_repo::clear(state.pool()?, account_id).await?;
 
+    // Clear the plaintext token fallbacks (`objectstore_auth_scoped` +
+    // legacy `objectstore_auth`) that `auth_session_repo::clear` leaves
+    // behind. Without this, on a keychain-less host `get_api_token` resolves
+    // the still-present plaintext token after logout and the session is
+    // silently resurrected (audit R-05).
+    crate::auth::tokens::clear_api_token(state.pool()?, account_id).await?;
+
     {
         let mut auth = state.auth.lock()?;
         auth.capabilities = crate::auth::state::AuthCapabilities::None;
@@ -37,6 +44,11 @@ pub async fn auth_logout_internal(state: &crate::app_state::AppState, account_id
         auth.eth_address = None;
         auth.mnemonic = None;
     }
+
+    // Reset the recovery gate so an OAuth account's `Pending` gate can't leak
+    // into a subsequent mnemonic login and hang its `ensure_sync_mnemonic`
+    // (audit R-30). Default-after-logout is `Skipped`, the non-blocking state.
+    state.set_recovery_state(crate::recovery::RecoveryGateState::Skipped);
 
     // Best-effort OS keychain cleanup so the next user on this machine
     // doesn't inherit credentials. Non-fatal — the user is already

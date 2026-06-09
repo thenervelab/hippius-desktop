@@ -39,6 +39,14 @@ export function scheduleOAuthSyncInit(
             if (isMasterMnemonicUnrecoverable(err)) {
                 appStore.set(syncRequiresReauthAtom, true);
             }
+            // Do NOT call onReady on failure. `onReady` is `initSync`, which
+            // latches `syncInitialized=true` and runs `tryAutoInitSync`; doing
+            // that with no usable mnemonic in AuthInfo wedges the sync engine
+            // and suppresses re-init until the next full auth cycle — silently,
+            // with no banner on a transient failure (audit R-25). The reauth
+            // banner (unrecoverable) or the next auth cycle (transient) is what
+            // drives the retry.
+            return;
         }
         onReady(accountId);
     })();
