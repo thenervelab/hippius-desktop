@@ -14,6 +14,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "bip39",
+ "bs58",
  "cbc",
  "chacha20poly1305",
  "chrono",

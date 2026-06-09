@@ -45,13 +45,6 @@ const SendBalanceConfirmationDialog: React.FC<
     setVerifying(false);
   }, [open]);
 
-  const truncatedRecipient =
-    recipientAddress.length > 14
-      ? `${recipientAddress.substring(0, 6)}...${recipientAddress.substring(
-          recipientAddress.length - 4,
-        )}`
-      : recipientAddress;
-
   const busy = loading || verifying;
 
   const handleConfirm = async () => {
@@ -113,12 +106,15 @@ const SendBalanceConfirmationDialog: React.FC<
               </span>
             </div>
           </div>
-          <div className="mt-2.5 flex items-center justify-between gap-3">
+          <div className="mt-2.5 flex flex-col gap-1">
             <span className="text-[14px] font-medium leading-[16.8px] text-[#a6a6ab]">
               Recipient
             </span>
-            <span className="text-[14px] font-medium leading-[16.8px] text-[#0a0a0a] dark:text-white">
-              {truncatedRecipient}
+            {/* Show the FULL SS58 (not a 6…4 truncation) so clipboard-swap
+                ("clipper") malware can't slip a lookalike address past the
+                user's visual check at the final confirm step (audit R-16). */}
+            <span className="font-mono text-[13px] leading-[18px] text-[#0a0a0a] break-all dark:text-white">
+              {recipientAddress}
             </span>
           </div>
         </div>
