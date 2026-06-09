@@ -12,50 +12,6 @@
  */
 export type FileExtension = string;
 
-export type FileSizeLabel =
-    | "< 1MB"
-    | "1-5MB"
-    | "5-10MB"
-    | "10-50MB"
-    | "50-100MB"
-    | "100-500MB"
-    | "500MB-1GB"
-    | "> 1GB";
-
-/** Lower-case the extension for the API. Mirrors the console's mapper. */
-export function mapFileExtensionToAPI(extension: FileExtension | undefined): string | undefined {
-    return extension?.toLowerCase();
-}
-
-/**
- * Translate a file-size label into a `{sizeMin, sizeMax}` byte window.
- * Uses decimal MB / GB (1 MB = 1_000_000) so the labels stay aligned
- * with the byte counts `formatBytes` prints. Same shape as the console's
- * mapper so a chip displayed as "1-5MB" filters the same range on both.
- */
-export function mapFileSizeToRange(sizeLabel: FileSizeLabel | undefined): {
-    sizeMin?: number;
-    sizeMax?: number;
-} {
-    if (!sizeLabel) return {};
-
-    const MB = 1_000_000;
-    const GB = 1_000_000_000;
-
-    const sizeRanges: Record<FileSizeLabel, { sizeMin?: number; sizeMax?: number }> = {
-        "< 1MB": { sizeMax: MB },
-        "1-5MB": { sizeMin: MB, sizeMax: 5 * MB },
-        "5-10MB": { sizeMin: 5 * MB, sizeMax: 10 * MB },
-        "10-50MB": { sizeMin: 10 * MB, sizeMax: 50 * MB },
-        "50-100MB": { sizeMin: 50 * MB, sizeMax: 100 * MB },
-        "100-500MB": { sizeMin: 100 * MB, sizeMax: 500 * MB },
-        "500MB-1GB": { sizeMin: 500 * MB, sizeMax: GB },
-        "> 1GB": { sizeMin: GB },
-    };
-
-    return sizeRanges[sizeLabel] ?? {};
-}
-
 /**
  * The full flat list of selectable extensions, grouped by category.
  * Ported 1:1 from the web console so the same options surface on both.

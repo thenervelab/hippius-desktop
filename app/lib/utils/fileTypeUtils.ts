@@ -19,8 +19,6 @@ import {
 } from "@/components/ui/icons";
 import { FileTypes } from "@/lib/types/fileTypes";
 
-export const DEFAULT_FILE_FORMAT: FileTypes = "document";
-
 export const DIRECTORY_SUFFIX = ".ec_metadata";
 
 export const isDirectory = (filename: string): boolean => {

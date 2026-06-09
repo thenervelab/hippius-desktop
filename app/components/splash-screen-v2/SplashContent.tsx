@@ -10,7 +10,6 @@ export type AppSetupPhaseContent = {
   commandTriggerPercent: number; // When to execute command within phase range (0-100)
 };
 
-export const APP_SETUP_EVENT = "app_setup_event";
 export const PHASE_PROGRESS_EVENT = "phase_progress_event";
 
 // Minimum duration for each phase animation in ms
