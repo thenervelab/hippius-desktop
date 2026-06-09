@@ -584,7 +584,31 @@ async fn open_db_pool(db_path: &std::path::Path) -> Result<SqlitePool, sqlx::Err
         .busy_timeout(std::time::Duration::from_secs(5))
         .foreign_keys(true);
 
-    SqlitePoolOptions::new().max_connections(8).connect_with(connect_opts).await
+    let pool = SqlitePoolOptions::new().max_connections(8).connect_with(connect_opts).await?;
+
+    // Restrict the DB and its WAL/SHM sidecars to owner-only (0600). The DB can
+    // hold a plaintext bearer-token fallback (keychain-less hosts) and encrypted
+    // drive-password ciphertext; under a default umask it would be created
+    // world-readable, so a second local user on a shared host could read it
+    // (audit R-17). Best-effort — a perms failure must never block launch.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for suffix in ["", "-wal", "-shm"] {
+            let path = {
+                let mut s = db_path.as_os_str().to_owned();
+                s.push(suffix);
+                std::path::PathBuf::from(s)
+            };
+            if path.exists()
+                && let Err(e) = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            {
+                tracing::warn!(path = %path.display(), error = %e, "failed to chmod 0600 on DB file");
+            }
+        }
+    }
+
+    Ok(pool)
 }
 
 /// Attach the Tauri `setup` hook to `builder` and return it for chaining.
@@ -594,6 +618,7 @@ async fn open_db_pool(db_path: &std::path::Path) -> Result<SqlitePool, sqlx::Err
 /// for dev), constructs the single `AppState` (the app holds no statics), and
 /// wires the sync bridge's app handle. Returning the builder lets this compose
 /// in `main()`'s builder chain.
+#[expect(clippy::too_many_lines, reason = "Sequential one-time startup: env load, dir hardening (R-17), deep-link + AppState wiring read top-to-bottom")]
 pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
     builder.setup(|app| {
         debug!(".setup() closure called in setup.rs");
@@ -702,7 +727,22 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
 
             // create_dir_all is blocking std::fs — run it off the async executor.
             let db_dir_for_mkdir = db_dir.clone();
-            match tokio::task::spawn_blocking(move || std::fs::create_dir_all(&db_dir_for_mkdir)).await {
+            match tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+                std::fs::create_dir_all(&db_dir_for_mkdir)?;
+                // Owner-only (0700): ~/.hippius holds the encrypted master
+                // mnemonic, the SQLite DB (with a plaintext token fallback on
+                // keychain-less hosts), and logs. Tighten regardless of the
+                // inherited umask so a second local user can't read them, and
+                // re-tighten existing installs on launch (audit R-17).
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(&db_dir_for_mkdir, std::fs::Permissions::from_mode(0o700))?;
+                }
+                Ok(())
+            })
+            .await
+            {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => {
                     error!("FATAL: failed to create {}: {e}", db_dir.display());
@@ -782,4 +822,32 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
         });
         Ok(())
     })
+}
+
+#[cfg(all(test, unix))]
+mod db_perms_tests {
+    use super::open_db_pool;
+    use std::os::unix::fs::PermissionsExt;
+
+    /// R-17: a freshly-created DB file must be owner-only `0600`, not
+    /// umask-dependent — it can hold a plaintext token fallback on
+    /// keychain-less hosts.
+    #[tokio::test]
+    async fn open_db_pool_creates_0600_file() {
+        let dir = tempfile::tempdir().expect("tmpdir");
+        let db_path = dir.path().join("hippius.db");
+
+        let _pool = open_db_pool(&db_path).await.expect("open pool");
+
+        let mode = std::fs::metadata(&db_path).expect("stat db").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "DB file must be chmod 0600, got {mode:o}");
+
+        // The WAL sidecar (created by WAL journal mode on connect) must also be
+        // locked down — it can contain not-yet-checkpointed writes.
+        let wal = dir.path().join("hippius.db-wal");
+        if wal.exists() {
+            let wal_mode = std::fs::metadata(&wal).unwrap().permissions().mode() & 0o777;
+            assert_eq!(wal_mode, 0o600, "WAL sidecar must be chmod 0600, got {wal_mode:o}");
+        }
+    }
 }

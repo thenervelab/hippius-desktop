@@ -73,11 +73,17 @@ async fn encryption_key_for_label(pool: &SqlitePool, account_id: &str, label: &s
 /// `NoEncryptionKey` if no mnemonic is loaded (e.g. session restored
 /// from disk without keychain rehydration — see the cold-start
 /// "Mnemonic required" issue).
-fn session_mnemonic(state: &AppState) -> Result<String> {
+///
+/// Returns a `Zeroizing<String>` so the heap copy is wiped when the caller
+/// drops it (the callers hold it across async download/decrypt work); the
+/// previous bare `String` left a plaintext master-mnemonic copy in freed heap
+/// after every preview/download (audit R-20). Callers pass `&mnemonic` to
+/// `&str` params, which deref-coerces unchanged.
+fn session_mnemonic(state: &AppState) -> Result<zeroize::Zeroizing<String>> {
     let auth = state.auth.lock().map_err(|e| AppError::Other(format!("auth lock poisoned: {e}")))?;
     auth.mnemonic
         .as_ref()
-        .map(|z| z.as_str().to_string())
+        .map(|z| zeroize::Zeroizing::new(z.as_str().to_string()))
         .ok_or(AppError::NotReady(crate::error::NotReadyKind::NoEncryptionKey))
 }
 

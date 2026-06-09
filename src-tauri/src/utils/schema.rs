@@ -13,8 +13,6 @@ use tracing::{debug, info, warn};
 /// new table to [`ensure_table_schema`], append its name here.
 #[cfg(test)]
 const EXPECTED_TABLES: &[&str] = &[
-    // Declarative TABLE_SCHEMAS block (1 table)
-    "sub_accounts",
     // Imperative CREATE TABLE statements (17 tables)
     "sync_paths",
     "sync_intent",
@@ -108,7 +106,12 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // decoupled from the schema-init lifecycle.
     let mut tx = pool.begin().await?;
 
-    ensure_sub_accounts(&mut tx).await?;
+    // The `sub_accounts` table was created but never read or written (audit
+    // R-35 / W-07): its `NOT NULL` plaintext `sub_account_seed_phrase` column
+    // (default `encryption_version = 0`) was a latent footgun — a future writer
+    // would default to storing seeds in plaintext, which `migrate_if_needed`
+    // does not cover. Drop it. Safe and idempotent: no data was ever stored.
+    sqlx::query("DROP TABLE IF EXISTS sub_accounts").execute(&mut *tx).await?;
     ensure_sync_paths(&mut tx).await?;
     ensure_sync_intent(&mut tx).await?;
     ensure_sync_file_failures(&mut tx).await?;
@@ -140,47 +143,6 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // `ensure_bridge_transactions` helper here alongside the new writer.
 
     tx.commit().await?;
-    Ok(())
-}
-
-/// `sub_accounts` — create the table and add any columns missing on older DBs.
-///
-/// Driven by a declarative schema table so a new column is added by editing
-/// one tuple; the create-then-add-missing-columns loop is idempotent.
-async fn ensure_sub_accounts(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
-    // Define the expected table schemas (only tables still needed)
-    const TABLE_SCHEMAS: &[(&str, &[(&str, &str)])] = &[(
-        "sub_accounts",
-        &[
-            ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
-            ("account_id", "TEXT NOT NULL"),
-            ("sub_account_seed_phrase", "TEXT NOT NULL"),
-            ("created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
-            ("encryption_version", "INTEGER NOT NULL DEFAULT 0"),
-        ],
-    )];
-
-    for (table_name, columns) in TABLE_SCHEMAS {
-        // Create table if it doesn't exist with basic structure
-        let create_table = format!(
-            "CREATE TABLE IF NOT EXISTS {} ({})",
-            table_name,
-            columns.iter().map(|(name, typ)| format!("{name} {typ}")).collect::<Vec<_>>().join(", ")
-        );
-        sqlx::query(&create_table).execute(&mut *conn).await?;
-
-        // Check and add any missing columns
-        let existing_cols = table_columns(&mut *conn, table_name).await?;
-
-        for (column_name, column_type) in *columns {
-            if !existing_cols.contains(*column_name) {
-                info!("Adding column {} to table {}", column_name, table_name);
-                sqlx::query(&format!("ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"))
-                    .execute(&mut *conn)
-                    .await?;
-            }
-        }
-    }
     Ok(())
 }
 
@@ -474,22 +436,19 @@ async fn ensure_hcfs_config(conn: &mut SqliteConnection) -> Result<(), sqlx::Err
     Ok(())
 }
 
-/// Encryption-at-rest: add `encryption_version` to `sub_accounts` and
-/// `hcfs_config` on older DBs (idempotent — "duplicate column" is expected
-/// and suppressed).
+/// Encryption-at-rest: add `encryption_version` to `hcfs_config` on older DBs
+/// (idempotent — "duplicate column" is expected and suppressed).
 async fn ensure_encryption_version_columns(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
-    // Encryption-at-rest: add encryption_version to sub_accounts and hcfs_config.
     // ALTER TABLE ADD COLUMN is idempotent in SQLite — the "duplicate column"
     // error is expected and suppressed for databases that already have the column.
-    for stmt in [
-        "ALTER TABLE sub_accounts ADD COLUMN encryption_version INTEGER NOT NULL DEFAULT 0",
-        "ALTER TABLE hcfs_config ADD COLUMN encryption_version INTEGER NOT NULL DEFAULT 0",
-    ] {
-        if let Err(e) = sqlx::query(stmt).execute(&mut *conn).await {
-            let msg = e.to_string();
-            if !msg.contains("duplicate column name") {
-                warn!("Schema migration failed: {msg}");
-            }
+    // (`sub_accounts` was dropped — audit R-35 — so only `hcfs_config` remains.)
+    if let Err(e) = sqlx::query("ALTER TABLE hcfs_config ADD COLUMN encryption_version INTEGER NOT NULL DEFAULT 0")
+        .execute(&mut *conn)
+        .await
+    {
+        let msg = e.to_string();
+        if !msg.contains("duplicate column name") {
+            warn!("Schema migration failed: {msg}");
         }
     }
     Ok(())
@@ -1085,7 +1044,9 @@ mod tests {
         // Spot-check that ordinary bring-up still ran; an early-return bug in
         // `ensure_table_schema` would silently drop the legacy tables *and*
         // skip the rest of schema init.
-        assert!(after.contains("sub_accounts"), "canonical schema missing after drop+init: {after:?}");
+        assert!(after.contains("sync_paths"), "canonical schema missing after drop+init: {after:?}");
+        // The dead `sub_accounts` table must NOT be (re)created (audit R-35).
+        assert!(!after.contains("sub_accounts"), "dropped sub_accounts table was recreated: {after:?}");
     }
 
     /// Helper: collect user (non-`sqlite_%`) table names from `sqlite_master`.
