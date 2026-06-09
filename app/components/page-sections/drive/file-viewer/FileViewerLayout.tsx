@@ -120,7 +120,13 @@ const FileViewerLayout: React.FC<FileViewerLayoutProps> = ({
     return platform.includes("mac") || ua.includes("mac os");
   });
 
-  const navigationOptions = useMemo(() => ({ localOnly: true }), []);
+  // Include cloud-only files (uploaded from other devices / under server folders
+  // not synced here) in BOTH the gallery strip and prev/next navigation. Their
+  // thumbnails resolve through the Rust thumbnailer (the strip's `useThumbnail`)
+  // and selecting one loads it in the main preview via `useViewableFileUrl`
+  // (cache_remote_file). The old `localOnly: true` filtered them out, so server
+  // files had no presence in the gallery at all.
+  const navigationOptions = useMemo(() => ({ localOnly: false }), []);
 
   const viewableFiles = useMemo(
     () => getViewableFiles(allFiles, navigationOptions),
