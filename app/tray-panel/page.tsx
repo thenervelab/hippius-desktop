@@ -53,7 +53,7 @@ const Avatar = dynamic(() => import("boring-avatars"), { ssr: false });
  * field mirrors the sidebar's search styling.
  */
 export default function TrayPanelPage() {
-  const { menu, feed, snapshot, blockNumber, isConnected, unreadCount } = useTrayPanelData();
+  const { menu, feed, snapshot, blockNumber, isConnected, unreadCount, loading } = useTrayPanelData();
   // Date-bucketed for the headed list (Today / Yesterday / This Week / …).
   // Live uploading/failed rows carry createdAt=now, so they lead "Today".
   const groups = groupUploadFeed(feed);
@@ -111,7 +111,13 @@ export default function TrayPanelPage() {
             active or just finished; getTraySyncSummary returns null when idle. */}
         <SyncSummary snapshot={snapshot} />
 
-        {feed.length === 0 ? (
+        {feed.length === 0 && loading ? (
+          // First load (no data yet): skeleton placeholders instead of the
+          // empty state, so a fresh open doesn't flash "No files yet" before the
+          // first fetch resolves. The empty state is shown only once loading
+          // settles with a genuinely empty feed (below).
+          <UploadRowsSkeleton />
+        ) : feed.length === 0 ? (
           // Empty state: a single simple rounded card (no graphsheet / guide
           // lines / corner textures) with copy + the Upload CTA that opens the
           // Drive page.
@@ -301,6 +307,33 @@ function SyncSummary({ snapshot }: { snapshot: SyncSnapshot }) {
  *  Completed rows show the uploaded time (like the search palette the product
  *  liked); in-flight and failed rows show a live status pill (with a progress
  *  ring while uploading). */
+/** First-load placeholder for the upload list — a faint group heading plus a
+ *  handful of rows mirroring `UploadRowItem`'s layout (icon + name + meta).
+ *  Uses explicit rgba fills, not `bg-black/x` (dead here: the black palette has
+ *  no DEFAULT key, so the modifier renders nothing in light mode). */
+function UploadRowsSkeleton() {
+  const bar = "rounded bg-[rgba(0,0,0,0.08)] dark:bg-white/10";
+  return (
+    <div aria-hidden className="animate-pulse">
+      <div className={`mb-1 mt-3 h-4 w-16 ${bar}`} />
+      <ul>
+        {Array.from({ length: 5 }).map((_, i) => (
+          <li key={i} className="flex items-start gap-3 py-2.5">
+            <span className={`h-5 w-4 shrink-0 ${bar}`} />
+            <div className="min-w-0 flex-1">
+              <div className={`h-3.5 w-1/2 ${bar}`} />
+              <div className="mt-2 flex items-center justify-between gap-2">
+                <div className={`h-3 w-16 ${bar}`} />
+                <div className={`h-3 w-12 ${bar}`} />
+              </div>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function UploadRowItem({ item }: { item: UploadFeedItem }) {
   const rawName = item.actualFileName || item.name;
   const ext = rawName.includes(".") ? rawName.split(".").pop() ?? null : null;

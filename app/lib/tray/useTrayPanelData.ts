@@ -61,6 +61,12 @@ export function useTrayPanelData() {
   // Unread notification count for the header bell badge — same DB-backed value
   // the main window's top-bar bell shows (`get_unread_count`).
   const [unreadCount, setUnreadCount] = useState(0);
+  // First-load gate for the upload list. True until the first authoritative
+  // fetch (one that ran with a hydrated session) resolves, so the popover shows
+  // a loading skeleton instead of the empty state before any data has arrived.
+  // The window is prewarmed/reused, so a boot-gap fetch (no session yet) keeps
+  // this true and the skeleton shows on the first open instead of "no uploads".
+  const [loading, setLoading] = useState(true);
   // Tracks the snapshot's last completion state so we refresh the server list
   // only on the rising edge (session finishes), not on every snapshot tick.
   const prevCompletedRef = useRef(false);
@@ -102,6 +108,10 @@ export function useTrayPanelData() {
         ]);
         setRecentUploads(uploads);
         setUnreadCount(count);
+        // We now have authoritative data for this session — drop the skeleton.
+        // Deferred until the session-ready branch so the boot gap (address known
+        // but session not yet hydrated) keeps showing the skeleton, not "empty".
+        setLoading(false);
       } else {
         setRecentUploads([]);
         setUnreadCount(0);
@@ -193,5 +203,5 @@ export function useTrayPanelData() {
     [recentUploads, snapshot.files],
   );
 
-  return { menu, feed, snapshot, blockNumber, isConnected, unreadCount, refresh };
+  return { menu, feed, snapshot, blockNumber, isConnected, unreadCount, loading, refresh };
 }
