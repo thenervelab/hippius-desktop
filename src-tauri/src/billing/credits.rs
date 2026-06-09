@@ -12,49 +12,15 @@ use serde::Serialize;
 /// (18 decimals) without floating-point intermediary. Returns the integer as a
 /// string so TypeScript can convert to BigInt losslessly.
 fn credits_to_planck(balance_str: &str) -> String {
-    let s = balance_str.trim();
-    if s.is_empty() || s == "0" {
-        return "0".to_string();
-    }
-
-    // Fail closed on anything that isn't a plain non-negative decimal — a
-    // leading sign, scientific notation (`e`/`E`), or any non-digit. The input
-    // is the first-party billing API, but a malformed 200 must render as "0",
-    // never a corrupt planck string (which the FE would feed to `BigInt()`) and
-    // never a panic. Mirrors the guards the sibling converters already carry
-    // (`convert::to_plancks`, `eligibility::parse_credit_balance`). Audit R-09:
-    // `"-5"` previously survived as `"-5000…"` and `"1.5e3"` as `"15e3000…"`.
-    let mut dot_seen = false;
-    let valid = s.chars().all(|c| match c {
-        '0'..='9' => true,
-        '.' if !dot_seen => {
-            dot_seen = true;
-            true
-        }
-        _ => false,
-    });
-    if !valid {
-        return "0".to_string();
-    }
-
-    let (int_part, frac_part) = match s.split_once('.') {
-        Some((i, f)) => (i, f),
-        None => (s, ""),
-    };
-
-    // Pad or truncate the fractional part to exactly 18 digits. `get(..18)` is
-    // panic-proof (the old `frac_part[..18]` panicked on a non-char-boundary at
-    // byte 18); after the validation above `frac_part` is ASCII digits, so the
-    // slice is always on a clean boundary too.
-    let padded: String = match frac_part.get(..18) {
-        Some(truncated) => truncated.to_string(),
-        None => format!("{frac_part:0<18}"),
-    };
-
-    let combined = format!("{int_part}{padded}");
-    // Strip leading zeros but keep at least "0"
-    let stripped = combined.trim_start_matches('0');
-    if stripped.is_empty() { "0".to_string() } else { stripped.to_string() }
+    // Delegate to the canonical decimal→planck converter (same 18-decimal
+    // pad/truncate/strip-leading-zeros logic + fail-closed validation) so the
+    // two can't drift (audit R-09). Policy difference vs `to_plancks`: the
+    // billing balance is first-party, but a malformed 200 must render as "0" —
+    // never a corrupt planck string (the FE feeds it to `BigInt()`) and never a
+    // panic — so we trim surrounding whitespace and fail *soft* to "0" where
+    // `to_plancks` (a user-typed send amount) fails *hard* with a validation
+    // error.
+    crate::blockchain::convert::to_plancks(balance_str.trim().to_owned()).unwrap_or_else(|_| "0".to_string())
 }
 
 /// Credit balance in both representations the frontend needs: raw planck
