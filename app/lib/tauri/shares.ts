@@ -6,7 +6,7 @@
 // place in the FE that talks to them, so swapping the wire shape is a
 // one-file change.
 
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 
 /**
  * Server feature advertisement. Old hcfs-server deployments either
@@ -35,15 +35,15 @@ export interface ShareLink {
 export type SharePhase = "encrypting" | "uploading" | "finalizing";
 
 /**
- * Progress for an in-flight `hcfs_create_share`. Mirrors the backend
- * `ShareProgress` shape from the file-sharing design doc
- * (`docs/plans/2026-04-28-file-sharing-design.md`).
+ * Progress for an in-flight `hcfs_create_share`. The Rust backend binds
+ * `tauri::ipc::Channel<ShareProgress>` directly to hcfs-client's
+ * `ShareProgress`, which serializes to exactly this camelCase shape — so
+ * the casing here is pinned cross-repo and must not drift from the
+ * backend serde derive.
  *
- * NOT emitted yet: the backend's `create_share` exposes no progress
- * callback in v1, so the share modal renders an indeterminate placeholder
- * bar. When the backend wires a `tauri::ipc::Channel<ShareProgress>` (or
- * events) into `hcfs_create_share`, feed those updates to the modal's
- * `running` state and the same bar becomes determinate with no UI rework.
+ * `bytesDone`/`bytesTotal` count plaintext bytes during `encrypting` and
+ * ciphertext bytes during `uploading`; the single-shot path (≤ 8 MiB)
+ * reports phase edges only, so the bar may jump rather than ramp there.
  */
 export interface ShareProgress {
   bytesDone: number;
@@ -89,8 +89,31 @@ export async function getServerCapabilities(accountId: string): Promise<ServerCa
   return invoke<ServerCapabilities>("hcfs_get_capabilities", { accountId });
 }
 
-export async function createShare(folderLabel: string, relativePath: string): Promise<ShareLink> {
-  return invoke<ShareLink>("hcfs_create_share", { folderLabel, relativePath });
+/**
+ * Mint a share link for a synced file. When `onProgress` is supplied, each
+ * backend `ShareProgress` is delivered to it while the share runs — the
+ * share modal feeds these to its determinate bar.
+ *
+ * A `Channel` is always opened (even without `onProgress`) because the
+ * Rust command param is a non-optional `Channel<ShareProgress>`; with no
+ * callback its `onmessage` is just a no-op. Cleanup is backend-driven, not
+ * promise-driven: `hcfs_create_share` owns the Rust `Channel` for the
+ * duration of the call, so when the command returns and drops it, Tauri
+ * sends an end-marker that unregisters this JS callback. There is no
+ * lingering registration once the call completes.
+ */
+export async function createShare(
+  folderLabel: string,
+  relativePath: string,
+  onProgress?: (progress: ShareProgress) => void,
+): Promise<ShareLink> {
+  const onProgressChannel = new Channel<ShareProgress>();
+  if (onProgress) onProgressChannel.onmessage = onProgress;
+  return invoke<ShareLink>("hcfs_create_share", {
+    folderLabel,
+    relativePath,
+    onProgress: onProgressChannel,
+  });
 }
 
 export async function listShares(): Promise<ShareSummary[]> {

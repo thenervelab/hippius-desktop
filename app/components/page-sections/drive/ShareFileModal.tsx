@@ -10,13 +10,12 @@
 //                Revoke actions.
 //   `error`    — IPC failed. Inline error message + Try again / Close.
 //
-// Progress: hcfs-client's share API exposes no progress callback in v1
-// (see `docs/plans/2026-04-28-file-sharing-design.md`), so we never fake
-// a percentage — the placeholder bar is honestly indeterminate. The
-// `running` state already carries an optional `ShareProgress`, so when the
-// backend wires a `tauri::ipc::Channel<ShareProgress>` into
-// `hcfs_create_share`, feeding those updates here flips the SAME bar to a
-// real determinate percentage with no further UI work.
+// Progress: `createShare` opens a `tauri::ipc::Channel<ShareProgress>`
+// and forwards each backend update into the `running` state, so the bar
+// is determinate (encrypting → uploading → finalizing) once the first
+// update arrives. Before that — and for the single-shot path that reports
+// phase edges only — `progress` is undefined and the bar falls back to
+// the honest indeterminate sweep; we never fake a percentage.
 
 "use client";
 
@@ -74,7 +73,15 @@ export default function ShareFileModal() {
       // to `name` mirrors `revealInFileManager` in the file row's
       // context menu.
       const relativePath = file.actualFileName || file.name;
-      const link = await createShare(folderLabel, relativePath);
+      // Apply progress only while still running: channel messages are
+      // delivered asynchronously, so a trailing `finalizing` update can
+      // land after the IPC promise resolves — it must not clobber the
+      // `done`/`error` state we transition to below.
+      const link = await createShare(folderLabel, relativePath, (progress) =>
+        setState((prev) =>
+          prev.kind === "running" ? { kind: "running", progress } : prev,
+        ),
+      );
       setState({ kind: "done", link });
     } catch (err) {
       setState({ kind: "error", message: errorMessage(err) });
