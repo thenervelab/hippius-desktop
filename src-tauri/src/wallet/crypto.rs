@@ -52,7 +52,6 @@ use argon2::{
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
 use chacha20poly1305::{ChaCha20Poly1305, KeyInit, aead::Aead};
 use hkdf::Hkdf;
-use rand::RngCore;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
@@ -70,8 +69,26 @@ const INFO_MNEMONIC: &[u8] = b"hippius-local-wallet-mnemonic";
 const NONCE_LEN: usize = 12;
 const TAG_LEN: usize = 16;
 
-/// Version byte for new ciphertext (Argon2id-derived AEAD key).
+/// Version byte for the previous ciphertext layout: Argon2id-derived AEAD key,
+/// **no** associated data. Still decrypted (never re-encrypted under the old
+/// format), so pre-R-33 wallets keep working unchanged.
 const V_ARGON2: u8 = 0x02;
+
+/// Version byte for current ciphertext: Argon2id-derived AEAD key **with** an
+/// AAD of `version_byte || address` (audit R-33). The AAD authenticates (but
+/// does not encrypt) the address, binding the ciphertext to its wallet
+/// independently of the address-salted key — so integrity holds even if a
+/// future key-derivation change weakened the salt binding.
+const V_ARGON2_AAD: u8 = 0x03;
+
+/// Associated data for [`V_ARGON2_AAD`] ciphertext: the version byte followed
+/// by the wallet's SS58 address bytes.
+fn aad_bytes(address: &str) -> Vec<u8> {
+    let mut aad = Vec::with_capacity(1 + address.len());
+    aad.push(V_ARGON2_AAD);
+    aad.extend_from_slice(address.as_bytes());
+    aad
+}
 
 /// Constant-time equality for two byte slices. Hex strings + PHC
 /// strings are short enough that the timing channel is small, but
@@ -214,19 +231,31 @@ pub fn password_hash_is_legacy(stored_hash: &str) -> bool {
 /// for valid inputs — the underlying library only errors on nonce
 /// reuse, which our per-encrypt `OsRng` draw cannot produce.
 pub fn encrypt_mnemonic(mnemonic: &str, password: &str, address: &str) -> Result<String, AppError> {
+    // Locally scoped so chacha's `OsRng` doesn't collide with the argon2
+    // `OsRng` imported at module level. Mirrors `crypto::store::encrypt`.
+    use chacha20poly1305::{AeadCore, aead::OsRng};
+
     let key = derive_aead_key_argon2(password, address)?;
     let cipher = ChaCha20Poly1305::new(key.as_slice().into());
 
-    let mut nonce = [0u8; NONCE_LEN];
-    rand::thread_rng().fill_bytes(&mut nonce);
+    // Fresh per-encrypt 12-byte nonce from the OS CSPRNG.
+    let nonce = ChaCha20Poly1305::generate_nonce(&mut OsRng);
 
+    // Bind the address into the AEAD as associated data (audit R-33).
+    let aad = aad_bytes(address);
     let ciphertext = cipher
-        .encrypt(nonce.as_slice().into(), mnemonic.as_bytes())
+        .encrypt(
+            &nonce,
+            chacha20poly1305::aead::Payload {
+                msg: mnemonic.as_bytes(),
+                aad: &aad,
+            },
+        )
         .map_err(|e| AppError::Crypto(format!("AEAD encrypt failed: {e}")))?;
 
     let mut out = Vec::with_capacity(1 + NONCE_LEN + ciphertext.len());
-    out.push(V_ARGON2);
-    out.extend_from_slice(&nonce);
+    out.push(V_ARGON2_AAD);
+    out.extend_from_slice(nonce.as_slice());
     out.extend_from_slice(&ciphertext);
     Ok(B64.encode(out))
 }
@@ -264,7 +293,23 @@ pub fn decrypt_mnemonic(encrypted_b64: &str, password: &str, address: &str) -> R
         .decode(encrypted_b64)
         .map_err(|e| AppError::Crypto(format!("invalid base64 ciphertext: {e}")))?;
 
-    // Try the new format first: a single version byte then nonce + body.
+    // Current format: `V_ARGON2_AAD` then nonce + body, decrypted with the
+    // address-bound AAD (audit R-33).
+    if raw.first().copied() == Some(V_ARGON2_AAD) && raw.len() >= 1 + NONCE_LEN + TAG_LEN {
+        let body = &raw[1..];
+        let (nonce_bytes, ct_and_tag) = body.split_at(NONCE_LEN);
+        let key = derive_aead_key_argon2(password, address)?;
+        let cipher = ChaCha20Poly1305::new(key.as_slice().into());
+        let aad = aad_bytes(address);
+        let plaintext = cipher
+            .decrypt(nonce_bytes.into(), chacha20poly1305::aead::Payload { msg: ct_and_tag, aad: &aad })
+            .map_err(|_| AppError::Crypto("decrypt failed — wrong password or corrupt data".into()))?;
+        let s = String::from_utf8(plaintext).map_err(|e| AppError::Crypto(format!("decrypted bytes not UTF-8: {e}")))?;
+        return Ok((Zeroizing::new(s), false));
+    }
+
+    // Previous format (`V_ARGON2`, no AAD) — still decrypted unchanged so
+    // pre-R-33 wallets keep working.
     if raw.first().copied() == Some(V_ARGON2) && raw.len() >= 1 + NONCE_LEN + TAG_LEN {
         let body = &raw[1..];
         let (nonce_bytes, ct_and_tag) = body.split_at(NONCE_LEN);
@@ -306,6 +351,37 @@ mod tests {
         assert!(!was_legacy, "new ciphertext must not be flagged as legacy");
     }
 
+    /// New ciphertext is emitted under the AAD-bound version byte (audit R-33).
+    #[test]
+    fn new_ciphertext_uses_aad_version() {
+        let enc = encrypt_mnemonic(MNEMONIC, "pw", ADDRESS).expect("encrypt");
+        let raw = B64.decode(&enc).expect("b64");
+        assert_eq!(raw.first().copied(), Some(V_ARGON2_AAD));
+    }
+
+    /// Backward compatibility: a pre-R-33 `V_ARGON2` (no-AAD) ciphertext MUST
+    /// still decrypt — the version byte routes it to the no-AAD path, so
+    /// existing wallets are untouched.
+    #[test]
+    fn decrypts_pre_r33_v_argon2_without_aad() {
+        // Reproduce the old encrypt: `V_ARGON2 || nonce || AEAD(empty AAD)`.
+        let enc = {
+            use chacha20poly1305::{AeadCore, aead::OsRng};
+            let key = derive_aead_key_argon2("pw", ADDRESS).unwrap();
+            let cipher = ChaCha20Poly1305::new(key.as_slice().into());
+            let nonce = ChaCha20Poly1305::generate_nonce(&mut OsRng);
+            let ct = cipher.encrypt(&nonce, MNEMONIC.as_bytes()).unwrap();
+            let mut out = Vec::with_capacity(1 + NONCE_LEN + ct.len());
+            out.push(V_ARGON2);
+            out.extend_from_slice(nonce.as_slice());
+            out.extend_from_slice(&ct);
+            B64.encode(out)
+        };
+        let (dec, was_legacy) = decrypt_mnemonic(&enc, "pw", ADDRESS).expect("decrypt old format");
+        assert_eq!(MNEMONIC, dec.as_str());
+        assert!(!was_legacy);
+    }
+
     #[test]
     fn wrong_password_rejected_argon2() {
         let enc = encrypt_mnemonic(MNEMONIC, "right", ADDRESS).expect("encrypt");
@@ -344,13 +420,13 @@ mod tests {
     /// migration path can be exercised without keeping the old
     /// `encrypt_mnemonic` API surface.
     fn encrypt_legacy_v1(mnemonic: &str, password: &str, address: &str) -> String {
+        use chacha20poly1305::{AeadCore, aead::OsRng};
         let key = derive_aead_key_hkdf_legacy(password, address);
         let cipher = ChaCha20Poly1305::new(key.as_slice().into());
-        let mut nonce = [0u8; NONCE_LEN];
-        rand::thread_rng().fill_bytes(&mut nonce);
-        let ct = cipher.encrypt(nonce.as_slice().into(), mnemonic.as_bytes()).expect("encrypt");
+        let nonce = ChaCha20Poly1305::generate_nonce(&mut OsRng);
+        let ct = cipher.encrypt(&nonce, mnemonic.as_bytes()).expect("encrypt");
         let mut out = Vec::with_capacity(NONCE_LEN + ct.len());
-        out.extend_from_slice(&nonce);
+        out.extend_from_slice(nonce.as_slice());
         out.extend_from_slice(&ct);
         B64.encode(out)
     }

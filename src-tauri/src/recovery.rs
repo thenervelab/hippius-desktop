@@ -524,7 +524,9 @@ async fn validate_master_against_existing_folders(pool: &SqlitePool, account_id:
         None => return Ok(()),
         Some((pw, _)) if pw.is_empty() => return Ok(()),
         Some((pw, 0)) => Zeroizing::new(pw),
-        Some((_, 1)) => match crate::sync::config::get_drive_password(pool, account_id, Some(candidate_master)).await {
+        // version 1 (no AAD) and 2 (AAD, audit R-33) both route through
+        // `get_drive_password`, which decrypts per the version.
+        Some((_, 1 | 2)) => match crate::sync::config::get_drive_password(pool, account_id, Some(candidate_master)).await {
             Ok(pw) => pw,
             Err(_) => {
                 return Err(AppError::Validation(
