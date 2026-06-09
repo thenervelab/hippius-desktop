@@ -117,12 +117,15 @@ async fn connect_once(wss_endpoint: &str) -> crate::error::Result<(RpcClient, On
             .map_err(|e| crate::error::AppError::Substrate(e.to_string()))?;
         // Refuse a node that isn't the Hippius chain before any signing path can
         // reach it (audit R-11). `genesis_hash()` is the value subxt cached at
-        // connect — no extra round-trip.
-        let genesis = client.genesis_hash();
-        if genesis != hippius_mainnet_genesis() {
-            return Err(crate::error::AppError::Substrate(format!(
-                "Refusing node at {wss_endpoint}: genesis 0x{genesis:x} is not the Hippius Mainnet chain"
-            )));
+        // connect — no extra round-trip. Loopback dev nodes are exempt (see
+        // `is_loopback_endpoint`): they are intentionally a different chain.
+        if !is_loopback_endpoint(wss_endpoint) {
+            let genesis = client.genesis_hash();
+            if genesis != hippius_mainnet_genesis() {
+                return Err(crate::error::AppError::Substrate(format!(
+                    "Refusing node at {wss_endpoint}: genesis 0x{genesis:x} is not the Hippius Mainnet chain"
+                )));
+            }
         }
         Ok::<_, crate::error::AppError>((rpc, client))
     })
@@ -307,6 +310,20 @@ fn is_loopback_host(host: &str) -> bool {
     host.eq_ignore_ascii_case("localhost") || host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
 }
 
+/// True if `endpoint` (a `ws://`/`wss://` URL) points at a loopback host. Used
+/// to exempt local dev nodes from the mainnet genesis pin (audit R-11): a
+/// loopback node is intentionally a *different* chain, the MITM threat the pin
+/// defends against doesn't apply over loopback, and `validate_endpoint_scheme`
+/// already permits plaintext `ws://` only for loopback — so without this
+/// exemption the pin would make that allowance dead.
+fn is_loopback_endpoint(endpoint: &str) -> bool {
+    let after = endpoint
+        .strip_prefix("wss://")
+        .or_else(|| endpoint.strip_prefix("ws://"))
+        .unwrap_or(endpoint);
+    is_loopback_host(endpoint_host(after))
+}
+
 /// Test if an RPC endpoint is reachable by attempting a WebSocket connection.
 ///
 /// Replaces the raw WebSocket test in `CustomizeRPC.tsx`.
@@ -395,6 +412,16 @@ mod tests {
         assert_eq!(endpoint_host("localhost"), "localhost");
         assert_eq!(endpoint_host("user@host.example:80/x"), "host.example");
         assert_eq!(endpoint_host("rpc.hippius.network"), "rpc.hippius.network");
+    }
+
+    #[test]
+    fn loopback_endpoints_are_exempt_from_genesis_pin() {
+        // R-11: a localhost dev node is exempt; a remote node is not.
+        assert!(is_loopback_endpoint("ws://localhost:9944"));
+        assert!(is_loopback_endpoint("ws://127.0.0.1:9944"));
+        assert!(is_loopback_endpoint("wss://[::1]:9944"));
+        assert!(!is_loopback_endpoint("wss://rpc.hippius.network"));
+        assert!(!is_loopback_endpoint("wss://hippius-testnet.starkleytech.com"));
     }
 
     /// A single connection attempt to an unreachable endpoint must return an

@@ -62,6 +62,12 @@ pub async fn transfer_balance(
     // `validate_send_balance` ran first (audit R-29).
     let (amount, recipient) = validate_transfer_inputs(&amount, &recipient_address)?;
 
+    // Enforce the cross-network guard on the signing path itself, not only the
+    // FE pre-check, so a direct IPC call can't sign a transfer to a
+    // foreign-network address (audit R-27).
+    let sender = get_substrate_address(&state).await?;
+    reject_cross_network(&sender, &recipient_address)?;
+
     let signer = get_signer(&state, &password).await?;
     let client = get_substrate_client(&state).await?;
 
@@ -120,6 +126,22 @@ fn same_ss58_network(a: &str, b: &str) -> bool {
     }
 }
 
+/// Reject a recipient on a different SS58 network than the `sender`'s own wallet
+/// (audit R-27): the pasted address decodes to the same 32-byte key but a
+/// *different* account, so funds would leave the Hippius network. Enforced on
+/// BOTH the pre-flight `validate_send_balance` and the authoritative
+/// `transfer_balance` signing path, so a direct IPC call can't bypass it
+/// (mirrors R-29's "the signing command self-guards" rationale).
+fn reject_cross_network(sender: &str, recipient: &str) -> Result<(), crate::error::AppError> {
+    if same_ss58_network(sender, recipient) {
+        Ok(())
+    } else {
+        Err(crate::error::AppError::Validation(
+            "Recipient is on a different network. Enter a Hippius address.".into(),
+        ))
+    }
+}
+
 /// Validate a balance transfer in a single call — fetches balance from chain.
 #[tauri::command]
 pub async fn validate_send_balance(
@@ -132,17 +154,7 @@ pub async fn validate_send_balance(
     }
 
     let address = get_substrate_address(&state).await?;
-
-    // Reject a recipient on a different SS58 network than the sender's own
-    // wallet (e.g. a Polkadot/Kusama address pasted into a Hippius wallet): it
-    // decodes to the same 32-byte key but a *different* account, so funds would
-    // leave the Hippius network (audit R-27). The sender's address defines the
-    // expected prefix, so no Hippius prefix is hardcoded.
-    if !same_ss58_network(&address, &recipient_address) {
-        return Err(crate::error::AppError::Validation(
-            "Recipient is on a different network. Enter a Hippius address.".into(),
-        ));
-    }
+    reject_cross_network(&address, &recipient_address)?;
 
     let client = get_substrate_client(&state).await?;
     let account_id: subxt::utils::AccountId32 = address
@@ -232,6 +244,16 @@ mod tests {
         // Never reject a transfer on a decode quirk — the checksum is validated
         // elsewhere. Undecodable input compares as "same network".
         assert!(same_ss58_network(ALICE_SUBSTRATE, "not-an-address"));
+    }
+
+    #[test]
+    fn reject_cross_network_blocks_foreign_allows_same() {
+        // R-27: the shared guard used by BOTH validate_send_balance and the
+        // transfer_balance signing path. Same network passes; a foreign-network
+        // recipient (same key, different SS58 prefix) is refused.
+        assert!(reject_cross_network(ALICE_SUBSTRATE, ALICE_SUBSTRATE).is_ok());
+        assert!(reject_cross_network(ALICE_SUBSTRATE, ALICE_POLKADOT).is_err());
+        assert!(reject_cross_network(ALICE_SUBSTRATE, ALICE_KUSAMA).is_err());
     }
 
     #[test]
