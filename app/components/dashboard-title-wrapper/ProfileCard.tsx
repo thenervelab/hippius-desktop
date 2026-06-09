@@ -183,8 +183,11 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
   const menuItemClass = cn(
     "h-8 rounded-[8px] px-3 py-1.5 gap-2 cursor-pointer",
     "text-[14px] font-medium leading-4 tracking-[-0.4px]",
-    "text-[#52525c] hover:!text-grey-10 hover:!bg-[#e9e9e9]",
-    "dark:text-[#a3a3a3] dark:hover:!text-white dark:hover:!bg-[#2c2c2c]",
+    // Radix toggles the highlighted item via data-highlighted (mouse AND
+    // keyboard), not :hover — the base item's hover:bg only coincidentally
+    // works. Style the real attribute so the highlight shows in both themes.
+    "text-[#52525c] data-[highlighted]:!text-grey-10 data-[highlighted]:!bg-[#e9e9e9]",
+    "dark:text-[#a3a3a3] dark:data-[highlighted]:!text-white dark:data-[highlighted]:!bg-[#2c2c2c]",
   );
 
   return (
@@ -287,8 +290,8 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
           className={cn(
             "h-8 rounded-[8px] px-3 py-1.5 gap-2 cursor-pointer",
             "text-[14px] font-medium leading-4 tracking-[-0.4px]",
-            "!text-[#fc7d73] hover:!text-[#fc7d73] hover:!bg-[#e9e9e9]",
-            "dark:hover:!bg-[#2c2c2c]",
+            "!text-[#fc7d73] data-[highlighted]:!text-[#fc7d73] data-[highlighted]:!bg-[#e9e9e9]",
+            "dark:data-[highlighted]:!bg-[#2c2c2c]",
           )}
         >
           <Logout className="size-4 shrink-0" />
