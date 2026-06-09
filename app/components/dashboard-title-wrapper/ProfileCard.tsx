@@ -183,7 +183,7 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
   const menuItemClass = cn(
     "h-8 rounded-[8px] px-3 py-1.5 gap-2 cursor-pointer",
     "text-[14px] font-medium leading-4 tracking-[-0.4px]",
-    "text-[#52525c] hover:!text-grey-10 hover:!bg-grey-light-700",
+    "text-[#52525c] hover:!text-grey-10 hover:!bg-[#e9e9e9]",
     "dark:text-[#a3a3a3] dark:hover:!text-white dark:hover:!bg-[#2c2c2c]",
   );
 
@@ -232,7 +232,7 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
         side="top"
         sideOffset={8}
         className={cn(
-          "rounded-[8px] border border-grey-dark-100 bg-white p-1 z-[1100]",
+          "w-[200px] rounded-[8px] border border-grey-dark-100 bg-white p-1 z-[1100]",
           // Match the menu to the trigger row (avatar + address + block +
           // chevron) via Radix's measured trigger width. Collapsed, the trigger
           // is just the avatar, so fall back to a fixed width that fits the items.
@@ -283,7 +283,7 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
           className={cn(
             "h-8 rounded-[8px] px-3 py-1.5 gap-2 cursor-pointer",
             "text-[14px] font-medium leading-4 tracking-[-0.4px]",
-            "!text-[#fc7d73] hover:!text-[#fc7d73] hover:!bg-grey-light-700",
+            "!text-[#fc7d73] hover:!text-[#fc7d73] hover:!bg-[#e9e9e9]",
             "dark:hover:!bg-[#2c2c2c]",
           )}
         >
