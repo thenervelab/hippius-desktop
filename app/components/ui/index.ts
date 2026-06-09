@@ -7,7 +7,6 @@ export { default as AbstractIconWrapper } from "./abstract-icon-wrapper";
 export { default as Skeleton } from "./skeleton";
 export { default as CopyText } from "./copy-text";
 export { default as ProgressBar } from "./progress-bar";
-export { default as GoBackButton } from "./go-back-button";
 export * from "./typography";
 export * as Icons from "./icons";
 export { default as SearchInput } from "./search-input";
