@@ -90,7 +90,7 @@ use crate::sync::mnemonic::{ensure_sync_mnemonic, get_drive_mnemonic};
 use crate::sync::paths::{get_sync_path, remove_sync_path, set_sync_path};
 use crate::sync::progress::{sp_clear_all_data, sp_dismiss_sync_widget, sp_get_snapshot};
 use crate::sync::recent_uploads::{get_recent_uploads, search_files};
-use crate::sync::remote::{cache_remote_file, download_remote_file, list_remote_folder_files};
+use crate::sync::remote::{cache_remote_file, download_remote_file, get_thumbnail, list_remote_folder_files};
 use crate::sync::status::{app_close, get_all_drive_statuses, get_sync_activity_rows, get_sync_engine_health};
 use crate::tray::panel::{hide_tray_panel, toggle_tray_panel};
 use crate::utils::logs::attach_logs_to_ticket;
@@ -304,6 +304,7 @@ fn main() {
             list_remote_folder_files,
             download_remote_file,
             cache_remote_file,
+            get_thumbnail,
             // File sharing (link-based public shares)
             crate::shares::commands::hcfs_create_share,
             crate::shares::commands::hcfs_list_shares,
