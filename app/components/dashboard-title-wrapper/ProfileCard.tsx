@@ -205,12 +205,15 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
             type="button"
             aria-label="Open account menu"
             className={cn(
-              "group flex items-center gap-1.5 rounded-lg py-2 hover:bg-black/5 transition-colors duration-200 min-w-0 overflow-hidden",
-              // No default focus ring (Radix returns focus here on close, which
-              // showed the browser's blue ring — clipped to a bar by overflow-
-              // hidden). Keyboard users still get an inset brand ring.
-              "outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary-50",
-              "dark:hover:bg-white/10 data-[state=open]:bg-black/5 dark:data-[state=open]:bg-white/10",
+              "group flex items-center gap-1.5 rounded-lg py-2 transition-colors duration-200 min-w-0 overflow-hidden",
+              // Hover / keyboard-focus / open share one translucent surface and
+              // there is NO focus ring (Radix returns focus here on close; a ring
+              // showed the browser/brand blue, clipped to a bar by overflow-hidden).
+              // bg-black/5 renders nothing here — the black palette has no DEFAULT
+              // key — so use an explicit rgba on light; white/10 on dark.
+              "outline-none",
+              "hover:bg-[rgba(0,0,0,0.06)] focus-visible:bg-[rgba(0,0,0,0.06)] data-[state=open]:bg-[rgba(0,0,0,0.06)]",
+              "dark:hover:bg-white/10 dark:focus-visible:bg-white/10 dark:data-[state=open]:bg-white/10",
               collapsed ? "px-1" : "flex-1 pr-1",
             )}
           >
