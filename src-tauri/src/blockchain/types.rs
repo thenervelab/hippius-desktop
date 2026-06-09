@@ -69,12 +69,36 @@ pub struct StakingInfo {
     pub unbonding_periods: Vec<UnbondingPeriod>,
 }
 
-/// Result of a submitted extrinsic.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TxResult {
-    pub tx_hash: String,
-    pub success: bool,
+/// Outcome of a submitted extrinsic.
+///
+/// Distinguishes the four operationally-different end states so the frontend
+/// never blindly re-submits a transaction that may already be on-chain
+/// (audit findings R-01 / R-15). The submit step and the finalization watch
+/// are separate awaits: submission can succeed and the extrinsic land on-chain
+/// while the watch later errors (RPC/websocket drop, timeout). Collapsing that
+/// into a bare `Err` led the FE to offer an unconditional "Try Again" that
+/// re-signed a fresh, valid extrinsic — a double-spend.
+///
+/// Retry-safety per variant:
+/// - `Finalized` — succeeded; nothing to retry.
+/// - `FinalizedFailed` — landed but the dispatch failed; the nonce was
+///   consumed, so the call definitively did not take effect. Safe to retry as
+///   a NEW transaction; `reason` is the on-chain error.
+/// - `SubmittedUnconfirmed` — the node accepted the extrinsic but we lost track
+///   of it before finalization. It MAY be on-chain — the FE must surface
+///   "pending, do not resend", NOT a retry.
+/// - `RejectedAtSubmission` — the submission was rejected; the extrinsic never
+///   entered the pool. Safe to retry.
+///
+/// Serializes as an internally-tagged object, e.g.
+/// `{ "status": "submittedUnconfirmed", "txHash": "0x…", "reason": "…" }`.
+#[derive(Serialize, Debug)]
+#[serde(tag = "status", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum TxOutcome {
+    Finalized { tx_hash: String },
+    FinalizedFailed { tx_hash: String, reason: String },
+    SubmittedUnconfirmed { tx_hash: String, reason: String },
+    RejectedAtSubmission { reason: String },
 }
 
 /// On-chain timestamp for a specific block number.

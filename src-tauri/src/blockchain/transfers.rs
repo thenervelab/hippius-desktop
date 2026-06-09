@@ -2,10 +2,10 @@
 
 use crate::blockchain::client::get_substrate_client;
 use crate::blockchain::convert::to_plancks;
-use crate::blockchain::helpers::{get_signer, get_substrate_address};
+use crate::blockchain::helpers::{get_signer, get_substrate_address, sign_submit_track};
 use crate::blockchain::queries::validate_address;
 use crate::blockchain::runtime::custom_runtime;
-use crate::blockchain::types::{TxResult, ValidatedTransfer};
+use crate::blockchain::types::{TxOutcome, ValidatedTransfer};
 use std::str::FromStr;
 use tracing::info;
 
@@ -55,7 +55,7 @@ pub async fn transfer_balance(
     recipient_address: String,
     amount: String,
     password: String,
-) -> Result<TxResult, crate::error::AppError> {
+) -> Result<TxOutcome, crate::error::AppError> {
     // Validate inputs BEFORE deriving the signing key, so a direct IPC call
     // can't reach the signer (or sign anything) with a zero amount or a
     // malformed recipient. The command previously trusted that the FE's
@@ -68,21 +68,9 @@ pub async fn transfer_balance(
     info!("Submitting transfer_keep_alive transaction...");
     let tx = custom_runtime::tx().balances().transfer_keep_alive(recipient.into(), amount);
 
-    let tx_hash = client
-        .tx()
-        .sign_and_submit_then_watch_default(&tx, &signer)
-        .await
-        .map_err(|e| crate::error::AppError::Substrate(format!("Submit failed: {e}")))?
-        .wait_for_finalized_success()
-        .await
-        .map_err(|e| crate::error::AppError::Substrate(format!("Transaction failed: {e}")))?
-        .extrinsic_hash();
-
-    info!("Transfer tx finalized: {:?}", tx_hash);
-    Ok(TxResult {
-        tx_hash: format!("{tx_hash:?}"),
-        success: true,
-    })
+    let outcome = sign_submit_track(&client, &tx, &signer).await?;
+    info!("Transfer outcome: {outcome:?}");
+    Ok(outcome)
 }
 
 /// Parse and validate a transfer's amount + recipient — the IPC's self-guard

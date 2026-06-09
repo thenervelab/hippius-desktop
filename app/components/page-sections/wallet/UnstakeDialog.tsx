@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { HAlphaCoinLogo, HippiusLogo } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
+import { TxSubmittedUnconfirmedError } from "@/lib/utils/txOutcome";
 
 import {
   WalletDialogShell,
@@ -96,9 +97,15 @@ const UnstakeDialog: React.FC<UnstakeDialogProps> = ({
         await refetch();
         onSuccess?.();
       } catch (e: unknown) {
-        const msg = e instanceof Error ? e.message : String(e);
-        setFlowState("error");
-        toast.error("Unstake failed", { description: msg });
+        if (e instanceof TxSubmittedUnconfirmedError) {
+          // May already be on-chain — no retry. Balances were already
+          // invalidated by the staking hook before this threw.
+          setFlowState("submitted");
+        } else {
+          const msg = e instanceof Error ? e.message : String(e);
+          setFlowState("error");
+          toast.error("Unstake failed", { description: msg });
+        }
       } finally {
         isProcessingRef.current = false;
       }
@@ -343,7 +350,7 @@ const UnstakeDialog: React.FC<UnstakeDialogProps> = ({
 
       {showFlowToast && (
         <TransactionFlowToast
-          state={flowState as "pending" | "success" | "error"}
+          state={flowState as "pending" | "success" | "error" | "submitted"}
           config={{
             pending: {
               title: "Unstaking hALPHA…",
@@ -357,6 +364,11 @@ const UnstakeDialog: React.FC<UnstakeDialogProps> = ({
               title: "Something went wrong",
               description: "We couldn’t unstake your hALPHA.",
               action: { label: "Try Again", onClick: handleRetryUnstake },
+            },
+            submitted: {
+              title: "Transaction submitted",
+              description:
+                "Your unstake may already be on-chain. Check your balance before retrying — do not submit again.",
             },
           }}
           onDismiss={closeFlowToast}

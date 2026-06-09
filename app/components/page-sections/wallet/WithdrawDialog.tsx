@@ -15,6 +15,7 @@ import TransactionFlowToast, {
 import WalletPasswordField from "./shared/WalletPasswordField";
 import { useStaking } from "@/lib/hooks/useStaking";
 import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
+import { TxSubmittedUnconfirmedError } from "@/lib/utils/txOutcome";
 
 interface WithdrawDialogProps {
   open: boolean;
@@ -69,9 +70,15 @@ const WithdrawDialog: React.FC<WithdrawDialogProps> = ({
         await refetch();
         onSuccess?.();
       } catch (e: unknown) {
-        const msg = e instanceof Error ? e.message : String(e);
-        setFlowState("error");
-        toast.error("Withdraw failed", { description: msg });
+        if (e instanceof TxSubmittedUnconfirmedError) {
+          // May already be on-chain — no retry. Balances were already
+          // invalidated by the staking hook before this threw.
+          setFlowState("submitted");
+        } else {
+          const msg = e instanceof Error ? e.message : String(e);
+          setFlowState("error");
+          toast.error("Withdraw failed", { description: msg });
+        }
       } finally {
         isProcessingRef.current = false;
       }
@@ -184,7 +191,7 @@ const WithdrawDialog: React.FC<WithdrawDialogProps> = ({
 
       {showFlowToast && (
         <TransactionFlowToast
-          state={flowState as "pending" | "success" | "error"}
+          state={flowState as "pending" | "success" | "error" | "submitted"}
           config={{
             pending: {
               title: "Withdrawing hALPHA…",
@@ -198,6 +205,11 @@ const WithdrawDialog: React.FC<WithdrawDialogProps> = ({
               title: "Something went wrong",
               description: "We couldn’t withdraw your tokens.",
               action: { label: "Try Again", onClick: handleRetry },
+            },
+            submitted: {
+              title: "Transaction submitted",
+              description:
+                "Your withdrawal may already be on-chain. Check your balance before retrying — do not submit again.",
             },
           }}
           onDismiss={closeFlowToast}

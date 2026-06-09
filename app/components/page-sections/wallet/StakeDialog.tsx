@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { HAlphaCoinLogo, HippiusLogo } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
+import { TxSubmittedUnconfirmedError } from "@/lib/utils/txOutcome";
 
 import {
   WalletDialogShell,
@@ -137,9 +138,15 @@ const StakeDialog: React.FC<StakeDialogProps> = ({
         await refetchBalance();
         onSuccess?.();
       } catch (e: unknown) {
-        const msg = e instanceof Error ? e.message : String(e);
-        setFlowState("error");
-        toast.error("Stake failed", { description: msg });
+        if (e instanceof TxSubmittedUnconfirmedError) {
+          // May already be on-chain — no retry. Balances were already
+          // invalidated by the staking hook before this threw.
+          setFlowState("submitted");
+        } else {
+          const msg = e instanceof Error ? e.message : String(e);
+          setFlowState("error");
+          toast.error("Stake failed", { description: msg });
+        }
       } finally {
         isProcessingRef.current = false;
       }
@@ -374,7 +381,7 @@ const StakeDialog: React.FC<StakeDialogProps> = ({
 
       {showFlowToast && (
         <TransactionFlowToast
-          state={flowState as "pending" | "success" | "error"}
+          state={flowState as "pending" | "success" | "error" | "submitted"}
           config={{
             pending: {
               title: "Staking hALPHA…",
@@ -388,6 +395,11 @@ const StakeDialog: React.FC<StakeDialogProps> = ({
               title: "Something went wrong",
               description: "We couldn’t stake your hALPHA.",
               action: { label: "Try Again", onClick: handleRetryStake },
+            },
+            submitted: {
+              title: "Transaction submitted",
+              description:
+                "Your stake may already be on-chain. Check your staked balance before retrying — do not submit again.",
             },
           }}
           onDismiss={closeFlowToast}

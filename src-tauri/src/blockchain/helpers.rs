@@ -20,9 +20,75 @@
 //! unlock a wallet).
 
 use crate::auth::account_key::account_key;
+use crate::blockchain::types::TxOutcome;
 use crate::error::{AppError, NotReadyKind};
 use crate::wallet::{crypto, repo};
+use subxt::tx::Payload;
+use subxt::config::DefaultExtrinsicParamsBuilder;
+use subxt::{OnlineClient, PolkadotConfig};
 use subxt_signer::{bip39::Mnemonic as SubxtMnemonic, sr25519::Keypair};
+
+/// Sign, submit, and track an extrinsic to a precise [`TxOutcome`].
+///
+/// The extrinsic is **mortal** (audit R-12): it carries a bounded era anchored
+/// to the latest finalized block, so a signed payload can't be replayed
+/// indefinitely. subxt's `_default` path is Immortal, so we build params
+/// explicitly and use `sign_and_submit_then_watch`.
+///
+/// The two awaits are deliberately kept distinct (see [`TxOutcome`] for why):
+/// 1. `sign_and_submit_then_watch` — any error here is pre-pool (anchor/nonce
+///    fetch, signing, or a rejected submission), so nothing reached the chain →
+///    `RejectedAtSubmission` (safe to retry).
+/// 2. `wait_for_finalized` — an error here means the extrinsic was accepted but
+///    we lost the watch before seeing it land → `SubmittedUnconfirmed` (it MAY
+///    be on-chain; the FE must not auto-resubmit). On success we further split
+///    dispatch-success (`Finalized`) from a landed-but-failed dispatch
+///    (`FinalizedFailed`).
+///
+/// The extrinsic hash is captured from the progress handle BEFORE the watch is
+/// consumed, so it is available even on the `SubmittedUnconfirmed` path for the
+/// FE / user to reconcile against the chain.
+///
+/// Returns `Err` only for the impossible-to-have-submitted cases handled by the
+/// caller earlier; every post-submission state is an `Ok(TxOutcome)` so the FE
+/// branches on one typed value instead of guessing from an error string.
+pub(crate) async fn sign_submit_track<Call>(client: &OnlineClient<PolkadotConfig>, tx: &Call, signer: &Keypair) -> Result<TxOutcome, AppError>
+where
+    Call: Payload,
+{
+    // Mortal era: bound how long a signed extrinsic stays valid so it can't be
+    // replayed indefinitely — e.g. after the account is reaped and later
+    // re-funded, which resets the nonce. 64 blocks (~6 min at 6s) is the
+    // polkadot-js default: ample for inclusion (sign→submit→include is normally
+    // seconds) yet a tight replay bound, and small enough to stay within any
+    // reasonable on-chain `BlockHashCount`. Anchored to the latest FINALIZED
+    // block so the checkpoint can't reorg out from under the extrinsic.
+    const MORTAL_PERIOD_BLOCKS: u64 = 64;
+    let anchor = client
+        .blocks()
+        .at_latest()
+        .await
+        .map_err(|e| AppError::Substrate(format!("Failed to fetch anchor block for mortal era: {e}")))?;
+    let params = DefaultExtrinsicParamsBuilder::<PolkadotConfig>::new()
+        .mortal(anchor.header(), MORTAL_PERIOD_BLOCKS)
+        .build();
+
+    let progress = match client.tx().sign_and_submit_then_watch(tx, signer, params).await {
+        Ok(p) => p,
+        Err(e) => return Ok(TxOutcome::RejectedAtSubmission { reason: e.to_string() }),
+    };
+
+    // Capture the hash now — `wait_for_finalized` consumes `progress`.
+    let tx_hash = format!("{:?}", progress.extrinsic_hash());
+
+    match progress.wait_for_finalized().await {
+        Err(e) => Ok(TxOutcome::SubmittedUnconfirmed { tx_hash, reason: e.to_string() }),
+        Ok(in_block) => match in_block.wait_for_success().await {
+            Ok(_events) => Ok(TxOutcome::Finalized { tx_hash }),
+            Err(e) => Ok(TxOutcome::FinalizedFailed { tx_hash, reason: e.to_string() }),
+        },
+    }
+}
 
 /// Resolve the current account's owner key, returning the unified
 /// `NotReady(SigningKeyUnavailable)` when nobody is logged in. The FE
@@ -158,5 +224,41 @@ async fn migrate_to_argon2(
             error = %e,
             "Failed to persist Argon2id-migrated wallet secrets"
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// Static regression guard (audit R-12): `sign_submit_track` MUST build a
+    /// mortal era and submit with explicit params — never fall back to subxt's
+    /// `_default` path, which is Immortal. A refactor that drops `.mortal(` (or
+    /// reverts to `sign_and_submit_then_watch_default`) silently reopens the
+    /// indefinite-replay window, so pin it here.
+    #[test]
+    fn signing_helper_uses_a_mortal_era() {
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/blockchain/helpers.rs")).expect("read helpers.rs");
+        let sig_idx = src.find("pub(crate) async fn sign_submit_track").expect("sign_submit_track present");
+        let body_start = src[sig_idx..].find('{').expect("fn body opens") + sig_idx;
+        let mut depth = 0usize;
+        let mut body_end = body_start;
+        for (i, ch) in src[body_start..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        body_end = body_start + i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let body = &src[body_start..=body_end];
+        assert!(body.contains(".mortal("), "sign_submit_track must build a mortal era (R-12)");
+        assert!(
+            !body.contains("sign_and_submit_then_watch_default"),
+            "sign_submit_track must NOT use the Immortal `_default` path (R-12)",
+        );
     }
 }
