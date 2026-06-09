@@ -312,9 +312,13 @@ const SidebarSearchModal: FC<SidebarSearchModalProps> = ({
                   ? formatBytes(file.size, 2)
                   : "—";
               const uploadedText = formatUploadedDate(file.createdAt);
-              const rowKey = `${file.label ?? ""}::${
-                file.actualFileName ?? file.name
-              }`;
+              // These rows come from /search_files (recent uploads + search),
+              // which is NOT deduped — two same-named files in different folders
+              // both appear. fileId (server path_hash) is unique per file path,
+              // so it keys them apart; label::name collides on the basename.
+              const rowKey =
+                file.fileId ||
+                `${file.label ?? ""}::${file.actualFileName ?? file.name}`;
               return (
                 <button
                   key={rowKey}

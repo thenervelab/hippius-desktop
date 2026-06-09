@@ -1272,7 +1272,9 @@ const FilesTable: FC<FilesTableProps> = memo(
         // per drive, so label + path is globally unique); arionHash is
         // unsuitable on its own because it's "pending"/empty for
         // not-yet-uploaded rows AND identical files synced to two drives
-        // share the same hash.
+        // share the same hash. (The recent-files feed is deduped on this same
+        // key in mergeUploadFeed, so two rows here can never share it; the
+        // un-deduped /search_files lists key on fileId instead.)
         getRowId: (row: FormattedUserFile) =>
           `${row.label ?? ""}::${row.actualFileName ?? row.name}`,
       }),
@@ -1603,7 +1605,11 @@ const FilesTable: FC<FilesTableProps> = memo(
                   return (
                     <TableModule.Td
                       className={cn(
-                        "px-2 py-[5px] border-x-0 border-r last:border-r-0 border-grey-dark-100 text-grey-dark-800 text-xs dark:border-black-300",
+                        // Cell base is `text-sm` so the file NAME (which inherits
+                        // it) reads as first-class data; the metadata columns
+                        // (size/date/type) override back to `text-xs` to stay
+                        // visually secondary.
+                        "px-2 py-[5px] border-x-0 border-r last:border-r-0 border-grey-dark-100 text-grey-dark-800 text-sm dark:border-black-300",
                         cell.column.id === "actions" && "p-0",
                         cell.column.id === "name" && "p-0 relative",
                         cell.column.id === "arionHash" && "p-0",
