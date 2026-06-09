@@ -1,9 +1,28 @@
 import { describe, expect, it } from "vitest";
 import { getTraySyncSummary } from "../traySyncSummary";
-import { EMPTY_SNAPSHOT, type SyncSnapshot } from "@/app/lib/types/syncSnapshot";
+import {
+  EMPTY_SNAPSHOT,
+  type FileProgress,
+  type SyncSnapshot,
+} from "@/app/lib/types/syncSnapshot";
 
 function snap(overrides: Partial<SyncSnapshot>): SyncSnapshot {
   return { ...EMPTY_SNAPSHOT, ...overrides };
+}
+
+function errorFile(fileName: string, error: string): FileProgress {
+  return {
+    path: `/${fileName}`,
+    fileName,
+    label: "default",
+    action: "upload",
+    status: "error",
+    progressPercent: 0,
+    bytesEncrypted: 0,
+    bytesTransferred: 0,
+    totalBytes: 0,
+    error,
+  };
 }
 
 describe("getTraySyncSummary", () => {
@@ -66,6 +85,43 @@ describe("getTraySyncSummary", () => {
       statusLabel: "Failed",
       detail: "1 of 4 files failed",
     });
+  });
+
+  it("appends the shared reason when every failed file failed the same way", () => {
+    const reason = "Insufficient credits — needs $1.00, you have $0.12.";
+    const out = getTraySyncSummary(
+      snap({
+        totalFiles: 2,
+        actualTotal: 2,
+        failedFiles: 2,
+        statusVariant: "error",
+        effectiveCompleted: true,
+        widgetVisible: true,
+        files: [errorFile("a.txt", reason), errorFile("b.txt", reason)],
+      }),
+    );
+    expect(out).toMatchObject({
+      tone: "failed",
+      detail: `2 of 2 files failed · ${reason}`,
+    });
+  });
+
+  it("keeps a bare count when failed files have differing reasons", () => {
+    const out = getTraySyncSummary(
+      snap({
+        totalFiles: 2,
+        actualTotal: 2,
+        failedFiles: 2,
+        statusVariant: "error",
+        effectiveCompleted: true,
+        widgetVisible: true,
+        files: [
+          errorFile("a.txt", "Network error — couldn't reach the server. Check your connection."),
+          errorFile("b.txt", "Server error (500). Please try again."),
+        ],
+      }),
+    );
+    expect(out?.detail).toBe("2 of 2 files failed");
   });
 
   it("reports the preparing state", () => {

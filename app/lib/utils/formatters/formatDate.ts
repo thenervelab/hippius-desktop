@@ -33,16 +33,3 @@ export const formatDate = (input: Date | string | number | bigint): string => {
 
   return `${dd}/${mm}/${yyyy} ${hours}:${minutes} ${ampm}`;
 };
-
-/** Format a Date / ISO string / Unix timestamp as `DD/MM/YYYY` (date only). */
-export function formatDateWithouteTime(
-  input: Date | string | number
-): string {
-  const d = input instanceof Date ? input : new Date(input);
-  if (isNaN(d.getTime())) return "Invalid Date";
-
-  const dd = String(d.getDate()).padStart(2, "0");
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const yyyy = String(d.getFullYear());
-  return `${dd}/${mm}/${yyyy}`;
-}

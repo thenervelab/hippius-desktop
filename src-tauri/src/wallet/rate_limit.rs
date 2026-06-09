@@ -248,7 +248,7 @@ mod tests {
                 assert!(retry_after <= LOCKOUT_SOFT);
                 assert!(retry_after > Duration::from_secs(0));
             }
-            Ok(()) => panic!("expected lockout after {} failures", FAIL_THRESHOLD_SOFT),
+            Ok(()) => panic!("expected lockout after {FAIL_THRESHOLD_SOFT} failures"),
         }
     }
 
@@ -338,7 +338,7 @@ mod tests {
     #[test]
     fn rate_limit_error_message_uses_minutes_over_minute() {
         let err = RateLimitError::Locked {
-            retry_after: Duration::from_secs(180),
+            retry_after: Duration::from_mins(3),
         };
         assert!(err.message().contains("minute"));
     }

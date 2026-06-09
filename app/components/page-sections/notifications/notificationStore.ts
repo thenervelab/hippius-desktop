@@ -41,9 +41,6 @@ if (typeof window !== 'undefined' && process.env.NODE_ENV === 'development') {
 
 export const notificationsAtom = atom<UiNotification[]>([]);
 
-// Atom to store the current user address for notifications
-export const userAddressAtom = atom<string | null>(null);
-
 // Atom to store enabled notification types
 export const enabledNotificationTypesAtom = atom<string[]>([]);
 
@@ -53,61 +50,61 @@ export const refreshEnabledTypesAtom = atom(null, async (_, set) => {
   set(enabledNotificationTypesAtom, types);
 });
 
-// helper atom — fetch + update list in one call
-export const refreshNotificationsAtom = atom(null, async (get, set) => {
-  // Get the current user address
-  const userAddress = get(userAddressAtom);
-  if (!userAddress) {
-    console.warn("[NotificationStore] No user address, skipping notification refresh");
-    set(notificationsAtom, []);
-    set(unreadCountAtom, 0);
-    return;
-  }
+/** Map one Rust notification row to the UI view model. */
+function mapRow(r: NotificationRow): UiNotification {
+  const timestamp = Number(r.creationTime);
+  return {
+    id: Number(r.id),
+    icon: (r.notificationType ? iconMap[r.notificationType] : undefined) ?? Icons.Document,
+    type: r.notificationType ?? "",
+    subType: r.notificationSubtype || "",
+    title: r.titleText ?? "",
+    description: r.description ?? "",
+    buttonText: r.linkText ?? "",
+    buttonLink: r.link ?? "",
+    releaseNotes: typeof r.releaseNotes === "string" ? r.releaseNotes : "",
+    unread: r.isUnread === true,
+    timestamp,
+    // Fallback display if the TimeAgo component can't render the timestamp.
+    time: isNaN(timestamp) ? "Unknown date" : new Date(timestamp).toLocaleString(),
+  };
+}
 
-  // Always fetch enabled types fresh from the backend so we never rely
-  // on a stale atom value (the atom may still be at its default `[]`).
+/**
+ * Pure row → view transform shared by the bell menu and the notifications page.
+ *
+ * A row is visible when its `notificationType` is one of the user's enabled
+ * category labels, OR it is a `"Hippius"` system row (always shown). Returns the
+ * visible list together with its unread tally so the bell badge and the list are
+ * computed from one source and can never disagree.
+ */
+export function buildNotificationView(
+  rows: NotificationRow[],
+  enabledTypes: string[],
+): { notifications: UiNotification[]; unreadCount: number } {
+  const notifications = rows
+    .map(mapRow)
+    .filter((n) => (n.type !== "" && enabledTypes.includes(n.type)) || n.type === "Hippius");
+  const unreadCount = notifications.filter((n) => n.unread).length;
+  return { notifications, unreadCount };
+}
+
+// Fetch + rebuild the list/badge in one call. Intentionally takes NO frontend
+// address: Rust scopes `list_notifications` to the signed-in session account and
+// ignores any caller-supplied address (see notifications/crud.rs). The previous
+// `if (!userAddress) return []` guard short-circuited the fetch whenever the
+// frontend address lagged the Rust session — a restored mnemonic session exposes
+// no `oauthSession` and `polkadotAddress` is briefly null during boot — leaving
+// the bell stuck on "Nothing here" while the database held rows. Always fetch and
+// let Rust scope.
+export const refreshNotificationsAtom = atom(null, async (_get, set) => {
   const enabledTypes = await getEnabledNotificationTypes();
   set(enabledNotificationTypesAtom, enabledTypes);
 
-  // Fetch all notifications for this user (Rust returns objects, not raw rows)
-  const rows = await listNotifications(userAddress, 100);
+  const rows = await listNotifications(100);
+  const { notifications, unreadCount } = buildNotificationView(rows, enabledTypes);
 
-  const mapped = rows.map((r: NotificationRow) => {
-    const timestamp = Number(r.creationTime);
-    const releaseNotes = typeof r.releaseNotes === "string" ? r.releaseNotes : "";
-
-    return {
-      id: Number(r.id),
-      icon: (r.notificationType ? iconMap[r.notificationType] : undefined) ?? Icons.Document,
-      type: r.notificationType ?? "",
-      subType: r.notificationSubtype || "",
-      title: r.titleText ?? "",
-      description: r.description ?? "",
-      buttonText: r.linkText ?? "",
-      buttonLink: r.link ?? "",
-      releaseNotes,
-      unread: r.isUnread === true,
-      // Keep original timestamp for TimeAgo component
-      timestamp: timestamp,
-      // Fallback time display in case TimeAgo fails
-      time: isNaN(timestamp)
-        ? "Unknown date"
-        : new Date(timestamp).toLocaleString(),
-    };
-  });
-
-  // Filter: only show notifications whose type is enabled, plus Hippius system
-  // notifications which are always visible.
-  const filteredNotifications = mapped.filter(
-    (notification) =>
-      (notification.type != null && enabledTypes.includes(notification.type)) ||
-      notification.type === "Hippius"
-  );
-
-  set(notificationsAtom, filteredNotifications);
-
-  // Update unread count based on filtered notifications
-  const unreadCount = filteredNotifications.filter(n => n.unread).length;
+  set(notificationsAtom, notifications);
   set(unreadCountAtom, unreadCount);
 });
 
@@ -143,10 +140,8 @@ export const markUnreadAtom = atom(null, async (get, set, id: number) => {
 });
 
 export const markAllReadAtom = atom(null, async (get, set) => {
-  const userAddress = get(userAddressAtom);
-  if (!userAddress) return;
-
-  await markAllRead(userAddress);
+  // Scoped to the session account in Rust; no frontend address needed.
+  await markAllRead();
   set(
     notificationsAtom,
     get(notificationsAtom).map((n) => ({ ...n, unread: false }))

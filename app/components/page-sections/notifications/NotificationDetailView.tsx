@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { isVersionGreaterOrEqual } from "@/lib/utils/versionCompare";
 import { IconComponent } from "@/app/lib/types";
+import { notificationCategoryLabel } from "@/app/lib/helpers/notificationCategories";
 import { handleButtonLink } from "@/app/lib/utils/links";
 import { ArrowUpCircle, ArrowDownCircle, Trash2, MoreVertical } from "lucide-react";
 import TimeAgo from "react-timeago";
@@ -155,7 +156,7 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
 
             <div className="flex flex-col flex-1 min-w-0">
               <p className="text-[14px] font-medium truncate text-[#0a0a0a] dark:text-white">
-                {type}
+                {notificationCategoryLabel(type)}
               </p>
               <p className="text-[13px] font-medium truncate text-[#0a0a0a] dark:text-grey-dark-700">
                 {title}

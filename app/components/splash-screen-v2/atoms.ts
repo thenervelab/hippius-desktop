@@ -27,19 +27,6 @@ export const phaseInternalProgressAtom = atom(
   }
 );
 
-export const stepAtom = atom((get) => {
-  const phase = get(phaseAtom);
-  const phaseKeys = Object.keys(PHASE_CONTENT);
-
-  if (phase) {
-    const index = phaseKeys.findIndex((v) => v === phase);
-    return index >= 0 ? index : 0;
-  }
-
-  return 0;
-});
-
-
 // Progress percentage based on weighted phases and real-time backend progress
 export const progressAtom = atom((get) => {
   const phase = get(phaseAtom);

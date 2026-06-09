@@ -21,11 +21,13 @@ use crate::shares::client::build_account_client;
 use crate::shares::history::{self, HistoryEntry};
 use crate::shares::origin;
 use chrono::Utc;
-use hcfs_client::client::share::ShareSummary as UpstreamShareSummary;
+use hcfs_client::client::share::{ShareProgress, ShareProgressFn, ShareSummary as UpstreamShareSummary};
 use serde::Serialize;
 use sqlx::sqlite::SqlitePool;
 use std::path::{Component, Path, PathBuf};
-use tracing::{info, warn};
+use std::sync::Arc;
+use tauri::ipc::Channel;
+use tracing::{debug, info, warn};
 
 /// Public console origin used to build the recipient URL fragment.
 /// Hard-coded for v1 to match the rest of the app's "static prod URL"
@@ -185,7 +187,18 @@ async fn require_shares_supported(state: &AppState, account_id: &str) -> Result<
 /// return the wire `ShareLink`. Reshare reuses this verbatim so a
 /// reshared link is indistinguishable from a freshly-minted one
 /// (same TTL, same keystore lifecycle, same sidecar invariants).
-async fn create_share_inner(state: &AppState, account_id: &str, folder_label: &str, relative_path: &str) -> Result<ShareLink> {
+///
+/// `progress`, when `Some`, is hcfs-client's per-phase
+/// encrypting→uploading→finalizing callback. `hcfs_create_share`
+/// supplies a channel-forwarding closure so the share modal can render
+/// a live bar; `hcfs_reshare` passes `None` (its modal has no bar).
+async fn create_share_inner(
+    state: &AppState,
+    account_id: &str,
+    folder_label: &str,
+    relative_path: &str,
+    progress: Option<ShareProgressFn>,
+) -> Result<ShareLink> {
     let pool = state.pool()?;
 
     // Resolve the local plaintext path. Synced-folder files are
@@ -229,7 +242,7 @@ async fn create_share_inner(state: &AppState, account_id: &str, folder_label: &s
     let mut reader = tokio::fs::File::open(&local_path).await?;
     let keystore = SqliteShareKeystore::new(pool.clone());
     let result = client
-        .create_share(&mut reader, plaintext_size, &filename, &mime_type, &keystore, CONSOLE_BASE_URL)
+        .create_share(&mut reader, plaintext_size, &filename, &mime_type, &keystore, CONSOLE_BASE_URL, progress)
         .await
         .map_err(|e| {
             warn!(error = %e, "create_share failed");
@@ -259,6 +272,28 @@ async fn create_share_inner(state: &AppState, account_id: &str, folder_label: &s
     })
 }
 
+/// Adapt a webview [`Channel`] into hcfs-client's [`ShareProgressFn`].
+///
+/// hcfs-client invokes the returned closure on every phase edge and
+/// byte-ramp tick; we forward each [`ShareProgress`] straight to the
+/// channel, which serializes it to the FE's committed camelCase shape
+/// (`{bytesDone, bytesTotal, phase}`) with no adapter struct.
+///
+/// A `send` failure means the webview side of the channel is gone (the
+/// share modal was closed, the window dropped) — that is expected and
+/// non-fatal: the share itself is the user-facing outcome, so we log at
+/// debug and keep going rather than aborting the upload. The closure is
+/// deliberately `send`-only and panic-free because hcfs-client may call
+/// it from the chunked path's blocking encryption thread, where a panic
+/// would surface as a misleading `ShareError::Crypto`.
+fn share_progress_forwarder(channel: Channel<ShareProgress>) -> ShareProgressFn {
+    Arc::new(move |update: ShareProgress| {
+        if let Err(e) = channel.send(update) {
+            debug!(error = %e, "share progress channel send failed (receiver gone)");
+        }
+    })
+}
+
 /// Mint a public share link for a file already inside a synced folder.
 ///
 /// Resolves the on-disk plaintext path from `(folder_label, relative_path)`,
@@ -266,8 +301,17 @@ async fn create_share_inner(state: &AppState, account_id: &str, folder_label: &s
 /// for ≤ 8 MiB, chunked above), persists the per-share key in our
 /// `share_keystore`, and returns a `ShareLink` whose `share_url` already
 /// contains the `#k=<key>` URL fragment.
+///
+/// `on_progress` is a webview channel the FE opens with `new Channel()`;
+/// progress updates flow through it while the share runs so the modal
+/// can show a determinate bar.
 #[tauri::command]
-pub async fn hcfs_create_share(state: tauri::State<'_, AppState>, folder_label: String, relative_path: String) -> Result<ShareLink> {
+pub async fn hcfs_create_share(
+    state: tauri::State<'_, AppState>,
+    folder_label: String,
+    relative_path: String,
+    on_progress: Channel<ShareProgress>,
+) -> Result<ShareLink> {
     let account_id = state.current_account_id()?;
 
     // Capability + eligibility gates. The capability call is a single
@@ -284,7 +328,8 @@ pub async fn hcfs_create_share(state: tauri::State<'_, AppState>, folder_label: 
     require_shares_supported(&state, &account_id).await?;
     require_eligible(&state, &account_id, InsufficientCreditsAction::Sharing, 0).await?;
 
-    create_share_inner(&state, &account_id, &folder_label, &relative_path).await
+    let progress = share_progress_forwarder(on_progress);
+    create_share_inner(&state, &account_id, &folder_label, &relative_path, Some(progress)).await
 }
 
 /// Revoke an existing share and immediately mint a new one for the
@@ -342,7 +387,9 @@ pub async fn hcfs_reshare(state: tauri::State<'_, AppState>, share_token: String
     // Mint the new share. If THIS fails, the old token and its origin sidecar
     // are left fully intact (revoke/forget below haven't run), so the user
     // keeps a working link — the property the create-before-retire order keeps.
-    let new_link = create_share_inner(&state, &account_id, &origin.folder_label, &origin.relative_path).await?;
+    // Reshare has no progress modal — pass `None`. The byte-ramp UI is
+    // only wired into the freshly-minted `hcfs_create_share` flow.
+    let new_link = create_share_inner(&state, &account_id, &origin.folder_label, &origin.relative_path, None).await?;
 
     // New link is live. Best-effort retire of the old token: revoke it
     // server-side (idempotent — already-missing tokens succeed) and drop its

@@ -386,8 +386,8 @@ mod tests {
     fn extract_strips_pallet_storage_blake2_128_prefix() {
         let code = b"HIPPIUS6559825516876025567";
         let mut key_bytes = vec![0xAA; 16]; // twox_128(pallet_name)
-        key_bytes.extend(std::iter::repeat(0xBB).take(16)); // twox_128(storage_name)
-        key_bytes.extend(std::iter::repeat(0xCC).take(16)); // blake2_128(key)
+        key_bytes.extend(std::iter::repeat_n(0xBB, 16)); // twox_128(storage_name)
+        key_bytes.extend(std::iter::repeat_n(0xCC, 16)); // blake2_128(key)
         key_bytes.extend_from_slice(code);
 
         let recovered = extract_referral_code_bytes(&key_bytes).expect("non-empty key");

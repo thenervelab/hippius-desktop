@@ -2,6 +2,7 @@ import React, { ReactNode } from "react";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { Video, AlertCircle } from "lucide-react";
 import VideoPlayer from "./VideoPlayer";
+import { HoverPreviewIcon } from "./HoverPreviewIcon";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { cn } from "@/lib/utils";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
@@ -12,7 +13,11 @@ export const VideoDialogTrigger: React.FC<{
   children: ReactNode;
   onClick: () => void;
   className?: string;
-}> = ({ children, onClick, className }) => {
+  /** Suppress the floating hover icon. Set for rows that show a persistent
+   *  right-edge status pill (e.g. "Failed"), which the icon would otherwise
+   *  fade in directly on top of. */
+  hideHoverIcon?: boolean;
+}> = ({ children, onClick, className, hideHoverIcon }) => {
   return (
     <button
       type="button"
@@ -24,9 +29,9 @@ export const VideoDialogTrigger: React.FC<{
     >
       <span className="flex-1 min-w-0">{children}</span>
       {/* Play icon on hover */}
-      <div className="absolute pointer-events-none opacity-0 transition-opacity duration-300 group-hover:opacity-100 right-4 inset-y-0 flex items-center">
+      <HoverPreviewIcon hidden={hideHoverIcon}>
         <Video className="size-4 text-primary-60" />
-      </div>
+      </HoverPreviewIcon>
     </button>
   );
 };

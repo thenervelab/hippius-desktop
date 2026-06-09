@@ -9,6 +9,7 @@ import { SettingsToggle } from "./SettingsToggle";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { useNotificationPreferences } from "@/app/lib/hooks/useNotificationPreferences";
+import { notificationCategoryLabel } from "@/app/lib/helpers/notificationCategories";
 import { useSetAtom } from "jotai";
 import {
   refreshEnabledTypesAtom,
@@ -206,7 +207,7 @@ export default function NotificationSection() {
               onCheckedChange={(checked) =>
                 setLocalPrefs((prev) => ({ ...prev, [item.id]: checked }))
               }
-              label={item.label}
+              label={notificationCategoryLabel(item.label)}
               description={item.description}
             />
           ))

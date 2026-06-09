@@ -285,11 +285,16 @@ export function WalletAuthProvider({
         : null;
 
       // Single Rust call handles all validation, token checking, fallback.
-      // 15s wall-clock cap protects the boot flow from a Rust-side hang
-      // (DB pool starvation, blockchain subscription init blocked on
-      // network, keychain access hanging). Without the cap a stuck
-      // `restore_session` would leave the entire auth context in its
-      // initial state forever — no login UI, no sync, no error.
+      // This cap is an orphan-IPC backstop, NOT a responsiveness budget.
+      // `restore_session` reads the OS keychain, which on macOS blocks on a
+      // user password prompt that can legitimately take minutes — a tight
+      // cap here is what surfaced the "restore_session timed out" toast and
+      // abandoned boot when the user typed slowly. The machine-paced work
+      // (the hcfs-server recovery probe) is now bounded inside Rust
+      // (`RECOVERY_PROBE_TIMEOUT` in session_restore.rs), so the only thing
+      // that can keep this call pending is the user at the keychain prompt.
+      // The 5-minute cap exists solely to recover from a truly orphaned IPC
+      // (Rust panics and drops the result), not to race the user.
       const result = await invokeWithTimeout<{
         authenticated: boolean;
         substrateAddress: string | null;
@@ -309,7 +314,7 @@ export function WalletAuthProvider({
           oauthSessionJson: storedSession ?? null,
           oauthExpiryMs: oauthExpiryMs ?? null,
         },
-        15_000,
+        300_000,
       );
 
       // Clear localStorage if Rust says so
@@ -394,7 +399,12 @@ export function WalletAuthProvider({
       }
     };
 
-    setupSessionTimeout();
+    // Fire-and-forget. On the orphan-IPC backstop (or any boot rejection)
+    // log it rather than letting it surface as an unhandled-rejection toast;
+    // a reload re-runs boot.
+    void setupSessionTimeout().catch((err) => {
+      console.error("[WalletAuth] session restore failed:", err);
+    });
 
     return () => {
       if (logoutTimerRef.current) clearTimeout(logoutTimerRef.current);

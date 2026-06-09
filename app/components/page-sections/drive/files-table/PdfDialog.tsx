@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { invoke } from "@tauri-apps/api/core";
 import { useViewableFileUrl } from "@/app/lib/hooks/useViewableFileUrl";
 import { FileViewerLayout } from "@/app/components/page-sections/drive/file-viewer";
+import { HoverPreviewIcon } from "./HoverPreviewIcon";
 
 const LOAD_TIMEOUT_MS = 15000;
 
@@ -27,7 +28,11 @@ export const PdfDialogTrigger: React.FC<{
   children: ReactNode;
   onClick: () => void;
   className?: string;
-}> = ({ children, onClick, className }) => {
+  /** Suppress the floating hover icon. Set for rows that show a persistent
+   *  right-edge status pill (e.g. "Failed"), which the icon would otherwise
+   *  fade in directly on top of. */
+  hideHoverIcon?: boolean;
+}> = ({ children, onClick, className, hideHoverIcon }) => {
   return (
     <button
       type="button"
@@ -39,9 +44,9 @@ export const PdfDialogTrigger: React.FC<{
     >
       <span className="flex-1 min-w-0">{children}</span>
       {/* Eye icon on hover */}
-      <div className="absolute pointer-events-none opacity-0 transition-opacity duration-300 group-hover:opacity-100 right-4 inset-y-0 flex items-center">
+      <HoverPreviewIcon hidden={hideHoverIcon}>
         <Icons.EyeOutline className="size-4 text-primary-60" />
-      </div>
+      </HoverPreviewIcon>
     </button>
   );
 };

@@ -9,8 +9,27 @@ export interface TraySyncSummary {
   percent: number;
   /** Short status word on the right ("In Progress", "Complete", "Failed", …). */
   statusLabel: string;
-  /** Secondary line: synced vs. remaining counts. */
+  /** Secondary line: synced vs. remaining counts, or — when failed and every
+   *  failed file shares one cause — the count plus that failure reason. */
   detail: string;
+}
+
+/**
+ * The single failure reason shared by every failed file in the snapshot, or
+ * `null` when there are none or they differ. A shared cause (e.g. every file
+ * 402'd on the same out-of-credits error) is worth surfacing verbatim; mixed
+ * causes stay a bare count so the line never implies one wrong reason. The
+ * reason strings are authored in Rust (`FileFailureKindPayload::display_reason`)
+ * and ride the snapshot's per-file `error` field — the FE never parses them.
+ */
+function sharedFailureReason(files: SyncSnapshot["files"]): string | null {
+  const reasons = new Set<string>();
+  for (const file of files) {
+    if (file.status !== "error") continue;
+    const reason = file.error?.trim();
+    if (reason) reasons.add(reason);
+  }
+  return reasons.size === 1 ? [...reasons][0] : null;
 }
 
 /**
@@ -72,11 +91,13 @@ export function getTraySyncSummary(
   const hasFailed =
     statusVariant === "error" || (failedFiles > 0 && effectiveCompleted);
   if (hasFailed) {
+    const countLine = `${failedFiles} of ${total} file${plural(total)} failed`;
+    const reason = sharedFailureReason(snapshot.files);
     return {
       tone: "failed",
       percent: clampPercent(overallPercent),
       statusLabel: "Failed",
-      detail: `${failedFiles} of ${total} file${plural(total)} failed`,
+      detail: reason ? `${countLine} · ${reason}` : countLine,
     };
   }
 

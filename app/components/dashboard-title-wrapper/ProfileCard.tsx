@@ -1,5 +1,5 @@
 "use client";
-import React from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 
@@ -11,12 +11,18 @@ import cn from "@/app/lib/utils/cn";
 import { Icons } from "../ui";
 import CustomTooltip2 from "../ui/CustomTooltip2";
 import BoxSimple from "../ui/icons/BoxSimple";
-import { ChevronDown, Setting, Logout, TrendUp } from "@/components/ui/icons";
+import {
+  ChevronDown,
+  Setting,
+  Logout,
+  TrendUp,
+  Copy,
+  Check,
+} from "@/components/ui/icons";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -42,6 +48,20 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
   const { blockNumber, isConnected } = usePolkadotApi();
   const router = useRouter();
 
+  // Copy-address feedback: the menu item's icon cross-fades into a green check
+  // for ~2s. Kept in state (not just a toast) so the result shows inline in the
+  // still-open menu — the address itself is no longer displayed in the menu.
+  const [copied, setCopied] = useState(false);
+  const copyResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Clear a pending reset if the card unmounts mid-animation.
+  useEffect(
+    () => () => {
+      if (copyResetRef.current) clearTimeout(copyResetRef.current);
+    },
+    [],
+  );
+
   // Prefer OAuth substrate address; fall back to locally-derived address for mnemonic logins.
   const displayAddress =
     oauthSession?.substrateAddress || polkadotAddress || null;
@@ -55,21 +75,46 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
       )}`
     : "";
 
-  // Copy lives only inside the open menu now: the row click just opens the
-  // menu, so this button must not dismiss it — swallow the event and keep it
-  // open long enough to show the copied state.
-  const handleCopyAddress = (e: React.MouseEvent) => {
+  // Mark copied + schedule the 2s reset (shared by both copy paths).
+  const markCopied = () => {
+    setCopied(true);
+    if (copyResetRef.current) clearTimeout(copyResetRef.current);
+    copyResetRef.current = setTimeout(() => setCopied(false), 2000);
+  };
+
+  // Copy the address from inside the menu. preventDefault stops Radix closing
+  // the menu on select so the Copy→Check swap stays visible. Falls back to a
+  // temporary <textarea> where the async clipboard API isn't available.
+  const handleCopyAddress = (e: Event) => {
     e.preventDefault();
-    e.stopPropagation();
     if (!displayAddress) return;
 
-    navigator.clipboard.writeText(displayAddress).then(() => {
-      toast.success(() => (
-        <div>
-          Address <strong>{truncatedAddress}</strong> Copied Successfully!
-        </div>
-      ));
-    });
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard
+        .writeText(displayAddress)
+        .then(markCopied)
+        .catch((err) => {
+          console.error(err);
+          toast.error("Failed to copy");
+        });
+      return;
+    }
+
+    const ta = document.createElement("textarea");
+    ta.value = displayAddress;
+    ta.style.position = "fixed";
+    ta.style.left = "-999999px";
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      document.execCommand("copy");
+      markCopied();
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to copy");
+    } finally {
+      ta.remove();
+    }
   };
 
   const handleSendIconClick = async (e: React.MouseEvent) => {
@@ -138,8 +183,11 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
   const menuItemClass = cn(
     "h-8 rounded-[8px] px-3 py-1.5 gap-2 cursor-pointer",
     "text-[14px] font-medium leading-4 tracking-[-0.4px]",
-    "text-[#52525c] hover:!text-grey-10 hover:!bg-grey-light-700",
-    "dark:text-[#a3a3a3] dark:hover:!text-white dark:hover:!bg-[#2c2c2c]",
+    // Radix toggles the highlighted item via data-highlighted (mouse AND
+    // keyboard), not :hover — the base item's hover:bg only coincidentally
+    // works. Style the real attribute so the highlight shows in both themes.
+    "text-[#52525c] data-[highlighted]:!text-grey-10 data-[highlighted]:!bg-[#e9e9e9]",
+    "dark:text-[#a3a3a3] dark:data-[highlighted]:!text-white dark:data-[highlighted]:!bg-[#2c2c2c]",
   );
 
   return (
@@ -157,8 +205,15 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
             type="button"
             aria-label="Open account menu"
             className={cn(
-              "group flex items-center gap-1.5 rounded-lg py-2 hover:bg-black/5 transition-colors duration-200 min-w-0 overflow-hidden",
-              "dark:hover:bg-white/10 data-[state=open]:bg-black/5 dark:data-[state=open]:bg-white/10",
+              "group flex items-center gap-1.5 rounded-lg py-2 transition-colors duration-200 min-w-0 overflow-hidden",
+              // Hover / keyboard-focus / open share one translucent surface and
+              // there is NO focus ring (Radix returns focus here on close; a ring
+              // showed the browser/brand blue, clipped to a bar by overflow-hidden).
+              // bg-black/5 renders nothing here — the black palette has no DEFAULT
+              // key — so use an explicit rgba on light; white/10 on dark.
+              "outline-none",
+              "hover:bg-[rgba(0,0,0,0.06)] focus-visible:bg-[rgba(0,0,0,0.06)] data-[state=open]:bg-[rgba(0,0,0,0.06)]",
+              "dark:hover:bg-white/10 dark:focus-visible:bg-white/10 dark:data-[state=open]:bg-white/10",
               collapsed ? "px-1" : "flex-1 pr-1",
             )}
           >
@@ -187,26 +242,41 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
         side="top"
         sideOffset={8}
         className={cn(
-          "w-[238px] rounded-[8px] border border-grey-dark-100 bg-white p-1 z-[1100]",
+          "w-[200px] rounded-[8px] border border-grey-dark-100 bg-white p-1 z-[1100]",
+          // Match the menu to the trigger row (avatar + address + block +
+          // chevron) via Radix's measured trigger width. Collapsed, the trigger
+          // is just the avatar, so fall back to a fixed width that fits the items.
+          collapsed
+            ? "w-[238px]"
+            : "w-[var(--radix-dropdown-menu-trigger-width)]",
           "shadow-[0_4px_24px_0_rgba(0,0,0,0.08)]",
           "dark:border-[#313131] dark:bg-[#161616]",
         )}
       >
-        {/* Header mirrors the row identity and is itself the copy control:
-            click to copy, hovering shows the same surface as the row trigger.
-            The handler keeps the menu open so the copy toast is visible. */}
-        <button
-          type="button"
-          onClick={handleCopyAddress}
+        {/* Copy address replaces the old avatar/address/block header. The copy
+            icon cross-fades into a green check (handler preventDefaults so the
+            menu stays open to show it). No separator per design. */}
+        <DropdownMenuItem
+          onSelect={handleCopyAddress}
           aria-label="Copy address"
-          title="Copy address"
-          className="flex items-center gap-1.5 w-full px-2 py-2 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 transition-colors duration-200 text-left"
+          className={menuItemClass}
         >
-          {avatarNode}
-          {renderIdentity(false)}
-        </button>
-
-        <DropdownMenuSeparator className="my-1 bg-grey-dark-100 dark:bg-[#313131]" />
+          <span className="relative size-4 shrink-0">
+            <Copy
+              className={cn(
+                "absolute inset-0 size-4 transition-all duration-200 ease-out",
+                copied ? "scale-50 opacity-0" : "scale-100 opacity-100",
+              )}
+            />
+            <Check
+              className={cn(
+                "absolute inset-0 size-4 text-emerald-500 dark:text-emerald-400 transition-all duration-200 ease-out",
+                copied ? "scale-100 opacity-100" : "scale-50 opacity-0",
+              )}
+            />
+          </span>
+          <span>{copied ? "Copied!" : "Copy address"}</span>
+        </DropdownMenuItem>
 
         <DropdownMenuItem onSelect={handleOpenUpdate} className={menuItemClass}>
           <TrendUp className="size-4 shrink-0" />
@@ -223,8 +293,8 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
           className={cn(
             "h-8 rounded-[8px] px-3 py-1.5 gap-2 cursor-pointer",
             "text-[14px] font-medium leading-4 tracking-[-0.4px]",
-            "!text-[#fc7d73] hover:!text-[#fc7d73] hover:!bg-grey-light-700",
-            "dark:hover:!bg-[#2c2c2c]",
+            "!text-[#fc7d73] data-[highlighted]:!text-[#fc7d73] data-[highlighted]:!bg-[#e9e9e9]",
+            "dark:data-[highlighted]:!bg-[#2c2c2c]",
           )}
         >
           <Logout className="size-4 shrink-0" />
