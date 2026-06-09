@@ -233,16 +233,61 @@ pub async fn get_current_wss_endpoint(pool: &SqlitePool) -> crate::error::Result
     }
 }
 
+/// Reject endpoints that would carry chain traffic in cleartext.
+///
+/// Plaintext `ws://` is allowed ONLY for loopback (a local dev node); any
+/// non-loopback `ws://` is refused. An on-path attacker on a cleartext link
+/// can feed false balances/staking state and steer the user into a bad send
+/// (audit R-11). `wss://` is always allowed; anything else is rejected.
+///
+/// Note: key theft is separately prevented by subxt's `CheckGenesis` (the
+/// genesis hash is bound into every signature), so a lying node can't forge a
+/// usable signature — but the MITM/false-display surface is real. Pinning the
+/// node's genesis/metadata hash on connect (the other half of R-11) needs the
+/// chain's expected genesis hash and is tracked separately.
+fn validate_endpoint_scheme(endpoint: &str) -> crate::error::Result<()> {
+    if let Some(after) = endpoint.strip_prefix("wss://") {
+        if endpoint_host(after).is_empty() {
+            return Err(crate::error::AppError::Validation("Endpoint host is empty".into()));
+        }
+        return Ok(());
+    }
+    if let Some(after) = endpoint.strip_prefix("ws://") {
+        if is_loopback_host(endpoint_host(after)) {
+            return Ok(());
+        }
+        return Err(crate::error::AppError::Validation(
+            "Plaintext ws:// is only allowed for localhost. Use wss:// for remote nodes.".into(),
+        ));
+    }
+    Err(crate::error::AppError::Validation(
+        "Invalid endpoint format. Must start with ws:// or wss://".into(),
+    ))
+}
+
+/// Extract the host from the part after the scheme (`host[:port][/path]`).
+/// Handles optional userinfo and bracketed IPv6 literals (`[::1]:9944`).
+fn endpoint_host(after_scheme: &str) -> &str {
+    let authority = after_scheme.split(['/', '?', '#']).next().unwrap_or(after_scheme);
+    let authority = authority.rsplit('@').next().unwrap_or(authority);
+    if let Some(rest) = authority.strip_prefix('[') {
+        // Bracketed IPv6: `[::1]:9944` → `::1`
+        return rest.split(']').next().unwrap_or(rest);
+    }
+    authority.split(':').next().unwrap_or(authority)
+}
+
+/// True for `localhost` (any case) or any loopback IP (127.0.0.0/8, ::1).
+fn is_loopback_host(host: &str) -> bool {
+    host.eq_ignore_ascii_case("localhost") || host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
+}
+
 /// Test if an RPC endpoint is reachable by attempting a WebSocket connection.
 ///
 /// Replaces the raw WebSocket test in `CustomizeRPC.tsx`.
 /// Returns Ok(()) on success, Err with message on failure.
 pub async fn test_rpc_endpoint(endpoint: &str) -> crate::error::Result<()> {
-    if !endpoint.starts_with("ws://") && !endpoint.starts_with("wss://") {
-        return Err(crate::error::AppError::Validation(
-            "Invalid endpoint format. Must start with ws:// or wss://".into(),
-        ));
-    }
+    validate_endpoint_scheme(endpoint)?;
 
     // Try to establish an RPC connection with a 10-second timeout
     match tokio::time::timeout(Duration::from_secs(10), async {
@@ -260,12 +305,8 @@ pub async fn test_rpc_endpoint(endpoint: &str) -> crate::error::Result<()> {
 
 /// Update the WSS endpoint in database and clear the current client.
 pub async fn update_wss_endpoint(app_state: &crate::app_state::AppState, new_endpoint: String) -> crate::error::Result<()> {
-    // Validate the endpoint format (basic check)
-    if !new_endpoint.starts_with("ws://") && !new_endpoint.starts_with("wss://") {
-        return Err(crate::error::AppError::Validation(
-            "Invalid WSS endpoint format. Must start with ws:// or wss://".into(),
-        ));
-    }
+    // Reject cleartext ws:// to non-loopback hosts (audit R-11).
+    validate_endpoint_scheme(&new_endpoint)?;
 
     let pool = app_state.pool()?;
 
@@ -288,6 +329,39 @@ pub async fn update_wss_endpoint(app_state: &crate::app_state::AppState, new_end
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn endpoint_scheme_rejects_remote_plaintext_ws() {
+        // R-11: cleartext ws:// to a non-loopback host must be refused.
+        assert!(validate_endpoint_scheme("ws://rpc.hippius.network:443").is_err());
+        assert!(validate_endpoint_scheme("ws://1.2.3.4:9944").is_err());
+        assert!(validate_endpoint_scheme("ws://hippius-testnet.starkleytech.com").is_err());
+    }
+
+    #[test]
+    fn endpoint_scheme_allows_wss_and_loopback_ws() {
+        assert!(validate_endpoint_scheme("wss://rpc.hippius.network").is_ok());
+        assert!(validate_endpoint_scheme("wss://rpc.hippius.network:443/path").is_ok());
+        assert!(validate_endpoint_scheme("ws://localhost:9944").is_ok());
+        assert!(validate_endpoint_scheme("ws://127.0.0.1:9944").is_ok());
+        assert!(validate_endpoint_scheme("ws://[::1]:9944").is_ok());
+    }
+
+    #[test]
+    fn endpoint_scheme_rejects_non_ws_schemes() {
+        assert!(validate_endpoint_scheme("http://rpc.hippius.network").is_err());
+        assert!(validate_endpoint_scheme("rpc.hippius.network").is_err());
+        assert!(validate_endpoint_scheme("wss://").is_err());
+    }
+
+    #[test]
+    fn endpoint_host_parses_authority() {
+        assert_eq!(endpoint_host("1.2.3.4:9944/path"), "1.2.3.4");
+        assert_eq!(endpoint_host("[::1]:9944"), "::1");
+        assert_eq!(endpoint_host("localhost"), "localhost");
+        assert_eq!(endpoint_host("user@host.example:80/x"), "host.example");
+        assert_eq!(endpoint_host("rpc.hippius.network"), "rpc.hippius.network");
+    }
 
     /// A single connection attempt to an unreachable endpoint must return an
     /// `Err` rather than hang. Before the per-attempt timeout, `connect_once`'s
