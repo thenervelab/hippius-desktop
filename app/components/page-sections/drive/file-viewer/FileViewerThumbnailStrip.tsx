@@ -2,10 +2,11 @@
 
 import React, { useEffect, useRef } from "react";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
-import { getFileUrl } from "@/app/lib/utils/fileUrlResolver";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
 import { getFileIcon } from "@/app/lib/utils/fileTypeUtils";
+import { useThumbnail } from "@/app/lib/hooks/useThumbnail";
+import { useInView } from "@/app/lib/hooks/useInView";
 import { cn } from "@/app/lib/utils";
 
 interface FileViewerThumbnailStripProps {
@@ -60,64 +61,89 @@ const FileViewerThumbnailStrip: React.FC<FileViewerThumbnailStripProps> = ({
           "py-[8px] px-[15px]",
         )}
       >
-        {files.map((f) => {
-          const isActive = fileKey(f) === currentKey;
-          const { fileFormat } = getFilePartsFromFileName(f.name);
-          const fileType = getFileTypeFromExtension(fileFormat || null);
-          const isImage = fileType === "image";
-          const url = isImage ? getFileUrl(f).url : "";
-          const { icon: Icon, color: iconColor } = getFileIcon(
-            fileType || undefined,
-            false,
-          );
-          const width = isImage ? IMAGE_THUMB_WIDTH : NON_IMAGE_THUMB_WIDTH;
-
-          return (
-            <button
-              key={fileKey(f)}
-              ref={isActive ? activeRef : null}
-              type="button"
-              onClick={() => onSelect(f)}
-              title={f.name}
-              aria-label={`Open ${f.name}`}
-              aria-current={isActive ? "true" : undefined}
-              style={{ width, height: THUMB_HEIGHT }}
-              className={cn(
-                "relative shrink-0 overflow-hidden rounded-[9px]",
-                "transition-opacity duration-150",
-                isActive ? "opacity-100" : "opacity-40 hover:opacity-100",
-                // Active ring for stronger affordance — Figma shows the
-                // current thumb at full opacity with no ring, but a subtle
-                // ring is needed for accessibility when neighbour thumbs
-                // are close to opacity-100 (e.g. high-contrast pictures).
-                isActive &&
-                  "ring-1 ring-primary-50 ring-offset-1 ring-offset-transparent",
-              )}
-            >
-              {isImage && url ? (
-                <img
-                  src={url}
-                  alt=""
-                  className="absolute inset-0 size-full object-cover"
-                  loading="lazy"
-                  draggable={false}
-                />
-              ) : (
-                <div
-                  className={cn(
-                    "absolute inset-0 flex items-center justify-center",
-                    "bg-grey-light-300 border-t border-grey-dark-100",
-                    "dark:bg-black-600 dark:border-black-300",
-                  )}
-                >
-                  <Icon className={cn("size-[28px]", iconColor)} />
-                </div>
-              )}
-            </button>
-          );
-        })}
+        {files.map((f) => (
+          <StripThumbnail
+            key={fileKey(f)}
+            file={f}
+            isActive={fileKey(f) === currentKey}
+            activeRef={fileKey(f) === currentKey ? activeRef : undefined}
+            onSelect={onSelect}
+          />
+        ))}
       </div>
     </div>
+  );
+};
+
+/**
+ * One filmstrip cell. Resolves its image thumbnail through {@link useThumbnail}
+ * so cloud-only images (other devices / unsynced folders) render here too — the
+ * download is gated on {@link useInView} so scrolling the strip doesn't fetch
+ * every off-screen file at once. Non-images (and unresolved cloud thumbs) show
+ * the file-type icon.
+ *
+ * `activeRef` is the parent's scroll-into-view ref for the current item; it's
+ * merged with the in-view observer ref onto the same button.
+ */
+const StripThumbnail: React.FC<{
+  file: FormattedUserFile;
+  isActive: boolean;
+  activeRef?: React.RefObject<HTMLButtonElement | null>;
+  onSelect: (file: FormattedUserFile) => void;
+}> = ({ file, isActive, activeRef, onSelect }) => {
+  const { fileFormat } = getFilePartsFromFileName(file.name);
+  const fileType = getFileTypeFromExtension(fileFormat || null);
+  const isImage = fileType === "image";
+  const { icon: Icon, color: iconColor } = getFileIcon(fileType || undefined, false);
+  const width = isImage ? IMAGE_THUMB_WIDTH : NON_IMAGE_THUMB_WIDTH;
+
+  const [inViewRef, inView] = useInView<HTMLButtonElement>();
+  const thumb = useThumbnail(isImage ? file : null, { enabled: inView, maxDim: 160 });
+
+  // Merge the in-view observer ref with the parent's active-scroll ref.
+  const setRefs = (el: HTMLButtonElement | null) => {
+    inViewRef.current = el;
+    if (activeRef) activeRef.current = el;
+  };
+
+  return (
+    <button
+      ref={setRefs}
+      type="button"
+      onClick={() => onSelect(file)}
+      title={file.name}
+      aria-label={`Open ${file.name}`}
+      aria-current={isActive ? "true" : undefined}
+      style={{ width, height: THUMB_HEIGHT }}
+      className={cn(
+        "relative shrink-0 overflow-hidden rounded-[9px]",
+        "transition-opacity duration-150",
+        isActive ? "opacity-100" : "opacity-40 hover:opacity-100",
+        // Active ring for stronger affordance — Figma shows the current thumb at
+        // full opacity with no ring, but a subtle ring is needed for
+        // accessibility when neighbour thumbs are near opacity-100.
+        isActive && "ring-1 ring-primary-50 ring-offset-1 ring-offset-transparent",
+      )}
+    >
+      {isImage && thumb.url ? (
+        <img
+          src={thumb.url}
+          alt=""
+          className="absolute inset-0 size-full object-cover"
+          draggable={false}
+        />
+      ) : (
+        <div
+          className={cn(
+            "absolute inset-0 flex items-center justify-center",
+            "bg-grey-light-300 border-t border-grey-dark-100",
+            "dark:bg-black-600 dark:border-black-300",
+          )}
+        >
+          <Icon className={cn("size-[28px]", iconColor)} />
+        </div>
+      )}
+    </button>
   );
 };
 
