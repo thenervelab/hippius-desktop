@@ -74,8 +74,17 @@ const ChangeRecoveryPasswordDialog: React.FC<Props> = ({
     setSubmitting(true);
     setCurrentError(null);
     try {
-      await changeRecoveryPassword(current, next);
-      toast.success("Password updated.");
+      const { alignPending } = await changeRecoveryPassword(current, next);
+      if (alignPending) {
+        // Server rotation succeeded but this device's folder keys are still
+        // finishing realignment to the new password (audit R-19). It completes
+        // automatically on the next launch; warn rather than claim a clean done.
+        toast.warning(
+          "Password updated. Finishing applying it to your synced folders — this completes automatically the next time you open the app.",
+        );
+      } else {
+        toast.success("Password updated.");
+      }
       reset();
       onOpenChange(false);
     } catch (err) {
