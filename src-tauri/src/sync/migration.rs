@@ -1417,13 +1417,11 @@ mod tests {
         let home_dir = dirs::home_dir().expect("home dir should exist on test runner");
         assert_eq!(parent, home_dir.as_path(), "Expected parent to be Home, got {parent:?}");
 
-        for protected in [dirs::document_dir(), dirs::desktop_dir(), dirs::download_dir()] {
-            if let Some(p) = protected {
-                assert!(
-                    !path.starts_with(&p),
-                    "default sync path must not live under TCC-protected folder {p:?}, got {path:?}",
-                );
-            }
+        for p in [dirs::document_dir(), dirs::desktop_dir(), dirs::download_dir()].into_iter().flatten() {
+            assert!(
+                !path.starts_with(&p),
+                "default sync path must not live under TCC-protected folder {p:?}, got {path:?}",
+            );
         }
     }
 
@@ -1463,7 +1461,7 @@ mod tests {
     #[test]
     fn retry_backoff_is_linear_and_increasing() {
         assert_eq!(migration_retry_backoff(1), std::time::Duration::from_millis(500));
-        assert_eq!(migration_retry_backoff(2), std::time::Duration::from_millis(1000));
+        assert_eq!(migration_retry_backoff(2), std::time::Duration::from_secs(1));
         assert_eq!(migration_retry_backoff(3), std::time::Duration::from_millis(1500));
         // Strictly increasing across the bounded range so each retry waits longer.
         for attempt in 1..MAX_MIGRATION_START_RETRIES {

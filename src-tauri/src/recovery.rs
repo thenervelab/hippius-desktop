@@ -1315,7 +1315,7 @@ mod tests {
         let good_dir = crate::sync::mnemonic::config_dir_for_folder(account, good_label).unwrap();
         tokio::fs::create_dir_all(&good_dir).await.unwrap();
         let good_fm = hcfs_client::drive::keys::derive_folder_mnemonic(master, good_label).unwrap();
-        hcfs_client::auth::save_encrypted_mnemonic(&good_dir.join("enc_mnemonic.json"), &good_fm, "old canonical password").unwrap();
+        hcfs_client::auth::save_encrypted_mnemonic(good_dir.join("enc_mnemonic.json"), &good_fm, "old canonical password").unwrap();
         // Bad folder: plant a FILE where its dir must be so create_dir_all fails.
         let bad_dir = crate::sync::mnemonic::config_dir_for_folder(account, bad_label).unwrap();
         tokio::fs::create_dir_all(bad_dir.parent().unwrap()).await.unwrap();
@@ -1342,7 +1342,7 @@ mod tests {
         // The healthy folder must still have been rewritten under the new password.
         let alpha_dir = crate::sync::mnemonic::config_dir_for_folder(account, "alpha").unwrap();
         let alpha_fm = hcfs_client::drive::keys::derive_folder_mnemonic(&master, "alpha").unwrap();
-        let check = hcfs_client::auth::recover_mnemonic(&alpha_dir.join("enc_mnemonic.json"), "new canonical password").unwrap();
+        let check = hcfs_client::auth::recover_mnemonic(alpha_dir.join("enc_mnemonic.json"), "new canonical password").unwrap();
         assert_eq!(
             check.to_string(),
             alpha_fm,

@@ -304,7 +304,10 @@ mod tests {
 
         for p in [&a, &b] {
             let s = p.to_str().expect("temp path is UTF-8");
-            assert!(s.ends_with(".part"), "temp file must end in .part: {s}");
+            assert!(
+                p.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("part")),
+                "temp file must end in .part: {s}"
+            );
             // The deterministic cache_name stem is preserved so the file keeps
             // its extension (MIME inference) and is recognisably a sibling.
             assert!(s.contains(cache_name), "temp path must carry the cache_name stem: {s}");

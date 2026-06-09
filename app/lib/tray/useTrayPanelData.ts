@@ -64,6 +64,13 @@ export function useTrayPanelData() {
   // Tracks the snapshot's last completion state so we refresh the server list
   // only on the rising edge (session finishes), not on every snapshot tick.
   const prevCompletedRef = useRef(false);
+  // Whether the popover is currently on-screen. The window is prewarmed hidden
+  // at boot and reused across opens, so this hook lives for the whole app
+  // session; without this guard the interval below would poll `get_tray_menu_data`
+  // — which makes a billing API call — every few seconds for a window nobody is
+  // looking at. The popover hides on blur (`on_panel_blur`), so focus tracks
+  // visibility 1:1.
+  const isShownRef = useRef(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -113,12 +120,20 @@ export function useTrayPanelData() {
         console.error("[TrayPanel] Failed to seed snapshot:", error),
       );
 
-    const interval = window.setInterval(() => void refresh(), REFRESH_INTERVAL_MS);
+    // Only poll while the popover is actually shown. The seed `refresh()` above
+    // and the on-show refresh below keep it fresh; this interval just keeps a
+    // *visible* popover live. Polling a hidden window would hit the billing API
+    // (`get_tray_menu_data`) every tick for the app's whole lifetime.
+    const interval = window.setInterval(() => {
+      if (isShownRef.current) void refresh();
+    }, REFRESH_INTERVAL_MS);
 
-    // Re-fetch each time the popover is shown (it regains focus on show).
+    // Re-fetch each time the popover is shown (it regains focus on show); track
+    // shown/hidden so the interval above stays idle while it's dismissed.
     let unlistenFocus: (() => void) | undefined;
     void getCurrentWindow()
       .onFocusChanged(({ payload: focused }) => {
+        isShownRef.current = focused;
         if (focused) void refresh();
       })
       .then((un) => {

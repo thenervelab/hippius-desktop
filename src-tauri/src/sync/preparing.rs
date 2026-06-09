@@ -449,7 +449,7 @@ mod tests {
         let t0 = Instant::now();
         state.mark_at(t0, "drive-a");
         // Re-marked well into the window (simulating a watcher storm).
-        let restamp_attempt = t0 + PREPARING_WATCHDOG_TIMEOUT - Duration::from_secs(1);
+        let restamp_attempt = (t0 + PREPARING_WATCHDOG_TIMEOUT).checked_sub(Duration::from_secs(1)).unwrap();
         assert!(!state.mark_at(restamp_attempt, "drive-a"));
         // Past the timeout relative to the FIRST mark only.
         let later = t0 + PREPARING_WATCHDOG_TIMEOUT + Duration::from_secs(1);
@@ -463,7 +463,7 @@ mod tests {
     fn drain_expired_ignores_entry_marked_in_the_future() {
         let state = PreparingState::new();
         let t0 = Instant::now();
-        state.mark_at(t0 + Duration::from_secs(120), "drive-a");
+        state.mark_at(t0 + Duration::from_mins(2), "drive-a");
         assert!(state.drain_expired(t0).is_empty());
         assert_eq!(state.snapshot_labels(), vec!["drive-a".to_string()]);
     }

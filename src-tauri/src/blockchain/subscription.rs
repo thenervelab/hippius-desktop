@@ -454,7 +454,7 @@ mod tests {
         // must reconnect on its own), so the delay is always a finite non-zero.
         assert_eq!(reconnect_delay_secs(RECONNECT_CEILING_ATTEMPTS, false), OFFLINE_REPROBE_SECS);
         assert_eq!(reconnect_delay_secs(RECONNECT_CEILING_ATTEMPTS + 50, true), OFFLINE_REPROBE_SECS);
-        assert!(OFFLINE_REPROBE_SECS > 60, "the slow re-probe must be slower than the pre-ceiling 60s cap");
+        const { assert!(OFFLINE_REPROBE_SECS > 60, "the slow re-probe must be slower than the pre-ceiling 60s cap") };
         for failures in 1..(RECONNECT_CEILING_ATTEMPTS + 100) {
             assert!(reconnect_delay_secs(failures, false) > 0, "reconnect must never busy-loop at 0s delay");
         }
