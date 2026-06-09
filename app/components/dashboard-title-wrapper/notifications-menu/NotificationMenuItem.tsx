@@ -11,6 +11,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { isVersionGreaterOrEqual } from "@/lib/utils/versionCompare";
 import { IconComponent } from "@/app/lib/types";
 import { deleteNotification } from "@/app/lib/helpers/notificationsDb";
+import { notificationCategoryLabel } from "@/app/lib/helpers/notificationCategories";
 
 const TYPE_COLORS: Record<string, string> = {
   Subscription: "bg-error-50",
@@ -124,7 +125,7 @@ const NotificationMenuItem: React.FC<NotificationItemProps> = ({
         {/* Content */}
         <div className="flex-1 min-w-0 flex flex-col gap-[2px]">
           <p className="text-[14px] font-medium text-[#0a0a0a] dark:text-white leading-normal truncate">
-            {notificationType}
+            {notificationCategoryLabel(notificationType)}
           </p>
           <p className="text-[13px] font-medium text-[#0a0a0a] dark:text-white opacity-40 leading-normal line-clamp-2">
             {notificationText}

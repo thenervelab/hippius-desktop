@@ -7,6 +7,7 @@ import { cn } from "@/app/lib/utils";
 import NotificationContextMenu from "./NotificationContextMenu";
 import { useSetAtom } from "jotai";
 import { deleteNotification } from "@/app/lib/helpers/notificationsDb";
+import { notificationCategoryLabel } from "@/app/lib/helpers/notificationCategories";
 import { refreshUnreadCountAtom } from "@/components/page-sections/notifications/notificationStore";
 import { Trash2 } from "lucide-react";
 
@@ -109,7 +110,7 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
         <div className="flex-1 min-w-0">
           <div className="flex items-baseline gap-2">
             <p className="flex-1 min-w-0 text-[14px] font-medium leading-[18.2px] truncate text-[#0a0a0a] dark:text-white">
-              {notificationType}
+              {notificationCategoryLabel(notificationType)}
             </p>
             {/* Relative time pill — same `react-timeago` formatter the
              *  detail view uses, so the list and detail surfaces never
