@@ -232,7 +232,13 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
         side="top"
         sideOffset={8}
         className={cn(
-          "w-[238px] rounded-[8px] border border-grey-dark-100 bg-white p-1 z-[1100]",
+          "rounded-[8px] border border-grey-dark-100 bg-white p-1 z-[1100]",
+          // Match the menu to the trigger row (avatar + address + block +
+          // chevron) via Radix's measured trigger width. Collapsed, the trigger
+          // is just the avatar, so fall back to a fixed width that fits the items.
+          collapsed
+            ? "w-[238px]"
+            : "w-[var(--radix-dropdown-menu-trigger-width)]",
           "shadow-[0_4px_24px_0_rgba(0,0,0,0.08)]",
           "dark:border-[#313131] dark:bg-[#161616]",
         )}
