@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 const ZOOM_STEP = 10;
 const MIN_ZOOM = 50;
@@ -20,16 +21,27 @@ function loadZoom(): number {
 }
 
 function applyZoom(percent: number) {
-  document.documentElement.style.setProperty(
-    "--zoom-factor",
-    String(percent / 100)
-  );
-  // Dispatch a custom event so other components (e.g. sidebar) can react
+  // Native webview page zoom = true browser zoom: it scales the ENTIRE UI —
+  // rem-based utilities AND the codebase's many hardcoded `px` values —
+  // uniformly, and reflows the layout viewport so the `h-screen` app shell
+  // keeps filling the window. This replaces the old root-font-size scaling,
+  // which only moved rem-based sizes and left every fixed-px element behind —
+  // the "some elements scale, some don't" mismatch most visible at low
+  // effective resolution. (On macOS this maps to WKWebView `setPageZoom`.)
+  try {
+    void getCurrentWebviewWindow()
+      .setZoom(percent / 100)
+      .catch((e) => console.warn("[useZoom] setZoom failed:", e));
+  } catch (e) {
+    // Non-Tauri context (e.g. `pnpm dev` in a plain browser) has no webview.
+    console.warn("[useZoom] setZoom unavailable:", e);
+  }
+  // Let width-sensitive components (e.g. the sidebar's auto-collapse) recompute.
   window.dispatchEvent(new CustomEvent("zoom-changed", { detail: percent }));
 }
 
 /**
- * Manages window zoom via root font-size scaling.
+ * Manages app zoom via the native webview's page zoom.
  * Listens for Cmd/Ctrl +/-/0 keyboard shortcuts.
  * Returns current zoom level and whether the indicator should be visible.
  */

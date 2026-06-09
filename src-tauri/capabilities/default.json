@@ -88,6 +88,7 @@
         "core:window:allow-unminimize",
         "core:window:allow-set-resizable",
         "core:window:allow-set-fullscreen",
-        "core:window:allow-is-fullscreen"
+        "core:window:allow-is-fullscreen",
+        "core:webview:allow-set-webview-zoom"
     ]
 }
