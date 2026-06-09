@@ -384,12 +384,31 @@ pub struct WalletBackup {
 }
 
 #[tauri::command]
-pub async fn local_wallet_export_backup(state: State<'_, AppState>, id: i64) -> Result<WalletBackup, AppError> {
+pub async fn local_wallet_export_backup(state: State<'_, AppState>, id: i64, password: String) -> Result<WalletBackup, AppError> {
+    // Gate export behind the wallet password + rate limiter, exactly like the
+    // sibling secret-revealing commands (`local_wallet_get_decrypted_mnemonic`,
+    // `local_wallet_sign`). The backup is offline-crackable ciphertext plus the
+    // Argon2 verifier hash; without this gate any actor able to invoke IPC in an
+    // unlocked session could exfiltrate it for every wallet without the password
+    // and without tripping the lockout (audit R-07).
+    let password = Zeroizing::new(password);
     let owner = require_owner(&state)?;
     let pool = state.pool()?;
     let Some(wallet) = repo::get_by_id(pool, &owner, id).await? else {
         return Err(AppError::Other(format!("Wallet {id} not found")));
     };
+    // Serialize attempts on this wallet (check → verify → record) so a
+    // concurrent IPC burst can't outrun the lockout threshold.
+    let _attempt_gate = state.wallet_rate_limit.attempt_gate(id).await;
+    if let Err(rl) = state.wallet_rate_limit.check(id) {
+        return Err(AppError::Other(rl.message()));
+    }
+    if !crypto::verify_password(&wallet.password_hash, &password, &wallet.address) {
+        state.wallet_rate_limit.record_failure(id);
+        return Err(AppError::Other("Incorrect password".into()));
+    }
+    state.wallet_rate_limit.record_success(id);
+
     use std::time::{SystemTime, UNIX_EPOCH};
     let exported_at = {
         // RFC3339-ish: just emit ms since epoch as a string. The FE displays
@@ -466,10 +485,13 @@ const MAX_BACKUP_JSON_BYTES: u64 = 64 * 1024;
 /// format, and (b) give the FE a single binary blob to write instead of
 /// pretty-printed JSON.
 #[tauri::command]
-pub async fn local_wallet_export_backup_zip(state: State<'_, AppState>, id: i64) -> Result<Vec<u8>, AppError> {
+pub async fn local_wallet_export_backup_zip(state: State<'_, AppState>, id: i64, password: String) -> Result<Vec<u8>, AppError> {
     use std::io::{Cursor, Write};
 
-    let backup = local_wallet_export_backup(state, id).await?;
+    // Delegates the password gate to `local_wallet_export_backup` (audit R-07);
+    // it acquires the rate-limit attempt gate, so this wrapper must NOT also
+    // acquire it (that would deadlock the per-wallet gate).
+    let backup = local_wallet_export_backup(state, id, password).await?;
     let json = serde_json::to_vec_pretty(&serde_json::json!({
         "version": 2,
         "name": backup.name,

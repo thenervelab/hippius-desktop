@@ -5,8 +5,6 @@ import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import { InView } from "react-intersection-observer";
 import { Check, Copy, MoreVertical, Plus } from "lucide-react";
-import { save } from "@tauri-apps/plugin-dialog";
-import { writeFile } from "@tauri-apps/plugin-fs";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   createColumnHelper,
@@ -40,6 +38,9 @@ import {
   Td,
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
+import ExportBackupDialog, {
+  type ExportBackupTarget,
+} from "@/components/page-sections/wallet/ExportBackupDialog";
 
 import { SettingsCard } from "./SettingsCard";
 import {
@@ -224,7 +225,6 @@ const WalletSettings: React.FC = () => {
     switchWallet,
     renameWallet,
     removeWallet,
-    exportBackupZip,
     setSetupStep,
   } = useLocalWallet();
   const router = useRouter();
@@ -247,6 +247,10 @@ const WalletSettings: React.FC = () => {
   );
   const [busyWalletId, setBusyWalletId] = useState<number | null>(null);
   const [openMenuId, setOpenMenuId] = useState<number | null>(null);
+  // The wallet whose backup is being exported (opens the password dialog).
+  const [exportWallet, setExportWallet] = useState<ExportBackupTarget | null>(
+    null,
+  );
 
   // Active first, then newest createdAt.
   const orderedWallets = useMemo(() => {
@@ -269,25 +273,10 @@ const WalletSettings: React.FC = () => {
     }
   };
 
-  const handleExport = async (wallet: LocalWallet) => {
-    try {
-      const bytes = await exportBackupZip(wallet.id);
-      if (!bytes) {
-        toast.error("Failed to export wallet");
-        return;
-      }
-      const safeName = wallet.name.trim().replace(/\s+/g, "-") || "wallet";
-      const filePath = await save({
-        filters: [{ name: "Wallet backup", extensions: ["zip"] }],
-        defaultPath: `hippius-wallet-${safeName}-backup.zip`,
-      });
-      if (!filePath) return;
-      await writeFile(filePath, bytes);
-      toast.success("Wallet backup saved");
-    } catch (e) {
-      console.error("[WalletSettings] export failed:", e);
-      toast.error("Failed to export wallet");
-    }
+  // Opens the password-gated export dialog; the dialog runs the export +
+  // save once the wallet password is entered (audit R-07).
+  const handleExport = (wallet: LocalWallet) => {
+    setExportWallet({ id: wallet.id, name: wallet.name });
   };
 
   const handleRenameSubmit = async (name: string) => {
@@ -655,6 +644,11 @@ const WalletSettings: React.FC = () => {
             onConfirm={() => void handleDeleteConfirm()}
             onBack={() => setWalletToDelete(null)}
             onClose={() => setWalletToDelete(null)}
+          />
+
+          <ExportBackupDialog
+            wallet={exportWallet}
+            onClose={() => setExportWallet(null)}
           />
         </div>
       )}

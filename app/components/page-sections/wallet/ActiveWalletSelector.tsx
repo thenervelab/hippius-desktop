@@ -15,10 +15,11 @@ import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { save } from "@tauri-apps/plugin-dialog";
-import { writeFile } from "@tauri-apps/plugin-fs";
 
 import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
+import ExportBackupDialog, {
+  type ExportBackupTarget,
+} from "@/components/page-sections/wallet/ExportBackupDialog";
 import { HardDriveUpload } from "@/components/ui/icons";
 import { Button } from "@/components/ui/button";
 import {
@@ -236,10 +237,13 @@ const ActiveWalletSelector: React.FC<ActiveWalletSelectorProps> = ({
     truncateAddress,
     setSetupStep,
     isLoading,
-    exportBackupZip,
   } = useLocalWallet();
 
   const [isOpen, setIsOpen] = useState(false);
+  // The wallet whose backup is being exported (opens the password dialog).
+  const [exportWallet, setExportWallet] = useState<ExportBackupTarget | null>(
+    null,
+  );
   const dropdownRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
 
@@ -293,25 +297,10 @@ const ActiveWalletSelector: React.FC<ActiveWalletSelectorProps> = ({
     setSetupStep("import-wallet");
   };
 
-  const handleExport = async (walletId: number, walletName: string) => {
-    try {
-      const bytes = await exportBackupZip(walletId);
-      if (!bytes) {
-        toast.error("Failed to export wallet");
-        return;
-      }
-      const safeName = walletName.trim().replace(/\s+/g, "-") || "wallet";
-      const filePath = await save({
-        filters: [{ name: "Wallet backup", extensions: ["zip"] }],
-        defaultPath: `hippius-wallet-${safeName}-backup.zip`,
-      });
-      if (!filePath) return;
-      await writeFile(filePath, bytes);
-      toast.success("Wallet backup saved");
-    } catch (e) {
-      console.error("[ActiveWalletSelector] export failed:", e);
-      toast.error("Failed to export wallet");
-    }
+  // Opens the password-gated export dialog (audit R-07); the dialog runs the
+  // export + save once the wallet password is entered.
+  const handleExport = (walletId: number, walletName: string) => {
+    setExportWallet({ id: walletId, name: walletName });
   };
 
   if (isLoading) {
@@ -555,6 +544,11 @@ const ActiveWalletSelector: React.FC<ActiveWalletSelectorProps> = ({
           </div>
         </div>
       )}
+
+      <ExportBackupDialog
+        wallet={exportWallet}
+        onClose={() => setExportWallet(null)}
+      />
     </div>
   );
 };

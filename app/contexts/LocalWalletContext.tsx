@@ -79,7 +79,7 @@ interface LocalWalletContextValue {
     walletId: number,
     password: string,
   ) => Promise<string | null>;
-  exportBackup: (walletId: number) => Promise<{
+  exportBackup: (walletId: number, password: string) => Promise<{
     name: string;
     address: string;
     encryptedMnemonic: string;
@@ -87,9 +87,10 @@ interface LocalWalletContextValue {
     exportedAt: string;
   } | null>;
   /** Returns the raw bytes of a `.zip` archive containing the
-      wallet's encrypted backup JSON. Caller is responsible for
-      saving to disk; null on IPC failure. */
-  exportBackupZip: (walletId: number) => Promise<Uint8Array | null>;
+      wallet's encrypted backup JSON. Requires the wallet password
+      (the backend gates export, audit R-07). Caller saves to disk;
+      null on a wrong password or IPC failure. */
+  exportBackupZip: (walletId: number, password: string) => Promise<Uint8Array | null>;
   /** Import a wallet from a `.zip` archive produced by
       `exportBackupZip`. The user-supplied `name` overrides whatever
       label the file carries, matching the JSON import path. */
@@ -467,6 +468,7 @@ export function LocalWalletProvider({
   const exportBackup = useCallback(
     async (
       walletId: number,
+      password: string,
     ): Promise<{
       name: string;
       address: string;
@@ -475,7 +477,7 @@ export function LocalWalletProvider({
       exportedAt: string;
     } | null> => {
       try {
-        return await invoke("local_wallet_export_backup", { id: walletId });
+        return await invoke("local_wallet_export_backup", { id: walletId, password });
       } catch (e) {
         console.error("Failed to export wallet backup:", e);
         return null;
@@ -485,16 +487,16 @@ export function LocalWalletProvider({
   );
 
   const exportBackupZip = useCallback(
-    async (walletId: number): Promise<Uint8Array | null> => {
+    async (walletId: number, password: string): Promise<Uint8Array | null> => {
       try {
         // Tauri serialises Vec<u8> as `number[]` over IPC; we normalise
         // to Uint8Array here so the caller can hand it straight to
-        // `writeFile`. The zip-bytes branch is opted into by callers
-        // that need the binary archive (export-as-zip flow) — the
-        // existing struct-returning `exportBackup` stays as-is so the
-        // tests + any FE code that wants the parsed payload still work.
+        // `writeFile`. The backend requires the wallet password (audit
+        // R-07); a wrong password surfaces as a thrown IPC error which we
+        // swallow to `null` so the export dialog shows a retry message.
         const bytes = await invoke<number[]>("local_wallet_export_backup_zip", {
           id: walletId,
+          password,
         });
         return new Uint8Array(bytes);
       } catch (e) {
