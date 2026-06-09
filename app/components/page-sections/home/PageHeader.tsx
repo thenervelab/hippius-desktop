@@ -133,7 +133,7 @@ const PageHeader: FC<PageHeaderProps> = ({
                   </span>
                 </div>
               ) : (
-                <p className="whitespace-nowrap text-[12px] font-bold leading-[18px] tracking-[-0.36px] text-primary-50 dark:text-primary-brand-dark">
+                <p className="whitespace-nowrap text-[12px] font-bold leading-[18px] tracking-[-0.12px] tabular-nums text-primary-50 dark:text-primary-brand-dark">
                   {stakedDisplay} hAlpha
                   <span className="ml-1 text-[12px] font-medium text-black-700 dark:text-white">
                     staked
