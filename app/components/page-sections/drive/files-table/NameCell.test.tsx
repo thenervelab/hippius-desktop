@@ -168,3 +168,56 @@ describe("NameCell sync-status badge", () => {
     expect(screen.queryByTestId(/^sync-status-/)).not.toBeInTheDocument();
   });
 });
+
+// The hover preview icon used to be an absolutely-positioned overlay in the
+// dialog triggers, which faded in directly on top of the Pending/Failed pill.
+// It now renders inline inside NameCell, strictly BEFORE the badge in DOM
+// order (i.e. to its left), so the two can never overlap.
+describe("NameCell hover preview icon", () => {
+  it("renders the icon before (left of) the status badge for a previewable image", () => {
+    render(
+      <NameCell
+        {...baseProps}
+        isPreviewable
+        fileType="image"
+        syncStatus="pending"
+      />,
+    );
+
+    const icon = screen.getByTestId("hover-preview-icon");
+    const badge = screen.getByTestId("sync-status-pending");
+    expect(
+      icon.compareDocumentPosition(badge) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("renders no icon for file types that don't open a preview", () => {
+    render(
+      <NameCell
+        {...baseProps}
+        isPreviewable
+        fileType="document"
+        syncStatus="pending"
+      />,
+    );
+
+    expect(
+      screen.queryByTestId("hover-preview-icon"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders no icon when previews are disabled (selection mode)", () => {
+    render(
+      <NameCell
+        {...baseProps}
+        isPreviewable={false}
+        fileType="image"
+        syncStatus="pending"
+      />,
+    );
+
+    expect(
+      screen.queryByTestId("hover-preview-icon"),
+    ).not.toBeInTheDocument();
+  });
+});

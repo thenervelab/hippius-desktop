@@ -920,11 +920,6 @@ const FilesTable: FC<FilesTableProps> = memo(
             const file = info.row.original;
             const { fileFormat } = getFilePartsFromFileName(info.getValue());
             const fileType = getFileTypeFromExtension(fileFormat || null);
-            // Failed rows show a persistent "Failed" pill at the name cell's
-            // right edge; suppress the trigger's floating hover icon so it
-            // doesn't fade in directly on top of that pill.
-            const hideHoverIcon = file.syncStatus === "failed";
-
             const nameNode = (
               <NameCell
                 rawName={info.getValue()}
@@ -948,7 +943,6 @@ const FilesTable: FC<FilesTableProps> = memo(
                   <VideoDialogTrigger
                     onClick={() => handleSetSelectedFile(file)}
                     className={triggerClass}
-                    hideHoverIcon={hideHoverIcon}
                   >
                     {nameNode}
                   </VideoDialogTrigger>
@@ -958,7 +952,6 @@ const FilesTable: FC<FilesTableProps> = memo(
                   <ImageDialogTrigger
                     onClick={() => handleSetSelectedFile(file)}
                     className={triggerClass}
-                    hideHoverIcon={hideHoverIcon}
                   >
                     {nameNode}
                   </ImageDialogTrigger>
@@ -968,7 +961,6 @@ const FilesTable: FC<FilesTableProps> = memo(
                   <PdfDialogTrigger
                     onClick={() => handleSetSelectedFile(file)}
                     className={triggerClass}
-                    hideHoverIcon={hideHoverIcon}
                   >
                     {nameNode}
                   </PdfDialogTrigger>

@@ -5,6 +5,8 @@ import { getFileIcon } from "@/lib/utils/fileTypeUtils";
 import { cn } from "@/lib/utils";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 import { buildFolderPath } from "@/app/utils/folderPathUtils";
+import { Video } from "lucide-react";
+import { Icons } from "@/components/ui";
 import MiddleTruncatedName from "@/components/ui/MiddleTruncatedName";
 import SharedLinkBadge from "@/components/page-sections/drive/SharedLinkBadge";
 import SyncQueueOverallProgress from "@/app/(pages)/SyncQueueOverallProgress";
@@ -367,10 +369,12 @@ const NameCell: FC<NameCellProps> = ({
           </div>
         </Link>
       ) : (
-        // Status badge sits at the right edge of the name cell — same x as
-        // the hover preview icon added by VideoDialogTrigger / ImageDialogTrigger
-        // / PdfDialogTrigger. The trigger's hover gradient layers on top, so
-        // the badge fades out as the play/eye icon appears.
+        // Status badge sits at the right edge of the name cell. The hover
+        // preview icon (eye / play) renders as a flex sibling directly to its
+        // LEFT — it used to be an absolutely-positioned overlay in the dialog
+        // triggers, which faded in on top of the Pending/Failed pills. The
+        // slot is always reserved (opacity, not display) so the badge doesn't
+        // jump when the icon fades in; `group` comes from the trigger button.
         <div className="flex items-center min-w-0 w-full gap-2">
           <div className="flex items-center min-w-0 flex-1">
             <Icon className={cn("size-5 mr-2 flex-shrink-0", color)} />
@@ -391,6 +395,25 @@ const NameCell: FC<NameCellProps> = ({
               }
             />
           </div>
+          {/* Mirrors the trigger-wrap gate in FilesTable/ExpandedFolderRows:
+              only video/image/PDF rows open a preview, so only they get the
+              hover affordance. */}
+          {isPreviewable &&
+            (fileType === "video" ||
+              fileType === "image" ||
+              fileType === "PDF") && (
+              <span
+                aria-hidden="true"
+                data-testid="hover-preview-icon"
+                className="inline-flex shrink-0 items-center opacity-0 transition-opacity duration-300 group-hover:opacity-100"
+              >
+                {fileType === "video" ? (
+                  <Video className="size-4 text-primary-60" />
+                ) : (
+                  <Icons.EyeOutline className="size-4 text-primary-60" />
+                )}
+              </span>
+            )}
           <FileStatusBadge
             status={badgeStatus}
             progressPercent={live.progressPercent}
