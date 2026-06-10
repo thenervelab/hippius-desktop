@@ -177,7 +177,7 @@ const CreateVM: React.FC = () => {
           <div className="animate-in fade-in duration-300">
             {/* Templates Grid */}
             {isBetaError ? (
-              <NoEntriesFound className="h-[31.25rem]">
+              <NoEntriesFound className="h-[max(31.25rem,55vh)]">
                 <div className="text-center">
                   <p className="text-grey-30 font-semibold mb-1 text-base dark:text-white">
                     Feature Not Available
