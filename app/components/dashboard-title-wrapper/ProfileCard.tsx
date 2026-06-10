@@ -195,7 +195,10 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
       <div
         className={cn(
           "flex items-center gap-1.5 w-full overflow-hidden h-11",
-          centered && "justify-center",
+          // Center the avatar in the collapsed rail. Without this it's
+          // left-aligned and the px-0 button (30px) sits flush-left, looking
+          // clipped against the rail edge at high zoom.
+          (centered || collapsed) && "justify-center",
         )}
       >
         {/* The entire identity card is the trigger: clicking anywhere on it
@@ -214,7 +217,9 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
               "outline-none",
               "hover:bg-[rgba(0,0,0,0.06)] focus-visible:bg-[rgba(0,0,0,0.06)] data-[state=open]:bg-[rgba(0,0,0,0.06)]",
               "dark:hover:bg-white/10 dark:focus-visible:bg-white/10 dark:data-[state=open]:bg-white/10",
-              collapsed ? "px-1" : "flex-1 pr-1",
+              // px-0 collapsed: the button is exactly the 30px avatar so it fits
+              // the ~33px rail content (px-1 made it 38px → overflow-clipped).
+              collapsed ? "px-0" : "flex-1 pr-1",
             )}
           >
             {avatarNode}

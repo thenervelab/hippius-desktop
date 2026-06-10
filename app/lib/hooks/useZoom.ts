@@ -5,7 +5,10 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 const ZOOM_STEP = 10;
 const MIN_ZOOM = 50;
-const MAX_ZOOM = 200;
+// Capped at 160%: beyond this the effective viewport is so narrow that the
+// fixed-width chrome (61px collapsed rail, header) is fundamentally too cramped
+// to lay out cleanly. Past the cap is diminishing returns vs. breakage.
+const MAX_ZOOM = 160;
 const DEFAULT_ZOOM = 100;
 const STORAGE_KEY = "hippius-zoom-level";
 const INDICATOR_TIMEOUT_MS = 1500;
