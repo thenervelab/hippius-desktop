@@ -91,6 +91,9 @@ const PageHeader: FC<PageHeaderProps> = ({
     : "";
 
   return (
+    // Title and wallet card sit side-by-side (each ~50%) at @4xl+; the card keeps
+    // that half-width cap — the three sections are balanced WITHIN it via the
+    // flex-grow/basis below, not by letting the card grow to full width.
     <div className="grid grid-cols-1 @4xl:grid-cols-[1fr_1fr] items-stretch gap-3 mt-3">
       <div className="flex flex-col items-start justify-center gap-0.5 px-1">
         <div className="flex items-center gap-2">
@@ -116,8 +119,20 @@ const PageHeader: FC<PageHeaderProps> = ({
         )}
       >
         <div className="flex flex-1 min-w-0 items-stretch">
-          {/* Wallet section */}
-          <div className="flex flex-1 min-w-0 items-center justify-between gap-3 border-r border-grey-dark-100 dark:border-black-500 pr-5 py-[11px] pl-3.5">
+          {/* Wallet section. The 14px left inset comes from the outer wrapper's
+              `px-3.5` when the top-up button is shown; only add our own `pl-3.5`
+              when that wrapper has none (`px-0`), so the staked text never ends
+              up double-padded (28px) instead of the intended 14px. */}
+          <div
+            className={cn(
+              // Big flex-basis (240px) + modest grow so the wallet keeps the
+              // weight on narrow cards; on wide cards it still grows but slower
+              // than the active-plan column (which has a bigger grow), so they
+              // converge instead of the wallet hogging every extra pixel.
+              "flex flex-[2_1_240px] min-w-0 items-center justify-between gap-3 border-r border-grey-dark-100 dark:border-black-500 pr-5 py-[11px]",
+              showTopUpCredits ? "" : "pl-3.5",
+            )}
+          >
             <div className="flex flex-col items-start justify-center gap-[3px]">
               <div className="flex items-center gap-1">
                 <Icons.Wallet className="size-[18px] text-primary-40 dark:text-primary-brand-dark" />
@@ -152,10 +167,14 @@ const PageHeader: FC<PageHeaderProps> = ({
             </Button>
           </div>
 
-          {/* Active plan section — border-r only when top-up button is visible */}
+          {/* Active plan section — border-r only when top-up button is visible.
+              Smaller flex-basis than the wallet section (its content — label +
+              short plan string — is narrow) but a HIGHER grow, so the wallet
+              keeps the weight on small cards while this column catches up on
+              wide ones. `min-w-[150px]` keeps the label from clipping. */}
           <div
             className={cn(
-              "flex w-[200px] flex-col items-start justify-center gap-[3px] py-[11px] dark:border-black-500",
+              "flex flex-[3_1_150px] min-w-[150px] flex-col items-start justify-center gap-[3px] py-[11px] dark:border-black-500",
               showTopUpCredits
                 ? "border-r border-grey-dark-100 px-5"
                 : "pl-5 pr-3.5",
