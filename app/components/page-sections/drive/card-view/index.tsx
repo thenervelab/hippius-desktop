@@ -162,7 +162,7 @@ const CardView: FC<CardViewProps> = ({
         )}
       >
         <div className="duration-300 delay-300">
-          <div className="grid grid-cols-1 @sm:grid-cols-2 @2xl:grid-cols-3 @4xl:grid-cols-4 gap-4">
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-4">
             {files.map((file, index) => {
               const { fileFormat } = getFilePartsFromFileName(file.name);
               const fileType = getFileTypeFromExtension(fileFormat || null);
