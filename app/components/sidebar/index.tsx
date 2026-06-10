@@ -102,23 +102,13 @@ const Sidebar: React.FC = () => {
                   key={section.label}
                   className="flex flex-col gap-y-1.5 w-full pt-[10px]"
                 >
-                  <div
-                    className={cn(
-                      "flex items-center py-1.5",
-                      collapsed
-                        ? "px-0 justify-stretch"
-                        : "justify-start px-2.5",
-                    )}
-                  >
-                    <span
-                      className={cn(
-                        "text-[10px] font-medium tracking-[-0.2px] text-black/40 dark:text-white/40 uppercase whitespace-nowrap overflow-hidden text-ellipsis",
-                        collapsed && "flex-1 min-w-0",
-                      )}
-                    >
-                      {section.label}
-                    </span>
-                  </div>
+                  {!collapsed && (
+                    <div className="flex items-center justify-start px-2.5 py-1.5">
+                      <span className="text-[10px] font-medium tracking-[-0.2px] text-[rgba(0,0,0,0.4)] dark:text-white/40 uppercase whitespace-nowrap overflow-hidden text-ellipsis">
+                        {section.label}
+                      </span>
+                    </div>
+                  )}
 
                   <div className="flex flex-col w-full gap-y-0.5">
                     {section.items.map((item) => {
