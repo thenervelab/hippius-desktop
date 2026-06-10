@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import NotificationMenuHeader from "./NotificationMenuHeader";
 import NotificationMenuList from "./NotificationMenuList";
 import { useNotifications } from "@/lib/hooks/useNotifications";
@@ -9,6 +10,7 @@ import { useSetAtom, useAtom } from "jotai";
 import {
   enabledNotificationTypesAtom,
   refreshEnabledTypesAtom,
+  refreshUnreadCountAtom,
 } from "@/components/page-sections/notifications/notificationStore";
 import NoNotificationsFound from "@/components/page-sections/notifications/NoNotificationsFound";
 import NoNotificationsEnabled from "@/components/page-sections/notifications/NoNotificationsEnabled";
@@ -18,15 +20,24 @@ import { notificationCategoryLabel } from "@/app/lib/helpers/notificationCategor
 interface Props {
   count: number;
   onClose?: () => void;
+  /** Hands the delete-all flow to the menu root, which owns the
+   *  confirmation dialog (it must outlive this dropdown content). */
+  onRequestClearAll?: () => void;
 }
 
-const NotificationMenuContent: React.FC<Props> = ({ count, onClose }) => {
+const NotificationMenuContent: React.FC<Props> = ({
+  count,
+  onClose,
+  onRequestClearAll,
+}) => {
   const [enabledTypes] = useAtom(enabledNotificationTypesAtom);
   const refreshEnabledTypes = useSetAtom(refreshEnabledTypesAtom);
+  const refreshUnread = useSetAtom(refreshUnreadCountAtom);
   const [activeCategory, setActiveCategory] = useState("All");
   const router = useRouter();
 
-  const { notifications, refresh, markRead, markUnread } = useNotifications();
+  const { notifications, refresh, markRead, markUnread, markAllRead } =
+    useNotifications();
 
   useEffect(() => {
     refresh();
@@ -77,6 +88,14 @@ const NotificationMenuContent: React.FC<Props> = ({ count, onClose }) => {
     router.push("/settings?section=notifications");
   };
 
+  // Mirrors the notifications page's "Mark all as read": the atom updates
+  // the shared list in place, so the menu stays open and rows settle.
+  const handleMarkAllRead = async () => {
+    await markAllRead();
+    toast.success("All notifications marked as read");
+    refreshUnread();
+  };
+
   return (
     <>
       <NotificationMenuHeader
@@ -85,6 +104,9 @@ const NotificationMenuContent: React.FC<Props> = ({ count, onClose }) => {
         activeCategory={activeCategory}
         onCategoryChange={setActiveCategory}
         categoryOptions={categoryOptions}
+        onMarkAllRead={handleMarkAllRead}
+        onClearAll={onRequestClearAll}
+        bulkActionsDisabled={notifications.length === 0}
       />
 
       <div className="flex-1 min-h-0 overflow-y-auto">
