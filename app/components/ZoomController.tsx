@@ -1,6 +1,6 @@
 "use client";
 
-import { useZoom } from "@/lib/hooks/useZoom";
+import { useZoom, MIN_ZOOM, MAX_ZOOM } from "@/lib/hooks/useZoom";
 
 /**
  * Mounts the zoom keyboard shortcut handler and renders a centered
@@ -11,7 +11,8 @@ export default function ZoomController() {
 
   if (!showIndicator) return null;
 
-  const limitLabel = zoom <= 50 ? " (min)" : zoom >= 200 ? " (max)" : "";
+  const limitLabel =
+    zoom <= MIN_ZOOM ? " (min)" : zoom >= MAX_ZOOM ? " (max)" : "";
 
   return (
     <div

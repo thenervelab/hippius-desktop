@@ -15,6 +15,10 @@ import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { cn } from "@/app/lib/utils";
 import {
+  TITLEBAR_BAND_H_54,
+  titlebarClearanceClass,
+} from "@/app/lib/utils/platformChrome";
+import {
   getNextViewableFile,
   getPrevViewableFile,
   getViewableFiles,
@@ -257,13 +261,16 @@ const FileViewerLayout: React.FC<FileViewerLayoutProps> = ({
                   traffic-light controls. */}
               <header
                 data-tauri-drag-region
-                className="relative flex items-center justify-between w-full select-none shrink-0 h-[54px]"
+                className={cn(
+                  "relative flex items-center justify-between w-full select-none shrink-0",
+                  TITLEBAR_BAND_H_54,
+                )}
               >
                 <div
                   data-tauri-drag-region
                   className={cn(
                     "flex items-center select-none h-full shrink-0 min-w-0",
-                    isMac ? "pl-[80px]" : "pl-[12px]",
+                    titlebarClearanceClass(isMac),
                   )}
                 >
                   <FileViewerTitle file={file} />

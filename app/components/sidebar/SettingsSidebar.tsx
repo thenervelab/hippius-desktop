@@ -10,6 +10,7 @@ import SidebarFooter from "./SidebarFooter";
 import SidebarSearch from "./SidebarSearch";
 import CustomTooltip2 from "@/components/ui/CustomTooltip2";
 import { VPN_FEATURE_ENABLED } from "@/app/lib/featureFlags";
+import { BELOW_TITLEBAR_TOP_54 } from "@/app/lib/utils/platformChrome";
 
 const ICON_CLASS = "size-[18px]";
 
@@ -60,7 +61,10 @@ const SettingsSidebar: React.FC = () => {
   return (
     <div
       className={cn(
-        "fixed top-[54px] left-0 bottom-0 bg-transparent flex flex-col overflow-hidden transition-all duration-300 ease-in-out z-50",
+        "fixed left-0 bottom-0 bg-transparent flex flex-col overflow-hidden transition-all duration-300 ease-in-out z-50",
+        // Tracks the top bar's zoom-compensated band height so the rail never
+        // rises into the macOS traffic lights when zoomed out.
+        BELOW_TITLEBAR_TOP_54,
         collapsed ? "w-[3.8125rem]" : "w-[16.4375rem]",
       )}
     >

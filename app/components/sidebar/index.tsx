@@ -11,14 +11,21 @@ import { InView } from "react-intersection-observer";
 import { useEffect, useMemo, useRef } from "react";
 import SidebarSearch from "./SidebarSearch";
 import SidebarFooter from "./SidebarFooter";
+import { BELOW_TITLEBAR_TOP_54 } from "@/app/lib/utils/platformChrome";
 
 const AUTO_COLLAPSE_WIDTH = 1100;
 
-/** Effective viewport width accounting for zoom */
+/**
+ * Effective viewport width for the auto-collapse decision.
+ *
+ * Zoom uses the native webview page zoom, which reflows the layout viewport, so
+ * `window.innerWidth` ALREADY reports the zoomed-in (narrower) / zoomed-out
+ * (wider) width — no manual division by the zoom factor. Dividing here (the old
+ * root-font-size behaviour) double-counted the zoom and collapsed the rail far
+ * too early when zoomed in.
+ */
 function getEffectiveWidth(): number {
-  const stored = localStorage.getItem("hippius-zoom-level");
-  const zoom = stored ? parseInt(stored, 10) : 100;
-  return window.innerWidth / (zoom / 100);
+  return window.innerWidth;
 }
 
 const Sidebar: React.FC = () => {
@@ -80,7 +87,10 @@ const Sidebar: React.FC = () => {
         <div
           ref={ref}
           className={cn(
-            "fixed top-[54px] left-0 bottom-0 bg-transparent  flex flex-col overflow-hidden transition-all duration-300 ease-in-out z-50",
+            "fixed left-0 bottom-0 bg-transparent  flex flex-col overflow-hidden transition-all duration-300 ease-in-out z-50",
+            // Tracks the top bar's zoom-compensated band height so the rail
+            // never rises into the macOS traffic lights when zoomed out.
+            BELOW_TITLEBAR_TOP_54,
             collapsed ? "w-[3.8125rem]" : "w-[16.4375rem]",
           )}
         >
