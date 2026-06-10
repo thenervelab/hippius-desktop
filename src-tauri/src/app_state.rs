@@ -153,6 +153,10 @@ impl AppState {
             sync_bridge.clone() as Arc<dyn hcfs_client::engine::events::SyncCallbacks>,
             health_client.clone(),
         ));
+        // Target for the trailing snapshot flush (sync/progress.rs): suppressed
+        // throttled emits schedule a deferred emit against this runner so the
+        // last tick of a burst always reaches the UI.
+        crate::sync::progress::register_flush_runner(&sync);
         Self {
             db: OnceLock::new(),
             auth: Mutex::new(AuthInfo::default()),

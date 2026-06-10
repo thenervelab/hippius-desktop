@@ -14,13 +14,15 @@
 //! main thread cannot drain its eval queue and the app hangs for tens of
 //! seconds (see bug report dated 2026-04-05).
 //!
-//! [`should_emit_snapshot`] and [`try_claim_snapshot_emit`] implement a
-//! trailing-edge throttle so that only the first call in any `min_interval_ms`
+//! [`should_emit_snapshot`] and [`try_claim_snapshot_emit`] implement the
+//! leading edge of the throttle: only the first call in any `min_interval_ms`
 //! window triggers an emit. File-completion ticks use a shorter 100 ms window
 //! ([`COMPLETION_THROTTLE_MS`]) to batch burst completions while remaining
-//! visually responsive at 10 Hz.
+//! visually responsive at 10 Hz. [`should_schedule_flush`] supplies the
+//! trailing edge: a suppressed call schedules one deferred emit at window end
+//! (see `crate::sync::progress`), so the final tick of a burst is never lost.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// Sentinel stored in the snapshot-emit cursor to mean "no prior emit has
 /// been recorded". Chosen as [`u64::MAX`] so the first call to
@@ -120,6 +122,28 @@ pub const fn is_file_completion_tick(bytes: u64, total: u64) -> bool {
     total > 0 && bytes == total
 }
 
+/// Decide whether the caller — whose emit was just suppressed by
+/// [`try_claim_snapshot_emit`] — should schedule the single trailing flush
+/// for the current throttle window.
+///
+/// The claim gate alone is leading-edge: the first tick in a window emits and
+/// every later tick is *dropped*, not deferred. When the dropped tick is the
+/// last one of a burst (typical for small files, whose only progress tick IS
+/// their completion tick), the UI shows a stale snapshot until some unrelated
+/// emit happens — possibly seconds later at cycle finalization. The trailing
+/// flush closes that gap: exactly one suppressed caller per window wins this
+/// gate and schedules a deferred forced emit, restoring the invariant that
+/// every progress mutation is visible within one throttle window.
+///
+/// `flush_scheduled` must be cleared by the flush task right before it emits,
+/// so a tick arriving after the flush can schedule the next one. `swap` makes
+/// winner selection atomic under concurrent suppressed callers; `Relaxed`
+/// suffices because (as with the emit cursor) a rare double-schedule costs
+/// one extra emit and self-corrects.
+pub fn should_schedule_flush(flush_scheduled: &AtomicBool) -> bool {
+    !flush_scheduled.swap(true, Ordering::Relaxed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,6 +190,27 @@ mod tests {
         assert!(!should_emit_snapshot(0, true, 0));
         // Completion past the window emits normally.
         assert!(should_emit_snapshot(100, true, 0));
+    }
+
+    // ── should_schedule_flush ──────────────────────────────────────────
+
+    #[test]
+    fn first_suppressed_caller_wins_the_flush_slot() {
+        let scheduled = AtomicBool::new(false);
+        assert!(should_schedule_flush(&scheduled));
+        // Slot is now taken until the flush task clears it.
+        assert!(!should_schedule_flush(&scheduled));
+        assert!(!should_schedule_flush(&scheduled));
+    }
+
+    #[test]
+    fn flush_slot_reopens_after_clear() {
+        let scheduled = AtomicBool::new(false);
+        assert!(should_schedule_flush(&scheduled));
+        // The flush task clears the flag just before emitting…
+        scheduled.store(false, Ordering::Relaxed);
+        // …so the next suppressed tick can schedule the next window's flush.
+        assert!(should_schedule_flush(&scheduled));
     }
 
     // ── is_file_completion_tick ────────────────────────────────────────
