@@ -137,7 +137,12 @@ const StatusBadge: React.FC<{ status: string }> = ({ status }) => {
   return (
     <span
       className={cn(
-        "inline-flex items-center justify-center whitespace-nowrap rounded-full border px-2 py-1 text-xs font-semibold tracking-[-0.24px]",
+        // Em-based geometry (0.67em≈8px, 0.33em≈4px, 1.34lh≈16px,
+        // -0.02em=-0.24px at the 12px text-xs size): WKWebView's pageZoom
+        // clamps small fonts (~9px floor) on zoom-out, so px/rem geometry
+        // (incl. text-xs's baked-in 1rem line-height) shrinks away from the
+        // text and crams the pill; em tracks the clamped font size.
+        "inline-flex items-center justify-center whitespace-nowrap rounded-full border px-[0.67em] py-[0.33em] text-xs leading-[1.34] font-semibold tracking-[-0.02em]",
         colorClasses,
       )}
     >
