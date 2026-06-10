@@ -91,10 +91,14 @@ const PageHeader: FC<PageHeaderProps> = ({
     : "";
 
   return (
-    // Title and wallet card sit side-by-side (each ~50%) at @4xl+; the card keeps
-    // that half-width cap — the three sections are balanced WITHIN it via the
+    // Title and wallet card sit side-by-side (each ~50%) at @4xl+; the card
+    // fills its half — the three sections are balanced WITHIN it via the
     // flex-grow/basis below, not by letting the card grow to full width.
-    <div className="grid grid-cols-1 @4xl:grid-cols-[1fr_1fr] items-stretch gap-3 mt-3">
+    // gap-4 (not 3) so the card's left edge aligns with the right column of
+    // the home page's `gap-4 @xl:grid-cols-2` charts grid directly below.
+    // Very-wide-viewport elongation is handled by the page-level content cap
+    // in ResponsiveContent, not here.
+    <div className="grid grid-cols-1 @4xl:grid-cols-[1fr_1fr] items-stretch gap-4 mt-3">
       <div className="flex flex-col items-start justify-center gap-0.5 px-1">
         <div className="flex items-center gap-2">
           <p className="text-[24px] font-medium leading-8 text-black-700 dark:text-white">
