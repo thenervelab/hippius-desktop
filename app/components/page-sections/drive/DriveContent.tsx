@@ -19,6 +19,7 @@ import { useFileViewShared } from "./shared/FileViewUtils";
 import FileContextMenu from "@/app/components/ui/context-menu";
 import { useSetAtom } from "jotai";
 import { shareModalFileAtom } from "@/app/lib/global-atoms/sharesAtoms";
+import { renameModalFileAtom } from "@/app/lib/global-atoms/renameAtoms";
 import { downloadFile } from "@/app/lib/utils/downloadFile";
 import { CloudUploadIcon, HardDrive } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -97,6 +98,8 @@ const DriveContent: FC<DriveContentProps> = ({
   // selected file. Setting the atom is the only handoff — the modal
   // owns its own lifecycle from there.
   const setShareModalFile = useSetAtom(shareModalFileAtom);
+  // Same handoff for `RenameDialog` (also mounted at the layout level).
+  const setRenameModalFile = useSetAtom(renameModalFileAtom);
 
   // Use selection context for delete functionality
   const { enterSelectionModeAndSelectFile } = useFileSelection();
@@ -521,6 +524,10 @@ const DriveContent: FC<DriveContentProps> = ({
           }}
           onShareFile={(file) => {
             setShareModalFile(file);
+            setContextMenu(null);
+          }}
+          onRename={(file) => {
+            setRenameModalFile(file);
             setContextMenu(null);
           }}
         />

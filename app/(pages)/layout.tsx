@@ -10,6 +10,7 @@ import InsufficientCreditsDialog from "@/components/page-sections/drive/Insuffic
 import FailedFilesListener from "./FailedFilesListener";
 import FailedFilesModal from "@/components/page-sections/drive/FailedFilesModal";
 import ShareFileModal from "@/components/page-sections/drive/ShareFileModal";
+import RenameDialog from "@/components/page-sections/drive/RenameDialog";
 import AccountRecoveryDialog from "@/components/recovery/AccountRecoveryDialog";
 import RecoveryEventListener from "@/components/recovery/RecoveryEventListener";
 import ExistingUserRecoveryPrompt from "@/components/recovery/ExistingUserRecoveryPrompt";
@@ -30,6 +31,7 @@ export default function ProtectedLayout({
         <InsufficientCreditsDialog />
         <FailedFilesModal />
         <ShareFileModal />
+        <RenameDialog />
         <RecoveryEventListener />
         <AccountRecoveryDialog />
         <ExistingUserRecoveryPrompt />

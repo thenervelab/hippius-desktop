@@ -28,12 +28,15 @@ import {
   MoreVertical,
   Folder,
   FolderOpen,
+  Pencil,
 } from "lucide-react";
 import { useAtomValue, useSetAtom } from "jotai";
 import {
   shareFeatureEnabledAtom,
   shareModalFileAtom,
 } from "@/app/lib/global-atoms/sharesAtoms";
+import { renameModalFileAtom } from "@/app/lib/global-atoms/renameAtoms";
+import { canRenameFile, RENAME_DISABLED_TOOLTIP } from "@/app/lib/utils/renameGating";
 import { cn } from "@/lib/utils";
 import NameCell from "./NameCell";
 import SelectionActionBar from "../SelectionActionBar";
@@ -279,6 +282,7 @@ const FilesTable: FC<FilesTableProps> = memo(
     // per session by `useServerCapabilities` (mounted in SyncEventLogger).
     const shareEnabled = useAtomValue(shareFeatureEnabledAtom);
     const setShareModalFile = useSetAtom(shareModalFileAtom);
+    const setRenameModalFile = useSetAtom(renameModalFileAtom);
     const enableFolderExpander = !isRecentFiles;
     // Enrich syncStatus with live snapshot data to distinguish uploads vs downloads.
     // Also suppress the "pending" upload arrow for files that just finished downloading
@@ -784,6 +788,22 @@ const FilesTable: FC<FilesTableProps> = memo(
                 },
               ]
             : []),
+          // Rename shares the delete-style gating plus the local-presence
+          // gate in `canRenameFile` — the rename is an on-disk operation.
+          {
+            icon: <Pencil className="size-4" />,
+            itemTitle: "Rename",
+            disabled: itemDeleting || !canRenameFile(file),
+            tooltip:
+              !itemDeleting && !canRenameFile(file)
+                ? RENAME_DISABLED_TOOLTIP
+                : undefined,
+            onItemClick: () => {
+              if (!itemDeleting && canRenameFile(file)) {
+                setRenameModalFile(file);
+              }
+            },
+          },
           // Delete is gated by both sync state (unassigned files are
           // mid-upload) and live deletion state (already in flight).
           {
@@ -818,6 +838,7 @@ const FilesTable: FC<FilesTableProps> = memo(
         polkadotAddress,
         shareEnabled,
         setShareModalFile,
+        setRenameModalFile,
         isItemDeleting,
         normalizedSubfolderPath,
         resolveRelativePath,

@@ -19,6 +19,7 @@ import {
 } from "@/lib/utils/getTileTypeFromExtension";
 import { useInfiniteScroll } from "@/lib/hooks/use-infinite-scroll";
 import { useNestedFolderListing } from "@/app/lib/hooks/use-nested-folder-listing";
+import { FILES_MUTATED_EVENT } from "@/app/lib/utils/fileMutationEvents";
 import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 import { useFolderAggregateSelection } from "@/app/lib/hooks/use-folder-aggregate-selection";
 import TableActionMenu, {
@@ -226,11 +227,27 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
     accountId && syncPath && label && folderRelativePath,
   );
 
+  // Background-refresh the child rows when a sync cycle lands or an in-app
+  // mutation (rename) changes names instantly — same pair of triggers as
+  // DriveContainer's nested view. Without this, a row renamed inside an
+  // open accordion kept its old name until collapse/re-expand.
+  const [refreshKey, setRefreshKey] = useState(0);
+  useEffect(() => {
+    const bump = () => setRefreshKey((prev) => prev + 1);
+    window.addEventListener("sync_files_completed_changed", bump);
+    window.addEventListener(FILES_MUTATED_EVENT, bump);
+    return () => {
+      window.removeEventListener("sync_files_completed_changed", bump);
+      window.removeEventListener(FILES_MUTATED_EVENT, bump);
+    };
+  }, []);
+
   const { data, isLoading } = useNestedFolderListing({
     accountId,
     syncPath,
     subfolder: listingEnabled ? folderRelativePath : null,
     label: label ?? null,
+    refreshKey,
     enabled: listingEnabled,
   });
 

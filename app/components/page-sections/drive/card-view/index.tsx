@@ -8,12 +8,14 @@ import React, {
 } from "react";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { Button } from "@/components/ui/button";
-import { MoreVertical, Download, FolderOpen, Link2 } from "lucide-react";
+import { MoreVertical, Download, FolderOpen, Link2, Pencil } from "lucide-react";
 import { useAtomValue } from "jotai";
 import {
   shareFeatureEnabledAtom,
   shareModalFileAtom,
 } from "@/app/lib/global-atoms/sharesAtoms";
+import { renameModalFileAtom } from "@/app/lib/global-atoms/renameAtoms";
+import { canRenameFile, RENAME_DISABLED_TOOLTIP } from "@/app/lib/utils/renameGating";
 import { cn } from "@/lib/utils";
 
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
@@ -88,6 +90,7 @@ const CardView: FC<CardViewProps> = ({
   // `useServerCapabilities` (mounted in SyncEventLogger).
   const shareEnabled = useAtomValue(shareFeatureEnabledAtom);
   const setShareModalFile = useSetAtom(shareModalFileAtom);
+  const setRenameModalFile = useSetAtom(renameModalFileAtom);
   const { getParam } = useUrlParams();
   const { isSelectionMode, enterSelectionModeAndSelectFile } =
     useFileSelection();
@@ -351,6 +354,26 @@ const CardView: FC<CardViewProps> = ({
                                 },
                               ]
                             : []),
+                          // Rename — same local-presence gating as the
+                          // table-view 3-dots menu (shared `canRenameFile`).
+                          {
+                            icon: <Pencil className="size-4" />,
+                            itemTitle: "Rename",
+                            disabled: !canRenameFile(file),
+                            tooltip: !canRenameFile(file)
+                              ? RENAME_DISABLED_TOOLTIP
+                              : undefined,
+                            onItemClick: (e?: React.MouseEvent) => {
+                              if (e) {
+                                e.preventDefault();
+                                e.stopPropagation();
+                              }
+                              setOpenMenuIndex(null);
+                              if (canRenameFile(file)) {
+                                setRenameModalFile(file);
+                              }
+                            },
+                          },
                           // Always show delete option, but disabled for unpinned files
                           {
                             icon: <Icons.Trash className="size-4" />,

@@ -45,6 +45,7 @@ import {
   saveDriveOnLocalView,
 } from "@/lib/utils/userPreferencesDb";
 import { useInfiniteScroll } from "@/lib/hooks/use-infinite-scroll";
+import { FILES_MUTATED_EVENT } from "@/app/lib/utils/fileMutationEvents";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { useInvokeQuery } from "@/app/lib/hooks/api/useInvokeQuery";
 import {
@@ -298,8 +299,13 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     if (!isNested) return;
     const handler = () => setNestedRefreshKey((prev) => prev + 1);
     window.addEventListener("sync_files_completed_changed", handler);
-    return () =>
+    // In-app mutations (rename) change names instantly, long before the
+    // sync cycle completes — refresh on those too.
+    window.addEventListener(FILES_MUTATED_EVENT, handler);
+    return () => {
       window.removeEventListener("sync_files_completed_changed", handler);
+      window.removeEventListener(FILES_MUTATED_EVENT, handler);
+    };
   }, [isNested]);
 
   const nestedListing = useNestedFolderListing({
