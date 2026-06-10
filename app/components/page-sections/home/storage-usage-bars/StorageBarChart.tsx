@@ -16,7 +16,10 @@ import { cn } from "@/app/lib/utils";
 // label "0" perfectly aligned with the bar baseline.
 const Y_TICK_COUNT = 6;
 const Y_AXIS_GAP = 12;
-const X_AXIS_H = 24;
+// Bottom band below the bars for the day labels. Clears both the 20px (h-5)
+// label row and the centered y-axis "0" baseline label that dips ~9px below the
+// baseline; 24px left them colliding in the bottom-left corner.
+const X_AXIS_H = 30;
 
 const BAR_COLOR = "#1F50BD";
 const BAR_HOVER_COLOR = "#3167DD";

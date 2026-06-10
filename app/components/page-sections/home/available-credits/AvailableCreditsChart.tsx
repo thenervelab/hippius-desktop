@@ -282,7 +282,11 @@ const AvailableCreditsChart: React.FC<AvailableCreditsChartProps> = ({
     });
   }, [yTicks, yMax]);
 
-  const X_AXIS_H = 24;
+  // Bottom band reserved below the plot for the day labels. Must clear BOTH the
+  // 20px (h-5) label row AND the y-axis "0" baseline label, which is centered on
+  // the baseline (-translate-y-1/2) so it dips ~9px below it; 24px left them
+  // touching in the bottom-left corner.
+  const X_AXIS_H = 30;
   const Y_AXIS_W = useMemo(() => computeYAxisWidth(values), [values]);
 
   const handleMouseMove = useCallback(
