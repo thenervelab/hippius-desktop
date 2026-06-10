@@ -5,6 +5,7 @@ import {
   markUnread,
   markAllRead,
   getEnabledNotificationTypes,
+  unreadCount as fetchDbUnreadCount,
 } from "@/app/lib/helpers/notificationsDb";
 import type { NotificationRow } from "@/app/lib/helpers/notificationsDb";
 import { UiNotification } from "@/components/page-sections/notifications/types";
@@ -101,11 +102,25 @@ export const refreshNotificationsAtom = atom(null, async (_get, set) => {
   const enabledTypes = await getEnabledNotificationTypes();
   set(enabledNotificationTypesAtom, enabledTypes);
 
-  const rows = await listNotifications(100);
+  // 1000-row window: must comfortably cover the account's whole backlog so the
+  // list shows every row the badge counts. At 100, older unread rows fell
+  // outside the window — invisible on the notifications page, impossible to
+  // mark read, yet still tallied by get_unread_count, so the badge sat at
+  // "99+" no matter how many visible rows the user read.
+  const rows = await listNotifications(1000);
   const { notifications, unreadCount } = buildNotificationView(rows, enabledTypes);
 
   set(notificationsAtom, notifications);
-  set(unreadCountAtom, unreadCount);
+  // Badge = the full DB unread count from Rust (`get_unread_count`, the same
+  // value the tray popover shows — its SQL mirrors buildNotificationView's
+  // visibility filter). Counting unread within the 100-row list fetch above
+  // undercounts whenever older unread rows fall outside the window, which made
+  // the bell read "97" while the tray correctly read "99+". The derived
+  // in-window count is kept only as a fallback if the IPC fails.
+  set(
+    unreadCountAtom,
+    await fetchDbUnreadCount().catch(() => unreadCount),
+  );
 });
 
 // Clear the in-memory notification view immediately (no I/O). Used on account
@@ -118,7 +133,9 @@ export const clearNotificationsAtom = atom(null, (_get, set) => {
   set(unreadCountAtom, 0);
 });
 
-// write-only atoms for actions
+// write-only atoms for actions. Each toggle re-fetches the badge from Rust
+// (the DB count can cover rows outside the 100-row list window, so a local
+// ±1 is only the IPC-failure fallback, not the source of truth).
 export const markReadAtom = atom(null, async (get, set, id: number) => {
   await markRead(id);
   set(
@@ -126,6 +143,10 @@ export const markReadAtom = atom(null, async (get, set, id: number) => {
     get(notificationsAtom).map((n) =>
       n.id === id ? { ...n, unread: false } : n
     )
+  );
+  set(
+    unreadCountAtom,
+    await fetchDbUnreadCount().catch(() => Math.max(0, get(unreadCountAtom) - 1)),
   );
 });
 
@@ -136,6 +157,10 @@ export const markUnreadAtom = atom(null, async (get, set, id: number) => {
     get(notificationsAtom).map((n) =>
       n.id === id ? { ...n, unread: true } : n
     )
+  );
+  set(
+    unreadCountAtom,
+    await fetchDbUnreadCount().catch(() => get(unreadCountAtom) + 1),
   );
 });
 

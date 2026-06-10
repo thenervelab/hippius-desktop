@@ -43,7 +43,9 @@ const NotificationIconButton = React.forwardRef<
           )}
           data-testid="notification-unread-count"
         >
-          {count}
+          {/* Same "99+" cap as the tray popover badge so the two surfaces
+              always read identically for large counts. */}
+          {count > 99 ? "99+" : count}
         </span>
       )}
     </Button>

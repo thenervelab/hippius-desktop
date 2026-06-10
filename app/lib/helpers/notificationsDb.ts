@@ -133,13 +133,11 @@ export async function markAllRead() {
   }
 }
 
-export async function unreadCount(userAddress: string): Promise<number> {
-  try {
-    return await invoke<number>("get_unread_count", { userAddress });
-  } catch (error) {
-    console.error("Failed to get unread count:", error);
-    return 0;
-  }
+// Session-scoped in Rust; no caller address needed. Deliberately rethrows on
+// IPC failure (instead of returning 0) so callers can fall back to a derived
+// count rather than blanking the badge on a transient error.
+export async function unreadCount(): Promise<number> {
+  return await invoke<number>("get_unread_count");
 }
 
 export async function deleteNotification(id: number) {

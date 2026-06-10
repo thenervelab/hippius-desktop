@@ -7,9 +7,11 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 // frontend never needs an address to load notifications.
 const getEnabledNotificationTypes = vi.fn();
 const listNotifications = vi.fn();
+const unreadCount = vi.fn();
 vi.mock("@/app/lib/helpers/notificationsDb", () => ({
   getEnabledNotificationTypes: (...a: unknown[]) => getEnabledNotificationTypes(...a),
   listNotifications: (...a: unknown[]) => listNotifications(...a),
+  unreadCount: (...a: unknown[]) => unreadCount(...a),
   markRead: vi.fn(),
   markUnread: vi.fn(),
   markAllRead: vi.fn(),
@@ -72,6 +74,7 @@ describe("refreshNotificationsAtom", () => {
   beforeEach(() => {
     getEnabledNotificationTypes.mockReset();
     listNotifications.mockReset();
+    unreadCount.mockReset();
   });
 
   // Regression: the bell rendered "Nothing here" while the database held rows
@@ -81,12 +84,42 @@ describe("refreshNotificationsAtom", () => {
   it("loads notifications from Rust without any frontend address being set", async () => {
     getEnabledNotificationTypes.mockResolvedValue(["Files"]);
     listNotifications.mockResolvedValue([row({ id: 11, isUnread: true })]);
+    unreadCount.mockResolvedValue(1);
 
     const store = createStore();
     await store.set(refreshNotificationsAtom);
 
-    expect(listNotifications).toHaveBeenCalledWith(100);
+    expect(listNotifications).toHaveBeenCalledWith(1000);
     expect(store.get(notificationsAtom).map((n) => n.id)).toEqual([11]);
     expect(store.get(unreadCountAtom)).toBe(1);
+  });
+
+  // Regression: the badge counted unread rows within the 100-row list fetch,
+  // so with >100 unread in the DB the bell read lower than the tray popover
+  // (97 vs 99+). The badge must come from Rust's full-table get_unread_count.
+  it("uses the full DB unread count, not the tally of the fetched window", async () => {
+    getEnabledNotificationTypes.mockResolvedValue(["Files"]);
+    listNotifications.mockResolvedValue([row({ id: 11, isUnread: true })]);
+    unreadCount.mockResolvedValue(142);
+
+    const store = createStore();
+    await store.set(refreshNotificationsAtom);
+
+    expect(store.get(unreadCountAtom)).toBe(142);
+  });
+
+  it("falls back to the in-window unread tally when the count IPC fails", async () => {
+    getEnabledNotificationTypes.mockResolvedValue(["Files"]);
+    listNotifications.mockResolvedValue([
+      row({ id: 11, isUnread: true }),
+      row({ id: 12, isUnread: true }),
+      row({ id: 13, isUnread: false }),
+    ]);
+    unreadCount.mockRejectedValue(new Error("ipc down"));
+
+    const store = createStore();
+    await store.set(refreshNotificationsAtom);
+
+    expect(store.get(unreadCountAtom)).toBe(2);
   });
 });
