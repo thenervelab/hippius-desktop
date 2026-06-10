@@ -14,10 +14,15 @@ const SidebarFooter: React.FC<SidebarFooterProps> = ({ collapsed }) => {
   return (
     <div
       className={cn(
-        "flex flex-col w-full pt-2 transition-[padding] duration-300 ease-in-out overflow-hidden gap-2",
-        // 14px in collapsed view positions the 30px avatar visually in the
-        // middle of the 61px sidebar without any post-animation layout shift.
-        collapsed ? "px-4" : "px-6",
+        // shrink-0 so the footer keeps its natural height when the viewport is
+        // short (high zoom = small effective height): the nav area above is the
+        // flex-1 min-h-0 scroller and absorbs the shrink, so the avatar/version
+        // never get compressed/clipped.
+        "flex flex-col w-full pt-2 shrink-0 transition-[padding] duration-300 ease-in-out overflow-hidden gap-2",
+        // 14px in collapsed view fits the 30px avatar inside the 61px rail and
+        // keeps it visually centered. px-4 (16px) left only 29px of content
+        // width, so the avatar's edge was clipped by overflow-hidden.
+        collapsed ? "px-3.5" : "px-6",
       )}
     >
       <div
