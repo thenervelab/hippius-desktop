@@ -19,10 +19,11 @@ const SidebarFooter: React.FC<SidebarFooterProps> = ({ collapsed }) => {
         // flex-1 min-h-0 scroller and absorbs the shrink, so the avatar/version
         // never get compressed/clipped.
         "flex flex-col w-full pt-2 shrink-0 transition-[padding] duration-300 ease-in-out overflow-hidden gap-2",
-        // 14px in collapsed view fits the 30px avatar inside the 61px rail and
-        // keeps it visually centered. px-4 (16px) left only 29px of content
-        // width, so the avatar's edge was clipped by overflow-hidden.
-        collapsed ? "px-3.5" : "px-6",
+        // 12px in collapsed view leaves 37px of content width inside the 61px
+        // rail — room for the avatar button's 36px circular hover halo without
+        // overflow-hidden clipping it (px-3.5 left only 33px and cut its sides;
+        // the row's justify-center keeps the avatar centered regardless).
+        collapsed ? "px-3" : "px-6",
       )}
     >
       <div

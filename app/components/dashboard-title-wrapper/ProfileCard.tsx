@@ -208,7 +208,7 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
             type="button"
             aria-label="Open account menu"
             className={cn(
-              "group flex items-center gap-1.5 rounded-lg py-2 transition-colors duration-200 min-w-0 overflow-hidden",
+              "group flex items-center transition-colors duration-200",
               // Hover / keyboard-focus / open share one translucent surface and
               // there is NO focus ring (Radix returns focus here on close; a ring
               // showed the browser/brand blue, clipped to a bar by overflow-hidden).
@@ -217,9 +217,14 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
               "outline-none",
               "hover:bg-[rgba(0,0,0,0.06)] focus-visible:bg-[rgba(0,0,0,0.06)] data-[state=open]:bg-[rgba(0,0,0,0.06)]",
               "dark:hover:bg-white/10 dark:focus-visible:bg-white/10 dark:data-[state=open]:bg-white/10",
-              // px-0 collapsed: the button is exactly the 30px avatar so it fits
-              // the ~33px rail content (px-1 made it 38px → overflow-clipped).
-              collapsed ? "px-0" : "flex-1 pr-1",
+              // Collapsed: a fixed 36px circle around the 30px avatar, so the
+              // hover surface is a concentric halo instead of the expanded
+              // state's rounded-lg pill (whose py-2 made it 46px tall — taller
+              // than the 44px row — so overflow-hidden cut its top/bottom flat).
+              // rem-sized like the rail, so it scales 1:1 at every zoom level.
+              collapsed
+                ? "size-9 shrink-0 justify-center rounded-full"
+                : "flex-1 gap-1.5 rounded-lg py-2 pr-1 min-w-0 overflow-hidden",
             )}
           >
             {avatarNode}
