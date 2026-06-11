@@ -178,7 +178,7 @@ fn retry_delay(attempt: usize, rate_limited: bool) -> Duration {
 /// Called while holding `connect_guard` — no other task is connecting.
 async fn connect_and_cache(app_state: &crate::app_state::AppState) -> crate::error::Result<Arc<OnlineClient<PolkadotConfig>>> {
     let pool = app_state.pool()?;
-    let wss_endpoint = get_current_wss_endpoint(pool).await.unwrap_or_else(|_| WSS_ENDPOINT.to_string());
+    let wss_endpoint = validated_endpoint_or_default(get_current_wss_endpoint(pool).await.ok());
 
     let mut attempt = 0;
     loop {
@@ -258,6 +258,32 @@ pub async fn get_current_wss_endpoint(pool: &SqlitePool) -> crate::error::Result
             Ok(endpoint)
         }
         None => Err(crate::error::AppError::Other("No WSS endpoint found in database".into())),
+    }
+}
+
+/// Resolve the endpoint to actually connect to: the stored row if it passes
+/// the cleartext guard, else the built-in default.
+///
+/// The scheme check must run on EVERY connect, not only when an endpoint is
+/// saved — a `ws://remote` row persisted before validation existed (or edited
+/// into the DB directly) would otherwise carry chain traffic in cleartext
+/// forever. The genesis pin doesn't close that hole: a transparent MITM
+/// proxying the real node passes the genesis check while still feeding false
+/// balances (audit R-11).
+fn validated_endpoint_or_default(stored: Option<String>) -> String {
+    let Some(endpoint) = stored else {
+        return WSS_ENDPOINT.to_string();
+    };
+    match validate_endpoint_scheme(&endpoint) {
+        Ok(()) => endpoint,
+        Err(e) => {
+            warn!(
+                endpoint = %endpoint,
+                error = %e,
+                "Stored RPC endpoint failed the transport guard; connecting to the default endpoint instead",
+            );
+            WSS_ENDPOINT.to_string()
+        }
     }
 }
 
@@ -412,6 +438,21 @@ mod tests {
         assert_eq!(endpoint_host("localhost"), "localhost");
         assert_eq!(endpoint_host("user@host.example:80/x"), "host.example");
         assert_eq!(endpoint_host("rpc.hippius.network"), "rpc.hippius.network");
+    }
+
+    /// The transport guard must apply to the endpoint LOADED from the DB on
+    /// every connect, not only at save time — a pre-validation `ws://remote`
+    /// row must not keep connecting in cleartext (R-11, review F3).
+    #[test]
+    fn stored_endpoint_is_validated_on_connect() {
+        // Valid stored endpoints are used as-is.
+        assert_eq!(validated_endpoint_or_default(Some("wss://rpc.hippius.network".into())), "wss://rpc.hippius.network");
+        assert_eq!(validated_endpoint_or_default(Some("ws://127.0.0.1:9944".into())), "ws://127.0.0.1:9944");
+        // A cleartext remote row falls back to the default instead of connecting.
+        assert_eq!(validated_endpoint_or_default(Some("ws://rpc.hippius.network:443".into())), WSS_ENDPOINT);
+        assert_eq!(validated_endpoint_or_default(Some("http://rpc.hippius.network".into())), WSS_ENDPOINT);
+        // No stored row at all → default.
+        assert_eq!(validated_endpoint_or_default(None), WSS_ENDPOINT);
     }
 
     #[test]
