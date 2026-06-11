@@ -148,6 +148,15 @@ jobs:
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
+      # rust-toolchain.toml pins the build to a specific toolchain, which
+      # rustup auto-installs on first use with only the host (aarch64)
+      # target — the step above only adds targets to *stable*. Run
+      # `rustup target add` from the repo root so it resolves the pinned
+      # toolchain and the universal build finds both Apple slices.
+      - name: Add Apple targets to the pinned toolchain
+        shell: bash
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
