@@ -97,10 +97,19 @@ pub async fn clear_api_token(pool: &SqlitePool, account_id: &str) -> crate::erro
         debug!(error = %e, "keychain token delete during clear_api_token was a no-op / unavailable");
     }
 
-    sqlx::query("UPDATE objectstore_auth_scoped SET temp_auth_key = NULL, updated_at = CURRENT_TIMESTAMP WHERE owner = ?")
-        .bind(account_id)
-        .execute(pool)
-        .await?;
+    // Also NULL the legacy migration-era S3 credential columns: no live code
+    // reads them, but rows written by old installs would otherwise keep real
+    // S3 credentials on disk after logout — the same residue class as the
+    // token itself (R-05).
+    sqlx::query(
+        "UPDATE objectstore_auth_scoped \
+         SET temp_auth_key = NULL, master_access_key_id = NULL, master_secret = NULL, \
+             updated_at = CURRENT_TIMESTAMP \
+         WHERE owner = ?",
+    )
+    .bind(account_id)
+    .execute(pool)
+    .await?;
 
     sqlx::query("DELETE FROM objectstore_auth WHERE id = ?")
         .bind(AUTH_ROW_ID)
@@ -342,6 +351,32 @@ mod tests {
             None,
             "after clear, no token may resolve from any fallback store"
         );
+    }
+
+    /// Logout must also wipe the migration-era S3 credential columns in the
+    /// scoped row — no live code reads them, but rows from old installs would
+    /// otherwise keep real S3 credentials on disk after logout (R-05 residue).
+    #[tokio::test]
+    async fn clear_api_token_wipes_legacy_s3_credentials() {
+        let pool = setup_db().await;
+        save_api_token(&pool, ACCOUNT_A, "token").await.unwrap();
+        sqlx::query("UPDATE objectstore_auth_scoped SET master_access_key_id = 'AKIA-old', master_secret = 's3cret' WHERE owner = ?")
+            .bind(ACCOUNT_A)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        clear_api_token(&pool, ACCOUNT_A).await.unwrap();
+
+        let row = sqlx::query("SELECT temp_auth_key, master_access_key_id, master_secret FROM objectstore_auth_scoped WHERE owner = ?")
+            .bind(ACCOUNT_A)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        for col in ["temp_auth_key", "master_access_key_id", "master_secret"] {
+            let v: Option<String> = row.get(col);
+            assert_eq!(v, None, "{col} must be NULL after clear_api_token");
+        }
     }
 
     /// `clear_api_token` also removes the legacy single-row `objectstore_auth`

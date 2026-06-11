@@ -52,7 +52,8 @@ pub(crate) async fn get_server_url(pool: &SqlitePool, account_id: &str) -> Resul
 ///
 /// `mnemonic` is the user's session BIP-39 mnemonic, needed by
 /// `get_drive_password` to decrypt the `hcfs_config.drive_password` row
-/// when its `encryption_version = 1`. Without this, the raw base64
+/// when its `encryption_version` is 1 or 2 (v2 adds the account-id AAD,
+/// audit R-33). Without this, the raw base64
 /// ciphertext from the column would be passed to `recover_mnemonic`
 /// as if it were the plaintext password — which fails with
 /// "Decryption failed - wrong password?" and surfaces as "Failed to load

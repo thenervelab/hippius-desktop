@@ -213,6 +213,16 @@ pub async fn get_mnemonic_for_account(app_state: &crate::app_state::AppState, ac
 /// and the W-02 unguarded consumers downstream). Reject any candidate that
 /// doesn't reproduce the account's own address so the chain falls through to
 /// the safe `MasterMnemonicUnrecoverable` re-auth path.
+///
+/// DECIDED TRADE-OFF (review 2026-06-11): this check assumes the account's
+/// address derives from the master. For OAuth accounts the address comes
+/// from the server while the sync master is locally minted, so Stage 3/4
+/// recovery is categorically unavailable to them — including the narrow
+/// legacy case (v0 plaintext drive_password + verbatim pre-derivation folder
+/// file) the old unguarded code happened to recover correctly. Accepted:
+/// that population is tiny, the server-blob Unlock flow remains their
+/// recovery path, and relaxing the guard re-admits installing a folder
+/// mnemonic as master. Do not "fix" this by skipping the check for OAuth.
 fn candidate_is_account_master(candidate: &str, account_id: &str) -> bool {
     match crate::auth::service::derive_keys(candidate) {
         Ok((_pair, substrate_address, _eth_signer, _eth_address)) => substrate_address == account_id,
@@ -924,6 +934,9 @@ mod tests {
         );
 
         // A different account_id is rejected even for the genuine master.
+        // This is also the OAuth shape (address NOT derived from the local
+        // master): Stage 3/4 recovery is deliberately unavailable there —
+        // see the decided trade-off on `candidate_is_account_master`.
         assert!(!candidate_is_account_master(master, "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"));
     }
 }

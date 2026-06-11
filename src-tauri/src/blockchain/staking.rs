@@ -6,6 +6,20 @@ use crate::blockchain::runtime::custom_runtime;
 use crate::blockchain::types::TxOutcome;
 use tracing::info;
 
+/// Parse and validate a stake/unstake amount BEFORE any signing work.
+/// Mirrors `transfers::validate_transfer_inputs` (audit R-29): a zero
+/// amount would be signed, submitted, and rejected on-chain — consuming
+/// the fee for a call that can never take effect.
+fn validate_stake_amount(amount: &str) -> Result<u128, crate::error::AppError> {
+    let amount: u128 = amount
+        .parse()
+        .map_err(|e| crate::error::AppError::Validation(format!("Invalid amount: {e}")))?;
+    if amount == 0 {
+        return Err(crate::error::AppError::Validation("Amount must be greater than zero".into()));
+    }
+    Ok(amount)
+}
+
 /// Bond tokens for staking. If already bonded, calls `bond_extra` instead.
 /// Requires the active local wallet's password to derive a signing keypair.
 #[tauri::command]
@@ -14,12 +28,9 @@ pub async fn stake_bond(
     amount: String,
     password: String,
 ) -> Result<TxOutcome, crate::error::AppError> {
+    let amount = validate_stake_amount(&amount)?;
     let (signer, address) = get_signer_and_address(&state, &password).await?;
     let client = get_substrate_client(&state).await?;
-
-    let amount: u128 = amount
-        .parse()
-        .map_err(|e| crate::error::AppError::Validation(format!("Invalid amount: {e}")))?;
 
     let account_id = address
         .parse::<subxt::utils::AccountId32>()
@@ -60,12 +71,9 @@ pub async fn stake_unbond(
     amount: String,
     password: String,
 ) -> Result<TxOutcome, crate::error::AppError> {
+    let amount = validate_stake_amount(&amount)?;
     let signer = get_signer(&state, &password).await?;
     let client = get_substrate_client(&state).await?;
-
-    let amount: u128 = amount
-        .parse()
-        .map_err(|e| crate::error::AppError::Validation(format!("Invalid amount: {e}")))?;
 
     info!("Submitting unbond transaction...");
     let tx = custom_runtime::tx().staking().unbond(amount);
@@ -140,4 +148,28 @@ pub async fn stake_claim_rewards(state: tauri::State<'_, crate::app_state::AppSt
     let outcome = sign_submit_track(&client, &tx, &signer).await?;
     info!("Payout outcome: {outcome:?}");
     Ok(outcome)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_stake_amount;
+
+    #[test]
+    fn validate_stake_amount_rejects_zero() {
+        assert!(validate_stake_amount("0").is_err());
+    }
+
+    #[test]
+    fn validate_stake_amount_rejects_non_numeric() {
+        assert!(validate_stake_amount("1.5").is_err());
+        assert!(validate_stake_amount("abc").is_err());
+        assert!(validate_stake_amount("").is_err());
+        assert!(validate_stake_amount("-1").is_err());
+    }
+
+    #[test]
+    fn validate_stake_amount_accepts_positive_planck() {
+        assert_eq!(validate_stake_amount("1").unwrap(), 1);
+        assert_eq!(validate_stake_amount("1000000000000000000").unwrap(), 1_000_000_000_000_000_000);
+    }
 }

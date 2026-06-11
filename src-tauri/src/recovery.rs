@@ -530,7 +530,11 @@ async fn validate_master_against_existing_folders(pool: &SqlitePool, account_id:
         // `get_drive_password`, which decrypts per the version.
         Some((_, 1 | 2)) => match crate::sync::config::get_drive_password(pool, account_id, Some(candidate_master)).await {
             Ok(pw) => pw,
-            Err(_) => {
+            // Only an AEAD/key failure (`Crypto`) means "wrong master". A
+            // transient DB/pool error must propagate truthfully — labelling
+            // it "does not match" sends the user chasing a mnemonic problem
+            // they don't have.
+            Err(AppError::Crypto(_)) => {
                 return Err(AppError::Validation(
                     "Cannot seal recovery blob: the provided master mnemonic does not match this \
                      account's existing encrypted drive password. Unlock with your original recovery \
@@ -538,6 +542,7 @@ async fn validate_master_against_existing_folders(pool: &SqlitePool, account_id:
                         .into(),
                 ));
             }
+            Err(other) => return Err(other),
         },
         Some((_, v)) => return Err(AppError::Other(format!("unknown drive password encryption_version: {v}"))),
     };

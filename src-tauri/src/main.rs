@@ -735,10 +735,17 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                 // keychain-less hosts), and logs. Tighten regardless of the
                 // inherited umask so a second local user can't read them, and
                 // re-tighten existing installs on launch (audit R-17).
+                //
+                // Warn-only, like the DB-file 0600 chmod in `open_db_pool`: a
+                // missing directory is fatal (no dir ⇒ no DB), but a hardening
+                // chmod that fails on a no-POSIX-perms $HOME (network/FAT
+                // mounts) must not brick launch.
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::PermissionsExt;
-                    std::fs::set_permissions(&db_dir_for_mkdir, std::fs::Permissions::from_mode(0o700))?;
+                    if let Err(e) = std::fs::set_permissions(&db_dir_for_mkdir, std::fs::Permissions::from_mode(0o700)) {
+                        warn!(dir = %db_dir_for_mkdir.display(), error = %e, "failed to chmod 0700 on ~/.hippius (continuing)");
+                    }
                 }
                 Ok(())
             })
