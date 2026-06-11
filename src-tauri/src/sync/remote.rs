@@ -227,11 +227,13 @@ pub async fn cache_remote_file(
     // the requested account must be the active session account.
     let account_id = state.require_session_account(&account_id)?;
 
-    // Must live under the asset-protocol scope (`$HOME/.hippius/**` in
-    // tauri.conf.json) so the webview can load the decrypted file via
-    // `convertFileSrc`. The OS cache dir is OUTSIDE that scope, so a preview
-    // pointed there is blocked by the asset protocol even though the download
-    // + decrypt succeeded — which is why download worked but preview didn't.
+    // Must live under the asset-protocol scope, which is deliberately ONLY
+    // `$HOME/.hippius/preview-cache/**` (tauri.conf.json) — scoping all of
+    // `~/.hippius` let a compromised renderer fetch `master_enc_mnemonic.json`
+    // and the SQLite DB through `http://asset.localhost` (R-03). The OS cache
+    // dir is OUTSIDE the scope, so a preview pointed there is blocked by the
+    // asset protocol even though the download + decrypt succeeded — which is
+    // why download worked but preview didn't.
     let cache_root = dirs::home_dir()
         .ok_or_else(|| AppError::Other("could not determine home directory".into()))?
         .join(".hippius")
