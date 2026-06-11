@@ -88,7 +88,7 @@ export default function UpdateChecker({ children }: UpdateCheckerProps) {
   return (
     <div className="flex items-center justify-center min-h-screen bg-grey-100">
       <div className="text-center">
-        <PageLoader />
+        <PageLoader ringFill="once" />
         <p className="mt-4 text-grey-50 text-sm">Loading...</p>
       </div>
     </div>

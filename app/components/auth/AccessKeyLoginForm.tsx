@@ -70,7 +70,7 @@ export function AccessKeyLoginForm({ onBack }: AccessKeyLoginFormProps) {
   return (
     <div className="opacity-0 animate-fade-in-0.5 w-full flex justify-center">
       <div
-        className="w-full max-w-[495px] bg-grey-light-100 dark:bg-black-500 rounded-[8px] p-[min(1rem,16px)] flex flex-col gap-[min(1.625rem,26px)] items-center overflow-hidden"
+        className="w-full max-w-[495px] bg-[#fffdff]  dark:bg-[#161416] rounded-[8px] p-[min(1rem,16px)] flex flex-col gap-[min(1.625rem,26px)] items-center overflow-hidden"
         style={{
           boxShadow:
             "0px 14px 31px 0px rgba(0,0,0,0.06), 0px 56px 56px 0px rgba(0,0,0,0.05), 0px 126px 76px 0px rgba(0,0,0,0.03), 0px 224px 90px 0px rgba(0,0,0,0.01)",
@@ -204,4 +204,3 @@ export function AccessKeyLoginForm({ onBack }: AccessKeyLoginFormProps) {
     </div>
   );
 }
-

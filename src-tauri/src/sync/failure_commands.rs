@@ -18,9 +18,16 @@ pub async fn sp_skip_file(label: String, path: String, state: tauri::State<'_, c
         let guard = state.sync.drives.lock().await;
         guard.get(&label).map(|slot| slot.manager.clone())
     };
+    // The exclude pattern is the actual sync-time enforcement of a skip (the
+    // in-memory session-skip set is consulted only on teardown, not during a
+    // sync cycle), so a failed write must surface — otherwise the FE reports
+    // "skipped" while the file resurfaces next cycle. Same bug class the
+    // `sp_exclude_file` comment documents. Missing drive stays tolerant: a skip
+    // is a session-scoped best-effort op, unlike permanent exclude.
     if let Some(arc) = drive_arc {
         let m = arc.lock().await;
-        let _ = m.add_exclude_pattern(&path);
+        m.add_exclude_pattern(&path)
+            .map_err(|e| crate::error::AppError::Hcfs(format!("add_exclude_pattern failed: {e}")))?;
     }
 
     state.sync.emit_snapshot(true);
@@ -40,9 +47,19 @@ pub async fn sp_exclude_file(label: String, path: String, state: tauri::State<'_
         let guard = state.sync.drives.lock().await;
         guard.get(&label).map(|slot| slot.manager.clone())
     };
-    if let Some(arc) = drive_arc {
+    // Fail loudly when the drive isn't loaded: the previous `if let Some` made
+    // "Exclude Permanently" silently return Ok when the drive had been stopped
+    // between the failure event and the click, so the FE reported success but no
+    // exclude pattern was written and the file resurfaced on the next sync.
+    // (`sp_skip_file` differs: it records a session-skip regardless, so its
+    // drive-side write is genuinely supplementary.)
+    let Some(arc) = drive_arc else {
+        return Err(crate::error::AppError::NotReady(crate::error::NotReadyKind::DriveNotInitialized));
+    };
+    {
         let m = arc.lock().await;
-        let _ = m.add_exclude_pattern(&path);
+        m.add_exclude_pattern(&path)
+            .map_err(|e| crate::error::AppError::Hcfs(format!("add_exclude_pattern failed: {e}")))?;
     }
 
     state.sync.emit_snapshot(true);
@@ -63,11 +80,113 @@ pub async fn sp_retry_file(label: String, path: String, state: tauri::State<'_, 
         let guard = state.sync.drives.lock().await;
         guard.get(&label).map(|slot| slot.manager.clone())
     };
+    // A failed removal leaves the file excluded after the user clicked Retry,
+    // so it would never re-sync with no signal — propagate it. Missing drive
+    // stays tolerant (the failure counter / session-skip were already cleared).
+    if let Some(arc) = drive_arc {
+        let m = arc.lock().await;
+        m.remove_exclude_pattern(&path)
+            .map_err(|e| crate::error::AppError::Hcfs(format!("remove_exclude_pattern failed: {e}")))?;
+    }
+
+    state.sync.emit_snapshot(true);
+    Ok(())
+}
+
+/// Read every persisted file-failure record for a drive so the FE can show
+/// *why* each failed file failed (and offer retry) in any listing view.
+///
+/// Scoped to the current account via the hashed `owner` key. Returns an empty
+/// vec when logged out or when the drive has no recorded failures — a missing
+/// account is a normal "nothing to show" state, not an error.
+///
+/// # Errors
+/// Returns an error only if the database read itself fails.
+#[tauri::command]
+pub async fn get_drive_failures(
+    label: String,
+    state: tauri::State<'_, crate::app_state::AppState>,
+) -> Result<Vec<crate::sync::failure_repo::FileFailureRecord>> {
+    let Ok(account_id) = state.current_account_id() else {
+        return Ok(Vec::new());
+    };
+    let owner = crate::auth::account_key::account_key(&account_id);
+    let pool = state.pool()?;
+    crate::sync::failure_repo::list_failures_for_label(pool, &owner, &label).await
+}
+
+/// Retry a single failed file: clear its durable + in-memory failure state,
+/// drop any session-skip / exclude pattern, and trigger a sync so it is
+/// re-attempted now rather than waiting for the next cycle.
+///
+/// This is the "Retry" action behind a failed-file badge. It is a superset of
+/// [`sp_retry_file`] that also deletes the persisted `sync_file_failures` row so
+/// the reason/badge clears immediately.
+///
+/// # Errors
+/// Returns an error if the database write fails.
+#[tauri::command]
+pub async fn retry_file_failure(label: String, path: String, state: tauri::State<'_, crate::app_state::AppState>) -> Result<()> {
+    if let Ok(account_id) = state.current_account_id() {
+        let owner = crate::auth::account_key::account_key(&account_id);
+        let pool = state.pool()?;
+        crate::sync::failure_repo::clear_failure(pool, &owner, &label, &path).await?;
+    }
+
+    // Mirror sp_retry_file's in-memory reset + exclude removal.
+    state.file_failures.clear_failure(&label, &path);
+    state.file_failures.unskip_file(&label, &path);
+    let drive_arc = {
+        let guard = state.sync.drives.lock().await;
+        guard.get(&label).map(|slot| slot.manager.clone())
+    };
     if let Some(arc) = drive_arc {
         let m = arc.lock().await;
         let _ = m.remove_exclude_pattern(&path);
     }
 
+    hcfs_client::engine::runner::trigger_sync(&state.sync).await;
+    state.sync.emit_snapshot(true);
+    Ok(())
+}
+
+/// Retry every failed file on a drive — e.g. after a credit top-up fixes a
+/// batch of `InsufficientBalance` failures at once. Clears all durable +
+/// in-memory failures for the drive, removes their exclude patterns, and
+/// triggers one sync.
+///
+/// # Errors
+/// Returns an error if the database read/write fails.
+#[tauri::command]
+pub async fn retry_all_failures(label: String, state: tauri::State<'_, crate::app_state::AppState>) -> Result<()> {
+    // Snapshot the persisted failures (we need their paths to drop excludes),
+    // then delete them durably — both scoped to the current account.
+    let records = if let Ok(account_id) = state.current_account_id() {
+        let owner = crate::auth::account_key::account_key(&account_id);
+        let pool = state.pool()?;
+        let recs = crate::sync::failure_repo::list_failures_for_label(pool, &owner, &label).await?;
+        crate::sync::failure_repo::clear_failures_for_label(pool, &owner, &label).await?;
+        recs
+    } else {
+        Vec::new()
+    };
+
+    state.file_failures.clear_all_for_label(&label);
+    for rec in &records {
+        state.file_failures.unskip_file(&label, &rec.relative_path);
+    }
+    let drive_arc = {
+        let guard = state.sync.drives.lock().await;
+        guard.get(&label).map(|slot| slot.manager.clone())
+    };
+    if let Some(arc) = drive_arc {
+        let m = arc.lock().await;
+        for rec in &records {
+            let _ = m.remove_exclude_pattern(&rec.relative_path);
+        }
+    }
+
+    hcfs_client::engine::runner::trigger_sync(&state.sync).await;
     state.sync.emit_snapshot(true);
     Ok(())
 }

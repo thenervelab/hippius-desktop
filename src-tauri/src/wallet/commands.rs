@@ -19,12 +19,11 @@ use crate::wallet::crypto;
 use crate::wallet::repo::{self, LocalWallet, PublicLocalWallet};
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
 use serde::Serialize;
-use subxt_signer::{
-    bip39::Mnemonic as SubxtMnemonic,
-    sr25519::Keypair as SrKeypair,
-};
+use sqlx::SqlitePool;
+use subxt_signer::{bip39::Mnemonic as SubxtMnemonic, sr25519::Keypair as SrKeypair};
 use tauri::State;
 use tracing::info;
+use zeroize::Zeroizing;
 
 /// Resolve the active account's owner key, or return a friendly error the
 /// FE can show when no one is logged in.
@@ -47,6 +46,116 @@ fn derive_address(mnemonic: &str) -> Result<String, AppError> {
     Ok(pair.public_key().to_account_id().to_string())
 }
 
+/// Reject a backup whose stored `address` does not actually correspond to its
+/// `encrypted_mnemonic`.
+///
+/// Password verification alone (`verify_password`) only proves the typed
+/// password matches the backup's hash for the backup's address — it does not
+/// prove the ciphertext decrypts to a mnemonic that *derives* that address. A
+/// tampered or malformed backup could therefore persist a row whose advertised
+/// `address` differs from its key material, so later signing
+/// (`get_signer_and_address` / `local_wallet_sign`) would act on a different
+/// address than the UI displays. The decrypt uses `address` as the AEAD salt,
+/// so a consistent backup round-trips; we then derive the address from the
+/// plaintext and require it to match. Costs one AEAD decrypt + key derivation,
+/// at import time only.
+fn verify_backup_address_binding(encrypted_mnemonic: &str, password: &str, address: &str) -> Result<(), AppError> {
+    let (mnemonic, _legacy) = crypto::decrypt_mnemonic(encrypted_mnemonic, password, address)?;
+    if derive_address(&mnemonic)? != address {
+        return Err(AppError::Validation("Backup address does not match its mnemonic".into()));
+    }
+    Ok(())
+}
+
+/// Re-encrypt a wallet's mnemonic under Argon2id and re-hash its password when
+/// the stored row is still in a legacy format (HKDF ciphertext or hex-SHA256
+/// verifier hash).
+///
+/// Best-effort: a re-encrypt or DB-write failure is logged and swallowed so it
+/// never blocks the unlock/sign the caller is performing — the next successful
+/// unlock retries. Reuses the caller's already-decrypted `plain` so there is no
+/// second AEAD pass, and preserves the address-as-salt invariant (the same
+/// address feeds both the new ciphertext and the new verifier hash) so later
+/// unlocks verify normally. No-op when the row is already on the current format.
+///
+/// Centralising this here keeps the two unlock paths
+/// (`local_wallet_get_decrypted_mnemonic`, `local_wallet_sign`) from drifting
+/// — both must migrate identically, and a divergence in a security-sensitive
+/// re-encrypt would be easy to miss across two copies.
+async fn maybe_migrate_secrets(
+    pool: &SqlitePool,
+    owner: &str,
+    wallet: &LocalWallet,
+    password: &str,
+    plain: &str,
+    ciphertext_was_legacy: bool,
+) {
+    if !(ciphertext_was_legacy || crypto::password_hash_is_legacy(&wallet.password_hash)) {
+        return;
+    }
+    let new_ciphertext = match crypto::encrypt_mnemonic(plain, password, &wallet.address) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(wallet = %wallet.address, error = %e, "Failed to re-encrypt legacy wallet secrets; will retry on next unlock");
+            return;
+        }
+    };
+    let new_hash = crypto::password_hash(password, &wallet.address);
+    match repo::update_secrets(pool, owner, wallet.id, &new_ciphertext, &new_hash).await {
+        Ok(()) => tracing::info!(wallet = %wallet.address, "Migrated wallet secrets to Argon2id"),
+        Err(e) => tracing::warn!(wallet = %wallet.address, error = %e, "Failed to persist migrated wallet secrets; will retry on next unlock"),
+    }
+}
+
+/// Minimum local-wallet password length. Mirrors the create screen's `MIN_LEN`
+/// (`app/components/page-sections/wallet/local-wallet/CreatePasswordScreen.tsx`).
+const MIN_WALLET_PASSWORD_LEN: usize = 8;
+
+/// Enforce the create-time password policy: a length floor plus at least one
+/// each of lowercase, uppercase, digit, and non-alphanumeric character.
+///
+/// This deliberately mirrors the frontend `CreatePasswordScreen` rules so the
+/// backend gate is **authoritative** — a direct IPC call (bypassing the UI)
+/// cannot set a weaker password than the create screen permits.
+///
+/// Applied ONLY at wallet creation. The import paths intentionally skip it:
+/// they accept an existing backup's password verbatim, and rejecting a wallet
+/// the user already owns because its password predates this policy would lock
+/// them out of their own funds. Character classes are matched against ASCII
+/// (`[a-z]`/`[A-Z]`/`[0-9]`/non-alnum) to line up exactly with the FE regexes.
+///
+/// # Errors
+///
+/// Returns [`AppError::Validation`] naming what the password is missing, so the
+/// FE can surface the same guidance it shows inline.
+fn validate_new_password(password: &str) -> Result<(), AppError> {
+    if password.chars().count() < MIN_WALLET_PASSWORD_LEN {
+        return Err(AppError::Validation(format!(
+            "Password must be at least {MIN_WALLET_PASSWORD_LEN} characters"
+        )));
+    }
+    let mut missing: Vec<&str> = Vec::new();
+    if !password.chars().any(|c| c.is_ascii_lowercase()) {
+        missing.push("a lowercase letter");
+    }
+    if !password.chars().any(|c| c.is_ascii_uppercase()) {
+        missing.push("an uppercase letter");
+    }
+    if !password.chars().any(|c| c.is_ascii_digit()) {
+        missing.push("a number");
+    }
+    if !password.chars().any(|c| !c.is_ascii_alphanumeric()) {
+        missing.push("a special character");
+    }
+    if !missing.is_empty() {
+        return Err(AppError::Validation(format!(
+            "Password must contain {}",
+            missing.join(", ")
+        )));
+    }
+    Ok(())
+}
+
 /// Generate a fresh 12-word mnemonic. The mnemonic is returned to the FE
 /// only so the user can write it down during the create flow — it must be
 /// immediately re-submitted via `create` (along with the password) to be
@@ -61,6 +170,9 @@ pub fn local_wallet_generate_mnemonic() -> Result<String, AppError> {
 /// the "Continue" button on the import screen.
 #[tauri::command]
 pub fn local_wallet_validate_mnemonic(mnemonic: String) -> bool {
+    // Scrub the candidate phrase from the heap after the check — it's key
+    // material even when it turns out to be invalid.
+    let mnemonic = Zeroizing::new(mnemonic);
     bip39::Mnemonic::parse_normalized(&mnemonic).is_ok()
 }
 
@@ -68,6 +180,7 @@ pub fn local_wallet_validate_mnemonic(mnemonic: String) -> bool {
 /// Surfaces address previews on the import / create-confirm screens.
 #[tauri::command]
 pub fn local_wallet_derive_address(mnemonic: String) -> Result<String, AppError> {
+    let mnemonic = Zeroizing::new(mnemonic);
     derive_address(&mnemonic)
 }
 
@@ -101,15 +214,24 @@ pub async fn local_wallet_get_active(state: State<'_, AppState>) -> Result<Optio
 }
 
 /// Create a new wallet from a mnemonic. The mnemonic is encrypted under
-/// `password` at rest and a SHA-256(password || address) hash is stored
-/// alongside for verification on unlock.
+/// `password` at rest (Argon2id-derived ChaCha20-Poly1305) and an Argon2id
+/// password-verifier hash is stored alongside for verification on unlock.
 ///
 /// The mnemonic argument may be either freshly generated by
 /// `local_wallet_generate_mnemonic` or pasted by the user during import —
 /// the two paths are identical from Rust's perspective. The row is scoped
 /// to whichever account is currently logged in.
 #[tauri::command]
-pub async fn local_wallet_create(state: State<'_, AppState>, name: String, mnemonic: String, password: String) -> Result<PublicLocalWallet, AppError> {
+pub async fn local_wallet_create(
+    state: State<'_, AppState>,
+    name: String,
+    mnemonic: String,
+    password: String,
+) -> Result<PublicLocalWallet, AppError> {
+    // Wrap the secrets so their heap buffers are wiped on drop, however this
+    // function returns.
+    let mnemonic = Zeroizing::new(mnemonic);
+    let password = Zeroizing::new(password);
     if bip39::Mnemonic::parse_normalized(&mnemonic).is_err() {
         return Err(AppError::Other("Invalid mnemonic".into()));
     }
@@ -119,6 +241,9 @@ pub async fn local_wallet_create(state: State<'_, AppState>, name: String, mnemo
     if password.is_empty() {
         return Err(AppError::Other("Password is required".into()));
     }
+    // Enforce the password policy server-side so the create gate is
+    // authoritative even for direct IPC calls (see `validate_new_password`).
+    validate_new_password(&password)?;
 
     let owner = require_owner(&state)?;
     let address = derive_address(&mnemonic)?;
@@ -179,12 +304,16 @@ pub async fn local_wallet_delete(state: State<'_, AppState>, id: i64) -> Result<
 /// regular wrong-password retry loop.
 #[tauri::command]
 pub async fn local_wallet_verify_password(state: State<'_, AppState>, id: i64, password: String) -> Result<bool, AppError> {
+    let password = Zeroizing::new(password);
     let owner = require_owner(&state)?;
     let pool = state.pool()?;
-    let wallet = match repo::get_by_id(pool, &owner, id).await? {
-        Some(w) => w,
-        None => return Err(AppError::Other(format!("Wallet {id} not found"))),
+    let Some(wallet) = repo::get_by_id(pool, &owner, id).await? else {
+        return Err(AppError::Other(format!("Wallet {id} not found")));
     };
+    // Serialize attempts on this wallet so a concurrent IPC burst can't all
+    // clear `check` before any `record_failure` runs and thereby outrun the
+    // lockout threshold. Held to fn end — covers check → verify → record.
+    let _attempt_gate = state.wallet_rate_limit.attempt_gate(id).await;
     if let Err(rl) = state.wallet_rate_limit.check(id) {
         return Err(AppError::Other(rl.message()));
     }
@@ -210,12 +339,16 @@ pub async fn local_wallet_verify_password(state: State<'_, AppState>, id: i64, p
 /// the row in the new format.
 #[tauri::command]
 pub async fn local_wallet_get_decrypted_mnemonic(state: State<'_, AppState>, id: i64, password: String) -> Result<String, AppError> {
+    let password = Zeroizing::new(password);
     let owner = require_owner(&state)?;
     let pool = state.pool()?;
-    let wallet = match repo::get_by_id(pool, &owner, id).await? {
-        Some(w) => w,
-        None => return Err(AppError::Other(format!("Wallet {id} not found"))),
+    let Some(wallet) = repo::get_by_id(pool, &owner, id).await? else {
+        return Err(AppError::Other(format!("Wallet {id} not found")));
     };
+    // Serialize attempts on this wallet so a concurrent IPC burst can't all
+    // clear `check` before any `record_failure` runs and thereby outrun the
+    // lockout threshold. Held to fn end — covers check → verify → record.
+    let _attempt_gate = state.wallet_rate_limit.attempt_gate(id).await;
     // Rate-limit BEFORE the verifier so a locked-out attacker can't
     // measure Argon2id timing to distinguish "wrong password" from
     // "lockout" — both surface as a plain error string now.
@@ -228,35 +361,11 @@ pub async fn local_wallet_get_decrypted_mnemonic(state: State<'_, AppState>, id:
         return Err(AppError::Other("Incorrect password".into()));
     }
     state.wallet_rate_limit.record_success(id);
-    let (plain, ciphertext_was_legacy) =
-        crypto::decrypt_mnemonic(&wallet.encrypted_mnemonic, &password, &wallet.address)?;
+    let (plain, ciphertext_was_legacy) = crypto::decrypt_mnemonic(&wallet.encrypted_mnemonic, &password, &wallet.address)?;
 
-    let hash_was_legacy = crypto::password_hash_is_legacy(&wallet.password_hash);
-    if ciphertext_was_legacy || hash_was_legacy {
-        // Re-encrypt under Argon2id + re-hash the password. The
-        // address-as-salt invariant is preserved (same address goes in
-        // both), so subsequent unlocks just verify normally.
-        let new_ciphertext =
-            crypto::encrypt_mnemonic(plain.as_str(), &password, &wallet.address)?;
-        let new_hash = crypto::password_hash(&password, &wallet.address);
-        if let Err(e) =
-            repo::update_secrets(pool, &owner, wallet.id, &new_ciphertext, &new_hash).await
-        {
-            // Failing to migrate must not block the unlock the user
-            // asked for — they get the mnemonic, the row stays legacy,
-            // and we'll try again on the next unlock.
-            tracing::warn!(
-                wallet = %wallet.address,
-                error = %e,
-                "Failed to migrate legacy wallet secrets to Argon2id; will retry on next unlock"
-            );
-        } else {
-            tracing::info!(
-                wallet = %wallet.address,
-                "Migrated wallet secrets to Argon2id"
-            );
-        }
-    }
+    // Transparently upgrade a legacy row on this successful unlock (best-effort;
+    // see `maybe_migrate_secrets`).
+    maybe_migrate_secrets(pool, &owner, &wallet, &password, plain.as_str(), ciphertext_was_legacy).await;
 
     Ok(plain.as_str().to_owned())
 }
@@ -278,15 +387,14 @@ pub struct WalletBackup {
 pub async fn local_wallet_export_backup(state: State<'_, AppState>, id: i64) -> Result<WalletBackup, AppError> {
     let owner = require_owner(&state)?;
     let pool = state.pool()?;
-    let wallet = match repo::get_by_id(pool, &owner, id).await? {
-        Some(w) => w,
-        None => return Err(AppError::Other(format!("Wallet {id} not found"))),
+    let Some(wallet) = repo::get_by_id(pool, &owner, id).await? else {
+        return Err(AppError::Other(format!("Wallet {id} not found")));
     };
     use std::time::{SystemTime, UNIX_EPOCH};
     let exported_at = {
         // RFC3339-ish: just emit ms since epoch as a string. The FE displays
         // the file's own mtime so this field is informational only.
-        let ms = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+        let ms = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis());
         ms.to_string()
     };
     Ok(WalletBackup {
@@ -311,6 +419,7 @@ pub async fn local_wallet_import_encrypted_backup(
     password_hash: String,
     password: String,
 ) -> Result<PublicLocalWallet, AppError> {
+    let password = Zeroizing::new(password);
     if name.trim().is_empty() {
         return Err(AppError::Other("Wallet name is required".into()));
     }
@@ -324,6 +433,9 @@ pub async fn local_wallet_import_encrypted_backup(
     if !crypto::verify_password(&password_hash, &password, address.trim()) {
         return Err(AppError::Other("Incorrect password for this backup".into()));
     }
+    // Reject a backup whose address doesn't derive from its mnemonic, so a
+    // tampered file can't persist a row that later signs under a different key.
+    verify_backup_address_binding(&encrypted_mnemonic, &password, address.trim())?;
     let owner = require_owner(&state)?;
     let pool = state.pool()?;
     let row = repo::insert(pool, &owner, name.trim(), address.trim(), &encrypted_mnemonic, &password_hash).await?;
@@ -334,6 +446,14 @@ pub async fn local_wallet_import_encrypted_backup(
 /// const so the writer and the reader can't drift apart silently.
 const BACKUP_ZIP_ENTRY: &str = "wallet-backup.json";
 
+/// Upper bound on the decompressed size of the backup JSON entry. A real
+/// backup is a few hundred bytes; 64 KiB is generous headroom. The cap stops
+/// a malicious/zip-bomb archive (small compressed, huge declared/decompressed
+/// size) from OOM-ing the app when imported — both the pre-read `size()` check
+/// and the bounded `take()` read enforce it (the latter in case the header
+/// `size()` lies).
+const MAX_BACKUP_JSON_BYTES: u64 = 64 * 1024;
+
 /// Export the active account's wallet `id` as a `.zip` archive whose
 /// only entry is `wallet-backup.json` (the same `WalletBackup` payload
 /// `local_wallet_export_backup` returns, serialised pretty-printed).
@@ -342,14 +462,11 @@ const BACKUP_ZIP_ENTRY: &str = "wallet-backup.json";
 /// ChaCha20-Poly1305-encrypted under the wallet password (the
 /// `encryptedMnemonic` ciphertext), and the password is never escrowed
 /// in either the file or the archive. The zip is purely a container
-/// chosen to (a) mirror `feature/wallet-updates` for cross-compat with
-/// the v1 frontend, and (b) give the FE a single binary blob to write
-/// instead of pretty-printed JSON.
+/// chosen to (a) stay cross-compatible with the v1 frontend's backup
+/// format, and (b) give the FE a single binary blob to write instead of
+/// pretty-printed JSON.
 #[tauri::command]
-pub async fn local_wallet_export_backup_zip(
-    state: State<'_, AppState>,
-    id: i64,
-) -> Result<Vec<u8>, AppError> {
+pub async fn local_wallet_export_backup_zip(state: State<'_, AppState>, id: i64) -> Result<Vec<u8>, AppError> {
     use std::io::{Cursor, Write};
 
     let backup = local_wallet_export_backup(state, id).await?;
@@ -365,15 +482,11 @@ pub async fn local_wallet_export_backup_zip(
 
     let buf = Cursor::new(Vec::new());
     let mut zip = zip::ZipWriter::new(buf);
-    let options = zip::write::SimpleFileOptions::default()
-        .compression_method(zip::CompressionMethod::Deflated);
+    let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
     zip.start_file(BACKUP_ZIP_ENTRY, options)
         .map_err(|e| AppError::Other(format!("zip start_file: {e}")))?;
-    zip.write_all(&json)
-        .map_err(|e| AppError::Other(format!("zip write_all: {e}")))?;
-    let cursor = zip
-        .finish()
-        .map_err(|e| AppError::Other(format!("zip finish: {e}")))?;
+    zip.write_all(&json).map_err(|e| AppError::Other(format!("zip write_all: {e}")))?;
+    let cursor = zip.finish().map_err(|e| AppError::Other(format!("zip finish: {e}")))?;
     Ok(cursor.into_inner())
 }
 
@@ -395,25 +508,35 @@ pub async fn local_wallet_import_encrypted_backup_from_zip(
 ) -> Result<PublicLocalWallet, AppError> {
     use std::io::{Cursor, Read};
 
+    let password = Zeroizing::new(password);
     if name.trim().is_empty() {
         return Err(AppError::Other("Wallet name is required".into()));
     }
 
     let reader = Cursor::new(zip_bytes);
-    let mut archive = zip::ZipArchive::new(reader)
-        .map_err(|e| AppError::Other(format!("Couldn't open backup zip: {e}")))?;
+    let mut archive = zip::ZipArchive::new(reader).map_err(|e| AppError::Other(format!("Couldn't open backup zip: {e}")))?;
 
     let mut entry = archive
         .by_name(BACKUP_ZIP_ENTRY)
         .map_err(|_| AppError::Other(format!("Backup zip is missing `{BACKUP_ZIP_ENTRY}`")))?;
-    let mut json_bytes = Vec::with_capacity(entry.size() as usize);
-    entry
+    // Reject an entry whose declared size is already oversized (cheap,
+    // header-based), then read with a hard cap so a lying header can't make us
+    // allocate/read unbounded memory. `Vec::with_capacity` is intentionally NOT
+    // sized from the attacker-controlled `entry.size()`.
+    if entry.size() > MAX_BACKUP_JSON_BYTES {
+        return Err(AppError::Other("Backup entry is unexpectedly large".into()));
+    }
+    let mut json_bytes = Vec::new();
+    (&mut entry)
+        .take(MAX_BACKUP_JSON_BYTES + 1)
         .read_to_end(&mut json_bytes)
         .map_err(|e| AppError::Other(format!("Couldn't read backup entry: {e}")))?;
     drop(entry);
+    if json_bytes.len() as u64 > MAX_BACKUP_JSON_BYTES {
+        return Err(AppError::Other("Backup entry is unexpectedly large".into()));
+    }
 
-    let parsed: serde_json::Value = serde_json::from_slice(&json_bytes)
-        .map_err(|e| AppError::Other(format!("Backup file isn't valid JSON: {e}")))?;
+    let parsed: serde_json::Value = serde_json::from_slice(&json_bytes).map_err(|e| AppError::Other(format!("Backup file isn't valid JSON: {e}")))?;
     let address = parsed
         .get("address")
         .and_then(|v| v.as_str())
@@ -443,18 +566,13 @@ pub async fn local_wallet_import_encrypted_backup_from_zip(
     if !crypto::verify_password(&password_hash, &password, &address) {
         return Err(AppError::Other("Incorrect password for this backup".into()));
     }
+    // Reject a backup whose address doesn't derive from its mnemonic (see the
+    // JSON import path) so a tampered zip can't persist a mismatched row.
+    verify_backup_address_binding(&encrypted_mnemonic, &password, &address)?;
 
     let owner = require_owner(&state)?;
     let pool = state.pool()?;
-    let row = repo::insert(
-        pool,
-        &owner,
-        name.trim(),
-        &address,
-        &encrypted_mnemonic,
-        &password_hash,
-    )
-    .await?;
+    let row = repo::insert(pool, &owner, name.trim(), &address, &encrypted_mnemonic, &password_hash).await?;
     Ok(PublicLocalWallet::from(&row))
 }
 
@@ -469,15 +587,11 @@ pub async fn local_wallet_import_encrypted_backup_from_zip(
 /// where the FE has the public key from one source and the Rust signer
 /// has it from another that could theoretically drift apart.
 #[tauri::command]
-pub async fn local_wallet_get_public_key(
-    state: State<'_, AppState>,
-    id: i64,
-) -> Result<String, AppError> {
+pub async fn local_wallet_get_public_key(state: State<'_, AppState>, id: i64) -> Result<String, AppError> {
     let owner = require_owner(&state)?;
     let pool = state.pool()?;
-    let wallet = match repo::get_by_id(pool, &owner, id).await? {
-        Some(w) => w,
-        None => return Err(AppError::Other(format!("Wallet {id} not found"))),
+    let Some(wallet) = repo::get_by_id(pool, &owner, id).await? else {
+        return Err(AppError::Other(format!("Wallet {id} not found")));
     };
     // The public key in question is the 32-byte sr25519 public key
     // that the SS58 address encodes. We don't need the password to
@@ -487,8 +601,7 @@ pub async fn local_wallet_get_public_key(
     // operation.
     use std::str::FromStr;
     use subxt::utils::AccountId32;
-    let account = AccountId32::from_str(&wallet.address)
-        .map_err(|e| AppError::Other(format!("Wallet address is not valid SS58: {e:?}")))?;
+    let account = AccountId32::from_str(&wallet.address).map_err(|e| AppError::Other(format!("Wallet address is not valid SS58: {e:?}")))?;
     Ok(B64.encode(account.0))
 }
 
@@ -527,13 +640,17 @@ pub async fn local_wallet_sign(
     password: String,
     payload_b64: String,
 ) -> Result<String, AppError> {
+    let password = Zeroizing::new(password);
     let owner = require_owner(&state)?;
     let pool = state.pool()?;
-    let wallet = match repo::get_by_id(pool, &owner, id).await? {
-        Some(w) => w,
-        None => return Err(AppError::Other(format!("Wallet {id} not found"))),
+    let Some(wallet) = repo::get_by_id(pool, &owner, id).await? else {
+        return Err(AppError::Other(format!("Wallet {id} not found")));
     };
 
+    // Serialize attempts on this wallet so a concurrent IPC burst can't all
+    // clear `check` before any `record_failure` runs and thereby outrun the
+    // lockout threshold. Held to fn end — covers check → verify → record.
+    let _attempt_gate = state.wallet_rate_limit.attempt_gate(id).await;
     if let Err(rl) = state.wallet_rate_limit.check(id) {
         return Err(AppError::Other(rl.message()));
     }
@@ -547,33 +664,15 @@ pub async fn local_wallet_sign(
         .decode(&payload_b64)
         .map_err(|e| AppError::Other(format!("Invalid payload base64: {e}")))?;
 
-    let (mnemonic, ciphertext_was_legacy) =
-        crypto::decrypt_mnemonic(&wallet.encrypted_mnemonic, &password, &wallet.address)?;
+    let (mnemonic, ciphertext_was_legacy) = crypto::decrypt_mnemonic(&wallet.encrypted_mnemonic, &password, &wallet.address)?;
 
-    // Transparent migration on legacy rows — same policy as
-    // get_decrypted_mnemonic / get_signer_and_address.
-    let hash_was_legacy = crypto::password_hash_is_legacy(&wallet.password_hash);
-    if ciphertext_was_legacy || hash_was_legacy {
-        if let Ok(new_ct) =
-            crypto::encrypt_mnemonic(mnemonic.as_str(), &password, &wallet.address)
-        {
-            let new_hash = crypto::password_hash(&password, &wallet.address);
-            if let Err(e) =
-                repo::update_secrets(pool, &owner, wallet.id, &new_ct, &new_hash).await
-            {
-                tracing::warn!(
-                    wallet = %wallet.address,
-                    error = %e,
-                    "Failed to migrate legacy wallet secrets during sign IPC"
-                );
-            }
-        }
-    }
+    // Transparent migration on legacy rows — same single audited path as
+    // get_decrypted_mnemonic (best-effort; never blocks the sign).
+    maybe_migrate_secrets(pool, &owner, &wallet, &password, mnemonic.as_str(), ciphertext_was_legacy).await;
 
-    let parsed = SubxtMnemonic::parse_normalized(mnemonic.as_str())
-        .map_err(|e| AppError::Crypto(format!("Stored mnemonic is not parseable: {e}")))?;
-    let keypair = SrKeypair::from_phrase(&parsed, None)
-        .map_err(|e| AppError::Crypto(format!("Failed to derive sr25519 keypair: {e}")))?;
+    let parsed =
+        SubxtMnemonic::parse_normalized(mnemonic.as_str()).map_err(|e| AppError::Crypto(format!("Stored mnemonic is not parseable: {e}")))?;
+    let keypair = SrKeypair::from_phrase(&parsed, None).map_err(|e| AppError::Crypto(format!("Failed to derive sr25519 keypair: {e}")))?;
     // `Keypair::sign` returns subxt_signer's Signature wrapper; we
     // unwrap to the raw 64 bytes via its `.0` since the FE needs a
     // plain Uint8Array. Keypair drops here, taking the secret key
@@ -582,7 +681,46 @@ pub async fn local_wallet_sign(
     Ok(B64.encode(sig.0))
 }
 
-// Convenience: keep the LocalWallet alias importable from this module so
-// downstream code can `use crate::wallet::commands::LocalWallet`.
-#[allow(dead_code)]
-pub(crate) type _LocalWallet = LocalWallet;
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_a_strong_password() {
+        assert!(validate_new_password("Abcdef1!").is_ok());
+        assert!(validate_new_password("Str0ng#Passw0rd").is_ok());
+    }
+
+    #[test]
+    fn rejects_too_short_even_if_all_classes_present() {
+        // 7 chars, every class present — still under MIN_WALLET_PASSWORD_LEN.
+        let err = validate_new_password("Aa1!aa").unwrap_err();
+        assert!(matches!(err, AppError::Validation(m) if m.contains("at least")));
+    }
+
+    #[test]
+    fn rejects_missing_character_classes() {
+        // Each is length-8 but missing exactly one required class.
+        for (pw, want) in [
+            ("abcdef1!", "an uppercase letter"),
+            ("ABCDEF1!", "a lowercase letter"),
+            ("Abcdefg!", "a number"),
+            ("Abcdefg1", "a special character"),
+        ] {
+            match validate_new_password(pw) {
+                Err(AppError::Validation(m)) => assert!(
+                    m.contains(want),
+                    "password {pw:?} should report missing {want:?}, got {m:?}"
+                ),
+                other => panic!("expected Validation error for {pw:?}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn special_class_matches_fe_non_ascii_alnum_rule() {
+        // A non-ASCII-alphanumeric char satisfies the "special" rule, matching
+        // the FE regex `[^A-Za-z0-9]`.
+        assert!(validate_new_password("Abcdefg1€").is_ok());
+    }
+}

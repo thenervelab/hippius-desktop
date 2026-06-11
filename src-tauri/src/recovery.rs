@@ -205,7 +205,7 @@ pub async fn check_recovery_state(state: tauri::State<'_, crate::app_state::AppS
 /// and the API client). Callable from other commands (notably the OAuth
 /// callback) without the `#[tauri::command]` boundary in the way.
 pub(crate) async fn check_recovery_state_inner(state: &tauri::State<'_, crate::app_state::AppState>) -> Result<RecoveryCheck> {
-    let account_id = state.current_account_id().map_err(AppError::Other)?;
+    let account_id = state.current_account_id()?;
     let pool = state.pool()?;
     seed_hcfs_server_url_if_missing(pool, &account_id).await?;
 
@@ -213,7 +213,11 @@ pub(crate) async fn check_recovery_state_inner(state: &tauri::State<'_, crate::a
     debug!(account = %short, "recovery: checking recovery state (probing server for sealed mnemonic blob)");
 
     let local = has_local_mnemonic(&account_id);
-    let can_decrypt = if local { can_decrypt_local_mnemonic(state, &account_id, pool).await } else { true };
+    let can_decrypt = if local {
+        can_decrypt_local_mnemonic(state, &account_id, pool).await
+    } else {
+        true
+    };
     let (has_server_blob, updated_at) = probe_server_blob(state).await;
 
     // Decision table (extended to distinguish "local file exists" from
@@ -318,7 +322,7 @@ async fn probe_server_blob(state: &tauri::State<'_, crate::app_state::AppState>)
 #[tauri::command]
 pub async fn recover_mnemonic(state: tauri::State<'_, crate::app_state::AppState>, password: String) -> Result<()> {
     let password = Zeroizing::new(password);
-    let account_id = state.current_account_id().map_err(AppError::Other)?;
+    let account_id = state.current_account_id()?;
     let pool = state.pool()?;
     seed_hcfs_server_url_if_missing(pool, &account_id).await?;
 
@@ -335,7 +339,13 @@ pub async fn recover_mnemonic(state: tauri::State<'_, crate::app_state::AppState
         }
     };
 
-    let mnemonic = open_mnemonic(&blob, &password, &ctx.ss58).map_err(crypto_to_err)?;
+    // Argon2id (~1.5 s) off the executor — see run_kdf. Owned, zeroizing copies
+    // of the secrets move into the closure; `blob` is moved (unused afterward),
+    // `password`/`ss58` are cloned because the function reuses them below.
+    let blob_k = blob;
+    let password_k = password.clone();
+    let ss58_k = ctx.ss58.clone();
+    let mnemonic = run_kdf(move || open_mnemonic(&blob_k, &password_k, &ss58_k).map_err(crypto_to_err)).await?;
 
     // Persist the recovered mnemonic to the local store so subsequent
     // sync init picks it up without re-fetching. The file password is
@@ -357,6 +367,25 @@ pub async fn recover_mnemonic(state: tauri::State<'_, crate::app_state::AppState
         "recovery: unlock complete — mnemonic decrypted and installed locally (no upload performed)"
     );
     Ok(())
+}
+
+/// Run a CPU-bound key-derivation closure off the Tokio executor.
+///
+/// Argon2id (`open_mnemonic` / `seal_mnemonic`, ~1.5 s) and PBKDF2 (folder
+/// `recover_mnemonic`, 600k iterations) are blocking; running them inline stalls
+/// every other task on this worker thread (axiom r4r_ch10_01). The closure runs
+/// on the blocking pool and must own `'static` copies of its secrets — wrap them
+/// in `Zeroizing` so they are scrubbed when it drops. A `JoinError` (the task
+/// panicked or was cancelled) maps to `AppError::Other`; the closure's own
+/// `Result` error passes straight through.
+async fn run_kdf<T, F>(f: F) -> Result<T>
+where
+    F: FnOnce() -> Result<T> + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| AppError::Other(format!("KDF task failed to join: {e}")))?
 }
 
 /// Write the recovered mnemonic to `master_enc_mnemonic.json` under the
@@ -479,15 +508,34 @@ async fn validate_master_against_existing_folders(pool: &SqlitePool, account_id:
         return Ok(());
     }
 
-    let drive_password = match crate::sync::config::get_drive_password(pool, account_id, None).await {
-        Ok(pw) if !pw.is_empty() => pw,
-        _ => {
-            // No usable drive password yet — we can't decrypt folder
-            // mnemonics to compare. Allow the seal so the fresh-signup
-            // path keeps working; once a drive password exists, future
-            // calls hit the real check.
-            return Ok(());
-        }
+    // Inspect the drive-password row directly so we can tell three cases apart.
+    // Collapsing the last two into a silent skip would let a WRONG master be
+    // sealed over an account that already had encrypted key material, leaving
+    // its uploads undecryptable:
+    //   (a) no row / empty password  → pre-config, nothing to compare → allow
+    //   (b) plaintext (version 0)     → compare folders against it
+    //   (c) encrypted (version 1)     → the candidate master MUST decrypt it;
+    //                                   if it can't, it's the wrong master → refuse
+    let row: Option<(String, i32)> = sqlx::query_as("SELECT drive_password, COALESCE(encryption_version, 0) FROM hcfs_config WHERE owner = ?")
+        .bind(&owner)
+        .fetch_optional(pool)
+        .await?;
+    let drive_password = match row {
+        None => return Ok(()),
+        Some((pw, _)) if pw.is_empty() => return Ok(()),
+        Some((pw, 0)) => Zeroizing::new(pw),
+        Some((_, 1)) => match crate::sync::config::get_drive_password(pool, account_id, Some(candidate_master)).await {
+            Ok(pw) => pw,
+            Err(_) => {
+                return Err(AppError::Validation(
+                    "Cannot seal recovery blob: the provided master mnemonic does not match this \
+                     account's existing encrypted drive password. Unlock with your original recovery \
+                     password first, then retry."
+                        .into(),
+                ));
+            }
+        },
+        Some((_, v)) => return Err(AppError::Other(format!("unknown drive password encryption_version: {v}"))),
     };
 
     for (_path, label) in &folders {
@@ -496,7 +544,19 @@ async fn validate_master_against_existing_folders(pool: &SqlitePool, account_id:
         if !folder_enc.exists() {
             continue;
         }
-        let stored = match hcfs_client::auth::recover_mnemonic(&folder_enc, &drive_password) {
+        // PBKDF2 (600k iterations) off the executor, once per folder — see
+        // run_kdf. Owned copies move into the closure. `drive_password` is now
+        // `Zeroizing<String>` at its source, so cloning it yields another
+        // scrubbed-on-drop copy for the 'static closure — no bare-String copy
+        // of the secret remains anywhere in this function.
+        let folder_enc_k = folder_enc.clone();
+        let drive_password_k = drive_password.clone();
+        let recovered = run_kdf(move || {
+            hcfs_client::auth::recover_mnemonic(&folder_enc_k, &drive_password_k)
+                .map_err(|e| AppError::Other(format!("recover folder mnemonic: {e}")))
+        })
+        .await;
+        let stored = match recovered {
             Ok(m) => Zeroizing::new(m.to_string()),
             Err(e) => {
                 warn!(
@@ -529,16 +589,25 @@ async fn validate_master_against_existing_folders(pool: &SqlitePool, account_id:
 /// "the user's canonical password is this now" moment: fresh signup,
 /// fresh-device unlock, and rotation.
 ///
-/// Writes the drive password row (encrypted with a mnemonic-derived
-/// HKDF key), then rewrites folder files. The second step is a no-op
-/// when there are no folders yet (fresh signup / fresh-device).
+/// Rewrites every folder `enc_mnemonic.json` under `new_password` FIRST, then
+/// commits the drive-password DB row. The folder step is a no-op when there
+/// are no folders yet (fresh signup / fresh-device).
 ///
-/// Never logs `new_password` or the master mnemonic. The `master` arg
-/// is used both to derive the encryption key for the DB row AND as the
-/// input to `derive_folder_mnemonic(master, label)`.
+/// Ordering is load-bearing: `drive_password` is a single value but folders
+/// are encrypted individually, so a folder rewrite failure must abort BEFORE
+/// the DB row is flipped. With folders-first, a systemic failure (server down,
+/// master unrecoverable, disk full) leaves the DB on the OLD password and
+/// nothing is wedged; the rotation flow keeps its retry sidecar and converges
+/// because re-derivation is deterministic and idempotent. A db-row-first order
+/// would flip the password and then have to swallow folder failures, wedging
+/// every folder still under the old password.
+///
+/// Never logs `new_password` or the master mnemonic. The `master` arg is used
+/// both to derive the encryption key for the DB row AND as the input to
+/// `derive_folder_mnemonic(master, label)`.
 async fn align_drive_password(pool: &SqlitePool, account_id: &str, server_url: &str, master: &str, new_password: &str) -> Result<()> {
-    crate::sync::config::save_hcfs_config_internal(pool, account_id, server_url, new_password, Some(master)).await?;
     crate::sync::mnemonic::reencrypt_all_folder_mnemonics(pool, account_id, master, new_password).await?;
+    crate::sync::config::save_hcfs_config_internal(pool, account_id, server_url, new_password, Some(master)).await?;
     Ok(())
 }
 
@@ -559,7 +628,7 @@ async fn align_drive_password(pool: &SqlitePool, account_id: &str, server_url: &
 #[tauri::command]
 pub async fn seal_and_upload_mnemonic(state: tauri::State<'_, crate::app_state::AppState>, password: String) -> Result<()> {
     let password = Zeroizing::new(password);
-    let account_id = state.current_account_id().map_err(AppError::Other)?;
+    let account_id = state.current_account_id()?;
     let pool = state.pool()?;
     seed_hcfs_server_url_if_missing(pool, &account_id).await?;
 
@@ -592,7 +661,12 @@ pub async fn seal_and_upload_mnemonic(state: tauri::State<'_, crate::app_state::
     validate_master_against_existing_folders(pool, &account_id, &mnemonic).await?;
 
     let ctx = HcfsServerCtx::resolve(&state).await?;
-    let blob = seal_mnemonic(&mnemonic, &password, &ctx.ss58).map_err(crypto_to_err)?;
+    // Argon2id off the executor. `mnemonic` is reused after sealing (installed
+    // locally once the upload commits), so clone a zeroizing copy for the closure.
+    let mnemonic_k = Zeroizing::new(mnemonic.to_string());
+    let password_k = password.clone();
+    let ss58_k = ctx.ss58.clone();
+    let blob = run_kdf(move || seal_mnemonic(&mnemonic_k, &password_k, &ss58_k).map_err(crypto_to_err)).await?;
 
     // Server upload is the commit point: if it fails on the fresh-signup
     // path, leaving a local `master_enc_mnemonic.json` behind would make
@@ -651,7 +725,7 @@ pub async fn change_recovery_password(state: tauri::State<'_, crate::app_state::
     validate_new_password_inputs(&current, &new)?;
     reject_if_weak(&new)?;
 
-    let account_id = state.current_account_id().map_err(AppError::Other)?;
+    let account_id = state.current_account_id()?;
     let pool = state.pool()?;
     seed_hcfs_server_url_if_missing(pool, &account_id).await?;
 
@@ -673,14 +747,22 @@ pub async fn change_recovery_password(state: tauri::State<'_, crate::app_state::
     };
 
     // 2. Decrypt with `current`. Wrong password → Validation("Wrong passphrase.").
-    let mnemonic = open_mnemonic(&blob, &current, &ctx.ss58).map_err(crypto_to_err)?;
+    //    Argon2id off the executor (see run_kdf).
+    let blob_k = blob;
+    let current_k = current.clone();
+    let ss58_open_k = ctx.ss58.clone();
+    let mnemonic = run_kdf(move || open_mnemonic(&blob_k, &current_k, &ss58_open_k).map_err(crypto_to_err)).await?;
 
     // 3. Derivation guard — refuse to rotate under a master that can't
     //    reproduce existing folder mnemonics.
     validate_master_against_existing_folders(pool, &account_id, &mnemonic).await?;
 
-    // 4. Reseal under `new`.
-    let new_blob = seal_mnemonic(&mnemonic, &new, &ctx.ss58).map_err(crypto_to_err)?;
+    // 4. Reseal under `new`. Argon2id off the executor (see run_kdf); clone a
+    //    zeroizing copy of the mnemonic for the closure.
+    let mnemonic_k = Zeroizing::new(mnemonic.to_string());
+    let new_k = new.clone();
+    let ss58_seal_k = ctx.ss58.clone();
+    let new_blob = run_kdf(move || seal_mnemonic(&mnemonic_k, &new_k, &ss58_seal_k).map_err(crypto_to_err)).await?;
 
     // 5. Commit point: POST upsert.
     post_json_discard(&ctx, "/v1/mnemonic-blob", &new_blob).await?;
@@ -732,14 +814,29 @@ pub async fn change_recovery_password(state: tauri::State<'_, crate::app_state::
             );
             // mnemonic is unchanged; AuthInfo cache still holds a valid value,
             // so we intentionally skip cache_session_mnemonic on this branch.
+            //
+            // The local master_enc_mnemonic.json is still sealed under the OLD
+            // password while the server blob is under the NEW one. The sidecar
+            // is the ONLY signal that lets the boot-time resume self-heal this
+            // gap (has_pending_rotation reads it). If even the sidecar write
+            // fails there is no automatic recovery path left, so the failure
+            // MUST surface — returning Ok here left a stale local file that
+            // silently broke decryption on the next launch with no marker for
+            // the resume path to act on.
             if let Err(sidecar_err) = write_rotation_sidecar(&account_id).await {
                 warn!(
                     error = %sidecar_err,
                     account = %crate::console_access::short_ss58(&account_id),
-                    "recovery: sidecar write also failed; boot-time retry will be unavailable. Rotation is still durable on the server; user may need to change password again if the local file stays stale."
+                    "recovery: sidecar write also failed; boot-time retry unavailable. Rotation is durable on the server — surfacing the error so the user can re-run the change."
                 );
+                return Err(AppError::Other(format!(
+                    "Recovery password was changed on the server, but this device's key file could \
+                     not be updated and no retry marker could be saved ({e}; sidecar: {sidecar_err}). \
+                     Please run the password change again to finish updating this device."
+                )));
             }
-            // Still Ok — the rotation is durable on the server.
+            // Sidecar written → has_pending_rotation is now true and the
+            // boot-time resume will finish the local rewrite; report success.
             Ok(())
         }
     }
@@ -755,7 +852,7 @@ pub async fn change_recovery_password(state: tauri::State<'_, crate::app_state::
 #[tauri::command]
 pub async fn resume_recovery_password_rotation(state: tauri::State<'_, crate::app_state::AppState>, password: String) -> Result<()> {
     let password = Zeroizing::new(password);
-    let account_id = state.current_account_id().map_err(AppError::Other)?;
+    let account_id = state.current_account_id()?;
     let pool = state.pool()?;
     seed_hcfs_server_url_if_missing(pool, &account_id).await?;
 
@@ -783,7 +880,11 @@ pub async fn resume_recovery_password_rotation(state: tauri::State<'_, crate::ap
     // current. If we ever need stricter semantics, store `updated_at`
     // in the sidecar and require it to match the server's before
     // accepting the resume.
-    let mnemonic = open_mnemonic(&blob, &password, &ctx.ss58).map_err(crypto_to_err)?;
+    // Argon2id off the executor (see run_kdf).
+    let blob_k = blob;
+    let password_k = password.clone();
+    let ss58_k = ctx.ss58.clone();
+    let mnemonic = run_kdf(move || open_mnemonic(&blob_k, &password_k, &ss58_k).map_err(crypto_to_err)).await?;
 
     install_recovered_mnemonic(&account_id, &mnemonic, &password).await?;
 
@@ -814,7 +915,7 @@ pub async fn resume_recovery_password_rotation(state: tauri::State<'_, crate::ap
 /// the "finish rotation" prompt.
 #[tauri::command]
 pub async fn has_pending_rotation(state: tauri::State<'_, crate::app_state::AppState>) -> Result<bool> {
-    let account_id = state.current_account_id().map_err(AppError::Other)?;
+    let account_id = state.current_account_id()?;
     let path = rotation_sidecar_path(&account_id)?;
     Ok(path.exists())
 }
@@ -956,42 +1057,36 @@ mod tests {
     async fn drive_password_is_plaintext_true_when_enc_ver_zero() {
         let pool = setup_pool().await;
         let owner = account_key("5PlaintextAccount");
-        sqlx::query(
-            "INSERT INTO hcfs_config (owner, server_url, drive_password, encryption_version) VALUES (?, 'https://x', 'plaintext-pw', 0)",
-        )
-        .bind(&owner)
-        .execute(&pool)
-        .await
-        .unwrap();
+        sqlx::query("INSERT INTO hcfs_config (owner, server_url, drive_password, encryption_version) VALUES (?, 'https://x', 'plaintext-pw', 0)")
+            .bind(&owner)
+            .execute(&pool)
+            .await
+            .unwrap();
         assert!(super::drive_password_is_plaintext(&pool, "5PlaintextAccount").await);
     }
 
     #[tokio::test]
     async fn drive_password_is_plaintext_false_when_encrypted() {
-        // The canonical post-#308 state: drive_password is encrypted under a
+        // The canonical encrypted state: drive_password is encrypted under a
         // mnemonic-derived key, so callers without the mnemonic cannot read it.
         // This is what routes OAuth returning users to Unlock instead of Proceed.
         let pool = setup_pool().await;
         let owner = account_key("5EncryptedAccount");
-        sqlx::query(
-            "INSERT INTO hcfs_config (owner, server_url, drive_password, encryption_version) VALUES (?, 'https://x', 'ciphertext', 1)",
-        )
-        .bind(&owner)
-        .execute(&pool)
-        .await
-        .unwrap();
+        sqlx::query("INSERT INTO hcfs_config (owner, server_url, drive_password, encryption_version) VALUES (?, 'https://x', 'ciphertext', 1)")
+            .bind(&owner)
+            .execute(&pool)
+            .await
+            .unwrap();
         assert!(!super::drive_password_is_plaintext(&pool, "5EncryptedAccount").await);
     }
 
     #[tokio::test]
     async fn leaves_empty_url_alone_on_existing_row() {
-        // The pre-region-probe version of `seed_hcfs_server_url_if_missing`
-        // would overwrite an empty `server_url` with the legacy single-region
-        // default. That UPDATE branch is gone — empty IS the new default
-        // (it's the auto-detect sentinel hcfs-client looks for). This test
-        // pins the new contract: an existing row with empty URL is left
-        // alone, so the next call to `get_server_url` returns "" and
-        // hcfs-client races the regional endpoints.
+        // Empty IS the default `server_url` — the auto-detect sentinel
+        // hcfs-client looks for — so `seed_hcfs_server_url_if_missing` must
+        // never overwrite it. This test pins that contract: an existing row
+        // with empty URL is left alone, so the next call to `get_server_url`
+        // returns "" and hcfs-client races the regional endpoints.
         let pool = setup_pool().await;
         let owner = account_key("5TestAccountId");
         sqlx::query("INSERT INTO hcfs_config (owner, server_url, drive_password, encryption_version) VALUES (?, '', '', 0)")
@@ -1181,11 +1276,183 @@ mod tests {
 
         // hcfs_config row exists, decrypts back to the new password.
         let recovered = crate::sync::config::get_drive_password(&pool, account, Some(master)).await.unwrap();
-        assert_eq!(recovered, "new canonical password");
+        assert_eq!(*recovered, "new canonical password");
 
         // Folder file re-encrypted under the new password.
         let folder_check = hcfs_client::auth::recover_mnemonic(&alpha_enc, "new canonical password").unwrap();
         assert_eq!(folder_check.to_string(), alpha_folder_mnemonic);
+    }
+
+    /// Seed a poolable hcfs_config + sync_paths schema in memory, set `HOME`
+    /// to a tempdir, and plant a regular FILE where `bad_label`'s config dir
+    /// must be created so that folder's `create_dir_all` fails. Returns the
+    /// pool, account id, and master mnemonic. Caller holds `HOME_LOCK`.
+    async fn setup_folder_failure(good_label: &str, bad_label: &str, account: &str) -> (sqlx::SqlitePool, String) {
+        use sqlx::sqlite::SqlitePoolOptions;
+        let master = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+        sqlx::query(
+            "CREATE TABLE hcfs_config (owner TEXT PRIMARY KEY, server_url TEXT NOT NULL DEFAULT '', drive_password TEXT NOT NULL DEFAULT '', encryption_version INTEGER NOT NULL DEFAULT 0, updated_at TIMESTAMP)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("CREATE TABLE sync_paths (owner TEXT NOT NULL, path TEXT NOT NULL, label TEXT NOT NULL, is_paused INTEGER NOT NULL DEFAULT 0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let owner = crate::auth::account_key::account_key(account);
+        for (label, path) in [(good_label, "/tmp/good"), (bad_label, "/tmp/bad")] {
+            sqlx::query("INSERT INTO sync_paths (owner, path, label) VALUES (?, ?, ?)")
+                .bind(&owner)
+                .bind(path)
+                .bind(label)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        // Good folder: a real config dir + enc_mnemonic.json under the OLD password.
+        let good_dir = crate::sync::mnemonic::config_dir_for_folder(account, good_label).unwrap();
+        tokio::fs::create_dir_all(&good_dir).await.unwrap();
+        let good_fm = hcfs_client::drive::keys::derive_folder_mnemonic(master, good_label).unwrap();
+        hcfs_client::auth::save_encrypted_mnemonic(good_dir.join("enc_mnemonic.json"), &good_fm, "old canonical password").unwrap();
+        // Bad folder: plant a FILE where its dir must be so create_dir_all fails.
+        let bad_dir = crate::sync::mnemonic::config_dir_for_folder(account, bad_label).unwrap();
+        tokio::fs::create_dir_all(bad_dir.parent().unwrap()).await.unwrap();
+        tokio::fs::write(&bad_dir, b"blocker").await.unwrap();
+        (pool, master.to_string())
+    }
+
+    #[tokio::test]
+    async fn reencrypt_returns_err_naming_failed_folder_but_rewrites_others() {
+        let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        unsafe {
+            std::env::set_var("HOME", tmp.path());
+        }
+        let account = "5TestReencryptErrAccount";
+        let (pool, master) = setup_folder_failure("alpha", "beta", account).await;
+
+        let err = crate::sync::mnemonic::reencrypt_all_folder_mnemonics(&pool, account, &master, "new canonical password")
+            .await
+            .unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("beta"), "error must name the failed folder, got: {msg}");
+
+        // The healthy folder must still have been rewritten under the new password.
+        let alpha_dir = crate::sync::mnemonic::config_dir_for_folder(account, "alpha").unwrap();
+        let alpha_fm = hcfs_client::drive::keys::derive_folder_mnemonic(&master, "alpha").unwrap();
+        let check = hcfs_client::auth::recover_mnemonic(alpha_dir.join("enc_mnemonic.json"), "new canonical password").unwrap();
+        assert_eq!(
+            check.to_string(),
+            alpha_fm,
+            "the good folder is still rewritten despite the bad one failing"
+        );
+    }
+
+    #[tokio::test]
+    async fn align_drive_password_does_not_flip_db_when_a_folder_fails() {
+        let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        unsafe {
+            std::env::set_var("HOME", tmp.path());
+        }
+        let account = "5TestAlignAbortAccount";
+        let (pool, master) = setup_folder_failure("alpha", "beta", account).await;
+
+        // Pre-seed the DB password under the OLD value.
+        crate::sync::config::save_hcfs_config_internal(&pool, account, "https://example.invalid", "old canonical password", Some(&master))
+            .await
+            .unwrap();
+
+        // align must fail because a folder rewrite fails...
+        let err = super::align_drive_password(&pool, account, "https://example.invalid", &master, "new canonical password")
+            .await
+            .unwrap_err();
+        let _ = err;
+
+        // ...and the DB password must NOT have been flipped to NEW: folders are
+        // rewritten BEFORE the DB row is committed, so a folder failure aborts
+        // with the system still consistent on the OLD password.
+        let pw = crate::sync::config::get_drive_password(&pool, account, Some(&master)).await.unwrap();
+        assert_eq!(*pw, "old canonical password", "DB password must stay OLD when a folder rewrite fails");
+    }
+
+    /// Minimal hcfs_config + sync_paths schema for the recovery-validation
+    /// tests, with `HOME` pointed at a tempdir (caller holds HOME_LOCK).
+    async fn setup_validation_pool() -> sqlx::SqlitePool {
+        use sqlx::sqlite::SqlitePoolOptions;
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory pool");
+        sqlx::query(
+            "CREATE TABLE hcfs_config (owner TEXT PRIMARY KEY, server_url TEXT NOT NULL DEFAULT '', drive_password TEXT NOT NULL DEFAULT '', encryption_version INTEGER NOT NULL DEFAULT 0, updated_at TIMESTAMP)",
+        )
+        .execute(&pool)
+        .await
+        .expect("create hcfs_config");
+        sqlx::query("CREATE TABLE sync_paths (owner TEXT NOT NULL, path TEXT NOT NULL, label TEXT NOT NULL, is_paused INTEGER NOT NULL DEFAULT 0)")
+            .execute(&pool)
+            .await
+            .expect("create sync_paths");
+        pool
+    }
+
+    const VALIDATION_MASTER: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+    #[tokio::test]
+    async fn validate_master_refuses_wrong_master_against_encrypted_drive_password() {
+        let _home = crate::test_helpers::HOME_LOCK.lock().expect("HOME_LOCK");
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        // SAFETY: test-only; HOME is serialized by HOME_LOCK and Rust 2024
+        // requires the unsafe block for std::env::set_var.
+        unsafe {
+            std::env::set_var("HOME", tmp.path());
+        }
+        let account = "5TestValidateWrongMaster";
+        let pool = setup_validation_pool().await;
+        let owner = crate::auth::account_key::account_key(account);
+        // A folder row so validation doesn't take the empty-folders early return.
+        sqlx::query("INSERT INTO sync_paths (owner, path, label) VALUES (?, '/tmp/x', 'default')")
+            .bind(&owner)
+            .execute(&pool)
+            .await
+            .expect("seed sync_paths");
+        // Seal an encrypted (version=1) drive password under the real master.
+        crate::sync::config::save_hcfs_config_internal(&pool, account, "https://example.invalid", "drive pw", Some(VALIDATION_MASTER))
+            .await
+            .expect("seal encrypted drive password");
+
+        // A DIFFERENT master can't decrypt that drive password → must be refused,
+        // not silently skipped, which would allow sealing a wrong master.
+        let wrong = "legal winner thank year wave sausage worth useful legal winner thank yellow";
+        let err = super::validate_master_against_existing_folders(&pool, account, wrong).await.unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)), "wrong master must be refused, got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn validate_master_allows_when_no_drive_password_config() {
+        let _home = crate::test_helpers::HOME_LOCK.lock().expect("HOME_LOCK");
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        // SAFETY: test-only; HOME is serialized by HOME_LOCK and Rust 2024
+        // requires the unsafe block for std::env::set_var.
+        unsafe {
+            std::env::set_var("HOME", tmp.path());
+        }
+        let account = "5TestValidateNoConfig";
+        let pool = setup_validation_pool().await;
+        let owner = crate::auth::account_key::account_key(account);
+        sqlx::query("INSERT INTO sync_paths (owner, path, label) VALUES (?, '/tmp/x', 'default')")
+            .bind(&owner)
+            .execute(&pool)
+            .await
+            .expect("seed sync_paths");
+        // No hcfs_config row → pre-config → vacuously allowed.
+        super::validate_master_against_existing_folders(&pool, account, VALIDATION_MASTER)
+            .await
+            .expect("validation allows pre-config");
     }
 
     #[tokio::test]
@@ -1211,5 +1478,53 @@ mod tests {
 
         // Idempotent clear.
         super::clear_rotation_sidecar(account).await;
+    }
+
+    /// Regression pin: when the post-commit local rewrite fails AND the
+    /// rotation sidecar also fails to write, the install-failed arm of
+    /// `change_recovery_password` must `return Err`, not `Ok(())`.
+    ///
+    /// `change_recovery_password` is a `tauri::command` that needs a running
+    /// hcfs-server and a managed `AppState`, so the doubly-failed branch can't
+    /// be driven from a unit test under the project's no-`tauri::test` policy
+    /// (axiom 111). A regression would silently restore the unconditional
+    /// `Ok(())`; this pins that the sidecar-failure path inside the `Err(e)`
+    /// arm carries a `return Err`, mirroring the `hippius_startup_window.rs`
+    /// static-pin convention.
+    #[test]
+    fn local_rewrite_and_sidecar_double_failure_surfaces_an_error() {
+        const SRC: &str = include_str!("recovery.rs");
+        // Anchor on the warn unique to the install-failure `Err(e)` arm (the
+        // align-branch shares the "sidecar write also failed" wording but
+        // legitimately returns Ok, so we must not match on that).
+        let anchor = "server rotated but local rewrite failed";
+        let at = SRC.find(anchor).expect("install-failure arm warn present");
+        let after = &SRC[at..];
+        let next_return_err = after
+            .find("return Err")
+            .expect("double failure must return Err, not fall through to Ok(())");
+        // The `return Err` (sidecar-failure bail-out) must come before the
+        // arm's closing `Ok(())`, i.e. it surfaces instead of reporting success.
+        let next_ok = after.find("Ok(())").unwrap_or(usize::MAX);
+        assert!(
+            next_return_err < next_ok,
+            "the sidecar-write-failure path must `return Err` before the arm's `Ok(())`"
+        );
+    }
+
+    /// After `seed_hcfs_server_url_if_missing`, the recovery base-URL
+    /// resolver must NOT reject the seeded row. This pins the fix for the
+    /// fresh-OAuth-device dead-end where empty server_url → ConfigMissing
+    /// → probe (None,None) → RecoveryFlow::Unknown forever.
+    /// See docs/plans/2026-05-18-oauth-recovery-region-resolution.md.
+    #[tokio::test]
+    async fn seeded_row_is_accepted_by_base_url_resolver() {
+        let pool = crate::console_access::tests_support_make_hcfs_config_pool().await;
+        let account = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
+        seed_hcfs_server_url_if_missing(&pool, account).await.expect("seed must succeed");
+        let url = crate::console_access::resolve_hcfs_base_url_for_test(&pool, account)
+            .await
+            .expect("seeded empty row must resolve to the sentinel, not error");
+        assert_eq!(url, "", "seeded server_url is the auto-detect sentinel");
     }
 }

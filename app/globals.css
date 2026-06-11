@@ -2,12 +2,13 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Fluid root font-size: scales text proportionally with window width.
-   At ~1073px and below → 13px (min), at 1320px (default) → 16px, wider → 16px (max).
-   --zoom-factor (set by JS) lets Cmd/Ctrl +/- scale everything further. */
+/* Fixed root font-size. App-wide scaling is handled by the native webview's
+   page zoom (Cmd/Ctrl +/-, see app/lib/hooks/useZoom.ts), which scales px and
+   rem uniformly and reflows the viewport. Keeping the root constant makes
+   rem-based sizes predictable instead of drifting with window width — the old
+   fluid `vw` term only moved rem text and left fixed-px elements behind. */
 html {
-  --zoom-factor: 1;
-  font-size: calc(clamp(13px, 1.212vw, 16px) * var(--zoom-factor));
+  font-size: 16px;
 }
 
 :root {
@@ -284,6 +285,53 @@ html {
   }
   50% {
     background-color: #5c8eef;
+  }
+}
+
+/* Decryption animation keyframes (PageLoader / DecryptingAnimation) */
+@keyframes decrypt-unlock {
+  0%,
+  15% {
+    d: path("M24 30V24C24 18.48 28.48 14 34 14V14");
+    opacity: 1;
+  }
+  35%,
+  65% {
+    d: path("M24 30V24C24 18.48 28.48 10 34 10V10");
+    opacity: 1;
+  }
+  85%,
+  100% {
+    d: path("M24 30V24C24 18.48 28.48 14 34 14V14");
+    opacity: 1;
+  }
+}
+
+@keyframes decrypt-progress {
+  0% {
+    stroke-dashoffset: 352;
+  }
+  100% {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes decrypt-burst {
+  0%,
+  15% {
+    transform: translateY(0);
+    opacity: 0;
+  }
+  30% {
+    opacity: 0.7;
+  }
+  60% {
+    transform: translateY(-32px);
+    opacity: 0;
+  }
+  100% {
+    transform: translateY(-32px);
+    opacity: 0;
   }
 }
 

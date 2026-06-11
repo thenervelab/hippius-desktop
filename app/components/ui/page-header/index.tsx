@@ -97,7 +97,7 @@ const PageHeader: React.FC<PageHeaderProps> = ({
                   </span>
                 </div>
               ) : (
-                <p className="text-[12px] font-bold leading-[18px] tracking-[-0.36px] text-primary-50 dark:text-primary-brand-dark">
+                <p className="whitespace-nowrap text-[12px] font-bold leading-[18px] tracking-[-0.12px] tabular-nums text-primary-50 dark:text-primary-brand-dark">
                   {stakedDisplay} hAlpha
                   <span className="text-[12px] font-medium text-grey-10 dark:text-white">
                     {" "}

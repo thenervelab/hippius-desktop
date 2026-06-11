@@ -129,8 +129,18 @@ pub async fn add_file(
     // / `tokio::fs::copy` will surface the I/O error to the user with
     // its native message. Don't `?`-bail here: a missing-file diagnostic
     // is clearer than "insufficient credits because we couldn't size it".
-    let account_id = state.current_account_id().map_err(crate::error::AppError::Other)?;
-    let bytes = tokio::fs::metadata(Path::new(&file_path)).await.map_or(0, |m| m.len());
+    let account_id = state.current_account_id()?;
+    // A stat failure falls back to bytes=0, which collapses the byte-priced
+    // credit gate to the legacy `> 0` floor (intentional — see above). Log it
+    // so the under-pricing is observable instead of silent; the server 402
+    // path remains the real backstop.
+    let bytes = match tokio::fs::metadata(Path::new(&file_path)).await {
+        Ok(m) => m.len(),
+        Err(e) => {
+            warn!(file = %file_path, error = %e, "could not size file for credit gate; falling back to legacy >0 floor");
+            0
+        }
+    };
     crate::billing::eligibility::require_eligible(
         &state,
         &account_id,
@@ -202,8 +212,12 @@ pub async fn add_folder(
     // returns a best-effort lower bound (see `sum_regular_file_bytes`),
     // which under-charges rather than over-charging the user — the
     // server's 402 path is still the last line of defense.
-    let account_id = state.current_account_id().map_err(crate::error::AppError::Other)?;
-    let bytes = sum_regular_file_bytes(Path::new(&folder_path)).await;
+    let account_id = state.current_account_id()?;
+    // One walk of the source tree for BOTH the credit-gate byte total and the
+    // banner file count (previously two separate full traversals). The byte
+    // total is a best-effort lower bound on permission-denied subdirs, which
+    // under-charges rather than over-charges — the server 402 is the backstop.
+    let (bytes, count) = walk_regular_files_stats(Path::new(&folder_path)).await;
     crate::billing::eligibility::require_eligible(
         &state,
         &account_id,
@@ -231,7 +245,6 @@ pub async fn add_folder(
     // banner that the sync engine will never clear (an empty plan
     // can complete without firing `SyncCompleted` in some hcfs-client
     // configurations).
-    let count = count_regular_files(Path::new(&folder_path)).await;
     if count > 0
         && let Some(label) = label_opt.as_deref()
     {
@@ -346,12 +359,23 @@ async fn add_folder_with_app_inner(sync_path: &str, folder_path: &str, subfolder
 /// async-fn boxing. Does not read file contents — only iterates
 /// directory entries — so the cost is bounded by what `copy_dir_recursive`
 /// is about to do anyway.
-async fn count_regular_files(root: &std::path::Path) -> u64 {
+/// Single-pass walk returning `(total_bytes, regular_file_count)` for the tree
+/// under `root`. Folder uploads previously walked the identical tree TWICE —
+/// once for the credit-gate byte total and once for the banner count — before
+/// `copy_dir_recursive` walked it a third time; this collapses the first two
+/// into one traversal. Same invariants as [`sum_regular_file_bytes`]: symlinks
+/// are not followed, per-subdir I/O errors are skipped, the stack is capped at
+/// [`FOLDER_BYTE_WALK_MAX_DEPTH`], and both accumulators use `saturating_add`.
+pub(super) async fn walk_regular_files_stats(root: &std::path::Path) -> (u64, u64) {
     use tokio::fs;
 
+    let mut bytes: u64 = 0;
     let mut count: u64 = 0;
     let mut stack: Vec<std::path::PathBuf> = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
+        if stack.len() > FOLDER_BYTE_WALK_MAX_DEPTH {
+            break;
+        }
         let Ok(mut entries) = fs::read_dir(&dir).await else { continue };
         while let Ok(Some(entry)) = entries.next_entry().await {
             let Ok(ft) = entry.file_type().await else { continue };
@@ -359,10 +383,13 @@ async fn count_regular_files(root: &std::path::Path) -> u64 {
                 stack.push(entry.path());
             } else if ft.is_file() {
                 count = count.saturating_add(1);
+                if let Ok(meta) = entry.metadata().await {
+                    bytes = bytes.saturating_add(meta.len());
+                }
             }
         }
     }
-    count
+    (bytes, count)
 }
 
 /// Sum the byte size of regular files (non-directory, non-symlink) under
@@ -428,25 +455,31 @@ pub(super) async fn sum_regular_file_bytes(root: &std::path::Path) -> u64 {
 /// to walk further is consistent with the rest of the module.
 const FOLDER_BYTE_WALK_MAX_DEPTH: usize = 4096;
 
-/// Recursively sum the byte size of a heterogeneous batch of paths
-/// (a mix of regular files and directories). Used by `add_files` to
-/// compute the credit-eligibility byte total. Each direct file path is
-/// sized via `tokio::fs::metadata`; each directory is walked through
-/// [`sum_regular_file_bytes`]. Per-path metadata failures degrade to
-/// zero so a missing or unreadable entry doesn't reject the rest of
-/// the batch — the subsequent copy loop surfaces the real I/O error.
-async fn sum_batch_bytes(paths: &[String]) -> u64 {
-    let mut total: u64 = 0;
+/// Single pass over a heterogeneous batch of paths (a mix of regular files and
+/// directories) returning `(total_bytes, regular_file_count)`. Used by
+/// `add_files` for both the credit-eligibility byte total and the banner count
+/// — previously two separate passes that each walked every directory. Each
+/// file is sized via `tokio::fs::metadata`; each directory is walked once via
+/// [`walk_regular_files_stats`]. Per-path metadata failures degrade to zero so
+/// a missing/unreadable entry doesn't reject the rest of the batch — the copy
+/// loop surfaces the real I/O error.
+async fn sum_and_count_batch(paths: &[String]) -> (u64, u64) {
+    let mut bytes: u64 = 0;
+    let mut count: u64 = 0;
     for fp in paths {
         let p = std::path::Path::new(fp);
-        let add = if p.is_dir() {
-            sum_regular_file_bytes(p).await
+        if p.is_dir() {
+            let (b, c) = walk_regular_files_stats(p).await;
+            bytes = bytes.saturating_add(b);
+            // Floor a directory's count at 1 so an unwalkable subdir still
+            // raises the banner (mirrors the prior `count_regular_files().max(1)`).
+            count = count.saturating_add(c.max(1));
         } else {
-            tokio::fs::metadata(p).await.map_or(0, |m| m.len())
-        };
-        total = total.saturating_add(add);
+            bytes = bytes.saturating_add(tokio::fs::metadata(p).await.map_or(0, |m| m.len()));
+            count = count.saturating_add(1);
+        }
     }
-    total
+    (bytes, count)
 }
 
 /// Internal folder copy — no sync trigger (caller handles it).
@@ -526,19 +559,27 @@ pub async fn delete_files(
     account_id: String,
     files: Vec<FileDeleteRequest>,
 ) -> Result<DeleteFilesResult> {
+    // Deletes files under the account's drives; authorize against the session.
+    let account_id = state.require_session_account(&account_id)?;
     let pool = state.pool()?;
+    // Resolve every drive's label→path ONCE (a single query) instead of one
+    // (often two, via the default fallback) SELECT per file in the batch.
+    let label_to_path: std::collections::HashMap<String, String> =
+        crate::sync::folders::get_all_sync_paths_or_warn(pool, &account_id, "delete_files")
+            .await
+            .into_iter()
+            .map(|sp| (sp.label, sp.path))
+            .collect();
+    let default_path = label_to_path.get("default").cloned();
+
     let mut deleted = 0u32;
     let mut failed = Vec::new();
 
     for file in &files {
         let effective_label = file.label.as_deref().unwrap_or("default");
-        let sync_path = match crate::sync::config::get_sync_path_for_label(pool, &account_id, effective_label).await {
-            Ok(p) => p,
-            Err(_) if effective_label != "default" => crate::sync::config::get_sync_path_for_label(pool, &account_id, "default")
-                .await
-                .unwrap_or_default(),
-            Err(_) => String::new(),
-        };
+        // Prefer the file's own drive path; fall back to the "default" drive's
+        // path (mirrors the prior per-file default fallback); else empty.
+        let sync_path = label_to_path.get(effective_label).or(default_path.as_ref()).cloned().unwrap_or_default();
 
         let relative_name = derive_relative_name(&sync_path, file.source.as_deref(), &file.name);
 
@@ -549,7 +590,7 @@ pub async fn delete_files(
                 let size_bytes = if target.is_dir() {
                     0
                 } else {
-                    tokio::fs::metadata(&target).await.map(|m| m.len()).unwrap_or(0)
+                    tokio::fs::metadata(&target).await.map_or(0, |m| m.len())
                 };
 
                 let remove_result = if target.is_dir() {
@@ -604,6 +645,233 @@ pub async fn delete_files(
     Ok(DeleteFilesResult { deleted, failed })
 }
 
+/// Request to rename a single file or folder, used by the `rename_entry` command.
+///
+/// Mirrors [`FileDeleteRequest`]: `name` is the drive-relative fallback
+/// (`actualFileName || name` on the FE), `source` the absolute on-disk path
+/// when known, `label` the drive the entry belongs to.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileRenameRequest {
+    pub name: String,
+    pub source: Option<String>,
+    pub label: Option<String>,
+    pub new_name: String,
+}
+
+/// Result of a rename: where the entry now lives, relative to its drive root.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameEntryResult {
+    pub new_relative_path: String,
+}
+
+/// Validate a user-supplied replacement basename, returning it trimmed.
+///
+/// The separator/traversal rejection is the invariant the whole rename path
+/// relies on: a basename that cannot contain `/`, `\`, NUL, or be `.`/`..`
+/// cannot move the entry out of its parent directory, so the (not yet
+/// existing) destination never needs its own canonicalize-and-contain check.
+fn validate_new_name(new_name: &str) -> Result<&str> {
+    let name = new_name.trim();
+    if name.is_empty() {
+        return Err(crate::error::AppError::Other("New name cannot be empty".into()));
+    }
+    // 255 bytes is the basename limit on APFS/ext4/NTFS; rejecting here gives
+    // a clear message instead of an opaque OS error from `rename`.
+    if name.len() > 255 {
+        return Err(crate::error::AppError::Other("New name is too long (255 bytes max)".into()));
+    }
+    if name.contains('/') || name.contains('\\') || name.contains('\0') || name == "." || name == ".." {
+        return Err(crate::error::AppError::Other("New name cannot contain path separators".into()));
+    }
+    // Cross-platform safety: drives sync to Windows devices, where ':' is
+    // the NTFS alternate-data-stream separator, a trailing dot is invalid,
+    // and the DOS device names are reserved even with an extension
+    // ("con.txt"). Rejecting here gives a friendly message now instead of
+    // an opaque sync failure on another device later. Trailing spaces are
+    // already gone via the trim above.
+    if name.contains(':') || name.ends_with('.') {
+        return Err(crate::error::AppError::Other("New name cannot contain ':' or end with '.'".into()));
+    }
+    const WINDOWS_RESERVED: [&str; 22] = [
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5",
+        "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
+    let stem = name.split('.').next().unwrap_or(name).to_ascii_uppercase();
+    if WINDOWS_RESERVED.contains(&stem.as_str()) {
+        return Err(crate::error::AppError::Other("That name is reserved by the operating system".into()));
+    }
+    Ok(name)
+}
+
+/// Rename a file or directory in place inside `sync_root`.
+///
+/// `old_rel` is the entry's current drive-relative path; `new_name` must be a
+/// pre-validated basename (see [`validate_new_name`]). `synced_rel_paths` is
+/// the drive's last-synced relative-path set when available — used only for
+/// the unsettled-folder guard below. Returns the new drive-relative path.
+///
+/// Two checks here are load-bearing:
+///
+/// - **Destination pre-check**: `std::fs::rename` silently REPLACES an
+///   existing destination file on Unix, so without it a name collision would
+///   clobber another synced file. A case-only rename ("file.txt" →
+///   "File.txt") is told apart from a real clash by canonical-path equality —
+///   on case-insensitive filesystems (macOS default) the "existing"
+///   destination IS the source. The exists→rename window is a TOCTOU gap we
+///   accept for a single-user desktop UI; the sync engine reconciles either
+///   outcome on the next cycle.
+/// - **Unsettled-folder guard**: `synced_rel_paths` holds the paths this
+///   device finished syncing in a previous cycle (the engine's `synced`
+///   tree). A synced path missing on disk means the folder has local
+///   changes the server has not acknowledged yet — e.g. a child deleted
+///   locally, awaiting remote-delete propagation — so the rename is refused
+///   conservatively until a cycle settles it. NOTE: this deliberately does
+///   NOT detect children uploaded from another device that were never
+///   downloaded here; those are absent from the synced set, and after a
+///   folder rename the next sync re-downloads them under the OLD folder
+///   name — exactly what happens for a Finder rename today. Closing that
+///   gap needs an engine-side accessor for server-known paths
+///   (hcfs-client `state.remote`); tracked follow-up.
+async fn rename_entry_inner(sync_root: &Path, old_rel: &str, new_name: &str, synced_rel_paths: Option<&[String]>) -> Result<String> {
+    let old_abs = ensure_within(sync_root, &sync_root.join(old_rel))
+        .map_err(|_| crate::error::AppError::Other("File is not available on this device yet — only locally synced files can be renamed".into()))?;
+
+    let old_basename = old_abs.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
+    if old_rel.is_empty() || old_basename.is_empty() {
+        return Err(crate::error::AppError::Other("Cannot rename the sync folder itself".into()));
+    }
+    if old_basename == new_name {
+        return Err(crate::error::AppError::Other("New name is the same as the current name".into()));
+    }
+
+    if old_abs.is_dir()
+        && let Some(rel_paths) = synced_rel_paths
+    {
+        let prefix = format!("{}/", old_rel.trim_end_matches('/'));
+        for rel in rel_paths {
+            if rel.starts_with(&prefix) && !sync_root.join(rel).exists() {
+                return Err(crate::error::AppError::Other(
+                    "This folder has changes that are still syncing on this device. Wait for sync to finish, then try again".into(),
+                ));
+            }
+        }
+    }
+
+    // `parent()` is Some for any canonical path below the root we just
+    // guarded against, but stay total rather than panic on the impossible.
+    let parent_dir = old_abs
+        .parent()
+        .ok_or(crate::error::AppError::Other("Cannot rename the sync folder itself".into()))?;
+    let new_abs = parent_dir.join(new_name);
+
+    if tokio::fs::try_exists(&new_abs).await.unwrap_or(false) {
+        let same_entry = tokio::fs::canonicalize(&new_abs).await.is_ok_and(|c| c == old_abs);
+        if !same_entry {
+            return Err(crate::error::AppError::Other(format!("\"{new_name}\" already exists in this folder")));
+        }
+    }
+
+    tokio::fs::rename(&old_abs, &new_abs)
+        .await
+        .map_err(|e| crate::error::AppError::Other(format!("Rename failed: {e}")))?;
+
+    // New rel path = old rel parent + new name, built from the caller's
+    // `old_rel` rather than the canonical absolute path. NOTE: `Path::join`
+    // appends with the OS separator, so on Windows a forward-slash `old_rel`
+    // yields a backslash-joined final segment. The value is informational —
+    // the FE displays nothing from it today — so this is acceptable.
+    let new_rel = Path::new(old_rel)
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map_or_else(|| PathBuf::from(new_name), |p| p.join(new_name))
+        .to_string_lossy()
+        .to_string();
+    Ok(new_rel)
+}
+
+/// Resolve which drive root a rename runs in, and the label whose synced
+/// state the unsettled-folder guard must consult.
+///
+/// An entry that names a label explicitly must rename in THAT drive: when
+/// the label has no configured row this errors instead of falling back to
+/// the default drive, where a same-named entry could silently be renamed
+/// in its place (PR #15 review finding 3 — `delete_files` still carries the
+/// old fallback; fixing it there is a joint follow-up). Only an entry with
+/// no label at all uses the default drive.
+fn resolve_rename_root<'a>(label: Option<&'a str>, label_to_path: &HashMap<String, String>) -> Result<(String, &'a str)> {
+    match label {
+        Some(l) => match label_to_path.get(l) {
+            Some(p) => Ok((p.clone(), l)),
+            None => Err(crate::error::AppError::Other(
+                "This file's sync folder is no longer configured on this device".into(),
+            )),
+        },
+        None => match label_to_path.get("default") {
+            Some(p) => Ok((p.clone(), "default")),
+            None => Err(crate::error::AppError::Other("No sync folder is configured for this file".into())),
+        },
+    }
+}
+
+/// Rename a file or folder inside a sync drive.
+///
+/// Resolves the drive root from `label` via [`resolve_rename_root`] (an
+/// explicitly-named drive must exist — no silent default-drive fallback),
+/// renames on disk, and triggers a sync cycle. The sync
+/// engine's own rename detection propagates the change to the server as a
+/// true rename (no re-upload): the hcfs-client file watcher captures the
+/// `fs::rename` exactly as it would a Finder rename (Tier 1 hint), and the
+/// content-hash fallback (Tier 2) covers a missed hint.
+///
+/// Deliberately does NOT call `SyncRunner::push_rename_hint`: the watcher
+/// already produces a hint, and a duplicate would put two renames with the
+/// same target into one batch — which hcfs-server's `validate_rename_batch`
+/// rejects WHOLESALE, forcing every rename in the cycle into the
+/// delete+re-upload fallback. Activity-log rewriting is likewise owned by
+/// the watcher path (`apply_rename_to_activity`).
+#[tauri::command]
+pub async fn rename_entry(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: String,
+    file: FileRenameRequest,
+) -> Result<RenameEntryResult> {
+    // Renames files under the account's drives; authorize against the session.
+    let account_id = state.require_session_account(&account_id)?;
+    let new_name = validate_new_name(&file.new_name)?.to_string();
+
+    let pool = state.pool()?;
+    let label_to_path: HashMap<String, String> = crate::sync::folders::get_all_sync_paths_or_warn(pool, &account_id, "rename_entry")
+        .await
+        .into_iter()
+        .map(|sp| (sp.label, sp.path))
+        .collect();
+    // One resolution yields both the drive root and the guard label, so the
+    // unsettled-folder guard below always queries the same drive it probes
+    // paths against (PR #15 review finding 2).
+    let (sync_path, guard_label) = resolve_rename_root(file.label.as_deref(), &label_to_path)?;
+
+    let old_rel = derive_relative_name(&sync_path, file.source.as_deref(), &file.name);
+
+    // Last-synced rel paths for the drive we actually resolved — feeds the
+    // unsettled-folder guard in the inner helper. `None` (drive not loaded)
+    // degrades to no guard; the disk rename is still valid, we just lose
+    // the early warning.
+    let synced_rel_paths: Option<Vec<String>> = synced_paths_for_label(&state.sync, guard_label)
+        .await
+        .map(|m| m.keys().cloned().collect());
+
+    let new_rel = rename_entry_inner(Path::new(&sync_path), &old_rel, &new_name, synced_rel_paths.as_deref()).await?;
+
+    // Trigger sync so the engine picks the rename up immediately instead of
+    // waiting for the watcher debounce / periodic cycle.
+    let _ = trigger_sync(&state.sync).await;
+
+    info!(old = %old_rel, new = %new_rel, "Rename completed");
+    Ok(RenameEntryResult { new_relative_path: new_rel })
+}
+
 /// Add multiple files to the sync folder in one call.
 ///
 /// Copies each file into `sync_path` and triggers sync once at the end.
@@ -650,41 +918,23 @@ pub async fn add_files(
     // below do NOT re-check — there's no point hammering the billing
     // API once per file when the batch is treated as a single unit.
     //
-    // The byte sum drives the price: each direct file path is sized via
-    // `tokio::fs::metadata`, each directory path is walked recursively
-    // via `sum_regular_file_bytes`. Per-path metadata failures degrade
-    // to 0 so a missing file in the input list doesn't reject the rest
-    // of the batch — the subsequent copy loop surfaces the I/O error.
-    let account_id = state.current_account_id().map_err(crate::error::AppError::Other)?;
+    // One pass over the batch yields BOTH the credit-gate byte total and the
+    // banner file count (previously two passes that each walked every directory
+    // in the batch). Each file path counts as 1; each directory contributes its
+    // recursive count floored at 1 so an unwalkable subdir still raises the
+    // banner. Per-path metadata failures degrade to 0 so a missing entry
+    // doesn't reject the rest — the copy loop surfaces the real I/O error. An
+    // empty `file_paths` yields count 0, which skips `begin` so an empty IPC
+    // doesn't raise a banner nothing will clear.
+    let account_id = state.current_account_id()?;
     let action = if for_folder {
         crate::billing::eligibility::InsufficientCreditsAction::FolderUpload
     } else {
         crate::billing::eligibility::InsufficientCreditsAction::FileUpload
     };
-    let total_bytes = sum_batch_bytes(&file_paths).await;
+    let (total_bytes, total_count) = sum_and_count_batch(&file_paths).await;
     crate::billing::eligibility::require_eligible(&state, &account_id, action, total_bytes).await?;
 
-    // Sum the file count for the banner. Each direct file path counts
-    // as 1; each directory path gets a recursive walk via
-    // `count_regular_files` (introduced in Task 7). Released either by
-    // the first upload chunk (success), the early-return error paths
-    // below (failure), or the all-failed-batch guard after the loop.
-    //
-    // Per-directory counts use `.max(1)` so that an unwalkable subdir
-    // (permission denied) still bumps the total by 1 — we know there's
-    // a directory there, even if we can't enumerate it. Per-batch
-    // count is NOT clamped: an empty `file_paths` skips `begin` so
-    // that an empty IPC call doesn't raise a banner that nothing
-    // will ever clear.
-    let mut total_count: u64 = 0;
-    for fp in &file_paths {
-        let p = Path::new(fp);
-        if p.is_dir() {
-            total_count = total_count.saturating_add(count_regular_files(p).await.max(1));
-        } else {
-            total_count = total_count.saturating_add(1);
-        }
-    }
     // Resolve `sync_path` → drive label once before any banner write
     // so the per-label state (Task 4.1) can route every `begin`/`reset`
     // for this IPC to the right drive. Banner writes degrade to no-op
@@ -841,9 +1091,7 @@ use hcfs_client::engine::types::{SyncedFileInfo, build_synced_paths_from_state};
 /// timestamps on cold start. See
 /// [`synced_paths_and_excludes_for_label`] for the full rationale.
 async fn synced_paths_for_label(sync: &SyncRunner, label: &str) -> Option<HashMap<String, SyncedFileInfo>> {
-    let _ = sync
-        .wait_for_first_reconcile(label, FIRST_RECONCILE_WAIT_BUDGET)
-        .await;
+    let _ = sync.wait_for_first_reconcile(label, FIRST_RECONCILE_WAIT_BUDGET).await;
     let arc = match acquire_drive_arc(sync, label) {
         DriveArcOutcome::Acquired(arc) => arc,
         DriveArcOutcome::CacheFallback => return sync.get_cached_synced_paths(label),
@@ -888,9 +1136,7 @@ async fn synced_paths_and_excludes_for_label(sync: &SyncRunner, label: &str) -> 
     // `Timeout` / `NotRegistered` falls through to whatever stale
     // state we have, matching the existing graceful-degradation
     // contract.
-    let _ = sync
-        .wait_for_first_reconcile(label, FIRST_RECONCILE_WAIT_BUDGET)
-        .await;
+    let _ = sync.wait_for_first_reconcile(label, FIRST_RECONCILE_WAIT_BUDGET).await;
 
     let arc = match acquire_drive_arc(sync, label) {
         DriveArcOutcome::Acquired(arc) => arc,
@@ -947,87 +1193,74 @@ fn acquire_drive_arc(sync: &SyncRunner, label: &str) -> DriveArcOutcome {
     }
 }
 
-/// Sync metadata for a single file, returned by `get_synced_file_metadata`.
-#[derive(Serialize)]
-pub struct SyncedFileMetadata {
-    /// File name (basename only, e.g. "photo.jpg")
-    pub file_name: String,
-    /// Relative path from sync root (e.g. "subfolder/photo.jpg")
-    pub relative_path: String,
-    /// Drive label this file belongs to
-    pub label: String,
-    /// Hex-encoded BLAKE3 path hash
-    pub arion_hash: String,
-    /// Arion CID from storage backend (empty if not available)
-    pub arion_cid: String,
-    /// Unix timestamp when file was first uploaded (0 if unknown)
-    pub uploaded_at: i64,
-    /// Unix timestamp when file was last updated (0 if unknown)
-    pub updated_at: i64,
-}
-
 /// Return sync metadata (arion hashes, CIDs, timestamps) for all synced
 /// files across all drives. Used internally by `get_user_files` to look
 /// up arion hashes without needing to list every subfolder from disk.
-pub async fn get_synced_file_metadata(state: tauri::State<'_, crate::app_state::AppState>) -> Result<Vec<SyncedFileMetadata>> {
-    let sync = &state.sync;
-    let mut result = Vec::new();
-
-    // Collect labels + cached paths in one pass
-    let label_maps: Vec<(String, HashMap<String, SyncedFileInfo>)> = {
-        let drive_arcs: Vec<(String, std::sync::Arc<tokio::sync::Mutex<DriveManager>>)> = {
-            match sync.drives.try_lock() {
-                Ok(guard) => guard.iter().map(|(k, slot)| (k.clone(), slot.manager.clone())).collect(),
-                Err(_) => Vec::new(),
-            }
-        };
-        if drive_arcs.is_empty() {
-            // All locks held by sync — use cached data
-            if let Ok(cache) = sync.synced_paths_cache.lock() {
-                cache.iter().map(|(l, m)| (l.clone(), m.clone())).collect()
-            } else {
-                Vec::new()
-            }
-        } else {
-            let mut out = Vec::new();
-            for (label, arc) in &drive_arcs {
-                if let Ok(manager) = arc.try_lock() {
-                    if let Ok(st) = manager.load_sync_state().await {
-                        let paths = build_synced_paths_from_state(&st);
-                        sync.update_synced_paths_cache(label, paths.clone());
-                        out.push((label.clone(), paths));
-                    }
-                } else if let Some(cached) = sync.get_cached_synced_paths(label) {
-                    // Drive is syncing — fall back to cached snapshot so
-                    // arion hashes remain visible while downloads are active.
-                    out.push((label.clone(), cached));
-                }
-            }
-            out
-        }
+/// Acquire each drive's synced-paths map: live per-drive lock first (cache
+/// warmed on success), falling back to the cached snapshot when a drive is
+/// mid-sync (or all drives are busy). Used by the bounded recent-files
+/// lookup (`get_recent_files`).
+async fn collect_label_maps(sync: &SyncRunner) -> Vec<(String, HashMap<String, SyncedFileInfo>)> {
+    let drive_arcs: Vec<(String, std::sync::Arc<tokio::sync::Mutex<DriveManager>>)> = match sync.drives.try_lock() {
+        Ok(guard) => guard.iter().map(|(k, slot)| (k.clone(), slot.manager.clone())).collect(),
+        Err(_) => Vec::new(),
     };
-
-    for (label, paths) in label_maps {
-        // Move out of the HashMap so we can take ownership of `rel_path`
-        // and only clone once per row (used to be twice — once each for
-        // `file_name` and `relative_path`, both of which always carry
-        // identical content).
-        for (rel_path, info) in paths {
-            // Use the full relative path so lookups match activity items
-            // that also use relative paths (e.g. "bucket/photo.jpg").
-            result.push(SyncedFileMetadata {
-                file_name: rel_path.clone(),
-                relative_path: rel_path,
-                label: label.clone(),
-                arion_hash: info.path_hash_hex(),
-                arion_cid: info.arion_cid.to_string(),
-                uploaded_at: info.uploaded_at,
-                updated_at: info.updated_at,
-            });
+    if drive_arcs.is_empty() {
+        // All locks held by sync — use cached data.
+        return match sync.synced_paths_cache.lock() {
+            Ok(cache) => cache.iter().map(|(l, m)| (l.clone(), m.clone())).collect(),
+            Err(_) => Vec::new(),
+        };
+    }
+    let mut out = Vec::new();
+    for (label, arc) in &drive_arcs {
+        if let Ok(manager) = arc.try_lock() {
+            if let Ok(st) = manager.load_sync_state().await {
+                let paths = build_synced_paths_from_state(&st);
+                sync.update_synced_paths_cache(label, paths.clone());
+                out.push((label.clone(), paths));
+            }
+        } else if let Some(cached) = sync.get_cached_synced_paths(label) {
+            // Drive is syncing — fall back to cached snapshot so arion
+            // hashes remain visible while downloads are active.
+            out.push((label.clone(), cached));
         }
     }
+    out
+}
 
-    Ok(result)
+/// Bounded variant of the synced-paths walk for the recent-files view.
+///
+/// A whole-corpus walk would materialize metadata (and several string/hash
+/// allocations) for EVERY synced file across all drives, even though
+/// `get_recent_files` only ever looks up at most `limit` (~50) keys.
+/// This allocates a `MetadataBundle` only for keys in `wanted`, so the
+/// per-row cost (hex-encoding the 32-byte hash, cloning the CID) is paid for
+/// the activity window, not the whole corpus. Pure (no `SyncRunner`) so the
+/// allocation bound is unit-testable.
+fn bundles_for_wanted_keys(
+    label_maps: Vec<(String, HashMap<String, SyncedFileInfo>)>,
+    wanted: &std::collections::HashSet<String>,
+) -> HashMap<String, MetadataBundle> {
+    let mut out = HashMap::with_capacity(wanted.len());
+    for (label, paths) in label_maps {
+        for (rel_path, info) in paths {
+            let key = format!("{rel_path}::{label}");
+            if !wanted.contains(&key) {
+                continue;
+            }
+            out.insert(
+                key,
+                MetadataBundle {
+                    arion_hash: info.path_hash_hex(),
+                    arion_cid: info.arion_cid.to_string(),
+                    uploaded_at: info.uploaded_at,
+                    updated_at: info.updated_at,
+                },
+            );
+        }
+    }
+    out
 }
 
 /// A recent file ready for UI rendering. Matches the frontend `FormattedUserFile`
@@ -1073,6 +1306,8 @@ pub async fn get_recent_files(
     account_id: String,
     limit: Option<usize>,
 ) -> Result<Vec<RecentFile>> {
+    // Account-scoped listing; authorize against the session account.
+    let account_id = state.require_session_account(&account_id)?;
     let sync = &state.sync;
     let pool = state.pool()?;
 
@@ -1083,32 +1318,15 @@ pub async fn get_recent_files(
     }
 
     // 2. Get sync paths → build label→path lookup
-    let sync_paths = crate::sync::folders::get_all_sync_paths_internal(pool, &account_id)
-        .await
-        .unwrap_or_default();
+    let sync_paths = crate::sync::folders::get_all_sync_paths_or_warn(pool, &account_id, "get_recent_files").await;
     let label_to_path: HashMap<String, String> = sync_paths
         .iter()
         .filter(|sp| !sp.path.is_empty() && !sp.label.is_empty())
         .map(|sp| (sp.label.clone(), sp.path.clone()))
         .collect();
 
-    // 3. Get synced file metadata → build lookup map
-    let metadata = get_synced_file_metadata(state.clone()).await.unwrap_or_default();
-    let mut meta_map: HashMap<String, MetadataBundle> = HashMap::with_capacity(metadata.len());
-    for entry in &metadata {
-        let key = format!("{}::{}", entry.file_name, entry.label);
-        meta_map.insert(
-            key,
-            MetadataBundle {
-                arion_hash: entry.arion_hash.clone(),
-                arion_cid: entry.arion_cid.clone(),
-                uploaded_at: entry.uploaded_at,
-                updated_at: entry.updated_at,
-            },
-        );
-    }
-
-    // 4. Filter deleted files
+    // 3. Filter deleted files FIRST so the metadata lookup below is bounded by
+    //    the (<= limit) surviving activity rows, not the whole synced corpus.
     let deleted_names: std::collections::HashSet<String> = items
         .iter()
         .filter(|item| item.action == SyncActivityAction::Deleted)
@@ -1123,6 +1341,12 @@ pub async fn get_recent_files(
     if non_deleted.is_empty() {
         return Ok(Vec::new());
     }
+
+    // 4. Look up synced metadata for ONLY the surviving keys. Allocation scales
+    //    with the activity window, not the total number of synced files.
+    let wanted: std::collections::HashSet<String> = non_deleted.iter().map(|item| format!("{}::{}", item.file_name, item.label)).collect();
+    let label_maps = collect_label_maps(&state.sync).await;
+    let mut meta_map = bundles_for_wanted_keys(label_maps, &wanted);
 
     // 5. Map to RecentFile with path resolution and timestamp priority
     let now_ms = chrono::Utc::now().timestamp_millis();
@@ -1189,7 +1413,7 @@ pub async fn get_recent_files(
     }
 
     // 6. Sort by timestamp (newest first)
-    result.sort_by(|a, b| b.last_charged_at.cmp(&a.last_charged_at));
+    result.sort_by_key(|b| std::cmp::Reverse(b.last_charged_at));
 
     Ok(result)
 }
@@ -1306,7 +1530,6 @@ pub async fn list_sync_folder(
     list_sync_folder_inner(&state, sync_path, subfolder, label).await
 }
 
-#[expect(clippy::too_many_lines, reason = "1 line over; extracting hurts readability")]
 async fn list_sync_folder_inner(
     state: &crate::app_state::AppState,
     sync_path: String,
@@ -1363,13 +1586,17 @@ async fn list_sync_folder_inner(
             if hcfs_client::engine::classify::is_failed_download_artifact(&name).is_some() {
                 let path = entry.path();
                 info!(artifact = %name, "Removing failed download artifact on list");
-                let _ = tokio::fs::remove_file(&path).await;
+                if let Err(e) = tokio::fs::remove_file(&path).await {
+                    warn!(artifact = %name, error = %e, "Failed to remove failed-download artifact on list — it will be retried on the next listing");
+                }
                 continue;
             }
             if hcfs_client::engine::classify::is_encrypted_name_stub(&name).is_some() && meta.len() == 0 {
                 let path = entry.path();
                 info!(stub = %name, "Removing 0-byte encrypted-name stub on list");
-                let _ = tokio::fs::remove_file(&path).await;
+                if let Err(e) = tokio::fs::remove_file(&path).await {
+                    warn!(stub = %name, error = %e, "Failed to remove 0-byte stub on list — it will be retried on the next listing");
+                }
                 continue;
             }
         }
@@ -1465,6 +1692,7 @@ pub async fn list_sync_folder_grouped(
     subfolder: Option<String>,
     label: Option<String>,
 ) -> Result<GroupedListing> {
+    let account_id = state.require_session_account(&account_id)?;
     list_sync_folder_grouped_inner(&state, account_id, sync_path, subfolder, label).await
 }
 
@@ -1504,26 +1732,57 @@ fn macos_name_cmp(a: &str, b: &str) -> std::cmp::Ordering {
             (Some(_), None) => return std::cmp::Ordering::Greater,
             (Some(ac), Some(bc)) => {
                 if ac.is_ascii_digit() && bc.is_ascii_digit() {
-                    // Compare digit runs as integers (natural sort).
-                    let mut an: u64 = 0;
-                    let mut bn: u64 = 0;
-                    while ai.peek().map_or(false, |c| c.is_ascii_digit()) {
-                        an = an * 10 + ai.next().unwrap().to_digit(10).unwrap() as u64;
+                    // Natural-sort the two digit runs by numeric value, comparing
+                    // them as digit *sequences* rather than parsing into an
+                    // integer: a 20+ digit run is a legal filename that overflows
+                    // any fixed-width integer. The earlier u64 parse saturated
+                    // every over-long run to the same u64::MAX, so two *distinct*
+                    // huge runs compared Equal — a non-total order, which
+                    // `slice::sort_by` documents as "May panic if `compare` does
+                    // not implement a total order" (std slice sort_by). Sequence
+                    // comparison stays a genuine total order with no overflow.
+                    //
+                    // Skip leading zeros first so "007" == "7" (numeric
+                    // equality); then the run with more significant digits is the
+                    // larger number, and for equal lengths the first differing
+                    // digit decides.
+                    while ai.peek() == Some(&'0') {
+                        ai.next();
                     }
-                    while bi.peek().map_or(false, |c| c.is_ascii_digit()) {
-                        bn = bn * 10 + bi.next().unwrap().to_digit(10).unwrap() as u64;
+                    while bi.peek() == Some(&'0') {
+                        bi.next();
                     }
-                    match an.cmp(&bn) {
+                    let mut run_order = std::cmp::Ordering::Equal;
+                    loop {
+                        let ad = ai.peek().copied().filter(char::is_ascii_digit);
+                        let bd = bi.peek().copied().filter(char::is_ascii_digit);
+                        match (ad, bd) {
+                            (Some(da), Some(db)) => {
+                                ai.next();
+                                bi.next();
+                                // First differing digit at equal length decides;
+                                // hold it until we know both runs are equal-length.
+                                if run_order == std::cmp::Ordering::Equal {
+                                    run_order = da.cmp(&db);
+                                }
+                            }
+                            // A remaining significant digit means the longer —
+                            // hence numerically larger — run.
+                            (Some(_), None) => return std::cmp::Ordering::Greater,
+                            (None, Some(_)) => return std::cmp::Ordering::Less,
+                            (None, None) => break,
+                        }
+                    }
+                    match run_order {
                         std::cmp::Ordering::Equal => continue,
                         ord => return ord,
                     }
-                } else {
-                    ai.next();
-                    bi.next();
-                    match ac.cmp(&bc) {
-                        std::cmp::Ordering::Equal => continue,
-                        ord => return ord,
-                    }
+                }
+                ai.next();
+                bi.next();
+                match ac.cmp(&bc) {
+                    std::cmp::Ordering::Equal => {}
+                    ord => return ord,
                 }
             }
         }
@@ -1685,7 +1944,7 @@ pub struct DateRangeFilter {
 pub struct FileFilterCriteria {
     pub search_term: Option<String>,
     pub file_types: Option<Vec<String>>,
-    /// Explicit file extensions to match (e.g. ["mp4", "jpg"]). Independent
+    /// Explicit file extensions to match (e.g. `["mp4", "jpg"]`). Independent
     /// from `file_types` (coarse categories) — present so the web-console
     /// style "specific extension" dropdown can request exact matches without
     /// re-encoding into category groups. Matched case-insensitively against
@@ -1712,10 +1971,7 @@ impl FileFilterCriteria {
     pub fn is_empty(&self) -> bool {
         self.search_term.as_deref().is_none_or(str::is_empty)
             && self.file_types.as_ref().is_none_or(std::vec::Vec::is_empty)
-            && self
-                .file_extensions
-                .as_ref()
-                .is_none_or(std::vec::Vec::is_empty)
+            && self.file_extensions.as_ref().is_none_or(std::vec::Vec::is_empty)
             && self.date_filter.as_deref().is_none_or(str::is_empty)
             && self.date_range.is_none()
             && self.file_sizes.as_ref().is_none_or(std::vec::Vec::is_empty)
@@ -1765,6 +2021,13 @@ pub struct UserFileEntry {
     pub created_at: i64,
     pub arion_hash: String,
     pub arion_cid: String,
+    /// Hex of the server-side `path_hash` — the file's unique id on Arion.
+    /// Used to download + decrypt a file that isn't synced to this device, via
+    /// `download_remote_file` / `cache_remote_file`. Empty for local disk-walk
+    /// entries (they preview/download straight from `source`); populated only
+    /// for `/search_files` hits so cloud-only results can be opened.
+    #[serde(default)]
+    pub file_id: String,
     pub source: String,
     pub miner_ids: Vec<String>,
     pub is_assigned: bool,
@@ -1783,8 +2046,7 @@ pub struct UserFileEntry {
 /// Whether a given `sync_status` value should contribute to per-label
 /// stats. Centralised so the inline accumulator in `get_user_files` and
 /// the test-definition `compute_label_stats` cannot disagree on the
-/// filter rule (only one of them being changed silently was the
-/// drift hazard the perf-audit review flagged).
+/// filter rule if only one of them is changed.
 fn is_counted_for_label_stats(sync_status: &str) -> bool {
     sync_status != "excluded"
 }
@@ -1836,10 +2098,10 @@ pub async fn get_user_files(
     account_id: String,
     filters: Option<FileFilterCriteria>,
 ) -> Result<UserFilesResult> {
+    // Account-scoped listing; authorize against the session account.
+    let account_id = state.require_session_account(&account_id)?;
     let pool = state.pool()?;
-    let sync_paths = crate::sync::folders::get_all_sync_paths_internal(pool, &account_id)
-        .await
-        .unwrap_or_default();
+    let sync_paths = crate::sync::folders::get_all_sync_paths_or_warn(pool, &account_id, "get_user_files").await;
 
     let mut all_files: Vec<UserFileEntry> = Vec::new();
     let mut total_private_size: u64 = 0;
@@ -1941,6 +2203,7 @@ pub async fn get_user_files(
                 created_at: created_at_ms,
                 arion_hash: entry.arion_hash.clone(),
                 arion_cid: entry.arion_cid.clone(),
+                file_id: String::new(),
                 source: format!("{folder_path}/{}", entry.name),
                 miner_ids: Vec::new(),
                 is_assigned: true,
@@ -1962,7 +2225,7 @@ pub async fn get_user_files(
     }
 
     // Sort by timestamp (newest first)
-    all_files.sort_by(|a, b| b.last_charged_at.cmp(&a.last_charged_at));
+    all_files.sort_by_key(|b| std::cmp::Reverse(b.last_charged_at));
 
     // Convert the borrowed-key map to owned-key for the result. One
     // allocation per label instead of one per file (the previous
@@ -2026,16 +2289,7 @@ async fn walk_disk_files_recursive(
 
         if meta.is_dir() {
             // Recurse — folders themselves are never emitted.
-            Box::pin(walk_disk_files_recursive(
-                base,
-                &rel_path,
-                label,
-                folder_path,
-                synced,
-                excluded,
-                out,
-            ))
-            .await;
+            Box::pin(walk_disk_files_recursive(base, &rel_path, label, folder_path, synced, excluded, out)).await;
             continue;
         }
 
@@ -2044,9 +2298,7 @@ async fn walk_disk_files_recursive(
         if hcfs_client::engine::classify::is_failed_download_artifact(&name).is_some() {
             continue;
         }
-        if hcfs_client::engine::classify::is_encrypted_name_stub(&name).is_some()
-            && meta.len() == 0
-        {
+        if hcfs_client::engine::classify::is_encrypted_name_stub(&name).is_some() && meta.len() == 0 {
             continue;
         }
 
@@ -2077,13 +2329,8 @@ async fn walk_disk_files_recursive(
             .modified()
             .ok()
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| i64::try_from(d.as_millis()).unwrap_or(0))
-            .unwrap_or(0);
-        let created_at_ms = if uploaded_at_ms != 0 {
-            uploaded_at_ms
-        } else {
-            local_modified_ms
-        };
+            .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(0));
+        let created_at_ms = if uploaded_at_ms != 0 { uploaded_at_ms } else { local_modified_ms };
         let last_charged_at_ms = if updated_at_ms != 0 { updated_at_ms } else { uploaded_at_ms };
 
         let display_name = if hcfs_client::engine::classify::is_encrypted_name_stub(&name).is_some()
@@ -2101,6 +2348,7 @@ async fn walk_disk_files_recursive(
             created_at: created_at_ms,
             arion_hash: info.map_or_else(String::new, hcfs_client::engine::types::SyncedFileInfo::path_hash_hex),
             arion_cid: info.map_or_else(String::new, |i| i.arion_cid.to_string()),
+            file_id: String::new(),
             source: format!("{folder_path}/{rel_path}"),
             miner_ids: Vec::new(),
             is_assigned: true,
@@ -2144,20 +2392,18 @@ pub async fn search_user_files_recursive(
     subfolder: Option<String>,
     filters: FileFilterCriteria,
 ) -> Result<Vec<UserFileEntry>> {
+    // Account-scoped search; authorize against the session account.
+    let account_id = state.require_session_account(&account_id)?;
     let pool = state.pool()?;
-    let owner = account_key(&account_id);
-    let sync_paths = crate::sync::folders::get_all_sync_paths_internal(pool, &account_id)
-        .await
-        .unwrap_or_default();
-    // Drive must be a real registered sync path for this user. Defends
-    // against a caller-supplied label that points at a different account's
-    // drive (the synced_paths_for_label lookup itself is in-memory keyed
-    // by label and doesn't enforce ownership).
+    let sync_paths = crate::sync::folders::get_all_sync_paths_or_warn(pool, &account_id, "search_user_files_recursive").await;
+    // Drive must be a real registered sync path for this user — the
+    // `sync_paths` membership check below is the ownership guard (the
+    // in-memory `synced_paths_for_label` lookup is keyed by label only and
+    // does not enforce ownership on its own).
     let Some(sp) = sync_paths.iter().find(|sp| sp.label == label && !sp.path.is_empty()) else {
         // Unknown label / not yet initialised — surface as empty rather
         // than failing the IPC. Matches `get_user_files` which silently
         // skips drives that fail to list.
-        let _ = owner; // suppress unused-var warning when the branch is taken
         return Ok(Vec::new());
     };
 
@@ -2181,16 +2427,7 @@ pub async fn search_user_files_recursive(
     let mut out: Vec<UserFileEntry> = Vec::new();
 
     // 1. On-disk walk — collects everything physically present locally.
-    walk_disk_files_recursive(
-        &base,
-        &rel_prefix,
-        &label,
-        &sp.path,
-        synced.as_ref(),
-        &excluded,
-        &mut out,
-    )
-    .await;
+    walk_disk_files_recursive(&base, &rel_prefix, &label, &sp.path, synced.as_ref(), &excluded, &mut out).await;
 
     // 2. Server-only overlay — files known on the server that haven't
     // downloaded to this device yet. We surface them as `sync_status =
@@ -2225,6 +2462,7 @@ pub async fn search_user_files_recursive(
                 created_at: uploaded_at_ms,
                 arion_hash: info.path_hash_hex(),
                 arion_cid: info.arion_cid.to_string(),
+                file_id: String::new(),
                 source: format!("{}/{}", sp.path, rel),
                 miner_ids: Vec::new(),
                 is_assigned: true,
@@ -2245,7 +2483,7 @@ pub async fn search_user_files_recursive(
 
     // Newest-first by upload/charge timestamp — mirrors `get_user_files`'s
     // default ordering so the UI sees the same shape across both paths.
-    out.sort_by(|a, b| b.last_charged_at.cmp(&a.last_charged_at));
+    out.sort_by_key(|b| std::cmp::Reverse(b.last_charged_at));
 
     Ok(out)
 }
@@ -2257,6 +2495,7 @@ pub async fn search_user_files_recursive(
 /// refetch). Owning the filter rules in a single function keeps the
 /// folder view and the files page from drifting — previously both
 /// reimplemented the logic in TypeScript.
+#[expect(clippy::too_many_lines, reason = "flat per-criterion filter cascade; splitting into helpers hurts readability")]
 fn apply_file_filters(files: &mut Vec<UserFileEntry>, f: &FileFilterCriteria) {
     let search_lower = f.search_term.as_ref().and_then(|s| {
         let low = s.to_lowercase();
@@ -2457,7 +2696,7 @@ pub async fn export_file(
     // Gate 1: sync_path must be a registered sync folder for the active
     // user. This prevents the broad `ensure_within` guard from being
     // bypassed via an attacker-controlled parent directory.
-    let account_id = state.current_account_id().map_err(crate::error::AppError::Other)?;
+    let account_id = state.current_account_id()?;
     let owner = account_key(&account_id);
     let registered: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM sync_paths WHERE owner = ? AND path = ? LIMIT 1")
         .bind(&owner)
@@ -2497,6 +2736,7 @@ pub async fn resolve_file_path(
     label: String,
     file_name: String,
 ) -> Result<String> {
+    let account_id = state.require_session_account(&account_id)?;
     // Reject path traversal attempts — slashes are allowed for subfolder access
     if file_name.contains("..") {
         return Err(crate::error::AppError::Other("Invalid file name".into()));
@@ -2554,6 +2794,7 @@ pub async fn resolve_file_info(
     source: Option<String>,
     file_name: String,
 ) -> Result<FilePathInfo> {
+    let account_id = state.require_session_account(&account_id)?;
     let pool = state.pool()?;
     let effective_label = label.as_deref().unwrap_or("default");
 
@@ -2602,6 +2843,83 @@ async fn copy_dir_recursive(src: &Path, dst: &Path, depth: u32) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+
+    // --- bundles_for_wanted_keys (F10: bounded recent-files metadata) ---
+
+    /// The bounded lookup must allocate a `MetadataBundle` only for keys in the
+    /// `wanted` set, regardless of how large the synced corpus is. Seeds 1000
+    /// synced files but asks for 3 keys (2 present, 1 absent) and asserts the
+    /// result holds exactly the 2 present-and-wanted entries — not 1000.
+    #[test]
+    fn bundles_for_wanted_keys_allocates_only_for_wanted() {
+        use std::collections::HashSet;
+        use std::sync::Arc;
+
+        let mut corpus: HashMap<String, SyncedFileInfo> = HashMap::new();
+        for i in 0..1000 {
+            corpus.insert(
+                format!("file{i}.txt"),
+                SyncedFileInfo {
+                    path_hash: [0u8; 32],
+                    arion_cid: Arc::from("cid"),
+                    uploaded_at: 1,
+                    updated_at: 2,
+                },
+            );
+        }
+        let label_maps = vec![("drive".to_string(), corpus)];
+
+        let wanted: HashSet<String> = ["file3.txt::drive", "file7.txt::drive", "missing.txt::drive"]
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+
+        let out = bundles_for_wanted_keys(label_maps, &wanted);
+
+        assert_eq!(out.len(), 2, "only present-and-wanted keys produce bundles, not the whole corpus");
+        assert!(out.contains_key("file3.txt::drive"));
+        assert!(out.contains_key("file7.txt::drive"));
+        assert!(!out.contains_key("missing.txt::drive"), "a wanted-but-absent key must not appear");
+    }
+
+    /// One walk yields both the byte total and the regular-file count across
+    /// nested directories — the single-pass replacement for the prior two
+    /// separate traversals in the folder-upload credit gate + banner.
+    #[tokio::test]
+    async fn walk_regular_files_stats_counts_and_sizes_nested_tree() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        tokio::fs::write(root.join("a.txt"), b"hello").await.unwrap(); // 5 bytes
+        tokio::fs::write(root.join("b.txt"), b"hi").await.unwrap(); // 2 bytes
+        let sub = root.join("sub");
+        tokio::fs::create_dir(&sub).await.unwrap();
+        tokio::fs::write(sub.join("c.txt"), b"xyz").await.unwrap(); // 3 bytes
+
+        let (bytes, count) = walk_regular_files_stats(root).await;
+        assert_eq!(count, 3, "all three regular files counted across the nested dir");
+        assert_eq!(bytes, 10, "byte total summed across the nested dir (5+2+3)");
+    }
+
+    /// An empty wanted set yields an empty map — the recent-files path returns
+    /// early on no surviving activity, but the helper must be safe regardless.
+    #[test]
+    fn bundles_for_wanted_keys_empty_wanted_is_empty() {
+        use std::collections::HashSet;
+        use std::sync::Arc;
+        let mut corpus: HashMap<String, SyncedFileInfo> = HashMap::new();
+        corpus.insert(
+            "a.txt".to_string(),
+            SyncedFileInfo {
+                path_hash: [1u8; 32],
+                arion_cid: Arc::from("x"),
+                uploaded_at: 0,
+                updated_at: 0,
+            },
+        );
+        let out = bundles_for_wanted_keys(vec![("d".to_string(), corpus)], &HashSet::new());
+        assert!(out.is_empty());
+    }
 
     // --- macos_name_cmp ---
 
@@ -2655,6 +2973,75 @@ mod tests {
         let mut names = vec!["Zebra", "apple", "Mango", "banana"];
         names.sort_by(|a, b| macos_name_cmp(a, b));
         assert_eq!(names, vec!["apple", "banana", "Mango", "Zebra"]);
+    }
+
+    #[test]
+    fn macos_name_cmp_handles_overflowing_digit_runs() {
+        // Digit runs longer than 20 chars overflow u64 (39 chars overflow u128):
+        // the comparator must neither panic nor lose its total order. It compares
+        // runs as digit sequences, so two *distinct* over-long runs order by
+        // magnitude instead of both collapsing to a saturated MAX.
+        let huge9 = format!("file{}", "9".repeat(30));
+        let huge8 = format!("file{}", "8".repeat(30));
+
+        // Equal-length runs: the larger leading digit wins (9… > 8…). The old
+        // u64-saturating comparator wrongly returned Equal here, making the order
+        // non-total — `slice::sort_by`'s documented "May panic" territory.
+        assert_eq!(macos_name_cmp(&huge9, &huge8), std::cmp::Ordering::Greater);
+        assert_eq!(macos_name_cmp(&huge8, &huge9), std::cmp::Ordering::Less);
+        // Identical over-long runs still compare Equal.
+        assert_eq!(macos_name_cmp(&huge9, &huge9), std::cmp::Ordering::Equal);
+        // More significant digits is the larger number even with smaller digits:
+        // 31 ones (≥ 10^30) outranks 30 nines (< 10^30).
+        let longer = format!("file{}", "1".repeat(31));
+        assert_eq!(macos_name_cmp(&longer, &huge9), std::cmp::Ordering::Greater);
+        // An over-long run still orders after a small number.
+        assert_eq!(macos_name_cmp(&huge9, "file2"), std::cmp::Ordering::Greater);
+        // Leading zeros are not significant: "007" == "7" within a run.
+        assert_eq!(macos_name_cmp("file007", "file7"), std::cmp::Ordering::Equal);
+
+        // A full sort containing over-long runs completes without panic and is
+        // correctly ordered by magnitude.
+        let mut names = vec![huge9.as_str(), "file2", "file1", "file10", huge8.as_str()];
+        names.sort_by(|a, b| macos_name_cmp(a, b));
+        assert_eq!(names, vec!["file1", "file2", "file10", huge8.as_str(), huge9.as_str()]);
+    }
+
+    proptest! {
+        // `macos_name_cmp` feeds `slice::sort_by`, which documents "May panic if
+        // `compare` does not implement a total order". These properties pin the
+        // total-order contract the old u64-saturating comparator broke for 20+
+        // digit runs.
+
+        // Antisymmetry: cmp(a, b) is always the reverse of cmp(b, a).
+        #[test]
+        fn macos_name_cmp_is_antisymmetric(a in "[0-9A-Za-z._-]{0,30}", b in "[0-9A-Za-z._-]{0,30}") {
+            prop_assert_eq!(macos_name_cmp(&a, &b), macos_name_cmp(&b, &a).reverse());
+        }
+
+        // Reflexivity: every name compares Equal to itself.
+        #[test]
+        fn macos_name_cmp_is_reflexive(a in "[0-9A-Za-z._-]{0,30}") {
+            prop_assert_eq!(macos_name_cmp(&a, &a), std::cmp::Ordering::Equal);
+        }
+
+        // Digit runs order by true numeric value whenever the run fits in u128 —
+        // the oracle is plain integer comparison, so this is not a tautology.
+        #[test]
+        fn macos_name_cmp_digit_runs_match_numeric(x in any::<u128>(), y in any::<u128>()) {
+            prop_assert_eq!(macos_name_cmp(&x.to_string(), &y.to_string()), x.cmp(&y));
+        }
+
+        // A sort over arbitrarily long digit runs (well past u64/u128) completes
+        // without panic and yields a non-decreasing sequence under the
+        // comparator — only possible if the comparator is a genuine total order.
+        #[test]
+        fn macos_name_cmp_sorts_long_digit_runs_total(mut names in proptest::collection::vec("[0-9]{0,40}", 0..15)) {
+            names.sort_by(|a, b| macos_name_cmp(a, b));
+            for pair in names.windows(2) {
+                prop_assert_ne!(macos_name_cmp(&pair[0], &pair[1]), std::cmp::Ordering::Greater);
+            }
+        }
     }
 
     // --- derive_relative_name ---
@@ -2764,6 +3151,7 @@ mod tests {
             created_at,
             arion_hash: String::new(),
             arion_cid: String::new(),
+            file_id: String::new(),
             source: String::new(),
             miner_ids: Vec::new(),
             is_assigned: false,
@@ -3066,9 +3454,7 @@ mod tests {
         });
 
         let start = Instant::now();
-        let outcome = sync
-            .wait_for_first_reconcile(label, Duration::from_millis(500))
-            .await;
+        let outcome = sync.wait_for_first_reconcile(label, Duration::from_millis(500)).await;
         let elapsed = start.elapsed();
 
         match outcome {
@@ -3113,9 +3499,7 @@ mod tests {
         ));
 
         let start = Instant::now();
-        let outcome = sync
-            .wait_for_first_reconcile("does-not-exist", Duration::from_secs(5))
-            .await;
+        let outcome = sync.wait_for_first_reconcile("does-not-exist", Duration::from_secs(5)).await;
         let elapsed = start.elapsed();
 
         assert!(matches!(outcome, WaitOutcome::NotRegistered), "got {outcome:?}");
@@ -3124,5 +3508,195 @@ mod tests {
             "NotRegistered must return immediately, took {}ms",
             elapsed.as_millis(),
         );
+    }
+
+    // --- rename_entry: basename validation + in-place rename ---
+
+    #[test]
+    fn validate_new_name_trims_and_accepts_plain_names() {
+        assert_eq!(validate_new_name("  notes.txt ").unwrap(), "notes.txt");
+        assert_eq!(validate_new_name("üñïçødé 文件.pdf").unwrap(), "üñïçødé 文件.pdf");
+    }
+
+    #[test]
+    fn validate_new_name_rejects_empty_traversal_and_separators() {
+        for bad in ["", "   ", ".", "..", "a/b", "a\\b", "a\0b"] {
+            assert!(validate_new_name(bad).is_err(), "{bad:?} should be rejected");
+        }
+        // Windows-unsafe shapes: ADS colon, trailing dot, DOS device names
+        // (reserved even with an extension, case-insensitively).
+        for bad in ["a:b", "name.", "CON", "con.txt", "Nul", "COM7", "lpt9.log"] {
+            assert!(validate_new_name(bad).is_err(), "{bad:?} should be rejected");
+        }
+        // Near-misses of the reserved list must stay legal.
+        for ok in ["console.txt", "common", "LPT10", "aux-cable.jpg"] {
+            assert!(validate_new_name(ok).is_ok(), "{ok:?} should be accepted");
+        }
+        // 255 bytes is the boundary: a 255-byte name passes, 256 fails. Use a
+        // multibyte char to pin "bytes, not chars" (é is 2 bytes in UTF-8).
+        let ok = "é".repeat(127) + "a"; // 255 bytes
+        assert_eq!(ok.len(), 255);
+        assert!(validate_new_name(&ok).is_ok());
+        let too_long = "é".repeat(128); // 256 bytes
+        assert!(validate_new_name(&too_long).is_err());
+    }
+
+    proptest! {
+        /// Any accepted name upholds the invariant `rename_entry_inner`
+        /// relies on: it cannot navigate out of the parent directory.
+        #[test]
+        fn validate_new_name_accepted_names_are_plain_basenames(input in ".{0,300}") {
+            if let Ok(name) = validate_new_name(&input) {
+                prop_assert!(!name.is_empty());
+                prop_assert!(name.len() <= 255);
+                prop_assert!(!name.contains('/'));
+                prop_assert!(!name.contains('\\'));
+                prop_assert!(!name.contains('\0'));
+                prop_assert!(!name.contains(':'));
+                prop_assert!(!name.ends_with('.'));
+                prop_assert!(name != "." && name != "..");
+                // Trimming is idempotent: a returned name re-validates to itself.
+                prop_assert_eq!(validate_new_name(name).unwrap(), name);
+            }
+        }
+    }
+
+    #[test]
+    fn resolve_rename_root_requires_named_label_to_exist() {
+        let mut map = HashMap::new();
+        map.insert("default".to_string(), "/drives/default".to_string());
+        map.insert("photos".to_string(), "/drives/photos".to_string());
+
+        // Named label present → that drive, and the guard label matches it.
+        let (path, guard) = resolve_rename_root(Some("photos"), &map).unwrap();
+        assert_eq!((path.as_str(), guard), ("/drives/photos", "photos"));
+
+        // Named label missing → error, NOT a silent default-drive fallback
+        // (a same-named entry in the default drive must never be renamed).
+        let err = resolve_rename_root(Some("gone"), &map).unwrap_err();
+        assert!(err.to_string().contains("no longer configured"), "got: {err}");
+
+        // No label at all → the default drive, when configured.
+        let (path, guard) = resolve_rename_root(None, &map).unwrap();
+        assert_eq!((path.as_str(), guard), ("/drives/default", "default"));
+
+        let empty: HashMap<String, String> = HashMap::new();
+        assert!(resolve_rename_root(None, &empty).is_err());
+    }
+
+    #[tokio::test]
+    async fn rename_entry_inner_renames_file_and_returns_new_rel_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        tokio::fs::create_dir_all(root.join("docs")).await.unwrap();
+        tokio::fs::write(root.join("docs/a.txt"), b"hello").await.unwrap();
+
+        let new_rel = rename_entry_inner(root, "docs/a.txt", "b.txt", None).await.unwrap();
+
+        assert_eq!(new_rel, "docs/b.txt");
+        assert!(!root.join("docs/a.txt").exists());
+        assert_eq!(tokio::fs::read(root.join("docs/b.txt")).await.unwrap(), b"hello");
+    }
+
+    #[tokio::test]
+    async fn rename_entry_inner_renames_top_level_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        tokio::fs::create_dir_all(root.join("old-folder")).await.unwrap();
+        tokio::fs::write(root.join("old-folder/x.txt"), b"x").await.unwrap();
+
+        let new_rel = rename_entry_inner(root, "old-folder", "new-folder", None).await.unwrap();
+
+        assert_eq!(new_rel, "new-folder");
+        assert!(root.join("new-folder/x.txt").exists());
+        assert!(!root.join("old-folder").exists());
+    }
+
+    #[tokio::test]
+    async fn rename_entry_inner_rejects_missing_source() {
+        let tmp = tempfile::tempdir().unwrap();
+        let err = rename_entry_inner(tmp.path(), "ghost.txt", "real.txt", None).await.unwrap_err();
+        assert!(err.to_string().contains("not available on this device"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn rename_entry_inner_rejects_existing_destination_without_clobbering() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        tokio::fs::write(root.join("a.txt"), b"a").await.unwrap();
+        tokio::fs::write(root.join("b.txt"), b"b").await.unwrap();
+
+        let err = rename_entry_inner(root, "a.txt", "b.txt", None).await.unwrap_err();
+
+        assert!(err.to_string().contains("already exists"), "got: {err}");
+        // The pre-check exists because fs::rename would otherwise silently
+        // replace b.txt on Unix — both files must survive intact.
+        assert_eq!(tokio::fs::read(root.join("a.txt")).await.unwrap(), b"a");
+        assert_eq!(tokio::fs::read(root.join("b.txt")).await.unwrap(), b"b");
+    }
+
+    #[tokio::test]
+    async fn rename_entry_inner_allows_case_only_rename() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        tokio::fs::write(root.join("report.txt"), b"r").await.unwrap();
+
+        // On a case-insensitive filesystem (macOS default) the destination
+        // "exists" — the same-entry canonical check must let this through.
+        // On a case-sensitive filesystem the destination is simply absent.
+        // Either way the rename succeeds.
+        let new_rel = rename_entry_inner(root, "report.txt", "Report.txt", None).await.unwrap();
+
+        assert_eq!(new_rel, "Report.txt");
+        assert_eq!(tokio::fs::read(root.join("Report.txt")).await.unwrap(), b"r");
+    }
+
+    #[tokio::test]
+    async fn rename_entry_inner_rejects_same_name_and_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        tokio::fs::write(root.join("a.txt"), b"a").await.unwrap();
+
+        let same = rename_entry_inner(root, "a.txt", "a.txt", None).await.unwrap_err();
+        assert!(same.to_string().contains("same as the current name"), "got: {same}");
+
+        let root_rename = rename_entry_inner(root, "", "new-root", None).await.unwrap_err();
+        assert!(root_rename.to_string().contains("sync folder itself"), "got: {root_rename}");
+    }
+
+    #[tokio::test]
+    async fn rename_entry_inner_folder_blocks_when_synced_children_missing_on_disk() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        tokio::fs::create_dir_all(root.join("album")).await.unwrap();
+        tokio::fs::write(root.join("album/on-disk.jpg"), b"j").await.unwrap();
+
+        // A previously-synced child is missing on disk (e.g. deleted
+        // locally, remote-delete not yet propagated): the folder is in an
+        // unsettled sync state, so the rename is refused conservatively.
+        let synced_paths = vec!["album/on-disk.jpg".to_string(), "album/locally-deleted.jpg".to_string()];
+        let err = rename_entry_inner(root, "album", "holiday", Some(&synced_paths)).await.unwrap_err();
+        assert!(err.to_string().contains("still syncing"), "got: {err}");
+        assert!(root.join("album").exists());
+
+        // Every synced child present on disk → folder is settled → proceed.
+        tokio::fs::write(root.join("album/locally-deleted.jpg"), b"j").await.unwrap();
+        let new_rel = rename_entry_inner(root, "album", "holiday", Some(&synced_paths)).await.unwrap();
+        assert_eq!(new_rel, "holiday");
+        assert!(root.join("holiday/on-disk.jpg").exists());
+    }
+
+    #[tokio::test]
+    async fn rename_entry_inner_unsettled_guard_ignores_sibling_prefix_folders() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        tokio::fs::create_dir_all(root.join("docs")).await.unwrap();
+        tokio::fs::write(root.join("docs/a.txt"), b"a").await.unwrap();
+
+        // "docs2/…" shares the "docs" string prefix but is a sibling — the
+        // guard's trailing-`/` normalization must not match it.
+        let synced_paths = vec!["docs/a.txt".to_string(), "docs2/not-here.txt".to_string()];
+        let new_rel = rename_entry_inner(root, "docs", "papers", Some(&synced_paths)).await.unwrap();
+        assert_eq!(new_rel, "papers");
     }
 }

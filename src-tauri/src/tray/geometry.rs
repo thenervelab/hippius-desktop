@@ -212,6 +212,25 @@ mod tests {
     }
 
     #[test]
+    fn no_rect_top_right_anchor_lands_top_right_on_screen() {
+        // Linux has no tray-icon bounds, so the popover anchors to a zero-size
+        // rect at the TOP-RIGHT corner of the work area (where the tray lives).
+        // The panel must right-align to the margin, drop just under the top
+        // inset, and stay fully inside the work area on every edge.
+        let corner = Rect {
+            x: MAC_WORK_AREA.right(),
+            y: MAC_WORK_AREA.y,
+            width: 0,
+            height: 0,
+        };
+        let (x, y) = compute_panel_position(corner, PANEL_W, PANEL_H, MAC_WORK_AREA, GAP, MARGIN);
+        // Centred on the right edge then clamped → flush to the right margin.
+        assert_eq!(x, MAC_WORK_AREA.right() - PANEL_W - MARGIN, "panel right-aligned: {x}");
+        assert!(y >= MAC_WORK_AREA.y + MARGIN, "panel top within work area: {y}");
+        assert!(y + PANEL_H <= MAC_WORK_AREA.bottom() - MARGIN, "panel bottom within work area: {y}");
+    }
+
+    #[test]
     fn panel_larger_than_work_area_does_not_panic() {
         // Degenerate: panel bigger than the whole work area. Must clamp to the
         // top-left inset without panicking on an inverted clamp range.

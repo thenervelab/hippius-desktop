@@ -77,7 +77,7 @@ fn normalize_activity_rows(items: &[SyncActivityItem]) -> Vec<SyncActivityRow> {
         });
     }
 
-    rows.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    rows.sort_by_key(|b| std::cmp::Reverse(b.timestamp));
     rows
 }
 
@@ -188,15 +188,21 @@ pub async fn get_all_drive_statuses_inner(state: &crate::app_state::AppState) ->
         return Ok(Vec::new());
     };
 
-    let paths = crate::sync::folders::get_all_sync_paths_internal(pool, &account_id)
-        .await
-        .unwrap_or_default();
+    // Propagate a DB failure rather than rendering it as an empty drive list:
+    // `.unwrap_or_default()` made a pool/query error indistinguishable from a
+    // legitimately empty account, so the FE showed "no drives configured" for a
+    // transient DB error. The no-account case above already returns an empty
+    // list; a real query error should surface (the FE handles an Err here).
+    let paths = crate::sync::folders::get_all_sync_paths_internal(pool, &account_id).await?;
 
     // Snapshot the cache once so the loop below doesn't hold the lock
     // across the sync-path iteration. A missing label falls through to
     // the DB-derived status; a hit wins over it.
+    // Recover a poisoned lock rather than `unwrap_or_default()`-ing to an empty
+    // cache, which would silently drop every cached drive status (the rows fall
+    // back to DB-derived status, masking the poison). into_inner reads the data.
     let cache_snapshot: std::collections::HashMap<String, DriveStatus> =
-        state.drive_status_cache.lock().map(|guard| guard.clone()).unwrap_or_default();
+        state.drive_status_cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
 
     Ok(paths
         .into_iter()

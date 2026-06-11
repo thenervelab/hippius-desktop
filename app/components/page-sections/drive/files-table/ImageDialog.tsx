@@ -5,7 +5,7 @@ import { Loader2, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { motion } from "framer-motion";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { getFileUrl } from "@/app/lib/utils/fileUrlResolver";
+import { useViewableFileUrl } from "@/app/lib/hooks/useViewableFileUrl";
 import { FileViewerLayout } from "@/app/components/page-sections/drive/file-viewer";
 
 export const ImageDialogTrigger: React.FC<{
@@ -13,6 +13,9 @@ export const ImageDialogTrigger: React.FC<{
   onClick: () => void;
   className?: string;
 }> = ({ children, onClick, className }) => {
+  // The hover eye icon lives inside NameCell (inline, left of the status
+  // badge) and reveals via this button's `group` class — an absolute overlay
+  // here would fade in on top of the Pending/Failed pills.
   return (
     <button
       type="button"
@@ -23,10 +26,6 @@ export const ImageDialogTrigger: React.FC<{
       )}
     >
       <span className="flex-1 min-w-0">{children}</span>
-      {/* Eye icon on hover */}
-      <div className="absolute pointer-events-none opacity-0 transition-opacity duration-300 group-hover:opacity-100 right-4 inset-y-0 flex items-center">
-        <Icons.EyeOutline className="size-4 text-primary-60" />
-      </div>
     </button>
   );
 };
@@ -72,19 +71,34 @@ const ImageDialog: React.FC<{
     file: FormattedUserFile,
     polkadotAddress: string,
   ) => void;
-}> = ({ file, allFiles, onCloseClicked, onNavigate, handleFileDownload }) => {
+  onDelete?: (file: FormattedUserFile) => void;
+}> = ({
+  file,
+  allFiles,
+  onCloseClicked,
+  onNavigate,
+  handleFileDownload,
+  onDelete,
+}) => {
   const [imageLoaded, setImageLoaded] = useState(false);
   const [imageError, setImageError] = useState<string | null>(null);
-  const [resolvedUrl, setResolvedUrl] = useState<string>("");
+  // Resolves to a local URL for synced files, or downloads + decrypts a
+  // cloud-only file on demand (sidebar-search results that aren't on disk).
+  const {
+    url: resolvedUrl,
+    isLoading: resolving,
+    error: resolveError,
+  } = useViewableFileUrl(file);
 
-  // Reset state and resolve a fresh URL whenever the open file changes,
-  // before mount as well as when navigating between files in the strip.
+  // Reset the <img> load state whenever the resolved URL changes (new file in
+  // the strip, or a just-finished cloud decrypt).
   useEffect(() => {
-    if (!file) return;
     setImageLoaded(false);
     setImageError(null);
-    setResolvedUrl(getFileUrl(file).url);
-  }, [file]);
+  }, [resolvedUrl]);
+
+  // A failed decrypt/download takes precedence over an <img> load failure.
+  const displayError = resolveError ?? imageError;
 
   if (!file) return null;
 
@@ -95,15 +109,16 @@ const ImageDialog: React.FC<{
       onClose={onCloseClicked}
       onNavigate={onNavigate}
       handleFileDownload={handleFileDownload}
+      onDelete={onDelete}
     >
       <div className="relative w-full h-full min-h-0 min-w-0 flex items-center justify-center">
-        {!imageLoaded && !imageError && resolvedUrl && (
+        {!imageLoaded && !displayError && (resolvedUrl || resolving) && (
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
             <Loader2 className="size-6 text-primary-50 animate-spin" />
           </div>
         )}
 
-        {!imageError && resolvedUrl && (
+        {!displayError && resolvedUrl && (
           <motion.div
             key={file.actualFileName || file.name}
             initial={{ opacity: 0, scale: 0.95 }}
@@ -136,7 +151,7 @@ const ImageDialog: React.FC<{
           </motion.div>
         )}
 
-        {imageError && (
+        {displayError && (
           <motion.div
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
@@ -144,7 +159,7 @@ const ImageDialog: React.FC<{
           >
             <ImageError
               handleFileDownload={handleFileDownload}
-              message={imageError}
+              message={displayError}
               file={file}
             />
           </motion.div>

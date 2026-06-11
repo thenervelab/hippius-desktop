@@ -10,6 +10,7 @@ pub mod device;
 pub mod drive_status;
 pub mod events;
 pub mod failure_commands;
+pub mod failure_repo;
 pub mod failure_tracking;
 pub mod files;
 pub mod folders;

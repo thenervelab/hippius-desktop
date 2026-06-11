@@ -95,6 +95,15 @@ pub enum NotReadyKind {
     /// — keeping it as a unit variant preserves the existing
     /// `screaming_snake_case` JSON wire format.
     InsufficientCredits,
+    /// The database pool has not been initialized yet. Raised by
+    /// [`crate::app_state::AppState::pool`] when a command runs before the
+    /// boot-time DB-init task installs the pool. This is distinct from a
+    /// genuine `sqlx::Error::PoolClosed` on a live-then-closed pool, so the
+    /// frontend can tell "never initialized" apart from "was open, now closed".
+    /// The main window is revealed only once the pool is ready, so this is
+    /// effectively unreachable from the UI, but it stays a precise
+    /// machine-readable signal for any early-startup path that reaches `pool()`.
+    DatabaseNotReady,
 }
 
 impl std::fmt::Display for NotReadyKind {
@@ -129,6 +138,9 @@ impl std::fmt::Display for NotReadyKind {
             }
             Self::InsufficientCredits => {
                 write!(f, "Insufficient credits to perform this action.")
+            }
+            Self::DatabaseNotReady => {
+                write!(f, "The application is still starting up. Please try again in a moment.")
             }
         }
     }
@@ -299,6 +311,22 @@ mod tests {
         assert_eq!(json, "DRIVE_NOT_INITIALIZED");
     }
 
+    /// Regression pin: an uninitialized pool surfaces as
+    /// `NotReady(DatabaseNotReady)` and serializes with the `subkind` the
+    /// frontend dispatches on, rather than the misleading `Db(PoolClosed)`.
+    #[test]
+    fn pool_uninitialized_is_not_ready_database_not_ready() {
+        let state = crate::app_state::AppState::new();
+        let err = state.pool().expect_err("uninitialized pool must error");
+        match err {
+            AppError::NotReady(NotReadyKind::DatabaseNotReady) => {}
+            other => panic!("expected NotReady(DatabaseNotReady), got {other:?}"),
+        }
+        let json = serde_json::to_value(&err).expect("serialize");
+        assert_eq!(json["kind"], "NotReady");
+        assert_eq!(json["subkind"], "DATABASE_NOT_READY");
+    }
+
     #[test]
     fn io_error_converts_via_from() {
         let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "gone");
@@ -345,7 +373,7 @@ mod tests {
         let json_err: serde_json::Error = serde_json::from_str::<String>("not valid json").unwrap_err();
         let app_err = AppError::from(json_err);
         assert!(matches!(app_err, AppError::Json(_)));
-        assert!(app_err.to_string().contains("JSON error"), "display: {app_err}",);
+        assert!(app_err.to_string().contains("JSON error"), "display: {app_err}");
     }
 
     #[test]
@@ -366,23 +394,45 @@ mod tests {
 
     // ── NotReadyKind round-trip through JSON ────────────────────────
 
+    /// Drift guard between the Rust `NotReadyKind` and the mirrored TS union in
+    /// `app/lib/utils/dispatchTauriError.ts`. `wire_name`'s match is exhaustive,
+    /// so adding a variant fails to COMPILE here until its wire name is declared
+    /// — a forcing reminder to also update the TS union. The assertion then pins
+    /// that serde's actual `rename_all` output equals the declared name (so a
+    /// rename of either side is caught, not silently skipped as a list would).
     #[test]
     fn not_ready_kind_all_variants_serialize_screaming_snake() {
-        let cases = [
-            (NotReadyKind::SyncSetup, "SYNC_SETUP"),
-            (NotReadyKind::DriveNotInitialized, "DRIVE_NOT_INITIALIZED"),
-            (NotReadyKind::DriveNotUnlocked, "DRIVE_NOT_UNLOCKED"),
-            (NotReadyKind::SyncInProgress, "SYNC_IN_PROGRESS"),
-            (NotReadyKind::NoEncryptionKey, "NO_ENCRYPTION_KEY"),
-            (NotReadyKind::ConfigMissing, "CONFIG_MISSING"),
-            (NotReadyKind::MasterMnemonicUnrecoverable, "MASTER_MNEMONIC_UNRECOVERABLE"),
-            (NotReadyKind::NotEnoughDiskSpace, "NOT_ENOUGH_DISK_SPACE"),
-            (NotReadyKind::SigningKeyUnavailable, "SIGNING_KEY_UNAVAILABLE"),
-            (NotReadyKind::InsufficientCredits, "INSUFFICIENT_CREDITS"),
-        ];
-        for (kind, expected) in cases {
+        fn wire_name(kind: &NotReadyKind) -> &'static str {
+            match kind {
+                NotReadyKind::SyncSetup => "SYNC_SETUP",
+                NotReadyKind::DriveNotInitialized => "DRIVE_NOT_INITIALIZED",
+                NotReadyKind::DriveNotUnlocked => "DRIVE_NOT_UNLOCKED",
+                NotReadyKind::SyncInProgress => "SYNC_IN_PROGRESS",
+                NotReadyKind::NoEncryptionKey => "NO_ENCRYPTION_KEY",
+                NotReadyKind::ConfigMissing => "CONFIG_MISSING",
+                NotReadyKind::MasterMnemonicUnrecoverable => "MASTER_MNEMONIC_UNRECOVERABLE",
+                NotReadyKind::NotEnoughDiskSpace => "NOT_ENOUGH_DISK_SPACE",
+                NotReadyKind::SigningKeyUnavailable => "SIGNING_KEY_UNAVAILABLE",
+                NotReadyKind::InsufficientCredits => "INSUFFICIENT_CREDITS",
+                NotReadyKind::DatabaseNotReady => "DATABASE_NOT_READY",
+            }
+        }
+        for kind in [
+            NotReadyKind::SyncSetup,
+            NotReadyKind::DriveNotInitialized,
+            NotReadyKind::DriveNotUnlocked,
+            NotReadyKind::SyncInProgress,
+            NotReadyKind::NoEncryptionKey,
+            NotReadyKind::ConfigMissing,
+            NotReadyKind::MasterMnemonicUnrecoverable,
+            NotReadyKind::NotEnoughDiskSpace,
+            NotReadyKind::SigningKeyUnavailable,
+            NotReadyKind::InsufficientCredits,
+            NotReadyKind::DatabaseNotReady,
+        ] {
+            let expected = wire_name(&kind);
             let json = serde_json::to_value(&kind).expect("serialize");
-            assert_eq!(json, expected, "variant {kind:?} should serialize to {expected}",);
+            assert_eq!(json, expected, "variant {kind:?} should serialize to {expected}");
         }
     }
 
@@ -400,7 +450,7 @@ mod tests {
     #[test]
     fn display_io_error_has_prefix() {
         let err = AppError::Io(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "no access"));
-        assert!(err.to_string().starts_with("I/O error:"), "got: {err}",);
+        assert!(err.to_string().starts_with("I/O error:"), "got: {err}");
     }
 
     #[test]
@@ -470,9 +520,7 @@ mod tests {
             AppError::NotReady(NotReadyKind::ConfigMissing),
             AppError::Progress("tracker".into()),
             AppError::Lock("poisoned".into()),
-            AppError::Intent(crate::sync::intent::IntentError::Db(sqlx::Error::ColumnNotFound(
-                "test_col".into(),
-            ))),
+            AppError::Intent(crate::sync::intent::IntentError::Db(sqlx::Error::ColumnNotFound("test_col".into()))),
             AppError::Other("misc".into()),
         ];
         let expected_kinds = [
@@ -518,6 +566,11 @@ mod tests {
             (
                 NotReadyKind::SigningKeyUnavailable,
                 "This action requires re-entering your seed phrase. Please log out and log in again with your seed phrase to continue.",
+            ),
+            (NotReadyKind::InsufficientCredits, "Insufficient credits to perform this action."),
+            (
+                NotReadyKind::DatabaseNotReady,
+                "The application is still starting up. Please try again in a moment.",
             ),
         ];
         for (kind, expected) in cases {

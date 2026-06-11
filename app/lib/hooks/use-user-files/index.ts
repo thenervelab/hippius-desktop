@@ -15,6 +15,14 @@ export type FormattedUserFile = {
   createdAt: number;
   arionHash: string;
   arionCid: string;
+  /**
+   * Hex of the server-side `path_hash` — the file's id on Arion. Present on
+   * `/search_files` results (sidebar search) so a file that lives only in the
+   * cloud can be previewed/downloaded via `cache_remote_file` /
+   * `download_remote_file`. Empty/undefined for local disk-walk entries, which
+   * resolve straight from `source`.
+   */
+  fileId?: string;
   minerIds: string | string[];
   isAssigned: boolean;
   lastChargedAt: number;

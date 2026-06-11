@@ -22,6 +22,12 @@ interface HomepageChartSelectProps {
   value: string;
   onValueChange: (value: string) => void;
   className?: string;
+  /**
+   * Shown (muted) on the trigger when `value` matches no option — e.g. an
+   * unset conflict resolution. Charts always have a value, so omitting it keeps
+   * the original behaviour.
+   */
+  placeholder?: string;
 }
 
 const HomepageChartSelect: React.FC<HomepageChartSelectProps> = ({
@@ -29,6 +35,7 @@ const HomepageChartSelect: React.FC<HomepageChartSelectProps> = ({
   value,
   onValueChange,
   className,
+  placeholder,
 }) => {
   const selected = options.find((o) => o.value === value);
 
@@ -40,8 +47,13 @@ const HomepageChartSelect: React.FC<HomepageChartSelectProps> = ({
           className,
         )}
       >
-        <span className="truncate pr-[2px] text-[14px] font-medium leading-5 tracking-[-0.28px]">
-          {selected?.label ?? value}
+        <span
+          className={cn(
+            "truncate pr-[2px] text-[14px] font-medium leading-5 tracking-[-0.28px]",
+            !selected && placeholder && "text-grey-50 dark:text-grey-dark-600",
+          )}
+        >
+          {selected?.label ?? placeholder ?? value}
         </span>
         <SelectPrimitive.Icon asChild>
           <ChevronDown className="size-[14px] text-grey-10 dark:text-white" />

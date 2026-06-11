@@ -11,8 +11,7 @@ use sqlx::sqlite::SqlitePool;
 use tracing::info;
 use zeroize::Zeroizing;
 
-/// HKDF info strings for key separation.
-pub const INFO_SUB_ACCOUNTS: &str = "hippius-sub-account-encryption";
+/// HKDF info string for key separation (drive-password encryption).
 pub const INFO_DRIVE_PASSWORD: &str = "hippius-drive-password-encryption";
 
 /// Minimum length of `base64(nonce[12] || tag[16])` — no ciphertext.
@@ -39,15 +38,6 @@ pub fn derive_key(mnemonic: &str, account_id: &str, info: &str) -> Result<Zeroiz
     hk.expand(info.as_bytes(), okm.as_mut())
         .expect("32 bytes is a valid HKDF-SHA256 output length");
     Ok(okm)
-}
-
-/// Derives the sub-account encryption key for the given mnemonic and account.
-///
-/// # Errors
-///
-/// Returns [`crate::error::AppError::Crypto`] if `mnemonic` is not a valid BIP-39 mnemonic.
-pub fn sub_account_key(mnemonic: &str, account_id: &str) -> Result<Zeroizing<[u8; 32]>, crate::error::AppError> {
-    derive_key(mnemonic, account_id, INFO_SUB_ACCOUNTS)
 }
 
 /// Derives the drive-password encryption key for the given mnemonic and account.
@@ -114,102 +104,61 @@ pub fn decrypt(key: &[u8; 32], encoded: &str) -> Result<Zeroizing<String>, crate
     Ok(Zeroizing::new(plaintext))
 }
 
-/// Encrypts all plaintext sub-account seed phrases for the given account.
+/// Encrypts all plaintext drive passwords for the given account.
 ///
-/// Scans `sub_accounts` for rows where `encryption_version = 0`, encrypts
-/// them in a single transaction, and sets `encryption_version = 1`. Safe
-/// to call repeatedly — rows already at version 1 are skipped.
+/// Scans `hcfs_config` for rows where `encryption_version = 0`, encrypts the
+/// `drive_password` in a single transaction, and sets `encryption_version = 1`.
+/// Safe to call repeatedly — rows already at version 1 are skipped, and the key
+/// derivation is performed only when there is at least one row to migrate.
 ///
-/// # Single-user assumption
-///
-/// This function selects ALL `sub_accounts` rows with
-/// `encryption_version = 0`, regardless of any parent-account column (the
-/// table has no such column). This is intentional: Hippius Desktop is a
-/// single-user application — each SQLite database belongs to exactly one
-/// logged-in user — so all rows in the database are owned by that user and
-/// should be encrypted with the same derived key. If multi-user support is
-/// ever added, a `parent_account_id` column will need to be introduced and
-/// this query scoped accordingly.
-///
-/// Encrypts all plaintext sub-account seed phrases and drive passwords
-/// for the given account.
-///
-/// Scans `sub_accounts` and `hcfs_config` for rows where
-/// `encryption_version = 0`, encrypts them in a single transaction, and
-/// sets `encryption_version = 1`. Safe to call repeatedly — rows already
-/// at version 1 are skipped.
+/// NOTE: despite living next to the sub-account helpers, this migrates ONLY
+/// `hcfs_config.drive_password`. It does NOT encrypt `sub_accounts` seed
+/// phrases. If sub-account seed phrases need encryption-at-rest, that is a
+/// separate, currently-unimplemented migration.
 ///
 /// # Single-user assumption
 ///
-/// This function selects ALL rows with `encryption_version = 0`,
-/// regardless of any parent-account column. This is intentional: Hippius
-/// Desktop is a single-user application — each SQLite database belongs to
-/// exactly one logged-in user. If multi-user support is ever added, a
-/// `parent_account_id` column will need to be introduced and this query
-/// scoped accordingly.
+/// This function selects ALL matching rows regardless of any parent-account
+/// column. This is intentional: Hippius Desktop is a single-user application —
+/// each SQLite database belongs to exactly one logged-in user. If multi-user
+/// support is ever added, a `parent_account_id` column will need to be
+/// introduced and this query scoped accordingly.
 pub async fn migrate_if_needed(pool: &SqlitePool, mnemonic: &str, account_id: &str) -> Result<(), crate::error::AppError> {
-    let sub_key = derive_key(mnemonic, account_id, INFO_SUB_ACCOUNTS)?;
-    let drive_key = derive_key(mnemonic, account_id, INFO_DRIVE_PASSWORD)?;
-
     let mut tx = pool.begin().await?;
 
-    // ── Sub-accounts ───────────────────────────────────────────────
-    let sub_rows: Vec<(i64, String)> =
-        sqlx::query_as("SELECT id, sub_account_seed_phrase FROM sub_accounts WHERE encryption_version = 0 AND sub_account_seed_phrase != ''")
-            .fetch_all(&mut *tx)
-            .await?;
-
-    let sub_count = sub_rows.len();
-    for (id, plaintext) in &sub_rows {
-        if plaintext.trim().is_empty() {
-            continue;
-        }
-        let ciphertext = encrypt(&sub_key, plaintext)?;
-        sqlx::query("UPDATE sub_accounts SET sub_account_seed_phrase = ?, encryption_version = 1 WHERE id = ?")
-            .bind(&ciphertext)
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
-    }
-
-    // ── Drive passwords ────────────────────────────────────────────
+    // Fetch the unmigrated rows BEFORE deriving the key. derive_key runs BIP-39
+    // PBKDF2-HMAC-SHA512 (2048 iterations), so deriving it unconditionally — as
+    // the previous version did — paid that cost on EVERY login and boot even
+    // though the steady state (everything already at encryption_version = 1) has
+    // nothing to migrate. The key is derived only when a row needs it.
     let drive_rows: Vec<(i64, String)> =
         sqlx::query_as("SELECT id, drive_password FROM hcfs_config WHERE encryption_version = 0 AND drive_password != ''")
             .fetch_all(&mut *tx)
             .await?;
 
     let drive_count = drive_rows.len();
-    for (id, plaintext) in &drive_rows {
-        if plaintext.trim().is_empty() {
-            continue;
+    if !drive_rows.is_empty() {
+        let drive_key = derive_key(mnemonic, account_id, INFO_DRIVE_PASSWORD)?;
+        for (id, plaintext) in &drive_rows {
+            if plaintext.trim().is_empty() {
+                continue;
+            }
+            let ciphertext = encrypt(&drive_key, plaintext)?;
+            sqlx::query("UPDATE hcfs_config SET drive_password = ?, encryption_version = 1 WHERE id = ?")
+                .bind(&ciphertext)
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
         }
-        let ciphertext = encrypt(&drive_key, plaintext)?;
-        sqlx::query("UPDATE hcfs_config SET drive_password = ?, encryption_version = 1 WHERE id = ?")
-            .bind(&ciphertext)
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
     }
 
     tx.commit().await?;
 
-    if sub_count > 0 || drive_count > 0 {
-        info!("Encryption migration complete: {sub_count} sub-account(s), {drive_count} drive password(s)");
+    if drive_count > 0 {
+        info!("Encryption migration complete: {drive_count} drive password(s)");
     }
 
     Ok(())
-}
-
-/// Decrypts a value if `encryption_version == 1`, returns as-is if `0`.
-///
-/// Used at every read site to transparently handle mixed-version rows
-/// during the migration window.
-pub fn decrypt_or_plaintext(key: &[u8; 32], raw_value: &str, encryption_version: i32) -> Result<Zeroizing<String>, crate::error::AppError> {
-    match encryption_version {
-        0 => Ok(Zeroizing::new(raw_value.to_string())),
-        1 => decrypt(key, raw_value),
-        v => Err(crate::error::AppError::Crypto(format!("unknown encryption_version: {v}"))),
-    }
 }
 
 #[cfg(test)]

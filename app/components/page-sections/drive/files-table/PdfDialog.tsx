@@ -5,7 +5,7 @@ import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { Loader2, AlertCircle, ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { invoke } from "@tauri-apps/api/core";
-import { getFileUrl } from "@/app/lib/utils/fileUrlResolver";
+import { useViewableFileUrl } from "@/app/lib/hooks/useViewableFileUrl";
 import { FileViewerLayout } from "@/app/components/page-sections/drive/file-viewer";
 
 const LOAD_TIMEOUT_MS = 15000;
@@ -28,6 +28,9 @@ export const PdfDialogTrigger: React.FC<{
   onClick: () => void;
   className?: string;
 }> = ({ children, onClick, className }) => {
+  // The hover eye icon lives inside NameCell (inline, left of the status
+  // badge) and reveals via this button's `group` class — an absolute overlay
+  // here would fade in on top of the Pending/Failed pills.
   return (
     <button
       type="button"
@@ -38,10 +41,6 @@ export const PdfDialogTrigger: React.FC<{
       )}
     >
       <span className="flex-1 min-w-0">{children}</span>
-      {/* Eye icon on hover */}
-      <div className="absolute pointer-events-none opacity-0 transition-opacity duration-300 group-hover:opacity-100 right-4 inset-y-0 flex items-center">
-        <Icons.EyeOutline className="size-4 text-primary-60" />
-      </div>
     </button>
   );
 };
@@ -55,12 +54,32 @@ const PdfDialog: React.FC<{
     file: FormattedUserFile,
     polkadotAddress: string,
   ) => void;
-}> = ({ file, allFiles, onCloseClicked, onNavigate, handleFileDownload }) => {
+  onDelete?: (file: FormattedUserFile) => void;
+}> = ({
+  file,
+  allFiles,
+  onCloseClicked,
+  onNavigate,
+  handleFileDownload,
+  onDelete,
+}) => {
   const [loaded, setLoaded] = useState(false);
-  const [loadError, setLoadError] = useState(false);
-  const [resolvedUrl, setResolvedUrl] = useState<string>("");
+  const [iframeFailed, setIframeFailed] = useState(false);
   const [isLinux, setIsLinux] = useState(false);
   const { polkadotAddress } = useWalletAuth();
+  // Local URL for synced files; on-demand cloud decrypt for files that aren't
+  // on disk (sidebar-search results that live only on the server). `localPath`
+  // is the raw path behind the URL, used for "Open with System Viewer".
+  const {
+    url: resolvedUrl,
+    localPath,
+    isLoading: resolving,
+    error: resolveError,
+  } = useViewableFileUrl(file);
+
+  // The error surface covers three causes: the Linux webview has no PDF
+  // viewer, the cloud download/decrypt failed, or the iframe never loaded.
+  const showError = isLinux || !!resolveError || iframeFailed;
 
   useEffect(() => {
     let cancelled = false;
@@ -74,31 +93,26 @@ const PdfDialog: React.FC<{
     };
   }, []);
 
+  // Reset the iframe load state whenever the resolved URL changes (new file,
+  // or a just-finished cloud decrypt).
   useEffect(() => {
-    if (!file) return;
     setLoaded(false);
-    setResolvedUrl(getFileUrl(file).url);
+    setIframeFailed(false);
+  }, [resolvedUrl]);
 
-    // WebKitGTK has no PDF viewer — short-circuit straight to the error
-    // state so the user gets the "Open with System Viewer" path instead
-    // of staring at a spinner for 15 seconds.
-    if (isLinux) {
-      setLoadError(true);
-      return;
-    }
-    setLoadError(false);
-
-    // iframe onError is unreliable for asset protocol failures, so treat
-    // a "still not loaded after timeout" state as an error.
+  // iframe onError is unreliable for asset-protocol failures, so treat a
+  // "still not loaded after timeout" state as an error. Skipped on Linux
+  // (no PDF viewer) and until we actually have a URL to load.
+  useEffect(() => {
+    if (isLinux || !resolvedUrl) return;
     const timeout = setTimeout(() => {
       setLoaded((wasLoaded) => {
-        if (!wasLoaded) setLoadError(true);
+        if (!wasLoaded) setIframeFailed(true);
         return wasLoaded;
       });
     }, LOAD_TIMEOUT_MS);
-
     return () => clearTimeout(timeout);
-  }, [file, isLinux]);
+  }, [resolvedUrl, isLinux]);
 
   if (!file) return null;
 
@@ -109,15 +123,16 @@ const PdfDialog: React.FC<{
       onClose={onCloseClicked}
       onNavigate={onNavigate}
       handleFileDownload={handleFileDownload}
+      onDelete={onDelete}
     >
       <div className="relative w-full h-full min-h-0 min-w-0 flex items-center justify-center">
-        {!loaded && !loadError && (
+        {!loaded && !showError && (resolvedUrl || resolving) && (
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
             <Loader2 className="size-6 text-primary-50 animate-spin" />
           </div>
         )}
 
-        {loadError && (
+        {showError && (
           <div
             className={cn(
               "flex flex-col items-center justify-center text-grey-10 dark:text-grey-light-100",
@@ -133,12 +148,13 @@ const PdfDialog: React.FC<{
             <p className="text-sm text-grey-50 dark:text-grey-light-300 mb-6 text-center">
               {isLinux
                 ? "The Linux webview has no built-in PDF viewer. Open it with your system viewer instead."
-                : "The file could not be displayed. Try downloading it instead."}
+                : (resolveError ??
+                  "The file could not be displayed. Try downloading it instead.")}
             </p>
             <div className="flex flex-row gap-3 flex-nowrap">
-              {file.source && (
+              {localPath && (
                 <button
-                  onClick={() => openInSystemViewer(file.source!)}
+                  onClick={() => openInSystemViewer(localPath)}
                   className="flex items-center gap-x-2 whitespace-nowrap bg-primary-50 hover:bg-primary-70 transition-colors px-4 py-2 rounded-md font-medium text-white"
                 >
                   <ExternalLink className="size-5" />
@@ -149,7 +165,7 @@ const PdfDialog: React.FC<{
                 onClick={() => handleFileDownload(file, polkadotAddress ?? "")}
                 className={cn(
                   "flex items-center gap-x-2 whitespace-nowrap rounded-md px-4 py-2 font-medium transition-colors",
-                  file.source
+                  localPath
                     ? "bg-grey-10 text-white hover:bg-grey-20 dark:bg-grey-20 dark:hover:bg-grey-30"
                     : "bg-primary-50 hover:bg-primary-70 text-white",
                 )}
@@ -161,7 +177,7 @@ const PdfDialog: React.FC<{
           </div>
         )}
 
-        {resolvedUrl && !loadError && (
+        {resolvedUrl && !showError && (
           <div
             className={cn(
               "relative w-full h-full flex flex-col rounded-[8px] overflow-hidden",
@@ -177,7 +193,7 @@ const PdfDialog: React.FC<{
               height="100%"
               className="border-none bg-white"
               onLoad={() => setLoaded(true)}
-              onError={() => setLoadError(true)}
+              onError={() => setIframeFailed(true)}
             />
           </div>
         )}

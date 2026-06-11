@@ -59,13 +59,7 @@ pub struct ShareOrigin {
 /// `hcfs_create_share` downgrades this to a warn-level log because
 /// the share itself has already been created on the server — the
 /// user-facing operation has already succeeded.
-pub async fn record(
-    pool: &SqlitePool,
-    share_token: &str,
-    owner: &str,
-    folder_label: &str,
-    relative_path: &str,
-) -> Result<()> {
+pub async fn record(pool: &SqlitePool, share_token: &str, owner: &str, folder_label: &str, relative_path: &str) -> Result<()> {
     sqlx::query(
         "INSERT INTO share_origin (share_token, owner, folder_label, relative_path) \
          VALUES (?, ?, ?, ?) \
@@ -107,23 +101,28 @@ pub async fn forget(pool: &SqlitePool, share_token: &str) -> Result<()> {
 /// map; the caller decides whether that's a "key forgotten" row or a
 /// legacy share created before this table existed.
 ///
+/// Scoped by `owner` (matching [`record`]/[`prune`]) so on a multi-account
+/// device one account can never read another account's origin rows even if it
+/// somehow supplied the other's token — the single enforced boundary is the
+/// `owner` column, not the caller passing only its own tokens.
+///
 /// # Errors
 ///
 /// Returns `Err` on a hard SQLite failure.
-pub async fn fetch_for_tokens(pool: &SqlitePool, tokens: &[&str]) -> Result<HashMap<String, ShareOrigin>> {
+pub async fn fetch_for_tokens(pool: &SqlitePool, owner: &str, tokens: &[&str]) -> Result<HashMap<String, ShareOrigin>> {
     if tokens.is_empty() {
         return Ok(HashMap::new());
     }
-    // sqlx 0.8 doesn't expand `Vec<T>` into an IN-list (see
-    // launchbadge/sqlx#875), so build placeholders by hand. The token
-    // count is bounded by the upstream "My Shares" page size, which
-    // is well below SQLite's 999-parameter ceiling.
+    // sqlx 0.8 doesn't expand `Vec<T>` into an IN-list, so build
+    // placeholders by hand. The token count is bounded by the upstream
+    // "My Shares" page size, which is well below SQLite's 999-parameter
+    // ceiling.
     let placeholders = vec!["?"; tokens.len()].join(", ");
     let sql = format!(
         "SELECT share_token, folder_label, relative_path \
-         FROM share_origin WHERE share_token IN ({placeholders})"
+         FROM share_origin WHERE owner = ? AND share_token IN ({placeholders})"
     );
-    let mut q = sqlx::query_as::<_, (String, String, String)>(&sql);
+    let mut q = sqlx::query_as::<_, (String, String, String)>(&sql).bind(owner);
     for t in tokens {
         q = q.bind(*t);
     }
@@ -156,10 +155,7 @@ pub async fn fetch_for_tokens(pool: &SqlitePool, tokens: &[&str]) -> Result<Hash
 /// best-effort cleanup, never a reason to fail a user-facing list call.
 pub async fn prune(pool: &SqlitePool, owner: &str, active_tokens: &[&str]) {
     let result = if active_tokens.is_empty() {
-        sqlx::query("DELETE FROM share_origin WHERE owner = ?")
-            .bind(owner)
-            .execute(pool)
-            .await
+        sqlx::query("DELETE FROM share_origin WHERE owner = ?").bind(owner).execute(pool).await
     } else {
         let placeholders = vec!["?"; active_tokens.len()].join(", ");
         let sql = format!("DELETE FROM share_origin WHERE owner = ? AND share_token NOT IN ({placeholders})");
@@ -196,7 +192,7 @@ mod tests {
     async fn record_then_fetch_returns_row() {
         let (_dir, pool) = fresh_pool().await;
         record(&pool, "tok-a", "owner1", "Drive", "sub/file.txt").await.expect("record");
-        let map = fetch_for_tokens(&pool, &["tok-a"]).await.expect("fetch");
+        let map = fetch_for_tokens(&pool, "owner1", &["tok-a"]).await.expect("fetch");
         let got = map.get("tok-a").expect("present");
         assert_eq!(got.folder_label, "Drive");
         assert_eq!(got.relative_path, "sub/file.txt");
@@ -211,7 +207,7 @@ mod tests {
         // re-record can change the row. Pin that here so a future
         // refactor that demotes upsert to plain INSERT fails this test.
         record(&pool, "tok", "owner1", "Drive", "b.txt").await.expect("record-2");
-        let map = fetch_for_tokens(&pool, &["tok"]).await.expect("fetch");
+        let map = fetch_for_tokens(&pool, "owner1", &["tok"]).await.expect("fetch");
         assert_eq!(map.get("tok").expect("present").relative_path, "b.txt");
     }
 
@@ -222,7 +218,7 @@ mod tests {
         record(&pool, "tok", "owner1", "Drive", "a.txt").await.expect("record");
         forget(&pool, "tok").await.expect("forget-existing");
         forget(&pool, "tok").await.expect("forget-twice");
-        let map = fetch_for_tokens(&pool, &["tok"]).await.expect("fetch");
+        let map = fetch_for_tokens(&pool, "owner1", &["tok"]).await.expect("fetch");
         assert!(map.is_empty());
     }
 
@@ -231,7 +227,7 @@ mod tests {
         let (_dir, pool) = fresh_pool().await;
         // The helper must early-return — `WHERE share_token IN ()` is
         // invalid SQL and the unit test pins the contract.
-        let map = fetch_for_tokens(&pool, &[]).await.expect("fetch-empty");
+        let map = fetch_for_tokens(&pool, "owner1", &[]).await.expect("fetch-empty");
         assert!(map.is_empty());
     }
 
@@ -243,11 +239,11 @@ mod tests {
         record(&pool, "stale-2", "owner-B", "Drive", "z").await.expect("record-3");
         prune(&pool, "owner-A", &["live-1"]).await;
         // owner-A keeps live-1 only.
-        let a_map = fetch_for_tokens(&pool, &["stale-1", "live-1"]).await.expect("fetch-A");
+        let a_map = fetch_for_tokens(&pool, "owner-A", &["stale-1", "live-1"]).await.expect("fetch-A");
         assert!(!a_map.contains_key("stale-1"));
         assert!(a_map.contains_key("live-1"));
         // owner-B is untouched even though we passed it no live tokens.
-        let b_map = fetch_for_tokens(&pool, &["stale-2"]).await.expect("fetch-B");
+        let b_map = fetch_for_tokens(&pool, "owner-B", &["stale-2"]).await.expect("fetch-B");
         assert!(b_map.contains_key("stale-2"));
     }
 
@@ -258,9 +254,23 @@ mod tests {
         record(&pool, "kept", "owner-B", "Drive", "y").await.expect("record-2");
         // owner-A has zero active shares right now — every row should go.
         prune(&pool, "owner-A", &[]).await;
-        let a_map = fetch_for_tokens(&pool, &["stale"]).await.expect("fetch-A");
+        let a_map = fetch_for_tokens(&pool, "owner-A", &["stale"]).await.expect("fetch-A");
         assert!(a_map.is_empty());
-        let b_map = fetch_for_tokens(&pool, &["kept"]).await.expect("fetch-B");
+        let b_map = fetch_for_tokens(&pool, "owner-B", &["kept"]).await.expect("fetch-B");
         assert!(b_map.contains_key("kept"));
+    }
+
+    // The cross-account property: a token belonging to owner-B must not be
+    // readable when fetching as owner-A, even though the token is supplied.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn fetch_is_owner_scoped() {
+        let (_dir, pool) = fresh_pool().await;
+        record(&pool, "b-token", "owner-B", "Drive", "secret.txt").await.expect("record");
+        // owner-A asks for owner-B's token -> empty (not a cross-account leak).
+        let as_a = fetch_for_tokens(&pool, "owner-A", &["b-token"]).await.expect("fetch-A");
+        assert!(as_a.is_empty(), "owner-A must not read owner-B's origin row");
+        // owner-B still sees its own row.
+        let as_b = fetch_for_tokens(&pool, "owner-B", &["b-token"]).await.expect("fetch-B");
+        assert!(as_b.contains_key("b-token"));
     }
 }

@@ -16,8 +16,7 @@ use crate::sync::folders::{get_all_sync_paths_internal, sanitize_label};
 use crate::sync::mnemonic::{account_dir, config_dir_for_folder, derive_folder_mnemonic, ensure_derived_mnemonic, folder_hash, master_mnemonic_path};
 use hcfs_client::engine::manager::DriveManager;
 use hcfs_client::engine::runner::{DriveSlot, SyncRunner};
-use hcfs_client::engine::types::{SyncActivityAction, SyncActivityItem, SyncedFileInfo, build_synced_paths_from_state};
-use hcfs_client::sync::SyncProgress;
+use hcfs_client::engine::types::build_synced_paths_from_state;
 use sqlx::sqlite::SqlitePool;
 use std::error::Error as _;
 use std::path::{Path, PathBuf};
@@ -25,6 +24,10 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex as TokioMutex;
 use tokio_util::sync::CancellationToken;
+
+mod callbacks;
+pub use callbacks::build_file_synced_callback;
+pub(crate) use callbacks::setup_progress_handlers;
 
 /// Start or join the background sync loop.
 ///
@@ -85,6 +88,7 @@ pub async fn setup_and_init_sync(
 ) -> Result<InitSyncResult> {
     use tauri::Manager;
     let state = app.state::<crate::app_state::AppState>();
+    let account_id = state.require_session_account(&account_id)?;
     let pool = state.pool()?;
 
     // 1. Save HCFS config
@@ -121,6 +125,7 @@ pub async fn add_local_sync_folder(
 ) -> Result<String> {
     use tauri::Manager;
     let state = app.state::<crate::app_state::AppState>();
+    let account_id = state.require_session_account(&account_id)?;
     let pool = state.pool()?;
 
     // Enforce credit eligibility at the IPC boundary, priced by the
@@ -166,6 +171,13 @@ pub async fn add_local_sync_folder(
 /// switching folders won't download files from the previous folder.
 #[tauri::command]
 pub async fn initialize_sync(app: tauri::AppHandle, account_id: String, label: String, existing_mnemonic: Option<String>) -> Result<InitSyncResult> {
+    // FE entry that flows account_id into the secret-using inner; authorize
+    // against the session. (Also reached from complete_migration_transition,
+    // itself guarded, with the session account — the re-check is idempotent.)
+    let account_id = {
+        use tauri::Manager;
+        app.state::<crate::app_state::AppState>().require_session_account(&account_id)?
+    };
     initialize_sync_inner(app, account_id, label, existing_mnemonic, true, false).await
 }
 
@@ -178,9 +190,14 @@ async fn teardown_previous_drive(sync: &SyncRunner, label: &str) {
             old_slot.cancel_token.cancel();
             debug!("Dropped previous drive instance for label '{}'", label);
         }
-        sync.discard_pending_activity_for_label(label);
-        sync.remove_state(label);
-    }
+    } // release the tokio drives Mutex BEFORE the std::sync::Mutex calls below
+
+    // discard_pending_activity_for_label and remove_state lock std::sync::Mutex
+    // fields; holding the tokio drives guard across them risked stalling the
+    // executor thread under contention (axiom rust_quality_74). The tokio guard
+    // is dropped first now.
+    sync.discard_pending_activity_for_label(label);
+    sync.remove_state(label);
     {
         let mut state = sync.progress.lock();
         if let Some(session) = state.current_session.as_mut() {
@@ -200,6 +217,29 @@ async fn teardown_previous_drive(sync: &SyncRunner, label: &str) {
 /// in-progress drive to observe the cancel token and persist state,
 /// but short enough that logout doesn't feel sluggish.
 const GRACEFUL_SHUTDOWN: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// Max time `remove_drive` waits for an in-flight sync cycle to release the
+/// per-drive manager lock before wiping the on-disk baseline. The cycle's
+/// cancel token is already tripped, so it exits promptly; this is the
+/// best-effort ceiling for a cycle mid-transfer (the cancel aborts the
+/// transfer, then it saves partial state and releases). On timeout the wipe
+/// proceeds anyway — a surviving stale baseline is the pre-fix state, not a
+/// regression.
+const GRACEFUL_DRIVE_SHUTDOWN: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Block (bounded) until the in-flight holder of a per-drive manager lock
+/// releases it. The sync cycle holds this lock across its cancel-path
+/// `save_sync_state`, so any caller that then mutates the on-disk baseline
+/// MUST drain it first — otherwise a late save re-creates the file the caller
+/// just deleted (the `remove_drive` data-loss window). Returns `true` once the
+/// lock drained, `false` on timeout. Generic over the guarded type so the
+/// ordering is unit-testable without constructing a `DriveManager`.
+async fn drain_drive_lock<T>(manager: Option<&Arc<TokioMutex<T>>>, timeout: std::time::Duration) -> bool {
+    match manager {
+        Some(m) => tokio::time::timeout(timeout, m.lock()).await.is_ok(),
+        None => true,
+    }
+}
 
 /// Cancel every drive's `CancellationToken`. Does NOT remove drives
 /// from the map — that happens later in the teardown sequence. Safe to
@@ -275,16 +315,35 @@ async fn teardown_last_drive(sync: &SyncRunner, app: &AppHandle) {
     let _ = app.emit(crate::sync::events::SYNC_STOPPED, ());
 }
 
+/// Best-effort lookup of a label's on-disk sync path from the `sync_paths` DB
+/// row. Used as the `path_hint` for [`remove_drive_inmemory`] so the file
+/// watcher can be unwatched even when the per-drive lock is momentarily held.
+async fn sync_path_for_label(app_state: &crate::app_state::AppState, account: &str, label: &str) -> Option<PathBuf> {
+    let pool = app_state.pool().ok()?;
+    crate::sync::folders::get_all_sync_paths_internal(pool, account)
+        .await
+        .ok()?
+        .into_iter()
+        .find(|p| p.label == label)
+        .map(|p| PathBuf::from(p.path))
+}
+
 /// Remove a drive from the in-memory registry: cancel its token, unwatch
 /// its path, and discard associated state. Returns `(remaining_count, removed_path)`.
 /// Does NOT touch the database — the caller decides whether to delete or
-/// mark-paused the DB row.
-async fn remove_drive_inmemory(sync: &SyncRunner, label: &str) -> (usize, Option<PathBuf>) {
+/// mark-paused the DB row. `path_hint` is the DB-resolved sync path used when
+/// the in-memory read can't get it (see below).
+async fn remove_drive_inmemory(sync: &SyncRunner, label: &str, path_hint: Option<PathBuf>) -> (usize, Option<PathBuf>) {
     let (remaining, removed_path) = {
         let mut guard = sync.drives.lock().await;
+        // Read the sync path for the unwatch below. `try_lock` returns None when
+        // an in-flight reconcile holds the per-drive lock across its HTTP await;
+        // fall back to the caller-supplied DB path so the watcher is still
+        // unwatched — otherwise the OS watch leaks until app restart.
         let path = guard
             .get(label)
-            .and_then(|slot| slot.manager.try_lock().ok().map(|m| m.sync_path().to_path_buf()));
+            .and_then(|slot| slot.manager.try_lock().ok().map(|m| m.sync_path().to_path_buf()))
+            .or(path_hint);
         if let Some(slot) = guard.remove(label) {
             slot.cancel_token.cancel();
         }
@@ -446,7 +505,12 @@ fn spawn_reconcile_timestamps(app: &AppHandle, sync: Arc<SyncRunner>, manager_ar
                     let paths = build_synced_paths_from_state(&state);
                     sync.update_synced_paths_cache(&label, paths);
                     drop(manager);
-                    let _ = app.emit(crate::sync::events::ACTIVITY_UPDATED, ());
+                    // Carry the drive label (F35) so the FE scopes its
+                    // metadata-stale clear to this drive instead of every drive.
+                    let _ = app.emit(
+                        crate::sync::events::ACTIVITY_UPDATED,
+                        crate::sync::events::LabelPayload { label: label.clone() },
+                    );
                     info!(label = %label, duration_ms = duration_ms, "reconcile: cache refreshed");
                 }
                 Err(e) => {
@@ -937,6 +1001,7 @@ fn spawn_folder_registration(server_url: &str, bearer_token: &str, label: &str, 
 /// `skip_credits_check` suppresses the HTTP call to `/api/billing/credits/balance/`.
 /// Pass `true` when the caller has already validated credits (e.g. `auto_init_sync`
 /// checks once before its per-drive loop to avoid N redundant requests).
+#[expect(clippy::too_many_lines, reason = "sequential drive-init steps read better inline than split across helpers")]
 pub(crate) async fn initialize_sync_inner(
     app: tauri::AppHandle,
     account_id: String,
@@ -964,17 +1029,27 @@ pub(crate) async fn initialize_sync_inner(
     // Validate user has credits/balance before allowing sync.
     // This is skipped when the caller has already performed the check (e.g.
     // `auto_init_sync` checks once before iterating all drives).
-    if !skip_credits_check && let Ok(acct) = app_state.current_account_id() {
+    if !skip_credits_check && let Ok(account) = app_state.current_session_account() {
         let client = crate::api::client::ApiClient::new(app_state.api_client.clone(), pool_owned.clone());
-        if let Ok(resp) = client
-            .get::<crate::billing::credits::CreditBalanceResponse>("/api/billing/credits/balance/", &acct)
+        match client
+            .get::<crate::billing::credits::CreditBalanceResponse>("/api/billing/credits/balance/", &account)
             .await
         {
-            let balance: f64 = resp.balance.as_deref().and_then(|s| s.parse().ok()).unwrap_or(0.0);
-            if balance <= 0.0 {
-                return Err(crate::error::AppError::Validation(
-                    "Insufficient credits. Please add credits to your account before syncing.".into(),
-                ));
+            Ok(resp) => {
+                // Unparseable balance is inconclusive, not zero — see balance_blocks_sync.
+                if balance_blocks_sync(resp.balance.as_deref()) {
+                    return Err(crate::error::AppError::Validation(
+                        "Insufficient credits. Please add credits to your account before syncing.".into(),
+                    ));
+                }
+            }
+            // Fail-open on a transport/HTTP/parse error: this pre-init gate is a
+            // best-effort proactive check. The gated upload IPCs each call the
+            // fail-closed `require_eligible`, and the per-file 402 path is the
+            // authoritative backstop, so a server blip here must not block sync.
+            // Log it so the skipped check is observable instead of silently dropped.
+            Err(e) => {
+                tracing::warn!(account = %account, error = %e, "credit pre-init balance check failed; proceeding (upload IPCs still enforce eligibility)");
             }
         }
     }
@@ -1037,7 +1112,9 @@ pub(crate) async fn initialize_sync_inner(
         account_id: &account_id,
         fhash: &fhash,
         label: &label,
-        drive_password: &cfg.drive_password,
+        // `cfg.drive_password` is `Zeroizing<String>`; the context borrows it as
+        // `&str` (it is never moved/owned here, so no second secret copy).
+        drive_password: cfg.drive_password.as_str(),
         existing_mnemonic: Some(&mnemonic_for_config),
     };
     let (manager, user_id, mnemonic, is_new_setup) = init_or_unlock_drive(
@@ -1208,13 +1285,68 @@ pub async fn stop_sync(app: AppHandle) -> Result<()> {
 /// Used for the 3-dot menu's "Remove from sync" action and for
 /// `change_sync_folder`'s teardown step before re-initializing with a
 /// new path.
+/// Resolve which account a drive teardown scopes its `sync_paths` row delete
+/// and on-disk baseline wipe to. The caller's explicit account (when known —
+/// e.g. the `remove_sync_path` IPC carries it in its params) takes precedence
+/// over the session's `current_account_id`, so a teardown that races an account
+/// switch wipes the baseline for the account that actually owns the drive
+/// rather than whichever account happens to be current. `None` means neither is
+/// available and the persistent cleanup must be skipped (the caller logs it).
+fn teardown_account(explicit: Option<String>, current: Option<String>) -> Option<String> {
+    explicit.or(current)
+}
+
+/// Decide whether a fetched credit balance should BLOCK sync.
+///
+/// A balance that parses to `<= 0.0` blocks; a positive balance allows. An
+/// UNPARSEABLE balance is INCONCLUSIVE and must NOT block (returns `false`):
+/// the previous `parse().ok()).unwrap_or(0.0)` treated any value f64 couldn't
+/// parse — a currency suffix like "10.00 USD", a localized "1.000,00", or a
+/// future API format change — as zero, locking paying users out of sync. Fail
+/// open on "unknown"; block only on a definitively non-positive balance.
+fn balance_blocks_sync(raw_balance: Option<&str>) -> bool {
+    match raw_balance.and_then(|s| s.trim().parse::<f64>().ok()) {
+        Some(balance) => balance <= 0.0,
+        None => false,
+    }
+}
+
+/// Remove a drive for the session's current account.
+///
+/// Thin wrapper over [`remove_drive_for_account`] with no explicit account.
+/// Internal callers that already hold the owning account (the
+/// `remove_sync_path` IPC) call the inner form directly so the baseline wipe
+/// stays account-correct even during an account switch.
 #[tauri::command]
 pub async fn remove_drive(app: AppHandle, label: String) -> Result<()> {
+    remove_drive_for_account(app, label, None).await
+}
+
+/// Tear down a drive: cancel any in-flight sync, drop it from the in-memory
+/// map, delete its `sync_paths` row, clear its intent rows, and wipe its
+/// on-disk sync baseline — in that drain-then-wipe order. `explicit_account`
+/// scopes the DB delete and baseline wipe: pass `Some` when the caller knows
+/// the owning account, `None` to fall back to the current session account.
+pub(crate) async fn remove_drive_for_account(app: AppHandle, label: String, explicit_account: Option<String>) -> Result<()> {
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
     let sync = &app_state.sync;
 
-    let (remaining, _removed_path) = remove_drive_inmemory(sync, &label).await;
+    // Clone the per-drive manager Arc BEFORE teardown removes its slot, so we
+    // can drain its lock further down before wiping the baseline (F09). Cheap
+    // Arc bump; the brief map-lock is released immediately.
+    let drive_manager = {
+        let guard = sync.drives.lock().await;
+        guard.get(&label).map(|slot| slot.manager.clone())
+    };
+
+    // Resolve the on-disk path from the DB so remove_drive_inmemory can unwatch
+    // the folder even when the per-drive lock is held by an in-flight reconcile.
+    let path_hint = match explicit_account.clone().or_else(|| app_state.current_account_id().ok()) {
+        Some(acct) => sync_path_for_label(&app_state, &acct, &label).await,
+        None => None,
+    };
+    let (remaining, _removed_path) = remove_drive_inmemory(sync, &label, path_hint).await;
 
     // Drop the preparing override for this label so a remove during
     // the SyncStarted → plan_ready window cannot leave a stuck
@@ -1232,10 +1364,6 @@ pub async fn remove_drive(app: AppHandle, label: String) -> Result<()> {
         sync.emit_snapshot(true);
     }
 
-    // Wake any waiters in remove_drive_and_wait so they can re-check without
-    // sleeping through the full polling interval.
-    app_state.drive_removed_notify.notify_waiters();
-
     // Delete the DB row so the drive isn't resurrected on app restart, and
     // drop the intent-manifest rows for this drive so the snapshot overlay
     // doesn't keep showing stale "X of Y" totals for a folder the user just
@@ -1247,7 +1375,13 @@ pub async fn remove_drive(app: AppHandle, label: String) -> Result<()> {
     // the next manifest GC pass even if this call fails. `pause_drive`
     // deliberately does NOT clear intent because pause is reversible and the
     // in-flight totals must survive a resume.
-    let acct = app_state.current_account_id().ok();
+    let acct = teardown_account(explicit_account, app_state.current_account_id().ok());
+    if acct.is_none() {
+        warn!(
+            label = %label,
+            "remove_drive: no account context — sync_paths row and on-disk baseline left intact; in-memory drive still removed",
+        );
+    }
     if let (Ok(pool), Some(acct)) = (app_state.pool(), acct.as_deref()) {
         if let Err(e) = crate::sync::paths::remove_sync_path_internal(pool, acct, &label).await {
             warn!("Failed to remove sync path for '{}' from DB: {e}", label);
@@ -1271,6 +1405,18 @@ pub async fn remove_drive(app: AppHandle, label: String) -> Result<()> {
     // for unlock-failure recovery — same "destructive intent → start fresh"
     // semantics. `pause_drive` deliberately preserves this state because pause
     // is the reversible counterpart to remove.
+    // Drain any in-flight cycle's per-drive lock before deleting the baseline:
+    // the cancel above makes the cycle exit, but its cancel-path
+    // save_sync_state runs UNDER this lock and is async relative to this IPC.
+    // Without the drain, that late save can re-create sync_state.json right
+    // after we delete it, resurrecting the stale `synced` tree this wipe exists
+    // to remove (the data-loss path fixed in 17b8e159). Best-effort on timeout.
+    if !drain_drive_lock(drive_manager.as_ref(), GRACEFUL_DRIVE_SHUTDOWN).await {
+        warn!(
+            "remove_drive: in-flight sync of '{}' did not release within the grace window; wiping baseline anyway",
+            label
+        );
+    }
     if let Some(acct) = acct.as_deref() {
         clear_persisted_sync_state(acct, &label);
     }
@@ -1328,19 +1474,22 @@ pub async fn pause_drive(app: AppHandle, label: String) -> Result<()> {
     let app_state = app.state::<crate::app_state::AppState>();
     let sync = &app_state.sync;
 
-    let (remaining, removed_path) = remove_drive_inmemory(sync, &label).await;
-
-    // Wake any waiters in remove_drive_and_wait so they can re-check without
-    // sleeping through the full polling interval.
-    app_state.drive_removed_notify.notify_waiters();
-
-    // Mark as paused in DB (keep the row, unlike stop_drive which deletes it).
-    // Capture pool/account for both the persist call AND the path
-    // lookup used by the per-drive status emit below.
+    // Capture pool/account up front: used both to mark the row paused AND to
+    // resolve the sync path passed as a hint to remove_drive_inmemory, so the
+    // watcher is unwatched even when the per-drive lock is held by an in-flight
+    // reconcile (try_lock would otherwise return None and leak the watch).
     let pool_and_acct = match (app_state.pool(), app_state.current_account_id()) {
         (Ok(pool), Ok(acct)) => Some((pool, acct)),
         _ => None,
     };
+    let path_hint = match &pool_and_acct {
+        Some((_, acct)) => sync_path_for_label(&app_state, acct, &label).await,
+        None => None,
+    };
+
+    let (remaining, removed_path) = remove_drive_inmemory(sync, &label, path_hint).await;
+
+    // Mark as paused in DB (keep the row, unlike stop_drive which deletes it).
     if let Some((pool, acct)) = &pool_and_acct
         && let Err(e) = crate::sync::paths::set_sync_path_paused(pool, acct, &label, true).await
     {
@@ -1351,23 +1500,10 @@ pub async fn pause_drive(app: AppHandle, label: String) -> Result<()> {
         teardown_last_drive(sync, &app).await;
     }
 
-    // Resolve the on-disk path so the per-drive status payload carries
-    // it (the FE relies on that field to keep its drive entry hydrated
-    // — see `useDriveStatuses`). Prefer the path captured by
-    // `remove_drive_inmemory`; fall back to a DB lookup when the drive
-    // wasn't in the in-memory map (e.g. pausing an already-removed
-    // drive after a crash recovery).
-    let drive_path = if let Some(path) = removed_path.as_ref() {
-        path.to_string_lossy().into_owned()
-    } else if let Some((pool, acct)) = &pool_and_acct {
-        crate::sync::folders::get_all_sync_paths_internal(pool, acct)
-            .await
-            .ok()
-            .and_then(|paths| paths.into_iter().find(|p| p.label == label).map(|p| p.path))
-            .unwrap_or_default()
-    } else {
-        String::new()
-    };
+    // The per-drive status payload carries the on-disk path (the FE relies on it
+    // to keep its drive entry hydrated — see `useDriveStatuses`). `removed_path`
+    // is now reliable thanks to the DB hint resolved above.
+    let drive_path = removed_path.map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
 
     // Emit a per-drive Paused status so the FE updates this single
     // drive without re-fetching the list. Other drives are unaffected.
@@ -1468,11 +1604,16 @@ pub async fn change_sync_folder(
     label: String,
     mnemonic: Option<String>,
 ) -> Result<InitSyncResult> {
+    let account_id = state.require_session_account(&account_id)?;
     let pool = state.pool()?;
 
-    // Tear down the existing drive (fire and forget if it doesn't
-    // exist) so we can re-initialize it with the new path.
-    let _ = remove_drive(app.clone(), label.clone()).await;
+    // Tear down the existing drive (fire and forget if it doesn't exist) so we
+    // can re-initialize it with the new path. Thread the explicit `account_id`
+    // (parity with `remove_sync_path`) so the baseline wipe stays account-correct
+    // if the session flips mid-call — the session-deriving `remove_drive` would
+    // scope the wipe to the wrong account during an account switch, which is the
+    // stale-baseline-survives precondition `clear_persisted_sync_state` guards.
+    let _ = remove_drive_for_account(app.clone(), label.clone(), Some(account_id.clone())).await;
 
     // Set the new sync path in the DB
     crate::sync::paths::set_sync_path_internal(pool, &account_id, &new_path, false, Some(&label)).await?;
@@ -1501,6 +1642,9 @@ pub async fn auto_init_sync(
     account_id: String,
     mnemonic: Option<String>,
 ) -> Result<AutoInitResult> {
+    // FE entry that flows account_id into the secret-using inner; authorize
+    // against the session before it reaches the mnemonic/token paths.
+    let account_id = state.require_session_account(&account_id)?;
     auto_init_sync_inner(app.clone(), &state, account_id, mnemonic).await
 }
 
@@ -1739,18 +1883,25 @@ async fn auto_init_sync_inner(
     // between drives, so a single HTTP round-trip is sufficient.  If the
     // check fails we return early; individual `initialize_sync_inner` calls
     // below will skip the check via `skip_credits_check = true`.
-    if let Ok(acct) = state.current_account_id() {
+    if let Ok(account) = state.current_session_account() {
         let pool_owned = state.pool()?.clone();
         let client = crate::api::client::ApiClient::new(state.api_client.clone(), pool_owned);
-        if let Ok(resp) = client
-            .get::<crate::billing::credits::CreditBalanceResponse>("/api/billing/credits/balance/", &acct)
+        match client
+            .get::<crate::billing::credits::CreditBalanceResponse>("/api/billing/credits/balance/", &account)
             .await
         {
-            let balance: f64 = resp.balance.as_deref().and_then(|s| s.parse().ok()).unwrap_or(0.0);
-            if balance <= 0.0 {
-                return Err(crate::error::AppError::Validation(
-                    "Insufficient credits. Please add credits to your account before syncing.".into(),
-                ));
+            Ok(resp) => {
+                // Unparseable balance is inconclusive, not zero — see balance_blocks_sync.
+                if balance_blocks_sync(resp.balance.as_deref()) {
+                    return Err(crate::error::AppError::Validation(
+                        "Insufficient credits. Please add credits to your account before syncing.".into(),
+                    ));
+                }
+            }
+            // Fail-open on transport/HTTP/parse error (per-drive init + per-file
+            // 402 are the authoritative backstops), but log the skipped check.
+            Err(e) => {
+                tracing::warn!(account = %account, error = %e, "credit pre-init balance check failed in auto_init; proceeding");
             }
         }
     }
@@ -1822,644 +1973,62 @@ async fn auto_init_sync_inner(
     })
 }
 
-// =========================================================================
-// Progress handler setup
-// =========================================================================
-
-/// Direction of a file transfer for progress callbacks.
-enum TransferDirection {
-    Upload,
-    Download,
-}
-
-/// Shared state for a transfer progress callback.
-struct TransferContext {
-    sync: Arc<SyncRunner>,
-    app: AppHandle,
-    label: Arc<str>,
-    direction: TransferDirection,
-}
-
-/// Handle per-chunk transfer progress: log first event, track in UI via the
-/// throttled snapshot path, and record completion activity. Shared between
-/// upload and download callbacks to avoid code duplication.
-///
-/// Per-chunk byte progress is surfaced to the frontend exclusively through
-/// the throttled `sync_progress_snapshot` event emitted by
-/// [`crate::sync::progress::update_file_progress`]. The previous separate
-/// `hcfs_upload_progress` / `hcfs_download_progress` Tauri events were
-/// removed after verifying (via grep of `app/`) that zero frontend code
-/// listened to them — they were firing on every chunk for no consumer.
-fn handle_transfer_progress(ctx: &TransferContext, bytes: u64, total: u64, path: Option<&str>) {
-    ctx.sync.touch_progress_time();
-    let (dir_name, file_action) = match ctx.direction {
-        TransferDirection::Upload => ("Upload", crate::sync::progress::FileAction::Upload),
-        TransferDirection::Download => ("Download", crate::sync::progress::FileAction::Download),
-    };
-
-    if let Some(path_str) = path {
-        let file_name = Path::new(path_str).file_name().and_then(|n| n.to_str()).unwrap_or(path_str);
-        // Log the first chunk of each transfer. Using bytes == 0 avoids
-        // the old started_set Mutex that was contended on every chunk.
-        // Trade-off: resumed transfers (first chunk has bytes > 0) won't
-        // get a "started" log — acceptable since the completion log still
-        // fires and resume is rare.
-        if bytes == 0 {
-            info!("{} started [{}]: {} ({} bytes)", dir_name, ctx.label, file_name, total);
-        }
-        let _ = crate::sync::progress::update_file_progress(&ctx.sync, path_str, bytes, total, file_action, Some(&*ctx.label));
-
-        // First non-zero upload chunk for any file ends the
-        // "processing" window — the bottom-right widget now has real
-        // per-file progress and the top banner can vanish. Gated on
-        // `sync_session_epoch` so chunks from an in-flight cycle
-        // that started BEFORE the activating `begin` do NOT clear the
-        // banner. Idempotent (single mutex tick + early return when
-        // state is already cleared) so calling on every chunk is
-        // fine.
-        if matches!(ctx.direction, TransferDirection::Upload) && bytes > 0 {
-            use tauri::Manager;
-            let app_state = ctx.app.state::<crate::app_state::AppState>();
-            let epoch = app_state.sync_session_epoch.load(std::sync::atomic::Ordering::SeqCst);
-            app_state.upload_processing.clear_if_session_advanced(&ctx.app, &ctx.label, epoch);
-        }
-
-        if crate::sync::logic::is_file_completion_tick(bytes, total) {
-            // Byte-progress completion is "the request body finished
-            // leaving our socket" — the HTTP response status (200 / 402
-            // / 5xx) has not been parsed yet. We log + emit the
-            // transfer-complete UI event here because both are
-            // best-effort progress signals, but we deliberately do NOT
-            // enqueue a `SyncActivityItem` from this point: that would
-            // record a server-rejected upload as a successful one.
-            // The enqueue lives in `build_file_synced_callback`, which
-            // hcfs-client fires only on per-file `Ok` (server-confirmed
-            // 2xx). See docs/plans/2026-05-13-sync-402-data-integrity.md.
-            info!("{} complete [{}]: {} ({} bytes)", dir_name, ctx.label, file_name, total);
-            let _ = ctx.app.emit(
-                crate::sync::events::FILE_TRANSFER_COMPLETE,
-                crate::sync::events::LabelPayload {
-                    label: ctx.label.to_string(),
-                },
-            );
-        }
-    }
-    debug!("{} [{}]: {}/{} bytes, path: {:?}", dir_name, ctx.label, bytes, total, path);
-}
-
-/// Fire-and-forget: persist the planner's view of pending uploads to the
-/// `sync_intent` table.
-///
-/// Called from `build_plan_ready_callback` once per sync cycle. The intent
-/// manifest is a pure UX overlay used by the sync widget to render
-/// "5 GB of 10 GB" across app restarts — it is NOT load-bearing for sync
-/// correctness. Failures (no logged-in user, missing pool, SQLite error)
-/// are logged and dropped; the next plan-ready call will replay the same
-/// uploads.
-///
-/// Ownership: all captures are owned (`AppHandle` is `Clone` and cheap;
-/// `label` and `plan_uploads` are moved in). The spawned future is
-/// `'static + Send`, satisfying `tauri::async_runtime::spawn`'s bound.
-///
-/// Uses `tauri::async_runtime::spawn`, NOT bare `tokio::spawn`: this runs
-/// from the hcfs `on_sync_plan_ready` callback, whose calling thread is
-/// not contractually guaranteed to be inside a Tokio runtime. Bare
-/// `tokio::spawn` panics ("there is no reactor running") off-runtime —
-/// the same crash class fixed in `tauri_bridge::spawn_snapshot_emit`.
-/// Tauri's runtime handle is global and thread-context-independent.
-fn spawn_record_intent_plan<R: tauri::Runtime>(app: AppHandle<R>, label: String, plan_uploads: Vec<(String, u64)>) {
-    tauri::async_runtime::spawn(async move {
-        use tauri::Manager;
-        let state: tauri::State<'_, crate::app_state::AppState> = app.state();
-        let account_id = match state.current_account_id() {
-            Ok(id) => id,
-            Err(e) => {
-                // Not logged in (or auth mutex poisoned). The widget overlay
-                // is a UX nicety, not load-bearing — drop rather than emit a
-                // noisy error. Next plan-ready after login replays uploads.
-                debug!(label = %label, error = %e, "skipping intent record_plan: no active account");
-                return;
-            }
-        };
-        let pool = match state.pool() {
-            Ok(p) => p.clone(),
-            Err(e) => {
-                warn!(label = %label, error = %e, "skipping intent record_plan: pool unavailable");
-                return;
-            }
-        };
-        let repo = crate::sync::intent::IntentRepo::new(pool);
-        if let Err(e) = repo.record_plan(&account_id, &label, &plan_uploads).await {
-            warn!(label = %label, error = %e, "intent record_plan failed");
-        }
-    });
-}
-
-/// Fire-and-forget: mark a single file as completed in the desktop-side
-/// `sync_intent` manifest.
-///
-/// Called from inside `build_file_synced_callback` only when hcfs-client's
-/// per-file callback reports `action == "uploaded"`. Downloads, deletes,
-/// and conflict events do NOT touch the intent manifest — the manifest
-/// counts user-initiated uploads, which is the only category the
-/// "X of Y uploaded across restarts" widget overlay needs.
-///
-/// Spawned because `FileSyncedFn` is a sync `Fn(...)` and
-/// [`crate::sync::intent::IntentRepo::mark_completed`] is async. The
-/// manifest is a pure UX overlay, NOT load-bearing for sync correctness,
-/// so on auth / pool / SQL failure we log and drop. Idempotence is
-/// enforced at the SQL layer (`AND completed_at_ms IS NULL`), so a
-/// duplicate fire — e.g. hcfs-client retrying a callback after a
-/// transient widget event drop — preserves the first completion
-/// timestamp.
-///
-/// Ownership: every capture is owned. `AppHandle<R>` is `Clone` and cheap
-/// (internally `Arc`); `label` and `rel_path` are moved in. The spawned
-/// future is `'static + Send`, satisfying `tauri::async_runtime::spawn`'s
-/// bound.
-///
-/// Uses `tauri::async_runtime::spawn`, NOT bare `tokio::spawn`: this runs
-/// from the hcfs `on_file_synced` callback, whose calling thread is not
-/// contractually guaranteed to be inside a Tokio runtime. Bare
-/// `tokio::spawn` panics ("there is no reactor running") off-runtime —
-/// the same crash class fixed in `tauri_bridge::spawn_snapshot_emit`.
-fn spawn_mark_intent_completed<R: tauri::Runtime>(app: AppHandle<R>, label: String, rel_path: String) {
-    tauri::async_runtime::spawn(async move {
-        use tauri::Manager;
-        let state: tauri::State<'_, crate::app_state::AppState> = app.state();
-        let account_id = match state.current_account_id() {
-            Ok(id) => id,
-            Err(e) => {
-                // Not logged in (or auth mutex poisoned). Treat like the
-                // plan-ready path: drop quietly, the next plan-ready will
-                // replay this row as pending until it gets uploaded again.
-                debug!(label = %label, path = %rel_path, error = %e, "skipping intent mark_completed: no active account");
-                return;
-            }
-        };
-        let pool = match state.pool() {
-            Ok(p) => p.clone(),
-            Err(e) => {
-                warn!(label = %label, path = %rel_path, error = %e, "skipping intent mark_completed: pool unavailable");
-                return;
-            }
-        };
-        let repo = crate::sync::intent::IntentRepo::new(pool);
-        let now_ms = chrono::Utc::now().timestamp_millis();
-        if let Err(e) = repo.mark_completed(&account_id, &label, &rel_path, now_ms).await {
-            warn!(label = %label, path = %rel_path, error = %e, "intent mark_completed failed");
-        }
-    });
-}
-
-/// Build the `on_sync_plan_ready` callback that merges the sync plan into the
-/// progress session and emits the `SYNC_PLAN_READY` event.
-fn build_plan_ready_callback<R: tauri::Runtime>(app: &AppHandle<R>, label: Arc<str>, sync: &Arc<SyncRunner>) -> hcfs_client::sync::SyncPlanReadyFn {
-    let app = app.clone();
-    let sync = sync.clone();
-    Arc::new(move |uploads, downloads, local_deletes, remote_deletes, renames| {
-        sync.touch_progress_time();
-        // Persist the planner's view to the desktop-side intent manifest.
-        // Runs UNCONDITIONALLY — above the `total == 0` early-return —
-        // because an empty plan must still flush stale pending rows (see
-        // `IntentRepo::record_plan`'s "Empty input semantics" docstring).
-        // Logic is delegated to `spawn_record_intent_plan` so this closure
-        // stays under the project's 100-line per-function ceiling.
-        let plan_uploads: Vec<(String, u64)> = uploads.iter().map(|f| (f.path.clone(), f.size_bytes)).collect();
-        spawn_record_intent_plan(app.clone(), label.to_string(), plan_uploads);
-
-        let total = uploads.len() + downloads.len() + local_deletes.len() + remote_deletes.len() + renames.len();
-        if total == 0 {
-            return;
-        }
-        info!(
-            "Sync plan ready [{}]: {} uploads, {} downloads, {} local_deletes, {} remote_deletes, {} renames",
-            label,
-            uploads.len(),
-            downloads.len(),
-            local_deletes.len(),
-            remote_deletes.len(),
-            renames.len()
-        );
-
-        // Build path vecs once and move them into SessionFileList (no .clone()).
-        // The Tauri event payload is built separately by re-iterating the plan
-        // slices (which are still alive), so we never hold two full copies of
-        // the path strings simultaneously.
-        let upload_paths: Vec<String> = uploads.iter().map(|f| f.path.clone()).collect();
-        let download_paths: Vec<String> = downloads.iter().map(|f| f.path.clone()).collect();
-        let local_delete_paths: Vec<String> = local_deletes.iter().map(|f| f.path.clone()).collect();
-        let remote_delete_paths: Vec<String> = remote_deletes.iter().map(|f| f.path.clone()).collect();
-
-        // Move path vecs into the file list — no redundant clone.
-        let file_list = crate::sync::progress::SessionFileList {
-            upload_files: Some(upload_paths),
-            download_files: Some(download_paths),
-            local_delete_files: Some(local_delete_paths),
-            remote_delete_files: Some(remote_delete_paths),
-        };
-        let _ = crate::sync::progress::merge_into_session(
-            &sync,
-            uploads.len() as u32,
-            downloads.len() as u32,
-            local_deletes.len() as u32,
-            remote_deletes.len() as u32,
-            Some(file_list),
-            Some(label.to_string()),
-        );
-
-        // Patch file sizes directly from plan items — eliminates the
-        // intermediate HashMap that previously cloned every path string.
-        let mut progress_state = sync.progress.lock();
-        if let Some(session) = progress_state.current_session.as_mut() {
-            let mut patched = 0u32;
-            for f in uploads
-                .iter()
-                .chain(downloads.iter())
-                .chain(local_deletes.iter())
-                .chain(remote_deletes.iter())
-            {
-                if f.size_bytes > 0
-                    && let Some(file) = session.files.get_mut(&f.path)
-                    && file.total_bytes == 0
-                {
-                    file.total_bytes = f.size_bytes;
-                    patched += 1;
-                }
-            }
-            if patched > 0 {
-                debug!("Patched sizes for {patched} files from sync plan");
-            }
-        }
-        let needs_snapshot = progress_state.current_session.is_some();
-        drop(progress_state);
-        if needs_snapshot {
-            sync.emit_snapshot(true);
-        }
-
-        // Build the event payload directly from plan slices. File-path vectors
-        // are capped to avoid oversized JSON payloads that freeze the webview
-        // when a migration produces thousands of files. The counts are always
-        // the true totals; only the path arrays are truncated.
-        let cap = crate::sync::progress::MAX_EVENT_FILES;
-        let _ = app.emit(
-            crate::sync::events::SYNC_PLAN_READY,
-            crate::sync::events::SyncPlanReadyPayload {
-                label: label.to_string(),
-                uploads: uploads.len(),
-                downloads: downloads.len(),
-                local_deletes: local_deletes.len(),
-                remote_deletes: remote_deletes.len(),
-                upload_files: uploads.iter().take(cap).map(|f| f.path.clone()).collect(),
-                download_files: downloads.iter().take(cap).map(|f| f.path.clone()).collect(),
-                local_delete_files: local_deletes.iter().take(cap).map(|f| f.path.clone()).collect(),
-                remote_delete_files: remote_deletes.iter().take(cap).map(|f| f.path.clone()).collect(),
-            },
-        );
-    })
-}
-
-/// Build an encrypt or decrypt progress callback.
-///
-/// The two callbacks are structurally identical — only the log prefix
-/// and `FileAction` variant differ — so this helper is parameterized
-/// over both.
-fn build_crypto_callback(
-    sync: Arc<SyncRunner>,
-    label: Arc<str>,
-    action: crate::sync::progress::FileAction,
-    direction_name: &'static str,
-) -> hcfs_client::sync::SyncProgressFn {
-    Arc::new(move |b, t, p| {
-        sync.touch_progress_time();
-        if b == 0 {
-            info!("{direction_name} starting [{label}]: {p:?} ({t} bytes)");
-        } else if b == t && t > 0 {
-            info!("{direction_name} complete [{label}]: {p:?} ({t} bytes)");
-        }
-        if let Some(path_str) = p {
-            let _ = crate::sync::progress::update_file_progress(&sync, path_str, b, t, action.clone(), Some(&*label));
-        }
-    })
-}
-
-/// Build the `on_scan_progress` callback that logs scan progress and
-/// emits the `SCAN_PROGRESS` Tauri event.
-fn build_scan_callback(sync: Arc<SyncRunner>, app: AppHandle, label: Arc<str>) -> hcfs_client::sync::ScanProgressFn {
-    Arc::new(move |n, p| {
-        sync.touch_progress_time();
-        info!("Scan [{label}]: {n} files scanned, current: {p:?}");
-        let _ = app.emit(
-            crate::sync::events::SCAN_PROGRESS,
-            crate::sync::events::ScanProgressPayload {
-                label: label.to_string(),
-                scanned: n,
-                path: p.map(std::string::ToString::to_string),
-            },
-        );
-    })
-}
-
-/// Build the `on_fetch_state_progress` callback that logs fetch state
-/// progress and emits the `FETCH_PROGRESS` Tauri event.
-fn build_fetch_callback(sync: Arc<SyncRunner>, app: AppHandle, label: Arc<str>) -> hcfs_client::sync::FetchProgressFn {
-    Arc::new(move |f, t| {
-        sync.touch_progress_time();
-        info!("Fetch state [{label}]: {f}/{t} entries");
-        let _ = app.emit(
-            crate::sync::events::FETCH_PROGRESS,
-            crate::sync::events::FetchProgressPayload {
-                label: label.to_string(),
-                fetched: f,
-                total: t,
-            },
-        );
-    })
-}
-
-/// Build the `on_file_synced` callback that logs per-file completion,
-/// updates the synced-paths cache, AND transitions the file's progress
-/// status to `Completed` so the sync widget reflects the file as done as
-/// soon as its individual AEAD verification has succeeded — instead of
-/// waiting for the entire sync cycle to finish. See
-/// [`crate::sync::progress::mark_file_synced`] for the full reasoning.
-pub fn build_file_synced_callback<R: tauri::Runtime>(
-    app: &AppHandle<R>,
-    sync: Arc<SyncRunner>,
-    label: Arc<str>,
-) -> hcfs_client::sync::FileSyncedFn {
-    // Clone once at construction time; the closure (`Arc<dyn Fn(...)>`)
-    // captures the owned `AppHandle<R>`. Per-fire we `.clone()` again to
-    // hand an owned handle to the `'static`-bound spawn future. Both
-    // clones are cheap (`AppHandle` is internally `Arc`).
-    let app = app.clone();
-    Arc::new(move |rel_path, path_hash_hex, arion_cid, action, timestamps| {
-        debug!("File synced [{label}]: {rel_path} ({action}) cid={arion_cid}");
-        if rel_path.is_empty() {
-            return;
-        }
-
-        // Transition this file from Decrypting/Downloading/Encrypting to
-        // Completed in the progress tracker. The hcfs-client side fires
-        // this callback only after the per-file upload or download task
-        // returns Ok — for downloads that means chunked download AND
-        // AEAD-tag-verifying decryption have both succeeded — so it is
-        // safe to mark Completed here without waiting for end-of-cycle
-        // `complete_pending_files`. Without this, a small decrypted file
-        // gets stuck on "Decrypting" until the largest in-flight file
-        // also finishes.
-        //
-        // `mark_file_synced` also returns the file's `total_bytes` from
-        // the in-memory progress tracker — that's the byte count we
-        // thread into the activity row below. `FileSyncedFn`'s upstream
-        // signature still doesn't carry the size, but the progress
-        // tracker holds it from per-chunk telemetry and the transition
-        // here reads it BEFORE flipping the row to `Completed`. The
-        // fallback (no session / no file entry / already-Completed) is
-        // `0`, matching the prior hardcoded value for those edge cases.
-        let size_bytes = match crate::sync::progress::mark_file_synced(&sync, rel_path) {
-            Ok(n) => n,
-            Err(e) => {
-                warn!(label = %label, path = %rel_path, error = %e, "Failed to mark file synced in progress tracker");
-                0
-            }
-        };
-
-        // Activity items must reflect SERVER-CONFIRMED success, not just
-        // "the request body finished sending". hcfs-client's per-file
-        // upload/download tasks invoke this callback only after the
-        // task returns `Ok` (2xx response parsed for uploads, full
-        // chunked download + AEAD verification for downloads), so this
-        // is the earliest point a "Uploaded" / "Downloaded" row is true.
-        //
-        // The enqueue ran inside the byte-progress completion-tick
-        // before fix `2026-05-13-sync-402-data-integrity`. That site
-        // fires when the local TCP socket has drained, so a 402 /
-        // 5xx-rejected upload would still appear as "Uploaded" in the
-        // activity log. See docs/plans/2026-05-13-sync-402-data-integrity.md.
-        //
-        // Action mapping: hcfs-client passes `action` as one of
-        // `"uploaded"` / `"downloaded"` / `"deleted"` / `"conflict"`
-        // (mirroring `SyncActivityAction::as_str()`). Unknown values
-        // produce `None`, which skips the activity enqueue entirely —
-        // recording nothing is the truthful choice when we don't know
-        // how to categorize the event. Fabricating an `Uploaded` row
-        // for a future hcfs-client variant (e.g. Phase 2's `"failed"`)
-        // is the exact category of lie this task exists to eliminate.
-        //
-        // `size_bytes` comes from `mark_file_synced`'s return value —
-        // the in-memory progress tracker's `file.total_bytes` read
-        // before the row transitions to Completed. The Recent-Files
-        // view (`get_recent_files` in `sync/files.rs`) reads
-        // `item.size_bytes` directly, so without this thread-through
-        // every newly-synced file would render with size 0 / "unknown".
-        // The byte-progress callback used to supply the size; we no
-        // longer trust it for activity rows (see the 402 plan), so the
-        // progress tracker is the authoritative source. The 0 fallback
-        // covers the documented edge cases of `mark_file_synced` —
-        // no session, no file entry, or the file was already Completed
-        // — where the size isn't observable from this call.
-        //
-        // `ActivityDedupKey = (file_name, action, label, size_bytes)`
-        // (`hcfs_client::engine::runner::ActivityDedupKey`) regains
-        // full entropy now that `size_bytes` is non-zero on the common
-        // path.
-        let activity_action: Option<SyncActivityAction> = match action {
-            "uploaded" => Some(SyncActivityAction::Uploaded),
-            "downloaded" => Some(SyncActivityAction::Downloaded),
-            "deleted" => Some(SyncActivityAction::Deleted),
-            "conflict" => Some(SyncActivityAction::Conflict),
-            other => {
-                warn!(
-                    label = %label,
-                    path = %rel_path,
-                    action = other,
-                    "unknown FileSyncedFn action; skipping activity-item enqueue to preserve activity-log truth"
-                );
-                None
-            }
-        };
-        // Skip ONLY the activity enqueue on unknown actions —
-        // `upsert_synced_path` below still runs because the file did
-        // sync successfully (hcfs-client only fires this callback on
-        // per-file `Ok`); we just decline to categorize the event for
-        // the activity log.
-        if let Some(activity_action) = activity_action {
-            sync.add_pending_activity(SyncActivityItem {
-                file_name: Arc::from(rel_path),
-                action: activity_action,
-                timestamp: chrono::Utc::now().timestamp(),
-                size_bytes,
-                label: Arc::clone(&label),
-            });
-        }
-
-        // Mark the file complete in the desktop-side intent manifest so
-        // the sync widget can show "X of Y" totals across app restarts.
-        // We mark intent complete ONLY on "uploaded":
-        //   - "downloaded": pulling someone else's file, not user upload intent.
-        //   - "deleted":    deletion is out of scope for the upload manifest.
-        //   - "conflict":   when a conflict resolves via upload, hcfs-client
-        //                   already arrives here with action="uploaded" (see
-        //                   `Drive::resolve_upload_conflict`), so the
-        //                   resolution is counted; the bare "conflict" event
-        //                   reports a non-upload outcome (kept-remote /
-        //                   manual-deferred) and must not advance totals.
-        //
-        // Spawned for the same async-Fn reason as `spawn_record_intent_plan`
-        // — `FileSyncedFn` is sync; `IntentRepo::mark_completed` is async.
-        // The manifest is a pure UX overlay, NOT load-bearing for sync
-        // correctness, so failures inside the spawn log and drop.
-        if action == "uploaded" {
-            spawn_mark_intent_completed(app.clone(), label.to_string(), rel_path.to_string());
-        }
-
-        // hcfs's `FileSyncedFn` callback passes `path_hash_hex` as a hex
-        // string. `SyncedFileInfo::with_timestamps` wants the raw 32-byte
-        // hash, so we decode here. A future hcfs PR could pass `&[u8; 32]`
-        // directly to skip this round-trip.
-        let decoded = match hex::decode(path_hash_hex) {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                warn!(
-                    error = %e,
-                    path_hash_hex = path_hash_hex,
-                    "failed to decode path_hash_hex, skipping synced-paths upsert"
-                );
-                return;
-            }
-        };
-        let Ok(path_hash_bytes) = <[u8; 32]>::try_from(decoded) else {
-            warn!(
-                path_hash_hex = path_hash_hex,
-                "path_hash_hex has wrong byte length, skipping synced-paths upsert"
-            );
-            return;
-        };
-        // When the server response carried authoritative timestamps we
-        // stamp them into the cache immediately so the Files page's
-        // "DATE UPLOADED" column renders right away — no waiting for a
-        // subsequent `fetch_remote_state` to populate them. When the
-        // server was legacy (no timestamps in response), hcfs-client
-        // passes `None` and `SyncedFileInfo::new` preserves the
-        // pre-existing cache timestamps via the zero-guard in
-        // `upsert_synced_path` — never clobber a good value with zeros.
-        let info = match timestamps {
-            Some(ts) => SyncedFileInfo::with_timestamps(path_hash_bytes, Arc::from(arion_cid), ts),
-            None => SyncedFileInfo::new(path_hash_bytes, Arc::from(arion_cid)),
-        };
-        sync.upsert_synced_path(&label, rel_path.to_string(), info);
-    })
-}
-
-/// Build the `on_file_failed` callback that flips the file's progress
-/// status to terminal `FileStatus::Error` synchronously at the failure
-/// site (does NOT emit any Tauri event — the bridge handles that via
-/// [`hcfs_client::engine::events::SyncEvent::FileFailed`]).
-///
-/// Visibility is intentionally module-private (`pub(super)` would also
-/// suffice, but neither is needed by integration tests because tests
-/// reach the same outcome through `mark_file_failed` directly — the
-/// callback is purely glue between hcfs-client's `FileFailedFn` shape and
-/// our progress tracker).
-///
-/// The split-of-responsibilities mirrors `build_file_synced_callback` and
-/// the existing bridge: bridge → Tauri event emit; this callback →
-/// progress-tracker mutation. hcfs-client guarantees both fire for the
-/// same per-file error, so we don't lose either signal.
-fn build_file_failed_callback(sync: Arc<SyncRunner>, label: Arc<str>) -> hcfs_client::sync::FileFailedFn {
-    Arc::new(move |rel_path, file_id_hex, kind, http_status| {
-        // Mirror `on_file_synced` shape: empty rel_path means the planner
-        // never recorded a path for this file (shouldn't happen, but the
-        // upstream doc on `FileFailedFn` allows it). No-op rather than
-        // mark a phantom entry.
-        if rel_path.is_empty() {
-            return;
-        }
-        debug!(
-            label = %label,
-            path = %rel_path,
-            file_id = %file_id_hex,
-            ?kind,
-            http_status = ?http_status,
-            "per-file sync failure reported by hcfs-client"
-        );
-
-        // Best-effort display string for the snapshot row's `error` field.
-        // The frontend already discriminates failure CATEGORY via the
-        // separate `hcfs_file_failed` Tauri event (typed
-        // `FileFailureKindPayload`); this string is only used as a
-        // tooltip/details fallback in the file list, so a `Debug` render
-        // is acceptable.
-        let error_msg = format!("{kind:?}");
-        if let Err(e) = crate::sync::progress::mark_file_failed(&sync, rel_path, &error_msg) {
-            warn!(
-                label = %label,
-                path = %rel_path,
-                error = %e,
-                "failed to mark file failed in progress tracker"
-            );
-        }
-    })
-}
-
-/// Wire up the hcfs-client progress callbacks for a drive.
-///
-/// Connects the `SyncProgress` callback struct (upload/download/encrypt/decrypt
-/// progress, scan/fetch state, file-synced notification, and the plan-ready
-/// callback) to the `SyncRunner`'s progress tracking and Tauri event emission.
-/// Called once per drive during [`initialize_sync_inner`].
-pub(crate) fn setup_progress_handlers(app: &AppHandle, manager: &mut DriveManager, label: &str, sync: &Arc<SyncRunner>) {
-    let label: Arc<str> = Arc::from(label);
-
-    let upload_ctx = Arc::new(TransferContext {
-        sync: sync.clone(),
-        app: app.clone(),
-        label: Arc::clone(&label),
-        direction: TransferDirection::Upload,
-    });
-    let download_ctx = Arc::new(TransferContext {
-        sync: sync.clone(),
-        app: app.clone(),
-        label: Arc::clone(&label),
-        direction: TransferDirection::Download,
-    });
-
-    manager.set_progress(SyncProgress {
-        on_sync_plan_ready: Some(build_plan_ready_callback(app, Arc::clone(&label), sync)),
-        on_upload_progress: Some(Arc::new(move |b, t, p| {
-            handle_transfer_progress(&upload_ctx, b, t, p);
-        })),
-        on_download_progress: Some(Arc::new(move |b, t, p| {
-            handle_transfer_progress(&download_ctx, b, t, p);
-        })),
-        on_encrypt_progress: Some(build_crypto_callback(
-            sync.clone(),
-            Arc::clone(&label),
-            crate::sync::progress::FileAction::Encrypt,
-            "Encrypt",
-        )),
-        on_decrypt_progress: Some(build_crypto_callback(
-            sync.clone(),
-            Arc::clone(&label),
-            crate::sync::progress::FileAction::Decrypt,
-            "Decrypt",
-        )),
-        on_scan_progress: Some(build_scan_callback(sync.clone(), app.clone(), Arc::clone(&label))),
-        on_fetch_state_progress: Some(build_fetch_callback(sync.clone(), app.clone(), Arc::clone(&label))),
-        on_file_synced: Some(build_file_synced_callback(app, sync.clone(), Arc::clone(&label))),
-        // Phase 2 / Task 2.7: per-file failure callback fired synchronously
-        // by hcfs-client at the error site. We mutate the in-memory
-        // progress tracker here; the bridge's `SyncEvent::FileFailed` arm
-        // is the user-visible side (Tauri event emit).
-        on_file_failed: Some(build_file_failed_callback(sync.clone(), Arc::clone(&label))),
-    });
-}
-
 #[cfg(test)]
 mod tests {
+    use super::callbacks::TransferDirection;
     use super::*;
     use std::time::Duration;
+
+    // ── drain_drive_lock (F09: serialize baseline wipe vs in-flight cycle) ──
+
+    /// The drain must not return until the in-flight lock holder releases —
+    /// i.e. the baseline wipe is ordered AFTER the cycle's cancel-path save.
+    /// The holder sets `saved` only just before dropping the guard, so a drain
+    /// that genuinely waits observes `saved == true`; a drain that skipped the
+    /// lock would race and see `false`.
+    #[tokio::test]
+    async fn drain_drive_lock_waits_for_holder_to_release() {
+        let lock = Arc::new(TokioMutex::new(()));
+        let saved = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (holding_tx, holding_rx) = tokio::sync::oneshot::channel();
+
+        let holder = {
+            let lock = Arc::clone(&lock);
+            let saved = Arc::clone(&saved);
+            tokio::spawn(async move {
+                let guard = lock.lock().await;
+                holding_tx.send(()).expect("signal that the lock is held");
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                // Simulate the cancel-path save_sync_state running under the lock.
+                saved.store(true, std::sync::atomic::Ordering::SeqCst);
+                drop(guard);
+            })
+        };
+
+        // Only start draining once the holder definitely holds the lock.
+        holding_rx.await.expect("holder acquired the lock");
+        assert!(drain_drive_lock(Some(&lock), Duration::from_secs(5)).await, "drain should succeed");
+        assert!(
+            saved.load(std::sync::atomic::Ordering::SeqCst),
+            "drain must return only after the in-flight save completed"
+        );
+        holder.await.expect("holder task joined");
+    }
+
+    /// When the holder never releases, the drain returns `false` within the
+    /// bound so `remove_drive` proceeds best-effort instead of hanging.
+    #[tokio::test]
+    async fn drain_drive_lock_times_out_when_holder_never_releases() {
+        let lock = Arc::new(TokioMutex::new(()));
+        let _held = Arc::clone(&lock).lock_owned().await; // held for the whole test
+        assert!(!drain_drive_lock(Some(&lock), Duration::from_millis(50)).await, "must time out, not hang");
+    }
+
+    /// No drive in the map (already removed) → nothing to drain, returns true.
+    #[tokio::test]
+    async fn drain_drive_lock_none_is_immediately_true() {
+        assert!(drain_drive_lock::<()>(None, Duration::from_secs(5)).await);
+    }
 
     // ── TransferDirection ───────────────────────────────────────────
 
@@ -2603,7 +2172,7 @@ mod tests {
         // Pre-conditions: drive and label root exist.
         assert!(sync.drives.lock().await.contains_key(label));
 
-        let (remaining, removed_path) = remove_drive_inmemory(&sync, label).await;
+        let (remaining, removed_path) = remove_drive_inmemory(&sync, label, None).await;
 
         assert_eq!(remaining, 0, "map should be empty after removing the only drive");
         assert_eq!(
@@ -2662,7 +2231,7 @@ mod tests {
             "first_reconcile gate map should have a pre-removal entry"
         );
 
-        let _ = remove_drive_inmemory(&sync, label).await;
+        let _ = remove_drive_inmemory(&sync, label, None).await;
 
         assert!(
             sync.get_cached_synced_paths(label).is_none(),
@@ -2702,7 +2271,7 @@ mod tests {
 
         assert!(!token_clone.is_cancelled(), "token should not be cancelled before removal");
 
-        let _ = remove_drive_inmemory(&sync, label).await;
+        let _ = remove_drive_inmemory(&sync, label, None).await;
 
         assert!(token_clone.is_cancelled(), "token should be cancelled after removal");
     }
@@ -2711,7 +2280,7 @@ mod tests {
     async fn remove_drive_inmemory_returns_none_for_nonexistent_label() {
         let sync = test_sync_runner();
 
-        let (remaining, removed_path) = remove_drive_inmemory(&sync, "nonexistent").await;
+        let (remaining, removed_path) = remove_drive_inmemory(&sync, "nonexistent", None).await;
 
         assert_eq!(remaining, 0, "empty map has zero remaining");
         assert!(removed_path.is_none(), "nonexistent label should yield None path");
@@ -2727,6 +2296,100 @@ mod tests {
     // files" → emits `local_deletes` → the user's local files are nuked
     // on the next sync cycle. Clearing the on-disk baseline on remove
     // forces a fresh start so the next sync uploads instead of deleting.
+
+    // teardown_account decides which account scopes the `sync_paths` row delete
+    // and the on-disk baseline wipe. The explicit account (carried by the
+    // `remove_sync_path` IPC) MUST win over the session's current account so a
+    // teardown that races an account switch never wipes the wrong account's
+    // baseline — the correctness bug this helper closes.
+    #[test]
+    fn teardown_account_prefers_explicit_over_current() {
+        assert_eq!(
+            teardown_account(Some("explicit".into()), Some("current".into())).as_deref(),
+            Some("explicit"),
+        );
+    }
+
+    #[test]
+    fn teardown_account_falls_back_to_current_without_explicit() {
+        assert_eq!(teardown_account(None, Some("current".into())).as_deref(), Some("current"));
+        assert_eq!(teardown_account(Some("explicit".into()), None).as_deref(), Some("explicit"));
+    }
+
+    #[test]
+    fn teardown_account_none_when_neither_available() {
+        // No account context at all → the caller skips persistent cleanup and warns.
+        assert_eq!(teardown_account(None, None), None);
+    }
+
+    // change_sync_folder holds an explicit account_id, so its teardown MUST go
+    // through remove_drive_for_account (threading that account) and NOT the
+    // session-deriving remove_drive wrapper — otherwise an account flip mid-call
+    // would wipe the wrong account's baseline (or leave A's stale baseline alive
+    // across a path change, the clear_persisted_sync_state data-loss precondition).
+    // Static source assertion mirrors remove_sync_path_delegates_to_remove_drive_for_account.
+    #[test]
+    fn change_sync_folder_tears_down_with_explicit_account() {
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/lifecycle.rs")).expect("read lifecycle.rs");
+        let sig = src.find("pub async fn change_sync_folder(").expect("change_sync_folder present");
+        let body_start = src[sig..].find('{').expect("fn body opens") + sig;
+        let mut depth = 0usize;
+        let mut body_end = body_start;
+        for (i, ch) in src[body_start..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        body_end = body_start + i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let body = &src[body_start..=body_end];
+        assert!(
+            body.contains("remove_drive_for_account(app.clone(), label.clone(), Some(account_id.clone()))"),
+            "change_sync_folder must tear down via remove_drive_for_account with the explicit account",
+        );
+        assert!(
+            !body.contains("remove_drive(app"),
+            "change_sync_folder must NOT use the session-deriving remove_drive wrapper",
+        );
+    }
+
+    // balance_blocks_sync must block only on a definitively non-positive value.
+    #[test]
+    fn balance_blocks_sync_only_on_nonpositive() {
+        assert!(balance_blocks_sync(Some("0")));
+        assert!(balance_blocks_sync(Some("0.0")));
+        assert!(balance_blocks_sync(Some("-5")));
+        assert!(!balance_blocks_sync(Some("5")));
+        assert!(!balance_blocks_sync(Some("0.5")));
+    }
+
+    // The regression: an unparseable balance (currency suffix, localized decimal,
+    // format change, empty, or absent) is INCONCLUSIVE and must NOT block — the
+    // old unwrap_or(0.0) treated these as zero and locked paying users out.
+    #[test]
+    fn balance_blocks_sync_treats_unparseable_as_inconclusive() {
+        assert!(!balance_blocks_sync(Some("1000.00 USD")));
+        assert!(!balance_blocks_sync(Some("1.000,00")));
+        assert!(!balance_blocks_sync(Some("")));
+        assert!(!balance_blocks_sync(Some("   ")));
+        assert!(!balance_blocks_sync(None));
+    }
+
+    // f64::from_str accepts "NaN"/"inf"/"-inf". Pin the resulting decisions:
+    // NaN <= 0.0 is false (IEEE-754, every NaN comparison is false) so NaN fails
+    // OPEN (no block — inconclusive); -inf is non-positive so it blocks; +inf allows.
+    #[test]
+    fn balance_blocks_sync_handles_float_specials() {
+        assert!(!balance_blocks_sync(Some("NaN")));
+        assert!(!balance_blocks_sync(Some("inf")));
+        assert!(balance_blocks_sync(Some("-inf")));
+    }
 
     #[test]
     fn clear_persisted_sync_state_removes_baseline_files() {
@@ -2825,6 +2488,7 @@ mod tests {
         // Seed the cache as if a reconcile had already populated good
         // timestamps for this rel_path. The legacy-server callback
         // below must NOT clobber these with zeros.
+        use hcfs_client::engine::types::SyncedFileInfo;
         let fid = [0xBBu8; 32];
         let mut prior: std::collections::HashMap<String, SyncedFileInfo> = std::collections::HashMap::new();
         prior.insert(

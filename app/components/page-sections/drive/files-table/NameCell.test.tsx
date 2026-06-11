@@ -63,6 +63,15 @@ vi.mock("@/app/lib/hooks/useFileLiveProgress", () => ({
   useFileLiveProgress: () => ({ status: null, progressPercent: null }),
 }));
 
+// The failed badge now reads the persisted failure (via TanStack Query) and a
+// retry mutation. Stub both so the badge-contract test stays hermetic (no
+// QueryClient needed) — the failure→message mapping is covered by its own unit
+// test, and the persist/retry path by the Rust tests.
+vi.mock("@/app/lib/hooks/useFileFailure", () => ({
+  useFileFailure: () => null,
+  useRetryFailure: () => ({ retryFile: { mutate: () => {}, isPending: false } }),
+}));
+
 // Stub the file-type icon to a no-op so we don't pull in the full
 // `getFileIcon` table — the row's leading icon isn't what we're asserting.
 vi.mock("@/lib/utils/fileTypeUtils", () => ({
@@ -157,5 +166,58 @@ describe("NameCell sync-status badge", () => {
     render(<NameCell {...baseProps} syncStatus={undefined} />);
 
     expect(screen.queryByTestId(/^sync-status-/)).not.toBeInTheDocument();
+  });
+});
+
+// The hover preview icon used to be an absolutely-positioned overlay in the
+// dialog triggers, which faded in directly on top of the Pending/Failed pill.
+// It now renders inline inside NameCell, strictly BEFORE the badge in DOM
+// order (i.e. to its left), so the two can never overlap.
+describe("NameCell hover preview icon", () => {
+  it("renders the icon before (left of) the status badge for a previewable image", () => {
+    render(
+      <NameCell
+        {...baseProps}
+        isPreviewable
+        fileType="image"
+        syncStatus="pending"
+      />,
+    );
+
+    const icon = screen.getByTestId("hover-preview-icon");
+    const badge = screen.getByTestId("sync-status-pending");
+    expect(
+      icon.compareDocumentPosition(badge) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("renders no icon for file types that don't open a preview", () => {
+    render(
+      <NameCell
+        {...baseProps}
+        isPreviewable
+        fileType="document"
+        syncStatus="pending"
+      />,
+    );
+
+    expect(
+      screen.queryByTestId("hover-preview-icon"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders no icon when previews are disabled (selection mode)", () => {
+    render(
+      <NameCell
+        {...baseProps}
+        isPreviewable={false}
+        fileType="image"
+        syncStatus="pending"
+      />,
+    );
+
+    expect(
+      screen.queryByTestId("hover-preview-icon"),
+    ).not.toBeInTheDocument();
   });
 });

@@ -23,6 +23,7 @@ import {
 } from "../lib/types/syncSnapshot";
 import { getFileIcon } from "../lib/utils/fileTypeUtils";
 import SyncQueueOverallProgress from "./SyncQueueOverallProgress";
+import SyncStatusMini from "./SyncStatusMini";
 
 const BODY_MAX_HEIGHT_REM = 11.5;
 const RATE_WINDOW = 10;
@@ -38,6 +39,20 @@ interface SyncStatusDialogProps {
   snapshot: SyncSnapshot;
   open: boolean;
   onClose?: () => void;
+  /**
+   * Render the compact circular form ({@link SyncStatusMini}) instead of the
+   * full card. Set when the sidebar is collapsed or the user minimized the
+   * widget via the ✕ icon. See {@link syncWidgetMinimizedAtom}.
+   */
+  minimized?: boolean;
+  /** Invoked when the minimized ring is clicked — expands back to full. */
+  onExpand?: () => void;
+  /**
+   * Corner the collapse/expand grow animation anchors to: `bottom-left` for
+   * the sidebar footer, `bottom-right` for the portal overlay (the default,
+   * matching the old bottom-right widget).
+   */
+  expandOrigin?: "bottom-left" | "bottom-right";
 }
 
 interface SyncFileItemProps {
@@ -83,8 +98,14 @@ function formatCompactBytes(value: number): string {
 function getStatusTone(options: {
   isUnhealthy: boolean;
   hasFailed: boolean;
+  isComplete: boolean;
 }): StatusTone {
   if (options.isUnhealthy || options.hasFailed) return "error";
+  // A successfully-finished sync gets the green "success" tone (collapsed ring
+  // check + tooltip). Without this branch tone could only be "error"/"progress",
+  // so a completed sync rendered as a blue in-progress ring and the success
+  // palette in SyncStatusMini/the tooltip was unreachable.
+  if (options.isComplete) return "success";
   return "progress";
 }
 
@@ -247,6 +268,9 @@ const SyncFileItem = memo<SyncFileItemProps>(
       isCompleted &&
       (file.action === "local_delete" || file.action === "remote_delete");
     const isError = file.status === "error";
+    // Trim to undefined (not "") so a blank reason falls back to the size meta
+    // via `??`. Rust always sends non-blank copy, but stay defensive.
+    const errorReason = (isError && file.error?.trim()) || undefined;
     const isEncrypting = file.status === "encrypting";
     const isDecrypting = file.status === "decrypting";
     const isInProgress = file.status === "inProgress";
@@ -295,8 +319,19 @@ const SyncFileItem = memo<SyncFileItemProps>(
           </div>
 
           <div className="flex items-end justify-between gap-2 font-geist">
-            <span className="min-w-0 text-[10px] font-medium leading-none tracking-[-0.2px] text-grey-10/50 dark:text-white/50 ">
-              {getFileMetaText(file)}
+            {/* Error rows surface the *why* (Rust-authored reason from the
+                snapshot's `error` field) in red instead of the byte size; it
+                may wrap to two lines, with the "Error" badge staying bottom-
+                aligned. All other rows keep the size meta. */}
+            <span
+              className={cn(
+                "min-w-0 text-[10px] font-medium tracking-[-0.2px]",
+                errorReason
+                  ? "leading-[1.3] text-error-50 line-clamp-2 break-words"
+                  : "leading-none text-grey-10/50 dark:text-white/50",
+              )}
+            >
+              {errorReason ?? getFileMetaText(file)}
             </span>
 
             <SyncFileStatusBadge
@@ -330,6 +365,9 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
   snapshot,
   open,
   onClose,
+  minimized = false,
+  onExpand,
+  expandOrigin = "bottom-right",
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const engineHealth = useAtomValue(syncEngineHealthAtom);
@@ -353,6 +391,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
   const tone = getStatusTone({
     isUnhealthy,
     hasFailed,
+    isComplete: effectiveCompleted || isCompleted,
   });
   const canExpand = snapshot.files.length > 0 || Boolean(snapshot.lastError);
 
@@ -505,6 +544,23 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
     isUnhealthy ? connectivityLabel : "Connected",
   );
 
+  // Compact circular form: shown when the sidebar is collapsed or the user
+  // minimized the widget. Built after the percentage/tone/badge text so the
+  // ring, its label, and the tooltip are driven by the exact same values as
+  // the full card — they can never disagree.
+  if (minimized) {
+    return (
+      <SyncStatusMini
+        percentage={displayPercentage}
+        tone={tone}
+        indeterminate={displayPercentage === null}
+        statusText={headerBadgeText}
+        onExpand={onExpand}
+        expandOrigin={expandOrigin}
+      />
+    );
+  }
+
   const hasTransferringFile = snapshot.files.some(
     (file) => file.status === "inProgress",
   );
@@ -611,7 +667,12 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
   return (
     <div
       onClick={(event: React.MouseEvent) => event.stopPropagation()}
-      className="w-[239px] "
+      className={cn(
+        "w-[239px] animate-widget-grow-0.3",
+        expandOrigin === "bottom-left"
+          ? "origin-bottom-left"
+          : "origin-bottom-right",
+      )}
     >
       <div className="w-full overflow-hidden rounded-[12px] shadow-lg bg-[#d8d8d9] dark:bg-[#4b4b4c]">
         <div className="flex items-start gap-[6px] p-[10px]">
@@ -692,9 +753,16 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
             )}
 
             <div className="max-h-[11.5rem] overflow-y-auto px-[10px] py-1.5 flex flex-col gap-1.5">
-              {snapshot.files.map((file) => (
-                <SyncFileItem key={file.path} file={file} />
-              ))}
+              {/* Only build the per-file rows when the body is actually visible.
+                  The collapsed body is CSS-hidden (max-height:0) but the dialog
+                  re-renders up to ~4x/sec during a sync; mapping the whole file
+                  list each time was wasted reconciliation. The wrapper stays
+                  mounted so the open/close transition still animates, and the
+                  list renders synchronously on first expand (no empty flash). */}
+              {isExpanded &&
+                snapshot.files.map((file) => (
+                  <SyncFileItem key={file.path} file={file} />
+                ))}
             </div>
           </div>
         </div>

@@ -20,8 +20,8 @@ import { UiNotification } from "./types";
 import { useNotifications } from "@/lib/hooks/useNotifications";
 import { useSearchParams } from "next/navigation";
 import { iconMap } from "@/app/lib/helpers/notificationIcons";
+import { notificationCategoryLabel } from "@/app/lib/helpers/notificationCategories";
 import { deleteAllNotifications } from "@/app/lib/helpers/notificationsDb";
-import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import ArchiveAllConfirmationDialog from "./ArchiveAllConfirmationDialog";
 import PageHeader from "@/components/ui/page-header";
 
@@ -36,22 +36,17 @@ const Notifications = () => {
   const refreshEnabledTypes = useSetAtom(refreshEnabledTypesAtom);
 
   const searchParams = useSearchParams();
-  const { polkadotAddress, oauthSession } = useWalletAuth();
   const refreshUnread = useSetAtom(refreshUnreadCountAtom);
 
   const { notifications, refresh, markRead, markUnread, markAllRead } =
     useNotifications();
-
-  const CATEGORY_DISPLAY: Record<string, string> = {
-    Files: "Storage",
-  };
 
   const tabs = useMemo(
     () => [
       ...(enabledTypes.length > 0 ? [{ tabName: "All", displayName: "All" }] : []),
       ...enabledTypes.map((type) => ({
         tabName: type,
-        displayName: CATEGORY_DISPLAY[type] ?? type,
+        displayName: notificationCategoryLabel(type),
       })),
     ],
     [enabledTypes]
@@ -136,11 +131,10 @@ const Notifications = () => {
   };
 
   const handleArchiveAllConfirm = async () => {
-    const userAddress = oauthSession?.substrateAddress || polkadotAddress;
-    if (!userAddress) { setIsArchiveDialogOpen(false); return; }
+    // Deletion is scoped to the session account in Rust; no frontend address gate.
     setIsArchiving(true);
     try {
-      await deleteAllNotifications(userAddress);
+      await deleteAllNotifications();
       await refresh();
       await refreshUnread();
       toast.success("All notifications deleted");

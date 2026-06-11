@@ -1,10 +1,10 @@
 "use client";
 
-import * as Dialog from "@radix-ui/react-dialog";
 import React from "react";
-import DialogContainer from "@/components/ui/DialogContainer";
-import { CardButton, Graphsheet, Icons } from "@/components/ui";
 import { useRouter } from "next/navigation";
+import FramedDialog from "@/components/ui/FramedDialog";
+import { Button } from "@/components/ui/button";
+import { Icons } from "@/components/ui";
 
 export interface MigrationCompleteDialogProps {
   open: boolean;
@@ -30,94 +30,91 @@ const MigrationCompleteDialog: React.FC<MigrationCompleteDialogProps> = ({
 }) => {
   const router = useRouter();
 
+  // A pending transition error means "migrated, but sync setup failed" — the
+  // dismiss path clears that state instead of the normal close/navigate flow.
+  const handleClose = () => {
+    if (transitionError) {
+      onDismiss?.();
+      return;
+    }
+    onClose();
+  };
+
+  const handleAction = () => {
+    if (transitionError) {
+      onDismiss?.();
+      return;
+    }
+    onClose();
+    if (migrationSucceeded) {
+      router.push("/files");
+    }
+  };
+
   return (
-    <Dialog.Root open={open} onOpenChange={(isOpen) => !isOpen && (transitionError ? onDismiss?.() : onClose())}>
-      <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[28.125rem] h-fit">
-        <Dialog.Title className="sr-only">Migration Complete</Dialog.Title>
+    <FramedDialog
+      open={open}
+      onClose={handleClose}
+      title={migrationSucceeded ? "Migration Complete!" : "Migration Failed"}
+      icon={
+        migrationSucceeded ? (
+          <Icons.TickCircle className="size-5 text-white" />
+        ) : (
+          <Icons.CloseCircle className="size-5 text-white" />
+        )
+      }
+      iconBgClassName={migrationSucceeded ? "bg-success-50" : "bg-[#fc7d73]"}
+      borderClassName={migrationSucceeded ? "bg-success-50" : "bg-[#fc7d73]"}
+      maxWidth="max-w-[640px]"
+    >
+      <p className="mb-5 text-center text-sm leading-5 text-grey-50 dark:text-grey-dark-700">
+        {migrationSucceeded
+          ? "All your files have been successfully migrated to Hippius Drive."
+          : "The migration could not be completed. Please try again later."}
+      </p>
 
-        <div className="px-4 py-6 flex flex-col gap-5">
-          <div className="flex flex-col items-center text-center gap-3">
-            <div className="size-14 flex justify-center items-center relative">
-              <Graphsheet
-                majorCell={{
-                  lineColor: migrationSucceeded ? [34, 197, 94, 1.0] : [239, 68, 68, 1.0],
-                  lineWidth: 2,
-                  cellDim: 200,
-                }}
-                minorCell={{
-                  lineColor: migrationSucceeded ? [74, 222, 128, 1.0] : [248, 113, 113, 1.0],
-                  lineWidth: 1,
-                  cellDim: 20,
-                }}
-                className="absolute w-full h-full duration-500 opacity-30 z-0"
-              />
-              <div className="bg-white-cloud-gradient-sm absolute w-full h-full z-10" />
-              <div className={`h-8 w-8 rounded-lg flex items-center justify-center z-20 ${
-                migrationSucceeded ? "bg-success-50" : "bg-error-50"
-              }`}>
-                {migrationSucceeded ? (
-                  <Icons.TickCircle className="size-5 text-white" />
-                ) : (
-                  <Icons.CloseCircle className="size-5 text-white" />
-                )}
-              </div>
-            </div>
-            <h2 className="text-xl font-semibold text-grey-10">
-              {migrationSucceeded ? "Migration Complete!" : "Migration Failed"}
-            </h2>
-            <p className="text-sm text-grey-50 max-w-sm">
-              {migrationSucceeded
-                ? "All your files have been successfully migrated to Hippius Drive."
-                : "The migration could not be completed. Please try again later."}
-            </p>
-          </div>
-
-          {/* Stats */}
-          <div className="grid grid-cols-2 gap-3">
-            <div className="bg-grey-95 border border-grey-80 rounded-lg p-3 text-center">
-              <p className="text-2xl font-bold text-grey-20">{totalCount}</p>
-              <p className="text-xs text-grey-50">Total Files</p>
-            </div>
-            <div className="bg-success-50/10 border border-success-50/30 rounded-lg p-3 text-center">
-              <p className="text-2xl font-bold text-success-50">{successCount}</p>
-              <p className="text-xs text-grey-50">Migrated</p>
-            </div>
-          </div>
-
-          {/* Transition Error Banner */}
-          {transitionError && (
-            <div className="bg-warning-50/10 border border-warning-50/30 rounded-lg p-3">
-              <p className="text-xs font-medium text-warning-50 mb-1">
-                Sync setup failed
-              </p>
-              <p className="text-xs text-grey-40">
-                Your files were migrated successfully but sync could not be
-                initialized. You can set it up later from Settings.
-              </p>
-            </div>
-          )}
-
-          {/* Action Button */}
-          <CardButton
-            variant="primary"
-            className="w-full h-12 text-base font-medium"
-            disabled={isTransitioning}
-            onClick={() => {
-              if (transitionError) {
-                onDismiss?.();
-              } else {
-                onClose();
-                if (migrationSucceeded) {
-                  router.push("/files");
-                }
-              }
-            }}
-          >
-            {migrationSucceeded ? "Go to My Files" : "Close"}
-          </CardButton>
+      {/* Stats */}
+      <div className="mb-5 grid grid-cols-2 gap-3">
+        <div className="rounded-lg border border-grey-80 bg-grey-95/60 p-4 text-center dark:border-[#2c2c2c] dark:bg-[#1f1f1f]/60">
+          <p className="text-2xl font-bold text-grey-10 dark:text-white">
+            {totalCount}
+          </p>
+          <p className="text-xs text-grey-50 dark:text-grey-dark-700">
+            Total Files
+          </p>
         </div>
-      </DialogContainer>
-    </Dialog.Root>
+        <div className="rounded-lg border border-success-50/30 bg-success-50/10 p-4 text-center dark:border-success-50/30 dark:bg-success-50/[0.12]">
+          <p className="text-2xl font-bold text-success-50">{successCount}</p>
+          <p className="text-xs text-grey-50 dark:text-grey-dark-700">
+            Migrated
+          </p>
+        </div>
+      </div>
+
+      {/* Transition error banner */}
+      {transitionError && (
+        <div className="mb-5 rounded-lg border border-warning-50/40 bg-warning-50/10 p-3 dark:border-warning-50/35 dark:bg-warning-50/[0.12]">
+          <p className="mb-1 text-xs font-medium text-warning-50">
+            Sync setup failed
+          </p>
+          <p className="text-xs leading-5 text-grey-40 dark:text-grey-dark-700">
+            Your files were migrated successfully but sync could not be
+            initialized. You can set it up later from Settings.
+          </p>
+        </div>
+      )}
+
+      {/* Action */}
+      <Button
+        variant="primary"
+        size="auto"
+        className="h-12 w-full rounded-md text-base font-medium"
+        disabled={isTransitioning}
+        onClick={handleAction}
+      >
+        {migrationSucceeded ? "Go to My Files" : "Close"}
+      </Button>
+    </FramedDialog>
   );
 };
 

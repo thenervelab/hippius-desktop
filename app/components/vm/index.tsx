@@ -371,7 +371,7 @@ const VirtualMachines: FC = () => {
               isBetaError(instancesError) ? (
                 <NoEntriesFound
                   cardView={false}
-                  className="!bg-white dark:!bg-black-600 h-[31.25rem]"
+                  className="!bg-white dark:!bg-black-600 h-[max(31.25rem,55vh)]"
                 >
                   <div className="text-center">
                     <p className="text-grey-30 font-semibold mb-1 text-base dark:text-white">
@@ -407,7 +407,7 @@ const VirtualMachines: FC = () => {
                 {isBetaError(flavorsError) ? (
                   <NoEntriesFound
                     cardView={false}
-                    className="!bg-white dark:!bg-black-600 h-[31.25rem]"
+                    className="!bg-white dark:!bg-black-600 h-[max(31.25rem,55vh)]"
                   >
                     <div className="text-center">
                       <p className="text-grey-30 font-semibold mb-1 text-base dark:text-white">

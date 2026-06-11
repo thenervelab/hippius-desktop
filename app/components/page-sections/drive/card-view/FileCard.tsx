@@ -15,14 +15,9 @@ import {
 import { Folder2 } from "@/components/ui/icons";
 import SharedLinkBadge from "@/components/page-sections/drive/SharedLinkBadge";
 import { useUrlParams } from '@/app/utils/hooks/useUrlParams';
-
-/** Fetch a URL into a same-origin blob URL (needed for canvas thumbnail extraction). */
-async function toBlobUrl(url: string) {
-  const res = await fetch(url);
-  const blob = await res.blob();
-  return URL.createObjectURL(blob);
-}
 import { getFileUrl } from "@/app/lib/utils/fileUrlResolver";
+import { useThumbnail } from "@/app/lib/hooks/useThumbnail";
+import { useInView } from "@/app/lib/hooks/useInView";
 import { buildFolderPath } from '@/app/utils/folderPathUtils';
 import { useFileSelection } from '@/app/contexts/FileSelectionContext';
 import * as Checkbox from "@radix-ui/react-checkbox";
@@ -51,6 +46,15 @@ const FileCard: React.FC<FileCardProps> = ({
 
   const fileType = getFileTypeFromExtension(fileFormat || null);
   const shouldLoadThumbnail = !file.isFolder && (fileType === "image" || fileType === "video");
+  const isImageType = fileType === "image";
+
+  // Lazy-load: only fetch a cloud thumbnail once the card scrolls into view.
+  const [cardRef, inView] = useInView<HTMLDivElement>();
+  // Images (local AND cloud-only — other devices / unsynced folders) resolve
+  // through the shared thumbnailer; cloud fetches are gated on `inView`. Videos
+  // keep the canvas-frame path in the effect below (local only for now).
+  const imageThumb = useThumbnail(isImageType ? file : null, { enabled: inView });
+
   const displayName = formatDisplayName(file.name);
   const { icon: Icon, color } = getFileIcon(fileType ?? undefined, !!file.isFolder);
 
@@ -94,10 +98,12 @@ const FileCard: React.FC<FileCardProps> = ({
   }, [file.arionHash, file.name]);
 
   useEffect(() => {
-    // Only attempt to load thumbnails for image and video files
-    // and make sure we're not already loading or have a thumbnail
+    // Video-only: images now resolve through `useThumbnail` (which also handles
+    // cloud-only files). This canvas-frame grab stays for local videos and is
+    // deferred until the card is in view.
     if (
-      !shouldLoadThumbnail ||
+      fileType !== "video" ||
+      !inView ||
       thumbnailUrl ||
       thumbnailError ||
       loadAttempts >= 2 ||
@@ -132,91 +138,62 @@ const FileCard: React.FC<FileCardProps> = ({
       }
     };
 
-    (async () => {
-      try {
-        const { url: cidUrl, isLocal: isFromLocal } = getFileUrl(file);
-        const isFromIpfs = false;
-        let finalUrl = cidUrl;
+    try {
+      const { url: localUrl, isLocal: isFromLocal } = getFileUrl(file);
 
-        if (fileType === "image") {
-          const img = document.createElement("img");
-          img.onload = () => handleSuccess(finalUrl);
-          img.onerror = handleError;
-          img.src = finalUrl;
+      timeoutRef.current = setTimeout(handleError, 15000);
 
-          timeoutRef.current = setTimeout(handleError, 10000);
-        } else if (fileType === "video") {
-          timeoutRef.current = setTimeout(handleError, 15000);
+      // Cloud-only videos have no local URL to grab a frame from; fall back to
+      // the file-type icon. Downloading a whole video just for a card frame is
+      // too costly — only images go through the cached Rust thumbnailer.
+      if (!isFromLocal || !localUrl) {
+        handleError();
+        return;
+      }
 
-          if (!isFromIpfs && !isFromLocal) {
+      const video = document.createElement("video");
+      video.src = localUrl;
+      video.preload = "metadata";
+
+      video.onloadedmetadata = () => {
+        try {
+          const seekTime = Math.min(1, video.duration * 0.25);
+          video.currentTime = seekTime;
+
+          video.onseeked = () => {
             try {
-              const blobUrl = await toBlobUrl(finalUrl);
-              finalUrl = blobUrl;
+              const canvas = document.createElement("canvas");
+              canvas.width = video.videoWidth || 300;
+              canvas.height = video.videoHeight || 200;
+              const ctx = canvas.getContext("2d");
+
+              if (ctx) {
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                const dataUrl = canvas.toDataURL("image/jpeg");
+                handleSuccess(dataUrl);
+              } else {
+                console.error(`Failed to get canvas context for ${file.name}`);
+                handleError();
+              }
             } catch (error) {
-              console.error(
-                `Failed to create blob URL for ${file.name}:`,
-                error
-              );
-              handleError();
-              return;
-            }
-          }
-
-          const video = document.createElement("video");
-          if (!isFromLocal) {
-            video.crossOrigin = "anonymous";
-          }
-          video.src = finalUrl || cidUrl;
-          video.preload = "metadata";
-
-          video.onloadedmetadata = () => {
-            try {
-              const seekTime = Math.min(1, video.duration * 0.25);
-              video.currentTime = seekTime;
-
-              video.onseeked = () => {
-                try {
-                  const canvas = document.createElement("canvas");
-                  canvas.width = video.videoWidth || 300;
-                  canvas.height = video.videoHeight || 200;
-                  const ctx = canvas.getContext("2d");
-
-                  if (ctx) {
-                    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-                    const dataUrl = canvas.toDataURL("image/jpeg");
-                    handleSuccess(dataUrl);
-                  } else {
-                    console.error(
-                      `Failed to get canvas context for ${file.name}`
-                    );
-                    handleError();
-                  }
-                } catch (error) {
-                  console.error(
-                    `Failed to generate thumbnail for ${file.name}:`,
-                    error
-                  );
-                  handleError();
-                }
-              };
-            } catch (error) {
-              console.error(`Failed to seek video for ${file.name}:`, error);
+              console.error(`Failed to generate thumbnail for ${file.name}:`, error);
               handleError();
             }
           };
-
-          video.onerror = (error) => {
-            console.warn(`Video load error for ${file.name}:`, error);
-            handleError();
-          };
-        } else {
+        } catch (error) {
+          console.error(`Failed to seek video for ${file.name}:`, error);
           handleError();
         }
-      } catch (error) {
-        console.error(`Thumbnail generation error for ${file.name}:`, error);
+      };
+
+      video.onerror = (error) => {
+        console.warn(`Video load error for ${file.name}:`, error);
         handleError();
-      }
-    })();
+      };
+    } catch (error) {
+      console.error(`Thumbnail generation error for ${file.name}:`, error);
+      handleError();
+    }
 
     return () => {
       if (timeoutRef.current) {
@@ -230,15 +207,25 @@ const FileCard: React.FC<FileCardProps> = ({
     file.name,
     file.isFolder,
     fileType,
-    shouldLoadThumbnail,
+    inView,
     thumbnailUrl,
     thumbnailError,
     loadAttempts,
     isLoadingThumbnail
   ]);
 
+  // Images come from the shared thumbnailer (local + cloud); videos from the
+  // canvas grab above. One pair of display vars so the render stays uniform.
+  const displayUrl = isImageType ? imageThumb.url : thumbnailUrl;
+  const displayLoading = isImageType ? imageThumb.isLoading : isLoadingThumbnail;
+  // `thumbnailError` also covers an <Image> onError for a resolved image URL.
+  const displayFailed = isImageType
+    ? !!imageThumb.error || thumbnailError
+    : thumbnailError;
+
   return (
     <div
+      ref={cardRef}
       className={cn(
         "w-full relative border rounded-[5px] overflow-hidden h-[220px] flex flex-col transition-all duration-200",
         // Folder containers use a subtle grey/dark background; files stay white/black-500.
@@ -341,10 +328,10 @@ const FileCard: React.FC<FileCardProps> = ({
             : "bg-white dark:bg-black-500"
         )}
       >
-        {shouldLoadThumbnail && thumbnailUrl && !thumbnailError ? (
+        {shouldLoadThumbnail && displayUrl && !displayFailed ? (
           <div className="relative w-full h-full">
             <Image
-              src={thumbnailUrl}
+              src={displayUrl}
               alt={fileName}
               fill
               className="object-cover"
@@ -360,7 +347,7 @@ const FileCard: React.FC<FileCardProps> = ({
           </div>
         ) : (
           <div className="flex flex-col items-center justify-center p-4 h-full w-full">
-            {shouldLoadThumbnail && isLoadingThumbnail ? (
+            {shouldLoadThumbnail && displayLoading ? (
               <div className="flex flex-col items-center justify-center space-y-2">
                 <Loader2 className="h-8 w-8 animate-spin text-primary-50" />
                 <span className="text-xs text-gray-500">

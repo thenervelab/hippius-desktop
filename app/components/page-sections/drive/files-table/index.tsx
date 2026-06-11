@@ -28,12 +28,18 @@ import {
   MoreVertical,
   Folder,
   FolderOpen,
+  Pencil,
 } from "lucide-react";
 import { useAtomValue, useSetAtom } from "jotai";
 import {
   shareFeatureEnabledAtom,
   shareModalFileAtom,
 } from "@/app/lib/global-atoms/sharesAtoms";
+import { renameModalFileAtom } from "@/app/lib/global-atoms/renameAtoms";
+import {
+  canRenameFile,
+  RENAME_DISABLED_TOOLTIP,
+} from "@/app/lib/utils/renameGating";
 import { cn } from "@/lib/utils";
 import NameCell from "./NameCell";
 import SelectionActionBar from "../SelectionActionBar";
@@ -53,7 +59,7 @@ import { fileDetailsPanelAtom } from "@/app/lib/global-atoms/fileDetailsAtoms";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 import { useRouter } from "next/navigation";
 import { generateFolderUrl } from "@/app/utils/folderUrlUtils";
-import { FormattedTimestamp } from "@/app/components/ui"; // Add this import
+import { FormattedTimestamp } from "@/app/components/ui";
 import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 import { useFolderAggregateSelection } from "@/app/lib/hooks/use-folder-aggregate-selection";
 import useDeleteFile from "@/app/lib/hooks/use-delete-file";
@@ -65,6 +71,9 @@ import { NameCellExpander } from "./FolderRail";
 import { preserveClosestScrollPosition } from "./preserveClosestScrollPosition";
 
 import { toast } from "sonner";
+import { invoke } from "@tauri-apps/api/core";
+import { useQueryClient } from "@tanstack/react-query";
+import { Refresh } from "@/components/ui/icons";
 
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
 const columnHelper = createColumnHelper<FormattedUserFile>();
@@ -229,6 +238,9 @@ const FilesTable: FC<FilesTableProps> = memo(
       () => drivePathsByLabel ?? {},
       [drivePathsByLabel],
     );
+    // For the row "Retry sync" action: invalidate the drive's failures query
+    // after a retry so the badge/reason clears immediately.
+    const queryClient = useQueryClient();
     const normalizedSubfolderPath = useMemo(() => {
       if (!currentSubfolderPath) return "";
       return currentSubfolderPath.replace(/^\/+|\/+$/g, "");
@@ -273,6 +285,7 @@ const FilesTable: FC<FilesTableProps> = memo(
     // per session by `useServerCapabilities` (mounted in SyncEventLogger).
     const shareEnabled = useAtomValue(shareFeatureEnabledAtom);
     const setShareModalFile = useSetAtom(shareModalFileAtom);
+    const setRenameModalFile = useSetAtom(renameModalFileAtom);
     const enableFolderExpander = !isRecentFiles;
     // Enrich syncStatus with live snapshot data to distinguish uploads vs downloads.
     // Also suppress the "pending" upload arrow for files that just finished downloading
@@ -513,9 +526,13 @@ const FilesTable: FC<FilesTableProps> = memo(
     );
 
     const localHandleContextMenu = useCallback(
-      (e: React.MouseEvent, file: FormattedUserFile) => {
+      (
+        e: React.MouseEvent,
+        file: FormattedUserFile,
+        previewSiblings?: FormattedUserFile[],
+      ) => {
         if (handleContextMenu) {
-          handleContextMenu(e, file);
+          handleContextMenu(e, file, previewSiblings ?? null);
         }
       },
       [handleContextMenu],
@@ -529,9 +546,13 @@ const FilesTable: FC<FilesTableProps> = memo(
       [handleFileDownload, polkadotAddress],
     );
 
+    // `previewSiblings` is set when the file was opened from an
+    // inline-expanded folder: it's that folder's rows, which the viewer
+    // uses for its thumbnail rail and prev/next instead of the page's
+    // top-level list. Top-level rows omit it (page-list fallback).
     const handleSetSelectedFile = useCallback(
-      (file: FormattedUserFile) => {
-        setSelectedFile?.(file);
+      (file: FormattedUserFile, previewSiblings?: FormattedUserFile[]) => {
+        setSelectedFile?.(file, previewSiblings ?? null);
       },
       [setSelectedFile],
     );
@@ -620,6 +641,10 @@ const FilesTable: FC<FilesTableProps> = memo(
         // the "Open" item would inherit the page URL's subFolderPath
         // and skip the intermediate folders the user expanded into.
         parentSubFolderPath?: string,
+        // Sibling rows of an inline-expanded subtree, forwarded into the
+        // viewer by the "View" item so the thumbnail rail / prev-next
+        // walk the folder the file lives in (see handleSetSelectedFile).
+        previewSiblings?: FormattedUserFile[],
       ) => {
         // Compute folderUrl if file is a folder
         let folderUrl: string | undefined = undefined;
@@ -678,6 +703,32 @@ const FilesTable: FC<FilesTableProps> = memo(
             onItemClick: () => handleDownload(file),
             disabled: itemDeleting,
           },
+          ...(!file.isFolder && file.syncStatus === "failed" && file.label
+            ? [
+                {
+                  icon: <Refresh className="size-4" />,
+                  itemTitle: "Retry sync",
+                  onItemClick: () => {
+                    const relativePath = resolveRelativePath(
+                      parentSubFolderPath ?? normalizedSubfolderPath,
+                      file.actualFileName || file.name,
+                    );
+                    void invoke("retry_file_failure", {
+                      label: file.label,
+                      path: relativePath,
+                    })
+                      .then(() => {
+                        void queryClient.invalidateQueries({
+                          queryKey: ["drive-failures", file.label],
+                        });
+                        toast.success("Retrying sync…");
+                      })
+                      .catch((e) => toast.error(`Retry failed: ${e}`));
+                  },
+                  disabled: itemDeleting,
+                },
+              ]
+            : []),
           ...((fileType === "video" ||
             fileType === "image" ||
             fileType === "PDF") &&
@@ -686,7 +737,8 @@ const FilesTable: FC<FilesTableProps> = memo(
                 {
                   icon: <Icons.Eye className="size-4" />,
                   itemTitle: "View",
-                  onItemClick: () => handleSetSelectedFile(file),
+                  onItemClick: () =>
+                    handleSetSelectedFile(file, previewSiblings),
                   disabled: itemDeleting,
                 },
               ]
@@ -752,6 +804,22 @@ const FilesTable: FC<FilesTableProps> = memo(
                 },
               ]
             : []),
+          // Rename shares the delete-style gating plus the local-presence
+          // gate in `canRenameFile` — the rename is an on-disk operation.
+          {
+            icon: <Pencil className="size-4" />,
+            itemTitle: "Rename",
+            disabled: itemDeleting || !canRenameFile(file),
+            tooltip:
+              !itemDeleting && !canRenameFile(file)
+                ? RENAME_DISABLED_TOOLTIP
+                : undefined,
+            onItemClick: () => {
+              if (!itemDeleting && canRenameFile(file)) {
+                setRenameModalFile(file);
+              }
+            },
+          },
           // Delete is gated by both sync state (unassigned files are
           // mid-upload) and live deletion state (already in flight).
           {
@@ -786,8 +854,11 @@ const FilesTable: FC<FilesTableProps> = memo(
         polkadotAddress,
         shareEnabled,
         setShareModalFile,
+        setRenameModalFile,
         isItemDeleting,
         normalizedSubfolderPath,
+        resolveRelativePath,
+        queryClient,
       ],
     );
 
@@ -865,7 +936,6 @@ const FilesTable: FC<FilesTableProps> = memo(
             const file = info.row.original;
             const { fileFormat } = getFilePartsFromFileName(info.getValue());
             const fileType = getFileTypeFromExtension(fileFormat || null);
-
             const nameNode = (
               <NameCell
                 rawName={info.getValue()}
@@ -1231,7 +1301,9 @@ const FilesTable: FC<FilesTableProps> = memo(
         // per drive, so label + path is globally unique); arionHash is
         // unsuitable on its own because it's "pending"/empty for
         // not-yet-uploaded rows AND identical files synced to two drives
-        // share the same hash.
+        // share the same hash. (The recent-files feed is deduped on this same
+        // key in mergeUploadFeed, so two rows here can never share it; the
+        // un-deduped /search_files lists key on fileId instead.)
         getRowId: (row: FormattedUserFile) =>
           `${row.label ?? ""}::${row.actualFileName ?? row.name}`,
       }),
@@ -1562,7 +1634,11 @@ const FilesTable: FC<FilesTableProps> = memo(
                   return (
                     <TableModule.Td
                       className={cn(
-                        "px-2 py-[5px] border-x-0 border-r last:border-r-0 border-grey-dark-100 text-grey-dark-800 text-xs dark:border-black-300",
+                        // Cell base is `text-sm` so the file NAME (which inherits
+                        // it) reads as first-class data; the metadata columns
+                        // (size/date/type) override back to `text-xs` to stay
+                        // visually secondary.
+                        "px-2 py-[5px] border-x-0 border-r last:border-r-0 border-grey-dark-100 text-grey-dark-800 text-sm dark:border-black-300",
                         cell.column.id === "actions" && "p-0",
                         cell.column.id === "name" && "p-0 relative",
                         cell.column.id === "arionHash" && "p-0",

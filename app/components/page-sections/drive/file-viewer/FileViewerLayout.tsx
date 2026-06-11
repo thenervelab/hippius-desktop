@@ -15,6 +15,10 @@ import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { cn } from "@/app/lib/utils";
 import {
+  TITLEBAR_BAND_H_54,
+  titlebarClearanceClass,
+} from "@/app/lib/utils/platformChrome";
+import {
   getNextViewableFile,
   getPrevViewableFile,
   getViewableFiles,
@@ -37,6 +41,13 @@ interface FileViewerLayoutProps {
     file: FormattedUserFile,
     polkadotAddress: string,
   ) => void;
+  /**
+   * Optional direct delete handler. When provided (e.g. the sidebar search
+   * preview, which has no drive-page selection bar), the trash button calls
+   * this instead of entering selection mode. The drive page omits it and keeps
+   * the selection-mode → action-bar flow.
+   */
+  onDelete?: (file: FormattedUserFile) => void;
   children: ReactNode;
 }
 
@@ -98,6 +109,7 @@ const FileViewerLayout: React.FC<FileViewerLayoutProps> = ({
   onClose,
   onNavigate,
   handleFileDownload,
+  onDelete,
   children,
 }) => {
   const { polkadotAddress } = useWalletAuth();
@@ -112,7 +124,13 @@ const FileViewerLayout: React.FC<FileViewerLayoutProps> = ({
     return platform.includes("mac") || ua.includes("mac os");
   });
 
-  const navigationOptions = useMemo(() => ({ localOnly: true }), []);
+  // Include cloud-only files (uploaded from other devices / under server folders
+  // not synced here) in BOTH the gallery strip and prev/next navigation. Their
+  // thumbnails resolve through the Rust thumbnailer (the strip's `useThumbnail`)
+  // and selecting one loads it in the main preview via `useViewableFileUrl`
+  // (cache_remote_file). The old `localOnly: true` filtered them out, so server
+  // files had no presence in the gallery at all.
+  const navigationOptions = useMemo(() => ({ localOnly: false }), []);
 
   const viewableFiles = useMemo(
     () => getViewableFiles(allFiles, navigationOptions),
@@ -152,8 +170,15 @@ const FileViewerLayout: React.FC<FileViewerLayoutProps> = ({
 
   const handleDelete = useCallback(() => {
     onClose();
-    enterSelectionModeAndSelectFile(file);
-  }, [enterSelectionModeAndSelectFile, file, onClose]);
+    // A direct handler (sidebar search preview) deletes straight away via its
+    // own confirm + `useDeleteFile`; the drive page falls back to selection
+    // mode, where the bottom action bar drives the confirm + delete.
+    if (onDelete) {
+      onDelete(file);
+    } else {
+      enterSelectionModeAndSelectFile(file);
+    }
+  }, [onDelete, enterSelectionModeAndSelectFile, file, onClose]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -185,8 +210,14 @@ const FileViewerLayout: React.FC<FileViewerLayoutProps> = ({
   // menu item: server advertises support, file is not a folder, file is
   // fully synced. The viewer only opens for synced viewable files, so we
   // still defensively check syncStatus.
+  // Sharing operates on the file's local synced path, so a cloud-only search
+  // result (no local `source`) hides the action even though its status reads
+  // "synced" — it isn't in a sync folder on this device.
   const canShare =
-    shareEnabled && !file.isFolder && file.syncStatus === "synced";
+    shareEnabled &&
+    !file.isFolder &&
+    file.syncStatus === "synced" &&
+    !!file.source;
 
   return (
     <Dialog.Root
@@ -230,13 +261,16 @@ const FileViewerLayout: React.FC<FileViewerLayoutProps> = ({
                   traffic-light controls. */}
               <header
                 data-tauri-drag-region
-                className="relative flex items-center justify-between w-full select-none shrink-0 h-[54px]"
+                className={cn(
+                  "relative flex items-center justify-between w-full select-none shrink-0",
+                  TITLEBAR_BAND_H_54,
+                )}
               >
                 <div
                   data-tauri-drag-region
                   className={cn(
                     "flex items-center select-none h-full shrink-0 min-w-0",
-                    isMac ? "pl-[80px]" : "pl-[12px]",
+                    titlebarClearanceClass(isMac),
                   )}
                 >
                   <FileViewerTitle file={file} />

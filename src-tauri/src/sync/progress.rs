@@ -12,12 +12,12 @@ pub use hcfs_client::engine::progress::state::{
 };
 
 use hcfs_client::engine::runner::SyncRunner;
-use std::sync::OnceLock;
-use std::sync::atomic::AtomicU64;
-use std::time::Instant;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock, Weak};
+use std::time::{Duration, Instant};
 
 use crate::error::{AppError, Result};
-use crate::sync::logic::{NEVER_EMITTED, is_file_completion_tick, try_claim_snapshot_emit};
+use crate::sync::logic::{NEVER_EMITTED, is_file_completion_tick, should_schedule_flush, try_claim_snapshot_emit};
 
 /// Minimum milliseconds between throttled `emit_snapshot(false)` calls from
 /// the per-chunk progress hot path.
@@ -38,6 +38,89 @@ const SNAPSHOT_THROTTLE_MS: u64 = 250;
 /// startup it arrives.
 static LAST_THROTTLED_EMIT_MS: AtomicU64 = AtomicU64::new(NEVER_EMITTED);
 
+/// True while a trailing flush is scheduled for the current throttle window.
+/// Set by the first suppressed emit (see [`should_schedule_flush`]), cleared
+/// by the flush task right before it emits.
+static FLUSH_SCHEDULED: AtomicBool = AtomicBool::new(false);
+
+/// Runner handle for the deferred trailing flush. `Weak` so a process-wide
+/// static cannot extend the runner's lifetime. Unset in unit tests that never
+/// call [`register_flush_runner`] — the suppressed path then degrades to the
+/// old drop-the-tick behavior instead of panicking or leaking threads.
+static RUNNER_FOR_FLUSH: OnceLock<Weak<SyncRunner>> = OnceLock::new();
+
+/// Register the app's `SyncRunner` as the target for trailing snapshot
+/// flushes. Called once from `AppState::new` (the only place the `Arc` is
+/// created); later calls are no-ops.
+pub fn register_flush_runner(sync: &Arc<SyncRunner>) {
+    let _ = RUNNER_FOR_FLUSH.set(Arc::downgrade(sync));
+}
+
+/// Throttled emit with a trailing-edge guarantee.
+///
+/// Leading edge: the first tick in a window claims the cursor and emits
+/// immediately. Trailing edge: a suppressed tick (any later tick in the same
+/// window) schedules exactly one deferred forced emit ~one window later, so
+/// the state it carried still reaches the UI even if no further ticks arrive.
+///
+/// The trailing edge is what keeps the tray popover / sync widget live during
+/// small-file bursts: a tiny file's only progress tick IS its completion
+/// tick, so when several finish within one window the last completions used
+/// to be dropped and the UI sat stale (e.g. "3 of 5 synced") until cycle
+/// finalization force-emitted — which can lag by seconds while the engine
+/// re-indexes remote paths.
+///
+/// The flush runs on a short-lived named thread (at most one alive at a
+/// time, bounded by [`FLUSH_SCHEDULED`]) rather than a tokio task because
+/// this is called from hcfs-client progress callbacks with no runtime
+/// guarantee. Clearing the flag *before* emitting lets a tick that lands
+/// during the emit schedule the next window's flush; the worst interleaving
+/// is one redundant emit, which is self-correcting.
+fn emit_snapshot_throttled(sync: &SyncRunner, is_file_complete: bool) {
+    if try_claim_snapshot_emit(&LAST_THROTTLED_EMIT_MS, monotonic_now_ms(), is_file_complete, SNAPSHOT_THROTTLE_MS) {
+        sync.emit_snapshot(false);
+        return;
+    }
+    if let Some(weak) = RUNNER_FOR_FLUSH.get() {
+        schedule_trailing_flush(weak.clone(), &LAST_THROTTLED_EMIT_MS, &FLUSH_SCHEDULED);
+    }
+}
+
+/// Spawn the deferred trailing-flush task, unless one is already pending.
+///
+/// `cursor` / `flag` are injected (rather than referencing the module statics
+/// directly) so tests can exercise the flush mechanics against their own
+/// atomics, isolated from every other test sharing this process's statics.
+/// `'static` because the detached thread outlives the caller's frame.
+///
+/// The cursor is advanced even when `weak` no longer upgrades (runner gone =
+/// app shutting down): the throttle bookkeeping must stay consistent so a
+/// dead runner can't wedge `flag`/`cursor` in a state that blocks later
+/// emits. Returns whether a flush task was actually spawned.
+fn schedule_trailing_flush(weak: Weak<SyncRunner>, cursor: &'static AtomicU64, flag: &'static AtomicBool) -> bool {
+    if !should_schedule_flush(flag) {
+        return false;
+    }
+    let spawned = std::thread::Builder::new().name("snapshot-trailing-flush".into()).spawn(move || {
+        std::thread::sleep(Duration::from_millis(SNAPSHOT_THROTTLE_MS));
+        // Clear the slot BEFORE emitting so a tick landing during the emit
+        // can schedule the next window's flush (worst case: one redundant
+        // emit, self-correcting).
+        flag.store(false, Ordering::Relaxed);
+        cursor.store(monotonic_now_ms(), Ordering::Relaxed);
+        if let Some(sync) = weak.upgrade() {
+            sync.emit_snapshot(false);
+        }
+    });
+    if spawned.is_err() {
+        // Could not spawn (resource exhaustion): release the slot so a
+        // later tick can retry instead of wedging the trailing edge off.
+        flag.store(false, Ordering::Relaxed);
+        return false;
+    }
+    true
+}
+
 /// Milliseconds since the current process started.
 ///
 /// Uses [`Instant`] so the value is immune to wall-clock adjustments (NTP
@@ -53,9 +136,10 @@ fn monotonic_now_ms() -> u64 {
 
 /// Update per-file byte progress in the active sync session.
 ///
-/// The underlying `SyncRunner::emit_snapshot(false)` call is **trailing-edge
-/// throttled** to one emit per [`SNAPSHOT_THROTTLE_MS`] across the whole
-/// process. File-completion ticks (`bytes_transferred == total_bytes` with
+/// The underlying `SyncRunner::emit_snapshot(false)` call is throttled to one
+/// emit per [`SNAPSHOT_THROTTLE_MS`] across the whole process, with a
+/// trailing flush for suppressed ticks (see [`emit_snapshot_throttled`]).
+/// File-completion ticks (`bytes_transferred == total_bytes` with
 /// `total_bytes > 0`) use a shorter 100 ms window (see
 /// [`crate::sync::logic::COMPLETION_THROTTLE_MS`]) to batch burst
 /// completions while remaining responsive.
@@ -83,10 +167,26 @@ pub fn update_file_progress(
         .update_file_progress(path.to_owned(), bytes_transferred, total_bytes, action, label.map(ToOwned::to_owned))
         .map_err(AppError::Progress)?;
     let is_file_complete = is_file_completion_tick(bytes_transferred, total_bytes);
-    if try_claim_snapshot_emit(&LAST_THROTTLED_EMIT_MS, monotonic_now_ms(), is_file_complete, SNAPSHOT_THROTTLE_MS) {
-        sync.emit_snapshot(false);
-    }
+    emit_snapshot_throttled(sync, is_file_complete);
     Ok(())
+}
+
+/// Emit a snapshot through the per-file completion throttle (the 100 ms
+/// completion window, same gate `update_file_progress` uses for completion
+/// ticks).
+///
+/// Per-file TERMINAL callbacks (`mark_file_synced` / `mark_file_failed`) fire
+/// once per file the instant each task settles. A cycle finishing N files in a
+/// burst would otherwise trigger N unthrottled `emit_snapshot(true)` calls —
+/// each rebuilding the whole `SyncSnapshot` and (via the bridge) running a
+/// SQLite overlay aggregate — flooding the webview. A terminal event does not
+/// need a synchronous immediate emit: a suppressed one is delivered by the
+/// trailing flush within ~one window (see [`emit_snapshot_throttled`]), and
+/// `finalize_session_for_label` does an unconditional immediate emit at cycle
+/// end so the final state is never lost. Reserve `emit_snapshot(true)` for
+/// genuine session transitions.
+fn emit_throttled_completion(sync: &SyncRunner) {
+    emit_snapshot_throttled(sync, true);
 }
 
 /// Merge file expectations into the current session, or start a new one.
@@ -127,75 +227,11 @@ pub fn clear_all_data(sync: &SyncRunner) -> Result<()> {
     Ok(())
 }
 
-/// Start a new sync session.
-pub fn start_session(
-    sync: &SyncRunner,
-    expected_uploads: u32,
-    expected_downloads: u32,
-    expected_local_deletes: u32,
-    expected_remote_deletes: u32,
-    file_list: Option<SessionFileList>,
-    label: Option<String>,
-) -> Result<SyncSessionHandle> {
-    let result = sync
-        .progress
-        .start_session(
-            expected_uploads,
-            expected_downloads,
-            expected_local_deletes,
-            expected_remote_deletes,
-            file_list,
-            label.as_deref(),
-        )
-        .map_err(AppError::Progress)?;
-    sync.emit_snapshot(true);
-    Ok(result)
-}
-
-/// Complete the current session.
-pub fn complete_session(sync: &SyncRunner, files_uploaded: u32, files_downloaded: u32) -> Result<()> {
-    sync.progress
-        .complete_session(files_uploaded, files_downloaded)
-        .map_err(AppError::Progress)?;
-    sync.emit_snapshot(true);
-    Ok(())
-}
-
-/// Stop the current session.
-pub fn stop_session(sync: &SyncRunner) -> Result<()> {
-    sync.progress.stop_session().map_err(AppError::Progress)?;
-    sync.emit_snapshot(true);
-    Ok(())
-}
-
-/// Force-complete all pending files for a label.
-pub fn complete_pending_files(sync: &SyncRunner, label: &str) -> Result<()> {
-    sync.progress.complete_pending_files(label).map_err(AppError::Progress)?;
-    sync.emit_snapshot(true);
-    Ok(())
-}
-
 /// Mark excess pending files as failed.
 pub fn mark_pending_files_as_failed(sync: &SyncRunner, actual_uploads: u32, actual_downloads: u32, label: &str) -> Result<()> {
     sync.progress
         .mark_pending_files_as_failed(actual_uploads, actual_downloads, label)
         .map_err(AppError::Progress)?;
-    sync.emit_snapshot(true);
-    Ok(())
-}
-
-/// Mark every pending/in-progress file as failed.
-pub fn mark_all_pending_files_as_failed(sync: &SyncRunner, error_message: String) -> Result<()> {
-    sync.progress
-        .mark_all_pending_files_as_failed(error_message)
-        .map_err(AppError::Progress)?;
-    sync.emit_snapshot(true);
-    Ok(())
-}
-
-/// Mark a specific file as errored.
-pub fn mark_file_error(sync: &SyncRunner, path: String, error: String) -> Result<()> {
-    sync.progress.mark_file_error(path, error).map_err(AppError::Progress)?;
     sync.emit_snapshot(true);
     Ok(())
 }
@@ -314,7 +350,7 @@ pub fn mark_file_synced(sync: &SyncRunner, path: &str) -> Result<u64> {
         }
         bytes
     };
-    sync.emit_snapshot(true);
+    emit_throttled_completion(sync);
     Ok(observed_bytes)
 }
 
@@ -372,13 +408,8 @@ pub fn mark_file_failed(sync: &SyncRunner, path: &str, error: &str) -> Result<()
         file.bytes_transferred = 0;
         file.progress = 0;
     }
-    sync.emit_snapshot(true);
+    emit_throttled_completion(sync);
     Ok(())
-}
-
-/// Compute overall progress.
-pub fn get_overall_progress(sync: &SyncRunner) -> Result<OverallProgress> {
-    sync.progress.get_overall_progress().map_err(AppError::Progress)
 }
 
 /// Maximum number of per-file or per-path entries sent to the frontend in a
@@ -453,7 +484,7 @@ pub fn collect_cycle_files_for_label(sync: &SyncRunner, label: &str, max_files: 
     // Most recently completed first, so a truncation to `max_files`
     // always keeps the cycle that just finished. `completed_at` is
     // `Option<i64>`; treat `None` as 0 so unmarked files sort last.
-    matching.sort_by(|a, b| b.completed_at.unwrap_or(0).cmp(&a.completed_at.unwrap_or(0)));
+    matching.sort_by_key(|b| std::cmp::Reverse(b.completed_at.unwrap_or(0)));
     matching
         .into_iter()
         .take(max_files)
@@ -472,11 +503,16 @@ pub fn get_snapshot(sync: &SyncRunner, preparing: &crate::sync::preparing::Prepa
     if retry_at > 0 {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
+            .map_or(0, |d| d.as_secs() as i64);
         snapshot.retry_in_secs = (retry_at - now).max(0) as u64;
     }
-    snapshot.last_error = sync.last_error.lock().ok().and_then(|g| g.clone());
+    // Recover a poisoned lock (read the data behind it) instead of `.ok()`-ing
+    // it away — a thread that panicked while holding `last_error` must not make
+    // the user-facing error string vanish from every later snapshot. Mirrors
+    // the deliberate `PoisonError::into_inner` recovery on the watcher mutex.
+    snapshot
+        .last_error
+        .clone_from(&sync.last_error.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
     prepare_snapshot_for_emit(&mut snapshot, preparing);
     Ok(snapshot)
 }
@@ -559,13 +595,6 @@ fn fixup_stalled_completion(snapshot: &mut SyncSnapshot) {
     }
 }
 
-/// Record a deleted file in recent files.
-pub fn record_deleted_file(sync: &SyncRunner, file_name: String, size_bytes: u64) -> Result<()> {
-    sync.progress.record_deleted_file(file_name, size_bytes).map_err(AppError::Progress)?;
-    sync.emit_snapshot(true);
-    Ok(())
-}
-
 // ── Tauri IPC Wrappers ─────────────────────────────────────────────────
 //
 // Only three `sp_*` commands remain exposed to the frontend:
@@ -575,14 +604,16 @@ pub fn record_deleted_file(sync: &SyncRunner, file_name: String, size_bytes: u64
 // - `sp_dismiss_sync_widget` — user closes the floating sync widget.
 // - `sp_clear_all_data` — full reset path during logout / `hcfs_sync_reset`.
 //
-// The rest of the session-management primitives (`start_session`,
-// `merge_into_session`, `complete_session`, `update_file_progress`, the
-// `mark_*` family, `record_deleted_file`, `remove_files_for_label`, etc.)
-// used to be exposed as `sp_*` IPCs back when the frontend drove session
-// lifecycle. hcfs-client now owns the session lifecycle entirely — those
-// inner functions are still called from `lifecycle.rs` and the
-// hcfs-client callback wiring, but their Tauri wrappers were dead and
-// have been removed (2026-04-09).
+// The session-management primitives used to be exposed as `sp_*` IPCs back
+// when the frontend drove session lifecycle. hcfs-client now owns the
+// session lifecycle entirely. The wrappers still called from `lifecycle.rs`
+// and the hcfs-client callback wiring (`mark_file_synced`,
+// `mark_pending_files_as_failed`, and the live update/merge helpers) remain;
+// the wrappers the frontend used to drive directly (`start_session`,
+// `complete_session`, `stop_session`, `complete_pending_files`,
+// `mark_all_pending_files_as_failed`, `mark_file_error`,
+// `get_overall_progress`, `record_deleted_file`) became dead once hcfs-client
+// took over and have been removed.
 
 #[tauri::command]
 pub fn sp_clear_all_data(state: tauri::State<'_, crate::app_state::AppState>) -> Result<()> {
@@ -909,6 +940,51 @@ mod tests {
             expected_remote_deletes: 0,
             files: file_map,
         });
+    }
+
+    // ── trailing snapshot flush ─────────────────────────────────────
+    //
+    // Pins `schedule_trailing_flush`: a suppressed emit must schedule a
+    // deferred flush that fires ~one throttle window later, clears the
+    // scheduled flag, and advances the emit cursor. Without it, the last
+    // completion tick of a small-file burst is dropped and the tray /
+    // widget shows a stale count until cycle finalization (the
+    // user-visible "tray lags while small files sync" bug). The test
+    // injects its own statics so it is isolated from the module-level
+    // cursor/flag, which other tests in this binary mutate concurrently
+    // (the global RUNNER_FOR_FLUSH OnceLock may also already be claimed
+    // by a dropped AppState runner — exactly why injection is needed).
+
+    #[test]
+    fn suppressed_emit_is_flushed_within_a_window() {
+        static CURSOR: AtomicU64 = AtomicU64::new(NEVER_EMITTED);
+        static FLAG: AtomicBool = AtomicBool::new(false);
+
+        let sync = test_runner();
+        let sentinel = monotonic_now_ms();
+        CURSOR.store(sentinel, Ordering::Relaxed);
+
+        assert!(
+            schedule_trailing_flush(Arc::downgrade(&sync), &CURSOR, &FLAG),
+            "first suppressed tick must win the flush slot",
+        );
+        // Slot taken: a second suppressed tick in the same window must not
+        // stack another flush.
+        assert!(!schedule_trailing_flush(Arc::downgrade(&sync), &CURSOR, &FLAG));
+        assert!(FLAG.load(Ordering::Relaxed));
+
+        // The flush must land within ~one window; poll generously (2 s)
+        // to absorb CI scheduling jitter.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            if CURSOR.load(Ordering::Relaxed) != sentinel {
+                // Delivered: cursor advanced and the slot reopened.
+                assert!(!FLAG.load(Ordering::Relaxed));
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        panic!("trailing flush never advanced the emit cursor — suppressed tick was dropped");
     }
 
     #[test]

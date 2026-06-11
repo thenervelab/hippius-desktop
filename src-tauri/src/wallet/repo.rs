@@ -61,8 +61,7 @@ impl From<WalletRow> for LocalWallet {
     }
 }
 
-const SELECT_COLS: &str =
-    "id, name, address, encrypted_mnemonic, password_hash, is_active, created_at, updated_at";
+const SELECT_COLS: &str = "id, name, address, encrypted_mnemonic, password_hash, is_active, created_at, updated_at";
 
 /// Public projection of `LocalWallet` that excludes the encrypted mnemonic
 /// and password hash. The full struct can leak into FE state via
@@ -97,8 +96,16 @@ fn now_ms() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
+        .map_or_else(
+            |e| {
+                // A pre-epoch system clock is near-impossible, but log rather than
+                // silently stamp 0 — a 0 created_at would distort the oldest-first
+                // ordering below and the auto-promote-on-delete target.
+                tracing::warn!(error = %e, "system clock is before the Unix epoch; using 0 for wallet timestamp");
+                0
+            },
+            |d| d.as_millis() as i64,
+        )
 }
 
 /// Insert a wallet row under `owner`. Returns the newly-created row.
@@ -138,7 +145,7 @@ pub async fn insert(
     .bind(address)
     .bind(encrypted_mnemonic)
     .bind(password_hash)
-    .bind(if is_first { 1 } else { 0 })
+    .bind(i32::from(is_first))
     .bind(now)
     .bind(now)
     .execute(pool)
@@ -150,7 +157,11 @@ pub async fn insert(
 }
 
 pub async fn list_all(pool: &SqlitePool, owner: &str) -> Result<Vec<LocalWallet>, AppError> {
-    let sql = format!("SELECT {SELECT_COLS} FROM local_wallets WHERE owner = ? ORDER BY created_at ASC");
+    // `id ASC` tiebreaks equal `created_at` (possible if two wallets are created
+    // in the same millisecond, or both stamped 0 by a clock fault) so the
+    // oldest-first order — which drives active-wallet selection and the
+    // promote-on-delete target — is deterministic.
+    let sql = format!("SELECT {SELECT_COLS} FROM local_wallets WHERE owner = ? ORDER BY created_at ASC, id ASC");
     let rows = sqlx::query_as::<_, WalletRow>(&sql).bind(owner).fetch_all(pool).await?;
     Ok(rows.into_iter().map(LocalWallet::from).collect())
 }
@@ -181,7 +192,11 @@ pub async fn get_by_id(pool: &SqlitePool, owner: &str, id: i64) -> Result<Option
 
 pub async fn get_by_address(pool: &SqlitePool, owner: &str, address: &str) -> Result<Option<LocalWallet>, AppError> {
     let sql = format!("SELECT {SELECT_COLS} FROM local_wallets WHERE owner = ? AND address = ?");
-    let row = sqlx::query_as::<_, WalletRow>(&sql).bind(owner).bind(address).fetch_optional(pool).await?;
+    let row = sqlx::query_as::<_, WalletRow>(&sql)
+        .bind(owner)
+        .bind(address)
+        .fetch_optional(pool)
+        .await?;
     Ok(row.map(LocalWallet::from))
 }
 
@@ -215,13 +230,7 @@ pub async fn set_active(pool: &SqlitePool, owner: &str, id: i64) -> Result<(), A
 ///
 /// The update is owner-scoped — a stale `id` from another account is a
 /// no-op rather than a cross-account leak.
-pub async fn update_secrets(
-    pool: &SqlitePool,
-    owner: &str,
-    id: i64,
-    encrypted_mnemonic: &str,
-    password_hash: &str,
-) -> Result<(), AppError> {
+pub async fn update_secrets(pool: &SqlitePool, owner: &str, id: i64, encrypted_mnemonic: &str, password_hash: &str) -> Result<(), AppError> {
     let now = now_ms();
     sqlx::query(
         "UPDATE local_wallets
@@ -254,9 +263,8 @@ pub async fn rename(pool: &SqlitePool, owner: &str, id: i64, name: &str) -> Resu
 /// remaining wallet under the same owner (by creation order) to active so
 /// the UI never has zero-active-and-non-empty state for that account.
 pub async fn delete(pool: &SqlitePool, owner: &str, id: i64) -> Result<(), AppError> {
-    let target = match get_by_id(pool, owner, id).await? {
-        Some(w) => w,
-        None => return Ok(()),
+    let Some(target) = get_by_id(pool, owner, id).await? else {
+        return Ok(());
     };
 
     sqlx::query("DELETE FROM local_wallets WHERE id = ? AND owner = ?")

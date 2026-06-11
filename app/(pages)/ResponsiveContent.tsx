@@ -7,7 +7,6 @@ import MigrationBanner from "@/components/ui/MigrationBanner";
 import CreditsExhaustedBanner from "@/components/billing/CreditsExhaustedBanner";
 import { SyncReauthRequiredAlert } from "@/components/ui/SyncReauthRequiredAlert";
 import FileDetailsPanel from "../components/page-sections/drive/FileDetailsPanel";
-// import SyncWidgetPlayground2 from "@/app/(pages)/SyncWidgetPlayground2";
 
 export default function ResponsiveContent({
   children,
@@ -36,12 +35,17 @@ export default function ResponsiveContent({
               route — the previous FilesContainer-only mount missed
               users whose last-visited page was /wallet, /billing, etc. */}
           <SyncReauthRequiredAlert className="mt-2" />
-          {/* <SyncWidgetPlayground2 /> */}
         </div>
 
         {/* Scrollable content area — serves as container query context */}
         <div className="flex-1 overflow-y-auto @container flex flex-col">
-          <div className="w-full flex-1 flex flex-col font-geist">
+          {/* Cap + center the content column on every page so cards and
+              grids keep a sane aspect when the viewport is very wide in
+              CSS px (zoomed out or large monitors). Below the cap this is
+              a no-op. Note the @container above is the uncapped scroll
+              area, so container-query breakpoints still see the full
+              viewport width — fine, since 1800px fits every max layout. */}
+          <div className="w-full max-w-[1800px] mx-auto flex-1 flex flex-col font-geist">
             {children}
           </div>
         </div>

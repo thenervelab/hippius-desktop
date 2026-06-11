@@ -149,14 +149,19 @@ export function NoEntriesBackgroundContainer({
           style={{ backgroundImage: cornerTextureLight }}
         />
 
+        {/* The corner patches are screen-sized (not container-sized): every
+            host clips them with overflow-hidden, so they must overshoot to
+            reach the host panel's edges. Container-sized (w-full/h-full)
+            patches stopped one container-width from the corner and left the
+            texture floating mid-panel on wide (zoomed-out) viewports. */}
         <div
           aria-hidden="true"
-          className="pointer-events-none absolute right-full bottom-full w-full h-full bg-[rgba(242,242,242,0.42)] dark:hidden"
+          className="pointer-events-none absolute right-full bottom-full w-screen h-screen bg-[rgba(242,242,242,0.42)] dark:hidden"
           style={{ backgroundImage: cornerTextureLight }}
         />
         <div
           aria-hidden="true"
-          className="pointer-events-none absolute left-full top-full w-full h-full bg-[rgba(242,242,242,0.42)] dark:hidden"
+          className="pointer-events-none absolute left-full top-full w-screen h-screen bg-[rgba(242,242,242,0.42)] dark:hidden"
           style={{ backgroundImage: cornerTextureLight }}
         />
         {/* dark mode textures */}
@@ -167,12 +172,12 @@ export function NoEntriesBackgroundContainer({
         />
         <div
           aria-hidden="true"
-          className="pointer-events-none absolute right-full bottom-full w-full h-full bg-[#1A1A1A] hidden dark:block"
+          className="pointer-events-none absolute right-full bottom-full w-screen h-screen bg-[#1A1A1A] hidden dark:block"
           style={{ backgroundImage: cornerTextureDark }}
         />
         <div
           aria-hidden="true"
-          className="pointer-events-none absolute left-full top-full w-full h-full bg-[#1A1A1A] hidden dark:block"
+          className="pointer-events-none absolute left-full top-full w-screen h-screen bg-[#1A1A1A] hidden dark:block"
           style={{ backgroundImage: cornerTextureDark }}
         />
         {/* Content */}

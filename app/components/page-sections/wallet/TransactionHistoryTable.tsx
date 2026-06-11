@@ -137,7 +137,11 @@ const columns = [
       return (
         <span
           className={cn(
-            "inline-flex rounded-full border px-2.5 py-1 text-[11px] font-medium",
+            // Em-based padding (0.9em≈10px, 0.36em≈4px at 100%): WKWebView's
+            // pageZoom clamps small fonts (~9px floor) on zoom-out, so px
+            // padding shrinks away from the text and crams the pill; em
+            // tracks the clamped font size at any zoom.
+            "inline-flex rounded-full border px-[0.9em] py-[0.36em] text-[11px] font-medium",
             direction === "Sent"
               ? "border-[#FEC134] bg-[#FFF2CC] text-[#E89702] dark:border-[#793902] dark:bg-[#793902] dark:text-[#E89702]"
               : "border-[#6CE9A6] bg-[#DAFBE8] text-[#04C870] dark:border-[#03301E] dark:bg-[#03301E] dark:text-[#6CE9A6]",

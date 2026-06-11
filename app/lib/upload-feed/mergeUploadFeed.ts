@@ -144,9 +144,22 @@ export function mergeUploadFeed({
   snapshotFiles,
   limit,
 }: MergeUploadFeedParams): UploadFeedItem[] {
+  // Server rows carry the real upload time. A completed live snapshot row is
+  // re-stamped `createdAt: Date.now()` on every merge (FileProgress has no
+  // timestamp), so a just-finished file that lingers in the snapshot would
+  // render "Just now" forever. Once the server list includes that file, drop
+  // the completed live row and let the server row (real time) represent it.
+  // Live rows for in-flight states (uploading / pending / failed) always win —
+  // they carry progress/error the server list can't show yet.
+  const serverByKey = new Map(recentUploads.map((f) => [dedupKey(f), f]));
+
   const liveItems = snapshotFiles
     .filter((f) => f.action === "upload")
     .map(snapshotToItem)
+    .filter(
+      (item) =>
+        !(item.feedStatus === "completed" && serverByKey.has(dedupKey(item))),
+    )
     .sort((a, b) => rankOf(a.feedStatus) - rankOf(b.feedStatus));
 
   const seen = new Set<string>();

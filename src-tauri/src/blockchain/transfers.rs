@@ -61,13 +61,13 @@ pub async fn transfer_balance(
 
     let amount: u128 = amount
         .parse()
-        .map_err(|e| crate::error::AppError::Other(format!("Invalid amount: {e}")))?;
+        .map_err(|e| crate::error::AppError::Validation(format!("Invalid amount: {e}")))?;
 
     // Parse the recipient as a `subxt::utils::AccountId32` directly —
     // this avoids the removed `sp_core::crypto::AccountId32 → MultiAddress`
     // conversion that only existed under `substrate-compat`.
     let recipient = subxt::utils::AccountId32::from_str(&recipient_address)
-        .map_err(|e| crate::error::AppError::Other(format!("Invalid recipient address: {e:?}")))?;
+        .map_err(|e| crate::error::AppError::Validation(format!("Invalid recipient address: {e:?}")))?;
 
     info!("Submitting transfer_keep_alive transaction...");
     let tx = custom_runtime::tx().balances().transfer_keep_alive(recipient.into(), amount);
@@ -76,10 +76,10 @@ pub async fn transfer_balance(
         .tx()
         .sign_and_submit_then_watch_default(&tx, &signer)
         .await
-        .map_err(|e| crate::error::AppError::Other(format!("Submit failed: {e}")))?
+        .map_err(|e| crate::error::AppError::Substrate(format!("Submit failed: {e}")))?
         .wait_for_finalized_success()
         .await
-        .map_err(|e| crate::error::AppError::Other(format!("Transaction failed: {e}")))?
+        .map_err(|e| crate::error::AppError::Substrate(format!("Transaction failed: {e}")))?
         .extrinsic_hash();
 
     info!("Transfer tx finalized: {:?}", tx_hash);
@@ -102,17 +102,24 @@ pub async fn validate_send_balance(
 
     let address = get_substrate_address(&state).await?;
     let client = get_substrate_client(&state).await?;
-    let account_id: subxt::utils::AccountId32 = address.parse().map_err(|_| format!("Invalid sender address: {address}"))?;
+    let account_id: subxt::utils::AccountId32 = address
+        .parse()
+        .map_err(|_| crate::error::AppError::Validation(format!("Invalid sender address: {address}")))?;
     let storage_query = custom_runtime::storage().system().account(&account_id);
     let account_info = client
         .storage()
         .at_latest()
         .await
-        .map_err(|e| crate::error::AppError::Other(format!("Storage error: {e}")))?
+        .map_err(|e| crate::error::AppError::Substrate(format!("Storage error: {e}")))?
         .fetch(&storage_query)
         .await
-        .map_err(|e| crate::error::AppError::Other(format!("Query failed: {e}")))?;
-    let available: u128 = account_info.map_or(0, |i| i.data.free);
+        .map_err(|e| crate::error::AppError::Substrate(format!("Query failed: {e}")))?;
+    // Transferable balance excludes the frozen portion (locks/holds from
+    // staking, vesting, etc.). `free` alone over-counts what the user can
+    // actually send, so a transfer that looks affordable could be rejected
+    // on-chain. `saturating_sub` because frozen can momentarily exceed free
+    // during reconfiguration.
+    let available: u128 = account_info.map_or(0, |i| i.data.free.saturating_sub(i.data.frozen));
 
     let planck_str = to_plancks(amount)?;
     let planck: u128 = planck_str

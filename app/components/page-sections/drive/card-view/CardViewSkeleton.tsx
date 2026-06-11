@@ -15,7 +15,7 @@ const SKELETON_BAR_CLASS =
 /**
  * Card-grid skeleton used while the FilesTable is rendered in card view
  * and the underlying data is still loading. Mirrors `card-view/index.tsx`:
- * same grid breakpoints, same per-card 220px height, same border/background
+ * same auto-fill grid, same per-card 220px height, same border/background
  * tokens — so the layout doesn't jump when real cards replace placeholders.
  */
 const CardViewSkeleton: React.FC<CardViewSkeletonProps> = ({
@@ -29,7 +29,7 @@ const CardViewSkeleton: React.FC<CardViewSkeletonProps> = ({
         isRecentFiles ? "min-h-[12.5rem]" : "min-h-[43.75rem]",
       )}
     >
-      <div className="grid grid-cols-1 @sm:grid-cols-2 @2xl:grid-cols-3 @4xl:grid-cols-4 gap-4">
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-4">
         {Array.from({ length: cards }).map((_, index) => (
           <div
             key={`card-skeleton-${index}`}

@@ -12,6 +12,7 @@ use crate::crypto::store;
 use crate::error::Result;
 use hcfs_client::client::HcfsClientConfig;
 use sqlx::sqlite::SqlitePool;
+use zeroize::Zeroizing;
 
 /// Whether HCFS clients should accept invalid TLS certificates.
 ///
@@ -59,7 +60,10 @@ pub struct HcfsConfigResult {
 /// Loaded sync configuration from the database for a single label.
 pub(crate) struct SyncConfig {
     pub sync_path: String,
-    pub drive_password: String,
+    /// Plaintext drive password (the user's unified recovery password). Held in
+    /// `Zeroizing` so it is scrubbed from the heap on drop rather than lingering
+    /// for the lifetime of the config across the whole sync-init call graph.
+    pub drive_password: Zeroizing<String>,
     pub server_url: String,
 }
 
@@ -70,6 +74,7 @@ pub async fn save_hcfs_config(
     server_url: String,
     drive_password: String,
 ) -> Result<()> {
+    let account_id = state.require_session_account(&account_id)?;
     let db = state.pool()?;
     let owner = account_key(&account_id);
 
@@ -136,6 +141,7 @@ pub(crate) async fn get_hcfs_config_internal(pool: &SqlitePool, account_id: &str
 
 #[tauri::command]
 pub async fn get_hcfs_config(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<HcfsConfigResult> {
+    let account_id = state.require_session_account(&account_id)?;
     get_hcfs_config_internal(state.pool()?, &account_id).await
 }
 
@@ -146,7 +152,11 @@ pub async fn get_hcfs_config(state: tauri::State<'_, crate::app_state::AppState>
 /// returned — encrypted rows produce an error. This allows mnemonic-recovery
 /// code paths (which don't yet have the mnemonic) to still read pre-migration
 /// plaintext passwords.
-pub(crate) async fn get_drive_password(pool: &SqlitePool, account_id: &str, mnemonic: Option<&str>) -> Result<String> {
+///
+/// Returns the plaintext in `Zeroizing` so callers hold the secret in
+/// scrubbed-on-drop memory; the decrypt path forwards `store::decrypt`'s own
+/// `Zeroizing` directly instead of cloning it into a bare `String`.
+pub(crate) async fn get_drive_password(pool: &SqlitePool, account_id: &str, mnemonic: Option<&str>) -> Result<Zeroizing<String>> {
     let db = pool;
     let owner = account_key(account_id);
 
@@ -163,11 +173,10 @@ pub(crate) async fn get_drive_password(pool: &SqlitePool, account_id: &str, mnem
     let (raw_password, enc_ver) = result.ok_or_else(|| crate::error::AppError::Other("HCFS config not found".into()))?;
 
     match (enc_ver, mnemonic) {
-        (0, _) => Ok(raw_password),
+        (0, _) => Ok(Zeroizing::new(raw_password)),
         (1, Some(m)) => {
             let key = store::drive_password_key(m, account_id)?;
-            let plaintext = store::decrypt(&key, &raw_password)?;
-            Ok((*plaintext).clone())
+            Ok(store::decrypt(&key, &raw_password)?)
         }
         (1, None) => Err(crate::error::AppError::Crypto(
             "Drive password is encrypted but no mnemonic available for decryption".into(),
@@ -220,7 +229,10 @@ pub(crate) async fn load_sync_config(pool: &SqlitePool, account_id: &str, label:
     // the faster one" sentinel. We rewrite the legacy single-region URL
     // to empty too — see normalize_for_region_probe.
     let server_url = normalize_for_region_probe(&config.server_url);
-    debug!("Server URL: {}", if server_url.is_empty() { "<auto-detect>" } else { server_url.as_str() });
+    debug!(
+        "Server URL: {}",
+        if server_url.is_empty() { "<auto-detect>" } else { server_url.as_str() }
+    );
 
     Ok(SyncConfig {
         sync_path,
@@ -305,9 +317,8 @@ mod tests {
     }
 
     /// The legacy single-region URL gets rewritten to empty so existing
-    /// users transparently opt into auto-detect — the whole point of
-    /// option (c) from the audit. Without this, every upgrading user
-    /// stays pinned to the legacy region forever.
+    /// users transparently opt into auto-detect. Without this, every
+    /// upgrading user stays pinned to the legacy region forever.
     #[test]
     fn normalize_rewrites_legacy_single_region_to_empty() {
         assert_eq!(normalize_for_region_probe(LEGACY_SINGLE_REGION_URL), "");
@@ -319,9 +330,18 @@ mod tests {
     /// user override — pass through verbatim.
     #[test]
     fn normalize_passes_explicit_overrides_through() {
-        assert_eq!(normalize_for_region_probe("https://eu-central-1-arion.hippius.com"), "https://eu-central-1-arion.hippius.com");
-        assert_eq!(normalize_for_region_probe("https://us-east-1-arion.hippius.com"), "https://us-east-1-arion.hippius.com");
-        assert_eq!(normalize_for_region_probe("https://my-self-hosted.example"), "https://my-self-hosted.example");
+        assert_eq!(
+            normalize_for_region_probe("https://eu-central-1-arion.hippius.com"),
+            "https://eu-central-1-arion.hippius.com"
+        );
+        assert_eq!(
+            normalize_for_region_probe("https://us-east-1-arion.hippius.com"),
+            "https://us-east-1-arion.hippius.com"
+        );
+        assert_eq!(
+            normalize_for_region_probe("https://my-self-hosted.example"),
+            "https://my-self-hosted.example"
+        );
         assert_eq!(normalize_for_region_probe("http://localhost:8080"), "http://localhost:8080");
     }
 

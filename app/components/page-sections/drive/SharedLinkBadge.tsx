@@ -63,12 +63,19 @@ const SharedLinkBadge: FC<SharedLinkBadgeProps> = ({
           <Tooltip.Content
             side="top"
             sideOffset={4}
-            className="z-50 bg-white border border-grey-80 rounded-[0.5rem] px-3 py-2 text-xs font-medium text-grey-40 shadow-lg"
+            // Light base + the shared dark-tooltip treatment from CustomTooltip2
+            // (dark surface, hairline border/ring, deeper shadow) so it reads as
+            // a first-class tooltip in dark mode instead of a glaring white card.
+            className={cn(
+              "z-50 bg-white border border-grey-80 rounded-[0.5rem] px-3 py-2 text-xs font-medium text-grey-40 shadow-lg",
+              "dark:border-white/10 dark:bg-[#1c1c1e] dark:text-grey-dark-100",
+              "dark:shadow-[0_8px_28px_-8px_rgba(0,0,0,0.55)] dark:ring-1 dark:ring-inset dark:ring-white/[0.04]",
+            )}
           >
             {tooltipLines.map((line, i) => (
               <div key={i}>{line}</div>
             ))}
-            <Tooltip.Arrow className="fill-white" />
+            <Tooltip.Arrow className="fill-white dark:fill-[#1c1c1e]" />
           </Tooltip.Content>
         </Tooltip.Portal>
       </Tooltip.Root>

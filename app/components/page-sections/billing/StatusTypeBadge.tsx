@@ -2,8 +2,15 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 import React from "react";
 
+// Pill geometry (padding/gap/line-height/tracking) is font-relative (em),
+// not px: WKWebView's pageZoom won't render fonts below a ~9px floor, so on
+// zoom-out this 10px text stops shrinking while px geometry keeps scaling —
+// the text ends up crammed edge-to-edge in a too-small pill. Em units
+// resolve against the clamped font size, so the pill tracks the text at any
+// zoom. At 100% the values are pixel-identical to the old px ones
+// (0.6em=6px, 0.4em=4px, 1.6lh=16px, -0.02em=-0.2px).
 const badgeVariants = cva(
-  "flex px-[6px] py-0 justify-center items-center gap-[4px] rounded-[90px] w-fit overflow-hidden text-ellipsis font-medium text-[10px] leading-[16px] tracking-[-0.2px]",
+  "flex px-[0.6em] py-0 justify-center items-center gap-[0.4em] rounded-[90px] w-fit overflow-hidden text-ellipsis font-medium text-[10px] leading-[1.6] tracking-[-0.02em]",
   {
     variants: {
       type: {

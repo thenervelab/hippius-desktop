@@ -19,6 +19,7 @@ import { useFileViewShared } from "./shared/FileViewUtils";
 import FileContextMenu from "@/app/components/ui/context-menu";
 import { useSetAtom } from "jotai";
 import { shareModalFileAtom } from "@/app/lib/global-atoms/sharesAtoms";
+import { renameModalFileAtom } from "@/app/lib/global-atoms/renameAtoms";
 import { downloadFile } from "@/app/lib/utils/downloadFile";
 import { CloudUploadIcon, HardDrive } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -97,6 +98,8 @@ const DriveContent: FC<DriveContentProps> = ({
   // selected file. Setting the atom is the only handoff — the modal
   // owns its own lifecycle from there.
   const setShareModalFile = useSetAtom(shareModalFileAtom);
+  // Same handoff for `RenameDialog` (also mounted at the layout level).
+  const setRenameModalFile = useSetAtom(renameModalFileAtom);
 
   // Use selection context for delete functionality
   const { enterSelectionModeAndSelectFile } = useFileSelection();
@@ -111,6 +114,7 @@ const DriveContent: FC<DriveContentProps> = ({
     setOpenDeleteModal,
     selectedFile,
     setSelectedFile,
+    previewList,
     fileDetailsFile,
     setFileDetailsFile,
     deleteFile,
@@ -121,6 +125,17 @@ const DriveContent: FC<DriveContentProps> = ({
   } = sharedState;
 
   const selectedFileType = selectedFile ? getFileType(selectedFile) : null;
+
+  // The viewer's gallery scope: a file opened from an inline-expanded folder
+  // carries that folder's rows as `previewList`, so its thumbnail rail and
+  // prev/next walk the folder it lives in — not the page's top-level list.
+  const viewerFiles = previewList ?? filteredData;
+  // Strip/arrow navigation stays within the current scope: re-pass the list
+  // so `setSelectedFile` (which pairs file + list atomically) keeps it.
+  const handleViewerNavigate = useCallback(
+    (file: FormattedUserFile) => setSelectedFile(file, previewList),
+    [setSelectedFile, previewList],
+  );
 
   // Re-sync the panel atom with the freshest copy from `filteredData`.
   // The atom snapshot can get stale (e.g. arion hash arrives after the panel
@@ -403,6 +418,7 @@ const DriveContent: FC<DriveContentProps> = ({
             filteredData.length > 0 &&
             !isRecentFiles &&
             "mt-[11px]",
+          isRecentFiles && "-mt-3",
           isDragging &&
             "after:absolute after:inset-0 after:bg-gray-50/50 after:border-2 after:border-primary-50 after:border-dashed after:rounded-lg after:z-10",
         )}
@@ -511,7 +527,7 @@ const DriveContent: FC<DriveContentProps> = ({
           }}
           onFileDownload={handleFileDownload}
           onSelectFile={(file) => {
-            setSelectedFile(file);
+            setSelectedFile(file, contextMenu.previewList ?? null);
             setContextMenu(null);
           }}
           onShowFileDetails={(file) => {
@@ -520,6 +536,10 @@ const DriveContent: FC<DriveContentProps> = ({
           }}
           onShareFile={(file) => {
             setShareModalFile(file);
+            setContextMenu(null);
+          }}
+          onRename={(file) => {
+            setRenameModalFile(file);
             setContextMenu(null);
           }}
         />
@@ -541,8 +561,8 @@ const DriveContent: FC<DriveContentProps> = ({
           onCloseClicked={() => setSelectedFile(null)}
           handleFileDownload={handleFileDownload}
           file={selectedFile}
-          allFiles={filteredData}
-          onNavigate={setSelectedFile}
+          allFiles={viewerFiles}
+          onNavigate={handleViewerNavigate}
         />
       )}
       {selectedFileType === "image" && (
@@ -550,8 +570,8 @@ const DriveContent: FC<DriveContentProps> = ({
           onCloseClicked={() => setSelectedFile(null)}
           handleFileDownload={handleFileDownload}
           file={selectedFile}
-          allFiles={filteredData}
-          onNavigate={setSelectedFile}
+          allFiles={viewerFiles}
+          onNavigate={handleViewerNavigate}
         />
       )}
       {selectedFileType === "PDF" && (
@@ -559,8 +579,8 @@ const DriveContent: FC<DriveContentProps> = ({
           onCloseClicked={() => setSelectedFile(null)}
           handleFileDownload={handleFileDownload}
           file={selectedFile}
-          allFiles={filteredData}
-          onNavigate={setSelectedFile}
+          allFiles={viewerFiles}
+          onNavigate={handleViewerNavigate}
         />
       )}
 

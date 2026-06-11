@@ -1,14 +1,20 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { Window } from "@tauri-apps/api/window";
-import { Upload } from "lucide-react";
+import { Upload, Check, AlertCircle } from "lucide-react";
 import "./tray-panel.css";
 import { useTrayPanelData } from "@/app/lib/tray/useTrayPanelData";
+import {
+  getTraySyncSummary,
+  type TraySyncTone,
+} from "@/app/lib/tray/traySyncSummary";
+import type { SyncSnapshot } from "@/app/lib/types/syncSnapshot";
 import type { UploadFeedItem } from "@/app/lib/upload-feed/mergeUploadFeed";
+import { groupUploadFeed } from "@/app/lib/upload-feed/groupUploadFeed";
 import { getFileTypeFromExtension } from "@/app/lib/utils/getTileTypeFromExtension";
 import { getFileIcon, DIRECTORY_SUFFIX } from "@/app/lib/utils/fileTypeUtils";
 import { formatBytes } from "@/app/lib/utils/formatBytes";
@@ -32,40 +38,94 @@ const Avatar = dynamic(() => import("boring-avatars"), { ssr: false });
  * NOT mount the app's providers (see `AppShell`) and talks to the backend only
  * through `invoke`. All data shown here is computed in Rust.
  *
- * The window is transparent (so the card's rounded corners show through), but
- * the card itself is an OPAQUE solid fill — `bg-white` / dark `bg-[#1e1e1e]`.
- * A translucent fill + `backdrop-filter: blur()` was tried to match the Figma
- * "frosted" look, but WebKit does not blur the desktop behind a transparent
- * macOS window (it just alpha-blends), so the content behind showed straight
- * through. A true frost would need native vibrancy (window effects), not CSS.
- * Light/dark follow the OS via Tailwind's media strategy (`darkMode: "class"`
- * is off), exactly like the rest of the app. The search field mirrors the
- * sidebar's search styling.
+ * The Figma "frosted" look (translucent card over a blurred background) is
+ * produced by NATIVE macOS vibrancy — a `Popover` window effect applied in
+ * `build_panel` (`src-tauri/src/tray/panel.rs`). CSS `backdrop-filter: blur()`
+ * was tried first but WebKit does not blur the desktop behind a transparent
+ * macOS window (it just alpha-blends it), so the desktop showed straight
+ * through. With the native material doing the real blur, the card itself is a
+ * TRANSLUCENT tint (`rgba(255,255,255,0.7)` light / `rgba(30,30,30,0.7)` dark —
+ * the Figma value) so the frost shows through it. The card fills the window
+ * edge-to-edge (the window IS the 460×672 Figma card) and its rounded corners
+ * line up with the material's 16px radius; the native window shadow provides
+ * elevation. Light/dark follow the OS via Tailwind's media strategy
+ * (`darkMode: "class"` is off), exactly like the rest of the app. The search
+ * field mirrors the sidebar's search styling.
  */
 export default function TrayPanelPage() {
-  const { menu, feed, blockNumber, isConnected, unreadCount } = useTrayPanelData();
+  const { menu, feed, snapshot, blockNumber, isConnected, unreadCount, loading } = useTrayPanelData();
+  // Date-bucketed for the headed list (Today / Yesterday / This Week / …).
+  // Live uploading/failed rows carry createdAt=now, so they lead "Today".
+  const groups = groupUploadFeed(feed);
+
+  // ⌘/Ctrl+F mirrors clicking the "Search Files" field (`openMainSearch`): the
+  // popover has no search of its own, so the shortcut reveals the main window
+  // and opens its command palette. Key check matches the main window's
+  // `SidebarSearch` so the behaviour is identical from either window.
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() !== "f") return;
+      if (!event.ctrlKey && !event.metaKey) return;
+      event.preventDefault();
+      void openMainSearch();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  // Only macOS gets the translucent "frosted" card, because only there does the
+  // window sit over native vibrancy (the `Popover` material in `build_panel`).
+  // On Linux/Windows there is no material, so a 0.7-alpha card over the
+  // transparent window shows the desktop straight through (the "very
+  // transparent" popover reported on Linux). Off macOS we therefore paint an
+  // OPAQUE card with a hairline border (no vibrancy/shadow to separate it from
+  // whatever is behind). Default to opaque so non-macOS never flashes
+  // see-through; macOS flips to translucent once detected — the window is
+  // prewarmed at boot, so this resolves long before it is ever shown.
+  const [isMac, setIsMac] = useState(false);
+  useEffect(() => {
+    invoke<{ os: string }>("get_platform_info")
+      .then((info) => setIsMac(info?.os === "macos"))
+      .catch(() => {});
+  }, []);
+  const cardSurface = isMac
+    ? "bg-[rgba(255,255,255,0.7)] dark:bg-[rgba(30,30,30,0.7)]"
+    : "bg-white dark:bg-[#1e1e1e] border border-[rgba(0,0,0,0.08)] dark:border-[rgba(255,255,255,0.1)]";
 
   return (
-    // Transparent full-window shell. Its padding gives the card's drop shadow
-    // room to render INSIDE the window (instead of bleeding into the window's
-    // square corners as dark notches) and keeps the card's rounded corners
-    // clear of the window edge. Padding is asymmetric — small on top so the
-    // card still hugs the tray icon, larger on the sides/bottom where the
-    // downward shadow actually casts. The card fills the padded area via flex.
-    <div className="tray-panel-shell flex h-screen w-screen pt-[10px] pl-4 pr-4 pb-6">
-      <div className="tray-panel-card flex min-h-0 flex-1 flex-col overflow-hidden rounded-[16px] bg-white font-geist text-black dark:bg-[#1e1e1e] dark:text-white">
+    // The card fills the window edge-to-edge: the window IS the 460×672 Figma
+    // card. On macOS the native vibrancy material (applied in `build_panel`)
+    // frosts the background and the native window shadow provides elevation; on
+    // Linux/Windows the card is opaque with a hairline border instead (see
+    // `cardSurface`). The card's 16px corners line up with the window radius.
+    <div className="tray-panel-shell flex h-screen w-screen">
+      <div className={`tray-panel-card flex min-h-0 flex-1 flex-col overflow-hidden rounded-[16px] ${cardSurface} font-geist text-black dark:text-white`}>
         <Header credits={menu?.credits ?? null} unreadCount={unreadCount} />
         <SearchBar />
 
-        <div className="flex flex-1 flex-col overflow-y-auto px-5 pb-2">
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-5 pb-2">
         <h2 className="py-2 font-geist text-[16px] font-medium leading-8 text-grey-10 dark:text-white">Your Uploads</h2>
 
-        {feed.length === 0 ? (
+        {/* Live sync-progress summary (percent + status + synced/remaining),
+            mirroring the sidebar sync widget. Renders only while a session is
+            active or just finished; getTraySyncSummary returns null when idle. */}
+        <SyncSummary snapshot={snapshot} />
+
+        {feed.length === 0 && loading ? (
+          // First load (no data yet): skeleton placeholders instead of the
+          // empty state, so a fresh open doesn't flash "No files yet" before the
+          // first fetch resolves. The empty state is shown only once loading
+          // settles with a genuinely empty feed (below).
+          <UploadRowsSkeleton />
+        ) : feed.length === 0 ? (
           // Empty state: a single simple rounded card (no graphsheet / guide
           // lines / corner textures) with copy + the Upload CTA that opens the
           // Drive page.
           <div className="flex flex-1 items-center justify-center py-2">
-            <div className="flex w-full flex-col gap-4 rounded-2xl border border-black/[0.08] bg-black/[0.02] p-5 shadow-sm dark:border-white/10 dark:bg-white/[0.03]">
+            {/* Explicit rgba fills/borders, not the arbitrary opacity-modifier
+                form (border-black/[0.08] etc.), which didn't render in light
+                mode here — same fix applied to the footer and credits pill. */}
+            <div className="flex w-full flex-col gap-4 rounded-2xl border border-[rgba(0,0,0,0.08)] bg-[rgba(0,0,0,0.02)] p-5 shadow-sm dark:border-white/10 dark:bg-[rgba(255,255,255,0.03)]">
               <div className="flex flex-col gap-1.5">
                 <h3 className="font-geist text-[18px] font-medium leading-6 tracking-[-0.54px] text-grey-10 dark:text-white">
                   No files yet
@@ -86,13 +146,21 @@ export default function TrayPanelPage() {
             </div>
           </div>
         ) : (
-          // Flat list ordered by `mergeUploadFeed`: uploading → failed →
-          // completed. No day-grouping — status order is the priority here.
-          <ul>
-            {feed.map((item) => (
-              <UploadRowItem key={uploadRowKey(item)} item={item} />
-            ))}
-          </ul>
+          // Date-grouped sections. `mergeUploadFeed` order (uploading → failed
+          // → completed) is preserved within each bucket, so active rows lead
+          // the "Today" group.
+          groups.map((group) => (
+            <section key={group.label} className="mb-1">
+              <h3 className="mb-1 mt-3 font-mono text-[14px] font-medium uppercase leading-5 tracking-[-0.28px] text-grey-70">
+                {group.label}
+              </h3>
+              <ul>
+                {group.items.map((item) => (
+                  <UploadRowItem key={uploadRowKey(item)} item={item} />
+                ))}
+              </ul>
+            </section>
+          ))
         )}
       </div>
 
@@ -109,12 +177,15 @@ export default function TrayPanelPage() {
 function Header({ credits, unreadCount }: { credits: number | null; unreadCount: number }) {
   return (
     <header className="flex items-center justify-between px-5 pt-5">
-      <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary-50">
-        <HippiusLogo className="size-7 text-white" />
-      </div>
+      {/* The Hippius mark shown directly (its own blue + white outline), with
+          no blue badge box behind it — a cleaner, simpler header that lets the
+          logo read as the brand rather than a solid blue tile. */}
+      <HippiusLogo className="h-11 w-11" />
 
-      <div className="flex items-center gap-3 rounded-xl bg-black/[0.06] py-1.5 pl-4 pr-2 dark:bg-white/[0.06]">
-        <div className="flex flex-col text-center">
+      {/* Explicit rgba fill, not the `bg-black/[0.06]` opacity-modifier, which
+          rendered no box in light mode (same issue fixed on the footer). */}
+      <div className="flex items-center gap-3 rounded-xl bg-[rgba(0,0,0,0.06)] py-1.5 pl-4 pr-2 dark:bg-[rgba(255,255,255,0.06)]">
+        <div className="flex flex-col text-left">
           <span className="font-mono text-[10px] font-medium leading-[18px] tracking-[-0.2px] text-[#1F51BE] dark:text-primary-brand-dark">
             CREDITS
           </span>
@@ -133,7 +204,14 @@ function Header({ credits, unreadCount }: { credits: number | null; unreadCount:
           {unreadCount > 0 && (
             <span
               data-testid="tray-unread-count"
-              className="absolute -right-0.5 -top-0.5 flex h-3 min-w-3 items-center justify-center rounded-full bg-primary-50 px-[3px] text-[7px] font-medium leading-none text-white"
+              // A single-digit count gets a larger circle + font so a lone "1"
+              // reads clearly; once the count needs two/three glyphs (≥10) we
+              // fall back to the compact pill so the wider text still fits.
+              className={`absolute -right-0.5 -top-0.5 flex items-center justify-center rounded-full bg-primary-50 font-medium leading-none text-white ${
+                unreadCount < 10
+                  ? "h-4 min-w-4 text-[10px]"
+                  : "h-3 min-w-3 px-[3px] text-[7px]"
+              }`}
             >
               {unreadCount > 99 ? "99+" : unreadCount}
             </span>
@@ -168,6 +246,60 @@ function SearchBar() {
   );
 }
 
+/** Per-tone accent color for the sync summary (matches `StatusLabel`'s tokens
+ *  and the sidebar widget). */
+const TRAY_SYNC_TONE_TEXT: Record<TraySyncTone, string> = {
+  active: "text-[#3167DD]",
+  preparing: "text-[#3167DD]",
+  completed: "text-[#04C870]",
+  failed: "text-[#FF6D61]",
+};
+
+/**
+ * Sync-progress summary shown above the upload list — the popover counterpart
+ * of the sidebar's sync widget. Top line: a status icon + overall percent on
+ * the left, the status word on the right. Bottom line: synced vs. remaining
+ * counts. Renders nothing when there's no active/recent session (the resolver
+ * returns null), so the list sits directly under the heading when idle.
+ */
+function SyncSummary({ snapshot }: { snapshot: SyncSnapshot }) {
+  const summary = getTraySyncSummary(snapshot);
+  if (!summary) return null;
+
+  const accent = TRAY_SYNC_TONE_TEXT[summary.tone];
+
+  return (
+    <div className="mb-2 mt-1 flex flex-col gap-2 rounded-[12px] border border-[rgba(0,0,0,0.08)] bg-[rgba(0,0,0,0.02)] p-3 dark:border-white/10 dark:bg-[rgba(255,255,255,0.03)]">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          {summary.tone === "completed" ? (
+            <Check className="size-4 shrink-0 text-[#04C870]" strokeWidth={3} />
+          ) : summary.tone === "failed" ? (
+            <AlertCircle className="size-4 shrink-0 text-[#FF6D61]" />
+          ) : (
+            <span className={`flex ${accent}`}>
+              <ProgressRing value={summary.percent} />
+            </span>
+          )}
+          <span className={`font-geist text-[14px] font-semibold leading-none ${accent}`}>
+            {summary.percent}%
+          </span>
+        </div>
+        <span
+          className={`font-mono text-[10px] font-medium uppercase leading-none tracking-[-0.2px] ${
+            summary.tone === "completed" ? "text-grey-70 dark:text-white/50" : accent
+          }`}
+        >
+          {summary.statusLabel}
+        </span>
+      </div>
+      <span className="font-geist text-[12px] font-medium tracking-[-0.24px] text-grey-70 dark:text-white/50">
+        {summary.detail}
+      </span>
+    </div>
+  );
+}
+
 /** A single upload row. Layout mirrors the Figma: the file-type icon aligns
  *  with the filename on the top line, and the size sits below — sharing that
  *  bottom line with the right-aligned status, so size and status line up.
@@ -175,6 +307,33 @@ function SearchBar() {
  *  Completed rows show the uploaded time (like the search palette the product
  *  liked); in-flight and failed rows show a live status pill (with a progress
  *  ring while uploading). */
+/** First-load placeholder for the upload list — a faint group heading plus a
+ *  handful of rows mirroring `UploadRowItem`'s layout (icon + name + meta).
+ *  Uses explicit rgba fills, not `bg-black/x` (dead here: the black palette has
+ *  no DEFAULT key, so the modifier renders nothing in light mode). */
+function UploadRowsSkeleton() {
+  const bar = "rounded bg-[rgba(0,0,0,0.08)] dark:bg-white/10";
+  return (
+    <div aria-hidden className="animate-pulse">
+      <div className={`mb-1 mt-3 h-4 w-16 ${bar}`} />
+      <ul>
+        {Array.from({ length: 5 }).map((_, i) => (
+          <li key={i} className="flex items-start gap-3 py-2.5">
+            <span className={`h-5 w-4 shrink-0 ${bar}`} />
+            <div className="min-w-0 flex-1">
+              <div className={`h-3.5 w-1/2 ${bar}`} />
+              <div className="mt-2 flex items-center justify-between gap-2">
+                <div className={`h-3 w-16 ${bar}`} />
+                <div className={`h-3 w-12 ${bar}`} />
+              </div>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function UploadRowItem({ item }: { item: UploadFeedItem }) {
   const rawName = item.actualFileName || item.name;
   const ext = rawName.includes(".") ? rawName.split(".").pop() ?? null : null;
@@ -197,9 +356,7 @@ function UploadRowItem({ item }: { item: UploadFeedItem }) {
         <Icon className="size-4" />
       </span>
       <div className="min-w-0 flex-1">
-        <p className="truncate font-geist text-[14px] font-medium leading-5 tracking-[-0.28px] text-[#1d1d1d] dark:text-white">
-          {displayFileName(item.name)}
-        </p>
+        <MiddleEllipsisName name={displayFileName(item.name)} />
         <div className="mt-1 flex items-center justify-between gap-2">
           <span className="truncate font-geist text-[12px] font-medium leading-normal tracking-[-0.24px] text-grey-10 dark:text-white">
             {sizeText}
@@ -214,6 +371,41 @@ function UploadRowItem({ item }: { item: UploadFeedItem }) {
         </div>
       </div>
     </li>
+  );
+}
+
+/**
+ * Center-truncate a filename with PURE CSS — no width measurement, so it is
+ * immune to the webfont-load timing that left the canvas-measuring
+ * `MiddleTruncatedName` clipping the extension in this provider-free webview.
+ *
+ * The head span truncates with the browser's own end-ellipsis; the tail span
+ * (the last `TAIL_CHARS` — extension plus a little context) is `shrink-0`, so it
+ * is always rendered in full. When the whole name fits, head sizes to its
+ * content (no `flex-1`), so there's no gap before the tail and it reads as one
+ * contiguous string; when it doesn't, only the head shrinks. The native `title`
+ * shows the full name on hover.
+ */
+function MiddleEllipsisName({ name }: { name: string }) {
+  const TAIL_CHARS = 10;
+  const textClass =
+    "font-geist text-[14px] font-medium leading-5 tracking-[-0.28px] text-[#1d1d1d] dark:text-white";
+
+  if (name.length <= TAIL_CHARS + 1) {
+    return (
+      <p className={`truncate ${textClass}`} title={name}>
+        {name}
+      </p>
+    );
+  }
+
+  const head = name.slice(0, name.length - TAIL_CHARS);
+  const tail = name.slice(name.length - TAIL_CHARS);
+  return (
+    <p className={`flex min-w-0 ${textClass}`} title={name}>
+      <span className="min-w-0 truncate">{head}</span>
+      <span className="shrink-0 whitespace-pre">{tail}</span>
+    </p>
   );
 }
 
@@ -268,8 +460,9 @@ function StatusLabel({ status, progress }: { status: string; progress?: number |
   return <span className={`${base} ${entry.className}`}>{entry.label}</span>;
 }
 
-/** Bottom bar: a single rounded box (Figma tokens — 12px padding, 8px gap,
- *  16px radius, 6%-opacity fill) holding the account chip (identicon + short
+/** Bottom bar: a single rounded box (Figma tokens — 8px gap, 16px radius,
+ *  6%-opacity fill) inset 16px from the card edges, holding the account chip
+ *  (identicon + short
  *  address + live chain block) on the left and the official `Button` CTA on the
  *  right. The identicon, address and block typography all match ProfileCard. */
 function Footer({ address, blockNumber, isConnected }: { address: string | null; blockNumber: number | null; isConnected: boolean }) {
@@ -289,8 +482,16 @@ function Footer({ address, blockNumber, isConnected }: { address: string | null;
   };
 
   return (
-    <footer className="px-3 pb-3">
-      <div className="flex w-full items-center justify-between gap-2 rounded-[16px] bg-black/[0.06] p-3 dark:bg-white/[0.06]">
+    <footer className="px-4 pb-4">
+      {/* Figma footer box: width 428 (w-full inside the 16px-inset footer),
+          padding 12 (p-3), gap 8 (gap-2), radius 16, align-items flex-start,
+          and a 56px height that the row hugs (32px content + 24px padding).
+          The fill uses an EXPLICIT rgba rather than the `bg-black/[0.06]`
+          opacity-modifier: that modifier form rendered no box in light mode
+          here (the search pill above already worked around the same issue with
+          an explicit `bg-[#0000000F]`), which is why the footer looked unstyled
+          in light mode while dark was fine. */}
+      <div className="flex w-full items-start justify-between gap-2 rounded-[16px] bg-[rgba(0,0,0,0.06)] p-3 dark:bg-[rgba(255,255,255,0.06)]">
         <button
           type="button"
           onClick={handleCopyAddress}
@@ -298,8 +499,8 @@ function Footer({ address, blockNumber, isConnected }: { address: string | null;
           aria-label="Copy address"
           className="flex min-w-0 items-center gap-2.5 rounded-xl transition-colors hover:opacity-80"
         >
-          <span className="size-[30px] shrink-0 overflow-hidden rounded-full">
-            <Avatar colors={["#D3DFF8", "#183E91", "#3167DE", "#A6F4C5"]} name={address ?? "hippius"} size={30} variant="pixel" />
+          <span className="size-8 shrink-0 overflow-hidden rounded-full">
+            <Avatar colors={["#D3DFF8", "#183E91", "#3167DE", "#A6F4C5"]} name={address ?? "hippius"} size={32} variant="pixel" />
           </span>
           <div className="flex min-w-0 flex-col items-start gap-0.5">
             <span className="truncate font-inter text-[14px] font-medium leading-none tracking-[-0.4px] text-black dark:text-white">
@@ -323,7 +524,7 @@ function Footer({ address, blockNumber, isConnected }: { address: string | null;
           variant="primary"
           size="auto"
           onClick={() => void openMainWindow()}
-          className="flex h-[30px] shrink-0 items-center justify-center gap-1 rounded-lg px-3 text-[14px] font-semibold"
+          className="flex h-8 shrink-0 items-center justify-center gap-1 rounded-lg px-3 text-[14px] font-semibold"
         >
           Open Hippius
           <ArrowRight className="size-4" />

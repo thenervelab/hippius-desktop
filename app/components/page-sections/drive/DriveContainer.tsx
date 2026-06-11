@@ -45,6 +45,7 @@ import {
   saveDriveOnLocalView,
 } from "@/lib/utils/userPreferencesDb";
 import { useInfiniteScroll } from "@/lib/hooks/use-infinite-scroll";
+import { FILES_MUTATED_EVENT } from "@/app/lib/utils/fileMutationEvents";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { useInvokeQuery } from "@/app/lib/hooks/api/useInvokeQuery";
 import {
@@ -80,8 +81,6 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     data: regularFilesData,
     isLoading: isRegularFilesLoading,
     refetch: refetchUserFiles,
-    isRefetching,
-    isFetching: isRegularFilesFetching,
     error,
   } = useUserFiles();
 
@@ -92,7 +91,6 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   const {
     data: recentFilesData,
     isLoading: isRecentFilesLoading,
-    isFetching: isRecentFilesFetching,
     refetch: refetchRecentFiles,
   } = useUploadFeed(50);
 
@@ -301,8 +299,13 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     if (!isNested) return;
     const handler = () => setNestedRefreshKey((prev) => prev + 1);
     window.addEventListener("sync_files_completed_changed", handler);
-    return () =>
+    // In-app mutations (rename) change names instantly, long before the
+    // sync cycle completes — refresh on those too.
+    window.addEventListener(FILES_MUTATED_EVENT, handler);
+    return () => {
       window.removeEventListener("sync_files_completed_changed", handler);
+      window.removeEventListener(FILES_MUTATED_EVENT, handler);
+    };
   }, [isNested]);
 
   const nestedListing = useNestedFolderListing({
@@ -318,18 +321,34 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     setNestedRefreshKey((prev) => prev + 1);
   }, []);
 
-  // Loading + fetching flags branched across the three view modes:
-  //   - recent files (read-only): use the recent-files query flags
-  //   - nested folder browsing: use the nested-listing hook's flags
-  //   - root drive view: use the regular useUserFiles flags
-  // `isLoading` itself is computed *after* `useFilteredFiles` below so it
-  // can fold in `isFiltering`, which surfaces the debounce/IPC window
-  // during transitions like nested→root and sync-folder switches.
-  const isFetching = isRecentFiles
-    ? isRecentFilesFetching
-    : isNested
-      ? nestedListing.isRefreshing
-      : isRegularFilesFetching;
+  // `isLoading` (computed after `useFilteredFiles` below so it can fold in
+  // `isFiltering`) branches across the three view modes — recent files, nested
+  // browsing, root drive — and surfaces the skeleton only on first load. The
+  // background-fetch flags are no longer tracked here: background refetches are
+  // intentionally silent (see the manual-refresh handling below).
+
+  // The refresh icon's spin is owned by `RefreshButton` itself: any click shows
+  // a fixed-duration spinner (the manual refetch is a local IPC that resolves
+  // too fast to otherwise see), and a background refetch never clicks it — so it
+  // stays silent. We therefore don't drive `refetching` from any fetch flag.
+
+  // On a MANUAL refresh we also want the files table/card to show their
+  // skeleton — not just the icon. The refetch resolves in tens of ms, so we
+  // hold this flag for a fixed window and OR it into `isLoading` below. Only a
+  // user click sets it (see `refetchUserFiles` wiring), so background sync
+  // refetches stay silent.
+  const [isManualRefreshing, setIsManualRefreshing] = useState(false);
+  const manualRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  useEffect(
+    () => () => {
+      if (manualRefreshTimerRef.current) {
+        clearTimeout(manualRefreshTimerRef.current);
+      }
+    },
+    [],
+  );
 
   // Get the appropriate data based on view mode
   const allData = useMemo(() => {
@@ -463,15 +482,20 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // typed into search and we're still waiting on the new IPC. Folding it
   // in keeps the loading shell consistent whether the active filter
   // path is in-memory or recursive.
-  const isLoading = isRecentFiles
-    ? isRecentFilesLoading || isFiltering
-    : isNested
-      ? nestedListing.isLoading || isFiltering || isRecursiveSearching
-      : isRegularFilesLoading || isFiltering || isRecursiveSearching;
+  const isLoading =
+    isManualRefreshing ||
+    (isRecentFiles
+      ? isRecentFilesLoading || isFiltering
+      : isNested
+        ? nestedListing.isLoading || isFiltering || isRecursiveSearching
+        : isRegularFilesLoading || isFiltering || isRecursiveSearching);
 
-  // Infinite scroll state for list and card views
-  const { visibleData, hasMore, loadMore, resetScroll } =
-    useInfiniteScroll(filteredData);
+  // Infinite scroll state for list and card views. Cheap keyFn (no row
+  // serialization) so the source-changed check stays O(1) during sync refetches.
+  const { visibleData, hasMore, loadMore, resetScroll } = useInfiniteScroll(
+    filteredData,
+    (f) => `${f.label ?? ""}::${f.actualFileName ?? f.arionHash}::${f.lastChargedAt}`
+  );
 
   // Batch update helper to prevent multiple rapid filter updates
   const updateFilters = useCallback(
@@ -1271,7 +1295,14 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
 
     content = (
       <FileSelectionProvider>
-        <div className={cn("w-full relative", !isRecentFiles && "px-3")}>
+        {/* `pb-10` keeps a long, fully-scrolled drive list from sitting flush
+            against the bottom of the page scroll. Applied on this outermost
+            drive-content wrapper (a plain block in the page scroll) rather than
+            inside the table — the table lives in `TableWrapper`, whose
+            `overflow-y-auto` clips any padding added below it. Recent Files is
+            excluded here: it renders on the Overview/home page, which owns the
+            equivalent bottom gap on its `#recent-files` wrapper. */}
+        <div className={cn("w-full relative", !isRecentFiles && "px-3 pb-10")}>
           {/* Sync Paused Alert */}
           {IS_SYNC_PAUSED && !isRecentFiles && (
             <div className="mb-4">
@@ -1329,8 +1360,8 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
             const driveHeader = (
               <DriveHeader
                 isRecentFiles={isRecentFiles}
-                isRefetching={isRefetching}
-                isFetching={isFetching}
+                isRefetching={false}
+                isFetching={false}
                 formattedStorageSize={formattedStorageSize}
                 allFilteredDataLength={displayedFileCount}
                 viewMode={viewMode}
@@ -1339,7 +1370,17 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 handleSearchChange={handleSearchChange}
                 activeFilters={activeFilters}
                 handleRemoveFilter={handleRemoveFilter}
-                refetchUserFiles={refreshForCurrentView}
+                refetchUserFiles={() => {
+                  if (manualRefreshTimerRef.current) {
+                    clearTimeout(manualRefreshTimerRef.current);
+                  }
+                  setIsManualRefreshing(true);
+                  refreshForCurrentView();
+                  manualRefreshTimerRef.current = setTimeout(
+                    () => setIsManualRefreshing(false),
+                    600,
+                  );
+                }}
                 addButtonRef={addButtonRef}
                 privateFileCount={privateFileCount}
                 isSyncPathEmpty={effectiveSyncPathEmpty}
@@ -1381,10 +1422,24 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
             );
 
             if (isRecentFiles) {
-              // Recent Files card — unchanged. DriveContent sits as a sibling
-              // of DriveHeader inside the outer card.
+              // Recent Files card — the OUTER wrapper owns the full card
+              // chrome (border + radius + clip), mirroring the drive page's
+              // outer grey card. Previously the wrapper painted only bg +
+              // shadow with square corners while the header inside rounded
+              // its own corners: the wrapper's light corners peeked out
+              // behind the header, and the header's bottom radius dangled
+              // over the card grid. DriveContent sits as a sibling of
+              // DriveHeader inside this one closed card.
               return (
-                <div className="bg-grey-light-300 border border-grey-dark-100 rounded-[8px] shadow-[0px_1px_1.1px_0px_rgba(0,0,0,0.04)] dark:bg-black-primary-bg dark:border-black-300 dark:shadow-[0px_1px_1.1px_0px_rgba(0,0,0,0.4)]">
+                <div
+                  className={cn(
+                    "overflow-hidden rounded-[8px]",
+                    "bg-grey-light-300 border border-grey-dark-100",
+                    "shadow-[0px_1px_1.1px_0px_rgba(0,0,0,0.04)]",
+                    "dark:bg-black-primary-bg dark:border-black-300",
+                    "dark:shadow-[0px_1px_1.1px_0px_rgba(0,0,0,0.4)]",
+                  )}
+                >
                   {driveHeader}
                   {driveContent}
                 </div>

@@ -275,6 +275,20 @@ export default {
             transform: "scale(1)",
           },
         },
+        // Sync widget collapse/expand. Paired with `origin-bottom-left`
+        // (sidebar) or `origin-bottom-right` (portal) so the mini ring and the
+        // full card appear to grow out of that corner, mirroring the old
+        // SyncStatusDialog2 expand.
+        ["widget-grow"]: {
+          "0%": {
+            opacity: "0",
+            transform: "scale(0.8)",
+          },
+          "100%": {
+            opacity: "1",
+            transform: "scale(1)",
+          },
+        },
         ["tooltip-reveal-left"]: {
           "0%": {
             opacity: "0",
@@ -371,6 +385,12 @@ export default {
           "25%": { transform: "translateX(-4px)" },
           "75%": { transform: "translateX(4px)" },
         },
+        // Indeterminate progress: a short fill that sweeps across the track.
+        // Used by the share modal while it has no real byte progress yet.
+        "indeterminate-sweep": {
+          "0%": { transform: "translateX(-100%)" },
+          "100%": { transform: "translateX(300%)" },
+        },
       },
       backgroundSize: {
         full: "100% 100%",
@@ -395,6 +415,7 @@ export default {
           "tooltip-reveal-right 0.3s ease-in-out forwards",
         "scale-in-95-0.2": "scale-in-95 0.2s ease-in-out forwards",
         "scale-out-95-0.2": "scale-out-95 0.2s ease-in-out forwards",
+        "widget-grow-0.3": "widget-grow 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards",
         ["slideDown"]: "slide-down 0.3s ease-out",
         ["slideUp"]: "slide-up 0.3s ease-out",
         ["translate-from-bottom"]:
@@ -411,6 +432,7 @@ export default {
         "panel-in": "panel-in 0.2s ease-out",
         "panel-out": "panel-out 0.2s ease-in",
         shake: "shake 0.3s ease-in-out",
+        "indeterminate-sweep": "indeterminate-sweep 1.2s ease-in-out infinite",
       },
     },
   },

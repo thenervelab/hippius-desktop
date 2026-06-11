@@ -144,6 +144,124 @@ async function refreshLoginStatus(): Promise<boolean> {
   return data.loggedIn;
 }
 
+/* ─ Right-click context menu ──────────────────────────────────── */
+//
+// The tray icon's LEFT click opens the custom popover window (see
+// `handleTrayClick`). Its RIGHT click shows this small native menu —
+// Open Files, Open Virtual Machines, Quit Hippius. "Open Hippius" is
+// deliberately omitted because the popover already has an Open Hippius
+// button. The menu is attached with `showMenuOnLeftClick: false` so it
+// never hijacks the left click.
+//
+// This is a separate, minimal menu from the (now-unattached) full menu
+// still built in `useTrayInit` for the icon-state machinery/tests. The
+// builder points the module-level `openFilesItem` / `openVmItem` at ITS
+// items so the existing login-status watcher (`updateOpenFilesMenuItem`
+// / `updateOpenVmMenuItem`) enables/disables the entries the user
+// actually sees.
+const CTX_OPEN_HIPPIUS_ID = "tray-ctx-open-hippius";
+const CTX_OPEN_FILES_ID = "tray-ctx-open-files";
+const CTX_OPEN_VM_ID = "tray-ctx-open-vm";
+const CTX_QUIT_ID = "tray-ctx-quit";
+
+// True on Linux. The tray icon emits no left-click `action` event there (a
+// `tray-icon` crate limitation), so the native menu — shown on left-click — is
+// the only affordance, and it carries an explicit "Open Hippius" entry.
+//
+// Detected SYNCHRONOUSLY from the webview user-agent (`detectLinuxPlatform`),
+// not the async `get_platform_info` IPC: the menu is built off this value, and
+// a late/failed async lookup previously left it `false` on Linux — which dropped
+// the "Open Hippius" item AND left `showMenuOnLeftClick` off, so a left-click
+// did nothing and the menu was missing its only entry point. A synchronous,
+// can't-fail check removes that race entirely.
+let isLinuxPlatform = false;
+
+/**
+ * Synchronous, never-throwing Linux check from the webview user-agent. The three
+ * desktop webviews set a standard UA — webkit2gtk (Linux) contains "Linux",
+ * while WKWebView (macOS) and WebView2 (Windows) do not — so this reliably
+ * identifies Linux with no IPC round-trip. Android is excluded for safety (this
+ * is a desktop app and never runs there).
+ */
+function detectLinuxPlatform(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent;
+  return /linux/i.test(ua) && !/android/i.test(ua);
+}
+
+/**
+ * Linux "Open Hippius" menu action: reveal the MAIN window.
+ *
+ * The rich popover is a macOS/Windows feature only. On Linux it proved
+ * unreliable — the icon fires no left-click event, the app cannot position its
+ * own window under Wayland, and there is no native vibrancy — so rather than
+ * pop a half-broken, see-through, mis-placed window, the stable behaviour is to
+ * just bring up the main app window (exactly what "Open Files"/"Open VM" do).
+ */
+async function openHippiusFromTray() {
+  try {
+    await openAppWindow();
+  } catch (e) {
+    logTrayAction("Failed to open Hippius from tray menu", e);
+  }
+}
+
+async function buildTrayContextMenu(): Promise<Menu> {
+  const loggedIn = await refreshLoginStatus();
+
+  // On Linux the menu is the tray's only affordance (the icon fires no
+  // left-click event), so it leads with "Open Hippius" → reveal the main window.
+  // macOS/Windows omit it: their left-click already opens the popover, whose
+  // header has its own Open Hippius button.
+  const leadingItems: MenuItem[] = [];
+  if (isLinuxPlatform) {
+    leadingItems.push(
+      await MenuItem.new({
+        id: CTX_OPEN_HIPPIUS_ID,
+        text: "Open Hippius",
+        action: openHippiusFromTray,
+      }),
+    );
+  }
+
+  const openFiles = await MenuItem.new({
+    id: CTX_OPEN_FILES_ID,
+    text: "Open Files",
+    enabled: loggedIn,
+    action: async () => {
+      // Guard against a stale `enabled` if login changed between renders.
+      if (!isUserLoggedIn() && !(await refreshLoginStatus())) return;
+      await openFilesPage();
+    },
+  });
+
+  const openVm = await MenuItem.new({
+    id: CTX_OPEN_VM_ID,
+    text: "Open Virtual Machines",
+    enabled: loggedIn,
+    action: async () => {
+      if (!isUserLoggedIn() && !(await refreshLoginStatus())) return;
+      await openVirtualMachinesPage();
+    },
+  });
+
+  const separator = await PredefinedMenuItem.new({ item: "Separator" });
+
+  const quit = await MenuItem.new({
+    id: CTX_QUIT_ID,
+    text: "Quit Hippius",
+    action: async () => {
+      await invoke("app_close");
+    },
+  });
+
+  // Track the visible (attached) items for the login-status watcher.
+  openFilesItem = openFiles;
+  openVmItem = openVm;
+
+  return Menu.new({ items: [...leadingItems, openFiles, openVm, separator, quit] });
+}
+
 // Mirror of the auth context's `isAuthenticated`, kept at module scope so the
 // tray `action` callback (a plain closure, not a React component) can read the
 // current value synchronously. This is the SAME flag that decides whether the
@@ -159,9 +277,10 @@ let isAuthenticatedLatest = false;
  * When signed out, the popover (credits/uploads/account) is meaningless, so the
  * click reveals the main window's login screen instead.
  *
- * Right/middle clicks are ignored. Tray click events are unsupported on Linux
- * (the `action` never fires there), so the popover is effectively
- * macOS/Windows-only — see the CLAUDE.md note.
+ * Right/middle clicks are ignored. Tray click events never fire on Linux, so
+ * this handler is a no-op there; on Linux the native menu's "Open Hippius" item
+ * (`openHippiusFromTray`) reveals the main window instead of the popover — see
+ * the CLAUDE.md note.
  */
 async function handleTrayClick(event: TrayIconEvent) {
   if (event.type !== "Click" || event.button !== "Left" || event.buttonState !== "Up") {
@@ -221,6 +340,11 @@ export function useTrayInit(isAuthenticated: boolean) {
     if (menuPromise) return;
 
     menuPromise = (async () => {
+      // Detect Linux synchronously (no IPC) so the tray is always built with the
+      // menu-on-left-click + "Open Hippius" fallback there. Set before the tray
+      // is created so the first context menu is correct on every launch.
+      isLinuxPlatform = detectLinuxPlatform();
+
       // resolve all three icons once
       const [defPath, syncPath, completedPath] = await Promise.all([
         resolveResource(DEFAULT_TRAY_ICON),
@@ -315,16 +439,25 @@ export function useTrayInit(isAuthenticated: boolean) {
       });
 
       if (!existingTray) {
-        // No `menu` is attached: the native tray menu has been replaced by the
-        // custom popover window. Left-click is routed to `handleTrayClick`,
-        // which toggles that window. (The in-memory `menu`/submenu objects are
-        // still maintained below to keep the icon-state machinery and its tests
-        // intact; deleting that now-unused code is a tracked follow-up.)
+        // macOS/Windows: left-click → custom popover (via `handleTrayClick`);
+        // right-click → the small native context menu (Open Files / Open VM /
+        // Quit). `showMenuOnLeftClick: false` keeps the left click on the
+        // popover. Linux: the icon fires no left-click event, so the menu must
+        // show on left-click (`showMenuOnLeftClick: isLinuxPlatform`) and it
+        // includes an "Open Hippius" entry (added by `buildTrayContextMenu`) as
+        // the only way to reach the popover there. `action` stays attached
+        // (harmless no-op on Linux).
+        // (The full `menu` built above is still maintained in memory for the
+        // icon-state machinery and its tests; deleting that now-unused code is
+        // a tracked follow-up.)
+        const contextMenu = await buildTrayContextMenu();
         await TrayIcon.new({
           id: TRAY_ID,
           icon: defaultIconPath!,
           iconAsTemplate: false,
           tooltip: "Hippius Cloud",
+          menu: contextMenu,
+          showMenuOnLeftClick: isLinuxPlatform,
           action: handleTrayClick,
         });
         trayIconState = "default";
@@ -754,11 +887,18 @@ async function setTrayIconSyncing(
 
       if (currentTray) await currentTray.close();
 
+      // Rebuild + re-attach the context menu (a fresh menu, since the previous
+      // one belonged to the closed icon). Left-click toggles the popover via
+      // `handleTrayClick` on macOS/Windows; on Linux it shows the menu (whose
+      // "Open Hippius" entry opens the popover) — see the creation path.
+      const contextMenu = await buildTrayContextMenu();
       await TrayIcon.new({
         id: TRAY_ID,
         icon: iconPath,
         iconAsTemplate: false,
         tooltip: "Hippius Cloud",
+        menu: contextMenu,
+        showMenuOnLeftClick: isLinuxPlatform,
         action: handleTrayClick,
       });
 
@@ -1035,11 +1175,15 @@ function startSyncActivityWatcher() {
       // note in `CLAUDE.md` ("Stalled completion fixup").
       //
       // `isPreparing` covers the file-watcher-triggered window between
-      // `SyncStarted` and the first session-populated snapshot. Rust
-      // sets `widgetState="preparing"` in `progress.rs::apply_preparing_override`;
-      // including it in `isActive` here makes the tray icon switch to
-      // syncing immediately when the user drops a folder via Finder,
-      // not only after `on_sync_plan_ready` fires several seconds later.
+      // `PlanReady` (the point the cycle's plan is known to contain real
+      // work) and the first session-populated snapshot. Rust sets
+      // `widgetState="preparing"` in `progress.rs::apply_preparing_override`;
+      // including it in `isActive` here surfaces the "⟳ Preparing sync…"
+      // tray state once a Finder-drop's plan is confirmed. The override is
+      // deliberately NOT raised at `SyncStarted` anymore: that fires before
+      // the plan exists, so it used to flash the tray red for the whole
+      // indexing window of every periodic no-op cycle (the user-reported
+      // looping-red-icon bug). See `src-tauri/src/sync/preparing.rs`.
       const isPreparing = progress.widgetState === "preparing";
       const isActive = isPreparing ||
         progress.effectiveInProgress ||

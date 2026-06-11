@@ -3,6 +3,10 @@
 import { useEffect, useState } from "react";
 import { HippiusBrandMark } from "@/components/ui/HippiusBrandMark";
 import { cn } from "@/app/lib/utils";
+import {
+  TITLEBAR_BAND_H_44,
+  titlebarClearanceClass,
+} from "@/app/lib/utils/platformChrome";
 
 const AuthTitleBar = () => {
   const [isMac, setIsMac] = useState(false);
@@ -18,8 +22,9 @@ const AuthTitleBar = () => {
     <div
       data-tauri-drag-region
       className={cn(
-        "relative z-10 flex items-center w-full select-none h-[44px] shrink-0",
-        isMac ? "pl-[80px]" : "pl-[12px]",
+        "relative z-10 flex items-center w-full select-none shrink-0",
+        TITLEBAR_BAND_H_44,
+        titlebarClearanceClass(isMac),
       )}
     >
       <div className="flex items-center gap-[8px] px-[4px] py-[5px] rounded-[9px] pointer-events-none">

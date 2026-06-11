@@ -84,9 +84,9 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
       // The Rust `require_eligible(...)?` gate inside `add_files` raises
       // `NotReady(InsufficientCredits)` when the user can't afford the
       // upload. `invoke()` failures arrive here as plain objects, not
-      // `Error` instances, so match on the structured `{ kind, message }`
-      // shape via `isNotReady` instead of brittle substring checks.
-      if (isNotReady(err, "insufficient credits")) {
+      // `Error` instances, so match on the structured `subkind` discriminant
+      // via `isNotReady` instead of brittle substring checks.
+      if (isNotReady(err, "INSUFFICIENT_CREDITS")) {
         setInsufficient(isFolder ? "folder-upload" : "file-upload");
         resetFn?.();
       }

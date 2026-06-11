@@ -127,9 +127,7 @@ fn bytes_just_over(balance: f64) -> u64 {
     let mut bytes: u64 = 1;
     while cost_for_bytes(bytes) <= balance {
         bytes = bytes.saturating_mul(2);
-        if bytes == 0 {
-            panic!("u64 overflow: no byte count produces cost > {balance}");
-        }
+        assert!(bytes != 0, "u64 overflow: no byte count produces cost > {balance}");
     }
     bytes
 }
@@ -148,6 +146,11 @@ async fn require_eligible_prices_uploads_by_byte_count() {
     let pool = setup_pool_with_token(account_id).await;
     let state = AppState::new();
     state.set_pool(pool);
+    // Eligibility mints a SessionAccount for the token fetch, so the checked
+    // account must be the active session account (always true in production).
+    state
+        .set_active_account(account_id, tauri_project_lib::auth::state::AuthCapabilities::Full)
+        .expect("set session account");
 
     // -----------------------------------------------------------------
     // Case A: tiny file (1 byte) with $0.33 balance must be ELIGIBLE.

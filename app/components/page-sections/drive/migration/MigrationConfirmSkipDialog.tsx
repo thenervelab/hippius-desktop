@@ -1,9 +1,9 @@
 "use client";
 
-import * as Dialog from "@radix-ui/react-dialog";
 import React, { useState } from "react";
-import DialogContainer from "@/components/ui/DialogContainer";
-import { CardButton, Graphsheet, Icons, Input } from "@/components/ui";
+import FramedDialog from "@/components/ui/FramedDialog";
+import { Button } from "@/components/ui/button";
+import { Icons, Input } from "@/components/ui";
 
 export interface MigrationConfirmSkipDialogProps {
   open: boolean;
@@ -34,87 +34,75 @@ const MigrationConfirmSkipDialog: React.FC<MigrationConfirmSkipDialogProps> = ({
   };
 
   return (
-    <Dialog.Root open={open}>
-      <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[28.125rem] h-fit" preventClose>
-        <Dialog.Title className="sr-only">Confirm Skip Migration</Dialog.Title>
+    <FramedDialog
+      open={open}
+      onClose={handleClose}
+      title="Are you sure?"
+      icon={<Icons.OctagonAlert className="size-5 text-white" />}
+      iconBgClassName="bg-[#fc7d73]"
+      borderClassName="bg-[#fc7d73]"
+      maxWidth="max-w-[640px]"
+    >
+      <p className="mb-5 text-center text-sm leading-5 text-grey-50 dark:text-grey-dark-700">
+        This will permanently skip migrating your{" "}
+        <strong className="font-semibold text-grey-10 dark:text-white">
+          {fileCount} files
+        </strong>{" "}
+        from S3 to Arion. They won&apos;t appear in your Hippius Drive.
+      </p>
 
-        <div className="px-4 py-6 flex flex-col gap-5">
-          <div className="flex flex-col items-center text-center gap-3">
-            <div className="size-14 flex justify-center items-center relative">
-              <Graphsheet
-                majorCell={{
-                  lineColor: [239, 68, 68, 1.0],
-                  lineWidth: 2,
-                  cellDim: 200,
-                }}
-                minorCell={{
-                  lineColor: [248, 113, 113, 1.0],
-                  lineWidth: 1,
-                  cellDim: 20,
-                }}
-                className="absolute w-full h-full duration-500 opacity-30 z-0"
-              />
-              <div className="bg-white-cloud-gradient-sm absolute w-full h-full z-10" />
-              <div className="h-8 w-8 bg-error-50 rounded-lg flex items-center justify-center z-20">
-                <Icons.OctagonAlert className="size-5 text-white" />
-              </div>
-            </div>
-            <h2 className="text-xl font-semibold text-grey-10">Are you sure?</h2>
-            <p className="text-sm text-grey-50 max-w-sm">
-              This will permanently skip migrating your <strong className="text-grey-30">{fileCount} files</strong> from S3 to Arion.
-              They won&apos;t appear in your Hippius Drive.
-            </p>
-          </div>
-
-          {/* Warning Box */}
-          <div className="bg-error-50/10 border border-error-50/30 rounded-lg p-4">
-            <div className="flex items-start gap-3">
-              <Icons.OctagonAlert className="size-5 text-error-50 flex-shrink-0 mt-0.5" />
-              <div className="text-sm text-grey-30">
-                <p className="font-medium text-error-50 mb-1">This action cannot be undone</p>
-                <p className="text-xs text-grey-50">
-                  Your files will not be deleted from S3, but you&apos;ll need to manually
-                  re-upload them if you want them in your Hippius Drive later.
-                </p>
-              </div>
-            </div>
-          </div>
-
-          {/* Confirmation Input */}
-          <div>
-            <label className="block text-sm font-medium text-grey-40 mb-2">
-              Type <span className="font-bold text-grey-20">&quot;DELETE&quot;</span> to confirm:
-            </label>
-            <Input
-              value={confirmText}
-              onChange={(e) => setConfirmText(e.target.value)}
-              placeholder="Type DELETE"
-              className="w-full"
-              autoFocus
-            />
-          </div>
-
-          {/* Action Buttons */}
-          <div className="flex gap-3">
-            <CardButton
-              variant="secondary"
-              className="flex-1 h-12 text-base font-medium border border-grey-80"
-              onClick={handleClose}
-            >
-              Cancel
-            </CardButton>
-            <CardButton
-              variant="error"
-              className="flex-1 h-12 text-base font-medium"
-              onClick={handleConfirm}
-              disabled={!isConfirmValid}
-            >
-              Confirm Skip
-            </CardButton>
-          </div>
+      {/* Irreversible-action warning */}
+      <div className="mb-5 flex items-start gap-3 rounded-lg border border-[#fc7d73]/30 bg-[#fc7d73]/10 p-4 dark:border-[#fc7d73]/30 dark:bg-[#fc7d73]/[0.12]">
+        <Icons.OctagonAlert className="mt-0.5 size-5 shrink-0 text-[#d6453a] dark:text-[#fc7d73]" />
+        <div>
+          <p className="mb-1 text-sm font-semibold text-[#d6453a] dark:text-[#fc7d73]">
+            This action cannot be undone
+          </p>
+          <p className="text-xs leading-5 text-grey-30 dark:text-grey-dark-700">
+            Your files will not be deleted from S3, but you&apos;ll need to
+            manually re-upload them if you want them in your Hippius Drive later.
+          </p>
         </div>
-      </DialogContainer>
-    </Dialog.Root>
+      </div>
+
+      {/* Type-to-confirm */}
+      <div className="mb-5">
+        <label className="mb-2 block text-sm font-medium text-grey-40 dark:text-grey-dark-700">
+          Type{" "}
+          <span className="font-bold text-grey-20 dark:text-white">
+            &quot;DELETE&quot;
+          </span>{" "}
+          to confirm:
+        </label>
+        <Input
+          value={confirmText}
+          onChange={(e) => setConfirmText(e.target.value)}
+          placeholder="Type DELETE"
+          autoFocus
+        />
+      </div>
+
+      {/* Actions */}
+      <div className="flex gap-3">
+        <Button
+          variant="defaultStable"
+          size="auto"
+          className="h-12 flex-1 rounded-md text-base font-medium"
+          onClick={handleClose}
+        >
+          Cancel
+        </Button>
+        <Button
+          variant="destructive"
+          size="auto"
+          className="h-12 flex-1 rounded-md text-base font-medium text-white"
+          onClick={handleConfirm}
+          disabled={!isConfirmValid}
+        >
+          Confirm Skip
+        </Button>
+      </div>
+    </FramedDialog>
   );
 };
 

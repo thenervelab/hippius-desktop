@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
+import TimeAgo from "react-timeago";
 import { cn } from "@/app/lib/utils";
 import { Icons } from "@/components/ui";
 import NotificationContextMenu from "@/components/page-sections/notifications/NotificationContextMenu";
@@ -11,6 +12,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { isVersionGreaterOrEqual } from "@/lib/utils/versionCompare";
 import { IconComponent } from "@/app/lib/types";
 import { deleteNotification } from "@/app/lib/helpers/notificationsDb";
+import { notificationCategoryLabel } from "@/app/lib/helpers/notificationCategories";
 
 const TYPE_COLORS: Record<string, string> = {
   Subscription: "bg-error-50",
@@ -44,6 +46,8 @@ const NotificationMenuItem: React.FC<NotificationItemProps> = ({
   notificationType,
   notificationSubType,
   notificationText,
+  notificationTime,
+  timestamp,
   buttonText,
   buttonLink,
   unread = false,
@@ -99,7 +103,8 @@ const NotificationMenuItem: React.FC<NotificationItemProps> = ({
   };
 
   const typeColor = TYPE_COLORS[notificationType] ?? "bg-grey-dark-200";
-  const showRightColumn = unread || !!shouldShowButton;
+  const hasTime = Boolean(timestamp || notificationTime);
+  const showRightColumn = unread || !!shouldShowButton || hasTime;
 
   return (
     <>
@@ -124,21 +129,32 @@ const NotificationMenuItem: React.FC<NotificationItemProps> = ({
         {/* Content */}
         <div className="flex-1 min-w-0 flex flex-col gap-[2px]">
           <p className="text-[14px] font-medium text-[#0a0a0a] dark:text-white leading-normal truncate">
-            {notificationType}
+            {notificationCategoryLabel(notificationType)}
           </p>
           <p className="text-[13px] font-medium text-[#0a0a0a] dark:text-white opacity-40 leading-normal line-clamp-2">
             {notificationText}
           </p>
         </div>
 
-        {/* Right: badge dot (top) + view button (bottom) */}
+        {/* Right: time + badge dot (top) + view button (bottom) */}
         {showRightColumn && (
           <div className="flex flex-col items-end justify-between self-stretch flex-shrink-0 gap-2">
-            {unread ? (
-              <div className={cn("size-[13px] rounded-full flex-shrink-0", typeColor)} />
-            ) : (
-              <div />
-            )}
+            <div className="flex items-center gap-[6px]">
+              {/* Relative time — same `react-timeago` source as the
+               *  notifications page list, so the two surfaces never drift.
+               *  `timestamp` is the canonical ms-epoch from the DB;
+               *  `notificationTime` is the stored pre-formatted fallback
+               *  for legacy rows without one. Sits directly left of the
+               *  unread dot, mirroring the page layout. */}
+              {hasTime && (
+                <span className="text-[11px] font-medium leading-[16px] tracking-[-0.22px] text-grey-50 dark:text-grey-dark-700 whitespace-nowrap">
+                  {timestamp ? <TimeAgo date={timestamp} /> : notificationTime}
+                </span>
+              )}
+              {unread && (
+                <div className={cn("size-[13px] rounded-full flex-shrink-0", typeColor)} />
+              )}
+            </div>
             {shouldShowButton ? (
               <button
                 onClick={(e) => {

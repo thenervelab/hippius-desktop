@@ -104,12 +104,10 @@ impl ShareKeystore for SqliteShareKeystore {
                 // `Zeroizing` wrapper here would close the smallest
                 // possible window and give a false sense of secrecy.
                 // Treat the encrypted DB itself as the trust boundary.
-                let arr: [u8; 32] = blob.as_slice().try_into().map_err(|_| {
-                    ShareError::Keystore(format!(
-                        "share_keystore row has invalid key length {}",
-                        blob.len()
-                    ))
-                })?;
+                let arr: [u8; 32] = blob
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| ShareError::Keystore(format!("share_keystore row has invalid key length {}", blob.len())))?;
                 Ok(Some(arr))
             }
         }
@@ -152,12 +150,11 @@ impl SqliteShareKeystore {
         let pool = self.pool.clone();
         let owned: Vec<String> = tokens.iter().map(|s| (*s).to_string()).collect();
         run_sync(async move {
-            // sqlx 0.8 doesn't expand a `Vec<T>` into an IN-list (see
-            // launchbadge/sqlx#875), so we materialise placeholders by
-            // hand. The placeholder count is bounded by the number of
-            // active shares the server returned, which has its own
-            // upstream cap, so we stay well below SQLite's 999-param
-            // ceiling without an explicit guard.
+            // sqlx 0.8 doesn't expand a `Vec<T>` into an IN-list, so we
+            // materialise placeholders by hand. The placeholder count is
+            // bounded by the number of active shares the server returned,
+            // which has its own upstream cap, so we stay well below
+            // SQLite's 999-param ceiling without an explicit guard.
             let placeholders = vec!["?"; owned.len()].join(", ");
             let sql = format!("SELECT share_token, share_key FROM share_keystore WHERE share_token IN ({placeholders})");
             let mut q = sqlx::query_as::<_, (String, Vec<u8>)>(&sql);

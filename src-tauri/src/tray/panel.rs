@@ -15,6 +15,7 @@ use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
+use tauri::window::{Effect, EffectState, EffectsBuilder};
 use tauri::{AppHandle, Manager, PhysicalPosition, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tracing::warn;
 
@@ -31,6 +32,10 @@ pub const PANEL_LABEL: &str = "tray-panel";
 /// against the target monitor's scale factor before positioning.
 const PANEL_WIDTH: f64 = 460.0;
 const PANEL_HEIGHT: f64 = 672.0;
+/// Corner radius of the panel card, matched by the native vibrancy material's
+/// `radius` and the card's CSS `rounded-[16px]` so the frosted material and the
+/// card edge line up exactly.
+const PANEL_RADIUS: f64 = 16.0;
 /// Logical breathing room between the tray icon and the panel's near edge.
 const GAP: f64 = 8.0;
 /// Logical inset kept between the panel and the work-area edges.
@@ -75,14 +80,22 @@ fn now_ms() -> u64 {
 /// Toggle the tray panel: show it anchored to the tray icon, or hide it if it
 /// is already visible.
 ///
+/// `rect` is the tray icon's screen rectangle on macOS/Windows, where the
+/// left-click `action` event carries it. On **Linux** the `tray-icon` crate
+/// fires no left-click event, so the popover is opened from the native menu's
+/// "Open Hippius" item instead, which has no icon bounds to forward — there
+/// `rect` is `None` and the panel uses a deterministic top-right anchor (see
+/// [`fallback_anchor`]).
+///
 /// Runs as a **synchronous** command so the window operations execute on the
 /// main thread, which macOS requires for `show`/`set_position`/`set_focus`.
 ///
 /// # Errors
 /// Returns [`AppError::Other`] if the window cannot be built, no monitor can be
-/// resolved, or a window operation (position/show/focus/hide) fails.
+/// resolved, or a window operation (position/show/focus/hide)
+/// fails.
 #[tauri::command]
-pub fn toggle_tray_panel(app: AppHandle, state: tauri::State<'_, AppState>, rect: TrayIconRect) -> Result<()> {
+pub fn toggle_tray_panel(app: AppHandle, state: tauri::State<'_, AppState>, rect: Option<TrayIconRect>) -> Result<()> {
     // NOTE: the signed-in/out decision is made by the frontend before calling
     // this command (it gates on the auth context's `isAuthenticated`, the same
     // value that decides whether the app shows its login screen). Rust's
@@ -108,7 +121,14 @@ pub fn toggle_tray_panel(app: AppHandle, state: tauri::State<'_, AppState>, rect
         return Ok(());
     }
 
-    let icon = rect.to_rect();
+    // macOS/Windows forward the tray icon's screen rect; Linux forwards `None`
+    // (no left-click tray event there) and we fall back to a deterministic
+    // top-right anchor. Either way the result is a physical-pixel rect fed to
+    // the same geometry.
+    let icon = match rect {
+        Some(r) => r.to_rect(),
+        None => fallback_anchor(&app)?,
+    };
     let (work_area, scale) = target_work_area(&app, icon)?;
 
     // Convert the logical panel/gap/margin to physical pixels for the target
@@ -185,12 +205,33 @@ fn build_panel(app: &AppHandle) -> Result<WebviewWindow> {
         .title("Hippius")
         .inner_size(PANEL_WIDTH, PANEL_HEIGHT)
         .decorations(false)
+        // Transparent on every platform so the card's rounded corners cut out
+        // cleanly. The FROSTED look is macOS-only: there the native "Popover"
+        // vibrancy material below fills the window behind a translucent card.
+        // Linux/Windows have no such material, so the frontend paints an OPAQUE
+        // card off macOS — without that, the 0.7-alpha card over the transparent
+        // window showed the desktop straight through (the "very transparent"
+        // popover reported on Linux).
         .transparent(true)
-        // The OS window shadow is computed from the rectangular window bounds,
-        // not the rounded CSS card — on a transparent window that renders as a
-        // dark rectangle around the corners. Disable it and let the card's own
-        // CSS `box-shadow` (which follows the border-radius) provide the shadow.
-        .shadow(false)
+        // The "Popover" vibrancy gives the real desktop blur the Figma frost
+        // calls for, which CSS `backdrop-filter` cannot do on a transparent
+        // WebKit window. `radius` rounds the material to the 16px card. This is a
+        // macOS-only material; Tauri ignores it on Linux/Windows, so applying it
+        // unconditionally is a harmless no-op there (and keeps the build path
+        // identical across platforms).
+        .effects(
+            EffectsBuilder::new()
+                .effect(Effect::Popover)
+                .state(EffectState::Active)
+                .radius(PANEL_RADIUS)
+                .build(),
+        )
+        // Native window shadow only on macOS, where it wraps the rounded vibrancy
+        // material correctly. On a transparent Linux/Windows window with NO
+        // material it would shadow the rectangular bounds (a dark frame around
+        // the rounded corners), so it is left off there; the opaque card's
+        // hairline border supplies edge definition instead.
+        .shadow(cfg!(target_os = "macos"))
         .always_on_top(true)
         .skip_taskbar(true)
         .resizable(false)
@@ -198,6 +239,36 @@ fn build_panel(app: &AppHandle) -> Result<WebviewWindow> {
         .focused(false)
         .build()
         .map_err(|e| AppError::Other(format!("failed to build tray panel window: {e}")))
+}
+
+/// Deterministic anchor [`Rect`] for the popover when the tray click carries no
+/// icon bounds — the Linux path, where the `tray-icon` crate emits no left-click
+/// event and the panel is opened from the native menu instead.
+///
+/// Linux gives us neither tray-icon bounds nor reliable self-positioning: under
+/// Wayland `set_position` is a no-op, and an earlier cursor-based anchor dropped
+/// the window at the compositor default (top-left) in practice. So we pin a
+/// predictable spot — the TOP-RIGHT corner of the primary monitor's work area,
+/// where the GNOME/most-Linux system tray lives. Returned as a zero-size rect at
+/// that corner; [`geometry::compute_panel_position`] then drops the panel just
+/// below the top inset, right-aligned, and clamps it fully on-screen.
+///
+/// # Errors
+/// Returns [`AppError::Other`] if no primary monitor can be resolved.
+fn fallback_anchor(app: &AppHandle) -> Result<Rect> {
+    let monitor = app
+        .primary_monitor()
+        .map_err(|e| AppError::Other(format!("primary_monitor failed: {e}")))?
+        .ok_or_else(|| AppError::Other("no primary monitor for tray panel".into()))?;
+    let wa = monitor.work_area();
+    Ok(Rect {
+        // Right/top corner of the work area as a zero-size point; the geometry
+        // clamps it to the right margin and just under the top inset.
+        x: wa.position.x + wa.size.width as i32,
+        y: wa.position.y,
+        width: 0,
+        height: 0,
+    })
 }
 
 /// Resolve the work area (and scale factor) of the monitor containing the tray

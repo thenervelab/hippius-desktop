@@ -309,7 +309,6 @@ fn lifecycle_initialize_sync_inner_spawns_backfill() {
     );
 }
 
-
 /// Invariant: once the backfill flag is set, `run_backfill_for_drive`
 /// short-circuits to `AlreadyDone` without touching the wire. This is
 /// the guard that prevents a hot-reload or repeated `spawn_backfill`
@@ -389,11 +388,7 @@ async fn run_backfill_returns_not_ready_when_drive_not_registered() {
         .await
         .expect("run_backfill_for_drive must not error on NotReady path");
 
-    assert_eq!(
-        outcome,
-        BackfillOutcome::NotReady,
-        "missing drive entry must surface as NotReady"
-    );
+    assert_eq!(outcome, BackfillOutcome::NotReady, "missing drive entry must surface as NotReady");
     assert!(
         recorder.snapshot().is_empty(),
         "NotReady MUST NOT touch the wire; saw {} requests",

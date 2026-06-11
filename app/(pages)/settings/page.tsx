@@ -11,6 +11,7 @@ import VPNSettings from "@/components/page-sections/settings/VPNSettings";
 import CustomizeRPC from "@/components/page-sections/settings/CustomizeRPC";
 import InfoTooltip from "@/components/page-sections/settings/InfoTooltip";
 import NotificationSection from "@/components/page-sections/settings/NotificationSection";
+import { VPN_FEATURE_ENABLED } from "@/app/lib/featureFlags";
 
 const SECTION_META: Record<
   string,
@@ -118,7 +119,8 @@ function SettingsContent() {
 
         {section === "api-key" && <ApiTokenSection />}
 
-        {section === "vpn" && <VPNSettings />}
+        {/* VPN is hidden behind a feature flag (code kept). See featureFlags.ts. */}
+        {VPN_FEATURE_ENABLED && section === "vpn" && <VPNSettings />}
 
         {section === "customize-rpc" && <CustomizeRPC />}
       </div>

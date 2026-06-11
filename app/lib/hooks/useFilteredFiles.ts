@@ -67,14 +67,17 @@ export function useFilteredFiles<T extends FormattedUserFile>(
         (!criteria.fileSizes || criteria.fileSizes.length === 0) &&
         !criteria.folderTab;
 
-    // Identity of the inputs that should produce the current `data`. When
-    // any field (or the `files` reference) changes, this object changes
-    // and `loadedInputsRef` no longer matches — that mismatch is what
-    // surfaces `isFiltering: true` to the caller so it can show a
-    // skeleton instead of stale rows.
-    const currentInputs = useMemo(
+    // Identity of the FILTER CRITERIA that produced the current `data`.
+    // Deliberately EXCLUDES `files`: a background refetch (sync completed) swaps
+    // the `files` reference for the SAME view, and surfacing `isFiltering: true`
+    // for that flashed the loading skeleton on every silent refresh (the
+    // flicker bug). The effect below still re-runs on `files` changes (so the
+    // new data gets re-filtered) and resets this ref to the unchanged criteria,
+    // so the refresh applies silently. `isFiltering` is therefore true only when
+    // the USER changed a criterion (search / filter / folder tab) and the new
+    // IPC result hasn't landed yet.
+    const currentCriteria = useMemo(
         () => ({
-            files,
             searchTerm: criteria.searchTerm,
             fileExtensions: criteria.fileExtensions,
             dateRange: criteria.dateRange,
@@ -82,7 +85,6 @@ export function useFilteredFiles<T extends FormattedUserFile>(
             folderTab: criteria.folderTab,
         }),
         [
-            files,
             criteria.searchTerm,
             criteria.fileExtensions,
             criteria.dateRange,
@@ -90,9 +92,9 @@ export function useFilteredFiles<T extends FormattedUserFile>(
             criteria.folderTab,
         ],
     );
-    const loadedInputsRef = useRef<typeof currentInputs | null>(null);
+    const loadedCriteriaRef = useRef<typeof currentCriteria | null>(null);
     // Bumped after every settled fetch so the render-time `isFiltering`
-    // derivation re-evaluates against the updated `loadedInputsRef`. A
+    // derivation re-evaluates against the updated `loadedCriteriaRef`. A
     // bare ref mutation wouldn't trigger a re-render on its own.
     const [, forceRender] = useState(0);
 
@@ -102,7 +104,7 @@ export function useFilteredFiles<T extends FormattedUserFile>(
             // the return value already short-circuits to `files` directly
             // below — so there's no one-frame lag when files changes.
             setResult(files);
-            loadedInputsRef.current = currentInputs;
+            loadedCriteriaRef.current = currentCriteria;
             forceRender((tick) => tick + 1);
             return;
         }
@@ -122,14 +124,14 @@ export function useFilteredFiles<T extends FormattedUserFile>(
                 });
                 if (callId === latestCallIdRef.current) {
                     setResult(filtered);
-                    loadedInputsRef.current = currentInputs;
+                    loadedCriteriaRef.current = currentCriteria;
                     forceRender((tick) => tick + 1);
                 }
             } catch (err) {
                 console.error("filter_file_entries failed:", err);
                 if (callId === latestCallIdRef.current) {
                     setResult(files);
-                    loadedInputsRef.current = currentInputs;
+                    loadedCriteriaRef.current = currentCriteria;
                     forceRender((tick) => tick + 1);
                 }
             }
@@ -145,7 +147,7 @@ export function useFilteredFiles<T extends FormattedUserFile>(
         criteria.folderTab,
         debounceMs,
         isNoopCriteria,
-        currentInputs,
+        currentCriteria,
     ]);
 
     // When there are no filters at all, skip the result-state roundtrip and
@@ -159,6 +161,6 @@ export function useFilteredFiles<T extends FormattedUserFile>(
     if (isNoopCriteria) {
         return { data: files, isFiltering: false };
     }
-    const isFiltering = loadedInputsRef.current !== currentInputs;
+    const isFiltering = loadedCriteriaRef.current !== currentCriteria;
     return { data: result, isFiltering };
 }

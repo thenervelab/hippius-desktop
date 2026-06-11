@@ -103,6 +103,33 @@ describe("mergeUploadFeed", () => {
     expect(out[0].progressPercent).toBe(50);
   });
 
+  it("drops a completed live row the server already has, keeping the server's real time", () => {
+    // A just-finished file lingers in the snapshot as `completed` while also
+    // appearing in the server list. The live row would re-stamp createdAt to
+    // now() on every merge (→ perpetual "Just now"); the server row's real
+    // createdAt must win.
+    const out = mergeUploadFeed({
+      recentUploads: [completed("ahmadrao.jpg", { createdAt: 1_234 })],
+      snapshotFiles: [progress("ahmadrao.jpg", "completed")],
+      limit: 50,
+    });
+    expect(out).toHaveLength(1);
+    expect(out[0].feedStatus).toBe("completed");
+    expect(out[0].createdAt).toBe(1_234);
+  });
+
+  it("keeps a completed live row when the server list does not yet have it", () => {
+    // Before the server list refreshes, the just-finished file is only in the
+    // snapshot — keep it so it stays visible (its createdAt≈now reads "Just now").
+    const out = mergeUploadFeed({
+      recentUploads: [],
+      snapshotFiles: [progress("fresh.jpg", "completed")],
+      limit: 50,
+    });
+    expect(out).toHaveLength(1);
+    expect(out[0].feedStatus).toBe("completed");
+  });
+
   it("treats the same name in different drives as distinct rows", () => {
     const out = mergeUploadFeed({
       recentUploads: [completed("x.png", { label: "Docs" })],

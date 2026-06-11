@@ -161,12 +161,20 @@ export default function FailedFilesModal() {
   return (
     <>
       <FramedDialog
-        open={open}
+        // Hide this dialog while the "Exclude all" confirm is up so the two
+        // don't stack. Setting `open` to false programmatically does NOT fire
+        // Radix's `onOpenChange`, so `handleDismiss` is not called and the
+        // failed-files list survives — it reappears when the confirm closes.
+        open={open && !excludeAllOpen}
         onClose={handleDismiss}
         title="Sync Issues"
+        // Frame + icon badge use the destructive coral (#fc7d73) — the same
+        // colour as the Exclude / Exclude-all buttons and the exclude-confirm
+        // dialog — so the whole "Sync Issues" surface reads as one consistent
+        // destructive family. The single hex renders identically in light/dark.
         icon={<AlertTriangle className="size-5 text-white" />}
-        iconBgClassName="bg-warning-50"
-        borderClassName="bg-warning-50"
+        iconBgClassName="bg-[#fc7d73]"
+        borderClassName="bg-[#fc7d73]"
         maxWidth="max-w-[685px]"
         cardClassName="bg-white dark:bg-[#161616]"
       >

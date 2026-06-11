@@ -1,6 +1,3 @@
-export * from "./urls";
-export const API_BASE_URL = "https://indexer.hippius.network";
-
 /**
  * Polling cadence for live on-chain / indexer-backed queries (ms).
  *

@@ -5,6 +5,8 @@ import { getFileIcon } from "@/lib/utils/fileTypeUtils";
 import { cn } from "@/lib/utils";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 import { buildFolderPath } from "@/app/utils/folderPathUtils";
+import { Video } from "lucide-react";
+import { Icons } from "@/components/ui";
 import MiddleTruncatedName from "@/components/ui/MiddleTruncatedName";
 import SharedLinkBadge from "@/components/page-sections/drive/SharedLinkBadge";
 import SyncQueueOverallProgress from "@/app/(pages)/SyncQueueOverallProgress";
@@ -13,6 +15,12 @@ import {
   useFileLiveProgress,
   type LiveFileStatus,
 } from "@/app/lib/hooks/useFileLiveProgress";
+import {
+  useFileFailure,
+  useRetryFailure,
+} from "@/app/lib/hooks/useFileFailure";
+import { failureMessage } from "@/app/lib/utils/failureMessage";
+import type { FileFailureRecord } from "@/app/lib/types/fileFailure";
 
 // Mirrors `FormattedUserFile.syncStatus`. `failed` is the FE-facing label for a
 // snapshot file whose Rust-side `FileProgressStatus` is `Error` — e.g. an
@@ -97,7 +105,12 @@ const FileStatusBadge: FC<{
   status: BadgeStatus | null;
   progressPercent: number | null;
   syncedBadgeMs: number;
-}> = ({ status, progressPercent, syncedBadgeMs }) => {
+  /** Persisted failure for this row, if any — drives the "why" tooltip. */
+  failure?: FileFailureRecord | null;
+  /** Retry handler; when present the Failed pill becomes click-to-retry. */
+  onRetry?: () => void;
+  retrying?: boolean;
+}> = ({ status, progressPercent, syncedBadgeMs, failure, onRetry, retrying }) => {
   // Tracks whether the live `synced` indicator is still within its
   // post-completion window. We start at `null` so the initial mount
   // doesn't count as a transition (already-synced rows shouldn't flash).
@@ -133,7 +146,7 @@ const FileStatusBadge: FC<{
   const pillLabel =
     "font-geist text-[10px] font-medium leading-none tracking-[-0.2px] whitespace-nowrap";
 
-  // Hover tooltips mirror the wording from the legacy SyncStatusHandler2
+  // Hover tooltips mirror the wording from the SyncStatusDialog
   // header so the user gets the same "where is this file in the sync
   // pipeline" cue even though the per-row badge has no inline text for
   // the progress states. The percent on uploading/downloading is the
@@ -172,27 +185,41 @@ const FileStatusBadge: FC<{
 
   if (status === "failed") {
     // Dark mode mirrors Figma node 5225:131500: #FF6D61 at 20% opacity
-    // with solid #FF6D61 text.
+    // with solid #FF6D61 text. The tooltip now shows the *reason* (from the
+    // persisted failure record) and the pill is click-to-retry when a retry
+    // handler is available.
+    const reason = failure
+      ? failureMessage(failure)
+      : "This file failed to sync. Please try again.";
+    const canRetry = Boolean(onRetry) && !retrying;
     return (
       <CustomTooltip2
         side="top"
-        tooltipContent="This file failed to sync. Please try again."
+        tooltipContent={canRetry ? `${reason} Click to retry.` : reason}
       >
         <span
           data-testid="sync-status-failed"
-          aria-label="Upload failed"
+          role={onRetry ? "button" : undefined}
+          tabIndex={onRetry ? 0 : undefined}
+          aria-label={onRetry ? "Upload failed — click to retry" : "Upload failed"}
+          onClick={
+            onRetry
+              ? (e) => {
+                  // Don't let the retry click bubble into the row's open/preview.
+                  e.stopPropagation();
+                  e.preventDefault();
+                  if (canRetry) onRetry();
+                }
+              : undefined
+          }
           className={cn(
             pillBase,
             "bg-[#FF6D61] dark:bg-[#FF6D61]/20",
+            onRetry && "cursor-pointer",
           )}
         >
-          <span
-            className={cn(
-              pillLabel,
-              "text-white dark:text-[#FF6D61]",
-            )}
-          >
-            Failed
+          <span className={cn(pillLabel, "text-white dark:text-[#FF6D61]")}>
+            {retrying ? "Retrying…" : "Failed"}
           </span>
         </span>
       </CustomTooltip2>
@@ -272,6 +299,12 @@ const NameCell: FC<NameCellProps> = ({
     ? null
     : resolveBadgeStatus(live.status, syncStatus);
 
+  // The persisted "why it failed" record + a retry handler for this row. The
+  // drive query is shared across all rows (TanStack dedupe); folders never
+  // match, so they read it for free.
+  const failure = useFileFailure(label, actualName ?? rawName);
+  const { retryFile } = useRetryFailure(label);
+
   const mainFolderHash = getParam("mainFolderCid", "");
   const folderActualName = isFolder ? actualName || "" : "";
   // When the caller hands us a runtime-known parent path (inline-expanded
@@ -336,10 +369,12 @@ const NameCell: FC<NameCellProps> = ({
           </div>
         </Link>
       ) : (
-        // Status badge sits at the right edge of the name cell — same x as
-        // the hover preview icon added by VideoDialogTrigger / ImageDialogTrigger
-        // / PdfDialogTrigger. The trigger's hover gradient layers on top, so
-        // the badge fades out as the play/eye icon appears.
+        // Status badge sits at the right edge of the name cell. The hover
+        // preview icon (eye / play) renders as a flex sibling directly to its
+        // LEFT — it used to be an absolutely-positioned overlay in the dialog
+        // triggers, which faded in on top of the Pending/Failed pills. The
+        // slot is always reserved (opacity, not display) so the badge doesn't
+        // jump when the icon fades in; `group` comes from the trigger button.
         <div className="flex items-center min-w-0 w-full gap-2">
           <div className="flex items-center min-w-0 flex-1">
             <Icon className={cn("size-5 mr-2 flex-shrink-0", color)} />
@@ -360,10 +395,34 @@ const NameCell: FC<NameCellProps> = ({
               }
             />
           </div>
+          {/* Mirrors the trigger-wrap gate in FilesTable/ExpandedFolderRows:
+              only video/image/PDF rows open a preview, so only they get the
+              hover affordance. */}
+          {isPreviewable &&
+            (fileType === "video" ||
+              fileType === "image" ||
+              fileType === "PDF") && (
+              <span
+                aria-hidden="true"
+                data-testid="hover-preview-icon"
+                className="inline-flex shrink-0 items-center opacity-0 transition-opacity duration-300 group-hover:opacity-100"
+              >
+                {fileType === "video" ? (
+                  <Video className="size-4 text-primary-60" />
+                ) : (
+                  <Icons.EyeOutline className="size-4 text-primary-60" />
+                )}
+              </span>
+            )}
           <FileStatusBadge
             status={badgeStatus}
             progressPercent={live.progressPercent}
             syncedBadgeMs={syncedBadgeMs}
+            failure={failure}
+            onRetry={
+              failure ? () => retryFile.mutate(failure.relativePath) : undefined
+            }
+            retrying={retryFile.isPending}
           />
         </div>
       )}

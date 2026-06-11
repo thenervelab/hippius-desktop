@@ -24,9 +24,7 @@ fn indexer_base_url() -> &'static str {
 }
 
 fn indexer_api_key() -> Option<&'static str> {
-    INDEXER_API_KEY
-        .get_or_init(|| std::env::var("INDEXER_API_KEY").ok())
-        .as_deref()
+    INDEXER_API_KEY.get_or_init(|| std::env::var("INDEXER_API_KEY").ok()).as_deref()
 }
 
 /// HTTP client for the Hippius indexer. Uses `X-API-KEY` header for authentication.
@@ -71,7 +69,14 @@ impl IndexerClient {
         if status.is_success() {
             resp.json::<T>().await.map_err(|e| ApiError::Other(format!("JSON parse error: {e}")))
         } else {
+            // Capture the request path before consuming `resp` with `.text()`, so
+            // a failed indexer call is attributable in the logs. The bare
+            // ApiError::Http carries only status + body, dropping which endpoint
+            // failed — match the sibling api::client::handle_response, which logs
+            // the path the same way.
+            let req_path = resp.url().path().to_string();
             let body = resp.text().await.unwrap_or_default();
+            tracing::warn!(status = status.as_u16(), path = %req_path, "Indexer API request failed");
             Err(ApiError::Http {
                 status: status.as_u16(),
                 body,
