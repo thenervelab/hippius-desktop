@@ -346,9 +346,12 @@ const DriveHeader: FC<DriveHeaderProps> = ({
   return (
     <>
       {isRecentFiles ? (
-        // Recent Files layout — intentionally unchanged. The new Figma-based
-        // alignment below applies only to the drive (non-recent) header.
-        <div className="flex justify-between items-center w-full gap-6 flex-wrap pt-2 pb-5 px-2.5 border border-grey-dark-100 rounded-[8px] dark:border-black-300 border-b-0">
+        // Recent Files layout — a plain padded row. The card chrome (border,
+        // radius, clip) is owned by the outer wrapper in DriveContainer's
+        // recent branch, exactly like the drive page's outer grey card; a
+        // border here previously left open-ended rounded stubs hanging over
+        // the card grid (the header had rounded corners but no bottom edge).
+        <div className="flex justify-between items-center w-full gap-6 flex-wrap pt-2 pb-5 px-2.5">
           <h2 className="text-lg font-medium text-grey-10 dark:text-grey-light-100">
             Recent Files
           </h2>

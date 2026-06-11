@@ -1422,10 +1422,24 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
             );
 
             if (isRecentFiles) {
-              // Recent Files card — unchanged. DriveContent sits as a sibling
-              // of DriveHeader inside the outer card.
+              // Recent Files card — the OUTER wrapper owns the full card
+              // chrome (border + radius + clip), mirroring the drive page's
+              // outer grey card. Previously the wrapper painted only bg +
+              // shadow with square corners while the header inside rounded
+              // its own corners: the wrapper's light corners peeked out
+              // behind the header, and the header's bottom radius dangled
+              // over the card grid. DriveContent sits as a sibling of
+              // DriveHeader inside this one closed card.
               return (
-                <div className="bg-grey-light-300  shadow-[0px_1px_1.1px_0px_rgba(0,0,0,0.04)] dark:bg-black-primary-bg  dark:shadow-[0px_1px_1.1px_0px_rgba(0,0,0,0.4)]">
+                <div
+                  className={cn(
+                    "overflow-hidden rounded-[8px]",
+                    "bg-grey-light-300 border border-grey-dark-100",
+                    "shadow-[0px_1px_1.1px_0px_rgba(0,0,0,0.04)]",
+                    "dark:bg-black-primary-bg dark:border-black-300",
+                    "dark:shadow-[0px_1px_1.1px_0px_rgba(0,0,0,0.4)]",
+                  )}
+                >
                   {driveHeader}
                   {driveContent}
                 </div>
