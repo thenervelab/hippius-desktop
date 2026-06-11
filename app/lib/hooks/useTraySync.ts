@@ -21,6 +21,7 @@ import {
 } from "@/components/updater/checkForUpdates";
 
 import { lastUpdatedPercentAtom } from "@/app/lib/store/syncAtoms";
+import { VM_FEATURE_ENABLED } from "@/app/lib/featureFlags";
 import { useAtom, useAtomValue } from "jotai";
 import {
   driveStatusesAtom,
@@ -249,15 +250,21 @@ async function buildTrayContextMenu(): Promise<Menu> {
     },
   });
 
-  const openVm = await MenuItem.new({
-    id: CTX_OPEN_VM_ID,
-    text: "Open Virtual Machines",
-    enabled: loggedIn,
-    action: async () => {
-      if (!isUserLoggedIn() && !(await refreshLoginStatus())) return;
-      await openVirtualMachinesPage();
-    },
-  });
+  // Omitted entirely while VMs are gated off ("Coming Soon") — the page
+  // redirects to the overview anyway, so a menu entry would be a dead end.
+  // `openVmItem` stays null in that case; the login-status watcher is
+  // already null-safe.
+  const openVm = VM_FEATURE_ENABLED
+    ? await MenuItem.new({
+        id: CTX_OPEN_VM_ID,
+        text: "Open Virtual Machines",
+        enabled: loggedIn,
+        action: async () => {
+          if (!isUserLoggedIn() && !(await refreshLoginStatus())) return;
+          await openVirtualMachinesPage();
+        },
+      })
+    : null;
 
   const separator = await PredefinedMenuItem.new({ item: "Separator" });
 
@@ -274,7 +281,13 @@ async function buildTrayContextMenu(): Promise<Menu> {
   openVmItem = openVm;
 
   return Menu.new({
-    items: [...leadingItems, openFiles, openVm, separator, quit],
+    items: [
+      ...leadingItems,
+      openFiles,
+      ...(openVm ? [openVm] : []),
+      separator,
+      quit,
+    ],
   });
 }
 
