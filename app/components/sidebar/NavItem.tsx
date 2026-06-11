@@ -175,6 +175,31 @@ const NavItem: React.FC<NavItemProps> = ({
               {subMenuItems.map((sub) => {
                 const subActive =
                   pathname === sub.path || pathname.startsWith(sub.path + "/");
+
+                // Gated sub-item: not a link. Greyed text + orange
+                // "Coming Soon" tag, mirroring the web console's sidebar
+                // treatment of unreleased features.
+                if (sub.comingSoon) {
+                  return (
+                    <span
+                      key={sub.path + sub.label}
+                      className="relative flex items-center gap-2 p-[10px] pt-4 rounded-[6px] cursor-default text-[#b0b0b0] dark:text-[#6e6e6e]"
+                    >
+                      {sub.icon && (
+                        <span className="size-[18px] flex-shrink-0 flex items-center justify-center text-current">
+                          {sub.icon}
+                        </span>
+                      )}
+                      <span className="text-[14px] font-medium leading-5 tracking-[-0.28px] truncate">
+                        {sub.label}
+                      </span>
+                      <span className="absolute right-2 top-1 whitespace-nowrap text-[10px] font-medium text-amber-600 dark:text-amber-500">
+                        Coming Soon
+                      </span>
+                    </span>
+                  );
+                }
+
                 return (
                   <Link
                     key={sub.path + sub.label}
