@@ -20,9 +20,7 @@ import {
   getAvailableUpdate,
 } from "@/components/updater/checkForUpdates";
 
-import {
-  lastUpdatedPercentAtom,
-} from "@/app/lib/store/syncAtoms";
+import { lastUpdatedPercentAtom } from "@/app/lib/store/syncAtoms";
 import { useAtom, useAtomValue } from "jotai";
 import {
   driveStatusesAtom,
@@ -108,7 +106,12 @@ let latchedSnapshot: SyncSnapshot | null = null;
 /* ─ Backend payload types ─────────────────────────────────────── */
 
 // Tray data cache — refreshed via get_tray_menu_data Rust command
-let trayDataCache: { loggedIn: boolean; credits: number | null; substrateAddress: string | null; timestamp: number } | null = null;
+let trayDataCache: {
+  loggedIn: boolean;
+  credits: number | null;
+  substrateAddress: string | null;
+  timestamp: number;
+} | null = null;
 const TRAY_CACHE_DURATION = 5000; // 5 seconds
 
 /**
@@ -120,12 +123,23 @@ export function clearLoginStatusCache() {
 }
 
 /** Fetch tray data from Rust (login status + credits), with caching. */
-async function refreshTrayData(): Promise<{ loggedIn: boolean; credits: number | null; substrateAddress: string | null }> {
-  if (trayDataCache && Date.now() - trayDataCache.timestamp < TRAY_CACHE_DURATION) {
+async function refreshTrayData(): Promise<{
+  loggedIn: boolean;
+  credits: number | null;
+  substrateAddress: string | null;
+}> {
+  if (
+    trayDataCache &&
+    Date.now() - trayDataCache.timestamp < TRAY_CACHE_DURATION
+  ) {
     return trayDataCache;
   }
   try {
-    const data = await invoke<{ loggedIn: boolean; credits: number | null; substrateAddress: string | null }>("get_tray_menu_data");
+    const data = await invoke<{
+      loggedIn: boolean;
+      credits: number | null;
+      substrateAddress: string | null;
+    }>("get_tray_menu_data");
     trayDataCache = { ...data, timestamp: Date.now() };
     return data;
   } catch {
@@ -226,7 +240,7 @@ async function buildTrayContextMenu(): Promise<Menu> {
 
   const openFiles = await MenuItem.new({
     id: CTX_OPEN_FILES_ID,
-    text: "Open Files",
+    text: "Open Drive",
     enabled: loggedIn,
     action: async () => {
       // Guard against a stale `enabled` if login changed between renders.
@@ -259,7 +273,9 @@ async function buildTrayContextMenu(): Promise<Menu> {
   openFilesItem = openFiles;
   openVmItem = openVm;
 
-  return Menu.new({ items: [...leadingItems, openFiles, openVm, separator, quit] });
+  return Menu.new({
+    items: [...leadingItems, openFiles, openVm, separator, quit],
+  });
 }
 
 // Mirror of the auth context's `isAuthenticated`, kept at module scope so the
@@ -283,7 +299,11 @@ let isAuthenticatedLatest = false;
  * the CLAUDE.md note.
  */
 async function handleTrayClick(event: TrayIconEvent) {
-  if (event.type !== "Click" || event.button !== "Left" || event.buttonState !== "Up") {
+  if (
+    event.type !== "Click" ||
+    event.button !== "Left" ||
+    event.buttonState !== "Up"
+  ) {
     return;
   }
   try {
@@ -388,7 +408,7 @@ export function useTrayInit(isAuthenticated: boolean) {
 
       const openFilesMenuItem = await MenuItem.new({
         id: OPEN_FILES_ID,
-        text: "Open Files",
+        text: "Open Drive",
         enabled: loggedIn,
         action: async () => {
           if (!isUserLoggedIn() && !(await refreshLoginStatus())) return;
@@ -465,7 +485,7 @@ export function useTrayInit(isAuthenticated: boolean) {
 
       // Start watcher for sync activity after menu exists
       startSyncActivityWatcher();
-      
+
       // Clear any stale file entries from previous sessions
       void clearTrayFileEntries();
 
@@ -552,7 +572,7 @@ export function useTrayInit(isAuthenticated: boolean) {
  * burst of N events into a single rebuild for the final state.
  */
 async function rebuildDriveSubmenu(
-  statuses: Map<string, DriveEntry>
+  statuses: Map<string, DriveEntry>,
 ): Promise<void> {
   if (!driveSubmenu) return;
 
@@ -587,7 +607,7 @@ async function rebuildDriveSubmenu(
  * `driveSubmenuRenderedText` to converge on `statuses`.
  */
 async function reconcileDriveSubmenu(
-  statuses: Map<string, DriveEntry>
+  statuses: Map<string, DriveEntry>,
 ): Promise<void> {
   if (!driveSubmenu) return;
 
@@ -650,10 +670,7 @@ async function reconcileDriveSubmenu(
         await item.setText(desiredText);
         driveSubmenuRenderedText.set(label, desiredText);
       } catch (err) {
-        console.error(
-          `[Tray] Failed to update drive row '${label}':`,
-          err
-        );
+        console.error(`[Tray] Failed to update drive row '${label}':`, err);
       }
     }
   }
@@ -668,7 +685,7 @@ async function reconcileDriveSubmenu(
     .map(([label]) => label);
 
   const missing: string[] = sortedLabels.filter(
-    (label) => !driveSubmenuItems.has(label)
+    (label) => !driveSubmenuItems.has(label),
   );
   if (missing.length === 0) return;
 
@@ -677,7 +694,7 @@ async function reconcileDriveSubmenu(
   // at or after that index needs to come off so we can re-append
   // in order.
   const firstMissingIndex = sortedLabels.findIndex(
-    (label) => !driveSubmenuItems.has(label)
+    (label) => !driveSubmenuItems.has(label),
   );
   const labelsToReappend = sortedLabels.slice(firstMissingIndex);
 
@@ -724,7 +741,7 @@ function renderDriveSubmenuText(entry: DriveEntry): string {
  */
 async function createDriveRowItem(
   label: string,
-  entry: DriveEntry
+  entry: DriveEntry,
 ): Promise<MenuItem> {
   const text = renderDriveSubmenuText(entry);
   return MenuItem.new({
@@ -765,11 +782,11 @@ async function createDriveRowItem(
       } catch (err) {
         console.error(
           `[Tray] Failed to ${needsResume ? "resume" : "pause"} drive '${label}':`,
-          err
+          err,
         );
         if (needsResume) {
           toast.error(
-            `Failed to resume "${folderName}". Open the Settings page and try from there.`
+            `Failed to resume "${folderName}". Open the Settings page and try from there.`,
           );
         } else {
           toast.error(`Failed to pause "${folderName}".`);
@@ -924,7 +941,7 @@ async function updateTraySyncLabel(label: string | null) {
     return;
   }
   isUpdatingTrayLabel = true;
-  
+
   try {
     const menu = await (menuPromise ?? Promise.resolve<Menu | null>(null));
     if (!menu) {
@@ -942,15 +959,17 @@ async function updateTraySyncLabel(label: string | null) {
 
     // ALWAYS search for existing sync items in the menu (don't rely on stale syncItem reference)
     const existingItems = items.filter((i) => i.id === SYNC_ID);
-    
+
     // If there are multiple, remove all but keep track of first one
     if (existingItems.length > 1) {
-      console.log(`[TraySync] Found ${existingItems.length} sync items, removing duplicates`);
+      console.log(
+        `[TraySync] Found ${existingItems.length} sync items, removing duplicates`,
+      );
       for (let i = 1; i < existingItems.length; i++) {
         await menu.remove(existingItems[i]);
       }
     }
-    
+
     syncItem = existingItems[0] as MenuItem | null;
 
     // If label is null, we want to remove the sync item
@@ -1002,24 +1021,26 @@ async function clearTrayFileEntries() {
     for (const [, item] of fileEntryItems.entries()) {
       try {
         await menu.remove(item);
-      } catch { }
+      } catch {}
     }
     fileEntryItems.clear();
 
     // Also remove any orphaned items
     const items = await menu.items();
     for (const item of items) {
-      if (typeof item.id === 'string' && item.id.startsWith(FILE_ENTRY_PREFIX)) {
+      if (
+        typeof item.id === "string" &&
+        item.id.startsWith(FILE_ENTRY_PREFIX)
+      ) {
         try {
           await menu.remove(item);
-        } catch { }
+        } catch {}
       }
     }
   } catch (error) {
     console.error("Error clearing tray file entries:", error);
   }
 }
-
 
 /* ─ Login status watcher (updates tray menu on login/logout) ──── */
 //
@@ -1053,7 +1074,8 @@ function startLoginStatusWatcher() {
   const h = setInterval(tick, INTERVAL_MS);
   if (typeof window !== "undefined") {
     // @ts-expect-error custom watcher handle
-    if (window.__hippiusLoginWatcher) clearInterval(window.__hippiusLoginWatcher);
+    if (window.__hippiusLoginWatcher)
+      clearInterval(window.__hippiusLoginWatcher);
     // @ts-expect-error custom watcher handle
     window.__hippiusLoginWatcher = h;
   }
@@ -1085,9 +1107,24 @@ async function reconcileSummaryRowRefs(menu: Menu): Promise<void> {
   const items = await menu.items();
 
   for (const [id, assignRef] of [
-    [SYNC_PROGRESS_ID, (it: MenuItem | null) => { syncProgressItem = it; }],
-    [SYNC_SIZE_ID, (it: MenuItem | null) => { syncSizeItem = it; }],
-    [SYNC_DELETE_ID, (it: MenuItem | null) => { syncDeleteItem = it; }],
+    [
+      SYNC_PROGRESS_ID,
+      (it: MenuItem | null) => {
+        syncProgressItem = it;
+      },
+    ],
+    [
+      SYNC_SIZE_ID,
+      (it: MenuItem | null) => {
+        syncSizeItem = it;
+      },
+    ],
+    [
+      SYNC_DELETE_ID,
+      (it: MenuItem | null) => {
+        syncDeleteItem = it;
+      },
+    ],
   ] as const) {
     const matches = items.filter((i) => i.id === id);
     if (matches.length === 0) {
@@ -1144,15 +1181,27 @@ function startSyncActivityWatcher() {
       // The data stays in the Rust backend so it can be shown after re-login.
       if (!isUserLoggedIn()) {
         if (syncProgressItem) {
-          try { await menu.remove(syncProgressItem); } catch { /* already removed */ }
+          try {
+            await menu.remove(syncProgressItem);
+          } catch {
+            /* already removed */
+          }
           syncProgressItem = null;
         }
         if (syncSizeItem) {
-          try { await menu.remove(syncSizeItem); } catch { /* already removed */ }
+          try {
+            await menu.remove(syncSizeItem);
+          } catch {
+            /* already removed */
+          }
           syncSizeItem = null;
         }
         if (syncDeleteItem) {
-          try { await menu.remove(syncDeleteItem); } catch { /* already removed */ }
+          try {
+            await menu.remove(syncDeleteItem);
+          } catch {
+            /* already removed */
+          }
           syncDeleteItem = null;
         }
         lastSyncSummarySignature = "";
@@ -1162,7 +1211,7 @@ function startSyncActivityWatcher() {
       // Clean up any legacy per-file rows from old implementation
       await removeAllSyncActivityRows(menu);
       const inProgressCount = progress.files.filter(
-        (f) => f.status === "inProgress" || f.status === "pending"
+        (f) => f.status === "inProgress" || f.status === "pending",
       ).length;
       // Prefer `effectiveInProgress` over raw `isActive`: the Rust
       // `fixup_stalled_completion` flips `effectiveInProgress=false`
@@ -1185,22 +1234,29 @@ function startSyncActivityWatcher() {
       // indexing window of every periodic no-op cycle (the user-reported
       // looping-red-icon bug). See `src-tauri/src/sync/preparing.rs`.
       const isPreparing = progress.widgetState === "preparing";
-      const isActive = isPreparing ||
+      const isActive =
+        isPreparing ||
         progress.effectiveInProgress ||
         inProgressCount > 0 ||
-        (progress.totalFiles > 0 && progress.completedFiles < progress.totalFiles && progress.failedFiles === 0);
+        (progress.totalFiles > 0 &&
+          progress.completedFiles < progress.totalFiles &&
+          progress.failedFiles === 0);
       const hasFailed = progress.failedFiles > 0;
-      const isCompleted = !isActive && (progress.completedFiles > 0 || hasFailed);
+      const isCompleted =
+        !isActive && (progress.completedFiles > 0 || hasFailed);
 
       // Count delete actions in the current file list
       const recentDeleteCount = progress.files.filter(
-        (f) => f.action === "local_delete" || f.action === "remote_delete"
+        (f) => f.action === "local_delete" || f.action === "remote_delete",
       ).length;
 
       // Latch: when we detect completion, capture the snapshot so a subsequent
       // snapshot reset (new empty cycle) doesn't hide the tray rows.
       // Also update the latch when a NEW session completes (different startedAt).
-      if (isCompleted && (!latchedComplete || progress.startedAt !== latchedSnapshot?.startedAt)) {
+      if (
+        isCompleted &&
+        (!latchedComplete || progress.startedAt !== latchedSnapshot?.startedAt)
+      ) {
         latchedComplete = true;
         latchedSnapshot = progress;
       }
@@ -1214,8 +1270,14 @@ function startSyncActivityWatcher() {
       // skipped — the snapshot's session may not have any startedAt
       // yet at the moment of the preparing flip, so requiring a
       // distinct value would block the unlatch.
-      if (isActive && latchedComplete && (isPreparing
-        || (progress.startedAt !== null && progress.startedAt !== latchedSnapshot?.startedAt && progress.totalFiles > 0))) {
+      if (
+        isActive &&
+        latchedComplete &&
+        (isPreparing ||
+          (progress.startedAt !== null &&
+            progress.startedAt !== latchedSnapshot?.startedAt &&
+            progress.totalFiles > 0))
+      ) {
         latchedComplete = false;
         latchedSnapshot = null;
       }
@@ -1226,17 +1288,25 @@ function startSyncActivityWatcher() {
       // flicker in the tray between "Sync Complete" and an empty state.
       // Preparing is the one empty-session shape we DO want to surface
       // (the user just dropped a folder; they need feedback now).
-      const isNewSessionWithFiles = isActive && progress.startedAt !== null
-        && progress.startedAt !== latchedSnapshot?.startedAt && progress.totalFiles > 0;
-      const effectiveCompleted = isCompleted || (latchedComplete && !isPreparing && !isNewSessionWithFiles);
-      const effectiveSnapshot = effectiveCompleted && !isCompleted && latchedSnapshot
-        ? latchedSnapshot
-        : progress;
-      const effectiveDeleteCount = effectiveCompleted && !isCompleted && latchedSnapshot
-        ? latchedSnapshot.files.filter(
-            (f) => f.action === "local_delete" || f.action === "remote_delete"
-          ).length
-        : recentDeleteCount;
+      const isNewSessionWithFiles =
+        isActive &&
+        progress.startedAt !== null &&
+        progress.startedAt !== latchedSnapshot?.startedAt &&
+        progress.totalFiles > 0;
+      const effectiveCompleted =
+        isCompleted ||
+        (latchedComplete && !isPreparing && !isNewSessionWithFiles);
+      const effectiveSnapshot =
+        effectiveCompleted && !isCompleted && latchedSnapshot
+          ? latchedSnapshot
+          : progress;
+      const effectiveDeleteCount =
+        effectiveCompleted && !isCompleted && latchedSnapshot
+          ? latchedSnapshot.files.filter(
+              (f) =>
+                f.action === "local_delete" || f.action === "remote_delete",
+            ).length
+          : recentDeleteCount;
 
       // Build signature to avoid redundant updates.
       // Include startedAt so different sessions with identical metrics still trigger updates.
@@ -1258,15 +1328,27 @@ function startSyncActivityWatcher() {
         // nothing is syncing. Mirrors the logout-cleanup path.
         await updateTraySyncLabel(null);
         if (syncProgressItem) {
-          try { await menu.remove(syncProgressItem); } catch { /* already removed */ }
+          try {
+            await menu.remove(syncProgressItem);
+          } catch {
+            /* already removed */
+          }
           syncProgressItem = null;
         }
         if (syncSizeItem) {
-          try { await menu.remove(syncSizeItem); } catch { /* already removed */ }
+          try {
+            await menu.remove(syncSizeItem);
+          } catch {
+            /* already removed */
+          }
           syncSizeItem = null;
         }
         if (syncDeleteItem) {
-          try { await menu.remove(syncDeleteItem); } catch { /* already removed */ }
+          try {
+            await menu.remove(syncDeleteItem);
+          } catch {
+            /* already removed */
+          }
           syncDeleteItem = null;
         }
         await setTrayIconSyncing(false, false);
@@ -1278,7 +1360,11 @@ function startSyncActivityWatcher() {
       if (isActive && !latchedComplete) {
         if (progress.totalFiles > 0) {
           const percent = progress.overallPercent;
-          if (percent === 0 && progress.completedFiles === 0 && progress.progressBytes === 0) {
+          if (
+            percent === 0 &&
+            progress.completedFiles === 0 &&
+            progress.progressBytes === 0
+          ) {
             await updateTraySyncLabel(`⟳ Preparing sync…`);
           } else {
             await updateTraySyncLabel(`⟳ Syncing: ${percent}%`);
@@ -1303,12 +1389,18 @@ function startSyncActivityWatcher() {
 
         if (isActive && !latchedComplete) {
           // In-progress: show current progress
-          if (progress.totalFiles > 0 && progress.overallPercent === 0 && progress.completedFiles === 0 && progress.progressBytes === 0) {
-            progressText = `${progress.totalFiles} ${progress.totalFiles === 1 ? 'file' : 'files'} pending`;
+          if (
+            progress.totalFiles > 0 &&
+            progress.overallPercent === 0 &&
+            progress.completedFiles === 0 &&
+            progress.progressBytes === 0
+          ) {
+            progressText = `${progress.totalFiles} ${progress.totalFiles === 1 ? "file" : "files"} pending`;
           } else {
-            progressText = progress.totalFiles > 0
-              ? `${progress.completedFiles} of ${progress.totalFiles} ${progress.totalFiles === 1 ? 'file' : 'files'} synced`
-              : "Preparing files…";
+            progressText =
+              progress.totalFiles > 0
+                ? `${progress.completedFiles} of ${progress.totalFiles} ${progress.totalFiles === 1 ? "file" : "files"} synced`
+                : "Preparing files…";
           }
           // Prefer the intent overlay's "X of Y" while the user-dragged
           // batch is in flight — this matches what the user expects to
@@ -1321,10 +1413,11 @@ function startSyncActivityWatcher() {
           } else if (progress.bytesExpected > 0) {
             sizeText = `${formatBytes(progress.progressBytes)} / ${formatBytes(progress.bytesExpected)}`;
           }
-        } else if (effectiveCompleted && (effectiveSnapshot.failedFiles > 0)) {
+        } else if (effectiveCompleted && effectiveSnapshot.failedFiles > 0) {
           // Failed: show failure counts
-          const totalFiles = effectiveSnapshot.completedFiles + effectiveSnapshot.failedFiles;
-          progressText = `${effectiveSnapshot.failedFiles} of ${totalFiles} ${totalFiles === 1 ? 'file' : 'files'} failed`;
+          const totalFiles =
+            effectiveSnapshot.completedFiles + effectiveSnapshot.failedFiles;
+          progressText = `${effectiveSnapshot.failedFiles} of ${totalFiles} ${totalFiles === 1 ? "file" : "files"} failed`;
           if (effectiveSnapshot.bytesExpected > 0) {
             sizeText = `${formatBytes(effectiveSnapshot.progressBytes)} / ${formatBytes(effectiveSnapshot.bytesExpected)}`;
           }
@@ -1332,17 +1425,20 @@ function startSyncActivityWatcher() {
           // Completed successfully: show final counts
           const syncedFiles = effectiveSnapshot.completedFiles;
           const deletedInSession = effectiveSnapshot.files.filter(
-            (f) => (f.action === "local_delete" || f.action === "remote_delete") && f.status === "completed"
+            (f) =>
+              (f.action === "local_delete" || f.action === "remote_delete") &&
+              f.status === "completed",
           ).length;
           const nonDeleteSynced = syncedFiles - deletedInSession;
 
           if (deletedInSession > 0 && nonDeleteSynced <= 0) {
-            progressText = `${deletedInSession} ${deletedInSession === 1 ? 'file' : 'files'} deleted`;
+            progressText = `${deletedInSession} ${deletedInSession === 1 ? "file" : "files"} deleted`;
           } else if (deletedInSession > 0 && nonDeleteSynced > 0) {
             progressText = `${nonDeleteSynced} synced · ${deletedInSession} deleted`;
           } else {
-            const totalFiles = effectiveSnapshot.completedFiles + effectiveSnapshot.failedFiles;
-            progressText = `${effectiveSnapshot.completedFiles} of ${totalFiles} ${totalFiles === 1 ? 'file' : 'files'} synced`;
+            const totalFiles =
+              effectiveSnapshot.completedFiles + effectiveSnapshot.failedFiles;
+            progressText = `${effectiveSnapshot.completedFiles} of ${totalFiles} ${totalFiles === 1 ? "file" : "files"} synced`;
           }
           if (effectiveSnapshot.bytesExpected > 0) {
             sizeText = formatBytes(effectiveSnapshot.bytesExpected);
@@ -1369,8 +1465,11 @@ function startSyncActivityWatcher() {
         // Update or create size row
         if (sizeText) {
           const itemsAfterProgress = await menu.items();
-          const progressIdx = itemsAfterProgress.findIndex((i) => i.id === SYNC_PROGRESS_ID);
-          const sizeInsertPos = progressIdx >= 0 ? progressIdx + 1 : insertPos + 1;
+          const progressIdx = itemsAfterProgress.findIndex(
+            (i) => i.id === SYNC_PROGRESS_ID,
+          );
+          const sizeInsertPos =
+            progressIdx >= 0 ? progressIdx + 1 : insertPos + 1;
 
           if (!syncSizeItem) {
             syncSizeItem = await MenuItem.new({
@@ -1383,17 +1482,29 @@ function startSyncActivityWatcher() {
             await syncSizeItem.setText(sizeText);
           }
         } else if (syncSizeItem) {
-          try { await menu.remove(syncSizeItem); } catch { /* already removed */ }
+          try {
+            await menu.remove(syncSizeItem);
+          } catch {
+            /* already removed */
+          }
           syncSizeItem = null;
         }
       } else {
         // No active/completed sync — remove progress/size rows if they exist
         if (syncProgressItem) {
-          try { await menu.remove(syncProgressItem); } catch { /* already removed */ }
+          try {
+            await menu.remove(syncProgressItem);
+          } catch {
+            /* already removed */
+          }
           syncProgressItem = null;
         }
         if (syncSizeItem) {
-          try { await menu.remove(syncSizeItem); } catch { /* already removed */ }
+          try {
+            await menu.remove(syncSizeItem);
+          } catch {
+            /* already removed */
+          }
           syncSizeItem = null;
         }
       }
@@ -1402,15 +1513,18 @@ function startSyncActivityWatcher() {
       // aren't already reflected in the progress row. During active sync,
       // the progress text already uses the right label ("deleted" vs "synced").
       // On completion, the progress text handles mixed/delete-only cases.
-      const deletesInProgressText = (effectiveCompleted && !hasFailed) || (isActive && !latchedComplete);
+      const deletesInProgressText =
+        (effectiveCompleted && !hasFailed) || (isActive && !latchedComplete);
       if (effectiveDeleteCount > 0 && !deletesInProgressText) {
-        const deleteText = `${effectiveDeleteCount} ${effectiveDeleteCount === 1 ? 'file' : 'files'} deleted`;
+        const deleteText = `${effectiveDeleteCount} ${effectiveDeleteCount === 1 ? "file" : "files"} deleted`;
 
         // Find insert position: after size row, or after progress row, or after sync header
         const itemsForDelete = await menu.items();
         let deleteInsertPos: number;
         const sizeIdx = itemsForDelete.findIndex((i) => i.id === SYNC_SIZE_ID);
-        const progIdx = itemsForDelete.findIndex((i) => i.id === SYNC_PROGRESS_ID);
+        const progIdx = itemsForDelete.findIndex(
+          (i) => i.id === SYNC_PROGRESS_ID,
+        );
         const headerIdx = itemsForDelete.findIndex((i) => i.id === SYNC_ID);
         if (sizeIdx >= 0) {
           deleteInsertPos = sizeIdx + 1;
@@ -1440,11 +1554,18 @@ function startSyncActivityWatcher() {
           await setTrayIconSyncing(false, true);
         }
       } else if (syncDeleteItem) {
-        try { await menu.remove(syncDeleteItem); } catch { /* already removed */ }
+        try {
+          await menu.remove(syncDeleteItem);
+        } catch {
+          /* already removed */
+        }
         syncDeleteItem = null;
       }
     } catch (error) {
-      console.error("[TraySync] Error updating sync summary:", errorMessage(error));
+      console.error(
+        "[TraySync] Error updating sync summary:",
+        errorMessage(error),
+      );
     } finally {
       isUpdatingTraySnapshot = false;
       // Drain any snapshot that arrived while we were working. Recursive
@@ -1464,16 +1585,20 @@ function startSyncActivityWatcher() {
   // a redundant sp_get_snapshot IPC roundtrip every 2 seconds.
   invoke<SyncSnapshot>("sp_get_snapshot")
     .then((snapshot) => void tick(snapshot))
-    .catch((err: unknown) => console.error("[TraySync] Initial snapshot:", err));
+    .catch((err: unknown) =>
+      console.error("[TraySync] Initial snapshot:", err),
+    );
 
   listen<SyncSnapshot>("sync_progress_snapshot", (e) => {
     void tick(e.payload);
-  }).then((unsub) => {
-    if (typeof window !== "undefined") {
-      // @ts-expect-error custom watcher handle
-      window.__hippiusSyncWatcherUnsub = unsub;
-    }
-  }).catch((err: unknown) => console.error("[TraySync] listen failed:", err));
+  })
+    .then((unsub) => {
+      if (typeof window !== "undefined") {
+        // @ts-expect-error custom watcher handle
+        window.__hippiusSyncWatcherUnsub = unsub;
+      }
+    })
+    .catch((err: unknown) => console.error("[TraySync] listen failed:", err));
 }
 
 /* ─ Remove all sync-activity rows ────────────────────────────── */
@@ -1482,7 +1607,7 @@ async function removeAllSyncActivityRows(menu: Menu) {
     for (const [, item] of [...syncRowItems.entries()]) {
       try {
         await menu.remove(item);
-      } catch { }
+      } catch {}
     }
     syncRowItems.clear();
 
@@ -1491,7 +1616,7 @@ async function removeAllSyncActivityRows(menu: Menu) {
       if (typeof item.id === "string" && item.id.startsWith(SYNC_ITEM_PREFIX)) {
         try {
           await menu.remove(item);
-        } catch { }
+        } catch {}
       }
     }
   } catch (error) {

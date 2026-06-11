@@ -28,6 +28,7 @@ import LoadingScreen from "./LoadingScreen";
 import PixelateTransition from "./PixelateTransition";
 import GrainTexture from "./GrainTexture";
 import PageLoader from "@/app/components/PageLoader";
+import { shouldResetSplashForUpdateDialog } from "./splashReset";
 
 // Splash background blue, shared by the loader card and the outro pixel grid so
 // the dissolve into the app reads as one continuous colour wash.
@@ -145,9 +146,21 @@ export default function SplashWrapper({
     };
   }, [setPhaseInternalProgress]);
 
-  // Reset phase and completed phases when update dialog is open
+  // Rewind the splash to its update-check beat when the updater dialog opens
+  // OVER the still-running splash during boot. Gated on `isFullyComplete` so it
+  // never fires once the splash has finished and handed off to the app: a
+  // manually-opened update dialog (profile menu, tray "Check for Updates", deep
+  // link) would otherwise flip `isFullyComplete` back to false, unmounting the
+  // app behind the dialog's full-screen overlay and leaving a blank window when
+  // the dialog is closed. See `shouldResetSplashForUpdateDialog`.
   useEffect(() => {
-    if (updateDialogOpen && phase) {
+    if (
+      shouldResetSplashForUpdateDialog({
+        updateDialogOpen,
+        hasActivePhase: Boolean(phase),
+        splashFullyComplete: isFullyComplete,
+      })
+    ) {
       setPhase(null);
       setCompletedPhases(new Set());
       setCurrentPhaseIndex(0);
@@ -159,6 +172,7 @@ export default function SplashWrapper({
   }, [
     updateDialogOpen,
     phase,
+    isFullyComplete,
     setPhase,
     setCompletedPhases,
     setCurrentPhaseIndex,
