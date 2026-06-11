@@ -9,6 +9,7 @@ import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
 import PageHeader from "@/components/page-sections/home/PageHeader";
 import CreateButton from "@/components/ui/button/CreateButton";
 import ComingSoon from "@/components/ui/ComingSoon";
+import { REFERRALS_COMING_SOON } from "@/app/lib/featureFlags";
 import {
   Clock,
   Link as LinkIcon,
@@ -40,11 +41,10 @@ import { API_CONFIG, REFERRAL_CODE_CONFIG } from "@/lib/config";
  * When `true`, the entire referrals page renders behind a blurred
  * "Coming Soon" overlay — the sidebar link still routes here, the
  * page still mounts (so the FE doesn't have to invalidate route
- * navigation), but the content is visibly gated.
- *
- * Flip to `false` when the feature is ready to ship.
+ * navigation), but the content is visibly gated. The flag lives in the
+ * shared featureFlags module (imported above) so release gating is
+ * edited in one place.
  */
-const REFERRALS_COMING_SOON = false;
 
 /* Seed values used to fill the sparkline buckets on each stat card —
  * same constants web uses so the two clients render an identical demo
