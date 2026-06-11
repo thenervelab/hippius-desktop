@@ -66,7 +66,7 @@ export const PHASE_CONTENT: Record<string, AppSetupPhaseContent> = {
     icon: (
       <Icons.SyncData className="h-[min(170px,24vh)] w-[min(194px,27vh)]" />
     ),
-    status: "Launching App 🚀",
+    status: "Launching App",
     subStatus: "Almost ready, securing your encrypted space...",
     command: "finish_splash",
     weight: 50, // 50-100%
