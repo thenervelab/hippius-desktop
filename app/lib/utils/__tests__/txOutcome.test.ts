@@ -62,4 +62,37 @@ describe("resolveTxOutcome", () => {
     expect(caught).toBeInstanceOf(Error);
     expect(caught).not.toBeInstanceOf(TxSubmittedUnconfirmedError);
   });
+
+  it("throws the no-retry error for an unknown status, preserving any tx hash", () => {
+    // A backend newer than this FE (or a drifted serde tag) must fail in the
+    // no-retry direction — we cannot prove the tx didn't land. Before the
+    // default arm existed this returned `undefined` and callers rendered
+    // success for an unproven transaction.
+    const outcome = {
+      status: "someFutureStatus",
+      txHash: "0x9",
+      reason: "x",
+    } as unknown as TxOutcome;
+    let caught: unknown;
+    try {
+      resolveTxOutcome(outcome);
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(TxSubmittedUnconfirmedError);
+    expect((caught as TxSubmittedUnconfirmedError).txHash).toBe("0x9");
+    expect((caught as Error).message).toContain("someFutureStatus");
+  });
+
+  it("throws the no-retry error for an unknown status without a tx hash", () => {
+    const outcome = { status: "weird" } as unknown as TxOutcome;
+    let caught: unknown;
+    try {
+      resolveTxOutcome(outcome);
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(TxSubmittedUnconfirmedError);
+    expect((caught as TxSubmittedUnconfirmedError).txHash).toBe("");
+  });
 });

@@ -33,21 +33,31 @@ use subxt_signer::{bip39::Mnemonic as SubxtMnemonic, sr25519::Keypair};
 /// The extrinsic is **mortal** (audit R-12): it carries a bounded era anchored
 /// to the latest finalized block, so a signed payload can't be replayed
 /// indefinitely. subxt's `_default` path is Immortal, so we build params
-/// explicitly and use `sign_and_submit_then_watch`.
+/// explicitly.
 ///
-/// The two awaits are deliberately kept distinct (see [`TxOutcome`] for why):
-/// 1. `sign_and_submit_then_watch` — any error here is pre-pool (anchor/nonce
-///    fetch, signing, or a rejected submission), so nothing reached the chain →
+/// Signing and broadcasting are deliberately SEPARATE awaits (`create_signed`
+/// then `submit_and_watch`, not the fused `sign_and_submit_then_watch`),
+/// because only the first is provably pre-broadcast. Classification:
+/// 1. `create_signed` — metadata/nonce fetch + offline signing; no bytes leave
+///    the machine, so an error here means nothing reached the chain →
 ///    `RejectedAtSubmission` (safe to retry).
-/// 2. `wait_for_finalized` — an error here means the extrinsic was accepted but
+/// 2. `submit_and_watch` — the `author_submitAndWatchExtrinsic` RPC round-trip.
+///    Its `Err` can arrive AFTER the node has the bytes (transport drop mid-RPC
+///    with the extrinsic already in the pool), so it is NOT retry-safe →
+///    `SubmittedUnconfirmed`.
+/// 3. `wait_for_finalized` — an error here means the extrinsic was accepted but
 ///    we lost the watch before seeing it land → `SubmittedUnconfirmed` (it MAY
-///    be on-chain; the FE must not auto-resubmit). On success we further split
-///    dispatch-success (`Finalized`) from a landed-but-failed dispatch
-///    (`FinalizedFailed`).
+///    be on-chain; the FE must not auto-resubmit).
+/// 4. `wait_for_success` — runs only once the extrinsic IS in a finalized
+///    block, but it re-fetches that block's events over RPC, so its errors are
+///    classified by [`classify_post_finalization_error`]: only a decoded
+///    on-chain dispatch error proves the call failed (`FinalizedFailed`);
+///    anything else (transport, block fetch, event decode) leaves a finalized
+///    extrinsic whose outcome is unproven → `SubmittedUnconfirmed`.
 ///
-/// The extrinsic hash is captured from the progress handle BEFORE the watch is
-/// consumed, so it is available even on the `SubmittedUnconfirmed` path for the
-/// FE / user to reconcile against the chain.
+/// The extrinsic hash is captured from the signed extrinsic BEFORE broadcast,
+/// so it is available on every `SubmittedUnconfirmed` path for the FE / user
+/// to reconcile against the chain.
 ///
 /// Returns `Err` only for the impossible-to-have-submitted cases handled by the
 /// caller earlier; every post-submission state is an `Ok(TxOutcome)` so the FE
@@ -73,20 +83,49 @@ where
         .mortal(anchor.header(), MORTAL_PERIOD_BLOCKS)
         .build();
 
-    let progress = match client.tx().sign_and_submit_then_watch(tx, signer, params).await {
-        Ok(p) => p,
+    // Build + sign locally. This fetches metadata/nonce but broadcasts
+    // nothing, so an error here is provably pre-pool.
+    let signed = match client.tx().create_signed(tx, signer, params).await {
+        Ok(s) => s,
         Err(e) => return Ok(TxOutcome::RejectedAtSubmission { reason: e.to_string() }),
     };
 
-    // Capture the hash now — `wait_for_finalized` consumes `progress`.
-    let tx_hash = format!("{:?}", progress.extrinsic_hash());
+    // Hash of the signed bytes — identical to what the watch handle would
+    // report, but available before broadcast so every ambiguous path below
+    // can hand it to the FE.
+    let tx_hash = format!("{:?}", signed.hash());
+
+    // Broadcast. An Err can arrive after the node already holds the bytes
+    // (transport drop mid-RPC), so the extrinsic MAY be in the pool — never
+    // classify this as retry-safe.
+    let progress = match signed.submit_and_watch().await {
+        Ok(p) => p,
+        Err(e) => return Ok(TxOutcome::SubmittedUnconfirmed { tx_hash, reason: e.to_string() }),
+    };
 
     match progress.wait_for_finalized().await {
         Err(e) => Ok(TxOutcome::SubmittedUnconfirmed { tx_hash, reason: e.to_string() }),
         Ok(in_block) => match in_block.wait_for_success().await {
             Ok(_events) => Ok(TxOutcome::Finalized { tx_hash }),
-            Err(e) => Ok(TxOutcome::FinalizedFailed { tx_hash, reason: e.to_string() }),
+            Err(e) => Ok(classify_post_finalization_error(&e, tx_hash)),
         },
+    }
+}
+
+/// Classify a `wait_for_success` error for an extrinsic that is already in a
+/// FINALIZED block. Only `subxt::Error::Runtime(_)` is a decoded on-chain
+/// `System.ExtrinsicFailed` — proof the dispatch failed and the call took no
+/// effect (the nonce was consumed, so retrying as a NEW transaction is safe).
+/// Every other variant (RPC/transport drop, `BlockNotFound`, event/metadata
+/// decode failures — which can even mask a real dispatch failure whose error
+/// bytes failed to decode) means the outcome is unprovable: the extrinsic IS
+/// finalized and MAY have succeeded → `SubmittedUnconfirmed`, never a retry.
+/// The wildcard arm is also future-proof: `subxt::Error` is `#[non_exhaustive]`,
+/// and any variant we don't know about gets the conservative answer.
+fn classify_post_finalization_error(e: &subxt::Error, tx_hash: String) -> TxOutcome {
+    match e {
+        subxt::Error::Runtime(_) => TxOutcome::FinalizedFailed { tx_hash, reason: e.to_string() },
+        _ => TxOutcome::SubmittedUnconfirmed { tx_hash, reason: e.to_string() },
     }
 }
 
@@ -260,5 +299,81 @@ mod tests {
             !body.contains("sign_and_submit_then_watch_default"),
             "sign_submit_track must NOT use the Immortal `_default` path (R-12)",
         );
+    }
+
+    /// Static regression guard (review F1): signing and broadcasting MUST be
+    /// separate awaits. The fused `sign_and_submit_then_watch` collapses the
+    /// pre-broadcast `create_signed` errors and the post-broadcast
+    /// `submit_and_watch` errors into one `Err`, which forces a single
+    /// classification — and classifying a broadcast-phase transport drop as
+    /// `RejectedAtSubmission` ("safe to retry") reopens the R-01 double-spend:
+    /// the bytes may already be in the node's pool.
+    #[test]
+    fn signing_helper_splits_sign_from_broadcast() {
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/blockchain/helpers.rs")).expect("read helpers.rs");
+        let sig_idx = src.find("pub(crate) async fn sign_submit_track").expect("sign_submit_track present");
+        let body_start = src[sig_idx..].find('{').expect("fn body opens") + sig_idx;
+        let mut depth = 0usize;
+        let mut body_end = body_start;
+        for (i, ch) in src[body_start..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        body_end = body_start + i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let body = &src[body_start..=body_end];
+        assert!(body.contains("create_signed("), "must sign via create_signed (pre-broadcast errors → RejectedAtSubmission)");
+        assert!(body.contains("submit_and_watch()"), "must broadcast via submit_and_watch (its errors → SubmittedUnconfirmed)");
+        assert!(
+            !body.contains("sign_and_submit_then_watch"),
+            "must NOT use the fused sign_and_submit_then_watch — it conflates pre- and post-broadcast errors (R-01)",
+        );
+        assert!(
+            body.contains("classify_post_finalization_error("),
+            "wait_for_success errors must go through classify_post_finalization_error (only Runtime proves dispatch failure)",
+        );
+    }
+
+    /// A decoded on-chain dispatch error is the ONLY proof that a finalized
+    /// extrinsic's call failed — that and only that may be surfaced as the
+    /// retryable `FinalizedFailed`.
+    #[test]
+    fn runtime_error_after_finalization_is_finalized_failed() {
+        let e = subxt::Error::Runtime(subxt::error::DispatchError::Other);
+        match super::classify_post_finalization_error(&e, "0xabc".into()) {
+            super::TxOutcome::FinalizedFailed { tx_hash, reason } => {
+                assert_eq!(tx_hash, "0xabc");
+                assert!(!reason.is_empty());
+            }
+            other => panic!("Runtime error must classify as FinalizedFailed, got {other:?}"),
+        }
+    }
+
+    /// Transport drops, missing blocks, and decode failures after finalization
+    /// do NOT disprove success — they must classify as the no-retry
+    /// `SubmittedUnconfirmed`, preserving the hash for reconciliation.
+    #[test]
+    fn non_runtime_errors_after_finalization_are_submitted_unconfirmed() {
+        let errors: Vec<subxt::Error> = vec![
+            subxt::Error::Other("websocket connection closed".into()),
+            subxt::Error::Transaction(subxt::error::TransactionError::BlockNotFound),
+            subxt::Error::Io(std::io::Error::other("connection reset")),
+        ];
+        for e in errors {
+            match super::classify_post_finalization_error(&e, "0xdef".into()) {
+                super::TxOutcome::SubmittedUnconfirmed { tx_hash, reason } => {
+                    assert_eq!(tx_hash, "0xdef");
+                    assert!(!reason.is_empty());
+                }
+                other => panic!("{e:?} must classify as SubmittedUnconfirmed, got {other:?}"),
+            }
+        }
     }
 }

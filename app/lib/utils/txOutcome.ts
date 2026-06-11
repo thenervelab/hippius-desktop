@@ -43,6 +43,10 @@ export class TxSubmittedUnconfirmedError extends Error {
  * - `submittedUnconfirmed` → throws {@link TxSubmittedUnconfirmedError} (no retry).
  * - `finalizedFailed` / `rejectedAtSubmission` → throws a plain `Error` (the
  *   call definitively did not take effect, so a retry is a safe new transaction).
+ * - unknown `status` (backend newer than this FE) → throws
+ *   {@link TxSubmittedUnconfirmedError}: we cannot prove the tx didn't land,
+ *   so fail in the no-retry direction. Without this arm an unrecognized
+ *   status would return `undefined` and every caller would render success.
  */
 export function resolveTxOutcome(outcome: TxOutcome): { txHash: string } {
   switch (outcome.status) {
@@ -54,5 +58,14 @@ export function resolveTxOutcome(outcome: TxOutcome): { txHash: string } {
       throw new Error(outcome.reason || "Transaction failed on-chain.");
     case "rejectedAtSubmission":
       throw new Error(outcome.reason || "Transaction was rejected.");
+    default: {
+      // TS narrows `outcome` to `never` here; the cast covers the runtime
+      // reality of a drifted/newer backend payload.
+      const unknown = outcome as { status?: string; txHash?: string };
+      throw new TxSubmittedUnconfirmedError(
+        unknown.txHash ?? "",
+        `Unknown transaction outcome status: ${String(unknown.status)}`,
+      );
+    }
   }
 }
