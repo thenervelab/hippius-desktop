@@ -276,7 +276,7 @@ async fn soft_delete_all_includes_system_rows() {
     let bob = "bob";
 
     insert_notification(&pool, alice, None, None, "a1").await;
-    insert_notification(&pool, "system", Some("Hippius"), Some("0.1.100"), "Update Available").await;
+    insert_notification(&pool, "system", Some("Hippius"), Some("0.2.0"), "Update Available").await;
     insert_notification(&pool, bob, None, None, "b1").await;
 
     // Same SQL the production command runs.
