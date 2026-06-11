@@ -2,10 +2,10 @@ import { toast } from "sonner";
 
 /**
  * SCREAMING_SNAKE_CASE names of the Rust `NotReadyKind` variants, mirrored
- * from `src-tauri/src/error.rs` (kept in sync with that enum's serde
- * `rename_all = "SCREAMING_SNAKE_CASE"` and the round-trip test there). These
- * are the stable `subkind` discriminants — match on these, never on the
- * English Display `message`, which is free to be reworded.
+ * from `src-tauri/src/error.rs` (kept in sync with that enum's `wire_name()`
+ * and the round-trip test there). These are the stable `subkind`
+ * discriminants — match on these, never on the English Display `message`,
+ * which is free to be reworded.
  */
 export type NotReadyKind =
   | "SYNC_SETUP"
@@ -18,7 +18,8 @@ export type NotReadyKind =
   | "NOT_ENOUGH_DISK_SPACE"
   | "SIGNING_KEY_UNAVAILABLE"
   | "INSUFFICIENT_CREDITS"
-  | "DATABASE_NOT_READY";
+  | "DATABASE_NOT_READY"
+  | "RATE_LIMITED";
 
 /**
  * Shape of an `AppError` returned by Tauri commands. The `kind` field

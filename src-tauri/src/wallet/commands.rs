@@ -14,7 +14,7 @@
 
 use crate::app_state::AppState;
 use crate::auth::account_key::account_key;
-use crate::error::AppError;
+use crate::error::{AppError, NotReadyKind};
 use crate::wallet::crypto;
 use crate::wallet::repo::{self, LocalWallet, PublicLocalWallet};
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
@@ -315,7 +315,7 @@ pub async fn local_wallet_verify_password(state: State<'_, AppState>, id: i64, p
     // lockout threshold. Held to fn end — covers check → verify → record.
     let _attempt_gate = state.wallet_rate_limit.attempt_gate(id).await;
     if let Err(rl) = state.wallet_rate_limit.check(id) {
-        return Err(AppError::Other(rl.message()));
+        return Err(AppError::NotReady(NotReadyKind::RateLimited { message: rl.message() }));
     }
     let ok = crypto::verify_password(&wallet.password_hash, &password, &wallet.address);
     if ok {
@@ -353,7 +353,7 @@ pub async fn local_wallet_get_decrypted_mnemonic(state: State<'_, AppState>, id:
     // measure Argon2id timing to distinguish "wrong password" from
     // "lockout" — both surface as a plain error string now.
     if let Err(rl) = state.wallet_rate_limit.check(id) {
-        return Err(AppError::Other(rl.message()));
+        return Err(AppError::NotReady(NotReadyKind::RateLimited { message: rl.message() }));
     }
     // Verifier check next for a friendlier error than AEAD-decrypt-failed.
     if !crypto::verify_password(&wallet.password_hash, &password, &wallet.address) {
@@ -401,7 +401,7 @@ pub async fn local_wallet_export_backup(state: State<'_, AppState>, id: i64, pas
     // concurrent IPC burst can't outrun the lockout threshold.
     let _attempt_gate = state.wallet_rate_limit.attempt_gate(id).await;
     if let Err(rl) = state.wallet_rate_limit.check(id) {
-        return Err(AppError::Other(rl.message()));
+        return Err(AppError::NotReady(NotReadyKind::RateLimited { message: rl.message() }));
     }
     if !crypto::verify_password(&wallet.password_hash, &password, &wallet.address) {
         state.wallet_rate_limit.record_failure(id);
@@ -674,7 +674,7 @@ pub async fn local_wallet_sign(
     // lockout threshold. Held to fn end — covers check → verify → record.
     let _attempt_gate = state.wallet_rate_limit.attempt_gate(id).await;
     if let Err(rl) = state.wallet_rate_limit.check(id) {
-        return Err(AppError::Other(rl.message()));
+        return Err(AppError::NotReady(NotReadyKind::RateLimited { message: rl.message() }));
     }
     if !crypto::verify_password(&wallet.password_hash, &password, &wallet.address) {
         state.wallet_rate_limit.record_failure(id);

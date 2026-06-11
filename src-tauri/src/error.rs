@@ -60,9 +60,10 @@ pub enum AppError {
 
 /// Machine-readable error kinds for state precondition failures.
 /// The frontend can match on these structurally instead of
-/// pattern-matching English error strings.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+/// pattern-matching English error strings. The wire form is the plain
+/// string from [`NotReadyKind::wire_name`] (no serde derive — see that
+/// method for why).
+#[derive(Debug, Clone)]
 pub enum NotReadyKind {
     /// Sync setup required before this operation can proceed.
     SyncSetup,
@@ -104,6 +105,41 @@ pub enum NotReadyKind {
     /// effectively unreachable from the UI, but it stays a precise
     /// machine-readable signal for any early-startup path that reaches `pool()`.
     DatabaseNotReady,
+    /// Too many failed wallet-password attempts; the per-wallet rate
+    /// limiter is in lockout. `message` carries the human-readable
+    /// retry-after text ("Try again in N minute(s)/second(s)") produced
+    /// by `wallet::rate_limit`. Structured (rather than `Other`) so the
+    /// FE can tell a lockout apart from a genuinely wrong password —
+    /// before this variant, a locked-out user typing the CORRECT
+    /// password was told it was incorrect and kept retrying blind.
+    /// NOTE: `blockchain::helpers::get_signer_and_address` deliberately
+    /// does NOT use this — on the scripted signing path, lockouts stay
+    /// indistinguishable from wrong passwords (`SigningKeyUnavailable`).
+    RateLimited { message: String },
+}
+
+impl NotReadyKind {
+    /// SCREAMING_SNAKE_CASE wire name — the value of the serialized
+    /// `subkind` field. An explicit method rather than serde's derived
+    /// enum serialization so variants may carry payload fields (e.g.
+    /// `RateLimited.message`) without changing `subkind`'s wire shape
+    /// from a plain string.
+    pub fn wire_name(&self) -> &'static str {
+        match self {
+            Self::SyncSetup => "SYNC_SETUP",
+            Self::DriveNotInitialized => "DRIVE_NOT_INITIALIZED",
+            Self::DriveNotUnlocked => "DRIVE_NOT_UNLOCKED",
+            Self::SyncInProgress => "SYNC_IN_PROGRESS",
+            Self::NoEncryptionKey => "NO_ENCRYPTION_KEY",
+            Self::ConfigMissing => "CONFIG_MISSING",
+            Self::MasterMnemonicUnrecoverable => "MASTER_MNEMONIC_UNRECOVERABLE",
+            Self::NotEnoughDiskSpace => "NOT_ENOUGH_DISK_SPACE",
+            Self::SigningKeyUnavailable => "SIGNING_KEY_UNAVAILABLE",
+            Self::InsufficientCredits => "INSUFFICIENT_CREDITS",
+            Self::DatabaseNotReady => "DATABASE_NOT_READY",
+            Self::RateLimited { .. } => "RATE_LIMITED",
+        }
+    }
 }
 
 impl std::fmt::Display for NotReadyKind {
@@ -142,6 +178,7 @@ impl std::fmt::Display for NotReadyKind {
             Self::DatabaseNotReady => {
                 write!(f, "The application is still starting up. Please try again in a moment.")
             }
+            Self::RateLimited { message } => write!(f, "{message}"),
         }
     }
 }
@@ -180,7 +217,7 @@ impl Serialize for AppError {
         if let Self::NotReady(subkind) = self {
             let mut s = serializer.serialize_struct("AppError", 3)?;
             s.serialize_field("kind", kind)?;
-            s.serialize_field("subkind", subkind)?;
+            s.serialize_field("subkind", subkind.wire_name())?;
             s.serialize_field("message", &self.to_string())?;
             s.end()
         } else {
@@ -306,9 +343,9 @@ mod tests {
 
     #[test]
     fn not_ready_kind_serializes_screaming_snake() {
-        let kind = NotReadyKind::DriveNotInitialized;
-        let json = serde_json::to_value(&kind).expect("serialize");
-        assert_eq!(json, "DRIVE_NOT_INITIALIZED");
+        let err = AppError::NotReady(NotReadyKind::DriveNotInitialized);
+        let json = serde_json::to_value(&err).expect("serialize");
+        assert_eq!(json["subkind"], "DRIVE_NOT_INITIALIZED");
     }
 
     /// Regression pin: an uninitialized pool surfaces as
@@ -395,14 +432,15 @@ mod tests {
     // ── NotReadyKind round-trip through JSON ────────────────────────
 
     /// Drift guard between the Rust `NotReadyKind` and the mirrored TS union in
-    /// `app/lib/utils/dispatchTauriError.ts`. `wire_name`'s match is exhaustive,
-    /// so adding a variant fails to COMPILE here until its wire name is declared
-    /// — a forcing reminder to also update the TS union. The assertion then pins
-    /// that serde's actual `rename_all` output equals the declared name (so a
-    /// rename of either side is caught, not silently skipped as a list would).
+    /// `app/lib/utils/dispatchTauriError.ts`. `expected_wire_name`'s match is
+    /// exhaustive, so adding a variant fails to COMPILE here until its wire name
+    /// is declared — a forcing reminder to also update the TS union. The
+    /// assertion then pins the FULL wire path (the `subkind` field of a
+    /// serialized `AppError::NotReady`) against the declared name, so a rename
+    /// in `wire_name()` or the Serialize impl is caught, not silently skipped.
     #[test]
     fn not_ready_kind_all_variants_serialize_screaming_snake() {
-        fn wire_name(kind: &NotReadyKind) -> &'static str {
+        fn expected_wire_name(kind: &NotReadyKind) -> &'static str {
             match kind {
                 NotReadyKind::SyncSetup => "SYNC_SETUP",
                 NotReadyKind::DriveNotInitialized => "DRIVE_NOT_INITIALIZED",
@@ -415,6 +453,7 @@ mod tests {
                 NotReadyKind::SigningKeyUnavailable => "SIGNING_KEY_UNAVAILABLE",
                 NotReadyKind::InsufficientCredits => "INSUFFICIENT_CREDITS",
                 NotReadyKind::DatabaseNotReady => "DATABASE_NOT_READY",
+                NotReadyKind::RateLimited { .. } => "RATE_LIMITED",
             }
         }
         for kind in [
@@ -429,11 +468,26 @@ mod tests {
             NotReadyKind::SigningKeyUnavailable,
             NotReadyKind::InsufficientCredits,
             NotReadyKind::DatabaseNotReady,
+            NotReadyKind::RateLimited { message: "Try again in 5 minutes.".into() },
         ] {
-            let expected = wire_name(&kind);
-            let json = serde_json::to_value(&kind).expect("serialize");
-            assert_eq!(json, expected, "variant {kind:?} should serialize to {expected}");
+            let expected = expected_wire_name(&kind);
+            let json = serde_json::to_value(AppError::NotReady(kind.clone())).expect("serialize");
+            assert_eq!(json["subkind"], expected, "variant {kind:?} should serialize subkind {expected}");
         }
+    }
+
+    /// The lockout variant must surface the rate limiter's retry-after text as
+    /// the message (the FE shows it verbatim) while keeping the structural
+    /// `RATE_LIMITED` subkind the FE dispatches on.
+    #[test]
+    fn rate_limited_carries_retry_after_message_on_the_wire() {
+        let err = AppError::NotReady(NotReadyKind::RateLimited {
+            message: "Too many failed attempts. Try again in 5 minute(s).".into(),
+        });
+        let json = serde_json::to_value(&err).expect("serialize");
+        assert_eq!(json["kind"], "NotReady");
+        assert_eq!(json["subkind"], "RATE_LIMITED");
+        assert_eq!(json["message"], "Too many failed attempts. Try again in 5 minute(s).");
     }
 
     // ── Display for every variant ───────────────────────────────────

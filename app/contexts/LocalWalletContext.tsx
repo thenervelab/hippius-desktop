@@ -79,18 +79,14 @@ interface LocalWalletContextValue {
     walletId: number,
     password: string,
   ) => Promise<string | null>;
-  exportBackup: (walletId: number, password: string) => Promise<{
-    name: string;
-    address: string;
-    encryptedMnemonic: string;
-    passwordHash: string;
-    exportedAt: string;
-  } | null>;
   /** Returns the raw bytes of a `.zip` archive containing the
       wallet's encrypted backup JSON. Requires the wallet password
-      (the backend gates export, audit R-07). Caller saves to disk;
-      null on a wrong password or IPC failure. */
-  exportBackupZip: (walletId: number, password: string) => Promise<Uint8Array | null>;
+      (the backend gates export, audit R-07). Caller saves to disk.
+      THROWS the structured IPC error on failure — a rate-limit
+      lockout (`subkind: "RATE_LIMITED"`) must reach the dialog with
+      its retry-after message instead of collapsing into a generic
+      "incorrect password". */
+  exportBackupZip: (walletId: number, password: string) => Promise<Uint8Array>;
   /** Import a wallet from a `.zip` archive produced by
       `exportBackupZip`. The user-supplied `name` overrides whatever
       label the file carries, matching the JSON import path. */
@@ -465,44 +461,18 @@ export function LocalWalletProvider({
     [],
   );
 
-  const exportBackup = useCallback(
-    async (
-      walletId: number,
-      password: string,
-    ): Promise<{
-      name: string;
-      address: string;
-      encryptedMnemonic: string;
-      passwordHash: string;
-      exportedAt: string;
-    } | null> => {
-      try {
-        return await invoke("local_wallet_export_backup", { id: walletId, password });
-      } catch (e) {
-        console.error("Failed to export wallet backup:", e);
-        return null;
-      }
-    },
-    [],
-  );
-
   const exportBackupZip = useCallback(
-    async (walletId: number, password: string): Promise<Uint8Array | null> => {
-      try {
-        // Tauri serialises Vec<u8> as `number[]` over IPC; we normalise
-        // to Uint8Array here so the caller can hand it straight to
-        // `writeFile`. The backend requires the wallet password (audit
-        // R-07); a wrong password surfaces as a thrown IPC error which we
-        // swallow to `null` so the export dialog shows a retry message.
-        const bytes = await invoke<number[]>("local_wallet_export_backup_zip", {
-          id: walletId,
-          password,
-        });
-        return new Uint8Array(bytes);
-      } catch (e) {
-        console.error("Failed to export wallet backup zip:", e);
-        return null;
-      }
+    async (walletId: number, password: string): Promise<Uint8Array> => {
+      // Tauri serialises Vec<u8> as `number[]` over IPC; we normalise
+      // to Uint8Array here so the caller can hand it straight to
+      // `writeFile`. The backend requires the wallet password (audit
+      // R-07). Errors propagate structured (not collapsed to null) so
+      // the dialog can tell a rate-limit lockout from a wrong password.
+      const bytes = await invoke<number[]>("local_wallet_export_backup_zip", {
+        id: walletId,
+        password,
+      });
+      return new Uint8Array(bytes);
     },
     [],
   );
@@ -560,7 +530,6 @@ export function LocalWalletProvider({
       lockWallet,
       getDecryptedMnemonic,
       getDecryptedMnemonicById,
-      exportBackup,
       exportBackupZip,
       importEncryptedWalletFromZip,
       setSetupStep,
@@ -589,7 +558,6 @@ export function LocalWalletProvider({
       lockWallet,
       getDecryptedMnemonic,
       getDecryptedMnemonicById,
-      exportBackup,
       exportBackupZip,
       importEncryptedWalletFromZip,
       refreshWallets,

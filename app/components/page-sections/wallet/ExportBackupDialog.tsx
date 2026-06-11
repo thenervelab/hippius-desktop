@@ -7,6 +7,7 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Lock } from "@/components/ui/icons";
+import { isNotReady } from "@/lib/utils/dispatchTauriError";
 import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
 import { WalletDialogShell } from "./shared/WalletDesign";
 import WalletPasswordField from "./shared/WalletPasswordField";
@@ -50,7 +51,12 @@ export default function ExportBackupDialog({
   }, [open, wallet?.id]);
 
   const close = () => {
-    if (!busy) onClose();
+    if (!busy) {
+      // Don't let the typed password outlive the dialog — it stays mounted
+      // after close, so React state would otherwise hold it indefinitely.
+      setPassword("");
+      onClose();
+    }
   };
 
   const handleExport = async () => {
@@ -63,12 +69,6 @@ export default function ExportBackupDialog({
     setError(null);
     try {
       const bytes = await exportBackupZip(wallet.id, password);
-      if (!bytes) {
-        // The backend rejects a wrong password before producing any bytes,
-        // and the context swallows the error to `null`.
-        setError("Incorrect password, or the export failed. Please try again.");
-        return;
-      }
       const safeName = wallet.name.trim().replace(/\s+/g, "-") || "wallet";
       const filePath = await save({
         filters: [{ name: "Wallet backup", extensions: ["zip"] }],
@@ -78,10 +78,22 @@ export default function ExportBackupDialog({
       if (!filePath) return;
       await writeFile(filePath, bytes);
       toast.success("Wallet backup saved");
+      setPassword("");
       onClose();
     } catch (e) {
       console.error("[ExportBackupDialog] export failed:", e);
-      setError("Export failed. Please try again.");
+      // A rate-limit lockout must show its retry-after text — telling a
+      // locked-out user their CORRECT password is wrong keeps them
+      // retrying blind (and the limiter rejects before verifying, so
+      // those retries never succeed).
+      if (isNotReady(e, "RATE_LIMITED")) {
+        setError(
+          (e as { message?: string }).message ??
+            "Too many failed attempts. Please wait before trying again.",
+        );
+      } else {
+        setError("Incorrect password, or the export failed. Please try again.");
+      }
     } finally {
       setBusy(false);
     }
