@@ -3,7 +3,7 @@
 import { usePathname } from "next/navigation";
 import cn from "@/app/lib/utils/cn";
 import NavItem from "./NavItem";
-import { navSections } from "./NavData";
+import { navSections, filterNavSections } from "./NavData";
 import { useAtom, useAtomValue } from "jotai";
 import { sidebarCollapsedAtom } from "@/app/components/sidebar/sideBarAtoms";
 import { shareFeatureEnabledAtom } from "@/app/lib/global-atoms/sharesAtoms";
@@ -66,16 +66,7 @@ const Sidebar: React.FC = () => {
   const shareEnabled = useAtomValue(shareFeatureEnabledAtom);
 
   const visibleSections = useMemo(
-    () =>
-      navSections
-        .map((section) => ({
-          ...section,
-          items: section.items.filter((item) => {
-            if (item.featureFlag === "shares") return shareEnabled;
-            return true;
-          }),
-        }))
-        .filter((section) => section.items.length > 0),
+    () => filterNavSections(navSections, { shareEnabled }),
     [shareEnabled],
   );
 

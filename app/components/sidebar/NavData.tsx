@@ -2,6 +2,10 @@ import { Icons } from "@/components/ui";
 import { Monitor, Share2Icon } from "lucide-react";
 import Support from "../ui/icons/Support";
 import SidebarVm from "../ui/icons/SidebarVm";
+import {
+  VM_FEATURE_ENABLED,
+  WALLET_FEATURE_ENABLED,
+} from "@/app/lib/featureFlags";
 
 export interface SubMenuItemData {
   label: string;
@@ -23,9 +27,10 @@ export interface NavItemData {
   external?: boolean;
   // Capability gate consulted by the sidebar before rendering this
   // item. `"shares"` hides the entry until the connected hcfs-server
-  // advertises `shares: true` (see `shareFeatureEnabledAtom`). Adding
-  // a new gate is one entry here plus one branch in the sidebar.
-  featureFlag?: "shares";
+  // advertises `shares: true` (see `shareFeatureEnabledAtom`); `"wallet"`
+  // hides it while `WALLET_FEATURE_ENABLED` is off. Adding a new gate is
+  // one entry here plus one branch in `filterNavSections`.
+  featureFlag?: "shares" | "wallet";
 }
 
 export interface NavSection {
@@ -64,6 +69,9 @@ export const navSections: NavSection[] = [
             label: "Virtual Machines",
             path: "/vm",
             icon: <SidebarVm className={ICON_CLASS} strokeWidth={1.5} />,
+            // Disabled + orange "Coming Soon" tag while the feature is
+            // gated off (mirrors the web console's sidebar treatment).
+            comingSoon: !VM_FEATURE_ENABLED,
           },
         ],
       },
@@ -81,6 +89,7 @@ export const navSections: NavSection[] = [
         label: "Wallet",
         path: "/wallet",
         icon: <Icons.Wallet className={ICON_CLASS} />,
+        featureFlag: "wallet",
       },
       {
         label: "Referrals",
@@ -106,3 +115,29 @@ export const navSections: NavSection[] = [
     ],
   },
 ];
+
+/**
+ * Resolve which nav sections/items are visible for the current gates.
+ *
+ * Pure so the gating rules are unit-testable: `shares` is a runtime server
+ * capability (passed in by the sidebar from `shareFeatureEnabledAtom`),
+ * `wallet` is the build-time `WALLET_FEATURE_ENABLED` flag (defaulted here
+ * so callers don't re-import it). Sections whose items are all filtered out
+ * are dropped entirely so no orphaned heading renders.
+ */
+export function filterNavSections(
+  sections: NavSection[],
+  gates: { shareEnabled: boolean; walletEnabled?: boolean },
+): NavSection[] {
+  const walletEnabled = gates.walletEnabled ?? WALLET_FEATURE_ENABLED;
+  return sections
+    .map((section) => ({
+      ...section,
+      items: section.items.filter((item) => {
+        if (item.featureFlag === "shares") return gates.shareEnabled;
+        if (item.featureFlag === "wallet") return walletEnabled;
+        return true;
+      }),
+    }))
+    .filter((section) => section.items.length > 0);
+}

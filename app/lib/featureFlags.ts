@@ -39,3 +39,31 @@ export const DRIVE_SCOPED_CREDITS_ENABLED = true;
  * fetch logged "Command get_vpn_status not found".
  */
 export const VPN_FEATURE_ENABLED = false;
+
+/**
+ * Wallet page. When `false`, the wallet is fully invisible: the sidebar
+ * entry is filtered out (`filterNavSections` in NavData.tsx) and a direct
+ * `/wallet` navigation redirects to the overview (`FeatureDisabledRedirect`
+ * in the page). All wallet code stays in place — same keep-don't-delete
+ * policy as VPN. Flip to `true` to restore the page and sidebar entry.
+ */
+export const WALLET_FEATURE_ENABLED = false;
+
+/**
+ * Virtual Machines. When `false`:
+ *   - the "Virtual Machines" sidebar sub-item renders disabled with an
+ *     orange "Coming Soon" tag (mirrors the web console's treatment),
+ *   - `/vm`, `/vm/create` and `/vm/instance-details` redirect to the
+ *     overview (`FeatureDisabledRedirect`),
+ *   - the tray context menu's "Open Virtual Machines" item is omitted.
+ * VM code stays intact. Flip to `true` to re-enable everything.
+ */
+export const VM_FEATURE_ENABLED = false;
+
+/**
+ * Referrals readiness. When `true`, the referrals page renders behind the
+ * blurred `ComingSoon` overlay (the sidebar link still routes there and the
+ * page still mounts — matching the web console's referrals gating). Flip to
+ * `false` when the program goes live.
+ */
+export const REFERRALS_COMING_SOON = true;
