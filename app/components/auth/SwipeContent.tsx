@@ -37,7 +37,7 @@ export interface SwipeSlide {
 // dedicated dark clips later, at which point gifDark gets its own file.
 export const SWIPE_CONTENT: SwipeSlide[] = [
   {
-    title: "Decentralized Storage",
+    title: "Distributed Storage",
     description:
       "A global network of independent nodes. Your files stay safe and accessible even if part of the network goes offline.",
     gif: "/assets/signin/1-light.gif",
