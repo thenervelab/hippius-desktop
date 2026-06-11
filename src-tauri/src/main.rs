@@ -600,6 +600,40 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
     builder.setup(|app| {
         debug!(".setup() closure called in setup.rs");
 
+        // macOS 26+ (Tahoe) mounts legacy transparent .icns icons onto a white
+        // rounded tile in the Dock, but renders a RUNTIME-set application icon
+        // as-is (the sticker-style glyph). Tauri performs this runtime set in
+        // dev builds only (see tauri's RunEvent::Ready, cfg(all(dev, macos))),
+        // which is why `pnpm tauri:dev` showed the bare hippo while installed
+        // builds showed the white tile. Mirror the same call for release so
+        // both modes look identical. Must run on the main thread (AppKit);
+        // Tauri's setup hook does.
+        #[cfg(all(not(dev), target_os = "macos"))]
+        {
+            use cocoa::appkit::{NSApp, NSApplication, NSImage};
+            use cocoa::base::nil;
+            use cocoa::foundation::NSData;
+
+            // 512px transparent-background source; the Dock scales down.
+            static DOCK_ICON_PNG: &[u8] = include_bytes!("../icons/icon.png");
+            // SAFETY: AppKit calls on the main thread (setup runs there).
+            // NSData copies the byte buffer; NSImage may return nil on
+            // malformed data, which we guard instead of unwrapping.
+            unsafe {
+                let data = NSData::dataWithBytes_length_(
+                    nil,
+                    DOCK_ICON_PNG.as_ptr().cast(),
+                    DOCK_ICON_PNG.len() as u64,
+                );
+                let image = NSImage::initWithData_(NSImage::alloc(nil), data);
+                if image == nil {
+                    warn!("dock icon: NSImage init failed; keeping bundle icon");
+                } else {
+                    NSApp().setApplicationIconImage_(image);
+                }
+            }
+        }
+
         if let Ok(env_path) = app.path().resolve(".env", BaseDirectory::Resource) {
             let _ = dotenvy::from_filename(env_path);
         }
