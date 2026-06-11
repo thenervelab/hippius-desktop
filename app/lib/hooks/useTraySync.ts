@@ -1073,11 +1073,15 @@ function startLoginStatusWatcher() {
   void tick();
   const h = setInterval(tick, INTERVAL_MS);
   if (typeof window !== "undefined") {
-    // @ts-expect-error custom watcher handle
-    if (window.__hippiusLoginWatcher)
-      clearInterval(window.__hippiusLoginWatcher);
-    // @ts-expect-error custom watcher handle
-    window.__hippiusLoginWatcher = h;
+    // The handle is stashed on `window` so an HMR re-run can clear the
+    // previous interval. Window has no such property, so widen via a local
+    // cast — `@ts-expect-error` comments only cover the next line and left
+    // the second access failing `next build`'s type check.
+    const w = window as Window & {
+      __hippiusLoginWatcher?: ReturnType<typeof setInterval>;
+    };
+    if (w.__hippiusLoginWatcher) clearInterval(w.__hippiusLoginWatcher);
+    w.__hippiusLoginWatcher = h;
   }
 }
 
