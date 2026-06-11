@@ -35,7 +35,7 @@ const PROVIDER_CONFIG: Record<
   },
   github: {
     icon: Icons.Github,
-    label: "Continue with Github",
+    label: "Continue with GitHub",
   },
   apple: {
     icon: Icons.Apple,
