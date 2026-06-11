@@ -36,7 +36,10 @@ import {
   shareModalFileAtom,
 } from "@/app/lib/global-atoms/sharesAtoms";
 import { renameModalFileAtom } from "@/app/lib/global-atoms/renameAtoms";
-import { canRenameFile, RENAME_DISABLED_TOOLTIP } from "@/app/lib/utils/renameGating";
+import {
+  canRenameFile,
+  RENAME_DISABLED_TOOLTIP,
+} from "@/app/lib/utils/renameGating";
 import { cn } from "@/lib/utils";
 import NameCell from "./NameCell";
 import SelectionActionBar from "../SelectionActionBar";
@@ -56,7 +59,7 @@ import { fileDetailsPanelAtom } from "@/app/lib/global-atoms/fileDetailsAtoms";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 import { useRouter } from "next/navigation";
 import { generateFolderUrl } from "@/app/utils/folderUrlUtils";
-import { FormattedTimestamp } from "@/app/components/ui"; // Add this import
+import { FormattedTimestamp } from "@/app/components/ui";
 import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 import { useFolderAggregateSelection } from "@/app/lib/hooks/use-folder-aggregate-selection";
 import useDeleteFile from "@/app/lib/hooks/use-delete-file";
@@ -523,9 +526,13 @@ const FilesTable: FC<FilesTableProps> = memo(
     );
 
     const localHandleContextMenu = useCallback(
-      (e: React.MouseEvent, file: FormattedUserFile) => {
+      (
+        e: React.MouseEvent,
+        file: FormattedUserFile,
+        previewSiblings?: FormattedUserFile[],
+      ) => {
         if (handleContextMenu) {
-          handleContextMenu(e, file);
+          handleContextMenu(e, file, previewSiblings ?? null);
         }
       },
       [handleContextMenu],
@@ -539,9 +546,13 @@ const FilesTable: FC<FilesTableProps> = memo(
       [handleFileDownload, polkadotAddress],
     );
 
+    // `previewSiblings` is set when the file was opened from an
+    // inline-expanded folder: it's that folder's rows, which the viewer
+    // uses for its thumbnail rail and prev/next instead of the page's
+    // top-level list. Top-level rows omit it (page-list fallback).
     const handleSetSelectedFile = useCallback(
-      (file: FormattedUserFile) => {
-        setSelectedFile?.(file);
+      (file: FormattedUserFile, previewSiblings?: FormattedUserFile[]) => {
+        setSelectedFile?.(file, previewSiblings ?? null);
       },
       [setSelectedFile],
     );
@@ -630,6 +641,10 @@ const FilesTable: FC<FilesTableProps> = memo(
         // the "Open" item would inherit the page URL's subFolderPath
         // and skip the intermediate folders the user expanded into.
         parentSubFolderPath?: string,
+        // Sibling rows of an inline-expanded subtree, forwarded into the
+        // viewer by the "View" item so the thumbnail rail / prev-next
+        // walk the folder the file lives in (see handleSetSelectedFile).
+        previewSiblings?: FormattedUserFile[],
       ) => {
         // Compute folderUrl if file is a folder
         let folderUrl: string | undefined = undefined;
@@ -722,7 +737,8 @@ const FilesTable: FC<FilesTableProps> = memo(
                 {
                   icon: <Icons.Eye className="size-4" />,
                   itemTitle: "View",
-                  onItemClick: () => handleSetSelectedFile(file),
+                  onItemClick: () =>
+                    handleSetSelectedFile(file, previewSiblings),
                   disabled: itemDeleting,
                 },
               ]

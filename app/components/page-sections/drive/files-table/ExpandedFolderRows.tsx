@@ -88,9 +88,21 @@ export interface ExpandedFolderRowsProps {
     canPreview?: boolean,
     folderExpansion?: { expanded: boolean; onToggle: () => void },
     parentSubFolderPath?: string,
+    previewSiblings?: FormattedUserFile[],
   ) => ActionItem[];
-  onSelectFile: (file: FormattedUserFile) => void;
-  onRowContextMenu?: (event: React.MouseEvent, file: FormattedUserFile) => void;
+  /** `previewSiblings` is this folder's full (sorted) listing — the viewer
+   *  scopes its thumbnail rail and prev/next to it, so opening a file from
+   *  an expanded subtree navigates within that folder, not within the
+   *  page's top-level rows. */
+  onSelectFile: (
+    file: FormattedUserFile,
+    previewSiblings?: FormattedUserFile[],
+  ) => void;
+  onRowContextMenu?: (
+    event: React.MouseEvent,
+    file: FormattedUserFile,
+    previewSiblings?: FormattedUserFile[],
+  ) => void;
   /** Invoked when a folder click should escape inline expansion and
    *  navigate via the URL (depth overflow, or future opt-outs). The
    *  second arg is the parent folder's path inside the sync drive so
@@ -466,21 +478,21 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
         const nameContent =
           !isSelectionMode && fileType === "video" ? (
             <VideoDialogTrigger
-              onClick={() => onSelectFile(childFile)}
+              onClick={() => onSelectFile(childFile, sortedChildRows)}
               className="min-w-0 px-0 py-0"
             >
               {nameNode}
             </VideoDialogTrigger>
           ) : !isSelectionMode && fileType === "image" ? (
             <ImageDialogTrigger
-              onClick={() => onSelectFile(childFile)}
+              onClick={() => onSelectFile(childFile, sortedChildRows)}
               className="min-w-0 px-0 py-0"
             >
               {nameNode}
             </ImageDialogTrigger>
           ) : !isSelectionMode && fileType === "PDF" ? (
             <PdfDialogTrigger
-              onClick={() => onSelectFile(childFile)}
+              onClick={() => onSelectFile(childFile, sortedChildRows)}
               className="min-w-0 px-0 py-0"
             >
               {nameNode}
@@ -496,6 +508,7 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
           true,
           undefined,
           folderRelativePath,
+          sortedChildRows,
         );
 
         return (
@@ -524,7 +537,7 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
               )}
               onContextMenu={(event) => {
                 if (isDeleting) return;
-                onRowContextMenu?.(event, childFile);
+                onRowContextMenu?.(event, childFile, sortedChildRows);
               }}
               onClick={(event) => {
                 if (isDeleting) {
