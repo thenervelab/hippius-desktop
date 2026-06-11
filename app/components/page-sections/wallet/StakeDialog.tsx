@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { HAlphaCoinLogo, HippiusLogo } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
+import { formatUnitsTruncated, parseUnitsToBase } from "@/lib/utils/planckUnits";
 import { TxSubmittedUnconfirmedError } from "@/lib/utils/txOutcome";
 
 import {
@@ -70,9 +71,12 @@ const StakeDialog: React.FC<StakeDialogProps> = ({
   // plancks are already locked by the staking pallet — the chain
   // rejects a `bond` for amounts that include them, so MAX would have
   // silently produced a transaction the user couldn't actually submit.
-  const availableHip = useMemo(() => {
+  // BigInt planck end-to-end (audit R-26): `Number(planck) / 1e18` rounds to
+  // the nearest double before truncating, so MAX could exceed the true
+  // available and the chain rejected the bond.
+  const availablePlanck = useMemo(() => {
     const freeBI = balanceInfo?.data?.free;
-    if (!freeBI) return 0;
+    if (!freeBI) return 0n;
     try {
       const free = typeof freeBI === "bigint" ? freeBI : BigInt(String(freeBI));
       const bonded = BigInt(stakingInfo.bonded || "0");
@@ -80,10 +84,9 @@ const StakeDialog: React.FC<StakeDialogProps> = ({
       const withdrawable = BigInt(stakingInfo.withdrawable || "0");
       const locked = bonded + unbonding + withdrawable;
       const remaining = free - locked - MAX_GAS_FEE_BUFFER_PLANCK;
-      if (remaining <= 0n) return 0;
-      return Number(remaining) / 1e18;
+      return remaining > 0n ? remaining : 0n;
     } catch {
-      return 0;
+      return 0n;
     }
   }, [
     balanceInfo,
@@ -92,10 +95,10 @@ const StakeDialog: React.FC<StakeDialogProps> = ({
     stakingInfo.withdrawable,
   ]);
 
-  const formattedAvailable = useMemo(() => {
-    if (availableHip === 0) return "0";
-    return availableHip.toFixed(6).replace(/\.?0+$/, "");
-  }, [availableHip]);
+  const formattedAvailable = useMemo(
+    () => formatUnitsTruncated(availablePlanck, 18),
+    [availablePlanck],
+  );
 
   const handleAmountChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
@@ -107,20 +110,18 @@ const StakeDialog: React.FC<StakeDialogProps> = ({
   };
 
   const handlePercentClick = (pct: 100 | 50 | 25) => {
-    const next = (availableHip * pct) / 100;
-    // Floor to 6 decimals so we never exceed the displayed available.
-    const truncated = Math.floor(next * 1e6) / 1e6;
-    setAmount(truncated > 0 ? truncated.toFixed(6).replace(/\.?0+$/, "") : "");
+    const next = (availablePlanck * BigInt(pct)) / 100n;
+    // Truncated to 6 decimals, so the typed amount never exceeds available.
+    const display = formatUnitsTruncated(next, 18);
+    setAmount(next > 0n ? display : "");
     setActiveButton(pct === 100 ? "max" : pct === 50 ? "50" : "25");
     setAmountError(undefined);
   };
 
   const isAmountValid = useMemo(() => {
-    const n = Number.parseFloat(amount);
-    return (
-      Number.isFinite(n) && n > 0 && Math.round(n * 1e6) <= Math.round(availableHip * 1e6)
-    );
-  }, [amount, availableHip]);
+    const parsed = parseUnitsToBase(amount, 18);
+    return parsed !== null && parsed > 0n && parsed <= availablePlanck;
+  }, [amount, availablePlanck]);
 
   const runStakeFlow = useCallback(
     async (hipAmount: string, password: string) => {
@@ -298,7 +299,7 @@ const StakeDialog: React.FC<StakeDialogProps> = ({
                 key={key}
                 type="button"
                 onClick={() => handlePercentClick(pct)}
-                disabled={stakingInfo.isLoading || availableHip === 0}
+                disabled={stakingInfo.isLoading || availablePlanck === 0n}
                 className={cn(
                   "rounded-full border px-2.5 py-0.5 text-[13px] font-semibold leading-5 tracking-[-0.26px] transition-colors disabled:opacity-60",
                   activeButton === key

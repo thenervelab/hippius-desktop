@@ -14,20 +14,10 @@
  * authoritative gates remain Rust (`compute_max_transferable`,
  * `validate_send_balance`); this is display-only formatting.
  */
-const PLANCK_PER_HIP = BigInt("1000000000000000000"); // 10^18
-const PLANCK_PER_MICRO_HIP = BigInt("1000000000000"); // 10^12 (→ 6 decimals)
+import { formatUnitsTruncated } from "./planckUnits";
 
 export function formatPlanckToHip(planck: bigint): string {
-  if (planck <= BigInt(0)) return "0";
-
-  const whole = planck / PLANCK_PER_HIP;
-  const remainder = planck % PLANCK_PER_HIP;
-
-  // First 6 fractional digits, truncated (never rounded).
-  const sixDecimals = (remainder / PLANCK_PER_MICRO_HIP).toString().padStart(6, "0");
-  const trimmed = sixDecimals.replace(/0+$/, "");
-
-  return trimmed.length > 0 ? `${whole}.${trimmed}` : `${whole}`;
+  return formatUnitsTruncated(planck, 18, 6);
 }
 
 export default formatPlanckToHip;

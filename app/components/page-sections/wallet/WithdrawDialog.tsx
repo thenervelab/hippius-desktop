@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { HAlphaCoinLogo, HippiusLogo } from "@/components/ui/icons";
@@ -36,8 +36,14 @@ const WithdrawDialog: React.FC<WithdrawDialogProps> = ({
   const { stakingInfo, operations, refetch } = useStaking();
   const { verifyPassword } = useLocalWallet();
   const withdrawableHip = stakingInfo?.withdrawableHip ?? "0";
-  const hasWithdrawable =
-    !!withdrawableHip && Number.parseFloat(withdrawableHip) > 0;
+  // Gate on the raw planck value, not a float parse of the display string.
+  const hasWithdrawable = useMemo(() => {
+    try {
+      return BigInt(stakingInfo?.withdrawable || "0") > 0n;
+    } catch {
+      return false;
+    }
+  }, [stakingInfo?.withdrawable]);
 
   const [flowState, setFlowState] = useState<TransactionFlowState>("idle");
   const [isMinimized, setIsMinimized] = useState(false);
