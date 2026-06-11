@@ -148,14 +148,34 @@ jobs:
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
-      # rust-toolchain.toml pins the build to a specific toolchain, which
-      # rustup auto-installs on first use with only the host (aarch64)
-      # target — the step above only adds targets to *stable*. Run
-      # `rustup target add` from the repo root so it resolves the pinned
-      # toolchain and the universal build finds both Apple slices.
+      # rust-toolchain.toml pins the build toolchain, which rustup
+      # auto-installs at first cargo use with only the host (aarch64)
+      # target. A bare `rustup target add` is NOT enough: it applies to the
+      # rustup *default* (stable, set by the action above), not the pinned
+      # toolchain — run 27331470103 proved it ("rust-std up to date" in 0.1s
+      # while the universal build still missed x86_64). Parse the pinned
+      # channel and install/target it explicitly.
       - name: Add Apple targets to the pinned toolchain
         shell: bash
-        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+        run: |
+          set -euo pipefail
+          # The pin lives in src-tauri/ (the Rust workspace); fall back to the
+          # repo root in case it moves again.
+          channel=""
+          for f in src-tauri/rust-toolchain.toml rust-toolchain.toml; do
+            if [[ -f "$f" ]]; then
+              channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' "$f")
+              echo "Pinned toolchain channel: ${channel} (from $f)"
+              break
+            fi
+          done
+          if [[ -z "$channel" ]]; then
+            echo "No rust-toolchain.toml found — stable already has both targets"
+            exit 0
+          fi
+          rustup toolchain install "${channel}" --no-self-update
+          rustup target add --toolchain "${channel}" aarch64-apple-darwin x86_64-apple-darwin
+          rustup show
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
