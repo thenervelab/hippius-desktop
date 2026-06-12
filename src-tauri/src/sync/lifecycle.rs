@@ -1187,7 +1187,25 @@ pub(crate) async fn initialize_sync_inner(
             // A pause/removal won. Undo OUR registration so the drive
             // doesn't run against the user's intent; the superseder
             // already emitted its own status, so emit nothing here.
-            teardown_previous_drive(sync, &label).await;
+            //
+            // Terminal teardown, NOT `teardown_previous_drive`: that
+            // helper is the cheap entry-teardown for an init that is
+            // about to re-register everything — it drops the slot but
+            // leaves the label root, the watcher path, the synced-paths
+            // cache, and the first-reconcile gate behind, which here
+            // would leak until the next lifecycle op because this init
+            // re-registers nothing. Mirror `pause_drive`'s sequence
+            // instead: resolve the path hint from the DB so the watcher
+            // is unwatched even when the per-drive lock is held by an
+            // in-flight reconcile, then do the full in-memory removal.
+            let path_hint = sync_path_for_label(&app_state, &account_id, &label).await;
+            let (remaining, _removed_path) = remove_drive_inmemory(sync, &label, path_hint).await;
+            if remaining == 0 {
+                // A superseding pause/removal of the LAST drive already
+                // stopped the sync loop, but `start_sync_loop` above may
+                // have restarted it over a now-empty map — re-stop it.
+                teardown_last_drive(sync, &app).await;
+            }
             info!(label = %label, "init superseded by pause/removal — torn down, is_paused untouched");
             return Err(crate::error::AppError::NotReady(crate::error::NotReadyKind::SupersededByPause));
         }
@@ -1275,11 +1293,16 @@ pub async fn stop_sync(app: AppHandle) -> Result<()> {
     //     epoch check already passed before the bump may still write
     //     `is_paused=false`; that is benign because stop_sync writes no
     //     `is_paused` state of its own (nothing to overwrite) and steps
-    //     1–5 below tear down all in-memory registrations after the bump,
-    //     so the committed drive does not survive the cleanup anyway.
+    //     1–5 below tear down the registrations this bump covered.
     //     Labels are collected in one short `sync.drives` lock scope first
     //     (hierarchy: never acquire a commit lock while holding
-    //     `sync.drives`).
+    //     `sync.drives`). Because labels are sourced from `sync.drives`,
+    //     an init still in its pre-register window at logout is NOT
+    //     invalidated by this bump — it can register and commit after
+    //     the cleanup completes. Known gap, tracked follow-up: source
+    //     bump labels from the account's `sync_paths` rows instead
+    //     (every init path persists its row before initializing), or
+    //     add a global epoch component.
     let lifecycle_labels: Vec<String> = {
         let guard = sync.drives.lock().await;
         guard.keys().cloned().collect()
