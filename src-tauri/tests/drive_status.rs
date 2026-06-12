@@ -278,7 +278,9 @@ fn lifecycle_guard_src() -> String {
 /// against this one. Format-string braces (`"{label}"`) are balanced,
 /// so counting raw `{`/`}` chars is sufficient for this source file.
 fn fn_body<'a>(src: &'a str, sig: &str) -> &'a str {
-    let sig_idx = src.find(sig).unwrap_or_else(|| panic!("declaration `{sig}` present in lifecycle.rs"));
+    let sig_idx = src
+        .find(sig)
+        .unwrap_or_else(|| panic!("declaration `{sig}` not found in the pinned source file"));
     let body_start = src[sig_idx..].find('{').expect("fn body opens") + sig_idx;
     let mut depth = 0usize;
     let mut body_end = body_start;
@@ -397,13 +399,20 @@ fn pause_drive_bumps_epoch_under_commit_lock() {
         .find("drive_lifecycle.bump(")
         .expect("pause_drive must bump the pause epoch so in-flight inits see the supersession");
     let write_idx = body.find("set_sync_path_paused(").expect("pause_drive must persist is_paused=true");
+    let emit_idx = body
+        .find("emit_drive_status(")
+        .expect("pause_drive must emit the Paused status inside its commit-locked block");
     // Protocol order, not mere presence: acquire the lock, bump under it,
-    // then write the flag. A bump after the write (or outside the lock)
-    // reopens the pause-overwrite race one level down.
+    // write the flag, then emit Paused — all before the guard drops. A
+    // bump after the write (or outside the lock) reopens the
+    // pause-overwrite race one level down; an emit outside the lock can
+    // be overtaken by an init's stale Active emit (the commit's
+    // on_committed hook runs under this same lock), leaving the status
+    // cache showing Active for a paused drive.
     assert!(
-        lock_idx < bump_idx && bump_idx < write_idx,
-        "pause_drive must order commit_lock < bump < set_sync_path_paused \
-         (got indices {lock_idx} / {bump_idx} / {write_idx})"
+        lock_idx < bump_idx && bump_idx < write_idx && write_idx < emit_idx,
+        "pause_drive must order commit_lock < bump < set_sync_path_paused < emit_drive_status \
+         (got indices {lock_idx} / {bump_idx} / {write_idx} / {emit_idx})"
     );
 }
 
@@ -422,11 +431,18 @@ fn remove_drive_for_account_bumps_epoch_under_commit_lock() {
     let bump_idx = body
         .find("drive_lifecycle.bump(")
         .expect("remove_drive_for_account must bump the epoch so in-flight inits abandon their commit");
+    let emit_idx = body
+        .find("emit_drive_removed(")
+        .expect("remove_drive_for_account must emit the removal inside its commit-locked block");
     // The bump announces the supersession and is only race-free while the
-    // label's commit lock is held — so the lock acquisition must precede it.
+    // label's commit lock is held — so the lock acquisition must precede
+    // it. The removal emit must follow the bump (inside the same locked
+    // block) so it is totally ordered with an in-flight init's
+    // on_committed Active emit: emitted-last must equal serialized-last.
     assert!(
-        lock_idx < bump_idx,
-        "remove_drive_for_account must order commit_lock < bump (got indices {lock_idx} / {bump_idx})"
+        lock_idx < bump_idx && bump_idx < emit_idx,
+        "remove_drive_for_account must order commit_lock < bump < emit_drive_removed \
+         (got indices {lock_idx} / {bump_idx} / {emit_idx})"
     );
 }
 
@@ -447,7 +463,11 @@ fn stop_sync_bumps_every_drive_epoch() {
 /// Static funnel pin: `resume_drive`'s pre-init `is_paused=false` write
 /// MUST happen under the label's commit lock (single-writer invariant:
 /// EVERY `sync_paths.is_paused` write holds the label's commit lock).
-/// Resume does NOT bump — it supersedes nothing.
+/// Resume does NOT bump — it supersedes nothing. It MUST also capture
+/// its lifecycle snapshot inside that same locked block and thread it
+/// into `initialize_sync_inner`: a snapshot taken later (at init entry)
+/// would miss a pause that fully completed between resume's pre-clear
+/// and the init's entry, letting the init commit over the pause.
 #[test]
 fn resume_drive_clears_paused_under_commit_lock() {
     let src = lifecycle_src();
@@ -455,6 +475,15 @@ fn resume_drive_clears_paused_under_commit_lock() {
     assert!(
         body.contains("drive_lifecycle.commit_lock("),
         "resume_drive must hold the label's commit lock across its set_sync_path_paused(false) write"
+    );
+    assert!(
+        body.contains("drive_lifecycle.snapshot("),
+        "resume_drive must capture the lifecycle snapshot inside its commit-locked pre-clear block"
+    );
+    assert!(
+        body.contains("Some(resume_snapshot)"),
+        "resume_drive must thread its locked-block snapshot into initialize_sync_inner so a pause \
+         completing between the pre-clear and init entry still supersedes the init"
     );
 }
 

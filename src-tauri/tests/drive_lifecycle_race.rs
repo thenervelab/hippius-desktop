@@ -90,7 +90,7 @@ async fn commit_clears_flag_when_epoch_unchanged() {
     let lifecycle = DriveLifecycle::default();
     let snapshot = lifecycle.snapshot("photos");
 
-    let outcome = apply_init_commit(&lifecycle, &pool, ACCOUNT, "photos", snapshot).await.unwrap();
+    let outcome = apply_init_commit(&lifecycle, &pool, ACCOUNT, "photos", snapshot, || {}).await.unwrap();
 
     assert_eq!(outcome, CommitOutcome::Committed);
     assert!(!is_paused(&pool, ACCOUNT, "photos").await, "commit must clear is_paused");
@@ -115,7 +115,7 @@ async fn commit_yields_when_pause_intervened() {
         .await
         .unwrap();
 
-    let outcome = apply_init_commit(&lifecycle, &pool, ACCOUNT, "photos", snapshot).await.unwrap();
+    let outcome = apply_init_commit(&lifecycle, &pool, ACCOUNT, "photos", snapshot, || {}).await.unwrap();
 
     assert_eq!(outcome, CommitOutcome::Superseded);
     assert!(is_paused(&pool, ACCOUNT, "photos").await, "stale init must never overwrite the pause's is_paused=1");
@@ -143,7 +143,7 @@ async fn concurrent_pause_and_commit_serialize_on_the_lock() {
     let mut commit_task = tokio::spawn({
         let lifecycle = Arc::clone(&lifecycle);
         let pool = pool.clone();
-        async move { apply_init_commit(&lifecycle, &pool, ACCOUNT, "photos", snapshot).await }
+        async move { apply_init_commit(&lifecycle, &pool, ACCOUNT, "photos", snapshot, || {}).await }
     });
 
     // While the lock is held the commit must be pending. `&mut JoinHandle`
@@ -181,11 +181,59 @@ async fn commit_db_error_propagates_and_releases_the_lock() {
     let lifecycle = DriveLifecycle::default();
     let snapshot = lifecycle.snapshot("photos");
 
-    let result = apply_init_commit(&lifecycle, &pool, ACCOUNT, "photos", snapshot).await;
+    let result = apply_init_commit(&lifecycle, &pool, ACCOUNT, "photos", snapshot, || {}).await;
     assert!(result.is_err(), "missing sync_paths table must surface as Err, got {result:?}");
 
     // The guard is lexically scoped inside apply_init_commit, so `?`
     // drops it — but pin that contract: the lock must be free again.
     let lock = lifecycle.commit_lock("photos");
     assert!(lock.try_lock().is_ok(), "commit lock must be released after an Err return");
+}
+
+/// The post-commit hook is the caller's status-emit slot. It must run
+/// (a) ONLY when the commit actually lands — a superseded init must
+/// emit nothing, the superseder already emitted its own status — and
+/// (b) while the label's commit lock is STILL HELD, so the init's
+/// Active emit is totally ordered with the superseding producers'
+/// locked Paused/removed emits. Without (b), a pause running entirely
+/// between the commit and an unlocked emit would have its Paused emit
+/// overwritten by the stale Active one, and the status cache (which
+/// wins over the DB on FE bootstrap) would show Active for a paused
+/// drive for the rest of the session.
+#[tokio::test]
+async fn committed_hook_runs_under_the_lock_and_only_on_commit() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let pool = make_pool().await;
+    insert_path(&pool, ACCOUNT, "photos", true).await;
+
+    let lifecycle = DriveLifecycle::default();
+
+    // (a) Superseded: the hook must NOT run.
+    let snapshot = lifecycle.snapshot("photos");
+    lifecycle.bump("photos");
+    let hook_ran = AtomicBool::new(false);
+    let outcome = apply_init_commit(&lifecycle, &pool, ACCOUNT, "photos", snapshot, || {
+        hook_ran.store(true, Ordering::SeqCst);
+    })
+    .await
+    .unwrap();
+    assert_eq!(outcome, CommitOutcome::Superseded);
+    assert!(!hook_ran.load(Ordering::SeqCst), "a superseded init must not run its status-emit hook");
+
+    // (b) Committed: the hook runs, and runs under the lock — proven by
+    // try_lock on the same label's commit lock FAILING inside the hook
+    // (apply_init_commit's own guard is still alive at that point).
+    let snapshot = lifecycle.snapshot("photos");
+    let hook_ran = AtomicBool::new(false);
+    let lifecycle_ref = &lifecycle;
+    let outcome = apply_init_commit(lifecycle_ref, &pool, ACCOUNT, "photos", snapshot, || {
+        let lock = lifecycle_ref.commit_lock("photos");
+        assert!(lock.try_lock().is_err(), "hook must run while the commit lock is held");
+        hook_ran.store(true, Ordering::SeqCst);
+    })
+    .await
+    .unwrap();
+    assert_eq!(outcome, CommitOutcome::Committed);
+    assert!(hook_ran.load(Ordering::SeqCst), "a committed init must run its status-emit hook");
 }

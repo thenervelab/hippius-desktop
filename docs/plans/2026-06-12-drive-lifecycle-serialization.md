@@ -330,3 +330,5 @@ Open follow-ups:
 - Late reconcile-timestamps writes after a supersession.
 - No dynamic end-to-end test for the `Superseded` arm — exercising it for real needs a Tauri+HCFS harness; coverage today is the `lifecycle_guard` race tests plus static funnel pins.
 - Orphaned `initializeSync` wrapper in `hcfsConfigUtils.ts` and a stale `tryInitializeSync` mention in the `lifecycle.rs` (~line 1627) comment.
+- Raw-vs-sanitized label keying of the lifecycle guard (pre-existing class): the producer commands (`pause_drive`, `resume_drive`, `remove_drive_for_account`) key `commit_lock`/`bump`/`snapshot` by the RAW label they receive, while `initialize_sync_inner` keys by the `sanitize_label` output — a label that sanitization rewrites would contend on two different lock/epoch entries. Harden by sanitizing in the producer commands too.
+- `resume_drive`'s failure-path `Error` emit still runs outside the commit lock (deliberate: failure-path emit ordering is a lower-stakes pre-existing edge — the init already failed, so there is no competing Active emit to be overtaken by).

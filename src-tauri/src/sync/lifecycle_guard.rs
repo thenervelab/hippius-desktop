@@ -23,10 +23,21 @@
 //! # Lock hierarchy
 //!
 //! `commit_lock(label)` → `SyncRunner::drives` → progress std mutexes,
-//! never the reverse. The outer std mutexes in this module guard only
-//! map access and are NEVER held across an await (axiom
-//! `rust_quality_74`); the returned tokio lock is the one callers hold
-//! across their short DB write.
+//! never the reverse. The status-cache std mutex (taken by
+//! `sync::status::emit_drive_status` / `emit_drive_removed`) is a
+//! permitted LEAF acquisition under the commit lock: lifecycle status
+//! emissions deliberately run inside the locked region so the emit
+//! order matches the serialization order (a stale Active emit can never
+//! land after a superseding Paused emit). The outer std mutexes in this
+//! module guard only map access and are NEVER held across an await
+//! (axiom `rust_quality_74`); the returned tokio lock is the one
+//! callers hold across their short DB write.
+//!
+//! Entries (epochs AND commit locks) are deliberately never pruned: a
+//! removed label's bumped epoch must keep superseding stale in-flight
+//! inits that still hold pre-removal snapshots, so do NOT "clean up"
+//! the maps on drive removal. The per-label footprint is two map
+//! entries — bounded by the labels an account ever configures.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -116,6 +127,20 @@ pub enum CommitOutcome {
 /// `account_id` is the RAW account id — `set_sync_path_paused` hashes
 /// it into the `sync_paths.owner` key internally via `account_key`.
 ///
+/// `on_committed` is the caller's status-emit slot. It runs while the
+/// commit lock is STILL HELD, immediately after the successful flag
+/// clear — so the init's Active emit is totally ordered by the lock
+/// with the superseding producers' emits (pause/remove emit inside
+/// their own locked blocks): a stale Active emit can never land after
+/// a pause's Paused emit and poison the status cache for the session.
+/// Hierarchy note: the hook may take the status-cache std mutex (a
+/// permitted leaf under `commit_lock(label)` — see the module docs)
+/// but must not acquire `SyncRunner::drives` or any commit lock. The
+/// hook does not run on the `Superseded` or `Err` paths: a superseded
+/// init must emit nothing (the superseder already emitted), and a
+/// failed flag clear leaves the cache agreeing with the still-set DB
+/// flag.
+///
 /// # Errors
 ///
 /// Returns `Err` only when the `is_paused` DB write fails. Being
@@ -127,6 +152,7 @@ pub async fn apply_init_commit(
     account_id: &str,
     label: &str,
     snapshot: u64,
+    on_committed: impl FnOnce(),
 ) -> crate::error::Result<CommitOutcome> {
     let lock = lifecycle.commit_lock(label);
     let _guard = lock.lock().await;
@@ -134,6 +160,7 @@ pub async fn apply_init_commit(
         return Ok(CommitOutcome::Superseded);
     }
     crate::sync::paths::set_sync_path_paused(pool, account_id, label, false).await?;
+    on_committed();
     Ok(CommitOutcome::Committed)
 }
 
