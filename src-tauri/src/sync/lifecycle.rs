@@ -1198,6 +1198,11 @@ pub(crate) async fn initialize_sync_inner(
             // instead: resolve the path hint from the DB so the watcher
             // is unwatched even when the per-drive lock is held by an
             // in-flight reconcile, then do the full in-memory removal.
+            // Unlike `pause_drive`, this teardown runs OUTSIDE the commit
+            // lock: the lock exists solely to make the epoch check and the
+            // `is_paused` write atomic, this arm writes no flag, and the
+            // remaining unprotected-removal hazard is exactly the
+            // identity-aware-teardown follow-up.
             let path_hint = sync_path_for_label(&app_state, &account_id, &label).await;
             let (remaining, _removed_path) = remove_drive_inmemory(sync, &label, path_hint).await;
             if remaining == 0 {

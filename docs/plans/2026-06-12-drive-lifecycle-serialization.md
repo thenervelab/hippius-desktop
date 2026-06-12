@@ -313,3 +313,20 @@ match crate::sync::lifecycle_guard::apply_init_commit(
 - Serializing *across* labels (per-label locks are correct; cross-label ordering doesn't matter).
 - Cancelling the in-flight init's network steps when superseded (it finishes and is then torn down; wasted seconds, no incorrect state — cancellation plumbing through `hcfs-client` is a separate upstream change).
 - The repo-wide rustfmt-1.95 / `tsc` test-file debt noted during PR #17 (separate `chore` PR if wanted; not part of this work).
+
+## Execution outcome
+
+All tasks executed 2026-06-12 via subagent-driven development. Deviations from plan:
+
+1. The `Superseded` arm uses `remove_drive_inmemory` + `teardown_last_drive` (terminal teardown) instead of the plan's `teardown_previous_drive` — a review-caught plan defect: `teardown_previous_drive` is the cheap entry-teardown for an init about to re-register everything, and here nothing re-registers, so it would have leaked the label root, watcher path, synced-paths cache, and first-reconcile gate.
+2. The TS error-union mirror was updated (`dispatchTauriError.ts`) per the `wire_name` drift-guard contract when `NotReadyKind::SupersededByPause` was added.
+3. `stop_sync`'s epoch bump is lock-free, with an inline justification: it writes no `is_paused` state of its own, and any commit that has not yet run re-checks the epoch under the commit lock.
+
+Open follow-ups:
+
+- Identity-aware slot teardown (the Superseded arm's removal is not protected against racing a newer registration).
+- `stop_sync` pre-register-window gap — source bump labels from the account's `sync_paths` rows (every init path persists its row before initializing) or add a global epoch component.
+- Epoch-gating `spawn_folder_registration` (the spawned registration is not yet supersession-aware).
+- Late reconcile-timestamps writes after a supersession.
+- No dynamic end-to-end test for the `Superseded` arm — exercising it for real needs a Tauri+HCFS harness; coverage today is the `lifecycle_guard` race tests plus static funnel pins.
+- Orphaned `initializeSync` wrapper in `hcfsConfigUtils.ts` and a stale `tryInitializeSync` mention in the `lifecycle.rs` (~line 1627) comment.
