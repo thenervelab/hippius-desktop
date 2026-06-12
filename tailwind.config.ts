@@ -2,7 +2,10 @@ import type { Config } from "tailwindcss";
 import containerQueries from "@tailwindcss/container-queries";
 
 export default {
-  // darkMode: "class",
+  // Class-driven dark mode: `dark:` variants apply under the `.dark` class
+  // that AppThemeProvider (app/lib/theme-context.tsx) toggles on <html>
+  // from the user's System/Light/Dark preference in settings.
+  darkMode: "selector",
   content: [
     "./pages/**/*.{js,ts,jsx,tsx,mdx}",
     "./components/**/*.{js,ts,jsx,tsx,mdx}",

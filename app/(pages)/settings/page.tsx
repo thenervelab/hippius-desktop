@@ -2,6 +2,7 @@
 
 import { Suspense } from "react";
 import { useSearchParams } from "next/navigation";
+import AppearanceSettings from "@/components/page-sections/settings/AppearanceSettings";
 import MultiFolderSyncManager from "@/components/page-sections/settings/MultiFolderSyncManager";
 import DeviceNameSetting from "@/components/page-sections/settings/DeviceNameSetting";
 import RecoveryPhraseSettings from "@/components/page-sections/settings/RecoveryPhraseSettings";
@@ -26,6 +27,13 @@ const SECTION_META: Record<
   sync: {
     title: "Sync & Storage",
     description: "Configure your sync folders and storage options.",
+  },
+  appearance: {
+    title: "Appearance",
+    description: "Personalize how Hippius looks on this device.",
+    tooltip:
+      "Your theme choice is stored locally and applies right away. It only affects this device, so other devices and the web console keep their own setting.",
+    showDescription: true,
   },
   wallets: {
     title: "Wallets",
@@ -110,6 +118,8 @@ function SettingsContent() {
             <MultiFolderSyncManager />
           </>
         )}
+
+        {section === "appearance" && <AppearanceSettings />}
 
         {section === "wallets" && <WalletSettings />}
 

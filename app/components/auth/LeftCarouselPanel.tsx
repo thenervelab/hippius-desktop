@@ -8,19 +8,22 @@ import { Pagination, EffectFade } from "swiper/modules";
 import type { Swiper as SwiperClass } from "swiper";
 import AuthTitleBar from "./AuthTitleBar";
 import { computeCropLockScale } from "./carouselCrop";
+import { useAppTheme } from "@/lib/theme-context";
 import "swiper/css";
 import "swiper/css/pagination";
 import "swiper/css/effect-fade";
 
 const LeftCarouselPanel = () => {
-  // Theme: the app uses Tailwind's media dark-mode strategy (no .dark class),
-  // so we mirror it by reading prefers-color-scheme directly to pick the clip.
-  const [prefersDark, setPrefersDark] = useState(false);
-  // Gate the <img> behind a client-mount flag so the theme-keyed GIF first
-  // renders only on the client, after `prefersDark` is resolved — the static
-  // export prerenders with the light src, so without this the first client
-  // paint would hydrate-mismatch (and briefly flash) the wrong theme's clip.
-  const [mounted, setMounted] = useState(false);
+  // Theme: read the app's resolved theme (the user's System/Light/Dark
+  // preference applied by AppThemeProvider) rather than prefers-color-scheme
+  // directly, so a forced Light/Dark picks the matching clip. `isLoaded`
+  // gates the <img> so the theme-keyed GIF first renders only after the
+  // preference is resolved on the client — the static export prerenders
+  // with the light src, so without this the first client paint would
+  // hydrate-mismatch (and briefly flash) the wrong theme's clip.
+  const { isLoaded: themeLoaded, resolvedTheme } = useAppTheme();
+  const prefersDark = resolvedTheme === "dark";
+  const mounted = themeLoaded;
   // The active slide is React state because we mount the <img> for ONLY that
   // slide (plus the outgoing one mid-crossfade). A GIF starts animating from
   // its first frame the moment it mounts, so mounting only the active clip is
@@ -47,15 +50,6 @@ const LeftCarouselPanel = () => {
   // an auto-advance apart from a user-initiated change.
   const autoAdvancingRef = useRef(false);
   const [frameSize, setFrameSize] = useState({ width: 0, height: 0 });
-
-  useEffect(() => {
-    const mq = window.matchMedia("(prefers-color-scheme: dark)");
-    setPrefersDark(mq.matches);
-    setMounted(true);
-    const onChange = (e: MediaQueryListEvent) => setPrefersDark(e.matches);
-    mq.addEventListener("change", onChange);
-    return () => mq.removeEventListener("change", onChange);
-  }, []);
 
   useEffect(() => {
     const node = videoFrameRef.current;
@@ -200,25 +194,25 @@ const LeftCarouselPanel = () => {
                        */}
                       {mounted &&
                         (index === activeIndex || index === prevIndex) && (
-                        <img
-                          key={`${index}-${prefersDark}`}
-                          src={prefersDark ? item.gifDark : item.gif}
-                          alt=""
-                          aria-hidden
-                          draggable={false}
-                          onLoad={
-                            index === activeIndex
-                              ? () => setActiveReady(true)
-                              : undefined
-                          }
-                          style={{
-                            transform: `translate(-50%, -50%) scale(${
-                              (1 + item.cropX / 100) * cropLockScale
-                            })`,
-                          }}
-                          className="absolute left-1/2 top-1/2 h-full w-auto max-w-none block select-none pointer-events-none"
-                        />
-                      )}
+                          <img
+                            key={`${index}-${prefersDark}`}
+                            src={prefersDark ? item.gifDark : item.gif}
+                            alt=""
+                            aria-hidden
+                            draggable={false}
+                            onLoad={
+                              index === activeIndex
+                                ? () => setActiveReady(true)
+                                : undefined
+                            }
+                            style={{
+                              transform: `translate(-50%, -50%) scale(${
+                                (1 + item.cropX / 100) * cropLockScale
+                              })`,
+                            }}
+                            className="absolute left-1/2 top-1/2 h-full w-auto max-w-none block select-none pointer-events-none"
+                          />
+                        )}
                     </div>
                   </div>
                 </SwiperSlide>
@@ -248,24 +242,20 @@ const LeftCarouselPanel = () => {
           opacity: 1 !important;
         }
         /*
-         * Dark mode uses prefers-color-scheme, NOT a .dark class: this app's
-         * Tailwind runs the default media strategy (darkMode is commented out
-         * in tailwind.config.ts) and nothing adds a .dark class at runtime. A
-         * .dark selector here would never match, leaving the active bullet at
-         * the light-mode solid black — invisible on the dark panel.
+         * Dark mode keys off the .dark class AppThemeProvider toggles on
+         * <html> (Tailwind darkMode: "selector"), so the bullets follow the
+         * user's System/Light/Dark preference, not just the OS.
          *
          * The active rule must be re-declared AFTER the inactive override so it
          * wins on source order: both selectors are equal specificity/!important,
          * so without this the inactive opacity would dim the active dot too.
          */
-        @media (prefers-color-scheme: dark) {
-          .auth-carousel-bullet {
-            background: #ebebeb !important;
-            opacity: 0.2 !important;
-          }
-          .auth-carousel-bullet-active {
-            opacity: 1 !important;
-          }
+        .dark .auth-carousel-bullet {
+          background: #ebebeb !important;
+          opacity: 0.2 !important;
+        }
+        .dark .auth-carousel-bullet-active {
+          opacity: 1 !important;
         }
       `}</style>
     </div>
