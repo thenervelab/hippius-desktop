@@ -9,7 +9,6 @@ import dynamic from "next/dynamic";
 import { openAppLink } from "@/app/lib/utils/links";
 import cn from "@/app/lib/utils/cn";
 import { Icons } from "../ui";
-import CustomTooltip2 from "../ui/CustomTooltip2";
 import BoxSimple from "../ui/icons/BoxSimple";
 import {
   ChevronDown,
@@ -70,8 +69,8 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
   // The address span is never CSS-clipped, so the trailing half always
   // survives — only this middle ellipsis shortens the address.
   const truncatedAddress = displayAddress
-    ? `${displayAddress.slice(0, 6)}...${displayAddress.slice(
-        displayAddress.length - 6,
+    ? `${displayAddress.slice(0, 8)}...${displayAddress.slice(
+        displayAddress.length - 8,
       )}`
     : "";
 
@@ -117,10 +116,8 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
     }
   };
 
-  const handleSendIconClick = async (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-
+  // Open the account page on the Hipstats explorer.
+  const openHipstatsAccount = async () => {
     const accountPageUrl = `https://hipstats.com/accounts/${displayAddress}`;
 
     try {
@@ -146,7 +143,9 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
   if (!displayAddress) return null;
 
   const avatarNode = (
-    <span className="size-[30px] rounded-full overflow-hidden flex-shrink-0">
+    // relative so the avatar paints above the absolutely-positioned hover
+    // layer in the expanded trigger (positioned, z-auto → later in paint order).
+    <span className="relative size-[30px] rounded-full overflow-hidden flex-shrink-0">
       <Avatar
         colors={["#D3DFF8", "#183E91", "#3167DE", "#A6F4C5"]}
         name={displayAddress}
@@ -160,7 +159,10 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
   // sits on the address line itself so it aligns with the address rather than
   // floating in the vertical centre of the two-line card.
   const renderIdentity = (withChevron: boolean) => (
-    <span className="flex flex-col items-start min-w-0 flex-1">
+    // relative: paint above the trigger's hover layer (see avatarNode).
+    // overflow-hidden: the trigger itself must stay overflow-visible (it
+    // would clip the hover layer), so text clipping lives here instead.
+    <span className="relative flex flex-col items-start min-w-0 flex-1 overflow-hidden">
       <span className="flex items-center gap-1.5">
         <span className="text-sm font-medium font-inter leading-none text-zinc-800 dark:text-grey-light-600 tracking-[-0.4px] whitespace-nowrap text-left">
           {truncatedAddress}
@@ -194,7 +196,9 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
     <DropdownMenu>
       <div
         className={cn(
-          "flex items-center gap-1.5 w-full overflow-hidden h-11",
+          // No overflow-hidden: it would clip the hover pill's bleed flat.
+          // Text clipping is handled inside renderIdentity instead.
+          "flex items-center gap-1.5 w-full h-11",
           // Center the avatar in the collapsed rail. Without this it's
           // left-aligned and the px-0 button (30px) sits flush-left, looking
           // clipped against the rail edge at high zoom.
@@ -208,43 +212,51 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
             type="button"
             aria-label="Open account menu"
             className={cn(
-              "group flex items-center transition-colors duration-200",
-              // Hover / keyboard-focus / open share one translucent surface and
-              // there is NO focus ring (Radix returns focus here on close; a ring
-              // showed the browser/brand blue, clipped to a bar by overflow-hidden).
-              // bg-black/5 renders nothing here — the black palette has no DEFAULT
-              // key — so use an explicit rgba on light; white/10 on dark.
-              "outline-none",
-              "hover:bg-[rgba(0,0,0,0.06)] focus-visible:bg-[rgba(0,0,0,0.06)] data-[state=open]:bg-[rgba(0,0,0,0.06)]",
-              "dark:hover:bg-white/10 dark:focus-visible:bg-white/10 dark:data-[state=open]:bg-white/10",
-              // Collapsed: a fixed 36px circle around the 30px avatar, so the
-              // hover surface is a concentric halo instead of the expanded
-              // state's rounded-lg pill (whose py-2 made it 46px tall — taller
-              // than the 44px row — so overflow-hidden cut its top/bottom flat).
-              // rem-sized like the rail, so it scales 1:1 at every zoom level.
+              // No focus ring (Radix returns focus here on close; a ring
+              // showed the browser/brand blue as a clipped bar).
+              "group flex items-center outline-none",
+              // Collapsed: a fixed 36px circle around the 30px avatar — the
+              // hover surface is a concentric halo painted by the button
+              // itself. rem-sized like the rail, so it scales 1:1 at every
+              // zoom level.
+              // Expanded: the button is a LAYOUT-ONLY box — no padding,
+              // margin, or background, so the avatar/address can never drift
+              // out of alignment with the footer. The glassy hover pill is the
+              // absolutely-positioned layer below, decoupled from layout.
+              // self-stretch fills the 44px row so :hover covers the whole
+              // row height, not just the 30px content band.
               collapsed
-                ? "size-9 shrink-0 justify-center rounded-full"
-                : "flex-1 gap-1.5 rounded-lg py-2 pr-1 min-w-0 overflow-hidden",
+                ? cn(
+                    "size-9 shrink-0 justify-center rounded-full transition-colors duration-200",
+                    "hover:bg-white/30 focus-visible:bg-white/30 data-[state=open]:bg-white/30",
+                    "dark:hover:bg-white/10 dark:focus-visible:bg-white/10 dark:data-[state=open]:bg-white/10",
+                  )
+                : "relative flex-1 self-stretch gap-1.5 min-w-0",
             )}
           >
+            {!collapsed && (
+              // Glass pill matching the nav links' surface (NavItem:
+              // hover:bg-white/30 dark:hover:bg-white/10), spanning the full
+              // 44px row and 10px past the content on both sides (the links'
+              // p-[10px] inset) — within the footer's px-6 gutters. Out of
+              // flow, so the row's gap and metrics ignore it. It deliberately
+              // KEEPS pointer events: as a child of the trigger, hovering or
+              // clicking the pill's bleed makes the button itself :hover /
+              // receive the click, so the whole visual pill is interactive —
+              // exactly like the links' padded box.
+              <span
+                aria-hidden
+                className={cn(
+                  "absolute -inset-x-[10px] inset-y-0 rounded-[6px] transition-colors duration-200",
+                  "group-hover:bg-white/30 group-focus-visible:bg-white/30 group-data-[state=open]:bg-white/30",
+                  "dark:group-hover:bg-white/10 dark:group-focus-visible:bg-white/10 dark:group-data-[state=open]:bg-white/10",
+                )}
+              />
+            )}
             {avatarNode}
             {!collapsed && renderIdentity(true)}
           </button>
         </DropdownMenuTrigger>
-
-        {!collapsed && (
-          <CustomTooltip2
-            className="self-center"
-            tooltipContent="View on Hipstats"
-          >
-            <button
-              onClick={handleSendIconClick}
-              className="hover:scale-110 rounded-full duration-300 p-1 flex justify-center transition-transform"
-            >
-              <Icons.Send className="size-4 text-zinc-500 dark:text-grey-dark-600" />
-            </button>
-          </CustomTooltip2>
-        )}
       </div>
 
       <DropdownMenuContent
@@ -286,6 +298,14 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
             />
           </span>
           <span>{copied ? "Copied!" : "Copy address"}</span>
+        </DropdownMenuItem>
+
+        <DropdownMenuItem
+          onSelect={() => void openHipstatsAccount()}
+          className={menuItemClass}
+        >
+          <Icons.Send className="size-4 shrink-0" />
+          <span>View on Hipstats</span>
         </DropdownMenuItem>
 
         <DropdownMenuItem onSelect={handleOpenUpdate} className={menuItemClass}>

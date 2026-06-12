@@ -596,6 +596,10 @@ async fn open_db_pool(db_path: &std::path::Path) -> Result<SqlitePool, sqlx::Err
 /// for dev), constructs the single `AppState` (the app holds no statics), and
 /// wires the sync bridge's app handle. Returning the builder lets this compose
 /// in `main()`'s builder chain.
+#[expect(
+    clippy::too_many_lines,
+    reason = "Linear one-shot startup pipeline — env load, deep links, AppState, migrations, tray. Splitting it fragments the strict ordering between the steps without reducing complexity."
+)]
 pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
     builder.setup(|app| {
         debug!(".setup() closure called in setup.rs");
