@@ -69,8 +69,8 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
   // The address span is never CSS-clipped, so the trailing half always
   // survives — only this middle ellipsis shortens the address.
   const truncatedAddress = displayAddress
-    ? `${displayAddress.slice(0, 6)}...${displayAddress.slice(
-        displayAddress.length - 6,
+    ? `${displayAddress.slice(0, 8)}...${displayAddress.slice(
+        displayAddress.length - 8,
       )}`
     : "";
 
@@ -209,19 +209,21 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
               // Hover / keyboard-focus / open share one translucent surface and
               // there is NO focus ring (Radix returns focus here on close; a ring
               // showed the browser/brand blue, clipped to a bar by overflow-hidden).
-              // bg-black/5 renders nothing here — the black palette has no DEFAULT
-              // key — so use an explicit rgba on light; white/10 on dark.
+              // The glassy white surface matches the sidebar nav links
+              // (NavItem: hover:bg-white/30 dark:hover:bg-white/10).
               "outline-none",
-              "hover:bg-[rgba(0,0,0,0.06)] focus-visible:bg-[rgba(0,0,0,0.06)] data-[state=open]:bg-[rgba(0,0,0,0.06)]",
+              "hover:bg-white/30 focus-visible:bg-white/30 data-[state=open]:bg-white/30",
               "dark:hover:bg-white/10 dark:focus-visible:bg-white/10 dark:data-[state=open]:bg-white/10",
               // Collapsed: a fixed 36px circle around the 30px avatar, so the
               // hover surface is a concentric halo instead of the expanded
-              // state's rounded-lg pill (whose py-2 made it 46px tall — taller
-              // than the 44px row — so overflow-hidden cut its top/bottom flat).
+              // state's pill (whose py-2 made it 46px tall — taller than the
+              // 44px row — so overflow-hidden cut its top/bottom flat).
               // rem-sized like the rail, so it scales 1:1 at every zoom level.
+              // Expanded: pl-[10px] + rounded-[6px] mirror the nav links'
+              // p-[10px] inset so the avatar aligns with the link icons.
               collapsed
                 ? "size-9 shrink-0 justify-center rounded-full"
-                : "flex-1 gap-1.5 rounded-lg py-2 pr-1 min-w-0 overflow-hidden",
+                : "flex-1 gap-1.5 rounded-[6px] py-2 pl-[10px] pr-1 min-w-0 overflow-hidden",
             )}
           >
             {avatarNode}
