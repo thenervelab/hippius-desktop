@@ -3,19 +3,15 @@
 import { useState, useCallback } from "react";
 import {
   getHcfsConfig,
-  initializeSync,
   type InitSyncResult,
   type HcfsConfigResult,
 } from "../utils/hcfsConfigUtils";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { migrationLockAtom } from "../global-atoms/migrationAtoms";
-import { appStore } from "@/lib/store/jotaiStore";
 import { isNotReady } from "../utils/dispatchTauriError";
 import { invokeWithTimeout } from "../utils/invokeWithTimeout";
 
 export interface UseHcfsSyncResult {
-  tryInitializeSync: (accountId: string, label: string, mnemonic?: string) => Promise<boolean>;
   setupAndInitialize: (
     accountId: string,
     label: string,
@@ -47,53 +43,6 @@ export function useHcfsSync(): UseHcfsSyncResult {
       return { server_url: "", has_password: false };
     }
   }, []);
-
-  /** Initialize sync if HCFS config already exists.
-   *  The Rust `initialize_sync` command handles cleanup of any previous sync loop internally,
-   *  so callers do not need to call `stop_sync` first. */
-  const tryInitializeSync = useCallback(
-    async (accountId: string, label: string, mnemonic?: string): Promise<boolean> => {
-      setError(null);
-
-      // Block sync while server-side migration is in progress
-      if (appStore.get(migrationLockAtom)) {
-        console.log("[useHcfsSync] Migration in progress, sync blocked");
-        return false;
-      }
-
-      try {
-        // Check if HCFS config exists
-        const config = await checkConfig(accountId);
-        if (!config.has_password) {
-          console.log("[useHcfsSync] No HCFS config, setup required");
-          setNeedsSetup(true);
-          return false;
-        }
-
-        setIsInitializing(true);
-
-        // Call initialize_sync
-        const result = await initializeSync(accountId, label, mnemonic);
-
-        // If a new mnemonic was generated, show backup dialog
-        if (result.mnemonic) {
-          setMnemonicToBackup(result.mnemonic);
-        }
-
-        console.log("[useHcfsSync] Sync initialized successfully:", result.user_id);
-        setNeedsSetup(false);
-        return true;
-      } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : String(err);
-        console.error("[useHcfsSync] Failed to initialize sync:", errorMsg);
-        setError(errorMsg);
-        return false;
-      } finally {
-        setIsInitializing(false);
-      }
-    },
-    [checkConfig]
-  );
 
   /** Save HCFS config and initialize sync.
    *  Callers MUST call `invoke("stop_sync")` before this if a sync loop is already running. */
@@ -147,7 +96,6 @@ export function useHcfsSync(): UseHcfsSyncResult {
   }, []);
 
   return {
-    tryInitializeSync,
     setupAndInitialize,
     checkConfig,
     isInitializing,
