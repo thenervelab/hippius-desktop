@@ -302,16 +302,21 @@ fn initialize_sync_inner_clears_paused_flag() {
     }
     let body = &src[body_start..=body_end];
 
-    let call_idx = body.find("set_sync_path_paused").expect(
+    let call_idx = body.find("set_sync_path_paused(").expect(
         "initialize_sync_inner must clear sync_paths.is_paused so a successfully \
          initialized drive is never left DB-flagged paused (files-page resume bug)",
     );
-    // The call must clear (pass `false`), not set, the flag. Inspect the
-    // argument window right after the call site.
-    let call_window = &body[call_idx..(call_idx + 200).min(body.len())];
+    // The call must clear (pass `false`), not set, the flag. Bind the
+    // assertion to the call's own argument list — not a loose window —
+    // so a stray `false` in a nearby comment or log string can never
+    // satisfy it. The call takes no nested parens, so the first `)`
+    // after the call closes its argument list.
+    let args_start = call_idx + "set_sync_path_paused(".len();
+    let args_end = body[args_start..].find(')').expect("set_sync_path_paused call closes its argument list") + args_start;
+    let args = &body[args_start..args_end];
     assert!(
-        call_window.contains("false"),
-        "set_sync_path_paused inside initialize_sync_inner must pass `false` (clear); got: {call_window}"
+        args.trim_end().ends_with("false"),
+        "set_sync_path_paused inside initialize_sync_inner must pass `false` (clear) as its last argument; got args: {args}"
     );
 }
 

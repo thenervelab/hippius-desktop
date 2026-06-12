@@ -1161,11 +1161,26 @@ pub(crate) async fn initialize_sync_inner(
     // login retry ladder) and every restart booted it paused again.
     // Clearing here makes "successfully initialized ⇒ is_paused = 0"
     // hold for every entry point; the UPDATE is a no-op for the
-    // already-cleared rows auto-init passes through. Non-fatal: the
-    // drive is already running, so a failed flag clear must not fail
-    // the init (mirrors `pause_drive`'s warn-on-DB-failure handling).
-    if let Err(e) = crate::sync::paths::set_sync_path_paused(pool, &account_id, &label, false).await {
-        warn!(label = %label, error = %e, "Failed to clear is_paused after successful init");
+    // already-cleared rows auto-init passes through.
+    //
+    // Pause-wins guard: only clear while OUR drive is still in the
+    // in-memory map. `pause_drive` removes the drive from the map
+    // BEFORE writing `is_paused=1`, so an absent label means a pause
+    // intervened after `register_drive` above — that intent must win,
+    // not be overwritten by this late bookkeeping write. (A pause that
+    // lands before `register_drive` is the pre-existing race shared
+    // with `resume_drive`'s pre-init clear; closing it fully needs
+    // per-label serialization of pause/resume/init — tracked follow-up.)
+    // Non-fatal: the drive is already running, so a failed flag clear
+    // must not fail the init (mirrors `pause_drive`'s warn-on-DB-failure
+    // handling).
+    let still_registered = sync.drives.lock().await.contains_key(&label);
+    if still_registered {
+        if let Err(e) = crate::sync::paths::set_sync_path_paused(pool, &account_id, &label, false).await {
+            warn!(label = %label, error = %e, "Failed to clear is_paused after successful init");
+        }
+    } else {
+        info!(label = %label, "Drive unregistered mid-init (pause intervened) — leaving is_paused untouched");
     }
 
     // Emit a per-drive Active status so any FE listener (settings page,
