@@ -58,6 +58,11 @@ impl DriveLifecycle {
 
     /// Records a superseding action (pause, removal) for the label,
     /// invalidating every snapshot taken before this call.
+    ///
+    /// `bump` must happen while holding the label's commit lock (or
+    /// otherwise strictly before the superseding `is_paused` write it
+    /// announces); bumping after releasing the lock reopens the race
+    /// this module exists to close.
     pub fn bump(&self, label: &str) {
         let mut epochs = self.epochs.lock().unwrap_or_else(PoisonError::into_inner);
         *epochs.entry(label.to_string()).or_insert(0) += 1;
@@ -75,6 +80,9 @@ impl DriveLifecycle {
     /// the outer std lock guards only the map insert and is dropped
     /// before this returns, so holding the returned tokio lock across
     /// an await never holds a std mutex (axiom `rust_quality_74`).
+    ///
+    /// Every write to `sync_paths.is_paused` for a label MUST happen
+    /// while holding that label's commit lock.
     pub fn commit_lock(&self, label: &str) -> Arc<tokio::sync::Mutex<()>> {
         let mut locks = self.commit_locks.lock().unwrap_or_else(PoisonError::into_inner);
         locks
