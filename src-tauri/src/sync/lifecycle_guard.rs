@@ -92,6 +92,47 @@ impl DriveLifecycle {
     }
 }
 
+/// Outcome of the init commit step.
+#[derive(Debug, PartialEq, Eq)]
+pub enum CommitOutcome {
+    /// No pause/removal superseded the init: `is_paused` cleared.
+    Committed,
+    /// A pause/removal bumped the epoch mid-init: nothing written;
+    /// the caller must tear down its registration.
+    Superseded,
+}
+
+/// Atomically (under the label's commit lock) re-check the epoch and,
+/// if still current, clear `is_paused`. This is the init side of the
+/// single-writer protocol documented on [`DriveLifecycle::commit_lock`]:
+/// the epoch check and the flag write happen as one step, so a pause
+/// that bumped the epoch can never have its `is_paused=1` overwritten
+/// by a stale in-flight init.
+///
+/// `account_id` is the RAW account id — `set_sync_path_paused` hashes
+/// it into the `sync_paths.owner` key internally via `account_key`.
+///
+/// # Errors
+///
+/// Returns `Err` only when the `is_paused` DB write fails. Being
+/// superseded is a normal protocol outcome ([`CommitOutcome::Superseded`]),
+/// not an error.
+pub async fn apply_init_commit(
+    lifecycle: &DriveLifecycle,
+    pool: &sqlx::SqlitePool,
+    account_id: &str,
+    label: &str,
+    snapshot: u64,
+) -> crate::error::Result<CommitOutcome> {
+    let lock = lifecycle.commit_lock(label);
+    let _guard = lock.lock().await;
+    if !lifecycle.is_current(label, snapshot) {
+        return Ok(CommitOutcome::Superseded);
+    }
+    crate::sync::paths::set_sync_path_paused(pool, account_id, label, false).await?;
+    Ok(CommitOutcome::Committed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
