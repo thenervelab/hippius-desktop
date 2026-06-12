@@ -166,3 +166,26 @@ async fn concurrent_pause_and_commit_serialize_on_the_lock() {
     assert_eq!(outcome, CommitOutcome::Superseded);
     assert!(is_paused(&pool, ACCOUNT, "photos").await, "pause must win regardless of interleaving order");
 }
+
+/// Err path: when the `is_paused` UPDATE itself fails (here: the
+/// `sync_paths` table doesn't exist at all), `apply_init_commit` must
+/// surface the DB error — and, critically, must RELEASE the label's
+/// commit lock on the way out. A lock leaked on the error path would
+/// deadlock every subsequent pause/resume/init for that label forever.
+#[tokio::test]
+async fn commit_db_error_propagates_and_releases_the_lock() {
+    // Deliberately no CREATE TABLE: the commit's UPDATE has nothing to
+    // run against and fails inside SQLite, exercising the `?` path.
+    let pool = SqlitePool::connect("sqlite::memory:").await.expect("open in-memory db");
+
+    let lifecycle = DriveLifecycle::default();
+    let snapshot = lifecycle.snapshot("photos");
+
+    let result = apply_init_commit(&lifecycle, &pool, ACCOUNT, "photos", snapshot).await;
+    assert!(result.is_err(), "missing sync_paths table must surface as Err, got {result:?}");
+
+    // The guard is lexically scoped inside apply_init_commit, so `?`
+    // drops it — but pin that contract: the lock must be free again.
+    let lock = lifecycle.commit_lock("photos");
+    assert!(lock.try_lock().is_ok(), "commit lock must be released after an Err return");
+}

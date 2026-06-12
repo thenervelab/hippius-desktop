@@ -267,6 +267,11 @@ fn lifecycle_src() -> String {
     std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/lifecycle.rs")).expect("read lifecycle.rs")
 }
 
+/// Read `src/sync/lifecycle_guard.rs` for the commit-step pin below.
+fn lifecycle_guard_src() -> String {
+    std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/lifecycle_guard.rs")).expect("read lifecycle_guard.rs")
+}
+
 /// Extract the brace-matched body of the function whose declaration
 /// contains `sig`. Brace-matching (rather than a loose window) means a
 /// matching call in a *sibling* function can never satisfy a pin
@@ -290,31 +295,77 @@ fn fn_body<'a>(src: &'a str, sig: &str) -> &'a str {
             _ => {}
         }
     }
-    &src[body_start..=body_end]
+    let body = &src[body_start..=body_end];
+    // Over-match canary: module-level items start at column 0, while every
+    // line inside a brace-matched body is indented. A column-0 function
+    // declaration inside the extracted slice means the brace matching ran
+    // past the function's real end into a sibling — every pin below would
+    // then silently match against the wrong function. The pinned files mix
+    // `async fn` and plain `fn` siblings behind `pub`/`pub(crate)` prefixes,
+    // so probe every column-0 declaration shape they use.
+    for needle in [
+        "\nasync fn ",
+        "\nfn ",
+        "\npub async fn ",
+        "\npub fn ",
+        "\npub(crate) async fn ",
+        "\npub(crate) fn ",
+    ] {
+        assert!(
+            !body[1..].contains(needle),
+            "fn_body over-matched into a sibling (found `{}` inside the body of `{sig}`)",
+            needle.trim()
+        );
+    }
+    body
 }
 
-/// Static regression guard: `initialize_sync_inner` MUST clear the
-/// `sync_paths.is_paused` flag (call `set_sync_path_paused(.., false)`)
-/// somewhere in its body.
+/// Static funnel pin: `initialize_sync_inner` MUST commit through the
+/// epoch-checked `apply_init_commit` step, with the epoch snapshot taken
+/// strictly BEFORE the commit (at function entry, before any teardown),
+/// so a pause/removal landing anywhere inside the init window — the
+/// pre-register steps included — is observed at commit time.
 ///
-/// Why: every surface that starts a drive funnels through
-/// `initialize_sync_inner`, but only `resume_drive` used to clear the
-/// flag. The files-page resume (`DriveOnboarding` → `initialize_sync`)
-/// skipped it, leaving a *running* drive DB-flagged paused — the next
-/// `auto_init_sync` pass then re-emitted `Paused` for it (~30 s after
-/// resume, from the login retry ladder) and every restart booted it
-/// paused again. Clearing at the funnel makes "drive successfully
-/// initialized ⇒ is_paused = 0" hold for every entry point. Mirrors the
-/// `spawn_backfill` funnel pin in `hippius_relative_path_backfill.rs`.
+/// Why the funnel matters: every surface that starts a drive flows
+/// through `initialize_sync_inner`, but only `resume_drive` used to
+/// clear `is_paused`. The files-page resume (`DriveOnboarding` →
+/// `initialize_sync`) skipped it, leaving a *running* drive DB-flagged
+/// paused. Committing at the funnel makes "drive successfully
+/// initialized ⇒ is_paused = 0" hold for every entry point — and the
+/// epoch check makes the converse hold too: a superseding pause is
+/// never overwritten by a stale in-flight init (the PR #17 race).
+/// Mirrors the `spawn_backfill` funnel pin in
+/// `hippius_relative_path_backfill.rs`.
 #[test]
-fn initialize_sync_inner_clears_paused_flag() {
+fn initialize_sync_inner_commits_via_epoch_check() {
     let src = lifecycle_src();
     let body = fn_body(&src, "async fn initialize_sync_inner(");
 
-    let call_idx = body.find("set_sync_path_paused(").expect(
-        "initialize_sync_inner must clear sync_paths.is_paused so a successfully \
-         initialized drive is never left DB-flagged paused (files-page resume bug)",
+    let snapshot_idx = body.find("drive_lifecycle.snapshot(").expect(
+        "initialize_sync_inner must snapshot the drive-lifecycle epoch at entry \
+         so a pause landing anywhere during the init is observed at commit",
     );
+    let commit_idx = body
+        .find("apply_init_commit(")
+        .expect("initialize_sync_inner must commit through the epoch-checked apply_init_commit step");
+    assert!(
+        snapshot_idx < commit_idx,
+        "the epoch snapshot must be taken BEFORE the commit step (a commit-time \
+         snapshot is trivially current and observes no supersession)"
+    );
+}
+
+/// Static pin on the commit step itself: `apply_init_commit` is where the
+/// "successfully initialized ⇒ is_paused = 0" write now lives, so IT must
+/// call `set_sync_path_paused(.., false)` — clear, never set.
+#[test]
+fn apply_init_commit_clears_paused_flag() {
+    let src = lifecycle_guard_src();
+    let body = fn_body(&src, "async fn apply_init_commit(");
+
+    let call_idx = body
+        .find("set_sync_path_paused(")
+        .expect("apply_init_commit must clear sync_paths.is_paused for a still-current init");
     // The call must clear (pass `false`), not set, the flag. Bind the
     // assertion to the call's own argument list — not a loose window —
     // so a stray `false` in a nearby comment or log string can never
@@ -325,7 +376,7 @@ fn initialize_sync_inner_clears_paused_flag() {
     let args = &body[args_start..args_end];
     assert!(
         args.trim_end().ends_with("false"),
-        "set_sync_path_paused inside initialize_sync_inner must pass `false` (clear) as its last argument; got args: {args}"
+        "set_sync_path_paused inside apply_init_commit must pass `false` (clear) as its last argument; got args: {args}"
     );
 }
 
@@ -339,13 +390,20 @@ fn initialize_sync_inner_clears_paused_flag() {
 fn pause_drive_bumps_epoch_under_commit_lock() {
     let src = lifecycle_src();
     let body = fn_body(&src, "async fn pause_drive(");
+    let lock_idx = body
+        .find("drive_lifecycle.commit_lock(")
+        .expect("pause_drive must take the label's commit lock before writing is_paused");
+    let bump_idx = body
+        .find("drive_lifecycle.bump(")
+        .expect("pause_drive must bump the pause epoch so in-flight inits see the supersession");
+    let write_idx = body.find("set_sync_path_paused(").expect("pause_drive must persist is_paused=true");
+    // Protocol order, not mere presence: acquire the lock, bump under it,
+    // then write the flag. A bump after the write (or outside the lock)
+    // reopens the pause-overwrite race one level down.
     assert!(
-        body.contains("drive_lifecycle.commit_lock("),
-        "pause_drive must take the label's commit lock before writing is_paused"
-    );
-    assert!(
-        body.contains("drive_lifecycle.bump("),
-        "pause_drive must bump the pause epoch so in-flight inits see the supersession"
+        lock_idx < bump_idx && bump_idx < write_idx,
+        "pause_drive must order commit_lock < bump < set_sync_path_paused \
+         (got indices {lock_idx} / {bump_idx} / {write_idx})"
     );
 }
 
@@ -358,13 +416,17 @@ fn pause_drive_bumps_epoch_under_commit_lock() {
 fn remove_drive_for_account_bumps_epoch_under_commit_lock() {
     let src = lifecycle_src();
     let body = fn_body(&src, "async fn remove_drive_for_account(");
+    let lock_idx = body
+        .find("drive_lifecycle.commit_lock(")
+        .expect("remove_drive_for_account must take the label's commit lock around teardown + row delete");
+    let bump_idx = body
+        .find("drive_lifecycle.bump(")
+        .expect("remove_drive_for_account must bump the epoch so in-flight inits abandon their commit");
+    // The bump announces the supersession and is only race-free while the
+    // label's commit lock is held — so the lock acquisition must precede it.
     assert!(
-        body.contains("drive_lifecycle.commit_lock("),
-        "remove_drive_for_account must take the label's commit lock around teardown + row delete"
-    );
-    assert!(
-        body.contains("drive_lifecycle.bump("),
-        "remove_drive_for_account must bump the epoch so in-flight inits abandon their commit"
+        lock_idx < bump_idx,
+        "remove_drive_for_account must order commit_lock < bump (got indices {lock_idx} / {bump_idx})"
     );
 }
 

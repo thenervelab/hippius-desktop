@@ -95,6 +95,10 @@ pub enum NotReadyKind {
     /// — keeping it as a unit variant preserves the existing
     /// `screaming_snake_case` JSON wire format.
     InsufficientCredits,
+    /// An in-flight drive init was superseded by a user pause/removal;
+    /// the drive was not started. Not an error to retry automatically —
+    /// the pause's Paused state stands.
+    SupersededByPause,
     /// The database pool has not been initialized yet. Raised by
     /// [`crate::app_state::AppState::pool`] when a command runs before the
     /// boot-time DB-init task installs the pool. This is distinct from a
@@ -138,6 +142,9 @@ impl std::fmt::Display for NotReadyKind {
             }
             Self::InsufficientCredits => {
                 write!(f, "Insufficient credits to perform this action.")
+            }
+            Self::SupersededByPause => {
+                write!(f, "Sync start was superseded by a pause or removal of this folder.")
             }
             Self::DatabaseNotReady => {
                 write!(f, "The application is still starting up. Please try again in a moment.")
@@ -414,6 +421,7 @@ mod tests {
                 NotReadyKind::NotEnoughDiskSpace => "NOT_ENOUGH_DISK_SPACE",
                 NotReadyKind::SigningKeyUnavailable => "SIGNING_KEY_UNAVAILABLE",
                 NotReadyKind::InsufficientCredits => "INSUFFICIENT_CREDITS",
+                NotReadyKind::SupersededByPause => "SUPERSEDED_BY_PAUSE",
                 NotReadyKind::DatabaseNotReady => "DATABASE_NOT_READY",
             }
         }
@@ -428,6 +436,7 @@ mod tests {
             NotReadyKind::NotEnoughDiskSpace,
             NotReadyKind::SigningKeyUnavailable,
             NotReadyKind::InsufficientCredits,
+            NotReadyKind::SupersededByPause,
             NotReadyKind::DatabaseNotReady,
         ] {
             let expected = wire_name(&kind);
@@ -568,6 +577,10 @@ mod tests {
                 "This action requires re-entering your seed phrase. Please log out and log in again with your seed phrase to continue.",
             ),
             (NotReadyKind::InsufficientCredits, "Insufficient credits to perform this action."),
+            (
+                NotReadyKind::SupersededByPause,
+                "Sync start was superseded by a pause or removal of this folder.",
+            ),
             (
                 NotReadyKind::DatabaseNotReady,
                 "The application is still starting up. Please try again in a moment.",

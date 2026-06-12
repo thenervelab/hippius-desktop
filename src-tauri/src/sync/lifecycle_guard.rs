@@ -81,8 +81,12 @@ impl DriveLifecycle {
     /// before this returns, so holding the returned tokio lock across
     /// an await never holds a std mutex (axiom `rust_quality_74`).
     ///
-    /// Every write to `sync_paths.is_paused` for a label MUST happen
-    /// while holding that label's commit lock.
+    /// Every *runtime lifecycle* write to `sync_paths.is_paused` for a
+    /// label MUST happen while holding that label's commit lock. The
+    /// one-shot startup migrations (`user_stopped_migration`,
+    /// `user_stopped_reversal`) also write the flag, but they run in
+    /// `main.rs` setup before any lifecycle IPC can fire and are exempt
+    /// by construction.
     pub fn commit_lock(&self, label: &str) -> Arc<tokio::sync::Mutex<()>> {
         let mut locks = self.commit_locks.lock().unwrap_or_else(PoisonError::into_inner);
         locks
