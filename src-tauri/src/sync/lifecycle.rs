@@ -1152,6 +1152,22 @@ pub(crate) async fn initialize_sync_inner(
     );
     spawn_folder_registration(&cfg.server_url, &bearer_token, &label, &account_id, &fhash, pool, &cfg.sync_path);
 
+    // Clear the persisted paused flag now that the drive is running.
+    // Every resume surface funnels through this function, but only
+    // `resume_drive` cleared the flag itself — a resume via the plain
+    // `initialize_sync` IPC (the files-page DriveOnboarding panel) left
+    // a *running* drive DB-flagged paused, so the next `auto_init_sync`
+    // pass re-emitted `Paused` for it (~30 s after resume, via the
+    // login retry ladder) and every restart booted it paused again.
+    // Clearing here makes "successfully initialized ⇒ is_paused = 0"
+    // hold for every entry point; the UPDATE is a no-op for the
+    // already-cleared rows auto-init passes through. Non-fatal: the
+    // drive is already running, so a failed flag clear must not fail
+    // the init (mirrors `pause_drive`'s warn-on-DB-failure handling).
+    if let Err(e) = crate::sync::paths::set_sync_path_paused(pool, &account_id, &label, false).await {
+        warn!(label = %label, error = %e, "Failed to clear is_paused after successful init");
+    }
+
     // Emit a per-drive Active status so any FE listener (settings page,
     // tray submenu) updates this one drive without re-fetching the
     // whole list. Other drives are unaffected.
