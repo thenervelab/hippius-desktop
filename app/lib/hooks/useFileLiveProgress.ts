@@ -24,7 +24,20 @@ const EMPTY: LiveFileProgress = { status: null, progressPercent: null };
 function deriveLiveStatus(file: FileProgress): LiveFileStatus | null {
   if (file.status === "error") return "failed";
   if (file.status === "completed") return "synced";
-  if (file.status === "pending") return "pending";
+  // "pending" is only honored while the transfer hasn't moved any bytes
+  // yet. The engine parks a file back on "pending" between chunk batches
+  // and retries (scheduling noise), and honoring that mid-transfer flapped
+  // the badge ring↔pill — remounting the ring's tooltip (closing it under
+  // the user's cursor) and making the percent appear to jump when the ring
+  // came back. Once bytes have moved, the file stays in its transfer state
+  // until it completes or errors.
+  if (
+    file.status === "pending" &&
+    file.progressPercent <= 0 &&
+    file.bytesTransferred <= 0
+  ) {
+    return "pending";
+  }
   // inProgress / encrypting / decrypting all map to the active direction
   // of the surrounding action, so encrypting an upload still reads as
   // "uploading" to the user (it's the same pipeline).
@@ -32,10 +45,12 @@ function deriveLiveStatus(file: FileProgress): LiveFileStatus | null {
   return "uploading";
 }
 
-// Bucket the percent to 5% steps so re-renders only fire on visible
-// progress changes. Without this the row would re-render on every 250ms
-// snapshot tick during a fast transfer.
-const PROGRESS_BUCKET = 5;
+// Bucket the percent to whole-percent steps so re-renders only fire on
+// visible progress changes, not on every 250ms snapshot tick during a fast
+// transfer. Only the in-flight rows subscribe at this granularity, so 1%
+// is cheap — a coarser 5% bucket made big-file progress feel slow/jumpy
+// (one visual tick every ~8MB).
+const PROGRESS_BUCKET = 1;
 
 /**
  * Subscribes to the sync snapshot and returns the live progress entry
