@@ -12,7 +12,10 @@ import VPNSettings from "@/components/page-sections/settings/VPNSettings";
 import CustomizeRPC from "@/components/page-sections/settings/CustomizeRPC";
 import InfoTooltip from "@/components/page-sections/settings/InfoTooltip";
 import NotificationSection from "@/components/page-sections/settings/NotificationSection";
-import { VPN_FEATURE_ENABLED } from "@/app/lib/featureFlags";
+import {
+  VPN_FEATURE_ENABLED,
+  WALLET_FEATURE_ENABLED,
+} from "@/app/lib/featureFlags";
 
 const SECTION_META: Record<
   string,
@@ -121,7 +124,9 @@ function SettingsContent() {
 
         {section === "appearance" && <AppearanceSettings />}
 
-        {section === "wallets" && <WalletSettings />}
+        {/* Wallets is hidden behind the same release gate as the Wallet
+            sidebar entry (code kept). See featureFlags.ts. */}
+        {WALLET_FEATURE_ENABLED && section === "wallets" && <WalletSettings />}
 
         {section === "security" && <RecoveryPhraseSettings />}
 
