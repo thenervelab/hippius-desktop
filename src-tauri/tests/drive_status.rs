@@ -262,28 +262,18 @@ async fn cached_status_wins_over_db_derived_status() {
     assert_eq!(result[1].status, DriveStatus::Active);
 }
 
-/// Static regression guard: `initialize_sync_inner` MUST clear the
-/// `sync_paths.is_paused` flag (call `set_sync_path_paused(.., false)`)
-/// somewhere in its body.
-///
-/// Why: every surface that starts a drive funnels through
-/// `initialize_sync_inner`, but only `resume_drive` used to clear the
-/// flag. The files-page resume (`DriveOnboarding` → `initialize_sync`)
-/// skipped it, leaving a *running* drive DB-flagged paused — the next
-/// `auto_init_sync` pass then re-emitted `Paused` for it (~30 s after
-/// resume, from the login retry ladder) and every restart booted it
-/// paused again. Clearing at the funnel makes "drive successfully
-/// initialized ⇒ is_paused = 0" hold for every entry point. Mirrors the
-/// `spawn_backfill` funnel pin in `hippius_relative_path_backfill.rs`.
-#[test]
-fn initialize_sync_inner_clears_paused_flag() {
-    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/lifecycle.rs")).expect("read lifecycle.rs");
+/// Read `src/sync/lifecycle.rs` for the static funnel pins below.
+fn lifecycle_src() -> String {
+    std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/lifecycle.rs")).expect("read lifecycle.rs")
+}
 
-    // Brace-match the function body so a `set_sync_path_paused` call in a
-    // sibling function (e.g. `resume_drive`) can't satisfy the assertion.
-    let sig_idx = src
-        .find("async fn initialize_sync_inner(")
-        .expect("initialize_sync_inner declaration present");
+/// Extract the brace-matched body of the function whose declaration
+/// contains `sig`. Brace-matching (rather than a loose window) means a
+/// matching call in a *sibling* function can never satisfy a pin
+/// against this one. Format-string braces (`"{label}"`) are balanced,
+/// so counting raw `{`/`}` chars is sufficient for this source file.
+fn fn_body<'a>(src: &'a str, sig: &str) -> &'a str {
+    let sig_idx = src.find(sig).unwrap_or_else(|| panic!("declaration `{sig}` present in lifecycle.rs"));
     let body_start = src[sig_idx..].find('{').expect("fn body opens") + sig_idx;
     let mut depth = 0usize;
     let mut body_end = body_start;
@@ -300,7 +290,26 @@ fn initialize_sync_inner_clears_paused_flag() {
             _ => {}
         }
     }
-    let body = &src[body_start..=body_end];
+    &src[body_start..=body_end]
+}
+
+/// Static regression guard: `initialize_sync_inner` MUST clear the
+/// `sync_paths.is_paused` flag (call `set_sync_path_paused(.., false)`)
+/// somewhere in its body.
+///
+/// Why: every surface that starts a drive funnels through
+/// `initialize_sync_inner`, but only `resume_drive` used to clear the
+/// flag. The files-page resume (`DriveOnboarding` → `initialize_sync`)
+/// skipped it, leaving a *running* drive DB-flagged paused — the next
+/// `auto_init_sync` pass then re-emitted `Paused` for it (~30 s after
+/// resume, from the login retry ladder) and every restart booted it
+/// paused again. Clearing at the funnel makes "drive successfully
+/// initialized ⇒ is_paused = 0" hold for every entry point. Mirrors the
+/// `spawn_backfill` funnel pin in `hippius_relative_path_backfill.rs`.
+#[test]
+fn initialize_sync_inner_clears_paused_flag() {
+    let src = lifecycle_src();
+    let body = fn_body(&src, "async fn initialize_sync_inner(");
 
     let call_idx = body.find("set_sync_path_paused(").expect(
         "initialize_sync_inner must clear sync_paths.is_paused so a successfully \
@@ -317,6 +326,73 @@ fn initialize_sync_inner_clears_paused_flag() {
     assert!(
         args.trim_end().ends_with("false"),
         "set_sync_path_paused inside initialize_sync_inner must pass `false` (clear) as its last argument; got args: {args}"
+    );
+}
+
+/// Static funnel pin: `pause_drive` MUST bump the drive-lifecycle epoch
+/// under the label's commit lock (`sync::lifecycle_guard` single-writer
+/// protocol). Without the bump, an in-flight init's commit step would
+/// silently overwrite the user's pause — the PR #17 race. The
+/// `drive_lifecycle.`-qualified needles bind to real call sites, not a
+/// comment mention.
+#[test]
+fn pause_drive_bumps_epoch_under_commit_lock() {
+    let src = lifecycle_src();
+    let body = fn_body(&src, "async fn pause_drive(");
+    assert!(
+        body.contains("drive_lifecycle.commit_lock("),
+        "pause_drive must take the label's commit lock before writing is_paused"
+    );
+    assert!(
+        body.contains("drive_lifecycle.bump("),
+        "pause_drive must bump the pause epoch so in-flight inits see the supersession"
+    );
+}
+
+/// Static funnel pin: the real drive teardown is
+/// `remove_drive_for_account` (the `remove_drive` IPC is a one-line
+/// wrapper over it), so the bump-under-commit-lock lives there. A
+/// removal must invalidate in-flight init snapshots exactly like a
+/// pause, or a slow init re-registers a zombie for the deleted row.
+#[test]
+fn remove_drive_for_account_bumps_epoch_under_commit_lock() {
+    let src = lifecycle_src();
+    let body = fn_body(&src, "async fn remove_drive_for_account(");
+    assert!(
+        body.contains("drive_lifecycle.commit_lock("),
+        "remove_drive_for_account must take the label's commit lock around teardown + row delete"
+    );
+    assert!(
+        body.contains("drive_lifecycle.bump("),
+        "remove_drive_for_account must bump the epoch so in-flight inits abandon their commit"
+    );
+}
+
+/// Static funnel pin: `stop_sync` (logout/reset cleanup) MUST bump every
+/// registered drive's epoch so a slow in-flight init cannot re-register
+/// a drive after the logout teardown completes. No commit lock is
+/// required here — see the justification comment at the call site.
+#[test]
+fn stop_sync_bumps_every_drive_epoch() {
+    let src = lifecycle_src();
+    let body = fn_body(&src, "async fn stop_sync(");
+    assert!(
+        body.contains("drive_lifecycle.bump("),
+        "stop_sync must bump the lifecycle epoch for every registered drive"
+    );
+}
+
+/// Static funnel pin: `resume_drive`'s pre-init `is_paused=false` write
+/// MUST happen under the label's commit lock (single-writer invariant:
+/// EVERY `sync_paths.is_paused` write holds the label's commit lock).
+/// Resume does NOT bump — it supersedes nothing.
+#[test]
+fn resume_drive_clears_paused_under_commit_lock() {
+    let src = lifecycle_src();
+    let body = fn_body(&src, "async fn resume_drive(");
+    assert!(
+        body.contains("drive_lifecycle.commit_lock("),
+        "resume_drive must hold the label's commit lock across its set_sync_path_paused(false) write"
     );
 }
 

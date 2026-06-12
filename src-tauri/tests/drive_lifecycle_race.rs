@@ -106,7 +106,7 @@ async fn commit_yields_when_pause_intervened() {
 
     // Simulate a pause landing mid-init: bump the epoch, then write the
     // pause's flag (direct UPDATE — the pause-side command isn't wired
-    // through the guard yet; Task 2.3 does that).
+    // through the guard yet; Task 2.4 does that).
     lifecycle.bump("photos");
     sqlx::query("UPDATE sync_paths SET is_paused = 1 WHERE owner = ? AND label = ?")
         .bind(account_key(ACCOUNT))

@@ -1248,6 +1248,24 @@ pub async fn stop_sync(app: AppHandle) -> Result<()> {
     //     previously-active label so the FE per-drive banners all clear.
     app_state.upload_processing.reset_all(&app);
 
+    // 0d. Bump every registered drive's lifecycle epoch so any in-flight
+    //     init notices the logout/reset at its commit step and tears itself
+    //     down instead of re-registering after this cleanup completes.
+    //     No commit lock is taken: stop_sync never writes `is_paused` (the
+    //     single-writer rule guards only that write), `bump` is atomic on
+    //     its own std-mutexed map, and every later init commit re-checks
+    //     the epoch UNDER the commit lock — so an unlocked bump is always
+    //     observed by any commit that has not yet run. Labels are collected
+    //     in one short `sync.drives` lock scope first (hierarchy: never
+    //     hold `sync.drives` while touching lifecycle locks' callers).
+    let lifecycle_labels: Vec<String> = {
+        let guard = sync.drives.lock().await;
+        guard.keys().cloned().collect()
+    };
+    for label in &lifecycle_labels {
+        app_state.drive_lifecycle.bump(label);
+    }
+
     // 1. Cancel every drive's cancellation token FIRST so the sync loop
     //    sees a clean shutdown signal and can persist state before exiting.
     cancel_all_drive_tokens(sync).await;
@@ -1377,55 +1395,75 @@ pub(crate) async fn remove_drive_for_account(app: AppHandle, label: String, expl
         Some(acct) => sync_path_for_label(&app_state, &acct, &label).await,
         None => None,
     };
-    let (remaining, _removed_path) = remove_drive_inmemory(sync, &label, path_hint).await;
+    // Lifecycle serialization (see sync::lifecycle_guard): bump the pause
+    // epoch and run the teardown's superseding mutations — in-memory removal
+    // and the `sync_paths` row delete — under the label's commit lock. An
+    // in-flight init for this label must observe the epoch change at its
+    // commit step and tear itself down instead of re-registering a zombie
+    // drive for the row this function deletes (Task 2.5 consumes the bump).
+    // Lock ordering: commit_lock(label) → sync.drives → progress std
+    // mutexes; the manager-clone read above released its `sync.drives`
+    // guard before this acquisition, so the hierarchy holds.
+    let (remaining, acct) = {
+        let commit_lock = app_state.drive_lifecycle.commit_lock(&label);
+        let _guard = commit_lock.lock().await;
+        app_state.drive_lifecycle.bump(&label);
 
-    // Drop the preparing override for this label so a remove during
-    // the SyncStarted → plan_ready window cannot leave a stuck
-    // "Preparing sync…" badge tied to a drive that no longer exists.
-    //
-    // Belt-and-suspenders with the `SyncError::Cancelled` arm in
-    // `tauri_bridge.rs` — that arm also clears preparing for the
-    // cancelled label, but the cancel SyncEvent is dispatched
-    // asynchronously relative to this synchronous IPC and may not
-    // have landed yet. Calling `clear` here is idempotent (second
-    // call returns `false` and skips the `emit_snapshot`), so the
-    // dual-path is cheap and covers the race where the IPC returns
-    // before the bridge has seen the cancel.
-    if app_state.preparing.clear(&label) {
-        sync.emit_snapshot(true);
-    }
+        let (remaining, _removed_path) = remove_drive_inmemory(sync, &label, path_hint).await;
 
-    // Delete the DB row so the drive isn't resurrected on app restart, and
-    // drop the intent-manifest rows for this drive so the snapshot overlay
-    // doesn't keep showing stale "X of Y" totals for a folder the user just
-    // removed.
-    //
-    // Both calls share the same prerequisites (pool + account known) and
-    // both are best-effort — failure here doesn't break sync correctness.
-    // The intent manifest is a UX overlay; stale rows will be cleaned up by
-    // the next manifest GC pass even if this call fails. `pause_drive`
-    // deliberately does NOT clear intent because pause is reversible and the
-    // in-flight totals must survive a resume.
-    let acct = teardown_account(explicit_account, app_state.current_account_id().ok());
-    if acct.is_none() {
-        warn!(
-            label = %label,
-            "remove_drive: no account context — sync_paths row and on-disk baseline left intact; in-memory drive still removed",
-        );
-    }
-    if let (Ok(pool), Some(acct)) = (app_state.pool(), acct.as_deref()) {
-        if let Err(e) = crate::sync::paths::remove_sync_path_internal(pool, acct, &label).await {
-            warn!("Failed to remove sync path for '{}' from DB: {e}", label);
+        // Drop the preparing override for this label so a remove during
+        // the SyncStarted → plan_ready window cannot leave a stuck
+        // "Preparing sync…" badge tied to a drive that no longer exists.
+        //
+        // Belt-and-suspenders with the `SyncError::Cancelled` arm in
+        // `tauri_bridge.rs` — that arm also clears preparing for the
+        // cancelled label, but the cancel SyncEvent is dispatched
+        // asynchronously relative to this synchronous IPC and may not
+        // have landed yet. Calling `clear` here is idempotent (second
+        // call returns `false` and skips the `emit_snapshot`), so the
+        // dual-path is cheap and covers the race where the IPC returns
+        // before the bridge has seen the cancel.
+        if app_state.preparing.clear(&label) {
+            sync.emit_snapshot(true);
         }
 
-        // `IntentRepo::new` takes `SqlitePool` by value; the pool is internally
-        // `Arc`-shaped so `.clone()` is just an `Arc` bump — no connection
-        // pool duplication.
-        let repo = crate::sync::intent::IntentRepo::new(pool.clone());
-        if let Err(e) = repo.clear_drive(acct, &label).await {
-            warn!("Failed to clear intent rows for drive '{}': {e}", label);
+        // Delete the DB row so the drive isn't resurrected on app restart, and
+        // drop the intent-manifest rows for this drive so the snapshot overlay
+        // doesn't keep showing stale "X of Y" totals for a folder the user just
+        // removed.
+        //
+        // Both calls share the same prerequisites (pool + account known) and
+        // both are best-effort — failure here doesn't break sync correctness.
+        // The intent manifest is a UX overlay; stale rows will be cleaned up by
+        // the next manifest GC pass even if this call fails. `pause_drive`
+        // deliberately does NOT clear intent because pause is reversible and the
+        // in-flight totals must survive a resume.
+        let acct = teardown_account(explicit_account, app_state.current_account_id().ok());
+        if acct.is_none() {
+            warn!(
+                label = %label,
+                "remove_drive: no account context — sync_paths row and on-disk baseline left intact; in-memory drive still removed",
+            );
         }
-    }
+        if let (Ok(pool), Some(acct)) = (app_state.pool(), acct.as_deref()) {
+            if let Err(e) = crate::sync::paths::remove_sync_path_internal(pool, acct, &label).await {
+                warn!("Failed to remove sync path for '{}' from DB: {e}", label);
+            }
+
+            // `IntentRepo::new` takes `SqlitePool` by value; the pool is internally
+            // `Arc`-shaped so `.clone()` is just an `Arc` bump — no connection
+            // pool duplication.
+            let repo = crate::sync::intent::IntentRepo::new(pool.clone());
+            if let Err(e) = repo.clear_drive(acct, &label).await {
+                warn!("Failed to clear intent rows for drive '{}': {e}", label);
+            }
+        }
+
+        (remaining, acct)
+        // Guard drops here: the row delete + in-memory teardown are done.
+        // The baseline drain below waits up to GRACEFUL_DRIVE_SHUTDOWN and
+        // must not hold the commit lock across that window.
+    };
 
     // Drop the on-disk sync baseline. Without this, a re-add (whether at the
     // same path or a new one) would resurrect the old `synced` tree and the
@@ -1518,14 +1556,32 @@ pub async fn pause_drive(app: AppHandle, label: String) -> Result<()> {
         None => None,
     };
 
-    let (remaining, removed_path) = remove_drive_inmemory(sync, &label, path_hint).await;
+    // Lifecycle serialization (see sync::lifecycle_guard): bump the pause
+    // epoch and perform BOTH superseding mutations — the in-memory removal
+    // and the `is_paused=true` write — under the label's commit lock. An
+    // in-flight init that snapshotted an older epoch then observes the bump
+    // at its commit step and yields instead of resurrecting this drive.
+    // Lock ordering: the commit lock is acquired BEFORE anything in this
+    // function touches `sync.drives` (hierarchy: commit_lock(label) →
+    // sync.drives → progress std mutexes — never the reverse).
+    let (remaining, removed_path) = {
+        let commit_lock = app_state.drive_lifecycle.commit_lock(&label);
+        let _guard = commit_lock.lock().await;
+        app_state.drive_lifecycle.bump(&label);
 
-    // Mark as paused in DB (keep the row, unlike stop_drive which deletes it).
-    if let Some((pool, acct)) = &pool_and_acct
-        && let Err(e) = crate::sync::paths::set_sync_path_paused(pool, acct, &label, true).await
-    {
-        warn!("Failed to mark '{}' as paused in DB: {e}", label);
-    }
+        let (remaining, removed_path) = remove_drive_inmemory(sync, &label, path_hint).await;
+
+        // Mark as paused in DB (keep the row, unlike stop_drive which deletes it).
+        if let Some((pool, acct)) = &pool_and_acct
+            && let Err(e) = crate::sync::paths::set_sync_path_paused(pool, acct, &label, true).await
+        {
+            warn!("Failed to mark '{}' as paused in DB: {e}", label);
+        }
+        (remaining, removed_path)
+        // Guard drops here: the locked region is exactly the superseding
+        // state writes. `teardown_last_drive` below waits a bounded grace
+        // window for the sync loop and must not stall other lifecycle ops.
+    };
 
     if remaining == 0 {
         teardown_last_drive(sync, &app).await;
@@ -1560,7 +1616,15 @@ pub async fn resume_drive(app: AppHandle, label: String, mnemonic: Option<String
     // Clear the paused flag in the DB before kicking off init. Doing it
     // first means even if init fails the row reflects user intent
     // (Active), so the next auto_init_sync attempt will pick it up.
-    crate::sync::paths::set_sync_path_paused(pool, &account_id, &label, false).await?;
+    // Single-writer rule (sync::lifecycle_guard): every `is_paused` write
+    // holds the label's commit lock. No bump — resume supersedes nothing.
+    // The guard MUST drop before `initialize_sync_inner` runs: the init's
+    // own commit step takes this same lock and would deadlock against us.
+    {
+        let commit_lock = app_state.drive_lifecycle.commit_lock(&label);
+        let _guard = commit_lock.lock().await;
+        crate::sync::paths::set_sync_path_paused(pool, &account_id, &label, false).await?;
+    }
 
     // Re-initialize the drive. `initialize_sync_inner` emits the
     // per-drive Active status on success. On failure, we must emit an
