@@ -261,6 +261,7 @@ async fn restore_single_folder(
         existing_mnemonic.map(String::from),
         false,
         false,
+        None,
     )
     .await?;
 

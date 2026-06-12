@@ -92,6 +92,9 @@ pub struct AppState {
     /// disk — an Error state is transient and should not survive app
     /// restart.
     pub drive_status_cache: Mutex<HashMap<String, DriveStatus>>,
+    /// Per-label pause epochs + commit locks serializing the lifecycle
+    /// state writes (pause/resume/init). See sync::lifecycle_guard.
+    pub drive_lifecycle: crate::sync::lifecycle_guard::DriveLifecycle,
     /// Per-account async locks serializing auth-token refreshes. Two concurrent
     /// `refresh_auth_token_internal` calls for the same account would otherwise
     /// race a parallel challenge-response (double session upsert + token save);
@@ -185,6 +188,7 @@ impl AppState {
             file_failures: crate::sync::failure_tracking::FileFailureState::new(),
             refresh_locks: Mutex::new(HashMap::new()),
             drive_status_cache: Mutex::new(HashMap::new()),
+            drive_lifecycle: crate::sync::lifecycle_guard::DriveLifecycle::default(),
             // Default `Skipped` — non-OAuth login paths (mnemonic login,
             // session restore for a returning user) never need the dialog,
             // so `ensure_sync_mnemonic`'s await passes through immediately.
