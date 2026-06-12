@@ -444,16 +444,15 @@ pub async fn get_thumbnail(
 
     // Source bytes: the local synced copy when present, else a throwaway
     // download of the cloud file (deleted after thumbnailing below).
-    let (src_path, cloud_temp) = match local_source_path(source.as_deref()).await {
-        Some(local) => (local, None),
-        None => {
-            let tmp = unique_part_path(&cache_root, &cache_name);
-            if let Err(e) = download_cloud_file_to(&state, &account_id, &label, &file_id, &tmp).await {
-                let _ = tokio::fs::remove_file(&tmp).await;
-                return Err(e);
-            }
-            (tmp.clone(), Some(tmp))
+    let (src_path, cloud_temp) = if let Some(local) = local_source_path(source.as_deref()).await {
+        (local, None)
+    } else {
+        let tmp = unique_part_path(&cache_root, &cache_name);
+        if let Err(e) = download_cloud_file_to(&state, &account_id, &label, &file_id, &tmp).await {
+            let _ = tokio::fs::remove_file(&tmp).await;
+            return Err(e);
         }
+        (tmp.clone(), Some(tmp))
     };
 
     // Decode + resize + encode off the async runtime (CPU-bound).

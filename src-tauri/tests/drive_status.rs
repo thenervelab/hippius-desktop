@@ -262,6 +262,64 @@ async fn cached_status_wins_over_db_derived_status() {
     assert_eq!(result[1].status, DriveStatus::Active);
 }
 
+/// Static regression guard: `initialize_sync_inner` MUST clear the
+/// `sync_paths.is_paused` flag (call `set_sync_path_paused(.., false)`)
+/// somewhere in its body.
+///
+/// Why: every surface that starts a drive funnels through
+/// `initialize_sync_inner`, but only `resume_drive` used to clear the
+/// flag. The files-page resume (`DriveOnboarding` → `initialize_sync`)
+/// skipped it, leaving a *running* drive DB-flagged paused — the next
+/// `auto_init_sync` pass then re-emitted `Paused` for it (~30 s after
+/// resume, from the login retry ladder) and every restart booted it
+/// paused again. Clearing at the funnel makes "drive successfully
+/// initialized ⇒ is_paused = 0" hold for every entry point. Mirrors the
+/// `spawn_backfill` funnel pin in `hippius_relative_path_backfill.rs`.
+#[test]
+fn initialize_sync_inner_clears_paused_flag() {
+    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/lifecycle.rs")).expect("read lifecycle.rs");
+
+    // Brace-match the function body so a `set_sync_path_paused` call in a
+    // sibling function (e.g. `resume_drive`) can't satisfy the assertion.
+    let sig_idx = src
+        .find("async fn initialize_sync_inner(")
+        .expect("initialize_sync_inner declaration present");
+    let body_start = src[sig_idx..].find('{').expect("fn body opens") + sig_idx;
+    let mut depth = 0usize;
+    let mut body_end = body_start;
+    for (i, ch) in src[body_start..].char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    body_end = body_start + i;
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let body = &src[body_start..=body_end];
+
+    let call_idx = body.find("set_sync_path_paused(").expect(
+        "initialize_sync_inner must clear sync_paths.is_paused so a successfully \
+         initialized drive is never left DB-flagged paused (files-page resume bug)",
+    );
+    // The call must clear (pass `false`), not set, the flag. Bind the
+    // assertion to the call's own argument list — not a loose window —
+    // so a stray `false` in a nearby comment or log string can never
+    // satisfy it. The call takes no nested parens, so the first `)`
+    // after the call closes its argument list.
+    let args_start = call_idx + "set_sync_path_paused(".len();
+    let args_end = body[args_start..].find(')').expect("set_sync_path_paused call closes its argument list") + args_start;
+    let args = &body[args_start..args_end];
+    assert!(
+        args.trim_end().ends_with("false"),
+        "set_sync_path_paused inside initialize_sync_inner must pass `false` (clear) as its last argument; got args: {args}"
+    );
+}
+
 #[tokio::test]
 async fn cached_status_falls_through_when_label_missing() {
     // Negative case: a cache that has an entry for one label must not

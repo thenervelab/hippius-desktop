@@ -15,7 +15,6 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   getHcfsConfig,
   saveHcfsConfig,
-  initializeSync,
 } from "@/app/lib/utils/hcfsConfigUtils";
 import { HcfsSetupDialog } from "@/components/page-sections/settings/HcfsSetupDialog";
 import {
@@ -249,7 +248,12 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
     if (!polkadotAddress) return;
     try {
       const mnemonic = (await getMnemonic()) ?? undefined;
-      await initializeSync(polkadotAddress, folder.id, mnemonic);
+      // `resume_drive`, not `initialize_sync`: resume must clear the
+      // persisted `is_paused` flag (and emit the right Error status on
+      // failure). Plain `initialize_sync` started the drive but left the
+      // DB row paused, so the next auto_init pass re-paused the folder.
+      // Same IPC the settings page and tray submenu use.
+      await invoke("resume_drive", { label: folder.id, mnemonic });
 
       // Per-drive Active status is emitted by Rust via the
       // hcfs_drive_status_changed event — see useDriveStatuses.
