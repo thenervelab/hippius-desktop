@@ -304,10 +304,7 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
           onSelect={() => void openHipstatsAccount()}
           className={menuItemClass}
         >
-          {/* Same 16px box as the other items; the Send glyph is drawn ~1px
-              inset within its viewBox, so a slight scale matches it optically
-              to the edge-to-edge Copy/TrendUp/Setting glyphs. */}
-          <Icons.Send className="size-4 shrink-0 scale-110" />
+          <Icons.Send className="size-4 shrink-0" />
           <span>View on Hipstats</span>
         </DropdownMenuItem>
 
