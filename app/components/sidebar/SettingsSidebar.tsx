@@ -5,11 +5,15 @@ import { useAtom } from "jotai";
 import { sidebarCollapsedAtom } from "./sideBarAtoms";
 import cn from "@/app/lib/utils/cn";
 import { Icons } from "@/components/ui";
-import { ChevronLeft } from "lucide-react";
+import { ChevronLeft, SunMoon } from "lucide-react";
 import SidebarFooter from "./SidebarFooter";
 import SidebarSearch from "./SidebarSearch";
 import CustomTooltip2 from "@/components/ui/CustomTooltip2";
-import { VPN_FEATURE_ENABLED } from "@/app/lib/featureFlags";
+import {
+  VPN_FEATURE_ENABLED,
+  WALLET_FEATURE_ENABLED,
+} from "@/app/lib/featureFlags";
+import { filterSettingsNavItems } from "./settingsNavGating";
 import { BELOW_TITLEBAR_TOP_54 } from "@/app/lib/utils/platformChrome";
 
 const ICON_CLASS = "size-[18px]";
@@ -34,6 +38,11 @@ const settingsNavItems = [
     label: "Notifications",
     section: "notifications",
     icon: <Icons.Notification className={ICON_CLASS} />,
+  },
+  {
+    label: "Appearance",
+    section: "appearance",
+    icon: <SunMoon className={ICON_CLASS} strokeWidth={2} />,
   },
   {
     label: "API Token",
@@ -113,62 +122,63 @@ const SettingsSidebar: React.FC = () => {
           )}
 
           <div className="flex flex-col w-full gap-y-0.5">
-            {settingsNavItems
-              // VPN is hidden behind a feature flag (entry kept in the array).
-              .filter(
-                (item) => VPN_FEATURE_ENABLED || item.section !== "vpn",
-              )
+            {/* VPN and Wallets are hidden behind feature flags (entries kept
+                in the array). */}
+            {filterSettingsNavItems(settingsNavItems, {
+              vpnEnabled: VPN_FEATURE_ENABLED,
+              walletEnabled: WALLET_FEATURE_ENABLED,
+            })
               .map((item) => {
-              const isActive = activeSection === item.section;
-              return (
-                <CustomTooltip2
-                  key={item.section}
-                  tooltipContent={item.label}
-                  side="right"
-                  disabled={!collapsed}
-                >
-                  <button
-                    type="button"
-                    onClick={() =>
-                      router.replace(`/settings?section=${item.section}`)
-                    }
-                    className="transition-all duration-300 relative group w-full text-left"
+                const isActive = activeSection === item.section;
+                return (
+                  <CustomTooltip2
+                    key={item.section}
+                    tooltipContent={item.label}
+                    side="right"
+                    disabled={!collapsed}
                   >
-                    <div
-                      className={cn(
-                        "flex items-center gap-2 p-[10px] w-full overflow-hidden transition-colors duration-200",
-                        isActive
-                          ? "bg-white/60 dark:bg-white/20 rounded-[12px]"
-                          : "rounded-[6px] hover:bg-white/30 dark:hover:bg-white/10",
-                      )}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        router.replace(`/settings?section=${item.section}`)
+                      }
+                      className="transition-all duration-300 relative group w-full text-left"
                     >
-                      <span
+                      <div
                         className={cn(
-                          "size-[18px] flex-shrink-0 flex items-center justify-center",
+                          "flex items-center gap-2 p-[10px] w-full overflow-hidden transition-colors duration-200",
                           isActive
-                            ? "text-primary-50 dark:text-primary-brand-dark"
-                            : "text-[#606060] dark:text-grey-dark-600",
+                            ? "bg-white/60 dark:bg-white/20 rounded-[12px]"
+                            : "rounded-[6px] hover:bg-white/30 dark:hover:bg-white/10",
                         )}
                       >
-                        {item.icon}
-                      </span>
-                      {!collapsed && (
                         <span
                           className={cn(
-                            "text-[14px] font-medium leading-5 tracking-[-0.28px] whitespace-nowrap overflow-hidden text-ellipsis",
+                            "size-[18px] flex-shrink-0 flex items-center justify-center",
                             isActive
-                              ? "text-[#0a0a0a] dark:text-grey-light-100"
+                              ? "text-primary-50 dark:text-primary-brand-dark"
                               : "text-[#606060] dark:text-grey-dark-600",
                           )}
                         >
-                          {item.label}
+                          {item.icon}
                         </span>
-                      )}
-                    </div>
-                  </button>
-                </CustomTooltip2>
-              );
-            })}
+                        {!collapsed && (
+                          <span
+                            className={cn(
+                              "text-[14px] font-medium leading-5 tracking-[-0.28px] whitespace-nowrap overflow-hidden text-ellipsis",
+                              isActive
+                                ? "text-[#0a0a0a] dark:text-grey-light-100"
+                                : "text-[#606060] dark:text-grey-dark-600",
+                            )}
+                          >
+                            {item.label}
+                          </span>
+                        )}
+                      </div>
+                    </button>
+                  </CustomTooltip2>
+                );
+              })}
           </div>
         </div>
       </div>

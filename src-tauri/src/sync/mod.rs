@@ -16,6 +16,7 @@ pub mod files;
 pub mod folders;
 pub mod intent;
 pub mod lifecycle;
+pub mod lifecycle_guard;
 pub mod logic;
 pub mod migration;
 pub mod mnemonic;

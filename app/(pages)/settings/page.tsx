@@ -2,6 +2,7 @@
 
 import { Suspense } from "react";
 import { useSearchParams } from "next/navigation";
+import AppearanceSettings from "@/components/page-sections/settings/AppearanceSettings";
 import MultiFolderSyncManager from "@/components/page-sections/settings/MultiFolderSyncManager";
 import DeviceNameSetting from "@/components/page-sections/settings/DeviceNameSetting";
 import RecoveryPhraseSettings from "@/components/page-sections/settings/RecoveryPhraseSettings";
@@ -11,7 +12,10 @@ import VPNSettings from "@/components/page-sections/settings/VPNSettings";
 import CustomizeRPC from "@/components/page-sections/settings/CustomizeRPC";
 import InfoTooltip from "@/components/page-sections/settings/InfoTooltip";
 import NotificationSection from "@/components/page-sections/settings/NotificationSection";
-import { VPN_FEATURE_ENABLED } from "@/app/lib/featureFlags";
+import {
+  VPN_FEATURE_ENABLED,
+  WALLET_FEATURE_ENABLED,
+} from "@/app/lib/featureFlags";
 
 const SECTION_META: Record<
   string,
@@ -26,6 +30,13 @@ const SECTION_META: Record<
   sync: {
     title: "Sync & Storage",
     description: "Configure your sync folders and storage options.",
+  },
+  appearance: {
+    title: "Appearance",
+    description: "Personalize how Hippius looks on this device.",
+    tooltip:
+      "Your theme choice is stored locally and applies right away. It only affects this device, so other devices and the web console keep their own setting.",
+    showDescription: true,
   },
   wallets: {
     title: "Wallets",
@@ -111,7 +122,11 @@ function SettingsContent() {
           </>
         )}
 
-        {section === "wallets" && <WalletSettings />}
+        {section === "appearance" && <AppearanceSettings />}
+
+        {/* Wallets is hidden behind the same release gate as the Wallet
+            sidebar entry (code kept). See featureFlags.ts. */}
+        {WALLET_FEATURE_ENABLED && section === "wallets" && <WalletSettings />}
 
         {section === "security" && <RecoveryPhraseSettings />}
 

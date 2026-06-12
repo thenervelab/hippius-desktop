@@ -15,7 +15,7 @@ import {
   SortingState,
 } from "@tanstack/react-table";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
-import { useSyncSnapshot } from "@/lib/hooks/useSyncSnapshot";
+import { actionableSyncFilesAtom } from "@/lib/hooks/useSyncSnapshot";
 import * as TableModule from "@/components/ui/alt-table";
 import { formatBytesFromBigInt } from "@/lib/utils/formatBytes";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
@@ -295,33 +295,16 @@ const FilesTable: FC<FilesTableProps> = memo(
     // `fileName` (basename). The "Your Files" page lists all files as basenames
     // (actualFileName = "photo.jpg"), while subfolder views use relative paths
     // (actualFileName = "subfolder/photo.jpg"). The snapshot always has the full path.
-    const snapshot = useSyncSnapshot();
-    // Stable signature of the actionable snapshot rows. The snapshot atom
-    // is replaced wholesale on every progress event (~250ms during sync,
-    // see useSyncSnapshotListener), so `snapshot.files` gets a new
-    // reference every tick even when nothing material changed for the
-    // file table. Reducing first to this string lets the downstream
-    // `enrichedAllFiles` memo skip its O(allFiles) re-map whenever the
-    // actionable set is content-equal — which is the common case during
-    // a sync of large files where bytes change but row status doesn't.
-    const actionSignature = useMemo(() => {
-      const parts: string[] = [];
-      for (const f of snapshot.files) {
-        const isInFlight =
-          f.status !== "completed" &&
-          (f.action === "upload" || f.action === "download");
-        const isCompletedDownload =
-          f.status === "completed" && f.action === "download";
-        if (isInFlight || isCompletedDownload) {
-          parts.push(`${f.path}|${f.fileName}|${f.status}|${f.action}`);
-        }
-      }
-      parts.sort();
-      return parts.join(",");
-    }, [snapshot.files]);
+    //
+    // Subscribes to the deep-equal `actionableSyncFilesAtom` — NOT the raw
+    // snapshot atom — so this (large) component only re-renders when a file's
+    // status actually transitions, not on every ~250ms byte-progress tick.
+    // The raw-atom subscription used to re-render every row 4×/second for the
+    // whole duration of a sync, freezing scroll on long listings.
+    const actionableFiles = useAtomValue(actionableSyncFilesAtom);
 
     const enrichedAllFiles = useMemo(() => {
-      if (actionSignature === "") return allFiles;
+      if (actionableFiles.length === 0) return allFiles;
 
       // Index by full path (preferred, no collisions) and basename (fallback)
       const actionByPath = new Map<string, "upload" | "download">();
@@ -329,14 +312,11 @@ const FilesTable: FC<FilesTableProps> = memo(
       const completedDownloadPaths = new Set<string>();
       const completedDownloadNames = new Set<string>();
 
-      for (const f of snapshot.files) {
-        if (
-          f.status !== "completed" &&
-          (f.action === "upload" || f.action === "download")
-        ) {
-          actionByPath.set(f.path, f.action);
-          actionByName.set(f.fileName, f.action);
-        } else if (f.status === "completed" && f.action === "download") {
+      for (const f of actionableFiles) {
+        if (f.phase === "inFlight") {
+          actionByPath.set(f.path, f.action as "upload" | "download");
+          actionByName.set(f.fileName, f.action as "upload" | "download");
+        } else {
           completedDownloadPaths.add(f.path);
           completedDownloadNames.add(f.fileName);
         }
@@ -360,12 +340,7 @@ const FilesTable: FC<FilesTableProps> = memo(
         }
         return file;
       });
-      // `snapshot.files` is intentionally captured by the closure rather
-      // than declared as a dep: when actionSignature is unchanged the
-      // snapshot.files contents are equivalent (same actionable rows,
-      // different reference), so re-running would just re-allocate.
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [allFiles, actionSignature]);
+    }, [allFiles, actionableFiles]);
 
     // Reserve the leading chevron slot only when the visible rows include
     // at least one folder; pure-file views (or empty sync folders) skip
@@ -862,9 +837,47 @@ const FilesTable: FC<FilesTableProps> = memo(
       ],
     );
 
-    // Create a stable memo of columns that doesn't depend on every prop
+    // Latest-render snapshot for the column render functions below.
+    //
+    // `flexRender` mounts a function `cell:`/`header:` as a COMPONENT TYPE,
+    // so React compares it by identity: rebuilding the columns array hands
+    // every cell a brand-new type, and React unmounts/remounts every cell
+    // subtree. With `files` (a new array on every refetch) in the old
+    // dependency list, each background refetch during a sync tore down all
+    // cells — closing the progress badge's open tooltip under the cursor
+    // and restarting hover transitions ("blinking" preview icons).
+    //
+    // The render functions read everything volatile through this ref, which
+    // is reassigned every render: any change here also re-renders the table
+    // body, so cells re-render with current values, while the columns array
+    // — and with it every cell's component identity — stays stable.
+    const cellCtxRef = useRef({
+      files,
+      getFolderKey,
+      expandedFolders,
+      drivePaths,
+      enableFolderExpander,
+      toggleFolderExpanded,
+      hasAnyFolder,
+      handleSetSelectedFile,
+      createTableItems,
+    });
+    cellCtxRef.current = {
+      files,
+      getFolderKey,
+      expandedFolders,
+      drivePaths,
+      enableFolderExpander,
+      toggleFolderExpanded,
+      hasAnyFolder,
+      handleSetSelectedFile,
+      createTableItems,
+    };
+
+    // Stable columns: `isSelectionMode` is the only real dependency because
+    // it changes the column STRUCTURE (adds/removes the selection column) —
+    // a rare, explicit user action where a one-off cell remount is fine.
     const columns = useMemo(() => {
-      // Create selection column inside useMemo to capture fresh values
       const selectionColumn = !isSelectionMode
         ? []
         : [
@@ -873,7 +886,7 @@ const FilesTable: FC<FilesTableProps> = memo(
               header: () => {
                 return (
                   <div className="flex justify-center items-center h-full">
-                    <SelectionHeaderColumn files={files} />
+                    <SelectionHeaderColumn files={cellCtxRef.current.files} />
                   </div>
                 );
               },
@@ -888,10 +901,19 @@ const FilesTable: FC<FilesTableProps> = memo(
       // and nested rows align icon-to-icon: a fixed-width chevron slot
       // (folders get an interactive button, files get an empty spacer)
       // followed by the existing NameCell or dialog-trigger content.
+      // Runs at cell render time, so reading the ref here is always fresh.
       const renderNameCellWithExpander = (
         file: FormattedUserFile,
         children: React.ReactNode,
       ) => {
+        const {
+          getFolderKey,
+          expandedFolders,
+          drivePaths,
+          enableFolderExpander,
+          toggleFolderExpanded,
+          hasAnyFolder,
+        } = cellCtxRef.current;
         const folderKey = file.isFolder ? getFolderKey(file) : "";
         const isExpanded = file.isFolder
           ? Boolean(expandedFolders[folderKey])
@@ -933,6 +955,7 @@ const FilesTable: FC<FilesTableProps> = memo(
           minSize: 200,
           maxSize: 1000,
           cell: (info) => {
+            const { handleSetSelectedFile } = cellCtxRef.current;
             const file = info.row.original;
             const { fileFormat } = getFilePartsFromFileName(info.getValue());
             const fileType = getFileTypeFromExtension(fileFormat || null);
@@ -1049,6 +1072,14 @@ const FilesTable: FC<FilesTableProps> = memo(
           maxSize: 60,
           enableResizing: false,
           cell: ({ cell }) => {
+            const {
+              getFolderKey,
+              expandedFolders,
+              drivePaths,
+              enableFolderExpander,
+              toggleFolderExpanded,
+              createTableItems,
+            } = cellCtxRef.current;
             const file = cell.row.original;
             const { arionHash, name } = file;
             const resolvedHash = arionHash;
@@ -1092,18 +1123,10 @@ const FilesTable: FC<FilesTableProps> = memo(
           },
         }),
       ];
-    }, [
-      handleSetSelectedFile,
-      createTableItems,
-      isSelectionMode,
-      files,
-      getFolderKey,
-      expandedFolders,
-      drivePaths,
-      enableFolderExpander,
-      toggleFolderExpanded,
-      hasAnyFolder,
-    ]);
+      // Everything volatile is read through cellCtxRef at render time (see
+      // the comment above) — adding it here would defeat the stable cell
+      // identity this memo exists to provide.
+    }, [isSelectionMode]);
 
     const [columnWidths, setColumnWidths] = useState(() => {
       const baseWidths = getStoredBaseColumnWidths(isRecentFiles);

@@ -61,19 +61,40 @@ export function useSyncEvents() {
     // the consumer to see N rather than have it overwritten by 0.
     let pendingFilesCompleted = 0;
     const DEBOUNCE_MS = 250;
+    // Floor between dispatches while completions keep arriving. The 250ms
+    // trailing debounce only collapses near-simultaneous bursts — during a
+    // long multi-file sync, per-file `hcfs_file_transfer_complete` events
+    // drip in every second or two, and each one used to trigger a full
+    // file-list refetch (an expensive `list_user_files` walk plus a
+    // whole-table re-render). Spacing the steady drip to one dispatch per
+    // interval keeps long listings scrollable during sync; the trailing
+    // timer still guarantees the final completion always lands.
+    const MIN_DISPATCH_INTERVAL_MS = 3000;
+    let lastDispatchAt = 0;
+    // NOTE: dispatches are throttled, never held. An earlier iteration
+    // suppressed them entirely while a session was transferring, which
+    // starved every listing that refreshes off this event — a folder the
+    // user had just dropped files into stayed visibly empty until a manual
+    // refresh. Liveness wins; row-stability is handled where it belongs
+    // (stable row keys + the coarse actionable-files atom).
     const scheduleCompletedDispatch = (filesCompleted: number) => {
       pendingFilesCompleted = Math.max(pendingFilesCompleted, filesCompleted);
       if (pendingDispatchTimer) clearTimeout(pendingDispatchTimer);
+      // Idle → fire after the short debounce (feels instantaneous).
+      // Mid-storm → push out to the interval floor since the last dispatch.
+      const sinceLast = Date.now() - lastDispatchAt;
+      const wait = Math.max(DEBOUNCE_MS, MIN_DISPATCH_INTERVAL_MS - sinceLast);
       pendingDispatchTimer = setTimeout(() => {
         const total = pendingFilesCompleted;
         pendingDispatchTimer = null;
         pendingFilesCompleted = 0;
+        lastDispatchAt = Date.now();
         window.dispatchEvent(
           new CustomEvent("sync_files_completed_changed", {
             detail: { filesCompleted: total },
           })
         );
-      }, DEBOUNCE_MS);
+      }, wait);
     };
 
     // Query current health state on mount (backend may already be running)

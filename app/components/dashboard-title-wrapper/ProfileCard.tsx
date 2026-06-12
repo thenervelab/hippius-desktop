@@ -328,7 +328,7 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
           )}
         >
           <Logout className="size-4 shrink-0" />
-          <span>Sign out</span>
+          <span>Log out</span>
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
