@@ -9,7 +9,6 @@ import dynamic from "next/dynamic";
 import { openAppLink } from "@/app/lib/utils/links";
 import cn from "@/app/lib/utils/cn";
 import { Icons } from "../ui";
-import CustomTooltip2 from "../ui/CustomTooltip2";
 import BoxSimple from "../ui/icons/BoxSimple";
 import {
   ChevronDown,
@@ -117,10 +116,8 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
     }
   };
 
-  const handleSendIconClick = async (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-
+  // Open the account page on the Hipstats explorer.
+  const openHipstatsAccount = async () => {
     const accountPageUrl = `https://hipstats.com/accounts/${displayAddress}`;
 
     try {
@@ -231,20 +228,6 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
             {!collapsed && renderIdentity(true)}
           </button>
         </DropdownMenuTrigger>
-
-        {!collapsed && (
-          <CustomTooltip2
-            className="self-center"
-            tooltipContent="View on Hipstats"
-          >
-            <button
-              onClick={handleSendIconClick}
-              className="hover:scale-110 rounded-full duration-300 p-1 flex justify-center transition-transform"
-            >
-              <Icons.Send className="size-4 text-zinc-500 dark:text-grey-dark-600" />
-            </button>
-          </CustomTooltip2>
-        )}
       </div>
 
       <DropdownMenuContent
@@ -286,6 +269,17 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
             />
           </span>
           <span>{copied ? "Copied!" : "Copy address"}</span>
+        </DropdownMenuItem>
+
+        <DropdownMenuItem
+          onSelect={() => void openHipstatsAccount()}
+          className={menuItemClass}
+        >
+          {/* Same 16px box as the other items; the Send glyph is drawn ~1px
+              inset within its viewBox, so a slight scale matches it optically
+              to the edge-to-edge Copy/TrendUp/Setting glyphs. */}
+          <Icons.Send className="size-4 shrink-0 scale-110" />
+          <span>View on Hipstats</span>
         </DropdownMenuItem>
 
         <DropdownMenuItem onSelect={handleOpenUpdate} className={menuItemClass}>
