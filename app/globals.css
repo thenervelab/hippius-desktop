@@ -2,20 +2,23 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Fluid root font-size: scales text proportionally with window width.
-   At ~1073px and below → 13px (min), at 1320px (default) → 16px, wider → 16px (max).
-   --zoom-factor (set by JS) lets Cmd/Ctrl +/- scale everything further. */
+/* Fixed root font-size. App-wide scaling is handled by the native webview's
+   page zoom (Cmd/Ctrl +/-, see app/lib/hooks/useZoom.ts), which scales px and
+   rem uniformly and reflows the viewport. Keeping the root constant makes
+   rem-based sizes predictable instead of drifting with window width — the old
+   fluid `vw` term only moved rem text and left fixed-px elements behind. */
 html {
-  --zoom-factor: 1;
-  font-size: calc(clamp(13px, 1.212vw, 16px) * var(--zoom-factor));
+  font-size: 16px;
 }
 
 :root {
   /* Primary Shades */
+  --brand-dark: 97 140 232;
   --primary-100: 233 239 251;
   --primary-90: 211 223 248;
   --primary-80: 180 200 243;
   --primary-70: 137 168 236;
+  --primary-65: 97 140 232;
   --primary-60: 93 135 229;
   --primary-50: 49 103 221;
   --primary-40: 31 81 190;
@@ -26,6 +29,7 @@ html {
   /* Grey Shades */
   --grey-100: 255 255 255;
   --grey-90: 244 244 244;
+  --grey-85: 235 235 235;
   --grey-80: 227 227 227;
   --grey-70: 163 163 163;
   --grey-60: 125 125 125;
@@ -34,6 +38,39 @@ html {
   --grey-30: 42 42 42;
   --grey-20: 29 29 29;
   --grey-10: 10 10 10;
+
+  /* New Grey Palette */
+  --grey-primary-bg: 235 235 235; /* #ebebeb */
+  --grey-light-100: 255 255 255; /* #ffffff */
+  --grey-light-200: 251 251 251; /* #fbfbfb */
+  --grey-light-300: 248 248 248; /* #f8f8f8 */
+  --grey-light-400: 245 245 245; /* #f5f5f5 */
+  --grey-light-500: 244 244 244; /* #f4f4f4 */
+  --grey-light-600: 243 243 243; /* #f3f3f3 */
+  --grey-light-700: 242 242 242; /* #f2f2f2 */
+  --grey-light-800: 240 240 240; /* #f0f0f0 */
+  --grey-dark-100: 227 227 227; /* #e3e3e3 */
+  --grey-dark-200: 209 209 209; /* #d1d1d1 */
+  --grey-dark-300: 206 206 206; /* #cecece */
+  --grey-dark-400: 183 183 183; /* #b7b7b7 */
+  --grey-dark-500: 182 182 182; /* #b6b6b6 */
+  --grey-dark-600: 163 163 163; /* #a3a3a3 */
+  --grey-dark-700: 151 151 151; /* #979797 */
+  --grey-dark-800: 125 125 125; /* #7d7d7d */
+  --grey-dark-900: 96 96 96; /* #606060 */
+
+  /* Black Palette */
+  --black-primary-bg: 30 30 30; /* #1e1e1e */
+  --black-100: 67 67 67; /* #434343 */
+  --black-200: 54 54 54; /* #363636 */
+  --black-300: 49 49 49; /* #313131 */
+  --black-400: 44 44 44; /* #2c2c2c */
+  --black-500: 22 22 22; /* #161616 */
+  --black-600: 17 17 17; /* #111111 */
+  --black-700: 10 10 10; /* #0a0a0a */
+  --black-800: 5 5 5; /* #050505 */
+  --black-850: 4 4 4; /* #040404 */
+  --black-900: 0 0 0; /* #000000 */
 
   /* Success Shades */
   --success-100: 246 254 249;
@@ -59,8 +96,10 @@ html {
   --error-20: 92 20 15;
   --error-10: 42 13 9;
 
-  /* Warning Shades */
-  --warning-100: 255 247 229;
+  /* Warning Shades — R G B channels for rgba(var() / a) */
+  --warning-100: 255 242 204; /* #FFF2CC */
+  --warning-200: 254 177 1; /* #618CE8 */
+  --warning-300: 232 151 2; /* #E89702 */
   --warning-90: 255 242 204;
   --warning-80: 253 227 155;
   --warning-70: 254 214 103;
@@ -249,6 +288,53 @@ html {
   }
 }
 
+/* Decryption animation keyframes (PageLoader / DecryptingAnimation) */
+@keyframes decrypt-unlock {
+  0%,
+  15% {
+    d: path("M24 30V24C24 18.48 28.48 14 34 14V14");
+    opacity: 1;
+  }
+  35%,
+  65% {
+    d: path("M24 30V24C24 18.48 28.48 10 34 10V10");
+    opacity: 1;
+  }
+  85%,
+  100% {
+    d: path("M24 30V24C24 18.48 28.48 14 34 14V14");
+    opacity: 1;
+  }
+}
+
+@keyframes decrypt-progress {
+  0% {
+    stroke-dashoffset: 352;
+  }
+  100% {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes decrypt-burst {
+  0%,
+  15% {
+    transform: translateY(0);
+    opacity: 0;
+  }
+  30% {
+    opacity: 0.7;
+  }
+  60% {
+    transform: translateY(-32px);
+    opacity: 0;
+  }
+  100% {
+    transform: translateY(-32px);
+    opacity: 0;
+  }
+}
+
 @keyframes dotPulse {
   0% {
     opacity: 0;
@@ -262,6 +348,53 @@ html {
 }
 .pulse-blue {
   animation: pulseBlue 1s infinite;
+}
+
+@keyframes chartDraw {
+  from {
+    stroke-dashoffset: 2000;
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+  }
+  to {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+}
+
+@keyframes chartAreaReveal {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes chartFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes chartLabelSlide {
+  from {
+    opacity: 0;
+    transform: translateX(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 .swiper-pagination-bullet {
@@ -325,4 +458,21 @@ body.body-scroll-locked {
 [data-sonner-toast] [data-content] {
   flex: 1 !important;
   padding-right: 2rem !important;
+}
+
+/* Active state for notification filter tabs/pills — handles light+dark without relying on Tailwind dark: prefix */
+.tab-pill-active {
+  background-color: #f8f8f8;
+  border-color: #e3e3e3;
+  box-shadow:
+    0px 12.26px 3.831px 0px rgba(0, 0, 0, 0),
+    0px 8.429px 3.065px 0px rgba(0, 0, 0, 0.01),
+    0px 4.597px 3.065px 0px rgba(0, 0, 0, 0.04),
+    0px 2.299px 2.299px 0px rgba(0, 0, 0, 0.08),
+    0px 0.766px 0.766px 0px rgba(0, 0, 0, 0.09);
+}
+.dark .tab-pill-active {
+  background-color: #1e1e1e;
+  border-color: #313131;
+  box-shadow: none;
 }

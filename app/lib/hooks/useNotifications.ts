@@ -7,7 +7,6 @@ import {
   markReadAtom,
   markUnreadAtom,
   markAllReadAtom,
-  userAddressAtom,
 } from "@/components/page-sections/notifications/notificationStore";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 
@@ -18,35 +17,33 @@ export function useNotifications() {
   const markRead = useSetAtom(markReadAtom);
   const markUnread = useSetAtom(markUnreadAtom);
   const markAllRead = useSetAtom(markAllReadAtom);
-  const setUserAddress = useSetAtom(userAddressAtom);
 
   const { polkadotAddress, oauthSession } = useWalletAuth();
 
-  // Track the previously-seen address so we only reset on a *real* account
-  // change, not on every effect re-run (e.g. a new `oauthSession` object
-  // identity with the same address).
-  const prevAddressRef = useRef<string | null>(null);
+  // `undefined` = no account observed yet (distinct from `null` = signed out).
+  // Seeded on first run so the very first observation is NOT treated as a switch.
+  const prevAddressRef = useRef<string | null | undefined>(undefined);
 
-  // Set the user address atom whenever it changes and refresh notifications
   useEffect(() => {
-    const address = oauthSession?.substrateAddress || polkadotAddress;
-    console.log("[useNotifications] Setting user address:", address);
-    setUserAddress(address);
+    const address = oauthSession?.substrateAddress || polkadotAddress || null;
 
-    // On a genuine account change (including logout → null), drop the previous
-    // account's cached notifications synchronously so they cannot flash under
-    // the new session while the async refresh below is in flight. Rust enforces
-    // the actual per-account isolation; this is a render-flicker guard only.
-    if (address !== prevAddressRef.current) {
+    // Clear only on a genuine account *switch* (A → B, or signed-in → signed-out),
+    // never on first observation. Each component that mounts this hook (the bell,
+    // the notifications page) gets its own ref, so clearing on first mount would
+    // blank the shared list every time the bell opens — flashing "Nothing here"
+    // before the refresh below repopulates it. Rust enforces the real per-account
+    // isolation; this is only a render-flicker guard.
+    if (prevAddressRef.current !== undefined && address !== prevAddressRef.current) {
       clearNotifications();
-      prevAddressRef.current = address;
     }
+    prevAddressRef.current = address;
 
-    // Refresh notifications after setting the address
-    if (address) {
-      refresh();
-    }
-  }, [polkadotAddress, oauthSession, setUserAddress, refresh, clearNotifications]);
+    // Always refresh — never gate on the frontend address. Rust scopes the read
+    // to the signed-in session account and ignores any caller address, so a
+    // momentarily-null frontend address (boot, or a restored mnemonic session
+    // that exposes no `oauthSession`) must not suppress the fetch.
+    refresh();
+  }, [polkadotAddress, oauthSession, refresh, clearNotifications]);
 
   return { notifications, refresh, markRead, markUnread, markAllRead };
 }

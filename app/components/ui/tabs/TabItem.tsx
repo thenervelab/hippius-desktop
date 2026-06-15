@@ -1,8 +1,6 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import React from "react";
 import { cn } from "@/lib/utils";
 import { middleTruncate } from "@/lib/utils/middleTruncate";
-import ActiveTabBg from "./ActiveTabBg";
 import * as Tooltip from "@radix-ui/react-tooltip";
 
 export interface TabItemProps {
@@ -13,10 +11,18 @@ export interface TabItemProps {
   isActive: boolean;
   onClick: () => void;
   width?: string;
+  /** Fixed height Tailwind class (e.g. `h-[36px]`). Ignored when `paddingY` is set. */
   height?: string;
+  /** Horizontal padding Tailwind class. Defaults to `px-3`. */
+  paddingX?: string;
+  /** Vertical padding Tailwind class (e.g. `py-[3px]`). When set, overrides `height`. */
+  paddingY?: string;
+  /** Tailwind classes used for the label's typography. Defaults to the standard 13px Geist Medium style. */
+  textClassName?: string;
   isJustifyStart?: boolean;
   showTooltip?: boolean;
   iconOnly?: boolean;
+  tabItemClassName?: string;
 }
 
 const TabItem: React.FC<TabItemProps> = ({
@@ -25,13 +31,16 @@ const TabItem: React.FC<TabItemProps> = ({
   icon,
   isActive,
   onClick,
-  width = "min-w-[9.25rem]",
-  height = "h-[2.25rem]",
+  width = "min-w-[148px]",
+  height = "h-[36px]",
+  paddingX = "px-3",
+  paddingY,
+  textClassName = "font-medium text-[13px] tracking-[-0.26px] leading-[1.1]",
   isJustifyStart = false,
   showTooltip = true,
   iconOnly = false,
+  tabItemClassName,
 }) => {
-  /** At text-[0.875rem] with px-4 inside max-w-[15rem], ~24 chars fit. */
   const TAB_MAX_CHARS = 24;
   const displayLabel = middleTruncate(label, TAB_MAX_CHARS);
   const isTruncated = displayLabel !== label;
@@ -40,43 +49,47 @@ const TabItem: React.FC<TabItemProps> = ({
     <div
       data-tab-label={dataLabel ?? label}
       className={cn(
-        "flex items-center gap-2 relative transition-all duration-300 cursor-pointer",
-        iconOnly ? "w-[2.5rem] justify-center" : width,
-        height,
-        isActive ? "text-primary-50" : "text-grey-70",
-        !iconOnly && (isJustifyStart ? "px-2" : "px-4")
+        "flex shrink-0 cursor-pointer items-center justify-center rounded-[3.065px] transition-opacity duration-200 border-[0.766px]",
+        paddingX,
+        paddingY ? paddingY : height,
+        iconOnly ? "w-[2.5rem]" : width,
+        isActive
+          ? "bg-grey-light-300 border-grey-dark-100 text-black-900 shadow-[0px_12.26px_3.831px_0px_rgba(0,0,0,0.00),0px_8.429px_3.065px_0px_rgba(0,0,0,0.01),0px_4.597px_3.065px_0px_rgba(0,0,0,0.04),0px_2.299px_2.299px_0px_rgba(0,0,0,0.08),0px_0.766px_0.766px_0px_rgba(0,0,0,0.09)] dark:bg-black-primary-bg dark:border-black-300 dark:text-white"
+          : "border-transparent opacity-50 text-black-900 hover:opacity-75 dark:text-white",
+        tabItemClassName,
       )}
       onClick={onClick}
     >
-      {isActive && <ActiveTabBg mainGroup={true} />}
       <div
         className={cn(
-          "relative z-10 flex items-center justify-center gap-2 w-full min-w-0",
-          isActive ? "text-primary-50" : "text-grey-70 hover:text-primary-50",
-          !iconOnly && (isJustifyStart ? "justify-start" : "justify-center")
+          "flex items-center gap-[6px] text-current",
+          !iconOnly && isJustifyStart && "justify-start w-full",
         )}
       >
-        <span className="flex-shrink-0">
-          {icon &&
-            React.cloneElement(icon as React.ReactElement<any>, {
-              className: "size-[1.125rem]",
-            })}
-        </span>
+        {icon ? (
+          <span
+            className={cn(
+              "flex shrink-0 items-center justify-center text-current",
+              isActive && "text-[#3167dd]",
+            )}
+          >
+            {icon}
+          </span>
+        ) : null}
         {!iconOnly && (
-          <span className="font-medium text-[0.875rem] whitespace-nowrap">{displayLabel}</span>
+          <span className={cn(textClassName, "whitespace-nowrap")}>
+            {displayLabel}
+          </span>
         )}
       </div>
     </div>
   );
 
-  // In iconOnly mode, always show tooltip with label
   if (iconOnly) {
     return (
       <Tooltip.Provider delayDuration={200}>
         <Tooltip.Root>
-          <Tooltip.Trigger asChild>
-            {content}
-          </Tooltip.Trigger>
+          <Tooltip.Trigger asChild>{content}</Tooltip.Trigger>
           <Tooltip.Portal>
             <Tooltip.Content
               side="right"
@@ -98,9 +111,7 @@ const TabItem: React.FC<TabItemProps> = ({
   return (
     <Tooltip.Provider delayDuration={200}>
       <Tooltip.Root>
-        <Tooltip.Trigger asChild>
-          {content}
-        </Tooltip.Trigger>
+        <Tooltip.Trigger asChild>{content}</Tooltip.Trigger>
         <Tooltip.Portal>
           <Tooltip.Content
             side="bottom"

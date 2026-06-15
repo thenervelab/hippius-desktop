@@ -148,6 +148,11 @@ async fn attempt(
 /// chaining `get_auth_token` → `billing_auth` → `save_auth_session`.
 #[tauri::command]
 pub async fn ensure_billing_auth(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<(), crate::error::AppError> {
+    // Mints + persists an auth-session token for `account_id` from its on-disk
+    // mnemonic; authorize against the session so a renderer can't forge a
+    // session/token for another locally-provisioned account. (The FE invokes
+    // this with the just-logged-in address, so the session is already set.)
+    let account_id = state.require_session_account(&account_id)?;
     let pool = state.pool()?;
 
     // A genuine DB failure here must NOT be silently treated as "no password
@@ -200,9 +205,7 @@ pub async fn ensure_billing_auth(state: tauri::State<'_, crate::app_state::AppSt
     }
     let result = result.ok_or(last_err)?;
 
-    save_api_token(pool, &account_id, &result.token)
-        .await
-        .map_err(|e| crate::error::AppError::Other(format!("Failed to persist billing auth token: {e}")))?;
+    save_api_token(pool, &account_id, &result.token).await?;
 
     // Token expiry: 30 days from now. The server doesn't include expiry in
     // the response, so we assume 30 days to match the auth service's default.

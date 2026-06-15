@@ -2,25 +2,28 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import {
-  RevealTextLine,
-  Input,
-  CardButton,
-  IconButton,
-} from "@/components/ui";
 import { toast } from "sonner";
 import { Monitor } from "lucide-react";
-import SectionHeader from "./SectionHeader";
-import { Label } from "@/components/ui/label";
 import { InView } from "react-intersection-observer";
-import { Edit } from "@/components/ui/icons";
-import { cn } from "@/lib/utils";
 
+import { Button, Skeleton } from "@/components/ui";
+import { cn } from "@/lib/utils";
+import { SettingsCard } from "./SettingsCard";
+
+/**
+ * Device name editor. Reads / writes the local device name via the
+ * `get_device_name` / `set_device_name` Rust commands. Styled to match
+ * the SettingsCard pattern used by CustomizeRPC: grey header strip
+ * with mono uppercase label, white content area with the device name
+ * (or an editable input in edit mode). Action buttons (Edit Name in
+ * view mode, Cancel / Save in edit mode) sit below the card.
+ */
 export default function DeviceNameSetting() {
   const [deviceName, setDeviceName] = useState("");
   const [editValue, setEditValue] = useState("");
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
 
   const loadDeviceName = useCallback(async () => {
     try {
@@ -29,6 +32,8 @@ export default function DeviceNameSetting() {
       setEditValue(name);
     } catch (error) {
       console.error("Failed to load device name:", error);
+    } finally {
+      setIsLoading(false);
     }
   }, []);
 
@@ -36,9 +41,18 @@ export default function DeviceNameSetting() {
     loadDeviceName();
   }, [loadDeviceName]);
 
+  const startEditing = () => {
+    setEditValue(deviceName);
+    setIsEditing(true);
+  };
+
+  const handleCancel = () => {
+    setEditValue(deviceName);
+    setIsEditing(false);
+  };
+
   const handleSave = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-
     const trimmed = editValue.trim();
     if (!trimmed) {
       toast.error("Device name cannot be empty");
@@ -48,7 +62,6 @@ export default function DeviceNameSetting() {
       setIsEditing(false);
       return;
     }
-
     setIsSaving(true);
     try {
       await invoke("set_device_name", { name: trimmed });
@@ -63,108 +76,101 @@ export default function DeviceNameSetting() {
     }
   };
 
-  const toggleEditMode = () => {
-    setIsEditing(!isEditing);
-    if (isEditing) {
-      setEditValue(deviceName);
-    }
-  };
-
-  const hasChanged = editValue.trim() !== deviceName && editValue.trim() !== "";
+  const hasChange = editValue.trim() !== "" && editValue.trim() !== deviceName;
 
   return (
     <InView triggerOnce>
       {({ inView, ref }) => (
         <div
           ref={ref}
-          className="flex gap-6 w-full flex-col border border-grey-80 rounded-lg p-4 relative bg-[url('/assets/rpc-bg-layer.png')] bg-repeat-round bg-cover"
+          className={cn(
+            "flex flex-col gap-3 transition-all duration-500 ease-out",
+            inView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-3"
+          )}
         >
-          <div className="w-full flex flex-col">
-            <div className="w-full">
-              <RevealTextLine
-                rotate
-                reveal={inView}
-                parentClassName="w-full"
-                className="delay-300 w-full"
-              >
-                <div className="w-full flex flex-wrap justify-between gap-4 items-start">
-                  <SectionHeader
-                    Icon={Monitor}
-                    title="Device Name"
-                    subtitle="A friendly name for this device, shown to your other devices when browsing remote sync folders."
-                  />
-                  {!isEditing && (
-                    <IconButton
-                      className="shrink-0 h-[2.625rem]"
-                      icon={Edit}
-                      text="Edit Name"
-                      onClick={toggleEditMode}
-                    />
+          <SettingsCard label="Device Name" icon={<Monitor className="size-4" />}>
+            {isLoading ? (
+              <div className="px-4 py-3">
+                <Skeleton width={180} height={16} />
+              </div>
+            ) : isEditing ? (
+              <form onSubmit={handleSave}>
+                <input
+                  type="text"
+                  value={editValue}
+                  onChange={(e) => setEditValue(e.target.value)}
+                  autoFocus
+                  maxLength={64}
+                  placeholder="e.g. Work MacBook, Home PC"
+                  disabled={isSaving}
+                  className={cn(
+                    "block w-full bg-transparent border-0 outline-none px-4 py-3",
+                    "text-sm font-medium text-grey-10 dark:text-white",
+                    "placeholder:text-grey-60 dark:placeholder:text-grey-dark-500",
+                    "disabled:opacity-60 disabled:cursor-not-allowed"
                   )}
-                </div>
-              </RevealTextLine>
-            </div>
-            <form className="w-full flex flex-col" onSubmit={handleSave}>
-              <RevealTextLine
-                rotate
-                reveal={inView}
-                parentClassName="w-full"
-                className="delay-300 w-full mt-4"
-              >
-                <div className="space-y-1 text-grey-10 w-full flex flex-col">
-                  <Label
-                    htmlFor="device-name"
-                    className="text-sm font-medium text-grey-70"
-                  >
-                    Device Name
-                  </Label>
-                  <div className="relative flex items-start w-full">
-                    <Monitor className="size-6 absolute left-3 top-[1.75rem] transform -translate-y-1/2 text-grey-60" />
-                    <Input
-                      id="device-name"
-                      placeholder="e.g. Work MacBook, Home PC"
-                      value={editValue}
-                      onChange={(e) => setEditValue(e.target.value)}
-                      disabled={!isEditing}
-                      maxLength={64}
-                      className="px-11 border-grey-80 h-14 text-grey-30 w-full
-                        bg-transparent py-4 font-medium text-base rounded-lg duration-300 outline-none
-                        hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus bg-white"
-                    />
-                  </div>
-                </div>
-              </RevealTextLine>
+                />
+              </form>
+            ) : (
+              <div className="px-4 py-3 text-sm font-medium text-grey-10 dark:text-white">
+                {deviceName}
+              </div>
+            )}
+          </SettingsCard>
 
-              <div
+          {isLoading ? (
+            <Skeleton width={104} height={30} className="rounded-[6px]" />
+          ) : isEditing ? (
+            <div className="flex items-center gap-3">
+              <Button
+                variant="defaultStable"
+                size="auto"
+                onClick={handleCancel}
+                disabled={isSaving}
                 className={cn(
-                  "overflow-hidden transition-all duration-300 ease-in-out",
-                  isEditing
-                    ? "max-h-96 opacity-100 mt-6"
-                    : "max-h-0 opacity-0"
+                  "h-[30px] px-3 gap-[7px] rounded-[6px] border text-sm font-medium",
+                  "border-grey-dark-100 bg-[#FEFEFE] text-[#4F4F4F]",
+                  "shadow-[0_5px_2.3px_rgba(0,0,0,0.03),0_1px_1.9px_rgba(0,0,0,0.14),0_0_1px_rgba(0,0,0,0.16),inset_0_1px_0_#FFF]",
+                  "hover:bg-[#F5F5F5]",
+                  "dark:border-black-300 dark:bg-black-600 dark:text-grey-dark-700 dark:shadow-[0_1px_2px_rgba(0,0,0,0.4)] dark:hover:bg-black-500"
                 )}
               >
-                <RevealTextLine
-                  rotate
-                  reveal={inView && isEditing}
-                  className="delay-300 w-full"
-                >
-                  <CardButton
-                    type="submit"
-                    className="max-w-[10rem] h-[3rem]"
-                    variant="dialog"
-                    disabled={isSaving || !hasChanged}
-                    onClick={handleSave}
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className="flex items-center text-lg leading-6 font-medium">
-                        {isSaving ? "Saving..." : "Save"}
-                      </span>
-                    </div>
-                  </CardButton>
-                </RevealTextLine>
-              </div>
-            </form>
-          </div>
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                size="auto"
+                onClick={() => handleSave()}
+                disabled={isSaving || !hasChange}
+                loading={isSaving}
+                className={cn(
+                  "h-[30px] px-3 gap-[10px] rounded-[6px] border text-sm font-medium",
+                  "border-[#3167DD] bg-[#3167DD] text-white",
+                  "hover:bg-[#2454c4] hover:border-[#2454c4]",
+                  "dark:hover:bg-[#2a5ad0] dark:hover:border-[#2a5ad0]"
+                )}
+              >
+                {isSaving ? "Saving..." : "Save"}
+              </Button>
+            </div>
+          ) : (
+            <div>
+              <Button
+                variant="primary"
+                size="auto"
+                onClick={startEditing}
+                disabled={!deviceName}
+                className={cn(
+                  "h-[30px] px-3 gap-[10px] rounded-[6px] border text-sm font-medium",
+                  "border-[#3167DD] bg-[#3167DD] text-white",
+                  "hover:bg-[#2454c4] hover:border-[#2454c4]",
+                  "dark:hover:bg-[#2a5ad0] dark:hover:border-[#2a5ad0]"
+                )}
+              >
+                Edit Name
+              </Button>
+            </div>
+          )}
         </div>
       )}
     </InView>

@@ -1,34 +1,28 @@
 "use client";
 
-import React, { useState, useMemo, useCallback } from "react";
-import { Icons, RevealTextLine, IconButton } from "@/components/ui";
+import React, { useState, useCallback } from "react";
+import { InView } from "react-intersection-observer";
+import { Icons } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { formatBytes } from "@/lib/utils/formatBytes";
 import { middleTruncate, middleTruncatePath } from "@/lib/utils/middleTruncate";
-import SectionHeader from "../SectionHeader";
-import { InView } from "react-intersection-observer";
 import {
   Folder,
   FolderOpen,
   FolderSearch,
-  Plus,
-  MoreVertical,
   Trash2,
   PauseCircle,
   PlayCircle,
   ServerCrash,
-  Clock,
-  HardDrive,
 } from "lucide-react";
 import TableActionMenu, { ActionItem } from "@/components/ui/alt-table/TableActionMenu";
 import { Button } from "@/components/ui/button";
+import { SettingsCard } from "../SettingsCard";
+import FolderRowSkeleton from "./FolderRowSkeleton";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import type { SyncFolder } from "@/app/lib/types/sync-folder";
-import { Pagination } from "@/components/ui/alt-table";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import FolderCardContextMenu from "@/app/components/ui/context-menu/FolderCardContextMenu";
-
-const FOLDERS_PER_PAGE = 6;
 
 interface LocalFoldersSectionProps {
   syncFolders: SyncFolder[];
@@ -39,54 +33,103 @@ interface LocalFoldersSectionProps {
   onRemoveFolder: (folder: SyncFolder) => void;
   onDeleteFromServer: (folderName: string, folderId: string) => void;
   onBrowseFolder: (folder: SyncFolder) => void;
+  // When provided, the folder row becomes clickable — used by the drive
+  // "Local" view (see SyncFolderBreadcrumb) to switch the active folder.
+  // The action menu and its children continue to handle their own clicks.
+  onSelectFolder?: (folder: SyncFolder) => void;
 }
 
-function getStatusColor(status: SyncFolder["status"]) {
-  switch (status) {
-    case "syncing":
-      return "bg-success-95 text-success-50 border-success-80";
-    case "paused":
-      return "bg-grey-95 text-grey-50 border-grey-80";
-    case "error":
-      return "bg-error-100 text-error-50 border-error-80";
-  }
+/**
+ * Status badge matching the On/Off pill in NotificationSection:
+ *   - Syncing → "On" treatment (green pill, green concentric-circle dot)
+ *   - Paused  → "Off" treatment (neutral grey pill / muted dot)
+ *   - Error   → red variant of the same shape
+ */
+function StatusBadge({ status }: { status: SyncFolder["status"] }) {
+  const styles: Record<
+    SyncFolder["status"],
+    { wrap: string; tone: string; label: string }
+  > = {
+    syncing: {
+      wrap: "bg-[rgba(4,200,112,0.2)]",
+      tone: "text-[#04c870]",
+      label: "Syncing",
+    },
+    paused: {
+      wrap: "bg-[#f0f0f0] dark:bg-white/10",
+      tone: "text-[#b6b6b6] dark:text-grey-dark-500",
+      label: "Paused",
+    },
+    error: {
+      wrap: "bg-error-50/20",
+      tone: "text-error-50",
+      label: "Error",
+    },
+  };
+  const s = styles[status];
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-[5px] px-[8.8px] py-[5px] rounded-full flex-shrink-0",
+        s.wrap
+      )}
+    >
+      <svg
+        width="12"
+        height="12"
+        viewBox="0 0 9.5 9.5"
+        fill="none"
+        className={cn("flex-shrink-0", s.tone)}
+      >
+        <circle cx="4.75" cy="4.75" r="4.75" fill="currentColor" fillOpacity="0.2" />
+        <circle cx="4.75" cy="4.75" r="2.375" fill="currentColor" />
+      </svg>
+      <span
+        className={cn(
+          "text-[10px] font-semibold leading-none tracking-[-0.2px]",
+          s.tone
+        )}
+      >
+        {s.label}
+      </span>
+    </span>
+  );
 }
 
-function getStatusText(status: SyncFolder["status"]) {
-  switch (status) {
-    case "syncing":
-      return "Syncing";
-    case "paused":
-      return "Paused";
-    case "error":
-      return "Error";
-  }
+function formatRowDate(timestamp: number) {
+  const d = new Date(timestamp);
+  const month = d.toLocaleString("en-US", { month: "short" });
+  const day = d.getDate();
+  const year = d.getFullYear();
+  let hours = d.getHours();
+  const minutes = String(d.getMinutes()).padStart(2, "0");
+  const ampm = hours >= 12 ? "pm" : "am";
+  hours = hours % 12 || 12;
+  return `${month} ${day}, ${year} at ${hours}:${minutes} ${ampm}`;
 }
 
-function PathWithTooltip({ path }: { path: string }) {
-  const displayPath = middleTruncatePath(path, 30);
-  const isPathTruncated = displayPath !== path;
+function PathTooltip({ path }: { path: string }) {
+  const display = middleTruncatePath(path, 40);
+  const truncated = display !== path;
 
-  const textContent = (
-    <p className="text-sm text-grey-60 truncate mb-1 cursor-default">
-      {displayPath}
+  const text = (
+    <p className="font-geist text-[14px] font-medium leading-normal text-[#0A0A0A]/40 dark:text-white/40 mt-2 ml-6 cursor-default">
+      {display}
     </p>
   );
 
-  if (!isPathTruncated) return textContent;
+  if (!truncated) return text;
 
   return (
     <Tooltip.Provider delayDuration={200}>
       <Tooltip.Root>
-        <Tooltip.Trigger asChild>
-          {textContent}
-        </Tooltip.Trigger>
+        <Tooltip.Trigger asChild>{text}</Tooltip.Trigger>
         <Tooltip.Portal>
           <Tooltip.Content
             side="bottom"
             align="start"
-            sideOffset={0}
-            className="z-[9999] max-w-[25rem] bg-white border border-grey-80 rounded-lg px-3 py-2 text-xs font-medium text-grey-40 shadow-lg break-all animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95"
+            sideOffset={2}
+            className="z-[9999] max-w-[28rem] bg-white border border-grey-80 rounded-lg px-3 py-2 text-xs font-medium text-grey-40 shadow-lg break-all animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95"
           >
             {path}
             <Tooltip.Arrow className="fill-white" width={12} height={6} />
@@ -106,217 +149,240 @@ export function LocalFoldersSection({
   onRemoveFolder,
   onDeleteFromServer,
   onBrowseFolder,
+  onSelectFolder,
 }: LocalFoldersSectionProps) {
-  const [currentPage, setCurrentPage] = useState(1);
-  const [cardContextMenu, setCardContextMenu] = useState<{ x: number; y: number; folder: SyncFolder } | null>(null);
+  const [cardContextMenu, setCardContextMenu] = useState<{
+    x: number;
+    y: number;
+    folder: SyncFolder;
+  } | null>(null);
 
   const getFileManagerLabel = useCallback(() => {
-    if (typeof navigator !== "undefined" && /win/i.test(navigator.platform)) return "Explorer";
+    if (typeof navigator !== "undefined" && /win/i.test(navigator.platform))
+      return "Explorer";
     return "Finder";
   }, []);
-
-  const totalPages = Math.max(1, Math.ceil(syncFolders.length / FOLDERS_PER_PAGE));
-  const paginatedFolders = useMemo(() => {
-    const validPage = Math.min(currentPage, totalPages);
-    const start = (validPage - 1) * FOLDERS_PER_PAGE;
-    return syncFolders.slice(start, start + FOLDERS_PER_PAGE);
-  }, [syncFolders, currentPage, totalPages]);
 
   return (
     <InView triggerOnce>
       {({ inView, ref }) => (
         <>
-        <div
-          ref={ref}
-          className="flex gap-6 w-full flex-col border border-grey-80 rounded-lg p-4 relative bg-[url('/assets/rpc-bg-layer.png')] bg-repeat-round bg-cover"
-        >
-          <div className="w-full">
-            <RevealTextLine
-              rotate
-              reveal={inView}
-              parentClassName="w-full"
-              className="delay-300 w-full"
-            >
-              <div className="w-full flex flex-wrap justify-between gap-4 items-start">
-                <SectionHeader
-                  Icon={Icons.Folder}
-                  title="Local Sync Folders"
-                  subtitle="Manage folders on this device that sync to the Hippius network. Changes are encrypted and synced automatically."
-                  info="Multi-folder sync allows you to keep different directories synchronized independently. Files are encrypted and synced to the Hippius network."
-                  learnMoreUrl="https://docs.hippius.com/use/desktop/settings#multi-folder-sync"
-                />
-                <IconButton
-                  className="shrink-0 h-[2.625rem]"
-                  icon={Plus}
-                  text="Add Folder"
-                  onClick={onAddFolder}
-                />
-              </div>
-            </RevealTextLine>
+          <div
+            ref={ref}
+            className={cn(
+              "transition-all duration-500 ease-out",
+              inView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-3"
+            )}
+          >
+            <SettingsCard
+              label="Local Sync Folders"
+              icon={<Folder className="size-4" />}
+        headerAction={
+          <Button
+            variant="defaultStable"
+            size="auto"
+            onClick={onAddFolder}
+            className={cn(
+              "h-[30px] gap-[7px] rounded-[6px] border px-3 text-[14px] font-normal leading-[1.109] tracking-[-0.28px]",
+              "border-grey-dark-100 bg-[#FEFEFE] text-[#111]",
+              "shadow-[0_5px_2.3px_rgba(0,0,0,0.03),0_1px_1.9px_rgba(0,0,0,0.14),0_0_1px_rgba(0,0,0,0.16),inset_0_1px_0_#FFF]",
+              "hover:bg-[#F5F5F5]",
+              "dark:border-black-300 dark:bg-black-600 dark:text-grey-dark-300 dark:shadow-[0_1px_2px_rgba(0,0,0,0.4)] dark:hover:bg-black-500"
+            )}
+          >
+            + Add Folder
+          </Button>
+        }
+      >
+        {/* Content */}
+        {isLoading ? (
+          <div>
+            <FolderRowSkeleton hasStatusBadge />
+            <FolderRowSkeleton hasStatusBadge />
+            <FolderRowSkeleton />
           </div>
-
-          <div className="w-full">
-            <div className="space-y-3 w-full">
-              {isLoading ? (
-                <div className="flex justify-center py-8">
-                  <Icons.Loader className="size-6 animate-spin text-primary-50" />
-                </div>
-              ) : syncFolders.length === 0 ? (
-                <div className="p-6 border border-dashed border-grey-80 rounded-lg text-center bg-white/60">
-                  <Folder className="size-8 mx-auto mb-2 text-grey-60" />
-                  <p className="text-sm text-grey-50 mb-1">
-                    No folders syncing yet
-                  </p>
-                  <p className="text-xs text-grey-60">
-                    Add a local folder to get started with encrypted sync
-                  </p>
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 @[56rem]:grid-cols-2 gap-2 w-full">
-                  {paginatedFolders.map((folder) => (
-                    <div
-                      key={folder.id}
-                      className="p-4 border border-grey-80 rounded-lg bg-white hover:bg-grey-98 transition-colors"
-                      onContextMenu={(e) => {
-                        e.preventDefault();
-                        setCardContextMenu({ x: e.clientX, y: e.clientY, folder });
-                      }}
-                    >
-                      <div className="flex items-start justify-between">
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 mb-1">
-                            <Folder className="size-4 text-grey-40 flex-shrink-0" />
-                            <Tooltip.Provider delayDuration={200}>
-                              <Tooltip.Root>
-                                <Tooltip.Trigger asChild>
-                                  <span className="font-medium text-base text-grey-10 truncate cursor-default">
-                                    {middleTruncate(folder.folderName, 30)}
-                                  </span>
-                                </Tooltip.Trigger>
-                                {middleTruncate(folder.folderName, 30) !== folder.folderName && (
-                                  <Tooltip.Portal>
-                                    <Tooltip.Content
-                                      side="bottom"
-                                      className="z-[9999] max-w-[25rem] bg-white border border-grey-80 rounded-lg px-3 py-2 text-xs font-medium text-grey-40 shadow-lg break-all animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95"
-                                      sideOffset={4}
-                                    >
-                                      {folder.folderName}
-                                      <Tooltip.Arrow className="fill-white" width={12} height={6} />
-                                    </Tooltip.Content>
-                                  </Tooltip.Portal>
-                                )}
-                              </Tooltip.Root>
-                            </Tooltip.Provider>
-                            <span
-                              className={cn(
-                                "text-xs font-medium px-2 py-0.5 rounded border flex-shrink-0 whitespace-nowrap",
-                                getStatusColor(folder.status)
-                              )}
+        ) : syncFolders.length === 0 ? (
+          <div className="flex min-h-[139px] flex-col items-center justify-center gap-[5px] px-4 py-6 text-center">
+            <p className="font-geist text-[14px] font-medium leading-[20px] tracking-[-0.28px] text-black dark:text-white">
+              No Folder Syncing Yet
+            </p>
+            <p className="font-geist w-[262px] max-w-full text-[14px] font-medium leading-[17px] tracking-[-0.28px] text-[#7D7D7D] dark:text-grey-dark-600">
+              Add a folder to get started with encrypted sync
+            </p>
+          </div>
+        ) : (
+          <div className="max-h-[420px] overflow-y-auto">
+            {syncFolders.map((folder) => (
+              <div
+                key={folder.id}
+                role={onSelectFolder ? "button" : undefined}
+                tabIndex={onSelectFolder ? 0 : undefined}
+                className={cn(
+                  "flex items-start justify-between p-3 transition-colors",
+                  // When the row is clickable (drive's Local cards view),
+                  // use a more pronounced hover treatment + pointer
+                  // cursor so it reads as "navigate into this folder".
+                  // `[&_*]:cursor-pointer` propagates the pointer to the
+                  // tooltip-wrapped name/path spans that otherwise carry
+                  // `cursor-default` and locally win the cascade.
+                  // Settings reuses this same component with no
+                  // onSelectFolder and keeps the subtler hover.
+                  onSelectFolder
+                    ? "cursor-pointer [&_*]:cursor-pointer hover:bg-grey-light-400 dark:hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-50"
+                    : "hover:bg-grey-light-400 dark:hover:bg-white/5",
+                )}
+                onClick={(e) => {
+                  if (!onSelectFolder) return;
+                  // Ignore clicks that originated inside the action menu / its
+                  // popover so menu interactions don't double as selections.
+                  const target = e.target as HTMLElement;
+                  if (target.closest(".action-menu-area")) return;
+                  if (target.closest("[role='menu']")) return;
+                  onSelectFolder(folder);
+                }}
+                onKeyDown={(e) => {
+                  if (!onSelectFolder) return;
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    onSelectFolder(folder);
+                  }
+                }}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setCardContextMenu({ x: e.clientX, y: e.clientY, folder });
+                }}
+              >
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-[7px] flex-wrap">
+                    <Folder className="size-4 text-primary-50 flex-shrink-0" />
+                    <Tooltip.Provider delayDuration={200}>
+                      <Tooltip.Root>
+                        <Tooltip.Trigger asChild>
+                          <span className="text-sm font-medium text-grey-10 dark:text-white cursor-default">
+                            {middleTruncate(folder.folderName, 30)}
+                          </span>
+                        </Tooltip.Trigger>
+                        {middleTruncate(folder.folderName, 30) !== folder.folderName && (
+                          <Tooltip.Portal>
+                            <Tooltip.Content
+                              side="bottom"
+                              sideOffset={4}
+                              className="z-[9999] max-w-[25rem] bg-white border border-grey-80 rounded-lg px-3 py-2 text-xs font-medium text-grey-40 shadow-lg break-all animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95"
                             >
-                              {getStatusText(folder.status)}
-                            </span>
-                          </div>
-                          <PathWithTooltip path={folder.localPath} />
-                          {(folder.fileCount !== undefined ||
-                            folder.totalBytes !== undefined ||
-                            folder.lastModified) && (
-                            <div className="flex items-center gap-x-3 gap-y-0.5 flex-wrap text-xs text-grey-60 mt-1">
-                              {folder.fileCount !== undefined &&
-                                folder.fileCount > 0 && (
-                                <span className="flex items-center gap-1 whitespace-nowrap">
-                                  <Icons.File2 className="size-3" />
-                                  {folder.fileCount}{" "}
-                                  {folder.fileCount === 1 ? "file" : "files"}
-                                </span>
-                              )}
-                              {folder.totalBytes !== undefined &&
-                                folder.totalBytes > 0 && (
-                                <span className="flex items-center gap-1 whitespace-nowrap">
-                                  <HardDrive className="size-3" />
-                                  {formatBytes(folder.totalBytes)}
-                                </span>
-                              )}
-                              {folder.lastModified !== undefined &&
-                                folder.lastModified > 0 && (
-                                <span className="flex items-center gap-1 whitespace-nowrap">
-                                  <Clock className="size-3" />
-                                  {new Date(folder.lastModified).toLocaleDateString(
-                                    "en-US",
-                                    {
-                                      month: "short",
-                                      day: "numeric",
-                                      year: "numeric",
-                                      hour: "2-digit",
-                                      minute: "2-digit",
-                                    }
-                                  )}
-                                </span>
-                              )}
-                            </div>
-                          )}
-                        </div>
+                              {folder.folderName}
+                              <Tooltip.Arrow className="fill-white" width={12} height={6} />
+                            </Tooltip.Content>
+                          </Tooltip.Portal>
+                        )}
+                      </Tooltip.Root>
+                    </Tooltip.Provider>
 
-                        <TableActionMenu
-                          dropdownTitle=""
-                          items={[
-                            {
-                              icon: <FolderSearch className="size-4" />,
-                              itemTitle: "Browse Contents",
-                              onItemClick: () => onBrowseFolder(folder),
-                            },
-                            {
-                              icon: folder.status === "syncing"
-                                ? <PauseCircle className="size-4" />
-                                : <PlayCircle className="size-4" />,
-                              itemTitle: folder.status === "syncing" ? "Pause Sync" : "Resume Sync",
-                              onItemClick: () => folder.status === "syncing"
-                                ? onPauseFolder(folder)
-                                : onResumeFolder(folder),
-                            },
-                            {
-                              icon: <FolderOpen className="size-4" />,
-                              itemTitle: "Open in Finder",
-                              onItemClick: async () => {
-                                try {
-                                  await revealItemInDir(folder.localPath);
-                                } catch (error) {
-                                  console.error("Failed to open in Finder:", error);
-                                }
-                              },
-                            },
-                            {
-                              icon: <Trash2 className="size-4" />,
-                              itemTitle: "Remove from Sync",
-                              onItemClick: () => onRemoveFolder(folder),
-                            },
-                            {
-                              icon: <ServerCrash className="size-4" />,
-                              itemTitle: "Delete from Server",
-                              variant: "destructive" as const,
-                              onItemClick: () => onDeleteFromServer(folder.folderName, folder.id),
-                            },
-                          ] satisfies ActionItem[]}
-                        >
-                          <Button variant="ghost" size="md" className="h-8 w-8 p-0 text-grey-70 action-menu-area">
-                            <MoreVertical className="size-4" />
-                          </Button>
-                        </TableActionMenu>
-                      </div>
-                    </div>
-                  ))}
+                    <StatusBadge status={folder.status} />
+
+                    {(folder.totalBytes || folder.fileCount || folder.lastModified) ? (
+                      <span className="h-4 w-px bg-grey-80 dark:bg-[#3a3a3a] flex-shrink-0" />
+                    ) : null}
+
+                    {folder.totalBytes !== undefined && folder.totalBytes > 0 && (
+                      <span className="flex items-center gap-1 text-xs text-grey-60 dark:text-grey-dark-600 whitespace-nowrap">
+                        <Icons.Database className="size-3.5 text-[#1F50BD]" />
+                        {formatBytes(folder.totalBytes)}
+                      </span>
+                    )}
+                    {folder.fileCount !== undefined && folder.fileCount > 0 && (
+                      <>
+                        {folder.totalBytes !== undefined && folder.totalBytes > 0 && (
+                          <span aria-hidden="true" className="w-[3px] h-[3px] rounded-full bg-[#9D9D9D] dark:bg-[#5a5a5a] flex-shrink-0" />
+                        )}
+                        <span className="flex items-center gap-1 text-xs text-grey-60 dark:text-grey-dark-600 whitespace-nowrap">
+                          <Icons.Folders className="size-3.5 text-[#1F50BD]" />
+                          {folder.fileCount}{" "}
+                          {folder.fileCount === 1 ? "file" : "files"}
+                        </span>
+                      </>
+                    )}
+                    {folder.lastModified !== undefined && folder.lastModified > 0 && (
+                      <>
+                        {((folder.totalBytes !== undefined && folder.totalBytes > 0) ||
+                          (folder.fileCount !== undefined && folder.fileCount > 0)) && (
+                          <span aria-hidden="true" className="w-[3px] h-[3px] rounded-full bg-[#9D9D9D] dark:bg-[#5a5a5a] flex-shrink-0" />
+                        )}
+                        <span className="flex items-center gap-1 text-xs text-grey-60 dark:text-grey-dark-600 whitespace-nowrap">
+                          <Icons.Clock8 className="size-3.5 text-[#1F50BD]" />
+                          {formatRowDate(folder.lastModified)}
+                        </span>
+                      </>
+                    )}
+                  </div>
+                  <PathTooltip path={folder.localPath} />
                 </div>
-              )}
-              {syncFolders.length > FOLDERS_PER_PAGE && (
-                <Pagination
-                  currentPage={Math.min(currentPage, totalPages)}
-                  totalPages={totalPages}
-                  setPage={setCurrentPage}
-                  className="mt-3"
-                />
-              )}
-            </div>
+
+                <TableActionMenu
+                  dropdownTitle=""
+                  items={
+                    [
+                      {
+                        icon: <FolderSearch className="size-4" />,
+                        itemTitle: "Browse Contents",
+                        onItemClick: () => onBrowseFolder(folder),
+                      },
+                      {
+                        icon:
+                          folder.status === "syncing" ? (
+                            <PauseCircle className="size-4" />
+                          ) : (
+                            <PlayCircle className="size-4" />
+                          ),
+                        itemTitle:
+                          folder.status === "syncing"
+                            ? "Pause Sync"
+                            : "Resume Sync",
+                        onItemClick: () =>
+                          folder.status === "syncing"
+                            ? onPauseFolder(folder)
+                            : onResumeFolder(folder),
+                      },
+                      {
+                        icon: <FolderOpen className="size-4" />,
+                        itemTitle: `Open in ${getFileManagerLabel()}`,
+                        onItemClick: async () => {
+                          try {
+                            await revealItemInDir(folder.localPath);
+                          } catch (error) {
+                            console.error("Failed to open in file manager:", error);
+                          }
+                        },
+                      },
+                      {
+                        icon: <Trash2 className="size-4" />,
+                        itemTitle: "Remove from Sync",
+                        onItemClick: () => onRemoveFolder(folder),
+                      },
+                      {
+                        icon: <ServerCrash className="size-4" />,
+                        itemTitle: "Delete from Server",
+                        variant: "destructive" as const,
+                        onItemClick: () =>
+                          onDeleteFromServer(folder.folderName, folder.id),
+                      },
+                    ] satisfies ActionItem[]
+                  }
+                >
+                  <Button
+                    variant="ghost"
+                    size="auto"
+                    className="h-8 w-8 p-0 action-menu-area mt-0.5 flex-shrink-0 rounded-md text-grey-70 hover:text-grey-30 hover:bg-grey-90 dark:text-grey-dark-600 dark:hover:text-white dark:hover:bg-white/10 transition-colors"
+                  >
+                    <Icons.EllipsisVertical className="size-[18px]" />
+                  </Button>
+                </TableActionMenu>
+              </div>
+            ))}
           </div>
-        </div>
+        )}
+
+            </SettingsCard>
+          </div>
 
       {cardContextMenu && (
         <FolderCardContextMenu
@@ -330,13 +396,20 @@ export function LocalFoldersSection({
               onClick: () => onBrowseFolder(cardContextMenu.folder),
             },
             {
-              icon: cardContextMenu.folder.status === "syncing"
-                ? <PauseCircle className="size-4" />
-                : <PlayCircle className="size-4" />,
-              label: cardContextMenu.folder.status === "syncing" ? "Pause Sync" : "Resume Sync",
-              onClick: () => cardContextMenu.folder.status === "syncing"
-                ? onPauseFolder(cardContextMenu.folder)
-                : onResumeFolder(cardContextMenu.folder),
+              icon:
+                cardContextMenu.folder.status === "syncing" ? (
+                  <PauseCircle className="size-4" />
+                ) : (
+                  <PlayCircle className="size-4" />
+                ),
+              label:
+                cardContextMenu.folder.status === "syncing"
+                  ? "Pause Sync"
+                  : "Resume Sync",
+              onClick: () =>
+                cardContextMenu.folder.status === "syncing"
+                  ? onPauseFolder(cardContextMenu.folder)
+                  : onResumeFolder(cardContextMenu.folder),
             },
             {
               icon: <FolderOpen className="size-4" />,
@@ -358,12 +431,16 @@ export function LocalFoldersSection({
               icon: <ServerCrash className="size-4" />,
               label: "Delete from Server",
               variant: "destructive" as const,
-              onClick: () => onDeleteFromServer(cardContextMenu.folder.folderName, cardContextMenu.folder.id),
+              onClick: () =>
+                onDeleteFromServer(
+                  cardContextMenu.folder.folderName,
+                  cardContextMenu.folder.id
+                ),
             },
           ]}
         />
       )}
-      </>
+        </>
       )}
     </InView>
   );

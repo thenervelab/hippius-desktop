@@ -15,9 +15,9 @@ use tracing::{debug, info, warn};
 /// Rejects empty/whitespace-only patterns and any pattern containing a `..`
 /// path component (path traversal). Returns the trimmed pattern on success.
 ///
-/// The component check splits on both `/` and `\` so it catches the cases a
-/// bare `contains("../")` substring test missed: the Windows separator
-/// (`..\`), a trailing `foo/..`, and a bare `..`. Exclusion patterns are
+/// The component check splits on both `/` and `\` so it catches cases a bare
+/// `contains("../")` substring test cannot: the Windows separator (`..\`), a
+/// trailing `foo/..`, and a bare `..`. Exclusion patterns are
 /// gitignore-style globs matched against relative paths, so a `..` component
 /// can never be legitimate — rejecting all of them is both safe and complete.
 ///
@@ -129,11 +129,19 @@ pub async fn remove_exclude_pattern(label: String, pattern: String, app_state: t
     Ok(removed)
 }
 
-/// Apply a batch of inclusion/exclusion pattern changes atomically.
+/// Apply a batch of inclusion/exclusion pattern changes, then trigger sync.
 ///
-/// Removes exclusion patterns for paths the user wants included, adds
-/// patterns for paths the user wants excluded, then triggers sync.
-/// Replaces the paired loops in `RemoteFolderBrowser.tsx`.
+/// Removes exclusion patterns for paths the user wants included, adds patterns
+/// for paths the user wants excluded. Replaces the paired loops in
+/// `RemoteFolderBrowser.tsx`.
+///
+/// Semantics are **best-effort, not atomic**: the changes are applied under the
+/// drive lock in order, and a drive-side `add`/`remove` failure returns `Err`
+/// immediately, leaving the changes applied so far in place (there is no
+/// rollback — SQLite-style transactional patterns don't apply to the in-memory
+/// exclude set). An invalid exclude *pattern* is the one exception: it is
+/// logged and skipped rather than aborting the batch. On `Err` the caller
+/// should re-fetch the selection to see which changes landed.
 #[tauri::command]
 pub async fn apply_sync_selection(
     app_state: tauri::State<'_, AppState>,
@@ -154,7 +162,22 @@ pub async fn apply_sync_selection(
     let manager = arc.lock().await;
 
     for path in &include {
-        let _ = manager.remove_exclude_pattern(path).map_err(AppError::Hcfs)?;
+        // Trim for parity with the exclude branch (validate_pattern trims before
+        // storing), so an entry with surrounding whitespace actually matches the
+        // stored rule instead of silently no-op'ing, and observe the returned
+        // bool so a no-match is logged rather than vanishing. A remove can only
+        // delete a stored rule — it cannot escape
+        // the sync root — so the full validate_pattern (`..`/newline rejection)
+        // the add side needs is unnecessary here.
+        let trimmed = path.trim();
+        if trimmed.is_empty() {
+            warn!(pattern = %path, "Skipping empty include entry in batch");
+            continue;
+        }
+        let removed = manager.remove_exclude_pattern(trimmed).map_err(AppError::Hcfs)?;
+        if !removed {
+            debug!(label = %label, pattern = %trimmed, "Include entry matched no stored exclude rule (already included)");
+        }
     }
     for path in &exclude {
         match validate_pattern(path) {
@@ -207,7 +230,7 @@ mod tests {
     #[test]
     fn test_validate_traversal_pattern_rejected() {
         // Leading, nested, trailing, bare, and Windows-separator forms must
-        // all be rejected — the prior `contains("../")` check only caught the
+        // all be rejected — a bare `contains("../")` check would only catch the
         // first two.
         for bad in ["../secret", "foo/../bar", "foo/..", "..", "..\\secret", "a\\..\\b"] {
             assert!(validate_pattern(bad).is_err(), "expected rejection for {bad:?}");

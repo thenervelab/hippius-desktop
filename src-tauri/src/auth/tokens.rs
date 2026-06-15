@@ -31,7 +31,7 @@ const AUTH_ROW_ID: i64 = 1;
 /// back to plaintext DB storage so the app stays functional — the row
 /// is tagged as such in a warn log so users on locked-down Linux boxes
 /// can see what's happening.
-pub async fn save_api_token(pool: &SqlitePool, account_id: &str, token: &str) -> Result<(), String> {
+pub async fn save_api_token(pool: &SqlitePool, account_id: &str, token: &str) -> crate::error::Result<()> {
     let keychain_ok = match token_keychain::store_token(account_id, token) {
         Ok(()) => true,
         Err(e) => {
@@ -58,8 +58,7 @@ pub async fn save_api_token(pool: &SqlitePool, account_id: &str, token: &str) ->
         )
         .bind(account_id)
         .execute(pool)
-        .await
-        .map_err(|e| format!("DB error clearing plaintext API token: {e}"))?;
+        .await?;
     } else {
         sqlx::query(
             r"
@@ -71,8 +70,7 @@ pub async fn save_api_token(pool: &SqlitePool, account_id: &str, token: &str) ->
         .bind(account_id)
         .bind(token)
         .execute(pool)
-        .await
-        .map_err(|e| format!("DB error saving API token: {e}"))?;
+        .await?;
     }
     Ok(())
 }
@@ -86,7 +84,7 @@ pub async fn save_api_token(pool: &SqlitePool, account_id: &str, token: &str) ->
 /// On a keychain miss with a plaintext fallback hit, the token is
 /// transparently migrated into the keychain and the plaintext column is
 /// scrubbed (a one-time upgrade step for every pre-keychain install).
-pub async fn get_api_token(pool: &SqlitePool, account_id: &str) -> Result<Option<String>, String> {
+pub async fn get_api_token(pool: &SqlitePool, account_id: &str) -> crate::error::Result<Option<String>> {
     // 1. Prefer the OS keychain. This is the authoritative store on
     //    every platform where it is available.
     match token_keychain::load_token(account_id) {
@@ -105,8 +103,7 @@ pub async fn get_api_token(pool: &SqlitePool, account_id: &str) -> Result<Option
     let scoped = sqlx::query("SELECT temp_auth_key FROM objectstore_auth_scoped WHERE owner = ?")
         .bind(account_id)
         .fetch_optional(pool)
-        .await
-        .map_err(|e| format!("DB error fetching API token: {e}"))?;
+        .await?;
 
     if let Some(row) = scoped
         && let Some(token) = row.get::<Option<String>, _>("temp_auth_key")
@@ -144,8 +141,7 @@ pub async fn get_api_token(pool: &SqlitePool, account_id: &str) -> Result<Option
     let legacy = sqlx::query("SELECT temp_auth_key FROM objectstore_auth WHERE id = ?")
         .bind(AUTH_ROW_ID)
         .fetch_optional(pool)
-        .await
-        .map_err(|e| format!("DB error fetching API token: {e}"))?;
+        .await?;
     if let Some(row) = legacy
         && let Some(token) = row.get::<Option<String>, _>("temp_auth_key")
     {
@@ -165,9 +161,7 @@ pub async fn get_api_token(pool: &SqlitePool, account_id: &str) -> Result<Option
     // Fall back to auth_session table (session restored from DB
     // without populating objectstore_auth_scoped). Goes through the
     // repo so schema knowledge stays in one place.
-    let token_row = crate::auth::auth_session_repo::get_token_and_expiry(pool, account_id)
-        .await
-        .map_err(|e| format!("DB error fetching auth_session token: {e}"))?;
+    let token_row = crate::auth::auth_session_repo::get_token_and_expiry(pool, account_id).await?;
     if let Some(crate::auth::auth_session_repo::TokenStatus { token: Some(token), .. }) = token_row {
         if let Err(e) = save_api_token(pool, account_id, &token).await {
             warn!("Failed to persist session token to scoped table: {e}");
@@ -185,6 +179,13 @@ pub async fn get_api_token(pool: &SqlitePool, account_id: &str) -> Result<Option
 pub async fn is_token_expiring(pool: &SqlitePool, account_id: &str, margin_secs: i64) -> bool {
     match crate::auth::auth_session_repo::get_token_and_expiry(pool, account_id).await {
         Ok(Some(crate::auth::auth_session_repo::TokenStatus { expiry_ms: Some(expiry), .. })) => {
+            // Convention (unified in D5): expiry == 0 means "never expires", so a
+            // never-expiring token never needs proactive refresh. Without this
+            // guard `0 - now` is a large negative < margin and would force a
+            // pointless refresh every cycle (PR review 2026-06-05).
+            if expiry == 0 {
+                return false;
+            }
             let now = chrono::Utc::now().timestamp_millis();
             expiry - now < margin_secs * 1000
         }
@@ -266,6 +267,68 @@ mod tests {
             get_api_token(&pool, ACCOUNT_B).await.unwrap().as_deref(),
             Some("bob-token"),
             "second account's auth_session token must not be starved by the first account's miss"
+        );
+    }
+
+    /// A DB-layer failure surfaces as the typed `AppError::Db`, not the old
+    /// stringly error that collapsed to `Other` at the IPC boundary — so the FE
+    /// can dispatch on `kind == "Db"`. The keychain is disabled and the pool has
+    /// no tables, so the scoped-token query fails at the DB layer.
+    #[tokio::test]
+    async fn get_api_token_db_failure_surfaces_as_db_error() {
+        // SAFETY: test-only, set to the same value every test uses; deterministic.
+        unsafe {
+            std::env::set_var("HIPPIUS_DISABLE_TOKEN_KEYCHAIN", "1");
+        }
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        let err = get_api_token(&pool, ACCOUNT_A).await.unwrap_err();
+        assert!(matches!(err, crate::error::AppError::Db(_)), "expected Db, got {err:?}");
+    }
+
+    /// D5 convention: a token with `expiry == 0` ("never expires") must NOT be
+    /// reported as expiring — otherwise the sync loop force-refreshes a
+    /// never-expiring token every cycle (PR review 2026-06-05).
+    #[tokio::test]
+    async fn never_expiring_token_is_not_reported_as_expiring() {
+        let pool = setup_db().await;
+        auth_session_repo::upsert(
+            &pool,
+            UpsertSession {
+                substrate_address: ACCOUNT_A,
+                token: "eternal",
+                token_expiry_ms: 0, // never expires
+                user_id: Some(1),
+                username: "alice",
+                provider: "mnemonic",
+                logout_time_minutes: Some(1440),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            !is_token_expiring(&pool, ACCOUNT_A, 300).await,
+            "expiry==0 means never-expires; it must not be treated as expiring"
+        );
+
+        // Sanity: an already-past expiry IS reported as expiring.
+        auth_session_repo::upsert(
+            &pool,
+            UpsertSession {
+                substrate_address: ACCOUNT_B,
+                token: "stale",
+                token_expiry_ms: 1, // 1970 — long past
+                user_id: Some(2),
+                username: "bob",
+                provider: "mnemonic",
+                logout_time_minutes: Some(1440),
+            },
+        )
+        .await
+        .unwrap();
+        assert!(
+            is_token_expiring(&pool, ACCOUNT_B, 300).await,
+            "a past expiry must be reported as expiring"
         );
     }
 }

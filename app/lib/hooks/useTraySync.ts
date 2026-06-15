@@ -1,5 +1,5 @@
 "use client";
-import { TrayIcon } from "@tauri-apps/api/tray";
+import { TrayIcon, type TrayIconEvent } from "@tauri-apps/api/tray";
 import {
   Menu,
   MenuItem,
@@ -20,9 +20,8 @@ import {
   getAvailableUpdate,
 } from "@/components/updater/checkForUpdates";
 
-import {
-  lastUpdatedPercentAtom,
-} from "@/app/lib/store/syncAtoms";
+import { lastUpdatedPercentAtom } from "@/app/lib/store/syncAtoms";
+import { VM_FEATURE_ENABLED } from "@/app/lib/featureFlags";
 import { useAtom, useAtomValue } from "jotai";
 import {
   driveStatusesAtom,
@@ -108,7 +107,12 @@ let latchedSnapshot: SyncSnapshot | null = null;
 /* ─ Backend payload types ─────────────────────────────────────── */
 
 // Tray data cache — refreshed via get_tray_menu_data Rust command
-let trayDataCache: { loggedIn: boolean; credits: number | null; substrateAddress: string | null; timestamp: number } | null = null;
+let trayDataCache: {
+  loggedIn: boolean;
+  credits: number | null;
+  substrateAddress: string | null;
+  timestamp: number;
+} | null = null;
 const TRAY_CACHE_DURATION = 5000; // 5 seconds
 
 /**
@@ -120,12 +124,23 @@ export function clearLoginStatusCache() {
 }
 
 /** Fetch tray data from Rust (login status + credits), with caching. */
-async function refreshTrayData(): Promise<{ loggedIn: boolean; credits: number | null; substrateAddress: string | null }> {
-  if (trayDataCache && Date.now() - trayDataCache.timestamp < TRAY_CACHE_DURATION) {
+async function refreshTrayData(): Promise<{
+  loggedIn: boolean;
+  credits: number | null;
+  substrateAddress: string | null;
+}> {
+  if (
+    trayDataCache &&
+    Date.now() - trayDataCache.timestamp < TRAY_CACHE_DURATION
+  ) {
     return trayDataCache;
   }
   try {
-    const data = await invoke<{ loggedIn: boolean; credits: number | null; substrateAddress: string | null }>("get_tray_menu_data");
+    const data = await invoke<{
+      loggedIn: boolean;
+      credits: number | null;
+      substrateAddress: string | null;
+    }>("get_tray_menu_data");
     trayDataCache = { ...data, timestamp: Date.now() };
     return data;
   } catch {
@@ -144,9 +159,191 @@ async function refreshLoginStatus(): Promise<boolean> {
   return data.loggedIn;
 }
 
+/* ─ Right-click context menu ──────────────────────────────────── */
+//
+// The tray icon's LEFT click opens the custom popover window (see
+// `handleTrayClick`). Its RIGHT click shows this small native menu —
+// Open Files, Open Virtual Machines, Quit Hippius. "Open Hippius" is
+// deliberately omitted because the popover already has an Open Hippius
+// button. The menu is attached with `showMenuOnLeftClick: false` so it
+// never hijacks the left click.
+//
+// This is a separate, minimal menu from the (now-unattached) full menu
+// still built in `useTrayInit` for the icon-state machinery/tests. The
+// builder points the module-level `openFilesItem` / `openVmItem` at ITS
+// items so the existing login-status watcher (`updateOpenFilesMenuItem`
+// / `updateOpenVmMenuItem`) enables/disables the entries the user
+// actually sees.
+const CTX_OPEN_HIPPIUS_ID = "tray-ctx-open-hippius";
+const CTX_OPEN_FILES_ID = "tray-ctx-open-files";
+const CTX_OPEN_VM_ID = "tray-ctx-open-vm";
+const CTX_QUIT_ID = "tray-ctx-quit";
+
+// True on Linux. The tray icon emits no left-click `action` event there (a
+// `tray-icon` crate limitation), so the native menu — shown on left-click — is
+// the only affordance, and it carries an explicit "Open Hippius" entry.
+//
+// Detected SYNCHRONOUSLY from the webview user-agent (`detectLinuxPlatform`),
+// not the async `get_platform_info` IPC: the menu is built off this value, and
+// a late/failed async lookup previously left it `false` on Linux — which dropped
+// the "Open Hippius" item AND left `showMenuOnLeftClick` off, so a left-click
+// did nothing and the menu was missing its only entry point. A synchronous,
+// can't-fail check removes that race entirely.
+let isLinuxPlatform = false;
+
+/**
+ * Synchronous, never-throwing Linux check from the webview user-agent. The three
+ * desktop webviews set a standard UA — webkit2gtk (Linux) contains "Linux",
+ * while WKWebView (macOS) and WebView2 (Windows) do not — so this reliably
+ * identifies Linux with no IPC round-trip. Android is excluded for safety (this
+ * is a desktop app and never runs there).
+ */
+function detectLinuxPlatform(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent;
+  return /linux/i.test(ua) && !/android/i.test(ua);
+}
+
+/**
+ * Linux "Open Hippius" menu action: reveal the MAIN window.
+ *
+ * The rich popover is a macOS/Windows feature only. On Linux it proved
+ * unreliable — the icon fires no left-click event, the app cannot position its
+ * own window under Wayland, and there is no native vibrancy — so rather than
+ * pop a half-broken, see-through, mis-placed window, the stable behaviour is to
+ * just bring up the main app window (exactly what "Open Files"/"Open VM" do).
+ */
+async function openHippiusFromTray() {
+  try {
+    await openAppWindow();
+  } catch (e) {
+    logTrayAction("Failed to open Hippius from tray menu", e);
+  }
+}
+
+async function buildTrayContextMenu(): Promise<Menu> {
+  const loggedIn = await refreshLoginStatus();
+
+  // On Linux the menu is the tray's only affordance (the icon fires no
+  // left-click event), so it leads with "Open Hippius" → reveal the main window.
+  // macOS/Windows omit it: their left-click already opens the popover, whose
+  // header has its own Open Hippius button.
+  const leadingItems: MenuItem[] = [];
+  if (isLinuxPlatform) {
+    leadingItems.push(
+      await MenuItem.new({
+        id: CTX_OPEN_HIPPIUS_ID,
+        text: "Open Hippius",
+        action: openHippiusFromTray,
+      }),
+    );
+  }
+
+  const openFiles = await MenuItem.new({
+    id: CTX_OPEN_FILES_ID,
+    text: "Open Drive",
+    enabled: loggedIn,
+    action: async () => {
+      // Guard against a stale `enabled` if login changed between renders.
+      if (!isUserLoggedIn() && !(await refreshLoginStatus())) return;
+      await openFilesPage();
+    },
+  });
+
+  // Omitted entirely while VMs are gated off ("Coming Soon") — the page
+  // redirects to the overview anyway, so a menu entry would be a dead end.
+  // `openVmItem` stays null in that case; the login-status watcher is
+  // already null-safe.
+  const openVm = VM_FEATURE_ENABLED
+    ? await MenuItem.new({
+        id: CTX_OPEN_VM_ID,
+        text: "Open Virtual Machines",
+        enabled: loggedIn,
+        action: async () => {
+          if (!isUserLoggedIn() && !(await refreshLoginStatus())) return;
+          await openVirtualMachinesPage();
+        },
+      })
+    : null;
+
+  const separator = await PredefinedMenuItem.new({ item: "Separator" });
+
+  const quit = await MenuItem.new({
+    id: CTX_QUIT_ID,
+    text: "Quit Hippius",
+    action: async () => {
+      await invoke("app_close");
+    },
+  });
+
+  // Track the visible (attached) items for the login-status watcher.
+  openFilesItem = openFiles;
+  openVmItem = openVm;
+
+  return Menu.new({
+    items: [
+      ...leadingItems,
+      openFiles,
+      ...(openVm ? [openVm] : []),
+      separator,
+      quit,
+    ],
+  });
+}
+
+// Mirror of the auth context's `isAuthenticated`, kept at module scope so the
+// tray `action` callback (a plain closure, not a React component) can read the
+// current value synchronously. This is the SAME flag that decides whether the
+// app shows its login screen, so the tray matches the visible UI exactly —
+// unlike Rust's `AuthInfo.substrate_address`, which stays set for a session
+// restored from disk even while the UI is logged out. Updated by `useTrayInit`.
+let isAuthenticatedLatest = false;
+
+/**
+ * Tray-icon click handler. When signed in, a left-click forwards the icon's
+ * screen rectangle (`event.rect`) to the Rust `toggle_tray_panel` command,
+ * which anchors and toggles the popover (it replaced the old native menu).
+ * When signed out, the popover (credits/uploads/account) is meaningless, so the
+ * click reveals the main window's login screen instead.
+ *
+ * Right/middle clicks are ignored. Tray click events never fire on Linux, so
+ * this handler is a no-op there; on Linux the native menu's "Open Hippius" item
+ * (`openHippiusFromTray`) reveals the main window instead of the popover — see
+ * the CLAUDE.md note.
+ */
+async function handleTrayClick(event: TrayIconEvent) {
+  if (
+    event.type !== "Click" ||
+    event.button !== "Left" ||
+    event.buttonState !== "Up"
+  ) {
+    return;
+  }
+  try {
+    if (!isAuthenticatedLatest) {
+      await openAppWindow();
+      return;
+    }
+    await invoke("toggle_tray_panel", {
+      rect: {
+        x: event.rect.position.x,
+        y: event.rect.position.y,
+        width: event.rect.size.width,
+        height: event.rect.size.height,
+      },
+    });
+  } catch (e) {
+    logTrayAction("Failed to toggle tray panel", e);
+  }
+}
+
 /* ─ Public: create tray once ──────────────────────────────────── */
 
 export function useTrayInit(isAuthenticated: boolean) {
+  // Keep the module-level mirror in sync so `handleTrayClick` (the tray
+  // `action` closure) sees the current auth state synchronously.
+  isAuthenticatedLatest = isAuthenticated;
+
   // Use atom to watch for sync percentage changes
   const [lastUpdatedPercent, setLastUpdatedPercent] = useAtom(
     lastUpdatedPercentAtom,
@@ -176,6 +373,11 @@ export function useTrayInit(isAuthenticated: boolean) {
     if (menuPromise) return;
 
     menuPromise = (async () => {
+      // Detect Linux synchronously (no IPC) so the tray is always built with the
+      // menu-on-left-click + "Open Hippius" fallback there. Set before the tray
+      // is created so the first context menu is correct on every launch.
+      isLinuxPlatform = detectLinuxPlatform();
+
       // resolve all three icons once
       const [defPath, syncPath, completedPath] = await Promise.all([
         resolveResource(DEFAULT_TRAY_ICON),
@@ -219,7 +421,7 @@ export function useTrayInit(isAuthenticated: boolean) {
 
       const openFilesMenuItem = await MenuItem.new({
         id: OPEN_FILES_ID,
-        text: "Open Files",
+        text: "Open Drive",
         enabled: loggedIn,
         action: async () => {
           if (!isUserLoggedIn() && !(await refreshLoginStatus())) return;
@@ -270,20 +472,33 @@ export function useTrayInit(isAuthenticated: boolean) {
       });
 
       if (!existingTray) {
+        // macOS/Windows: left-click → custom popover (via `handleTrayClick`);
+        // right-click → the small native context menu (Open Files / Open VM /
+        // Quit). `showMenuOnLeftClick: false` keeps the left click on the
+        // popover. Linux: the icon fires no left-click event, so the menu must
+        // show on left-click (`showMenuOnLeftClick: isLinuxPlatform`) and it
+        // includes an "Open Hippius" entry (added by `buildTrayContextMenu`) as
+        // the only way to reach the popover there. `action` stays attached
+        // (harmless no-op on Linux).
+        // (The full `menu` built above is still maintained in memory for the
+        // icon-state machinery and its tests; deleting that now-unused code is
+        // a tracked follow-up.)
+        const contextMenu = await buildTrayContextMenu();
         await TrayIcon.new({
           id: TRAY_ID,
           icon: defaultIconPath!,
           iconAsTemplate: false,
           tooltip: "Hippius Cloud",
-          menu,
-          menuOnLeftClick: true,
+          menu: contextMenu,
+          showMenuOnLeftClick: isLinuxPlatform,
+          action: handleTrayClick,
         });
         trayIconState = "default";
       }
 
       // Start watcher for sync activity after menu exists
       startSyncActivityWatcher();
-      
+
       // Clear any stale file entries from previous sessions
       void clearTrayFileEntries();
 
@@ -370,7 +585,7 @@ export function useTrayInit(isAuthenticated: boolean) {
  * burst of N events into a single rebuild for the final state.
  */
 async function rebuildDriveSubmenu(
-  statuses: Map<string, DriveEntry>
+  statuses: Map<string, DriveEntry>,
 ): Promise<void> {
   if (!driveSubmenu) return;
 
@@ -405,7 +620,7 @@ async function rebuildDriveSubmenu(
  * `driveSubmenuRenderedText` to converge on `statuses`.
  */
 async function reconcileDriveSubmenu(
-  statuses: Map<string, DriveEntry>
+  statuses: Map<string, DriveEntry>,
 ): Promise<void> {
   if (!driveSubmenu) return;
 
@@ -468,10 +683,7 @@ async function reconcileDriveSubmenu(
         await item.setText(desiredText);
         driveSubmenuRenderedText.set(label, desiredText);
       } catch (err) {
-        console.error(
-          `[Tray] Failed to update drive row '${label}':`,
-          err
-        );
+        console.error(`[Tray] Failed to update drive row '${label}':`, err);
       }
     }
   }
@@ -486,7 +698,7 @@ async function reconcileDriveSubmenu(
     .map(([label]) => label);
 
   const missing: string[] = sortedLabels.filter(
-    (label) => !driveSubmenuItems.has(label)
+    (label) => !driveSubmenuItems.has(label),
   );
   if (missing.length === 0) return;
 
@@ -495,7 +707,7 @@ async function reconcileDriveSubmenu(
   // at or after that index needs to come off so we can re-append
   // in order.
   const firstMissingIndex = sortedLabels.findIndex(
-    (label) => !driveSubmenuItems.has(label)
+    (label) => !driveSubmenuItems.has(label),
   );
   const labelsToReappend = sortedLabels.slice(firstMissingIndex);
 
@@ -542,7 +754,7 @@ function renderDriveSubmenuText(entry: DriveEntry): string {
  */
 async function createDriveRowItem(
   label: string,
-  entry: DriveEntry
+  entry: DriveEntry,
 ): Promise<MenuItem> {
   const text = renderDriveSubmenuText(entry);
   return MenuItem.new({
@@ -583,11 +795,11 @@ async function createDriveRowItem(
       } catch (err) {
         console.error(
           `[Tray] Failed to ${needsResume ? "resume" : "pause"} drive '${label}':`,
-          err
+          err,
         );
         if (needsResume) {
           toast.error(
-            `Failed to resume "${folderName}". Open the Settings page and try from there.`
+            `Failed to resume "${folderName}". Open the Settings page and try from there.`,
           );
         } else {
           toast.error(`Failed to pause "${folderName}".`);
@@ -697,21 +909,27 @@ async function setTrayIconSyncing(
       }
     }
 
-    // Fallback: Recreate the tray completely
+    // Fallback: Recreate the tray completely. Like the initial creation, no
+    // native menu is attached — left-click toggles the custom popover.
     try {
       logTrayAction("Recreating tray with new icon");
       const currentTray = await TrayIcon.getById(TRAY_ID);
-      const menu = await (menuPromise || Promise.resolve(null));
 
       if (currentTray) await currentTray.close();
 
+      // Rebuild + re-attach the context menu (a fresh menu, since the previous
+      // one belonged to the closed icon). Left-click toggles the popover via
+      // `handleTrayClick` on macOS/Windows; on Linux it shows the menu (whose
+      // "Open Hippius" entry opens the popover) — see the creation path.
+      const contextMenu = await buildTrayContextMenu();
       await TrayIcon.new({
         id: TRAY_ID,
         icon: iconPath,
         iconAsTemplate: false,
         tooltip: "Hippius Cloud",
-        menu: menu || undefined,
-        menuOnLeftClick: true,
+        menu: contextMenu,
+        showMenuOnLeftClick: isLinuxPlatform,
+        action: handleTrayClick,
       });
 
       trayIconState = newState;
@@ -736,7 +954,7 @@ async function updateTraySyncLabel(label: string | null) {
     return;
   }
   isUpdatingTrayLabel = true;
-  
+
   try {
     const menu = await (menuPromise ?? Promise.resolve<Menu | null>(null));
     if (!menu) {
@@ -754,15 +972,17 @@ async function updateTraySyncLabel(label: string | null) {
 
     // ALWAYS search for existing sync items in the menu (don't rely on stale syncItem reference)
     const existingItems = items.filter((i) => i.id === SYNC_ID);
-    
+
     // If there are multiple, remove all but keep track of first one
     if (existingItems.length > 1) {
-      console.log(`[TraySync] Found ${existingItems.length} sync items, removing duplicates`);
+      console.log(
+        `[TraySync] Found ${existingItems.length} sync items, removing duplicates`,
+      );
       for (let i = 1; i < existingItems.length; i++) {
         await menu.remove(existingItems[i]);
       }
     }
-    
+
     syncItem = existingItems[0] as MenuItem | null;
 
     // If label is null, we want to remove the sync item
@@ -814,17 +1034,20 @@ async function clearTrayFileEntries() {
     for (const [, item] of fileEntryItems.entries()) {
       try {
         await menu.remove(item);
-      } catch { }
+      } catch {}
     }
     fileEntryItems.clear();
 
     // Also remove any orphaned items
     const items = await menu.items();
     for (const item of items) {
-      if (typeof item.id === 'string' && item.id.startsWith(FILE_ENTRY_PREFIX)) {
+      if (
+        typeof item.id === "string" &&
+        item.id.startsWith(FILE_ENTRY_PREFIX)
+      ) {
         try {
           await menu.remove(item);
-        } catch { }
+        } catch {}
       }
     }
   } catch (error) {
@@ -832,18 +1055,13 @@ async function clearTrayFileEntries() {
   }
 }
 
-
 /* ─ Login status watcher (updates tray menu on login/logout) ──── */
 //
-// Polls Rust for login status and resets login-gated tray rows when the user
-// signs out. This is an INTENTIONAL process-lifetime singleton: it is started
-// exactly once (via the `menuPromise` guard) and is deliberately NOT torn down
-// on logout, because this poll IS the logout-detection mechanism for the tray —
-// stopping it on logout would defeat its purpose. The tray menu lives at the OS
-// level (not under the React auth boundary), so it has no unmount to hook into.
-// The `window.__hippiusLoginWatcher` handle is purely an HMR guard (clear the
-// previous Fast-Refresh instance so dev reloads don't stack intervals) — it is
-// NOT a lifecycle teardown handle. The steady-state cost is one ~2s SQLite read.
+// Polls Rust for login status and resets login-gated tray rows when
+// the user signs out. The interval handle is parked on `window` so
+// React Fast Refresh can clear the previous instance before the new
+// module run starts a fresh one — without that, HMR would leave a
+// stack of intervals running.
 let lastLoginStatus: boolean | null = null;
 
 function startLoginStatusWatcher() {
@@ -868,10 +1086,15 @@ function startLoginStatusWatcher() {
   void tick();
   const h = setInterval(tick, INTERVAL_MS);
   if (typeof window !== "undefined") {
-    // @ts-expect-error custom watcher handle
-    if (window.__hippiusLoginWatcher) clearInterval(window.__hippiusLoginWatcher);
-    // @ts-expect-error custom watcher handle
-    window.__hippiusLoginWatcher = h;
+    // The handle is stashed on `window` so an HMR re-run can clear the
+    // previous interval. Window has no such property, so widen via a local
+    // cast — `@ts-expect-error` comments only cover the next line and left
+    // the second access failing `next build`'s type check.
+    const w = window as Window & {
+      __hippiusLoginWatcher?: ReturnType<typeof setInterval>;
+    };
+    if (w.__hippiusLoginWatcher) clearInterval(w.__hippiusLoginWatcher);
+    w.__hippiusLoginWatcher = h;
   }
 }
 
@@ -901,9 +1124,24 @@ async function reconcileSummaryRowRefs(menu: Menu): Promise<void> {
   const items = await menu.items();
 
   for (const [id, assignRef] of [
-    [SYNC_PROGRESS_ID, (it: MenuItem | null) => { syncProgressItem = it; }],
-    [SYNC_SIZE_ID, (it: MenuItem | null) => { syncSizeItem = it; }],
-    [SYNC_DELETE_ID, (it: MenuItem | null) => { syncDeleteItem = it; }],
+    [
+      SYNC_PROGRESS_ID,
+      (it: MenuItem | null) => {
+        syncProgressItem = it;
+      },
+    ],
+    [
+      SYNC_SIZE_ID,
+      (it: MenuItem | null) => {
+        syncSizeItem = it;
+      },
+    ],
+    [
+      SYNC_DELETE_ID,
+      (it: MenuItem | null) => {
+        syncDeleteItem = it;
+      },
+    ],
   ] as const) {
     const matches = items.filter((i) => i.id === id);
     if (matches.length === 0) {
@@ -927,12 +1165,7 @@ async function reconcileSummaryRowRefs(menu: Menu): Promise<void> {
 }
 
 function startSyncActivityWatcher() {
-  // Like the login-status watcher, this is an intentional process-lifetime
-  // singleton (started once via the `menuPromise` guard, never torn down on
-  // logout — the OS tray has no React unmount). The `__hippiusSyncWatcherUnsub`
-  // handle below is an HMR guard only (clear the prior Fast-Refresh listener so
-  // dev reloads don't stack `sync_progress_snapshot` subscriptions), NOT a
-  // logout/lifecycle teardown.
+  // Clear any old watcher from HMR
   if (typeof window !== "undefined") {
     // @ts-expect-error custom watcher handle
     if (window.__hippiusSyncWatcherUnsub) {
@@ -965,15 +1198,27 @@ function startSyncActivityWatcher() {
       // The data stays in the Rust backend so it can be shown after re-login.
       if (!isUserLoggedIn()) {
         if (syncProgressItem) {
-          try { await menu.remove(syncProgressItem); } catch { /* already removed */ }
+          try {
+            await menu.remove(syncProgressItem);
+          } catch {
+            /* already removed */
+          }
           syncProgressItem = null;
         }
         if (syncSizeItem) {
-          try { await menu.remove(syncSizeItem); } catch { /* already removed */ }
+          try {
+            await menu.remove(syncSizeItem);
+          } catch {
+            /* already removed */
+          }
           syncSizeItem = null;
         }
         if (syncDeleteItem) {
-          try { await menu.remove(syncDeleteItem); } catch { /* already removed */ }
+          try {
+            await menu.remove(syncDeleteItem);
+          } catch {
+            /* already removed */
+          }
           syncDeleteItem = null;
         }
         lastSyncSummarySignature = "";
@@ -983,7 +1228,7 @@ function startSyncActivityWatcher() {
       // Clean up any legacy per-file rows from old implementation
       await removeAllSyncActivityRows(menu);
       const inProgressCount = progress.files.filter(
-        (f) => f.status === "inProgress" || f.status === "pending"
+        (f) => f.status === "inProgress" || f.status === "pending",
       ).length;
       // Prefer `effectiveInProgress` over raw `isActive`: the Rust
       // `fixup_stalled_completion` flips `effectiveInProgress=false`
@@ -996,28 +1241,39 @@ function startSyncActivityWatcher() {
       // note in `CLAUDE.md` ("Stalled completion fixup").
       //
       // `isPreparing` covers the file-watcher-triggered window between
-      // `SyncStarted` and the first session-populated snapshot. Rust
-      // sets `widgetState="preparing"` in `progress.rs::apply_preparing_override`;
-      // including it in `isActive` here makes the tray icon switch to
-      // syncing immediately when the user drops a folder via Finder,
-      // not only after `on_sync_plan_ready` fires several seconds later.
+      // `PlanReady` (the point the cycle's plan is known to contain real
+      // work) and the first session-populated snapshot. Rust sets
+      // `widgetState="preparing"` in `progress.rs::apply_preparing_override`;
+      // including it in `isActive` here surfaces the "⟳ Preparing sync…"
+      // tray state once a Finder-drop's plan is confirmed. The override is
+      // deliberately NOT raised at `SyncStarted` anymore: that fires before
+      // the plan exists, so it used to flash the tray red for the whole
+      // indexing window of every periodic no-op cycle (the user-reported
+      // looping-red-icon bug). See `src-tauri/src/sync/preparing.rs`.
       const isPreparing = progress.widgetState === "preparing";
-      const isActive = isPreparing ||
+      const isActive =
+        isPreparing ||
         progress.effectiveInProgress ||
         inProgressCount > 0 ||
-        (progress.totalFiles > 0 && progress.completedFiles < progress.totalFiles && progress.failedFiles === 0);
+        (progress.totalFiles > 0 &&
+          progress.completedFiles < progress.totalFiles &&
+          progress.failedFiles === 0);
       const hasFailed = progress.failedFiles > 0;
-      const isCompleted = !isActive && (progress.completedFiles > 0 || hasFailed);
+      const isCompleted =
+        !isActive && (progress.completedFiles > 0 || hasFailed);
 
       // Count delete actions in the current file list
       const recentDeleteCount = progress.files.filter(
-        (f) => f.action === "local_delete" || f.action === "remote_delete"
+        (f) => f.action === "local_delete" || f.action === "remote_delete",
       ).length;
 
       // Latch: when we detect completion, capture the snapshot so a subsequent
       // snapshot reset (new empty cycle) doesn't hide the tray rows.
       // Also update the latch when a NEW session completes (different startedAt).
-      if (isCompleted && (!latchedComplete || progress.startedAt !== latchedSnapshot?.startedAt)) {
+      if (
+        isCompleted &&
+        (!latchedComplete || progress.startedAt !== latchedSnapshot?.startedAt)
+      ) {
         latchedComplete = true;
         latchedSnapshot = progress;
       }
@@ -1031,8 +1287,14 @@ function startSyncActivityWatcher() {
       // skipped — the snapshot's session may not have any startedAt
       // yet at the moment of the preparing flip, so requiring a
       // distinct value would block the unlatch.
-      if (isActive && latchedComplete && (isPreparing
-        || (progress.startedAt !== null && progress.startedAt !== latchedSnapshot?.startedAt && progress.totalFiles > 0))) {
+      if (
+        isActive &&
+        latchedComplete &&
+        (isPreparing ||
+          (progress.startedAt !== null &&
+            progress.startedAt !== latchedSnapshot?.startedAt &&
+            progress.totalFiles > 0))
+      ) {
         latchedComplete = false;
         latchedSnapshot = null;
       }
@@ -1043,17 +1305,25 @@ function startSyncActivityWatcher() {
       // flicker in the tray between "Sync Complete" and an empty state.
       // Preparing is the one empty-session shape we DO want to surface
       // (the user just dropped a folder; they need feedback now).
-      const isNewSessionWithFiles = isActive && progress.startedAt !== null
-        && progress.startedAt !== latchedSnapshot?.startedAt && progress.totalFiles > 0;
-      const effectiveCompleted = isCompleted || (latchedComplete && !isPreparing && !isNewSessionWithFiles);
-      const effectiveSnapshot = effectiveCompleted && !isCompleted && latchedSnapshot
-        ? latchedSnapshot
-        : progress;
-      const effectiveDeleteCount = effectiveCompleted && !isCompleted && latchedSnapshot
-        ? latchedSnapshot.files.filter(
-            (f) => f.action === "local_delete" || f.action === "remote_delete"
-          ).length
-        : recentDeleteCount;
+      const isNewSessionWithFiles =
+        isActive &&
+        progress.startedAt !== null &&
+        progress.startedAt !== latchedSnapshot?.startedAt &&
+        progress.totalFiles > 0;
+      const effectiveCompleted =
+        isCompleted ||
+        (latchedComplete && !isPreparing && !isNewSessionWithFiles);
+      const effectiveSnapshot =
+        effectiveCompleted && !isCompleted && latchedSnapshot
+          ? latchedSnapshot
+          : progress;
+      const effectiveDeleteCount =
+        effectiveCompleted && !isCompleted && latchedSnapshot
+          ? latchedSnapshot.files.filter(
+              (f) =>
+                f.action === "local_delete" || f.action === "remote_delete",
+            ).length
+          : recentDeleteCount;
 
       // Build signature to avoid redundant updates.
       // Include startedAt so different sessions with identical metrics still trigger updates.
@@ -1075,15 +1345,27 @@ function startSyncActivityWatcher() {
         // nothing is syncing. Mirrors the logout-cleanup path.
         await updateTraySyncLabel(null);
         if (syncProgressItem) {
-          try { await menu.remove(syncProgressItem); } catch { /* already removed */ }
+          try {
+            await menu.remove(syncProgressItem);
+          } catch {
+            /* already removed */
+          }
           syncProgressItem = null;
         }
         if (syncSizeItem) {
-          try { await menu.remove(syncSizeItem); } catch { /* already removed */ }
+          try {
+            await menu.remove(syncSizeItem);
+          } catch {
+            /* already removed */
+          }
           syncSizeItem = null;
         }
         if (syncDeleteItem) {
-          try { await menu.remove(syncDeleteItem); } catch { /* already removed */ }
+          try {
+            await menu.remove(syncDeleteItem);
+          } catch {
+            /* already removed */
+          }
           syncDeleteItem = null;
         }
         await setTrayIconSyncing(false, false);
@@ -1095,7 +1377,11 @@ function startSyncActivityWatcher() {
       if (isActive && !latchedComplete) {
         if (progress.totalFiles > 0) {
           const percent = progress.overallPercent;
-          if (percent === 0 && progress.completedFiles === 0 && progress.progressBytes === 0) {
+          if (
+            percent === 0 &&
+            progress.completedFiles === 0 &&
+            progress.progressBytes === 0
+          ) {
             await updateTraySyncLabel(`⟳ Preparing sync…`);
           } else {
             await updateTraySyncLabel(`⟳ Syncing: ${percent}%`);
@@ -1120,12 +1406,18 @@ function startSyncActivityWatcher() {
 
         if (isActive && !latchedComplete) {
           // In-progress: show current progress
-          if (progress.totalFiles > 0 && progress.overallPercent === 0 && progress.completedFiles === 0 && progress.progressBytes === 0) {
-            progressText = `${progress.totalFiles} ${progress.totalFiles === 1 ? 'file' : 'files'} pending`;
+          if (
+            progress.totalFiles > 0 &&
+            progress.overallPercent === 0 &&
+            progress.completedFiles === 0 &&
+            progress.progressBytes === 0
+          ) {
+            progressText = `${progress.totalFiles} ${progress.totalFiles === 1 ? "file" : "files"} pending`;
           } else {
-            progressText = progress.totalFiles > 0
-              ? `${progress.completedFiles} of ${progress.totalFiles} ${progress.totalFiles === 1 ? 'file' : 'files'} synced`
-              : "Preparing files…";
+            progressText =
+              progress.totalFiles > 0
+                ? `${progress.completedFiles} of ${progress.totalFiles} ${progress.totalFiles === 1 ? "file" : "files"} synced`
+                : "Preparing files…";
           }
           // Prefer the intent overlay's "X of Y" while the user-dragged
           // batch is in flight — this matches what the user expects to
@@ -1138,10 +1430,11 @@ function startSyncActivityWatcher() {
           } else if (progress.bytesExpected > 0) {
             sizeText = `${formatBytes(progress.progressBytes)} / ${formatBytes(progress.bytesExpected)}`;
           }
-        } else if (effectiveCompleted && (effectiveSnapshot.failedFiles > 0)) {
+        } else if (effectiveCompleted && effectiveSnapshot.failedFiles > 0) {
           // Failed: show failure counts
-          const totalFiles = effectiveSnapshot.completedFiles + effectiveSnapshot.failedFiles;
-          progressText = `${effectiveSnapshot.failedFiles} of ${totalFiles} ${totalFiles === 1 ? 'file' : 'files'} failed`;
+          const totalFiles =
+            effectiveSnapshot.completedFiles + effectiveSnapshot.failedFiles;
+          progressText = `${effectiveSnapshot.failedFiles} of ${totalFiles} ${totalFiles === 1 ? "file" : "files"} failed`;
           if (effectiveSnapshot.bytesExpected > 0) {
             sizeText = `${formatBytes(effectiveSnapshot.progressBytes)} / ${formatBytes(effectiveSnapshot.bytesExpected)}`;
           }
@@ -1149,17 +1442,20 @@ function startSyncActivityWatcher() {
           // Completed successfully: show final counts
           const syncedFiles = effectiveSnapshot.completedFiles;
           const deletedInSession = effectiveSnapshot.files.filter(
-            (f) => (f.action === "local_delete" || f.action === "remote_delete") && f.status === "completed"
+            (f) =>
+              (f.action === "local_delete" || f.action === "remote_delete") &&
+              f.status === "completed",
           ).length;
           const nonDeleteSynced = syncedFiles - deletedInSession;
 
           if (deletedInSession > 0 && nonDeleteSynced <= 0) {
-            progressText = `${deletedInSession} ${deletedInSession === 1 ? 'file' : 'files'} deleted`;
+            progressText = `${deletedInSession} ${deletedInSession === 1 ? "file" : "files"} deleted`;
           } else if (deletedInSession > 0 && nonDeleteSynced > 0) {
             progressText = `${nonDeleteSynced} synced · ${deletedInSession} deleted`;
           } else {
-            const totalFiles = effectiveSnapshot.completedFiles + effectiveSnapshot.failedFiles;
-            progressText = `${effectiveSnapshot.completedFiles} of ${totalFiles} ${totalFiles === 1 ? 'file' : 'files'} synced`;
+            const totalFiles =
+              effectiveSnapshot.completedFiles + effectiveSnapshot.failedFiles;
+            progressText = `${effectiveSnapshot.completedFiles} of ${totalFiles} ${totalFiles === 1 ? "file" : "files"} synced`;
           }
           if (effectiveSnapshot.bytesExpected > 0) {
             sizeText = formatBytes(effectiveSnapshot.bytesExpected);
@@ -1186,8 +1482,11 @@ function startSyncActivityWatcher() {
         // Update or create size row
         if (sizeText) {
           const itemsAfterProgress = await menu.items();
-          const progressIdx = itemsAfterProgress.findIndex((i) => i.id === SYNC_PROGRESS_ID);
-          const sizeInsertPos = progressIdx >= 0 ? progressIdx + 1 : insertPos + 1;
+          const progressIdx = itemsAfterProgress.findIndex(
+            (i) => i.id === SYNC_PROGRESS_ID,
+          );
+          const sizeInsertPos =
+            progressIdx >= 0 ? progressIdx + 1 : insertPos + 1;
 
           if (!syncSizeItem) {
             syncSizeItem = await MenuItem.new({
@@ -1200,17 +1499,29 @@ function startSyncActivityWatcher() {
             await syncSizeItem.setText(sizeText);
           }
         } else if (syncSizeItem) {
-          try { await menu.remove(syncSizeItem); } catch { /* already removed */ }
+          try {
+            await menu.remove(syncSizeItem);
+          } catch {
+            /* already removed */
+          }
           syncSizeItem = null;
         }
       } else {
         // No active/completed sync — remove progress/size rows if they exist
         if (syncProgressItem) {
-          try { await menu.remove(syncProgressItem); } catch { /* already removed */ }
+          try {
+            await menu.remove(syncProgressItem);
+          } catch {
+            /* already removed */
+          }
           syncProgressItem = null;
         }
         if (syncSizeItem) {
-          try { await menu.remove(syncSizeItem); } catch { /* already removed */ }
+          try {
+            await menu.remove(syncSizeItem);
+          } catch {
+            /* already removed */
+          }
           syncSizeItem = null;
         }
       }
@@ -1219,15 +1530,18 @@ function startSyncActivityWatcher() {
       // aren't already reflected in the progress row. During active sync,
       // the progress text already uses the right label ("deleted" vs "synced").
       // On completion, the progress text handles mixed/delete-only cases.
-      const deletesInProgressText = (effectiveCompleted && !hasFailed) || (isActive && !latchedComplete);
+      const deletesInProgressText =
+        (effectiveCompleted && !hasFailed) || (isActive && !latchedComplete);
       if (effectiveDeleteCount > 0 && !deletesInProgressText) {
-        const deleteText = `${effectiveDeleteCount} ${effectiveDeleteCount === 1 ? 'file' : 'files'} deleted`;
+        const deleteText = `${effectiveDeleteCount} ${effectiveDeleteCount === 1 ? "file" : "files"} deleted`;
 
         // Find insert position: after size row, or after progress row, or after sync header
         const itemsForDelete = await menu.items();
         let deleteInsertPos: number;
         const sizeIdx = itemsForDelete.findIndex((i) => i.id === SYNC_SIZE_ID);
-        const progIdx = itemsForDelete.findIndex((i) => i.id === SYNC_PROGRESS_ID);
+        const progIdx = itemsForDelete.findIndex(
+          (i) => i.id === SYNC_PROGRESS_ID,
+        );
         const headerIdx = itemsForDelete.findIndex((i) => i.id === SYNC_ID);
         if (sizeIdx >= 0) {
           deleteInsertPos = sizeIdx + 1;
@@ -1257,11 +1571,18 @@ function startSyncActivityWatcher() {
           await setTrayIconSyncing(false, true);
         }
       } else if (syncDeleteItem) {
-        try { await menu.remove(syncDeleteItem); } catch { /* already removed */ }
+        try {
+          await menu.remove(syncDeleteItem);
+        } catch {
+          /* already removed */
+        }
         syncDeleteItem = null;
       }
     } catch (error) {
-      console.error("[TraySync] Error updating sync summary:", errorMessage(error));
+      console.error(
+        "[TraySync] Error updating sync summary:",
+        errorMessage(error),
+      );
     } finally {
       isUpdatingTraySnapshot = false;
       // Drain any snapshot that arrived while we were working. Recursive
@@ -1281,16 +1602,20 @@ function startSyncActivityWatcher() {
   // a redundant sp_get_snapshot IPC roundtrip every 2 seconds.
   invoke<SyncSnapshot>("sp_get_snapshot")
     .then((snapshot) => void tick(snapshot))
-    .catch((err: unknown) => console.error("[TraySync] Initial snapshot:", err));
+    .catch((err: unknown) =>
+      console.error("[TraySync] Initial snapshot:", err),
+    );
 
   listen<SyncSnapshot>("sync_progress_snapshot", (e) => {
     void tick(e.payload);
-  }).then((unsub) => {
-    if (typeof window !== "undefined") {
-      // @ts-expect-error custom watcher handle
-      window.__hippiusSyncWatcherUnsub = unsub;
-    }
-  }).catch((err: unknown) => console.error("[TraySync] listen failed:", err));
+  })
+    .then((unsub) => {
+      if (typeof window !== "undefined") {
+        // @ts-expect-error custom watcher handle
+        window.__hippiusSyncWatcherUnsub = unsub;
+      }
+    })
+    .catch((err: unknown) => console.error("[TraySync] listen failed:", err));
 }
 
 /* ─ Remove all sync-activity rows ────────────────────────────── */
@@ -1299,7 +1624,7 @@ async function removeAllSyncActivityRows(menu: Menu) {
     for (const [, item] of [...syncRowItems.entries()]) {
       try {
         await menu.remove(item);
-      } catch { }
+      } catch {}
     }
     syncRowItems.clear();
 
@@ -1308,7 +1633,7 @@ async function removeAllSyncActivityRows(menu: Menu) {
       if (typeof item.id === "string" && item.id.startsWith(SYNC_ITEM_PREFIX)) {
         try {
           await menu.remove(item);
-        } catch { }
+        } catch {}
       }
     }
   } catch (error) {

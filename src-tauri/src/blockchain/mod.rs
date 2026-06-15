@@ -2,7 +2,7 @@
 
 pub mod client;
 pub mod convert;
-mod helpers;
+pub(crate) mod helpers;
 pub mod queries;
 pub mod runtime;
 pub mod staking;

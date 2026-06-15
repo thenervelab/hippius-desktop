@@ -25,7 +25,12 @@ describe("resetSyncSession", () => {
     // Seed account A's session state across all the leak-prone atoms.
     appStore.set(
       pendingConflictsAtom,
-      new Map([["a", { uploads: [], downloads: [], conflicts: [] } as unknown as StagedChanges]])
+      new Map([
+        [
+          "a",
+          { uploads: [], downloads: [], conflicts: [] } as unknown as StagedChanges,
+        ],
+      ])
     );
     appStore.set(failedFilesAtom, [
       { label: "a", path: "/a/p", fileName: "p", error: "boom", failureCount: 5 },
@@ -46,6 +51,7 @@ describe("resetSyncSession", () => {
 
     resetSyncSession();
 
+    // pendingConflictsAtom is keyed by drive label, so "empty" is a 0-size Map.
     expect(appStore.get(pendingConflictsAtom).size).toBe(0);
     expect(appStore.get(failedFilesAtom)).toBeNull();
     expect(appStore.get(creditsExhaustedAtom)).toBeNull();

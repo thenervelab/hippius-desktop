@@ -6,16 +6,22 @@ import { categories } from "./CreateTicketModal";
 
 interface CategoryBadgeProps {
   category: string;
+  className?: string;
 }
 
-const CategoryBadge: React.FC<CategoryBadgeProps> = ({ category }) => {
+const CategoryBadge: React.FC<CategoryBadgeProps> = ({
+  category,
+  className,
+}) => {
   const categoryConfig = categories.find((c) => c.value === category);
   const label = categoryConfig?.label || category;
 
   return (
     <span
       className={cn(
-        "inline-flex items-center px-2 py-1 rounded text-xs font-medium border border-grey-80 bg-grey-90 text-grey-10"
+        "text-[12px] font-medium leading-[18px] tracking-[-0.24px]",
+        "text-grey-10 dark:text-grey-dark-200",
+        className
       )}
     >
       {label}

@@ -1,32 +1,21 @@
-// components/ProgressBar.tsx
 import React from "react";
-import { cn } from "@/app/lib/utils";
 
 interface ProgressBarProps {
   totalSteps: number;
-  currentStep: number; // 1‑based
+  currentStep: number; // 1-based
 }
 
-const ProgressBar: React.FC<ProgressBarProps> = ({
-  totalSteps,
-  currentStep
-}) => {
+const ProgressBar: React.FC<ProgressBarProps> = ({ totalSteps, currentStep }) => {
   return (
-    <div className="flex gap-2">
+    <div className="flex gap-3">
       {Array.from({ length: totalSteps }).map((_, idx) => {
         const filled = idx < currentStep;
         return (
           <div
             key={idx}
-            className="flex-1 h-1 bg-grey-80 rounded overflow-hidden"
-          >
-            <div
-              className={cn(
-                "h-1 bg-primary-50 transition-all duration-500",
-                filled ? "w-full" : "w-0"
-              )}
-            />
-          </div>
+            className="h-[4px] flex-1 rounded-[23px] transition-opacity duration-500 bg-grey-10 dark:bg-[#EBEBEB]"
+            style={{ opacity: filled ? 1 : 0.1 }}
+          />
         );
       })}
     </div>

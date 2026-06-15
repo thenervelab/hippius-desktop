@@ -1,5 +1,7 @@
 import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
 import InstanceDetails from "@/components/vm/instance-details";
+import FeatureDisabledRedirect from "@/components/FeatureDisabledRedirect";
+import { VM_FEATURE_ENABLED } from "@/app/lib/featureFlags";
 
 import { Metadata } from "next";
 
@@ -10,13 +12,15 @@ export const metadata: Metadata = {
 
 export default function InstanceDetailsPage() {
   return (
-    <DashboardTitleWrapper
-      mainText="Virtual Machines"
-      subText="All virtual machines run in isolated enclaves with hardware-level encryption"
-    >
-      <div className="mt-6">
-        <InstanceDetails />
-      </div>
-    </DashboardTitleWrapper>
+    <FeatureDisabledRedirect enabled={VM_FEATURE_ENABLED}>
+      <DashboardTitleWrapper
+        mainText="Virtual Machines"
+        subText="All virtual machines run in isolated enclaves with hardware-level encryption"
+      >
+        <div className="m-3">
+          <InstanceDetails />
+        </div>
+      </DashboardTitleWrapper>
+    </FeatureDisabledRedirect>
   );
 }

@@ -13,7 +13,7 @@ use tracing::info;
 #[tauri::command]
 pub async fn list_support_tickets(
     state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
+    account_id: crate::app_state::SessionAccount,
     page: Option<i64>,
     limit: Option<i64>,
     search: Option<String>,
@@ -40,7 +40,7 @@ pub async fn list_support_tickets(
 #[tauri::command]
 pub async fn get_support_ticket_messages(
     state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
+    account_id: crate::app_state::SessionAccount,
     ticket_id: i64,
     page: Option<i64>,
     limit: Option<i64>,
@@ -77,7 +77,7 @@ pub struct CreateTicketParams {
 #[tauri::command]
 pub async fn create_support_ticket(
     state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
+    account_id: crate::app_state::SessionAccount,
     params: CreateTicketParams,
 ) -> Result<serde_json::Value, AppError> {
     info!(
@@ -95,15 +95,13 @@ pub async fn create_support_ticket(
     // Only include resource_type/resource_id if they are non-empty;
     // the API rejects null values for these fields.
     if let Some(ref rt) = params.resource_type
-        && !rt.is_empty()
-    {
-        body["resource_type"] = serde_json::json!(rt);
-    }
+        && !rt.is_empty() {
+            body["resource_type"] = serde_json::json!(rt);
+        }
     if let Some(ref ri) = params.resource_id
-        && !ri.is_empty()
-    {
-        body["resource_id"] = serde_json::json!(ri);
-    }
+        && !ri.is_empty() {
+            body["resource_id"] = serde_json::json!(ri);
+        }
     Ok(client.post::<serde_json::Value, _>("/api/support/tickets/", &body, &account_id).await?)
 }
 
@@ -111,7 +109,7 @@ pub async fn create_support_ticket(
 #[tauri::command]
 pub async fn post_ticket_message(
     state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
+    account_id: crate::app_state::SessionAccount,
     ticket_id: i64,
     message_type: String,
     body: String,
@@ -145,7 +143,7 @@ pub struct TicketAttachment {
 #[tauri::command]
 pub async fn upload_ticket_attachment(
     state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
+    account_id: crate::app_state::SessionAccount,
     ticket_id: String,
     message_id: String,
     file_path: String,
@@ -153,8 +151,44 @@ pub async fn upload_ticket_attachment(
 ) -> Result<TicketAttachment, AppError> {
     info!(ticket_id = %ticket_id, message_id = %message_id, "Uploading ticket attachment");
 
+    // Read file from disk; the multipart/auth wiring is shared (see
+    // `upload_attachment_bytes`) with the log-bundle command.
+    let path = std::path::Path::new(&file_path);
+    let file_bytes = tokio::fs::read(path)
+        .await
+        .map_err(|e| AppError::Other(format!("Failed to read attachment file: {e}")))?;
+
+    // `to_string_lossy` (not `to_str().unwrap_or("attachment")`) so a non-UTF-8
+    // final path component (legal on macOS/Linux) degrades to a recognizable
+    // lossy name keeping the extension, instead of collapsing every such file to
+    // the generic "attachment".
+    let file_name = filename.unwrap_or_else(|| {
+        path.file_name()
+            .map_or_else(|| "attachment".to_string(), |n| n.to_string_lossy().into_owned())
+    });
+
+    upload_attachment_bytes(&state, &account_id, &ticket_id, &message_id, file_bytes, file_name).await
+}
+
+/// Shared core for uploading attachment bytes to a ticket message.
+///
+/// Handles auth, numeric-ID validation (guards against URL path injection),
+/// the multipart POST, and response parsing. Both [`upload_ticket_attachment`]
+/// (a file read from disk) and `attach_logs_to_ticket` (an in-memory log zip)
+/// call this so the auth + multipart wiring lives in exactly one place.
+///
+/// `ticket_id`/`message_id` MUST be the decimal IDs the support API returned;
+/// anything else is rejected as `Validation` before a request is made.
+pub(crate) async fn upload_attachment_bytes(
+    state: &tauri::State<'_, crate::app_state::AppState>,
+    account_id: &crate::app_state::SessionAccount,
+    ticket_id: &str,
+    message_id: &str,
+    file_bytes: Vec<u8>,
+    file_name: String,
+) -> Result<TicketAttachment, AppError> {
     let pool = state.pool()?;
-    let token = crate::api::client::get_auth_token_for_account(pool, &account_id)
+    let token = crate::api::client::get_auth_token_for_account(pool, account_id)
         .await
         .map_err(|e| AppError::Other(format!("Auth token error: {e}")))?;
 
@@ -173,14 +207,6 @@ pub async fn upload_ticket_attachment(
         ticket_id,
         message_id
     );
-
-    // Read file from disk
-    let path = std::path::Path::new(&file_path);
-    let file_bytes = tokio::fs::read(path)
-        .await
-        .map_err(|e| AppError::Other(format!("Failed to read attachment file: {e}")))?;
-
-    let file_name = filename.unwrap_or_else(|| path.file_name().and_then(|n| n.to_str()).unwrap_or("attachment").to_string());
 
     // Build multipart form
     let file_part = reqwest::multipart::Part::bytes(file_bytes)
@@ -215,7 +241,7 @@ pub async fn upload_ticket_attachment(
 #[tauri::command]
 pub async fn update_support_ticket(
     state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
+    account_id: crate::app_state::SessionAccount,
     ticket_id: i64,
     updates: serde_json::Value,
 ) -> Result<serde_json::Value, AppError> {

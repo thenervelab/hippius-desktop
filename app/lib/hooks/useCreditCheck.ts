@@ -6,7 +6,7 @@ import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import {
   insufficientCreditsDialogOpenAtom,
   InsufficientCreditsReason,
-} from "@/app/components/page-sections/files/atoms/query-atoms";
+} from "@/app/components/page-sections/drive/atoms/query-atoms";
 
 /**
  * Result shape returned by the Rust `check_action_eligibility` IPC.

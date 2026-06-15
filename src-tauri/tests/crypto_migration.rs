@@ -2,10 +2,8 @@
 //!
 //! Verifies `migrate_if_needed` correctly encrypts plaintext `hcfs_config`
 //! drive passwords, is idempotent, skips empty values, and rejects
-//! wrong-key decryption. (The former sub-account half of this migration was
-//! removed in the 2026-06-01 audit — it was write-only with no reader; the
-//! drive-password half below is the live path consumed by
-//! `sync::config::get_drive_password`.)
+//! wrong-key decryption. This drive-password path is the live one consumed by
+//! `sync::config::get_drive_password`.
 
 use sqlx::sqlite::SqlitePool;
 

@@ -1,11 +1,11 @@
 "use client";
 
 import React from "react";
-import { CardButton } from "@/components/ui";
-import DialogContainer from "@/components/ui/DialogContainer";
 import { PauseCircle } from "lucide-react";
-import * as Dialog from "@radix-ui/react-dialog";
-import { DialogIconHeader } from "./DialogIconHeader";
+
+import { FramedDialog } from "@/components/ui/FramedDialog";
+import { Button } from "@/components/ui";
+import { cn } from "@/lib/utils";
 
 interface PauseSyncDialogProps {
   open: boolean;
@@ -22,61 +22,54 @@ export function PauseSyncDialog({
   onClose,
   onConfirm,
 }: PauseSyncDialogProps) {
+  const handleClose = () => {
+    if (isPausing) return;
+    onClose();
+  };
+
   return (
-    <Dialog.Root
+    <FramedDialog
       open={open}
-      onOpenChange={(isOpen) => {
-        if (!isOpen && !isPausing) onClose();
-      }}
+      onClose={handleClose}
+      title="Pause Sync"
+      icon={<PauseCircle className="size-5 text-white" />}
+      maxWidth="max-w-[680px]"
+      iconBgClassName="bg-[#3167dd]"
     >
-      <DialogContainer
-        className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[26.75rem] h-fit"
-        preventClose={isPausing}
-      >
-        <Dialog.Title className="sr-only">Pause Sync</Dialog.Title>
+      <p className="mb-5 text-center text-sm text-[#7D7D7D] dark:text-grey-dark-600">
+        This will pause syncing for{" "}
+        <span className="font-semibold text-grey-10 dark:text-white">
+          &quot;{folderName}&quot;
+        </span>
+        . No new changes will be uploaded or downloaded until you resume.
+      </p>
 
-        <div className="px-4 py-6 flex flex-col gap-5">
-          <div className="flex flex-col items-center text-center gap-3">
-            <DialogIconHeader
-              icon={<PauseCircle className="size-5 text-grey-100" />}
-              bgColor="bg-grey-40"
-            />
-            <div className="flex flex-col gap-1">
-              <h2 className="text-xl font-semibold text-grey-10">
-                Pause Sync
-              </h2>
-              <p className="text-sm text-grey-50 max-w-sm">
-                This will pause syncing for &quot;
-                <span className="font-semibold text-grey-10">
-                  {folderName}
-                </span>
-                &quot;. No new changes will be uploaded or downloaded until you
-                resume.
-              </p>
-            </div>
-          </div>
-
-          <div className="flex gap-3">
-            <CardButton
-              className="w-full"
-              variant="secondary"
-              onClick={onClose}
-              disabled={isPausing}
-            >
-              Cancel
-            </CardButton>
-            <CardButton
-              className="w-full"
-              variant="primary"
-              onClick={onConfirm}
-              disabled={isPausing}
-              loading={isPausing}
-            >
-              {isPausing ? "Pausing..." : "Pause Sync"}
-            </CardButton>
-          </div>
-        </div>
-      </DialogContainer>
-    </Dialog.Root>
+      <div className="flex gap-3">
+        <Button
+          variant="defaultStable"
+          size="auto"
+          onClick={handleClose}
+          disabled={isPausing}
+          className="h-[42px] w-full rounded-[6px] text-sm font-medium"
+        >
+          Cancel
+        </Button>
+        <Button
+          variant="primary"
+          size="auto"
+          onClick={onConfirm}
+          disabled={isPausing}
+          loading={isPausing}
+          className={cn(
+            "h-[42px] w-full rounded-[6px] border text-sm font-medium",
+            "border-[#3167DD] bg-[#3167DD] text-white",
+            "hover:bg-[#2454c4] hover:border-[#2454c4]",
+            "dark:hover:bg-[#2a5ad0] dark:hover:border-[#2a5ad0]"
+          )}
+        >
+          {isPausing ? "Pausing..." : "Pause Sync"}
+        </Button>
+      </div>
+    </FramedDialog>
   );
 }

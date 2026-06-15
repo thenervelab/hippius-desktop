@@ -36,6 +36,9 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 const DEBOUNCE_MS = 250;
+// Mirrors MIN_DISPATCH_INTERVAL_MS in useSyncEvents — the floor between
+// dispatches while completions keep arriving.
+const MIN_DISPATCH_INTERVAL_MS = 3000;
 
 function renderHookWithStore() {
   const store = createStore();
@@ -45,7 +48,7 @@ function renderHookWithStore() {
   const wrapper = ({ children }: { children: React.ReactNode }) => (
     <Provider store={store}>{children}</Provider>
   );
-  return renderHook(() => useSyncEvents(), { wrapper });
+  return { store, ...renderHook(() => useSyncEvents(), { wrapper }) };
 }
 
 async function waitForHandlerRegistration() {
@@ -141,15 +144,17 @@ describe("useSyncEvents — debounced sync_files_completed_changed dispatch", ()
     expect(completedDispatchCount()).toBe(0);
   });
 
-  it("each of the three listeners individually triggers a debounced dispatch", async () => {
+  it("each of the three listeners individually triggers a dispatch when spaced beyond the throttle floor", async () => {
     renderHookWithStore();
     await waitForHandlerRegistration();
 
     vi.useFakeTimers();
 
+    // Drain past the debounce AND the inter-dispatch floor so each event
+    // is treated as idle-arrival, not part of a completion storm.
     const fireAndDrain = (handler: (e: { payload: unknown }) => void, payload: unknown) => {
       act(() => { handler({ payload }); });
-      act(() => { vi.advanceTimersByTime(DEBOUNCE_MS); });
+      act(() => { vi.advanceTimersByTime(MIN_DISPATCH_INTERVAL_MS + DEBOUNCE_MS); });
     };
 
     fireAndDrain(listenHandlers.get("hcfs_sync_completed")!, {
@@ -168,5 +173,57 @@ describe("useSyncEvents — debounced sync_files_completed_changed dispatch", ()
 
     fireAndDrain(listenHandlers.get("hcfs_activity_updated")!, {});
     expect(completedDispatchCount()).toBe(3);
+  });
+
+  // Pins the refetch-storm fix: during a long multi-file sync, per-file
+  // completion events drip in every second or so. Each used to trigger its
+  // own file-list refetch (expensive list_user_files + full table
+  // re-render), which froze scrolling. The drip must now coalesce to one
+  // dispatch per MIN_DISPATCH_INTERVAL_MS, with the trailing timer always
+  // delivering the final state.
+  it("spaces a steady drip of per-file completions to one dispatch per interval", async () => {
+    renderHookWithStore();
+    await waitForHandlerRegistration();
+
+    vi.useFakeTimers();
+
+    const transfer = listenHandlers.get("hcfs_file_transfer_complete")!;
+
+    // First completion arrives while idle → dispatches after the short
+    // debounce so single-file syncs still feel instantaneous.
+    act(() => { transfer({ payload: {} }); });
+    act(() => { vi.advanceTimersByTime(DEBOUNCE_MS); });
+    expect(completedDispatchCount()).toBe(1);
+
+    // A steady drip (1s apart) within the floor — no extra dispatches yet.
+    act(() => { transfer({ payload: {} }); });
+    act(() => { vi.advanceTimersByTime(1000); });
+    act(() => { transfer({ payload: {} }); });
+    act(() => { vi.advanceTimersByTime(1000); });
+    act(() => { transfer({ payload: {} }); });
+    act(() => { vi.advanceTimersByTime(999); });
+    expect(completedDispatchCount()).toBe(1);
+
+    // The floor elapses → exactly one coalesced trailing dispatch.
+    act(() => { vi.advanceTimersByTime(1); });
+    expect(completedDispatchCount()).toBe(2);
+  });
+
+  // Liveness guard: dispatches must keep flowing DURING an active sync (at
+  // the throttled cadence) — an earlier iteration held them until the
+  // session settled, which left a freshly-populated folder visibly empty
+  // until a manual refresh. The throttle test above already pins the
+  // cadence; this pins that a single mid-sync completion reaches listeners
+  // without waiting for anything session-scoped.
+  it("dispatches mid-sync completions without requiring the session to settle", async () => {
+    renderHookWithStore();
+    await waitForHandlerRegistration();
+
+    vi.useFakeTimers();
+
+    const transfer = listenHandlers.get("hcfs_file_transfer_complete")!;
+    act(() => { transfer({ payload: {} }); });
+    act(() => { vi.advanceTimersByTime(DEBOUNCE_MS); });
+    expect(completedDispatchCount()).toBe(1);
   });
 });

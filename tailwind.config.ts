@@ -2,6 +2,10 @@ import type { Config } from "tailwindcss";
 import containerQueries from "@tailwindcss/container-queries";
 
 export default {
+  // Class-driven dark mode: `dark:` variants apply under the `.dark` class
+  // that AppThemeProvider (app/lib/theme-context.tsx) toggles on <html>
+  // from the user's System/Light/Dark preference in settings.
+  darkMode: "selector",
   content: [
     "./pages/**/*.{js,ts,jsx,tsx,mdx}",
     "./components/**/*.{js,ts,jsx,tsx,mdx}",
@@ -12,6 +16,12 @@ export default {
       screens: {
         compact: "900px",
         desktop: "1310px",
+        short: { raw: "(max-height: 890px)" },
+        "max-sm": { max: "639px" },
+        "max-md": { max: "767px" },
+        "max-lg": { max: "1023px" },
+        "max-xl": { max: "1279px" },
+        "max-2xl": { max: "1535px" },
       },
       maxWidth: {
         "screen-1.5xl": "1360px",
@@ -35,6 +45,8 @@ export default {
           "0 2px 9px 0 rgba(61, 140, 250, 0.60) inset, 0 4px 4px 0 rgba(4, 65, 149, 0.10)",
         "outer-action-button":
           " 0 2px 9px 0 rgba(61, 140, 250, 0.60) inset, 0 4px 4px 0 rgba(4, 65, 149, 0.10)",
+        "tab-active":
+          "0px 12.26px 3.831px 0px rgba(0,0,0,0), 0px 8.429px 3.065px 0px rgba(0,0,0,0.01), 0px 4.597px 3.065px 0px rgba(0,0,0,0.04), 0px 2.299px 2.299px 0px rgba(0,0,0,0.08), 0px 0.766px 0.766px 0px rgba(0,0,0,0.09)",
       },
       backgroundImage: {
         "white-cloud-gradient":
@@ -47,11 +59,13 @@ export default {
           "radial-gradient(70% 70% at 50% 50%, rgba(255, 255, 255, 0) 0%, #FFFFFF 100%)",
       },
       fontFamily: {
+        inter: "var(--font-inter)",
         sans: "var(--font-geist-sans)",
         mono: "var(--font-geist-mono)",
         digital: "digitalFonts",
       },
       colors: {
+        "table-header": "#FAFAFA",
         success: {
           100: "rgb(var(--success-100) / <alpha-value>)",
           90: "rgb(var(--success-90) / <alpha-value>)",
@@ -65,10 +79,12 @@ export default {
           10: "rgb(var(--success-10) / <alpha-value>)",
         },
         primary: {
+          "brand-dark": "rgb(var(--brand-dark) / <alpha-value>)",
           100: "rgb(var(--primary-100) / <alpha-value>)",
           90: "rgb(var(--primary-90) / <alpha-value>)",
           80: "rgb(var(--primary-80) / <alpha-value>)",
           70: "rgb(var(--primary-70) / <alpha-value>)",
+          65: "rgb(var(--primary-65) / <alpha-value>)",
           60: "rgb(var(--primary-60) / <alpha-value>)",
           50: "rgb(var(--primary-50) / <alpha-value>)",
           40: "rgb(var(--primary-40) / <alpha-value>)",
@@ -76,9 +92,23 @@ export default {
           20: "rgb(var(--primary-20) / <alpha-value>)",
           10: "rgb(var(--primary-10) / <alpha-value>)",
         },
+        black: {
+          "primary-bg": "rgb(var(--black-primary-bg) / <alpha-value>)",
+          100: "rgb(var(--black-100) / <alpha-value>)",
+          200: "rgb(var(--black-200) / <alpha-value>)",
+          300: "rgb(var(--black-300) / <alpha-value>)",
+          400: "rgb(var(--black-400) / <alpha-value>)",
+          500: "rgb(var(--black-500) / <alpha-value>)",
+          600: "rgb(var(--black-600) / <alpha-value>)",
+          700: "rgb(var(--black-700) / <alpha-value>)",
+          800: "rgb(var(--black-800) / <alpha-value>)",
+          850: "rgb(var(--black-850) / <alpha-value>)",
+          900: "rgb(var(--black-900) / <alpha-value>)",
+        },
         grey: {
           100: "rgb(var(--grey-100) / <alpha-value>)",
           90: "rgb(var(--grey-90) / <alpha-value>)",
+          85: "rgb(var(--grey-85) / <alpha-value>)",
           80: "rgb(var(--grey-80) / <alpha-value>)",
           70: "rgb(var(--grey-70) / <alpha-value>)",
           60: "rgb(var(--grey-60) / <alpha-value>)",
@@ -87,9 +117,29 @@ export default {
           30: "rgb(var(--grey-30) / <alpha-value>)",
           20: "rgb(var(--grey-20) / <alpha-value>)",
           10: "rgb(var(--grey-10) / <alpha-value>)",
+          "primary-bg": "rgb(var(--grey-primary-bg) / <alpha-value>)",
+          "light-100": "rgb(var(--grey-light-100) / <alpha-value>)",
+          "light-200": "rgb(var(--grey-light-200) / <alpha-value>)",
+          "light-300": "rgb(var(--grey-light-300) / <alpha-value>)",
+          "light-400": "rgb(var(--grey-light-400) / <alpha-value>)",
+          "light-500": "rgb(var(--grey-light-500) / <alpha-value>)",
+          "light-600": "rgb(var(--grey-light-600) / <alpha-value>)",
+          "light-700": "rgb(var(--grey-light-700) / <alpha-value>)",
+          "light-800": "rgb(var(--grey-light-800) / <alpha-value>)",
+          "dark-100": "rgb(var(--grey-dark-100) / <alpha-value>)",
+          "dark-200": "rgb(var(--grey-dark-200) / <alpha-value>)",
+          "dark-300": "rgb(var(--grey-dark-300) / <alpha-value>)",
+          "dark-400": "rgb(var(--grey-dark-400) / <alpha-value>)",
+          "dark-500": "rgb(var(--grey-dark-500) / <alpha-value>)",
+          "dark-600": "rgb(var(--grey-dark-600) / <alpha-value>)",
+          "dark-700": "rgb(var(--grey-dark-700) / <alpha-value>)",
+          "dark-800": "rgb(var(--grey-dark-800) / <alpha-value>)",
+          "dark-900": "rgb(var(--grey-dark-900) / <alpha-value>)",
         },
         warning: {
           100: "rgb(var(--warning-100) / <alpha-value>)",
+          200: "rgb(var(--warning-200) / <alpha-value>)",
+          300: "rgb(var(--warning-300) / <alpha-value>)",
           90: "rgb(var(--warning-90) / <alpha-value>)",
           80: "rgb(var(--warning-80) / <alpha-value>)",
           70: "rgb(var(--warning-70) / <alpha-value>)",
@@ -228,6 +278,20 @@ export default {
             transform: "scale(1)",
           },
         },
+        // Sync widget collapse/expand. Paired with `origin-bottom-left`
+        // (sidebar) or `origin-bottom-right` (portal) so the mini ring and the
+        // full card appear to grow out of that corner, mirroring the old
+        // SyncStatusDialog2 expand.
+        ["widget-grow"]: {
+          "0%": {
+            opacity: "0",
+            transform: "scale(0.8)",
+          },
+          "100%": {
+            opacity: "1",
+            transform: "scale(1)",
+          },
+        },
         ["tooltip-reveal-left"]: {
           "0%": {
             opacity: "0",
@@ -324,6 +388,12 @@ export default {
           "25%": { transform: "translateX(-4px)" },
           "75%": { transform: "translateX(4px)" },
         },
+        // Indeterminate progress: a short fill that sweeps across the track.
+        // Used by the share modal while it has no real byte progress yet.
+        "indeterminate-sweep": {
+          "0%": { transform: "translateX(-100%)" },
+          "100%": { transform: "translateX(300%)" },
+        },
       },
       backgroundSize: {
         full: "100% 100%",
@@ -348,6 +418,7 @@ export default {
           "tooltip-reveal-right 0.3s ease-in-out forwards",
         "scale-in-95-0.2": "scale-in-95 0.2s ease-in-out forwards",
         "scale-out-95-0.2": "scale-out-95 0.2s ease-in-out forwards",
+        "widget-grow-0.3": "widget-grow 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards",
         ["slideDown"]: "slide-down 0.3s ease-out",
         ["slideUp"]: "slide-up 0.3s ease-out",
         ["translate-from-bottom"]:
@@ -364,6 +435,7 @@ export default {
         "panel-in": "panel-in 0.2s ease-out",
         "panel-out": "panel-out 0.2s ease-in",
         shake: "shake 0.3s ease-in-out",
+        "indeterminate-sweep": "indeterminate-sweep 1.2s ease-in-out infinite",
       },
     },
   },

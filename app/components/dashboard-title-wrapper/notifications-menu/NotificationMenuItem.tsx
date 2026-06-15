@@ -1,20 +1,28 @@
+"use client";
+
 import React, { useState, useEffect } from "react";
-import { IconComponent } from "@/app/lib/types";
-import { AbstractIconWrapper, Icons } from "@/components/ui";
-import { cn } from "@/app/lib/utils";
-import { handleButtonLink } from "@/app/lib/utils/links";
-import { InView } from "react-intersection-observer";
-import RevealTextLine from "@/components/ui/reveal-text-line";
 import TimeAgo from "react-timeago";
-import { useRouter } from "next/navigation";
-import NotificationType from "@/components/page-sections/notifications/NotificationType";
+import { cn } from "@/app/lib/utils";
+import { Icons } from "@/components/ui";
 import NotificationContextMenu from "@/components/page-sections/notifications/NotificationContextMenu";
 import { useSetAtom } from "jotai";
-import { deleteNotification } from "@/app/lib/helpers/notificationsDb";
 import { refreshUnreadCountAtom } from "@/components/page-sections/notifications/notificationStore";
 import { useNotifications } from "@/lib/hooks/useNotifications";
 import { getVersion } from "@tauri-apps/api/app";
 import { isVersionGreaterOrEqual } from "@/lib/utils/versionCompare";
+import { IconComponent } from "@/app/lib/types";
+import { deleteNotification } from "@/app/lib/helpers/notificationsDb";
+import { notificationCategoryLabel } from "@/app/lib/helpers/notificationCategories";
+
+const TYPE_COLORS: Record<string, string> = {
+  Subscription: "bg-error-50",
+  Files: "bg-primary-50",
+  Balance: "bg-warning-50",
+  Credits: "bg-warning-50",
+  Blockchain: "bg-success-50",
+  Storage: "bg-primary-50",
+  Hippius: "bg-primary-50",
+};
 
 interface NotificationItemProps {
   id?: number;
@@ -35,7 +43,6 @@ interface NotificationItemProps {
 
 const NotificationMenuItem: React.FC<NotificationItemProps> = ({
   id,
-  icon: Icon,
   notificationType,
   notificationSubType,
   notificationText,
@@ -44,28 +51,23 @@ const NotificationMenuItem: React.FC<NotificationItemProps> = ({
   buttonText,
   buttonLink,
   unread = false,
-  selected = false,
   onClick,
   onReadStatusChange,
-  onClose,
 }) => {
-  const [contextMenu, setContextMenu] = useState<{
-    x: number;
-    y: number;
-  } | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [isArchiving, setIsArchiving] = useState(false);
   const [currentVersion, setCurrentVersion] = useState<string>("");
-  const router = useRouter();
   const refreshUnread = useSetAtom(refreshUnreadCountAtom);
   const { refresh } = useNotifications();
 
   useEffect(() => {
     getVersion()
       .then(setCurrentVersion)
-      .catch((err: unknown) => console.warn("[NotificationMenuItem] Failed to get app version:", err));
+      .catch((err: unknown) =>
+        console.warn("[NotificationMenuItem] Failed to get app version:", err)
+      );
   }, []);
 
-  // For Hippius update notifications, hide button if already on this version or newer
   const isUpdateNotification =
     notificationType === "Hippius" &&
     notificationSubType &&
@@ -74,13 +76,7 @@ const NotificationMenuItem: React.FC<NotificationItemProps> = ({
     isUpdateNotification &&
     currentVersion &&
     isVersionGreaterOrEqual(currentVersion, notificationSubType);
-  const shouldShowButton =
-    buttonText && buttonLink && !isUpdateAlreadyInstalled;
-
-  const handleLinkClick = (e: React.MouseEvent) => {
-    handleButtonLink(e, buttonLink, router);
-    onClose?.();
-  };
+  const shouldShowButton = buttonText && buttonLink && !isUpdateAlreadyInstalled;
 
   const handleReadStatusToggle = () => {
     if (id && onReadStatusChange) {
@@ -93,14 +89,11 @@ const NotificationMenuItem: React.FC<NotificationItemProps> = ({
     setContextMenu({ x: e.clientX, y: e.clientY });
   };
 
-  const handleDelete = async (e: React.MouseEvent) => {
-    e.stopPropagation(); // Prevent triggering onClick
-
+  const handleArchive = async () => {
     if (!id) return;
-
     try {
       setIsArchiving(true);
-      await new Promise((r) => setTimeout(r, 160)); // Animation delay
+      await new Promise((r) => setTimeout(r, 160));
       await deleteNotification(id);
       await refresh();
       await refreshUnread();
@@ -109,93 +102,77 @@ const NotificationMenuItem: React.FC<NotificationItemProps> = ({
     }
   };
 
+  const typeColor = TYPE_COLORS[notificationType] ?? "bg-grey-dark-200";
+  const hasTime = Boolean(timestamp || notificationTime);
+  const showRightColumn = unread || !!shouldShowButton || hasTime;
+
   return (
     <>
-      <InView triggerOnce>
-        {({ inView, ref }) => (
-          <div
-            ref={ref}
-            className={cn(
-              "flex items-start gap-2 p-3 hover:bg-grey-90 hover:rounded rounded-lg mb-3 bg-white group cursor-pointer w-full transition duration-200 relative",
-              selected && "border border-primary-70 bg-primary-100",
-              isArchiving && "opacity-0 translate-y-1 scale-[0.98]",
-            )}
-            onClick={() => {
-              onClick?.();
-            }}
-            onContextMenu={handleContextMenu}
-          >
-            <AbstractIconWrapper className="min-w-[2rem] size-8 text-primary-40">
-              <Icon className="absolute text-primary-40 size-5" />
-            </AbstractIconWrapper>
+      <div
+        className={cn(
+          "flex gap-[10px] items-start px-[10px] py-[12px] rounded-[8px] cursor-pointer transition-colors relative",
+          "hover:bg-grey-light-300 dark:hover:bg-[#252525]",
+          unread && "bg-grey-light-300 dark:bg-[#1e1e1e]",
+          isArchiving && "opacity-0 scale-[0.98] transition-all duration-150"
+        )}
+        onClick={onClick}
+        onContextMenu={handleContextMenu}
+      >
+        {/* Left colored indicator line */}
+        <div
+          className={cn(
+            "w-[2px] self-stretch rounded-full flex-shrink-0 mt-[2px]",
+            unread ? typeColor : "bg-grey-dark-100 dark:bg-[#3a3a3a]"
+          )}
+        />
 
-            <div className="flex justify-between gap-1 w-full">
-              <div className="flex flex-col">
-                {/* Type badge  */}
-                <RevealTextLine rotate reveal={inView} className="delay-200">
-                  <NotificationType type={notificationType} />
-                </RevealTextLine>
+        {/* Content */}
+        <div className="flex-1 min-w-0 flex flex-col gap-[2px]">
+          <p className="text-[14px] font-medium text-[#0a0a0a] dark:text-white leading-normal truncate">
+            {notificationCategoryLabel(notificationType)}
+          </p>
+          <p className="text-[13px] font-medium text-[#0a0a0a] dark:text-white opacity-40 leading-normal line-clamp-2">
+            {notificationText}
+          </p>
+        </div>
 
-                {/* Notification text */}
-                <RevealTextLine rotate reveal={inView} className="delay-300">
-                  <p
-                    className="text-sm text-grey-30 leading-5 mb-1 truncate max-w-[12.5rem]"
-                    title={notificationText}
-                  >
-                    {notificationText}
-                  </p>
-                </RevealTextLine>
-
-                {/* Time */}
-                <RevealTextLine rotate reveal={inView} className="delay-400">
-                  <span className="text-xs text-grey-60 leading-[1.125rem]">
-                    {timestamp ? (
-                      <TimeAgo date={timestamp} />
-                    ) : (
-                      notificationTime
-                    )}
-                  </span>
-                </RevealTextLine>
-              </div>
-
-              {/* Button & unread symbol */}
-              <div className="flex gap-3">
-                {shouldShowButton && (
-                  <RevealTextLine rotate reveal={inView} className="delay-500">
-                    <button
-                      onClick={handleLinkClick}
-                      className="text-sm font-medium rounded py-2 self-start px-3 text-grey-10 flex items-center justify-center bg-grey-90 group-hover:bg-grey-100 whitespace-nowrap"
-                    >
-                      {buttonText}
-                      <Icons.ArrowRight className="size-[0.875rem] text-grey-10 ml-1" />
-                    </button>
-                  </RevealTextLine>
-                )}
-                <div
-                  className={cn("flex size-2 bg-primary-50 rounded-full", {
-                    "opacity-0": !unread,
-                    "opacity-100": unread,
-                  })}
-                ></div>
-              </div>
-            </div>
-
-            {/* Delete button - appears on hover */}
-            <button
-              className={cn(
-                "absolute top-6 right-2 opacity-0 group-hover:opacity-100 transition-opacity text-grey-60 hover:text-error-50",
-                !unread && "top-4",
+        {/* Right: time + badge dot (top) + view button (bottom) */}
+        {showRightColumn && (
+          <div className="flex flex-col items-end justify-between self-stretch flex-shrink-0 gap-2">
+            <div className="flex items-center gap-[6px]">
+              {/* Relative time — same `react-timeago` source as the
+               *  notifications page list, so the two surfaces never drift.
+               *  `timestamp` is the canonical ms-epoch from the DB;
+               *  `notificationTime` is the stored pre-formatted fallback
+               *  for legacy rows without one. Sits directly left of the
+               *  unread dot, mirroring the page layout. */}
+              {hasTime && (
+                <span className="text-[11px] font-medium leading-[16px] tracking-[-0.22px] text-grey-50 dark:text-grey-dark-700 whitespace-nowrap">
+                  {timestamp ? <TimeAgo date={timestamp} /> : notificationTime}
+                </span>
               )}
-              onClick={handleDelete}
-              title="Delete Notification"
-            >
-              <Icons.Trash className="size-4" />
-            </button>
+              {unread && (
+                <div className={cn("size-[13px] rounded-full flex-shrink-0", typeColor)} />
+              )}
+            </div>
+            {shouldShowButton ? (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onClick?.();
+                }}
+                className="px-[9px] py-[5px] rounded-[21px] bg-white dark:bg-[#222] border border-grey-dark-100 dark:border-[#313131] text-[10px] font-medium text-[#111] dark:text-white tracking-[-0.2px] whitespace-nowrap shadow-[0px_1px_1.9px_0px_rgba(0,0,0,0.14),0px_0px_1px_0px_rgba(0,0,0,0.16)] dark:shadow-[0_0_0_1px_#000] hover:opacity-80 transition-opacity"
+              >
+                <span className="flex items-center gap-[3px]">
+                  View
+                  <Icons.ArrowRightFill className="size-[9px]" />
+                </span>
+              </button>
+            ) : null}
           </div>
         )}
-      </InView>
+      </div>
 
-      {/* Context Menu */}
       {contextMenu && (
         <NotificationContextMenu
           x={contextMenu.x}
@@ -203,13 +180,12 @@ const NotificationMenuItem: React.FC<NotificationItemProps> = ({
           isUnread={unread}
           onClose={() => setContextMenu(null)}
           onToggleReadStatus={handleReadStatusToggle}
-          // New
           notificationId={id}
-          onArchived={() => {
-            setContextMenu(null);
-            // Remove onClose?.() here to keep the notification menu open
+          onArchived={() => setContextMenu(null)}
+          onArchiveStart={() => {
+            setIsArchiving(true);
+            handleArchive();
           }}
-          onArchiveStart={() => setIsArchiving(true)}
         />
       )}
     </>

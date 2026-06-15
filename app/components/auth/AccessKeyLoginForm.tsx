@@ -9,16 +9,14 @@
 
 import React, { useState, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import Input from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { AlertCircle, Loader2 } from "lucide-react";
-import { cn } from "@/lib/utils";
-import { ArrowRight2, Key } from "@/components/ui/icons";
+import { Loader2 } from "lucide-react";
+import { ArrowRight, Eye, EyeOff, Key } from "@/components/ui/icons";
+import { LogoMark } from "@/components/ui/LogoMark";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getVersion } from "@tauri-apps/api/app";
-import { BackButton } from "@/components/ui";
-import ButtonCard from "../ui/button/CardButton";
+import { Button } from "@/components/ui/button";
 
 interface AccessKeyLoginFormProps {
   onBack: () => void;
@@ -29,6 +27,7 @@ export function AccessKeyLoginForm({ onBack }: AccessKeyLoginFormProps) {
   const [error, setError] = useState<string | null>(null);
   const [logginIn, setLoggingIn] = useState(false);
   const [version, setVersion] = useState<string>("");
+  const [showSecret, setShowSecret] = useState(false);
 
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -62,93 +61,128 @@ export function AccessKeyLoginForm({ onBack }: AccessKeyLoginFormProps) {
       setError(
         error instanceof Error
           ? error.message
-          : "Invalid access key. Please ensure you've entered a valid 12-word mnemonic phrase."
+          : "Invalid access key. Please ensure you've entered a valid 12-word mnemonic phrase.",
       );
       setLoggingIn(false);
     }
   };
 
   return (
-    <div className="opacity-0 animate-fade-in-0.5 w-full">
-      <div className="space-y-[min(1rem,16px)] text-grey-10 w-full">
-        {/* Back Button */}
-        <BackButton onBack={onBack} text="Back" />
+    <div className="opacity-0 animate-fade-in-0.5 w-full flex justify-center">
+      <div
+        className="w-full max-w-[495px] bg-[#fffdff]  dark:bg-[#161416] rounded-[8px] p-[min(1rem,16px)] flex flex-col gap-[min(1.625rem,26px)] items-center overflow-hidden"
+        style={{
+          boxShadow:
+            "0px 14px 31px 0px rgba(0,0,0,0.06), 0px 56px 56px 0px rgba(0,0,0,0.05), 0px 126px 76px 0px rgba(0,0,0,0.03), 0px 224px 90px 0px rgba(0,0,0,0.01)",
+        }}
+      >
+        <div className="flex flex-col gap-[min(0.75rem,12px)] items-center w-full">
+          <LogoMark />
+          <h1 className="w-full text-center text-grey-10 dark:text-grey-light-100 font-medium text-[min(1.5rem,24px)] leading-[min(2rem,32px)]">
+            Log In to Hippius
+          </h1>
+        </div>
 
-        <form onSubmit={handleLogin} className="space-y-6">
-          {/* Title */}
-          <div>
-            <h1 className="text-grey-10 text-[min(2rem,32px)] font-medium">
-              Login with your access key
-            </h1>
-            <p className="text-[min(0.875rem,14px)] font-medium text-grey-70">
-              Please enter your access key to confirm and start creating your
-              account
-            </p>
-          </div>
+        <div className="flex flex-col gap-[min(1rem,16px)] items-center w-full">
+          <form
+            onSubmit={handleLogin}
+            className="flex flex-col gap-[min(1rem,16px)] items-center w-full"
+          >
+            <div className="flex flex-col gap-[min(0.5rem,8px)] items-start w-full">
+              <p className="font-medium text-[min(1.125rem,18px)] leading-[min(1.5rem,24px)] tracking-[-0.02em] text-grey-10 dark:text-grey-light-100">
+                Enter Your Access Key To Continue
+              </p>
 
-          {/* Access Key Input */}
-          <div className="space-y-2">
-            <Label
-              htmlFor="accessKey"
-              className="text-sm font-medium text-grey-70"
-            >
-              Access Key
-            </Label>
+              <div className="flex flex-col gap-[min(0.625rem,10px)] items-start w-full">
+                <div className="flex gap-[min(0.5rem,8px)] items-center">
+                  <label
+                    htmlFor="accessKey"
+                    className="font-medium text-[min(0.875rem,14px)] leading-[min(1.25rem,20px)] tracking-[-0.02em] text-grey-dark-600"
+                  >
+                    Access Key
+                  </label>
+                </div>
 
-            <div className="relative">
-              <Key className="size-5 absolute left-3 top-1/2 transform -translate-y-1/2 text-grey-60" />
-              <Input
-                id="accessKey"
-                placeholder="Enter your access key"
-                type="password"
-                value={mnemonic}
-                onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                  setMnemonic(e.target.value)
-                }
-                className="pl-10 pr-4 border-grey-80 h-14 text-grey-10 bg-grey-100 font-normal text-[0.9375rem] rounded-lg duration-200 outline-none hover:border-grey-70 placeholder-grey-60 focus:ring-0 focus:border-primary-50 w-full"
-                disabled={logginIn}
-              />
+                <Input
+                  id="accessKey"
+                  placeholder="Enter or paste seed words here"
+                  type={showSecret ? "text" : "password"}
+                  value={mnemonic}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                    setMnemonic(e.target.value)
+                  }
+                  disabled={logginIn}
+                  aria-invalid={Boolean(error)}
+                  startAdornment={<Key className="size-[min(1.5rem,24px)]" />}
+                  endAdornment={
+                    <button
+                      type="button"
+                      onClick={() => setShowSecret((s) => !s)}
+                      className="text-grey-dark-800 hover:text-grey-10 dark:hover:text-grey-light-100 transition-colors cursor-pointer"
+                      aria-label={
+                        showSecret ? "Hide access key" : "Show access key"
+                      }
+                    >
+                      {showSecret ? (
+                        <EyeOff className="size-[min(1.5rem,24px)]" />
+                      ) : (
+                        <Eye className="size-[min(1.5rem,24px)]" />
+                      )}
+                    </button>
+                  }
+                />
+              </div>
             </div>
-          </div>
 
-          {error && (
-            <div className="flex text-error-70 text-sm font-medium items-center gap-2">
-              <AlertCircle className="size-4" />
-              <span>{error}</span>
-            </div>
-          )}
-
-          {/* Primary Button */}
-          <ButtonCard
-            type="submit"
-            className={cn(
-              "w-full flex h-12 text-white font-semibold text-base rounded",
-              "bg-primary-50 hover:bg-primary-60 transition-colors"
+            {error && (
+              <p
+                className="w-full text-error-70 text-[min(0.875rem,14px)] leading-[min(1.25rem,20px)] tracking-[-0.02em] font-medium"
+                role="alert"
+              >
+                {error}
+              </p>
             )}
-            disabled={logginIn}
-            icon={
-              logginIn ? (
+
+            <Button
+              type="submit"
+              variant="primary"
+              size="auto"
+              dotSize={4}
+              disabled={logginIn}
+              className="w-full h-[min(3.25rem,52px)] gap-[min(0.625rem,10px)] px-[min(0.625rem,10px)] py-[min(0.625rem,10px)] text-[min(1.125rem,18px)] tracking-[-0.02em] font-normal text-white leading-[1.109]"
+            >
+              {logginIn ? (
                 <Loader2 className="size-4 animate-spin text-white" />
               ) : (
-                <ArrowRight2 className="size-4" />
-              )
-            }
-          >
-            {logginIn ? "Logging in..." : "Log In"}
-          </ButtonCard>
-        </form>
-      </div>
-      {/* Footer Links */}
-      <div className="space-y-[min(0.5rem,8px)] mt-[min(0.5rem,8px)]">
-        <div className="text-center">
-          <p className="text-[min(0.75rem,12px)] text-grey-60 font-semibold">
-            By continuing, you agree to our{" "}
+                <>
+                  <span>Log In</span>
+                  <ArrowRight className="size-4" />
+                </>
+              )}
+            </Button>
+
+            <Button
+              type="button"
+              variant="defaultStable"
+              size="auto"
+              dotSize={4}
+              onClick={onBack}
+              disabled={logginIn}
+              className="w-full h-[min(3.25rem,52px)] gap-[min(0.625rem,10px)] px-[min(0.625rem,10px)] py-[min(0.625rem,10px)] text-[min(1.125rem,18px)] tracking-[-0.02em] font-normal text-grey-10 dark:text-grey-light-100 leading-[1.109] border border-grey-80 dark:border-[#494949] bg-white dark:bg-[#2c2c2c] hover:bg-grey-90 dark:hover:bg-[#2e2e2e]"
+            >
+              <span>Choose another log in method</span>
+              <ArrowRight className="size-4" />
+            </Button>
+          </form>
+
+          <p className="w-full text-center text-[min(0.75rem,12px)] leading-[min(1.125rem,18px)] tracking-[-0.02em] text-grey-dark-800 font-medium">
+            By continuing you agree to our{" "}
             <button
               type="button"
               onClick={() =>
                 openUrl("https://hippius.com/terms-and-conditions")
               }
-              className="text-primary-50 font-semibold hover:text-primary-60 transition-colors cursor-pointer"
+              className="font-semibold text-primary-50 dark:text-primary-65 hover:text-primary-60 transition-colors cursor-pointer"
             >
               Terms and Conditions
             </button>{" "}
@@ -156,15 +190,15 @@ export function AccessKeyLoginForm({ onBack }: AccessKeyLoginFormProps) {
             <button
               type="button"
               onClick={() => openUrl("https://hippius.com/privacy-policy")}
-              className="text-primary-50 font-semibold hover:text-primary-60 transition-colors cursor-pointer"
+              className="font-semibold text-primary-50 dark:text-primary-65 hover:text-primary-60 transition-colors cursor-pointer"
             >
               Privacy Policy
             </button>
           </p>
-        </div>
 
-        <div className="text-center text-[min(0.75rem,12px)] text-grey-70 font-medium">
-          <p>Version {version}</p>
+          <p className="text-[min(0.75rem,12px)] leading-[min(1.125rem,18px)] tracking-[-0.02em] text-grey-dark-600 font-medium">
+            Version {version}
+          </p>
         </div>
       </div>
     </div>

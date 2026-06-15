@@ -44,8 +44,8 @@ export default function MultiFolderSyncManager() {
 
   // Reconcile each SyncFolder.status with the per-drive atom on every
   // change. The pause/resume buttons in this manager and in sibling
-  // surfaces (the tray submenu, FilesContainer's tab menu,
-  // FilesOnboarding) all flow through the same Rust events, which
+  // surfaces (the tray submenu, DriveContainer's tab menu,
+  // DriveOnboarding) all flow through the same Rust events, which
   // land in driveStatusesAtom — this effect makes the local list
   // reflect them without optimistic mutations that would lie when
   // the user pauses from another surface.
@@ -469,42 +469,38 @@ export default function MultiFolderSyncManager() {
   return (
     <>
       <div className="flex flex-col gap-4 w-full">
-        <div className="shadow-menu rounded-lg bg-white p-4 w-full">
-          <LocalFoldersSection
-            syncFolders={syncFolders}
-            isLoading={isLoading}
-            onAddFolder={() => setShowAddDialog(true)}
-            onPauseFolder={(folder) => setPauseDialog({ open: true, folder })}
-            onResumeFolder={handleResumeSync}
-            onRemoveFolder={(folder) =>
-              setRemoveDialog({
-                open: true,
-                folderId: folder.id,
-                folderName: folder.folderName,
-              })
-            }
-            onDeleteFromServer={openDeleteServerDialog}
-            onBrowseFolder={(folder) => handleBrowseFolder({
+        <LocalFoldersSection
+          syncFolders={syncFolders}
+          isLoading={isLoading}
+          onAddFolder={() => setShowAddDialog(true)}
+          onPauseFolder={(folder) => setPauseDialog({ open: true, folder })}
+          onResumeFolder={handleResumeSync}
+          onRemoveFolder={(folder) =>
+            setRemoveDialog({
+              open: true,
+              folderId: folder.id,
               folderName: folder.folderName,
-              deviceName: folder.deviceName ?? "This Device",
-              lastModified: folder.lastModified ?? 0,
-              fileCount: folder.fileCount ?? 0,
-              totalBytes: folder.totalBytes ?? 0,
-            }, true)}
-          />
-        </div>
+            })
+          }
+          onDeleteFromServer={openDeleteServerDialog}
+          onBrowseFolder={(folder) => handleBrowseFolder({
+            folderName: folder.folderName,
+            deviceName: folder.deviceName ?? "This Device",
+            lastModified: folder.lastModified ?? 0,
+            fileCount: folder.fileCount ?? 0,
+            totalBytes: folder.totalBytes ?? 0,
+          }, true)}
+        />
 
-        <div className="shadow-menu rounded-lg bg-white p-4 w-full mb-4">
-          <RemoteFoldersSection
-            remoteFolders={remoteFolders}
-            isLoading={isLoading}
-            onSyncFolder={handleSyncRemoteFolder}
-            onDeleteFromServer={(folderName) =>
-              openDeleteServerDialog(folderName)
-            }
-            onBrowseFolder={handleBrowseFolder}
-          />
-        </div>
+        <RemoteFoldersSection
+          remoteFolders={remoteFolders}
+          isLoading={isLoading}
+          onSyncFolder={handleSyncRemoteFolder}
+          onDeleteFromServer={(folderName) =>
+            openDeleteServerDialog(folderName)
+          }
+          onBrowseFolder={handleBrowseFolder}
+        />
       </div>
 
       {/* Dialogs */}
@@ -512,7 +508,10 @@ export default function MultiFolderSyncManager() {
       <AddLocalFolderDialog
         open={showAddDialog}
         onClose={() => setShowAddDialog(false)}
-        onSuccess={refreshFoldersAndStats}
+        // Settings doesn't track an "active" folder, so we discard the
+        // returned label and run the standard refresh — the drive page
+        // uses the label to navigate to the new folder via its breadcrumb.
+        onSuccess={() => refreshFoldersAndStats()}
       />
 
       <RemoveFolderDialog
@@ -579,6 +578,7 @@ export default function MultiFolderSyncManager() {
           isLocal={browseDialog.isLocal}
         />
       )}
+
     </>
   );
 }

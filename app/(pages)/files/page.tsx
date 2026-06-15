@@ -1,34 +1,47 @@
 "use client";
 
-import DashboardTitleWrapper from "@/app/components/dashboard-title-wrapper";
-import FolderView from "@/app/components/page-sections/files-folder";
-import { Files } from "@/components/page-sections";
-import { FC } from "react";
-import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
+import { Drive } from "@/components/page-sections";
+import { FC, useEffect } from "react";
+import PageHeader from "@/components/ui/page-header";
+import { useSetAtom } from "jotai";
+
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { InfoCircle } from "@/app/components/ui/icons";
+import { fileDetailsPanelAtom } from "@/app/lib/global-atoms/fileDetailsAtoms";
+
+const DRIVE_DOCS_URL = "https://docs.hippius.com/use/desktop/file-system";
 
 const FilesPage: FC = () => {
-    const { getParam } = useUrlParams();
-
-    const folderCid = getParam("folderCid");
-    const folderName = getParam("folderName", "");
-    const folderActualName = getParam("folderActualName", "");
-    const mainFolderActualName = getParam("mainFolderActualName", "");
-    const subFolderPath = getParam("subFolderPath");
-
-    if (folderName) {
-        return (
-            <DashboardTitleWrapper mainText={`My Drive - ${folderName}`}>
-                <FolderView
-                    folderCid={folderCid}
-                    folderName={folderName}
-                    folderActualName={folderActualName}
-                    mainFolderActualName={mainFolderActualName}
-                    subFolderPath={subFolderPath}
-                />
-            </DashboardTitleWrapper>
-        );
-    }
-    return <Files />;
+  // The inline FileDetailsPanel is mounted at the layout level
+  // (ResponsiveContent) so it stays pinned to the available screen height
+  // instead of scrolling with the page. We just need to clear the panel
+  // atom on unmount so a selection from this page doesn't bleed into other
+  // routes if the user navigates away with the panel still open.
+  const setFileDetails = useSetAtom(fileDetailsPanelAtom);
+  useEffect(() => {
+    return () => setFileDetails(null);
+  }, [setFileDetails]);
+  return (
+    <>
+      <PageHeader
+        hideStats={true}
+        infoTooltip={
+          <button
+            onClick={() => openUrl(DRIVE_DOCS_URL)}
+            aria-label="Drive documentation"
+            title="Drive documentation"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-grey-dark-100 bg-grey-light-700 text-black transition-colors hover:bg-grey-90 hover:text-primary-50 dark:border-black-300 dark:bg-black-primary-bg dark:text-grey-dark-400 dark:hover:border-black-100 dark:hover:bg-black-300 dark:hover:text-primary-50"
+          >
+            <InfoCircle className="size-4" />
+          </button>
+        }
+        title="Your Files"
+        className="!shadow-none"
+        subtitle="All uploaded files are private and securely encrypted."
+      />
+      <Drive />
+    </>
+  );
 };
 
 export default FilesPage;

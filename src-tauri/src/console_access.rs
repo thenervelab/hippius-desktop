@@ -204,8 +204,7 @@ impl HcfsServerCtx {
 
         let pool = state.pool()?;
         let bearer = get_api_token(pool, &account_id)
-            .await
-            .map_err(AppError::Other)?
+            .await?
             .ok_or_else(|| AppError::Other("No authentication token — please log in again.".into()))?;
 
         let base_url = resolve_hcfs_base_url(pool, &account_id).await?;
@@ -233,30 +232,19 @@ impl HcfsServerCtx {
 
 /// Resolve the hcfs-server URL stored for this account.
 ///
-/// Passes the stored `hcfs_config.server_url` through
-/// [`crate::sync::config::normalize_for_region_probe`] so the legacy
-/// single-region URL (`https://arion.hippius.com`) collapses to the
-/// region auto-detect sentinel (`""`), identical to how the sync path
-/// resolves its URL (`load_sync_config`, `sync::folders`, `sync::remote`).
-/// This is load-bearing for recovery: a legacy account still carries the
-/// old single-region URL in its row, and without this the seal POST and
-/// the probe GET would talk to that retired endpoint verbatim — the
-/// upload is accepted (success toast) but the blob never reads back, so
-/// Settings shows "not set up" even though sync (which DOES normalize)
-/// works. Normalizing here routes recovery to the same current regional
-/// server sync uses. Empty already round-trips; a missing row also
-/// resolves to the sentinel rather than an error. Concrete non-legacy
-/// URLs (self-hosted, staging) pass through untouched.
-///
-/// Turning the sentinel into a concrete endpoint is
-/// [`HcfsServerCtx::resolve`]'s job via [`hcfs_client::client::pick_fastest`].
-/// Keeping this helper a pure, network-free DB read is what makes it
-/// unit-testable.
+/// Returns the `hcfs_config.server_url` value verbatim, including the
+/// empty string. Empty is the region auto-detect sentinel
+/// (`recovery::seed_hcfs_server_url_if_missing` seeds `''`); turning it
+/// into a concrete endpoint is [`HcfsServerCtx::resolve`]'s job via
+/// [`hcfs_client::client::pick_fastest`]. Keeping this helper a pure,
+/// network-free DB read is what makes it unit-testable. A missing row
+/// also resolves to the sentinel rather than an error — recovery seeds a
+/// row first, but the network layer must still cope if it did not.
 async fn resolve_hcfs_base_url(pool: &sqlx::SqlitePool, account_id: &str) -> Result<String> {
     let config = crate::sync::config::get_hcfs_config_internal(pool, account_id)
         .await
         .map_err(|e| AppError::Other(format!("Could not read sync config: {e}")))?;
-    Ok(crate::sync::config::normalize_for_region_probe(&config.server_url))
+    Ok(config.server_url)
 }
 
 pub(crate) enum HttpOutcome<T> {
@@ -508,27 +496,5 @@ mod tests {
             .unwrap();
         let url = resolve_hcfs_base_url(&pool, account).await.expect("ok");
         assert_eq!(url, "https://staging.example.com");
-    }
-
-    #[tokio::test]
-    async fn resolve_base_url_normalizes_legacy_single_region_to_sentinel() {
-        // Regression: a legacy account still carries the retired single-region
-        // URL `https://arion.hippius.com` in its row. The recovery path used to
-        // return it verbatim, so the seal POST / probe GET hit that dead endpoint
-        // — upload "succeeded" but the blob never read back (Settings stuck on
-        // "not set up") while sync, which normalizes, worked. The resolver must
-        // collapse the legacy URL to the auto-detect sentinel so recovery and
-        // sync target the same current regional server.
-        let pool = make_empty_pool_with_hcfs_config().await;
-        let account = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
-        let owner = crate::auth::account_key::account_key(account);
-        sqlx::query("INSERT INTO hcfs_config (owner, server_url, drive_password, encryption_version) VALUES (?, ?, '', 0)")
-            .bind(&owner)
-            .bind("https://arion.hippius.com")
-            .execute(&pool)
-            .await
-            .unwrap();
-        let url = resolve_hcfs_base_url(&pool, account).await.expect("ok");
-        assert_eq!(url, "", "legacy single-region URL must normalize to the auto-detect sentinel");
     }
 }

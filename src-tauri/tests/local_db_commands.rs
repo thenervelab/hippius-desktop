@@ -38,23 +38,27 @@ async fn setup_db() -> SqlitePool {
     .await
     .unwrap();
 
+    // Per-account shape (owner, id): mirrors the production schema so the
+    // preference-filtered unread-count query (owner-scoped subquery) resolves.
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS notification_preferences (
-            id TEXT PRIMARY KEY,
+            owner TEXT NOT NULL,
+            id TEXT NOT NULL,
             label TEXT NOT NULL,
             description TEXT NOT NULL,
-            enabled INTEGER DEFAULT 1
+            enabled INTEGER DEFAULT 1,
+            PRIMARY KEY (owner, id)
         )",
     )
     .execute(&pool)
     .await
     .unwrap();
 
-    // Seed default preferences
+    // Seed default preferences for the `alice` account these tests use.
     sqlx::query(
-        "INSERT INTO notification_preferences (id, label, description, enabled) VALUES
-         ('credits', 'Credits', 'Account credit notifications', 1),
-         ('files', 'Files', 'File sync notifications', 1)",
+        "INSERT INTO notification_preferences (owner, id, label, description, enabled) VALUES
+         ('alice', 'credits', 'Credits', 'Account credit notifications', 1),
+         ('alice', 'files', 'Files', 'File sync notifications', 1)",
     )
     .execute(&pool)
     .await
@@ -272,7 +276,7 @@ async fn soft_delete_all_includes_system_rows() {
     let bob = "bob";
 
     insert_notification(&pool, alice, None, None, "a1").await;
-    insert_notification(&pool, "system", Some("Hippius"), Some("0.1.101"), "Update Available").await;
+    insert_notification(&pool, "system", Some("Hippius"), Some("0.2.0"), "Update Available").await;
     insert_notification(&pool, bob, None, None, "b1").await;
 
     // Same SQL the production command runs.
@@ -1009,6 +1013,23 @@ async fn unread_count_respects_disabled_files_preference() {
 
     // Only Credits enabled → should count 1
     assert_eq!(preference_filtered_unread_count(&pool, alice).await, 1);
+}
+
+#[tokio::test]
+async fn unread_count_excludes_types_outside_preference_categories() {
+    let pool = setup_db().await;
+    let alice = "alice";
+
+    // Credits + Files are default preference categories (counted). A
+    // notification whose type has no enabled preference row (here "VM") must
+    // NOT be counted — it mirrors the frontend list, which shows only enabled
+    // categories + Hippius. The old "absent means enabled" rule counted it, so
+    // the tray badge read higher (e.g. "99+") than the 97 the bell list showed.
+    insert_notification(&pool, alice, Some("Credits"), None, "credit-n1").await;
+    insert_notification(&pool, alice, Some("Files"), None, "file-n1").await;
+    insert_notification(&pool, alice, Some("VM"), None, "vm-n1").await;
+
+    assert_eq!(preference_filtered_unread_count(&pool, alice).await, 2);
 }
 
 #[tokio::test]

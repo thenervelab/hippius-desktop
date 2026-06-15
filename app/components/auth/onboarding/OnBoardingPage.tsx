@@ -1,6 +1,6 @@
 "use client";
 
-import BaseAuthLayout from "@/components/auth/BaseAuthLayout";
+import React from "react";
 import Onboarding from ".";
 
 const OnBoardingPage: React.FC<{
@@ -8,13 +8,8 @@ const OnBoardingPage: React.FC<{
   setOnboardingCompleted: (completed: boolean) => void;
 }> = ({ onboardingCompleted, setOnboardingCompleted }) => {
   if (!onboardingCompleted) {
-    return (
-      <BaseAuthLayout onboardingCompleted={onboardingCompleted}>
-        <Onboarding setOnboardingCompleted={setOnboardingCompleted} />
-      </BaseAuthLayout>
-    );
+    return <Onboarding setOnboardingCompleted={setOnboardingCompleted} />;
   }
-
   return null;
 };
 

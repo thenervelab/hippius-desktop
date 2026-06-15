@@ -11,7 +11,8 @@ import { registerTauriListeners } from "@/lib/utils/tauriListeners";
  * Invisible component that listens for conflict-related Tauri events and
  * updates the per-drive `pendingConflictsAtom` map. Every event carries the
  * owning drive `label`, so each write/delete is scoped to that drive — one
- * drive's completion no longer clears another drive's pending conflicts.
+ * drive's completion no longer clears another drive's pending conflicts
+ * (upstream F16).
  *
  * - `hcfs_conflicts_pending`   → set this drive's conflicts
  * - `hcfs_sync_completed`      → drop this drive (conflicts resolved)

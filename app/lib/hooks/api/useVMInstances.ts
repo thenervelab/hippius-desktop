@@ -1,9 +1,6 @@
 "use client";
 
-import {
-  UseQueryOptions,
-  UseQueryResult,
-} from "@tanstack/react-query";
+import { UseQueryOptions, UseQueryResult } from "@tanstack/react-query";
 import { useInvokeQuery } from "./useInvokeQuery";
 
 export interface VMInstanceResponse {
@@ -14,6 +11,7 @@ export interface VMInstanceResponse {
   flavor: string;
   image: string;
   public_ip: string | null;
+  nebula_ip: string | null;
   created_at: string;
 }
 
@@ -24,7 +22,7 @@ export default function useVMInstances(
   options?: Omit<
     UseQueryOptions<VMInstanceResponse[], Error, VMInstanceResponse[]>,
     "queryKey" | "queryFn"
-  >
+  >,
 ): UseQueryResult<VMInstanceResponse[], Error> {
   return useInvokeQuery<VMInstanceResponse[]>({
     command: "list_vm_instances",

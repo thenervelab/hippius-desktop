@@ -37,19 +37,26 @@ vi.mock("@tauri-apps/api/event", () => ({
 // `snapshot.widgetVisible`. We surface intent fields as data attributes
 // so we can pin that the handler hands the new optional fields to the
 // dialog without reading or mutating them — they should pass straight
-// through. Rendering of the actual "X of Y" line is verified directly
-// against SyncStatusDialog in `SyncStatusDialog.test.tsx`.
+// through. `data-minimized` lets us assert the collapse/expand wiring
+// (✕ → minimize, ring click → expand) without depending on the real
+// SyncStatusMini visuals. Rendering of the actual "X of Y" line is
+// verified directly against SyncStatusDialog in `SyncStatusDialog.test.tsx`.
 const mockOnClose = vi.fn();
+const mockOnExpand = vi.fn();
 vi.mock("../SyncStatusDialog", () => ({
-  default: ({ snapshot, open, onClose }: {
+  default: ({ snapshot, open, minimized, onClose, onExpand }: {
     snapshot: SyncSnapshot;
     open: boolean;
+    minimized?: boolean;
     onClose: () => void;
+    onExpand?: () => void;
   }) => {
     mockOnClose.mockImplementation(onClose);
+    mockOnExpand.mockImplementation(onExpand ?? (() => {}));
     return open ? (
       <div
         data-testid="sync-widget"
+        data-minimized={String(Boolean(minimized))}
         data-started-at={snapshot.startedAt}
         data-intent-active={String(snapshot.intentActive ?? "undefined")}
         data-intent-total-bytes={String(snapshot.intentTotalBytes ?? "undefined")}
@@ -289,34 +296,62 @@ describe("SyncStatusHandler – user actions", () => {
     invokeCalls.length = 0;
   });
 
-  it("invokes sp_dismiss_sync_widget when the user closes the widget", () => {
-    const store = createTestStore([[snapshotAtom, visibleSnapshot()]]);
-
-    render(<Provider store={store}><SyncStatusHandler /></Provider>);
-
-    act(() => { mockOnClose(); });
-
-    expect(invokeCalls).toContainEqual({ cmd: "sp_dismiss_sync_widget", args: undefined });
-  });
-
-  it("does NOT hide the widget on close until Rust publishes a new snapshot", () => {
-    // The handler is stateless — clicking close only fires an IPC.
-    // Only Rust flipping `widgetVisible` actually removes the widget.
+  it("minimizes (not dismisses) the widget when the user clicks ✕", () => {
+    // The ✕ now collapses the widget into its compact ring instead of telling
+    // Rust to hide it. It must NOT call sp_dismiss_sync_widget, and the widget
+    // must stay rendered — just in minimized form.
     const store = createTestStore([[snapshotAtom, visibleSnapshot()]]);
 
     const { queryByTestId } = render(
       <Provider store={store}><SyncStatusHandler /></Provider>,
     );
-    expect(queryByTestId("sync-widget")).toBeInTheDocument();
+    expect(queryByTestId("sync-widget")?.dataset.minimized).toBe("false");
 
     act(() => { mockOnClose(); });
 
-    // Widget still visible — the atom hasn't changed yet.
-    expect(queryByTestId("sync-widget")).toBeInTheDocument();
+    const widget = queryByTestId("sync-widget");
+    expect(widget).toBeInTheDocument();
+    expect(widget?.dataset.minimized).toBe("true");
+    expect(invokeCalls).not.toContainEqual({
+      cmd: "sp_dismiss_sync_widget",
+      args: undefined,
+    });
+  });
 
-    // Simulate Rust reacting to the dismiss IPC by publishing a hidden snapshot.
-    act(() => { store.set(snapshotAtom, hiddenSnapshot()); });
-    expect(queryByTestId("sync-widget")).not.toBeInTheDocument();
+  it("restores the full widget when the user clicks the minimized ring", () => {
+    const store = createTestStore([[snapshotAtom, visibleSnapshot()]]);
+
+    const { queryByTestId } = render(
+      <Provider store={store}><SyncStatusHandler /></Provider>,
+    );
+
+    act(() => { mockOnClose(); });
+    expect(queryByTestId("sync-widget")?.dataset.minimized).toBe("true");
+
+    act(() => { mockOnExpand(); });
+    expect(queryByTestId("sync-widget")?.dataset.minimized).toBe("false");
+  });
+
+  it("re-opens the full widget when a new sync session starts", () => {
+    // A prior minimize must not permanently shrink every future sync: when
+    // Rust publishes a snapshot with a new startedAt, the widget pops back to
+    // full (mirrors the old dismiss→reappear behavior).
+    const store = createTestStore([
+      [snapshotAtom, visibleSnapshot({ startedAt: 1000 })],
+    ]);
+
+    const { queryByTestId } = render(
+      <Provider store={store}><SyncStatusHandler /></Provider>,
+    );
+
+    act(() => { mockOnClose(); });
+    expect(queryByTestId("sync-widget")?.dataset.minimized).toBe("true");
+
+    act(() => {
+      store.set(snapshotAtom, visibleSnapshot({ startedAt: 2000, widgetState: "active" }));
+    });
+
+    expect(queryByTestId("sync-widget")?.dataset.minimized).toBe("false");
   });
 
   it("invokes sp_dismiss_sync_widget on hcfs_sync_stopped event", async () => {

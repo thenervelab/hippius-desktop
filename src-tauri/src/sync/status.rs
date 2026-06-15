@@ -198,8 +198,11 @@ pub async fn get_all_drive_statuses_inner(state: &crate::app_state::AppState) ->
     // Snapshot the cache once so the loop below doesn't hold the lock
     // across the sync-path iteration. A missing label falls through to
     // the DB-derived status; a hit wins over it.
+    // Recover a poisoned lock rather than `unwrap_or_default()`-ing to an empty
+    // cache, which would silently drop every cached drive status (the rows fall
+    // back to DB-derived status, masking the poison). into_inner reads the data.
     let cache_snapshot: std::collections::HashMap<String, DriveStatus> =
-        state.drive_status_cache.lock().map(|guard| guard.clone()).unwrap_or_default();
+        state.drive_status_cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
 
     Ok(paths
         .into_iter()

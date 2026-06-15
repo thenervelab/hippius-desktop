@@ -18,6 +18,7 @@ const EXPECTED_TABLES: &[&str] = &[
     // Imperative CREATE TABLE statements (17 tables)
     "sync_paths",
     "sync_intent",
+    "sync_file_failures",
     "wss_endpoint",
     "security_scoped_bookmarks",
     "auth_session",
@@ -35,6 +36,7 @@ const EXPECTED_TABLES: &[&str] = &[
     "share_keystore",
     "share_origin",
     "shared_link_history",
+    "local_wallets",
 ];
 
 /// Read the column names of a table via `PRAGMA table_info(...)`.
@@ -109,6 +111,7 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     ensure_sub_accounts(&mut tx).await?;
     ensure_sync_paths(&mut tx).await?;
     ensure_sync_intent(&mut tx).await?;
+    ensure_sync_file_failures(&mut tx).await?;
     ensure_wss_endpoint(&mut tx).await?;
     ensure_security_scoped_bookmarks(&mut tx).await?;
     ensure_auth_session(&mut tx).await?;
@@ -122,10 +125,19 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     ensure_notification_preferences(&mut tx).await?;
     ensure_address_book(&mut tx).await?;
     ensure_onboarding(&mut tx).await?;
+    ensure_local_wallets(&mut tx).await?;
     ensure_user_preferences(&mut tx).await?;
     ensure_share_keystore(&mut tx).await?;
     ensure_share_origin(&mut tx).await?;
     ensure_shared_link_history(&mut tx).await?;
+
+    // No `bridge_transactions` helper by design: the first cut of the bridge
+    // persisted a full per-account tx-history table, but the FE now mirrors
+    // hippius-web's localStorage-backed tracking via `app/lib/bridge/
+    // local-cache.ts` — there is no Rust writer left to populate it. Pre-existing
+    // rows in upgraded installs are harmless; we leave them rather than running a
+    // destructive DROP. If the bridge ever moves back to Rust persistence, add an
+    // `ensure_bridge_transactions` helper here alongside the new writer.
 
     tx.commit().await?;
     Ok(())
@@ -217,7 +229,7 @@ async fn ensure_sync_paths(conn: &mut SqliteConnection) -> Result<(), sqlx::Erro
             .await?;
     }
 
-    // Migration: add `relative_paths_backfilled_at` column if missing (PR 7 Task 7.3).
+    // Migration: add `relative_paths_backfilled_at` column if missing.
     //
     // Unix epoch timestamp marking when the one-shot `relative_path` backfill
     // succeeded for this drive. NULL means "not yet backfilled"; any non-NULL
@@ -312,22 +324,20 @@ async fn ensure_sync_paths_unique_constraint(conn: &mut SqliteConnection) -> Res
 
 /// `sync_intent` — persistent upload-intent manifest for the sync widget.
 ///
-/// The sync widget previously reset progress on app restart after a partial
-/// bulk upload (drag 10 GB → close at 5 GB → reopen shows "0 / 5 GB" instead
-/// of "5 / 10 GB") because the in-memory snapshot was the only source of
-/// truth. This table is the durable shadow: every queued file is recorded
-/// here when its plan lands, and `completed_at_ms` is set when the file
-/// finishes uploading. The composite primary key `(account_id, drive_label,
+/// This table is the durable shadow of the in-memory progress snapshot, so a
+/// partial bulk upload survives an app restart (drag 10 GB → close at 5 GB →
+/// reopen still shows "5 / 10 GB"). Every queued file is recorded here when
+/// its plan lands, and `completed_at_ms` is set when the file finishes
+/// uploading. The composite primary key `(account_id, drive_label,
 /// relative_path)` makes "same file enqueued twice for the same drive"
-/// unrepresentable at the storage layer; subsequent tasks decide the
-/// ON CONFLICT policy when wiring `record_plan`.
+/// unrepresentable at the storage layer.
 ///
 /// `completed_at_ms` is NULLABLE on purpose: NULL is the canonical "still
 /// pending" marker. The covering index `(account_id, drive_label,
 /// completed_at_ms)` keeps the per-drive "pending count" and totals queries
-/// (Task 2) off a full table scan as the table grows across long-running
-/// sync sessions. `added_at_ms` is non-NULL so age-based prune policies have
-/// a deterministic ordering key.
+/// off a full table scan as the table grows across long-running sync
+/// sessions. `added_at_ms` is non-NULL so age-based prune policies have a
+/// deterministic ordering key.
 async fn ensure_sync_intent(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS sync_intent (
@@ -346,6 +356,39 @@ async fn ensure_sync_intent(conn: &mut SqliteConnection) -> Result<(), sqlx::Err
     sqlx::query(
         "CREATE INDEX IF NOT EXISTS idx_sync_intent_drive
             ON sync_intent (account_id, drive_label, completed_at_ms)",
+    )
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
+
+/// `sync_file_failures` — durable per-file sync-failure records so the FE can
+/// show *why* a file failed (and offer retry) in any listing view, even across
+/// restarts. Keyed by `(owner, label, relative_path)`; one row per file, bumped
+/// on repeat failures and deleted on success. See `sync::failure_repo`.
+async fn ensure_sync_file_failures(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS sync_file_failures (
+            owner          TEXT    NOT NULL,
+            label          TEXT    NOT NULL,
+            relative_path  TEXT    NOT NULL,
+            file_name      TEXT    NOT NULL,
+            kind           TEXT    NOT NULL,
+            message        TEXT,
+            http_status    INTEGER,
+            balance_cents  INTEGER,
+            required_cents INTEGER,
+            failure_count  INTEGER NOT NULL DEFAULT 1,
+            last_failed_at INTEGER NOT NULL,
+            PRIMARY KEY (owner, label, relative_path)
+        )",
+    )
+    .execute(&mut *conn)
+    .await?;
+
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_sync_file_failures_drive
+            ON sync_file_failures (owner, label, last_failed_at DESC)",
     )
     .execute(&mut *conn)
     .await?;
@@ -600,32 +643,47 @@ async fn ensure_app_state(conn: &mut SqliteConnection) -> Result<(), sqlx::Error
     Ok(())
 }
 
-/// `notification_preferences` — replaces the frontend table, seeded with the
-/// default `credits` and `files` categories (both enabled).
+/// Per-account `notification_preferences` table, in one place so the fresh-DB
+/// create and the legacy-table rebuild can never drift.
+const NOTIFICATION_PREFERENCES_DDL: &str = "CREATE TABLE notification_preferences (
+    owner TEXT NOT NULL,
+    id TEXT NOT NULL,
+    label TEXT NOT NULL,
+    description TEXT NOT NULL,
+    enabled INTEGER DEFAULT 1,
+    PRIMARY KEY (owner, id)
+)";
+
+/// `notification_preferences` — per-account notification-category toggles.
+///
+/// Scoped by `owner` (the session ss58 address, matching the sibling
+/// `notifications` table) with a composite `(owner, id)` primary key so one
+/// account's toggle can't change another account's preferences on a
+/// multi-account device. The default `credits`/`files` rows are seeded
+/// per-account on demand by the notification commands — NOT here — because the
+/// account set isn't known at schema-init time.
+///
+/// One owning code path for the schema: if a table with an `owner` column
+/// already exists we are current and do nothing. Otherwise — the table is
+/// absent (fresh DB) or is the legacy global `id`-only table (upgrade) — we
+/// (re)create it in the per-account shape. SQLite cannot add a column to a
+/// primary key in place, so the legacy table must be dropped and rebuilt; this
+/// runs in a nested savepoint (`begin()` on an in-transaction connection issues
+/// a `SAVEPOINT`) so a failed rebuild rolls back without aborting schema init.
+/// Legacy rows are dropped rather than migrated — they cannot be attributed to
+/// a specific account, and the commands re-seed enabled defaults per account on
+/// next use, so the only user-visible effect on upgrade is that a
+/// previously-disabled category returns to enabled once.
 async fn ensure_notification_preferences(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
-    // Notification preferences (replaces frontend notification_preferences table)
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS notification_preferences (
-            id TEXT PRIMARY KEY,
-            label TEXT NOT NULL,
-            description TEXT NOT NULL,
-            enabled INTEGER DEFAULT 1
-        )",
-    )
-    .execute(&mut *conn)
-    .await?;
+    if table_columns(&mut *conn, "notification_preferences").await?.contains("owner") {
+        return Ok(());
+    }
 
-    sqlx::query(
-        "INSERT OR IGNORE INTO notification_preferences (id, label, description, enabled) VALUES ('credits', 'Credits', 'Account credit notifications', 1)",
-    )
-    .execute(&mut *conn)
-    .await?;
-
-    sqlx::query(
-        "INSERT OR IGNORE INTO notification_preferences (id, label, description, enabled) VALUES ('files', 'Files', 'File sync notifications', 1)",
-    )
-    .execute(&mut *conn)
-    .await?;
+    info!("Creating/migrating notification_preferences to per-account (owner, id) scoping");
+    let mut sp = conn.begin().await?;
+    sqlx::query("DROP TABLE IF EXISTS notification_preferences").execute(&mut *sp).await?;
+    sqlx::query(NOTIFICATION_PREFERENCES_DDL).execute(&mut *sp).await?;
+    sp.commit().await?;
     Ok(())
 }
 
@@ -678,6 +736,39 @@ async fn ensure_onboarding(conn: &mut SqliteConnection) -> Result<(), sqlx::Erro
     sqlx::query("INSERT OR IGNORE INTO onboarding (id, is_done) VALUES (1, 0)")
         .execute(&mut *conn)
         .await?;
+    Ok(())
+}
+
+/// `local_wallets` — per-logged-in-account wallet store, scoped via `owner`
+/// (mirrors `sync_paths`). See `src-tauri/src/wallet/{crypto,repo,commands}.rs`.
+async fn ensure_local_wallets(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
+    // Migration policy: legacy installs had a global `local_wallets` table with
+    // no `owner` column. We drop those rows wholesale on first boot of this build
+    // rather than silently attributing them to whichever account logs in first —
+    // the wallet password is the only thing that decrypts the mnemonic and we
+    // cannot prove who that mnemonic belongs to. Users must re-create/re-import.
+    let local_wallets_cols = table_columns(&mut *conn, "local_wallets").await?;
+    if !local_wallets_cols.is_empty() && !local_wallets_cols.contains("owner") {
+        info!("Dropping legacy unscoped local_wallets table; wallets must be re-created per-account");
+        sqlx::query("DROP TABLE local_wallets").execute(&mut *conn).await?;
+    }
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS local_wallets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner TEXT NOT NULL,
+            name TEXT NOT NULL,
+            address TEXT NOT NULL,
+            encrypted_mnemonic TEXT NOT NULL,
+            password_hash TEXT NOT NULL,
+            is_active INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000),
+            updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000),
+            UNIQUE(owner, address)
+        )",
+    )
+    .execute(&mut *conn)
+    .await?;
     Ok(())
 }
 
@@ -805,30 +896,40 @@ pub async fn migrate_account_keys(pool: &SqlitePool) -> Result<(), sqlx::Error> 
 
             let mut tx = pool.begin().await?;
 
-            // Update owner in all tables that use it
-            let tables = [
-                "auth_session",
-                "objectstore_auth_scoped",
-                "sync_paths",
-                "user_preferences",
-                "address_book",
-                "notifications",
-                "hcfs_config",
-            ];
+            // Selection criterion: a table belongs here iff it BOTH (a) carries
+            // an `owner` column keyed by the account hash AND (b) predates the
+            // legacy 8-char key era, so it can actually hold a row under a legacy
+            // `owner` that needs renaming.
+            //
+            // Excluded for (a): `notifications` (keyed by `user_address` = raw
+            // ss58) and `user_preferences` (keyed by `preference_key`, a global
+            // k/v store) have NO `owner` column, so `UPDATE … SET owner` errors
+            // with "no such column: owner". Including them would make the
+            // `?`-propagation below roll the migration back on that guaranteed
+            // error EVERY run, permanently breaking every legacy account.
+            //
+            // Excluded for (b): `local_wallets` and `share_origin` DO have an
+            // `owner` column, but both were introduced AFTER the legacy→16-char
+            // migration shipped, so they only ever stored 16-char keys and hold
+            // no legacy rows to rename. Deliberately omitted — do not "fix" the
+            // list by adding them.
+            let tables = ["auth_session", "objectstore_auth_scoped", "sync_paths", "address_book", "hcfs_config"];
 
             for table in tables {
-                // Use explicit per-table queries to avoid SQL injection
+                // Use explicit per-table queries to avoid SQL injection.
                 let query = format!("UPDATE {table} SET owner = ? WHERE owner = ?");
-                let result = sqlx::query(&query).bind(&new_key).bind(&legacy).execute(&mut *tx).await;
-                match result {
-                    Ok(r) if r.rows_affected() > 0 => {
-                        info!("Updated {} row(s) in {}", r.rows_affected(), table);
-                    }
-                    Ok(_) => {} // No rows to update in this table
-                    Err(e) => {
-                        // Table may not exist yet — non-fatal
-                        warn!("Could not update {}: {}", table, e);
-                    }
+                // Propagate any error via `?` so the whole transaction rolls
+                // back. Every table in the list above carries an `owner` column
+                // and is created by ensure_table_schema before this migration
+                // runs (main.rs setup, guarded by the EXPECTED_TABLES test), so
+                // an error here is a genuine failure — e.g. a UNIQUE(owner,
+                // label) collision on sync_paths — not a missing table/column.
+                // Propagating it (rather than swallowing) keeps the whole
+                // migration atomic: swallowing would commit the other tables
+                // and split one account across the legacy and new owner keys.
+                let r = sqlx::query(&query).bind(&new_key).bind(&legacy).execute(&mut *tx).await?;
+                if r.rows_affected() > 0 {
+                    info!("Updated {} row(s) in {}", r.rows_affected(), table);
                 }
             }
 
@@ -1017,10 +1118,9 @@ mod tests {
 
     /// The `UNIQUE(owner, label)` constraint-swap migration must PRESERVE the
     /// user's `is_paused` intent and the `relative_paths_backfilled_at` audit
-    /// breadcrumb. The pre-fix swap copied neither (is_paused reset to its
-    /// default 0; the backfill column was absent from the new table entirely),
-    /// so a paused drive was silently un-paused and the one-shot backfill
-    /// re-triggered on a DB created with the legacy `UNIQUE(owner, type)` DDL.
+    /// breadcrumb across the table rebuild. If the swap dropped either, a paused
+    /// drive would be silently un-paused and the one-shot backfill would
+    /// re-trigger on a DB created with the legacy `UNIQUE(owner, type)` DDL.
     #[tokio::test]
     async fn constraint_swap_preserves_is_paused_and_backfill_timestamp() {
         let pool = temp_pool().await;
@@ -1085,5 +1185,113 @@ mod tests {
             .await
             .expect("query index");
         assert_eq!(idx.as_deref(), Some("idx_notifications_type_subtype"));
+    }
+
+    /// Regression pin: a per-table UPDATE failure during account-key migration
+    /// must roll back the WHOLE transaction, not commit the tables that already
+    /// succeeded. Forces a `UNIQUE(owner, label)` collision on `sync_paths`
+    /// (updated AFTER `auth_session` in the loop) and asserts `auth_session`
+    /// was not partially migrated — proving atomicity. Without it, a swallowed
+    /// collision would commit anyway, splitting one account across the legacy
+    /// and new owner keys.
+    #[tokio::test]
+    async fn account_key_migration_rolls_back_on_collision() {
+        use crate::auth::account_key::{account_key, account_key_legacy};
+
+        let pool = temp_pool().await;
+        ensure_table_schema(&pool).await.expect("schema");
+
+        let addr = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
+        let legacy = account_key_legacy(addr);
+        let new_key = account_key(addr);
+        assert_ne!(legacy, new_key, "legacy and new keys must differ for the migration to trigger");
+
+        // A legacy-keyed session is what makes the migration adopt this address.
+        sqlx::query("INSERT INTO auth_session (owner, substrate_address) VALUES (?, ?)")
+            .bind(&legacy)
+            .bind(addr)
+            .execute(&pool)
+            .await
+            .expect("seed legacy session");
+
+        // sync_paths is updated after auth_session. Seed a legacy row AND a
+        // new-key row sharing the label, so renaming the legacy row's owner to
+        // new_key violates UNIQUE(owner, label) mid-transaction.
+        sqlx::query("INSERT INTO sync_paths (owner, path, type, label, timestamp) VALUES (?, '/legacy', 'folder', 'L', 0)")
+            .bind(&legacy)
+            .execute(&pool)
+            .await
+            .expect("seed legacy sync_path");
+        sqlx::query("INSERT INTO sync_paths (owner, path, type, label, timestamp) VALUES (?, '/new', 'folder', 'L', 0)")
+            .bind(&new_key)
+            .execute(&pool)
+            .await
+            .expect("seed colliding new-key sync_path");
+
+        // The migration must surface the collision as Err...
+        let result = migrate_account_keys(&pool).await;
+        assert!(result.is_err(), "a UNIQUE collision must surface as Err, not a silent partial commit");
+
+        // ...and auth_session (updated first) must be rolled back to the legacy
+        // key — if it were new_key, the transaction had partially committed.
+        let (owner,): (String,) = sqlx::query_as("SELECT owner FROM auth_session WHERE substrate_address = ?")
+            .bind(addr)
+            .fetch_one(&pool)
+            .await
+            .expect("session row still present");
+        assert_eq!(owner, legacy, "auth_session must NOT be partially migrated when a later table collides");
+    }
+
+    /// Regression pin: the no-collision happy path must COMMIT — every
+    /// owner-bearing table moves legacy→new. Only tables that actually have an
+    /// `owner` column may be in the migration list; including a columnless
+    /// table like `notifications`/`user_preferences` would make `?`-propagation
+    /// roll the whole migration back every run on a guaranteed "no such column:
+    /// owner" error, so a legacy account would never be migrated.
+    #[tokio::test]
+    async fn account_key_migration_commits_clean_owner_bearing_tables() {
+        use crate::auth::account_key::{account_key, account_key_legacy};
+
+        let pool = temp_pool().await;
+        ensure_table_schema(&pool).await.expect("schema");
+
+        let addr = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
+        let legacy = account_key_legacy(addr);
+        let new_key = account_key(addr);
+
+        // Legacy-keyed rows across three owner-bearing tables, no collisions.
+        sqlx::query("INSERT INTO auth_session (owner, substrate_address) VALUES (?, ?)")
+            .bind(&legacy)
+            .bind(addr)
+            .execute(&pool)
+            .await
+            .expect("seed session");
+        sqlx::query("INSERT INTO sync_paths (owner, path, type, label, timestamp) VALUES (?, '/p', 'folder', 'L', 0)")
+            .bind(&legacy)
+            .execute(&pool)
+            .await
+            .expect("seed sync_path");
+        sqlx::query("INSERT INTO address_book (owner, name, wallet_address) VALUES (?, 'Alice', 'addr1')")
+            .bind(&legacy)
+            .execute(&pool)
+            .await
+            .expect("seed contact");
+
+        // Must COMMIT, not roll back on a phantom columnless-table error.
+        migrate_account_keys(&pool).await.expect("clean migration must commit");
+
+        // Every owner-bearing table moved legacy → new_key.
+        for (table, where_col, where_val) in [
+            ("auth_session", "substrate_address", addr),
+            ("sync_paths", "path", "/p"),
+            ("address_book", "name", "Alice"),
+        ] {
+            let (owner,): (String,) = sqlx::query_as(&format!("SELECT owner FROM {table} WHERE {where_col} = ?"))
+                .bind(where_val)
+                .fetch_one(&pool)
+                .await
+                .unwrap_or_else(|e| panic!("row in {table} must exist: {e}"));
+            assert_eq!(owner, new_key, "{table}.owner must be migrated to the new key");
+        }
     }
 }

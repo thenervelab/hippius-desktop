@@ -6,7 +6,14 @@ use crate::error::AppError;
 use sqlx::sqlite::SqlitePool;
 use tracing::info;
 
+/// Address-book row sent to the frontend.
+///
+/// `camelCase` rename matches the TS interface in `addressBookDb.ts`; without
+/// it the frontend reads `walletAddress`/`dateAdded` as `undefined`, which
+/// silently rendered an empty WALLET ADDRESS cell and an "Invalid Date" in
+/// DATE ADDED — same convention `BalanceObject` uses (`billing/queries.rs`).
 #[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Contact {
     pub id: i64,
     pub name: String,
@@ -28,6 +35,15 @@ fn caller_owner(state: &tauri::State<'_, AppState>) -> Result<String, AppError> 
 /// its address book claims all owner-empty rows; once claimed they are scoped
 /// like any other row and no other account can see them. Idempotent — after the
 /// first claim there are no `owner = ''` rows left, so this is a 0-row no-op.
+///
+/// Why first-account-claim is an accepted tradeoff (not a bug): legacy rows
+/// predate the `owner` column, so the database holds no attribution for them —
+/// there is no recoverable key to scope the claim by. Hippius Desktop is also
+/// single-user-per-database (one logged-in account owns each SQLite file; see
+/// the same assumption in `crypto::store::migrate_if_needed`), so in practice
+/// the "first account" IS the only account. The claim is verified end-to-end by
+/// the `first_account_claims_legacy_unowned_contacts` test below. If multi-user
+/// support is ever added, this must be re-scoped per the new attribution source.
 async fn claim_legacy_contacts(pool: &SqlitePool, owner: &str) -> Result<(), AppError> {
     sqlx::query("UPDATE address_book SET owner = ? WHERE owner = ''")
         .bind(owner)

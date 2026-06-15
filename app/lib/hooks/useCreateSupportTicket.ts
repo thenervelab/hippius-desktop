@@ -13,7 +13,7 @@ import { SupportTicket } from "./useSupportTickets";
 // Request payload for creating a ticket
 export interface CreateTicketPayload {
   subject: string;
-  priority: "low" | "medium" | "high";
+  priority: "low" | "normal" | "high" | "urgent";
   category: string;
   resource_type: string;
   resource_id: string;

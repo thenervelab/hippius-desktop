@@ -1,10 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 const ZOOM_STEP = 10;
-const MIN_ZOOM = 50;
-const MAX_ZOOM = 200;
+export const MIN_ZOOM = 50;
+// Capped at 160%: beyond this the effective viewport is so narrow that the
+// fixed-width chrome (61px collapsed rail, header) is fundamentally too cramped
+// to lay out cleanly. Past the cap is diminishing returns vs. breakage.
+// Exported so the on-screen indicator's "(max)" label can't drift from the cap.
+export const MAX_ZOOM = 160;
 const DEFAULT_ZOOM = 100;
 const STORAGE_KEY = "hippius-zoom-level";
 const INDICATOR_TIMEOUT_MS = 1500;
@@ -20,16 +25,51 @@ function loadZoom(): number {
 }
 
 function applyZoom(percent: number) {
-  document.documentElement.style.setProperty(
-    "--zoom-factor",
-    String(percent / 100)
-  );
-  // Dispatch a custom event so other components (e.g. sidebar) can react
+  // Native chrome — the macOS traffic lights under `titleBarStyle: "Overlay"` —
+  // does NOT scale with page zoom: it keeps a fixed physical position while
+  // every CSS px shrinks/grows. Clearances for it are therefore written as
+  // `calc(<px> * var(--zoom-inverse))` (see app/lib/utils/platformChrome.ts) so
+  // their physical size stays constant at any zoom. The var is only set to the
+  // true inverse when the native zoom actually applied AND we're on macOS:
+  // other platforms have no overlay chrome (their decorations sit above the
+  // webview), and in a plain browser (`pnpm dev`) setZoom is unavailable so no
+  // zoom happens — both must keep the classes at their uncompensated values.
+  const setChromeCompensation = (applied: boolean) => {
+    const isMac =
+      typeof navigator !== "undefined" &&
+      ((navigator.platform || "").toLowerCase().includes("mac") ||
+        (navigator.userAgent || "").toLowerCase().includes("mac os"));
+    document.documentElement.style.setProperty(
+      "--zoom-inverse",
+      applied && isMac ? String(100 / percent) : "1",
+    );
+  };
+  // Native webview page zoom = true browser zoom: it scales the ENTIRE UI —
+  // rem-based utilities AND the codebase's many hardcoded `px` values —
+  // uniformly, and reflows the layout viewport so the `h-screen` app shell
+  // keeps filling the window. This replaces the old root-font-size scaling,
+  // which only moved rem-based sizes and left every fixed-px element behind —
+  // the "some elements scale, some don't" mismatch most visible at low
+  // effective resolution. (On macOS this maps to WKWebView `setPageZoom`.)
+  try {
+    void getCurrentWebviewWindow()
+      .setZoom(percent / 100)
+      .then(() => setChromeCompensation(true))
+      .catch((e) => {
+        console.warn("[useZoom] setZoom failed:", e);
+        setChromeCompensation(false);
+      });
+  } catch (e) {
+    // Non-Tauri context (e.g. `pnpm dev` in a plain browser) has no webview.
+    console.warn("[useZoom] setZoom unavailable:", e);
+    setChromeCompensation(false);
+  }
+  // Let width-sensitive components (e.g. the sidebar's auto-collapse) recompute.
   window.dispatchEvent(new CustomEvent("zoom-changed", { detail: percent }));
 }
 
 /**
- * Manages window zoom via root font-size scaling.
+ * Manages app zoom via the native webview's page zoom.
  * Listens for Cmd/Ctrl +/-/0 keyboard shortcuts.
  * Returns current zoom level and whether the indicator should be visible.
  */

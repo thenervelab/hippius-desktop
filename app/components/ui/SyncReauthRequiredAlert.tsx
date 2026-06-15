@@ -23,7 +23,7 @@ interface SyncReauthRequiredAlertProps {
  *
  * Mirrors the deleted `SyncStoppedAlert` component (commit
  * `6f467abe`) — same visual language, same two-variant layout, same
- * mount point in the FilesContainer alerts stack — but with a
+ * mount point in the DriveContainer alerts stack — but with a
  * different trigger (the new `syncRequiresReauthAtom`) and a
  * dedicated call-to-action button.
  *

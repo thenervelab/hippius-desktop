@@ -1,30 +1,69 @@
+"use client";
+
+import React, { useMemo, useState } from "react";
 import {
   createColumnHelper,
   getCoreRowModel,
-  useReactTable,
   getSortedRowModel,
+  useReactTable,
 } from "@tanstack/react-table";
-import { useMemo, useState, useCallback, useEffect, useRef } from "react";
 import {
-  TableWrapper,
   Table,
-  Tr,
-  Td,
-  Th,
+  TableWrapper,
   THead,
   TBody,
+  Tr,
+  Th,
+  Td,
   Pagination,
-  CopyableCell,
-} from "@/components/ui/alt-table";
-import { Loader2 } from "lucide-react";
-import AbstractIconWrapper from "@/components/ui/abstract-icon-wrapper";
-import { Dollar, TaoLogo } from "@/components/ui/icons";
+  MiniPaginationControl,
+  SkeletonTableRow,
+} from "@/components/ui/table";
+import StatusTypeBadge from "./StatusTypeBadge";
 import TransactionTypeBadge from "./TransactionTypeBadge";
 import useBillingTransactions, {
   TransactionObject,
 } from "@/app/lib/hooks/api/useBillingTransactions";
-import StatusTypeBadge from "./StatusTypeBadge";
-import { cn } from "@/app/lib/utils";
+import { TaoLogo } from "@/components/ui/icons";
+import { Icons } from "@/components/ui";
+import { toast } from "sonner";
+import { cn } from "@/lib/utils";
+import NoEntriesFound from "@/components/ui/NoEntriesFound";
+
+function BillingIdCell({ id }: { id: string }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    navigator.clipboard.writeText(id);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+    toast.success("Billing ID Copied Successfully!");
+  };
+  return (
+    <div className="flex items-center gap-1 w-full min-w-0">
+      <span className="flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-medium text-grey-20 dark:text-grey-dark-200">
+        {id}
+      </span>
+      <button
+        onClick={handleCopy}
+        className="shrink-0 p-1 hover:text-gray-700 transition-colors"
+        title="Copy Billing ID"
+      >
+        {copied ? (
+          <Icons.Check className="size-3.5 text-green-500" />
+        ) : (
+          <Icons.Copy className="size-3.5 text-grey-60 dark:text-grey-dark-500" />
+        )}
+      </button>
+    </div>
+  );
+}
+
+const HEADERS = ["ID", "AMOUNT", "TRANSACTION TYPE", "STATUS", "DATE"];
+const SKEL_WIDTHS = ["120px", "80px", "120px", "90px", "150px"];
+const MIN_W = "min-w-[540px] sm:min-w-[780px]";
+const DEFAULT_PAGE_SIZE = 10;
 
 export const formatDate = (
   date: Date,
@@ -56,330 +95,166 @@ export const formatDate = (
     .toLowerCase();
 };
 
-const columnHelper = createColumnHelper<TransactionObject>();
-const ITEMS_PER_PAGE = 10;
+const col = createColumnHelper<TransactionObject>();
 
-// Visible column order (single source of truth)
-const COLUMN_ORDER = [
-  "id",
-  "amount",
-  "transaction_type",
-  "status",
-  "date",
-] as const;
-
-// Default column widths for billing history table (percentages)
-const DEFAULT_COLUMN_WIDTHS: Record<(typeof COLUMN_ORDER)[number], number> = {
-  id: 25,
-  amount: 15,
-  transaction_type: 20,
-  status: 15,
-  date: 25,
-};
-
-const MIN_COLUMN_WIDTHS: Record<(typeof COLUMN_ORDER)[number], number> = {
-  id: 25,
-  amount: 20,
-  transaction_type: 20,
-  status: 15,
-  date: 20,
-};
-
-const normalizeColumnWidths = (maybeStored?: Record<string, number>) => {
-  const merged: Record<string, number> = {
-    ...DEFAULT_COLUMN_WIDTHS,
-    ...(maybeStored || {}),
-  };
-  const normalized: Record<string, number> = {};
-
-  // Keep only expected keys with numeric values; fall back to defaults
-  COLUMN_ORDER.forEach((key) => {
-    const v = Number(merged[key]);
-    normalized[key] = Number.isFinite(v) ? v : DEFAULT_COLUMN_WIDTHS[key];
-  });
-
-  // Keep total ≈ 100%
-  const total = COLUMN_ORDER.reduce((acc, k) => acc + normalized[k], 0);
-  if (total !== 100) {
-    const factor = 100 / total;
-    COLUMN_ORDER.forEach((k) => {
-      normalized[k] = Math.round(normalized[k] * factor * 100) / 100;
-    });
-  }
-  return normalized as Record<string, number>;
-};
-
-const getStoredColumnWidths = () => {
-  if (typeof window === "undefined") return normalizeColumnWidths();
-  try {
-    const stored = localStorage.getItem("billingTable_columnWidths");
-    return normalizeColumnWidths(stored ? JSON.parse(stored) : undefined);
-  } catch {
-    return normalizeColumnWidths();
-  }
-};
-
-const saveColumnWidths = (columnWidths: Record<string, number>) => {
-  if (typeof window === "undefined") return;
-  try {
-    localStorage.setItem(
-      "billingTable_columnWidths",
-      JSON.stringify(columnWidths),
-    );
-  } catch {}
-};
+const columns = [
+  col.accessor("id", {
+    header: "ID",
+    cell: (d) => <BillingIdCell id={String(d.getValue())} />,
+  }),
+  col.accessor("amount", {
+    header: "AMOUNT",
+    enableSorting: true,
+    cell: (d) => (
+      <div className="flex items-center gap-x-1 font-medium text-grey-20 dark:text-grey-dark-200">
+        {d.row.original.transaction_type === "tao" ? (
+          <TaoLogo className="size-2.5" />
+        ) : (
+          "$"
+        )}
+        <span>{d.getValue().toLocaleString()}</span>
+      </div>
+    ),
+  }),
+  col.accessor("transaction_type", {
+    header: "TRANSACTION TYPE",
+    cell: (d) => {
+      const type = d.getValue();
+      const validType = type === "tao" || type === "card" ? type : null;
+      return <TransactionTypeBadge type={validType} />;
+    },
+  }),
+  col.accessor("status", {
+    header: "STATUS",
+    cell: (d) => {
+      const raw = d.getValue();
+      if (!raw) return null;
+      const normalized = raw.toLowerCase().replace(/[\s-]+/g, "_");
+      const validStatuses = [
+        "failed", "error", "declined", "cancelled", "canceled", "expired",
+        "success", "successful", "completed", "paid", "confirmed",
+        "pending", "processing", "in_progress", "refunded", "reversed",
+      ] as const;
+      const validStatus = validStatuses.find((s) => s === normalized) ?? null;
+      return <StatusTypeBadge type={validStatus} fallback={raw} />;
+    },
+  }),
+  col.accessor("transaction_date", {
+    header: "DATE",
+    enableSorting: true,
+    cell: (d) => (
+      <span className="font-medium text-grey-dark-800 dark:text-grey-dark-800">
+        {formatDate(new Date(d.getValue()))}
+      </span>
+    ),
+  }),
+];
 
 const BillingHistoryTable: React.FC = () => {
   const { data: transactions, isPending, error } = useBillingTransactions();
 
-  const tableRef = useRef<HTMLDivElement>(null);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
 
-  const [currentPage, setCurrentPage] = useState(1);
+  const totalCount = transactions?.length ?? 0;
+  const totalPages = Math.ceil(totalCount / pageSize);
 
-  // Column resizing state
-  const [columnWidths, setColumnWidths] = useState<Record<string, number>>(() =>
-    getStoredColumnWidths(),
-  );
-  const [isResizing, setIsResizing] = useState(false);
-  const [resizeData, setResizeData] = useState<{
-    columnId: string;
-    startX: number;
-    startWidth: number;
-    nextColumnId?: string;
-    nextStartWidth: number;
-  } | null>(null);
-  const [justResized, setJustResized] = useState(false);
-
-  // Save column widths to localStorage (debounced)
-  useEffect(() => {
-    saveColumnWidths(columnWidths);
-  }, [columnWidths]);
-
-  const baseColumns = useMemo(
-    () => [
-      columnHelper.accessor("id", {
-        id: "id",
-        header: "ID",
-        cell: (info) => (
-          <CopyableCell
-            copyAbleText={String(info.getValue())}
-            title="Copy Billing ID"
-            toastMessage="Billing ID Copied Successfully!"
-            isTable={true}
-          />
-        ),
-        enableSorting: true,
-      }),
-      columnHelper.accessor("amount", {
-        id: "amount",
-        header: "AMOUNT",
-        cell: (d) => {
-          return (
-            <div className="flex items-center gap-x-1">
-              {d.row.original.transaction_type === "tao" ? (
-                <TaoLogo className="size-2.5" />
-              ) : (
-                "$"
-              )}
-              <span>{d.getValue().toLocaleString()}</span>
-            </div>
-          );
-        },
-        enableSorting: true,
-      }),
-      columnHelper.accessor("transaction_type", {
-        id: "transaction_type",
-        header: "TRANSACTION TYPE",
-        cell: (d) => {
-          const type = d.getValue();
-          const validType = type === "tao" || type === "card" ? type : null;
-          return <TransactionTypeBadge type={validType} />;
-        },
-      }),
-      columnHelper.accessor("status", {
-        id: "status",
-        header: "STATUS",
-        cell: (d) => {
-          const raw = d.getValue();
-          if (!raw) return null;
-          const normalized = raw.toLowerCase().replace(/[\s-]+/g, "_");
-          const validStatuses = [
-            "failed",
-            "error",
-            "declined",
-            "cancelled",
-            "canceled",
-            "expired",
-            "success",
-            "successful",
-            "completed",
-            "paid",
-            "confirmed",
-            "pending",
-            "processing",
-            "in_progress",
-            "refunded",
-            "reversed",
-          ] as const;
-          const validStatus =
-            validStatuses.find((s) => s === normalized) ?? null;
-          return <StatusTypeBadge type={validStatus} fallback={raw} />;
-        },
-      }),
-      columnHelper.accessor("transaction_date", {
-        id: "date",
-        header: "TRANSACTION DATE",
-        minSize: 200,
-        maxSize: 1000,
-        cell: (d) => formatDate(new Date(d.getValue())),
-        enableSorting: true,
-      }),
-    ],
-    [],
-  );
-
-  // Real visible order derived from the columns (never drifts)
-  const visibleColumnOrder = useMemo<string[]>(
-    () => baseColumns.map((c) => c.id!),
-    [baseColumns],
-  );
-
-  // Column resize handlers (use visible order)
-  const handleResizeStart = useCallback(
-    (columnId: string, startX: number) => {
-      const columnIds = visibleColumnOrder;
-      const currentIndex = columnIds.indexOf(columnId);
-      if (currentIndex === -1) return;
-
-      const nextColumnId =
-        columnIds[currentIndex + 1] ?? columnIds[currentIndex - 1];
-      if (!nextColumnId) return;
-
-      setIsResizing(true);
-      setResizeData({
-        columnId,
-        startX,
-        startWidth:
-          columnWidths[columnId] ??
-          DEFAULT_COLUMN_WIDTHS[columnId as (typeof COLUMN_ORDER)[number]],
-        nextColumnId,
-        nextStartWidth:
-          columnWidths[nextColumnId] ??
-          DEFAULT_COLUMN_WIDTHS[nextColumnId as (typeof COLUMN_ORDER)[number]],
-      });
-    },
-    [columnWidths, visibleColumnOrder],
-  );
-
-  const handleResizeMove = useCallback(
-    (clientX: number) => {
-      if (!resizeData || !isResizing) return;
-
-      requestAnimationFrame(() => {
-        const diff = clientX - resizeData.startX;
-        const tableWidth =
-          tableRef.current?.getBoundingClientRect().width || 1200;
-        const sensitivity = 2.2;
-        const diffPercent = (diff / tableWidth) * 100 * sensitivity;
-
-        // push/pull against the neighbor (right by default)
-        const proposedCurrentWidth = resizeData.startWidth + diffPercent;
-        const proposedNextWidth = resizeData.nextStartWidth - diffPercent;
-
-        const currentMin =
-          MIN_COLUMN_WIDTHS[
-            resizeData.columnId as (typeof COLUMN_ORDER)[number]
-          ] ?? 5;
-        const nextMin =
-          MIN_COLUMN_WIDTHS[
-            resizeData.nextColumnId as (typeof COLUMN_ORDER)[number]
-          ] ?? 5;
-
-        const newCurrent = Math.max(
-          currentMin,
-          Math.min(80, proposedCurrentWidth),
-        );
-        const newNext = Math.max(nextMin, Math.min(80, proposedNextWidth));
-
-        if (
-          newCurrent >= currentMin &&
-          newNext >= nextMin &&
-          resizeData.nextColumnId
-        ) {
-          setColumnWidths((prev) => {
-            const updated = {
-              ...prev,
-              [resizeData.columnId]: newCurrent,
-              [resizeData.nextColumnId!]: newNext,
-            };
-            // Normalize to keep total at 100%
-            const total = COLUMN_ORDER.reduce(
-              (sum, key) => sum + updated[key],
-              0,
-            );
-            if (total !== 100) {
-              const factor = 100 / total;
-              COLUMN_ORDER.forEach((key) => {
-                updated[key] = Math.round(updated[key] * factor * 100) / 100;
-              });
-            }
-            return updated;
-          });
-        }
-      });
-    },
-    [resizeData, isResizing],
-  );
-
-  const handleResizeEnd = useCallback(() => {
-    setIsResizing(false);
-    setResizeData(null);
-    setJustResized(true);
-    setTimeout(() => {
-      setJustResized(false);
-    }, 100);
-  }, []);
-
-  useEffect(() => {
-    if (!isResizing) return;
-
-    const handleMouseMove = (e: MouseEvent) => handleResizeMove(e.clientX);
-    const handleMouseUp = () => handleResizeEnd();
-
-    document.addEventListener("mousemove", handleMouseMove);
-    document.addEventListener("mouseup", handleMouseUp);
-
-    return () => {
-      document.removeEventListener("mousemove", handleMouseMove);
-      document.removeEventListener("mouseup", handleMouseUp);
-    };
-  }, [isResizing, handleResizeMove, handleResizeEnd]);
-
-  const totalPages = useMemo(
-    () => Math.ceil((transactions?.length || 0) / ITEMS_PER_PAGE),
-    [transactions?.length],
-  );
-
-  const paginatedData = useMemo(() => {
+  const pageData = useMemo(() => {
     if (!transactions) return [];
-    const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
-    return transactions.slice(startIndex, startIndex + ITEMS_PER_PAGE);
-  }, [transactions, currentPage]);
-
-  const columns = baseColumns;
+    return transactions.slice((page - 1) * pageSize, page * pageSize);
+  }, [transactions, page, pageSize]);
 
   const table = useReactTable({
     columns,
-    data: paginatedData,
+    data: pageData,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
   });
 
+  // Loading state
+  if (isPending && !error) {
+    return (
+      <TableWrapper className="border-0 shadow-none bg-transparent dark:bg-transparent dark:border-0 dark:shadow-none rounded-none">
+        <div className="overflow-x-auto custom-scrollbar-thin">
+          <Table className={MIN_W}>
+            <THead>
+              <Tr>
+                {HEADERS.map((h) => (
+                  <th
+                    key={h}
+                    className="h-[var(--table-row-height,36px)] border-b border-r border-[#E3E3E3] bg-white px-[var(--table-cell-padding-x,10px)] py-0 text-left text-[length:var(--table-header-font-size,10px)] font-semibold uppercase text-grey-dark-600 last:border-r-0 dark:border-[#313131] dark:!bg-[#111111] dark:text-grey-dark-700"
+                  >
+                    {h}
+                  </th>
+                ))}
+              </Tr>
+            </THead>
+            <TBody>
+              <SkeletonTableRow
+                rows={DEFAULT_PAGE_SIZE}
+                columns={HEADERS.length}
+                columnWidths={SKEL_WIDTHS}
+                rowClassName="odd:bg-[#fbfbfb] even:bg-[#f5f5f5] dark:odd:bg-[#161616] dark:even:bg-[#1e1e1e]"
+                cellClassName="!border-[#E3E3E3] dark:!border-[#313131]"
+              />
+            </TBody>
+          </Table>
+        </div>
+      </TableWrapper>
+    );
+  }
+
+  // Empty / error state — mirrors the wallet TransactionHistoryTable
+  // empty pattern via NoEntriesFound. Subscription plans live on the
+  // same /billing page above this table, so the copy points the user
+  // there instead of carrying a CTA that scrolls or routes away.
+  if (((transactions && !transactions.length) || error) && !isPending) {
+    const errorMessage = (() => {
+      if (!error) return null;
+      if (error instanceof Error) return error.message;
+      if (typeof error === "string") return error;
+      if (typeof error === "object" && "message" in error)
+        return String((error as { message: unknown }).message);
+      return "Unexpected error";
+    })();
+
+    return (
+      <div className="p-3">
+        <NoEntriesFound
+          title={
+            errorMessage ? "Couldn't load billing history" : "No billing history yet"
+          }
+          description={
+            errorMessage
+              ? errorMessage
+              : "Subscribe to a plan above or top up credits to get started. Your invoices and credit purchases will show up here."
+          }
+          cardView={false}
+          className="p-6 sm:p-10 rounded-[8px]"
+        />
+      </div>
+    );
+  }
+
   return (
     <>
-      <TableWrapper className={cn("mt-5 overflow-x-hidden")}>
-        <div ref={tableRef}>
-          <Table>
+      {/* Mini pagination in header — only when multiple pages */}
+      {totalCount > DEFAULT_PAGE_SIZE && (
+        <div className="flex justify-end px-3 pt-3 mb-3">
+          <MiniPaginationControl
+            currentPage={page}
+            totalPages={totalPages}
+            pageSize={pageSize}
+            totalCount={totalCount}
+            onPrev={() => setPage((p) => Math.max(1, p - 1))}
+            onNext={() => setPage((p) => Math.min(totalPages, p + 1))}
+          />
+        </div>
+      )}
+
+      <TableWrapper className="border-0 shadow-none bg-transparent dark:bg-transparent dark:border-0 dark:shadow-none rounded-none">
+        <div className="overflow-x-auto custom-scrollbar-thin">
+          <Table className={MIN_W}>
             <THead>
               {table.getHeaderGroups().map((hg) => (
                 <Tr key={hg.id}>
@@ -387,9 +262,7 @@ const BillingHistoryTable: React.FC = () => {
                     <Th
                       key={h.id}
                       header={h}
-                      columnWidth={columnWidths[h.id]}
-                      onResizeStart={handleResizeStart}
-                      preventSort={justResized}
+                      className="bg-white dark:!bg-[#111111] !border-[#E3E3E3] dark:!border-[#313131]"
                     />
                   ))}
                 </Tr>
@@ -397,13 +270,17 @@ const BillingHistoryTable: React.FC = () => {
             </THead>
             <TBody>
               {table.getRowModel().rows.map((row) => (
-                <Tr key={row.id} transparent>
+                <Tr key={row.id}>
                   {row.getVisibleCells().map((cell) => (
                     <Td
-                      className="text-grey-20"
                       key={cell.id}
                       cell={cell}
-                      columnWidth={columnWidths[cell.column.id]}
+                      className={cn(
+                        "!border-[#E3E3E3] dark:!border-[#313131]",
+                        row.index % 2 === 0
+                          ? "bg-[#fbfbfb] dark:bg-[#161616]"
+                          : "bg-[#f5f5f5] dark:bg-[#1e1e1e]",
+                      )}
                     />
                   ))}
                 </Tr>
@@ -411,37 +288,20 @@ const BillingHistoryTable: React.FC = () => {
             </TBody>
           </Table>
         </div>
-
-        {isPending && !error && (
-          <div className="w-full h-[21.875rem] flex items-center justify-center p-6 animate-fade-in-0.3">
-            <Loader2 className="size-6 animate-spin text-grey-50" />
-          </div>
-        )}
-
-        {((transactions && !transactions.length) || error) &&
-          !isPending &&
-          transactions !== null && (
-            <div className="w-full h-[21.875rem] flex items-center justify-center p-6">
-              <div className="flex flex-col items-center opacity-0 animate-fade-in-0.5">
-                <AbstractIconWrapper className="size-10 rounded-2xl bg-grey-40/20 mb-2">
-                  <Dollar className="absolute size-6" />
-                </AbstractIconWrapper>
-                <span className="text-grey-60 text-sm font-medium max-w-[16.25rem] text-center">
-                  {error
-                    ? `Unable to load billing history: ${error}`
-                    : "You do not have any billing history yet"}
-                </span>
-              </div>
-            </div>
-          )}
       </TableWrapper>
 
-      {totalPages > 1 && (
-        <div className="my-4">
+      {totalCount > DEFAULT_PAGE_SIZE && (
+        <div className="px-3 pb-3 mt-3">
           <Pagination
-            currentPage={currentPage}
+            currentPage={page}
             totalPages={totalPages}
-            setPage={setCurrentPage}
+            setPage={setPage}
+            totalCount={totalCount}
+            pageSize={pageSize}
+            setPageSize={(s) => {
+              setPageSize(s);
+              setPage(1);
+            }}
           />
         </div>
       )}

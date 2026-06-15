@@ -78,8 +78,3 @@ export function bytesToUnit(bytes: number, unit: ByteUnit): number {
 export function unitToBytes(value: number, unit: ByteUnit): number {
   return Math.round(value * BYTE_UNITS[unit]);
 }
-
-// Get max value for a unit given a byte limit (SI)
-export function getMaxForUnit(maxBytes: number, unit: ByteUnit): number {
-  return maxBytes / BYTE_UNITS[unit];
-}

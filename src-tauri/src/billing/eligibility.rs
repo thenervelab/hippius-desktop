@@ -2,11 +2,9 @@
 //!
 //! Centralizes the threshold table, the live balance check, and the
 //! enforcement helper that gated action IPCs use to refuse work when the
-//! user can't afford it. Replaces the TypeScript `useCreditCheck` hook
-//! that was reading from a `staleTime: Infinity` TanStack Query cache and
-//! gating only at the click handler — see
-//! `docs/follow-ups/credit-check-rust-source-of-truth.md` for the full
-//! reasoning.
+//! user can't afford it. Living in Rust keeps the gate off the FE's
+//! `staleTime: Infinity` display cache and off the click handler, so it
+//! can't be bypassed by stale state or a direct IPC call.
 //!
 //! ## Architecture
 //!
@@ -47,7 +45,7 @@ use serde::{Deserialize, Serialize};
 ///    (`FileUpload`, `FolderUpload`, `FolderSync`, `Sharing`) where the
 ///    real cost scales with the bytes the user is about to commit to
 ///    paid storage. The static thresholds for upload actions are kept
-///    at `0.0` (legacy "any positive balance" floor) but the
+///    at `0.0` (an "any positive balance" floor) but the
 ///    [`required_credits`](InsufficientCreditsAction::required_credits)
 ///    accessor combines them with the bytes-priced layer so the IPC gate
 ///    refuses uploads the user cannot afford BEFORE hcfs-server returns
@@ -60,7 +58,7 @@ pub mod thresholds {
     /// [`CREDITS_PER_BYTE_MONTHLY`] times the file's byte length at the
     /// gate. The constant itself stays at `0.0` so a zero-byte sentinel
     /// upload (or a proactive FE check that doesn't yet know the size)
-    /// falls back to the legacy "any positive balance" floor.
+    /// falls back to the "any positive balance" floor.
     pub const FILE_UPLOAD: f64 = 0.0;
     /// Minimum credits required for a folder upload (which expands into
     /// many file uploads server-side). Combined with the recursive byte
@@ -113,10 +111,9 @@ pub mod thresholds {
     /// the gate's most-eligible files). The constant is `3.0e-12` —
     /// ~7% above the derived rate so the gate is a defensible floor.
     ///
-    /// TODO(rate-sync): Phase 4 / follow-up. Replace this hardcoded
-    /// constant with a fetch from hcfs-server's pricing endpoint at boot
-    /// (cached, refetched on 402) so client/server pricing can't drift.
-    /// Tracked in the 2026-05-13 sync-402 plan.
+    /// TODO(rate-sync): replace this hardcoded constant with a fetch
+    /// from hcfs-server's pricing endpoint at boot (cached, refetched on
+    /// 402) so client/server pricing can't drift.
     pub const CREDITS_PER_BYTE_MONTHLY: f64 = 3.0e-12;
 }
 
@@ -142,10 +139,8 @@ pub fn cost_for_bytes(bytes: u64) -> f64 {
 }
 
 /// Which action the user is requesting eligibility for. Wire format is
-/// `kebab-case` to match the existing TypeScript
-/// `InsufficientCreditsReason` type and the dialog copy table — the FE
-/// already passes these strings to the (now-defunct) JS-side gate, so
-/// migrating the call sites is mechanical.
+/// `kebab-case` to match the TypeScript `InsufficientCreditsReason` type
+/// and the dialog copy table, which key on these exact strings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum InsufficientCreditsAction {
@@ -188,8 +183,8 @@ impl InsufficientCreditsAction {
     /// Floor semantics: when an upload action sees `bytes == 0` (FE
     /// proactive check before the size is known, or a zero-byte file)
     /// the per-byte layer evaluates to `0.0` and the result is exactly
-    /// the static threshold. This preserves the legacy "any positive
-    /// balance" check for the proactive FE path.
+    /// the static threshold. This preserves the "any positive balance"
+    /// check for the proactive FE path.
     pub fn required_credits(self, bytes: u64) -> f64 {
         let threshold = self.min_credits();
         if self.is_upload() {
@@ -286,14 +281,39 @@ async fn chain_free_balance(state: &crate::app_state::AppState, account_id: &str
 /// a 200 response is logged and treated as `0.0`, so a malformed billing-API
 /// response refuses the action instead of over-granting. `required` combines
 /// the static per-action threshold with the per-byte upload price via
-/// `required_credits`, so a single comparison covers both the legacy and the
-/// bytes-priced paths.
+/// `required_credits`, so a single comparison covers both the static-floor and
+/// the bytes-priced paths.
 ///
 /// # Errors
 ///
 /// Returns an error if the DB pool is unavailable or the billing-API balance
 /// request fails. A zero or unparseable balance is *not* an error — it
 /// resolves to `eligible: false`.
+/// Parse a marketplace credit-balance string fail-closed.
+///
+/// The balance is a JSON string the billing server controls, so a 200 response
+/// can carry an empty wallet (`"0"`), a malformed value, or — critically — a
+/// non-finite (`"inf"`/`"NaN"`) or negative number. Only a finite, non-negative
+/// value is trusted; everything else resolves to `0.0` so a bad balance REFUSES
+/// the gated action rather than over-granting. The finiteness guard is what
+/// blocks an `"inf"` balance from satisfying every threshold (`inf > 0.0` and
+/// `inf >= required`) and silently granting eligibility. The reason is logged so
+/// a malformed balance is traceable rather than surfacing to the user as a bare
+/// "insufficient credits".
+fn parse_credit_balance(credit_str: &str, account_id: &str) -> f64 {
+    match credit_str.parse::<f64>() {
+        Ok(v) if v.is_finite() && v >= 0.0 => v,
+        Ok(v) => {
+            tracing::warn!(balance = %credit_str, parsed = v, %account_id, "non-finite or negative credit balance from billing API; treating as 0");
+            0.0
+        }
+        Err(_) => {
+            tracing::warn!(balance = %credit_str, %account_id, "unparseable credit balance from billing API; treating as 0");
+            0.0
+        }
+    }
+}
+
 pub(crate) async fn check_action_eligibility_inner(
     state: &crate::app_state::AppState,
     account_id: &str,
@@ -301,6 +321,11 @@ pub(crate) async fn check_action_eligibility_inner(
     bytes: u64,
 ) -> Result<ActionEligibility> {
     let pool = state.pool()?;
+    // The token fetch below requires proof the account is the session account.
+    // Minting here also validates the (possibly frontend-supplied) `account_id`
+    // for the proactive `check_action_eligibility` command path, not just the
+    // gated-IPC path that already passes the session account.
+    let account = state.require_session_account_typed(account_id)?;
     let required = action.required_credits(bytes);
 
     // 1. Live marketplace credit fetch. NO caching — the whole point of
@@ -309,25 +334,16 @@ pub(crate) async fn check_action_eligibility_inner(
     //    check fails. Decoded into a typed struct (not `serde_json::Value`)
     //    so we skip the dynamic-Value allocation per call.
     let client = ApiClient::new(state.api_client.clone(), pool.clone());
-    let resp: crate::billing::credits::CreditBalanceResponse = client.get("/api/billing/credits/balance/", account_id).await?;
+    let resp: crate::billing::credits::CreditBalanceResponse = client.get("/api/billing/credits/balance/", &account).await?;
     let credit_str = resp.balance.as_deref().unwrap_or("0");
-    // An unparseable balance from a 200 response is NOT the same as an empty
-    // wallet, but both previously collapsed to 0.0 and silently refused every
-    // gated action with no diagnostic. Keep the fail-closed 0.0 (safe default)
-    // but log it so a malformed billing-API balance is traceable rather than
-    // presenting to the user as "insufficient credits".
-    let credits: f64 = credit_str.parse::<f64>().unwrap_or_else(|_| {
-        tracing::warn!(balance = %credit_str, %account_id, "unparseable credit balance from billing API; treating as 0");
-        0.0
-    });
+    let credits = parse_credit_balance(credit_str, account_id);
 
     // 2. Threshold comparison. The user must always have a strictly
-    //    positive balance (matches legacy `credits <= BigInt(0)` blocks
-    //    in `useCreditCheck`), AND if there's a positive `required`
+    //    positive balance, AND if there's a positive `required`
     //    cost the balance must meet it. The `required` value combines
     //    the static action threshold (e.g. ≥10 for VmCreation) with the
     //    per-byte upload cost via `required_credits`, so a single
-    //    comparison covers both legacy and bytes-priced paths.
+    //    comparison covers both the static-floor and bytes-priced paths.
     let credits_ok = credits > 0.0 && (required <= 0.0 || credits >= required);
     if !credits_ok {
         return Ok(ActionEligibility {
@@ -345,9 +361,8 @@ pub(crate) async fn check_action_eligibility_inner(
     if action.requires_chain_balance() {
         // Best-effort: the spawn endpoint is the authoritative gate, so any
         // failure here (client not connected, RPC error, etc.) is a SKIP, not a
-        // refusal. But the skip must be observable — previously every fallible
-        // step fell through silently to `eligible: true`, so an unreachable node
-        // looked identical to a funded account.
+        // refusal. The skip must be observable, otherwise an unreachable node
+        // would look identical to a funded account.
         match chain_free_balance(state, account_id).await {
             Ok(0) => {
                 return Ok(ActionEligibility {
@@ -380,7 +395,7 @@ pub(crate) async fn check_action_eligibility_inner(
 ///
 /// `bytes` is optional. The proactive FE path that gates a click before
 /// the user has picked a file omits it (defaults to `0`) and the gate
-/// falls back to the legacy "any positive balance" floor. Callers that
+/// falls back to the "any positive balance" floor. Callers that
 /// already know the byte count (e.g. an in-app dialog summarizing the
 /// files about to be uploaded) should pass it so `required_balance` in
 /// the structured response is the actual computed cost — that lets the
@@ -405,7 +420,7 @@ pub async fn check_action_eligibility(
 /// sizes for `add_files`, recursive folder byte total for `add_folder`
 /// and `add_local_sync_folder`). Pass `0` only for VmCreation or for
 /// the very-first proactive check that doesn't yet know the size —
-/// `0` falls back to the legacy "any positive balance" floor.
+/// `0` falls back to the "any positive balance" floor.
 ///
 /// # Race window
 ///
@@ -413,12 +428,10 @@ pub async fn check_action_eligibility(
 /// committing (concurrent device drains the wallet, billing tick rolls
 /// over, hcfs-server's view of the balance lags this client's view).
 /// The gate is a best-effort proactive refusal, NOT a transactional
-/// reservation — this is accepted by design. Phase 2's per-file
+/// reservation — this is accepted by design. The per-file
 /// `SyncEvent::FileFailed { kind: InsufficientBalance }` path (mapped
 /// from hcfs-server's 402 response) is the last line of defense and
 /// the only layer that sees the true committed balance at upload time.
-/// See `docs/plans/2026-05-13-sync-402-data-integrity.md` for the full
-/// data-integrity layering and how the two layers interact.
 ///
 /// Action commands should write:
 ///
@@ -471,6 +484,36 @@ mod tests {
     }
 
     #[test]
+    fn parse_credit_balance_accepts_finite_non_negative() {
+        assert!(float_eq(parse_credit_balance("0", "acct"), 0.0));
+        assert!(float_eq(parse_credit_balance("9.99", "acct"), 9.99));
+        assert!(float_eq(parse_credit_balance("100", "acct"), 100.0));
+    }
+
+    #[test]
+    fn parse_credit_balance_rejects_non_finite_and_negative_fail_closed() {
+        // The billing server controls this string. "inf" is the dangerous one:
+        // without the finiteness guard `inf > 0.0 && inf >= required` would grant
+        // every gated action. All of these must fail closed to 0.0.
+        for bad in ["inf", "Inf", "INF", "infinity", "NaN", "nan", "-inf", "-5", "-0.01"] {
+            assert!(
+                float_eq(parse_credit_balance(bad, "acct"), 0.0),
+                "balance {bad:?} must fail closed to 0.0, not grant eligibility"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_credit_balance_rejects_unparseable_and_blank() {
+        for bad in ["", "  ", "abc", "1.2.3", "$5"] {
+            assert!(
+                float_eq(parse_credit_balance(bad, "acct"), 0.0),
+                "balance {bad:?} must fail closed to 0.0"
+            );
+        }
+    }
+
+    #[test]
     fn action_serializes_to_kebab_case() {
         // Wire format must match the existing TS `InsufficientCreditsReason`
         // type values, which the dialog copy table keys on.
@@ -504,9 +547,8 @@ mod tests {
     }
 
     /// Pure threshold logic without touching the network — verifies
-    /// the strict `>` vs `>=` semantics that mirror the legacy TS rules:
-    /// `credits > 0` for the zero-threshold actions, `credits >= 10` for
-    /// VM creation.
+    /// the strict `>` vs `>=` semantics: `credits > 0` for the
+    /// zero-threshold actions, `credits >= 10` for VM creation.
     #[test]
     fn eligibility_threshold_logic_matches_legacy_typescript() {
         // > 0 actions

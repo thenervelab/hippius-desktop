@@ -7,7 +7,6 @@ import { useSetAtom, useAtomValue } from "jotai";
 import { refreshUnreadCountAtom } from "@/components/page-sections/notifications/notificationStore";
 import { updateDialogOpenAtom, updateStore, updateCheckCompleteAtom } from "@/app/components/updater/updateStore";
 import PageLoader from "@/app/components/PageLoader";
-import UpdateDialogWrapper from "./UpdateDialogWrapper";
 
 interface UpdateCheckerProps {
   children?: ReactNode;
@@ -77,21 +76,19 @@ export default function UpdateChecker({ children }: UpdateCheckerProps) {
     return <>{children}</>;
   }
 
-  // Show app (splash screen) with update dialog on top if available
+  // Show app (splash screen). The update dialog itself is mounted once
+  // at the Providers level via UpdateDialogWrapper — no need to duplicate
+  // it here. We still gate the children render on showApp/updateDialogOpen
+  // so the splash stays visible until the initial check resolves.
   if (showApp || updateDialogOpen) {
-    return (
-      <>
-        {children}
-        {updateDialogOpen && <UpdateDialogWrapper />}
-      </>
-    );
+    return <>{children}</>;
   }
 
   // Fallback loading state
   return (
     <div className="flex items-center justify-center min-h-screen bg-grey-100">
       <div className="text-center">
-        <PageLoader />
+        <PageLoader ringFill="once" />
         <p className="mt-4 text-grey-50 text-sm">Loading...</p>
       </div>
     </div>

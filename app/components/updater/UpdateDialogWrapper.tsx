@@ -5,7 +5,7 @@ import {
   updateDialogOpenAtom,
   updateStore,
 } from "@/app/components/updater/updateStore";
-import DesktopAppDownloadDialog from "./UpdateDownloadDialog";
+import UpdateDialog from "./UpdateDialog";
 
 export default function UpdateDialogWrapper() {
   const open = useAtomValue(updateDialogOpenAtom, { store: updateStore });
@@ -13,5 +13,5 @@ export default function UpdateDialogWrapper() {
   // Only render the dialog when it's needed
   if (!open) return null;
 
-  return <DesktopAppDownloadDialog />;
+  return <UpdateDialog />;
 }

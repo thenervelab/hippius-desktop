@@ -11,7 +11,7 @@ use crate::error::AppError;
 #[tauri::command]
 pub async fn get_notification_settings(
     state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
+    account_id: crate::app_state::SessionAccount,
 ) -> Result<serde_json::Value, AppError> {
     let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
     Ok(client.get::<serde_json::Value>("/api/notifications/settings/", &account_id).await?)
@@ -21,7 +21,7 @@ pub async fn get_notification_settings(
 #[tauri::command]
 pub async fn update_notification_settings(
     state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
+    account_id: crate::app_state::SessionAccount,
     settings: serde_json::Value,
 ) -> Result<serde_json::Value, AppError> {
     let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());

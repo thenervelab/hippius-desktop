@@ -82,15 +82,19 @@ pub(crate) async fn seed_hcfs_server_url_if_missing(pool: &SqlitePool, account_i
 
 /// Discriminant the frontend uses to route the recovery dialog.
 ///
-/// - `Signup` — no server blob and no local mnemonic. User sees the
-///   "create a recovery password" wizard, which generates the mnemonic
-///   and seals it to the server.
-/// - `Unlock` — server blob exists but no local mnemonic (fresh device
-///   returning user). User sees "enter your recovery password".
-/// - `Proceed` — local mnemonic is already present. Nothing to do;
-///   the dialog auto-skips and marks the gate resolved. Server-blob
-///   state is intentionally ignored on this branch — if a local
-///   mnemonic exists, it's authoritative.
+/// - `Signup` — no server blob, and either no local mnemonic (a
+///   first-time user) OR a local mnemonic that we can decrypt (a legacy
+///   user who pre-dates always-on recovery). Both see the "Protect Your
+///   Account" wizard: the first-time case generates and seals a fresh
+///   mnemonic, the legacy case seals the *existing* one. `seal_and_upload_mnemonic`
+///   distinguishes the two and never mints over openable local state.
+/// - `Unlock` — server blob exists but no usable local mnemonic (fresh
+///   device returning user, or a local file we can't decrypt). User
+///   sees "enter your recovery password".
+/// - `Proceed` — local mnemonic is already present and either openable
+///   with a server blob already in place, or unopenable (so sealing it
+///   is unsafe). Nothing to do; the dialog auto-skips and marks the gate
+///   resolved.
 /// - `Unknown` — the server status check failed (network / auth). FE
 ///   shows a retry prompt; we never silently fall through to `Signup`
 ///   because that would upload a fresh blob and overwrite whatever
@@ -113,14 +117,6 @@ pub struct RecoveryCheck {
     pub has_local_mnemonic: bool,
     pub updated_at: Option<String>,
     pub recommended_flow: RecoveryFlow,
-    /// `true` iff the user has a local mnemonic but no server blob —
-    /// i.e. the account pre-dates always-on recovery and is currently
-    /// unrecoverable. `ExistingUserRecoveryPrompt` reads this flag
-    /// directly instead of composing its own predicate over
-    /// `has_local_mnemonic` and `has_server_blob`, so policy changes
-    /// (rate-limiting the nag, server-side opt-out, kill switch)
-    /// stay backend-owned.
-    pub should_prompt_legacy_migration: bool,
 }
 
 /// Lightweight metadata-only fetch of the server blob.
@@ -220,40 +216,7 @@ pub(crate) async fn check_recovery_state_inner(state: &tauri::State<'_, crate::a
     };
     let (has_server_blob, updated_at) = probe_server_blob(state).await;
 
-    // Decision table (extended to distinguish "local file exists" from
-    // "local file exists AND we can actually open it"):
-    //   local=false, blob=false     → Signup  (first-time OAuth user)
-    //   local=false, blob=true      → Unlock  (returning user on fresh device)
-    //   local=true,  decryptable    → Proceed (local mnemonic is authoritative)
-    //   local=true,  !decryptable,  → Unlock  (OAuth returning device: drive_password is
-    //               blob=true                  enc_ver=1, no cached mnemonic — prompt
-    //                                          for recovery password rather than
-    //                                          silently dead-ending in
-    //                                          get_mnemonic_for_account)
-    //   local=true,  !decryptable,  → Proceed (stuck; FE surfaces the reauth error.
-    //               blob=false or None        Signup would overwrite the undecryptable
-    //                                         master file with one we can't roundtrip)
-    //   probe failed on local=false → Unknown (FE retries; never overwrite)
-    //
-    // Returning `has_server_blob` truthfully even on the Proceed branch
-    // lets the existing-user migration prompt detect
-    // "local + no blob" (needs server-side recovery setup).
-    let recommended_flow = match (local, can_decrypt, has_server_blob) {
-        // Unlock fires for two reasons: fresh device with a server blob, OR
-        // returning device whose local file exists but can't be decrypted
-        // (OAuth + drive_password enc_ver=1 + no cached mnemonic). Both
-        // resolve the same way — prompt for recovery password, download (or
-        // re-anchor to) the server blob.
-        (true, false, Some(true)) | (false, _, Some(true)) => RecoveryFlow::Unlock,
-        (true, _, _) => RecoveryFlow::Proceed,
-        (false, _, Some(false)) => RecoveryFlow::Signup,
-        (false, _, None) => RecoveryFlow::Unknown,
-    };
-
-    // Legacy-user predicate: known-absent server blob AND a local
-    // mnemonic. `Some(false)` (server said 404), not `None` (probe
-    // failed) — we only nag users we're certain are unrecoverable.
-    let should_prompt_legacy_migration = local && matches!(has_server_blob, Some(false));
+    let recommended_flow = decide_recovery_flow(local, can_decrypt, has_server_blob);
 
     info!(
         account = %short,
@@ -261,7 +224,6 @@ pub(crate) async fn check_recovery_state_inner(state: &tauri::State<'_, crate::a
         can_decrypt_local = can_decrypt,
         has_server_blob = ?has_server_blob,
         flow = ?recommended_flow,
-        legacy_migration_prompt = should_prompt_legacy_migration,
         "recovery: state decided (Signup=will upload blob, Unlock=will download blob, Proceed=local is authoritative, Unknown=probe failed)"
     );
 
@@ -270,8 +232,47 @@ pub(crate) async fn check_recovery_state_inner(state: &tauri::State<'_, crate::a
         has_local_mnemonic: local,
         updated_at,
         recommended_flow,
-        should_prompt_legacy_migration,
     })
+}
+
+/// Map the three observable recovery facts to the UI flow.
+///
+/// Pure so the decision table is unit-testable without standing up
+/// `AppState`, a pool, or the server probe. Inputs:
+/// - `local` — a `master_enc_mnemonic.json` exists on disk.
+/// - `can_decrypt` — that file (or `AuthInfo.mnemonic`) can be opened
+///   without prompting for the recovery password.
+/// - `has_server_blob` — `Some(true/false)` once the server probe
+///   settles, `None` when it failed (network/auth).
+///
+/// Decision table:
+///   local=false, blob=Some(false)        → Signup  (first-time user; mint + seal)
+///   local=true,  decryptable, blob=false → Signup  (legacy user; seal the EXISTING
+///                                                    mnemonic — `seal_and_upload_mnemonic`
+///                                                    reads it rather than minting)
+///   local=false, blob=Some(true)         → Unlock  (returning user, fresh device)
+///   local=true,  !decryptable, blob=true → Unlock  (OAuth returning device: drive_password
+///                                                    enc_ver=1, no cached mnemonic)
+///   local=true,  otherwise               → Proceed (local is authoritative, OR it's
+///                                                    unopenable so sealing it is unsafe —
+///                                                    Signup would seal a master that
+///                                                    can't reproduce the folder keys)
+///   local=false, blob=None               → Unknown (probe failed; FE retries, never
+///                                                    overwrites server state)
+///
+/// The legacy `Signup` arm is gated on `can_decrypt`: an undecryptable
+/// local file stays on `Proceed` because `seal_and_upload_mnemonic`
+/// would otherwise fall through to a freshly-minted master and either
+/// trip `validate_master_against_existing_folders` or corrupt recovery
+/// state.
+fn decide_recovery_flow(local: bool, can_decrypt: bool, has_server_blob: Option<bool>) -> RecoveryFlow {
+    match (local, can_decrypt, has_server_blob) {
+        (true, false, Some(true)) | (false, _, Some(true)) => RecoveryFlow::Unlock,
+        (true, true, Some(false)) => RecoveryFlow::Signup,
+        (true, _, _) => RecoveryFlow::Proceed,
+        (false, _, Some(false)) => RecoveryFlow::Signup,
+        (false, _, None) => RecoveryFlow::Unknown,
+    }
 }
 
 /// Probe hcfs-server for blob existence.
@@ -508,10 +509,10 @@ async fn validate_master_against_existing_folders(pool: &SqlitePool, account_id:
         return Ok(());
     }
 
-    // Inspect the drive-password row directly so we can tell three cases apart —
-    // get_drive_password(None) collapsed the last two into a silent skip, which
-    // let a WRONG master be sealed over an account that already had encrypted
-    // key material (leaving its uploads undecryptable):
+    // Inspect the drive-password row directly so we can tell three cases apart.
+    // Collapsing the last two into a silent skip would let a WRONG master be
+    // sealed over an account that already had encrypted key material, leaving
+    // its uploads undecryptable:
     //   (a) no row / empty password  → pre-config, nothing to compare → allow
     //   (b) plaintext (version 0)     → compare folders against it
     //   (c) encrypted (version 1)     → the candidate master MUST decrypt it;
@@ -598,9 +599,9 @@ async fn validate_master_against_existing_folders(pool: &SqlitePool, account_id:
 /// the DB row is flipped. With folders-first, a systemic failure (server down,
 /// master unrecoverable, disk full) leaves the DB on the OLD password and
 /// nothing is wedged; the rotation flow keeps its retry sidecar and converges
-/// because re-derivation is deterministic and idempotent. The pre-fix
-/// db-row-first order flipped the password and then silently swallowed folder
-/// failures, wedging every folder still under the old password.
+/// because re-derivation is deterministic and idempotent. A db-row-first order
+/// would flip the password and then have to swallow folder failures, wedging
+/// every folder still under the old password.
 ///
 /// Never logs `new_password` or the master mnemonic. The `master` arg is used
 /// both to derive the encryption key for the DB row AND as the input to
@@ -814,14 +815,29 @@ pub async fn change_recovery_password(state: tauri::State<'_, crate::app_state::
             );
             // mnemonic is unchanged; AuthInfo cache still holds a valid value,
             // so we intentionally skip cache_session_mnemonic on this branch.
+            //
+            // The local master_enc_mnemonic.json is still sealed under the OLD
+            // password while the server blob is under the NEW one. The sidecar
+            // is the ONLY signal that lets the boot-time resume self-heal this
+            // gap (has_pending_rotation reads it). If even the sidecar write
+            // fails there is no automatic recovery path left, so the failure
+            // MUST surface — returning Ok here left a stale local file that
+            // silently broke decryption on the next launch with no marker for
+            // the resume path to act on.
             if let Err(sidecar_err) = write_rotation_sidecar(&account_id).await {
                 warn!(
                     error = %sidecar_err,
                     account = %crate::console_access::short_ss58(&account_id),
-                    "recovery: sidecar write also failed; boot-time retry will be unavailable. Rotation is still durable on the server; user may need to change password again if the local file stays stale."
+                    "recovery: sidecar write also failed; boot-time retry unavailable. Rotation is durable on the server — surfacing the error so the user can re-run the change."
                 );
+                return Err(AppError::Other(format!(
+                    "Recovery password was changed on the server, but this device's key file could \
+                     not be updated and no retry marker could be saved ({e}; sidecar: {sidecar_err}). \
+                     Please run the password change again to finish updating this device."
+                )));
             }
-            // Still Ok — the rotation is durable on the server.
+            // Sidecar written → has_pending_rotation is now true and the
+            // boot-time resume will finish the local rewrite; report success.
             Ok(())
         }
     }
@@ -1052,7 +1068,7 @@ mod tests {
 
     #[tokio::test]
     async fn drive_password_is_plaintext_false_when_encrypted() {
-        // The canonical post-#308 state: drive_password is encrypted under a
+        // The canonical encrypted state: drive_password is encrypted under a
         // mnemonic-derived key, so callers without the mnemonic cannot read it.
         // This is what routes OAuth returning users to Unlock instead of Proceed.
         let pool = setup_pool().await;
@@ -1065,15 +1081,51 @@ mod tests {
         assert!(!super::drive_password_is_plaintext(&pool, "5EncryptedAccount").await);
     }
 
+    // Pins every cell of the recovery decision table — especially the
+    // legacy-migration cell `(local, decryptable, no blob) → Signup`,
+    // which routes existing users through the same "Protect Your Account"
+    // dialog as first-time users, and its safety guard
+    // `(local, !decryptable, no blob) → Proceed`, which must NOT seal an
+    // unopenable master.
+    #[test]
+    fn decide_recovery_flow_covers_decision_table() {
+        use super::{decide_recovery_flow, RecoveryFlow};
+
+        // First-time user: nothing local, server confirms no blob.
+        assert_eq!(decide_recovery_flow(false, false, Some(false)), RecoveryFlow::Signup);
+        assert_eq!(decide_recovery_flow(false, true, Some(false)), RecoveryFlow::Signup);
+
+        // Legacy user: local mnemonic, decryptable, no server blob → seal
+        // the existing one via the Protect Your Account flow.
+        assert_eq!(decide_recovery_flow(true, true, Some(false)), RecoveryFlow::Signup);
+
+        // Legacy user we CAN'T open: stay on Proceed so we never mint/seal
+        // a master that can't reproduce the on-disk folder keys.
+        assert_eq!(decide_recovery_flow(true, false, Some(false)), RecoveryFlow::Proceed);
+        assert_eq!(decide_recovery_flow(true, false, None), RecoveryFlow::Proceed);
+
+        // Local present and authoritative: blob already there, or probe failed.
+        assert_eq!(decide_recovery_flow(true, true, Some(true)), RecoveryFlow::Proceed);
+        assert_eq!(decide_recovery_flow(true, true, None), RecoveryFlow::Proceed);
+
+        // Returning user on a fresh device (or an unopenable local file)
+        // with a server blob → Unlock.
+        assert_eq!(decide_recovery_flow(false, false, Some(true)), RecoveryFlow::Unlock);
+        assert_eq!(decide_recovery_flow(false, true, Some(true)), RecoveryFlow::Unlock);
+        assert_eq!(decide_recovery_flow(true, false, Some(true)), RecoveryFlow::Unlock);
+
+        // Fresh device, probe failed: retry, never overwrite server state.
+        assert_eq!(decide_recovery_flow(false, false, None), RecoveryFlow::Unknown);
+        assert_eq!(decide_recovery_flow(false, true, None), RecoveryFlow::Unknown);
+    }
+
     #[tokio::test]
     async fn leaves_empty_url_alone_on_existing_row() {
-        // The pre-region-probe version of `seed_hcfs_server_url_if_missing`
-        // would overwrite an empty `server_url` with the legacy single-region
-        // default. That UPDATE branch is gone — empty IS the new default
-        // (it's the auto-detect sentinel hcfs-client looks for). This test
-        // pins the new contract: an existing row with empty URL is left
-        // alone, so the next call to `get_server_url` returns "" and
-        // hcfs-client races the regional endpoints.
+        // Empty IS the default `server_url` — the auto-detect sentinel
+        // hcfs-client looks for — so `seed_hcfs_server_url_if_missing` must
+        // never overwrite it. This test pins that contract: an existing row
+        // with empty URL is left alone, so the next call to `get_server_url`
+        // returns "" and hcfs-client races the regional endpoints.
         let pool = setup_pool().await;
         let owner = account_key("5TestAccountId");
         sqlx::query("INSERT INTO hcfs_config (owner, server_url, drive_password, encryption_version) VALUES (?, '', '', 0)")
@@ -1302,8 +1354,7 @@ mod tests {
         let good_dir = crate::sync::mnemonic::config_dir_for_folder(account, good_label).unwrap();
         tokio::fs::create_dir_all(&good_dir).await.unwrap();
         let good_fm = hcfs_client::drive::keys::derive_folder_mnemonic(master, good_label).unwrap();
-        hcfs_client::auth::save_encrypted_mnemonic(good_dir.join("enc_mnemonic.json"), &good_fm, "old canonical password")
-            .expect("test setup: seal folder mnemonic under the old password");
+        hcfs_client::auth::save_encrypted_mnemonic(good_dir.join("enc_mnemonic.json"), &good_fm, "old canonical password").unwrap();
         // Bad folder: plant a FILE where its dir must be so create_dir_all fails.
         let bad_dir = crate::sync::mnemonic::config_dir_for_folder(account, bad_label).unwrap();
         tokio::fs::create_dir_all(bad_dir.parent().unwrap()).await.unwrap();
@@ -1330,8 +1381,7 @@ mod tests {
         // The healthy folder must still have been rewritten under the new password.
         let alpha_dir = crate::sync::mnemonic::config_dir_for_folder(account, "alpha").unwrap();
         let alpha_fm = hcfs_client::drive::keys::derive_folder_mnemonic(&master, "alpha").unwrap();
-        let check = hcfs_client::auth::recover_mnemonic(alpha_dir.join("enc_mnemonic.json"), "new canonical password")
-            .expect("alpha folder mnemonic must decrypt under the rotated password");
+        let check = hcfs_client::auth::recover_mnemonic(alpha_dir.join("enc_mnemonic.json"), "new canonical password").unwrap();
         assert_eq!(
             check.to_string(),
             alpha_fm,
@@ -1415,7 +1465,7 @@ mod tests {
             .expect("seal encrypted drive password");
 
         // A DIFFERENT master can't decrypt that drive password → must be refused,
-        // not silently skipped (the pre-fix bug that allowed sealing a wrong master).
+        // not silently skipped, which would allow sealing a wrong master.
         let wrong = "legal winner thank year wave sausage worth useful legal winner thank yellow";
         let err = super::validate_master_against_existing_folders(&pool, account, wrong).await.unwrap_err();
         assert!(matches!(err, AppError::Validation(_)), "wrong master must be refused, got {err:?}");
@@ -1467,6 +1517,38 @@ mod tests {
 
         // Idempotent clear.
         super::clear_rotation_sidecar(account).await;
+    }
+
+    /// Regression pin: when the post-commit local rewrite fails AND the
+    /// rotation sidecar also fails to write, the install-failed arm of
+    /// `change_recovery_password` must `return Err`, not `Ok(())`.
+    ///
+    /// `change_recovery_password` is a `tauri::command` that needs a running
+    /// hcfs-server and a managed `AppState`, so the doubly-failed branch can't
+    /// be driven from a unit test under the project's no-`tauri::test` policy
+    /// (axiom 111). A regression would silently restore the unconditional
+    /// `Ok(())`; this pins that the sidecar-failure path inside the `Err(e)`
+    /// arm carries a `return Err`, mirroring the `hippius_startup_window.rs`
+    /// static-pin convention.
+    #[test]
+    fn local_rewrite_and_sidecar_double_failure_surfaces_an_error() {
+        const SRC: &str = include_str!("recovery.rs");
+        // Anchor on the warn unique to the install-failure `Err(e)` arm (the
+        // align-branch shares the "sidecar write also failed" wording but
+        // legitimately returns Ok, so we must not match on that).
+        let anchor = "server rotated but local rewrite failed";
+        let at = SRC.find(anchor).expect("install-failure arm warn present");
+        let after = &SRC[at..];
+        let next_return_err = after
+            .find("return Err")
+            .expect("double failure must return Err, not fall through to Ok(())");
+        // The `return Err` (sidecar-failure bail-out) must come before the
+        // arm's closing `Ok(())`, i.e. it surfaces instead of reporting success.
+        let next_ok = after.find("Ok(())").unwrap_or(usize::MAX);
+        assert!(
+            next_return_err < next_ok,
+            "the sidecar-write-failure path must `return Err` before the arm's `Ok(())`"
+        );
     }
 
     /// After `seed_hcfs_server_url_if_missing`, the recovery base-URL

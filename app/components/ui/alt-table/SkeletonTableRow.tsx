@@ -9,6 +9,12 @@ interface SkeletonTableRowProps {
   rowClassName?: string;
   columnWidths?: string[];
   showBorders?: boolean;
+  /**
+   * Skeleton height inside each cell. Defaults to `1.25rem` to preserve the
+   * existing visual; callers building compact rows (e.g. the Figma-spec VM
+   * table) can shrink this to keep the placeholder shorter than the row.
+   */
+  skeletonHeight?: string;
 }
 
 export const SkeletonTableRow: React.FC<SkeletonTableRowProps> = ({
@@ -18,6 +24,7 @@ export const SkeletonTableRow: React.FC<SkeletonTableRowProps> = ({
   rowClassName = "",
   columnWidths,
   showBorders = true,
+  skeletonHeight = "1.25rem",
 }) => {
   return (
     <>
@@ -30,32 +37,29 @@ export const SkeletonTableRow: React.FC<SkeletonTableRowProps> = ({
           )}
         >
           {Array.from({ length: columns }).map((_, colIndex) => {
-            // Base cell styling
-            let tdClasses = `px-2.5 py-3 border-b border-grey-80 align-middle h-10 ${cellClassName}`;
+            const isLastCol = colIndex === columns - 1;
 
-            // Add vertical borders if enabled
-            if (showBorders && colIndex !== columns - 1) {
-              tdClasses += " border-r border-grey-80";
-            }
-
-            // Determine skeleton width - use columnWidths if provided or default
+            // Determine skeleton width — use columnWidths if provided, else
+            // default to a narrow id/actions hint for the edges.
             let skeletonWidth = "100%";
             if (columnWidths && columnWidths[colIndex]) {
               skeletonWidth = columnWidths[colIndex];
             } else if (colIndex === 0) {
-              // Default for first column (usually ID)
               skeletonWidth = "5rem";
-            } else if (colIndex === columns - 1) {
-              // Default for last column (usually actions)
+            } else if (isLastCol) {
               skeletonWidth = "1.5rem";
             }
 
             return (
               <td
                 key={`skeleton-cell-${rowIndex}-${colIndex}`}
-                className={tdClasses}
+                className={cn(
+                  "px-2.5 py-3 border-b border-grey-80 align-middle h-10",
+                  showBorders && !isLastCol && "border-r border-grey-80",
+                  cellClassName
+                )}
               >
-                <Skeleton height="1.25rem" width={skeletonWidth} />
+                <Skeleton height={skeletonHeight} width={skeletonWidth} />
               </td>
             );
           })}

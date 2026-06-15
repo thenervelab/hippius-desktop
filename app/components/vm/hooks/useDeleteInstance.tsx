@@ -2,8 +2,9 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
+import { Trash2 } from "lucide-react";
 import { Instance } from "../instances-table";
-import DeleteConfirmationDialog from "../../DeleteConfirmationDialog";
+import ConfirmationDialog from "../../ConfirmationDialog";
 import useTerminateVM from "@/app/lib/hooks/api/useTerminateVM";
 
 interface UseDeleteInstanceOptions {
@@ -23,7 +24,7 @@ export const useDeleteInstance = (options?: UseDeleteInstanceOptions) => {
   const queryClient = useQueryClient();
   const [openDeleteModal, setOpenDeleteModal] = useState(false);
   const [selectedInstance, setSelectedInstance] = useState<Instance | null>(
-    null
+    null,
   );
 
   // Use the terminate VM mutation
@@ -61,7 +62,7 @@ export const useDeleteInstance = (options?: UseDeleteInstanceOptions) => {
       }
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : "Failed to delete instance"
+        error instanceof Error ? error.message : "Failed to delete instance",
       );
       console.error("Delete instance error:", error);
     }
@@ -74,15 +75,19 @@ export const useDeleteInstance = (options?: UseDeleteInstanceOptions) => {
   };
 
   const DeleteInstanceModal = () => (
-    <DeleteConfirmationDialog
+    <ConfirmationDialog
       open={openDeleteModal}
       onClose={isDeleting ? () => {} : handleCancelDelete}
       onBack={isDeleting ? () => {} : handleCancelDelete}
-      onDelete={handleConfirmDelete}
+      onConfirm={handleConfirmDelete}
       button={isDeleting ? "Deleting..." : "Delete Instance"}
       text="Are you sure you want to delete this instance? This action is permanent and all data will be lost."
       heading="Delete Instance"
+      icon={<Trash2 className="size-[18px] text-white" strokeWidth={2.5} />}
+      iconBgColor="bg-[#fc7d73]"
+      confirmVariant="destructive"
       disableButton={isDeleting}
+      disableBackButton={isDeleting}
     />
   );
 

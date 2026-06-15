@@ -1,14 +1,14 @@
 "use client";
 
 import React, { useEffect, useState, useMemo, useCallback } from "react";
-import { Icons } from "@/components/ui";
-import * as Switch from "@radix-ui/react-switch";
+import { cn } from "@/lib/utils";
+import { Settings } from "lucide-react";
 import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
-import TabList from "@/components/ui/tabs/TabList";
 import NotificationList from "./NotificationList";
 import NotificationDetailView from "./NotificationDetailView";
 import NoNotificationsFound from "./NoNotificationsFound";
 import NoNotificationsEnabled from "./NoNotificationsEnabled";
+import NotificationsSettingsDialog from "./NotificationsSettingsDialog";
 import { toast } from "sonner";
 import { useSetAtom, useAtom } from "jotai";
 import {
@@ -19,83 +19,44 @@ import {
 import { UiNotification } from "./types";
 import { useNotifications } from "@/lib/hooks/useNotifications";
 import { useSearchParams } from "next/navigation";
-import {
-  settingsDialogOpenAtom,
-  activeSettingsTabAtom,
-} from "@/app/components/sidebar/sideBarAtoms";
 import { iconMap } from "@/app/lib/helpers/notificationIcons";
+import { notificationCategoryLabel } from "@/app/lib/helpers/notificationCategories";
 import { deleteAllNotifications } from "@/app/lib/helpers/notificationsDb";
-import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import ArchiveAllConfirmationDialog from "./ArchiveAllConfirmationDialog";
+import PageHeader from "@/components/ui/page-header";
 
 const Notifications = () => {
   const [activeTab, setActiveTab] = useState("All");
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [onlyUnread, setOnlyUnread] = useState(false);
-  // Confirmation modal for "Delete All". Same two-state shape used by
-  // the notifications dropdown (`NotificationMenuContent.tsx`) so the
-  // two surfaces behave identically — open the dialog on click, run
-  // the actual delete only after the user confirms.
   const [isArchiveDialogOpen, setIsArchiveDialogOpen] = useState(false);
   const [isArchiving, setIsArchiving] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [enabledTypes] = useAtom(enabledNotificationTypesAtom);
   const refreshEnabledTypes = useSetAtom(refreshEnabledTypesAtom);
-  const [settingsDialogOpen] = useAtom(settingsDialogOpenAtom);
 
   const searchParams = useSearchParams();
-  const setSettingsDialogOpen = useSetAtom(settingsDialogOpenAtom);
-  const setActiveSettingsTab = useSetAtom(activeSettingsTabAtom);
-  const { polkadotAddress, oauthSession } = useWalletAuth();
-
   const refreshUnread = useSetAtom(refreshUnreadCountAtom);
 
   const { notifications, refresh, markRead, markUnread, markAllRead } =
     useNotifications();
 
-  // Dynamically build tabs based on enabled notification types
-  // Only include "All" tab if there's at least one enabled notification type
   const tabs = useMemo(
     () => [
-      ...(enabledTypes.length > 0
-        ? [{ tabName: "All", icon: <Icons.MaximizeCircle /> }]
-        : []),
+      ...(enabledTypes.length > 0 ? [{ tabName: "All", displayName: "All" }] : []),
       ...enabledTypes.map((type) => ({
         tabName: type,
-        icon: iconMap[type] ? (
-          React.createElement(iconMap[type])
-        ) : (
-          <Icons.Document />
-        ),
+        displayName: notificationCategoryLabel(type),
       })),
     ],
-    [enabledTypes],
+    [enabledTypes]
   );
 
-  // A) Run once on mount (already OK)
   useEffect(() => {
     refresh();
     refreshEnabledTypes();
   }, [refresh, refreshEnabledTypes]);
 
-  // New: remove window event listeners. We refetch directly where needed.
-  // useEffect(() => {
-  //   const onUpdated = () => {
-  //     refresh();
-  //     refreshUnread();
-  //   };
-  //   window.addEventListener("notifications:updated", onUpdated);
-  //   return () => window.removeEventListener("notifications:updated", onUpdated);
-  // }, [refresh, refreshUnread]);
-
-  // B) Re-fetch types when the settings dialog closes/opens
-  useEffect(() => {
-    if (!settingsDialogOpen) {
-      refreshEnabledTypes();
-    }
-    // do NOT depend on enabledTypes/tabs here
-  }, [settingsDialogOpen, refreshEnabledTypes]);
-
-  // C) Handle tab correction separately, without calling refreshEnabledTypes()
   useEffect(() => {
     if (
       (activeTab === "All" && enabledTypes.length === 0) ||
@@ -105,7 +66,6 @@ const Notifications = () => {
     }
   }, [enabledTypes, activeTab, tabs]);
 
-  // Update active tab if tabs change and current active tab is no longer available
   useEffect(() => {
     if (tabs.length > 0 && !tabs.some((tab) => tab.tabName === activeTab)) {
       setActiveTab(tabs[0].tabName);
@@ -115,48 +75,33 @@ const Notifications = () => {
   useEffect(() => {
     const raw = searchParams.get("selected");
     if (!raw) return;
-
     const id = Number(raw);
     if (Number.isNaN(id)) return;
-
     setSelectedId(id);
-    markRead(id).then(() => {
-      refreshUnread();
-    });
-    // remove "selected" from search params after using it
+    markRead(id).then(() => { refreshUnread(); });
     const params = new URLSearchParams(searchParams.toString());
     params.delete("selected");
-    window.history.replaceState(
-      {},
-      "",
-      `${window.location.pathname}?${params.toString()}`,
-    );
+    window.history.replaceState({}, "", `${window.location.pathname}?${params.toString()}`);
   }, [searchParams, markRead, refreshUnread]);
 
-  // attach icons
   const items: UiNotification[] = notifications.map((n) => ({
     ...n,
-    icon: iconMap[n.type] ?? Icons.Document,
+    icon: iconMap[n.type] ?? (() => null),
   }));
 
-  // filtering
   const visible = items
     .filter((n) => activeTab === "All" || n.type === activeTab)
     .filter((n) => !onlyUnread || n.unread);
 
   const onReadToggle = async (id: number, unread: boolean) => {
-    if (unread) {
-      await markUnread(id);
-    } else {
-      await markRead(id);
-    }
-
+    if (unread) await markUnread(id);
+    else await markRead(id);
     toast.success(unread ? "Marked as unread" : "Marked as read");
     refreshUnread();
   };
 
   const onItemClick = (id: number) => {
-    markRead(id).then(refreshUnread); // mark read then update badge
+    markRead(id).then(refreshUnread);
     setSelectedId(id);
   };
 
@@ -185,18 +130,8 @@ const Notifications = () => {
     refreshUnread();
   };
 
-  // The "Delete All" button only opens the confirmation modal — the
-  // actual delete runs in `handleArchiveAllConfirm` once the user
-  // accepts. Previously the button called the delete directly with
-  // no confirmation, which (a) bypassed the dialog the dropdown was
-  // already wired up to, and (b) had no error handling, so a failing
-  // backend call left the UI silently broken.
   const handleArchiveAllConfirm = async () => {
-    const userAddress = oauthSession?.substrateAddress || polkadotAddress;
-    if (!userAddress) {
-      setIsArchiveDialogOpen(false);
-      return;
-    }
+    // Deletion is scoped to the session account in Rust; no frontend address gate.
     setIsArchiving(true);
     try {
       await deleteAllNotifications();
@@ -212,100 +147,138 @@ const Notifications = () => {
     }
   };
 
-  const handleOpenSettings = () => {
-    // Set the active tab to "Notifications" before opening
-    setActiveSettingsTab("Notifications");
-    setSettingsDialogOpen(true);
-  };
-
-  // Refresh the notifications list
-  const handleRefreshNotifications = useCallback(() => {
-    refresh();
-  }, [refresh]);
+  const handleRefreshNotifications = useCallback(() => { refresh(); }, [refresh]);
 
   return (
     <DashboardTitleWrapper mainText="Notifications">
-      {/* controls */}
-      <div className="mt-6 flex justify-end gap-4 flex-wrap">
-        {tabs.length > 0 && (
-          <>
-            <TabList
-              tabs={tabs}
-              width="min-w-[5.5625rem]"
-              height="h-[2rem]"
-              gap="gap-1"
-              activeTab={activeTab}
-              onTabChange={setActiveTab}
-              className="max-w-fit p-1 border border-grey-80"
-            />
+      <div className="flex flex-1 flex-col rounded-[11px] pb-3 bg-[#fbfbfb] dark:bg-black-primary-bg">
 
-            <label className="flex items-center gap-3 cursor-pointer select-none">
-              <span className="text-grey-10 font-medium text-sm leading-5">
-                Only show unread
-              </span>
-              <Switch.Root
-                checked={onlyUnread}
-                onCheckedChange={setOnlyUnread}
-                className="w-[3.375rem] h-[1.625rem] bg-grey-90 rounded-full relative data-[state=checked]:bg-primary-50 transition-all outline-none border border-grey-80"
-              >
-                <Switch.Thumb className="block w-[1.125rem] h-[1.125rem] bg-primary-50 rounded-full shadow transition-transform duration-100 translate-x-0.5 data-[state=checked]:translate-x-8 data-[state=checked]:bg-white" />
-              </Switch.Root>
-            </label>
+        <PageHeader
+          title="Notifications Hub"
+          subtitle="Store. Compute. Own your infrastructure."
+        />
 
-            <button
-              className="px-4 py-2.5 items-center bg-grey-90 rounded hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white text-grey-10 leading-5 text-[0.875rem] font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-50 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-grey-90 disabled:hover:text-grey-10"
-              onClick={handleAllRead}
-              disabled={visible.length === 0}
-            >
-              Mark all as Read
-            </button>
-            {/* Delete All — opens the confirmation dialog. The actual
-                delete fires from the dialog's onConfirm so we never
-                wipe state without an explicit user yes. */}
-            <button
-              className="px-4 py-2.5 items-center bg-grey-90 rounded hover:bg-error-60 hover:text-white active:bg-error-70 active:text-white text-grey-10 leading-5 text-[0.875rem] font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-error-50 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-grey-90 disabled:hover:text-grey-10"
-              onClick={() => setIsArchiveDialogOpen(true)}
-              disabled={visible.length === 0}
-              title={
-                visible.length === 0
-                  ? "No notifications to delete"
-                  : "Remove all notifications"
-              }
-            >
-              Delete All
-            </button>
-          </>
-        )}
-        <button
-          className="px-4 py-2.5 bg-grey-90 rounded text-grey-10 leading-5 text-[0.875rem] font-medium flex items-center gap-2 transition-colors hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white focus:outline-none focus:ring-2 focus:ring-primary-50"
-          onClick={handleOpenSettings}
-        >
-          <Icons.Setting className="size-4" />
-          Notification Setting
-        </button>
-      </div>
+        <div className="px-3 flex-1 flex flex-col min-h-0">
+          <div className="border border-grey-dark-100 dark:border-black-300 rounded-lg overflow-hidden flex flex-col flex-1 bg-[#f8f8f8] dark:bg-black-400">
 
-      {/* list + detail */}
-      <div className="mt-4 flex gap-4 w-full">
-        {enabledTypes.length === 0 ? (
-          <NoNotificationsEnabled onOpenSettings={handleOpenSettings} />
-        ) : visible.length === 0 ? (
-          <NoNotificationsFound />
-        ) : (
-          <>
-            <NotificationList
-              notifications={visible}
-              selectedNotificationId={selectedId}
-              onSelectNotification={onItemClick}
-              onReadStatusChange={onReadToggle}
-              onRefresh={handleRefreshNotifications}
-            />
-            <NotificationDetailView
-              selectedNotification={detail}
-              onReadStatusChange={onReadToggle}
-            />
-          </>
-        )}
+            {/* Tabs + filter row */}
+            <div className="flex items-center justify-between border-b border-grey-dark-100 dark:border-black-300 px-2.5 py-2 gap-2.5 flex-wrap">
+              {tabs.length > 0 && (
+                <div className="inline-flex items-center gap-1 rounded-[6px] bg-[#ebebeb] p-[3px] dark:bg-[#000000]">
+                  {tabs.map((tab) => {
+                    const isActive = activeTab === tab.tabName;
+                    return (
+                      <button
+                        key={tab.tabName}
+                        onClick={() => setActiveTab(tab.tabName)}
+                        className={cn(
+                          "flex items-center px-[6px] py-px rounded-[3px] font-mono text-[12px] font-medium leading-5 uppercase tracking-[-0.24px] whitespace-nowrap text-black dark:text-white border border-[#e3e3e3] dark:border-[#313131] bg-[#f8f8f8] dark:bg-[#1e1e1e] shadow-tab-active transition-[opacity,background-color,border-color,box-shadow]",
+                          !isActive && "!bg-transparent !border-transparent !shadow-none opacity-50 hover:opacity-75",
+                        )}
+                      >
+                        {tab.displayName ?? tab.tabName}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {tabs.length > 0 && (
+                <div className="flex items-center gap-3 flex-wrap">
+                  {/* All / Unread toggle */}
+                  <div className="inline-flex items-center gap-1 rounded-[6px] border border-[#e3e3e3] bg-[#ebebeb] p-[3px] drop-shadow-[0px_1px_0px_white] dark:border-[#313131] dark:bg-[#000000] dark:drop-shadow-none">
+                    {(["all", "unread"] as const).map((id) => {
+                      const isActive = id === (onlyUnread ? "unread" : "all");
+                      return (
+                        <button
+                          key={id}
+                          onClick={() => setOnlyUnread(id === "unread")}
+                          className={cn(
+                            "flex items-center gap-[6px] px-3 h-[24px] rounded-[3px] text-[13px] font-medium leading-[1.109] tracking-[-0.26px] whitespace-nowrap text-black dark:text-white border border-[#e3e3e3] dark:border-[#313131] bg-[#f8f8f8] dark:bg-[#1e1e1e] shadow-tab-active transition-[opacity,background-color,border-color,box-shadow]",
+                            !isActive && "!bg-transparent !border-transparent !shadow-none opacity-50 hover:opacity-75",
+                          )}
+                        >
+                          <span className={`size-[7px] flex-shrink-0 rounded-full ${isActive ? "bg-[#3167dd]" : "bg-black/40 dark:bg-white/40"}`} />
+                          {id === "all" ? "All" : "Unread"}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Mark all as read */}
+                  <button
+                    className="flex items-center h-[30px] px-[10px] gap-2 text-[14px] font-medium tracking-[-0.28px] rounded-[7px] bg-[#fefefe] border border-[#e3e3e3] text-[#111] shadow-[0px_5px_2.3px_0px_rgba(0,0,0,0.03),0px_1px_1.9px_0px_rgba(0,0,0,0.14),0px_0px_1px_0px_rgba(0,0,0,0.16)] hover:bg-[#f5f5f5] dark:bg-[#1e1e1e] dark:border-[#313131] dark:text-white dark:shadow-[0px_0px_0px_1px_black] dark:hover:bg-[#252525] disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
+                    onClick={handleAllRead}
+                    disabled={visible.length === 0}
+                  >
+                    Mark all as read
+                  </button>
+
+                  {/* Clear all — opens a confirmation dialog before
+                   *  calling `deleteAllNotifications`. Disabled when
+                   *  there's nothing in the current view. Same
+                   *  chrome as "Mark all as read" so the two
+                   *  bulk-actions read as a paired group. */}
+                  <button
+                    className="flex items-center h-[30px] px-[10px] gap-2 text-[14px] font-medium tracking-[-0.28px] rounded-[7px] bg-[#fefefe] border border-[#e3e3e3] text-[#111] shadow-[0px_5px_2.3px_0px_rgba(0,0,0,0.03),0px_1px_1.9px_0px_rgba(0,0,0,0.14),0px_0px_1px_0px_rgba(0,0,0,0.16)] hover:bg-[#f5f5f5] dark:bg-[#1e1e1e] dark:border-[#313131] dark:text-white dark:shadow-[0px_0px_0px_1px_black] dark:hover:bg-[#252525] disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
+                    onClick={() => setIsArchiveDialogOpen(true)}
+                    disabled={notifications.length === 0 || isArchiving}
+                  >
+                    Clear all
+                  </button>
+
+                  {/* Notifications Settings */}
+                  <button
+                    className="flex items-center h-[30px] px-[10px] gap-2 text-[14px] font-medium tracking-[-0.28px] rounded-[7px] bg-[#fefefe] border border-[#e3e3e3] text-[#111] shadow-[0px_5px_2.3px_0px_rgba(0,0,0,0.03),0px_1px_1.9px_0px_rgba(0,0,0,0.14),0px_0px_1px_0px_rgba(0,0,0,0.16)] hover:bg-[#f5f5f5] dark:bg-[#1e1e1e] dark:border-[#313131] dark:text-white dark:shadow-[0px_0px_0px_1px_black] dark:hover:bg-[#252525] whitespace-nowrap"
+                    onClick={() => setIsSettingsOpen(true)}
+                  >
+                    <Settings className="size-[14px]" />
+                    Notifications Settings
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Notification list + detail panel */}
+            <div className="flex flex-1 bg-white dark:bg-black-500 rounded-b-lg overflow-hidden">
+              {enabledTypes.length === 0 ? (
+                <div className="flex-1 flex items-center justify-center">
+                  <NoNotificationsEnabled onOpenSettings={() => setIsSettingsOpen(true)} />
+                </div>
+              ) : visible.length === 0 ? (
+                <div className="flex-1 flex items-center justify-center">
+                  <NoNotificationsFound />
+                </div>
+              ) : (
+                <>
+                  <div className="w-1/2 flex-shrink-0 border-r border-grey-dark-100 dark:border-black-300 overflow-hidden">
+                    <NotificationList
+                      notifications={visible}
+                      selectedNotificationId={selectedId}
+                      onSelectNotification={onItemClick}
+                      onReadStatusChange={onReadToggle}
+                      onRefresh={handleRefreshNotifications}
+                    />
+                  </div>
+                  <div className="w-1/2 flex-shrink-0 overflow-hidden">
+                    {detail ? (
+                      <NotificationDetailView
+                        selectedNotification={detail}
+                        onReadStatusChange={onReadToggle}
+                      />
+                    ) : (
+                      <div className="flex flex-col items-center justify-center h-full gap-2 px-6 text-center">
+                        <p className="text-[14px] font-medium text-grey-dark-500 dark:text-grey-dark-400">
+                          Select a notification to view details
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
       </div>
 
       <ArchiveAllConfirmationDialog
@@ -313,6 +286,11 @@ const Notifications = () => {
         onClose={() => setIsArchiveDialogOpen(false)}
         onConfirm={handleArchiveAllConfirm}
         loading={isArchiving}
+      />
+
+      <NotificationsSettingsDialog
+        open={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
       />
     </DashboardTitleWrapper>
   );

@@ -16,9 +16,7 @@ import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 
 export function useCreditsNotification() {
   const { data: creditEvents, isSuccess } = useAddCreditEvent({ limit: 50 });
-  // Live so the "running low on credits" check re-evaluates as the balance
-  // moves during a session, not just against the initial load.
-  const { data: credits, isLoading: isCreditsLoading } = useUserCredits({ live: true });
+  const { data: credits, isLoading: isCreditsLoading } = useUserCredits();
   const refreshUnread = useSetAtom(refreshUnreadCountAtom);
   const [enabledTypes] = useAtom(enabledNotificationTypesAtom);
   const pathname = usePathname(); // Track route changes
@@ -115,7 +113,7 @@ export function useCreditsNotification() {
             return {
               subtype: e.subtype,
               title: `Woo-hoo! ${amt} credit${plural} just landed.`,
-              description: `Fresh credit${plural} are in your wallet. Use them right away to upload or sync files with zero delay. Hit Jump to 'Files' and make something awesome.`,
+              description: `${amt} credit${plural} added to your account and ready to use. Spend credits to upload files, keep folders in sync, or spin up confidential VMs. They're deducted automatically as you go, so there's nothing extra to manage. Track your balance and recent usage anytime under Billing, or hit Jump to 'Files' to start uploading right away.`,
             };
           });
           await invoke("create_credit_notifications", {

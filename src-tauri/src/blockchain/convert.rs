@@ -48,8 +48,7 @@ pub fn planck_to_hip_full(planck: String) -> String {
 /// strings (`"1.23e+20"`) and some as plain integers (`"1230000000"`).
 /// Planck amounts are always whole numbers of the smallest unit, so we
 /// collapse any fractional/exponent form into a single decimal-digit
-/// string. Non-parseable input falls through as `"0"` — the same
-/// behavior the old `parse::<f64>().unwrap_or(0.0)` path gave.
+/// string. Non-parseable input falls through as `"0"`.
 pub fn normalize_decimal_digits(raw: &str) -> String {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -162,7 +161,7 @@ pub(crate) fn planck_to_hip_with_decimals(planck: &str, max_fraction_digits: usi
 #[tauri::command]
 pub fn to_plancks(amount: String) -> Result<String, crate::error::AppError> {
     if amount.is_empty() {
-        return Err(crate::error::AppError::Other("Invalid amount".into()));
+        return Err(crate::error::AppError::Validation("Invalid amount".into()));
     }
     // Bind the parsed value and enforce the planck domain (a non-negative
     // integer-of-base-units). Discarding the parse let "-1" through: the later
@@ -280,6 +279,16 @@ mod tests {
     }
 
     #[test]
+    fn planck_to_hip_sub_one_hip_referral_reward_is_not_zero() {
+        // Referral rewards are frequently sub-1-HIP. Integer division
+        // (`reward_raw / 10^18`) truncates these to "0"; routing the planck
+        // value through this converter preserves the fraction.
+        assert_eq!(planck_to_hip("500000000000000000"), "0.5");
+        assert_eq!(planck_to_hip("12345000000000000"), "0.012345");
+        assert_eq!(planck_to_hip("1"), "0"); // genuinely below the 6-decimal display floor
+    }
+
+    #[test]
     fn planck_to_hip_sub_unit() {
         // 0.000001 HIP — exactly at the 6-decimal display boundary.
         assert_eq!(planck_to_hip("1000000000000"), "0.000001");
@@ -349,7 +358,8 @@ mod tests {
 
     #[test]
     fn to_plancks_rejects_scientific_notation_fixture() {
-        // f64 accepts "1e18"; the string path used to emit "1e18000…000".
+        // f64 would accept "1e18", but the string path must reject it rather
+        // than emit a malformed "1e18000…000" planck value.
         assert!(to_plancks("1e18".into()).is_err());
         assert!(to_plancks("1E18".into()).is_err());
         assert!(to_plancks("+1".into()).is_err());

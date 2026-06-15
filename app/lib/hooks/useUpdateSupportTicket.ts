@@ -13,8 +13,8 @@ import { SupportTicket } from "./useSupportTickets";
 // Request payload for updating a ticket (partial update)
 export interface UpdateTicketPayload {
   id: number;
-  status?: "open" | "closed" | "in_progress";
-  priority?: "low" | "medium" | "high";
+  status?: "open" | "pending" | "resolved" | "closed";
+  priority?: "low" | "normal" | "high" | "urgent";
   assigned_to?: number | null;
 }
 

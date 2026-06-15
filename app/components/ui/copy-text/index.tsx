@@ -51,14 +51,17 @@ const CopyText: React.FC<CopyCellProps> = ({
       <button
         onClick={handleCopy}
         className={cn(
-          "ml-2 p-1 hover:text-gray-700 transition-colors",
+          "ml-2 p-1 shrink-0 text-grey-60 hover:text-gray-700 transition-colors dark:text-[#8e8e8e] dark:hover:text-grey-dark-200",
           buttonClass
         )}
         title={title}
       >
         {copied ? (
           <Icons.Check
-            className={cn("w-4 h-4 text-green-500", checkIconClassName)}
+            className={cn(
+              "w-4 h-4 text-green-500 dark:text-success-50",
+              checkIconClassName,
+            )}
           />
         ) : (
           <Icons.Copy className={cn("w-4 h-4", copyIconClassName)} />

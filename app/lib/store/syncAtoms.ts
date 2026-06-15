@@ -5,11 +5,29 @@ import type { StagedChanges } from "@/lib/types/syncTypes";
 // The multi-drive engine emits conflict-review events per drive (each carries a
 // `label`) and syncs drives concurrently, so a single global StagedChanges let
 // one drive's conflicts overwrite another's, and any drive's completion cleared
-// them all. Keyed by label, each drive's review is independent.
+// them all. Keyed by label, each drive's review is independent (upstream F16).
 export const pendingConflictsAtom = atom<Map<string, StagedChanges>>(new Map());
 
 // Tracks whether we've already updated the tray for the current percentage
 export const lastUpdatedPercentAtom = atom<number | null>(null);
+
+/**
+ * UI-only flag: the user collapsed the floating sync widget into its compact
+ * circular form by clicking the close (✕) icon. This is pure presentation
+ * state (the same category as the widget's expand/collapse of its file list),
+ * so it lives in the frontend rather than Rust.
+ *
+ * `true` → the widget renders {@link SyncStatusMini} (a percentage ring) instead
+ * of the full card. Clicking the ring (or a new sync session starting) clears
+ * it. It deliberately does NOT call `sp_dismiss_sync_widget`: minimizing keeps
+ * the widget reachable, whereas dismissing tells Rust to hide it entirely
+ * (still used by the `hcfs_sync_stopped` path).
+ *
+ * The sidebar's own collapsed state ALSO forces the mini form, but that is
+ * driven by `sidebarCollapsedAtom`, not this atom — the two are OR'd together
+ * at the render site so either trigger produces the compact view.
+ */
+export const syncWidgetMinimizedAtom = atom<boolean>(false);
 
 // Connectivity health state from periodic backend health checks
 export type ConnectivityStatusType =

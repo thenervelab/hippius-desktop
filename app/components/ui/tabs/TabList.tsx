@@ -4,7 +4,9 @@ import TabItem from "./TabItem";
 
 export interface TabOption {
   tabName: string;
-  /** Optional display label shown in the tab. Falls back to `tabName`. */
+  /** Stable identifier used for matching; falls back to `tabName`. */
+  tabKey?: string;
+  /** Display label shown in the tab; falls back to `tabName`. */
   displayName?: string;
   icon?: React.ReactNode;
 }
@@ -12,11 +14,19 @@ export interface TabOption {
 interface TabListProps {
   tabs: TabOption[];
   activeTab: string;
-  onTabChange: (tabName: string) => void;
-  className?: string;
+  onTabChange: (value: string) => void;
   width?: string;
   height?: string;
+  /** Horizontal padding Tailwind class for each tab item. Defaults to `px-3`. */
+  tabItemPaddingX?: string;
+  /** Vertical padding Tailwind class for each tab item (e.g. `py-[3px]`). When set, overrides `height`. */
+  tabItemPaddingY?: string;
+  /** Gap between tab items (Tailwind class). Defaults to `gap-1`. */
   gap?: string;
+  className?: string;
+  tabItemClassName?: string;
+  /** Tailwind classes used for the tab label's typography. Defaults to the standard 13px Geist Medium style. */
+  textClassName?: string;
   isJustifyStart?: boolean;
   showTooltip?: boolean;
   iconOnly?: boolean;
@@ -26,31 +36,48 @@ const TabList: React.FC<TabListProps> = ({
   tabs,
   activeTab,
   onTabChange,
+  width = "min-w-[148px]",
+  height = "h-[36px]",
+  tabItemPaddingX,
+  tabItemPaddingY,
+  gap = "gap-1",
   className,
-  width = "min-w-[9.25rem]",
-  height = "h-[2.25rem]",
-  gap = "gap-4",
+  tabItemClassName,
+  textClassName,
   isJustifyStart = false,
   showTooltip = true,
   iconOnly = false,
 }) => {
   return (
-    <div className={cn("flex ", gap, className)}>
-      {tabs.map((tab) => (
-        <TabItem
-          key={tab.tabName}
-          label={tab.displayName ?? tab.tabName}
-          dataLabel={tab.tabName}
-          icon={tab.icon}
-          isActive={activeTab === tab.tabName}
-          onClick={() => onTabChange(tab.tabName)}
-          width={width}
-          height={height}
-          isJustifyStart={isJustifyStart}
-          showTooltip={showTooltip}
-          iconOnly={iconOnly}
-        />
-      ))}
+    <div
+      className={cn(
+        "inline-flex rounded-[6px] bg-[#ebebeb] p-1 dark:bg-black-900",
+        gap,
+        className,
+      )}
+    >
+      {tabs.map((tab) => {
+        const tabIdentifier = tab.tabKey ?? tab.tabName;
+        return (
+          <TabItem
+            key={tabIdentifier}
+            label={tab.displayName ?? tab.tabName}
+            dataLabel={tabIdentifier}
+            icon={tab.icon}
+            isActive={activeTab === tabIdentifier}
+            onClick={() => onTabChange(tabIdentifier)}
+            width={width}
+            height={height}
+            paddingX={tabItemPaddingX}
+            paddingY={tabItemPaddingY}
+            textClassName={textClassName}
+            isJustifyStart={isJustifyStart}
+            showTooltip={showTooltip}
+            iconOnly={iconOnly}
+            tabItemClassName={tabItemClassName}
+          />
+        );
+      })}
     </div>
   );
 };

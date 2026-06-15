@@ -35,7 +35,7 @@ const CONNECT_ATTEMPT_TIMEOUT_SECS: u64 = 10;
 ///
 /// Uses `connect_guard` to serialize connection attempts — only one task
 /// connects at a time; concurrent callers wait and reuse the result.
-pub async fn get_substrate_client(app_state: &crate::app_state::AppState) -> Result<Arc<OnlineClient<PolkadotConfig>>, String> {
+pub async fn get_substrate_client(app_state: &crate::app_state::AppState) -> crate::error::Result<Arc<OnlineClient<PolkadotConfig>>> {
     // Fast path: return cached client without acquiring the connection guard.
     if let Some(client) = read_cached_client(app_state)? {
         return Ok(client);
@@ -51,7 +51,7 @@ pub async fn get_substrate_client(app_state: &crate::app_state::AppState) -> Res
         if let Some(client) = read_cached_client(app_state)? {
             return Ok(client);
         }
-        return Err("Substrate client is connecting; retry shortly".to_string());
+        return Err(crate::error::AppError::Substrate("Substrate client is connecting; retry shortly".into()));
     };
 
     // Re-check: another task may have connected while we waited.
@@ -69,7 +69,7 @@ pub async fn get_substrate_client(app_state: &crate::app_state::AppState) -> Res
 /// whenever it had been concurrently cleared even though the `OnlineClient` was
 /// still cached (the two caches are populated together but can be cleared
 /// independently). This re-derives both together via `connect_and_cache`.
-pub async fn get_rpc_client(app_state: &crate::app_state::AppState) -> Result<RpcClient, String> {
+pub async fn get_rpc_client(app_state: &crate::app_state::AppState) -> crate::error::Result<RpcClient> {
     if let Some(rpc) = read_cached_rpc_client(app_state)? {
         return Ok(rpc);
     }
@@ -77,52 +77,56 @@ pub async fn get_rpc_client(app_state: &crate::app_state::AppState) -> Result<Rp
         if let Some(rpc) = read_cached_rpc_client(app_state)? {
             return Ok(rpc);
         }
-        return Err("Substrate client is connecting; retry shortly".to_string());
+        return Err(crate::error::AppError::Substrate("Substrate client is connecting; retry shortly".into()));
     };
     if let Some(rpc) = read_cached_rpc_client(app_state)? {
         return Ok(rpc);
     }
     // connect_and_cache repopulates BOTH the OnlineClient and the RPC caches.
     connect_and_cache(app_state).await?;
-    read_cached_rpc_client(app_state)?.ok_or_else(|| "RPC client unavailable after connect".to_string())
+    read_cached_rpc_client(app_state)?.ok_or_else(|| crate::error::AppError::Substrate("RPC client unavailable after connect".into()))
 }
 
 /// One bounded connection attempt. Always returns within
 /// [`CONNECT_ATTEMPT_TIMEOUT_SECS`] — a stalled `from_url`/`from_rpc_client`
 /// on a dead endpoint surfaces as a timeout `Err` rather than hanging while
 /// `connect_guard` is held.
-async fn connect_once(wss_endpoint: &str) -> Result<(RpcClient, OnlineClient<PolkadotConfig>), String> {
+async fn connect_once(wss_endpoint: &str) -> crate::error::Result<(RpcClient, OnlineClient<PolkadotConfig>)> {
     let attempt = tokio::time::timeout(Duration::from_secs(CONNECT_ATTEMPT_TIMEOUT_SECS), async {
-        let rpc = RpcClient::from_url(wss_endpoint).await.map_err(|e| e.to_string())?;
+        let rpc = RpcClient::from_url(wss_endpoint)
+            .await
+            .map_err(|e| crate::error::AppError::Substrate(e.to_string()))?;
         let client = OnlineClient::<PolkadotConfig>::from_rpc_client(rpc.clone())
             .await
-            .map_err(|e| e.to_string())?;
-        Ok::<_, String>((rpc, client))
+            .map_err(|e| crate::error::AppError::Substrate(e.to_string()))?;
+        Ok::<_, crate::error::AppError>((rpc, client))
     })
     .await;
     match attempt {
         Ok(inner) => inner,
-        Err(_elapsed) => Err(format!("connection attempt timed out after {CONNECT_ATTEMPT_TIMEOUT_SECS}s")),
+        Err(_elapsed) => Err(crate::error::AppError::Substrate(format!(
+            "connection attempt timed out after {CONNECT_ATTEMPT_TIMEOUT_SECS}s"
+        ))),
     }
 }
 
 /// Read the cached RPC client without modifying state.
-fn read_cached_rpc_client(app_state: &crate::app_state::AppState) -> Result<Option<RpcClient>, String> {
+fn read_cached_rpc_client(app_state: &crate::app_state::AppState) -> crate::error::Result<Option<RpcClient>> {
     let rpc = app_state
         .blockchain
         .rpc_client
         .read()
-        .map_err(|e| format!("RPC client lock failed: {e}"))?;
+        .map_err(|e| crate::error::AppError::Lock(format!("rpc_client read: {e}")))?;
     Ok(rpc.clone())
 }
 
 /// Read the cached client without modifying state.
-fn read_cached_client(app_state: &crate::app_state::AppState) -> Result<Option<Arc<OnlineClient<PolkadotConfig>>>, String> {
+fn read_cached_client(app_state: &crate::app_state::AppState) -> crate::error::Result<Option<Arc<OnlineClient<PolkadotConfig>>>> {
     let client = app_state
         .blockchain
         .client
         .read()
-        .map_err(|e| format!("Substrate client lock failed: {e}"))?;
+        .map_err(|e| crate::error::AppError::Lock(format!("substrate client read: {e}")))?;
     Ok(client.clone())
 }
 
@@ -144,8 +148,8 @@ fn retry_delay(attempt: usize, rate_limited: bool) -> Duration {
 
 /// Connect to the RPC endpoint and cache the client.
 /// Called while holding `connect_guard` — no other task is connecting.
-async fn connect_and_cache(app_state: &crate::app_state::AppState) -> Result<Arc<OnlineClient<PolkadotConfig>>, String> {
-    let pool = app_state.pool().map_err(|e| e.to_string())?;
+async fn connect_and_cache(app_state: &crate::app_state::AppState) -> crate::error::Result<Arc<OnlineClient<PolkadotConfig>>> {
+    let pool = app_state.pool()?;
     let wss_endpoint = get_current_wss_endpoint(pool).await.unwrap_or_else(|_| WSS_ENDPOINT.to_string());
 
     let mut attempt = 0;
@@ -162,7 +166,7 @@ async fn connect_and_cache(app_state: &crate::app_state::AppState) -> Result<Arc
                         .blockchain
                         .client
                         .write()
-                        .map_err(|e| format!("Substrate client lock failed: {e}"))?;
+                        .map_err(|e| crate::error::AppError::Lock(format!("substrate client write: {e}")))?;
                     *client_lock = Some(arc.clone());
                 }
 
@@ -175,7 +179,12 @@ async fn connect_and_cache(app_state: &crate::app_state::AppState) -> Result<Arc
                 info!(attempt, endpoint = %wss_endpoint, "Connected to Substrate node");
                 return Ok(arc);
             }
-            Err(e) => e,
+            // connect_once only ever yields AppError::Substrate; unwrap its inner
+            // message so is_rate_limited (429 detection) and the aggregate
+            // "after N attempts" error read the raw transport text without a
+            // doubled "Blockchain RPC error:" prefix.
+            Err(crate::error::AppError::Substrate(s)) => s,
+            Err(other) => other.to_string(),
         };
 
         let rate_limited = is_rate_limited(&err_str);
@@ -189,7 +198,9 @@ async fn connect_and_cache(app_state: &crate::app_state::AppState) -> Result<Arc
             "Failed to connect to Substrate node"
         );
         if attempt >= max {
-            return Err(format!("Failed to connect to Substrate node after {max} attempts: {err_str}"));
+            return Err(crate::error::AppError::Substrate(format!(
+                "Failed to connect to Substrate node after {max} attempts: {err_str}"
+            )));
         }
         sleep(retry_delay(attempt, rate_limited)).await;
     }
@@ -210,18 +221,15 @@ pub fn clear_substrate_client(app_state: &crate::app_state::AppState) {
 }
 
 /// Get the current WSS endpoint from database.
-pub async fn get_current_wss_endpoint(pool: &SqlitePool) -> Result<String, String> {
-    let row = sqlx::query("SELECT endpoint FROM wss_endpoint WHERE id = 1")
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| format!("Failed to query WSS endpoint: {e}"))?;
+pub async fn get_current_wss_endpoint(pool: &SqlitePool) -> crate::error::Result<String> {
+    let row = sqlx::query("SELECT endpoint FROM wss_endpoint WHERE id = 1").fetch_optional(pool).await?;
 
     match row {
         Some(row) => {
             let endpoint: String = row.get("endpoint");
             Ok(endpoint)
         }
-        None => Err("No WSS endpoint found in database".to_string()),
+        None => Err(crate::error::AppError::Other("No WSS endpoint found in database".into())),
     }
 }
 
@@ -229,40 +237,43 @@ pub async fn get_current_wss_endpoint(pool: &SqlitePool) -> Result<String, Strin
 ///
 /// Replaces the raw WebSocket test in `CustomizeRPC.tsx`.
 /// Returns Ok(()) on success, Err with message on failure.
-pub async fn test_rpc_endpoint(endpoint: &str) -> Result<(), String> {
+pub async fn test_rpc_endpoint(endpoint: &str) -> crate::error::Result<()> {
     if !endpoint.starts_with("ws://") && !endpoint.starts_with("wss://") {
-        return Err("Invalid endpoint format. Must start with ws:// or wss://".into());
+        return Err(crate::error::AppError::Validation(
+            "Invalid endpoint format. Must start with ws:// or wss://".into(),
+        ));
     }
 
     // Try to establish an RPC connection with a 10-second timeout
     match tokio::time::timeout(Duration::from_secs(10), async {
         subxt::backend::rpc::RpcClient::from_url(endpoint)
             .await
-            .map_err(|e| format!("Connection failed: {e}"))
+            .map_err(|e| crate::error::AppError::Substrate(format!("Connection failed: {e}")))
     })
     .await
     {
         Ok(Ok(_)) => Ok(()),
         Ok(Err(e)) => Err(e),
-        Err(_) => Err("Connection timed out after 10 seconds".into()),
+        Err(_) => Err(crate::error::AppError::Substrate("Connection timed out after 10 seconds".into())),
     }
 }
 
 /// Update the WSS endpoint in database and clear the current client.
-pub async fn update_wss_endpoint(app_state: &crate::app_state::AppState, new_endpoint: String) -> Result<(), String> {
+pub async fn update_wss_endpoint(app_state: &crate::app_state::AppState, new_endpoint: String) -> crate::error::Result<()> {
     // Validate the endpoint format (basic check)
     if !new_endpoint.starts_with("ws://") && !new_endpoint.starts_with("wss://") {
-        return Err("Invalid WSS endpoint format. Must start with ws:// or wss://".to_string());
+        return Err(crate::error::AppError::Validation(
+            "Invalid WSS endpoint format. Must start with ws:// or wss://".into(),
+        ));
     }
 
-    let pool = app_state.pool().map_err(|e| e.to_string())?;
+    let pool = app_state.pool()?;
 
     // Update or insert the endpoint
     let result = sqlx::query("INSERT OR REPLACE INTO wss_endpoint (id, endpoint, updated_at) VALUES (1, ?, CURRENT_TIMESTAMP)")
         .bind(&new_endpoint)
         .execute(pool)
-        .await
-        .map_err(|e| format!("Failed to update WSS endpoint: {e}"))?;
+        .await?;
 
     if result.rows_affected() > 0 {
         // Clear the current client so it will reconnect with new endpoint
@@ -270,7 +281,7 @@ pub async fn update_wss_endpoint(app_state: &crate::app_state::AppState, new_end
         info!("WSS endpoint updated to: {}", new_endpoint);
         Ok(())
     } else {
-        Err("Failed to update WSS endpoint".to_string())
+        Err(crate::error::AppError::Other("Failed to update WSS endpoint".into()))
     }
 }
 
@@ -297,5 +308,16 @@ mod tests {
     async fn connect_once_returns_err_on_malformed_endpoint() {
         let result = connect_once("not-a-websocket-url").await;
         assert!(result.is_err(), "malformed endpoint must be an Err");
+    }
+
+    /// A scheme that is not `ws://`/`wss://` is rejected at the input-format
+    /// check as `AppError::Validation` (not a network/`Substrate` error and not
+    /// the old catch-all `Other`), so the FE can dispatch on `kind == "Validation"`
+    /// to show an inline form error instead of a connection-failure toast. This
+    /// returns before any network I/O, so it needs no timeout.
+    #[tokio::test]
+    async fn test_rpc_endpoint_rejects_non_ws_scheme_as_validation() {
+        let err = test_rpc_endpoint("http://example.com").await.unwrap_err();
+        assert!(matches!(err, crate::error::AppError::Validation(_)), "expected Validation, got {err:?}");
     }
 }
