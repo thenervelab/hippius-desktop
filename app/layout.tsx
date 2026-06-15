@@ -1,30 +1,46 @@
 "use client";
-import { Geist } from "next/font/google";
+import { Inter as InterFont, Geist, Geist_Mono } from "next/font/google";
 import localFont from "next/font/local";
 import "@/app/globals.css";
-import Providers from "@/components/providers";
-import { Toaster } from "sonner";
 import "sonner/dist/styles.css";
 import "react-circular-progressbar/dist/styles.css";
-import NextTopLoader from "nextjs-toploader";
-import { WalletAuthProvider } from "./lib/wallet-auth-context";
-import PreAuthProvider from "@/app/components/auth/PreAuthProvider";
-import { Suspense } from "react";
-import PageLoader from "@/app/components/PageLoader";
-import SplashWrapper from "./components/splash-screen";
-import { NavigationLoaderProvider } from "./lib/hooks/useNavigationLoader";
-import UpdateChecker from "@/components/updater/UpdateChecker";
-import TrayNavigationListener from "@/app/components/tray/TrayNavigationListener";
-import ZoomController from "@/app/components/ZoomController";
+import AppShell from "@/app/components/AppShell";
+import { cn } from "./lib/utils";
+import { THEME_STORAGE_KEY } from "./lib/theme";
 
-const digitalFonts = localFont({
-  src: "./fonts/DigitalNumbers-Regular.ttf",
+/**
+ * Pre-hydration theme boot: applies the stored System/Light/Dark
+ * preference to <html> before the body paints, so a forced theme never
+ * flashes the OS theme first. Must mirror the rules in app/lib/theme.ts
+ * (missing or invalid stored value means "system"). Runs as the first
+ * child of <body> — the same placement next-themes uses — which is why
+ * <html> carries suppressHydrationWarning: the script mutates the class
+ * list before React hydrates.
+ */
+const themeBootScript = `try{var p=localStorage.getItem(${JSON.stringify(
+  THEME_STORAGE_KEY,
+)});var d=p==="dark"||(p!=="light"&&window.matchMedia("(prefers-color-scheme: dark)").matches);var r=document.documentElement;r.classList.toggle("dark",d);r.style.colorScheme=d?"dark":"light";}catch(e){}`;
+
+const inter = InterFont({
+  subsets: ["latin"],
   display: "swap",
+  variable: "--font-inter",
 });
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
   subsets: ["latin"],
+});
+
+const geistMono = Geist_Mono({
+  variable: "--font-geist-mono",
+  subsets: ["latin"],
+});
+
+const digitalFonts = localFont({
+  src: "./fonts/DigitalNumbers-Regular.ttf",
+  variable: "--font-digital",
+  display: "swap",
 });
 
 export default function RootLayout({
@@ -33,38 +49,23 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="scroll-smooth">
+    <html lang="en" className="scroll-smooth" suppressHydrationWarning>
       <body
-        className={`${digitalFonts.className} ${geistSans.className} ${geistSans.variable} bg-grey-100 text-grey-10 antialiased font-sans`}
+        className={cn(
+          inter.variable,
+          geistSans.variable,
+          geistMono.variable,
+          digitalFonts.variable,
+          geistSans.className,
+          "bg-grey-100 text-grey-10 antialiased font-geist",
+        )}
       >
-        <Providers>
-          <WalletAuthProvider>
-            <UpdateChecker>
-              <PreAuthProvider>
-                <NextTopLoader color="#3167DD" showSpinner={false} />
-                <NavigationLoaderProvider>
-                  <TrayNavigationListener />
-                  <ZoomController />
-                  <SplashWrapper preventClose={false}>
-                    <Suspense fallback={<PageLoader />}>
-                      <div className="flex min-h-screen h-screen">
-                        {children}
-                      </div>
-                    </Suspense>
-                  </SplashWrapper>
-
-                  <Toaster
-                    position="top-center"
-                    className="toaster-auth-aware"
-                    toastOptions={{
-                      style: { fontFamily: "var(--font-geist-sans)" },
-                    }}
-                  />
-                </NavigationLoaderProvider>
-              </PreAuthProvider>
-            </UpdateChecker>
-          </WalletAuthProvider>
-        </Providers>
+        <script dangerouslySetInnerHTML={{ __html: themeBootScript }} />
+        {/* AppShell decides which provider tree to mount per window:
+         *  the full app for the main window, or a minimal self-contained
+         *  tree for the borderless system-tray popover (the `/tray-panel`
+         *  route). See app/components/AppShell.tsx. */}
+        <AppShell>{children}</AppShell>
       </body>
     </html>
   );

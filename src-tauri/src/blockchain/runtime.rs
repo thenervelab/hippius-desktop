@@ -52,7 +52,7 @@ impl From<FileInputWrapper> for FileInput {
 /// Fetch the current WSS endpoint.
 #[tauri::command]
 pub async fn get_wss_endpoint(state: tauri::State<'_, crate::app_state::AppState>) -> Result<String, crate::error::AppError> {
-    Ok(get_current_wss_endpoint(state.pool()?).await?)
+    get_current_wss_endpoint(state.pool()?).await
 }
 
 /// Update the WSS endpoint.
@@ -77,7 +77,5 @@ pub async fn test_rpc_endpoint_command(endpoint: String) -> Result<(), crate::er
             "Invalid WSS endpoint format. URL must start with ws:// or wss://".into(),
         ));
     }
-    crate::blockchain::client::test_rpc_endpoint(trimmed)
-        .await
-        .map_err(crate::error::AppError::Other)
+    crate::blockchain::client::test_rpc_endpoint(trimmed).await
 }

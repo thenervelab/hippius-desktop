@@ -1,63 +1,55 @@
 "use client";
 
-import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { AppVersion, Icons, RevealTextLine } from "@/components/ui";
 import cn from "@/app/lib/utils/cn";
 import NavItem from "./NavItem";
-import { navItems, footerNavItems } from "./NavData";
-import { useAtom, useAtomValue, useSetAtom } from "jotai";
-import {
-  settingsDialogOpenAtom,
-  sidebarCollapsedAtom,
-  activeSettingsTabAtom,
-} from "@/app/components/sidebar/sideBarAtoms";
+import { navSections, filterNavSections } from "./NavData";
+import { useAtom, useAtomValue } from "jotai";
+import { sidebarCollapsedAtom } from "@/app/components/sidebar/sideBarAtoms";
 import { shareFeatureEnabledAtom } from "@/app/lib/global-atoms/sharesAtoms";
 import { InView } from "react-intersection-observer";
-import FooterNavItem from "./FooterNavItems";
-import SettingsWidthDialog from "@/components/page-sections/settings/SettingsDialog";
-import SettingsDialogContent from "@/components/page-sections/settings/SettingsDialogContent";
-import CheckForUpdateDialog from "../updater/CheckForUpdateDialog";
-import { useState, useCallback, useEffect, useMemo, useRef } from "react";
-import { triggerSyncPathRefreshAtom } from "@/app/lib/global-atoms/unpinAtoms";
+import { useEffect, useMemo, useRef } from "react";
+import SidebarSearch from "./SidebarSearch";
+import SidebarFooter from "./SidebarFooter";
+import { BELOW_TITLEBAR_TOP_54 } from "@/app/lib/utils/platformChrome";
 
-const AUTO_COLLAPSE_WIDTH = 1000;
+const AUTO_COLLAPSE_WIDTH = 1100;
 
-/** Effective viewport width accounting for zoom */
+/**
+ * Effective viewport width for the auto-collapse decision.
+ *
+ * Zoom uses the native webview page zoom, which reflows the layout viewport, so
+ * `window.innerWidth` ALREADY reports the zoomed-in (narrower) / zoomed-out
+ * (wider) width — no manual division by the zoom factor. Dividing here (the old
+ * root-font-size behaviour) double-counted the zoom and collapsed the rail far
+ * too early when zoomed in.
+ */
 function getEffectiveWidth(): number {
-  const stored = localStorage.getItem("hippius-zoom-level");
-  const zoom = stored ? parseInt(stored, 10) : 100;
-  return window.innerWidth / (zoom / 100);
+  return window.innerWidth;
 }
 
 const Sidebar: React.FC = () => {
   const pathname = usePathname();
-  const [open, setOpen] = useState(false);
   const [collapsed, setCollapsed] = useAtom(sidebarCollapsedAtom);
-  // Track whether we auto-collapsed so we can auto-expand when the window widens
   const autoCollapsedRef = useRef(false);
   const collapsedRef = useRef(collapsed);
   collapsedRef.current = collapsed;
 
-  // Auto-collapse sidebar when effective viewport is narrow (accounts for zoom)
   useEffect(() => {
     let wasNarrow = getEffectiveWidth() < AUTO_COLLAPSE_WIDTH;
 
     const handleChange = () => {
       const isNarrow = getEffectiveWidth() < AUTO_COLLAPSE_WIDTH;
       if (isNarrow && !wasNarrow && !collapsedRef.current) {
-        // Effective viewport just became narrow — auto-collapse
         setCollapsed(true);
         autoCollapsedRef.current = true;
       } else if (!isNarrow && wasNarrow && autoCollapsedRef.current) {
-        // Effective viewport just became wide again — restore if we auto-collapsed
         setCollapsed(false);
         autoCollapsedRef.current = false;
       }
       wasNarrow = isNarrow;
     };
 
-    // Collapse on mount if already narrow
     if (wasNarrow && !collapsedRef.current) {
       setCollapsed(true);
       autoCollapsedRef.current = true;
@@ -70,228 +62,89 @@ const Sidebar: React.FC = () => {
       window.removeEventListener("zoom-changed", handleChange);
     };
   }, [setCollapsed]);
-  const [settingsDialogOpen, setSettingsDialogOpen] = useAtom(
-    settingsDialogOpenAtom
-  );
-  const setActiveSettingsTab = useSetAtom(activeSettingsTabAtom);
-  const triggerSyncPathRefresh = useSetAtom(triggerSyncPathRefreshAtom);
-  // Hide capability-gated nav items until the server says they're
-  // supported. `shareFeatureEnabledAtom` stays `false` while the
-  // capability fetch is in flight, so a slow first load never flickers
-  // the entry in then out. The only `true→false` transition is logout
-  // (`useServerCapabilities` resets the atom on session end), which is
-  // the desired UX — the entry should disappear with the session.
+
   const shareEnabled = useAtomValue(shareFeatureEnabledAtom);
-  const visibleNavItems = useMemo(
-    () =>
-      navItems.filter((item) => {
-        if (item.featureFlag === "shares") return shareEnabled;
-        return true;
-      }),
-    [shareEnabled]
+
+  const visibleSections = useMemo(
+    () => filterNavSections(navSections, { shareEnabled }),
+    [shareEnabled],
   );
 
-  const toggleSidebar = () => {
-    setCollapsed(!collapsed);
-  };
-
-  const openSettingsWithDefaultTab = () => {
-    setActiveSettingsTab("Sync & Storage");
-    setSettingsDialogOpen(true);
-  };
-
-  const handleSettingsOpenChange = useCallback(
-    (isOpen: boolean) => {
-      setSettingsDialogOpen(isOpen);
-      if (!isOpen) {
-        // Refresh Files page data when Settings dialog closes
-        triggerSyncPathRefresh((prev) => prev + 1);
-      }
-    },
-    [setSettingsDialogOpen, triggerSyncPathRefresh]
-  );
+  if (pathname.startsWith("/settings")) return null;
 
   return (
-    <>
-      <SettingsWidthDialog
-        open={settingsDialogOpen}
-        onOpenChange={handleSettingsOpenChange}
-        heading="Settings"
-      >
-        <SettingsDialogContent />
-      </SettingsWidthDialog>
-      <CheckForUpdateDialog
-        open={open}
-        onOpenChange={setOpen}
-        onClose={() => setOpen(false)}
-      />
+    <InView triggerOnce>
+      {({ ref, inView }) => (
+        <div
+          ref={ref}
+          className={cn(
+            "fixed left-0 bottom-0 bg-transparent  flex flex-col overflow-hidden transition-all duration-300 ease-in-out z-50",
+            // Tracks the top bar's zoom-compensated band height so the rail
+            // never rises into the macOS traffic lights when zoomed out.
+            BELOW_TITLEBAR_TOP_54,
+            collapsed ? "w-[3.8125rem]" : "w-[16.4375rem]",
+          )}
+        >
+            <div className="flex flex-col flex-1 min-h-0 overflow-y-auto px-3 pt-0.5 pb-2 overflow-x-hidden">
+              <SidebarSearch collapsed={collapsed} />
 
-      <InView triggerOnce>
-        {({ ref, inView }) => (
-          <div
-            ref={ref}
-            className={cn(
-              "fixed top-0 left-0 bottom-0 bg-white flex flex-col ml-4 my-4 border border-grey-80 rounded transition-all duration-300 ease-in-out z-50",
-              collapsed ? "w-[3rem]" : "w-[10.625rem]"
-            )}
-          >
-            <div className="flex flex-col items-start w-full">
-              <Link
-                className=" hover:opacity-70 pt-2 px-2 duration-300 text-white w-full"
-                href="/"
-              >
-                <RevealTextLine
-                  reveal={inView}
-                  className="flex items-center gap-x-2"
+              {visibleSections.map((section) => (
+                <div
+                  key={section.label}
+                  className="flex flex-col gap-y-1.5 w-full pt-[10px]"
                 >
-                  <div className="block rounded-lg bg-primary-50 flex-shrink-0">
-                    <Icons.HippiusLogo className="size-8" />
-                  </div>
-
                   {!collapsed && (
-                    <span className="font-medium text-grey-10 text-base overflow-hidden transition-opacity duration-300">
-                      Hippius
-                    </span>
+                    <div className="flex items-center justify-start px-2.5 py-1.5">
+                      <span className="text-[10px] font-medium tracking-[-0.2px] text-[rgba(0,0,0,0.4)] dark:text-white/40 uppercase whitespace-nowrap overflow-hidden text-ellipsis">
+                        {section.label}
+                      </span>
+                    </div>
                   )}
-                </RevealTextLine>
-              </Link>
-              <RevealTextLine
-                reveal={inView}
-                onClick={toggleSidebar}
-                className="cursor-pointer block p-1.5 border border-gray-80 rounded self-start mx-2 my-4 transition-all duration-300"
-              >
-                <Icons.SideBarLeft
-                  className={cn(
-                    "size-4 transition-transform duration-300 text-grey-40",
-                    collapsed && "transform rotate-180"
-                  )}
-                />
-              </RevealTextLine>
-            </div>
 
-            {/* <div className="px-4 pt-4">
-            {!collapsed && (
-              <div className="text-xs text-grey-60 font-semibold mb-2">
-                Locations
-              </div>
-            )}
-            <div className="flex flex-col gap-2">
-              <div className="flex items-center gap-2 text-grey-10">
-                <FaHdd className="text-grey-50" />
-                {!collapsed && <span>Hippius</span>}
-              </div>
-              <div className="flex items-center gap-2 text-grey-10">
-                <FaFolder className="text-blue-500" />
-                {!collapsed && (
-                  <span>{syncPath ? syncPath.split("/").pop() : ""}</span>
-                )}
-              </div>
-            </div>
-          </div> */}
+                  <div className="flex flex-col w-full gap-y-0.5">
+                    {section.items.map((item) => {
+                      // Only the most-specific entry should look active. If
+                      // any sub-item matches the current route, suppress the
+                      // parent's active visual — child-active still drives
+                      // submenu auto-expand inside NavItem.
+                      const hasActiveChild =
+                        item.subMenuItems?.some(
+                          (sub) =>
+                            pathname === sub.path ||
+                            pathname.startsWith(sub.path + "/"),
+                        ) ?? false;
 
-            <div className="flex gap-4 flex-col flex-1 pt-4 border-t border-gray-80 w-full overflow-y-auto min-h-0">
-              {visibleNavItems.map((item) => {
-                // Check if current path matches or starts with the item path (for child routes)
-                const isActive =
-                  item.path === "/"
-                    ? pathname === item.path
-                    : pathname === item.path ||
-                      pathname.startsWith(item.path + "/");
+                      const isActive =
+                        !hasActiveChild &&
+                        (item.path === "/"
+                          ? pathname === item.path
+                          : pathname === item.path ||
+                            pathname.startsWith(item.path + "/"));
 
-                return (
-                  <NavItem
-                    key={item.path}
-                    icon={item.icon}
-                    label={item.label}
-                    href={item.path}
-                    inView={inView}
-                    active={isActive}
-                    comingSoon={item?.comingSoon}
-                    collapsed={collapsed}
-                    subMenuItems={item?.subMenuItems}
-                    onClick={
-                      item.label === "Settings"
-                        ? openSettingsWithDefaultTab
-                        : undefined
-                    }
-                  />
-                );
-              })}
-            </div>
-
-            <div className="py-3 border-b border-gray-80 w-full">
-              {footerNavItems.map((item) => (
-                <FooterNavItem
-                  key={item.label}
-                  icon={item.icon}
-                  label={item.label}
-                  inView={inView}
-                  collapsed={collapsed}
-                />
+                      return (
+                        <NavItem
+                          key={`${section.label}-${item.path}-${item.label}`}
+                          icon={item.icon}
+                          label={item.label}
+                          href={item.path}
+                          inView={inView}
+                          active={isActive}
+                          comingSoon={item?.comingSoon}
+                          collapsed={collapsed}
+                          subMenuItems={item?.subMenuItems}
+                          external={item?.external}
+                        />
+                      );
+                    })}
+                  </div>
+                </div>
               ))}
             </div>
 
-            <RevealTextLine
-              reveal={inView}
-              className={cn(
-                "flex w-full text-xs font-digital text-grey-40 transition-all duration-300 border-b border-gray-80",
-                collapsed ? "justify-center p-2" : "px-4 py-3"
-              )}
-            >
-              <>
-                <span className={cn(collapsed ? "text-[0.625rem]" : "")}>
-                  {!collapsed ? "VER" : <AppVersion />}
-                </span>
-                {!collapsed && (
-                  <span className="whitespace-nowrap ml-1.5 overflow-hidden">
-                    <AppVersion />
-                  </span>
-                )}
-              </>
-            </RevealTextLine>
-            <div className="py-3">
-              <div
-                className={cn(
-                  "transition-all duration-300 relative group cursor-pointer py-2",
-                  "hover:bg-gray-100 hover:text-primary-40 text-grey-40"
-                )}
-                onClick={() => setOpen(true)}
-              >
-                <RevealTextLine
-                  reveal={inView}
-                  parentClassName="block"
-                  className="flex items-center  px-3.5"
-                >
-                  <span className="size-4 flex-shrink-0">
-                    <Icons.TrendUp />
-                  </span>
-                  {!collapsed && (
-                    <span className="text-sm font-medium whitespace-nowrap ml-1.5 overflow-hidden transition-opacity duration-300">
-                      Update App
-                    </span>
-                  )}
-                </RevealTextLine>
-              </div>
-            </div>
-
-            {/* <RevealTextLine
-              reveal={inView}
-              className={cn(
-                "flex w-full text-xs text-grey-70 transition-all duration-300 font-medium hover:text-primary-50 cursor-pointer",
-                collapsed ? "justify-center p-2" : "px-4 py-2"
-              )}
-              onClick={() => submitABug()}
-            >
-              <>
-                <span className={cn(collapsed ? "text-[0.625rem]" : "")}>
-                  {!collapsed ? "Submit a Bug" : "Bug"}
-                </span>
-              </>
-            </RevealTextLine> */}
-          </div>
-        )}
-      </InView>
-    </>
+          <SidebarFooter collapsed={collapsed} />
+        </div>
+      )}
+    </InView>
   );
 };
 

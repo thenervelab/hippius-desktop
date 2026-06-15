@@ -1,13 +1,12 @@
 "use client";
 
 import React, { useCallback, useState } from "react";
-import * as Dialog from "@radix-ui/react-dialog";
 import { toast } from "sonner";
-import { HelpCircle } from "lucide-react";
+import { HelpCircle, OctagonAlert } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
-import DialogContainer from "@/components/ui/DialogContainer";
-import { CardButton, Graphsheet, Icons } from "@/components/ui";
+import { FramedDialog } from "@/components/ui/FramedDialog";
+import { Button, Icons } from "@/components/ui";
 import {
   PassphraseStrength,
   changeRecoveryPassword,
@@ -19,6 +18,7 @@ import {
   useLiveStrength,
   UNLOCK_PASSWORD_DOCS_URL,
 } from "./_shared";
+import { cn } from "@/lib/utils";
 
 interface Props {
   open: boolean;
@@ -33,7 +33,10 @@ interface Props {
  * All domain rules (decryption, strength, derivation guard) live in Rust.
  * This component just renders inputs and surfaces errors.
  */
-const ChangeRecoveryPasswordDialog: React.FC<Props> = ({ open, onOpenChange }) => {
+const ChangeRecoveryPasswordDialog: React.FC<Props> = ({
+  open,
+  onOpenChange,
+}) => {
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -48,6 +51,11 @@ const ChangeRecoveryPasswordDialog: React.FC<Props> = ({ open, onOpenChange }) =
     setConfirm("");
     setStrength(null);
     setCurrentError(null);
+  };
+
+  const handleClose = () => {
+    reset();
+    onOpenChange(false);
   };
 
   const mismatch = confirm.length > 0 && confirm !== next;
@@ -85,96 +93,102 @@ const ChangeRecoveryPasswordDialog: React.FC<Props> = ({ open, onOpenChange }) =
   }, [canSubmit, current, next, onOpenChange]);
 
   return (
-    <Dialog.Root
+    <FramedDialog
       open={open}
-      onOpenChange={(o) => {
-        if (!o) reset();
-        onOpenChange(o);
-      }}
+      onClose={handleClose}
+      title="Change Unlock Password"
+      icon={<Icons.ShieldTick className="size-5 text-white" />}
+      maxWidth="max-w-[680px]"
     >
-      <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[26.75rem] h-fit">
-        <Dialog.Title className="sr-only">Change Unlock Password</Dialog.Title>
+      <p className="mb-5 text-center text-sm text-[#7D7D7D] dark:text-grey-dark-600">
+        Enter your current password, then choose a new one for accessing your
+        files on other devices and Hippius Console.
+      </p>
 
-        <div className="px-4 py-6 flex flex-col gap-5">
-          {/* Centered icon header */}
-          <div className="flex flex-col items-center text-center gap-3">
-            <div className="size-14 flex justify-center items-center relative">
-              <Graphsheet
-                majorCell={{ lineColor: [31, 80, 189, 1.0], lineWidth: 2, cellDim: 200 }}
-                minorCell={{ lineColor: [49, 103, 211, 1.0], lineWidth: 1, cellDim: 20 }}
-                className="absolute w-full h-full duration-500 opacity-30 z-0"
-              />
-              <div className="bg-white-cloud-gradient-sm absolute w-full h-full z-10" />
-              <div className="h-8 w-8 bg-primary-50 rounded-lg flex items-center justify-center z-20">
-                <Icons.ShieldSecurity className="size-5 text-grey-100" />
-              </div>
-            </div>
-            <div className="flex flex-col gap-1">
-              <h2 className="text-xl font-semibold text-grey-10">Change Unlock Password</h2>
-              <p className="text-sm text-grey-50 max-w-sm">
-                Enter your current password, then choose a new one for
-                accessing your files on other devices and Hippius Console.
-              </p>
-            </div>
-          </div>
+      <div className="flex flex-col gap-4">
+        <PasswordField
+          label="Current password"
+          value={current}
+          onChange={(v) => {
+            setCurrent(v);
+            setCurrentError(null);
+          }}
+          errorMessage={currentError ?? undefined}
+          placeholder="Enter current password"
+          autoComplete="current-password"
+        />
 
-          {/* Info box */}
-          <div className="p-3 bg-primary-95 border border-primary-80 rounded-lg flex flex-col gap-2">
-            <p className="text-xs text-primary-40">
-              Changing your unlock password re-encrypts the sealed backup on
-              the server. Your files on the desktop app are not affected.
+        <PasswordField
+          label="New password"
+          value={next}
+          onChange={setNext}
+          errorMessage={
+            sameAsCurrent
+              ? "New password must differ from current."
+              : undefined
+          }
+          placeholder="Enter a strong password"
+        />
+        <StrengthMeter strength={strength} />
+
+        <PasswordField
+          label="Confirm new password"
+          value={confirm}
+          onChange={setConfirm}
+          errorMessage={mismatch ? "Passwords do not match." : undefined}
+          onSubmit={handleSubmit}
+          placeholder="Confirm your password"
+        />
+
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-center gap-1.5">
+            <OctagonAlert className="size-4 text-[#feb101]" />
+            <p className="font-geist text-[14px] leading-[1.109] tracking-[-0.28px] font-medium text-black dark:text-white">
+              Important
             </p>
-            <button
-              type="button"
-              onClick={() => openUrl(UNLOCK_PASSWORD_DOCS_URL)}
-              className="flex items-center gap-1.5 text-xs text-primary-50 hover:text-primary-40 transition-colors"
-            >
-              <HelpCircle className="size-3.5" />
-              Learn how this works
-            </button>
           </div>
-
-            <PasswordField
-              label="Current password"
-              value={current}
-              onChange={(v) => {
-                setCurrent(v);
-                setCurrentError(null);
-              }}
-              errorMessage={currentError ?? undefined}
-              placeholder="Enter current password"
-            />
-
-            <PasswordField
-              label="New password"
-              value={next}
-              onChange={setNext}
-              errorMessage={sameAsCurrent ? "New password must differ from current." : undefined}
-              placeholder="Enter a strong password"
-            />
-            <StrengthMeter strength={strength} />
-
-            <PasswordField
-              label="Confirm new password"
-              value={confirm}
-              onChange={setConfirm}
-              errorMessage={mismatch ? "Passwords do not match." : undefined}
-              onSubmit={handleSubmit}
-              placeholder="Confirm your password"
-            />
-
-          {/* Actions */}
-          <div className="flex gap-3">
-            <CardButton className="w-full" variant="secondary" onClick={() => { reset(); onOpenChange(false); }}>
-              Cancel
-            </CardButton>
-            <CardButton className="w-full" onClick={handleSubmit} disabled={!canSubmit} loading={submitting}>
-              Change password
-            </CardButton>
-          </div>
+          <p className="font-geist text-[14px] leading-[1.4] tracking-[-0.28px] text-[#7d7d7d] dark:text-grey-dark-600">
+            Changing your unlock password re-encrypts the sealed backup on the
+            server. Your files on the desktop app are not affected.
+          </p>
+          <button
+            type="button"
+            onClick={() => openUrl(UNLOCK_PASSWORD_DOCS_URL)}
+            className="self-start flex items-center gap-1.5 text-xs text-primary-50 hover:text-primary-40 transition-colors"
+          >
+            <HelpCircle className="size-3.5" />
+            Learn how this works
+          </button>
         </div>
-        </DialogContainer>
-    </Dialog.Root>
+
+        <div className="flex gap-3">
+          <Button
+            variant="defaultStable"
+            size="auto"
+            onClick={handleClose}
+            disabled={submitting}
+            className="h-[42px] w-full rounded-[6px] text-sm font-medium"
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            size="auto"
+            onClick={handleSubmit}
+            disabled={!canSubmit}
+            loading={submitting}
+            className={cn(
+              "h-[42px] w-full rounded-[6px] border text-sm font-medium",
+              "border-[#3167DD] bg-[#3167DD] text-white",
+              "hover:bg-[#2454c4] hover:border-[#2454c4]",
+              "dark:hover:bg-[#2a5ad0] dark:hover:border-[#2a5ad0]"
+            )}
+          >
+            {submitting ? "Changing..." : "Change password"}
+          </Button>
+        </div>
+      </div>
+    </FramedDialog>
   );
 };
 

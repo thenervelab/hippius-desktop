@@ -16,6 +16,10 @@ export default function OnBoardingGuard({
   const [done, setDone] = useState<boolean | null>(null);
   const [checking, setChecking] = useState(true);
 
+  const handleSetDone = (completed: boolean) => {
+    setDone(completed);
+  };
+
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
       router.replace("/login");
@@ -35,14 +39,14 @@ export default function OnBoardingGuard({
   }, [isAuthenticated, isLoading]);
 
   if (isLoading || (isAuthenticated && checking)) {
-    return <PageLoader />;
+    return <PageLoader ringFill="once" />;
   }
   if (!isAuthenticated) return null;
   if (done === false) {
     return (
       <OnBoardingPage
         onboardingCompleted={done}
-        setOnboardingCompleted={setDone}
+        setOnboardingCompleted={handleSetDone}
       />
     );
   }

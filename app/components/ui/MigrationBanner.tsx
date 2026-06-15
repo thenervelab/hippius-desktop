@@ -19,22 +19,24 @@ export default function MigrationBanner() {
       : 0;
 
   return (
-    <div className="flex items-center gap-3 px-4 py-2.5 rounded-lg border border-primary-80 bg-primary-50/5 mt-2">
-      <Icons.Loader className="size-4 text-primary-50 animate-spin shrink-0" />
+    <div className="relative flex items-center gap-3 overflow-hidden rounded-xl border border-primary-80 bg-gradient-to-r from-primary-50/[0.10] to-primary-50/[0.02] px-4 py-3.5 mt-2 dark:border-primary-50/50 dark:from-primary-50/[0.18] dark:to-primary-50/[0.05]">
+      <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary-50/10 dark:bg-primary-50/25">
+        <Icons.Loader className="size-4 text-primary-50 dark:text-primary-40 animate-spin" />
+      </div>
       <div className="flex-1 min-w-0">
-        <div className="flex items-center justify-between mb-1">
-          <span className="text-sm font-medium text-grey-10">
-            Migrating files...
+        <div className="mb-1.5 flex items-center justify-between gap-2">
+          <span className="text-sm font-semibold text-grey-10 dark:text-white">
+            Migrating files…
           </span>
-          <span className="text-xs text-grey-50">
+          <span className="shrink-0 text-xs font-medium tabular-nums text-grey-50 dark:text-grey-dark-700">
             {formatCount(progress.completed)} / {formatCount(progress.total)}
+            <span className="ml-1.5 text-primary-50 dark:text-primary-40">
+              {percentage}%
+            </span>
           </span>
         </div>
         <ProgressBar value={percentage} className="h-1.5" />
       </div>
-      <span className="text-xs font-medium text-primary-50 shrink-0">
-        {percentage}%
-      </span>
     </div>
   );
 }

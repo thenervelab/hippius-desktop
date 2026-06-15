@@ -7,7 +7,7 @@ import { toast } from "sonner";
 /**
  * Stable Sonner toast ID. The IPC call sites
  * (`useFilesUpload/index.ts` and
- * `app/components/page-sections/files/upload-files-flow/index.tsx`)
+ * `app/components/page-sections/drive/upload-files-flow/index.tsx`)
  * SHOW the loading toast with this ID; this hook is responsible for
  * DISMISSING it when Rust signals the sync cycle has actually started
  * (i.e. the upload-processing window is over).

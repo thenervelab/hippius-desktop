@@ -5,16 +5,15 @@ import {
   isViewingRecentFilesAtom,
 } from "@/app/components/sidebar/sideBarAtoms";
 import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
-import DetailList from "./DetailList";
-import StorageUsageTrends from "./storage-usage-trends";
-import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import Ipfs from "@/app/components/page-sections/files/FilesContainer";
+import PageHeader from "./PageHeader";
+import AvailableCreditsCard from "./available-credits";
+import StorageUsageCard from "./storage-usage-bars";
+import Drive from "@/app/components/page-sections/drive/DriveContainer";
 import { IS_SYNC_PAUSED, SyncPausedAlert } from "@/components/ui";
 
 const Home: React.FC = () => {
   const setActiveSubMenuItem = useSetAtom(activeSubMenuItemAtom);
   const setIsViewingRecentFiles = useSetAtom(isViewingRecentFilesAtom);
-  const { polkadotAddress } = useWalletAuth();
 
   useEffect(() => {
     setActiveSubMenuItem("");
@@ -27,24 +26,30 @@ const Home: React.FC = () => {
 
   return (
     <>
-      <DashboardTitleWrapper
-        mainText="Welcome to Hippius"
-        subText="Secure & Encrypted Storage with Easy Sync and Real-Time Tracking"
-      >
-        <div className="mt-6">
-          {IS_SYNC_PAUSED && (
-            <div className="mb-4">
-              <SyncPausedAlert variant="inline" />
+      <DashboardTitleWrapper mainText="Overview">
+        <div className="px-3">
+          <PageHeader />
+          <div className="mt-3">
+            {IS_SYNC_PAUSED && (
+              <div className="mb-4">
+                <SyncPausedAlert variant="inline" />
+              </div>
+            )}
+
+            <div className="mb-3 grid gap-4 grid-cols-1 @xl:grid-cols-2">
+              <AvailableCreditsCard />
+              <StorageUsageCard />
             </div>
-          )}
 
-          <DetailList />
-
-          <div className="gap-4 mt-6 w-full h-full grid grid-cols-1">
-            <StorageUsageTrends accountId={polkadotAddress ?? undefined} />
-          </div>
-          <div id="recent-files">
-            <Ipfs isRecentFiles />
+            {/* `pb-10` mirrors the drive page's bottom gap: the recent-files
+                card is the last block in the page scroll, so without it the
+                card sits flush against the bottom edge when fully scrolled.
+                It belongs here (the recent-files card's own wrapper in the
+                page scroll) rather than inside DriveContainer, whose
+                isRecentFiles branch intentionally skips its `pb-10`. */}
+            <div id="recent-files" className="pb-10">
+              <Drive isRecentFiles />
+            </div>
           </div>
         </div>
       </DashboardTitleWrapper>

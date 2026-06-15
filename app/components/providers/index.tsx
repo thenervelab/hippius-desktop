@@ -8,7 +8,7 @@ import { useHydrateAtoms } from "jotai/react/utils";
 import { queryClientAtom } from "jotai-tanstack-query";
 
 import { PolkadotApiProvider } from "@/lib/polkadot-api-context";
-import UpdateDownloadDialog from "@/app/components/updater/UpdateDownloadDialog";
+import UpdateDialogWrapper from "@/app/components/updater/UpdateDialogWrapper";
 import { appStore } from "@/lib/store/jotaiStore";
 
 const queryClient = new QueryClient();
@@ -25,7 +25,7 @@ const Providers: React.FC<{ children: ReactNode }> = ({ children }) => {
         <HydrateAtoms>
           <PolkadotApiProvider>
             <ParallaxProvider>{children}</ParallaxProvider>
-            <UpdateDownloadDialog />
+            <UpdateDialogWrapper />
           </PolkadotApiProvider>
         </HydrateAtoms>
       </JotaiProvider>

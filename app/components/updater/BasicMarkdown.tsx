@@ -108,7 +108,7 @@ function renderInline(text: string): (string | React.JSX.Element)[] {
 function BasicMarkdown({ text }: { text: string }) {
   const blocks = React.useMemo(() => parseBasicMd(text), [text]);
   return (
-    <div className="text-sm text-grey-60">
+    <div className="text-[13px] text-[#3a3a3a] dark:text-grey-dark-600">
       {blocks.map((b, i) => {
         if (b.type === "p")
           return (
@@ -119,18 +119,18 @@ function BasicMarkdown({ text }: { text: string }) {
         if (b.type === "h") {
           if (b.level === 1)
             return (
-              <h1 key={i} className="text-lg font-semibold mt-4 mb-2">
+              <h1 key={i} className="text-[15px] font-semibold mt-4 mb-2 text-[#0a0a0a] dark:text-white">
                 {renderInline(b.text)}
               </h1>
             );
           if (b.level === 2)
             return (
-              <h2 key={i} className="text-base font-semibold mt-4 mb-2">
+              <h2 key={i} className="text-[14px] font-semibold mt-4 mb-2 text-[#0a0a0a] dark:text-white">
                 {renderInline(b.text)}
               </h2>
             );
           return (
-            <h3 key={i} className="text-sm font-semibold mt-3 mb-2">
+            <h3 key={i} className="text-[13px] font-semibold mt-3 mb-1 text-[#0a0a0a] dark:text-grey-light-100">
               {renderInline(b.text)}
             </h3>
           );

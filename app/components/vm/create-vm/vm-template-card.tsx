@@ -2,6 +2,7 @@ import React from "react";
 import { MoreVertical } from "lucide-react";
 import TableActionMenu from "../../ui/alt-table/TableActionMenu";
 import { Button, Icons } from "../../ui";
+import { cn } from "@/lib/utils";
 
 export interface VMTemplate {
   id: string;
@@ -32,11 +33,11 @@ const VMTemplateCard: React.FC<VMTemplateCardProps> = ({
   hideMenu = false,
 }) => {
   return (
-    <div className="bg-white border border-grey-80 rounded-lg overflow-hidden flex flex-col gap-4 p-0">
+    <div className="bg-grey-light-100 border border-grey-dark-100 rounded-[8px] overflow-hidden flex flex-col items-center gap-[14px] pb-[8px] dark:bg-black-600 dark:border-black-300">
       {/* Header */}
-      <div className="bg-white border-b border-grey-80 flex gap-2 items-center pl-4 pr-3 py-2.5">
-        <Icons.Computing className="size-5 text-primary-50" />
-        <p className="flex-1 font-medium leading-6 text-lg text-grey-10 tracking-tight">
+      <div className="bg-grey-light-300 border-b-[0.884px] border-grey-dark-100 shadow-[0px_0.884px_0px_0px_white] flex gap-[8px] items-center overflow-hidden px-[8px] py-[8.842px] w-full dark:bg-black-primary-bg dark:border-black-300 dark:shadow-[0px_0.884px_0px_0px_rgba(255,255,255,0.06)]">
+        <Icons.SquareLibrary className="size-[18px] text-primary-50 shrink-0" />
+        <p className="flex-1 font-medium text-[14px] leading-normal tracking-[-0.28px] text-grey-10 dark:text-grey-light-300 min-w-0 truncate">
           {template.name}
         </p>
         {!hideMenu && !showSetupButton && onDelete && (
@@ -51,7 +52,7 @@ const VMTemplateCard: React.FC<VMTemplateCardProps> = ({
               },
             ]}
           >
-            <button className="text-grey-70 hover:bg-grey-90 p-1 rounded transition">
+            <button className="text-grey-70 hover:bg-grey-90 p-1 rounded transition shrink-0">
               <MoreVertical className="size-4" />
             </button>
           </TableActionMenu>
@@ -59,54 +60,52 @@ const VMTemplateCard: React.FC<VMTemplateCardProps> = ({
       </div>
 
       {/* Content */}
-      <div
-        className={`flex flex-col gap-2 px-4 ${!showSetupButton ? "pb-4" : ""}`}
-      >
+      <div className="flex flex-col gap-[12px] px-[8px] w-full">
         {/* RAM and Cores */}
         <div className="flex items-start w-full">
           {/* RAM */}
-          <div className="flex-1 flex flex-col gap-2">
-            <div className="flex gap-1 items-center">
-              <Icons.Cpu className="size-4 text-grey-10" />
-              <p className="font-medium leading-[1.375rem] text-base text-grey-10 tracking-tight">
+          <div className="flex-1 flex flex-col gap-[1.768px] min-w-0">
+            <div className="flex gap-[3.537px] items-center w-full">
+              <Icons.Cpu className="size-[14.147px] shrink-0 text-grey-10 dark:text-grey-light-300" />
+              <p className="font-mono font-medium text-[12px] leading-[19.452px] tracking-[-0.24px] uppercase text-grey-10 dark:text-grey-light-300 whitespace-nowrap">
                 RAM
               </p>
             </div>
-            <p className="font-medium leading-5 text-sm text-grey-70 tracking-tight">
+            <p className="font-medium text-[10px] leading-[17.683px] tracking-[-0.2px] text-grey-dark-600 w-full">
               {template.ramValue}
             </p>
           </div>
 
           {/* Cores */}
-          <div className="flex-1 flex flex-col gap-2">
-            <div className="flex gap-1 items-center">
-              <Icons.CpuCharge className="size-4 text-grey-10" />
-              <p className="font-medium leading-[1.375rem] text-base text-grey-10 tracking-tight">
+          <div className="flex-1 flex flex-col gap-[1.768px] min-w-0">
+            <div className="flex gap-[3.537px] items-center w-full">
+              <Icons.CpuCharge className="size-[14.147px] shrink-0 text-grey-10 dark:text-grey-light-300" />
+              <p className="font-mono font-medium text-[12px] leading-[19.452px] tracking-[-0.24px] uppercase text-grey-10 dark:text-grey-light-300 whitespace-nowrap">
                 Cores
               </p>
             </div>
-            <p className="font-medium leading-5 text-sm text-grey-70 tracking-tight">
+            <p className="font-medium text-[10px] leading-[17.683px] tracking-[-0.2px] text-grey-dark-600 w-full">
               {template.coresValue}
             </p>
           </div>
         </div>
 
         {/* Other Specifications */}
-        <div className="flex flex-col gap-2 w-full">
-          <div className="flex gap-1 items-center">
-            <Icons.MoreSquare className="size-4 text-grey-10" />
-            <p className="font-medium leading-[1.375rem] text-base text-grey-10 tracking-tight">
+        <div className="flex flex-col gap-[1.768px] w-full">
+          <div className="flex gap-[3.537px] items-center w-full">
+            <Icons.Grip className="size-[14.147px] shrink-0 text-grey-10 dark:text-grey-light-300" />
+            <p className="font-mono font-medium text-[12px] leading-[19.452px] tracking-[-0.24px] uppercase text-grey-10 dark:text-grey-light-300 whitespace-nowrap">
               Other Specifications
             </p>
           </div>
-          <div className="flex gap-2 items-center">
-            <p className="font-medium leading-5 text-sm text-grey-70 tracking-tight">
+          <div className="flex gap-[8px] items-center">
+            <p className="font-medium text-[10px] leading-[17.683px] tracking-[-0.2px] text-grey-dark-600 whitespace-nowrap">
               {template.storage}
             </p>
             {template.bandwidth && (
               <>
-                <div className="size-1 rounded-full bg-grey-80" />
-                <p className="font-medium leading-5 text-sm text-grey-70 tracking-tight">
+                <div className="size-1 rounded-full bg-grey-dark-600 shrink-0" />
+                <p className="font-medium text-[10px] leading-[17.683px] tracking-[-0.2px] text-grey-dark-600 whitespace-nowrap">
                   {template.bandwidth}
                 </p>
               </>
@@ -115,14 +114,19 @@ const VMTemplateCard: React.FC<VMTemplateCardProps> = ({
         </div>
 
         {/* Price */}
-        <div className="flex flex-col gap-2 w-full">
-          <div className="flex gap-1 items-center">
-            <Icons.DollarSquare className="size-4 text-grey-10" />
-            <p className="font-medium leading-[1.375rem] text-base text-grey-10 tracking-tight">
+        <div
+          className={cn(
+            "flex flex-col gap-[1.768px] w-full",
+            !showSetupButton && "pb-[8px]",
+          )}
+        >
+          <div className="flex gap-[3.537px] items-center w-full">
+            <Icons.DollarSquare className="size-[14.147px] shrink-0 text-grey-10 dark:text-grey-light-300" />
+            <p className="font-mono font-medium text-[12px] leading-[19.452px] tracking-[-0.24px] uppercase text-grey-10 dark:text-grey-light-300 whitespace-nowrap">
               Price
             </p>
           </div>
-          <p className="font-medium leading-5 text-sm text-grey-70 tracking-tight">
+          <p className="font-medium text-[10px] leading-[17.683px] tracking-[-0.2px] text-grey-dark-600 whitespace-nowrap">
             {template.price}
           </p>
         </div>
@@ -130,16 +134,15 @@ const VMTemplateCard: React.FC<VMTemplateCardProps> = ({
 
       {/* Button */}
       {showSetupButton && onSelect && (
-        <div className="px-4 pb-4">
+        <div className="px-[8px] w-full">
           <Button
-            className={`flex gap-x-2 items-center  h-[2.625rem] w-full`}
-            icon={<Icons.ArrowRight className="size-4" />}
+            variant="primary"
+            size="auto"
+            className="w-full flex items-center justify-center gap-[6px] px-[10px] py-[4px] text-[14px] font-medium leading-[22px] tracking-[-0.28px] rounded-[6px]"
             onClick={() => onSelect(template)}
           >
-            {" "}
-            <span className="font-medium text-base leading-[1.375rem] tracking-tight">
-              Set Up Virtual Machine
-            </span>
+            <span>Setup VM</span>
+            <Icons.ArrowRight className="size-[19px]" />
           </Button>
         </div>
       )}

@@ -38,7 +38,7 @@ export const serverCapabilitiesAtom = atom<ServerCapabilities | null>(null);
  * means the re-enable PR is a single-line revert with no behavioural
  * coupling to untangle.
  */
-export const shareFeatureEnabledAtom = atom(() => false);
+export const shareFeatureEnabledAtom = atom(() => true);
 
 /**
  * Open `ShareFileModal` for this file. `null` means closed.

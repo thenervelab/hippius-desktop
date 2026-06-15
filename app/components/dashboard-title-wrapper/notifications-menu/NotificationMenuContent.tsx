@@ -1,57 +1,40 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import NotificationMenuHeader from "./NotificationMenuHeader";
-import NotificationOptionSelect from "./NotificationOptionSelect";
 import NotificationMenuList from "./NotificationMenuList";
 import { useNotifications } from "@/lib/hooks/useNotifications";
 import { useSetAtom, useAtom } from "jotai";
 import {
-  refreshUnreadCountAtom,
   enabledNotificationTypesAtom,
   refreshEnabledTypesAtom,
+  refreshUnreadCountAtom,
 } from "@/components/page-sections/notifications/notificationStore";
-import { toast } from "sonner";
 import NoNotificationsFound from "@/components/page-sections/notifications/NoNotificationsFound";
 import NoNotificationsEnabled from "@/components/page-sections/notifications/NoNotificationsEnabled";
 import NotificationMenuFooter from "./NotificationMenuFooter";
-import {
-  settingsDialogOpenAtom,
-  activeSettingsTabAtom,
-} from "@/app/components/sidebar/sideBarAtoms";
-import { deleteAllNotifications } from "@/app/lib/helpers/notificationsDb";
-import ArchiveAllConfirmationDialog from "@/components/page-sections/notifications/ArchiveAllConfirmationDialog";
-import { useWalletAuth } from "@/app/lib/wallet-auth-context";
+import { notificationCategoryLabel } from "@/app/lib/helpers/notificationCategories";
 
 interface Props {
   count: number;
   onClose?: () => void;
+  /** Hands the delete-all flow to the menu root, which owns the
+   *  confirmation dialog (it must outlive this dropdown content). */
+  onRequestClearAll?: () => void;
 }
 
-const NotificationMenuContent: React.FC<Props> = ({ count, onClose }) => {
+const NotificationMenuContent: React.FC<Props> = ({
+  count,
+  onClose,
+  onRequestClearAll,
+}) => {
   const [enabledTypes] = useAtom(enabledNotificationTypesAtom);
   const refreshEnabledTypes = useSetAtom(refreshEnabledTypesAtom);
   const refreshUnread = useSetAtom(refreshUnreadCountAtom);
+  const [activeCategory, setActiveCategory] = useState("All");
   const router = useRouter();
-  const setSettingsDialogOpen = useSetAtom(settingsDialogOpenAtom);
-  const setActiveSettingsTab = useSetAtom(activeSettingsTabAtom);
-  const [isArchiveDialogOpen, setIsArchiveDialogOpen] = useState(false);
-  const [isArchiving, setIsArchiving] = useState(false);
-  const { polkadotAddress, oauthSession } = useWalletAuth();
-
-  const notificationOptions = useMemo(
-    () => [
-      ...(enabledTypes.length > 0 ? [{ label: "View All", value: "all" }] : []),
-      ...enabledTypes.map((type) => ({
-        label: type,
-        value: type.toLowerCase(),
-      })),
-    ],
-    [enabledTypes]
-  );
-
-  const [selected, setSelected] = useState(notificationOptions[0]?.value || "");
 
   const { notifications, refresh, markRead, markUnread, markAllRead } =
     useNotifications();
@@ -64,17 +47,27 @@ const NotificationMenuContent: React.FC<Props> = ({ count, onClose }) => {
     refreshEnabledTypes();
   }, [refreshEnabledTypes]);
 
+  // Reset to "All" if the active category gets disabled
   useEffect(() => {
-    if (
-      notificationOptions.length > 0 &&
-      !notificationOptions.some((opt) => opt.value === selected)
-    ) {
-      setSelected(notificationOptions[0].value);
+    if (activeCategory !== "All" && !enabledTypes.includes(activeCategory)) {
+      setActiveCategory("All");
     }
-  }, [notificationOptions, selected]);
+  }, [enabledTypes, activeCategory]);
 
-  const visible = notifications.filter((n) =>
-    selected === "all" ? true : n.type.toLowerCase() === selected
+  const categoryOptions = useMemo(() => [
+    { value: "All", label: "All" },
+    ...enabledTypes.map((type) => ({
+      value: type,
+      label: notificationCategoryLabel(type),
+    })),
+  ], [enabledTypes]);
+
+  const filteredNotifications = useMemo(
+    () =>
+      activeCategory === "All"
+        ? notifications
+        : notifications.filter((n) => n.type === activeCategory),
+    [notifications, activeCategory],
   );
 
   const handleSelect = async (id: number) => {
@@ -88,95 +81,57 @@ const NotificationMenuContent: React.FC<Props> = ({ count, onClose }) => {
     } else {
       await markRead(id);
     }
-    toast.success(unread ? "Marked as unread" : "Marked as read");
-    refreshUnread();
   };
 
-  const handleAllRead = async () => {
+  const handleOpenSettings = () => {
+    onClose?.();
+    router.push("/settings?section=notifications");
+  };
+
+  // Mirrors the notifications page's "Mark all as read": the atom updates
+  // the shared list in place, so the menu stays open and rows settle.
+  const handleMarkAllRead = async () => {
     await markAllRead();
     toast.success("All notifications marked as read");
     refreshUnread();
   };
 
-  const handleArchiveAllConfirm = async () => {
-    setIsArchiving(true);
-    try {
-      const userAddress = oauthSession?.substrateAddress || polkadotAddress;
-      if (!userAddress) return;
-      await deleteAllNotifications();
-      await refresh();
-      await refreshUnread();
-      toast.success("All notifications deleted");
-    } catch (error) {
-      console.log("Delete all notifications error:", error);
-      toast.error("Failed to delete notifications");
-    } finally {
-      setIsArchiving(false);
-      setIsArchiveDialogOpen(false);
-    }
-  };
-
-  const handleOpenSettings = () => {
-    onClose?.();
-    setActiveSettingsTab("Notifications");
-    setSettingsDialogOpen(true);
-  };
-
   return (
     <>
-      <NotificationMenuHeader count={count} onClose={onClose} />
+      <NotificationMenuHeader
+        count={count}
+        onClose={onClose}
+        activeCategory={activeCategory}
+        onCategoryChange={setActiveCategory}
+        categoryOptions={categoryOptions}
+        onMarkAllRead={handleMarkAllRead}
+        onClearAll={onRequestClearAll}
+        bulkActionsDisabled={notifications.length === 0}
+      />
 
-      <div className="p-4 flex flex-col gap-4 flex-1 min-h-0">
-        {notificationOptions.length > 0 && (
-          <div className="flex justify-between">
-            <NotificationOptionSelect
-              options={notificationOptions}
-              value={selected}
-              onChange={setSelected}
-            />
-            <div className="flex gap-2">
-              <button
-                className="px-3 py-2 items-center text-sm rounded-md text-grey-70 hover:bg-gray-100 active:bg-gray-200 active:text-gray-700 focus:bg-gray-200 focus:text-gray-700 leading-5 font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-gray-300 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-grey-70"
-                onClick={handleAllRead}
-                disabled={visible.length === 0}
-              >
-                Mark all as Read
-              </button>
-              <button
-                className="px-3 py-2 items-center text-sm rounded-md text-grey-70 hover:bg-error-50 hover:text-white active:bg-error-60 leading-5 font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-error-50 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-grey-70"
-                onClick={() => setIsArchiveDialogOpen(true)}
-                disabled={visible.length === 0}
-                title={visible.length === 0 ? "No notifications to delete" : "Remove all notifications"}
-              >
-                Delete All
-              </button>
-            </div>
-          </div>
-        )}
+      <div className="flex-1 min-h-0 overflow-y-auto">
         {enabledTypes.length === 0 ? (
-          <NoNotificationsEnabled
-            heightClassName="min-h-[15rem]"
-            onOpenSettings={handleOpenSettings}
-          />
-        ) : visible.length === 0 ? (
+          <div className="p-4">
+            <NoNotificationsEnabled
+              heightClassName="min-h-[15rem]"
+              onOpenSettings={handleOpenSettings}
+            />
+          </div>
+        ) : filteredNotifications.length === 0 ? (
           <NoNotificationsFound heightClassName="min-h-[15rem]" />
         ) : (
           <NotificationMenuList
-            notifications={visible}
+            notifications={filteredNotifications}
             onSelectNotification={handleSelect}
             onReadStatusChange={handleReadToggle}
             onClose={onClose}
           />
         )}
       </div>
-      <NotificationMenuFooter onClose={onClose} />
 
-      <ArchiveAllConfirmationDialog
-        open={isArchiveDialogOpen}
-        onClose={() => setIsArchiveDialogOpen(false)}
-        onConfirm={handleArchiveAllConfirm}
-        loading={isArchiving}
-      />
+      {filteredNotifications.length > 0 && (
+        <NotificationMenuFooter onClose={onClose} />
+      )}
     </>
   );
 };

@@ -12,12 +12,12 @@ pub use hcfs_client::engine::progress::state::{
 };
 
 use hcfs_client::engine::runner::SyncRunner;
-use std::sync::OnceLock;
-use std::sync::atomic::AtomicU64;
-use std::time::Instant;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock, Weak};
+use std::time::{Duration, Instant};
 
 use crate::error::{AppError, Result};
-use crate::sync::logic::{NEVER_EMITTED, is_file_completion_tick, try_claim_snapshot_emit};
+use crate::sync::logic::{NEVER_EMITTED, is_file_completion_tick, should_schedule_flush, try_claim_snapshot_emit};
 
 /// Minimum milliseconds between throttled `emit_snapshot(false)` calls from
 /// the per-chunk progress hot path.
@@ -38,6 +38,89 @@ const SNAPSHOT_THROTTLE_MS: u64 = 250;
 /// startup it arrives.
 static LAST_THROTTLED_EMIT_MS: AtomicU64 = AtomicU64::new(NEVER_EMITTED);
 
+/// True while a trailing flush is scheduled for the current throttle window.
+/// Set by the first suppressed emit (see [`should_schedule_flush`]), cleared
+/// by the flush task right before it emits.
+static FLUSH_SCHEDULED: AtomicBool = AtomicBool::new(false);
+
+/// Runner handle for the deferred trailing flush. `Weak` so a process-wide
+/// static cannot extend the runner's lifetime. Unset in unit tests that never
+/// call [`register_flush_runner`] — the suppressed path then degrades to the
+/// old drop-the-tick behavior instead of panicking or leaking threads.
+static RUNNER_FOR_FLUSH: OnceLock<Weak<SyncRunner>> = OnceLock::new();
+
+/// Register the app's `SyncRunner` as the target for trailing snapshot
+/// flushes. Called once from `AppState::new` (the only place the `Arc` is
+/// created); later calls are no-ops.
+pub fn register_flush_runner(sync: &Arc<SyncRunner>) {
+    let _ = RUNNER_FOR_FLUSH.set(Arc::downgrade(sync));
+}
+
+/// Throttled emit with a trailing-edge guarantee.
+///
+/// Leading edge: the first tick in a window claims the cursor and emits
+/// immediately. Trailing edge: a suppressed tick (any later tick in the same
+/// window) schedules exactly one deferred forced emit ~one window later, so
+/// the state it carried still reaches the UI even if no further ticks arrive.
+///
+/// The trailing edge is what keeps the tray popover / sync widget live during
+/// small-file bursts: a tiny file's only progress tick IS its completion
+/// tick, so when several finish within one window the last completions used
+/// to be dropped and the UI sat stale (e.g. "3 of 5 synced") until cycle
+/// finalization force-emitted — which can lag by seconds while the engine
+/// re-indexes remote paths.
+///
+/// The flush runs on a short-lived named thread (at most one alive at a
+/// time, bounded by [`FLUSH_SCHEDULED`]) rather than a tokio task because
+/// this is called from hcfs-client progress callbacks with no runtime
+/// guarantee. Clearing the flag *before* emitting lets a tick that lands
+/// during the emit schedule the next window's flush; the worst interleaving
+/// is one redundant emit, which is self-correcting.
+fn emit_snapshot_throttled(sync: &SyncRunner, is_file_complete: bool) {
+    if try_claim_snapshot_emit(&LAST_THROTTLED_EMIT_MS, monotonic_now_ms(), is_file_complete, SNAPSHOT_THROTTLE_MS) {
+        sync.emit_snapshot(false);
+        return;
+    }
+    if let Some(weak) = RUNNER_FOR_FLUSH.get() {
+        schedule_trailing_flush(weak.clone(), &LAST_THROTTLED_EMIT_MS, &FLUSH_SCHEDULED);
+    }
+}
+
+/// Spawn the deferred trailing-flush task, unless one is already pending.
+///
+/// `cursor` / `flag` are injected (rather than referencing the module statics
+/// directly) so tests can exercise the flush mechanics against their own
+/// atomics, isolated from every other test sharing this process's statics.
+/// `'static` because the detached thread outlives the caller's frame.
+///
+/// The cursor is advanced even when `weak` no longer upgrades (runner gone =
+/// app shutting down): the throttle bookkeeping must stay consistent so a
+/// dead runner can't wedge `flag`/`cursor` in a state that blocks later
+/// emits. Returns whether a flush task was actually spawned.
+fn schedule_trailing_flush(weak: Weak<SyncRunner>, cursor: &'static AtomicU64, flag: &'static AtomicBool) -> bool {
+    if !should_schedule_flush(flag) {
+        return false;
+    }
+    let spawned = std::thread::Builder::new().name("snapshot-trailing-flush".into()).spawn(move || {
+        std::thread::sleep(Duration::from_millis(SNAPSHOT_THROTTLE_MS));
+        // Clear the slot BEFORE emitting so a tick landing during the emit
+        // can schedule the next window's flush (worst case: one redundant
+        // emit, self-correcting).
+        flag.store(false, Ordering::Relaxed);
+        cursor.store(monotonic_now_ms(), Ordering::Relaxed);
+        if let Some(sync) = weak.upgrade() {
+            sync.emit_snapshot(false);
+        }
+    });
+    if spawned.is_err() {
+        // Could not spawn (resource exhaustion): release the slot so a
+        // later tick can retry instead of wedging the trailing edge off.
+        flag.store(false, Ordering::Relaxed);
+        return false;
+    }
+    true
+}
+
 /// Milliseconds since the current process started.
 ///
 /// Uses [`Instant`] so the value is immune to wall-clock adjustments (NTP
@@ -53,9 +136,10 @@ fn monotonic_now_ms() -> u64 {
 
 /// Update per-file byte progress in the active sync session.
 ///
-/// The underlying `SyncRunner::emit_snapshot(false)` call is **trailing-edge
-/// throttled** to one emit per [`SNAPSHOT_THROTTLE_MS`] across the whole
-/// process. File-completion ticks (`bytes_transferred == total_bytes` with
+/// The underlying `SyncRunner::emit_snapshot(false)` call is throttled to one
+/// emit per [`SNAPSHOT_THROTTLE_MS`] across the whole process, with a
+/// trailing flush for suppressed ticks (see [`emit_snapshot_throttled`]).
+/// File-completion ticks (`bytes_transferred == total_bytes` with
 /// `total_bytes > 0`) use a shorter 100 ms window (see
 /// [`crate::sync::logic::COMPLETION_THROTTLE_MS`]) to batch burst
 /// completions while remaining responsive.
@@ -83,9 +167,7 @@ pub fn update_file_progress(
         .update_file_progress(path.to_owned(), bytes_transferred, total_bytes, action, label.map(ToOwned::to_owned))
         .map_err(AppError::Progress)?;
     let is_file_complete = is_file_completion_tick(bytes_transferred, total_bytes);
-    if try_claim_snapshot_emit(&LAST_THROTTLED_EMIT_MS, monotonic_now_ms(), is_file_complete, SNAPSHOT_THROTTLE_MS) {
-        sync.emit_snapshot(false);
-    }
+    emit_snapshot_throttled(sync, is_file_complete);
     Ok(())
 }
 
@@ -98,14 +180,13 @@ pub fn update_file_progress(
 /// burst would otherwise trigger N unthrottled `emit_snapshot(true)` calls —
 /// each rebuilding the whole `SyncSnapshot` and (via the bridge) running a
 /// SQLite overlay aggregate — flooding the webview. A terminal event does not
-/// need a synchronous immediate emit: the next throttled tick (≤100 ms)
-/// reflects it, and `finalize_session_for_label` does an unconditional
-/// immediate emit at cycle end so the final state is never lost. Reserve
-/// `emit_snapshot(true)` for genuine session transitions.
+/// need a synchronous immediate emit: a suppressed one is delivered by the
+/// trailing flush within ~one window (see [`emit_snapshot_throttled`]), and
+/// `finalize_session_for_label` does an unconditional immediate emit at cycle
+/// end so the final state is never lost. Reserve `emit_snapshot(true)` for
+/// genuine session transitions.
 fn emit_throttled_completion(sync: &SyncRunner) {
-    if try_claim_snapshot_emit(&LAST_THROTTLED_EMIT_MS, monotonic_now_ms(), true, SNAPSHOT_THROTTLE_MS) {
-        sync.emit_snapshot(false);
-    }
+    emit_snapshot_throttled(sync, true);
 }
 
 /// Merge file expectations into the current session, or start a new one.
@@ -425,7 +506,13 @@ pub fn get_snapshot(sync: &SyncRunner, preparing: &crate::sync::preparing::Prepa
             .map_or(0, |d| d.as_secs() as i64);
         snapshot.retry_in_secs = (retry_at - now).max(0) as u64;
     }
-    snapshot.last_error = sync.last_error.lock().ok().and_then(|g| g.clone());
+    // Recover a poisoned lock (read the data behind it) instead of `.ok()`-ing
+    // it away — a thread that panicked while holding `last_error` must not make
+    // the user-facing error string vanish from every later snapshot. Mirrors
+    // the deliberate `PoisonError::into_inner` recovery on the watcher mutex.
+    snapshot
+        .last_error
+        .clone_from(&sync.last_error.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
     prepare_snapshot_for_emit(&mut snapshot, preparing);
     Ok(snapshot)
 }
@@ -853,6 +940,51 @@ mod tests {
             expected_remote_deletes: 0,
             files: file_map,
         });
+    }
+
+    // ── trailing snapshot flush ─────────────────────────────────────
+    //
+    // Pins `schedule_trailing_flush`: a suppressed emit must schedule a
+    // deferred flush that fires ~one throttle window later, clears the
+    // scheduled flag, and advances the emit cursor. Without it, the last
+    // completion tick of a small-file burst is dropped and the tray /
+    // widget shows a stale count until cycle finalization (the
+    // user-visible "tray lags while small files sync" bug). The test
+    // injects its own statics so it is isolated from the module-level
+    // cursor/flag, which other tests in this binary mutate concurrently
+    // (the global RUNNER_FOR_FLUSH OnceLock may also already be claimed
+    // by a dropped AppState runner — exactly why injection is needed).
+
+    #[test]
+    fn suppressed_emit_is_flushed_within_a_window() {
+        static CURSOR: AtomicU64 = AtomicU64::new(NEVER_EMITTED);
+        static FLAG: AtomicBool = AtomicBool::new(false);
+
+        let sync = test_runner();
+        let sentinel = monotonic_now_ms();
+        CURSOR.store(sentinel, Ordering::Relaxed);
+
+        assert!(
+            schedule_trailing_flush(Arc::downgrade(&sync), &CURSOR, &FLAG),
+            "first suppressed tick must win the flush slot",
+        );
+        // Slot taken: a second suppressed tick in the same window must not
+        // stack another flush.
+        assert!(!schedule_trailing_flush(Arc::downgrade(&sync), &CURSOR, &FLAG));
+        assert!(FLAG.load(Ordering::Relaxed));
+
+        // The flush must land within ~one window; poll generously (2 s)
+        // to absorb CI scheduling jitter.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            if CURSOR.load(Ordering::Relaxed) != sentinel {
+                // Delivered: cursor advanced and the slot reopened.
+                assert!(!FLAG.load(Ordering::Relaxed));
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        panic!("trailing flush never advanced the emit cursor — suppressed tick was dropped");
     }
 
     #[test]

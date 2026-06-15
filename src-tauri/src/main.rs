@@ -26,7 +26,9 @@ pub mod splash;
 pub mod sync;
 #[cfg(test)]
 mod test_helpers;
+pub mod tray;
 mod utils;
+pub mod wallet;
 
 use crate::auth::contacts::{add_contact, delete_contact, get_contacts, update_contact};
 use crate::auth::login::{login_with_mnemonic, validate_mnemonic};
@@ -77,7 +79,7 @@ use crate::sync::control::{reveal_drive_in_finder, trigger_sync_now};
 use crate::sync::device::{get_device_name, set_device_name};
 use crate::sync::files::{
     add_file, add_files, add_folder, allow_asset_scope, delete_files, export_file, filter_file_entries, get_recent_files, get_user_files,
-    list_sync_folder, list_sync_folder_grouped, resolve_file_info, resolve_file_path,
+    list_sync_folder, list_sync_folder_grouped, rename_entry, resolve_file_info, resolve_file_path, search_user_files_recursive,
 };
 use crate::sync::folders::{delete_remote_folder, get_sync_folders_with_stats, list_remote_folders, restore_remote_folders};
 use crate::sync::lifecycle::{
@@ -87,14 +89,23 @@ use crate::sync::lifecycle::{
 use crate::sync::mnemonic::{ensure_sync_mnemonic, get_drive_mnemonic};
 use crate::sync::paths::{get_sync_path, remove_sync_path, set_sync_path};
 use crate::sync::progress::{sp_clear_all_data, sp_dismiss_sync_widget, sp_get_snapshot};
-use crate::sync::remote::{download_remote_file, list_remote_folder_files};
+use crate::sync::recent_uploads::{get_recent_uploads, search_files};
+use crate::sync::remote::{cache_remote_file, download_remote_file, get_thumbnail, list_remote_folder_files};
 use crate::sync::status::{app_close, get_all_drive_statuses, get_sync_activity_rows, get_sync_engine_health};
+use crate::tray::panel::{hide_tray_panel, toggle_tray_panel};
+use crate::utils::logs::attach_logs_to_ticket;
 use crate::utils::platform_info::get_platform_info;
 use crate::utils::preferences::{get_user_preference, is_onboarding_done, save_user_preference, set_onboarding_done};
 use crate::utils::support::{
     create_support_ticket, get_support_ticket_messages, list_support_tickets, post_ticket_message, update_support_ticket, upload_ticket_attachment,
 };
 use crate::utils::tray_menu::get_tray_menu_data;
+use crate::wallet::commands::{
+    local_wallet_create, local_wallet_delete, local_wallet_derive_address, local_wallet_export_backup, local_wallet_export_backup_zip,
+    local_wallet_generate_mnemonic, local_wallet_get_active, local_wallet_get_decrypted_mnemonic, local_wallet_get_public_key, local_wallet_has_any,
+    local_wallet_import_encrypted_backup, local_wallet_import_encrypted_backup_from_zip, local_wallet_list, local_wallet_rename,
+    local_wallet_set_active, local_wallet_sign, local_wallet_validate_mnemonic, local_wallet_verify_password,
+};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous};
 use tauri::{Builder, Emitter, Manager, Wry, path::BaseDirectory};
 #[cfg(target_os = "linux")]
@@ -110,19 +121,72 @@ fn load_env() {
     let _ = dotenvy::from_filename(env_path);
 }
 
+/// Initializes tracing with a stdout layer plus a daily rolling-file layer
+/// under `$HOME/.hippius/logs/` (files named `hippius.YYYY-MM-DD.log`).
+///
+/// Returns `Some(WorkerGuard)` when the rolling-file writer is enabled, or
+/// `None` when file logging was skipped (see below). When present, the caller
+/// MUST hold the guard for the whole process lifetime: dropping it flushes the
+/// background writer thread and then stops it, so any log emitted afterwards
+/// is silently lost. Binding it to a `main`-scoped local is the crate's
+/// documented idiom and keeps it alive exactly as long as the app runs.
+///
+/// File logging is best-effort — if the home directory can't be resolved or
+/// the appender can't be created, the file layer is skipped and logging falls
+/// back to stdout-only rather than aborting startup. `Option<Layer>` is a
+/// no-op `Layer` when `None`, so the registry wiring is identical either way.
+///
+/// Retention: `max_log_files(7)` prunes on the rotation/write path, not at
+/// startup (a known tracing-appender limitation), so a long-idle install may
+/// briefly keep more than seven files until the next write. The log-bundling
+/// step caps the number and size of files it ships independently, so this is
+/// harmless here.
+///
+/// [`WorkerGuard`]: tracing_appender::non_blocking::WorkerGuard
+fn init_logging() -> Option<tracing_appender::non_blocking::WorkerGuard> {
+    use tracing_subscriber::{EnvFilter, fmt, prelude::*};
+
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn,hcfs_client=info,Hippius=info"));
+    let stdout_layer = fmt::layer().with_target(true).with_file(false).with_line_number(false);
+
+    let (file_layer, guard) = match dirs::home_dir() {
+        Some(home) => {
+            let log_dir = home.join(".hippius").join("logs");
+            match tracing_appender::rolling::RollingFileAppender::builder()
+                .rotation(tracing_appender::rolling::Rotation::DAILY)
+                .filename_prefix("hippius")
+                .filename_suffix("log")
+                .max_log_files(7)
+                .build(&log_dir)
+            {
+                Ok(appender) => {
+                    let (non_blocking, guard) = tracing_appender::non_blocking(appender);
+                    // `with_ansi(false)`: files are read as plain text (and shipped to
+                    // support), so colour escape codes would be noise.
+                    let layer = fmt::layer().with_ansi(false).with_target(true).with_writer(non_blocking);
+                    (Some(layer), Some(guard))
+                }
+                // Tracing isn't initialized yet and `print_stderr` is denied, so the
+                // setup error can't be surfaced here; degrade quietly to stdout-only.
+                Err(_) => (None, None),
+            }
+        }
+        None => (None, None),
+    };
+
+    tracing_subscriber::registry().with(filter).with(stdout_layer).with(file_layer).init();
+
+    guard
+}
+
 #[expect(clippy::too_many_lines, reason = "Tauri builder chain: handler registration must stay together")]
 fn main() {
     load_env();
 
-    // Initialize tracing subscriber to capture hcfs-client library logs.
-    // Filter to show WARN and ERROR from hcfs-client, INFO and above from our code.
-    // Set RUST_LOG env var to customize (e.g., RUST_LOG=hcfs_client=debug).
-    use tracing_subscriber::{EnvFilter, fmt, prelude::*};
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn,hcfs_client=info,Hippius=info"));
-    tracing_subscriber::registry()
-        .with(fmt::layer().with_target(true).with_file(false).with_line_number(false))
-        .with(filter)
-        .init();
+    // Initialize tracing (stdout + daily rolling file under ~/.hippius/logs/).
+    // The guard must outlive the app so the non-blocking file writer keeps
+    // flushing — see `init_logging`. Holding it in this `main` local does that.
+    let _log_guard = init_logging();
 
     info!("Application starting...");
     info!("Tracing subscriber initialized - hcfs-client logs now visible");
@@ -182,11 +246,15 @@ fn main() {
             add_files,
             add_folder,
             delete_files,
+            rename_entry,
             list_sync_folder,
             list_sync_folder_grouped,
             get_recent_files,
+            get_recent_uploads,
+            search_files,
             get_user_files,
             filter_file_entries,
+            search_user_files_recursive,
             export_file,
             resolve_file_path,
             resolve_file_info,
@@ -220,6 +288,9 @@ fn main() {
             crate::sync::failure_commands::sp_skip_file,
             crate::sync::failure_commands::sp_exclude_file,
             crate::sync::failure_commands::sp_retry_file,
+            crate::sync::failure_commands::get_drive_failures,
+            crate::sync::failure_commands::retry_file_failure,
+            crate::sync::failure_commands::retry_all_failures,
             // Stage & conflict resolution
             crate::sync::control::stage_changes,
             crate::sync::control::sync_with_conflict_resolutions,
@@ -233,6 +304,8 @@ fn main() {
             // Remote folder browsing & one-off download
             list_remote_folder_files,
             download_remote_file,
+            cache_remote_file,
+            get_thumbnail,
             // File sharing (link-based public shares)
             crate::shares::commands::hcfs_create_share,
             crate::shares::commands::hcfs_list_shares,
@@ -324,6 +397,7 @@ fn main() {
             create_support_ticket,
             update_support_ticket,
             upload_ticket_attachment,
+            attach_logs_to_ticket,
             post_ticket_message,
             // OAuth
             start_oauth_flow,
@@ -337,6 +411,9 @@ fn main() {
             logout_full,
             is_token_valid,
             get_tray_menu_data,
+            // Tray popover panel (replaces the native tray menu)
+            toggle_tray_panel,
+            hide_tray_panel,
             get_platform_info,
             // Local DB (notifications, address book, onboarding, preferences, app state)
             add_notification,
@@ -369,6 +446,25 @@ fn main() {
             get_contacts,
             update_contact,
             delete_contact,
+            // Local wallets (password-encrypted Substrate wallets)
+            local_wallet_list,
+            local_wallet_has_any,
+            local_wallet_get_active,
+            local_wallet_generate_mnemonic,
+            local_wallet_validate_mnemonic,
+            local_wallet_derive_address,
+            local_wallet_create,
+            local_wallet_set_active,
+            local_wallet_rename,
+            local_wallet_delete,
+            local_wallet_verify_password,
+            local_wallet_get_decrypted_mnemonic,
+            local_wallet_get_public_key,
+            local_wallet_sign,
+            local_wallet_export_backup,
+            local_wallet_export_backup_zip,
+            local_wallet_import_encrypted_backup,
+            local_wallet_import_encrypted_backup_from_zip,
             is_onboarding_done,
             set_onboarding_done,
             get_user_preference,
@@ -432,6 +528,15 @@ fn main() {
 /// On Windows/Linux, closing the window exits the app via `app.exit(0)`.
 pub fn on_window_event(builder: Builder<Wry>) -> Builder<Wry> {
     builder.on_window_event(|window, event| {
+        // Click-outside dismissal for the tray popover: when the panel loses
+        // focus, hide it. Centralized here (rather than in the FE) so the
+        // re-open cooldown timestamp is recorded against the same `AppState`
+        // that `toggle_tray_panel` reads.
+        if let tauri::WindowEvent::Focused(false) = event
+            && window.label() == crate::tray::panel::PANEL_LABEL {
+                crate::tray::panel::on_panel_blur(window.app_handle());
+            }
+
         if let tauri::WindowEvent::CloseRequested { api, .. } = event {
             // Only intercept the main window. If a future refactor adds a
             // secondary window (e.g. a settings popup), its close button
@@ -491,9 +596,47 @@ async fn open_db_pool(db_path: &std::path::Path) -> Result<SqlitePool, sqlx::Err
 /// for dev), constructs the single `AppState` (the app holds no statics), and
 /// wires the sync bridge's app handle. Returning the builder lets this compose
 /// in `main()`'s builder chain.
+#[expect(
+    clippy::too_many_lines,
+    reason = "Linear one-shot startup pipeline — env load, deep links, AppState, migrations, tray. Splitting it fragments the strict ordering between the steps without reducing complexity."
+)]
 pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
     builder.setup(|app| {
         debug!(".setup() closure called in setup.rs");
+
+        // macOS 26+ (Tahoe) mounts legacy transparent .icns icons onto a white
+        // rounded tile in the Dock, but renders a RUNTIME-set application icon
+        // as-is (the sticker-style glyph). Tauri performs this runtime set in
+        // dev builds only (see tauri's RunEvent::Ready, cfg(all(dev, macos))),
+        // which is why `pnpm tauri:dev` showed the bare hippo while installed
+        // builds showed the white tile. Mirror the same call for release so
+        // both modes look identical. Must run on the main thread (AppKit);
+        // Tauri's setup hook does.
+        #[cfg(all(not(dev), target_os = "macos"))]
+        {
+            use cocoa::appkit::{NSApp, NSApplication, NSImage};
+            use cocoa::base::nil;
+            use cocoa::foundation::NSData;
+
+            // 512px transparent-background source; the Dock scales down.
+            static DOCK_ICON_PNG: &[u8] = include_bytes!("../icons/icon.png");
+            // SAFETY: AppKit calls on the main thread (setup runs there).
+            // NSData copies the byte buffer; NSImage may return nil on
+            // malformed data, which we guard instead of unwrapping.
+            unsafe {
+                let data = NSData::dataWithBytes_length_(
+                    nil,
+                    DOCK_ICON_PNG.as_ptr().cast(),
+                    DOCK_ICON_PNG.len() as u64,
+                );
+                let image = NSImage::initWithData_(NSImage::alloc(nil), data);
+                if image == nil {
+                    warn!("dock icon: NSImage init failed; keeping bundle icon");
+                } else {
+                    NSApp().setApplicationIconImage_(image);
+                }
+            }
+        }
 
         if let Ok(env_path) = app.path().resolve(".env", BaseDirectory::Resource) {
             let _ = dotenvy::from_filename(env_path);
@@ -529,6 +672,11 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
         app_handle.manage(app_state);
         crate::sync::upload_processing::spawn_watchdog(upload_processing_weak, app_handle.clone());
         crate::sync::preparing::spawn_watchdog(preparing_weak, sync_weak);
+
+        // Pre-create the (hidden) tray popover so the first tray click shows it
+        // instantly instead of paying webview + route load cost on click.
+        crate::tray::panel::prewarm(&app_handle);
+
         let win = app.get_webview_window("main").expect("main window not found");
 
         // Open devtools on startup when `HIPPIUS_DEVTOOLS=1` is set in the
@@ -553,20 +701,39 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
 
             win.set_size(tauri::Size::Physical(tauri::PhysicalSize { width: w, height: h }))?;
             win.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x: pos_x, y: pos_y }))?;
-            win.show()?;
+            // NOTE: the window is sized/positioned here but deliberately NOT
+            // shown yet. Showing it synchronously would let the webview boot and
+            // fire its first IPC calls before the async task below installs the
+            // DB pool, racing those calls to a transient PoolClosed error. The
+            // reveal is deferred into the init task and happens once the schema
+            // is ready (or once init has definitively failed).
         }
         // Spawn async task for database initialization.
         tauri::async_runtime::spawn(async move {
             debug!("Async block started in setup.rs");
+
+            // Reveal the (sized-but-hidden) main window. Deferred out of the
+            // synchronous setup so it never appears before the pool+schema are
+            // ready. Idempotent (Tauri `show` on an already-visible window is a
+            // no-op), and called on EVERY exit path — including the fatal DB
+            // failures below — so a broken database still surfaces a window the
+            // FE can render its error state in, rather than an invisible,
+            // seemingly-hung app.
+            let show_main = || {
+                if let Some(win) = app_handle.get_webview_window("main") {
+                    let _ = win.show();
+                }
+            };
 
             // Database initialization. A failure here is fatal, but it must NOT
             // panic: a panic inside `tauri::async_runtime::spawn` is swallowed by
             // the runtime, so `set_pool` would never run and EVERY IPC command
             // would fail with PoolClosed for the whole session, with no error
             // shown. Handle both failure modes the way the open_db_pool branch
-            // below already does — log FATAL and return.
+            // below already does — log FATAL, reveal the window, and return.
             let Some(home_dir) = dirs::home_dir() else {
                 error!("FATAL: could not determine home directory; database not initialized");
+                show_main();
                 return;
             };
             let db_dir = home_dir.join(".hippius");
@@ -579,10 +746,12 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => {
                     error!("FATAL: failed to create {}: {e}", db_dir.display());
+                    show_main();
                     return;
                 }
                 Err(e) => {
                     error!("FATAL: directory-creation task failed to join: {e}");
+                    show_main();
                     return;
                 }
             }
@@ -593,6 +762,7 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                 Ok(pool) => pool,
                 Err(e) => {
                     error!("FATAL: Failed to open database at {}: {e}", db_path.display());
+                    show_main();
                     return; // cannot propagate from spawned task; error is logged
                 }
             };
@@ -601,8 +771,15 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
             // Ensure all tables and columns exist
             if let Err(e) = crate::utils::schema::ensure_table_schema(&pool).await {
                 error!("FATAL: Failed to ensure table schema: {}", e);
+                show_main();
                 return;
             }
+
+            // Pool installed AND schema ensured — the backend can now service
+            // IPC, so it is safe to reveal the window. Done before the
+            // idempotent background migrations below so the user sees the app
+            // the moment it is usable, not after the data fixups finish.
+            show_main();
 
             // Migrate account keys from 8-char to 16-char format
             if let Err(e) = crate::utils::schema::migrate_account_keys(&pool).await {
@@ -631,13 +808,12 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
             // See `sync::relative_path_backfill_reset` for details.
             crate::sync::relative_path_backfill_reset::run_at_startup(&pool).await;
 
-            // Collapse duplicate welcome notifications from the pre-fix
-            // era (the FE sent bare `"Welcome"` which bypassed the
-            // `starts_with("Welcome-")` dedup guard, so every login
-            // inserted a new row). Keeps the oldest per user so the
-            // timestamp used by `process_credit_events` for event
-            // filtering stays valid. Idempotent — a one-time sweep
-            // that finds nothing to delete on subsequent launches.
+            // Collapse duplicate welcome notifications: a bare `"Welcome"`
+            // subtype bypasses the `starts_with("Welcome-")` dedup guard, so
+            // such rows can accumulate one per login. Keeps the oldest per
+            // user so the timestamp used by `process_credit_events` for event
+            // filtering stays valid. Idempotent — a one-time sweep that finds
+            // nothing to delete on subsequent launches.
             if let Err(e) = crate::notifications::crud::cleanup_duplicate_welcome_notifications(&pool).await {
                 warn!("Welcome notification cleanup failed (non-fatal): {}", e);
             }

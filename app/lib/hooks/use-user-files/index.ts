@@ -15,6 +15,14 @@ export type FormattedUserFile = {
   createdAt: number;
   arionHash: string;
   arionCid: string;
+  /**
+   * Hex of the server-side `path_hash` — the file's id on Arion. Present on
+   * `/search_files` results (sidebar search) so a file that lives only in the
+   * cloud can be previewed/downloaded via `cache_remote_file` /
+   * `download_remote_file`. Empty/undefined for local disk-walk entries, which
+   * resolve straight from `source`.
+   */
+  fileId?: string;
   minerIds: string | string[];
   isAssigned: boolean;
   lastChargedAt: number;
@@ -38,6 +46,16 @@ export type FormattedUserFile = {
   syncStatus?: "synced" | "pending" | "uploading" | "downloading" | "failed" | "unknown" | "excluded";
   label?: string;
   fileCount?: number;
+  /**
+   * For folder rows whose `actualFileName` is only the basename (the
+   * inline-expanded tree never embeds the path in the folder name), this
+   * carries the sync-root-relative path of the containing folder. Stored
+   * at selection time and used by `FileSelectionContext` and the cascade
+   * logic to disambiguate two folders with the same name at different
+   * tree locations. Files don't need this because their `actualFileName`
+   * already contains the full relative path.
+   */
+  parentRelativePath?: string;
 };
 
 export interface LabelStats {

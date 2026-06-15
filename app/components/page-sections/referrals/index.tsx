@@ -1,141 +1,311 @@
 "use client";
 
+import React, { useCallback, useMemo, useState } from "react";
+import { toast } from "sonner";
+import * as TooltipPrimitive from "@radix-ui/react-tooltip";
+import { Info } from "lucide-react";
+
 import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
-import { UserSquare, PieChart } from "lucide-react";
-import { WalletAdd, TaoLogo, Refresh } from "@/components/ui/icons";
-import { Link as LinkIcon, Hourglass, Send } from "lucide-react";
-import { ComingSoon, AbstractIconWrapper } from "@/components/ui";
-import { P } from "@/components/ui/typography";
+import PageHeader from "@/components/page-sections/home/PageHeader";
+import CreateButton from "@/components/ui/button/CreateButton";
+import ComingSoon from "@/components/ui/ComingSoon";
+import { REFERRALS_COMING_SOON } from "@/app/lib/featureFlags";
+import {
+  Clock,
+  Link as LinkIcon,
+  MousePointerClick,
+  ReferralGrip,
+  Tickets,
+} from "@/components/ui/icons";
+import { cn } from "@/lib/utils";
 
-// Feature flag - set to true when referrals feature is ready
-const REFERRALS_ENABLED = false;
+import ReferralLinkHeader from "./ReferralLinkHeader";
+import ReferralStatCard from "./ReferralStatCard";
+import ReferralLinksTable from "./ReferralLinksTable";
+import ReferralHistoryTable from "./ReferralHistoryTable";
 
-// Static placeholder card component
-const PlaceholderCard = ({
-  icon: Icon,
-  title,
-  value
-}: {
-  icon: React.ComponentType<{ className?: string }>;
-  title: string;
-  value: string;
-}) => (
-  <div className="bg-white p-3 rounded-lg border border-grey-80 shadow-sm flex justify-between flex-col">
-    <div className="flex justify-between items-start">
-      <AbstractIconWrapper className="size-10 text-primary-40">
-        <Icon className="absolute text-primary-40 size-6" />
-      </AbstractIconWrapper>
-    </div>
-    <div className="mt-4">
-      <div className="text-base font-medium text-grey-60 mb-2">{title}</div>
-      <div className="text-2xl text-grey-10 font-medium">{value}</div>
-    </div>
-  </div>
+import { useReferralLinks } from "@/lib/hooks/api/useReferralLinks";
+import { useUserReferrals } from "@/lib/hooks/api/useUserReferrals";
+import { useWalletAuth } from "@/lib/wallet-auth-context";
+import { API_CONFIG, REFERRAL_CODE_CONFIG } from "@/lib/config";
+
+/* Referrals dashboard — restyled to match the desktop card pattern used
+ * across the wallet, billing and settings pages: rounded shell + mono
+ * uppercase header strip + inner white panel. The corner-junction
+ * overlay icons (CornerBracket / PlusCrossIcon) that came over from
+ * the hippius-web port are removed — the desktop layout uses bordered
+ * cards instead of edge-to-edge sections, so the junction markers have
+ * nothing to anchor against. */
+
+/**
+ * When `true`, the entire referrals page renders behind a blurred
+ * "Coming Soon" overlay — the sidebar link still routes here, the
+ * page still mounts (so the FE doesn't have to invalidate route
+ * navigation), but the content is visibly gated. The flag lives in the
+ * shared featureFlags module (imported above) so release gating is
+ * edited in one place.
+ */
+
+/* Seed values used to fill the sparkline buckets on each stat card —
+ * same constants web uses so the two clients render an identical demo
+ * chart while the live referral-analytics API is still under
+ * development. */
+const PLACEHOLDER_CHART = [
+  2, 5, 3, 8, 4, 6, 1, 9, 3, 7, 2, 10, 5, 8, 3, 6, 4, 7, 2, 11, 5, 8, 4, 6,
+  3, 9, 7, 12, 5, 8,
+];
+
+/* Shared shell classes for the two table sections. Same palette as the
+ * "Billing History" wrapper on the billing page and the "Tabbed table
+ * surface" on the wallet page. */
+const SECTION_SHELL_CLASS = cn(
+  "mt-6 flex flex-col items-center w-full rounded-[8px] border overflow-hidden",
+  "bg-grey-light-300 border-grey-dark-100",
+  "dark:bg-black-primary-bg dark:border-black-300",
+  "shadow-[0px_1px_1.1px_rgba(0,0,0,0.04)]",
 );
 
-// Static referral link card
-const StaticReferralLinkCard = () => (
-  <div className="bg-white p-3 rounded-lg border border-grey-80 shadow-sm min-h-[10.375rem] relative bg-[url('/assets/refferal.png')] bg-repeat-round bg-cover">
-    <div className="flex flex-col gap-4">
-      <div className="flex justify-between items-center">
-        <div className="flex gap-2">
-          <AbstractIconWrapper className="size-10 text-primary-40">
-            <TaoLogo className="absolute text-white rounded size-6 p-1 bg-primary-50" />
-          </AbstractIconWrapper>
-          <div className="text-primary-40 text-xs flex gap-x-1 font-medium items-center">
-            REFERRAL LINK
-          </div>
-        </div>
-        <button className="flex items-center text-xs gap-1 cursor-not-allowed opacity-50" disabled>
-          <Refresh className="size-[1.125rem] text-grey-60" />
-          Generate Link
-        </button>
-      </div>
-      <div className="min-h-[5.375rem] text-base leading-[1.375rem] text-grey-60 flex flex-col justify-center">
-        <span className="mb-2">Your Referral Link</span>
-        <div className="flex items-center justify-between rounded-[0.5rem] p-3 border border-grey-80 bg-white">
-          <div className="text-grey-60 text-sm font-medium">
-            Referral links coming soon
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
+const SECTION_HEADER_CLASS =
+  "flex h-[46px] w-full items-center justify-between gap-2 pl-[14px] pr-[10px]";
+
+const SECTION_BODY_CLASS = cn(
+  "flex flex-col w-full flex-1",
+  "rounded-tl-[8px] rounded-tr-[8px] border-t border-grey-dark-100",
+  "bg-white dark:bg-black-600 dark:border-black-300",
+  "overflow-hidden",
 );
 
-// Static referral links table placeholder
-const StaticReferralLinksTable = () => (
-  <div className="mb-4">
-    <div className="flex items-center gap-x-2 mb-4">
-      <AbstractIconWrapper className="size-10">
-        <LinkIcon className="absolute size-6 text-primary-50" />
-      </AbstractIconWrapper>
-      <P size="lg">Your Referral Links</P>
-    </div>
-    <div className="p-6 text-center text-gray-500 border border-grey-80 rounded-lg">
-      No referral links yet
-    </div>
-  </div>
-);
+const SECTION_HEADER_LABEL_CLASS =
+  "font-mono font-medium text-[12px] leading-[18px] tracking-[-0.24px] text-primary-40 dark:text-primary-brand-dark uppercase";
 
-// Static referral history table placeholder
-const StaticReferralHistoryTable = () => (
-  <div>
-    <div className="flex items-center gap-x-2 mb-4">
-      <AbstractIconWrapper className="size-10">
-        <Hourglass className="absolute size-6 text-primary-50" />
-      </AbstractIconWrapper>
-      <P size="lg">Referral History</P>
-    </div>
-    <div className="w-full min-h-[12.5rem] flex items-center justify-center border border-grey-80 rounded-lg">
-      <div className="flex flex-col items-center">
-        <AbstractIconWrapper className="size-10 rounded-2xl flex items-center justify-center bg-grey-40/20 mb-2">
-          <Send className="absolute size-6 text-primary-50" />
-        </AbstractIconWrapper>
-        <span className="text-grey-60 text-sm font-medium max-w-[11.875rem] text-center">
-          You have not made any referrals yet
-        </span>
-      </div>
-    </div>
-  </div>
-);
+/* ── Main page ─────────────────────────────────────────────────── */
 
 const Referrals: React.FC = () => {
-  // When feature is disabled, show static placeholder content
-  if (!REFERRALS_ENABLED) {
-    return (
-      <DashboardTitleWrapper mainText="Referrals">
-        <div className="w-full mt-6 relative">
+  const { links, loading: linksLoading, reload: reloadLinks } =
+    useReferralLinks();
+  const {
+    data: referralData,
+    isPending: referralsPending,
+    refetch: refetchReferrals,
+  } = useUserReferrals();
+
+  const { polkadotAddress } = useWalletAuth();
+  const [generating, setGenerating] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+
+  /* Build the canonical referral URL: prefer useReferralLinks data,
+   * fall back to useUserReferrals' code list. */
+  const referralUrl = useMemo(() => {
+    if (links.length > 0) {
+      return `${REFERRAL_CODE_CONFIG.link}${links[links.length - 1].code}`;
+    }
+    if (
+      referralData?.referralCodes &&
+      referralData.referralCodes.length > 0
+    ) {
+      const lastCode =
+        referralData.referralCodes[referralData.referralCodes.length - 1];
+      return `${REFERRAL_CODE_CONFIG.link}${lastCode}`;
+    }
+    return null;
+  }, [links, referralData?.referralCodes]);
+
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await Promise.all([reloadLinks?.(), refetchReferrals()]);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [reloadLinks, refetchReferrals]);
+
+  const handleGenerateReferral = useCallback(async () => {
+    if (!polkadotAddress) {
+      toast.error("Please log in to generate a referral link.");
+      return;
+    }
+    setGenerating(true);
+    try {
+      const res = await fetch(`${API_CONFIG.baseUrl}/api/referrals/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ address: polkadotAddress }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        throw new Error(err?.message || `Request failed (${res.status})`);
+      }
+      toast.success("Referral Code Generated Successfully!");
+      reloadLinks?.();
+      refetchReferrals();
+    } catch (err) {
+      console.error("Generate referral failed:", err);
+      toast.error(
+        err instanceof Error
+          ? err.message
+          : "Failed to generate referral code.",
+      );
+    } finally {
+      setGenerating(false);
+    }
+  }, [polkadotAddress, reloadLinks, refetchReferrals]);
+
+  const totalReferrals = referralData?.totalReferrals ?? 0;
+  const totalCredits = links.reduce(
+    (sum, { reward }) => sum + Number(reward),
+    0,
+  );
+  const isLoading = linksLoading || referralsPending || refreshing;
+
+  /* Portal targets for each table's MiniPaginationControl — injected
+   * into the section header by the child via createPortal. Same pattern
+   * the wallet bridge tab uses. */
+  const [linksControlsContainer, setLinksControlsContainer] =
+    useState<HTMLDivElement | null>(null);
+  const [historyControlsContainer, setHistoryControlsContainer] =
+    useState<HTMLDivElement | null>(null);
+
+  return (
+    <DashboardTitleWrapper mainText="Referrals">
+      {/* `relative` so the absolute-positioned coming-soon overlay
+       *  hangs off this container instead of the dashboard chrome
+       *  around it. The page itself stays interactive (no
+       *  `pointer-events-none` on the wrapper) — the dot grid + corner
+       *  badge communicate "not ready" visually without disabling
+       *  every cell. */}
+      <div className="relative flex flex-col px-4 pb-6">
+        {REFERRALS_COMING_SOON && (
           <ComingSoon
             variant="white"
-            overlay={true}
+            overlay
             blurIntensity="extraLight"
             position="top-right"
             size="small"
           />
-          <div className="grid grid-cols-1 @md:grid-cols-2 @4xl:grid-cols-4 gap-4 mb-6">
-            <StaticReferralLinkCard />
-            <PlaceholderCard icon={UserSquare} title="Total Referrals" value="0" />
-            <PlaceholderCard icon={PieChart} title="Usage Count" value="0" />
-            <PlaceholderCard icon={WalletAdd} title="Total hAlpha Earned" value="0" />
+        )}
+        <PageHeader
+          title="Referrals"
+          subtitle="Earn 5% of every purchase your referrals make, for life."
+          showTopUpCredits={false}
+          rightSlot={
+            <ReferralLinkHeader
+              referralUrl={referralUrl}
+              onRefresh={handleRefresh}
+              isRefreshing={refreshing}
+            />
+          }
+          infoButton={
+            <TooltipPrimitive.Provider delayDuration={300}>
+              <TooltipPrimitive.Root>
+                <TooltipPrimitive.Trigger asChild>
+                  <button
+                    type="button"
+                    aria-label="Referrals information"
+                    className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-grey-80 bg-white text-grey-50 transition-colors hover:bg-grey-90 hover:text-primary-50 dark:border-black-300 dark:bg-black-primary-bg dark:text-grey-dark-400"
+                  >
+                    <Info className="size-3.5" />
+                  </button>
+                </TooltipPrimitive.Trigger>
+                <TooltipPrimitive.Portal>
+                  <TooltipPrimitive.Content
+                    side="bottom"
+                    align="center"
+                    sideOffset={8}
+                    avoidCollisions
+                    collisionPadding={8}
+                    className="z-[9999] max-w-[280px] rounded-[8px] border border-grey-dark-100 bg-white px-3 py-[10px] text-[12px] font-medium leading-4 tracking-[-0.24px] text-[#52525c] shadow-[0px_4px_24px_0px_rgba(0,0,0,0.08)] dark:border-[#494949] dark:bg-[#2c2c2c] dark:text-[#a3a3a3] dark:shadow-black/25"
+                  >
+                    Credits are paid automatically on every purchase made
+                    through your referral link.
+                    <TooltipPrimitive.Arrow className="fill-white dark:fill-[#2c2c2c]" />
+                  </TooltipPrimitive.Content>
+                </TooltipPrimitive.Portal>
+              </TooltipPrimitive.Root>
+            </TooltipPrimitive.Provider>
+          }
+        />
+
+        {/* Top 3-card stat grid */}
+        <div className="mt-4 grid grid-cols-1 @md:grid-cols-2 @3xl:grid-cols-3 gap-4">
+          <ReferralStatCard
+            icon={<ReferralGrip />}
+            label="Total Referrals"
+            value={totalReferrals}
+            unit="Referrals"
+            chartData={PLACEHOLDER_CHART}
+            isLoading={isLoading}
+          />
+          <ReferralStatCard
+            icon={<MousePointerClick />}
+            label="Total Usage"
+            value={referralData?.referralHistory?.length ?? 0}
+            unit=""
+            chartData={PLACEHOLDER_CHART.map((v) => v * 2)}
+            isLoading={isLoading}
+          />
+          <ReferralStatCard
+            icon={<Tickets />}
+            label="Total hAlpha Earned"
+            value={totalCredits}
+            unit="hAlpha"
+            chartData={PLACEHOLDER_CHART.map((v) => v * 3)}
+            isLoading={isLoading}
+          />
+        </div>
+
+        {/* Referral Links section */}
+        <div className={SECTION_SHELL_CLASS}>
+          <div className={SECTION_HEADER_CLASS}>
+            <div className="flex items-center gap-1 min-w-0">
+              <LinkIcon className="size-[14px] shrink-0 text-primary-40 dark:text-primary-brand-dark" />
+              <p className={cn(SECTION_HEADER_LABEL_CLASS, "truncate")}>
+                Referral Links
+              </p>
+            </div>
+            <div className="flex items-center gap-3 shrink-0">
+              <div
+                ref={setLinksControlsContainer}
+                className="flex flex-wrap items-center gap-3 overflow-x-auto empty:hidden"
+              />
+              <CreateButton
+                text="+ Generate"
+                isLoading={generating}
+                onClick={handleGenerateReferral}
+              />
+            </div>
           </div>
-          <div className="p-4 border border-grey-80 shadow-sm rounded-lg mb-6">
-            <StaticReferralLinksTable />
-          </div>
-          <div className="p-4 border border-grey-80 shadow-sm rounded-lg">
-            <StaticReferralHistoryTable />
+          <div className={SECTION_BODY_CLASS}>
+            <ReferralLinksTable
+              headerPortalTarget={linksControlsContainer}
+              onGenerate={handleGenerateReferral}
+              isGenerating={generating}
+              isRefreshing={refreshing}
+            />
           </div>
         </div>
-      </DashboardTitleWrapper>
-    );
-  }
 
-  // When feature is enabled, render the full components (future implementation)
-  return (
-    <DashboardTitleWrapper mainText="Referrals">
-      <div className="w-full mt-6">
-        <div className="text-center text-grey-60">
-          Referrals feature coming soon...
+        {/* Referral History section */}
+        <div className={SECTION_SHELL_CLASS}>
+          <div className={SECTION_HEADER_CLASS}>
+            <div className="flex items-center gap-1 min-w-0">
+              <Clock className="size-[14px] shrink-0 text-primary-40 dark:text-primary-brand-dark" />
+              <p className={cn(SECTION_HEADER_LABEL_CLASS, "truncate")}>
+                Referral History
+              </p>
+            </div>
+            <div className="flex items-center gap-3 shrink-0">
+              <div
+                ref={setHistoryControlsContainer}
+                className="flex flex-wrap items-center gap-3 overflow-x-auto empty:hidden"
+              />
+            </div>
+          </div>
+          <div className={SECTION_BODY_CLASS}>
+            <ReferralHistoryTable
+              headerPortalTarget={historyControlsContainer}
+              isRefreshing={refreshing}
+            />
+          </div>
         </div>
       </div>
     </DashboardTitleWrapper>

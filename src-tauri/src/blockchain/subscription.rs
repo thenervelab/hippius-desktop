@@ -37,9 +37,38 @@ pub struct BlockUpdate {
     pub is_connected: bool,
 }
 
+/// Consecutive-failure ceiling past which the node is treated as persistently
+/// unreachable. The reconnect loop never STOPS — a wallet must reconnect on its
+/// own when connectivity returns — but past this many failures it stops the
+/// aggressive ~60s retry and falls back to a slow re-probe so a long outage
+/// (closed laptop, no network for hours) doesn't hammer the endpoint or spam
+/// the logs every minute.
+const RECONNECT_CEILING_ATTEMPTS: u32 = 10;
+
+/// Slow re-probe interval (seconds) used once past [`RECONNECT_CEILING_ATTEMPTS`].
+const OFFLINE_REPROBE_SECS: u64 = 300;
+
+/// Backoff (seconds) before the next block-subscription reconnect attempt.
+///
+/// Exponential 5/10/20/40s capped at 60s for the first
+/// [`RECONNECT_CEILING_ATTEMPTS`] failures; a 429 (rate-limited) response keeps
+/// a 30s floor so we back off harder when the endpoint is actively rejecting
+/// us. At/after the ceiling it returns [`OFFLINE_REPROBE_SECS`] — the slow
+/// re-probe that bounds a sustained outage without ever giving up. Pure so the
+/// whole schedule (incl. the ceiling transition) is unit-testable.
+fn reconnect_delay_secs(consecutive_failures: u32, is_rate_limited: bool) -> u64 {
+    if consecutive_failures >= RECONNECT_CEILING_ATTEMPTS {
+        return OFFLINE_REPROBE_SECS;
+    }
+    let base = 5u64
+        .saturating_mul(2u64.saturating_pow(consecutive_failures.saturating_sub(1).min(4)))
+        .min(60);
+    if is_rate_limited { base.max(30) } else { base }
+}
+
 /// Start the background block subscription. Idempotent — does nothing if already running.
 #[tauri::command]
-pub async fn start_block_subscription(app: tauri::AppHandle) -> Result<(), String> {
+pub async fn start_block_subscription(app: tauri::AppHandle) -> crate::error::Result<()> {
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
     let bsub = &app_state.block_sub;
@@ -81,12 +110,22 @@ pub async fn start_block_subscription(app: tauri::AppHandle) -> Result<(), Strin
                 Ok(()) => break,
                 Err(e) => {
                     consecutive_failures += 1;
-                    // Exponential backoff: 5s, 10s, 20s, 40s, capped at 60s
-                    let delay_secs = 5u64
-                        .saturating_mul(2u64.saturating_pow(consecutive_failures.saturating_sub(1).min(4)))
-                        .min(60);
-                    let is_rate_limited = e.contains("429");
-                    let delay_secs = if is_rate_limited { delay_secs.max(30) } else { delay_secs };
+                    // AppError now (see the taxonomy conversion); stringify for the
+                    // 429 substring probe. reconnect_delay_secs carries the F4
+                    // reconnect-ceiling so a sustained outage slows to a periodic
+                    // re-probe instead of hammering the endpoint every ~60s.
+                    let is_rate_limited = e.to_string().contains("429");
+                    let delay_secs = reconnect_delay_secs(consecutive_failures, is_rate_limited);
+
+                    // Log the ceiling crossing exactly once so a sustained
+                    // outage is visible in the logs without per-retry spam.
+                    if consecutive_failures == RECONNECT_CEILING_ATTEMPTS {
+                        warn!(
+                            consecutive_failures,
+                            reprobe_secs = OFFLINE_REPROBE_SECS,
+                            "Block subscription persistently failing — slowing to a periodic re-probe (still auto-recovers)"
+                        );
+                    }
 
                     warn!(
                         error = %e,
@@ -148,12 +187,12 @@ pub(crate) async fn stop_block_subscription_inner(app: &tauri::AppHandle) {
 
 /// Stop the background block subscription (IPC wrapper). Idempotent.
 #[tauri::command]
-pub async fn stop_block_subscription(app: tauri::AppHandle) -> Result<(), String> {
+pub async fn stop_block_subscription(app: tauri::AppHandle) -> crate::error::Result<()> {
     stop_block_subscription_inner(&app).await;
     Ok(())
 }
 
-async fn subscribe_blocks(app: &tauri::AppHandle) -> Result<(), String> {
+async fn subscribe_blocks(app: &tauri::AppHandle) -> crate::error::Result<()> {
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
     let client = get_substrate_client(&app_state).await?;
@@ -163,7 +202,7 @@ async fn subscribe_blocks(app: &tauri::AppHandle) -> Result<(), String> {
         .blocks()
         .subscribe_finalized()
         .await
-        .map_err(|e| format!("Block subscription failed: {e}"))?;
+        .map_err(|e| crate::error::AppError::Substrate(format!("Block subscription failed: {e}")))?;
 
     info!("Subscribed to finalized blocks");
 
@@ -173,7 +212,7 @@ async fn subscribe_blocks(app: &tauri::AppHandle) -> Result<(), String> {
             break;
         }
 
-        let block = result.map_err(|e| format!("Block error: {e}"))?;
+        let block = result.map_err(|e| crate::error::AppError::Substrate(format!("Block error: {e}")))?;
         let number = block.number() as u64;
         app_state.block_sub.latest_block.store(number, Ordering::SeqCst);
 
@@ -217,9 +256,11 @@ async fn subscribe_blocks(app: &tauri::AppHandle) -> Result<(), String> {
 /// graceful WebSocket `None`); returning `Err` routes it through the caller's
 /// backoff-and-reconnect arm, which also emits `is_connected = false` so the
 /// FE connectivity indicator stays honest.
-fn classify_stream_exit(running: bool) -> Result<(), String> {
+fn classify_stream_exit(running: bool) -> crate::error::Result<()> {
     if running {
-        Err("block stream ended unexpectedly (graceful disconnect)".to_string())
+        Err(crate::error::AppError::Substrate(
+            "block stream ended unexpectedly (graceful disconnect)".into(),
+        ))
     } else {
         Ok(())
     }
@@ -242,9 +283,6 @@ fn schedule_trailing_block_emit(app: tauri::AppHandle) {
         // latest block when it wakes.
         return;
     }
-    // `app_state_check` borrows `app`; NLL ends that borrow at its last use
-    // (the `swap` above), so `app` moves freely into the spawn below — no
-    // explicit drop needed (`tauri::State` is a reference wrapper, not `Drop`).
 
     tokio::spawn(async move {
         // Sleep until the throttle window has had a chance to close. We
@@ -348,6 +386,16 @@ mod tests {
     }
 
     #[test]
+    fn graceful_disconnect_is_classified_as_substrate_error() {
+        // The reconnectable disconnect must carry the blockchain taxonomy
+        // (`AppError::Substrate`), so the start loop's 429 detection
+        // (`e.to_string().contains("429")`) and the FE's kind-based dispatch
+        // both see a chain error rather than a stringly-typed `Other`.
+        let err = classify_stream_exit(true).unwrap_err();
+        assert!(matches!(err, crate::error::AppError::Substrate(_)), "expected Substrate, got {err:?}");
+    }
+
+    #[test]
     fn intentional_stop_is_clean_exit() {
         // The in-loop break clears nothing; `running == false` means the user
         // (logout/stop) asked the task to end. That is a clean Ok, not a
@@ -372,5 +420,43 @@ mod tests {
         assert_eq!(wins, 1, "expected exactly one win in a 500 ms burst against a 1000 ms gate");
         // After the throttle window closes, the next attempt wins (ts=1101 - 100 = 1001 ms ≥ 1000).
         assert!(try_claim_block_emit(&last, 1101, 1000));
+    }
+
+    // -----------------------------------------------------------------------
+    // reconnect_delay_secs (F4 — bounded reconnect backoff + ceiling)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn reconnect_backoff_is_exponential_then_capped_at_60() {
+        assert_eq!(reconnect_delay_secs(1, false), 5);
+        assert_eq!(reconnect_delay_secs(2, false), 10);
+        assert_eq!(reconnect_delay_secs(3, false), 20);
+        assert_eq!(reconnect_delay_secs(4, false), 40);
+        // 5th+ failures cap at 60s, up to the ceiling.
+        assert_eq!(reconnect_delay_secs(5, false), 60);
+        assert_eq!(reconnect_delay_secs(RECONNECT_CEILING_ATTEMPTS - 1, false), 60);
+    }
+
+    #[test]
+    fn rate_limited_keeps_a_30s_floor_below_the_cap() {
+        // A 429 backs off harder early: the 5s/10s/20s steps are floored to 30s.
+        assert_eq!(reconnect_delay_secs(1, true), 30);
+        assert_eq!(reconnect_delay_secs(2, true), 30);
+        assert_eq!(reconnect_delay_secs(3, true), 30);
+        // Once the exponential exceeds 30s, the floor stops mattering.
+        assert_eq!(reconnect_delay_secs(4, true), 40);
+    }
+
+    #[test]
+    fn past_the_ceiling_falls_back_to_the_slow_reprobe_and_never_zero() {
+        // At and beyond the ceiling, the cadence drops to the slow re-probe
+        // instead of retrying every 60s forever — but it never STOPS (a wallet
+        // must reconnect on its own), so the delay is always a finite non-zero.
+        assert_eq!(reconnect_delay_secs(RECONNECT_CEILING_ATTEMPTS, false), OFFLINE_REPROBE_SECS);
+        assert_eq!(reconnect_delay_secs(RECONNECT_CEILING_ATTEMPTS + 50, true), OFFLINE_REPROBE_SECS);
+        const { assert!(OFFLINE_REPROBE_SECS > 60, "the slow re-probe must be slower than the pre-ceiling 60s cap") };
+        for failures in 1..(RECONNECT_CEILING_ATTEMPTS + 100) {
+            assert!(reconnect_delay_secs(failures, false) > 0, "reconnect must never busy-loop at 0s delay");
+        }
     }
 }

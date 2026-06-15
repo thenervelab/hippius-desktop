@@ -1,22 +1,25 @@
 "use client";
 
 import React, { useState, useMemo, useRef, useEffect } from "react";
+import * as TooltipPrimitive from "@radix-ui/react-tooltip";
+import { Info } from "lucide-react";
+import { toast } from "sonner";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { getVersion } from "@tauri-apps/api/app";
+import { invoke } from "@tauri-apps/api/core";
+import { InView } from "react-intersection-observer";
+import { getDiagonalTextureSvgBackgroundImage } from "@/app/lib/ui-textures";
 
-import AbstractIconWrapper from "@/components/ui/abstract-icon-wrapper";
 import TicketsTable from "./TicketsTable";
-import { P } from "@/components/ui/typography";
 import CreateTicketModal, {
   CreateTicketData,
   CreateTicketModalRef,
 } from "./CreateTicketModal";
-import { toast } from "sonner";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import TicketMessagesDialog from "./TicketMessagesDialog";
-import Lock from "../../ui/icons/Lock";
-import { Ticket } from "../../ui/icons";
-import { RefreshButton, SearchInput } from "../../ui";
-import { HelpCircle } from "lucide-react";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { RefreshButton, RevealTextLine, SearchInput } from "../../ui";
+import { BackgroundContainer } from "@/components/ui/BackgroundContainer";
+import { LogoMark } from "@/components/ui/LogoMark";
 import useCreateSupportTicket from "@/app/lib/hooks/useCreateSupportTicket";
 import useUploadTicketAttachment from "@/app/lib/hooks/useUploadTicketAttachment";
 import useSupportTickets, {
@@ -27,24 +30,25 @@ import CreateButton from "../../ui/button/CreateButton";
 import ConfirmModal from "./SupportConfirmModal";
 import { OAuthButtonsGroup } from "../../auth/OAuthButtons";
 
-const SUPPORT_DOCS_URL = "https://docs.hippius.com/use/help-support";
+// Single-page tickets fetch — the help-and-support page now lists all
+// tickets in one shot rather than paginating. 1000 is a safe ceiling
+// for any realistic user; the backend caps far below this in practice.
+const ALL_TICKETS_LIMIT = 1000;
 
 const Support: React.FC = () => {
-  const { oauthSession } = useWalletAuth();
+  const { oauthSession, polkadotAddress } = useWalletAuth();
   const createTicketModalRef = useRef<CreateTicketModalRef>(null);
 
-  const [pageSize] = useState(10);
-  const [currentPage, setCurrentPage] = useState(1);
   const [searchTerm, setSearchTerm] = useState("");
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState("");
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isCloseModalOpen, setIsCloseModalOpen] = useState(false);
   const [isMessagesDialogOpen, setIsMessagesDialogOpen] = useState(false);
   const [selectedTicket, setSelectedTicket] = useState<SupportTicket | null>(
-    null,
+    null
   );
   const [ticketToClose, setTicketToClose] = useState<SupportTicket | null>(
-    null,
+    null
   );
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -53,18 +57,12 @@ const Support: React.FC = () => {
     const timer = setTimeout(() => {
       setDebouncedSearchTerm(searchTerm);
     }, 500);
-
     return () => clearTimeout(timer);
   }, [searchTerm]);
 
-  // Reset to first page when search term changes
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [debouncedSearchTerm]);
-
   const { data, isLoading, error, refetch, isRefetching } = useSupportTickets({
-    page: currentPage,
-    limit: pageSize,
+    page: 1,
+    limit: ALL_TICKETS_LIMIT,
     search: debouncedSearchTerm,
   });
 
@@ -93,63 +91,40 @@ const Support: React.FC = () => {
     });
 
   // Sort tickets by status: open > in progress > closed > resolved
-  const filteredTickets = useMemo(() => {
+  const sortedTickets = useMemo(() => {
     if (!data?.results) return [];
 
+    // Bubble the most actionable tickets to the top: Open (needs first
+    // staff response) → Pending (in flight) → Resolved (done well) →
+    // Closed (archived). in_progress is kept at the Pending slot so any
+    // legacy rows interleave sensibly.
     const statusOrder: { [key: string]: number } = {
       open: 0,
-      "in progress": 1,
-      closed: 2,
-      resolved: 3,
+      pending: 1,
+      in_progress: 1,
+      resolved: 2,
+      closed: 3,
     };
 
-    return data.results.sort((a, b) => {
+    return [...data.results].sort((a, b) => {
       const statusA = statusOrder[a.status.toLowerCase()] ?? 999;
       const statusB = statusOrder[b.status.toLowerCase()] ?? 999;
       return statusA - statusB;
     });
   }, [data?.results]);
 
-  // Calculate total pages based on API response
-  const totalPages = useMemo(() => {
-    if (!data?.count) return 1;
-    return Math.ceil(data.count / pageSize);
-  }, [data?.count, pageSize]);
-
   const handleCreateTicket = () => {
     setIsModalOpen(true);
   };
 
   const handleSubmitTicket = async (ticketData: CreateTicketData) => {
-    const { attachment, ...ticketPayload } = ticketData;
+    const { attachment, includeLogs, ...ticketPayload } = ticketData;
 
     setIsSubmitting(true);
 
-    // If no attachment, just create the ticket normally
-    if (!attachment) {
-      createTicket(
-        {
-          ...ticketPayload,
-          resource_type: "",
-          resource_id: "",
-        },
-        {
-          onSuccess: () => {
-            setIsSubmitting(false);
-            setIsModalOpen(false);
-            createTicketModalRef.current?.resetForm();
-            toast.success("Ticket created successfully!");
-            refetch();
-          },
-          onError: () => {
-            setIsSubmitting(false);
-          },
-        },
-      );
-      return;
-    }
-
-    // If there's an attachment, create ticket first, keep modal open, then upload attachment
+    // Create the ticket, then run the optional post-create steps (image
+    // attachment, log bundle) against its first message. Both attachment and
+    // no-attachment flows share this single path.
     createTicket(
       {
         ...ticketPayload,
@@ -158,51 +133,67 @@ const Support: React.FC = () => {
       },
       {
         onSuccess: async (ticket) => {
-          try {
-            // Upload the attachment using the first message ID from the response
-            if (ticket.messages && ticket.messages.length > 0) {
-              await uploadAttachment({
-                ticket_id: ticket.id.toString(),
-                message_id: ticket.messages[0].id.toString(),
-                filePath: attachment.path,
-                filename: attachment.name,
-              });
-            } else {
-              throw new Error("No message ID available in ticket response");
-            }
+          const firstMessageId = ticket.messages?.[0]?.id;
 
-            // Only close modal and show success after attachment upload completes
-            setIsSubmitting(false);
-            setIsModalOpen(false);
-            createTicketModalRef.current?.resetForm();
-            toast.success("Ticket created successfully!");
-            refetch();
-          } catch (error) {
-            setIsSubmitting(false);
-            setIsModalOpen(false);
-            createTicketModalRef.current?.resetForm();
-            toast.error(
-              error instanceof Error
-                ? error.message
-                : "Failed to upload attachment",
-            );
-            refetch();
+          // User-selected image attachment. A failure here IS surfaced — the
+          // user explicitly attached a file and expects it to arrive.
+          let attachmentError: string | null = null;
+          if (attachment) {
+            if (firstMessageId == null) {
+              attachmentError = "No message ID available in ticket response";
+            } else {
+              try {
+                await uploadAttachment({
+                  ticket_id: ticket.id.toString(),
+                  message_id: firstMessageId.toString(),
+                  filePath: attachment.path,
+                  filename: attachment.name,
+                });
+              } catch (error) {
+                attachmentError =
+                  error instanceof Error
+                    ? error.message
+                    : "Failed to upload attachment";
+              }
+            }
           }
+
+          // Best-effort log bundle. Business logic (bundling, redaction, zip,
+          // upload) lives in the `attach_logs_to_ticket` Rust command; here we
+          // only fire it and SWALLOW any failure so it can never fail ticket
+          // creation or show an error toast.
+          if (includeLogs && firstMessageId != null && polkadotAddress) {
+            try {
+              await invoke("attach_logs_to_ticket", {
+                accountId: polkadotAddress,
+                ticketId: ticket.id.toString(),
+                messageId: firstMessageId.toString(),
+              });
+            } catch (error) {
+              console.warn("Failed to attach logs to support ticket", error);
+            }
+          }
+
+          setIsSubmitting(false);
+          setIsModalOpen(false);
+          createTicketModalRef.current?.resetForm();
+          if (attachmentError) {
+            toast.error(attachmentError);
+          } else {
+            toast.success("Ticket created successfully!");
+          }
+          refetch();
         },
         onError: (error) => {
           setIsSubmitting(false);
           toast.error(error.message || "Failed to create ticket");
         },
-      },
+      }
     );
   };
 
   const handleRefresh = () => {
     refetch();
-  };
-
-  const handlePageChange = (page: number) => {
-    setCurrentPage(page);
   };
 
   const handleViewMessages = (ticket: SupportTicket) => {
@@ -236,128 +227,268 @@ const Support: React.FC = () => {
 
   // Check if user is logged in with mnemonic (access key)
   const isAccessKeyLogin = oauthSession?.provider === "mnemonic";
+  const showGate = isAccessKeyLogin;
 
   return (
-    <div className="w-full">
-      {/* Access Key Login Overlay */}
-      {isAccessKeyLogin ? (
-        <div className="flex items-center justify-center min-h-[37.5rem]">
-          <div className="max-w-md w-full px-4 py-6 bg-white rounded-lg shadow-lg border border-grey-80">
-            <div className="text-center mb-4 max-w-[20.625rem] w-full mx-auto">
-              <AbstractIconWrapper className="size-12 mx-auto mb-4 flex items-center justify-center">
-                <Lock className="size-7 relative text-primary-50" />
-              </AbstractIconWrapper>
-              <h3 className="text-2xl font-medium text-grey-10 mb-2">
-                Login Required
-              </h3>
-              <p className="text-base text-grey-50">
-                Support tickets are not available with Access Key login. Please
-                sign in with one of the following providers to access this
-                feature.
-              </p>
-            </div>
-
-            <OAuthButtonsGroup
-              onAccessKeyClick={() => {}}
-              hideAccessKey={true}
-            />
-          </div>
-        </div>
+    <>
+      {showGate ? (
+        <AccessKeyLoginGate />
       ) : (
-        <>
-          {/* Header & Controls */}
-          <div className="flex items-center w-full justify-between gap-4 flex-wrap mb-5">
-            <div className="flex items-center justify-between w-full @sm:w-auto">
-              <div className="flex items-center gap-x-2">
-                <AbstractIconWrapper className="size-10 flex items-center justify-center">
-                  <Ticket className="size-6 relative text-primary-50" />
-                </AbstractIconWrapper>
-                <P size="lg">My Tickets</P>
-                <button
-                  onClick={() => openUrl(SUPPORT_DOCS_URL)}
-                  aria-label="Support documentation"
-                  title="Support documentation"
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-grey-80 bg-white text-grey-50 transition-colors hover:bg-grey-90 hover:text-primary-50"
-                >
-                  <HelpCircle className="size-4" />
-                </button>
-              </div>
+        <InView triggerOnce>
+          {({ inView, ref }) => (
+            <div
+              ref={ref}
+              className="flex flex-col px-4 pb-6 w-full"
+            >
+              {/* Page header — title + info tooltip on the left, New Ticket on the right.
+                  Staggered RevealTextLine mirrors the entrance animation used on the
+                  Settings page so navigating between sections feels consistent. */}
+              <RevealTextLine
+                rotate
+                reveal={inView}
+                className="delay-150 w-full"
+                parentClassName="w-full mt-3"
+              >
+                <div className="flex items-center justify-between gap-3 px-1 w-full">
+                  <div className="flex items-center gap-2">
+                    <p className="text-[24px] font-medium leading-8 text-black-700 dark:text-white">
+                      My Tickets
+                    </p>
+                    <TooltipPrimitive.Provider delayDuration={300}>
+                      <TooltipPrimitive.Root>
+                        <TooltipPrimitive.Trigger asChild>
+                          <button
+                            type="button"
+                            aria-label="About support tickets"
+                            className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-grey-80 bg-white text-grey-50 transition-colors hover:bg-grey-90 hover:text-primary-50 dark:border-black-300 dark:bg-black-primary-bg dark:text-grey-dark-400 dark:hover:bg-black-300 dark:hover:text-white"
+                          >
+                            <Info className="size-3.5" />
+                          </button>
+                        </TooltipPrimitive.Trigger>
+                        <TooltipPrimitive.Portal>
+                          <TooltipPrimitive.Content
+                            side="bottom"
+                            align="start"
+                            sideOffset={8}
+                            avoidCollisions
+                            collisionPadding={8}
+                            className="z-[9999] max-w-[280px] rounded-[8px] border border-grey-dark-100 bg-white px-3 py-[10px] text-[12px] font-medium leading-4 tracking-[-0.24px] text-[#52525c] shadow-[0px_4px_24px_0px_rgba(0,0,0,0.08)] dark:border-[#494949] dark:bg-[#2c2c2c] dark:text-[#a3a3a3] dark:shadow-black/25"
+                          >
+                            View and manage your support tickets. Click &ldquo;New
+                            Ticket&rdquo; to start a conversation with our support
+                            team.
+                            <TooltipPrimitive.Arrow className="fill-white dark:fill-[#2c2c2c]" />
+                          </TooltipPrimitive.Content>
+                        </TooltipPrimitive.Portal>
+                      </TooltipPrimitive.Root>
+                    </TooltipPrimitive.Provider>
+                  </div>
+
+                  <CreateButton
+                    text="+ New Ticket"
+                    isLoading={false}
+                    onClick={handleCreateTicket}
+                  />
+                </div>
+              </RevealTextLine>
+
+              {/* Tickets card — outer ring with search/refresh header, inner table.
+                  Reveals slightly after the header so the eye lands on the title first. */}
+              <RevealTextLine
+                rotate
+                reveal={inView}
+                className="delay-300 w-full"
+                parentClassName="w-full mt-6 overflow-visible"
+              >
+                <div className="flex flex-col items-center w-full rounded-[8px] border overflow-hidden bg-grey-light-300 border-grey-dark-100 dark:bg-black-primary-bg dark:border-black-300 shadow-[0px_1px_1.1px_rgba(0,0,0,0.04)]">
+                  <div className="flex h-[46px] w-full items-center justify-end gap-2 pl-[14px] pr-[10px]">
+                    <div className="w-[207px]">
+                      <SearchInput
+                        value={searchTerm}
+                        onChange={(value: string) => setSearchTerm(value)}
+                        placeholder="Search Global"
+                      />
+                    </div>
+                    <RefreshButton
+                      refetching={isRefetching}
+                      onClick={handleRefresh}
+                      ariaLabel="Refresh tickets"
+                    />
+                  </div>
+
+                  <div className="flex flex-col w-full flex-1 rounded-tl-[8px] rounded-tr-[8px] border-t border-grey-dark-100 bg-white dark:bg-black-600 dark:border-black-300 overflow-hidden">
+                    <TicketsTable
+                      data={sortedTickets}
+                      isLoading={isLoading}
+                      isError={!!error}
+                      isRefreshing={isRefetching}
+                      onViewMessages={handleViewMessages}
+                      onCloseTicket={handleCloseTicket}
+                      onCreateTicket={handleCreateTicket}
+                    />
+                  </div>
+                </div>
+              </RevealTextLine>
+
             </div>
-
-            <div className="flex items-center gap-x-4">
-              <SearchInput
-                placeholder="Search for a ticket"
-                className="h-9"
-                value={searchTerm}
-                onChange={(e: string) => setSearchTerm(e)}
-              />
-              <RefreshButton
-                refetching={isRefetching}
-                onClick={handleRefresh}
-              />
-
-              {!isAccessKeyLogin && (
-                <CreateButton
-                  text="New Ticket"
-                  isLoading={false}
-                  onClick={handleCreateTicket}
-                />
-              )}
-            </div>
-          </div>
-
-          {/* Tickets Table */}
-          <TicketsTable
-            data={filteredTickets}
-            isLoading={isLoading}
-            isError={!!error}
-            isRefreshing={isRefetching}
-            currentPage={currentPage}
-            totalPages={totalPages}
-            onPageChange={handlePageChange}
-            onViewMessages={handleViewMessages}
-            onCloseTicket={handleCloseTicket}
-          />
-
-          {/* Create Ticket Modal */}
-          <CreateTicketModal
-            ref={createTicketModalRef}
-            open={isModalOpen}
-            onClose={() => setIsModalOpen(false)}
-            onSubmit={handleSubmitTicket}
-            isLoading={isSubmitting}
-          />
-
-          {/* Close Ticket Confirmation Modal */}
-          <ConfirmModal
-            open={isCloseModalOpen}
-            title="Close Ticket"
-            description={
-              <div className="max-w-[20.25rem] w-full text-center mx-auto">
-                Are you sure you want to close ticket{" "}
-                <strong>{ticketToClose?.subject}</strong>? This action is
-                permanent
-              </div>
-            }
-            loading={isUpdating}
-            onConfirm={handleConfirmCloseTicket}
-            onCancel={handleCancelCloseTicket}
-            variant="close"
-            confirmText={isUpdating ? "Closing..." : "Close Ticket"}
-            cancelText="Cancel"
-          />
-
-          {/* Ticket Messages Dialog */}
-          <TicketMessagesDialog
-            open={isMessagesDialogOpen}
-            onClose={handleCloseMessagesDialog}
-            ticket={selectedTicket}
-            onCloseTicket={handleCloseTicket}
-          />
-        </>
+          )}
+        </InView>
       )}
-    </div>
+
+      {/* Create Ticket Modal */}
+      <CreateTicketModal
+        ref={createTicketModalRef}
+        open={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        onSubmit={handleSubmitTicket}
+        isLoading={isSubmitting}
+      />
+
+      {/* Close Ticket Confirmation Modal */}
+      <ConfirmModal
+        open={isCloseModalOpen}
+        title="Close Ticket"
+        description={
+          <div className="max-w-[20.25rem] w-full text-center mx-auto">
+            Are you sure you want to close ticket{" "}
+            <strong>{ticketToClose?.subject}</strong>? This action is permanent
+          </div>
+        }
+        loading={isUpdating}
+        onConfirm={handleConfirmCloseTicket}
+        onCancel={handleCancelCloseTicket}
+        confirmText={isUpdating ? "Closing..." : "Close Ticket"}
+        cancelText="Cancel"
+      />
+
+      {/* Ticket Messages Dialog */}
+      <TicketMessagesDialog
+        open={isMessagesDialogOpen}
+        onClose={handleCloseMessagesDialog}
+        ticket={selectedTicket}
+        onCloseTicket={handleCloseTicket}
+      />
+
+    </>
   );
 };
 
 export default Support;
+
+// Pre-computed diagonal SVG textures used for the corner backdrops
+// around the login card. Lifted from NoEntriesBackgroundContainer so
+// the visual matches the rest of the framed-dialog surfaces (and the
+// hippius-web VM beta-access state that inspired this design).
+const cornerTextureLight = getDiagonalTextureSvgBackgroundImage({
+  opacity: 0.21,
+});
+const cornerTextureDark = getDiagonalTextureSvgBackgroundImage({
+  color: "white",
+  opacity: 0.1,
+});
+
+// Access-key login gate.
+//
+// Renders the BackgroundContainer "framed dialog" frame (matching the Figma
+// blue-bordered card) with the Sign In to Hippius card content inside —
+// minus the Access Key button, since the user is *already* on access-key
+// and needs to switch to an OAuth provider to access tickets.
+const AccessKeyLoginGate: React.FC = () => {
+  const [version, setVersion] = useState<string>("");
+
+  useEffect(() => {
+    getVersion()
+      .then((v) => setVersion(v))
+      .catch(() => setVersion(""));
+  }, []);
+
+  return (
+    <div className="flex flex-1 w-full items-center justify-center px-4 py-6 overflow-hidden">
+      <div className="relative">
+        {/* Diagonal-texture backdrop tiles sitting OUTSIDE the dialog
+            at the top-left and bottom-right corners. The tiles are
+            sized to the viewport (w-screen h-screen) — not to the
+            card — so on very wide displays the texture still reaches
+            the viewport edges instead of leaving large blank
+            quadrants beside a relatively small card. Positioning is
+            anchored to the card via right-full bottom-full (top-left)
+            and left-full top-full (bottom-right), and the parent flex
+            container's overflow-hidden clips any overflow. */}
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute right-full bottom-full w-screen h-screen bg-[rgba(242,242,242,0.42)] dark:hidden"
+          style={{ backgroundImage: cornerTextureLight }}
+        />
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute left-full top-full w-screen h-screen bg-[rgba(242,242,242,0.42)] dark:hidden"
+          style={{ backgroundImage: cornerTextureLight }}
+        />
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute right-full bottom-full w-screen h-screen bg-[#1A1A1A] hidden dark:block"
+          style={{ backgroundImage: cornerTextureDark }}
+        />
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute left-full top-full w-screen h-screen bg-[#1A1A1A] hidden dark:block"
+          style={{ backgroundImage: cornerTextureDark }}
+        />
+
+      <BackgroundContainer
+        className="relative w-full max-w-[613px]"
+        fillClassName="fill-[#f9f9f9] dark:fill-[#262626]"
+        hippoIconClassName="fill-[#989898] dark:fill-[#5e5e5e]"
+        contentClassName="flex justify-center"
+        shellClassName="w-full min-w-0 max-w-[613px]"
+        cardClassName="w-full min-w-0 max-w-full p-[min(1rem,16px)] gap-[min(0.75rem,12px)] items-center"
+      >
+        <LogoMark />
+
+        <h1 className="w-full text-center text-grey-10 dark:text-grey-light-100 font-medium text-[min(1.75rem,28px)] leading-[min(2.25rem,36px)] tracking-[-0.03em]">
+          Log In to Hippius
+        </h1>
+
+        <p className="self-stretch text-center text-grey-50 dark:text-grey-dark-600 font-medium text-[16px] leading-[22px] tracking-[-0.32px]">
+          Support tickets are not available with Access Key login. Please sign
+          in with one of the following providers to access this feature.
+        </p>
+
+        <div className="flex flex-col gap-[min(1rem,16px)] items-center w-full">
+          <OAuthButtonsGroup onAccessKeyClick={() => {}} hideAccessKey />
+
+          <div className="h-px w-full bg-grey-80 dark:bg-[#494949]" />
+
+          <p className="w-full text-center text-[min(0.75rem,12px)] leading-[min(1.125rem,18px)] tracking-[-0.02em] text-grey-dark-800 font-medium">
+            By continuing you agree to our
+            <br />
+            <button
+              type="button"
+              onClick={() =>
+                openUrl("https://hippius.com/terms-and-conditions")
+              }
+              className="font-semibold text-primary-50 dark:text-primary-65 hover:text-primary-60 transition-colors cursor-pointer"
+            >
+              Terms and Conditions
+            </button>{" "}
+            and{" "}
+            <button
+              type="button"
+              onClick={() => openUrl("https://hippius.com/privacy-policy")}
+              className="font-semibold text-primary-50 dark:text-primary-65 hover:text-primary-60 transition-colors cursor-pointer"
+            >
+              Privacy Policy
+            </button>
+          </p>
+
+          {version && (
+            <p className="text-[min(0.75rem,12px)] leading-[min(1.125rem,18px)] tracking-[-0.02em] text-grey-dark-600 font-medium">
+              Version {version}
+            </p>
+          )}
+        </div>
+      </BackgroundContainer>
+      </div>
+    </div>
+  );
+};

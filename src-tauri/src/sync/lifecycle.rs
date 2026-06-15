@@ -88,6 +88,7 @@ pub async fn setup_and_init_sync(
 ) -> Result<InitSyncResult> {
     use tauri::Manager;
     let state = app.state::<crate::app_state::AppState>();
+    let account_id = state.require_session_account(&account_id)?;
     let pool = state.pool()?;
 
     // 1. Save HCFS config
@@ -107,7 +108,7 @@ pub async fn setup_and_init_sync(
     }
 
     // 3. Initialize sync
-    initialize_sync_inner(app, account_id, label, mnemonic, true, false).await
+    initialize_sync_inner(app, account_id, label, mnemonic, true, false, None).await
 }
 
 /// Add a local folder to sync in one step.
@@ -124,6 +125,7 @@ pub async fn add_local_sync_folder(
 ) -> Result<String> {
     use tauri::Manager;
     let state = app.state::<crate::app_state::AppState>();
+    let account_id = state.require_session_account(&account_id)?;
     let pool = state.pool()?;
 
     // Enforce credit eligibility at the IPC boundary, priced by the
@@ -159,7 +161,7 @@ pub async fn add_local_sync_folder(
     crate::sync::paths::set_sync_path_internal(pool, &account_id, &path, false, Some(&label)).await?;
 
     // 3. Initialize sync for this drive (start_loop = true)
-    initialize_sync_inner(app, account_id, label.clone(), mnemonic, true, false).await?;
+    initialize_sync_inner(app, account_id, label.clone(), mnemonic, true, false, None).await?;
 
     info!(label = %label, path = %path, "Local sync folder added");
     Ok(label)
@@ -169,7 +171,14 @@ pub async fn add_local_sync_folder(
 /// switching folders won't download files from the previous folder.
 #[tauri::command]
 pub async fn initialize_sync(app: tauri::AppHandle, account_id: String, label: String, existing_mnemonic: Option<String>) -> Result<InitSyncResult> {
-    initialize_sync_inner(app, account_id, label, existing_mnemonic, true, false).await
+    // FE entry that flows account_id into the secret-using inner; authorize
+    // against the session. (Also reached from complete_migration_transition,
+    // itself guarded, with the session account — the re-check is idempotent.)
+    let account_id = {
+        use tauri::Manager;
+        app.state::<crate::app_state::AppState>().require_session_account(&account_id)?
+    };
+    initialize_sync_inner(app, account_id, label, existing_mnemonic, true, false, None).await
 }
 
 /// Stop the existing drive with the given label, discard its pending activity
@@ -497,7 +506,7 @@ fn spawn_reconcile_timestamps(app: &AppHandle, sync: Arc<SyncRunner>, manager_ar
                     sync.update_synced_paths_cache(&label, paths);
                     drop(manager);
                     // Carry the drive label (F35) so the FE scopes its
-                    // metadata-stale clear to this drive.
+                    // metadata-stale clear to this drive instead of every drive.
                     let _ = app.emit(
                         crate::sync::events::ACTIVITY_UPDATED,
                         crate::sync::events::LabelPayload { label: label.clone() },
@@ -992,10 +1001,14 @@ fn spawn_folder_registration(server_url: &str, bearer_token: &str, label: &str, 
 /// `skip_credits_check` suppresses the HTTP call to `/api/billing/credits/balance/`.
 /// Pass `true` when the caller has already validated credits (e.g. `auto_init_sync`
 /// checks once before its per-drive loop to avoid N redundant requests).
-#[expect(
-    clippy::too_many_lines,
-    reason = "init orchestrator sits 2 lines over the limit; slated for decomposition in structure-audit Phase 3"
-)]
+///
+/// `lifecycle_snapshot` is the drive-lifecycle epoch this init commits
+/// against. Callers that pre-clear `is_paused` under the label's commit
+/// lock (`resume_drive`) MUST pass the snapshot captured inside that
+/// locked block — a pause that fully completes between their critical
+/// section and this function's entry then still supersedes the init.
+/// All other callers pass `None` and the snapshot is taken here.
+#[expect(clippy::too_many_lines, reason = "sequential drive-init steps read better inline than split across helpers")]
 pub(crate) async fn initialize_sync_inner(
     app: tauri::AppHandle,
     account_id: String,
@@ -1003,10 +1016,22 @@ pub(crate) async fn initialize_sync_inner(
     existing_mnemonic: Option<String>,
     start_loop: bool,
     skip_credits_check: bool,
+    lifecycle_snapshot: Option<u64>,
 ) -> Result<InitSyncResult> {
     use tauri::Manager;
     let label = sanitize_label(&label)?;
     let app_state = app.state::<crate::app_state::AppState>();
+
+    // Resolve the drive-lifecycle epoch snapshot BEFORE any teardown or
+    // other observable step of this init. Callers that pre-cleared
+    // `is_paused` under the commit lock pass their own (earlier)
+    // snapshot so the supersession window covers their critical section
+    // too; everyone else snapshots at entry. The commit step at the end
+    // re-checks it under the label's commit lock, so a pause/removal
+    // that lands anywhere during this init — including its earliest
+    // steps — bumps the epoch past this snapshot and the commit yields
+    // instead of resurrecting the drive (see sync::lifecycle_guard).
+    let lifecycle_snapshot = lifecycle_snapshot.unwrap_or_else(|| app_state.drive_lifecycle.snapshot(&label));
 
     // Block non-migration sync init while a migration is running
     if label != "migration" && app_state.migration.in_progress.load(std::sync::atomic::Ordering::SeqCst) {
@@ -1023,17 +1048,27 @@ pub(crate) async fn initialize_sync_inner(
     // Validate user has credits/balance before allowing sync.
     // This is skipped when the caller has already performed the check (e.g.
     // `auto_init_sync` checks once before iterating all drives).
-    if !skip_credits_check && let Ok(acct) = app_state.current_account_id() {
+    if !skip_credits_check && let Ok(account) = app_state.current_session_account() {
         let client = crate::api::client::ApiClient::new(app_state.api_client.clone(), pool_owned.clone());
-        if let Ok(resp) = client
-            .get::<crate::billing::credits::CreditBalanceResponse>("/api/billing/credits/balance/", &acct)
+        match client
+            .get::<crate::billing::credits::CreditBalanceResponse>("/api/billing/credits/balance/", &account)
             .await
         {
-            // Unparseable balance is inconclusive, not zero — see balance_blocks_sync.
-            if balance_blocks_sync(resp.balance.as_deref()) {
-                return Err(crate::error::AppError::Validation(
-                    "Insufficient credits. Please add credits to your account before syncing.".into(),
-                ));
+            Ok(resp) => {
+                // Unparseable balance is inconclusive, not zero — see balance_blocks_sync.
+                if balance_blocks_sync(resp.balance.as_deref()) {
+                    return Err(crate::error::AppError::Validation(
+                        "Insufficient credits. Please add credits to your account before syncing.".into(),
+                    ));
+                }
+            }
+            // Fail-open on a transport/HTTP/parse error: this pre-init gate is a
+            // best-effort proactive check. The gated upload IPCs each call the
+            // fail-closed `require_eligible`, and the per-file 402 path is the
+            // authoritative backstop, so a server blip here must not block sync.
+            // Log it so the skipped check is observable instead of silently dropped.
+            Err(e) => {
+                tracing::warn!(account = %account, error = %e, "credit pre-init balance check failed; proceeding (upload IPCs still enforce eligibility)");
             }
         }
     }
@@ -1136,10 +1171,79 @@ pub(crate) async fn initialize_sync_inner(
     );
     spawn_folder_registration(&cfg.server_url, &bearer_token, &label, &account_id, &fhash, pool, &cfg.sync_path);
 
-    // Emit a per-drive Active status so any FE listener (settings page,
-    // tray submenu) updates this one drive without re-fetching the
-    // whole list. Other drives are unaffected.
-    crate::sync::status::emit_drive_status(&app, &label, &cfg.sync_path, crate::sync::drive_status::DriveStatus::Active);
+    // Commit: clear the persisted paused flag now that the drive is
+    // running. Every resume surface funnels through this function, but
+    // only `resume_drive` cleared the flag itself — a resume via the
+    // plain `initialize_sync` IPC (the files-page DriveOnboarding panel)
+    // left a *running* drive DB-flagged paused, so the next
+    // `auto_init_sync` pass re-emitted `Paused` for it (~30 s after
+    // resume, via the login retry ladder) and every restart booted it
+    // paused again. Clearing at the funnel makes "successfully
+    // initialized ⇒ is_paused = 0" hold for every entry point; the
+    // UPDATE is a no-op for the already-cleared rows auto-init passes
+    // through.
+    //
+    // Pause-wins guard: the commit re-checks the epoch snapshot taken at
+    // the top of this function — atomically with the flag clear, under
+    // the label's commit lock (see sync::lifecycle_guard). A pause or
+    // removal landing ANYWHERE during this init bumps the epoch, so the
+    // commit observes it and yields no matter where in the init window
+    // the supersession landed — including before `register_drive`, the
+    // gap the old "is our label still in the in-memory map" heuristic
+    // could not see (PR #17). The per-drive Active emit (settings page,
+    // tray submenu listeners) rides INSIDE the commit via the
+    // `on_committed` hook, which runs while the commit lock is still
+    // held: emitting after the lock dropped let a pause run to
+    // completion in that gap and have its Paused emit overwritten by
+    // the stale Active one — poisoning the status cache (which wins
+    // over the DB on FE bootstrap) for the rest of the session.
+    match crate::sync::lifecycle_guard::apply_init_commit(&app_state.drive_lifecycle, pool, &account_id, &label, lifecycle_snapshot, || {
+        crate::sync::status::emit_drive_status(&app, &label, &cfg.sync_path, crate::sync::drive_status::DriveStatus::Active);
+    })
+    .await
+    {
+        Ok(crate::sync::lifecycle_guard::CommitOutcome::Committed) => { /* Active already emitted by the on_committed hook */ }
+        Ok(crate::sync::lifecycle_guard::CommitOutcome::Superseded) => {
+            // A pause/removal won. Undo OUR registration so the drive
+            // doesn't run against the user's intent; the superseder
+            // already emitted its own status, so emit nothing here.
+            //
+            // Terminal teardown, NOT `teardown_previous_drive`: that
+            // helper is the cheap entry-teardown for an init that is
+            // about to re-register everything — it drops the slot but
+            // leaves the label root, the watcher path, the synced-paths
+            // cache, and the first-reconcile gate behind, which here
+            // would leak until the next lifecycle op because this init
+            // re-registers nothing. Mirror `pause_drive`'s sequence
+            // instead: resolve the path hint from the DB so the watcher
+            // is unwatched even when the per-drive lock is held by an
+            // in-flight reconcile, then do the full in-memory removal.
+            // Unlike `pause_drive`, this teardown runs OUTSIDE the commit
+            // lock: the lock exists solely to make the epoch check and the
+            // `is_paused` write atomic, this arm writes no flag, and the
+            // remaining unprotected-removal hazard is exactly the
+            // identity-aware-teardown follow-up.
+            let path_hint = sync_path_for_label(&app_state, &account_id, &label).await;
+            let (remaining, _removed_path) = remove_drive_inmemory(sync, &label, path_hint).await;
+            if remaining == 0 {
+                // A superseding pause/removal of the LAST drive already
+                // stopped the sync loop, but `start_sync_loop` above may
+                // have restarted it over a now-empty map — re-stop it.
+                teardown_last_drive(sync, &app).await;
+            }
+            info!(label = %label, "init superseded by pause/removal — torn down, is_paused untouched");
+            return Err(crate::error::AppError::NotReady(crate::error::NotReadyKind::SupersededByPause));
+        }
+        Err(e) => {
+            // Epoch was current but the flag clear failed: drive keeps
+            // running (warn-and-continue, PR #17 posture); the stale flag
+            // self-heals on the next successful init or explicit resume.
+            // No Active emit fires on this path (the hook runs only after
+            // a successful flag clear) — the status cache keeps agreeing
+            // with the still-set DB flag instead of contradicting it.
+            warn!(label = %label, error = %e, "Failed to clear is_paused after successful init");
+        }
+    }
 
     // One-shot `relative_path` backfill for this drive. The task itself
     // re-checks the `relative_paths_backfilled_at` flag as its first
@@ -1200,6 +1304,35 @@ pub async fn stop_sync(app: AppHandle) -> Result<()> {
     //     even if no upload was active) and emits one cleared payload per
     //     previously-active label so the FE per-drive banners all clear.
     app_state.upload_processing.reset_all(&app);
+
+    // 0d. Bump every registered drive's lifecycle epoch so any in-flight
+    //     init notices the logout/reset at its commit step and tears itself
+    //     down instead of re-registering after this cleanup completes.
+    //     No commit lock is taken: stop_sync never writes `is_paused` (the
+    //     single-writer rule guards only that write), `bump` is atomic on
+    //     its own std-mutexed map, and every later init commit re-checks
+    //     the epoch UNDER the commit lock — so an unlocked bump is always
+    //     observed by any commit that has not yet run. A commit whose
+    //     epoch check already passed before the bump may still write
+    //     `is_paused=false`; that is benign because stop_sync writes no
+    //     `is_paused` state of its own (nothing to overwrite) and steps
+    //     1–5 below tear down the registrations this bump covered.
+    //     Labels are collected in one short `sync.drives` lock scope first
+    //     (hierarchy: never acquire a commit lock while holding
+    //     `sync.drives`). Because labels are sourced from `sync.drives`,
+    //     an init still in its pre-register window at logout is NOT
+    //     invalidated by this bump — it can register and commit after
+    //     the cleanup completes. Known gap, tracked follow-up: source
+    //     bump labels from the account's `sync_paths` rows instead
+    //     (every init path persists its row before initializing), or
+    //     add a global epoch component.
+    let lifecycle_labels: Vec<String> = {
+        let guard = sync.drives.lock().await;
+        guard.keys().cloned().collect()
+    };
+    for label in &lifecycle_labels {
+        app_state.drive_lifecycle.bump(label);
+    }
 
     // 1. Cancel every drive's cancellation token FIRST so the sync loop
     //    sees a clean shutdown signal and can persist state before exiting.
@@ -1330,54 +1463,94 @@ pub(crate) async fn remove_drive_for_account(app: AppHandle, label: String, expl
         Some(acct) => sync_path_for_label(&app_state, &acct, &label).await,
         None => None,
     };
-    let (remaining, _removed_path) = remove_drive_inmemory(sync, &label, path_hint).await;
+    // Lifecycle serialization (see sync::lifecycle_guard): bump the pause
+    // epoch and run the teardown's superseding mutations — in-memory removal
+    // and the `sync_paths` row delete — under the label's commit lock. An
+    // in-flight init for this label must observe the epoch change at its
+    // commit step and tear itself down instead of re-registering a zombie
+    // drive for the row this function deletes (Task 2.5 consumes the bump).
+    // Lock ordering: commit_lock(label) → sync.drives → progress std
+    // mutexes; the manager-clone read above released its `sync.drives`
+    // guard before this acquisition, so the hierarchy holds.
+    let (remaining, acct, preparing_cleared) = {
+        let commit_lock = app_state.drive_lifecycle.commit_lock(&label);
+        let _guard = commit_lock.lock().await;
+        app_state.drive_lifecycle.bump(&label);
 
-    // Drop the preparing override for this label so a remove during
-    // the SyncStarted → plan_ready window cannot leave a stuck
-    // "Preparing sync…" badge tied to a drive that no longer exists.
-    //
-    // Belt-and-suspenders with the `SyncError::Cancelled` arm in
-    // `tauri_bridge.rs` — that arm also clears preparing for the
-    // cancelled label, but the cancel SyncEvent is dispatched
-    // asynchronously relative to this synchronous IPC and may not
-    // have landed yet. Calling `clear` here is idempotent (second
-    // call returns `false` and skips the `emit_snapshot`), so the
-    // dual-path is cheap and covers the race where the IPC returns
-    // before the bridge has seen the cancel.
-    if app_state.preparing.clear(&label) {
+        let (remaining, _removed_path) = remove_drive_inmemory(sync, &label, path_hint).await;
+
+        // Drop the preparing override for this label so a remove during
+        // the SyncStarted → plan_ready window cannot leave a stuck
+        // "Preparing sync…" badge tied to a drive that no longer exists.
+        //
+        // Belt-and-suspenders with the `SyncError::Cancelled` arm in
+        // `tauri_bridge.rs` — that arm also clears preparing for the
+        // cancelled label, but the cancel SyncEvent is dispatched
+        // asynchronously relative to this synchronous IPC and may not
+        // have landed yet. Calling `clear` here is idempotent (second
+        // call returns `false`), so the dual-path is cheap and covers
+        // the race where the IPC returns before the bridge has seen the
+        // cancel. Only the `clear` runs in here — the corresponding
+        // `emit_snapshot` is a pure FE notification with no lifecycle
+        // state to serialize, so it happens after the guard drops to
+        // keep the locked region minimal.
+        let preparing_cleared = app_state.preparing.clear(&label);
+
+        // Delete the DB row so the drive isn't resurrected on app restart, and
+        // drop the intent-manifest rows for this drive so the snapshot overlay
+        // doesn't keep showing stale "X of Y" totals for a folder the user just
+        // removed.
+        //
+        // Both calls share the same prerequisites (pool + account known) and
+        // both are best-effort — failure here doesn't break sync correctness.
+        // The intent manifest is a UX overlay; stale rows will be cleaned up by
+        // the next manifest GC pass even if this call fails. `pause_drive`
+        // deliberately does NOT clear intent because pause is reversible and the
+        // in-flight totals must survive a resume.
+        let acct = teardown_account(explicit_account, app_state.current_account_id().ok());
+        if acct.is_none() {
+            warn!(
+                label = %label,
+                "remove_drive: no account context — sync_paths row and on-disk baseline left intact; in-memory drive still removed",
+            );
+        }
+        if let (Ok(pool), Some(acct)) = (app_state.pool(), acct.as_deref()) {
+            if let Err(e) = crate::sync::paths::remove_sync_path_internal(pool, acct, &label).await {
+                warn!("Failed to remove sync path for '{}' from DB: {e}", label);
+            }
+
+            // `IntentRepo::new` takes `SqlitePool` by value; the pool is internally
+            // `Arc`-shaped so `.clone()` is just an `Arc` bump — no connection
+            // pool duplication.
+            let repo = crate::sync::intent::IntentRepo::new(pool.clone());
+            if let Err(e) = repo.clear_drive(acct, &label).await {
+                warn!("Failed to clear intent rows for drive '{}': {e}", label);
+            }
+        }
+
+        // Tell the FE to drop this drive's entry from its per-drive
+        // status map — INSIDE the locked region so emission order
+        // matches serialization order: an in-flight init's Active emit
+        // runs under this same lock (the commit's `on_committed` hook),
+        // so this removal emit can never be overtaken by a stale Active
+        // one that would re-insert the just-removed drive into the
+        // status cache. `emit_drive_removed` is sync and only takes the
+        // status-cache std mutex — a permitted leaf under the commit
+        // lock (see the hierarchy in sync::lifecycle_guard).
+        crate::sync::status::emit_drive_removed(&app, &label);
+
+        (remaining, acct, preparing_cleared)
+        // Guard drops here: the row delete + in-memory teardown are done.
+        // The baseline drain below waits up to GRACEFUL_DRIVE_SHUTDOWN and
+        // must not hold the commit lock across that window.
+    };
+
+    // Deferred from the locked block above: tell the FE the preparing
+    // badge cleared. Snapshot emission can synchronously run FE-bound
+    // serialization and progress-mutex work — none of it needs the
+    // commit lock, so it must not extend the locked region.
+    if preparing_cleared {
         sync.emit_snapshot(true);
-    }
-
-    // Delete the DB row so the drive isn't resurrected on app restart, and
-    // drop the intent-manifest rows for this drive so the snapshot overlay
-    // doesn't keep showing stale "X of Y" totals for a folder the user just
-    // removed.
-    //
-    // Both calls share the same prerequisites (pool + account known) and
-    // both are best-effort — failure here doesn't break sync correctness.
-    // The intent manifest is a UX overlay; stale rows will be cleaned up by
-    // the next manifest GC pass even if this call fails. `pause_drive`
-    // deliberately does NOT clear intent because pause is reversible and the
-    // in-flight totals must survive a resume.
-    let acct = teardown_account(explicit_account, app_state.current_account_id().ok());
-    if acct.is_none() {
-        warn!(
-            label = %label,
-            "remove_drive: no account context — sync_paths row and on-disk baseline left intact; in-memory drive still removed",
-        );
-    }
-    if let (Ok(pool), Some(acct)) = (app_state.pool(), acct.as_deref()) {
-        if let Err(e) = crate::sync::paths::remove_sync_path_internal(pool, acct, &label).await {
-            warn!("Failed to remove sync path for '{}' from DB: {e}", label);
-        }
-
-        // `IntentRepo::new` takes `SqlitePool` by value; the pool is internally
-        // `Arc`-shaped so `.clone()` is just an `Arc` bump — no connection
-        // pool duplication.
-        let repo = crate::sync::intent::IntentRepo::new(pool.clone());
-        if let Err(e) = repo.clear_drive(acct, &label).await {
-            warn!("Failed to clear intent rows for drive '{}': {e}", label);
-        }
     }
 
     // Drop the on-disk sync baseline. Without this, a re-add (whether at the
@@ -1408,10 +1581,6 @@ pub(crate) async fn remove_drive_for_account(app: AppHandle, label: String, expl
     if remaining == 0 {
         teardown_last_drive(sync, &app).await;
     }
-
-    // Tell the FE to drop this drive's entry from its per-drive status
-    // map. Other drives are unaffected and keep their existing status.
-    crate::sync::status::emit_drive_removed(&app, &label);
 
     info!("Removed drive '{}', {} drives remaining", label, remaining);
     Ok(())
@@ -1471,27 +1640,53 @@ pub async fn pause_drive(app: AppHandle, label: String) -> Result<()> {
         None => None,
     };
 
-    let (remaining, removed_path) = remove_drive_inmemory(sync, &label, path_hint).await;
+    // Lifecycle serialization (see sync::lifecycle_guard): bump the pause
+    // epoch and perform BOTH superseding mutations — the in-memory removal
+    // and the `is_paused=true` write — under the label's commit lock. An
+    // in-flight init that snapshotted an older epoch then observes the bump
+    // at its commit step and yields instead of resurrecting this drive.
+    // Lock ordering: the commit lock is acquired BEFORE anything in this
+    // function touches `sync.drives` (hierarchy: commit_lock(label) →
+    // sync.drives → progress std mutexes — never the reverse).
+    let remaining = {
+        let commit_lock = app_state.drive_lifecycle.commit_lock(&label);
+        let _guard = commit_lock.lock().await;
+        app_state.drive_lifecycle.bump(&label);
 
-    // Mark as paused in DB (keep the row, unlike stop_drive which deletes it).
-    if let Some((pool, acct)) = &pool_and_acct
-        && let Err(e) = crate::sync::paths::set_sync_path_paused(pool, acct, &label, true).await
-    {
-        warn!("Failed to mark '{}' as paused in DB: {e}", label);
-    }
+        let (remaining, removed_path) = remove_drive_inmemory(sync, &label, path_hint).await;
+
+        // Mark as paused in DB (keep the row, unlike stop_drive which deletes it).
+        if let Some((pool, acct)) = &pool_and_acct
+            && let Err(e) = crate::sync::paths::set_sync_path_paused(pool, acct, &label, true).await
+        {
+            warn!("Failed to mark '{}' as paused in DB: {e}", label);
+        }
+
+        // The per-drive status payload carries the on-disk path (the FE relies on it
+        // to keep its drive entry hydrated — see `useDriveStatuses`). `removed_path`
+        // is reliable thanks to the DB hint resolved above.
+        let drive_path = removed_path.map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+
+        // Emit the per-drive Paused status INSIDE the locked region so
+        // emission order matches serialization order: an in-flight
+        // init's Active emit runs under this same lock (the commit's
+        // `on_committed` hook), so this Paused emit can never be
+        // overtaken by a stale Active one once the pause has won.
+        // `emit_drive_status` is sync and only takes the status-cache
+        // std mutex — a permitted leaf under the commit lock (see the
+        // hierarchy in sync::lifecycle_guard).
+        crate::sync::status::emit_drive_status(&app, &label, &drive_path, crate::sync::drive_status::DriveStatus::Paused);
+
+        remaining
+        // Guard drops here: the locked region is exactly the superseding
+        // state writes plus their status emit. `teardown_last_drive`
+        // below waits a bounded grace window for the sync loop and must
+        // not stall other lifecycle ops.
+    };
 
     if remaining == 0 {
         teardown_last_drive(sync, &app).await;
     }
-
-    // The per-drive status payload carries the on-disk path (the FE relies on it
-    // to keep its drive entry hydrated — see `useDriveStatuses`). `removed_path`
-    // is now reliable thanks to the DB hint resolved above.
-    let drive_path = removed_path.map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
-
-    // Emit a per-drive Paused status so the FE updates this single
-    // drive without re-fetching the list. Other drives are unaffected.
-    crate::sync::status::emit_drive_status(&app, &label, &drive_path, crate::sync::drive_status::DriveStatus::Paused);
 
     info!("Paused drive '{}', {} drives remaining", label, remaining);
     Ok(())
@@ -1513,7 +1708,26 @@ pub async fn resume_drive(app: AppHandle, label: String, mnemonic: Option<String
     // Clear the paused flag in the DB before kicking off init. Doing it
     // first means even if init fails the row reflects user intent
     // (Active), so the next auto_init_sync attempt will pick it up.
-    crate::sync::paths::set_sync_path_paused(pool, &account_id, &label, false).await?;
+    // Single-writer rule (sync::lifecycle_guard): every `is_paused` write
+    // holds the label's commit lock. No bump — resume supersedes nothing.
+    // The guard MUST drop before `initialize_sync_inner` runs: the init's
+    // own commit step takes this same lock and would deadlock against us.
+    let resume_snapshot = {
+        let commit_lock = app_state.drive_lifecycle.commit_lock(&label);
+        let _guard = commit_lock.lock().await;
+        // Capture the lifecycle snapshot the init will commit against in
+        // the SAME locked block as the pre-clear. A snapshot taken later
+        // (at init entry) misses a pause that fully completes between
+        // this block and the init's entry — the init would then commit
+        // over the pause even though the user's last click was Pause.
+        // Order within the block is irrelevant: pause/remove bump under
+        // this same lock, so no bump can interleave with these two
+        // statements; stop_sync's lock-free bump can only make this
+        // snapshot stale (commit yields — stop wins), never fresher.
+        let resume_snapshot = app_state.drive_lifecycle.snapshot(&label);
+        crate::sync::paths::set_sync_path_paused(pool, &account_id, &label, false).await?;
+        resume_snapshot
+    };
 
     // Re-initialize the drive. `initialize_sync_inner` emits the
     // per-drive Active status on success. On failure, we must emit an
@@ -1522,7 +1736,17 @@ pub async fn resume_drive(app: AppHandle, label: String, mnemonic: Option<String
     // or a stale `Error`) while the DB already says `is_paused=false`.
     // The FE would then read a stale entry from `get_all_drive_statuses`
     // on its next mount/bootstrap.
-    match initialize_sync_inner(app.clone(), account_id.clone(), label.clone(), mnemonic, true, false).await {
+    match initialize_sync_inner(
+        app.clone(),
+        account_id.clone(),
+        label.clone(),
+        mnemonic,
+        true,
+        false,
+        Some(resume_snapshot),
+    )
+    .await
+    {
         Ok(_) => {
             info!("Resumed drive '{}'", label);
             Ok(())
@@ -1588,6 +1812,7 @@ pub async fn change_sync_folder(
     label: String,
     mnemonic: Option<String>,
 ) -> Result<InitSyncResult> {
+    let account_id = state.require_session_account(&account_id)?;
     let pool = state.pool()?;
 
     // Tear down the existing drive (fire and forget if it doesn't exist) so we
@@ -1625,6 +1850,9 @@ pub async fn auto_init_sync(
     account_id: String,
     mnemonic: Option<String>,
 ) -> Result<AutoInitResult> {
+    // FE entry that flows account_id into the secret-using inner; authorize
+    // against the session before it reaches the mnemonic/token paths.
+    let account_id = state.require_session_account(&account_id)?;
     auto_init_sync_inner(app.clone(), &state, account_id, mnemonic).await
 }
 
@@ -1863,18 +2091,25 @@ async fn auto_init_sync_inner(
     // between drives, so a single HTTP round-trip is sufficient.  If the
     // check fails we return early; individual `initialize_sync_inner` calls
     // below will skip the check via `skip_credits_check = true`.
-    if let Ok(acct) = state.current_account_id() {
+    if let Ok(account) = state.current_session_account() {
         let pool_owned = state.pool()?.clone();
         let client = crate::api::client::ApiClient::new(state.api_client.clone(), pool_owned);
-        if let Ok(resp) = client
-            .get::<crate::billing::credits::CreditBalanceResponse>("/api/billing/credits/balance/", &acct)
+        match client
+            .get::<crate::billing::credits::CreditBalanceResponse>("/api/billing/credits/balance/", &account)
             .await
         {
-            // Unparseable balance is inconclusive, not zero — see balance_blocks_sync.
-            if balance_blocks_sync(resp.balance.as_deref()) {
-                return Err(crate::error::AppError::Validation(
-                    "Insufficient credits. Please add credits to your account before syncing.".into(),
-                ));
+            Ok(resp) => {
+                // Unparseable balance is inconclusive, not zero — see balance_blocks_sync.
+                if balance_blocks_sync(resp.balance.as_deref()) {
+                    return Err(crate::error::AppError::Validation(
+                        "Insufficient credits. Please add credits to your account before syncing.".into(),
+                    ));
+                }
+            }
+            // Fail-open on transport/HTTP/parse error (per-drive init + per-file
+            // 402 are the authoritative backstops), but log the skipped check.
+            Err(e) => {
+                tracing::warn!(account = %account, error = %e, "credit pre-init balance check failed in auto_init; proceeding");
             }
         }
     }
@@ -1898,7 +2133,7 @@ async fn auto_init_sync_inner(
         let label = sp.label.clone();
         let mnemonic = resolved_mnemonic.as_str().to_owned();
         async move {
-            let result = initialize_sync_inner(app, account_id, label.clone(), Some(mnemonic), true, true).await;
+            let result = initialize_sync_inner(app, account_id, label.clone(), Some(mnemonic), true, true, None).await;
             (label, result)
         }
     });

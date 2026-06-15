@@ -1,6 +1,4 @@
 import React from "react";
-import { Icons, AbstractIconWrapper, RevealTextLine } from "@/components/ui";
-import { InView } from "react-intersection-observer";
 import { cn } from "@/lib/utils";
 
 interface NoNotificationsFoundProps {
@@ -11,29 +9,29 @@ const NoNotificationsFound: React.FC<NoNotificationsFoundProps> = ({
   heightClassName = "h-[80.9vh]",
 }) => {
   return (
-    <InView triggerOnce>
-      {({ ref, inView }) => (
-        <div
-          ref={ref}
-          className={cn(
-            "p-6 flex flex-col items-center justify-center text-center w-full",
-            heightClassName
-          )}
-        >
-          <AbstractIconWrapper className="size-12 mb-3 bg-gray-100">
-            <Icons.Notification className="relative size-6 text-primary-50" />
-          </AbstractIconWrapper>
-          <h3 className="text-grey-10 font-medium text-base block">
-            <RevealTextLine reveal={!!inView}>No Notifications</RevealTextLine>
-          </h3>
-          <p className="text-xs text-grey-60 mt-1">
-            <RevealTextLine reveal={!!inView}>
-              Try adjusting the options to see more results.
-            </RevealTextLine>
-          </p>
-        </div>
+    <div
+      className={cn(
+        "flex flex-col items-center justify-center text-center w-full px-6",
+        heightClassName
       )}
-    </InView>
+    >
+      <div className="mb-4">
+        <img
+          src="/assets/notifications/notification-center.png"
+          alt="No notifications"
+          className="size-[96px] object-contain dark:hidden"
+        />
+        <img
+          src="/assets/notifications/notification-center-dark.png"
+          alt="No notifications"
+          className="size-[96px] object-contain hidden dark:block"
+        />
+      </div>
+      <h3 className="text-[#0a0a0a] dark:text-white font-bold text-[16px] tracking-[-0.32px]">Nothing here</h3>
+      <p className="text-[13px] text-grey-dark-800 dark:text-grey-dark-600 mt-2 max-w-[15rem] leading-5">
+        This is the notifications center. Any update will be present here.
+      </p>
+    </div>
   );
 };
 

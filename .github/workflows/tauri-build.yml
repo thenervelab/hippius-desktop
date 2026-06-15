@@ -13,9 +13,6 @@ concurrency:
   group: publish-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-
 jobs:
   publish-tauri:
     strategy:
@@ -23,7 +20,7 @@ jobs:
       matrix:
         include:
           - platform: macos-latest
-            args: "--target universal-apple-darwin"
+            args: "--target universal-apple-darwin" # One universal mac build
           - platform: ubuntu-22.04
             args: "--bundles deb"
           - platform: windows-latest
@@ -35,83 +32,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 0 # Fetch all history to get commit messages
 
-      - name: Setup SSH for private Rust git deps
-        shell: bash
-        env:
-          PRIVATE_GIT_DEPLOY_KEY_B64: ${{ secrets.HCFS_DEPLOY_KEY_B64 }}
-        run: |
-          set -euo pipefail
-
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
-
-          # Decode private key from base64
-          echo "$PRIVATE_GIT_DEPLOY_KEY_B64" | python3 -c "
-          import sys, base64
-          data = sys.stdin.read().strip()
-          sys.stdout.buffer.write(base64.b64decode(data))
-          " > ~/.ssh/private_git_key
-          chmod 600 ~/.ssh/private_git_key
-
-          # Trust GitHub host key
-          ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
-          chmod 600 ~/.ssh/known_hosts
-
-          # SSH config — git will use the key automatically (no ssh-agent needed)
-          cat > ~/.ssh/config <<'EOF'
-          Host github.com
-            HostName github.com
-            User git
-            IdentityFile ~/.ssh/private_git_key
-            IdentitiesOnly yes
-            StrictHostKeyChecking yes
-            BatchMode yes
-          EOF
-          chmod 600 ~/.ssh/config
-
-      - name: Force Cargo to use git CLI
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p ~/.cargo
-          cat >> ~/.cargo/config.toml << 'EOF'
-          [net]
-          git-fetch-with-cli = true
-          EOF
-
-      - name: Verify SSH access to hcfs
-        shell: bash
-        run: |
-          set -euo pipefail
-          git ls-remote ssh://git@github.com/thenervelab/hcfs.git HEAD
-
-      - name: Verify pinned hcfs commit is fetchable
-        shell: bash
-        env:
-          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-        run: |
-          set -euo pipefail
-          REV=$(grep -m1 'thenervelab/hcfs.git' src-tauri/Cargo.toml | sed 's/.*rev *= *"\([^"]*\)".*/\1/')
-          echo "Pinned hcfs rev: $REV"
-          if git ls-remote ssh://git@github.com/thenervelab/hcfs.git | grep -q "$REV"; then
-            echo "Commit $REV found at remote ref"
-          else
-            echo "Commit not at a ref tip, verifying via shallow clone..."
-            git clone --bare --filter=blob:none ssh://git@github.com/thenervelab/hcfs.git /tmp/hcfs-verify
-            git -C /tmp/hcfs-verify cat-file -t "$REV"
-          fi
-
+      # Get PR or commit details for the release notes
       - name: Get release notes
         id: release_notes
         shell: bash
         run: |
           set -euo pipefail
+
+          # Commit data
           SHA="$(git rev-parse HEAD)"
+
+          # Try to read PR number from commit subject like "... (#123)"
           PR_NUMBER="$(git log -1 --pretty=format:'%s' | grep -oE '#[0-9]+' | tr -d '# ' || true)"
 
           if [[ -z "${PR_NUMBER:-}" ]]; then
+            # Better: ask GitHub which PR(s) are linked to this commit
             PR_NUMBER="$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
               "https://api.github.com/repos/${{ github.repository }}/commits/${SHA}/pulls" \
               | jq -r '.[0].number // empty')"
@@ -130,14 +67,17 @@ jobs:
             BODY="$(git log -1 --pretty=%b)"
           fi
 
+          # Normalize endings and guard empties
           TITLE="${TITLE//$'\r'/}"
           BODY="${BODY//$'\r'/}"
           if [[ -z "${BODY:-}" ]]; then
             BODY="See the assets to download this version and install."
           fi
 
+          # Optional: trim very large bodies (example: 30000 chars)
           BODY="$(printf '%s' "$BODY" | head -c 30000)"
 
+          # Write to $GITHUB_OUTPUT using multiline-safe heredoc
           {
             echo "title<<__TITLE__"
             echo "$TITLE"
@@ -146,7 +86,6 @@ jobs:
             echo "$BODY"
             echo "__BODY__"
           } >> "$GITHUB_OUTPUT"
-
       - name: Linux deps
         if: matrix.platform == 'ubuntu-22.04'
         run: |
@@ -156,6 +95,7 @@ jobs:
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
         with:
+          # Needed so universal contains BOTH slices
           targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       # src-tauri/rust-toolchain.toml pins the build to a specific channel
@@ -203,33 +143,67 @@ jobs:
           run_install: false
 
       - name: PNPM store path
-        shell: bash
         run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
 
       - name: PNPM cache
-        uses: actions/cache@v4
+        uses: actions/cache@v3
         with:
           path: ${{ env.STORE_PATH }}
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
           restore-keys: ${{ runner.os }}-pnpm-
 
       - name: Install deps
         run: pnpm install --frozen-lockfile
 
-      - name: Create src-tauri/.env
-        shell: bash
+      - name: Create Tauri env
         run: |
-          set -euo pipefail
-          mkdir -p src-tauri
-          cat > src-tauri/.env << 'EOF'
-          ${{ secrets.TAURI_ENV_FILE }}
-          EOF
-          chmod 600 src-tauri/.env
+          echo "INDEXER_API_KEY=${{ secrets.INDEXER_API_KEY }}" > src-tauri/.env
 
       - name: Build frontend
         run: pnpm build
         env:
           NODE_ENV: production
+
+      # Apple code signing + notarization (macOS only). Exported via GITHUB_ENV
+      # instead of the tauri-action env block because an unset secret renders as
+      # an empty string there, and tauri treats empty APPLE_SIGNING_IDENTITY /
+      # APPLE_API_KEY as "present" — failing the build instead of skipping.
+      # With secrets set: tauri-action imports the base64 .p12 into a throwaway
+      # keychain and signs; the bundler then notarizes the app + DMG with the
+      # App Store Connect API key and staples the ticket.
+      - name: Set up Apple signing & notarization
+        if: matrix.platform == 'macos-latest'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: |
+          if [[ -n "$APPLE_CERTIFICATE" && -n "$APPLE_SIGNING_IDENTITY" ]]; then
+            {
+              echo "APPLE_CERTIFICATE=$APPLE_CERTIFICATE"
+              echo "APPLE_CERTIFICATE_PASSWORD=$APPLE_CERTIFICATE_PASSWORD"
+              echo "APPLE_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY"
+            } >> "$GITHUB_ENV"
+            echo "Code signing enabled."
+          else
+            echo "APPLE_CERTIFICATE / APPLE_SIGNING_IDENTITY secrets not set — building unsigned."
+          fi
+          if [[ -n "$APPLE_API_KEY_CONTENT" && -n "$APPLE_API_KEY_ID" && -n "$APPLE_API_ISSUER_ID" ]]; then
+            KEY_PATH="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
+            printf '%s' "$APPLE_API_KEY_CONTENT" | base64 --decode > "$KEY_PATH"
+            {
+              echo "APPLE_API_KEY_PATH=$KEY_PATH"
+              echo "APPLE_API_KEY=$APPLE_API_KEY_ID"
+              echo "APPLE_API_ISSUER=$APPLE_API_ISSUER_ID"
+            } >> "$GITHUB_ENV"
+            echo "Notarization enabled."
+          else
+            echo "App Store Connect API key secrets not set — skipping notarization."
+          fi
 
       - name: Build & publish
         uses: tauri-apps/tauri-action@v0
@@ -237,7 +211,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
         with:
           tagName: v__VERSION__
           releaseName: "${{ steps.release_notes.outputs.title }}"

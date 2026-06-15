@@ -11,7 +11,8 @@ use crate::error::{AppError, Result};
 use hcfs_client::drive::keys::folder_hash;
 use hcfs_client::drive::remote::RemoteFileInfo;
 use sqlx::sqlite::SqlitePool;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{error, info};
 use zeroize::Zeroize;
 
@@ -54,9 +55,9 @@ pub(crate) async fn get_server_url(pool: &SqlitePool, account_id: &str) -> Resul
 /// when its `encryption_version = 1`. Without this, the raw base64
 /// ciphertext from the column would be passed to `recover_mnemonic`
 /// as if it were the plaintext password — which fails with
-/// "Decryption failed - wrong password?" and was the long-standing bug
-/// behind the "Failed to load remote files" error in the browse-folder
-/// dialog (and the matching failure in `download_remote_file`).
+/// "Decryption failed - wrong password?" and surfaces as "Failed to load
+/// remote files" in the browse-folder dialog (and the matching failure in
+/// `download_remote_file`).
 async fn encryption_key_for_label(pool: &SqlitePool, account_id: &str, label: &str, mnemonic: &str) -> Result<[u8; 32]> {
     let password = crate::sync::config::get_drive_password(pool, account_id, Some(mnemonic)).await?;
     let master_path = master_mnemonic_path(account_id)?;
@@ -89,10 +90,33 @@ async fn build_client(pool: &SqlitePool, account_id: &str, label: &str) -> Resul
     hcfs_client::client::HcfsClient::new(config).map_err(|e| AppError::Hcfs(format!("Failed to create HCFS client: {e}")))
 }
 
+/// Build a per-attempt-unique temp path for a preview download.
+///
+/// The final cache entry is the deterministic `cache_name`, but the in-flight
+/// download MUST land on a unique sibling. Two preview surfaces opening the same
+/// uncached file near-simultaneously (e.g. the search palette and the files
+/// table both resolving the same cloud-only hit) would otherwise share one
+/// `{cache_name}.part` and either interleave their writes into one file (a
+/// corrupt cache entry served stale forever, since the cache-hit check only
+/// asserts non-zero length) or race the rename (the second loser hits ENOENT
+/// because the first already moved the shared part away). The process id plus a
+/// monotonic counter make every attempt's
+/// temp path distinct within this process and across processes; the rename into
+/// `cache_name` stays atomic and idempotent (a racing winner's copy has the
+/// same content hash, so replacing it is harmless).
+fn unique_part_path(cache_root: &std::path::Path, cache_name: &str) -> PathBuf {
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    cache_root.join(format!("{cache_name}.{}.{n}.part", std::process::id()))
+}
+
 // ─── Tauri Commands ────────────────────────────────────────────────────────
 
 #[tauri::command]
 pub async fn list_remote_folder_files(state: tauri::State<'_, AppState>, account_id: String, label: String) -> Result<Vec<RemoteFileInfo>> {
+    // Lists another account's remote files under its token; authorize against
+    // the session (sibling download/cache commands are already guarded).
+    let account_id = state.require_session_account(&account_id)?;
     info!(account_id = %account_id, label = %label, "Listing remote folder files");
     let pool = state.pool()?;
     let mnemonic = session_mnemonic(&state)?;
@@ -120,6 +144,9 @@ pub async fn download_remote_file(
     use tauri::Emitter;
     info!(label = %label, file_id = %file_id, "Downloading remote file");
 
+    // The account is the authority for the bearer token and encryption key
+    // used below; trust the session, not the webview-supplied argument.
+    let account_id = state.require_session_account(&account_id)?;
     let pool = state.pool()?;
     let mnemonic = session_mnemonic(&state)?;
     let encryption_key = encryption_key_for_label(pool, &account_id, &label, &mnemonic).await?;
@@ -152,4 +179,383 @@ pub async fn download_remote_file(
 
     info!(file_id = %file_id, "File downloaded and decrypted successfully");
     Ok(())
+}
+
+/// Download + decrypt a single remote file into a local preview cache and
+/// return its absolute path, so the preview dialogs (image / video / PDF) can
+/// display a file that isn't synced to this device — exactly like a synced
+/// file resolved through the frontend's `convertFileSrc`.
+///
+/// The decrypted copy is cached under the OS cache dir
+/// (`{cache}/hippius/preview/`). The cache key is the file's content hash
+/// (`arion_hash`) when present — so an edit (new content) produces a new entry
+/// and a re-open never serves a stale copy — falling back to `file_id` (the
+/// path hash) otherwise. The download lands on a per-attempt-unique `.part`
+/// sibling first (see [`unique_part_path`]) and is renamed into place
+/// atomically, so an interrupted transfer never leaves a half-written file the
+/// webview would render as broken, a failed transfer cleans up its partial, and
+/// two concurrent previews of the same file can't collide on one temp path.
+///
+/// Decryption uses the same `hcfs_config.drive_password` → master-mnemonic →
+/// folder-key path as [`download_remote_file`]; no password prompt is needed
+/// because the drive password lives in the DB and the mnemonic in the session.
+///
+/// # Errors
+///
+/// - [`AppError::NotReady`] when no session mnemonic is loaded (re-auth needed).
+/// - [`AppError::Hcfs`] / [`AppError::Crypto`] on download or decrypt failure.
+/// - [`AppError::Io`] when the cache directory or file cannot be created.
+#[tauri::command]
+pub async fn cache_remote_file(
+    state: tauri::State<'_, AppState>,
+    account_id: String,
+    label: String,
+    file_id: String,
+    file_name: String,
+    arion_hash: String,
+) -> Result<String> {
+    info!(label = %label, file_id = %file_id, "Caching remote file for preview");
+
+    // Decrypts another-account's file under the session's token/key path, so
+    // the requested account must be the active session account.
+    let account_id = state.require_session_account(&account_id)?;
+
+    // Must live under the asset-protocol scope (`$HOME/.hippius/**` in
+    // tauri.conf.json) so the webview can load the decrypted file via
+    // `convertFileSrc`. The OS cache dir is OUTSIDE that scope, so a preview
+    // pointed there is blocked by the asset protocol even though the download
+    // + decrypt succeeded — which is why download worked but preview didn't.
+    let cache_root = dirs::home_dir()
+        .ok_or_else(|| AppError::Other("could not determine home directory".into()))?
+        .join(".hippius")
+        .join("preview-cache");
+    tokio::fs::create_dir_all(&cache_root).await?;
+
+    // Content-addressed when we have it (never stale across edits); else keyed
+    // by the path hash. Both values are hex/base-N, so filename-safe. Keep the
+    // original extension so the webview infers the right MIME type.
+    let key = if arion_hash.is_empty() { &file_id } else { &arion_hash };
+    let ext = std::path::Path::new(&file_name).extension().and_then(|e| e.to_str()).unwrap_or("");
+    let cache_name = if ext.is_empty() { key.clone() } else { format!("{key}.{ext}") };
+    let target = cache_root.join(&cache_name);
+
+    // Cache hit: reuse the already-decrypted copy.
+    if matches!(tokio::fs::metadata(&target).await, Ok(meta) if meta.len() > 0) {
+        return target
+            .to_str()
+            .map(str::to_string)
+            .ok_or_else(|| AppError::Other("preview cache path is not valid UTF-8".into()));
+    }
+
+    let pool = state.pool()?;
+    let mnemonic = session_mnemonic(&state)?;
+    let encryption_key = encryption_key_for_label(pool, &account_id, &label, &mnemonic).await?;
+    let client = build_client(pool, &account_id, &label).await?;
+    let fhash = folder_hash(&label);
+
+    let part = unique_part_path(&cache_root, &cache_name);
+    if let Err(e) = hcfs_client::drive::remote::download_remote_file(
+        &client,
+        &account_id,
+        &fhash,
+        &file_id,
+        &part,
+        &encryption_key,
+        // No progress events: preview is a one-shot interactive fetch.
+        Some(|_: u64, _: u64| {}),
+    )
+    .await
+    {
+        // Best-effort cleanup of the partially-written download so a failed or
+        // interrupted transfer doesn't leak a `.part` file into the cache dir
+        // (the doc comment's "never leaves a half-written file" invariant). The
+        // unlink result is intentionally discarded — a missing/already-gone
+        // partial must not mask the real download error.
+        let _ = tokio::fs::remove_file(&part).await;
+        return Err(AppError::Hcfs(e.to_string()));
+    }
+
+    tokio::fs::rename(&part, &target)
+        .await
+        .map_err(|e| AppError::Other(format!("failed to promote preview cache {} -> {}: {e}", part.display(), target.display())))?;
+
+    info!(file_id = %file_id, "Remote file cached for preview");
+    target
+        .to_str()
+        .map(str::to_string)
+        .ok_or_else(|| AppError::Other("preview cache path is not valid UTF-8".into()))
+}
+
+// ─── Thumbnails ────────────────────────────────────────────────────────────
+
+/// Root dir for cached thumbnails. Under `$HOME/.hippius/**` so the webview can
+/// load them via `convertFileSrc` — same asset-scope reasoning as the preview
+/// cache (the OS cache dir is outside the scope and would be blocked).
+fn thumbnail_cache_root() -> Result<PathBuf> {
+    Ok(dirs::home_dir()
+        .ok_or_else(|| AppError::Other("could not determine home directory".into()))?
+        .join(".hippius")
+        .join("thumbnail-cache"))
+}
+
+/// Deterministic, content-addressed cache filename for a thumbnail. `key` is the
+/// file's content hash (`arion_hash`) when known, else its path hash
+/// (`file_id`); `max_dim` is folded in so a later request for a different size
+/// can't collide with (or serve a stale) entry. Always `.jpg` — the thumbnail
+/// encoder's output format regardless of the source type.
+fn thumbnail_cache_name(key: &str, max_dim: u32) -> String {
+    format!("{key}_{max_dim}.jpg")
+}
+
+/// Resolve a usable on-disk source path, or `None` when the file isn't present
+/// locally (cloud-only). A blank `source`, a missing path, or a non-file all
+/// fall through to `None` so the caller takes the download path. This is the
+/// same "is it really on disk" gate `useViewableFileUrl` applies on the FE.
+async fn local_source_path(source: Option<&str>) -> Option<PathBuf> {
+    let s = source?.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let p = PathBuf::from(s.replace('\\', "/"));
+    match tokio::fs::metadata(&p).await {
+        Ok(meta) if meta.is_file() => Some(p),
+        _ => None,
+    }
+}
+
+/// Download + decrypt one cloud file to `dest`. The shared cloud-fetch core so
+/// the preview cache and the thumbnailer use one key-derivation → client-build →
+/// download path. `account_id` MUST already be the validated session account.
+///
+/// # Errors
+/// [`AppError::NotReady`] (no session mnemonic), [`AppError::Crypto`] (key
+/// derivation), or [`AppError::Hcfs`] (download/decrypt).
+pub(crate) async fn download_cloud_file_to(state: &AppState, account_id: &str, label: &str, file_id: &str, dest: &Path) -> Result<()> {
+    let pool = state.pool()?;
+    let mnemonic = session_mnemonic(state)?;
+    let encryption_key = encryption_key_for_label(pool, account_id, label, &mnemonic).await?;
+    let client = build_client(pool, account_id, label).await?;
+    let fhash = folder_hash(label);
+    hcfs_client::drive::remote::download_remote_file(
+        &client,
+        account_id,
+        &fhash,
+        file_id,
+        dest,
+        &encryption_key,
+        // No progress events: a thumbnail fetch is a small one-shot.
+        Some(|_: u64, _: u64| {}),
+    )
+    .await
+    // Discard the downloaded byte count — callers only need success/failure.
+    .map(|_bytes| ())
+    .map_err(|e| AppError::Hcfs(e.to_string()))
+}
+
+/// Decode `src`, scale it to fit within `max_dim` (aspect preserved, never
+/// upscaled), and write a JPEG to `target` via a unique temp + atomic rename.
+/// Format is sniffed from the bytes (`with_guessed_format`), not the path, so a
+/// `.part` download temp or a mis-extensioned file still decodes.
+///
+/// CPU-bound and blocking — callers MUST run it on a blocking thread.
+///
+/// # Errors
+/// [`AppError::Other`] when the source can't be decoded or the JPEG can't be
+/// written; [`AppError::Io`] when the atomic rename into place fails.
+fn generate_thumbnail_file(src: &Path, cache_root: &Path, cache_name: &str, target: &Path, max_dim: u32) -> Result<()> {
+    let img = image::ImageReader::open(src)
+        .map_err(|e| AppError::Other(format!("open image for thumbnail: {e}")))?
+        .with_guessed_format()
+        .map_err(|e| AppError::Other(format!("guess image format: {e}")))?
+        .decode()
+        .map_err(|e| AppError::Other(format!("decode image for thumbnail: {e}")))?;
+
+    // `thumbnail` is a fast averaging downscale that preserves aspect ratio and
+    // never upscales past the source. `to_rgb8` drops any alpha so the JPEG
+    // encoder (which has no alpha channel) accepts the buffer.
+    let thumb = img.thumbnail(max_dim, max_dim).to_rgb8();
+
+    // Write to a per-attempt-unique sibling then rename, mirroring the preview
+    // cache's atomic-promote invariant: a crash mid-encode never leaves a
+    // half-written JPEG that the cache-hit check (non-zero length) would serve.
+    let part = unique_part_path(cache_root, cache_name);
+    if let Err(e) = thumb.save_with_format(&part, image::ImageFormat::Jpeg) {
+        let _ = std::fs::remove_file(&part);
+        return Err(AppError::Other(format!("encode thumbnail: {e}")));
+    }
+    std::fs::rename(&part, target).map_err(AppError::Io)?;
+    Ok(())
+}
+
+fn thumbnail_path_to_string(p: &Path) -> Result<String> {
+    p.to_str()
+        .map(str::to_string)
+        .ok_or_else(|| AppError::Other("thumbnail cache path is not valid UTF-8".into()))
+}
+
+/// Return a cached thumbnail path for an image, generating it on first request.
+///
+/// Unlike the FE's `getFileUrl` (which only resolves files already on disk),
+/// this works for files NOT present on this device — uploads from other devices
+/// or folders not synced here: with no local copy it downloads + decrypts the
+/// file (the same path as [`cache_remote_file`]), thumbnails it, and **discards
+/// the full decrypted copy** so only the small JPEG persists. Local synced files
+/// are thumbnailed straight from disk with no network.
+///
+/// The result lives under `$HOME/.hippius/thumbnail-cache/` and is
+/// content-addressed (`arion_hash`, else `file_id`, plus `max_dim`), so
+/// re-browsing the same grid is a metadata-only cache hit.
+///
+/// # Errors
+/// - [`AppError::Validation`] when neither a content hash nor a file id is given.
+/// - [`AppError::NotReady`] when no session mnemonic is loaded (re-auth needed).
+/// - [`AppError::Hcfs`]/[`AppError::Crypto`] on download/decrypt failure.
+/// - [`AppError::Other`] when the image can't be decoded or encoded.
+#[tauri::command]
+pub async fn get_thumbnail(
+    state: tauri::State<'_, AppState>,
+    account_id: String,
+    label: String,
+    file_id: String,
+    arion_hash: String,
+    source: Option<String>,
+    max_dim: Option<u32>,
+) -> Result<String> {
+    // Decrypts another account's file under the session's token/key path when
+    // the file is cloud-only, so the requested account must be the session one.
+    let account_id = state.require_session_account(&account_id)?;
+    // Clamp to a sane thumbnail range so a webview can't request a 100k-px decode.
+    let max_dim = max_dim.unwrap_or(256).clamp(32, 1024);
+
+    let key = if arion_hash.is_empty() { file_id.as_str() } else { arion_hash.as_str() };
+    if key.is_empty() {
+        return Err(AppError::Validation("thumbnail requires a content hash or file id".into()));
+    }
+
+    let cache_root = thumbnail_cache_root()?;
+    tokio::fs::create_dir_all(&cache_root).await?;
+    let cache_name = thumbnail_cache_name(key, max_dim);
+    let target = cache_root.join(&cache_name);
+
+    // Cache hit — reuse the already-generated thumbnail.
+    if matches!(tokio::fs::metadata(&target).await, Ok(meta) if meta.len() > 0) {
+        return thumbnail_path_to_string(&target);
+    }
+
+    // Source bytes: the local synced copy when present, else a throwaway
+    // download of the cloud file (deleted after thumbnailing below).
+    let (src_path, cloud_temp) = if let Some(local) = local_source_path(source.as_deref()).await {
+        (local, None)
+    } else {
+        let tmp = unique_part_path(&cache_root, &cache_name);
+        if let Err(e) = download_cloud_file_to(&state, &account_id, &label, &file_id, &tmp).await {
+            let _ = tokio::fs::remove_file(&tmp).await;
+            return Err(e);
+        }
+        (tmp.clone(), Some(tmp))
+    };
+
+    // Decode + resize + encode off the async runtime (CPU-bound).
+    let encode = {
+        let src = src_path.clone();
+        let cache_root = cache_root.clone();
+        let cache_name = cache_name.clone();
+        let target = target.clone();
+        tokio::task::spawn_blocking(move || generate_thumbnail_file(&src, &cache_root, &cache_name, &target, max_dim))
+            .await
+            .map_err(|e| AppError::Other(format!("thumbnail task panicked: {e}")))?
+    };
+
+    // Always reclaim the throwaway cloud download, success or not — only the
+    // small JPEG should persist on disk.
+    if let Some(tmp) = cloud_temp {
+        let _ = tokio::fs::remove_file(&tmp).await;
+    }
+    encode?;
+
+    info!(label = %label, key = %key, "Generated thumbnail");
+    thumbnail_path_to_string(&target)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unique_part_path_is_distinct_per_attempt_but_keeps_the_cache_name_stem() {
+        let root = std::path::Path::new("/tmp/hippius-preview-cache");
+        let cache_name = "abc123def.png";
+        let a = unique_part_path(root, cache_name);
+        let b = unique_part_path(root, cache_name);
+
+        // The core of the race guard: two concurrent previews of the SAME
+        // uncached file must download to DIFFERENT temp paths so they can't
+        // interleave into one file or race the rename.
+        assert_ne!(a, b, "two attempts on the same cache_name must produce distinct temp paths");
+
+        for p in [&a, &b] {
+            let s = p.to_str().expect("temp path is UTF-8");
+            assert!(
+                p.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("part")),
+                "temp file must end in .part: {s}"
+            );
+            // The deterministic cache_name stem is preserved so the file keeps
+            // its extension (MIME inference) and is recognisably a sibling.
+            assert!(s.contains(cache_name), "temp path must carry the cache_name stem: {s}");
+            assert!(s.starts_with(root.to_str().unwrap()), "temp path must live under the cache root: {s}");
+        }
+    }
+
+    #[test]
+    fn thumbnail_cache_name_is_content_and_size_addressed() {
+        assert_eq!(thumbnail_cache_name("abc", 256), "abc_256.jpg");
+        // Different sizes must not collide so a 128px request never serves a
+        // cached 256px thumbnail (or vice versa).
+        assert_ne!(thumbnail_cache_name("abc", 256), thumbnail_cache_name("abc", 128));
+        // Different content hashes must not collide.
+        assert_ne!(thumbnail_cache_name("abc", 256), thumbnail_cache_name("xyz", 256));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn local_source_path_only_resolves_existing_regular_files() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        // None / blank / missing all fall through to the download path.
+        assert!(local_source_path(None).await.is_none());
+        assert!(local_source_path(Some("   ")).await.is_none());
+        assert!(local_source_path(Some("/no/such/hippius/file.png")).await.is_none());
+        // A directory is not a usable file source.
+        assert!(local_source_path(dir.path().to_str()).await.is_none());
+        // A real file resolves.
+        let f = dir.path().join("pic.png");
+        tokio::fs::write(&f, b"bytes").await.expect("write");
+        assert_eq!(local_source_path(f.to_str()).await.expect("resolves"), f);
+    }
+
+    #[test]
+    fn generate_thumbnail_file_downscales_preserving_aspect_and_writes_jpeg() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        // 400×200 source → fitting 128 keeps aspect → 128×64.
+        let src = dir.path().join("src.png");
+        image::RgbImage::from_pixel(400, 200, image::Rgb([10, 200, 30])).save(&src).expect("write src");
+
+        let target = dir.path().join("out_128.jpg");
+        generate_thumbnail_file(&src, dir.path(), "out_128.jpg", &target, 128).expect("thumbnail");
+
+        assert!(std::fs::metadata(&target).expect("exists").len() > 0, "thumbnail must be non-empty");
+        let thumb = image::open(&target).expect("decodes as a valid image");
+        assert_eq!((thumb.width(), thumb.height()), (128, 64), "aspect ratio must be preserved");
+    }
+
+    #[test]
+    fn generate_thumbnail_file_decodes_despite_a_non_image_extension() {
+        // The cloud-download temp is named `<name>.jpg.<pid>.<n>.part`, so the
+        // decoder must sniff bytes, not trust the extension.
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let src = dir.path().join("payload.part");
+        image::RgbImage::from_pixel(64, 64, image::Rgb([0, 0, 0])).save_with_format(&src, image::ImageFormat::Png).expect("write png-as-part");
+
+        let target = dir.path().join("out_32.jpg");
+        generate_thumbnail_file(&src, dir.path(), "out_32.jpg", &target, 32).expect("decodes via byte sniffing");
+        assert!(std::fs::metadata(&target).expect("exists").len() > 0);
+    }
 }

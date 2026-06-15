@@ -1,24 +1,39 @@
 "use client";
 
-import React, { useState } from "react";
-import * as Dialog from "@radix-ui/react-dialog";
-import { CardButton, Graphsheet } from "@/components/ui";
+import React, { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
+import { OctagonAlert, ArrowRight, Folder, X } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { Folder } from "lucide-react";
-import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { invoke } from "@tauri-apps/api/core";
-import { getHcfsConfig, saveHcfsConfig } from "@/app/lib/utils/hcfsConfigUtils";
+
+import { FramedDialog } from "@/components/ui/FramedDialog";
+import { Button, Icons } from "@/components/ui";
+import GraphSheetContainer from "@/components/ui/graphsheet";
+import { cn } from "@/lib/utils";
+import { useWalletAuth } from "@/app/lib/wallet-auth-context";
+import {
+  getHcfsConfig,
+  saveHcfsConfig,
+} from "@/app/lib/utils/hcfsConfigUtils";
 import { HcfsSetupDialog } from "./HcfsSetupDialog";
 import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
-import DialogContainer from "@/components/ui/DialogContainer";
 
 interface AddLocalFolderDialogProps {
   open: boolean;
   onClose: () => void;
-  onSuccess: () => void;
+  // The optional `newLabel` is the unique label that Rust assigned to the
+  // newly added folder (returned by `add_local_sync_folder`). Callers like
+  // DriveContainer use it to auto-select the new folder in the breadcrumb.
+  onSuccess: (newLabel?: string) => void;
 }
 
+/**
+ * Add Local Folder dialog using the FramedDialog shell. The dropzone
+ * supports both clicking to open the native folder picker and dragging
+ * a folder from the OS — drag-drop uses Tauri's tauri://drag-drop
+ * window event and filters out file drops (only directories are valid
+ * sync sources).
+ */
 export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
   open,
   onClose,
@@ -29,9 +44,15 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
   const [selectedPath, setSelectedPath] = useState<string>("");
   const [folderName, setFolderName] = useState<string>("");
   const [isAdding, setIsAdding] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
   const [showHcfsSetup, setShowHcfsSetup] = useState(false);
 
-  const handleSelectFolder = async () => {
+  const handleClearSelection = useCallback(() => {
+    setSelectedPath("");
+    setFolderName("");
+  }, []);
+
+  const handleSelectFolder = useCallback(async () => {
     try {
       let defaultPath: string | undefined;
       try {
@@ -49,15 +70,81 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
 
       if (typeof path === "string") {
         setSelectedPath(path);
-        // Extract folder name from path
-        const name = path.split(/[\\\/]/).pop() || "";
+        const name = path.split(/[\\/]/).pop() || "";
         setFolderName(name);
       }
     } catch (error) {
       console.error("Failed to select folder:", error);
       toast.error("Failed to select folder");
     }
-  };
+  }, []);
+
+  // Tauri native drag-drop: accept exactly one dropped directory.
+  // Listeners are only registered while the dialog is open so we don't
+  // hijack drops in other surfaces.
+  useEffect(() => {
+    if (!open) return;
+    const unlisteners: Array<() => void> = [];
+
+    (async () => {
+      try {
+        const { listen } = await import("@tauri-apps/api/event");
+        const { stat } = await import("@tauri-apps/plugin-fs");
+
+        const unDragEnter = await listen("tauri://drag-enter", () => {
+          setIsDragging(true);
+        });
+        unlisteners.push(unDragEnter);
+
+        const unDragLeave = await listen("tauri://drag-leave", () => {
+          setIsDragging(false);
+        });
+        unlisteners.push(unDragLeave);
+
+        const unDragDrop = await listen<{ paths: string[] }>(
+          "tauri://drag-drop",
+          async (event) => {
+            setIsDragging(false);
+            const paths = event.payload.paths;
+            if (!paths || paths.length === 0) return;
+
+            // Only accept a single directory drop.
+            const first = paths[0];
+            try {
+              const info = await stat(first);
+              if (!info.isDirectory) {
+                toast.error(
+                  "Only folders can be added here. Drop a folder, not a file."
+                );
+                return;
+              }
+            } catch (err) {
+              console.error("[AddLocalFolderDialog] stat failed:", err);
+              toast.error("Could not read the dropped item. Try again.");
+              return;
+            }
+
+            if (paths.length > 1) {
+              toast.info("Only the first dropped folder will be used.");
+            }
+
+            setSelectedPath(first);
+            setFolderName(first.split(/[\\/]/).pop() || "");
+          }
+        );
+        unlisteners.push(unDragDrop);
+      } catch (err) {
+        console.error(
+          "[AddLocalFolderDialog] Failed to register drag listeners:",
+          err
+        );
+      }
+    })();
+
+    return () => {
+      unlisteners.forEach((fn) => fn());
+    };
+  }, [open]);
 
   const doAdd = async () => {
     if (!polkadotAddress || !selectedPath) return;
@@ -66,22 +153,17 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
     try {
       const mnemonic = (await getMnemonic()) ?? undefined;
 
-      // Single Rust call: generates label, sets path, initializes sync
-      await invoke<string>("add_local_sync_folder", {
+      const newLabel = await invoke<string>("add_local_sync_folder", {
         accountId: polkadotAddress,
         path: selectedPath,
         folderName,
         mnemonic: mnemonic ?? null,
       });
 
-      // Per-drive Active status is emitted by Rust via the
-      // hcfs_drive_status_changed event — see useDriveStatuses.
-      // hasConfiguredDrivesAtom recomputes from that automatically.
-
       toast.success("Folder added to sync");
       setSelectedPath("");
       setFolderName("");
-      onSuccess();
+      onSuccess(newLabel);
       onClose();
     } catch (error) {
       console.error("Failed to add folder:", error);
@@ -98,21 +180,16 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
       toast.error("Wallet authentication is required");
       return;
     }
-
     if (!selectedPath) {
       toast.error("Please select a folder first");
       return;
     }
 
-    // Live Rust eligibility check (replaces legacy stale-cache gate).
-    // The Rust `add_local_sync_folder` IPC also enforces this internally
-    // via `require_eligible(...)?` so the gate is impossible to bypass.
     if (!(await checkEligibility("folder-sync"))) {
       handleClose();
       return;
     }
 
-    // Check if HCFS config (encryption password) exists
     try {
       const config = await getHcfsConfig(polkadotAddress);
       if (!config.has_password) {
@@ -136,10 +213,8 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
     if (!polkadotAddress) return;
 
     try {
-      // Save config first — add_local_sync_folder needs it for init
       await saveHcfsConfig(polkadotAddress, result.serverUrl, result.password);
       setShowHcfsSetup(false);
-      // doAdd → add_local_sync_folder handles mnemonic persistence during init
       await doAdd();
     } catch (err) {
       console.error("Failed to save HCFS config:", err);
@@ -148,109 +223,184 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
   };
 
   const handleClose = () => {
-    if (!isAdding) {
-      setSelectedPath("");
-      setFolderName("");
-      onClose();
-    }
+    if (isAdding) return;
+    setSelectedPath("");
+    setFolderName("");
+    setIsDragging(false);
+    onClose();
   };
 
   return (
     <>
-    <Dialog.Root open={open} onOpenChange={handleClose}>
-      <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[26.75rem] h-fit" preventClose={isAdding}>
-        <Dialog.Title className="sr-only">Add Local Folder</Dialog.Title>
+      <FramedDialog
+        open={open}
+        onClose={handleClose}
+        title="Add a Local Folder"
+        icon={<Icons.FolderPlus className="size-5 text-white" />}
+        maxWidth="max-w-[680px]"
+      >
+        <p className="mb-5 text-center text-sm text-[#7D7D7D] dark:text-grey-dark-600">
+          Select a folder from this device to sync
+        </p>
 
-        <div className="px-4 py-6 flex flex-col gap-5">
-          {/* Centered icon header */}
-          <div className="flex flex-col items-center text-center gap-3">
-            <div className="size-14 flex justify-center items-center relative">
-              <Graphsheet
-                majorCell={{ lineColor: [31, 80, 189, 1.0], lineWidth: 2, cellDim: 200 }}
-                minorCell={{ lineColor: [49, 103, 211, 1.0], lineWidth: 1, cellDim: 20 }}
-                className="absolute w-full h-full duration-500 opacity-30 z-0"
-              />
-              <div className="bg-white-cloud-gradient-sm absolute w-full h-full z-10" />
-              <div className="h-8 w-8 bg-primary-50 rounded-lg flex items-center justify-center z-20">
-                <Folder className="size-5 text-grey-100" />
-              </div>
-            </div>
-            <div className="flex flex-col gap-1">
-              <h2 className="text-xl font-semibold text-grey-10">Add Local Folder</h2>
-              <p className="text-sm text-grey-50 max-w-sm">
-              Select a folder from this device to sync
-            </p>
-            </div>
-          </div>
+        <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-2">
+            <span className="text-xs text-grey-40 dark:text-grey-dark-600">
+              Upload Folder
+            </span>
 
-          {/* Folder Selection */}
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-grey-30">
-              Selected Folder
-            </label>
-            {selectedPath ? (
-              <div className="p-3 border border-grey-80 rounded-lg bg-grey-98">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs text-grey-60 break-all font-mono bg-white px-2 py-1.5 rounded border border-grey-90">
-                      {selectedPath}
-                    </p>
+            <div
+              className={cn(
+                // Mirrors inputFieldShellClassName from `@/components/ui/input`
+                // (the same shell used in Protect Your Account inputs), with
+                // p-2 instead of p-4 so the inner dashed area sits 8px in.
+                "rounded-[8px] border bg-white p-2 transition-[border-color,box-shadow] duration-200",
+                "border-grey-80 shadow-[0px_0px_0px_4px_rgba(10,10,10,0.05)]",
+                "dark:border-[#494949] dark:bg-[#1f1f1f] dark:shadow-[0px_0px_0px_4px_rgba(255,255,255,0.03)]",
+                isDragging &&
+                  "border-primary-50 shadow-[0px_0px_0px_4px_rgba(49,103,221,0.12)] dark:border-primary-65 dark:shadow-[0px_0px_0px_4px_rgba(97,140,232,0.15)]"
+              )}
+            >
+              <div
+                className={cn(
+                  "rounded-[8px] border-[1.5px] border-dashed bg-white transition-colors",
+                  "border-grey-70 dark:border-grey-dark-700 dark:bg-[#1f1f1f]",
+                  isDragging &&
+                    "border-primary-50 bg-primary-50/5 dark:border-primary-50 dark:bg-primary-50/10",
+                  isAdding && "opacity-60"
+                )}
+              >
+                {selectedPath ? (
+                  <div className="flex w-full items-center gap-2 px-3 py-3">
+                    <button
+                      type="button"
+                      onClick={handleSelectFolder}
+                      disabled={isAdding}
+                      title="Click to change folder"
+                      className="flex flex-1 min-w-0 items-center gap-3 rounded-md px-2 py-1.5 -mx-2 -my-1.5 text-left transition-colors hover:bg-grey-light-400 dark:hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      <Folder className="size-5 text-primary-50 flex-shrink-0" />
+                      <p className="font-mono text-xs text-grey-40 dark:text-grey-dark-300 break-all">
+                        {selectedPath}
+                      </p>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleClearSelection}
+                      disabled={isAdding}
+                      aria-label="Clear selected folder"
+                      title="Clear selection"
+                      className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md text-grey-60 hover:text-grey-30 hover:bg-grey-90 dark:text-grey-dark-600 dark:hover:text-white dark:hover:bg-white/10 transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      <X className="size-4" />
+                    </button>
                   </div>
+                ) : (
                   <button
-                    className="flex-shrink-0 px-3 py-1.5 text-xs font-medium text-primary-50 bg-white border border-primary-50 rounded hover:bg-primary-50 hover:text-white transition-colors"
+                    type="button"
                     onClick={handleSelectFolder}
                     disabled={isAdding}
+                    className={cn(
+                      "flex w-full flex-col items-center justify-center gap-4 rounded-[8px] px-4 py-[22px] transition-colors",
+                      "hover:bg-[#fafafa] dark:hover:bg-[#252525]",
+                      isAdding && "cursor-not-allowed"
+                    )}
                   >
-                    Change
+                    {/* Decorative grid + blue badge — mirrors the FramedDialog icon at 40px */}
+                    <div className="relative flex size-10 items-center justify-center overflow-hidden rounded-[4px] dark:rounded-full">
+                      {/* Light mode: WebGL canvas grid — matches FramedDialog header opacity */}
+                      <GraphSheetContainer
+                        majorCell={{ lineColor: [31, 80, 189, 1.0], lineWidth: 2, cellDim: 200 }}
+                        minorCell={{ lineColor: [49, 103, 211, 1.0], lineWidth: 1, cellDim: 20 }}
+                        className="absolute inset-0 size-full opacity-30 dark:hidden"
+                      />
+                      {/* Dark mode: CSS grid with radial fade mask */}
+                      <div
+                        className="absolute inset-0 size-full hidden dark:block"
+                        style={{
+                          backgroundImage:
+                            "linear-gradient(to right, rgba(31,80,189,0.85) 1px, transparent 1px), linear-gradient(to bottom, rgba(31,80,189,0.85) 1px, transparent 1px)",
+                          backgroundSize: "17px 17px",
+                          maskImage:
+                            "radial-gradient(55% 70% at 50% 50%, black 0%, transparent 100%)",
+                          WebkitMaskImage:
+                            "radial-gradient(55% 70% at 50% 50%, black 0%, transparent 100%)",
+                        }}
+                      />
+                      {/* Light mode gradient wash */}
+                      <div className="bg-gradient-to-b from-white/80 via-white/40 to-transparent absolute inset-0 dark:hidden" />
+                      {/* Blue icon badge */}
+                      <div className="relative flex size-[22.857px] items-center justify-center rounded-[5.714px] bg-[#3167dd]">
+                        <Icons.FolderPlus className="size-3 text-white" />
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col items-center gap-0.5">
+                      <p className="font-geist text-[16px] font-medium leading-[22px] tracking-[-0.32px] text-grey-10 dark:text-white">
+                        Select Folder
+                      </p>
+                      <p className="font-geist w-[262px] max-w-full text-[14px] font-medium leading-5 tracking-[-0.28px] text-[#7D7D7D] dark:text-grey-dark-600 text-center">
+                        Drag and drop or click to add folder here to upload
+                      </p>
+                    </div>
                   </button>
-                </div>
+                )}
               </div>
-            ) : (
-              <CardButton
-                variant="secondary"
-                className="w-full justify-center"
-                icon={<Folder className="size-4" />}
-                appendToStart
-                onClick={handleSelectFolder}
-                disabled={isAdding}
-              >
-                Select Folder
-              </CardButton>
+            </div>
+          </div>
+
+          {/* Important callout */}
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center gap-1.5">
+              <OctagonAlert className="size-4 text-[#feb101]" />
+              <p className="font-geist text-[14px] leading-[1.109] tracking-[-0.28px] font-medium text-black dark:text-white">
+                Important
+              </p>
+            </div>
+            <div className="flex items-start gap-2">
+              <ArrowRight className="mt-0.5 size-4 flex-shrink-0 text-[#E3E3E3] dark:text-[#3a3a3a]" />
+              <p className="font-geist text-[14px] leading-[1.4] tracking-[-0.28px] text-[#4F4F4F] dark:text-grey-dark-600">
+                All files in this folder will be encrypted and synced to the
+                Hippius network. Changes will automatically sync across your
+                devices.
+              </p>
+            </div>
+          </div>
+
+          {/* Actions */}
+          <Button
+            variant="primary"
+            size="auto"
+            onClick={handleAddFolder}
+            disabled={!selectedPath || isAdding}
+            loading={isAdding}
+            className={cn(
+              "h-[52px] w-full rounded-[6px] border text-sm font-medium",
+              "border-[#3167DD] bg-[#3167DD] text-white",
+              "hover:bg-[#2454c4] hover:border-[#2454c4]",
+              "dark:hover:bg-[#2a5ad0] dark:hover:border-[#2a5ad0]"
             )}
-          </div>
+          >
+            {isAdding ? "Adding..." : "Add Folder"}
+          </Button>
 
-          {/* Info Box */}
-          <div className="p-3 bg-primary-95 border border-primary-80 rounded-lg">
-            <p className="text-xs text-primary-40">
-              All files in this folder will be encrypted and synced to the
-              Hippius network. Changes will automatically sync across your
-              devices.
-            </p>
-          </div>
-
-          {/* Action Buttons */}
-          <div className="flex gap-3">
-            <CardButton
-              className="w-full"
-              variant="secondary"
-              onClick={handleClose}
-              disabled={isAdding}
-            >
-              Cancel
-            </CardButton>
-            <CardButton
-              className="w-full"
-              variant="primary"
-              onClick={handleAddFolder}
-              disabled={!selectedPath || isAdding}
-              loading={isAdding}
-            >
-              {isAdding ? "Adding..." : "Add Folder"}
-            </CardButton>
-          </div>
+          <Button
+            variant="defaultStable"
+            size="auto"
+            onClick={handleClose}
+            disabled={isAdding}
+            className={cn(
+              "h-[52px] w-full rounded-[6px] border text-sm font-medium",
+              "border-grey-dark-100 bg-[#FEFEFE] text-[#111]",
+              "shadow-[0_5px_2.3px_rgba(0,0,0,0.03),0_1px_1.9px_rgba(0,0,0,0.14),0_0_1px_rgba(0,0,0,0.16),inset_0_1px_0_#FFF]",
+              "hover:bg-[#F5F5F5]",
+              "dark:border-black-300 dark:bg-black-600 dark:text-grey-dark-300 dark:shadow-[0_1px_2px_rgba(0,0,0,0.4)] dark:hover:bg-black-500"
+            )}
+          >
+            Cancel
+          </Button>
         </div>
-      </DialogContainer>
-    </Dialog.Root>
+      </FramedDialog>
 
       <HcfsSetupDialog
         open={showHcfsSetup}

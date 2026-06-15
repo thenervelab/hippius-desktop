@@ -1,13 +1,15 @@
-import { PlusCircle, Loader2 } from "lucide-react";
-
-import React, { FC } from "react";
-import { CardButton } from "..";
+import { Loader2 } from "lucide-react";
+import React, { FC, ReactNode } from "react";
+import { cn } from "@/lib/utils";
+import Button from ".";
 
 interface CreateButtonProps {
   text: string;
   isLoading: boolean;
   onClick: () => void;
   className?: string;
+  /** Optional element rendered left of the label (e.g. a Plus icon). */
+  icon?: ReactNode;
 }
 
 const CreateButton: FC<CreateButtonProps> = ({
@@ -15,16 +17,28 @@ const CreateButton: FC<CreateButtonProps> = ({
   isLoading,
   onClick,
   className = "w-fit",
+  icon,
 }) => {
   return (
-    <CardButton
-      className={`flex gap-x-2 items-center  h-10 ${className}`}
-      icon={<PlusCircle className="size-4" />}
-      appendToStart
+    <Button
+      variant="primary"
+      size="auto"
       onClick={onClick}
+      className={cn(
+        "h-[30px] px-3 py-[10px] gap-[10px] rounded-[6px]",
+        "font-geist text-[14px] tracking-[-0.28px] leading-[1.109]",
+        className,
+      )}
     >
-      {isLoading ? <Loader2 className="animate-spin size-4" /> : text}
-    </CardButton>
+      {isLoading ? (
+        <Loader2 className="size-4 animate-spin" />
+      ) : (
+        <span className="flex items-center gap-2">
+          {icon}
+          <span>{text}</span>
+        </span>
+      )}
+    </Button>
   );
 };
 

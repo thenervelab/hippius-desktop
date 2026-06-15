@@ -4,15 +4,17 @@ import { useState, useCallback } from "react";
 import { useAtomValue, useSetAtom } from "jotai";
 import { pendingConflictsAtom } from "@/lib/store/syncAtoms";
 import { useStagedChanges } from "@/lib/hooks/useStagedChanges";
-import StagedChangesDialog from "@/components/page-sections/files/StagedChangesDialog";
+import StagedChangesDialog from "@/components/page-sections/drive/StagedChangesDialog";
 import { Icons } from "@/components/ui";
+import { Button } from "@/components/ui/button";
+import { X } from "lucide-react";
 import type { ConflictResolution, StagedChanges } from "@/lib/types/syncTypes";
 
 /**
  * Renders one independent conflict banner per drive that has pending conflicts.
  * Conflict state is now keyed by drive label (see `pendingConflictsAtom`), so a
  * second drive's conflicts no longer overwrite the first's and resolving one
- * drive leaves the others' banners intact.
+ * drive leaves the others' banners intact (upstream F16).
  */
 export default function ConflictsBanner() {
   const pendingConflicts = useAtomValue(pendingConflictsAtom);
@@ -30,18 +32,25 @@ export default function ConflictsBanner() {
  * A single drive's conflict banner. Every action (review, resolve, dismiss) is
  * scoped to `label` so it only touches this drive's review state.
  *
- * Note: there is intentionally NO cancel-on-unmount here. `cancel_review` arms a
- * 60s per-drive cooldown that suppresses fresh conflict dialogs, and a row
- * cannot distinguish "the engine resolved this entry" (completed/error/timeout
- * removed it) from "the user navigated away" — firing it on every unmount would
- * re-arm that cooldown after a normal resolution. Explicit dismiss/resolve cancel
- * this drive's review directly; navigate-away is covered by the engine's 5-minute
- * REVIEW_MODE_TIMEOUT.
+ * Note: there is intentionally NO cancel-on-unmount here (upstream F16/F42).
+ * `cancel_review` arms a per-drive cooldown that suppresses fresh conflict
+ * dialogs, and a row cannot distinguish "the engine resolved this entry"
+ * (completed/error/timeout removed it) from "the user navigated away" — firing
+ * it on every unmount would re-arm that cooldown after a normal resolution.
+ * Explicit dismiss/resolve cancels this drive's review directly; navigate-away
+ * is covered by the engine's 5-minute REVIEW_MODE_TIMEOUT.
  */
-function ConflictBannerRow({ label, staged }: { label: string; staged: StagedChanges }) {
+function ConflictBannerRow({
+  label,
+  staged,
+}: {
+  label: string;
+  staged: StagedChanges;
+}) {
   const setPendingConflicts = useSetAtom(pendingConflictsAtom);
   const [dialogOpen, setDialogOpen] = useState(false);
-  const { syncWithResolutions, cancelReview, isSyncing } = useStagedChanges(label);
+  const { syncWithResolutions, cancelReview, isSyncing } =
+    useStagedChanges(label);
 
   const dropSelf = useCallback(() => {
     setPendingConflicts((prev) => {
@@ -70,28 +79,35 @@ function ConflictBannerRow({ label, staged }: { label: string; staged: StagedCha
 
   return (
     <>
-      <div className="flex items-center justify-between gap-3 px-4 py-2 mt-2 rounded-lg border border-warning-50/30 bg-warning-50/5">
-        <div className="flex items-center gap-2 min-w-0">
-          <Icons.OctagonAlert className="size-4 text-warning-50 shrink-0" />
-          <span className="text-sm text-grey-10">
-            {conflictCount} file conflict{conflictCount !== 1 ? "s" : ""}{" "}
-            detected during sync.
-          </span>
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <button
+      <div className="relative overflow-hidden rounded-xl border border-warning-50/40 bg-gradient-to-r from-warning-50/[0.14] to-warning-50/[0.04] px-4 py-3.5 mt-2 dark:border-warning-50/35 dark:from-warning-50/[0.16] dark:to-warning-50/[0.05]">
+        <button
+          onClick={handleDismiss}
+          className="absolute right-3 top-3 text-grey-50 transition-colors hover:text-grey-10 dark:text-grey-dark-700 dark:hover:text-white"
+          title="Dismiss and resume auto-sync"
+          aria-label="Dismiss conflicts banner"
+        >
+          <X className="size-4" />
+        </button>
+        <div className="flex items-center gap-3 pr-8">
+          <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-warning-50">
+            <Icons.OctagonAlert className="size-4 text-white" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-semibold text-grey-10 dark:text-white">
+              {conflictCount} file conflict{conflictCount !== 1 ? "s" : ""} detected
+            </p>
+            <p className="text-xs text-grey-50 dark:text-grey-dark-700">
+              Review and resolve them to resume syncing.
+            </p>
+          </div>
+          <Button
+            variant="primary"
+            size="auto"
+            className="h-[30px] gap-[10px] rounded-[6px] px-3 py-[10px] font-geist text-[14px] leading-[1.109] tracking-[-0.28px]"
             onClick={() => setDialogOpen(true)}
-            className="px-3 py-1.5 text-xs font-medium rounded bg-primary-50 text-white hover:bg-primary-40 shadow-outer-action-button transition-colors"
           >
             Review &amp; Resolve
-          </button>
-          <button
-            onClick={handleDismiss}
-            className="p-1 rounded hover:bg-grey-90 transition-colors"
-            title="Dismiss and resume auto-sync"
-          >
-            <Icons.CloseCircle className="size-4 text-grey-40" />
-          </button>
+          </Button>
         </div>
       </div>
 

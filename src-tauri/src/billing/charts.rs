@@ -1,9 +1,8 @@
 //! Chart data formatting commands.
 //!
 //! Provides Tauri commands that convert raw account/indexer data into
-//! [`ChartPoint`] vectors suitable for frontend chart rendering. This replaces
-//! the TypeScript formatters in `getFormatDataForCreditsUsageChart.tsx`,
-//! `getFormatDataForStorageUsageChart.tsx`, and `getFormatDataForAccountsChart.tsx`.
+//! [`ChartPoint`] vectors suitable for frontend chart rendering, keeping
+//! the chart-formatting logic in Rust rather than the frontend.
 //!
 //! All three chart types share the same core logic ([`build_chart`]):
 //! 1. Parse timestamped balance data into dated points
@@ -68,18 +67,17 @@ pub(super) fn hippius_creation_date() -> NaiveDate {
 ///
 /// Uses the precision-preserving string-divmod conversion from
 /// `blockchain::convert` instead of routing the planck string through
-/// `f64`. The pure-f64 path silently loses precision for any value above
-/// ~9 HIP at 6 decimals (2^53 / 10^18 ≈ 9), which broke chart point
-/// formatting for any user with a meaningful balance. See
+/// `f64`. A pure-f64 path silently loses precision for any value above
+/// ~9 HIP at 6 decimals (2^53 / 10^18 ≈ 9), which would corrupt chart
+/// point formatting for any user with a meaningful balance. See
 /// `blockchain::convert::planck_to_hip` for the underlying semantics.
 ///
 /// **Input contract**: `raw` MUST be a pure decimal-digit string (the
 /// integer planck representation, no decimal point, no scientific
 /// notation, no leading sign). Any non-digit input — including the empty
-/// string, `"1.5"`, `"1e18"`, `"-1"` — is treated as zero. The pre-fix
-/// f64 path silently coerced some of these formats to numeric values;
-/// the new path returns `"0"` consistently. All current callers build
-/// `raw` via `format!("{}", _ as u128)` so they always pass pure digits.
+/// string, `"1.5"`, `"1e18"`, `"-1"` — is treated as zero, returning
+/// `"0"` consistently. All current callers build `raw` via
+/// `format!("{}", _ as u128)` so they always pass pure digits.
 pub(super) fn format_balance(raw: &str, decimals: usize) -> String {
     let value = crate::blockchain::convert::planck_to_hip_with_decimals(raw, decimals);
     if value == "0" {
@@ -270,9 +268,8 @@ fn map_to_range_carry_forward(
     // Seed the carry-forward with the LAST balance at or before the range start,
     // not the maximum. `points` is sorted ascending by date (accounts_to_raw_points),
     // so iterating and assigning unconditionally leaves the most recent pre-range
-    // value. The old `if p.balance > last_balance` guard took the historical peak,
-    // so a wallet that dropped (e.g. 100 -> 50 HIP) before the window opened
-    // charted as starting at 100.
+    // value. Taking the historical peak instead would chart a wallet that dropped
+    // (e.g. 100 -> 50 HIP) before the window opened as starting at 100.
     for p in points {
         if p.date <= first_key {
             last_balance = p.balance;
@@ -426,9 +423,15 @@ pub fn transform_marketplace_credits(credits: Vec<MarketplaceCreditInput>) -> Re
 
     for credit in &credits {
         let date_key = parse_date_key(&credit.date);
-        let raw_amount = credit.amount.parse::<u128>().unwrap_or(0);
+        // A malformed amount is logged rather than silently coerced to 0, so a
+        // bad event doesn't quietly understate the cumulative total.
+        let raw_amount = credit.amount.parse::<u128>().unwrap_or_else(|_| {
+            tracing::warn!(amount = %credit.amount, date = %credit.date, "unparseable marketplace credit amount; treating as 0");
+            0
+        });
         let entry = daily.entry(date_key).or_insert((0, credit.date.clone()));
-        entry.0 += raw_amount;
+        // saturating_add: a daily sum near u128::MAX must not wrap silently.
+        entry.0 = entry.0.saturating_add(raw_amount);
     }
 
     if daily.is_empty() {
@@ -449,15 +452,16 @@ pub fn transform_marketplace_credits(credits: Vec<MarketplaceCreditInput>) -> Re
     let mut results = Vec::new();
     let mut cumulative: u128 = 0;
     let mut current = start_date;
-    let fallback_ts = credits[0].date.clone();
 
     while current <= end_date {
         let key = current.format("%Y-%m-%d").to_string();
         let timestamp = if let Some((amount, ts)) = daily.get(&key) {
-            cumulative += amount;
+            cumulative = cumulative.saturating_add(*amount);
             ts.clone()
         } else {
-            fallback_ts.clone()
+            // Gap day (no credits): carry THIS day's date so each empty day
+            // gets its own timestamp rather than all sharing the first day's.
+            key.clone()
         };
 
         results.push(MarketplaceCreditOutput {
@@ -536,9 +540,8 @@ pub struct StorageCapacityInfo {
 
 /// Calculate storage capacity for given credit amounts.
 ///
-/// Replaces the duplicated binary search in `billing/plans/page.tsx` and
-/// `home/DetailList.tsx`. Returns max GB, formatted display string, and
-/// ideal usage description for each credit amount.
+/// Returns max GB, formatted display string, and ideal usage description
+/// for each credit amount.
 #[tauri::command]
 pub fn calculate_storage_capacity(credits_per_month: Vec<f64>) -> Vec<StorageCapacityInfo> {
     credits_per_month
@@ -563,13 +566,19 @@ pub fn calculate_storage_capacity(credits_per_month: Vec<f64>) -> Vec<StorageCap
                 }
             }
 
+            // Return just the storage amount (e.g. "999 GB", "5 TB").
+            // The frontend appends " storage on Hippius" and highlights the amount in blue.
             let storage_display = if credits <= 3.0 {
-                let rounded_gb = (max_gb / 1000) * 1000;
-                let storage_tb = max_gb / 1000;
-                format!("≈{rounded_gb} GB / {storage_tb} TB Storage on Hippius")
+                let gb_str = add_commas_to_int(&max_gb.to_string());
+                format!("{gb_str} GB")
             } else {
-                let storage_tb = max_gb / 1000;
-                format!("≈{storage_tb} TB Storage on Hippius")
+                let storage_tb = max_gb as f64 / 1000.0;
+                let tb_str = if storage_tb >= 10.0 {
+                    add_commas_to_int(&(storage_tb.floor() as u64).to_string())
+                } else {
+                    format!("{storage_tb:.2}")
+                };
+                format!("{tb_str} TB")
             };
 
             let usage_description = if credits <= 3.0 {
@@ -635,11 +644,11 @@ mod tests {
         assert_eq!(format_balance("1234567890000000000000", 6), "1,234.56789");
     }
 
-    /// Regression: the previous f64-based implementation silently lost
-    /// precision for any value above ~9 HIP at 6 decimals (since
-    /// 2^53 / 10^18 ≈ 9). 100 HIP is well above that threshold and would
-    /// render as a rounded, lossy value through f64. The string-divmod
-    /// path preserves the exact fraction.
+    /// Regression: an f64-based conversion silently loses precision for
+    /// any value above ~9 HIP at 6 decimals (since 2^53 / 10^18 ≈ 9).
+    /// 100 HIP is well above that threshold and would render as a
+    /// rounded, lossy value through f64. The string-divmod path
+    /// preserves the exact fraction.
     #[test]
     fn format_balance_preserves_precision_above_f64_threshold() {
         // 100 HIP, with one wei of fractional grit so f64 would round it off.
@@ -653,9 +662,9 @@ mod tests {
 
     /// Pin the input-contract behavior documented on `format_balance`:
     /// non-digit inputs (decimals, scientific notation, signs, garbage)
-    /// must surface as `"0"` rather than silently rounding via f64 like
-    /// the pre-fix path did. This guards against a future caller
-    /// regressing to passing a non-integer planck string.
+    /// must surface as `"0"` rather than silently rounding via f64. This
+    /// guards against a future caller regressing to passing a
+    /// non-integer planck string.
     #[test]
     fn format_balance_treats_non_digit_input_as_zero() {
         assert_eq!(format_balance("", 6), "0");
@@ -740,7 +749,7 @@ mod tests {
     fn carry_forward_seeds_with_last_pre_range_balance_not_max() {
         // Two pre-range points: 100 then 50 HIP — a drop before the window opens.
         // The carry-forward seed must be the LAST value (50), not the historical
-        // peak (100); the old `if p.balance > last_balance` guard charted 100.
+        // peak (100), which a `if p.balance > last_balance` guard would wrongly pick.
         let points = vec![
             RawPoint {
                 date: NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
@@ -857,6 +866,54 @@ mod tests {
     }
 
     #[test]
+    fn transform_skips_malformed_amount_and_dates_gap_days_correctly() {
+        let credits = vec![
+            MarketplaceCreditInput {
+                amount: "100".into(),
+                date: "2025-03-10T00:00:00.000Z".into(),
+            },
+            // Malformed amount on the same day must be skipped (treated as 0),
+            // not poison the day's sum.
+            MarketplaceCreditInput {
+                amount: "not-a-number".into(),
+                date: "2025-03-10T06:00:00.000Z".into(),
+            },
+            MarketplaceCreditInput {
+                amount: "50".into(),
+                date: "2025-03-12T00:00:00.000Z".into(),
+            },
+        ];
+        let result = transform_marketplace_credits(credits).unwrap();
+        // 03-10, 03-11 (gap), 03-12.
+        assert_eq!(result.len(), 3);
+        // Malformed amount skipped: day 1's total is exactly 100, not poisoned.
+        assert_eq!(result[0].total_balance, "100");
+        // The gap day carries ITS OWN date, not the series-start timestamp.
+        assert_eq!(result[1].processed_timestamp, "2025-03-11");
+        // Cumulative carries across the gap and adds day 3.
+        assert_eq!(result[1].total_balance, "100");
+        assert_eq!(result[2].total_balance, "150");
+    }
+
+    #[test]
+    fn transform_saturates_instead_of_overflowing() {
+        let credits = vec![
+            MarketplaceCreditInput {
+                amount: u128::MAX.to_string(),
+                date: "2025-03-15T00:00:00.000Z".into(),
+            },
+            MarketplaceCreditInput {
+                amount: "10".into(),
+                date: "2025-03-15T01:00:00.000Z".into(),
+            },
+        ];
+        // Summing past u128::MAX must saturate, not wrap — a plain `+=` would
+        // panic in a debug build on this input.
+        let result = transform_marketplace_credits(credits).unwrap();
+        assert_eq!(result[0].total_balance, u128::MAX.to_string());
+    }
+
+    #[test]
     fn storage_cost_per_month() {
         let cost = calculate_storage_cost("ipfs".into(), "per-month".into(), 1.0).unwrap();
         assert!(cost > 0.0);
@@ -888,5 +945,49 @@ mod tests {
     fn storage_cost_first_hour() {
         let cost = calculate_storage_cost("ipfs".into(), "first-hour".into(), 1.0).unwrap();
         assert!((cost - 0.000_031_5).abs() < 1e-10);
+    }
+
+    /// Regression: integer division `max_gb / 1000` for credits ≤ 3
+    /// collapses any sub-1000 GB capacity to "0 TB" — a 0.74-credit
+    /// balance (~246 GB) would render as "≈0 GB / 0 TB" in the UI. The
+    /// formatter matches the console: GB units when credits ≤ 3, TB
+    /// units (with 2-decimal precision under 10 TB) when credits > 3.
+    #[test]
+    fn storage_display_small_credits_shows_gb() {
+        let info = calculate_storage_capacity(vec![0.74]);
+        assert_eq!(info.len(), 1);
+        let display = &info[0].storage_display;
+        assert!(display.ends_with(" GB"), "expected GB unit, got: {display}");
+        // Sanity: must NOT collapse to "0 GB".
+        assert!(!display.starts_with("0 GB"), "regressed to zero-GB display: {display}");
+        // Storage capacity itself should be in the hundreds-of-GB range.
+        assert!(info[0].storage_gb > 100, "got {} GB", info[0].storage_gb);
+    }
+
+    #[test]
+    fn storage_display_zero_credits() {
+        let info = calculate_storage_capacity(vec![0.0]);
+        assert_eq!(info[0].storage_gb, 0);
+        assert_eq!(info[0].storage_display, "0 GB");
+    }
+
+    #[test]
+    fn storage_display_medium_credits_shows_tb_with_decimals() {
+        // 10 credits → ~3.3 TB, well under the 10 TB threshold so we expect
+        // the two-decimal TB format.
+        let info = calculate_storage_capacity(vec![10.0]);
+        let display = &info[0].storage_display;
+        assert!(display.ends_with(" TB"), "expected TB unit, got: {display}");
+        assert!(display.contains('.'), "expected fractional TB under 10 TB, got: {display}");
+    }
+
+    #[test]
+    fn storage_display_large_credits_shows_integer_tb() {
+        // 1000 credits → ~333 TB, above the 10 TB threshold so we expect
+        // an integer TB value with thousands grouping.
+        let info = calculate_storage_capacity(vec![1000.0]);
+        let display = &info[0].storage_display;
+        assert!(display.ends_with(" TB"), "expected TB unit, got: {display}");
+        assert!(!display.contains('.'), "expected integer TB above 10 TB, got: {display}");
     }
 }

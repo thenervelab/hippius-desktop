@@ -95,11 +95,8 @@ export async function addNotification({
   }
 }
 
-// `list_notifications` — like the other session-scoped commands below
-// (`mark_all_notifications_read`, `delete_all_notifications`) — derives the
-// account from the authenticated session in Rust. The FE no longer passes an
-// address: it was ignored, and supplying one implied a cross-account read the
-// backend now deliberately refuses (per-account isolation, audit Phase 2).
+// Rust's `list_notifications` derives the account from the signed-in session and
+// ignores any caller-supplied address, so we pass none.
 export async function listNotifications(limit = 50) {
   try {
     return await invoke<NotificationRow[]>("list_notifications", { limit });
@@ -125,6 +122,7 @@ export async function markUnread(id: number) {
   }
 }
 
+// Session-scoped in Rust; no caller address needed.
 export async function markAllRead() {
   try {
     await invoke("mark_all_notifications_read");
@@ -133,6 +131,13 @@ export async function markAllRead() {
     console.error("Failed to mark all notifications as read:", error);
     return false;
   }
+}
+
+// Session-scoped in Rust; no caller address needed. Deliberately rethrows on
+// IPC failure (instead of returning 0) so callers can fall back to a derived
+// count rather than blanking the badge on a transient error.
+export async function unreadCount(): Promise<number> {
+  return await invoke<number>("get_unread_count");
 }
 
 export async function deleteNotification(id: number) {
@@ -145,6 +150,7 @@ export async function deleteNotification(id: number) {
   }
 }
 
+// Session-scoped in Rust; no caller address needed.
 export async function deleteAllNotifications() {
   try {
     await invoke("delete_all_notifications");

@@ -18,22 +18,6 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
 }));
 
-// Mock heavy UI components that have complex dependencies
-vi.mock("@/components/ui", () => ({
-  Graphsheet: ({ className }: { className?: string }) => (
-    <div data-testid="graphsheet" className={className} />
-  ),
-}));
-vi.mock("@/components/ui/abstract-icon-wrapper", () => ({
-  default: ({ children, className }: {
-    children?: React.ReactNode;
-    className?: string;
-  }) => (
-    <div data-testid="icon-wrapper" className={className}>
-      {children}
-    </div>
-  ),
-}));
 vi.mock("@/components/ui/icons", () => ({
   Close: ({ className }: { className?: string }) => (
     <span data-testid="icon-close" className={className} />
@@ -52,6 +36,9 @@ vi.mock("@/components/ui/info-tooltip", () => ({
   default: ({ children }: { children?: React.ReactNode }) => (
     <span data-testid="info-tooltip">{children}</span>
   ),
+}));
+vi.mock("@/components/ui/CustomTooltip2", () => ({
+  default: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
 }));
 
 vi.mock("@/components/ui/MiddleTruncatedName", () => ({
@@ -130,16 +117,33 @@ describe("SyncStatusDialog", () => {
       <SyncStatusDialog snapshot={snapshot} open={true} />,
     );
 
-    // Before expanding, file items exist in DOM but are hidden
-    // via max-height: 0px on the body container.
-    // Click the header to expand.
-    const chevrons = document.querySelectorAll("svg");
-    const header = chevrons[1]?.closest("[class*='cursor-pointer']");
-    expect(header).toBeTruthy();
-    fireEvent.click(header!);
+    fireEvent.click(screen.getByTestId("sync-status-toggle"));
 
     const fileItems = screen.getAllByTestId("file-item");
     expect(fileItems).toHaveLength(3);
+  });
+
+  it("shows the failure reason on an error row instead of the byte size", () => {
+    const reason = "Insufficient credits — needs $1.00, you have $0.12.";
+    const files = [
+      makeFileProgress("invoice.pdf", {
+        status: "error",
+        totalBytes: 2048,
+        error: reason,
+      }),
+    ];
+    const snapshot = makeSnapshot(files);
+
+    renderWithJotai(<SyncStatusDialog snapshot={snapshot} open={true} />);
+
+    fireEvent.click(screen.getByTestId("sync-status-toggle"));
+
+    const item = screen.getByTestId("file-item");
+    // The Rust-authored reason replaces the size meta; the "Error" pill stays.
+    expect(item).toHaveTextContent(reason);
+    expect(item).toHaveTextContent("Error");
+    // 2048 bytes would render as "2.05 KB" — the reason takes its place.
+    expect(item).not.toHaveTextContent("2.05 KB");
   });
 
   it("shows percentage in collapsed state", () => {
@@ -157,9 +161,7 @@ describe("SyncStatusDialog", () => {
       <SyncStatusDialog snapshot={snapshot} open={true} />,
     );
 
-    // In collapsed state, the header shows "Syncing 60%" as status text.
-    const statusText = screen.getByText("Syncing 60%");
-    expect(statusText).toBeInTheDocument();
+    expect(screen.getByTestId("overall-progress-label")).toHaveTextContent("60%");
   });
 
   it("preserves file order from snapshot", () => {
@@ -187,11 +189,7 @@ describe("SyncStatusDialog", () => {
       <SyncStatusDialog snapshot={snapshot} open={true} />,
     );
 
-    // Expand to see file list
-    const header = document.querySelector(
-      "[class*='cursor-pointer']",
-    );
-    fireEvent.click(header!);
+    fireEvent.click(screen.getByTestId("sync-status-toggle"));
 
     const fileItems = screen.getAllByTestId("file-item");
     expect(fileItems[0]).toHaveTextContent("alpha.txt");
@@ -238,7 +236,6 @@ describe("SyncStatusDialog", () => {
       </Provider>,
     );
 
-    // Rust fixes the stalled state, so the widget shows "Complete"
     expect(screen.getByText("Complete")).toBeInTheDocument();
 
     // Now add a 5th file (deferred completion merged it in)
@@ -255,42 +252,13 @@ describe("SyncStatusDialog", () => {
       </Provider>,
     );
 
-    // After new file added, percentage should adjust to ~80% (4000/5000),
-    // NOT stay locked at 100%.
-    const percentText = screen.getByText("Syncing 80%");
-    expect(percentText).toBeInTheDocument();
+    expect(screen.getByTestId("overall-progress-label")).toHaveTextContent("80%");
   });
 
-  // ── Intent overlay rendering ────────────────────────────────────
-  // The size row under "Overall progress" prefers the intent manifest's
-  // user-truthful "X of Y" totals when the backend signals intentActive.
-  // Falls back to per-cycle "progressBytes / bytesExpected" otherwise.
-  // We assert on the dialog directly (not via SyncStatusHandler) because
-  // the handler test mocks SyncStatusDialog away — rendering assertions
-  // belong here where the real component runs.
-
-  /** Return the "Overall progress" section element, or null if absent.
-   * Per-file rows live OUTSIDE this subtree, so this lets us assert
-   * about the aggregate size span without false matches from file rows
-   * that also display their own "X / Y" text via formatBytes. */
-  function overallProgressSection(container: HTMLElement): Element | null {
-    const label = Array.from(container.querySelectorAll("span")).find(
-      (el) => el.textContent === "Overall progress",
+  function compactSummaryTexts(container: HTMLElement): string[] {
+    return Array.from(container.querySelectorAll("span")).map(
+      (element) => element.textContent ?? "",
     );
-    // The label sits two divs deep inside the wrapper that owns the bar
-    // and the size row (`<div class="px-4 pt-3">…`).
-    return label?.parentElement?.parentElement ?? null;
-  }
-
-  /** Text content of all `text-[0.625rem] text-grey-50` size-line spans
-   * inside the overall-progress section. The intent line and the
-   * fallback per-cycle line both render with this class. */
-  function overallSizeLineTexts(container: HTMLElement): string[] {
-    const section = overallProgressSection(container);
-    if (!section) return [];
-    return Array.from(
-      section.querySelectorAll("span.text-\\[0\\.625rem\\].text-grey-50"),
-    ).map((el) => el.textContent ?? "");
   }
 
   it("renders 'X of Y' intent line when intentActive is true", () => {
@@ -320,15 +288,9 @@ describe("SyncStatusDialog", () => {
       <SyncStatusDialog snapshot={snapshot} open={true} />,
     );
 
-    // formatBytes(10_000_000_000) → "10 GB" (default 2 decimals, trailing
-    // zeros trimmed by parseFloat); formatBytes(5_000_000_000) → "5 GB".
-    const overallTexts = overallSizeLineTexts(container);
-    expect(overallTexts).toContain("5 GB of 10 GB");
-    // Per-cycle slash line must NOT appear at the aggregate level when
-    // intent is active. The two branches are mutually exclusive in the
-    // JSX (`if/else if/null`), so verifying the absence of any
-    // slash-separated total here pins that contract.
-    expect(overallTexts.some((t) => / \/ /.test(t))).toBe(false);
+    const summaryTexts = compactSummaryTexts(container);
+    expect(summaryTexts).toContain("5GB/10GB");
+    expect(summaryTexts).not.toContain("2.5MB/7.5MB");
   });
 
   it("falls back to per-cycle line when intent fields are undefined", () => {
@@ -355,12 +317,9 @@ describe("SyncStatusDialog", () => {
       <SyncStatusDialog snapshot={snapshot} open={true} />,
     );
 
-    // progressBytes = 2.5 MB (a.bin transferred), bytesExpected = 7.5 MB
-    // (a.bin + b.bin totals). formatBytes(7_500_000) → "7.5 MB".
-    const overallTexts = overallSizeLineTexts(container);
-    expect(overallTexts).toContain("2.5 MB / 7.5 MB");
-    // The intent "of <unit>" form must not appear at the aggregate level.
-    expect(overallTexts.some((t) => / of /.test(t))).toBe(false);
+    const summaryTexts = compactSummaryTexts(container);
+    expect(summaryTexts).toContain("2.5MB/7.5MB");
+    expect(summaryTexts).not.toContain("5GB/10GB");
   });
 
   it("falls back to per-cycle line when intentActive is true but intentTotalBytes is 0", () => {
@@ -392,11 +351,57 @@ describe("SyncStatusDialog", () => {
       <SyncStatusDialog snapshot={snapshot} open={true} />,
     );
 
-    const overallTexts = overallSizeLineTexts(container);
-    // Falls back to per-cycle slash line.
-    expect(overallTexts).toContain("2.5 MB / 7.5 MB");
-    // Empty intent banner must not appear.
-    expect(overallTexts.some((t) => t === "0 B of 0 B")).toBe(false);
+    const summaryTexts = compactSummaryTexts(container);
+    expect(summaryTexts).toContain("2.5MB/7.5MB");
+    expect(summaryTexts).not.toContain("0B/0B");
+  });
+
+  it("renders the compact ring instead of the full card when minimized", () => {
+    const files = [
+      makeFileProgress("data.csv", {
+        status: "inProgress",
+        progressPercent: 60,
+        bytesTransferred: 600,
+        totalBytes: 1000,
+      }),
+    ];
+    const snapshot = makeSnapshot(files);
+
+    renderWithJotai(
+      <SyncStatusDialog snapshot={snapshot} open={true} minimized={true} />,
+    );
+
+    // Compact ring is shown…
+    expect(screen.getByTestId("sync-status-mini")).toBeInTheDocument();
+    expect(screen.getByTestId("sync-status-mini-label")).toHaveTextContent("60%");
+    // …and the full card's expand toggle / file list are not rendered.
+    expect(screen.queryByTestId("sync-status-toggle")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("file-item")).not.toBeInTheDocument();
+  });
+
+  it("calls onExpand when the minimized ring is clicked", () => {
+    const onExpand = vi.fn();
+    const files = [
+      makeFileProgress("data.csv", {
+        status: "inProgress",
+        progressPercent: 40,
+        bytesTransferred: 400,
+        totalBytes: 1000,
+      }),
+    ];
+    const snapshot = makeSnapshot(files);
+
+    renderWithJotai(
+      <SyncStatusDialog
+        snapshot={snapshot}
+        open={true}
+        minimized={true}
+        onExpand={onExpand}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("sync-status-mini"));
+    expect(onExpand).toHaveBeenCalledTimes(1);
   });
 
   it("shows Complete when Rust fixes stalled active session at 100%", () => {

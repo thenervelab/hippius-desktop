@@ -38,11 +38,19 @@ const StatusCell: React.FC<StatusCellProps> = ({ value, className }) => {
     value.charAt(0).toUpperCase() + value.slice(1).toLowerCase();
 
   return (
-    <div className={cn("flex items-center gap-2", className)}>
+    <div
+      className={cn(
+        "flex items-center gap-1 bg-[#0000000A] w-fit py-1 px-1.5 pr-2 rounded-full",
+        className,
+      )}
+    >
       <div
-        className={cn("border-[0.1875rem] p-[0.1875rem] rounded-full", getStatusColor())}
+        className={cn(
+          "border-[0.1875rem] p-[0.1875rem] rounded-full",
+          getStatusColor(),
+        )}
       ></div>
-      <span className="text-xs font-medium text-grey-10">{displayValue}</span>
+      <span className="text-[10px] font-medium text-black">{displayValue}</span>
     </div>
   );
 };

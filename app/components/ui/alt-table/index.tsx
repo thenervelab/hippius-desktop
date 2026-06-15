@@ -7,5 +7,6 @@ export * from "./Tr";
 export * from "./Table";
 export * from "./CopyableCell";
 export * from "./Pagination";
+export * from "./MiniPagination";
 export * from "./TruncatedCell";
 export * from "./SkeletonTableRow";

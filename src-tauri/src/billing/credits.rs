@@ -61,7 +61,10 @@ pub(crate) struct CreditBalanceResponse {
 /// the planck string through `planck_to_hip` so the FE has both shapes
 /// in a single round-trip.
 #[tauri::command]
-pub async fn get_user_credits(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<CreditBalance, AppError> {
+pub async fn get_user_credits(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: crate::app_state::SessionAccount,
+) -> Result<CreditBalance, AppError> {
     let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
     let resp: CreditBalanceResponse = client.get("/api/billing/credits/balance/", &account_id).await?;
     let balance_str = resp.balance.as_deref().unwrap_or("0");
@@ -92,7 +95,10 @@ pub struct SyncEligibility {
 /// working without a behavior change — it returns the same `SyncEligibility`
 /// shape and the same legacy reason codes (`balance_zero` / `no_credits`).
 #[tauri::command]
-pub async fn check_sync_eligibility(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<SyncEligibility, AppError> {
+pub async fn check_sync_eligibility(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: crate::app_state::SessionAccount,
+) -> Result<SyncEligibility, AppError> {
     use crate::billing::eligibility::{InsufficientCreditsAction, check_action_eligibility_inner};
 
     // Legacy alias preserves the pre-Task-3.1 semantic: `> 0` floor, no

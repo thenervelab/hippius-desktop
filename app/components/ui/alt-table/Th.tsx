@@ -17,6 +17,20 @@ export interface ThProps<TData, TValue>
    * narrow and resizing adds visual clutter without value).
    */
   disableResize?: boolean;
+  /**
+   * Skip the default `uppercase` text-transform on the header label.
+   * Tables that match a Figma design with title-case column headers
+   * (e.g. "Date Added") opt out via this prop so the rendered string
+   * isn't force-uppercased.
+   */
+  disableUppercase?: boolean;
+  /**
+   * Sort-affordance style. `"double"` (default) shows the legacy
+   * stacked up/down chevron pair that's always visible. `"rotating"`
+   * matches the shares/page.tsx table — a single ChevronDown that only
+   * appears once the column is sorted and rotates 180° for ascending.
+   */
+  sortIcon?: "double" | "rotating";
 }
 
 export function Th<TData, TValue>(props: ThProps<TData, TValue>) {
@@ -30,11 +44,17 @@ export function Th<TData, TValue>(props: ThProps<TData, TValue>) {
     onResizeStart,
     preventSort,
     disableResize,
+    disableUppercase,
+    sortIcon = "double",
     ...rest
   } = props;
 
   const sortOrder = header.column.getIsSorted();
   const canSort = header.column.getCanSort();
+
+  const headerClassName = (
+    header.column.columnDef.meta as { headerClassName?: string } | undefined
+  )?.headerClassName;
 
   // Allow resizing all except an "actions" column (if you use one),
   // unless the consumer has explicitly disabled resize for this table.
@@ -45,8 +65,14 @@ export function Th<TData, TValue>(props: ThProps<TData, TValue>) {
       className={cn(
         "font-semibold text-xs px-2.5 border-x first:border-l-transparent last:border-r-transparent border-b py-3 text-grey-70 relative",
         canSort && "cursor-pointer hover:bg-gray-50/30",
-        sortOrder && canSort && cn("text-primary-50", activeSortClassName),
+        headerClassName,
         className,
+        // Active sort styles applied LAST so they win over caller-supplied
+        // text colors in `className` / meta.headerClassName. Without this
+        // ordering, a Figma-style table that paints inactive headers in a
+        // muted color (e.g. `text-[#a3a3a3]`) would suppress the sort
+        // indicator highlight even when the column is sorted.
+        sortOrder && canSort && cn("text-primary-50", activeSortClassName),
       )}
       style={{
         width: columnWidth ? `${columnWidth}%` : undefined,
@@ -76,14 +102,28 @@ export function Th<TData, TValue>(props: ThProps<TData, TValue>) {
           <button
             className={cn(
               "inline-flex items-center gap-1 whitespace-nowrap",
-              header.column.columnDef.header !== "hALPHA EARNED" && "uppercase",
+              !disableUppercase &&
+                header.column.columnDef.header !== "hALPHA EARNED" &&
+                "uppercase",
             )}
           >
             {flexRender(header.column.columnDef.header, header.getContext())}
-            <SortIndicator sortOrder={sortOrder} />
+            {sortIcon === "rotating" ? (
+              sortOrder ? (
+                <ChevronDown
+                  aria-hidden="true"
+                  className={cn(
+                    "size-3.5 transition-transform shrink-0",
+                    sortOrder === "asc" && "rotate-180",
+                  )}
+                />
+              ) : null
+            ) : (
+              <SortIndicator sortOrder={sortOrder} />
+            )}
           </button>
         ) : (
-          <span className="uppercase">
+          <span className={cn(!disableUppercase && "uppercase")}>
             {flexRender(header.column.columnDef.header, header.getContext())}
           </span>
         )}

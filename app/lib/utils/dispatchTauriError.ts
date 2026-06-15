@@ -1,12 +1,6 @@
 import { toast } from "sonner";
 
 /**
- * Shape of an `AppError` returned by Tauri commands. The `kind` field
- * is a top-level discriminant ("NotReady", "Auth", etc.) and `message`
- * is the human-readable error from the Display impl. See
- * `src-tauri/src/error.rs::AppError::serialize`.
- */
-/**
  * SCREAMING_SNAKE_CASE names of the Rust `NotReadyKind` variants, mirrored
  * from `src-tauri/src/error.rs` (kept in sync with that enum's serde
  * `rename_all = "SCREAMING_SNAKE_CASE"` and the round-trip test there). These
@@ -23,8 +17,16 @@ export type NotReadyKind =
   | "MASTER_MNEMONIC_UNRECOVERABLE"
   | "NOT_ENOUGH_DISK_SPACE"
   | "SIGNING_KEY_UNAVAILABLE"
-  | "INSUFFICIENT_CREDITS";
+  | "INSUFFICIENT_CREDITS"
+  | "SUPERSEDED_BY_PAUSE"
+  | "DATABASE_NOT_READY";
 
+/**
+ * Shape of an `AppError` returned by Tauri commands. The `kind` field
+ * is a top-level discriminant ("NotReady", "Auth", etc.) and `message`
+ * is the human-readable error from the Display impl. See
+ * `src-tauri/src/error.rs::AppError::serialize`.
+ */
 interface TauriError {
   kind?: string;
   /**

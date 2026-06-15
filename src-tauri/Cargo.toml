@@ -1,6 +1,6 @@
 [package]
 name = "Hippius"
-version = "0.1.101"
+version = "0.2.0"
 description = "Hippius Desktop App"
 authors = ["you"]
 edition = "2024"
@@ -23,6 +23,10 @@ tauri = { version = "2", features = [
     'tray-icon',
     'image-ico',
     'image-png',
+    # Required for the transparent tray-panel popover window
+    # (`macOSPrivateApi: true` in tauri.conf.json). Enables the private
+    # macOS APIs Tauri uses to render a borderless, see-through webview.
+    'macos-private-api',
     # Enable devtools even in release builds so we can debug OAuth/recovery
     # without rebuilding a debug DMG. Gated at runtime via the HIPPIUS_DEVTOOLS
     # env var — see `main.rs` setup hook. Remove once we stop shipping dev
@@ -77,6 +81,7 @@ hostname = "0.4"
 zeroize = "1"
 chacha20poly1305 = "0.10"
 hkdf = "0.12"
+argon2 = "0.5"
 bip39 = { version = "2.2", features = ["rand"] }
 zxcvbn = { version = "3", default-features = false }
 keyring = { version = "3", default-features = false, features = [
@@ -89,12 +94,12 @@ alloy-signer = { version = "0.8", default-features = false }
 alloy-signer-local = { version = "0.8", default-features = false, features = [
     "mnemonic",
 ] }
-hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "41954d7" }
+hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "1b8d90dfb0cfadddaab7bcbd7ff3e2ce3d17168b" }
 # hcfs-shared pulls in the `network` module types (RegisterRelativePathEntry,
 # MAX_REGISTER_RELATIVE_PATHS_BATCH, ...) that hcfs-client takes/returns on
 # its public API but does not re-export. Pinned to the same git rev so the
 # wire types stay in lockstep with the client.
-hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "41954d7" }
+hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "1b8d90dfb0cfadddaab7bcbd7ff3e2ce3d17168b" }
 # NFC-normalise relative_path strings before posting them to the server's
 # register_relative_paths endpoint. macOS APFS hands filenames back in NFD
 # and the server's path_validator hard-rejects anything non-NFC — see the
@@ -107,9 +112,25 @@ unicode-normalization = "0.1"
 # magic-byte sniffer in the desktop. The crate has no transitive
 # deps beyond `unicase` and is what hcfs-server itself uses.
 mime_guess = "2.0"
+# Decode/resize/encode for server-side thumbnail generation (sync/remote.rs).
+# Capped below 0.25.9: image 0.25.9 bumped its `jpeg` feature to require
+# `zune-core ^0.5.0` / `zune-jpeg ^0.5.5`, and `zune-core 0.5.0` has no STABLE
+# release on crates.io yet (only 0.5.0-rc*), so 0.25.9/0.25.10 + `jpeg` are
+# currently unbuildable. ≤0.25.8 resolves the published `zune-core 0.4.12`.
+# `default-features = false` keeps the heavy/optional decoders (exr, avif, gif,
+# tiff) out; jpeg+png+bmp cover the common cloud image types (webp is a
+# follow-up — it pulls `image-webp`). Lift the cap once `zune-core 0.5.0` ships.
+image = { version = ">=0.25.0, <0.25.9", default-features = false, features = ["jpeg", "png", "bmp"] }
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Daily rolling-file log appender so the app's tracing output lands on disk
+# (~/.hippius/logs/) and can be bundled into support tickets. Pairs with
+# tracing-subscriber's non-blocking writer + WorkerGuard.
+tracing-appender = "0.2"
+# Pattern-based redaction of secrets (mnemonics, auth tokens, private keys)
+# from log text before it is zipped and uploaded with a support ticket.
+regex = "1"
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.31.2", features = ["fs"] }

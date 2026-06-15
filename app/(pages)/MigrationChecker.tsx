@@ -9,7 +9,7 @@ import {
   MigrationPromptDialog,
   MigrationConfirmSkipDialog,
   MigrationCompleteDialog,
-} from "@/components/page-sections/files/migration";
+} from "@/components/page-sections/drive/migration";
 import { HcfsSetupDialog } from "@/components/page-sections/settings/HcfsSetupDialog";
 
 /**

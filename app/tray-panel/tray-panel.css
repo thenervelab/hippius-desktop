@@ -1,0 +1,32 @@
+/*
+ * The tray popover is a borderless, transparent Tauri window. The shared root
+ * layout paints a solid background on <html>/<body>; clear it here so the
+ * rounded frosted card shows the desktop behind it.
+ *
+ * This must win over Tailwind's `bg-grey-100` body utility AND apply at
+ * stylesheet-parse time (it ships in this route's <head>), before the first
+ * paint. The previous approach set the background from a `useEffect`, which
+ * ran *after* first paint and produced the opaque grey flash / "sometimes
+ * transparent, sometimes not" race the user reported.
+ */
+html,
+body {
+  background: transparent !important;
+}
+
+body {
+  /* The popover is a fixed-size window; never show window-level scrollbars. */
+  overflow: hidden;
+}
+
+/*
+ * Elevation on macOS comes from the NATIVE window shadow (`build_panel` enables
+ * it only there, via `.shadow(cfg!(target_os = "macos"))`), which macOS draws
+ * around the rounded vibrancy material. The card fills the window edge-to-edge,
+ * so a CSS `box-shadow` here would render outside the window and be clipped (the
+ * old dark-corner artifact); the native shadow renders outside the window frame
+ * correctly instead. On Linux/Windows there is no native shadow (it would
+ * shadow the rectangular bounds with no material), so the opaque card's hairline
+ * border supplies edge definition — see `cardSurface` in `page.tsx`. No CSS
+ * box-shadow is needed on any platform.
+ */

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { Download, Link2, Trash2, FolderOpen } from "lucide-react";
+import { Download, Link2, Trash2, FolderOpen, Pencil } from "lucide-react";
 import { Icons } from "@/components/ui";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
@@ -17,6 +17,7 @@ import { generateFolderUrl } from "@/app/utils/folderUrlUtils";
 import { Folder } from "@/components/ui/icons";
 import cn from "@/app/lib/utils/cn";
 import { shareFeatureEnabledAtom } from "@/app/lib/global-atoms/sharesAtoms";
+import { canRenameFile, RENAME_DISABLED_TOOLTIP } from "@/app/lib/utils/renameGating";
 
 const getFileManagerLabel = () => {
   if (typeof navigator !== "undefined" && /win/i.test(navigator.platform)) return "Explorer";
@@ -37,11 +38,19 @@ interface ContextMenuProps {
   ) => void;
   /**
    * Open the "Share via link" modal for this file. Wired from
-   * `FilesContent` via `shareModalFileAtom`. The menu hides the
+   * `DriveContent` via `shareModalFileAtom`. The menu hides the
    * Share row when this is omitted, so consumers that don't want
    * the feature don't need a no-op handler.
    */
   onShareFile?: (file: FormattedUserFile) => void;
+  /**
+   * Open the rename dialog for this file/folder. Wired from consumers via
+   * `renameModalFileAtom`. The row is hidden when omitted (same convention
+   * as `onShareFile`) and disabled — not hidden — when the entry isn't
+   * renameable yet (`canRenameFile`), mirroring the Delete row's treatment
+   * of mid-sync files.
+   */
+  onRename?: (file: FormattedUserFile) => void;
 }
 
 export default function FileContextMenu({
@@ -54,6 +63,7 @@ export default function FileContextMenu({
   onShowFileDetails,
   onFileDownload,
   onShareFile,
+  onRename,
 }: ContextMenuProps) {
   const [mounted, setMounted] = useState(false);
   const { polkadotAddress } = useWalletAuth();
@@ -136,7 +146,7 @@ export default function FileContextMenu({
   const { url: folderUrl } = generateFolderUrl(file, getParam);
   const fileManagerLabel = getFileManagerLabel();
 
-  const menuItemClass = "flex items-center gap-2 p-2 text-xs font-medium !text-grey-30 hover:!text-grey-40 hover:bg-grey-90 border-b border-grey-80 cursor-pointer";
+  const menuItemClass = "flex items-center gap-2 p-2 text-xs font-medium !text-grey-30 hover:!text-grey-40 hover:bg-grey-90 border-b border-grey-80 cursor-pointer dark:!text-grey-dark-200 dark:hover:!text-grey-light-100 dark:hover:bg-white/5 dark:border-black-300";
 
   return createPortal(
     <div
@@ -144,7 +154,7 @@ export default function FileContextMenu({
       style={menuStyle}
       onClick={(e) => e.stopPropagation()}
     >
-      <div className="bg-white border border-grey-80 shadow-[0px_12px_32px_8px_rgba(51,51,51,0.1)] rounded-lg overflow-hidden p-0 min-w-[9.375rem]">
+      <div className="bg-white border border-grey-80 shadow-[0px_12px_32px_8px_rgba(51,51,51,0.1)] rounded-lg overflow-hidden p-0 min-w-[9.375rem] dark:bg-black-500 dark:border-black-300 dark:shadow-[0px_12px_32px_8px_rgba(0,0,0,0.3)]">
         <div className="flex flex-col">
           {file.isFolder && (
             <Link
@@ -241,10 +251,35 @@ export default function FileContextMenu({
               </button>
             )}
 
+          {onRename && (
+            <button
+              // No `pointer-events-none` here: it would stop the element
+              // from ever being a hover target, making the `title` tooltip
+              // unreachable. The `disabled` attribute + onClick guard
+              // already block activation.
+              className={cn(menuItemClass, {
+                "opacity-60 cursor-not-allowed": !canRenameFile(file),
+              })}
+              disabled={!canRenameFile(file)}
+              title={!canRenameFile(file) ? RENAME_DISABLED_TOOLTIP : undefined}
+              onClick={() => {
+                if (canRenameFile(file)) {
+                  onRename(file);
+                  onClose();
+                }
+              }}
+            >
+              <Pencil className="size-4" />
+              <span>Rename</span>
+            </button>
+          )}
+
           <button
-            className={cn("flex items-center gap-2 p-2 text-xs font-medium hover:bg-grey-90", {
-              "hover:!text-error-70 !text-error-60 cursor-pointer": file.isAssigned,
-              "opacity-60 cursor-not-allowed pointer-events-none !text-grey-30": !file.isAssigned
+            // Same rationale as the Rename row: `pointer-events-none` made
+            // the disabled-state `title` tooltip unreachable.
+            className={cn("flex items-center gap-2 p-2 text-xs font-medium hover:bg-grey-90 dark:hover:bg-error-70/10", {
+              "hover:!text-error-70 !text-error-60 cursor-pointer dark:!text-error-70 dark:hover:!text-error-60": file.isAssigned,
+              "opacity-60 cursor-not-allowed !text-grey-30 dark:!text-grey-dark-200": !file.isAssigned
             })}
             disabled={!file.isAssigned}
             title={!file.isAssigned ? "This file is currently being synced and cannot be deleted yet. Please wait for the sync to complete." : "Delete this file"}

@@ -2,8 +2,8 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
 import { Instance } from "../instances-table";
-import { ConfirmDialog } from "../../ui/ConfirmDialog";
-import { Icons } from "../../ui";
+import ConfirmationDialog from "../../ConfirmationDialog";
+import { PlayCircle, StopCircle } from "@/components/ui/icons";
 import useStartVM from "@/app/lib/hooks/api/useStartVM";
 import useStopVM from "@/app/lib/hooks/api/useStopVM";
 
@@ -17,7 +17,7 @@ export const useStartStopInstance = (options?: UseStartStopInstanceOptions) => {
 
   const [openConfirmModal, setOpenConfirmModal] = useState(false);
   const [selectedInstance, setSelectedInstance] = useState<Instance | null>(
-    null
+    null,
   );
   const [action, setAction] = useState<"start" | "stop">("stop");
 
@@ -38,13 +38,14 @@ export const useStartStopInstance = (options?: UseStartStopInstanceOptions) => {
 
   const handleStartStopInstance = (
     instance?: Instance,
-    currentStatus?: string
+    currentStatus?: string,
   ) => {
     if (instance) {
       setSelectedInstance(instance);
     }
     // Determine action based on current status (case-insensitive)
-    const actionType = currentStatus?.toLowerCase() === "stopped" ? "start" : "stop";
+    const actionType =
+      currentStatus?.toLowerCase() === "stopped" ? "start" : "stop";
     setAction(actionType);
     setOpenConfirmModal(true);
   };
@@ -68,7 +69,7 @@ export const useStartStopInstance = (options?: UseStartStopInstanceOptions) => {
       onSuccess?.();
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : `Failed to ${action} instance`
+        error instanceof Error ? error.message : `Failed to ${action} instance`,
       );
       console.error(`${action} instance error:`, error);
     }
@@ -83,32 +84,32 @@ export const useStartStopInstance = (options?: UseStartStopInstanceOptions) => {
   const isProcessing = isStarting || isStopping;
 
   const StartStopConfirmModal = () => (
-    <ConfirmDialog
-      mode="branded"
+    <ConfirmationDialog
       open={openConfirmModal}
-      onCancel={isProcessing ? () => {} : handleCancel}
+      onClose={isProcessing ? () => {} : handleCancel}
       onBack={isProcessing ? () => {} : handleCancel}
       onConfirm={handleConfirm}
-      confirmText={
+      button={
         isProcessing
           ? action === "start"
             ? "Starting..."
             : "Stopping..."
           : action === "start"
-          ? "Start Instance"
-          : "Stop Instance"
+            ? "Start Instance"
+            : "Stop Instance"
       }
-      description={`Are you sure you want to ${action} this instance?`}
-      title={action === "start" ? "Start Instance" : "Stop Instance"}
+      text={`Are you sure you want to ${action} this instance?`}
+      heading={action === "start" ? "Start Instance" : "Stop Instance"}
       icon={
         action === "start" ? (
-          <Icons.PlayCircle className="size-6 text-grey-100" />
+          <PlayCircle className="size-6 text-grey-100" />
         ) : (
-          <Icons.StopCircle className="size-6 text-grey-100" />
+          <StopCircle className="size-6 text-grey-100" />
         )
       }
       iconBgColor="bg-primary-50"
-      isLoading={isProcessing}
+      disableButton={isProcessing}
+      disableBackButton={isProcessing}
     />
   );
 

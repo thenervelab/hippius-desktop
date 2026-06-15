@@ -5,7 +5,7 @@ import { Provider, createStore } from "jotai";
 import React from "react";
 
 import { useCreditCheck } from "../useCreditCheck";
-import { insufficientCreditsDialogOpenAtom } from "@/app/components/page-sections/files/atoms/query-atoms";
+import { insufficientCreditsDialogOpenAtom } from "@/app/components/page-sections/drive/atoms/query-atoms";
 
 // ── Mocks ────────────────────────────────────────────────────────────
 //

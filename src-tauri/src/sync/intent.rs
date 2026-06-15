@@ -43,6 +43,15 @@ use sqlx::sqlite::SqlitePool;
 /// from exploding into a unique entry per pending-set size.
 const DELETE_CHUNK_SIZE: usize = 500;
 
+/// Retention window for completed (settled) intent rows.
+///
+/// The plan-ready path prunes settled rows older than this per drive each
+/// cycle (see [`IntentRepo::prune_settled`]) so the durable manifest stays
+/// bounded for sessions that run for weeks without a logout — logout's
+/// `clear_account` is the other reclaim. 30 days is far longer than any
+/// realistic in-flight upload, so a still-relevant row is never aged out.
+pub const SETTLED_RETENTION_MS: i64 = 30 * 24 * 60 * 60 * 1000;
+
 /// Repository handle backed by the `sync_intent` SQLite table.
 ///
 /// Clone is cheap: the inner `SqlitePool` is `Arc`-backed by sqlx.

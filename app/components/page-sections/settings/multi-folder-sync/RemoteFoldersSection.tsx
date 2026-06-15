@@ -1,28 +1,24 @@
 "use client";
 
-import React, { useState, useMemo } from "react";
-import { Icons, RevealTextLine } from "@/components/ui";
+import React, { useState } from "react";
+import { InView } from "react-intersection-observer";
+import { Icons } from "@/components/ui";
+import { cn } from "@/lib/utils";
 import { formatBytes } from "@/lib/utils/formatBytes";
 import { middleTruncate } from "@/lib/utils/middleTruncate";
 import * as Tooltip from "@radix-ui/react-tooltip";
-import SectionHeader from "../SectionHeader";
-import { InView } from "react-intersection-observer";
 import {
   Folder,
   CloudDownload,
-  MoreVertical,
   ServerCrash,
-  Clock,
-  HardDrive,
   FolderSearch,
 } from "lucide-react";
 import TableActionMenu, { ActionItem } from "@/components/ui/alt-table/TableActionMenu";
 import { Button } from "@/components/ui/button";
+import { SettingsCard } from "../SettingsCard";
+import FolderRowSkeleton from "./FolderRowSkeleton";
 import type { RemoteFolder } from "@/app/lib/types/sync-folder";
-import { Pagination } from "@/components/ui/alt-table";
 import FolderCardContextMenu from "@/app/components/ui/context-menu/FolderCardContextMenu";
-
-const FOLDERS_PER_PAGE = 6;
 
 interface RemoteFoldersSectionProps {
   remoteFolders: RemoteFolder[];
@@ -33,13 +29,15 @@ interface RemoteFoldersSectionProps {
 }
 
 function formatDate(timestamp: number) {
-  return new Date(timestamp).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  const d = new Date(timestamp);
+  const month = d.toLocaleString("en-US", { month: "short" });
+  const day = d.getDate();
+  const year = d.getFullYear();
+  let hours = d.getHours();
+  const minutes = String(d.getMinutes()).padStart(2, "0");
+  const ampm = hours >= 12 ? "pm" : "am";
+  hours = hours % 12 || 12;
+  return `${month} ${day}, ${year} at ${hours}:${minutes} ${ampm}`;
 }
 
 export function RemoteFoldersSection({
@@ -49,159 +47,165 @@ export function RemoteFoldersSection({
   onDeleteFromServer,
   onBrowseFolder,
 }: RemoteFoldersSectionProps) {
-  const [currentPage, setCurrentPage] = useState(1);
-  const [cardContextMenu, setCardContextMenu] = useState<{ x: number; y: number; folder: RemoteFolder } | null>(null);
-
-  const totalPages = Math.max(1, Math.ceil(remoteFolders.length / FOLDERS_PER_PAGE));
-  const paginatedFolders = useMemo(() => {
-    const validPage = Math.min(currentPage, totalPages);
-    const start = (validPage - 1) * FOLDERS_PER_PAGE;
-    return remoteFolders.slice(start, start + FOLDERS_PER_PAGE);
-  }, [remoteFolders, currentPage, totalPages]);
+  const [cardContextMenu, setCardContextMenu] = useState<{
+    x: number;
+    y: number;
+    folder: RemoteFolder;
+  } | null>(null);
 
   return (
     <InView triggerOnce>
       {({ inView, ref }) => (
         <>
-        <div
-          ref={ref}
-          className="flex gap-6 w-full flex-col border border-grey-80 rounded-lg p-4 relative bg-[url('/assets/rpc-bg-layer.png')] bg-repeat-round bg-cover"
-        >
-          <div className="w-full">
-            <RevealTextLine
-              rotate
-              reveal={inView}
-              parentClassName="w-full"
-              className="delay-300 w-full"
-            >
-              <SectionHeader
-                Icon={CloudDownload}
-                title="Sync from Other Devices"
-                subtitle="Folders synced from your other machines. Start syncing to download them to this device."
-              />
-            </RevealTextLine>
+          <div
+            ref={ref}
+            className={cn(
+              "transition-all duration-500 ease-out delay-150",
+              inView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-3"
+            )}
+          >
+            <SettingsCard
+              label="Sync from Other Devices"
+              icon={<Icons.HardDriveUpload className="size-4" />}
+      >
+        {/* Content */}
+        {isLoading ? (
+          <div>
+            <FolderRowSkeleton />
+            <FolderRowSkeleton />
+            <FolderRowSkeleton />
           </div>
-
-          <div className="w-full">
-            <div className="space-y-3 w-full">
-              {isLoading ? (
-                <div className="flex justify-center py-8">
-                  <Icons.Loader className="size-6 animate-spin text-primary-50" />
-                </div>
-              ) : remoteFolders.length > 0 ? (
-                <div className="grid grid-cols-1 @[56rem]:grid-cols-2 gap-2 w-full">
-                  {paginatedFolders.map((folder) => (
-                    <div
-                      key={folder.folderName}
-                      className="p-4 border border-grey-80 rounded-lg bg-white hover:bg-grey-98 transition-colors"
-                      onContextMenu={(e) => {
-                        e.preventDefault();
-                        setCardContextMenu({ x: e.clientX, y: e.clientY, folder });
-                      }}
-                    >
-                      <div className="flex items-start justify-between">
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 mb-1">
-                            <Folder className="size-4 text-primary-50 flex-shrink-0" />
-                            <Tooltip.Provider delayDuration={200}>
-                              <Tooltip.Root>
-                                <Tooltip.Trigger asChild>
-                                  <span className="font-medium text-base text-grey-10 truncate cursor-default">
-                                    {middleTruncate(folder.folderName, 30)}
-                                  </span>
-                                </Tooltip.Trigger>
-                                {middleTruncate(folder.folderName, 30) !== folder.folderName && (
-                                  <Tooltip.Portal>
-                                    <Tooltip.Content
-                                      side="bottom"
-                                      className="z-[9999] max-w-[25rem] bg-white border border-grey-80 rounded-lg px-3 py-2 text-xs font-medium text-grey-40 shadow-lg break-all animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95"
-                                      sideOffset={4}
-                                    >
-                                      {folder.folderName}
-                                      <Tooltip.Arrow className="fill-white" width={12} height={6} />
-                                    </Tooltip.Content>
-                                  </Tooltip.Portal>
-                                )}
-                              </Tooltip.Root>
-                            </Tooltip.Provider>
-                            <span className="text-xs font-medium px-2 py-0.5 rounded border bg-grey-95 text-grey-50 border-grey-80 flex-shrink-0 whitespace-nowrap">
-                              {folder.deviceName}
-                            </span>
-                          </div>
-                          <div className="flex items-center gap-x-3 gap-y-0.5 flex-wrap text-xs text-grey-60 mt-1">
-                            {folder.fileCount > 0 && (
-                              <span className="flex items-center gap-1 whitespace-nowrap">
-                                <Icons.File2 className="size-3" />
-                                {folder.fileCount}{" "}
-                                {folder.fileCount === 1 ? "file" : "files"}
-                              </span>
-                            )}
-                            {folder.totalBytes > 0 && (
-                              <span className="flex items-center gap-1 whitespace-nowrap">
-                                <HardDrive className="size-3" />
-                                {formatBytes(folder.totalBytes)}
-                              </span>
-                            )}
-                            {folder.lastModified > 0 && (
-                              <span className="flex items-center gap-1 whitespace-nowrap">
-                                <Clock className="size-3" />
-                                {formatDate(folder.lastModified)}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-
-                        <TableActionMenu
-                          dropdownTitle=""
-                          items={[
-                            {
-                              icon: <FolderSearch className="size-4" />,
-                              itemTitle: "Browse Contents",
-                              onItemClick: () => onBrowseFolder(folder),
-                            },
-                            {
-                              icon: <CloudDownload className="size-4" />,
-                              itemTitle: "Sync to This Device",
-                              onItemClick: () => onSyncFolder(folder),
-                            },
-                            {
-                              icon: <ServerCrash className="size-4" />,
-                              itemTitle: "Delete from Server",
-                              variant: "destructive" as const,
-                              onItemClick: () => onDeleteFromServer(folder.folderName),
-                            },
-                          ] satisfies ActionItem[]}
-                        >
-                          <Button variant="ghost" size="md" className="h-8 w-8 p-0 text-grey-70 action-menu-area">
-                            <MoreVertical className="size-4" />
-                          </Button>
-                        </TableActionMenu>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="p-6 border border-dashed border-grey-80 rounded-lg text-center bg-white/60">
-                  <CloudDownload className="size-8 mx-auto mb-2 text-grey-60" />
-                  <p className="text-sm text-grey-50 mb-1">
-                    No remote folders found
-                  </p>
-                  <p className="text-xs text-grey-60">
-                    Folders synced from your other devices will appear here
-                  </p>
-                </div>
-              )}
-              {remoteFolders.length > FOLDERS_PER_PAGE && (
-                <Pagination
-                  currentPage={Math.min(currentPage, totalPages)}
-                  totalPages={totalPages}
-                  setPage={setCurrentPage}
-                  className="mt-3"
-                />
-              )}
-            </div>
+        ) : remoteFolders.length === 0 ? (
+          <div className="flex min-h-[139px] flex-col items-center justify-center gap-[5px] px-4 py-6 text-center">
+            <p className="font-geist text-[14px] font-medium leading-[20px] tracking-[-0.28px] text-black dark:text-white">
+              No Remote Folder Found
+            </p>
+            <p className="font-geist w-[262px] max-w-full text-[14px] font-medium leading-[17px] tracking-[-0.28px] text-[#7D7D7D] dark:text-grey-dark-600">
+              Folder synced from your devices will appear here
+            </p>
           </div>
-        </div>
+        ) : (
+          <div className="max-h-[420px] overflow-y-auto">
+            {remoteFolders.map((folder) => (
+              <div
+                key={folder.folderName}
+                className="flex items-start justify-between p-3 hover:bg-grey-light-400 dark:hover:bg-white/5 transition-colors"
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setCardContextMenu({ x: e.clientX, y: e.clientY, folder });
+                }}
+              >
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-[7px] flex-wrap">
+                    <Folder className="size-4 text-primary-50 flex-shrink-0" />
+                    <Tooltip.Provider delayDuration={200}>
+                      <Tooltip.Root>
+                        <Tooltip.Trigger asChild>
+                          <span className="text-sm font-medium text-grey-10 dark:text-white cursor-default">
+                            {middleTruncate(folder.folderName, 30)}
+                          </span>
+                        </Tooltip.Trigger>
+                        {middleTruncate(folder.folderName, 30) !==
+                          folder.folderName && (
+                          <Tooltip.Portal>
+                            <Tooltip.Content
+                              side="bottom"
+                              sideOffset={4}
+                              className="z-[9999] max-w-[25rem] bg-white border border-grey-80 rounded-lg px-3 py-2 text-xs font-medium text-grey-40 shadow-lg break-all animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95"
+                            >
+                              {folder.folderName}
+                              <Tooltip.Arrow
+                                className="fill-white"
+                                width={12}
+                                height={6}
+                              />
+                            </Tooltip.Content>
+                          </Tooltip.Portal>
+                        )}
+                      </Tooltip.Root>
+                    </Tooltip.Provider>
+
+                    {(folder.totalBytes > 0 ||
+                      folder.fileCount > 0 ||
+                      folder.lastModified > 0) && (
+                      <span className="h-4 w-px bg-grey-80 dark:bg-[#3a3a3a] flex-shrink-0" />
+                    )}
+
+                    {folder.totalBytes > 0 && (
+                      <span className="flex items-center gap-1 text-xs text-grey-60 dark:text-grey-dark-600 whitespace-nowrap">
+                        <Icons.Database className="size-3.5 text-[#1F50BD]" />
+                        {formatBytes(folder.totalBytes)}
+                      </span>
+                    )}
+                    {folder.fileCount > 0 && (
+                      <>
+                        {folder.totalBytes > 0 && (
+                          <span aria-hidden="true" className="w-[3px] h-[3px] rounded-full bg-[#9D9D9D] dark:bg-[#5a5a5a] flex-shrink-0" />
+                        )}
+                        <span className="flex items-center gap-1 text-xs text-grey-60 dark:text-grey-dark-600 whitespace-nowrap">
+                          <Icons.Folders className="size-3.5 text-[#1F50BD]" />
+                          {folder.fileCount}{" "}
+                          {folder.fileCount === 1 ? "file" : "files"}
+                        </span>
+                      </>
+                    )}
+                    {folder.lastModified > 0 && (
+                      <>
+                        {(folder.totalBytes > 0 || folder.fileCount > 0) && (
+                          <span aria-hidden="true" className="w-[3px] h-[3px] rounded-full bg-[#9D9D9D] dark:bg-[#5a5a5a] flex-shrink-0" />
+                        )}
+                        <span className="flex items-center gap-1 text-xs text-grey-60 dark:text-grey-dark-600 whitespace-nowrap">
+                          <Icons.Clock8 className="size-3.5 text-[#1F50BD]" />
+                          {formatDate(folder.lastModified)}
+                        </span>
+                      </>
+                    )}
+                  </div>
+                  {folder.deviceName && (
+                    <p className="font-geist text-[14px] font-medium leading-normal text-[#0A0A0A]/40 dark:text-white/40 mt-2 ml-6 cursor-default">
+                      {folder.deviceName}
+                    </p>
+                  )}
+                </div>
+
+                <TableActionMenu
+                  dropdownTitle=""
+                  items={
+                    [
+                      {
+                        icon: <FolderSearch className="size-4" />,
+                        itemTitle: "Browse Contents",
+                        onItemClick: () => onBrowseFolder(folder),
+                      },
+                      {
+                        icon: <CloudDownload className="size-4" />,
+                        itemTitle: "Sync to This Device",
+                        onItemClick: () => onSyncFolder(folder),
+                      },
+                      {
+                        icon: <ServerCrash className="size-4" />,
+                        itemTitle: "Delete from Server",
+                        variant: "destructive" as const,
+                        onItemClick: () => onDeleteFromServer(folder.folderName),
+                      },
+                    ] satisfies ActionItem[]
+                  }
+                >
+                  <Button
+                    variant="ghost"
+                    size="auto"
+                    className="h-8 w-8 p-0 action-menu-area mt-0.5 flex-shrink-0 rounded-md text-grey-70 hover:text-grey-30 hover:bg-grey-90 dark:text-grey-dark-600 dark:hover:text-white dark:hover:bg-white/10 transition-colors"
+                  >
+                    <Icons.EllipsisVertical className="size-[18px]" />
+                  </Button>
+                </TableActionMenu>
+              </div>
+            ))}
+          </div>
+        )}
+
+            </SettingsCard>
+          </div>
 
       {cardContextMenu && (
         <FolderCardContextMenu
@@ -228,7 +232,7 @@ export function RemoteFoldersSection({
           ]}
         />
       )}
-      </>
+        </>
       )}
     </InView>
   );

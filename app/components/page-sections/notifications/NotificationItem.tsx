@@ -1,21 +1,26 @@
+"use client";
+
 import React, { useState } from "react";
-import { IconComponent } from "@/app/lib/types";
-import { AbstractIconWrapper, Icons } from "@/components/ui";
-import { cn } from "@/app/lib/utils";
-import { handleButtonLink } from "@/app/lib/utils/links";
-import NotificationType from "./NotificationType";
-import { InView } from "react-intersection-observer";
-import RevealTextLine from "@/components/ui/reveal-text-line";
 import TimeAgo from "react-timeago";
+import { IconComponent } from "@/app/lib/types";
+import { cn } from "@/app/lib/utils";
 import NotificationContextMenu from "./NotificationContextMenu";
-import { useRouter } from "next/navigation";
 import { useSetAtom } from "jotai";
 import { deleteNotification } from "@/app/lib/helpers/notificationsDb";
+import { notificationCategoryLabel } from "@/app/lib/helpers/notificationCategories";
 import { refreshUnreadCountAtom } from "@/components/page-sections/notifications/notificationStore";
-import { useAppVersion } from "@/lib/hooks/useAppVersion";
+import { Trash2 } from "lucide-react";
 
-// Helper to compare semver versions (returns true if v1 >= v2)
-import { isVersionGreaterOrEqual } from "@/lib/utils/versionCompare";
+const TYPE_ACCENT: Record<string, string> = {
+  Subscription: "#ff6d61",
+  Balance:      "#ff6d61",
+  Credits:      "#ff6d61",
+  Files:        "#3067dd",
+  Hippius:      "#3067dd",
+  Blockchain:   "#3067dd",
+  Storage:      "#3067dd",
+};
+const READ_ACCENT = "#b6b6b6";
 
 interface NotificationItemProps {
   id?: number;
@@ -32,52 +37,28 @@ interface NotificationItemProps {
   selected?: boolean;
   onClick?: () => void;
   onReadStatusChange?: (id: number, isUnread: boolean) => void;
-  onRefresh?: () => void; // Added for refreshing notification list
+  onRefresh?: () => void;
 }
 
 const NotificationItem: React.FC<NotificationItemProps> = ({
   id,
-  icon: Icon,
   notificationType,
-  notificationSubType,
   notificationText,
-  notificationDescription,
   notificationTime,
   timestamp,
-  buttonText,
-  buttonLink,
   unread = false,
   selected = false,
   onClick,
   onReadStatusChange,
   onRefresh,
 }) => {
-  const [contextMenu, setContextMenu] = useState<{
-    x: number;
-    y: number;
-  } | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [isArchiving, setIsArchiving] = useState(false);
-  // Shared across all rows via a module-memoized promise — one IPC per session
-  // instead of one per notification row.
-  const currentVersion = useAppVersion();
-  const router = useRouter();
   const refreshUnread = useSetAtom(refreshUnreadCountAtom);
 
-  // For Hippius update notifications, hide button if already on this version or newer
-  const isUpdateNotification =
-    notificationType === "Hippius" &&
-    notificationSubType &&
-    buttonLink === "Install Update";
-  const isUpdateAlreadyInstalled =
-    isUpdateNotification &&
-    currentVersion &&
-    isVersionGreaterOrEqual(currentVersion, notificationSubType);
-  const shouldShowButton =
-    buttonText && buttonLink && !isUpdateAlreadyInstalled;
-
-  const handleLinkClick = (e: React.MouseEvent) => {
-    handleButtonLink(e, buttonLink, router);
-  };
+  const accentColor = unread
+    ? (TYPE_ACCENT[notificationType] ?? "#3067dd")
+    : READ_ACCENT;
 
   const handleReadStatusToggle = () => {
     if (id && onReadStatusChange) {
@@ -91,18 +72,14 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
   };
 
   const handleDelete = async (e: React.MouseEvent) => {
-    e.stopPropagation(); // Prevent triggering onClick
-
+    e.stopPropagation();
     if (!id) return;
-
     try {
       setIsArchiving(true);
-      await new Promise((r) => setTimeout(r, 160)); // Animation delay
+      await new Promise((r) => setTimeout(r, 160));
       await deleteNotification(id);
       await refreshUnread();
-      if (onRefresh) {
-        onRefresh();
-      }
+      if (onRefresh) onRefresh();
     } catch (error) {
       console.error("Failed to delete notification:", error);
     }
@@ -110,102 +87,63 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
 
   return (
     <>
-      <InView triggerOnce>
-        {({ inView, ref }) => (
-          <div
-            ref={ref}
-            className={cn(
-              "flex items-start gap-3 p-3 hover:bg-grey-90 hover:rounded rounded-lg mb-3 bg-white group cursor-pointer transition duration-200 relative",
-              selected && "border border-primary-70 bg-primary-100",
-              isArchiving && "opacity-0 translate-y-1 scale-[0.98]",
-            )}
-            onClick={onClick}
-            onContextMenu={handleContextMenu}
-          >
-            <AbstractIconWrapper className="min-w-[2rem] size-8 text-primary-40">
-              <Icon className="absolute text-primary-40 size-5" />
-            </AbstractIconWrapper>
-
-            <div className="flex justify-between gap-4 w-full">
-              <div className="flex flex-col">
-                {/* Type badge  */}
-                <RevealTextLine rotate reveal={inView} className="delay-200">
-                  <NotificationType type={notificationType} />
-                </RevealTextLine>
-
-                {/* Notification text */}
-                <RevealTextLine rotate reveal={inView} className="delay-300">
-                  <p
-                    className="text-sm font-medium text-grey-10 leading-5 mb-0.5 truncate max-w-[18.75rem]"
-                    title={notificationText}
-                  >
-                    {notificationText}
-                  </p>
-                </RevealTextLine>
-
-                {/* Description */}
-                {notificationDescription && (
-                  <RevealTextLine rotate reveal={inView} className="delay-350">
-                    <p
-                      className="text-xs text-grey-50 leading-4 mb-1 truncate max-w-[18.75rem]"
-                      title={notificationDescription}
-                    >
-                      {notificationDescription}
-                    </p>
-                  </RevealTextLine>
-                )}
-
-                {/* Time */}
-                <RevealTextLine rotate reveal={inView} className="delay-400">
-                  <span className="text-xs text-grey-60 leading-[1.125rem]">
-                    {timestamp ? (
-                      <TimeAgo date={timestamp} />
-                    ) : (
-                      notificationTime
-                    )}
-                  </span>
-                </RevealTextLine>
-              </div>
-
-              {/* Button & unread symbol */}
-              <div className="flex gap-3">
-                {shouldShowButton && (
-                  <RevealTextLine rotate reveal={inView} className="delay-500">
-                    <button
-                      onClick={handleLinkClick}
-                      className="text-sm font-medium rounded py-2 self-start px-3 text-grey-10 flex items-center justify-center bg-grey-90 group-hover:bg-grey-100 whitespace-nowrap"
-                    >
-                      {buttonText}
-                      <Icons.ArrowRight className="size-[0.875rem] text-grey-10 ml-1" />
-                    </button>
-                  </RevealTextLine>
-                )}
-
-                <div
-                  className={cn("flex size-2 bg-primary-50 rounded-full", {
-                    "opacity-0": !unread,
-                    "opacity-100": unread,
-                  })}
-                ></div>
-              </div>
-            </div>
-
-            {/* Delete button - appears on hover */}
-            <button
-              className={cn(
-                "absolute top-6 right-2 opacity-0 group-hover:opacity-100 transition-opacity text-grey-60 hover:text-error-50",
-                !unread && "top-4",
-              )}
-              onClick={handleDelete}
-              title="Delete notification"
-            >
-              <Icons.Trash className="size-4" />
-            </button>
-          </div>
+      <div
+        className={cn(
+          "flex items-start gap-2.5 px-2.5 py-3 rounded-lg cursor-pointer transition-colors group relative",
+          selected
+            ? "bg-[#dfe5f7] ring-1 ring-[#618ce8] dark:bg-[rgba(97,140,232,0.2)] dark:ring-[#618ce8]"
+            : unread
+            ? "bg-[#f8f8f8] hover:bg-[#f0f0f0] dark:bg-white/[0.02] dark:hover:bg-white/[0.05]"
+            : "hover:bg-[#f8f8f8] dark:hover:bg-white/[0.03]",
+          isArchiving && "opacity-0 scale-[0.98] transition-all duration-150"
         )}
-      </InView>
+        onClick={onClick}
+        onContextMenu={handleContextMenu}
+      >
+        {/* Accent line */}
+        <div
+          className="w-0.5 self-stretch rounded-full flex-shrink-0 min-h-[1.125rem]"
+          style={{ backgroundColor: accentColor }}
+        />
 
-      {/* Context Menu */}
+        {/* Content */}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-baseline gap-2">
+            <p className="flex-1 min-w-0 text-[14px] font-medium leading-[18.2px] truncate text-[#0a0a0a] dark:text-white">
+              {notificationCategoryLabel(notificationType)}
+            </p>
+            {/* Relative time pill — same `react-timeago` formatter the
+             *  detail view uses, so the list and detail surfaces never
+             *  drift. `timestamp` is the canonical signal (ms-precise
+             *  epoch ms from the DB); `notificationTime` is a stored
+             *  pre-formatted string used as a fallback when the row
+             *  has no numeric timestamp (legacy rows). */}
+            {(timestamp || notificationTime) && (
+              <span className="shrink-0 text-[11px] font-medium leading-[16px] tracking-[-0.22px] text-grey-50 dark:text-grey-dark-700 whitespace-nowrap">
+                {timestamp ? <TimeAgo date={timestamp} /> : notificationTime}
+              </span>
+            )}
+          </div>
+          <p className="text-[13px] font-medium leading-[16.9px] truncate mt-0.5 text-[#0a0a0a] dark:text-grey-dark-700">
+            {notificationText}
+          </p>
+        </div>
+
+        {/* Shared slot: unread dot fades out on hover, trash fades in */}
+        <div className="relative flex-shrink-0 flex items-center justify-center size-4 self-start mt-1">
+          {unread && (
+            <div className="absolute size-2 rounded-full bg-primary-50 transition-opacity duration-150 group-hover:opacity-0" />
+          )}
+          <button
+            className="absolute opacity-0 group-hover:opacity-100 transition-opacity duration-150 text-[#a3a3a3] hover:text-[#ff6d61] dark:text-[#616161] dark:hover:text-[#ff6d61]"
+            onClick={handleDelete}
+            title="Delete notification"
+          >
+            <Trash2 className="size-3.5" />
+          </button>
+        </div>
+      </div>
+
       {contextMenu && (
         <NotificationContextMenu
           x={contextMenu.x}

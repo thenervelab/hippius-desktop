@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useUserFiles } from "@/app/lib/hooks/use-user-files";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { useSetAtom, useAtomValue } from "jotai";
-import { uploadProgressAtom } from "@/app/components/page-sections/files/atoms/query-atoms";
+import { uploadProgressAtom } from "@/app/components/page-sections/drive/atoms/query-atoms";
 import { queryClientAtom } from "jotai-tanstack-query";
 import { DRIVE_STORAGE_STATS_QUERY_KEY } from "@/app/lib/hooks/api/useDriveStorageStats";
 import { toast } from "sonner";

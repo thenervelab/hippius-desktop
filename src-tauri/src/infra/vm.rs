@@ -9,14 +9,21 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 
 /// Hardware configuration template for VM provisioning (vCPUs, RAM, disk).
+///
+/// `name` is the short flavor identifier (e.g. "spark", "vault") used by the
+/// frontend to match flavors and assign UI categories. `credits_per_hour`
+/// is forwarded as JSON to preserve whichever shape the upstream API uses
+/// (number or string) — both the Templates tab and instance-row lookup
+/// just stringify it for display.
 #[derive(Serialize, Deserialize)]
 pub struct VMFlavor {
     pub id: i64,
+    pub name: String,
     pub display_name: String,
     pub cpu_cores: i64,
     pub memory_mb: i64,
     pub data_disk_gb: i64,
-    pub credits_per_hour: String,
+    pub credits_per_hour: serde_json::Value,
     pub description: Option<String>,
 }
 
@@ -30,12 +37,18 @@ pub struct VMImage {
 }
 
 /// Pre-configured application stack that can be layered onto a VM image.
+///
+/// `logo_url` carries the absolute https URL the upstream API returns for the
+/// app's brand icon — without this field, serde silently drops it on the way
+/// through Rust and the dropdown trigger/options render the generic fallback
+/// glyph instead of the real per-app logo.
 #[derive(Serialize, Deserialize)]
 pub struct VMApplication {
     pub id: i64,
     pub name: String,
     pub slug: String,
     pub description: Option<String>,
+    pub logo_url: Option<String>,
 }
 
 /// A running or stopped VM instance with its current status and metadata.
@@ -57,28 +70,40 @@ pub struct VMInstance {
 
 /// List available VM hardware flavors for the account's billing tier.
 #[tauri::command]
-pub async fn list_vm_flavors(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<Vec<VMFlavor>, AppError> {
+pub async fn list_vm_flavors(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: crate::app_state::SessionAccount,
+) -> Result<Vec<VMFlavor>, AppError> {
     let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
     Ok(client.get("/api/infrastructure/vm/flavors/", &account_id).await?)
 }
 
 /// List available base OS images for VM creation.
 #[tauri::command]
-pub async fn list_vm_images(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<Vec<VMImage>, AppError> {
+pub async fn list_vm_images(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: crate::app_state::SessionAccount,
+) -> Result<Vec<VMImage>, AppError> {
     let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
     Ok(client.get("/api/infrastructure/vm/images/", &account_id).await?)
 }
 
 /// List pre-configured application stacks that can be installed on a VM.
 #[tauri::command]
-pub async fn list_vm_applications(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<Vec<VMApplication>, AppError> {
+pub async fn list_vm_applications(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: crate::app_state::SessionAccount,
+) -> Result<Vec<VMApplication>, AppError> {
     let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
     Ok(client.get("/api/infrastructure/vm/applications/", &account_id).await?)
 }
 
 /// List all VM instances owned by the account.
 #[tauri::command]
-pub async fn list_vm_instances(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<Vec<VMInstance>, AppError> {
+pub async fn list_vm_instances(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: crate::app_state::SessionAccount,
+) -> Result<Vec<VMInstance>, AppError> {
     let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
     Ok(client.get("/api/infrastructure/vm/instances/", &account_id).await?)
 }
@@ -87,7 +112,7 @@ pub async fn list_vm_instances(state: tauri::State<'_, crate::app_state::AppStat
 #[tauri::command]
 pub async fn get_vm_instance(
     state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
+    account_id: crate::app_state::SessionAccount,
     instance_id: i64,
 ) -> Result<VMInstance, AppError> {
     let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
@@ -120,7 +145,7 @@ struct CreateVMBody {
 #[tauri::command]
 pub async fn create_vm(
     state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
+    account_id: crate::app_state::SessionAccount,
     params: CreateVMParams,
 ) -> Result<serde_json::Value, AppError> {
     // Enforce credit eligibility at the IPC boundary. Refuses to call the spawn
@@ -154,7 +179,7 @@ pub async fn create_vm(
 #[tauri::command]
 pub async fn reboot_vm(
     state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
+    account_id: crate::app_state::SessionAccount,
     instance_id: i64,
 ) -> Result<serde_json::Value, AppError> {
     info!(instance_id = instance_id, "Rebooting VM");
@@ -167,7 +192,7 @@ pub async fn reboot_vm(
 #[tauri::command]
 pub async fn start_vm(
     state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
+    account_id: crate::app_state::SessionAccount,
     instance_id: i64,
 ) -> Result<serde_json::Value, AppError> {
     info!(instance_id = instance_id, "Starting VM");
@@ -180,7 +205,7 @@ pub async fn start_vm(
 #[tauri::command]
 pub async fn stop_vm(
     state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
+    account_id: crate::app_state::SessionAccount,
     instance_id: i64,
 ) -> Result<serde_json::Value, AppError> {
     info!(instance_id = instance_id, "Stopping VM");
@@ -193,7 +218,7 @@ pub async fn stop_vm(
 #[tauri::command]
 pub async fn terminate_vm(
     state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
+    account_id: crate::app_state::SessionAccount,
     instance_id: i64,
 ) -> Result<serde_json::Value, AppError> {
     info!(instance_id = instance_id, "Terminating VM");

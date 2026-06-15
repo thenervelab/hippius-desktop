@@ -1,7 +1,7 @@
 import { useInvokeQuery } from "./useInvokeQuery";
 
 export interface TransactionObject {
-  id: number;
+  id: string;
   transaction_type: string;
   amount: number;
   transaction_date: string;

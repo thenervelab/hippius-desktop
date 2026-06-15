@@ -6,8 +6,7 @@ import VirtualMachineInfo from "./virtual-machine-info";
 import NetworksInfo from "./networks-info";
 import VncConsole from "./vnc-console";
 import useVMInstanceDetails from "@/app/lib/hooks/api/useVMInstanceDetails";
-import NoDataFound from "../../ui/NoDataFound";
-import { Server } from "lucide-react";
+import NoEntriesFound from "../../ui/NoEntriesFound";
 
 const InstanceDetails: React.FC = () => {
   const searchParams = useSearchParams();
@@ -37,13 +36,11 @@ const InstanceDetails: React.FC = () => {
 
   if (error) {
     return (
-      <NoDataFound
-        icon={Server}
+      <NoEntriesFound
         title="Failed to load instance"
         description={
           error instanceof Error ? error.message : "An error occurred"
         }
-        showButton={false}
       />
     );
   }
@@ -51,11 +48,9 @@ const InstanceDetails: React.FC = () => {
   // Only show "not found" after loading is complete and there's no data
   if (!loading && !instanceData) {
     return (
-      <NoDataFound
-        icon={Server}
+      <NoEntriesFound
         title="Instance not found"
         description="The instance you're looking for doesn't exist or has been deleted."
-        showButton={false}
       />
     );
   }
@@ -74,13 +69,17 @@ const InstanceDetails: React.FC = () => {
       {/* Display content based on activeTab */}
       <div className="animate-in fade-in duration-300">
         {activeTab === "Dashboard" ? (
-          <div className="grid grid-cols-1 @md:grid-cols-2 gap-4 items-start">
+          <div className="grid grid-cols-1 @md:grid-cols-2 gap-[24px] items-start">
             <VirtualMachineInfo
               instanceData={instanceData}
               isLoading={loading}
               onRefresh={() => refetch()}
             />
-            <NetworksInfo instanceData={instanceData} isLoading={loading} />
+            <NetworksInfo
+              instanceData={instanceData}
+              isLoading={loading}
+              onRefresh={() => refetch()}
+            />
           </div>
         ) : activeTab === "Console" ? (
           <VncConsole
@@ -94,6 +93,7 @@ const InstanceDetails: React.FC = () => {
                     flavor: instanceData.flavor.name,
                     image: instanceData.image,
                     public_ip: instanceData.public_ip,
+                    nebula_ip: instanceData.nebula_ip || null,
                     created_at: instanceData.created_at,
                   }
                 : undefined

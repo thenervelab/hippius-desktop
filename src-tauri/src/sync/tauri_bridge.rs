@@ -85,6 +85,17 @@ impl TauriSyncBridge {
     }
 }
 
+/// Resolve `(pool, owner)` for durably persisting file failures, or `None` when
+/// no account / DB pool is available (logged out, pool not yet ready) — in which
+/// case persistence is simply skipped. `owner` is the hashed account key, the
+/// same scoping `sync_paths` uses, so failure rows stay private to the account.
+fn failure_persist_ctx(app_state: &crate::app_state::AppState) -> Option<(sqlx::SqlitePool, String)> {
+    let account_id = app_state.current_account_id().ok()?;
+    let owner = crate::auth::account_key::account_key(&account_id);
+    let pool = app_state.pool().ok()?.clone();
+    Some((pool, owner))
+}
+
 /// Inspect the progress tracker after a sync cycle completes to update
 /// per-file failure counters. If any file reaches the threshold, emit
 /// the `FILES_FAILED_REPEATEDLY` event to trigger the frontend modal.
@@ -122,12 +133,32 @@ fn update_failure_counts(app: &AppHandle, label: &str) {
     if failed_files.is_empty() {
         // All files succeeded for this label -- clear counters.
         failure_state.clear_all_for_label(label);
+        // Mirror the clear into the durable store (best-effort, off the
+        // sync thread since this fn is sync and DB writes are async).
+        if let Some((pool, owner)) = failure_persist_ctx(&app_state) {
+            let label = label.to_string();
+            tauri::async_runtime::spawn(async move {
+                let _ = super::failure_repo::clear_failures_for_label(&pool, &owner, &label).await;
+            });
+        }
         return;
     }
 
     // Clear counters for files that succeeded this cycle.
     for path in &succeeded_paths {
         failure_state.clear_failure(label, path);
+    }
+    // Mirror the per-file success clears into the durable store.
+    if !succeeded_paths.is_empty()
+        && let Some((pool, owner)) = failure_persist_ctx(&app_state)
+    {
+        let label = label.to_string();
+        let paths = succeeded_paths.clone();
+        tauri::async_runtime::spawn(async move {
+            for p in &paths {
+                let _ = super::failure_repo::clear_failure(&pool, &owner, &label, p).await;
+            }
+        });
     }
 
     // Increment counters for failed files.
@@ -149,6 +180,105 @@ fn update_failure_counts(app: &AppHandle, label: &str) {
             );
         }
     }
+}
+
+/// Run the canonical post-cycle cleanup for a successfully completed sync
+/// cycle, then emit `SYNC_COMPLETED`.
+///
+/// This is the single source of truth for the "a sync cycle finished
+/// successfully" transition. Both the auto-sync engine (`on_event`'s
+/// `SyncCompleted` arm) and the reviewed-conflict command
+/// (`crate::sync::control::sync_with_conflict_resolutions`) route through here,
+/// so the per-label cleanup cannot drift between the two completion paths.
+/// Routing both through here keeps the reviewed path from skipping the cleanup
+/// below — otherwise it would leave a stuck "Preparing sync…" widget, a stale
+/// pending-upload banner, stale repeated-failure counters, and a detail-less
+/// completion notification after a reviewed sync.
+///
+/// `payload.files` is ignored on input and replaced with the cycle's completed
+/// files collected from session state — callers pass `Vec::new()`. `files_failed`
+/// is logged only (per-file detail already flowed through `SyncEvent::FileFailed`);
+/// the reviewed path, which has no cycle-level failure count, passes `0`.
+pub(crate) fn handle_sync_completed(app: &AppHandle, mut payload: events::SyncCompletedPayload, files_failed: usize) {
+    use tauri::Manager;
+
+    if files_failed > 0 {
+        tracing::warn!(label = %payload.label, files_failed = files_failed, "sync cycle completed with per-file failures");
+    }
+
+    let app_state = app.state::<crate::app_state::AppState>();
+    // Clear the preparing override for this label BEFORE the snapshot emit so a
+    // cycle that completes with an empty plan (no merge_into_session) doesn't
+    // leak a stuck "Preparing sync…" widget after the cycle ends.
+    app_state.preparing.clear(&payload.label);
+    app_state.sync.emit_snapshot(true);
+
+    // Defensive banner clear, scoped to THIS label and epoch-gated so an
+    // overlapping in-flight cycle's completion cannot prematurely clear a NEW
+    // upload's banner. Idempotent — the common case (a real upload already
+    // cleared it) is a no-op.
+    {
+        let epoch = app_state.sync_session_epoch.load(std::sync::atomic::Ordering::SeqCst);
+        app_state.upload_processing.clear_if_session_advanced(app, &payload.label, epoch);
+    }
+
+    // Update per-file failure counters from the finalized session.
+    update_failure_counts(app, &payload.label);
+
+    // Snapshot the cycle's completed files from session state before the next
+    // cycle starts. Capped by MAX_NOTIFICATION_FILES and again by the reported
+    // completion counts so a multi-cycle residue of stale Completed files can't
+    // over-report.
+    let reported_count = payload.files_uploaded + payload.files_downloaded + payload.files_deleted_locally + payload.files_deleted_remotely;
+    let max_files = reported_count.min(crate::sync::progress::MAX_NOTIFICATION_FILES);
+    payload.files = crate::sync::progress::collect_cycle_files_for_label(&app_state.sync, &payload.label, max_files);
+
+    let _ = app.emit(events::SYNC_COMPLETED, payload);
+}
+
+/// Single source of truth for the sync-ERROR transition, shared by the auto-sync
+/// bridge ([`SyncEventHandler::on_event`]'s `SyncError` arm) and the
+/// reviewed-conflict command ([`crate::sync::control::sync_with_conflict_resolutions`]).
+///
+/// Like [`handle_sync_completed`], this exists so the two paths can't drift. It:
+/// 1. DROPS cancels — any error equal to [`events::CANCELLED_MARKER`] (every
+///    user-initiated pause/remove/logout teardown and the stall-watchdog
+///    self-cancel stringifies to it) is silenced so it never becomes a persisted
+///    "Sync Failed" notification; the preparing widget is still cleared.
+/// 2. For a REAL error, runs the epoch-gated, per-label defensive clears
+///    (upload-processing banner, preparing override, 402 credits counter) so an
+///    abort mid-cycle can't leak a stuck banner, then emits `SYNC_ERROR`.
+///
+/// Sharing this with the reviewed-conflict path keeps a cancel during a
+/// reviewed sync from surfacing a spurious "Sync Failed" and from skipping the
+/// defensive clears.
+pub(crate) fn handle_sync_error(app: &AppHandle, payload: events::SyncErrorPayload) {
+    use tauri::Manager;
+    let app_state = app.state::<crate::app_state::AppState>();
+
+    // 1. Cancels are never user-actionable — silence them, but still clear the
+    //    preparing widget (a paused/removed drive would otherwise leak a stuck
+    //    "Preparing sync…" badge). Banner clear is skipped for cancels (handled
+    //    by stop_sync).
+    if payload.error == events::CANCELLED_MARKER {
+        if app_state.preparing.clear(&payload.label) {
+            app_state.sync.emit_snapshot(true);
+        }
+        tracing::debug!(label = %payload.label, "Silenced sync cancel (not emitted as error)");
+        return;
+    }
+
+    // 2. Real error: epoch-gated, label-scoped defensive clears so an abort
+    //    mid-encryption (before the first-chunk path raised the banner) can't
+    //    leave a stuck banner / preparing override / 402 counter.
+    {
+        let epoch = app_state.sync_session_epoch.load(std::sync::atomic::Ordering::SeqCst);
+        app_state.upload_processing.clear_if_session_advanced(app, &payload.label, epoch);
+        app_state.preparing.clear(&payload.label);
+        app_state.credits_exhausted.clear(&payload.label);
+    }
+
+    let _ = app.emit(events::SYNC_ERROR, payload);
 }
 
 impl SyncEventHandler for TauriSyncBridge {
@@ -198,37 +328,15 @@ impl SyncEventHandler for TauriSyncBridge {
                     // before the user sees it.
                     app_state.credits_exhausted.clear(&label);
 
-                    // Per-label check (Task 4.1): an IPC-initiated
-                    // upload banner is only an "already signalling"
-                    // affordance for ITS OWN drive. A banner active
-                    // on drive A must not suppress the preparing
-                    // widget for drive B — the pre-Task-4.1 global
-                    // `snapshot()` did exactly that and was Bug 4
-                    // in the original 402 diagnosis.
-                    let banner_active_for_label = app_state.upload_processing.is_active_for(&label);
-                    if !banner_active_for_label && app_state.preparing.mark_preparing(&label) {
-                        // Newly inserted — push a snapshot so the
-                        // widget reflects preparing within one tick
-                        // of `SyncStarted`. Subsequent SyncStarted
-                        // for the same label inside the same window
-                        // (rapid file-watcher re-triggers) return
-                        // false from `mark_preparing` and skip this
-                        // re-emit.
-                        //
-                        // `emit_snapshot` synchronously re-enters this
-                        // same `on_event` with `ProgressSnapshot`;
-                        // that path will reacquire the preparing
-                        // mutex. Safe because `PreparingState::mark_preparing`
-                        // drops its `MutexGuard` at its function
-                        // boundary (the return value is a `bool`, not
-                        // a guard), so the lock is released before
-                        // we get here. A future refactor that inlines
-                        // `mark_preparing` and accidentally extends
-                        // the guard's scope would deadlock on the
-                        // non-reentrant `std::sync::Mutex` — keep
-                        // the boundary.
-                        app_state.sync.emit_snapshot(true);
-                    }
+                    // The "preparing" override is deliberately NOT marked here:
+                    // `SyncStarted` fires before the plan is known, so marking
+                    // it here would paint the red "Preparing sync…" widget/tray
+                    // state for the entire scan + remote-fetch (indexing) window
+                    // of every cycle — including periodic no-op cycles with zero
+                    // work, flashing the tray icon red on a loop. It is marked
+                    // in the `PlanReady` arm instead, gated on a non-empty plan,
+                    // so it only appears once there is real work to do. See the
+                    // `PlanReady` arm below and `sync::preparing`.
                 }
                 cap_file_list(&mut upload_files);
                 cap_file_list(&mut download_files);
@@ -259,71 +367,14 @@ impl SyncEventHandler for TauriSyncBridge {
                 conflicts_skipped,
                 files_failed,
             } => {
-                // Cycle-level failure counter is observable here only for
-                // logging — the per-file detail already flowed through
-                // `SyncEvent::FileFailed` (one event per failing file) and
-                // the snapshot's `failed_files` aggregate. Surfacing it
-                // again as a Tauri event would duplicate signals the FE
-                // already consumes; a warn-level log preserves the
-                // operability signal for backend operators.
-                if files_failed > 0 {
-                    tracing::warn!(
-                        label = %label,
-                        files_failed = files_failed,
-                        "sync cycle completed with per-file failures"
-                    );
-                }
-                use tauri::Manager;
-
-                // Belt-and-suspenders snapshot emit. As of hcfs >= a26f4296,
-                // `finalize_session_for_label` already emits a snapshot at
-                // its exit, so the success and conflicts-skipped code paths
-                // are covered upstream. This emit additionally covers the
-                // `ConflictsPending` branch in `dispatch_sync_result` which
-                // fires `SyncCompleted` without calling
-                // `finalize_session_for_label` — without it the UI would
-                // miss the conflict-pending transition. Idempotent if the
-                // upstream emit already fired this cycle.
-                let app_state = app.state::<crate::app_state::AppState>();
-                // Clear the preparing override for this label BEFORE
-                // the snapshot emit so a cycle that completes with an
-                // empty plan (no merge_into_session) doesn't leak a
-                // stuck "Preparing sync…" widget after the cycle ends.
-                app_state.preparing.clear(&label);
-                app_state.sync.emit_snapshot(true);
-
-                // Defensive clear: if the cycle finished without ever
-                // emitting a non-zero upload tick (empty plan,
-                // already-synced batch, downloads/deletes only), the
-                // first-chunk path in `handle_transfer_progress` never
-                // ran and the banner would otherwise stay raised for
-                // this label. `clear_if_session_advanced` is idempotent
-                // and gated on the per-cycle epoch, so the common case
-                // (real upload already cleared it) is a no-op and an
-                // overlapping in-flight cycle's completion cannot
-                // prematurely clear a NEW upload's banner. Scoped to
-                // THIS label (Task 4.1) — completion on drive A must
-                // not touch drive B's banner state.
-                {
-                    let epoch = app_state.sync_session_epoch.load(std::sync::atomic::Ordering::SeqCst);
-                    app_state.upload_processing.clear_if_session_advanced(&app, &label, epoch);
-                }
-
-                // Update per-file failure counters from the finalized session.
-                update_failure_counts(&app, &label);
-
-                // Snapshot the cycle's completed files from the session
-                // state BEFORE the next cycle starts. `MAX_NOTIFICATION_FILES`
-                // caps the payload so a 10k-file migration doesn't blow up
-                // the webview. The second cap — the reported completion
-                // counts — prevents a multi-cycle residue of stale
-                // Completed files in the session map from over-reporting.
-                let reported_count = files_uploaded + files_downloaded + files_deleted_locally + files_deleted_remotely;
-                let max_files = reported_count.min(crate::sync::progress::MAX_NOTIFICATION_FILES);
-                let files = crate::sync::progress::collect_cycle_files_for_label(&app_state.sync, &label, max_files);
-
-                let _ = app.emit(
-                    events::SYNC_COMPLETED,
+                // Single source of truth for the completion transition: the
+                // cleanup (preparing-clear, banner-clear, failure-counter
+                // recompute) and the per-file detail collection live in
+                // `handle_sync_completed`, shared with the reviewed-conflict
+                // command so the two paths can't drift. `files: Vec::new()` is
+                // a placeholder the helper overwrites from session state.
+                handle_sync_completed(
+                    &app,
                     events::SyncCompletedPayload {
                         label,
                         files_uploaded,
@@ -332,8 +383,9 @@ impl SyncEventHandler for TauriSyncBridge {
                         files_deleted_remotely,
                         conflicts_resolved,
                         conflicts_skipped,
-                        files,
+                        files: Vec::new(),
                     },
+                    files_failed,
                 );
             }
             SyncEvent::SyncError {
@@ -342,58 +394,11 @@ impl SyncEventHandler for TauriSyncBridge {
                 retry_in_secs,
                 consecutive_failures,
             } => {
-                // Cancels (pause, remove, logout teardown, stall watchdog
-                // self-cancel) are never user-actionable and must not produce
-                // persisted "Sync Failed" notifications. The upstream library
-                // routes every cancellation through `SyncError::Cancelled`,
-                // which stringifies to `events::CANCELLED_MARKER` — silence
-                // at the bridge so the `hcfs_sync_error` channel only
-                // carries real failures (network, auth, rate limit, etc.).
-                if error == events::CANCELLED_MARKER {
-                    // Cancels still need to clear the preparing widget
-                    // for this label — otherwise a paused/removed drive
-                    // would leak a stuck "Preparing sync…" badge until
-                    // the next sync cycle (which may never come for a
-                    // paused drive). Banner clear is intentionally
-                    // skipped for cancels (handled by `stop_sync`).
-                    use tauri::Manager;
-                    let app_state = app.state::<crate::app_state::AppState>();
-                    if app_state.preparing.clear(&label) {
-                        app_state.sync.emit_snapshot(true);
-                    }
-                    tracing::debug!(label = %label, "Silenced sync cancel (not emitted as error)");
-                    return;
-                }
-                // Defensive clear on real (non-cancel) errors: if the
-                // session aborted mid-encryption the first-chunk path
-                // never ran and the banner would stay raised. Cancels
-                // are intentionally skipped above — those go through
-                // `stop_sync`'s reset path. Epoch-gated so an error
-                // emitted by an in-flight cycle that started BEFORE
-                // a fresh `begin` cannot clear that begin's banner.
-                //
-                // Preparing override also cleared here: an error
-                // before plan_ready leaves nothing in the session, so
-                // the override would stay raised otherwise.
-                {
-                    use tauri::Manager;
-                    let app_state = app.state::<crate::app_state::AppState>();
-                    let epoch = app_state.sync_session_epoch.load(std::sync::atomic::Ordering::SeqCst);
-                    // Scoped to THIS label (Task 4.1) — an error on
-                    // drive A must not silently clear drive B's
-                    // pending upload banner.
-                    app_state.upload_processing.clear_if_session_advanced(&app, &label, epoch);
-                    app_state.preparing.clear(&label);
-                    // The cycle ended in a real error; the next
-                    // cycle should reset the 402 counter so its
-                    // banner shows only the new cycle's failures.
-                    // Cancels do NOT clear here — they early-return
-                    // above. A pause/resume/remove flow goes through
-                    // `SyncStopped`, which has its own clear.
-                    app_state.credits_exhausted.clear(&label);
-                }
-                let _ = app.emit(
-                    events::SYNC_ERROR,
+                // Cancel-drop + epoch-gated defensive clears + emit all live in
+                // `handle_sync_error`, shared with the reviewed-conflict command
+                // so the two paths can't drift.
+                handle_sync_error(
+                    &app,
                     events::SyncErrorPayload {
                         label,
                         error,
@@ -439,6 +444,37 @@ impl SyncEventHandler for TauriSyncBridge {
                 mut local_delete_files,
                 mut remote_delete_files,
             } => {
+                // Mark the "preparing" override now that the plan is known and
+                // confirms real work. Marked here (not at `SyncStarted`, which
+                // fires before the plan exists) so periodic no-op cycles —
+                // whose plan is empty — never flash the red "Preparing sync…"
+                // state during their indexing window. A genuine Finder-drop
+                // still surfaces the indicator: its plan is non-empty, and the
+                // override bridges the small gap from here until the first
+                // files-populated snapshot (after `merge_into_session`), at
+                // which point the `ProgressSnapshot` arm clears it.
+                {
+                    use tauri::Manager;
+                    let app_state = app.state::<crate::app_state::AppState>();
+                    let has_work = uploads + downloads + local_deletes + remote_deletes > 0;
+                    // An IPC-initiated upload already shows its own top-of-page
+                    // banner for this drive, so suppress the override to avoid
+                    // double-signalling. Per-label (not global) so a banner on
+                    // drive A can't suppress drive B's preparing widget.
+                    let banner_active_for_label = app_state.upload_processing.is_active_for(&label);
+                    if has_work && !banner_active_for_label && app_state.preparing.mark_preparing(&label) {
+                        // Newly inserted — push one snapshot so the widget
+                        // reflects preparing immediately. `emit_snapshot`
+                        // synchronously re-enters this same `on_event` with
+                        // `ProgressSnapshot`, which reacquires the preparing
+                        // mutex; safe because `mark_preparing` returns a `bool`
+                        // (its `MutexGuard` is dropped at the fn boundary), so
+                        // the lock is already released here. Keep that boundary
+                        // — extending the guard across this emit would deadlock
+                        // the non-reentrant `std::sync::Mutex`.
+                        app_state.sync.emit_snapshot(true);
+                    }
+                }
                 cap_file_list(&mut upload_files);
                 cap_file_list(&mut download_files);
                 cap_file_list(&mut local_delete_files);
@@ -511,10 +547,10 @@ impl SyncEventHandler for TauriSyncBridge {
                 //     "Sync Failed" rows on `hcfs_sync_error`, which per-file
                 //     failures never trigger. Suppression is architectural,
                 //     not gated on a flag.
-                //   - Activity-item enqueue: Phase 1 Task 1.1 established
-                //     that activity rows only land on server-confirmed
-                //     success. Failures are visible via the snapshot's
-                //     Error status and the FILES_FAILED_REPEATEDLY event.
+                //   - Activity-item enqueue: activity rows only land on
+                //     server-confirmed success. Failures are visible via the
+                //     snapshot's Error status and the FILES_FAILED_REPEATEDLY
+                //     event.
 
                 // InsufficientBalance failures additionally raise the
                 // "Out of credits" banner. The branch reads the typed
@@ -546,13 +582,37 @@ impl SyncEventHandler for TauriSyncBridge {
                     None
                 };
 
+                // Persist the failure durably so the FE can show *why* it failed
+                // (and offer retry) in any listing view — Recent Files, the Drive
+                // table, the tray — even across restarts. The structured `kind` is
+                // only available here at the failure site. `on_event` is sync, so
+                // the DB write is spawned off-thread; skipped when logged out.
+                let kind_payload = events::FileFailureKindPayload::from(&kind);
+                {
+                    use tauri::Manager;
+                    let app_state = app.state::<crate::app_state::AppState>();
+                    if let Some((pool, owner)) = failure_persist_ctx(&app_state) {
+                        let label = label.clone();
+                        let path = path.clone();
+                        let file_name = path.rsplit('/').next().unwrap_or(path.as_str()).to_string();
+                        let kind_for_db = kind_payload.clone();
+                        let now_ms = chrono::Utc::now().timestamp_millis();
+                        tauri::async_runtime::spawn(async move {
+                            if let Err(e) = super::failure_repo::upsert_failure(&pool, &owner, &label, &path, &file_name, &kind_for_db, now_ms).await
+                            {
+                                tracing::warn!("[failure_repo] persist failed for {label}/{path}: {e}");
+                            }
+                        });
+                    }
+                }
+
                 let _ = app.emit(
                     events::FILE_FAILED,
                     events::FileFailedPayload {
                         label,
                         path,
                         file_id,
-                        kind: events::FileFailureKindPayload::from(&kind),
+                        kind: kind_payload,
                         http_status,
                     },
                 );
@@ -574,9 +634,10 @@ impl SyncEventHandler for TauriSyncBridge {
             SyncEvent::ReviewModeTimeout { label } => {
                 let _ = app.emit(events::REVIEW_MODE_TIMEOUT, events::LabelPayload { label });
             }
+            // ActivityUpdated carries the originating drive label, so forward
+            // it and the FE clears only that drive's stale-metadata banner
+            // instead of every drive's.
             SyncEvent::ActivityUpdated { label } => {
-                // Forward the drive label (F35) so the FE clears only that
-                // drive's stale-metadata entry instead of every drive's.
                 let _ = app.emit(events::ACTIVITY_UPDATED, events::LabelPayload { label });
             }
             SyncEvent::AuthRequired { error } => {
@@ -880,7 +941,7 @@ async fn build_intent_overlay<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> S
 /// itself within one frame.
 ///
 /// **Concurrent-claim contract**: pairs with `try_claim_snapshot_fingerprint`'s
-/// `swap` (not `compare_exchange`). The emit path now runs from a
+/// `swap` (not `compare_exchange`). The emit path runs from a
 /// `tokio::spawn` (so multiple emits can race), but `swap` returns the
 /// previous value to each racer — two racers with different fingerprints
 /// both see `prev != fp` and both emit. Two racers with identical
@@ -922,9 +983,9 @@ fn snapshot_fingerprint(s: &SyncSnapshot, overlay: SyncIntentOverlay) -> u64 {
         f.path.as_ref().hash(&mut h);
         // FileAction and FileProgressStatus do NOT derive Hash in
         // hcfs-client (only Debug + Clone + PartialEq + serde). They are
-        // payload-free, so `mem::discriminant` is sufficient and avoids
-        // the per-file `format!("{:?}", …)` allocation pair the original
-        // implementation paid (10k files × 2 strings × every emit).
+        // payload-free, so `mem::discriminant` is sufficient and avoids a
+        // per-file `format!("{:?}", …)` allocation pair (10k files × 2 strings
+        // × every emit).
         std::mem::discriminant(&f.action).hash(&mut h);
         std::mem::discriminant(&f.status).hash(&mut h);
         f.bytes_transferred.hash(&mut h);
@@ -1022,8 +1083,7 @@ mod tests {
     }
 
     /// Regression: the fingerprint MUST change when `progress_bytes`
-    /// changes. Catches the "we forgot to hash field X" class of bug
-    /// the audit's #4 review was specifically about.
+    /// changes. Catches the "we forgot to hash field X" class of bug.
     #[test]
     fn fingerprint_changes_when_progress_bytes_changes() {
         let mut a = fixture_snapshot();
@@ -1037,9 +1097,9 @@ mod tests {
         assert_eq!(snapshot_fingerprint(&a, empty), snapshot_fingerprint(&b, empty));
     }
 
-    /// Regression for the review-flagged `started_at` gap: a session
-    /// that ends and immediately restarts with the same expected counts
-    /// must produce a different fingerprint.
+    /// Regression for the `started_at` gap: a session that ends and
+    /// immediately restarts with the same expected counts must produce a
+    /// different fingerprint.
     #[test]
     fn fingerprint_changes_when_started_at_changes() {
         let mut a = fixture_snapshot();
@@ -1051,7 +1111,7 @@ mod tests {
         assert_eq!(snapshot_fingerprint(&a, empty), snapshot_fingerprint(&b, empty));
     }
 
-    /// Regression for Task 7: an overlay-only change MUST flip the
+    /// Regression: an overlay-only change MUST flip the
     /// fingerprint so an emit fires even if every hcfs-side field is
     /// byte-identical. Without this, `mark_completed` advancing the
     /// intent totals while no transfer is in flight (e.g. the closing

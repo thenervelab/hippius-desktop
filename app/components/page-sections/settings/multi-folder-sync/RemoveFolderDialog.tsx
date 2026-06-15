@@ -1,11 +1,11 @@
 "use client";
 
 import React from "react";
-import { CardButton } from "@/components/ui";
-import DialogContainer from "@/components/ui/DialogContainer";
 import { Trash2 } from "lucide-react";
-import * as Dialog from "@radix-ui/react-dialog";
-import { DialogIconHeader } from "./DialogIconHeader";
+
+import { FramedDialog } from "@/components/ui/FramedDialog";
+import { Button } from "@/components/ui";
+import { cn } from "@/lib/utils";
 
 interface RemoveFolderDialogProps {
   open: boolean;
@@ -22,63 +22,54 @@ export function RemoveFolderDialog({
   onClose,
   onConfirm,
 }: RemoveFolderDialogProps) {
+  const handleClose = () => {
+    if (isRemoving) return;
+    onClose();
+  };
+
   return (
-    <Dialog.Root
+    <FramedDialog
       open={open}
-      onOpenChange={(isOpen) => {
-        if (!isOpen && !isRemoving) onClose();
-      }}
+      onClose={handleClose}
+      title="Remove Folder from Sync"
+      icon={<Trash2 className="size-5 text-white" />}
+      maxWidth="max-w-[680px]"
+      iconBgClassName="bg-[#fc7d73]"
     >
-      <DialogContainer
-        className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[26.75rem] h-fit"
-        preventClose={isRemoving}
-      >
-        <Dialog.Title className="sr-only">
-          Remove Folder from Sync
-        </Dialog.Title>
+      <p className="mb-5 text-center text-sm text-[#7D7D7D] dark:text-grey-dark-600">
+        Are you sure you want to remove{" "}
+        <span className="font-semibold text-grey-10 dark:text-white">
+          &quot;{folderName}&quot;
+        </span>{" "}
+        from sync? Local files will remain on your device, but this folder
+        will no longer be synchronized.
+      </p>
 
-        <div className="px-4 py-6 flex flex-col gap-5">
-          <div className="flex flex-col items-center text-center gap-3">
-            <DialogIconHeader
-              icon={<Trash2 className="size-5 text-grey-100" />}
-              bgColor="bg-error-50"
-            />
-            <div className="flex flex-col gap-1">
-              <h2 className="text-xl font-semibold text-grey-10">
-                Remove Folder from Sync
-              </h2>
-              <p className="text-sm text-grey-50 max-w-sm">
-                Are you sure you want to remove &quot;
-                <span className="font-semibold text-grey-10">
-                  {folderName}
-                </span>
-                &quot; from sync? Local files will remain on your device, but
-                this folder will no longer be synchronized.
-              </p>
-            </div>
-          </div>
-
-          <div className="flex gap-3">
-            <CardButton
-              className="w-full"
-              variant="secondary"
-              onClick={onClose}
-              disabled={isRemoving}
-            >
-              Cancel
-            </CardButton>
-            <CardButton
-              className="w-full"
-              variant="error"
-              onClick={onConfirm}
-              disabled={isRemoving}
-              loading={isRemoving}
-            >
-              {isRemoving ? "Removing..." : "Remove Folder"}
-            </CardButton>
-          </div>
-        </div>
-      </DialogContainer>
-    </Dialog.Root>
+      <div className="flex gap-3">
+        <Button
+          variant="defaultStable"
+          size="auto"
+          onClick={handleClose}
+          disabled={isRemoving}
+          className="h-[42px] w-full rounded-[6px] text-sm font-medium"
+        >
+          Cancel
+        </Button>
+        <Button
+          variant="destructive"
+          size="auto"
+          onClick={onConfirm}
+          disabled={isRemoving}
+          loading={isRemoving}
+          className={cn(
+            "h-[42px] w-full rounded-[6px] border text-sm font-medium",
+            "border-[#fc7d73] bg-[#fc7d73] text-white",
+            "hover:bg-[#fb695e] hover:border-[#fb695e]"
+          )}
+        >
+          {isRemoving ? "Removing..." : "Remove Folder"}
+        </Button>
+      </div>
+    </FramedDialog>
   );
 }
