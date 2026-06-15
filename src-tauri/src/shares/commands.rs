@@ -34,9 +34,9 @@ use tracing::{debug, info, warn};
 /// pattern — see the OAuth-recovery memory note. Bumping it later is
 /// a single-constant change.
 ///
-/// `hippicode.com` is the production hostname for the recipient page;
+/// `hippius.com` is the production hostname for the recipient page;
 /// the share UI in `hippius-console` is served from this origin.
-const CONSOLE_BASE_URL: &str = "https://console.hippicode.com";
+const CONSOLE_BASE_URL: &str = "https://console.hippius.com";
 
 // ─── Wire types ────────────────────────────────────────────────────────────
 
