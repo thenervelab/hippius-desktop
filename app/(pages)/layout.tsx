@@ -13,7 +13,6 @@ import ShareFileModal from "@/components/page-sections/drive/ShareFileModal";
 import RenameDialog from "@/components/page-sections/drive/RenameDialog";
 import AccountRecoveryDialog from "@/components/recovery/AccountRecoveryDialog";
 import RecoveryEventListener from "@/components/recovery/RecoveryEventListener";
-import ExistingUserRecoveryPrompt from "@/components/recovery/ExistingUserRecoveryPrompt";
 import { LocalWalletProvider } from "@/app/contexts/LocalWalletContext";
 
 export default function ProtectedLayout({
@@ -34,7 +33,6 @@ export default function ProtectedLayout({
         <RenameDialog />
         <RecoveryEventListener />
         <AccountRecoveryDialog />
-        <ExistingUserRecoveryPrompt />
         <div className="flex flex-col min-h-screen w-full bg-cover bg-center bg-no-repeat bg-fixed bg-[url('/logged-in-app-background.png')] dark:bg-[url('/logged-in-app-background-dark.png')]">
           <TopBar />
           <div className="flex flex-1 min-h-0 w-full">

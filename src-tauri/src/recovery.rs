@@ -82,15 +82,19 @@ pub(crate) async fn seed_hcfs_server_url_if_missing(pool: &SqlitePool, account_i
 
 /// Discriminant the frontend uses to route the recovery dialog.
 ///
-/// - `Signup` — no server blob and no local mnemonic. User sees the
-///   "create a recovery password" wizard, which generates the mnemonic
-///   and seals it to the server.
-/// - `Unlock` — server blob exists but no local mnemonic (fresh device
-///   returning user). User sees "enter your recovery password".
-/// - `Proceed` — local mnemonic is already present. Nothing to do;
-///   the dialog auto-skips and marks the gate resolved. Server-blob
-///   state is intentionally ignored on this branch — if a local
-///   mnemonic exists, it's authoritative.
+/// - `Signup` — no server blob, and either no local mnemonic (a
+///   first-time user) OR a local mnemonic that we can decrypt (a legacy
+///   user who pre-dates always-on recovery). Both see the "Protect Your
+///   Account" wizard: the first-time case generates and seals a fresh
+///   mnemonic, the legacy case seals the *existing* one. `seal_and_upload_mnemonic`
+///   distinguishes the two and never mints over openable local state.
+/// - `Unlock` — server blob exists but no usable local mnemonic (fresh
+///   device returning user, or a local file we can't decrypt). User
+///   sees "enter your recovery password".
+/// - `Proceed` — local mnemonic is already present and either openable
+///   with a server blob already in place, or unopenable (so sealing it
+///   is unsafe). Nothing to do; the dialog auto-skips and marks the gate
+///   resolved.
 /// - `Unknown` — the server status check failed (network / auth). FE
 ///   shows a retry prompt; we never silently fall through to `Signup`
 ///   because that would upload a fresh blob and overwrite whatever
@@ -113,14 +117,6 @@ pub struct RecoveryCheck {
     pub has_local_mnemonic: bool,
     pub updated_at: Option<String>,
     pub recommended_flow: RecoveryFlow,
-    /// `true` iff the user has a local mnemonic but no server blob —
-    /// i.e. the account pre-dates always-on recovery and is currently
-    /// unrecoverable. `ExistingUserRecoveryPrompt` reads this flag
-    /// directly instead of composing its own predicate over
-    /// `has_local_mnemonic` and `has_server_blob`, so policy changes
-    /// (rate-limiting the nag, server-side opt-out, kill switch)
-    /// stay backend-owned.
-    pub should_prompt_legacy_migration: bool,
 }
 
 /// Lightweight metadata-only fetch of the server blob.
@@ -220,40 +216,7 @@ pub(crate) async fn check_recovery_state_inner(state: &tauri::State<'_, crate::a
     };
     let (has_server_blob, updated_at) = probe_server_blob(state).await;
 
-    // Decision table (extended to distinguish "local file exists" from
-    // "local file exists AND we can actually open it"):
-    //   local=false, blob=false     → Signup  (first-time OAuth user)
-    //   local=false, blob=true      → Unlock  (returning user on fresh device)
-    //   local=true,  decryptable    → Proceed (local mnemonic is authoritative)
-    //   local=true,  !decryptable,  → Unlock  (OAuth returning device: drive_password is
-    //               blob=true                  enc_ver=1, no cached mnemonic — prompt
-    //                                          for recovery password rather than
-    //                                          silently dead-ending in
-    //                                          get_mnemonic_for_account)
-    //   local=true,  !decryptable,  → Proceed (stuck; FE surfaces the reauth error.
-    //               blob=false or None        Signup would overwrite the undecryptable
-    //                                         master file with one we can't roundtrip)
-    //   probe failed on local=false → Unknown (FE retries; never overwrite)
-    //
-    // Returning `has_server_blob` truthfully even on the Proceed branch
-    // lets the existing-user migration prompt detect
-    // "local + no blob" (needs server-side recovery setup).
-    let recommended_flow = match (local, can_decrypt, has_server_blob) {
-        // Unlock fires for two reasons: fresh device with a server blob, OR
-        // returning device whose local file exists but can't be decrypted
-        // (OAuth + drive_password enc_ver=1 + no cached mnemonic). Both
-        // resolve the same way — prompt for recovery password, download (or
-        // re-anchor to) the server blob.
-        (true, false, Some(true)) | (false, _, Some(true)) => RecoveryFlow::Unlock,
-        (true, _, _) => RecoveryFlow::Proceed,
-        (false, _, Some(false)) => RecoveryFlow::Signup,
-        (false, _, None) => RecoveryFlow::Unknown,
-    };
-
-    // Legacy-user predicate: known-absent server blob AND a local
-    // mnemonic. `Some(false)` (server said 404), not `None` (probe
-    // failed) — we only nag users we're certain are unrecoverable.
-    let should_prompt_legacy_migration = local && matches!(has_server_blob, Some(false));
+    let recommended_flow = decide_recovery_flow(local, can_decrypt, has_server_blob);
 
     info!(
         account = %short,
@@ -261,7 +224,6 @@ pub(crate) async fn check_recovery_state_inner(state: &tauri::State<'_, crate::a
         can_decrypt_local = can_decrypt,
         has_server_blob = ?has_server_blob,
         flow = ?recommended_flow,
-        legacy_migration_prompt = should_prompt_legacy_migration,
         "recovery: state decided (Signup=will upload blob, Unlock=will download blob, Proceed=local is authoritative, Unknown=probe failed)"
     );
 
@@ -270,8 +232,47 @@ pub(crate) async fn check_recovery_state_inner(state: &tauri::State<'_, crate::a
         has_local_mnemonic: local,
         updated_at,
         recommended_flow,
-        should_prompt_legacy_migration,
     })
+}
+
+/// Map the three observable recovery facts to the UI flow.
+///
+/// Pure so the decision table is unit-testable without standing up
+/// `AppState`, a pool, or the server probe. Inputs:
+/// - `local` — a `master_enc_mnemonic.json` exists on disk.
+/// - `can_decrypt` — that file (or `AuthInfo.mnemonic`) can be opened
+///   without prompting for the recovery password.
+/// - `has_server_blob` — `Some(true/false)` once the server probe
+///   settles, `None` when it failed (network/auth).
+///
+/// Decision table:
+///   local=false, blob=Some(false)        → Signup  (first-time user; mint + seal)
+///   local=true,  decryptable, blob=false → Signup  (legacy user; seal the EXISTING
+///                                                    mnemonic — `seal_and_upload_mnemonic`
+///                                                    reads it rather than minting)
+///   local=false, blob=Some(true)         → Unlock  (returning user, fresh device)
+///   local=true,  !decryptable, blob=true → Unlock  (OAuth returning device: drive_password
+///                                                    enc_ver=1, no cached mnemonic)
+///   local=true,  otherwise               → Proceed (local is authoritative, OR it's
+///                                                    unopenable so sealing it is unsafe —
+///                                                    Signup would seal a master that
+///                                                    can't reproduce the folder keys)
+///   local=false, blob=None               → Unknown (probe failed; FE retries, never
+///                                                    overwrites server state)
+///
+/// The legacy `Signup` arm is gated on `can_decrypt`: an undecryptable
+/// local file stays on `Proceed` because `seal_and_upload_mnemonic`
+/// would otherwise fall through to a freshly-minted master and either
+/// trip `validate_master_against_existing_folders` or corrupt recovery
+/// state.
+fn decide_recovery_flow(local: bool, can_decrypt: bool, has_server_blob: Option<bool>) -> RecoveryFlow {
+    match (local, can_decrypt, has_server_blob) {
+        (true, false, Some(true)) | (false, _, Some(true)) => RecoveryFlow::Unlock,
+        (true, true, Some(false)) => RecoveryFlow::Signup,
+        (true, _, _) => RecoveryFlow::Proceed,
+        (false, _, Some(false)) => RecoveryFlow::Signup,
+        (false, _, None) => RecoveryFlow::Unknown,
+    }
 }
 
 /// Probe hcfs-server for blob existence.
@@ -1078,6 +1079,44 @@ mod tests {
             .await
             .unwrap();
         assert!(!super::drive_password_is_plaintext(&pool, "5EncryptedAccount").await);
+    }
+
+    // Pins every cell of the recovery decision table — especially the
+    // legacy-migration cell `(local, decryptable, no blob) → Signup`,
+    // which routes existing users through the same "Protect Your Account"
+    // dialog as first-time users, and its safety guard
+    // `(local, !decryptable, no blob) → Proceed`, which must NOT seal an
+    // unopenable master.
+    #[test]
+    fn decide_recovery_flow_covers_decision_table() {
+        use super::{decide_recovery_flow, RecoveryFlow};
+
+        // First-time user: nothing local, server confirms no blob.
+        assert_eq!(decide_recovery_flow(false, false, Some(false)), RecoveryFlow::Signup);
+        assert_eq!(decide_recovery_flow(false, true, Some(false)), RecoveryFlow::Signup);
+
+        // Legacy user: local mnemonic, decryptable, no server blob → seal
+        // the existing one via the Protect Your Account flow.
+        assert_eq!(decide_recovery_flow(true, true, Some(false)), RecoveryFlow::Signup);
+
+        // Legacy user we CAN'T open: stay on Proceed so we never mint/seal
+        // a master that can't reproduce the on-disk folder keys.
+        assert_eq!(decide_recovery_flow(true, false, Some(false)), RecoveryFlow::Proceed);
+        assert_eq!(decide_recovery_flow(true, false, None), RecoveryFlow::Proceed);
+
+        // Local present and authoritative: blob already there, or probe failed.
+        assert_eq!(decide_recovery_flow(true, true, Some(true)), RecoveryFlow::Proceed);
+        assert_eq!(decide_recovery_flow(true, true, None), RecoveryFlow::Proceed);
+
+        // Returning user on a fresh device (or an unopenable local file)
+        // with a server blob → Unlock.
+        assert_eq!(decide_recovery_flow(false, false, Some(true)), RecoveryFlow::Unlock);
+        assert_eq!(decide_recovery_flow(false, true, Some(true)), RecoveryFlow::Unlock);
+        assert_eq!(decide_recovery_flow(true, false, Some(true)), RecoveryFlow::Unlock);
+
+        // Fresh device, probe failed: retry, never overwrite server state.
+        assert_eq!(decide_recovery_flow(false, false, None), RecoveryFlow::Unknown);
+        assert_eq!(decide_recovery_flow(false, true, None), RecoveryFlow::Unknown);
     }
 
     #[tokio::test]
