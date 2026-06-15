@@ -6,6 +6,25 @@ import { toast } from "sonner";
  * is the human-readable error from the Display impl. See
  * `src-tauri/src/error.rs::AppError::serialize`.
  */
+/**
+ * SCREAMING_SNAKE_CASE names of the Rust `NotReadyKind` variants, mirrored
+ * from `src-tauri/src/error.rs` (kept in sync with that enum's serde
+ * `rename_all = "SCREAMING_SNAKE_CASE"` and the round-trip test there). These
+ * are the stable `subkind` discriminants — match on these, never on the
+ * English Display `message`, which is free to be reworded.
+ */
+export type NotReadyKind =
+  | "SYNC_SETUP"
+  | "DRIVE_NOT_INITIALIZED"
+  | "DRIVE_NOT_UNLOCKED"
+  | "SYNC_IN_PROGRESS"
+  | "NO_ENCRYPTION_KEY"
+  | "CONFIG_MISSING"
+  | "MASTER_MNEMONIC_UNRECOVERABLE"
+  | "NOT_ENOUGH_DISK_SPACE"
+  | "SIGNING_KEY_UNAVAILABLE"
+  | "INSUFFICIENT_CREDITS";
+
 interface TauriError {
   kind?: string;
   /**
@@ -14,7 +33,7 @@ interface TauriError {
    * `"MASTER_MNEMONIC_UNRECOVERABLE"`). See `src-tauri/src/error.rs`.
    * Absent for other `AppError` variants.
    */
-  subkind?: string;
+  subkind?: NotReadyKind;
   message?: string;
 }
 
@@ -46,22 +65,17 @@ interface TauriError {
  * so substring matching against `err.message` is brittle and easy to
  * get wrong.
  *
- * `messageSubstring` is matched case-insensitively against the Display
- * output of the corresponding `NotReadyKind` variant — e.g. pass
- * `"insufficient credits"` to detect `NotReadyKind::InsufficientCredits`.
- * Omit it (or pass `undefined`) to match any `NotReady` variant.
+ * Pass the stable `NotReadyKind` discriminant (e.g. `"INSUFFICIENT_CREDITS"`)
+ * to detect a specific variant via the serialized `subkind` field. Omit it
+ * (or pass `undefined`) to match any `NotReady` variant. This deliberately
+ * does NOT look at `message` (the Display text) — that string is presentation
+ * and may be reworded without breaking control flow.
  */
-export function isNotReady(
-  error: unknown,
-  messageSubstring?: string
-): boolean {
+export function isNotReady(error: unknown, expected?: NotReadyKind): boolean {
   const e = error as TauriError | null;
   if (e?.kind !== "NotReady") return false;
-  if (messageSubstring === undefined) return true;
-  return (
-    typeof e.message === "string" &&
-    e.message.toLowerCase().includes(messageSubstring.toLowerCase())
-  );
+  if (expected === undefined) return true;
+  return e.subkind === expected;
 }
 
 /**
@@ -80,11 +94,7 @@ export function dispatchSigningError(
   onReAuth: () => void
 ): boolean {
   const e = error as TauriError | null;
-  if (
-    e?.kind === "NotReady" &&
-    typeof e.message === "string" &&
-    e.message.includes("re-entering your seed phrase")
-  ) {
+  if (e?.kind === "NotReady" && e.subkind === "SIGNING_KEY_UNAVAILABLE") {
     toast.error("Re-authentication required", {
       description:
         "This action needs your seed phrase. Log out and log back in to continue.",

@@ -58,6 +58,13 @@ pub async fn logout_full(app: tauri::AppHandle, account_id: String) -> Result<()
         warn!("stop_sync during logout failed: {e}");
     }
 
+    // 1b. Stop the block subscription so its background task doesn't outlive the
+    //     session — otherwise it keeps reconnecting and emitting
+    //     `block_number_updated` against the logged-out account, and its still-set
+    //     `running` flag would make the next login's `start_block_subscription`
+    //     CAS refuse to start a fresh subscription.
+    crate::blockchain::subscription::stop_block_subscription_inner(&app).await;
+
     // 2. Clear auth state
     let state = app.state::<crate::app_state::AppState>();
     if let Err(e) = auth_logout_internal(&state, &account_id).await {
@@ -85,6 +92,14 @@ pub async fn logout_full(app: tauri::AppHandle, account_id: String) -> Result<()
             }
         }
         Err(e) => warn!("pool unavailable during logout clear_account: {e}"),
+    }
+
+    // 5. Drop this account's cached share list so another user's share
+    //    metadata (filenames, mime types, timestamps) does not linger in
+    //    memory after logout. Account-scoped, mirroring step 4 — a second
+    //    account sharing the process keeps its own entry.
+    if let Ok(mut cache) = state.share_active_list_cache.lock() {
+        cache.remove(&account_id);
     }
 
     Ok(())

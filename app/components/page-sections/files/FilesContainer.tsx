@@ -251,9 +251,12 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     folderTab: isRecentFiles ? null : selectedFolderTab,
   });
 
-  // Infinite scroll state for list and card views
-  const { visibleData, hasMore, loadMore, resetScroll } =
-    useInfiniteScroll(filteredData);
+  // Infinite scroll state for list and card views. The keyFn samples cheap
+  // primitive fields so the source-change reset works without serializing rows.
+  const { visibleData, hasMore, loadMore, resetScroll } = useInfiniteScroll(
+    filteredData,
+    (f) => `${f.label ?? ""}::${f.actualFileName ?? f.arionHash}::${f.lastChargedAt}`
+  );
 
   // Batch update helper to prevent multiple rapid filter updates
   const updateFilters = useCallback(

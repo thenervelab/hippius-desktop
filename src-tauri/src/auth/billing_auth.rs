@@ -150,10 +150,18 @@ async fn attempt(
 pub async fn ensure_billing_auth(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<(), crate::error::AppError> {
     let pool = state.pool()?;
 
-    let config = crate::sync::config::get_hcfs_config_internal(pool, &account_id).await;
-    match config {
+    // A genuine DB failure here must NOT be silently treated as "no password
+    // configured": the old catch-all `_ => Ok(())` skipped billing auth on a
+    // pool/lock/schema error without telling the caller, and every later API
+    // call then 401'd with no breadcrumb. Propagate Db errors; a missing or
+    // unconfigured row (any other Err, or Ok without a password) stays the
+    // legitimate non-fatal skip.
+    match crate::sync::config::get_hcfs_config_internal(pool, &account_id).await {
         Ok(c) if c.has_password => {}
-        _ => return Ok(()),
+        // A real DB failure must surface (see above).
+        Err(e @ crate::error::AppError::Db(_)) => return Err(e),
+        // Configured-without-password OR a missing/unconfigured row: non-fatal skip.
+        Ok(_) | Err(_) => return Ok(()),
     }
 
     if let Some(token) = get_api_token(pool, &account_id).await?

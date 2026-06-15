@@ -1,51 +1,72 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
-import { useAtom } from "jotai";
+import { useState, useCallback } from "react";
+import { useAtomValue, useSetAtom } from "jotai";
 import { pendingConflictsAtom } from "@/lib/store/syncAtoms";
 import { useStagedChanges } from "@/lib/hooks/useStagedChanges";
 import StagedChangesDialog from "@/components/page-sections/files/StagedChangesDialog";
 import { Icons } from "@/components/ui";
-import { invoke } from "@tauri-apps/api/core";
-import type { ConflictResolution } from "@/lib/types/syncTypes";
+import type { ConflictResolution, StagedChanges } from "@/lib/types/syncTypes";
 
+/**
+ * Renders one independent conflict banner per drive that has pending conflicts.
+ * Conflict state is now keyed by drive label (see `pendingConflictsAtom`), so a
+ * second drive's conflicts no longer overwrite the first's and resolving one
+ * drive leaves the others' banners intact.
+ */
 export default function ConflictsBanner() {
-  const [pendingConflicts, setPendingConflicts] = useAtom(pendingConflictsAtom);
+  const pendingConflicts = useAtomValue(pendingConflictsAtom);
+  if (pendingConflicts.size === 0) return null;
+  return (
+    <>
+      {Array.from(pendingConflicts.entries()).map(([label, staged]) => (
+        <ConflictBannerRow key={label} label={label} staged={staged} />
+      ))}
+    </>
+  );
+}
+
+/**
+ * A single drive's conflict banner. Every action (review, resolve, dismiss) is
+ * scoped to `label` so it only touches this drive's review state.
+ *
+ * Note: there is intentionally NO cancel-on-unmount here. `cancel_review` arms a
+ * 60s per-drive cooldown that suppresses fresh conflict dialogs, and a row
+ * cannot distinguish "the engine resolved this entry" (completed/error/timeout
+ * removed it) from "the user navigated away" — firing it on every unmount would
+ * re-arm that cooldown after a normal resolution. Explicit dismiss/resolve cancel
+ * this drive's review directly; navigate-away is covered by the engine's 5-minute
+ * REVIEW_MODE_TIMEOUT.
+ */
+function ConflictBannerRow({ label, staged }: { label: string; staged: StagedChanges }) {
+  const setPendingConflicts = useSetAtom(pendingConflictsAtom);
   const [dialogOpen, setDialogOpen] = useState(false);
-  const { syncWithResolutions, cancelReview, isSyncing } = useStagedChanges();
+  const { syncWithResolutions, cancelReview, isSyncing } = useStagedChanges(label);
 
-  // Track whether review is active via ref so the unmount cleanup sees the latest value
-  const reviewActiveRef = useRef(false);
-  useEffect(() => {
-    reviewActiveRef.current = pendingConflicts !== null;
-  }, [pendingConflicts]);
-
-  // Safety net: cancel review mode on unmount to prevent stuck SYNC_REVIEW_MODE
-  useEffect(() => {
-    return () => {
-      if (reviewActiveRef.current) {
-        invoke("cancel_review").catch((err: unknown) => console.warn("[ConflictsBanner] cancel_review failed on unmount:", err));
-      }
-    };
-  }, []);
+  const dropSelf = useCallback(() => {
+    setPendingConflicts((prev) => {
+      if (!prev.has(label)) return prev;
+      const next = new Map(prev);
+      next.delete(label);
+      return next;
+    });
+  }, [setPendingConflicts, label]);
 
   const handleDismiss = useCallback(async () => {
     await cancelReview();
-    setPendingConflicts(null);
-  }, [cancelReview, setPendingConflicts]);
+    dropSelf();
+  }, [cancelReview, dropSelf]);
 
   const handleSync = useCallback(
     async (resolutions: Record<string, ConflictResolution>) => {
       await syncWithResolutions(resolutions);
-      setPendingConflicts(null);
+      dropSelf();
       setDialogOpen(false);
     },
-    [syncWithResolutions, setPendingConflicts]
+    [syncWithResolutions, dropSelf]
   );
 
-  if (!pendingConflicts) return null;
-
-  const conflictCount = pendingConflicts.conflicts.length;
+  const conflictCount = staged.conflicts.length;
 
   return (
     <>
@@ -77,7 +98,7 @@ export default function ConflictsBanner() {
       <StagedChangesDialog
         open={dialogOpen}
         onClose={() => setDialogOpen(false)}
-        stagedChanges={pendingConflicts}
+        stagedChanges={staged}
         isSyncing={isSyncing}
         onSync={handleSync}
         onCancel={() => setDialogOpen(false)}

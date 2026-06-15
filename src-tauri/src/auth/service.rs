@@ -145,12 +145,26 @@ pub(crate) async fn challenge_response(
 /// Acquires a [`hcfs_client::engine::runner::TokenRefreshGuard`] to pause sync while
 /// the token is being replaced, preventing 401 races.
 pub(crate) async fn refresh_auth_token_internal(pool: &SqlitePool, app: &tauri::AppHandle, account_id: &str) -> Result<(), String> {
-    info!(account_id = %account_id, "Auth token refresh started");
     use tauri::Manager;
-    let sync = app.state::<crate::app_state::AppState>().sync.clone();
-    let _guard = hcfs_client::engine::runner::TokenRefreshGuard::new(sync);
-
     let app_state = app.state::<crate::app_state::AppState>();
+
+    // Serialize refreshes per account (F23): two concurrent callers for the same
+    // account would otherwise each run challenge_response + upsert + save_api_token
+    // in parallel, racing the two writes. Clone the per-account async lock (the
+    // outer std lock guards only the map insert and is dropped immediately) and
+    // hold its guard across the whole refresh so the second caller waits.
+    let refresh_lock = {
+        let mut locks = app_state.refresh_locks.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        locks
+            .entry(account_id.to_string())
+            .or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
+    };
+    let _refresh_serialize = refresh_lock.lock().await;
+
+    info!(account_id = %account_id, "Auth token refresh started");
+    let sync = app_state.sync.clone();
+    let _guard = hcfs_client::engine::runner::TokenRefreshGuard::new(sync);
     // get_mnemonic_for_account now returns Zeroizing<String> directly — no double-wrap needed.
     let mnemonic = get_mnemonic_for_account(&app_state, account_id)
         .await

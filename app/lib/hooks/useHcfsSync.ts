@@ -253,7 +253,7 @@ export async function tryAutoInitSync(
       // `MasterMnemonicUnrecoverable` is the specific signal that auth
       // state hasn't been populated yet. Any other error (insufficient
       // credits, validation, network) is terminal and must not retry.
-      if (isNotReady(err, "mnemonic")) {
+      if (isNotReady(err, "MASTER_MNEMONIC_UNRECOVERABLE")) {
         console.warn(
           "[AutoSync] mnemonic not yet recoverable — will retry when auth is ready"
         );

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import { IconComponent } from "@/app/lib/types";
 import { AbstractIconWrapper, Icons } from "@/components/ui";
 import { cn } from "@/app/lib/utils";
@@ -12,7 +12,7 @@ import { useRouter } from "next/navigation";
 import { useSetAtom } from "jotai";
 import { deleteNotification } from "@/app/lib/helpers/notificationsDb";
 import { refreshUnreadCountAtom } from "@/components/page-sections/notifications/notificationStore";
-import { getVersion } from "@tauri-apps/api/app";
+import { useAppVersion } from "@/lib/hooks/useAppVersion";
 
 // Helper to compare semver versions (returns true if v1 >= v2)
 import { isVersionGreaterOrEqual } from "@/lib/utils/versionCompare";
@@ -57,15 +57,11 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
     y: number;
   } | null>(null);
   const [isArchiving, setIsArchiving] = useState(false);
-  const [currentVersion, setCurrentVersion] = useState<string>("");
+  // Shared across all rows via a module-memoized promise — one IPC per session
+  // instead of one per notification row.
+  const currentVersion = useAppVersion();
   const router = useRouter();
   const refreshUnread = useSetAtom(refreshUnreadCountAtom);
-
-  useEffect(() => {
-    getVersion()
-      .then(setCurrentVersion)
-      .catch((err: unknown) => console.warn("[NotificationItem] Failed to get app version:", err));
-  }, []);
 
   // For Hippius update notifications, hide button if already on this version or newer
   const isUpdateNotification =

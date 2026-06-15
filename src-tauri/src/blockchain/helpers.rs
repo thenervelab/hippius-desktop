@@ -18,10 +18,7 @@ use subxt_signer::sr25519::Keypair;
 pub(crate) fn get_signer(app_state: &crate::app_state::AppState) -> Result<Keypair, AppError> {
     let auth = app_state.auth.lock().map_err(|e| AppError::Other(format!("Lock error: {e}")))?;
     match auth.capabilities {
-        AuthCapabilities::Full => auth
-            .sr25519_pair
-            .clone()
-            .ok_or(AppError::NotReady(NotReadyKind::SigningKeyUnavailable)),
+        AuthCapabilities::Full => auth.sr25519_pair.clone().ok_or(AppError::NotReady(NotReadyKind::SigningKeyUnavailable)),
         AuthCapabilities::OAuthOnly | AuthCapabilities::Restored => Err(AppError::NotReady(NotReadyKind::SigningKeyUnavailable)),
         AuthCapabilities::None => Err(AppError::Auth("Not authenticated — please log in first".into())),
     }

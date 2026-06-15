@@ -40,9 +40,19 @@ pub async fn sp_exclude_file(label: String, path: String, state: tauri::State<'_
         let guard = state.sync.drives.lock().await;
         guard.get(&label).map(|slot| slot.manager.clone())
     };
-    if let Some(arc) = drive_arc {
+    // Fail loudly when the drive isn't loaded: the previous `if let Some` made
+    // "Exclude Permanently" silently return Ok when the drive had been stopped
+    // between the failure event and the click, so the FE reported success but no
+    // exclude pattern was written and the file resurfaced on the next sync.
+    // (`sp_skip_file` differs: it records a session-skip regardless, so its
+    // drive-side write is genuinely supplementary.)
+    let Some(arc) = drive_arc else {
+        return Err(crate::error::AppError::NotReady(crate::error::NotReadyKind::DriveNotInitialized));
+    };
+    {
         let m = arc.lock().await;
-        let _ = m.add_exclude_pattern(&path);
+        m.add_exclude_pattern(&path)
+            .map_err(|e| crate::error::AppError::Hcfs(format!("add_exclude_pattern failed: {e}")))?;
     }
 
     state.sync.emit_snapshot(true);

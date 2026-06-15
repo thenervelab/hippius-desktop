@@ -200,16 +200,16 @@ fn parse_indexer_u64(field: &str, raw: &str) -> u64 {
 /// is not valid JSON. An empty `data` array is *not* an error — it returns
 /// `{ totalBytes: 0, fileCount: 0 }`.
 #[tauri::command]
-pub async fn get_drive_storage_stats(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
-) -> Result<DriveStorageStats, AppError> {
+pub async fn get_drive_storage_stats(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<DriveStorageStats, AppError> {
     let indexer = IndexerClient::from_env(state.api_client.clone())?;
     let params = [("account_id", account_id.as_str()), ("storage", "drive"), ("limit", "1")];
     let response: IndexerResponse<DriveStorageRow> = indexer.get("/user-extended-storage-metrics", &params).await?;
 
     let Some(row) = response.data.into_iter().next() else {
-        return Ok(DriveStorageStats { total_bytes: 0, file_count: 0 });
+        return Ok(DriveStorageStats {
+            total_bytes: 0,
+            file_count: 0,
+        });
     };
 
     Ok(DriveStorageStats {
@@ -309,7 +309,7 @@ pub async fn get_credits(
             date: chrono::DateTime::from_timestamp_millis(ts).map_or_else(|| date.format("%Y-%m-%d").to_string(), |d| d.to_rfc3339()),
         })
         .collect();
-    results.sort_by(|a, b| b.block.cmp(&a.block));
+    results.sort_by_key(|b| std::cmp::Reverse(b.block));
     Ok(results)
 }
 
@@ -372,7 +372,7 @@ pub async fn get_system_balance(
             }
         })
         .collect();
-    results.sort_by(|a, b| b.block_number.cmp(&a.block_number));
+    results.sort_by_key(|b| std::cmp::Reverse(b.block_number));
     Ok(results)
 }
 

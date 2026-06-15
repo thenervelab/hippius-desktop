@@ -1,0 +1,9 @@
+# Pin the toolchain so the Clippy lint set stops drifting under CI's floating
+# `dtolnay/rust-toolchain@stable`. New lints that turn on with a stable bump
+# (e.g. 1.95's `unchecked_time_subtraction`, `duration_suboptimal_units`) must
+# be an explicit, reviewed upgrade — not a surprise red `-D warnings` build.
+# rustup honors this override even when the runner installed plain `stable`,
+# auto-installing the pinned version on first `cargo` invocation.
+[toolchain]
+channel = "1.95.0"
+components = ["rustfmt", "clippy"]

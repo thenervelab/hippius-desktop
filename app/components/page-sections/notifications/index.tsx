@@ -199,7 +199,7 @@ const Notifications = () => {
     }
     setIsArchiving(true);
     try {
-      await deleteAllNotifications(userAddress);
+      await deleteAllNotifications();
       await refresh();
       await refreshUnread();
       toast.success("All notifications deleted");

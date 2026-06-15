@@ -123,12 +123,14 @@ pub async fn create_vm(
     account_id: String,
     params: CreateVMParams,
 ) -> Result<serde_json::Value, AppError> {
-    // Enforce credit eligibility at the IPC boundary. Refuses to call
-    // the spawn endpoint if the user has fewer than 10 credits OR a zero
-    // chain balance — see `crate::billing::eligibility::thresholds`.
-    // VM creation has no upload payload; pass `bytes = 0` so the
-    // bytes-priced layer is a no-op and the gate falls back to the
-    // static `VM_CREATION` threshold (10 credits).
+    // Enforce credit eligibility at the IPC boundary. Refuses to call the spawn
+    // endpoint when the user has fewer than 10 credits (the authoritative gate).
+    // It ALSO refuses on a confirmed zero chain balance, but that pre-flight is
+    // best-effort: if the substrate node is unreachable the chain check is
+    // skipped (logged, not enforced) and the spawn endpoint is the backstop —
+    // see `crate::billing::eligibility::thresholds` and `chain_free_balance`.
+    // VM creation has no upload payload; pass `bytes = 0` so the bytes-priced
+    // layer is a no-op and the gate falls back to the static `VM_CREATION` (10).
     crate::billing::eligibility::require_eligible(&state, &account_id, crate::billing::eligibility::InsufficientCreditsAction::VmCreation, 0).await?;
 
     info!(

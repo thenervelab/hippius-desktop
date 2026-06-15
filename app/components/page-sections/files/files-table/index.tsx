@@ -965,10 +965,17 @@ const FilesTable: FC<FilesTableProps> = memo(
     // is re-read so each Th picks up the new getIsSorted() value (sort
     // chevron + active style). `enrichedAllFiles` keeps the rows in sync
     // when the data source changes (folder tab switch, sync re-enrichment).
+    // Sort over the FULL set (table data is enrichedAllFiles), then render only
+    // the paginated window. `files` is the displayed slice (visibleData), so
+    // `files.length` is the current infinite-scroll count — loadMore grows it.
+    // Previously every row of the full list mounted at once (each NameCell has
+    // multiple Radix Tooltip subtrees), causing multi-second jank on large
+    // drives; the IntersectionObserver/loadMore machinery was decorative.
+    const visibleCount = files.length;
     const visibleRows = useMemo(() => {
-      return table.getRowModel().rows;
+      return table.getRowModel().rows.slice(0, visibleCount);
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [table, enrichedAllFiles, sorting]);
+    }, [table, enrichedAllFiles, sorting, visibleCount]);
 
     const headerRows = useMemo(
       () =>
@@ -986,6 +993,9 @@ const FilesTable: FC<FilesTableProps> = memo(
             ))}
           </TableModule.Tr>
         )),
+      // `sorting` is needed so the header chevrons re-read getIsSorted() on a
+      // sort toggle; the rule can't see that transitive use through `table`.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
       [table, columnWidths, handleResizeStart, justResized, sorting]
     );
 

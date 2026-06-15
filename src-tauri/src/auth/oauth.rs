@@ -42,7 +42,7 @@ use tauri::Emitter;
 /// opens browser → signs in → redirected back) while short enough that
 /// a dormant entry can't be weaponized hours after the user abandoned
 /// their login attempt.
-const PKCE_STATE_TTL: Duration = Duration::from_secs(5 * 60);
+const PKCE_STATE_TTL: Duration = Duration::from_mins(5);
 
 /// In-flight OAuth flow states, keyed by the random `state` CSRF token.
 ///
@@ -243,6 +243,20 @@ pub struct ParsedDeepLink {
     pub callback_path: Option<String>,
 }
 
+/// Parse an inbound `hippiusapp://` deep-link URL into a structured
+/// `ParsedDeepLink`, extracting OAuth callback parameters.
+///
+/// Operates on **untrusted external input** — the URL is handed in by the OS
+/// deep-link handler — so it is defensive. A malformed URL carrying more than
+/// one `?` (a known server quirk) is repaired by treating only the first `?`
+/// as the query separator and every later one as `&`. A URL whose path is not
+/// `/auth/callback` is not an error: it returns `is_callback: false`. The
+/// `state` query parameter is preserved verbatim because it is the CSRF token
+/// that `complete_oauth_flow` later matches against the pending flow.
+///
+/// # Errors
+///
+/// Returns `AppError::Other` if the (repaired) URL fails to parse as a URL.
 #[tauri::command]
 pub fn parse_oauth_deep_link(url: String) -> Result<ParsedDeepLink, AppError> {
     // Fix malformed URLs with multiple `?` characters (server workaround)
@@ -645,10 +659,7 @@ mod tests {
     #[test]
     fn state_lookup_fails_after_ttl_purge() {
         let mut states = HashMap::new();
-        states.insert(
-            "csrf-token-old".to_string(),
-            make_state(PKCE_STATE_TTL + Duration::from_secs(1)),
-        );
+        states.insert("csrf-token-old".to_string(), make_state(PKCE_STATE_TTL + Duration::from_secs(1)));
 
         // Mirror `complete_oauth_flow`: purge_expired runs BEFORE the
         // state lookup. A deep link that surfaces after the 5-minute
