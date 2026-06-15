@@ -13,6 +13,12 @@ concurrency:
   group: publish-${{ github.ref }}
   cancel-in-progress: true
 
+# hcfs-client/hcfs-shared are pulled from the PRIVATE thenervelab/hcfs repo over
+# ssh; force Cargo to fetch via the git CLI so it honors the deploy key the
+# build job installs into ~/.ssh below.
+env:
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
 jobs:
   publish-tauri:
     strategy:
@@ -33,6 +39,70 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0 # Fetch all history to get commit messages
+
+      # CI has no developer SSH key, so install the hcfs deploy key and trust
+      # github.com. Without this the build dies at "failed to authenticate when
+      # downloading repository" while fetching the private hcfs-client crate.
+      - name: Setup SSH for private Rust git deps
+        shell: bash
+        env:
+          PRIVATE_GIT_DEPLOY_KEY_B64: ${{ secrets.HCFS_DEPLOY_KEY_B64 }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+
+          # Decode private key from base64
+          echo "$PRIVATE_GIT_DEPLOY_KEY_B64" | python3 -c "
+          import sys, base64
+          data = sys.stdin.read().strip()
+          sys.stdout.buffer.write(base64.b64decode(data))
+          " > ~/.ssh/private_git_key
+          chmod 600 ~/.ssh/private_git_key
+
+          # Trust GitHub host key
+          ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+          chmod 600 ~/.ssh/known_hosts
+
+          # SSH config — git uses the key automatically (no ssh-agent needed)
+          cat > ~/.ssh/config <<'EOF'
+          Host github.com
+            HostName github.com
+            User git
+            IdentityFile ~/.ssh/private_git_key
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+            BatchMode yes
+          EOF
+          chmod 600 ~/.ssh/config
+
+      - name: Force Cargo to use git CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.cargo
+          cat >> ~/.cargo/config.toml << 'EOF'
+          [net]
+          git-fetch-with-cli = true
+          EOF
+
+      # The pinned rev lives in history but not at a branch tip, so a plain
+      # ls-remote won't list it; fall back to a blobless bare clone + cat-file
+      # to prove it is fetchable before the much longer cargo build starts.
+      - name: Verify pinned hcfs commit is fetchable
+        shell: bash
+        run: |
+          set -euo pipefail
+          REV=$(grep -m1 'thenervelab/hcfs.git' src-tauri/Cargo.toml | sed 's/.*rev *= *"\([^"]*\)".*/\1/')
+          echo "Pinned hcfs rev: $REV"
+          if git ls-remote ssh://git@github.com/thenervelab/hcfs.git | grep -q "$REV"; then
+            echo "Commit $REV found at a remote ref"
+          else
+            echo "Commit not at a ref tip; verifying via shallow clone..."
+            git clone --bare --filter=blob:none ssh://git@github.com/thenervelab/hcfs.git /tmp/hcfs-verify
+            git -C /tmp/hcfs-verify cat-file -t "$REV"
+          fi
 
       # Get PR or commit details for the release notes
       - name: Get release notes
