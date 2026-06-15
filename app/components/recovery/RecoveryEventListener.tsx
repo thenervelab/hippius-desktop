@@ -60,9 +60,11 @@ const RecoveryEventListener: React.FC = () => {
   // component mounted (gated on `isAuthenticated` by OnBoardingGuard) —
   // the event was lost. Query the current recovery state once on mount
   // and adopt any actionable flow. `proceed` is a no-op (local is
-  // authoritative), `unknown` means probe failed (FE retries), so only
-  // `unlock`/`signup` pop the dialog. Skip when the atom is already
-  // populated to avoid racing the live listener above.
+  // authoritative). `unlock`/`signup` pop their dialog; `unknown` pops
+  // the connection-retry dialog — without adopting it here, a probe that
+  // failed during the pre-mount window leaves the user with no UI and a
+  // wedged recovery gate (the fresh-OAuth-device bug). Skip when the
+  // atom is already populated to avoid racing the live listener above.
   useEffect(() => {
     if (current !== null) return;
     let cancelled = false;
@@ -70,7 +72,7 @@ const RecoveryEventListener: React.FC = () => {
       try {
         const check = await checkRecoveryState();
         if (cancelled) return;
-        if (check.recommendedFlow === "unlock" || check.recommendedFlow === "signup") {
+        if (check.recommendedFlow !== "proceed") {
           setCheck(check);
         }
       } catch (err) {

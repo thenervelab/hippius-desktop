@@ -8,13 +8,14 @@ import StakeConfirmationDialog from "../wallet/StakeConfirmationDialog";
 import { toast } from "sonner";
 import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
 import { useStaking } from "@/app/lib/hooks/useStaking";
+import StakingErrorNotice from "../wallet/shared/StakingErrorNotice";
 import { invoke } from "@tauri-apps/api/core";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { dispatchSigningError } from "@/lib/utils/dispatchTauriError";
 
 const Unstake = () => {
     const router = useRouter();
-    const { stakingInfo, operations } = useStaking();
+    const { stakingInfo, operations, refetch } = useStaking();
     const { logout } = useWalletAuth();
     const [isLoading, setIsLoading] = useState(false);
     const [showConfirmation, setShowConfirmation] = useState(false);
@@ -89,6 +90,11 @@ const Unstake = () => {
                 <div className="mb-6">
                     <BackButton text="Go Back" href="/wallet" />
                 </div>
+                <StakingErrorNotice
+                    message={stakingInfo.isLoading ? null : stakingInfo.error}
+                    onRetry={() => refetch()}
+                    className="mb-6"
+                />
                 <TokenForm
                     title="Unstake hAlpha"
                     description="Redeem your staked hAlpha tokens on Hippius"

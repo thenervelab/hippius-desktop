@@ -835,11 +835,15 @@ async function clearTrayFileEntries() {
 
 /* ─ Login status watcher (updates tray menu on login/logout) ──── */
 //
-// Polls Rust for login status and resets login-gated tray rows when
-// the user signs out. The interval handle is parked on `window` so
-// React Fast Refresh can clear the previous instance before the new
-// module run starts a fresh one — without that, HMR would leave a
-// stack of intervals running.
+// Polls Rust for login status and resets login-gated tray rows when the user
+// signs out. This is an INTENTIONAL process-lifetime singleton: it is started
+// exactly once (via the `menuPromise` guard) and is deliberately NOT torn down
+// on logout, because this poll IS the logout-detection mechanism for the tray —
+// stopping it on logout would defeat its purpose. The tray menu lives at the OS
+// level (not under the React auth boundary), so it has no unmount to hook into.
+// The `window.__hippiusLoginWatcher` handle is purely an HMR guard (clear the
+// previous Fast-Refresh instance so dev reloads don't stack intervals) — it is
+// NOT a lifecycle teardown handle. The steady-state cost is one ~2s SQLite read.
 let lastLoginStatus: boolean | null = null;
 
 function startLoginStatusWatcher() {
@@ -923,7 +927,12 @@ async function reconcileSummaryRowRefs(menu: Menu): Promise<void> {
 }
 
 function startSyncActivityWatcher() {
-  // Clear any old watcher from HMR
+  // Like the login-status watcher, this is an intentional process-lifetime
+  // singleton (started once via the `menuPromise` guard, never torn down on
+  // logout — the OS tray has no React unmount). The `__hippiusSyncWatcherUnsub`
+  // handle below is an HMR guard only (clear the prior Fast-Refresh listener so
+  // dev reloads don't stack `sync_progress_snapshot` subscriptions), NOT a
+  // logout/lifecycle teardown.
   if (typeof window !== "undefined") {
     // @ts-expect-error custom watcher handle
     if (window.__hippiusSyncWatcherUnsub) {

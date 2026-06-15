@@ -103,7 +103,7 @@ const NotificationMenuContent: React.FC<Props> = ({ count, onClose }) => {
     try {
       const userAddress = oauthSession?.substrateAddress || polkadotAddress;
       if (!userAddress) return;
-      await deleteAllNotifications(userAddress);
+      await deleteAllNotifications();
       await refresh();
       await refreshUnread();
       toast.success("All notifications deleted");

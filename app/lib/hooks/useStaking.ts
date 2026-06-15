@@ -66,6 +66,10 @@ export const useStaking = () => {
         staleTime: 0,
         refetchOnWindowFocus: true,
         refetchInterval: LIVE_DATA_REFRESH_MS,
+        // A failed `get_staking_info` is almost always a transient chain/RPC
+        // outage. Don't retry-storm it: surface the error so the UI can show it
+        // and let the next `refetchInterval` tick re-attempt on its own cadence.
+        retry: false,
         queryFn: () => invoke<StakingInfoResult>('get_staking_info'),
     });
 

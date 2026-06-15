@@ -24,7 +24,7 @@ use tracing::warn;
 use zeroize::Zeroizing;
 
 use crate::auth::tokens::get_api_token;
-use crate::error::{AppError, NotReadyKind, Result};
+use crate::error::{AppError, Result};
 
 // ---------------------------------------------------------------------------
 // Passphrase strength types (consumed by the recovery dialog's meter)
@@ -86,6 +86,15 @@ fn bits_to_percent(bits: f64) -> u8 {
     raw.clamp(5.0, 100.0).round() as u8
 }
 
+/// Score a recovery passphrase for the UI strength meter.
+///
+/// Passphrases shorter than `MIN_PASSPHRASE_LEN` short-circuit to a
+/// zero-entropy `TooShort` verdict (never `acceptable_for_submit`) before the
+/// estimator runs. Otherwise entropy is derived from zxcvbn's guess count
+/// (`guesses_log10` converted to bits) and bucketed Weak / Ok / Strong against
+/// `MIN_ENTROPY_BITS`; zxcvbn's own warning and suggestions are surfaced as
+/// user hints. Length is measured in Unicode scalar values
+/// (`chars().count()`), not bytes, so multi-byte characters count once.
 pub(crate) fn score_passphrase(passphrase: &str) -> PassphraseStrength {
     if passphrase.chars().count() < MIN_PASSPHRASE_LEN {
         let verdict = PassphraseVerdict::TooShort;
@@ -169,7 +178,7 @@ pub(crate) struct HcfsServerCtx {
 
 impl HcfsServerCtx {
     pub(crate) async fn resolve(state: &tauri::State<'_, crate::app_state::AppState>) -> Result<Self> {
-        let account_id = state.current_account_id().map_err(AppError::Other)?;
+        let account_id = state.current_account_id()?;
         let ss58 = state
             .auth
             .lock()?
@@ -200,6 +209,19 @@ impl HcfsServerCtx {
             .ok_or_else(|| AppError::Other("No authentication token — please log in again.".into()))?;
 
         let base_url = resolve_hcfs_base_url(pool, &account_id).await?;
+        // Empty == region auto-detect sentinel. The sync path lets
+        // hcfs-client's own client race the regions; this raw-reqwest
+        // recovery path has no such step, so resolve it here. Either
+        // region is correctness-equivalent — the blob store is a shared
+        // replicated DB (hcfs-client region.rs:3-7) — so the race is a
+        // pure latency choice and cannot cause a false 404 / wrong Signup.
+        let base_url = if base_url.is_empty() {
+            hcfs_client::client::pick_fastest(&state.api_client)
+                .await
+                .map_err(|e| AppError::Hcfs(e.to_string()))?
+        } else {
+            base_url
+        };
         Ok(Self {
             client: state.api_client.clone(),
             base_url,
@@ -209,22 +231,32 @@ impl HcfsServerCtx {
     }
 }
 
-/// Resolve the hcfs-server URL the desktop uses for blob traffic.
+/// Resolve the hcfs-server URL stored for this account.
 ///
-/// Reads `hcfs_config.server_url`. Refuses to fall back to a hardcoded
-/// default here — a user who has never configured sync on this account
-/// would otherwise upload their sealed blob to the public host even on
-/// a self-hosted deployment, leaving orphaned ciphertext on the wrong
-/// server. Recovery flows seed the default URL explicitly via
-/// `recovery::seed_hcfs_server_url_if_missing` before calling this.
+/// Passes the stored `hcfs_config.server_url` through
+/// [`crate::sync::config::normalize_for_region_probe`] so the legacy
+/// single-region URL (`https://arion.hippius.com`) collapses to the
+/// region auto-detect sentinel (`""`), identical to how the sync path
+/// resolves its URL (`load_sync_config`, `sync::folders`, `sync::remote`).
+/// This is load-bearing for recovery: a legacy account still carries the
+/// old single-region URL in its row, and without this the seal POST and
+/// the probe GET would talk to that retired endpoint verbatim — the
+/// upload is accepted (success toast) but the blob never reads back, so
+/// Settings shows "not set up" even though sync (which DOES normalize)
+/// works. Normalizing here routes recovery to the same current regional
+/// server sync uses. Empty already round-trips; a missing row also
+/// resolves to the sentinel rather than an error. Concrete non-legacy
+/// URLs (self-hosted, staging) pass through untouched.
+///
+/// Turning the sentinel into a concrete endpoint is
+/// [`HcfsServerCtx::resolve`]'s job via [`hcfs_client::client::pick_fastest`].
+/// Keeping this helper a pure, network-free DB read is what makes it
+/// unit-testable.
 async fn resolve_hcfs_base_url(pool: &sqlx::SqlitePool, account_id: &str) -> Result<String> {
     let config = crate::sync::config::get_hcfs_config_internal(pool, account_id)
         .await
         .map_err(|e| AppError::Other(format!("Could not read sync config: {e}")))?;
-    if config.server_url.is_empty() {
-        return Err(AppError::NotReady(NotReadyKind::ConfigMissing));
-    }
-    Ok(config.server_url)
+    Ok(crate::sync::config::normalize_for_region_probe(&config.server_url))
 }
 
 pub(crate) enum HttpOutcome<T> {
@@ -276,9 +308,7 @@ pub(crate) async fn post_json_discard<B: Serialize>(ctx: &HcfsServerCtx, path: &
 async fn http_err(status: StatusCode, resp: reqwest::Response, path: &str) -> AppError {
     let body = resp.text().await.unwrap_or_default();
     if status == StatusCode::TOO_MANY_REQUESTS {
-        return AppError::Validation(
-            "You've hit the rate limit for recovery operations. Please wait a few minutes and try again.".into(),
-        );
+        return AppError::Validation("You've hit the rate limit for recovery operations. Please wait a few minutes and try again.".into());
     }
     AppError::Api {
         status: status.as_u16(),
@@ -313,6 +343,21 @@ pub(crate) fn crypto_to_err(e: hcfs_client::mnemonic_blob::MnemonicBlobError) ->
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+// Test-only seams letting `recovery.rs`'s test module exercise this
+// module's private base-URL resolver against the exact in-memory schema
+// this module's own tests use. Declared before `mod tests` (clippy's
+// `items_after_test_module`); `#[cfg(test)]` so they never reach a
+// release binary and widen no production visibility.
+#[cfg(test)]
+pub(crate) async fn resolve_hcfs_base_url_for_test(pool: &sqlx::SqlitePool, account_id: &str) -> Result<String> {
+    resolve_hcfs_base_url(pool, account_id).await
+}
+
+#[cfg(test)]
+pub(crate) async fn tests_support_make_hcfs_config_pool() -> sqlx::SqlitePool {
+    tests::make_empty_pool_with_hcfs_config().await
+}
 
 #[cfg(test)]
 mod tests {
@@ -398,15 +443,20 @@ mod tests {
 
     // ── resolve_hcfs_base_url ──────────────────────────────────────────
 
-    async fn make_empty_pool_with_hcfs_config() -> sqlx::SqlitePool {
+    pub(crate) async fn make_empty_pool_with_hcfs_config() -> sqlx::SqlitePool {
         let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.expect("open in-memory db");
+        // Mirror the production schema in `utils/schema.rs` exactly,
+        // including `updated_at` — `recovery::seed_hcfs_server_url_if_missing`
+        // writes that column, so a fixture missing it would fail a true
+        // seed-then-resolve test for a reason unrelated to the resolver.
         sqlx::query(
             "CREATE TABLE hcfs_config (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 owner TEXT NOT NULL UNIQUE,
                 server_url TEXT NOT NULL DEFAULT '',
                 drive_password TEXT NOT NULL DEFAULT '',
-                encryption_version INTEGER NOT NULL DEFAULT 0
+                encryption_version INTEGER NOT NULL DEFAULT 0,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )",
         )
         .execute(&pool)
@@ -416,28 +466,33 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resolve_base_url_rejects_empty_server_url() {
+    async fn resolve_base_url_returns_empty_for_auto_detect_sentinel() {
+        // Empty server_url is the region auto-detect sentinel
+        // (recovery::seed_hcfs_server_url_if_missing seeds ''). It must
+        // pass through here, NOT error — HcfsServerCtx::resolve turns the
+        // empty string into a concrete URL via region::pick_fastest. The
+        // old ConfigMissing rejection broke every fresh-OAuth-device
+        // recovery (see docs/plans/2026-05-18-oauth-recovery-region-resolution.md).
         let pool = make_empty_pool_with_hcfs_config().await;
-        let err = resolve_hcfs_base_url(&pool, "5GrwvaEF…").await.expect_err("empty config must fail");
-        assert!(
-            matches!(err, AppError::NotReady(NotReadyKind::ConfigMissing)),
-            "expected NotReady(ConfigMissing), got {err:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn resolve_base_url_rejects_blank_string_row() {
-        let pool = make_empty_pool_with_hcfs_config().await;
-        let owner = crate::auth::account_key::account_key("5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY");
+        let account = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
+        let owner = crate::auth::account_key::account_key(account);
         sqlx::query("INSERT INTO hcfs_config (owner, server_url, drive_password, encryption_version) VALUES (?, '', '', 0)")
             .bind(&owner)
             .execute(&pool)
             .await
             .unwrap();
-        let err = resolve_hcfs_base_url(&pool, "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY")
-            .await
-            .expect_err("blank server_url must fail");
-        assert!(matches!(err, AppError::NotReady(NotReadyKind::ConfigMissing)));
+        let url = resolve_hcfs_base_url(&pool, account).await.expect("empty must pass through");
+        assert_eq!(url, "", "auto-detect sentinel must round-trip untouched");
+    }
+
+    #[tokio::test]
+    async fn resolve_base_url_returns_empty_when_no_row() {
+        // No hcfs_config row at all also resolves to the auto-detect
+        // sentinel rather than ConfigMissing — recovery seeds a row first
+        // in practice, but the network layer must still cope if it didn't.
+        let pool = make_empty_pool_with_hcfs_config().await;
+        let url = resolve_hcfs_base_url(&pool, "5GrwvaEF…").await.expect("missing row → empty");
+        assert_eq!(url, "");
     }
 
     #[tokio::test]
@@ -453,5 +508,27 @@ mod tests {
             .unwrap();
         let url = resolve_hcfs_base_url(&pool, account).await.expect("ok");
         assert_eq!(url, "https://staging.example.com");
+    }
+
+    #[tokio::test]
+    async fn resolve_base_url_normalizes_legacy_single_region_to_sentinel() {
+        // Regression: a legacy account still carries the retired single-region
+        // URL `https://arion.hippius.com` in its row. The recovery path used to
+        // return it verbatim, so the seal POST / probe GET hit that dead endpoint
+        // — upload "succeeded" but the blob never read back (Settings stuck on
+        // "not set up") while sync, which normalizes, worked. The resolver must
+        // collapse the legacy URL to the auto-detect sentinel so recovery and
+        // sync target the same current regional server.
+        let pool = make_empty_pool_with_hcfs_config().await;
+        let account = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
+        let owner = crate::auth::account_key::account_key(account);
+        sqlx::query("INSERT INTO hcfs_config (owner, server_url, drive_password, encryption_version) VALUES (?, ?, '', 0)")
+            .bind(&owner)
+            .bind("https://arion.hippius.com")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let url = resolve_hcfs_base_url(&pool, account).await.expect("ok");
+        assert_eq!(url, "", "legacy single-region URL must normalize to the auto-detect sentinel");
     }
 }

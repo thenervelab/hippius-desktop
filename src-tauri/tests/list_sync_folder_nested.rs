@@ -132,16 +132,15 @@ async fn groups_disk_entries_by_level() {
     seed_cache(&state, &["a.txt", "sub1/b.txt", "sub1/sub2/c.txt"]);
 
     // Root: folders=[sub1], files=[a.txt]
-    let root = list_sync_folder_grouped_inner(
-        &state,
-        ACCOUNT.into(),
-        tmp.path().to_string_lossy().into(),
-        None,
-        Some(LABEL.into()),
-    )
-    .await
-    .expect("root listing");
-    assert_eq!(root.folders.len(), 1, "root folders: {:?}", root.folders.iter().map(|f| &f.name).collect::<Vec<_>>());
+    let root = list_sync_folder_grouped_inner(&state, ACCOUNT.into(), tmp.path().to_string_lossy().into(), None, Some(LABEL.into()))
+        .await
+        .expect("root listing");
+    assert_eq!(
+        root.folders.len(),
+        1,
+        "root folders: {:?}",
+        root.folders.iter().map(|f| &f.name).collect::<Vec<_>>()
+    );
     assert_eq!(root.folders[0].name, "sub1");
     assert_eq!(root.files.len(), 1, "root files");
     assert_eq!(root.files[0].name, "a.txt");
@@ -193,15 +192,9 @@ async fn server_only_entries_surface_when_disk_is_empty() {
     // Server knows 3 files nested under sub1, none are on disk.
     seed_cache(&state, &["root.txt", "sub1/a.txt", "sub1/b.txt", "sub1/nested/c.txt"]);
 
-    let root = list_sync_folder_grouped_inner(
-        &state,
-        ACCOUNT.into(),
-        tmp.path().to_string_lossy().into(),
-        None,
-        Some(LABEL.into()),
-    )
-    .await
-    .expect("root listing");
+    let root = list_sync_folder_grouped_inner(&state, ACCOUNT.into(), tmp.path().to_string_lossy().into(), None, Some(LABEL.into()))
+        .await
+        .expect("root listing");
 
     let folder_names: Vec<&str> = root.folders.iter().map(|f| f.name.as_str()).collect();
     assert!(folder_names.contains(&"sub1"), "sub1 should be visible server-side; got {folder_names:?}");
@@ -247,15 +240,9 @@ async fn dedupes_entries_present_on_disk_and_in_cache() {
     let state = make_state(pool);
     seed_cache(&state, &["a.txt", "sub1/b.txt"]);
 
-    let root = list_sync_folder_grouped_inner(
-        &state,
-        ACCOUNT.into(),
-        tmp.path().to_string_lossy().into(),
-        None,
-        Some(LABEL.into()),
-    )
-    .await
-    .expect("root listing");
+    let root = list_sync_folder_grouped_inner(&state, ACCOUNT.into(), tmp.path().to_string_lossy().into(), None, Some(LABEL.into()))
+        .await
+        .expect("root listing");
 
     let folder_names: Vec<&str> = root.folders.iter().map(|f| f.name.as_str()).collect();
     let file_names: Vec<&str> = root.files.iter().map(|f| f.name.as_str()).collect();
@@ -298,15 +285,9 @@ async fn pending_backfill_flag_reflects_db_state() {
     insert_sync_path(&pool, &tmp.path().to_string_lossy(), None).await;
     let state = make_state(pool);
 
-    let listing = list_sync_folder_grouped_inner(
-        &state,
-        ACCOUNT.into(),
-        tmp.path().to_string_lossy().into(),
-        None,
-        Some(LABEL.into()),
-    )
-    .await
-    .expect("listing");
+    let listing = list_sync_folder_grouped_inner(&state, ACCOUNT.into(), tmp.path().to_string_lossy().into(), None, Some(LABEL.into()))
+        .await
+        .expect("listing");
 
     assert!(listing.pending_backfill, "NULL column → FE banner should show");
 }

@@ -104,12 +104,10 @@ impl ShareKeystore for SqliteShareKeystore {
                 // `Zeroizing` wrapper here would close the smallest
                 // possible window and give a false sense of secrecy.
                 // Treat the encrypted DB itself as the trust boundary.
-                let arr: [u8; 32] = blob.as_slice().try_into().map_err(|_| {
-                    ShareError::Keystore(format!(
-                        "share_keystore row has invalid key length {}",
-                        blob.len()
-                    ))
-                })?;
+                let arr: [u8; 32] = blob
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| ShareError::Keystore(format!("share_keystore row has invalid key length {}", blob.len())))?;
                 Ok(Some(arr))
             }
         }

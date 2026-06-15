@@ -15,9 +15,10 @@ export default function DetailList() {
   const {
     data: credits,
     isLoading: isCreditsLoading,
-    error: creditsError,
     refetch: refetchCredits,
-  } = useUserCredits();
+    // Live so the home credits tile tracks charges on the same 6s cadence as
+    // its sibling storage tiles instead of lagging until a manual refresh.
+  } = useUserCredits({ live: true });
 
   // Single drive-scoped query feeds both the storage and file-count cards.
   // Loading state is shared so the two cards never flash inconsistent values.
@@ -45,9 +46,11 @@ export default function DetailList() {
 
   const getCreditsValue = () => {
     if (isCreditsLoading) return "Loading...";
-    if (creditsError) return "Error";
-    if (credits !== undefined) return credits.hip;
-    return "--";
+    // Mirror the new-design `redesign` branch: when no balance is present
+    // (undefined, or a failed/zero-balance fetch), show "0" rather than
+    // "Error" or "--" so the tile always renders a number. `credits.hip` is
+    // already "0" for a real zero balance.
+    return credits?.hip ?? "0";
   };
 
   // Storage subtitle from Rust (replaces duplicated binary search).

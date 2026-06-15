@@ -112,10 +112,7 @@ async fn mark_completed_after_record_plan_updates_totals_idempotently() {
     repo.mark_completed("acct", "default", "photos/img1.jpg", 1_000_000)
         .await
         .expect("mark_completed first call failed");
-    let after_first = repo
-        .totals_for_drive("acct", "default")
-        .await
-        .expect("totals after first mark");
+    let after_first = repo.totals_for_drive("acct", "default").await.expect("totals after first mark");
     assert_eq!(after_first.completed_files, 1, "one file completed");
     // Completed bytes counts the FULL file size, not the mark timestamp.
     assert_eq!(after_first.completed_bytes, 4_000_000, "completed bytes match plan size");
@@ -127,15 +124,9 @@ async fn mark_completed_after_record_plan_updates_totals_idempotently() {
     repo.mark_completed("acct", "default", "photos/img1.jpg", 2_000_000)
         .await
         .expect("mark_completed second call failed");
-    let after_second = repo
-        .totals_for_drive("acct", "default")
-        .await
-        .expect("totals after second mark");
+    let after_second = repo.totals_for_drive("acct", "default").await.expect("totals after second mark");
     assert_eq!(after_second.completed_files, 1, "still exactly one file completed");
-    assert_eq!(
-        after_second.completed_bytes, 4_000_000,
-        "completed bytes unchanged on duplicate callback"
-    );
+    assert_eq!(after_second.completed_bytes, 4_000_000, "completed bytes unchanged on duplicate callback");
 }
 
 /// Calling `record_plan` with an empty plan must compact every pending row
@@ -152,13 +143,8 @@ async fn record_plan_with_empty_uploads_compacts_pending_rows() {
     let repo = IntentRepo::new(pool.clone());
 
     // Seed: two pending uploads.
-    let initial: Vec<(String, u64)> = vec![
-        ("a.txt".to_string(), 100),
-        ("b.txt".to_string(), 200),
-    ];
-    repo.record_plan("acct", "drive", &initial)
-        .await
-        .expect("seed record_plan failed");
+    let initial: Vec<(String, u64)> = vec![("a.txt".to_string(), 100), ("b.txt".to_string(), 200)];
+    repo.record_plan("acct", "drive", &initial).await.expect("seed record_plan failed");
 
     let seeded: i64 = sqlx::query("SELECT COUNT(*) AS n FROM sync_intent")
         .fetch_one(&pool)
@@ -168,9 +154,7 @@ async fn record_plan_with_empty_uploads_compacts_pending_rows() {
     assert_eq!(seeded, 2, "seed should have inserted 2 rows");
 
     // Empty plan — must compact every pending row for (acct, drive).
-    repo.record_plan("acct", "drive", &[])
-        .await
-        .expect("empty record_plan failed");
+    repo.record_plan("acct", "drive", &[]).await.expect("empty record_plan failed");
 
     let after: i64 = sqlx::query("SELECT COUNT(*) AS n FROM sync_intent")
         .fetch_one(&pool)
@@ -197,13 +181,9 @@ async fn totals_for_account_sums_across_drives() {
     let pool = fresh_pool().await;
     let repo = IntentRepo::new(pool);
 
-    repo.record_plan(
-        "acct",
-        "drive_a",
-        &[("a.txt".into(), 100), ("b.txt".into(), 200)],
-    )
-    .await
-    .expect("record_plan drive_a");
+    repo.record_plan("acct", "drive_a", &[("a.txt".into(), 100), ("b.txt".into(), 200)])
+        .await
+        .expect("record_plan drive_a");
     repo.record_plan("acct", "drive_b", &[("c.txt".into(), 300)])
         .await
         .expect("record_plan drive_b");
@@ -219,26 +199,17 @@ async fn totals_for_account_sums_across_drives() {
         .await
         .expect("record_plan other_acct");
 
-    let totals = repo
-        .totals_for_account("acct")
-        .await
-        .expect("totals_for_account acct");
+    let totals = repo.totals_for_account("acct").await.expect("totals_for_account acct");
     assert_eq!(totals.total_files, 3, "a + b + c across drive_a + drive_b");
     assert_eq!(totals.total_bytes, 600, "100 + 200 + 300");
     assert_eq!(totals.completed_files, 1, "only a.txt is completed");
     assert_eq!(totals.completed_bytes, 100, "a.txt's size only");
 
-    let other = repo
-        .totals_for_account("other_acct")
-        .await
-        .expect("totals_for_account other_acct");
+    let other = repo.totals_for_account("other_acct").await.expect("totals_for_account other_acct");
     assert_eq!(other.total_files, 1, "other account is isolated");
     assert_eq!(other.total_bytes, 999);
 
-    let absent = repo
-        .totals_for_account("missing_acct")
-        .await
-        .expect("totals_for_account missing_acct");
+    let absent = repo.totals_for_account("missing_acct").await.expect("totals_for_account missing_acct");
     assert_eq!(
         absent,
         tauri_project_lib::sync::intent::IntentTotals {
@@ -290,33 +261,22 @@ async fn clear_drive_via_repo_drops_intent_rows_for_target_drive_only() {
         .await
         .expect("record_plan other_acct/drive_a");
 
-    repo.clear_drive("acct", "drive_a")
-        .await
-        .expect("clear_drive acct/drive_a");
+    repo.clear_drive("acct", "drive_a").await.expect("clear_drive acct/drive_a");
 
     // Invariant 1: drive_a on `acct` wiped (both pending and completed
     // halves gone). `total_files == 0` proves the DELETE didn't skip
     // either kind.
-    let ta = repo
-        .totals_for_drive("acct", "drive_a")
-        .await
-        .expect("totals acct/drive_a");
+    let ta = repo.totals_for_drive("acct", "drive_a").await.expect("totals acct/drive_a");
     assert_eq!(ta.total_files, 0, "drive_a wiped: no rows remain");
     assert_eq!(ta.completed_files, 0, "drive_a wiped: completed gone");
 
     // Invariant 2: drive_b on the SAME account is untouched.
-    let tb = repo
-        .totals_for_drive("acct", "drive_b")
-        .await
-        .expect("totals acct/drive_b");
+    let tb = repo.totals_for_drive("acct", "drive_b").await.expect("totals acct/drive_b");
     assert_eq!(tb.total_files, 1, "drive_b on same account preserved");
     assert_eq!(tb.total_bytes, 200, "drive_b bytes preserved");
 
     // Invariant 3: same drive_label under a different account is untouched.
-    let other = repo
-        .totals_for_drive("other_acct", "drive_a")
-        .await
-        .expect("totals other_acct/drive_a");
+    let other = repo.totals_for_drive("other_acct", "drive_a").await.expect("totals other_acct/drive_a");
     assert_eq!(other.total_files, 1, "other_acct's drive_a is isolated");
     assert_eq!(other.total_bytes, 999);
 }
@@ -368,23 +328,14 @@ async fn clear_account_via_repo_drops_all_intent_for_account_preserving_others()
 
     // Invariant 1: every drive for victim_acct is empty (drive_a had
     // both a completed and a pending row; drive_b had a pending row).
-    let ta = repo
-        .totals_for_drive("victim_acct", "drive_a")
-        .await
-        .expect("totals victim_acct/drive_a");
-    let tb = repo
-        .totals_for_drive("victim_acct", "drive_b")
-        .await
-        .expect("totals victim_acct/drive_b");
+    let ta = repo.totals_for_drive("victim_acct", "drive_a").await.expect("totals victim_acct/drive_a");
+    let tb = repo.totals_for_drive("victim_acct", "drive_b").await.expect("totals victim_acct/drive_b");
     assert_eq!(ta.total_files, 0, "drive_a wiped across pending + completed");
     assert_eq!(tb.total_files, 0, "drive_b wiped");
 
     // Invariant 2: other_acct's rows are untouched — account scoping
     // holds even when the two accounts share a drive label.
-    let other = repo
-        .totals_for_drive("other_acct", "drive_a")
-        .await
-        .expect("totals other_acct/drive_a");
+    let other = repo.totals_for_drive("other_acct", "drive_a").await.expect("totals other_acct/drive_a");
     assert_eq!(other.total_files, 1, "other_acct survives victim_acct clear");
     assert_eq!(other.total_bytes, 999, "other_acct bytes preserved");
 }

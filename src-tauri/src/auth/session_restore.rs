@@ -196,6 +196,28 @@ pub async fn restore_session(
                 Ok(session_data) => {
                     let substrate_address = session_data.get("substrateAddress").and_then(|v| v.as_str()).map(String::from);
 
+                    // A valid OAuth session MUST carry a substrateAddress. The
+                    // token-DB validation below only runs inside `if let
+                    // Some(addr)`, so a session JSON that parses but lacks the
+                    // address would skip that check entirely and fall through to
+                    // `authenticated: true` with no identity — accepting a
+                    // malformed or forged session. Treat a missing address as
+                    // unauthenticated and bounce to login.
+                    if substrate_address.is_none() {
+                        info!("OAuth session JSON missing substrateAddress — treating as unauthenticated");
+                        return Ok(SessionRestoreResult {
+                            authenticated: false,
+                            substrate_address: None,
+                            auth_type: None,
+                            oauth_session: None,
+                            logout_time_ms: None,
+                            should_clear_oauth: true,
+                            needs_sync_mnemonic: false,
+                            redirect_to: Some("/login".into()),
+                            sync_requires_reauth: false,
+                        });
+                    }
+
                     // Validate token in Rust DB
                     if let Some(ref addr) = substrate_address {
                         let token_row = auth_session_repo::get_token_and_expiry(pool, addr).await?;
@@ -301,7 +323,7 @@ pub async fn restore_session(
                             None
                         }
                     };
-                    let (_, recovery_result) = tokio::join!(asset_scope_fut, recovery_probe_fut);
+                    let ((), recovery_result) = tokio::join!(asset_scope_fut, recovery_probe_fut);
 
                     if let Some(rc_result) = recovery_result {
                         match rc_result {
@@ -328,7 +350,7 @@ pub async fn restore_session(
 
                     // Notify FE if a rotation is awaiting its local-rewrite step.
                     if let Some(ref addr) = substrate_address
-                        && crate::recovery::rotation_sidecar_path(addr).map(|p| p.exists()).unwrap_or(false)
+                        && crate::recovery::rotation_sidecar_path(addr).is_ok_and(|p| p.exists())
                     {
                         info!(
                             account = %crate::console_access::short_ss58(addr),
