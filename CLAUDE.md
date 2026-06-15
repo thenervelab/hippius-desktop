@@ -54,9 +54,18 @@ If the Hippius **Developer ID Application** cert is imported into your login key
 export APPLE_SIGNING_IDENTITY="Developer ID Application: <Company> (<TEAMID>)"
 ```
 
-`tauri.conf.json`'s `bundle.macOS.signingIdentity` is `null`, which means Tauri reads the signing identity from this env var at build time. No config changes needed. The same var is consumed by the `tauri-apps/tauri-action` step in `.github/workflows/tauri-build.yml` for signed release builds.
+`tauri.conf.json`'s `bundle.macOS.signingIdentity` is `null`, which means Tauri reads the signing identity from this env var at build time. No config changes needed.
 
 The default migration sync root (`~/Hippius-Migration-YYYY-MM-DD`, see `sync::migration::compute_default_sync_path`) lives outside every TCC-protected folder, so new installs never trigger a prompt at all.
+
+### macOS: CI release signing & notarization
+
+`.github/workflows/tauri-build.yml` has a macOS-only "Set up Apple signing & notarization" step that activates from repo secrets — when a group of secrets is missing it logs a skip and the build proceeds (unsigned / un-notarized) instead of failing on empty values, which is why the vars are exported via `GITHUB_ENV` rather than the `tauri-action` env block.
+
+- **Signing** (`APPLE_CERTIFICATE` = base64 .p12, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`): tauri-action imports the cert into a throwaway keychain and the bundler signs with hardened runtime + `src-tauri/entitlements.plist`. Public distribution requires a **Developer ID Application** cert (Account Holder-only to create); a Mac Development cert signs but Gatekeeper rejects it on other machines.
+- **Notarization** (`APPLE_API_KEY_CONTENT` = base64 .p8, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID`): an App Store Connect API key; the step decodes the key to disk and exports the `APPLE_API_*` vars Tauri's notarytool integration reads. Stapling is automatic.
+
+Helper scripts that build the .p12 / validate the .p8 and push all secrets via `gh secret set` live in `~/Documents/hippius-signing/` (`finish-ci-signing.sh`, `set-notary-secrets.sh`) alongside the CSR/private key the certs must be issued against.
 
 ## Architecture
 
