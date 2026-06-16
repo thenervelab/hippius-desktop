@@ -94,6 +94,7 @@ use crate::sync::remote::{cache_remote_file, download_remote_file, get_thumbnail
 use crate::sync::status::{app_close, get_all_drive_statuses, get_sync_activity_rows, get_sync_engine_health};
 use crate::tray::panel::{hide_tray_panel, toggle_tray_panel};
 use crate::utils::logs::attach_logs_to_ticket;
+use crate::utils::app_location::is_app_translocated;
 use crate::utils::platform_info::get_platform_info;
 use crate::utils::preferences::{get_user_preference, is_onboarding_done, save_user_preference, set_onboarding_done};
 use crate::utils::support::{
@@ -415,6 +416,7 @@ fn main() {
             toggle_tray_panel,
             hide_tray_panel,
             get_platform_info,
+            is_app_translocated,
             // Local DB (notifications, address book, onboarding, preferences, app state)
             add_notification,
             list_notifications,
@@ -636,6 +638,19 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                     NSApp().setApplicationIconImage_(image);
                 }
             }
+        }
+
+        // Gatekeeper App Translocation makes macOS forget folder permissions on
+        // every launch (the "asks 10 times" symptom). Record it at startup so it
+        // shows up in support-log bundles even when the UI never mounts; the
+        // frontend separately queries `is_app_translocated` to surface a notice.
+        #[cfg(target_os = "macos")]
+        if crate::utils::app_location::current_exe_is_translocated() {
+            warn!(
+                "Hippius is running from a Gatekeeper App Translocation mount — macOS will not \
+                 persist folder permissions across launches. The user should move Hippius into \
+                 /Applications."
+            );
         }
 
         if let Ok(env_path) = app.path().resolve(".env", BaseDirectory::Resource) {
