@@ -61,7 +61,17 @@ export const WALLET_FEATURE_ENABLED = false;
 export const VM_FEATURE_ENABLED = false;
 
 /**
- * Referrals readiness. When `true`, the referrals page renders behind the
+ * Referrals page. When `false`, referrals is fully invisible: the sidebar
+ * entry is filtered out (`filterNavSections` in NavData.tsx) and a direct
+ * `/referrals` navigation redirects to the overview (`FeatureDisabledRedirect`
+ * in the page). All referrals code stays in place — same keep-don't-delete
+ * policy as wallet/VPN. Flip to `true` to restore the page and sidebar entry.
+ */
+export const REFERRALS_FEATURE_ENABLED = false;
+
+/**
+ * Referrals readiness. Only consulted while `REFERRALS_FEATURE_ENABLED` is
+ * `true`: when this is also `true`, the referrals page renders behind the
  * blurred `ComingSoon` overlay (the sidebar link still routes there and the
  * page still mounts — matching the web console's referrals gating). Flip to
  * `false` when the program goes live.
