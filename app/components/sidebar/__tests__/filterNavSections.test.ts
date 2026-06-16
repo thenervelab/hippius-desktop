@@ -4,6 +4,7 @@ import type { NavSection } from "../NavData";
 import {
   VM_FEATURE_ENABLED,
   WALLET_FEATURE_ENABLED,
+  REFERRALS_FEATURE_ENABLED,
 } from "@/app/lib/featureFlags";
 
 // Minimal fixture — gates only, no icons (icon is typed ReactNode but the
@@ -15,6 +16,12 @@ const sections: NavSection[] = [
       { label: "Billing", path: "/billing", icon: null },
       { label: "Wallet", path: "/wallet", icon: null, featureFlag: "wallet" },
       { label: "Shares", path: "/shares", icon: null, featureFlag: "shares" },
+      {
+        label: "Referrals",
+        path: "/referrals",
+        icon: null,
+        featureFlag: "referrals",
+      },
     ],
   },
   {
@@ -30,10 +37,26 @@ describe("filterNavSections", () => {
     const out = filterNavSections(sections, {
       shareEnabled: true,
       walletEnabled: false,
+      referralsEnabled: true,
     });
     expect(out.flatMap((s) => s.items.map((i) => i.label))).toEqual([
       "Billing",
       "Shares",
+      "Referrals",
+    ]);
+  });
+
+  it("hides referrals entries when the referrals gate is off", () => {
+    const out = filterNavSections(sections, {
+      shareEnabled: true,
+      walletEnabled: true,
+      referralsEnabled: false,
+    });
+    expect(out.flatMap((s) => s.items.map((i) => i.label))).toEqual([
+      "Billing",
+      "Wallet",
+      "Shares",
+      "Wallet2",
     ]);
   });
 
@@ -41,6 +64,7 @@ describe("filterNavSections", () => {
     const out = filterNavSections(sections, {
       shareEnabled: true,
       walletEnabled: false,
+      referralsEnabled: false,
     });
     expect(out.map((s) => s.label)).toEqual(["ACCOUNT"]);
   });
@@ -49,10 +73,12 @@ describe("filterNavSections", () => {
     const out = filterNavSections(sections, {
       shareEnabled: false,
       walletEnabled: true,
+      referralsEnabled: true,
     });
     expect(out.flatMap((s) => s.items.map((i) => i.label))).toEqual([
       "Billing",
       "Wallet",
+      "Referrals",
       "Wallet2",
     ]);
   });
@@ -65,6 +91,7 @@ describe("filterNavSections", () => {
     const out = filterNavSections(navSections, { shareEnabled: true });
     const labels = out.flatMap((s) => s.items.map((i) => i.label));
     expect(labels.includes("Wallet")).toBe(WALLET_FEATURE_ENABLED);
+    expect(labels.includes("Referrals")).toBe(REFERRALS_FEATURE_ENABLED);
 
     const vm = out
       .flatMap((s) => s.items)
