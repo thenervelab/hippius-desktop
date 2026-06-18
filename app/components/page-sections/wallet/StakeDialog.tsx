@@ -235,7 +235,8 @@ const StakeDialog: React.FC<StakeDialogProps> = ({
         onClose={onClose}
         title="Stake"
         description="Stake your hAlpha tokens on Hippius"
-        icon={<HippiusLogo className="size-4 text-white" />}
+        icon={<HippiusLogo className="size-8" />}
+        iconBgClassName="bg-transparent"
         maxWidth="max-w-[600px]"
         titleDescriptionGap="mt-2"
         footer={
@@ -317,7 +318,8 @@ const StakeDialog: React.FC<StakeDialogProps> = ({
         onClose={() => setShowConfirmation(false)}
         title="Confirm Staking"
         description="Stake your hAlpha tokens on Hippius"
-        icon={<HippiusLogo className="size-4 text-white" />}
+        icon={<HippiusLogo className="size-8" />}
+        iconBgClassName="bg-transparent"
         maxWidth="max-w-[600px]"
         titleDescriptionGap="mt-2"
         footer={
