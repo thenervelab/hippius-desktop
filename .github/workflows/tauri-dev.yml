@@ -219,6 +219,47 @@ jobs:
         env:
           NODE_ENV: production
 
+      # Apple code signing + notarization. Exported via GITHUB_ENV instead of
+      # the tauri-action env block because an unset secret renders as an empty
+      # string there, and tauri treats empty APPLE_SIGNING_IDENTITY /
+      # APPLE_API_KEY as "present" — failing the build instead of skipping.
+      # With secrets set: tauri-action imports the base64 .p12 into a throwaway
+      # keychain and signs; the bundler then notarizes the app + DMG with the
+      # App Store Connect API key and staples the ticket. This job is macOS-only
+      # (no matrix), so there is no platform guard.
+      - name: Set up Apple signing & notarization
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: |
+          if [[ -n "$APPLE_CERTIFICATE" && -n "$APPLE_SIGNING_IDENTITY" ]]; then
+            {
+              echo "APPLE_CERTIFICATE=$APPLE_CERTIFICATE"
+              echo "APPLE_CERTIFICATE_PASSWORD=$APPLE_CERTIFICATE_PASSWORD"
+              echo "APPLE_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY"
+            } >> "$GITHUB_ENV"
+            echo "Code signing enabled."
+          else
+            echo "APPLE_CERTIFICATE / APPLE_SIGNING_IDENTITY secrets not set — building unsigned."
+          fi
+          if [[ -n "$APPLE_API_KEY_CONTENT" && -n "$APPLE_API_KEY_ID" && -n "$APPLE_API_ISSUER_ID" ]]; then
+            KEY_PATH="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
+            printf '%s' "$APPLE_API_KEY_CONTENT" | base64 --decode > "$KEY_PATH"
+            {
+              echo "APPLE_API_KEY_PATH=$KEY_PATH"
+              echo "APPLE_API_KEY=$APPLE_API_KEY_ID"
+              echo "APPLE_API_ISSUER=$APPLE_API_ISSUER_ID"
+            } >> "$GITHUB_ENV"
+            echo "Notarization enabled."
+          else
+            echo "App Store Connect API key secrets not set — skipping notarization."
+          fi
+
       - name: Build & publish
         uses: tauri-apps/tauri-action@v0
         env:
