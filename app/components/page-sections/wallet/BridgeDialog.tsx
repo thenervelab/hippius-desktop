@@ -485,7 +485,8 @@ const BridgeDialog: React.FC<BridgeDialogProps> = ({
             ? "Bridge your tokens from Bittensor to Hippius"
             : "Bridge your tokens from Hippius to Bittensor"
         }
-        icon={<HippiusLogo className="size-4 text-white" />}
+        icon={<HippiusLogo className="size-8" />}
+        iconBgClassName="bg-transparent"
         iconTitleGap="mt-4 mb-0"
         titleDescriptionGap="mt-0"
         maxWidth="max-w-[640px]"
@@ -649,7 +650,8 @@ const BridgeDialog: React.FC<BridgeDialogProps> = ({
         title={
           isAlphaToHAlpha ? "Bridge Alpha to hAlpha" : "Bridge hAlpha to Alpha"
         }
-        icon={<HippiusLogo className="size-4 text-white" />}
+        icon={<HippiusLogo className="size-8" />}
+        iconBgClassName="bg-transparent"
         iconTitleGap="mt-4 mb-0"
         titleDescriptionGap="mt-0"
         maxWidth="max-w-[640px]"

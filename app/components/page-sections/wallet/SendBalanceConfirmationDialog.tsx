@@ -83,7 +83,8 @@ const SendBalanceConfirmationDialog: React.FC<
       onClose={onClose}
       title="Confirm Transaction"
       description="Sending hAlpha tokens."
-      icon={<HippiusLogo className="size-4 text-white" />}
+      icon={<HippiusLogo className="size-8" />}
+      iconBgClassName="bg-transparent"
       maxWidth="max-w-[600px]"
       titleDescriptionGap="mt-2"
       footer={

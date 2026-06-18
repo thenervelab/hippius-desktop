@@ -147,12 +147,20 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
         <div ref={ref} className="flex flex-col h-full overflow-y-auto">
           {/* Header */}
           <div className="flex items-start gap-3 px-3 py-3 border-b border-grey-dark-100 dark:border-black-300 flex-shrink-0">
-            <div
-              className="size-9 rounded-full flex items-center justify-center flex-shrink-0 overflow-hidden"
-              style={{ backgroundColor: iconBg }}
-            >
-              <Icon className={cn("text-white", type === "Hippius" ? "size-6" : "size-5")} />
-            </div>
+            {/* Hippius-type notifications show the brand logo exactly as
+                the top bar does — the bare blue mark, never on a filled
+                blue circle. Every other type keeps its colored badge so
+                its white glyph stays legible against the surface. */}
+            {type === "Hippius" ? (
+              <Icon className="size-9 flex-shrink-0" />
+            ) : (
+              <div
+                className="size-9 rounded-full flex items-center justify-center flex-shrink-0 overflow-hidden"
+                style={{ backgroundColor: iconBg }}
+              >
+                <Icon className="text-white size-5" />
+              </div>
+            )}
 
             <div className="flex flex-col flex-1 min-w-0">
               <p className="text-[14px] font-medium truncate text-[#0a0a0a] dark:text-white">

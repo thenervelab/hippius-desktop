@@ -131,7 +131,8 @@ const WithdrawDialog: React.FC<WithdrawDialogProps> = ({
         onClose={onClose}
         title="Withdraw hALPHA"
         description="Withdraw your redeemable hAlpha tokens on Hippius."
-        icon={<HippiusLogo className="size-4 text-white" />}
+        icon={<HippiusLogo className="size-8" />}
+        iconBgClassName="bg-transparent"
         maxWidth="max-w-[600px]"
         titleDescriptionGap="mt-2"
         footer={

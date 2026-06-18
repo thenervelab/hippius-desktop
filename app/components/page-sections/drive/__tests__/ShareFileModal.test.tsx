@@ -74,7 +74,7 @@ describe("ShareFileModal", () => {
   it("shows running state then transitions to done with the share URL", async () => {
     invokeMock.mockResolvedValueOnce({
       shareToken: "tok-abc",
-      shareUrl: "https://console.hippicode.com/share/tok-abc#k=KEY",
+      shareUrl: "https://console.hippius.com/share/tok-abc#k=KEY",
       expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
     });
 
@@ -156,7 +156,7 @@ describe("ShareFileModal", () => {
       .mockRejectedValueOnce("network down")
       .mockResolvedValueOnce({
         shareToken: "tok-xyz",
-        shareUrl: "https://console.hippicode.com/share/tok-xyz#k=KEY2",
+        shareUrl: "https://console.hippius.com/share/tok-xyz#k=KEY2",
         expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
       });
 
@@ -177,7 +177,7 @@ describe("ShareFileModal", () => {
     invokeMock
       .mockResolvedValueOnce({
         shareToken: "tok-rev",
-        shareUrl: "https://console.hippicode.com/share/tok-rev#k=K",
+        shareUrl: "https://console.hippius.com/share/tok-rev#k=K",
         expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
       })
       .mockResolvedValueOnce(undefined); // revoke_share returns void

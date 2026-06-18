@@ -634,7 +634,6 @@ mod tests {
             has_local_mnemonic: true,
             updated_at: None,
             recommended_flow: RecoveryFlow::Proceed,
-            should_prompt_legacy_migration: false,
         }
     }
 

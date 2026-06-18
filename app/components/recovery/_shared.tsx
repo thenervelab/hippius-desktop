@@ -14,10 +14,10 @@ export const UNLOCK_PASSWORD_DOCS_URL =
   "https://docs.hippius.com/use/desktop/file-system#unlock-password";
 
 /**
- * Shared recovery-dialog UI primitives. Used by
- * `AccountRecoveryDialog.tsx` and `ExistingUserRecoveryPrompt.tsx` so
- * the signup form and the migration nag stay visually and behaviourally
- * identical — both password fields, both strength meters, same debounce.
+ * Shared recovery-dialog UI primitives. Used across the
+ * `AccountRecoveryDialog.tsx` branches (signup / unlock) so every
+ * recovery form stays visually and behaviourally identical — same
+ * password fields, strength meters, and debounce.
  */
 
 export const PasswordField: React.FC<{
