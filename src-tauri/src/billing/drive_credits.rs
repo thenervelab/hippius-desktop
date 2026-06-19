@@ -203,9 +203,20 @@ fn build_credits_chart(events: &[DriveCreditEvent], range: &str) -> Vec<ChartPoi
     }
 
     let today = chrono::Utc::now().date_naive();
-    let Some(start) = range_start(range, today) else {
+    let Some(window_start) = range_start(range, today) else {
         return Vec::new();
     };
+
+    // Clamp the window to the first day the drive endpoint actually has data.
+    // `consumed` is sorted ascending, so its first entry is the earliest
+    // CreditsConsumed event. Without this clamp every window that predates
+    // that day paints a misleading flat-zero plateau — and `max` is worst of
+    // all, since `range_start("max")` is the hardcoded service-creation date
+    // (2025-03-11), over a year before this endpoint's earliest event. We only
+    // ever clamp *up* to `data_start`, so the `pre_range_total` seed below
+    // still carries forward earlier spend for windows that begin after it.
+    let data_start = consumed[0].0;
+    let start = window_start.max(data_start);
     let dates = get_all_dates_in_range(start, today);
 
     let pre_range_total: f64 = consumed
@@ -357,6 +368,24 @@ mod tests {
         let kept = consumed_events_by_date(&events);
         let dates: Vec<NaiveDate> = kept.iter().map(|(d, _)| *d).collect();
         assert!(dates.windows(2).all(|w| w[0] <= w[1]), "not sorted: {dates:?}");
+    }
+
+    #[test]
+    fn max_range_starts_at_first_event_not_service_creation() {
+        // `range_start("max")` is the hardcoded service-creation date
+        // (2025-03-11), but the drive endpoint's earliest event is over a
+        // year later. The chart must begin at the first real event — not
+        // paint a flat-zero plateau back to 2025 — and the first point must
+        // already reflect that day's cumulative spend (1 credit here), not 0.
+        let events = vec![evt("CreditsConsumed", "1000000000000000000", "2026-05-06T00:00:00Z")];
+        let chart = build_credits_chart(&events, "max");
+        assert!(!chart.is_empty(), "max chart should not be empty");
+        assert_eq!(chart[0].x, "2026-05-06T00:00:00.000Z", "first point should be the first event day");
+        assert!(
+            (chart[0].balance - 1.0).abs() < 1e-12,
+            "first point should carry the day's spend, got {}",
+            chart[0].balance
+        );
     }
 
     #[test]
