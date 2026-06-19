@@ -15,11 +15,14 @@ import { cn } from "@/app/lib/utils";
 
 import AvailableCreditsChart from "./AvailableCreditsChart";
 
+// Drive credit history only exists from the endpoint's first event onward, so
+// longer fixed windows (60 days, 1 year) would render mostly flat-zero before
+// the data begins. We offer just these three; MAX clamps to the first real
+// event in Rust (`build_credits_chart`) and auto-grows as the span lengthens,
+// so this set stays correct in future years without per-year special-casing.
 const timeRangeOptions = [
   { value: "last7days", label: "THIS WEEK" },
   { value: "last30days", label: "LAST 30 DAYS" },
-  { value: "last60days", label: "LAST 60 DAYS" },
-  { value: "year", label: "1 YEAR" },
   { value: "max", label: "MAX" },
 ];
 
