@@ -59,6 +59,16 @@ pub struct AppState {
     /// of `SyncError`, and globally on `SyncReset`). See
     /// `crate::sync::credits_exhausted`.
     pub credits_exhausted: std::sync::Arc<crate::sync::credits_exhausted::CreditsExhaustedState>,
+    /// Per-label consecutive-failure count deciding whether a `SyncError`
+    /// becomes a persisted "Sync Failed" notification. A flaky endpoint fires
+    /// a `SyncError` every retry cycle; this surfaces ONE notification once a
+    /// drive has failed `ERROR_NOTIFY_THRESHOLD` consecutive cycles and
+    /// suppresses the rest until the drive recovers. Counted per-label here
+    /// rather than read from the payload's runner-global `consecutive_failures`
+    /// (which any healthy drive resets). Cleared on the recovery edge
+    /// (`SyncCompleted`), `SyncStopped`, and globally on `SyncReset`. See
+    /// `crate::sync::error_notify`.
+    pub error_notify: std::sync::Arc<crate::sync::error_notify::ErrorNotifyState>,
     /// Monotonically increasing counter, incremented on every
     /// `SyncStarted` event. The `UploadProcessingState` clear gate
     /// reads this to distinguish events from a cycle that began
@@ -172,6 +182,7 @@ impl AppState {
             upload_processing: std::sync::Arc::new(crate::sync::upload_processing::UploadProcessingState::new()),
             preparing: std::sync::Arc::new(crate::sync::preparing::PreparingState::new()),
             credits_exhausted: std::sync::Arc::new(crate::sync::credits_exhausted::CreditsExhaustedState::new()),
+            error_notify: std::sync::Arc::new(crate::sync::error_notify::ErrorNotifyState::new()),
             sync_session_epoch: AtomicU64::new(0),
             tray_panel_hidden_at: AtomicU64::new(0),
             health_client,

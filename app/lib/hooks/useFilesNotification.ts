@@ -169,14 +169,18 @@ export function useFilesNotification() {
               flushNotification();
             }, SYNC_NOTIFICATION_AGGREGATION_MS);
           }),
-          listen<SyncError>("hcfs_sync_error", async (e) => {
+          listen<SyncError>("hcfs_sync_failed_notify", async (e) => {
             if (cancelled || !userAddress) return;
             const label = e.payload.label || "default";
             // Single Rust call for error notification. `outcome: "error"`
             // makes the backend pick the "Sync Failed" title and the
-            // `FileSyncError-<ts>` subtype. Cancels never reach this
-            // handler — they are silenced at the Rust bridge, so every
-            // event that arrives here is a real, user-actionable failure.
+            // `FileSyncError-<ts>` subtype. We listen to the GATED
+            // `hcfs_sync_failed_notify` event, not the raw `hcfs_sync_error`:
+            // a flaky endpoint emits a sync error every retry cycle, so the
+            // Rust bridge gates this channel on a per-label "genuinely down"
+            // threshold (see `sync::error_notify`) and fires it once per
+            // outage. Cancels and transient single-cycle blips never reach
+            // here, so every event is a real, sustained failure.
             await invoke("create_sync_notification", {
               userAddress,
               description: `Sync failed for folder "${label}": ${e.payload.error}`,

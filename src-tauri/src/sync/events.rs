@@ -55,6 +55,19 @@ pub const DRIVE_STATUS_CHANGED: &str = "hcfs_drive_status_changed";
 pub const DRIVE_REMOVED: &str = "hcfs_drive_removed";
 /// Emitted when files have repeatedly failed to sync (threshold reached).
 pub const FILES_FAILED_REPEATEDLY: &str = "hcfs_files_failed_repeatedly";
+
+/// Gated sibling of [`SYNC_ERROR`] that drives the persisted "Sync Failed"
+/// notification.
+///
+/// [`SYNC_ERROR`] fires on every real (non-cancel) failed cycle, so a flaky
+/// endpoint emits it once per retry — too noisy to turn each into a
+/// notification. This event is emitted only when a drive is *genuinely down*:
+/// the bridge gates it on a per-label consecutive-failure count reaching a
+/// threshold (see `crate::sync::error_notify`), so the frontend gets exactly
+/// one notification per outage instead of one per cycle. A user-initiated
+/// reviewed-conflict sync bypasses the gate and always emits on failure.
+/// Carries the same [`SyncErrorPayload`] as [`SYNC_ERROR`].
+pub const SYNC_FAILED_NOTIFY: &str = "hcfs_sync_failed_notify";
 /// Emitted the moment hcfs-client classifies a per-file upload or download
 /// as failed (e.g. server returned 402 InsufficientBalance, 5xx, network
 /// error). Carries a typed [`FileFailureKindPayload`] so the FE can switch

@@ -8,6 +8,7 @@ pub mod control;
 pub mod credits_exhausted;
 pub mod device;
 pub mod drive_status;
+pub mod error_notify;
 pub mod events;
 pub mod failure_commands;
 pub mod failure_repo;

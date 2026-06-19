@@ -222,6 +222,11 @@ pub(crate) fn handle_sync_completed(app: &AppHandle, mut payload: events::SyncCo
         app_state.upload_processing.clear_if_session_advanced(app, &payload.label, epoch);
     }
 
+    // Recovery edge: a successful cycle re-arms the "Sync Failed" latch so a
+    // drive that goes down again later notifies anew. Mirrors hcfs-client
+    // resetting `consecutive_failures` to 0 on success.
+    app_state.error_notify.clear(&payload.label);
+
     // Update per-file failure counters from the finalized session.
     update_failure_counts(app, &payload.label);
 
@@ -236,6 +241,36 @@ pub(crate) fn handle_sync_completed(app: &AppHandle, mut payload: events::SyncCo
     let _ = app.emit(events::SYNC_COMPLETED, payload);
 }
 
+/// Consecutive failed sync cycles before a drive is treated as *genuinely
+/// down* and a single "Sync Failed" notification is surfaced.
+///
+/// Counted PER-LABEL by `crate::sync::error_notify::ErrorNotifyState` — NOT
+/// read from the `SyncError` payload's `consecutive_failures`, which is a
+/// runner-global counter any healthy drive resets every cycle (see that
+/// module's header). `3` matches the project's existing per-file
+/// repeated-failure threshold (`sync::failure_tracking::FAILURE_THRESHOLD`)
+/// and sits above hcfs-client's own `HEALTH_FAILURE_THRESHOLD = 2`
+/// connectivity flip, so a notification means "still failing after the engine
+/// already considers the endpoint offline", not a one-cycle blip.
+const ERROR_NOTIFY_THRESHOLD: u32 = 3;
+
+/// Notification policy for a sync failure routed through [`handle_sync_error`].
+///
+/// The auto-retry loop fires a `SyncError` every failed cycle, so its
+/// notifications must be rate-limited; a reviewed-conflict sync is a
+/// user-initiated one-shot whose single failure is always worth one
+/// notification. Modeled as an enum rather than a `bool` so the two intents
+/// read at the call site (axiom `illu_design_02`).
+#[derive(Clone, Copy)]
+pub(crate) enum FailureNotify {
+    /// Auto-retry loop: notify only once `ERROR_NOTIFY_THRESHOLD` consecutive
+    /// cycles have failed for this label.
+    Gated,
+    /// User-initiated one-shot (reviewed-conflict sync): always notify on a
+    /// real (non-cancel) failure.
+    Always,
+}
+
 /// Single source of truth for the sync-ERROR transition, shared by the auto-sync
 /// bridge ([`SyncEventHandler::on_event`]'s `SyncError` arm) and the
 /// reviewed-conflict command ([`crate::sync::control::sync_with_conflict_resolutions`]).
@@ -247,12 +282,18 @@ pub(crate) fn handle_sync_completed(app: &AppHandle, mut payload: events::SyncCo
 ///    "Sync Failed" notification; the preparing widget is still cleared.
 /// 2. For a REAL error, runs the epoch-gated, per-label defensive clears
 ///    (upload-processing banner, preparing override, 402 credits counter) so an
-///    abort mid-cycle can't leak a stuck banner, then emits `SYNC_ERROR`.
+///    abort mid-cycle can't leak a stuck banner, then emits `SYNC_ERROR` and,
+///    per `notify`, the gated `SYNC_FAILED_NOTIFY`.
+///
+/// `notify` selects the notification policy: [`FailureNotify::Gated`] for the
+/// auto-retry loop (notify once a label has failed `ERROR_NOTIFY_THRESHOLD`
+/// consecutive cycles) and [`FailureNotify::Always`] for a user-initiated
+/// reviewed-conflict sync (always notify a real failure).
 ///
 /// Sharing this with the reviewed-conflict path keeps a cancel during a
 /// reviewed sync from surfacing a spurious "Sync Failed" and from skipping the
 /// defensive clears.
-pub(crate) fn handle_sync_error(app: &AppHandle, payload: events::SyncErrorPayload) {
+pub(crate) fn handle_sync_error(app: &AppHandle, payload: events::SyncErrorPayload, notify: FailureNotify) {
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
 
@@ -278,6 +319,27 @@ pub(crate) fn handle_sync_error(app: &AppHandle, payload: events::SyncErrorPaylo
         app_state.credits_exhausted.clear(&payload.label);
     }
 
+    // Decide BEFORE emitting whether this failure should surface a persisted
+    // "Sync Failed" notification. For the auto-retry loop, `record_failure`
+    // counts THIS label's consecutive failed cycles (not the payload's
+    // runner-global `consecutive_failures`, which any healthy drive resets —
+    // see `error_notify`) and fires once when the count first reaches the
+    // threshold, suppressing every later cycle until `handle_sync_completed`
+    // clears it on recovery. A reviewed one-shot always notifies.
+    let should_notify = match notify {
+        FailureNotify::Always => true,
+        FailureNotify::Gated => app_state.error_notify.record_failure(&payload.label, ERROR_NOTIFY_THRESHOLD),
+    };
+
+    // `SYNC_ERROR` still fires on EVERY real failed cycle — unchanged — so
+    // live consumers keep working (e.g. `ConflictEventListener` drops the
+    // drive's pending conflicts on an aborted cycle). Only the gated
+    // notification channel is rate-limited. The notify emit clones the small
+    // payload only on the rare down-edge; `SYNC_ERROR` takes the original by
+    // move.
+    if should_notify {
+        let _ = app.emit(events::SYNC_FAILED_NOTIFY, payload.clone());
+    }
     let _ = app.emit(events::SYNC_ERROR, payload);
 }
 
@@ -405,6 +467,8 @@ impl SyncEventHandler for TauriSyncBridge {
                         retry_in_secs,
                         consecutive_failures,
                     },
+                    // Auto-retry loop: rate-limit notifications per label.
+                    FailureNotify::Gated,
                 );
             }
             SyncEvent::SyncStopped { label } => {
@@ -418,6 +482,9 @@ impl SyncEventHandler for TauriSyncBridge {
                 // per-cycle aggregate; clear it so a future resume /
                 // re-add starts at zero. Idempotent.
                 app_state.credits_exhausted.clear(&label);
+                // Re-arm the "Sync Failed" latch: a paused/removed drive that
+                // is later resumed and goes down should notify again.
+                app_state.error_notify.clear(&label);
                 let _ = app.emit(events::SYNC_STOPPED, events::LabelPayload { label });
             }
             SyncEvent::SyncReset { account_id, message } => {
@@ -431,6 +498,10 @@ impl SyncEventHandler for TauriSyncBridge {
                 // data could touch it — a stale `file_count` would
                 // pollute the banner for an unrelated user.
                 app_state.credits_exhausted.clear_all();
+                // Same reasoning for the "Sync Failed" latch: a previous
+                // account's down-episode must not suppress the first
+                // notification for a different account.
+                app_state.error_notify.clear_all();
                 let _ = app.emit(events::SYNC_RESET, events::SyncResetPayload { account_id, message });
             }
             SyncEvent::PlanReady {

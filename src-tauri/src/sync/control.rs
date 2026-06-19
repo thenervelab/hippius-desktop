@@ -202,6 +202,9 @@ pub async fn sync_with_conflict_resolutions(app: AppHandle, label: String, resol
                     retry_in_secs: 0,
                     consecutive_failures: 0,
                 },
+                // User-initiated reviewed sync: a real failure always notifies
+                // (not the auto-loop's per-label rate-limited path).
+                crate::sync::tauri_bridge::FailureNotify::Always,
             );
             Err(crate::error::AppError::from(e))
         }
@@ -215,6 +218,8 @@ pub async fn sync_with_conflict_resolutions(app: AppHandle, label: String, resol
                     retry_in_secs: 0,
                     consecutive_failures: 0,
                 },
+                // User-initiated reviewed sync: a real failure always notifies.
+                crate::sync::tauri_bridge::FailureNotify::Always,
             );
             Err(crate::error::AppError::NotReady(crate::error::NotReadyKind::DriveNotUnlocked))
         }
