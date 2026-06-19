@@ -357,6 +357,35 @@ fn initialize_sync_inner_commits_via_epoch_check() {
     );
 }
 
+/// Static guard against the "app freezes when a second folder is added while
+/// one is already syncing" regression. When a sync loop is already running,
+/// `initialize_sync_inner` must SPAWN the loop hot-add, not `.await` it. The
+/// awaited path runs hcfs-client's `hot_add_drives` → `collect_drive_paths`,
+/// which blocks on every peer drive's manager lock (held for the whole of a
+/// peer's in-flight sync cycle), stalling the `add_local_sync_folder` IPC and
+/// its disabled-button modal for the length of that sync. The new drive is
+/// already registered before this point, so the running loop syncs it on its
+/// next cycle regardless. Reverting to an unconditional
+/// `start_sync_loop(app).await` reintroduces the freeze; this pins the fix.
+#[test]
+fn initialize_sync_inner_spawns_loop_hot_add_when_running() {
+    let src = lifecycle_src();
+    let body = fn_body(&src, "async fn initialize_sync_inner(");
+
+    let gate_idx = body.find("loop_already_running").expect(
+        "initialize_sync_inner must branch on whether a loop is already running so the \
+         hot-add never stalls the init IPC on a peer drive's manager lock",
+    );
+    let spawn_idx = body.find("async_runtime::spawn").expect(
+        "initialize_sync_inner must SPAWN start_sync_loop when a loop is already running — \
+         awaiting hot_add_drives blocks on a peer drive's manager lock (the freeze bug)",
+    );
+    assert!(
+        gate_idx < spawn_idx,
+        "the spawn must live inside the `loop_already_running` branch",
+    );
+}
+
 /// Static pin on the commit step itself: `apply_init_commit` is where the
 /// "successfully initialized ⇒ is_paused = 0" write now lives, so IT must
 /// call `set_sync_path_paused(.., false)` — clear, never set.

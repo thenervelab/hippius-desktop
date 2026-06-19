@@ -1163,7 +1163,38 @@ pub(crate) async fn initialize_sync_inner(
     register_drive(&app, sync, manager, &label, &cfg.sync_path, &folder_dir).await;
 
     if start_loop {
-        start_sync_loop(app.clone()).await;
+        // Starting the sync loop must NOT block this init's return when a loop
+        // is ALREADY running. In that case hcfs-client's `start_sync_loop`
+        // takes the `hot_add_drives` path, whose `collect_drive_paths` awaits
+        // EVERY registered drive's manager lock — and that lock is held for the
+        // full duration of a peer drive's in-flight sync cycle (run_sync_cycle
+        // holds `manager.lock()` across the whole transfer). Awaiting it here
+        // stalled the entire `add_local_sync_folder` IPC — and its modal, whose
+        // buttons are disabled while the call is pending — for the length of the
+        // peer drive's sync: the reported "app freezes when a second folder is
+        // added while one is already syncing". The new drive is already in
+        // `sync.drives` (registered just above), so the running loop picks it up
+        // on its next cycle regardless; spawn the hot-add so init can commit its
+        // status and return immediately.
+        //
+        // When no loop is running yet, keep awaiting: creation is cheap (there
+        // is no busy peer manager to wait on) and awaiting keeps the first
+        // drive's watcher/loop deterministically up before init returns.
+        //
+        // Read `loop_handle` into a `let` so its guard drops at the semicolon,
+        // before `start_sync_loop` re-locks `loop_handle` internally. The check
+        // is a hint, not a guarantee: if the loop is torn down between here and
+        // the spawned task running, `start_sync_loop` re-checks `loop_handle`
+        // under its own lock and self-guards an empty drive map — safe either way.
+        let loop_already_running = sync.loop_handle.lock().await.is_some();
+        if loop_already_running {
+            let app_for_hot_add = app.clone();
+            tauri::async_runtime::spawn(async move {
+                start_sync_loop(app_for_hot_add).await;
+            });
+        } else {
+            start_sync_loop(app.clone()).await;
+        }
     }
     info!(
         "Sync initialized successfully for '{}'. User ID: {}, New setup: {}",
