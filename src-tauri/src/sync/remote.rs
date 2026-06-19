@@ -124,7 +124,13 @@ pub async fn list_remote_folder_files(state: tauri::State<'_, AppState>, account
     let client = build_client(pool, &account_id, &label).await?;
     let fhash = folder_hash(&label);
 
-    hcfs_client::drive::remote::list_remote_files(&client, &account_id, &fhash, &encryption_key)
+    let access = hcfs_client::drive::remote::RemoteFileAccess {
+        client: &client,
+        ss58_address: &account_id,
+        folder_hash: &fhash,
+        encryption_key: &encryption_key,
+    };
+    hcfs_client::drive::remote::list_remote_files(&access)
         .await
         .map_err(|e| {
             error!(label = %label, "Failed to list remote files: {e}");
@@ -156,13 +162,16 @@ pub async fn download_remote_file(
     let progress_file_id = file_id.clone();
     let progress_app = app.clone();
 
+    let access = hcfs_client::drive::remote::RemoteFileAccess {
+        client: &client,
+        ss58_address: &account_id,
+        folder_hash: &fhash,
+        encryption_key: &encryption_key,
+    };
     hcfs_client::drive::remote::download_remote_file(
-        &client,
-        &account_id,
-        &fhash,
+        &access,
         &file_id,
         &PathBuf::from(&output_path),
-        &encryption_key,
         Some(move |bytes: u64, total: u64| {
             let _ = progress_app.emit(
                 "oneoff_download_progress",
@@ -254,13 +263,16 @@ pub async fn cache_remote_file(
     let fhash = folder_hash(&label);
 
     let part = unique_part_path(&cache_root, &cache_name);
+    let access = hcfs_client::drive::remote::RemoteFileAccess {
+        client: &client,
+        ss58_address: &account_id,
+        folder_hash: &fhash,
+        encryption_key: &encryption_key,
+    };
     if let Err(e) = hcfs_client::drive::remote::download_remote_file(
-        &client,
-        &account_id,
-        &fhash,
+        &access,
         &file_id,
         &part,
-        &encryption_key,
         // No progress events: preview is a one-shot interactive fetch.
         Some(|_: u64, _: u64| {}),
     )
@@ -336,13 +348,16 @@ pub(crate) async fn download_cloud_file_to(state: &AppState, account_id: &str, l
     let encryption_key = encryption_key_for_label(pool, account_id, label, &mnemonic).await?;
     let client = build_client(pool, account_id, label).await?;
     let fhash = folder_hash(label);
+    let access = hcfs_client::drive::remote::RemoteFileAccess {
+        client: &client,
+        ss58_address: account_id,
+        folder_hash: &fhash,
+        encryption_key: &encryption_key,
+    };
     hcfs_client::drive::remote::download_remote_file(
-        &client,
-        account_id,
-        &fhash,
+        &access,
         file_id,
         dest,
-        &encryption_key,
         // No progress events: a thumbnail fetch is a small one-shot.
         Some(|_: u64, _: u64| {}),
     )

@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
-use crate::error::{AppError, Result};
+use crate::error::Result;
 use crate::sync::logic::{NEVER_EMITTED, is_file_completion_tick, should_schedule_flush, try_claim_snapshot_emit};
 
 /// Minimum milliseconds between throttled `emit_snapshot(false)` calls from
@@ -163,9 +163,11 @@ pub fn update_file_progress(
     action: FileAction,
     label: Option<&str>,
 ) -> Result<()> {
+    // hcfs-client's progress tracker is infallible (no ProgressError); the
+    // call returns `()`. The wrapper still returns Result<()> so its callers
+    // (which `?` it) don't ripple.
     sync.progress
-        .update_file_progress(path.to_owned(), bytes_transferred, total_bytes, action, label.map(ToOwned::to_owned))
-        .map_err(AppError::Progress)?;
+        .update_file_progress(path.to_owned(), bytes_transferred, total_bytes, action, label.map(ToOwned::to_owned));
     let is_file_complete = is_file_completion_tick(bytes_transferred, total_bytes);
     emit_snapshot_throttled(sync, is_file_complete);
     Ok(())
@@ -207,22 +209,21 @@ pub fn merge_into_session(
             expected_remote_deletes,
             file_list,
             label.as_deref(),
-        )
-        .map_err(AppError::Progress)?;
+        );
     sync.emit_snapshot(true);
     Ok(())
 }
 
 /// Remove all files for a label from the current session.
 pub fn remove_files_for_label(sync: &SyncRunner, label: String) -> Result<()> {
-    sync.progress.remove_files_for_label(label).map_err(AppError::Progress)?;
+    sync.progress.remove_files_for_label(label);
     sync.emit_snapshot(true);
     Ok(())
 }
 
 /// Clear all sync progress data (session + recent files).
 pub fn clear_all_data(sync: &SyncRunner) -> Result<()> {
-    sync.progress.clear_all_data().map_err(AppError::Progress)?;
+    sync.progress.clear_all_data();
     sync.emit_snapshot(true);
     Ok(())
 }
@@ -230,8 +231,7 @@ pub fn clear_all_data(sync: &SyncRunner) -> Result<()> {
 /// Mark excess pending files as failed.
 pub fn mark_pending_files_as_failed(sync: &SyncRunner, actual_uploads: u32, actual_downloads: u32, label: &str) -> Result<()> {
     sync.progress
-        .mark_pending_files_as_failed(actual_uploads, actual_downloads, label)
-        .map_err(AppError::Progress)?;
+        .mark_pending_files_as_failed(actual_uploads, actual_downloads, label);
     sync.emit_snapshot(true);
     Ok(())
 }

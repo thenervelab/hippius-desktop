@@ -423,6 +423,9 @@ async fn register_drive(app: &AppHandle, sync: &Arc<SyncRunner>, manager: DriveM
             DriveSlot {
                 manager: manager_arc,
                 cancel_token: CancellationToken::new(),
+                // Lock-free path for the watcher enumeration (hcfs-client
+                // `collect_drive_paths`); equals `manager.sync_path()`.
+                sync_path: PathBuf::from(sync_path),
             },
         );
     }
@@ -2401,6 +2404,7 @@ mod tests {
                 DriveSlot {
                     manager: Arc::new(TokioMutex::new(manager)),
                     cancel_token: token,
+                    sync_path: sync_path.clone(),
                 },
             );
         }
@@ -2504,6 +2508,7 @@ mod tests {
                 DriveSlot {
                     manager: Arc::new(TokioMutex::new(manager)),
                     cancel_token: token,
+                    sync_path: sync_path.clone(),
                 },
             );
         }
