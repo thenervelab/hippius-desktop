@@ -573,4 +573,81 @@ mod tests {
         generate_thumbnail_file(&src, dir.path(), "out_32.jpg", &target, 32).expect("decodes via byte sniffing");
         assert!(std::fs::metadata(&target).expect("exists").len() > 0);
     }
+
+    /// Build an in-memory pool with the production schema (so `hcfs_config`
+    /// matches `ensure_hcfs_config`, not a hand-rolled DDL that could drift).
+    async fn schema_pool() -> SqlitePool {
+        let pool = SqlitePool::connect("sqlite::memory:").await.expect("open sqlite::memory:");
+        crate::utils::schema::ensure_table_schema(&pool).await.expect("apply schema");
+        pool
+    }
+
+    /// `download_cloud_file_to` is the shared cloud-fetch core behind the
+    /// preview cache and the thumbnailer, adapted to hcfs-client's
+    /// `RemoteFileAccess` API. Before any network/crypto it must fail closed
+    /// with `NotReady(NoEncryptionKey)` when the session carries no mnemonic
+    /// (the cold-start "Mnemonic required" guard) — never panic or proceed.
+    #[tokio::test]
+    async fn download_cloud_file_to_requires_session_mnemonic() {
+        let state = AppState::new();
+        state.set_pool(schema_pool().await);
+        // No mnemonic seeded on `state.auth`.
+
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let dest = dir.path().join("out.bin");
+        let err = download_cloud_file_to(&state, "5SessionlessAccount", "label", "deadbeef", &dest)
+            .await
+            .expect_err("must fail without a session mnemonic");
+
+        assert!(
+            matches!(err, AppError::NotReady(crate::error::NotReadyKind::NoEncryptionKey)),
+            "expected NotReady(NoEncryptionKey), got {err:?}"
+        );
+    }
+
+    /// With a session mnemonic and a `hcfs_config` drive-password row, but no
+    /// `master_enc_mnemonic.json` on disk, key derivation must surface a clear
+    /// `AppError::Hcfs` (from `recover_mnemonic`) rather than panicking — the
+    /// guard the cloud-fetch path relies on before building the HCFS client.
+    /// `HOME` is pointed at a tempdir so `master_mnemonic_path` resolves to a
+    /// directory with no key file; serialised by `HOME_LOCK`.
+    #[allow(
+        clippy::await_holding_lock,
+        reason = "Test holds HOME_LOCK across awaits to serialise $HOME overrides. #[tokio::test] runs on a current-thread runtime so awaits don't contend on this lock — see test_helpers.rs."
+    )]
+    #[tokio::test]
+    async fn download_cloud_file_to_errors_when_master_mnemonic_missing() {
+        let _home = crate::test_helpers::HOME_LOCK.lock().expect("HOME_LOCK");
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        // SAFETY: the HOME override is serialised by HOME_LOCK (see test_helpers);
+        // #[tokio::test] is current-thread so no await contends on the env.
+        unsafe {
+            std::env::set_var("HOME", tmp.path());
+        }
+
+        let account = "5MasterMissingAccount";
+        let pool = schema_pool().await;
+        // encryption_version = 0 -> get_drive_password returns the plaintext, so
+        // the failure lands at recover_mnemonic (missing file), not earlier.
+        sqlx::query("INSERT INTO hcfs_config (owner, server_url, drive_password, encryption_version) VALUES (?, '', ?, 0)")
+            .bind(account_key(account))
+            .bind("pw-123")
+            .execute(&pool)
+            .await
+            .expect("seed hcfs_config");
+
+        let state = AppState::new();
+        state.set_pool(pool);
+        state.auth.lock().expect("auth lock").mnemonic = Some(zeroize::Zeroizing::new("test mnemonic phrase".to_string()));
+
+        let dest = tmp.path().join("out.bin");
+        let err = download_cloud_file_to(&state, account, "label", "deadbeef", &dest)
+            .await
+            .expect_err("must fail when the master mnemonic file is absent");
+
+        assert!(
+            matches!(err, AppError::Hcfs(_)),
+            "expected Hcfs(recover master mnemonic) error, got {err:?}"
+        );
+    }
 }
