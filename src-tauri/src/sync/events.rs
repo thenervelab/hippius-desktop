@@ -181,6 +181,82 @@ mod tests {
             "blank message falls back to a generic line, never an empty reason"
         );
     }
+
+    /// IPC wire-contract guard (Layer 0): pin the foreign `FileAction` wire
+    /// strings the `hcfs_sync_completed` payload carries.
+    ///
+    /// `SyncedFileDetail.action` forwards hcfs-client's `FileAction` verbatim;
+    /// its upstream `#[serde(rename_all = "snake_case")]` (verified at
+    /// `hcfs-client/src/engine/progress/state.rs`) is the contract the FE
+    /// `FileAction` union (`app/lib/types/syncSnapshot.ts`) switches on. A
+    /// foreign rename — e.g. hcfs flipping to `camelCase` — would still compile
+    /// here but silently break the FE's action dispatch; pinning the strings
+    /// turns that into a failing test. (The enum also has `Encrypt`/`Decrypt`,
+    /// but only these four reach a completed-cycle detail row.)
+    #[test]
+    fn synced_file_detail_pins_file_action_wire_strings() {
+        use hcfs_client::engine::progress::state::FileAction;
+
+        let cases = [
+            (FileAction::Upload, "upload"),
+            (FileAction::Download, "download"),
+            (FileAction::LocalDelete, "local_delete"),
+            (FileAction::RemoteDelete, "remote_delete"),
+        ];
+        for (action, wire) in cases {
+            let detail = SyncedFileDetail {
+                file_name: "f.txt".to_string(),
+                total_bytes: 1,
+                action,
+            };
+            let json = serde_json::to_value(&detail).expect("serialize SyncedFileDetail");
+            assert_eq!(json["action"], wire, "FileAction wire string drifted (expected {wire})");
+
+            // The desktop-owned envelope keys must stay camelCase.
+            let mut keys: Vec<&str> = json.as_object().expect("object").keys().map(String::as_str).collect();
+            keys.sort_unstable();
+            assert_eq!(keys, ["action", "fileName", "totalBytes"], "SyncedFileDetail key set drifted");
+        }
+    }
+
+    /// IPC wire-contract guard (Layer 0): pin the foreign `StagedChanges` keys
+    /// the `hcfs_conflicts_pending` payload nests under `staged`.
+    ///
+    /// `ConflictsPendingPayload.staged` forwards hcfs-client's `StagedChanges`
+    /// verbatim (no upstream `rename_all` → snake_case keys, verified at
+    /// `hcfs-client/src/engine/manager.rs`). The explicit struct literal below
+    /// ALSO fails to compile if hcfs adds or removes a `StagedChanges` field,
+    /// so this guards the field set at compile time and the wire keys at run
+    /// time — both of which the FE conflict-review UI depends on.
+    #[test]
+    fn conflicts_pending_pins_staged_changes_wire_keys() {
+        use hcfs_client::engine::manager::StagedChanges;
+
+        let payload = ConflictsPendingPayload {
+            label: "drive".to_string(),
+            staged: StagedChanges {
+                uploads: Vec::new(),
+                downloads: Vec::new(),
+                local_deletes: Vec::new(),
+                remote_deletes: Vec::new(),
+                conflicts: Vec::new(),
+                unchanged_count: 0,
+            },
+        };
+        let json = serde_json::to_value(&payload).expect("serialize ConflictsPendingPayload");
+
+        let mut top: Vec<&str> = json.as_object().expect("object").keys().map(String::as_str).collect();
+        top.sort_unstable();
+        assert_eq!(top, ["label", "staged"], "ConflictsPendingPayload top-level keys drifted");
+
+        let mut staged: Vec<&str> = json["staged"].as_object().expect("staged object").keys().map(String::as_str).collect();
+        staged.sort_unstable();
+        assert_eq!(
+            staged,
+            ["conflicts", "downloads", "local_deletes", "remote_deletes", "unchanged_count", "uploads"],
+            "StagedChanges wire keys drifted — an hcfs-client bump changed the conflict manifest shape"
+        );
+    }
 }
 
 // ── Payload structs for direct Tauri emission ──────────────────────────

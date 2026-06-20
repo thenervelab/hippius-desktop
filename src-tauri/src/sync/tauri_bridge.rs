@@ -1265,6 +1265,84 @@ mod tests {
         assert!(json["intentActive"].is_null());
     }
 
+    /// IPC wire-contract guard (Layer 0): pin the COMPLETE set of JSON keys
+    /// the `sync_progress_snapshot` event carries.
+    ///
+    /// `fixture_snapshot()` already pins the inner `SyncSnapshot` *field set*
+    /// at compile time — it names every field, so an hcfs-client field add or
+    /// rename fails to build. This test adds the dimension the compiler can't
+    /// see: the exact serialized key *strings*. A foreign serde-attribute drift
+    /// — hcfs flipping `rename_all = "camelCase"` to `snake_case`, or adding a
+    /// per-field `#[serde(rename)]` — leaves the Rust field names (and thus the
+    /// fixture) untouched but silently changes the JSON the frontend reads.
+    /// Asserting the full key set turns that silent break into a failing
+    /// `cargo test`. If you change the wire shape ON PURPOSE, update this list
+    /// AND `app/lib/types/syncSnapshot.ts` in the same change.
+    #[test]
+    fn snapshot_wire_pins_full_json_key_set() {
+        let inner = fixture_snapshot();
+        let wire = SyncSnapshotWire {
+            inner: &inner,
+            intent_total_files: Some(1),
+            intent_total_bytes: Some(1),
+            intent_completed_files: Some(1),
+            intent_completed_bytes: Some(1),
+            intent_active: Some(true),
+        };
+        let json = serde_json::to_value(&wire).expect("serialize wire");
+        let obj = json.as_object().expect("wire serializes to a JSON object");
+
+        let mut actual: Vec<&str> = obj.keys().map(String::as_str).collect();
+        actual.sort_unstable();
+
+        // The 27 flattened `SyncSnapshot` fields (camelCase) plus the 5 intent
+        // overlay fields `SyncSnapshotWire` appends. Source for the field set:
+        // `fixture_snapshot()` above + `hcfs-client/src/engine/progress/snapshot.rs`
+        // (`#[serde(rename_all = "camelCase")]`, no per-field rename/skip).
+        let mut expected = [
+            "actualTotal",
+            "bytesExpected",
+            "combinedBytesExpected",
+            "combinedProgressBytes",
+            "completedAt",
+            "completedFiles",
+            "deletedCount",
+            "effectiveCompleted",
+            "effectiveInProgress",
+            "expectedDownloads",
+            "expectedLocalDeletes",
+            "expectedRemoteDeletes",
+            "expectedUploads",
+            "failedFiles",
+            "files",
+            "isActive",
+            "lastError",
+            "overallPercent",
+            "progressBytes",
+            "retryInSecs",
+            "startedAt",
+            "statusVariant",
+            "syncDirection",
+            "syncedCount",
+            "totalFiles",
+            "widgetState",
+            "widgetVisible",
+            "intentActive",
+            "intentCompletedBytes",
+            "intentCompletedFiles",
+            "intentTotalBytes",
+            "intentTotalFiles",
+        ];
+        expected.sort_unstable();
+
+        assert_eq!(
+            actual, expected,
+            "sync_progress_snapshot wire key set drifted — update \
+             app/lib/types/syncSnapshot.ts and this list together, or revert the \
+             hcfs-client change that moved it"
+        );
+    }
+
     /// Regression for the production crash:
     /// `thread 'main' panicked at tauri_bridge.rs: there is no reactor
     /// running, must be called from the context of a Tokio 1.x runtime`
