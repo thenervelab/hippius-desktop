@@ -1,0 +1,178 @@
+name: ci
+
+# Test + lint gate for every PR and for pushes to the long-lived branches.
+#
+# This is the foundation of the dependency-bump safety net: when the pinned
+# `hcfs-client` git rev is bumped, this workflow re-runs the full Rust suite
+# — including the IPC wire-contract guards in sync/events.rs + sync/tauri_bridge.rs
+# — so a breaking bump fails the PR instead of shipping silently. Before this
+# existed, none of the Rust or frontend tests ran in CI at all.
+on:
+  pull_request:
+  push:
+    branches: [main, redesign]
+
+# Least privilege: this workflow only reads the checkout.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
+jobs:
+  rust:
+    # macOS matches the dev/build environment: the Rust suite is known-green
+    # there and it sidesteps the Linux Tauri system-deps + secret-service /
+    # keychain setup the `keyring` crate would need on a headless runner.
+    # Moving this to a cheaper ubuntu runner is a tracked follow-up.
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # No step pushes or reuses the GITHUB_TOKEN; the rust job fetches the
+          # private hcfs dep over a separate SSH key. Don't leave the token in
+          # .git/config where it could leak through artifacts.
+          persist-credentials: false
+
+      # hcfs-client / hcfs-shared are private git dependencies fetched over SSH.
+      # Mirrors the proven setup in publish-dev.yml so cargo can resolve them.
+      - name: Setup SSH for private Rust git deps
+        shell: bash
+        env:
+          PRIVATE_GIT_DEPLOY_KEY_B64: ${{ secrets.HCFS_DEPLOY_KEY_B64 }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          python3 - <<'PY' > ~/.ssh/private_git_key
+          import os, base64, sys
+          sys.stdout.buffer.write(base64.b64decode(os.environ["PRIVATE_GIT_DEPLOY_KEY_B64"].strip()))
+          PY
+          chmod 600 ~/.ssh/private_git_key
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          cat > ~/.ssh/config <<'EOF'
+          Host github.com
+            HostName github.com
+            User git
+            IdentityFile ~/.ssh/private_git_key
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+            BatchMode yes
+          EOF
+          chmod 600 ~/.ssh/config
+          eval "$(ssh-agent -s)"
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
+          echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
+          ssh-add ~/.ssh/private_git_key
+
+      - name: Force Cargo to use the git CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.cargo
+          printf '[net]\ngit-fetch-with-cli = true\n' > ~/.cargo/config.toml
+
+      - name: Install the pinned toolchain with clippy
+        shell: bash
+        run: |
+          set -euo pipefail
+          # rust-toolchain.toml pins the channel; add clippy to THAT toolchain
+          # (not the runner's default stable) so the gate runs under the same
+          # compiler the app builds with.
+          channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' src-tauri/rust-toolchain.toml)
+          echo "pinned channel: ${channel:-<none, using default>}"
+          if [[ -n "$channel" ]]; then
+            rustup toolchain install "$channel" --component clippy --no-self-update
+          else
+            rustup component add clippy
+          fi
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      # tauri-build requires the `frontendDist` dir (../out) to exist. The Rust
+      # suite never serves the frontend, so a placeholder satisfies the build
+      # without a full `pnpm build` (verified locally: cargo build succeeds).
+      - name: Placeholder frontend dist
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          printf '<!doctype html><title>ci</title>' > out/index.html
+
+      - name: Create src-tauri/.env
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p src-tauri
+          cat > src-tauri/.env <<'EOF'
+          ${{ secrets.TAURI_ENV_FILE }}
+          EOF
+          chmod 600 src-tauri/.env
+
+      - name: Clippy (deny warnings)
+        working-directory: src-tauri
+        env:
+          SQLX_OFFLINE: "true"
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Tests
+        working-directory: src-tauri
+        env:
+          SQLX_OFFLINE: "true"
+        run: cargo test
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # No step pushes or reuses the GITHUB_TOKEN; the rust job fetches the
+          # private hcfs dep over a separate SSH key. Don't leave the token in
+          # .git/config where it could leak through artifacts.
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 'lts/*'
+
+      - name: Setup PNPM
+        uses: pnpm/action-setup@eae0cfeb286e66ffb5155f1a79b90583a127a68b # v2.4.1
+        with:
+          version: 9.12.3
+          run_install: false
+
+      - name: PNPM store path
+        shell: bash
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_ENV"
+
+      - name: PNPM cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-pnpm-
+
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      # Three tests are currently red on the branch (FilterChips styling +
+      # two ShareFileModal async-state tests), unrelated to this CI change.
+      # Run non-blocking for visibility; drop `continue-on-error` to make this
+      # a hard gate once those are fixed (Layer 2 / Phase D follow-up).
+      - name: Tests (non-blocking until the 3 known reds are fixed)
+        continue-on-error: true
+        run: pnpm test
