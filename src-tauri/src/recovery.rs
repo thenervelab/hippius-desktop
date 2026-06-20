@@ -265,6 +265,14 @@ pub(crate) async fn check_recovery_state_inner(state: &tauri::State<'_, crate::a
 /// would otherwise fall through to a freshly-minted master and either
 /// trip `validate_master_against_existing_folders` or corrupt recovery
 /// state.
+// The two `Signup` arms are distinct decision-table rows, not an accidental
+// duplicate: `(true, true, Some(false))` seals an EXISTING legacy mnemonic
+// while `(false, _, Some(false))` mints a first-time one (see the doc table
+// above + `seal_and_upload_mnemonic`'s two paths). They are kept as separate
+// arms to mirror that table 1:1; merging them via `|` would fold two different
+// recovery scenarios into one and break the spec-to-code traceability this
+// security-sensitive function depends on.
+#[allow(clippy::match_same_arms, reason = "distinct decision-table rows that share an outcome; see comment above")]
 fn decide_recovery_flow(local: bool, can_decrypt: bool, has_server_blob: Option<bool>) -> RecoveryFlow {
     match (local, can_decrypt, has_server_blob) {
         (true, false, Some(true)) | (false, _, Some(true)) => RecoveryFlow::Unlock,
