@@ -169,10 +169,5 @@ jobs:
       - name: Lint
         run: pnpm lint
 
-      # Three tests are currently red on the branch (FilterChips styling +
-      # two ShareFileModal async-state tests), unrelated to this CI change.
-      # Run non-blocking for visibility; drop `continue-on-error` to make this
-      # a hard gate once those are fixed (Layer 2 / Phase D follow-up).
-      - name: Tests (non-blocking until the 3 known reds are fixed)
-        continue-on-error: true
+      - name: Tests
         run: pnpm test
