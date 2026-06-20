@@ -84,7 +84,7 @@ describe("ShareFileModal", () => {
     expect(screen.getByText(/encrypting and uploading/i)).toBeInTheDocument();
 
     // Then the URL surfaces in the read-only textarea.
-    const textarea = await screen.findByDisplayValue(/console\.hippicode\.com\/share\/tok-abc#k=KEY/);
+    const textarea = await screen.findByDisplayValue(/console\.hippius\.com\/share\/tok-abc#k=KEY/);
     expect(textarea).toBeInTheDocument();
     // The third arg is the progress `Channel`; assert the file coordinates
     // without pinning the channel instance.
@@ -169,7 +169,7 @@ describe("ShareFileModal", () => {
     fireEvent.click(screen.getByRole("button", { name: /try again/i }));
 
     // Second call succeeds; URL appears.
-    await screen.findByDisplayValue(/console\.hippicode\.com\/share\/tok-xyz#k=KEY2/);
+    await screen.findByDisplayValue(/console\.hippius\.com\/share\/tok-xyz#k=KEY2/);
     expect(invokeMock).toHaveBeenCalledTimes(2);
   });
 

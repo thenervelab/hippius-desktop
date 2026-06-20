@@ -30,7 +30,7 @@ describe("FilterChips", () => {
     expect(chip).toHaveClass("bg-grey-light-700");
     expect(chip).toHaveClass("font-mono");
     expect(chip).toHaveClass("uppercase");
-    expect(closeButton).toHaveClass("bg-grey-light-100");
+    expect(closeButton).toHaveClass("bg-grey-dark-100");
     expect(closeButton).toHaveClass("rounded-[3px]");
   });
 });
