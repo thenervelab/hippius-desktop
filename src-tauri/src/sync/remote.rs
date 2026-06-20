@@ -117,16 +117,24 @@ pub async fn list_remote_folder_files(state: tauri::State<'_, AppState>, account
     // Lists another account's remote files under its token; authorize against
     // the session (sibling download/cache commands are already guarded).
     let account_id = state.require_session_account(&account_id)?;
+    list_remote_folder_files_inner(state.inner(), &account_id, &label).await
+}
+
+/// Inner of [`list_remote_folder_files`], taking `&AppState` so live e2e tests
+/// can drive it without a `tauri::State`. The command wrapper performs the
+/// session-authority check before delegating here (mirrors the `*_inner` split
+/// used by `list_sync_folder_grouped_inner` and friends).
+pub async fn list_remote_folder_files_inner(state: &AppState, account_id: &str, label: &str) -> Result<Vec<RemoteFileInfo>> {
     info!(account_id = %account_id, label = %label, "Listing remote folder files");
     let pool = state.pool()?;
-    let mnemonic = session_mnemonic(&state)?;
-    let encryption_key = encryption_key_for_label(pool, &account_id, &label, &mnemonic).await?;
-    let client = build_client(pool, &account_id, &label).await?;
-    let fhash = folder_hash(&label);
+    let mnemonic = session_mnemonic(state)?;
+    let encryption_key = encryption_key_for_label(pool, account_id, label, &mnemonic).await?;
+    let client = build_client(pool, account_id, label).await?;
+    let fhash = folder_hash(label);
 
     let access = hcfs_client::drive::remote::RemoteFileAccess {
         client: &client,
-        ss58_address: &account_id,
+        ss58_address: account_id,
         folder_hash: &fhash,
         encryption_key: &encryption_key,
     };
@@ -342,7 +350,7 @@ async fn local_source_path(source: Option<&str>) -> Option<PathBuf> {
 /// # Errors
 /// [`AppError::NotReady`] (no session mnemonic), [`AppError::Crypto`] (key
 /// derivation), or [`AppError::Hcfs`] (download/decrypt).
-pub(crate) async fn download_cloud_file_to(state: &AppState, account_id: &str, label: &str, file_id: &str, dest: &Path) -> Result<()> {
+pub async fn download_cloud_file_to(state: &AppState, account_id: &str, label: &str, file_id: &str, dest: &Path) -> Result<()> {
     let pool = state.pool()?;
     let mnemonic = session_mnemonic(state)?;
     let encryption_key = encryption_key_for_label(pool, account_id, label, &mnemonic).await?;
