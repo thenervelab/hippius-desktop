@@ -257,6 +257,173 @@ mod tests {
             "StagedChanges wire keys drifted — an hcfs-client bump changed the conflict manifest shape"
         );
     }
+
+    /// Serialize `payload` and return its top-level JSON keys as an
+    /// order-independent set, so a wire-contract assertion can't be defeated
+    /// by transcribing the expected list in the wrong order.
+    fn keyset<T: serde::Serialize>(payload: T) -> std::collections::BTreeSet<String> {
+        let value = serde_json::to_value(&payload).expect("payload serializes to JSON");
+        value.as_object().expect("payload is a JSON object").keys().cloned().collect()
+    }
+
+    fn expect_keys(keys: &[&str]) -> std::collections::BTreeSet<String> {
+        keys.iter().map(|key| (*key).to_string()).collect()
+    }
+
+    /// IPC wire-contract guard (Layer 0): pin the top-level JSON key set of
+    /// every desktop-owned Tauri event payload in this module. Together with
+    /// the foreign-type guards (snapshot / FileAction / StagedChanges) this
+    /// covers the full IPC event surface — a field add/remove/rename here
+    /// changes the JSON the matching FE listener reads, and pinning the key
+    /// sets turns that into a failing `cargo test`. Each `#[serde(rename)]` /
+    /// `rename_all = "camelCase"` choice is part of the contract and is
+    /// asserted in its post-rename wire form. Change a shape ON PURPOSE → update
+    /// the FE listener type in the same change, then this list.
+    #[test]
+    fn desktop_event_payload_key_sets_are_pinned() {
+        use crate::sync::drive_status::DriveStatus;
+
+        // `localDeletes`/`uploadFiles`/... are explicit per-field renames; the
+        // PlanReady and Started payloads deliberately share this exact shape.
+        let plan_keys = [
+            "label",
+            "uploads",
+            "downloads",
+            "localDeletes",
+            "remoteDeletes",
+            "uploadFiles",
+            "downloadFiles",
+            "localDeleteFiles",
+            "remoteDeleteFiles",
+        ];
+        let plan_ready = SyncPlanReadyPayload {
+            label: "d".to_string(),
+            uploads: 0,
+            downloads: 0,
+            local_deletes: 0,
+            remote_deletes: 0,
+            upload_files: Vec::new(),
+            download_files: Vec::new(),
+            local_delete_files: Vec::new(),
+            remote_delete_files: Vec::new(),
+        };
+        let started = SyncStartedPayload {
+            label: "d".to_string(),
+            uploads: 0,
+            downloads: 0,
+            local_deletes: 0,
+            remote_deletes: 0,
+            upload_files: Vec::new(),
+            download_files: Vec::new(),
+            local_delete_files: Vec::new(),
+            remote_delete_files: Vec::new(),
+        };
+
+        assert_eq!(keyset(MetadataStalePayload { label: "d".to_string(), reason: "r".to_string() }), expect_keys(&["label", "reason"]), "MetadataStalePayload");
+        assert_eq!(keyset(LabelPayload { label: "d".to_string() }), expect_keys(&["label"]), "LabelPayload");
+        assert_eq!(keyset(AuthRequiredPayload { error: "e".to_string() }), expect_keys(&["error"]), "AuthRequiredPayload");
+        assert_eq!(keyset(FetchProgressPayload { label: "d".to_string(), fetched: 0, total: 0 }), expect_keys(&["label", "fetched", "total"]), "FetchProgressPayload");
+        assert_eq!(keyset(ScanProgressPayload { label: "d".to_string(), scanned: 0, path: None }), expect_keys(&["label", "scanned", "path"]), "ScanProgressPayload");
+        assert_eq!(keyset(SyncResetPayload { account_id: "a".to_string(), message: "m".to_string() }), expect_keys(&["account_id", "message"]), "SyncResetPayload");
+        assert_eq!(
+            keyset(SyncErrorPayload { label: "d".to_string(), error: "e".to_string(), retry_in_secs: 0, consecutive_failures: 0 }),
+            expect_keys(&["label", "error", "retry_in_secs", "consecutive_failures"]),
+            "SyncErrorPayload"
+        );
+        assert_eq!(
+            keyset(SyncCompletedPayload {
+                label: "d".to_string(),
+                files_uploaded: 0,
+                files_downloaded: 0,
+                files_deleted_locally: 0,
+                files_deleted_remotely: 0,
+                conflicts_resolved: 0,
+                conflicts_skipped: 0,
+                files: Vec::new(),
+            }),
+            expect_keys(&[
+                "label",
+                "files_uploaded",
+                "files_downloaded",
+                "files_deleted_locally",
+                "files_deleted_remotely",
+                "conflicts_resolved",
+                "conflicts_skipped",
+                "files",
+            ]),
+            "SyncCompletedPayload"
+        );
+        assert_eq!(keyset(plan_ready), expect_keys(&plan_keys), "SyncPlanReadyPayload");
+        assert_eq!(keyset(started), expect_keys(&plan_keys), "SyncStartedPayload (must match PlanReady)");
+        assert_eq!(keyset(FilesFailedRepeatedlyPayload { files: Vec::new() }), expect_keys(&["files"]), "FilesFailedRepeatedlyPayload");
+        assert_eq!(
+            keyset(FileFailedPayload {
+                label: "d".to_string(),
+                path: "p".to_string(),
+                file_id: "id".to_string(),
+                kind: FileFailureKindPayload::Network,
+                http_status: None,
+            }),
+            expect_keys(&["label", "path", "fileId", "kind", "httpStatus"]),
+            "FileFailedPayload"
+        );
+        assert_eq!(
+            keyset(CreditsExhaustedPayload { label: "d".to_string(), balance_cents: 0, required_cents: 0, file_count: 0 }),
+            expect_keys(&["label", "balanceCents", "requiredCents", "fileCount"]),
+            "CreditsExhaustedPayload"
+        );
+        assert_eq!(
+            keyset(DriveStatusChangedPayload {
+                label: "d".to_string(),
+                folder_name: "Hippius".to_string(),
+                path: "/p".to_string(),
+                status: DriveStatus::Active,
+            }),
+            expect_keys(&["label", "folderName", "path", "status"]),
+            "DriveStatusChangedPayload"
+        );
+    }
+
+    /// IPC wire-contract guard (Layer 0): pin the tagged-union wire shape of
+    /// `FileFailureKindPayload` — `{"kind": "...", ...}` internally tagged by
+    /// `kind`. The FE switches on `kind` and reads the camelCase per-variant
+    /// fields, so both the discriminant strings AND the field names are the
+    /// contract (the module doc comment specifies this exact shape).
+    #[test]
+    fn file_failure_kind_payload_pins_tagged_wire_shape() {
+        let insufficient = serde_json::to_value(FileFailureKindPayload::InsufficientBalance { balance_cents: 12, required_cents: 100 }).expect("serialize");
+        assert_eq!(insufficient["kind"], "insufficientBalance");
+        assert_eq!(insufficient["balanceCents"], 12);
+        assert_eq!(insufficient["requiredCents"], 100);
+
+        let server = serde_json::to_value(FileFailureKindPayload::ServerError { status: 500 }).expect("serialize");
+        assert_eq!(server["kind"], "serverError");
+        assert_eq!(server["status"], 500);
+
+        let network = serde_json::to_value(FileFailureKindPayload::Network).expect("serialize");
+        assert_eq!(network["kind"], "network");
+        assert_eq!(network.as_object().expect("object").len(), 1, "Network carries only the discriminant");
+
+        let other = serde_json::to_value(FileFailureKindPayload::Other { message: "x".to_string() }).expect("serialize");
+        assert_eq!(other["kind"], "other");
+        assert_eq!(other["message"], "x");
+    }
+
+    /// IPC wire-contract guard (Layer 0): pin `DriveStatus`'s tagged wire shape
+    /// (`{"kind": "active" | "paused" | "error", ...}`), nested under
+    /// `DriveStatusChangedPayload.status` and also returned by
+    /// `get_all_drive_statuses`. The FE's per-drive status map keys off `kind`.
+    #[test]
+    fn drive_status_pins_tagged_wire_shape() {
+        use crate::sync::drive_status::DriveStatus;
+
+        assert_eq!(serde_json::to_value(DriveStatus::Active).expect("serialize")["kind"], "active");
+        assert_eq!(serde_json::to_value(DriveStatus::Paused).expect("serialize")["kind"], "paused");
+
+        let error = serde_json::to_value(DriveStatus::Error { message: "boom".to_string() }).expect("serialize");
+        assert_eq!(error["kind"], "error");
+        assert_eq!(error["message"], "boom");
+    }
 }
 
 // ── Payload structs for direct Tauri emission ──────────────────────────
