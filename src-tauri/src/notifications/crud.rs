@@ -387,6 +387,9 @@ pub async fn delete_all_notifications(state: tauri::State<'_, AppState>) -> Resu
 /// Soft-delete a system notification by its version (notification_subtype).
 #[tauri::command]
 pub async fn delete_system_notification_by_version(state: tauri::State<'_, AppState>, version: String) -> Result<(), AppError> {
+    // Require an active session (audit NOTIF-2) so a logged-out/out-of-band
+    // caller can't suppress an app-wide system notice (e.g. "Update Available").
+    let _ = state.current_account_id()?;
     let pool = state.pool()?;
 
     sqlx::query(
@@ -449,13 +452,20 @@ pub async fn get_unread_count(state: tauri::State<'_, AppState>) -> Result<i64, 
 /// Check if a credit notification with the given timestamp already exists.
 #[tauri::command]
 pub async fn credit_already_notified(state: tauri::State<'_, AppState>, timestamp: String) -> Result<bool, AppError> {
+    // Scope to the active account (audit NOTIF-1): credit notifications are
+    // per-account, so an unscoped probe leaked one account's credit timing to
+    // another and could wrongly suppress the caller's own notification.
+    let user_address = state.current_account_id()?;
     let pool = state.pool()?;
     let subtype = format!("MintedAccountCredits-{timestamp}");
 
-    let row = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM notifications WHERE notification_type = 'Credits' AND notification_subtype = ?")
-        .bind(&subtype)
-        .fetch_one(pool)
-        .await?;
+    let row = sqlx::query_as::<_, (i64,)>(
+        "SELECT COUNT(*) FROM notifications WHERE user_address = ? AND notification_type = 'Credits' AND notification_subtype = ?",
+    )
+    .bind(&user_address)
+    .bind(&subtype)
+    .fetch_one(pool)
+    .await?;
 
     Ok(row.0 > 0)
 }
@@ -463,12 +473,17 @@ pub async fn credit_already_notified(state: tauri::State<'_, AppState>, timestam
 /// Check if a low-credit notification with the given subtype exists.
 #[tauri::command]
 pub async fn low_credit_subtype_exists(state: tauri::State<'_, AppState>, subtype: String) -> Result<bool, AppError> {
+    // Scope to the active account (audit NOTIF-1).
+    let user_address = state.current_account_id()?;
     let pool = state.pool()?;
 
-    let row = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM notifications WHERE notification_type = 'Credits' AND notification_subtype = ?")
-        .bind(&subtype)
-        .fetch_one(pool)
-        .await?;
+    let row = sqlx::query_as::<_, (i64,)>(
+        "SELECT COUNT(*) FROM notifications WHERE user_address = ? AND notification_type = 'Credits' AND notification_subtype = ?",
+    )
+    .bind(&user_address)
+    .bind(&subtype)
+    .fetch_one(pool)
+    .await?;
 
     Ok(row.0 > 0)
 }
@@ -509,13 +524,20 @@ pub async fn hippius_version_notification_exists(state: tauri::State<'_, AppStat
     Ok(row.0 > 0)
 }
 
-/// Hard-delete all notifications. Intended for testing / reset.
+/// Hard-delete the active account's notifications. Scoped to the caller
+/// (audit NOTIF-3) — the previous unscoped `DELETE FROM notifications` wiped
+/// every account's history on a multi-account device. `'system'` rows are
+/// preserved (app-wide notices, not the caller's to purge).
 #[tauri::command]
 pub async fn clear_all_notifications(state: tauri::State<'_, AppState>) -> Result<(), AppError> {
-    info!("Clearing all notifications");
+    let user_address = state.current_account_id()?;
+    info!("Clearing all notifications for the active account");
     let pool = state.pool()?;
 
-    sqlx::query("DELETE FROM notifications").execute(pool).await?;
+    sqlx::query("DELETE FROM notifications WHERE user_address = ?")
+        .bind(&user_address)
+        .execute(pool)
+        .await?;
 
     Ok(())
 }
