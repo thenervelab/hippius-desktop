@@ -259,7 +259,7 @@ pub async fn restore_session(
     if let (Some(json), Some(expiry)) = (&oauth_session_json, oauth_expiry_ms) {
         if now_ms < expiry {
             match serde_json::from_str::<serde_json::Value>(json) {
-                Ok(session_data) => {
+                Ok(mut session_data) => {
                     let substrate_address = session_data.get("substrateAddress").and_then(|v| v.as_str()).map(String::from);
 
                     // A valid OAuth session MUST carry a substrateAddress. The
@@ -284,20 +284,42 @@ pub async fn restore_session(
                         });
                     }
 
-                    // Validate token in Rust DB
+                    // Validate the token against the Rust DB AND bind the session
+                    // to the DB token — never the FE-supplied one (audit H-2). The
+                    // renderer fully controls `oauth_session_json` (localStorage),
+                    // so trusting its token, or returning it verbatim, is an
+                    // identity-confusion / IDOR vector on a multi-account install.
+                    // `expiry_ms == 0` means "never expires" (same sentinel as the
+                    // DB-fallback check and `is_token_valid`).
                     if let Some(ref addr) = substrate_address {
                         let token_row = auth_session_repo::get_token_and_expiry(pool, addr).await?;
-                        // `expiry_ms == 0` means "never expires" — the same
-                        // convention the DB-fallback check (`expiry > 0 && expiry
-                        // < now`) and `is_token_valid` use. Treating 0 as the
-                        // never-expires sentinel here keeps a non-expiring token
-                        // accepted on restore, matching everywhere else.
-                        let token_valid = matches!(
-                            token_row,
-                            Some(TokenStatus { token: Some(_), expiry_ms: Some(exp) }) if exp == 0 || exp > now_ms
-                        );
-                        if !token_valid {
-                            info!("OAuth token expired in DB, clearing session");
+                        let db_token = match token_row {
+                            Some(TokenStatus {
+                                token: Some(t),
+                                expiry_ms: Some(exp),
+                            }) if exp == 0 || exp > now_ms => t,
+                            _ => {
+                                info!("OAuth token missing/expired in DB, clearing session");
+                                return Ok(SessionRestoreResult {
+                                    authenticated: false,
+                                    substrate_address: None,
+                                    auth_type: None,
+                                    oauth_session: None,
+                                    logout_time_ms: None,
+                                    should_clear_oauth: true,
+                                    needs_sync_mnemonic: false,
+                                    redirect_to: Some("/login".into()),
+                                    sync_requires_reauth: false,
+                                });
+                            }
+                        };
+                        // If the FE session carries a token that disagrees with the
+                        // DB's for this address, the localStorage was tampered with
+                        // — refuse rather than run on an attacker-chosen token.
+                        if let Some(fe_token) = session_data.get("token").and_then(|v| v.as_str())
+                            && fe_token != db_token
+                        {
+                            info!("OAuth session token does not match DB; treating as tampered/unauthenticated");
                             return Ok(SessionRestoreResult {
                                 authenticated: false,
                                 substrate_address: None,
@@ -309,6 +331,12 @@ pub async fn restore_session(
                                 redirect_to: Some("/login".into()),
                                 sync_requires_reauth: false,
                             });
+                        }
+                        // Run on the authoritative DB token regardless of what the
+                        // FE stored, so the returned session can never carry an
+                        // unverified token downstream.
+                        if let Some(obj) = session_data.as_object_mut() {
+                            obj.insert("token".to_string(), serde_json::Value::String(db_token));
                         }
                     }
 

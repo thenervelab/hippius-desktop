@@ -648,6 +648,11 @@ pub async fn seal_and_upload_mnemonic(state: tauri::State<'_, crate::app_state::
     // Serialize against other recovery/rotation commands (audit R-18).
     let _recovery_guard = state.recovery_lock.lock().await;
     let password = Zeroizing::new(password);
+    // This password protects the master-mnemonic blob uploaded to the server
+    // (offline-brute-forceable once that blob is obtained), so enforce the same
+    // strength bar as change_recovery_password — the FE gate is not authoritative
+    // and a direct IPC call could otherwise seal an empty/trivial password (audit M-2).
+    reject_if_weak(&password)?;
     let account_id = state.current_account_id()?;
     let pool = state.pool()?;
     seed_hcfs_server_url_if_missing(pool, &account_id).await?;

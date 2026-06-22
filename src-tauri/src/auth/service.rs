@@ -45,7 +45,10 @@ pub(crate) fn derive_keys(mnemonic: &str) -> Result<(subxt_signer::sr25519::Keyp
     use subxt_signer::bip39::Mnemonic as SubxtMnemonic;
     use subxt_signer::sr25519::Keypair as SrKeypair;
 
-    let parsed = SubxtMnemonic::parse(mnemonic).map_err(|e| format!("Invalid BIP-39 mnemonic: {e}"))?;
+    // parse_normalized (NFKD) to match the wallet/signing derivation paths
+    // (helpers.rs, wallet/commands.rs, recovery_binding.rs) — a non-NFKD phrase
+    // must not derive a different address here than it does there (audit INFO-1).
+    let parsed = SubxtMnemonic::parse_normalized(mnemonic).map_err(|e| format!("Invalid BIP-39 mnemonic: {e}"))?;
     let sr25519_pair = SrKeypair::from_phrase(&parsed, None).map_err(|e| format!("Failed to derive sr25519 keypair: {e}"))?;
     // subxt_signer's account_id uses the generic `42` SS58 prefix by
     // default, matching the previous `sp_core::sr25519::Pair::public().to_ss58check()`

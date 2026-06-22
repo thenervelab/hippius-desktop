@@ -181,25 +181,39 @@ pub async fn get_api_token(pool: &SqlitePool, account_id: &str) -> crate::error:
     // missed), and the `auth_session` hit self-heals into the scoped table
     // via `save_api_token` below, so steady-state cost is unchanged.
 
-    // Legacy single-row fallback — auto-migrate
-    let legacy = sqlx::query("SELECT temp_auth_key FROM objectstore_auth WHERE id = ?")
-        .bind(AUTH_ROW_ID)
-        .fetch_optional(pool)
-        .await?;
-    if let Some(row) = legacy
-        && let Some(token) = row.get::<Option<String>, _>("temp_auth_key")
-    {
-        if let Err(e) = save_api_token(pool, account_id, &token).await {
-            warn!("Failed to migrate legacy API token: {e}");
-        }
-        if let Err(e) = sqlx::query("DELETE FROM objectstore_auth WHERE id = ?")
+    // Legacy single-row fallback — auto-migrate, but ONLY on a single-account
+    // install whose one session is this account (audit M-5). The legacy
+    // `objectstore_auth` row has no owner, so blind-migrating it to whichever
+    // account reaches this cold path first would hand one account another
+    // account's bearer token on a multi-account machine. Gate on "exactly one
+    // auth_session row, and it is mine".
+    let owner = crate::auth::account_key::account_key(account_id);
+    let sole_session_is_mine: i64 = sqlx::query_scalar(
+        "SELECT ((SELECT COUNT(*) FROM auth_session) = 1 AND EXISTS (SELECT 1 FROM auth_session WHERE owner = ?))",
+    )
+    .bind(&owner)
+    .fetch_one(pool)
+    .await?;
+    if sole_session_is_mine != 0 {
+        let legacy = sqlx::query("SELECT temp_auth_key FROM objectstore_auth WHERE id = ?")
             .bind(AUTH_ROW_ID)
-            .execute(pool)
-            .await
+            .fetch_optional(pool)
+            .await?;
+        if let Some(row) = legacy
+            && let Some(token) = row.get::<Option<String>, _>("temp_auth_key")
         {
-            warn!("Failed to delete legacy API token row: {e}");
+            if let Err(e) = save_api_token(pool, account_id, &token).await {
+                warn!("Failed to migrate legacy API token: {e}");
+            }
+            if let Err(e) = sqlx::query("DELETE FROM objectstore_auth WHERE id = ?")
+                .bind(AUTH_ROW_ID)
+                .execute(pool)
+                .await
+            {
+                warn!("Failed to delete legacy API token row: {e}");
+            }
+            return Ok(Some(token));
         }
-        return Ok(Some(token));
     }
 
     // Fall back to auth_session table (session restored from DB
