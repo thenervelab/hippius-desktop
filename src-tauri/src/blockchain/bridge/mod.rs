@@ -9,7 +9,11 @@
 //! subxt codegen scaffold and the pure conversion/fee math; the contract,
 //! read, and write paths land in subsequent stages.
 
+pub mod client;
 pub mod config;
 pub mod contract;
 pub mod convert;
+pub mod queries;
 pub mod runtime;
+pub mod types;
+pub mod withdraw;
