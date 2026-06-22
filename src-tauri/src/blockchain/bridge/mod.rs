@@ -15,6 +15,7 @@ pub mod contract;
 pub mod convert;
 pub mod deposit;
 pub mod history;
+pub mod status;
 pub mod queries;
 pub mod runtime;
 pub mod types;
