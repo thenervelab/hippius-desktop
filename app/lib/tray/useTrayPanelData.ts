@@ -11,6 +11,7 @@ import {
   mergeUploadFeed,
   type UploadFeedItem,
 } from "@/app/lib/upload-feed/mergeUploadFeed";
+import { useRetainedCompletedUploads } from "@/app/lib/upload-feed/useRetainedCompletedUploads";
 
 /**
  * Account / credits summary for the tray popover header + footer.
@@ -193,14 +194,20 @@ export function useTrayPanelData() {
     };
   }, [refresh]);
 
+  const retainedCompleted = useRetainedCompletedUploads(
+    snapshot.files,
+    recentUploads,
+  );
+
   const feed: UploadFeedItem[] = useMemo(
     () =>
       mergeUploadFeed({
         recentUploads,
         snapshotFiles: snapshot.files,
+        retainedCompleted,
         limit: FEED_LIMIT,
       }),
-    [recentUploads, snapshot.files],
+    [recentUploads, snapshot.files, retainedCompleted],
   );
 
   return { menu, feed, snapshot, blockNumber, isConnected, unreadCount, loading, refresh };

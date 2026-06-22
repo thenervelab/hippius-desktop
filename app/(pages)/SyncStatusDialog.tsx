@@ -24,6 +24,10 @@ import {
 import { getFileIcon } from "../lib/utils/fileTypeUtils";
 import SyncQueueOverallProgress from "./SyncQueueOverallProgress";
 import SyncStatusMini from "./SyncStatusMini";
+import {
+  resolveSmoothedPercent,
+  selectLiveTransferBytes,
+} from "./syncStatusDialogLogic";
 
 const BODY_MAX_HEIGHT_REM = 11.5;
 const RATE_WINDOW = 10;
@@ -407,34 +411,36 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
   );
   const previousSessionRef = useRef<number | null>(null);
   const previousTotalFilesRef = useRef<number>(snapshot.totalFiles);
+  const previousFailedFilesRef = useRef<number>(snapshot.failedFiles);
+  const previousBytesExpectedRef = useRef<number>(snapshot.bytesExpected);
 
   useEffect(() => {
-    if (snapshot.startedAt !== previousSessionRef.current) {
-      previousSessionRef.current = snapshot.startedAt;
-      previousTotalFilesRef.current = snapshot.totalFiles;
-      setSmoothedPercent(rawPercent);
-      return;
-    }
+    const newSession = snapshot.startedAt !== previousSessionRef.current;
+    // A re-plan (bytesExpected changes), a retry that resets transferred bytes,
+    // a partial failure (failedFiles grows), or more files queued (totalFiles
+    // grows) all legitimately LOWER overallPercent. Re-seed in those cases so
+    // the monotonic-max smoothing can't pin the ring at a stale high-water mark
+    // for the rest of the session (the "stuck high" bug).
+    const replanned =
+      snapshot.totalFiles > previousTotalFilesRef.current ||
+      snapshot.failedFiles > previousFailedFilesRef.current ||
+      snapshot.bytesExpected !== previousBytesExpectedRef.current;
 
-    if (snapshot.totalFiles > previousTotalFilesRef.current) {
-      previousTotalFilesRef.current = snapshot.totalFiles;
-      setSmoothedPercent(rawPercent);
-      return;
-    }
-
+    previousSessionRef.current = snapshot.startedAt;
     previousTotalFilesRef.current = snapshot.totalFiles;
+    previousFailedFilesRef.current = snapshot.failedFiles;
+    previousBytesExpectedRef.current = snapshot.bytesExpected;
 
-    if (rawPercent === null) {
-      setSmoothedPercent(null);
-      return;
-    }
-
-    setSmoothedPercent((previous) => {
-      if (previous === null) return rawPercent;
-      if (rawPercent >= 100) return 100;
-      return Math.max(previous, rawPercent);
-    });
-  }, [rawPercent, snapshot.startedAt, snapshot.totalFiles]);
+    setSmoothedPercent((previous) =>
+      resolveSmoothedPercent(previous, rawPercent, newSession || replanned),
+    );
+  }, [
+    rawPercent,
+    snapshot.startedAt,
+    snapshot.totalFiles,
+    snapshot.failedFiles,
+    snapshot.bytesExpected,
+  ]);
 
   const rateSamplesRef = useRef<RateSample[]>([]);
   const [etaSeconds, setEtaSeconds] = useState<number | null>(null);
@@ -584,16 +590,9 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
 
   const compactTransferredText = (() => {
     if (!showTransferDetails) return null;
-    if (
-      (snapshot.intentActive ?? false) &&
-      (snapshot.intentTotalBytes ?? 0) > 0
-    ) {
-      return `${formatCompactBytes(snapshot.intentCompletedBytes ?? 0)}/${formatCompactBytes(snapshot.intentTotalBytes ?? 0)}`;
-    }
-    if (snapshot.bytesExpected > 0) {
-      return `${formatCompactBytes(snapshot.progressBytes)}/${formatCompactBytes(snapshot.bytesExpected)}`;
-    }
-    return null;
+    const bytes = selectLiveTransferBytes(snapshot);
+    if (!bytes) return null;
+    return `${formatCompactBytes(bytes.progress)}/${formatCompactBytes(bytes.expected)}`;
   })();
 
   const compactTrailingText: React.ReactNode = (() => {

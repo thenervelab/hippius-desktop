@@ -261,9 +261,13 @@ describe("SyncStatusDialog", () => {
     );
   }
 
-  it("renders 'X of Y' intent line when intentActive is true", () => {
-    // Multi-file in-progress snapshot — required for the "Overall progress"
-    // section to render (gated by !isSingleFile && effectiveInProgress).
+  it("shows the byte-granular transferred line, NOT the intent overlay bytes", () => {
+    // Regression for the "0B / 260MB at 16%" report. The intent overlay counts
+    // only whole-FILE-completed bytes (and is account-wide), so wiring it into
+    // the live transferred counter made it disagree with the percent/speed.
+    // Even with an active intent overlay claiming 5GB/10GB, the header must
+    // render the byte-granular combined counters that the percent is weighted
+    // on (2.5MB transferred / 7.5MB expected here).
     const files = [
       makeFileProgress("a.bin", {
         status: "inProgress",
@@ -289,13 +293,44 @@ describe("SyncStatusDialog", () => {
     );
 
     const summaryTexts = compactSummaryTexts(container);
-    expect(summaryTexts).toContain("5GB/10GB");
-    expect(summaryTexts).not.toContain("2.5MB/7.5MB");
+    expect(summaryTexts).toContain("2.5MB/7.5MB");
+    expect(summaryTexts).not.toContain("5GB/10GB");
   });
 
-  it("falls back to per-cycle line when intent fields are undefined", () => {
-    // Legacy / pre-login snapshot shape: no intent overlay. The size row
-    // must keep showing the per-cycle "progressBytes / bytesExpected".
+  it("never shows 0 transferred while a single large file is in flight", () => {
+    // The exact screenshot scenario: one 260MB file, 16% uploaded. The intent
+    // overlay would read 0 completed bytes (no whole file done yet); the
+    // byte-granular counter must show the partial progress instead of "0B".
+    const files = [
+      makeFileProgress("Air-261.681.18-aarch64.dmg", {
+        status: "inProgress",
+        progressPercent: 16,
+        bytesTransferred: 41_600_000,
+        totalBytes: 260_070_000,
+      }),
+    ];
+    const snapshot = makeSnapshot(files, {
+      intentTotalFiles: 1,
+      intentCompletedFiles: 0,
+      intentTotalBytes: 260_070_000,
+      intentCompletedBytes: 0,
+      intentActive: true,
+    });
+
+    const { container } = renderWithJotai(
+      <SyncStatusDialog snapshot={snapshot} open={true} />,
+    );
+
+    const summaryTexts = compactSummaryTexts(container);
+    // The intent overlay's "0B" must NOT be what we render.
+    expect(summaryTexts).not.toContain("0B/260.07MB");
+    // The transferred figure tracks the byte-granular counter (~41.6MB).
+    expect(summaryTexts.some((t) => /^41\.6MB\//.test(t))).toBe(true);
+  });
+
+  it("uses the per-cycle pair when combined counters are unavailable", () => {
+    // Legacy / pre-login snapshot shape with no intent overlay still renders
+    // the byte-granular transferred line (combined == progress in the factory).
     const files = [
       makeFileProgress("a.bin", {
         status: "inProgress",
@@ -309,9 +344,7 @@ describe("SyncStatusDialog", () => {
       }),
     ];
     const snapshot = makeSnapshot(files);
-    // Sanity check: factory did not silently populate intent fields.
     expect(snapshot.intentActive).toBeUndefined();
-    expect(snapshot.intentTotalBytes).toBeUndefined();
 
     const { container } = renderWithJotai(
       <SyncStatusDialog snapshot={snapshot} open={true} />,
@@ -319,41 +352,6 @@ describe("SyncStatusDialog", () => {
 
     const summaryTexts = compactSummaryTexts(container);
     expect(summaryTexts).toContain("2.5MB/7.5MB");
-    expect(summaryTexts).not.toContain("5GB/10GB");
-  });
-
-  it("falls back to per-cycle line when intentActive is true but intentTotalBytes is 0", () => {
-    // Manifest exists but is empty — the `> 0` guard on intentTotalBytes
-    // catches this so we do not render "0 B of 0 B". The `??` operator
-    // (not `||`) lets us distinguish absent (undefined) from explicit 0
-    // in the type, even though both fail the guard here.
-    const files = [
-      makeFileProgress("a.bin", {
-        status: "inProgress",
-        progressPercent: 50,
-        bytesTransferred: 2_500_000,
-        totalBytes: 5_000_000,
-      }),
-      makeFileProgress("b.bin", {
-        status: "pending",
-        totalBytes: 2_500_000,
-      }),
-    ];
-    const snapshot = makeSnapshot(files, {
-      intentTotalFiles: 0,
-      intentCompletedFiles: 0,
-      intentTotalBytes: 0,
-      intentCompletedBytes: 0,
-      intentActive: true,
-    });
-
-    const { container } = renderWithJotai(
-      <SyncStatusDialog snapshot={snapshot} open={true} />,
-    );
-
-    const summaryTexts = compactSummaryTexts(container);
-    expect(summaryTexts).toContain("2.5MB/7.5MB");
-    expect(summaryTexts).not.toContain("0B/0B");
   });
 
   it("renders the compact ring instead of the full card when minimized", () => {

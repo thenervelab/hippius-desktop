@@ -294,7 +294,7 @@ const NameCell: FC<NameCellProps> = ({
   const { getParam } = useUrlParams();
   // Folder rows never carry their own sync state — the badge only renders
   // for files, so skip the snapshot subscription work for folders.
-  const live = useFileLiveProgress(actualName, rawName);
+  const live = useFileLiveProgress(actualName, rawName, label);
   const badgeStatus = isFolder
     ? null
     : resolveBadgeStatus(live.status, syncStatus);

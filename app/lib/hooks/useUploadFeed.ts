@@ -8,6 +8,7 @@ import {
   mergeUploadFeed,
   type UploadFeedItem,
 } from "@/app/lib/upload-feed/mergeUploadFeed";
+import { useRetainedCompletedUploads } from "@/app/lib/upload-feed/useRetainedCompletedUploads";
 
 /**
  * Main-window upload feed: the account-wide "last uploads" (server) overlaid
@@ -34,14 +35,20 @@ export function useUploadFeed(limit: number) {
       window.removeEventListener("sync_files_completed_changed", handler);
   }, [refetch]);
 
+  const retainedCompleted = useRetainedCompletedUploads(
+    snapshot.files,
+    data ?? [],
+  );
+
   const files: UploadFeedItem[] = useMemo(
     () =>
       mergeUploadFeed({
         recentUploads: data ?? [],
         snapshotFiles: snapshot.files,
+        retainedCompleted,
         limit,
       }),
-    [data, snapshot.files, limit],
+    [data, snapshot.files, retainedCompleted, limit],
   );
 
   return { data: files, isLoading, isFetching, refetch };

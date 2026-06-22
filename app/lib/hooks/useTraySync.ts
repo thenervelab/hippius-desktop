@@ -1419,14 +1419,17 @@ function startSyncActivityWatcher() {
                 ? `${progress.completedFiles} of ${progress.totalFiles} ${progress.totalFiles === 1 ? "file" : "files"} synced`
                 : "Preparing files…";
           }
-          // Prefer the intent overlay's "X of Y" while the user-dragged
-          // batch is in flight — this matches what the user expects to
-          // see ("I added 10 GB; 5 GB done"), unlike the per-cycle bytes
-          // which restart each sync attempt. `??` (not `||`) preserves
-          // the 0-vs-undefined distinction: an explicit `intentTotalBytes: 0`
-          // fails the `> 0` guard and we fall through to the per-cycle line.
-          if (progress.intentActive && (progress.intentTotalBytes ?? 0) > 0) {
-            sizeText = `${formatBytes(progress.intentCompletedBytes ?? 0)} of ${formatBytes(progress.intentTotalBytes ?? 0)}`;
+          // The byte readout MUST share its source with the percent the widget
+          // shows, or they contradict: the intent overlay counts only whole-
+          // FILE-completed bytes (and is summed account-wide), so for a single
+          // in-flight file it reads 0 the entire upload while the percent
+          // climbs on partial bytes (the "0B / 260MB at 16%" report). The
+          // intent overlay's "X of Y" survives in `progressText` (the file
+          // count) above; the byte line uses the byte-granular, current-cycle
+          // counters. `combinedBytesExpected` is preferred (it includes encrypt
+          // bytes); fall back to the per-cycle pair when it's unavailable.
+          if (progress.combinedBytesExpected > 0) {
+            sizeText = `${formatBytes(progress.combinedProgressBytes)} / ${formatBytes(progress.combinedBytesExpected)}`;
           } else if (progress.bytesExpected > 0) {
             sizeText = `${formatBytes(progress.progressBytes)} / ${formatBytes(progress.bytesExpected)}`;
           }
