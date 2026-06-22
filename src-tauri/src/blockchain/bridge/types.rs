@@ -30,6 +30,15 @@ pub struct BridgeBalances {
     pub h_alpha: String,
 }
 
+/// A hotkey the coldkey has Alpha staked to (on the bridge netuid), for the
+/// deposit dialog's validator picker. `stake` is 9-dec Alpha rao as a string.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StakedHotkey {
+    pub hotkey: String,
+    pub stake: String,
+}
+
 /// Fee/received breakdown for a quoted amount — all 9-dec or 18-dec rao decimal
 /// strings depending on the direction.
 #[derive(Clone, Debug, Default, Serialize)]

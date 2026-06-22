@@ -51,7 +51,7 @@ use crate::billing::queries::{
 use crate::billing::subscriptions::{create_subscription, get_customer_portal_url, get_subscription_data};
 use crate::blockchain::convert::{planck_to_hip_full, to_plancks};
 use crate::blockchain::bridge::deposit::bridge_alpha_to_halpha;
-use crate::blockchain::bridge::queries::{bridge_estimate_fees, bridge_min_transfers};
+use crate::blockchain::bridge::queries::{bridge_estimate_fees, bridge_get_balances, bridge_get_staked_hotkeys, bridge_min_transfers};
 use crate::blockchain::bridge::withdraw::bridge_halpha_to_alpha;
 use crate::blockchain::queries::{
     generate_referral_link, get_account_balance, get_block_timestamp, get_referral_links, get_staking_info, validate_address,
@@ -353,6 +353,8 @@ fn main() {
             // before release (see bridge/DEPOSIT_PORT_NOTES.md).
             bridge_estimate_fees,
             bridge_min_transfers,
+            bridge_get_balances,
+            bridge_get_staked_hotkeys,
             bridge_halpha_to_alpha,
             bridge_alpha_to_halpha,
             to_plancks,
