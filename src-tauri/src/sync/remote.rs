@@ -52,7 +52,8 @@ pub(crate) async fn get_server_url(pool: &SqlitePool, account_id: &str) -> Resul
 ///
 /// `mnemonic` is the user's session BIP-39 mnemonic, needed by
 /// `get_drive_password` to decrypt the `hcfs_config.drive_password` row
-/// when its `encryption_version = 1`. Without this, the raw base64
+/// when its `encryption_version` is 1 or 2 (v2 adds the account-id AAD,
+/// audit R-33). Without this, the raw base64
 /// ciphertext from the column would be passed to `recover_mnemonic`
 /// as if it were the plaintext password — which fails with
 /// "Decryption failed - wrong password?" and surfaces as "Failed to load
@@ -73,11 +74,17 @@ async fn encryption_key_for_label(pool: &SqlitePool, account_id: &str, label: &s
 /// `NoEncryptionKey` if no mnemonic is loaded (e.g. session restored
 /// from disk without keychain rehydration — see the cold-start
 /// "Mnemonic required" issue).
-fn session_mnemonic(state: &AppState) -> Result<String> {
+///
+/// Returns a `Zeroizing<String>` so the heap copy is wiped when the caller
+/// drops it (the callers hold it across async download/decrypt work); the
+/// previous bare `String` left a plaintext master-mnemonic copy in freed heap
+/// after every preview/download (audit R-20). Callers pass `&mnemonic` to
+/// `&str` params, which deref-coerces unchanged.
+fn session_mnemonic(state: &AppState) -> Result<zeroize::Zeroizing<String>> {
     let auth = state.auth.lock().map_err(|e| AppError::Other(format!("auth lock poisoned: {e}")))?;
     auth.mnemonic
         .as_ref()
-        .map(|z| z.as_str().to_string())
+        .map(|z| zeroize::Zeroizing::new(z.as_str().to_string()))
         .ok_or(AppError::NotReady(crate::error::NotReadyKind::NoEncryptionKey))
 }
 
@@ -237,11 +244,13 @@ pub async fn cache_remote_file(
     // the requested account must be the active session account.
     let account_id = state.require_session_account(&account_id)?;
 
-    // Must live under the asset-protocol scope (`$HOME/.hippius/**` in
-    // tauri.conf.json) so the webview can load the decrypted file via
-    // `convertFileSrc`. The OS cache dir is OUTSIDE that scope, so a preview
-    // pointed there is blocked by the asset protocol even though the download
-    // + decrypt succeeded — which is why download worked but preview didn't.
+    // Must live under the asset-protocol scope, which is deliberately ONLY
+    // `$HOME/.hippius/preview-cache/**` (tauri.conf.json) — scoping all of
+    // `~/.hippius` let a compromised renderer fetch `master_enc_mnemonic.json`
+    // and the SQLite DB through `http://asset.localhost` (R-03). The OS cache
+    // dir is OUTSIDE the scope, so a preview pointed there is blocked by the
+    // asset protocol even though the download + decrypt succeeded — which is
+    // why download worked but preview didn't.
     let cache_root = dirs::home_dir()
         .ok_or_else(|| AppError::Other("could not determine home directory".into()))?
         .join(".hippius")

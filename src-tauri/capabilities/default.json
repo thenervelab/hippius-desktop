@@ -41,6 +41,11 @@
                 "path": "$APPLOCALDATA/hippius-desktop.db"
             }, {
                 "path": "$HOME/**"
+            }],
+            "deny": [{
+                "path": "$HOME/.hippius/**"
+            }, {
+                "path": "$HOME/.hippius"
             }]
         },
         {

@@ -103,8 +103,9 @@ pub async fn save_hcfs_config(
         match guard.mnemonic.as_deref() {
             Some(m) => {
                 let key = store::drive_password_key(m, &account_id)?;
-                let encrypted = store::encrypt(&key, &drive_password)?;
-                (encrypted, 1i32)
+                // encryption_version = 2: AEAD with the account id bound as AAD (audit R-33).
+                let encrypted = store::encrypt_with_aad(&key, &drive_password, account_id.as_bytes())?;
+                (encrypted, 2i32)
             }
             None => (drive_password, 0i32),
         }
@@ -198,7 +199,12 @@ pub(crate) async fn get_drive_password(pool: &SqlitePool, account_id: &str, mnem
             let key = store::drive_password_key(m, account_id)?;
             Ok(store::decrypt(&key, &raw_password)?)
         }
-        (1, None) => Err(crate::error::AppError::Crypto(
+        // v2 (audit R-33): same key, with the account id bound as AAD.
+        (2, Some(m)) => {
+            let key = store::drive_password_key(m, account_id)?;
+            Ok(store::decrypt_with_aad(&key, &raw_password, account_id.as_bytes())?)
+        }
+        (1 | 2, None) => Err(crate::error::AppError::Crypto(
             "Drive password is encrypted but no mnemonic available for decryption".into(),
         )),
         (v, _) => Err(crate::error::AppError::Crypto(format!("unknown drive password encryption_version: {v}"))),
@@ -277,8 +283,9 @@ pub(crate) async fn save_hcfs_config_internal(
     let (stored_password, enc_version) = match mnemonic {
         Some(m) => {
             let key = store::drive_password_key(m, account_id)?;
-            let encrypted = store::encrypt(&key, drive_password)?;
-            (encrypted, 1i32)
+            // encryption_version = 2: AEAD with the account id bound as AAD (audit R-33).
+            let encrypted = store::encrypt_with_aad(&key, drive_password, account_id.as_bytes())?;
+            (encrypted, 2i32)
         }
         None => (drive_password.to_string(), 0i32),
     };

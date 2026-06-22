@@ -40,24 +40,6 @@ pub async fn get_account_balance(
     })
 }
 
-/// Transferable balance = `free` minus every still-frozen portion.
-///
-/// On pallet_staking, the account's `free` balance includes the active bonded
-/// stake AND every unlocking chunk — both chunks still inside the unbonding
-/// period (`unbonding_total`) and chunks whose era has matured but have not yet
-/// been released by an explicit `withdraw_unbonded` extrinsic
-/// (`withdrawable_total`). All three remain locked and unspendable until
-/// withdrawal, so all three are subtracted. Earlier code omitted
-/// `withdrawable_total`, over-reporting spendable balance for users who
-/// unbonded, waited out the period, but had not yet withdrawn — the chain then
-/// rejects a transfer of the over-reported amount. Saturating so a transiently
-/// inconsistent storage snapshot (locked sum momentarily exceeding free) yields
-/// 0 rather than underflowing.
-fn spendable_balance(free: u128, bonded: u128, unbonding_total: u128, withdrawable_total: u128) -> u128 {
-    free.saturating_sub(bonded)
-        .saturating_sub(unbonding_total)
-        .saturating_sub(withdrawable_total)
-}
 
 /// Query staking state for the current authenticated user.
 /// Fetch staking state.
@@ -96,7 +78,10 @@ pub async fn get_staking_info(
         .fetch(&balance_query)
         .await
         .map_err(|e| crate::error::AppError::Substrate(format!("Balance query failed: {e}")))?;
-    let free_balance = balance_info.map_or_else(|| "0".to_string(), |info| info.data.free.to_string());
+    let (free_balance, frozen_balance) = balance_info.map_or_else(
+        || ("0".to_string(), "0".to_string()),
+        |info| (info.data.free.to_string(), info.data.frozen.to_string()),
+    );
 
     let mut bonded = "0".to_string();
     let mut unbonding_total: u128 = 0;
@@ -206,8 +191,16 @@ pub async fn get_staking_info(
 
     let rewards = "0".to_string();
     let total: u128 = free_balance.parse().unwrap_or(0);
-    let bonded_u128: u128 = bonded.parse().unwrap_or(0);
-    let available = spendable_balance(total, bonded_u128, unbonding_total, withdrawable_total);
+    let frozen: u128 = frozen_balance.parse().unwrap_or(0);
+    // Canonical transferable = free − frozen — the chain's own definition and
+    // the one `validate_send_balance` uses. The earlier
+    // free−bonded−unbonding−withdrawable sum equals this only when `frozen` has
+    // no non-staking locks (vesting/conviction-voting); they match on a
+    // staking-only account today, but using `frozen` keeps `available_balance`
+    // consistent with the send validator if such locks are ever introduced
+    // (audit R-23). The bonded/unbonding/withdrawable breakdown is still
+    // returned below for composition display.
+    let available = total.saturating_sub(frozen);
 
     let unbonding = unbonding_total.to_string();
     let withdrawable = withdrawable_total.to_string();
@@ -381,44 +374,7 @@ pub fn validate_address(address: String) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{REFERRAL_KEY_PREFIX_LEN, extract_referral_code_bytes, spendable_balance};
-    use proptest::prelude::*;
-
-    #[test]
-    fn spendable_excludes_matured_but_unwithdrawn_chunks() {
-        // free = 100 = 40 active bonded + 30 still-unbonding + 20 matured-but-
-        // -unwithdrawn + 10 genuinely free. Only the 10 is spendable; the 20
-        // matured chunk stays locked until withdraw_unbonded (the regression).
-        assert_eq!(spendable_balance(100, 40, 30, 20), 10);
-    }
-
-    #[test]
-    fn spendable_is_zero_when_everything_is_locked() {
-        assert_eq!(spendable_balance(100, 100, 0, 0), 0);
-        assert_eq!(spendable_balance(100, 0, 60, 40), 0);
-    }
-
-    #[test]
-    fn spendable_saturates_instead_of_underflowing() {
-        // Inconsistent snapshot: locked sum exceeds free. Must clamp at 0.
-        assert_eq!(spendable_balance(10, 50, 50, 50), 0);
-    }
-
-    proptest! {
-        // Spendable can never exceed free, and locking more (raising any frozen
-        // component) can never increase it — the core monotonicity invariants.
-        #[test]
-        fn spendable_never_exceeds_free(free in any::<u128>(), bonded in any::<u128>(), unbonding in any::<u128>(), withdrawable in any::<u128>()) {
-            let s = spendable_balance(free, bonded, unbonding, withdrawable);
-            prop_assert!(s <= free);
-        }
-
-        #[test]
-        fn spendable_monotonic_in_withdrawable(free in any::<u128>(), bonded in any::<u128>(), unbonding in any::<u128>(), w1 in any::<u128>(), extra in any::<u128>()) {
-            let w2 = w1.saturating_add(extra);
-            prop_assert!(spendable_balance(free, bonded, unbonding, w2) <= spendable_balance(free, bonded, unbonding, w1));
-        }
-    }
+    use super::{REFERRAL_KEY_PREFIX_LEN, extract_referral_code_bytes};
 
     /// Pins the on-chain storage-key layout assumption. If the
     /// `credits.referral_codes` map ever changes its hasher (e.g. from

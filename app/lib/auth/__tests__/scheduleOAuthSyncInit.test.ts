@@ -70,19 +70,22 @@ describe("scheduleOAuthSyncInit", () => {
         await scheduleOAuthSyncInit("5TestAddress", onReady, invokeMock as never);
 
         expect(appStore.get(syncRequiresReauthAtom)).toBe(true);
-        // Even on error, `onReady` still fires — `initSync`'s internal
-        // guards (and the reauth banner) take over from there, matching
-        // the pre-refactor fallthrough behavior.
-        expect(onReady).toHaveBeenCalledWith("5TestAddress");
+        // `onReady` (→ initSync) must NOT fire on failure: latching sync as
+        // initialized with no usable mnemonic wedges the engine. The reauth
+        // banner takes over and the user re-enters the seed (audit R-25).
+        expect(onReady).not.toHaveBeenCalled();
     });
 
-    it("leaves the reauth atom untouched for unrelated IPC errors", async () => {
+    it("leaves the reauth atom untouched and does not latch sync on transient IPC errors", async () => {
         const invokeMock = vi.fn(() => Promise.reject(new Error("network unreachable")));
 
         const onReady = vi.fn();
         await scheduleOAuthSyncInit("5TestAddress", onReady, invokeMock as never);
 
         expect(appStore.get(syncRequiresReauthAtom)).toBe(false);
-        expect(onReady).toHaveBeenCalledWith("5TestAddress");
+        // A transient failure must NOT latch sync as initialized — otherwise
+        // the user lands in a silent half-initialized state with no banner and
+        // no retry until the next auth cycle (audit R-25).
+        expect(onReady).not.toHaveBeenCalled();
     });
 });

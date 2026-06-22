@@ -7,6 +7,8 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { HAlphaCoinLogo, HippiusLogo } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
+import { formatUnitsTruncated, parseUnitsToBase } from "@/lib/utils/planckUnits";
+import { TxSubmittedUnconfirmedError } from "@/lib/utils/txOutcome";
 
 import {
   WalletDialogShell,
@@ -47,15 +49,21 @@ const UnstakeDialog: React.FC<UnstakeDialogProps> = ({
     if (open) refetch();
   }, [open, refetch]);
 
-  const bondedHip = useMemo(() => {
-    const n = Number.parseFloat(stakingInfo?.bondedHip ?? "0");
-    return Number.isFinite(n) && n > 0 ? n : 0;
+  // BigInt planck end-to-end (audit R-26) — sourced from the raw planck
+  // string, not the pre-formatted bondedHip, so no float ever rounds it.
+  const bondedPlanck = useMemo(() => {
+    try {
+      const v = BigInt(stakingInfo?.bonded || "0");
+      return v > 0n ? v : 0n;
+    } catch {
+      return 0n;
+    }
   }, [stakingInfo]);
 
-  const formattedBonded = useMemo(() => {
-    if (bondedHip === 0) return "0";
-    return bondedHip.toFixed(6).replace(/\.?0+$/, "");
-  }, [bondedHip]);
+  const formattedBonded = useMemo(
+    () => formatUnitsTruncated(bondedPlanck, 18),
+    [bondedPlanck],
+  );
 
   const handleAmountChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
@@ -67,19 +75,17 @@ const UnstakeDialog: React.FC<UnstakeDialogProps> = ({
   };
 
   const handlePercentClick = (pct: 100 | 50 | 25) => {
-    const next = (bondedHip * pct) / 100;
-    const truncated = Math.floor(next * 1e6) / 1e6;
-    setAmount(truncated > 0 ? truncated.toFixed(6).replace(/\.?0+$/, "") : "");
+    const next = (bondedPlanck * BigInt(pct)) / 100n;
+    const display = formatUnitsTruncated(next, 18);
+    setAmount(next > 0n ? display : "");
     setActiveButton(pct === 100 ? "max" : pct === 50 ? "50" : "25");
     setAmountError(undefined);
   };
 
   const isAmountValid = useMemo(() => {
-    const n = Number.parseFloat(amount);
-    return (
-      Number.isFinite(n) && n > 0 && Math.round(n * 1e6) <= Math.round(bondedHip * 1e6)
-    );
-  }, [amount, bondedHip]);
+    const parsed = parseUnitsToBase(amount, 18);
+    return parsed !== null && parsed > 0n && parsed <= bondedPlanck;
+  }, [amount, bondedPlanck]);
 
   const runUnstakeFlow = useCallback(
     async (hipAmount: string, password: string) => {
@@ -96,9 +102,15 @@ const UnstakeDialog: React.FC<UnstakeDialogProps> = ({
         await refetch();
         onSuccess?.();
       } catch (e: unknown) {
-        const msg = e instanceof Error ? e.message : String(e);
-        setFlowState("error");
-        toast.error("Unstake failed", { description: msg });
+        if (e instanceof TxSubmittedUnconfirmedError) {
+          // May already be on-chain — no retry. Balances were already
+          // invalidated by the staking hook before this threw.
+          setFlowState("submitted");
+        } else {
+          const msg = e instanceof Error ? e.message : String(e);
+          setFlowState("error");
+          toast.error("Unstake failed", { description: msg });
+        }
       } finally {
         isProcessingRef.current = false;
       }
@@ -250,7 +262,7 @@ const UnstakeDialog: React.FC<UnstakeDialogProps> = ({
                 key={key}
                 type="button"
                 onClick={() => handlePercentClick(pct)}
-                disabled={stakingInfo.isLoading || bondedHip === 0}
+                disabled={stakingInfo.isLoading || bondedPlanck === 0n}
                 className={cn(
                   "rounded-full border px-2.5 py-0.5 text-[13px] font-semibold leading-5 tracking-[-0.26px] transition-colors disabled:opacity-60",
                   activeButton === key
@@ -345,7 +357,7 @@ const UnstakeDialog: React.FC<UnstakeDialogProps> = ({
 
       {showFlowToast && (
         <TransactionFlowToast
-          state={flowState as "pending" | "success" | "error"}
+          state={flowState as "pending" | "success" | "error" | "submitted"}
           config={{
             pending: {
               title: "Unstaking hALPHA…",
@@ -359,6 +371,11 @@ const UnstakeDialog: React.FC<UnstakeDialogProps> = ({
               title: "Something went wrong",
               description: "We couldn’t unstake your hALPHA.",
               action: { label: "Try Again", onClick: handleRetryUnstake },
+            },
+            submitted: {
+              title: "Transaction submitted",
+              description:
+                "Your unstake may already be on-chain. Check your balance before retrying — do not submit again.",
             },
           }}
           onDismiss={closeFlowToast}

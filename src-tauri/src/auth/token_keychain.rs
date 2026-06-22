@@ -82,7 +82,10 @@ fn keychain_disabled() -> bool {
 /// process".
 #[derive(Clone)]
 enum CachedEntry {
-    Present(String),
+    // Zeroized on drop so a bearer credential doesn't linger in unscrubbed
+    // process heap after logout/refresh, matching the mnemonic cache in
+    // `keychain.rs` (audit R-21).
+    Present(zeroize::Zeroizing<String>),
     Absent,
 }
 
@@ -100,7 +103,7 @@ fn cached(account_id: &str) -> Option<CachedEntry> {
 
 fn record_present(account_id: &str, token: &str) {
     if let Ok(mut c) = cache().lock() {
-        c.insert(account_id.to_string(), CachedEntry::Present(token.to_string()));
+        c.insert(account_id.to_string(), CachedEntry::Present(zeroize::Zeroizing::new(token.to_string())));
     }
 }
 
@@ -142,7 +145,7 @@ pub fn store_token(account_id: &str, token: &str) -> Result<(), String> {
         return Err("token keychain disabled via HIPPIUS_DISABLE_TOKEN_KEYCHAIN".into());
     }
     if let Some(CachedEntry::Present(existing)) = cached(account_id)
-        && existing == token
+        && existing.as_str() == token
     {
         return Ok(());
     }
@@ -165,7 +168,7 @@ pub fn load_token(account_id: &str) -> TokenKeychainResult<String> {
         return TokenKeychainResult::Unavailable("disabled via HIPPIUS_DISABLE_TOKEN_KEYCHAIN".into());
     }
     match cached(account_id) {
-        Some(CachedEntry::Present(token)) => return TokenKeychainResult::Found(token),
+        Some(CachedEntry::Present(token)) => return TokenKeychainResult::Found(token.as_str().to_owned()),
         Some(CachedEntry::Absent) => return TokenKeychainResult::NotFound,
         None => {}
     }
@@ -229,10 +232,10 @@ mod tests {
         assert!(cached(acct).is_none(), "fresh account has no cache entry");
 
         record_present(acct, "tok-1");
-        assert!(matches!(cached(acct), Some(CachedEntry::Present(ref t)) if t == "tok-1"));
+        assert!(matches!(cached(acct), Some(CachedEntry::Present(ref t)) if t.as_str() == "tok-1"));
 
         record_present(acct, "tok-2");
-        assert!(matches!(cached(acct), Some(CachedEntry::Present(ref t)) if t == "tok-2"));
+        assert!(matches!(cached(acct), Some(CachedEntry::Present(ref t)) if t.as_str() == "tok-2"));
 
         record_absent(acct);
         assert!(matches!(cached(acct), Some(CachedEntry::Absent)));
@@ -251,13 +254,13 @@ mod tests {
         record_present(a, "token-a");
         record_present(b, "token-b");
 
-        assert!(matches!(cached(a), Some(CachedEntry::Present(ref t)) if t == "token-a"));
-        assert!(matches!(cached(b), Some(CachedEntry::Present(ref t)) if t == "token-b"));
+        assert!(matches!(cached(a), Some(CachedEntry::Present(ref t)) if t.as_str() == "token-a"));
+        assert!(matches!(cached(b), Some(CachedEntry::Present(ref t)) if t.as_str() == "token-b"));
 
         record_absent(a);
         assert!(matches!(cached(a), Some(CachedEntry::Absent)));
         assert!(
-            matches!(cached(b), Some(CachedEntry::Present(ref t)) if t == "token-b"),
+            matches!(cached(b), Some(CachedEntry::Present(ref t)) if t.as_str() == "token-b"),
             "marking account a absent must not touch account b"
         );
 
@@ -322,19 +325,19 @@ mod tests {
 
         // First write — real keychain touched.
         store_token(acct, "v1").expect("first store should succeed");
-        assert!(matches!(cached(acct), Some(CachedEntry::Present(ref t)) if t == "v1"));
+        assert!(matches!(cached(acct), Some(CachedEntry::Present(ref t)) if t.as_str() == "v1"));
 
         // Second write of the same value — MUST skip the keychain.
         // We can't assert "keychain was not called" directly, but we
         // can assert that the call returns instantly and leaves cache
         // unchanged.
         store_token(acct, "v1").expect("duplicate store should succeed via cache");
-        assert!(matches!(cached(acct), Some(CachedEntry::Present(ref t)) if t == "v1"));
+        assert!(matches!(cached(acct), Some(CachedEntry::Present(ref t)) if t.as_str() == "v1"));
 
         // Write of a different value — real keychain touched, cache
         // updated.
         store_token(acct, "v2").expect("different-value store should succeed");
-        assert!(matches!(cached(acct), Some(CachedEntry::Present(ref t)) if t == "v2"));
+        assert!(matches!(cached(acct), Some(CachedEntry::Present(ref t)) if t.as_str() == "v2"));
 
         delete_token(acct).unwrap();
         assert!(matches!(cached(acct), Some(CachedEntry::Absent)));

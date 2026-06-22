@@ -218,3 +218,41 @@ pub(crate) async fn refresh_auth_token_internal(pool: &SqlitePool, app: &tauri::
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::derive_keys;
+
+    /// Frozen derivation vectors (audit R-28). `derive_keys` turns one BIP-39
+    /// mnemonic into the user's funds-bearing Substrate (sr25519) and Ethereum
+    /// (secp256k1, `m/44'/60'/0'/0/0`) addresses. A silent change in either
+    /// derivation — e.g. a `subxt_signer` or `alloy` bump that alters the
+    /// scheme — would hand the user a *different* address: deposits to the old
+    /// one, or signatures the chain rejects. This pins both so such a change
+    /// fails CI instead of shipping.
+    ///
+    /// The mnemonic is the well-known Foundry/Anvil/Hardhat test phrase. Its
+    /// Ethereum account-0 address is a published, cross-implementation constant
+    /// (`0xf39F…2266`), so the ETH assertion is an INDEPENDENT correctness check
+    /// of the `MnemonicBuilder` path — not merely a snapshot. The Substrate
+    /// address is the value subxt_signer produces today (SS58 prefix 42); it is
+    /// a regression anchor — if it changes, the sr25519 derivation moved and
+    /// must be investigated before release.
+    #[test]
+    fn derive_keys_matches_frozen_vectors() {
+        const MNEMONIC: &str = "test test test test test test test test test test test junk";
+        // Independent ground truth: Foundry/Anvil/Hardhat default account 0.
+        const EXPECTED_ETH: &str = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
+        // Regression anchor: subxt_signer sr25519, generic-substrate SS58 (42).
+        const EXPECTED_SUBSTRATE: &str = "5GmS1wtCfR4tK5SSgnZbVT4kYw5W8NmxmijcsxCQE6oLW6A8";
+
+        let (_sr, substrate, _eth_signer, eth) = derive_keys(MNEMONIC).expect("valid mnemonic derives");
+        assert_eq!(eth, EXPECTED_ETH, "Ethereum derivation drifted from the published Foundry vector");
+        assert_eq!(substrate, EXPECTED_SUBSTRATE, "sr25519 Substrate derivation changed — funds-critical, investigate");
+    }
+
+    #[test]
+    fn derive_keys_rejects_invalid_mnemonic() {
+        assert!(derive_keys("not a valid bip39 mnemonic at all").is_err());
+    }
+}

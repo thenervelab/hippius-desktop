@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import useAddCreditEvent from "@/app/lib/hooks/api/useAddCreditEvent";
 import { addNotification } from "@/app/lib/helpers/notificationsDb";
 
-import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
 import { invoke } from "@tauri-apps/api/core";
 import { useSetAtom, useAtom } from "jotai";
 import {
@@ -16,7 +15,6 @@ import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 
 export function useCreditsNotification() {
   const { data: creditEvents, isSuccess } = useAddCreditEvent({ limit: 50 });
-  const { data: credits, isLoading: isCreditsLoading } = useUserCredits();
   const refreshUnread = useSetAtom(refreshUnreadCountAtom);
   const [enabledTypes] = useAtom(enabledNotificationTypesAtom);
   const pathname = usePathname(); // Track route changes
@@ -30,30 +28,26 @@ export function useCreditsNotification() {
     setRouteChangeKey(prev => prev + 1);
   }, [pathname]);
 
-  // Handle low credit notifications — all business logic in Rust
+  // Handle low credit notifications — Rust fetches the LIVE balance and owns
+  // all decision logic. Audit R-08: the FE no longer feeds a stale cached
+  // balance into the check (`useUserCredits` is `staleTime: Infinity` and never
+  // invalidated), so a mid-session drop below the threshold is now caught on
+  // the next route-change re-evaluation.
   useEffect(() => {
-    if (
-      !areCreditsNotificationsEnabled ||
-      isCreditsLoading ||
-      credits === undefined
-    )
-      return;
+    if (!areCreditsNotificationsEnabled) return;
 
     const handleCreditBalanceCheck = async () => {
       try {
         const userAddress = oauthSession?.substrateAddress || polkadotAddress;
         if (!userAddress) return;
 
-        // Pass planck string directly — no float conversion needed.
-        const creditPlanck = credits.planck.toString();
-
-        // Single Rust call handles all state checks and decisions
+        // Single Rust call fetches the live balance and runs every state
+        // check / decision — no FE-supplied (cacheable) balance.
         const result = await invoke<{
           shouldNotify: boolean;
           creditBalance: number;
-        }>("check_low_credit_notification", {
+        }>("check_low_credit_notification_live", {
           accountId: userAddress,
-          creditBalancePlanck: creditPlanck,
         });
 
         if (result.shouldNotify) {
@@ -77,8 +71,6 @@ export function useCreditsNotification() {
 
     handleCreditBalanceCheck();
   }, [
-    credits,
-    isCreditsLoading,
     refreshUnread,
     areCreditsNotificationsEnabled,
     routeChangeKey,

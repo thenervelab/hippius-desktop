@@ -330,6 +330,8 @@ async fn probe_server_blob(state: &tauri::State<'_, crate::app_state::AppState>)
 /// SS58 on the server side.
 #[tauri::command]
 pub async fn recover_mnemonic(state: tauri::State<'_, crate::app_state::AppState>, password: String) -> Result<()> {
+    // Serialize against other recovery/rotation commands (audit R-18).
+    let _recovery_guard = state.recovery_lock.lock().await;
     let password = Zeroizing::new(password);
     let account_id = state.current_account_id()?;
     let pool = state.pool()?;
@@ -533,9 +535,15 @@ async fn validate_master_against_existing_folders(pool: &SqlitePool, account_id:
         None => return Ok(()),
         Some((pw, _)) if pw.is_empty() => return Ok(()),
         Some((pw, 0)) => Zeroizing::new(pw),
-        Some((_, 1)) => match crate::sync::config::get_drive_password(pool, account_id, Some(candidate_master)).await {
+        // version 1 (no AAD) and 2 (AAD, audit R-33) both route through
+        // `get_drive_password`, which decrypts per the version.
+        Some((_, 1 | 2)) => match crate::sync::config::get_drive_password(pool, account_id, Some(candidate_master)).await {
             Ok(pw) => pw,
-            Err(_) => {
+            // Only an AEAD/key failure (`Crypto`) means "wrong master". A
+            // transient DB/pool error must propagate truthfully — labelling
+            // it "does not match" sends the user chasing a mnemonic problem
+            // they don't have.
+            Err(AppError::Crypto(_)) => {
                 return Err(AppError::Validation(
                     "Cannot seal recovery blob: the provided master mnemonic does not match this \
                      account's existing encrypted drive password. Unlock with your original recovery \
@@ -543,6 +551,7 @@ async fn validate_master_against_existing_folders(pool: &SqlitePool, account_id:
                         .into(),
                 ));
             }
+            Err(other) => return Err(other),
         },
         Some((_, v)) => return Err(AppError::Other(format!("unknown drive password encryption_version: {v}"))),
     };
@@ -636,6 +645,8 @@ async fn align_drive_password(pool: &SqlitePool, account_id: &str, server_url: &
 /// tick a box is friction without added safety.
 #[tauri::command]
 pub async fn seal_and_upload_mnemonic(state: tauri::State<'_, crate::app_state::AppState>, password: String) -> Result<()> {
+    // Serialize against other recovery/rotation commands (audit R-18).
+    let _recovery_guard = state.recovery_lock.lock().await;
     let password = Zeroizing::new(password);
     let account_id = state.current_account_id()?;
     let pool = state.pool()?;
@@ -726,8 +737,26 @@ pub async fn seal_and_upload_mnemonic(state: tauri::State<'_, crate::app_state::
 ///
 /// The mnemonic itself is unchanged, so no sync re-init or session
 /// invalidation is needed.
+///
+/// Returns [`RecoveryRotationResult`] so the FE can tell a clean rotation from
+/// one that committed on the server but left this device's local key alignment
+/// to finish on the next boot — the latter should surface a non-fatal "finishing
+/// up" warning rather than a bare "success" (audit R-19).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecoveryRotationResult {
+    /// `true` when the rotation is durable (server + master file under the new
+    /// password) but the local per-folder/DB `drive_password` alignment did not
+    /// fully complete. It self-heals on the next boot/login via the sidecar, but
+    /// a synced drive may briefly fail to open until then — so the FE should warn
+    /// rather than report a clean success.
+    pub align_pending: bool,
+}
+
 #[tauri::command]
-pub async fn change_recovery_password(state: tauri::State<'_, crate::app_state::AppState>, current: String, new: String) -> Result<()> {
+pub async fn change_recovery_password(state: tauri::State<'_, crate::app_state::AppState>, current: String, new: String) -> Result<RecoveryRotationResult> {
+    // Serialize against other recovery/rotation commands (audit R-18).
+    let _recovery_guard = state.recovery_lock.lock().await;
     let current = Zeroizing::new(current);
     let new = Zeroizing::new(new);
 
@@ -805,7 +834,7 @@ pub async fn change_recovery_password(state: tauri::State<'_, crate::app_state::
                 }
                 // Intentionally skip cache_session_mnemonic on this branch
                 // so the next call that reads it picks up a fresh value.
-                return Ok(());
+                return Ok(RecoveryRotationResult { align_pending: true });
             }
             clear_rotation_sidecar(&account_id).await;
             state.auth.lock()?.cache_session_mnemonic(&account_id, (*mnemonic).clone());
@@ -813,7 +842,7 @@ pub async fn change_recovery_password(state: tauri::State<'_, crate::app_state::
                 account = %crate::console_access::short_ss58(&account_id),
                 "recovery: password rotation complete"
             );
-            Ok(())
+            Ok(RecoveryRotationResult { align_pending: false })
         }
         Err(e) => {
             warn!(
@@ -845,8 +874,10 @@ pub async fn change_recovery_password(state: tauri::State<'_, crate::app_state::
                 )));
             }
             // Sidecar written → has_pending_rotation is now true and the
-            // boot-time resume will finish the local rewrite; report success.
-            Ok(())
+            // boot-time resume will finish the local rewrite; report success
+            // but flag the pending alignment so the FE warns rather than
+            // claiming a clean rotation (audit R-19).
+            Ok(RecoveryRotationResult { align_pending: true })
         }
     }
 }
@@ -860,6 +891,8 @@ pub async fn change_recovery_password(state: tauri::State<'_, crate::app_state::
 /// the sidecar.
 #[tauri::command]
 pub async fn resume_recovery_password_rotation(state: tauri::State<'_, crate::app_state::AppState>, password: String) -> Result<()> {
+    // Serialize against other recovery/rotation commands (audit R-18).
+    let _recovery_guard = state.recovery_lock.lock().await;
     let password = Zeroizing::new(password);
     let account_id = state.current_account_id()?;
     let pool = state.pool()?;
@@ -894,6 +927,16 @@ pub async fn resume_recovery_password_rotation(state: tauri::State<'_, crate::ap
     let password_k = password.clone();
     let ss58_k = ctx.ss58.clone();
     let mnemonic = run_kdf(move || open_mnemonic(&blob_k, &password_k, &ss58_k).map_err(crypto_to_err)).await?;
+
+    // Derivation guard — refuse to rewrite local key material under a master
+    // that can't reproduce the existing per-folder mnemonics. The two other
+    // folder-mutating paths (`change_recovery_password`, `seal_and_upload_mnemonic`)
+    // validate here; resume must too. Without it, a divergent server blob
+    // (sealed from a stale/fallback master on another device) would have
+    // `align_drive_password` rewrite every `enc_mnemonic.json` under the wrong
+    // master, destroying the folder keys that open already-uploaded ciphertext —
+    // permanent AEAD-tag failures on later downloads (audit R-10).
+    validate_master_against_existing_folders(pool, &account_id, &mnemonic).await?;
 
     install_recovered_mnemonic(&account_id, &mnemonic, &password).await?;
 
@@ -1573,5 +1616,84 @@ mod tests {
             .await
             .expect("seeded empty row must resolve to the sentinel, not error");
         assert_eq!(url, "", "seeded server_url is the auto-detect sentinel");
+    }
+
+    /// Static regression guard (audit R-10): `resume_recovery_password_rotation`
+    /// MUST validate the master against existing folders BEFORE it installs the
+    /// recovered mnemonic / rewrites per-folder key material. The two sibling
+    /// folder-mutating paths (`change_recovery_password`, `seal_and_upload_mnemonic`)
+    /// already do; a refactor that drops it from resume would let a divergent
+    /// server blob destroy the keys that open already-uploaded ciphertext.
+    /// Mirrors the `initialize_sync_inner`/`spawn_backfill` source guard.
+    #[test]
+    fn resume_rotation_validates_master_before_install() {
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/recovery.rs")).expect("read recovery.rs");
+        let sig_idx = src
+            .find("pub async fn resume_recovery_password_rotation(")
+            .expect("resume_recovery_password_rotation declaration present");
+        let body_start = src[sig_idx..].find('{').expect("fn body opens") + sig_idx;
+        let mut depth = 0usize;
+        let mut body_end = body_start;
+        for (i, ch) in src[body_start..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        body_end = body_start + i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let body = &src[body_start..=body_end];
+        let validate_idx = body
+            .find("validate_master_against_existing_folders")
+            .expect("resume must call validate_master_against_existing_folders (R-10)");
+        let install_idx = body
+            .find("install_recovered_mnemonic")
+            .expect("resume must call install_recovered_mnemonic");
+        assert!(
+            validate_idx < install_idx,
+            "the derivation guard must run BEFORE install_recovered_mnemonic rewrites key material",
+        );
+    }
+
+    /// Static regression guard (audit R-18): every mnemonic-mutating recovery /
+    /// rotation command MUST acquire `recovery_lock` so two of them can't
+    /// interleave the master-file write, per-folder rewrites, and DB-row flip.
+    #[test]
+    fn recovery_commands_acquire_recovery_lock() {
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/recovery.rs")).expect("read recovery.rs");
+        for func in [
+            "pub async fn change_recovery_password(",
+            "pub async fn recover_mnemonic(",
+            "pub async fn seal_and_upload_mnemonic(",
+            "pub async fn resume_recovery_password_rotation(",
+        ] {
+            let sig_idx = src.find(func).unwrap_or_else(|| panic!("{func} present"));
+            let body_start = src[sig_idx..].find('{').expect("fn body opens") + sig_idx;
+            let mut depth = 0usize;
+            let mut body_end = body_start;
+            for (i, ch) in src[body_start..].char_indices() {
+                match ch {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            body_end = body_start + i;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let body = &src[body_start..=body_end];
+            assert!(
+                body.contains("recovery_lock.lock()"),
+                "{func} must acquire state.recovery_lock to serialize against other recovery commands (R-18)",
+            );
+        }
     }
 }

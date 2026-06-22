@@ -10,6 +10,11 @@ import { Input } from "@/components/ui";
 import { Button } from "@/components/ui/button";
 import { OutGoing } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
+import {
+  resolveTxOutcome,
+  TxSubmittedUnconfirmedError,
+  type TxOutcome,
+} from "@/lib/utils/txOutcome";
 
 import AddressSelect from "./AddressSelect";
 import SendBalanceConfirmationDialog from "./SendBalanceConfirmationDialog";
@@ -24,7 +29,9 @@ export interface SendBalanceDialogProps {
   onClose: () => void;
   /** Raw planck string — source of truth for the max calculation. */
   availableBalancePlanck: string;
-  /** Pre-formatted HIP string from Rust (`planck_to_hip`) for display. */
+  /** Pre-formatted HIP display string from the precise BigInt `formatPlanckToHip`
+   *  helper (NOT a float). Display only — the authoritative over-balance gate is
+   *  Rust `validate_send_balance`, fed the raw `availableBalancePlanck`. */
   availableBalanceHip: string;
   refetchBalance?: () => void;
   polkadotAddress: string;
@@ -181,18 +188,27 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
       setSubmittedAmount(amountForToast);
       setSubmittedAddress(addrForToast);
       try {
-        await invoke<{ txHash: string; success: boolean }>("transfer_balance", {
+        const outcome = await invoke<TxOutcome>("transfer_balance", {
           recipientAddress: addrForToast,
           amount: planck,
           password,
         });
+        resolveTxOutcome(outcome);
         setFlowState("success");
         refetchBalance?.();
         resetForm();
       } catch (e: unknown) {
-        const msg = e instanceof Error ? e.message : String(e);
-        setFlowState("error");
-        toast.error("Transfer failed", { description: msg });
+        if (e instanceof TxSubmittedUnconfirmedError) {
+          // The transfer may already be on-chain — surface a no-retry
+          // "pending" state and refresh the balance, but never re-send.
+          setFlowState("submitted");
+          refetchBalance?.();
+          resetForm();
+        } else {
+          const msg = e instanceof Error ? e.message : String(e);
+          setFlowState("error");
+          toast.error("Transfer failed", { description: msg });
+        }
       } finally {
         setLoading(false);
         isProcessingRef.current = false;
@@ -376,7 +392,7 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
 
       {showFlowToast && (
         <TransactionFlowToast
-          state={flowState as "pending" | "success" | "error"}
+          state={flowState as "pending" | "success" | "error" | "submitted"}
           config={{
             pending: {
               title: "Sending hALPHA…",
@@ -390,6 +406,11 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
               title: "Something went wrong",
               description: "We couldn’t send your hALPHA.",
               action: { label: "Try Again", onClick: handleRetryTransfer },
+            },
+            submitted: {
+              title: "Transaction submitted",
+              description:
+                "It may already be on-chain. Check your balance before resending — do not send again.",
             },
           }}
           onDismiss={closeFlowToast}

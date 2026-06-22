@@ -75,6 +75,50 @@ pub async fn save_api_token(pool: &SqlitePool, account_id: &str, token: &str) ->
     Ok(())
 }
 
+/// Remove this account's API token from every store consulted by
+/// [`get_api_token`]: the OS keychain, the plaintext
+/// `objectstore_auth_scoped.temp_auth_key` fallback column, and the legacy
+/// `objectstore_auth` row.
+///
+/// Logout MUST call this. `save_api_token`'s keychain-unavailable branch writes
+/// the bearer token into `objectstore_auth_scoped.temp_auth_key` in plaintext,
+/// and `get_api_token` falls through to that column (and the legacy row) after a
+/// keychain miss. `auth_session_repo::clear` removes the keychain entry and the
+/// `auth_session` token but NOT these two fallbacks — so without this a
+/// logged-out session is silently resurrected by the next reader on a
+/// keychain-less host (audit finding R-05).
+///
+/// The scoped column is keyed by the raw `account_id`, matching how
+/// `save_api_token` / `get_api_token` bind it (NOT `account_key`).
+pub async fn clear_api_token(pool: &SqlitePool, account_id: &str) -> crate::error::Result<()> {
+    // Best-effort keychain removal (idempotent; `auth_session_repo::clear` also
+    // does this, but keeping it here makes the function self-complete).
+    if let Err(e) = token_keychain::delete_token(account_id) {
+        debug!(error = %e, "keychain token delete during clear_api_token was a no-op / unavailable");
+    }
+
+    // Also NULL the legacy migration-era S3 credential columns: no live code
+    // reads them, but rows written by old installs would otherwise keep real
+    // S3 credentials on disk after logout — the same residue class as the
+    // token itself (R-05).
+    sqlx::query(
+        "UPDATE objectstore_auth_scoped \
+         SET temp_auth_key = NULL, master_access_key_id = NULL, master_secret = NULL, \
+             updated_at = CURRENT_TIMESTAMP \
+         WHERE owner = ?",
+    )
+    .bind(account_id)
+    .execute(pool)
+    .await?;
+
+    sqlx::query("DELETE FROM objectstore_auth WHERE id = ?")
+        .bind(AUTH_ROW_ID)
+        .execute(pool)
+        .await?;
+
+    Ok(())
+}
+
 /// Retrieve the API auth token for this account.
 ///
 /// Returns the bearer token string or `None` if no token is stored.
@@ -283,6 +327,76 @@ mod tests {
         let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
         let err = get_api_token(&pool, ACCOUNT_A).await.unwrap_err();
         assert!(matches!(err, crate::error::AppError::Db(_)), "expected Db, got {err:?}");
+    }
+
+    /// R-05: logout must leave no resolvable token on a keychain-less host. A
+    /// plaintext token written to `objectstore_auth_scoped` (keychain disabled)
+    /// must be gone after `clear_api_token`, so `get_api_token` returns `None`
+    /// and the session cannot be silently resurrected by the next reader.
+    #[tokio::test]
+    async fn clear_api_token_prevents_session_resurrection() {
+        let pool = setup_db().await; // HIPPIUS_DISABLE_TOKEN_KEYCHAIN=1
+        save_api_token(&pool, ACCOUNT_A, "resurrectable").await.unwrap();
+        // Sanity: it resolves from the plaintext fallback before clearing.
+        assert_eq!(
+            get_api_token(&pool, ACCOUNT_A).await.unwrap().as_deref(),
+            Some("resurrectable"),
+            "precondition: token resolvable from plaintext fallback"
+        );
+
+        clear_api_token(&pool, ACCOUNT_A).await.unwrap();
+
+        assert_eq!(
+            get_api_token(&pool, ACCOUNT_A).await.unwrap(),
+            None,
+            "after clear, no token may resolve from any fallback store"
+        );
+    }
+
+    /// Logout must also wipe the migration-era S3 credential columns in the
+    /// scoped row — no live code reads them, but rows from old installs would
+    /// otherwise keep real S3 credentials on disk after logout (R-05 residue).
+    #[tokio::test]
+    async fn clear_api_token_wipes_legacy_s3_credentials() {
+        let pool = setup_db().await;
+        save_api_token(&pool, ACCOUNT_A, "token").await.unwrap();
+        sqlx::query("UPDATE objectstore_auth_scoped SET master_access_key_id = 'AKIA-old', master_secret = 's3cret' WHERE owner = ?")
+            .bind(ACCOUNT_A)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        clear_api_token(&pool, ACCOUNT_A).await.unwrap();
+
+        let row = sqlx::query("SELECT temp_auth_key, master_access_key_id, master_secret FROM objectstore_auth_scoped WHERE owner = ?")
+            .bind(ACCOUNT_A)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        for col in ["temp_auth_key", "master_access_key_id", "master_secret"] {
+            let v: Option<String> = row.get(col);
+            assert_eq!(v, None, "{col} must be NULL after clear_api_token");
+        }
+    }
+
+    /// `clear_api_token` also removes the legacy single-row `objectstore_auth`
+    /// fallback that `get_api_token` consults.
+    #[tokio::test]
+    async fn clear_api_token_removes_legacy_row() {
+        let pool = setup_db().await;
+        sqlx::query("INSERT INTO objectstore_auth (id, temp_auth_key) VALUES (1, ?)")
+            .bind("legacy-token")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        clear_api_token(&pool, ACCOUNT_A).await.unwrap();
+
+        let row = sqlx::query("SELECT temp_auth_key FROM objectstore_auth WHERE id = 1")
+            .fetch_optional(&pool)
+            .await
+            .unwrap();
+        assert!(row.is_none(), "legacy objectstore_auth row must be deleted on clear");
     }
 
     /// D5 convention: a token with `expiry == 0` ("never expires") must NOT be

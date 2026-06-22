@@ -170,6 +170,7 @@ pub async fn get_mnemonic_for_account(app_state: &crate::app_state::AppState, ac
         let m = arc.lock().await;
         if m.is_initialized()
             && let Ok(mnemonic) = m.export_mnemonic(&drive_password)
+            && candidate_is_account_master(&mnemonic, account_id)
         {
             return Ok(zeroize::Zeroizing::new(mnemonic));
         }
@@ -189,6 +190,7 @@ pub async fn get_mnemonic_for_account(app_state: &crate::app_state::AppState, ac
         let manager = DriveManager::new(PathBuf::from(&path), folder_dir);
         if manager.is_initialized()
             && let Ok(mnemonic) = manager.export_mnemonic(&drive_password)
+            && candidate_is_account_master(&mnemonic, account_id)
         {
             return Ok(zeroize::Zeroizing::new(mnemonic));
         }
@@ -197,6 +199,38 @@ pub async fn get_mnemonic_for_account(app_state: &crate::app_state::AppState, ac
     // Stage 5: nothing recoverable. Frontend dispatches on this kind to
     // prompt the user to log in again with their seed phrase.
     Err(crate::error::AppError::NotReady(crate::error::NotReadyKind::MasterMnemonicUnrecoverable))
+}
+
+/// Post-condition for the Stage 3/4 drive-export fallbacks: does `candidate`
+/// actually derive to `account_id`'s SS58 address?
+///
+/// `DriveManager::export_mnemonic` returns the per-folder mnemonic, which
+/// `init_new_drive` wrote as `derive_folder_mnemonic(master, label)` — a
+/// one-way hash of the master, NOT the master itself. Returning it as the
+/// account master would derive a different sr25519/SS58 keypair than
+/// `account_id`, corrupting auth (a token persisted under a foreign address)
+/// and showing the user the wrong "recovery phrase" to back up (audit R-06,
+/// and the W-02 unguarded consumers downstream). Reject any candidate that
+/// doesn't reproduce the account's own address so the chain falls through to
+/// the safe `MasterMnemonicUnrecoverable` re-auth path.
+///
+/// DECIDED TRADE-OFF (review 2026-06-11): this check assumes the account's
+/// address derives from the master. For OAuth accounts the address comes
+/// from the server while the sync master is locally minted, so Stage 3/4
+/// recovery is categorically unavailable to them — including the narrow
+/// legacy case (v0 plaintext drive_password + verbatim pre-derivation folder
+/// file) the old unguarded code happened to recover correctly. Accepted:
+/// that population is tiny, the server-blob Unlock flow remains their
+/// recovery path, and relaxing the guard re-admits installing a folder
+/// mnemonic as master. Do not "fix" this by skipping the check for OAuth.
+fn candidate_is_account_master(candidate: &str, account_id: &str) -> bool {
+    match crate::auth::service::derive_keys(candidate) {
+        Ok((_pair, substrate_address, _eth_signer, _eth_address)) => substrate_address == account_id,
+        Err(e) => {
+            warn!("Drive-fallback mnemonic failed key derivation during master validation: {e}");
+            false
+        }
+    }
 }
 
 /// Tauri command wrapper: return the master BIP-39 mnemonic by decrypting it
@@ -876,5 +910,33 @@ mod tests {
             let enc = config_dir_for_folder(account, label).unwrap().join("enc_mnemonic.json");
             assert!(!enc.exists(), "{label}: no file should be written when derivation fails");
         }
+    }
+
+    /// R-06: the Stage 3/4 post-condition must accept the real master and
+    /// reject a folder-derived mnemonic (what `export_mnemonic` actually
+    /// returns) for the account's address.
+    #[test]
+    fn candidate_is_account_master_accepts_master_rejects_folder() {
+        let master = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        let (_pair, master_ss58, _eth_signer, _eth_address) =
+            crate::auth::service::derive_keys(master).expect("derive master keys");
+
+        // The genuine master reproduces its own account_id.
+        assert!(candidate_is_account_master(master, &master_ss58));
+
+        // The per-folder mnemonic Stages 3/4 export is one-way-derived from the
+        // master and is NOT the account master — it must be rejected.
+        let folder = derive_folder_mnemonic(master, "default").expect("derive folder mnemonic");
+        assert_ne!(folder, master, "folder mnemonic must differ from master");
+        assert!(
+            !candidate_is_account_master(&folder, &master_ss58),
+            "a folder mnemonic must not validate as the account master (R-06)"
+        );
+
+        // A different account_id is rejected even for the genuine master.
+        // This is also the OAuth shape (address NOT derived from the local
+        // master): Stage 3/4 recovery is deliberately unavailable there —
+        // see the decided trade-off on `candidate_is_account_master`.
+        assert!(!candidate_is_account_master(master, "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"));
     }
 }

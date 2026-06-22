@@ -18,6 +18,7 @@ import {
   HippiusLogo,
 } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
+import { formatUnitsTruncated, parseUnitsToBase } from "@/lib/utils/planckUnits";
 
 import { WalletDialogShell } from "./shared/WalletDesign";
 import WalletPasswordField from "./shared/WalletPasswordField";
@@ -50,6 +51,15 @@ const formatDisplayAmount = (amount: string) => {
   if (num >= 1) return num.toFixed(2);
   const s = num.toFixed(18).replace(/0+$/, "");
   return s.endsWith(".") ? `${s}0` : s;
+};
+
+/** Balance line: exactly two decimals (truncated), BigInt-safe — the
+ *  balances exceed Number.MAX_SAFE_INTEGER, so `.toFixed(2)` on a float
+ *  could show a rounded-up value the user can't actually bridge. */
+const formatBalance2dp = (value: bigint, decimals: number) => {
+  const s = formatUnitsTruncated(value, decimals, 2);
+  const [whole, fraction = ""] = s.split(".");
+  return `${whole}.${fraction.padEnd(2, "0")}`;
 };
 
 const parseBridgeError = (error: string | Error | unknown): string => {
@@ -196,53 +206,37 @@ const BridgeDialog: React.FC<BridgeDialogProps> = ({
    *  alpha-to-halpha : source = staked Alpha, dest = free hAlpha
    *  halpha-to-alpha : source = free hAlpha (minus gas buffer), dest = staked Alpha
    */
-  const sourceBalanceNumber = useMemo<number | null>(() => {
+  // Balances stay BigInt in the SOURCE/DEST token's own base units (audit
+  // R-26): alpha is 9-decimal rao, hAlpha is 18-decimal planck, and both
+  // overflow double precision at realistic sizes.
+  const sourceBalancePlanck = useMemo<bigint | null>(() => {
     if (!balances) return null;
-    if (isAlphaToHAlpha) {
-      try {
-        return Number(balances.alphaStake) / 1e9;
-      } catch {
-        return 0;
-      }
-    }
-    try {
-      const after = balances.hAlpha - MAX_GAS_FEE_BUFFER_PLANCK;
-      if (after <= BigInt(0)) return 0;
-      return Number(after) / 1e18;
-    } catch {
-      return 0;
-    }
+    if (isAlphaToHAlpha) return balances.alphaStake > 0n ? balances.alphaStake : 0n;
+    const after = balances.hAlpha - MAX_GAS_FEE_BUFFER_PLANCK;
+    return after > 0n ? after : 0n;
   }, [balances, isAlphaToHAlpha]);
 
-  const destBalanceNumber = useMemo<number | null>(() => {
+  const destBalancePlanck = useMemo<bigint | null>(() => {
     if (!balances) return null;
-    if (isAlphaToHAlpha) {
-      try {
-        return Number(balances.hAlpha) / 1e18;
-      } catch {
-        return 0;
-      }
-    }
-    try {
-      return Number(balances.alphaStake) / 1e9;
-    } catch {
-      return 0;
-    }
+    if (isAlphaToHAlpha) return balances.hAlpha > 0n ? balances.hAlpha : 0n;
+    return balances.alphaStake > 0n ? balances.alphaStake : 0n;
   }, [balances, isAlphaToHAlpha]);
+
+  const destDecimals = isAlphaToHAlpha ? 18 : 9;
 
   /* Per-direction minimum sourced from the Rust BridgeConfig so the
-   * hint matches the chain-enforced floor. */
-  const minAmount = useMemo(() => {
-    if (!bridge.config) return 0;
+   * hint matches the chain-enforced floor. In source base units. */
+  const minAmountPlanck = useMemo<bigint>(() => {
+    if (!bridge.config) return 0n;
     const planck = isAlphaToHAlpha
       ? bridge.config.minAlphaPlanck
       : bridge.config.minHalphaPlanck;
     try {
-      return Number(BigInt(planck)) / 10 ** sourceDecimals;
+      return BigInt(planck);
     } catch {
-      return 0;
+      return 0n;
     }
-  }, [bridge.config, isAlphaToHAlpha, sourceDecimals]);
+  }, [bridge.config, isAlphaToHAlpha]);
 
   const handleSwapBridgeDirection = useCallback(() => {
     setBridgeDirection((prev) =>
@@ -260,35 +254,33 @@ const BridgeDialog: React.FC<BridgeDialogProps> = ({
     }
   };
 
-  const truncate6 = (v: number) => {
-    const t = Math.round(v * 1e6) / 1e6;
-    return t > 0 ? t.toFixed(6).replace(/\.?0+$/, "") : "";
-  };
-
   const handlePercentClick = (
     pct: 100 | 50 | 25,
     key: "max" | "50" | "25",
   ) => {
-    if (sourceBalanceNumber === null) return;
-    setAmount(truncate6((sourceBalanceNumber * pct) / 100));
+    if (sourceBalancePlanck === null) return;
+    const next = (sourceBalancePlanck * BigInt(pct)) / 100n;
+    // Truncated to 6 decimals, so the typed amount never exceeds available.
+    setAmount(next > 0n ? formatUnitsTruncated(next, sourceDecimals) : "");
     setActiveButton(key);
   };
 
-  const numericAmount = parseFloat(amount) || 0;
-  const displayAmount = amount && numericAmount > 0 ? amount : "0.00";
+  // The typed amount in source base units; null = unparseable.
+  const amountPlanck = useMemo(
+    () => parseUnitsToBase(amount, sourceDecimals),
+    [amount, sourceDecimals],
+  );
+  const displayAmount = amount && amountPlanck !== null && amountPlanck > 0n ? amount : "0.00";
 
   const isAmountValid = useMemo(() => {
-    if (numericAmount <= 0) return false;
-    if (minAmount > 0 && numericAmount < minAmount) return false;
-    if (sourceBalanceNumber === null) return true;
-    return (
-      Math.round(numericAmount * 1e6) <=
-      Math.round(sourceBalanceNumber * 1e6)
-    );
-  }, [numericAmount, minAmount, sourceBalanceNumber]);
+    if (amountPlanck === null || amountPlanck <= 0n) return false;
+    if (minAmountPlanck > 0n && amountPlanck < minAmountPlanck) return false;
+    if (sourceBalancePlanck === null) return true;
+    return amountPlanck <= sourceBalancePlanck;
+  }, [amountPlanck, minAmountPlanck, sourceBalancePlanck]);
 
   const handleBridgeSubmit = () => {
-    if (!amount || numericAmount <= 0) {
+    if (!amount || amountPlanck === null || amountPlanck <= 0n) {
       toast.error("Please enter a valid amount to bridge");
       return;
     }
@@ -296,16 +288,13 @@ const BridgeDialog: React.FC<BridgeDialogProps> = ({
       toast.error("No active wallet — create or unlock one first.");
       return;
     }
-    if (minAmount > 0 && numericAmount < minAmount) {
+    if (minAmountPlanck > 0n && amountPlanck < minAmountPlanck) {
       toast.error(
-        `Minimum bridge amount is ${minAmount.toFixed(2)} ${sourceToken}`,
+        `Minimum bridge amount is ${formatBalance2dp(minAmountPlanck, sourceDecimals)} ${sourceToken}`,
       );
       return;
     }
-    if (
-      sourceBalanceNumber !== null &&
-      Math.round(numericAmount * 1e6) > Math.round(sourceBalanceNumber * 1e6)
-    ) {
+    if (sourceBalancePlanck !== null && amountPlanck > sourceBalancePlanck) {
       toast.error(`Amount exceeds your ${sourceToken} balance`);
       return;
     }
@@ -314,25 +303,8 @@ const BridgeDialog: React.FC<BridgeDialogProps> = ({
   };
 
   const toPlanckString = useCallback(
-    (decimalStr: string): string | null => {
-      const trimmed = decimalStr.trim();
-      if (!/^\d*\.?\d*$/.test(trimmed) || !trimmed || trimmed === ".") {
-        return null;
-      }
-      const [whole, frac = ""] = trimmed.split(".");
-      const fracPadded = (frac + "0".repeat(sourceDecimals)).slice(
-        0,
-        sourceDecimals,
-      );
-      try {
-        const planck =
-          BigInt(whole || "0") * BigInt(10) ** BigInt(sourceDecimals) +
-          BigInt(fracPadded || "0");
-        return planck.toString();
-      } catch {
-        return null;
-      }
-    },
+    (decimalStr: string): string | null =>
+      parseUnitsToBase(decimalStr, sourceDecimals)?.toString() ?? null,
     [sourceDecimals],
   );
 
@@ -552,20 +524,20 @@ const BridgeDialog: React.FC<BridgeDialogProps> = ({
             <div className="mt-2 flex items-center justify-between">
               <span className="text-[13px] font-medium text-[#0a0a0a] dark:text-white">
                 Min:{" "}
-                {minAmount > 0
-                  ? `${minAmount.toFixed(2)} ${sourceToken}`
+                {minAmountPlanck > 0n
+                  ? `${formatBalance2dp(minAmountPlanck, sourceDecimals)} ${sourceToken}`
                   : "--"}
               </span>
               <span className="text-[13px] font-medium text-[#0a0a0a] dark:text-white">
                 You have:{" "}
                 {balancesLoading ? (
                   <span className="inline-block h-3 w-16 animate-pulse rounded bg-[#dcdcdc] align-middle dark:bg-[#3a3a3a]" />
-                ) : sourceBalanceNumber === null ? (
+                ) : sourceBalancePlanck === null ? (
                   <span className="text-[#7d7d7d]">— {sourceToken}</span>
                 ) : (
                   <>
                     <span className="font-semibold">
-                      {sourceBalanceNumber.toFixed(2)}
+                      {formatBalance2dp(sourceBalancePlanck, sourceDecimals)}
                     </span>
                     {` ${sourceToken}`}
                   </>
@@ -587,7 +559,7 @@ const BridgeDialog: React.FC<BridgeDialogProps> = ({
                     key={key}
                     type="button"
                     onClick={() => handlePercentClick(pct, key)}
-                    disabled={sourceBalanceNumber === null || balancesLoading}
+                    disabled={sourceBalancePlanck === null || balancesLoading}
                     className={cn(
                       "rounded-full border px-2.5 py-0.5 text-[13px] font-semibold leading-5 tracking-[-0.26px] transition-colors disabled:opacity-60",
                       activeButton === key
@@ -627,12 +599,12 @@ const BridgeDialog: React.FC<BridgeDialogProps> = ({
                 You have:{" "}
                 {balancesLoading ? (
                   <span className="inline-block h-3 w-16 animate-pulse rounded bg-[#dcdcdc] align-middle dark:bg-[#3a3a3a]" />
-                ) : destBalanceNumber === null ? (
+                ) : destBalancePlanck === null ? (
                   <span className="text-[#7d7d7d]">— {destToken}</span>
                 ) : (
                   <>
                     <span className="font-semibold">
-                      {destBalanceNumber.toFixed(2)}
+                      {formatBalance2dp(destBalancePlanck, destDecimals)}
                     </span>
                     {` ${destToken}`}
                   </>

@@ -174,6 +174,23 @@ pub async fn check_low_credit_notification(
     })
 }
 
+/// Low-credit check that fetches the **live** balance server-side and then runs
+/// the same decision as [`check_low_credit_notification`].
+///
+/// The FE used to pass `useUserCredits`'s cached planck, but that query is
+/// `staleTime: Infinity` and is never invalidated — so a user who spent below
+/// the threshold mid-session was never warned (audit R-08). This command takes
+/// no FE-supplied balance: it fetches the balance from the billing API itself,
+/// so the warning can never be decided against stale data.
+#[tauri::command]
+pub async fn check_low_credit_notification_live(state: tauri::State<'_, AppState>, account_id: String) -> Result<CreditNotificationCheck, AppError> {
+    let account = state.require_session_account_typed(&account_id)?;
+    let planck = crate::billing::credits::fetch_credit_balance_planck(&state, &account).await?;
+    // Delegate to the existing decision (it re-validates the session account and
+    // owns all the one-per-day / dedup / flag-state logic).
+    check_low_credit_notification(state, account_id, planck).await
+}
+
 /// Count active (non-deleted) low-credit warnings for a single user.
 ///
 /// Scoped by `user_address` so one account's warning never suppresses another's
