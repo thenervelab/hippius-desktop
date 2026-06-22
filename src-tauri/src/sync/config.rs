@@ -50,6 +50,26 @@ pub(crate) fn normalize_for_region_probe(server_url: &str) -> String {
     }
 }
 
+/// Resolve the `/health` URL for the init-time connectivity diagnostic, or
+/// `None` when the drive is in region auto-detect mode.
+///
+/// The probe is a best-effort log line (see `check_init_server_health`). In
+/// auto-detect mode there is no single endpoint to hit — hcfs-client races the
+/// regional `/health` endpoints itself — so a blank base would only build the
+/// relative URL `"/health"`, which `reqwest` rejects with "relative URL
+/// without a base", logging a spurious failure every launch. Deciding via
+/// [`normalize_for_region_probe`] keeps this identical to the engine's own
+/// auto-detect rule, so a legacy-single-region user is treated as auto-detect
+/// here too rather than probing an endpoint that may no longer exist.
+pub(crate) fn health_probe_url(server_url: &str) -> Option<String> {
+    let base = normalize_for_region_probe(server_url);
+    if base.is_empty() {
+        None
+    } else {
+        Some(format!("{base}/health"))
+    }
+}
+
 /// HCFS server configuration returned by `get_hcfs_config`.
 #[derive(serde::Serialize, Clone)]
 pub struct HcfsConfigResult {
@@ -352,5 +372,48 @@ mod tests {
     #[test]
     fn normalize_is_exact_match_for_legacy() {
         assert_eq!(normalize_for_region_probe("https://arion.hippius.com/"), "https://arion.hippius.com/");
+    }
+
+    // ── health_probe_url ────────────────────────────────────────────
+
+    /// Auto-detect mode (empty base) yields no probe URL — the caller skips
+    /// the probe instead of asking reqwest to GET the relative URL "/health".
+    #[test]
+    fn health_probe_url_is_none_for_empty() {
+        assert_eq!(health_probe_url(""), None);
+    }
+
+    /// The legacy single-region URL is auto-detect too (mirrors
+    /// `normalize_for_region_probe`), so it must not probe a possibly-dead
+    /// endpoint — this is the case that produced the spurious launch warning.
+    #[test]
+    fn health_probe_url_is_none_for_legacy_single_region() {
+        assert_eq!(health_probe_url(LEGACY_SINGLE_REGION_URL), None);
+        assert_eq!(health_probe_url("https://arion.hippius.com"), None);
+    }
+
+    /// An explicit override resolves to that endpoint's `/health` path.
+    #[test]
+    fn health_probe_url_appends_health_to_explicit_override() {
+        assert_eq!(
+            health_probe_url("https://eu-central-1-arion.hippius.com"),
+            Some("https://eu-central-1-arion.hippius.com/health".to_string())
+        );
+        assert_eq!(
+            health_probe_url("http://localhost:8080"),
+            Some("http://localhost:8080/health".to_string())
+        );
+    }
+
+    /// The trailing-slash legacy variant is an explicit override (exact-match
+    /// rewrite, per `normalize_is_exact_match_for_legacy`), so it DOES probe —
+    /// pinning that `health_probe_url` defers its auto-detect decision wholly
+    /// to `normalize_for_region_probe` rather than re-implementing it.
+    #[test]
+    fn health_probe_url_follows_normalize_exact_match() {
+        assert_eq!(
+            health_probe_url("https://arion.hippius.com/"),
+            Some("https://arion.hippius.com//health".to_string())
+        );
     }
 }

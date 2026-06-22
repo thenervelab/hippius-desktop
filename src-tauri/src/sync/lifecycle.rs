@@ -9,7 +9,8 @@ use crate::auth::account_key::account_key;
 use crate::auth::tokens::get_api_token;
 use crate::error::Result;
 use crate::sync::config::{
-    build_hcfs_config, get_drive_password, get_hcfs_config_internal, get_sync_path_for_label, load_sync_config, save_hcfs_config_internal,
+    build_hcfs_config, get_drive_password, get_hcfs_config_internal, get_sync_path_for_label, health_probe_url, load_sync_config,
+    save_hcfs_config_internal,
 };
 use crate::sync::device::get_device_name_internal;
 use crate::sync::folders::{get_all_sync_paths_internal, sanitize_label};
@@ -948,8 +949,16 @@ async fn init_new_drive(
 }
 
 /// Fire-and-log a health check against the HCFS server.
+///
+/// Best-effort diagnostic only — its result gates nothing; the real sync uses
+/// hcfs-client's region-resolved requests. In region auto-detect mode there is
+/// no single endpoint to probe, so the probe is skipped rather than building an
+/// invalid relative URL (see [`health_probe_url`]).
 async fn check_init_server_health(client: &reqwest::Client, server_url: &str) {
-    let test_url = format!("{server_url}/health");
+    let Some(test_url) = health_probe_url(server_url) else {
+        debug!("Skipping init connectivity probe — drive uses region auto-detect");
+        return;
+    };
     debug!("Testing connectivity to: {}", test_url);
     let resp = client.get(&test_url).header("X-API-Key", "Arion").send().await;
     match resp {
