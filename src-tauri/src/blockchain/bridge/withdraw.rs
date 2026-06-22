@@ -30,7 +30,8 @@ pub async fn bridge_halpha_to_alpha(
     recipient: Option<String>,
     password: String,
 ) -> Result<BridgeOutcome> {
-    let _ = recipient; // not part of the on-chain call; see doc above
+    // `recipient` is not part of the on-chain `withdraw` call (the chain credits
+    // the burning account) — it is only retained for the local history record.
     let amount: u128 = amount
         .trim()
         .parse()
@@ -39,7 +40,7 @@ pub async fn bridge_halpha_to_alpha(
         return Err(AppError::Validation("Amount is below the minimum bridge transfer".into()));
     }
 
-    let (signer, _address) = get_signer_and_address(&state, &password).await?;
+    let (signer, address) = get_signer_and_address(&state, &password).await?;
     let client = client::connect_hippius().await?;
 
     let tx = hippius_tn::tx().alpha_bridge().withdraw(amount);
@@ -60,6 +61,9 @@ pub async fn bridge_halpha_to_alpha(
         .ok()
         .flatten()
         .map(|ev| format!("0x{}", hex::encode(ev.id.0)));
+
+    // Record locally for the history view (best-effort).
+    super::history::record_submitted(&state, "halpha-to-alpha", amount, &address, recipient.as_deref(), &tx_hash, withdrawal_id.as_deref()).await;
 
     Ok(BridgeOutcome {
         tx_hash,

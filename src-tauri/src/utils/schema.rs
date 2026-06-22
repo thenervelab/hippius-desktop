@@ -35,6 +35,7 @@ const EXPECTED_TABLES: &[&str] = &[
     "share_origin",
     "shared_link_history",
     "local_wallets",
+    "bridge_transactions",
 ];
 
 /// Read the column names of a table via `PRAGMA table_info(...)`.
@@ -132,6 +133,7 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     ensure_user_preferences(&mut tx).await?;
     ensure_share_keystore(&mut tx).await?;
     ensure_share_origin(&mut tx).await?;
+    ensure_bridge_transactions(&mut tx).await?;
     ensure_shared_link_history(&mut tx).await?;
 
     // No `bridge_transactions` helper by design: the first cut of the bridge
@@ -785,6 +787,37 @@ async fn ensure_share_origin(conn: &mut SqliteConnection) -> Result<(), sqlx::Er
     .execute(&mut *conn)
     .await?;
     sqlx::query("CREATE INDEX IF NOT EXISTS share_origin_owner_idx ON share_origin (owner, folder_label)")
+        .execute(&mut *conn)
+        .await?;
+    Ok(())
+}
+
+/// `bridge_transactions` — locally-tracked Alpha↔hAlpha bridge submissions
+/// (replaces the renderer's localStorage tracker, audit TSLOGIC-7). Owner-scoped
+/// by `account_key`; the chain explorer reads are the authoritative status, this
+/// just records what this device submitted (incl. a pending row until the chain
+/// reflects it). The `(owner, created_at)` index keeps the DESC list off a scan.
+async fn ensure_bridge_transactions(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS bridge_transactions (
+            id              TEXT PRIMARY KEY,
+            owner           TEXT NOT NULL,
+            direction       TEXT NOT NULL,
+            status          TEXT NOT NULL,
+            amount          TEXT NOT NULL,
+            sender          TEXT,
+            recipient       TEXT,
+            source_tx_hash  TEXT,
+            deposit_id      TEXT,
+            withdrawal_id   TEXT,
+            created_at      INTEGER NOT NULL DEFAULT (unixepoch()),
+            updated_at      INTEGER NOT NULL DEFAULT (unixepoch()),
+            error           TEXT
+        )",
+    )
+    .execute(&mut *conn)
+    .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS bridge_transactions_owner_idx ON bridge_transactions (owner, created_at)")
         .execute(&mut *conn)
         .await?;
     Ok(())

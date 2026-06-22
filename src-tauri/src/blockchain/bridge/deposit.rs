@@ -163,6 +163,9 @@ pub async fn bridge_alpha_to_halpha(
         tracing::warn!(error = %e, "remove_proxy after deposit failed (deposit already succeeded)");
     }
 
+    // Record locally for the history view (best-effort).
+    super::history::record_submitted(&state, "alpha-to-halpha", amount, &origin_ss58, Some(&origin_ss58), &tx_hash, None).await;
+
     // The deposit_request_id lives in the contract's DepositRequestCreated event
     // as an #[ink(topic)] — recovering it from a raw Contracts.ContractEmitted
     // needs ink!-ABI-driven event decoding subxt doesn't do natively. Left as a
