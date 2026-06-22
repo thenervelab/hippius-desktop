@@ -1294,6 +1294,12 @@ pub(crate) async fn initialize_sync_inner(
     // call site stays dumb even under re-init storms.
     crate::sync::relative_path_backfill::spawn_backfill(app.clone(), account_id.clone(), label.clone());
 
+    // Recovery is default-on: ensure this account's mnemonic is registered as a
+    // read-only recovery principal, with no user action. Best-effort and guarded
+    // to one success per account per session, so the per-drive funnel is a safe
+    // call site even under re-init storms.
+    crate::recovery_binding::spawn_default_recovery_binding(app.clone());
+
     Ok(InitSyncResult {
         user_id,
         // Unwrap Zeroizing at the IPC serialization boundary; the Zeroizing

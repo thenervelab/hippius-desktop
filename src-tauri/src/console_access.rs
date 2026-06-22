@@ -293,6 +293,29 @@ pub(crate) async fn post_json_discard<B: Serialize>(ctx: &HcfsServerCtx, path: &
     }
 }
 
+/// POST JSON and parse the response body. Unlike [`post_json_discard`], the
+/// caller needs the returned payload (e.g. a challenge nonce), so any non-2xx
+/// — including 404 when the server feature is disabled — is an error, never a
+/// silent empty result.
+pub(crate) async fn post_json<B: Serialize, T: serde::de::DeserializeOwned>(ctx: &HcfsServerCtx, path: &str, body: &B) -> Result<T> {
+    let url = format!("{}{path}", ctx.base_url);
+    let resp = ctx
+        .client
+        .post(&url)
+        .header(AUTHORIZATION, format!("Bearer {}", ctx.bearer))
+        .header(CONTENT_TYPE, "application/json")
+        .header(ACCEPT, "application/json")
+        .json(body)
+        .send()
+        .await
+        .map_err(|e| AppError::Other(format!("HTTP error: {e}")))?;
+    if resp.status().is_success() {
+        resp.json::<T>().await.map_err(|e| AppError::Other(format!("JSON parse error: {e}")))
+    } else {
+        Err(http_err(resp.status(), resp, path).await)
+    }
+}
+
 async fn http_err(status: StatusCode, resp: reqwest::Response, path: &str) -> AppError {
     let body = resp.text().await.unwrap_or_default();
     if status == StatusCode::TOO_MANY_REQUESTS {

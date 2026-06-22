@@ -82,6 +82,17 @@ pub struct AppState {
     /// panel, then fires the toggle, which would see it hidden and re-show it.
     /// `0` means "never hidden by blur". See `tray::panel` for the cooldown.
     pub tray_panel_hidden_at: AtomicU64,
+    /// Set by `cancel_account_recovery` to request that an in-flight
+    /// `recover_account_files` pull stop after the current file. The recover
+    /// command resets it to `false` at entry and checks it each iteration,
+    /// returning the partial summary. A plain flag (not a `CancellationToken`)
+    /// because recovery is a single foreground pull, not a fan-out.
+    pub recovery_cancel: std::sync::atomic::AtomicBool,
+    /// Accounts whose default recovery binding has already succeeded this
+    /// process session. Guards `recovery_binding::spawn_default_recovery_binding`
+    /// so the per-drive sync-init funnel doesn't re-bind on every init/resume; a
+    /// failed attempt leaves the account absent, so it retries on the next init.
+    pub recovery_bound: std::sync::Mutex<std::collections::HashSet<String>>,
     /// HTTP client for HCFS health checks (accepts self-signed certs in debug).
     pub health_client: reqwest::Client,
     /// HTTP client for Hippius API calls (reuses connection pool + TLS cache).
@@ -185,6 +196,8 @@ impl AppState {
             error_notify: std::sync::Arc::new(crate::sync::error_notify::ErrorNotifyState::new()),
             sync_session_epoch: AtomicU64::new(0),
             tray_panel_hidden_at: AtomicU64::new(0),
+            recovery_cancel: std::sync::atomic::AtomicBool::new(false),
+            recovery_bound: std::sync::Mutex::new(std::collections::HashSet::new()),
             health_client,
             // Explicit timeouts. Without them a hung connection (e.g. a
             // billing-server blip during `check_action_eligibility`) would

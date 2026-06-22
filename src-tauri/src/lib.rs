@@ -16,6 +16,7 @@ pub mod error;
 pub mod infra;
 pub mod notifications;
 pub mod recovery;
+pub mod recovery_binding;
 pub mod shares;
 pub mod sync;
 pub mod tray;

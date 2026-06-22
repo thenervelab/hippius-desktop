@@ -21,6 +21,7 @@ pub mod error;
 pub mod infra;
 pub mod notifications;
 pub mod recovery;
+pub mod recovery_binding;
 pub mod shares;
 pub mod splash;
 pub mod sync;
@@ -75,6 +76,7 @@ use crate::recovery::{
     change_recovery_password, check_recovery_state, has_pending_rotation, mark_recovery_skipped, recover_mnemonic, resume_recovery_password_rotation,
     seal_and_upload_mnemonic,
 };
+use crate::recovery_binding::{cancel_account_recovery, list_recoverable_accounts, recover_account_files};
 use crate::sync::control::{reveal_drive_in_finder, trigger_sync_now};
 use crate::sync::device::{get_device_name, set_device_name};
 use crate::sync::files::{
@@ -353,6 +355,9 @@ fn main() {
             change_recovery_password,
             resume_recovery_password_rotation,
             has_pending_rotation,
+            list_recoverable_accounts,
+            recover_account_files,
+            cancel_account_recovery,
             // Block subscription
             start_block_subscription,
             stop_block_subscription,
