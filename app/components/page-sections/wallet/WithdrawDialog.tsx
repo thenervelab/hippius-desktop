@@ -16,6 +16,8 @@ import TransactionFlowToast, {
 import WalletPasswordField from "./shared/WalletPasswordField";
 import { useStaking } from "@/lib/hooks/useStaking";
 import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
+import { dispatchSigningError } from "@/lib/utils/dispatchTauriError";
+import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { TxSubmittedUnconfirmedError } from "@/lib/utils/txOutcome";
 
 interface WithdrawDialogProps {
@@ -36,6 +38,7 @@ const WithdrawDialog: React.FC<WithdrawDialogProps> = ({
 }) => {
   const { stakingInfo, operations, refetch } = useStaking();
   const { verifyPassword } = useLocalWallet();
+  const { logout } = useWalletAuth();
   const withdrawableHip = stakingInfo?.withdrawableHip ?? "0";
   // Gate on the raw planck value, not a float parse of the display string.
   const hasWithdrawable = useMemo(() => {
@@ -82,15 +85,18 @@ const WithdrawDialog: React.FC<WithdrawDialogProps> = ({
           // invalidated by the staking hook before this threw.
           setFlowState("submitted");
         } else {
-          const msg = errorMessage(e);
           setFlowState("error");
-          toast.error("Withdraw failed", { description: msg });
+          // Offer re-auth instead of a dead toast when the signing key is
+          // unavailable (M-14).
+          if (!dispatchSigningError(e, () => logout("/login?reauth=1"))) {
+            toast.error("Withdraw failed", { description: errorMessage(e) });
+          }
         }
       } finally {
         isProcessingRef.current = false;
       }
     },
-    [operations, refetch, withdrawableHip, onSuccess],
+    [operations, refetch, withdrawableHip, onSuccess, logout],
   );
 
   const handleConfirm = async () => {

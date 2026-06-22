@@ -21,6 +21,8 @@ import TransactionFlowToast, {
 import WalletPasswordField from "./shared/WalletPasswordField";
 import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
 import { useStaking } from "@/lib/hooks/useStaking";
+import { dispatchSigningError } from "@/lib/utils/dispatchTauriError";
+import { useWalletAuth } from "@/lib/wallet-auth-context";
 
 interface UnstakeDialogProps {
   open: boolean;
@@ -34,6 +36,7 @@ const UnstakeDialog: React.FC<UnstakeDialogProps> = ({
   onSuccess,
 }) => {
   const { stakingInfo, operations, refetch } = useStaking();
+  const { logout } = useWalletAuth();
 
   const [amount, setAmount] = useState("");
   const [activeButton, setActiveButton] = useState<
@@ -108,15 +111,18 @@ const UnstakeDialog: React.FC<UnstakeDialogProps> = ({
           // invalidated by the staking hook before this threw.
           setFlowState("submitted");
         } else {
-          const msg = errorMessage(e);
           setFlowState("error");
-          toast.error("Unstake failed", { description: msg });
+          // Offer re-auth instead of a dead toast when the signing key is
+          // unavailable (M-14).
+          if (!dispatchSigningError(e, () => logout("/login?reauth=1"))) {
+            toast.error("Unstake failed", { description: errorMessage(e) });
+          }
         }
       } finally {
         isProcessingRef.current = false;
       }
     },
-    [operations, refetch, onSuccess],
+    [operations, refetch, onSuccess, logout],
   );
 
   const handleOpenConfirm = () => {

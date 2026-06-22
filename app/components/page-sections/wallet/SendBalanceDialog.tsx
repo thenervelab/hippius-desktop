@@ -24,6 +24,8 @@ import TransactionFlowToast, {
   type TransactionFlowState,
 } from "./shared/TransactionFlowToast";
 import { useAddressValidation } from "@/lib/hooks/useAddressValidation";
+import { dispatchSigningError } from "@/lib/utils/dispatchTauriError";
+import { useWalletAuth } from "@/lib/wallet-auth-context";
 
 export interface SendBalanceDialogProps {
   open: boolean;
@@ -58,6 +60,7 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
     disallowedAddressMessage: "Cannot send to your own address",
   });
 
+  const { logout } = useWalletAuth();
   const [amount, setAmount] = useState("");
   const [amountError, setAmountError] = useState<string | undefined>();
   const [activeButton, setActiveButton] = useState<"max" | null>(null);
@@ -206,16 +209,19 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
           refetchBalance?.();
           resetForm();
         } else {
-          const msg = errorMessage(e);
           setFlowState("error");
-          toast.error("Transfer failed", { description: msg });
+          // Offer re-auth instead of a dead toast when the signing key is
+          // unavailable (M-14).
+          if (!dispatchSigningError(e, () => logout("/login?reauth=1"))) {
+            toast.error("Transfer failed", { description: errorMessage(e) });
+          }
         }
       } finally {
         setLoading(false);
         isProcessingRef.current = false;
       }
     },
-    [refetchBalance, resetForm],
+    [refetchBalance, resetForm, logout],
   );
 
   // The confirmation dialog now collects the password inline, so there's

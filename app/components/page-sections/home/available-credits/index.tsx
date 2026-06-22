@@ -54,6 +54,7 @@ const AvailableCreditsCard: React.FC<{ className?: string }> = ({
   const {
     data: credits,
     isLoading: creditsLoading,
+    isError: creditsError,
     isFetching: creditsFetching,
     refetch: refetchCredits,
   } = useUserCredits();
@@ -97,8 +98,11 @@ const AvailableCreditsCard: React.FC<{ className?: string }> = ({
 
   const balanceDisplay = useMemo(() => {
     if (creditsLoading) return null;
+    // A failed balance fetch must NOT read as a real zero balance (audit M-16) —
+    // show a distinct placeholder so the user can tell "unknown" from "0 HIP".
+    if (creditsError) return "—";
     return credits?.hip ?? "0";
-  }, [credits, creditsLoading]);
+  }, [credits, creditsLoading, creditsError]);
 
   // Blue dollar estimate next to the headline. 1 credit ≈ $1 (matches the
   // console's `getDollarValue`), shown to two decimals.

@@ -22,6 +22,8 @@ import WalletPasswordField from "./shared/WalletPasswordField";
 import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
 import { useStaking } from "@/lib/hooks/useStaking";
 import { useHippiusBalance } from "@/lib/hooks/api/useHippiusBalance";
+import { dispatchSigningError } from "@/lib/utils/dispatchTauriError";
+import { useWalletAuth } from "@/lib/wallet-auth-context";
 
 /**
  * 0.01 hAlpha (= 10^16 planck) reserved on MAX so the user always has
@@ -44,6 +46,7 @@ const StakeDialog: React.FC<StakeDialogProps> = ({
 }) => {
   const { stakingInfo, operations, refetch } = useStaking();
   const { data: balanceInfo, refetch: refetchBalance } = useHippiusBalance();
+  const { logout } = useWalletAuth();
 
   const [amount, setAmount] = useState("");
   const [activeButton, setActiveButton] = useState<
@@ -145,15 +148,18 @@ const StakeDialog: React.FC<StakeDialogProps> = ({
           // invalidated by the staking hook before this threw.
           setFlowState("submitted");
         } else {
-          const msg = errorMessage(e);
           setFlowState("error");
-          toast.error("Stake failed", { description: msg });
+          // If the wallet has no signing key (e.g. an OAuth session with no
+          // seed), offer a re-auth path instead of a dead error toast (M-14).
+          if (!dispatchSigningError(e, () => logout("/login?reauth=1"))) {
+            toast.error("Stake failed", { description: errorMessage(e) });
+          }
         }
       } finally {
         isProcessingRef.current = false;
       }
     },
-    [operations, refetch, refetchBalance, onSuccess],
+    [operations, refetch, refetchBalance, onSuccess, logout],
   );
 
   const handleOpenConfirm = () => {
