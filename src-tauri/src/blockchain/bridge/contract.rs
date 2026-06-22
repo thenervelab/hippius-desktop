@@ -11,11 +11,16 @@
 //! - `[0x00, variant]`       — a directly-encoded variant
 //! - `[variant]`             — a bare single-byte variant
 //!
-//! The variant table is the ink! `bridge::Error` enum, index-for-index from
-//! `.papi/contracts/bridge.json` (verified to match the TS table).
+//! The variant table follows the ink! `bridge::Error` enum in `thebrain`
+//! `contracts/bridge/src/errors.rs` at HEAD (24 variants). NOTE: the chain's
+//! own generated ABI and the desktop `.papi` ABI both disagree with it (and
+//! each other) — the desktop ABI the FE used had a stale extra
+//! `InvalidWithdrawalDetails@9` (25 variants), which mislabels everything from
+//! index 9 up. Because the enum the *deployed* contract uses can't be confirmed
+//! here, `variant_name` always emits the raw index too (see its docs).
 
 /// `bridge::Error` variants by discriminant (0-24).
-const CONTRACT_ERROR_VARIANTS: [&str; 25] = [
+const CONTRACT_ERROR_VARIANTS: [&str; 24] = [
     "Unauthorized",                   // 0
     "NotGuardian",                    // 1
     "AlreadyVoted",                   // 2
@@ -25,28 +30,38 @@ const CONTRACT_ERROR_VARIANTS: [&str; 25] = [
     "AmountTooSmall",                 // 6
     "InvalidThresholds",              // 7
     "TooManyGuardians",               // 8
-    "InvalidWithdrawalDetails",       // 9
-    "InvalidTTL",                     // 10
-    "BridgePaused",                   // 11
-    "DepositRequestNotFound",         // 12
-    "WithdrawalNotFound",             // 13
-    "DepositRequestAlreadyFinalized", // 14
-    "WithdrawalAlreadyFinalized",     // 15
-    "Overflow",                       // 16
-    "RuntimeCallFailed",              // 17
-    "StakeQueryFailed",               // 18
-    "TransferFailed",                 // 19
-    "StakeConsolidationFailed",       // 20
-    "CodeUpgradeFailed",              // 21
-    "InvalidRequestId",               // 22
-    "RecordNotFinalized",             // 23
-    "TTLNotExpired",                  // 24
+    "InvalidTTL",                     // 9
+    "BridgePaused",                   // 10
+    "DepositRequestNotFound",         // 11
+    "WithdrawalNotFound",             // 12
+    "DepositRequestAlreadyFinalized", // 13
+    "WithdrawalAlreadyFinalized",     // 14
+    "Overflow",                       // 15
+    "RuntimeCallFailed",              // 16
+    "StakeQueryFailed",               // 17
+    "TransferFailed",                 // 18
+    "StakeConsolidationFailed",       // 19
+    "CodeUpgradeFailed",              // 20
+    "InvalidRequestId",               // 21
+    "RecordNotFinalized",             // 22
+    "TTLNotExpired",                  // 23
 ];
 
+/// Map a variant index to a name, ALWAYS keeping the raw index in the output.
+///
+/// The index is authoritative (it's what the contract emits); the name is a
+/// best-effort label from `thebrain` `contracts/bridge/src/errors.rs` at HEAD.
+/// The three known sources disagree (chain `errors.rs` = 24 variants w/
+/// InvalidRequestId, no InvalidWithdrawalDetails; the chain's own generated
+/// ABI and the desktop `.papi` ABI each differ from it and each other), and the
+/// enum the *deployed* testnet contract uses can't be confirmed from here — so
+/// the index is surfaced alongside the name to stay debuggable if the label is
+/// stale. Regenerate this table from the DEPLOYED contract's ABI when known.
 fn variant_name(idx: u8) -> String {
-    CONTRACT_ERROR_VARIANTS
-        .get(idx as usize)
-        .map_or_else(|| format!("ContractError(variant={idx})"), |s| (*s).to_string())
+    CONTRACT_ERROR_VARIANTS.get(idx as usize).map_or_else(
+        || format!("contract error #{idx}"),
+        |name| format!("{name} (contract error #{idx})"),
+    )
 }
 
 /// Decode the SCALE return bytes of a reverted `deposit` ink! call into a
@@ -77,21 +92,21 @@ mod tests {
 
     #[test]
     fn decodes_known_contract_errors() {
-        // Ok(Err(BridgePaused=11)).
-        assert_eq!(describe_contract_error(&[0x00, 0x01, 11]).as_deref(), Some("BridgePaused"));
-        // Ok(Err(StakeConsolidationFailed=20)) — the pattern the TS comment cites.
-        assert_eq!(
-            describe_contract_error(&[0x00, 0x01, 20]).as_deref(),
-            Some("StakeConsolidationFailed")
-        );
+        // Names per thebrain errors.rs HEAD; output always carries the raw index.
+        // Ok(Err(BridgePaused=10)).
+        let r = describe_contract_error(&[0x00, 0x01, 10]).unwrap();
+        assert!(r.contains("BridgePaused") && r.contains("#10"), "got: {r}");
+        // Ok(Err(StakeConsolidationFailed=19)).
+        let r = describe_contract_error(&[0x00, 0x01, 19]).unwrap();
+        assert!(r.contains("StakeConsolidationFailed") && r.contains("#19"), "got: {r}");
         // Err(LangError).
         assert!(describe_contract_error(&[0x01, 0x01]).unwrap().starts_with("LangError"));
         // Direct variant 6 = AmountTooSmall.
-        assert_eq!(describe_contract_error(&[0x00, 6]).as_deref(), Some("AmountTooSmall"));
-        // Bare single-byte variant.
-        assert_eq!(describe_contract_error(&[24]).as_deref(), Some("TTLNotExpired"));
-        // Out-of-range variant falls back to a labelled form, never panics.
-        assert_eq!(describe_contract_error(&[0x00, 0x01, 99]).as_deref(), Some("ContractError(variant=99)"));
+        assert!(describe_contract_error(&[0x00, 6]).unwrap().contains("AmountTooSmall"));
+        // Bare single-byte variant 23 = TTLNotExpired.
+        assert!(describe_contract_error(&[23]).unwrap().contains("TTLNotExpired"));
+        // Out-of-range variant falls back to the index form, never panics.
+        assert_eq!(describe_contract_error(&[0x00, 0x01, 99]).as_deref(), Some("contract error #99"));
         // Empty → no decodable error.
         assert_eq!(describe_contract_error(&[]), None);
     }
