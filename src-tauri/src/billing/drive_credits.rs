@@ -14,6 +14,7 @@
 //! `CreditsConsumed` matches the existing `/marketplace/credit`
 //! consumer and avoids double-counting.
 
+use crate::api::client::ApiError;
 use crate::api::indexer::IndexerClient;
 use crate::billing::charts::{
     ChartPoint, date_to_iso, dd_mon_label, format_balance, get_all_dates_in_range, normalize_date, parse_timestamp_to_date, range_start, weekday_name,
@@ -135,6 +136,11 @@ async fn fetch_all_drive_events(state: &crate::app_state::AppState, account_id: 
     let indexer = IndexerClient::from_env(state.api_client.clone())?;
     let limit_str = PAGE_LIMIT.to_string();
     let mut all = Vec::new();
+    // DEBUG: raw page bodies captured for the on-disk dump below. Holds the
+    // full untyped response (account_id, block_number, raw_event_data, …) that
+    // DriveCreditEvent discards, so the dump shows exactly what the API returns.
+    let mut raw_pages: Vec<serde_json::Value> = Vec::new();
+    let mut truncated = true;
 
     for page in 1..=MAX_PAGES {
         let page_str = page.to_string();
@@ -144,16 +150,63 @@ async fn fetch_all_drive_events(state: &crate::app_state::AppState, account_id: 
             ("page", page_str.as_str()),
             ("limit", limit_str.as_str()),
         ];
-        let response: HistoryPage = indexer.get(ENDPOINT, &params).await?;
+        // Fetch the raw body once, then parse it locally — one request, but we
+        // keep the unparsed text for the diagnostic dump.
+        let body = indexer.get_text(ENDPOINT, &params).await?;
+        match serde_json::from_str::<serde_json::Value>(&body) {
+            Ok(value) => raw_pages.push(value),
+            Err(e) => tracing::warn!(page, error = %e, "drive credit history: page body is not valid JSON"),
+        }
+        let response: HistoryPage = serde_json::from_str(&body).map_err(|e| ApiError::Other(format!("JSON parse error: {e}")))?;
         let total_pages = response.pagination.total_pages.max(1);
         all.extend(response.data);
         if page >= total_pages {
-            return Ok(all);
+            truncated = false;
+            break;
         }
     }
 
-    tracing::warn!(account_id, max_pages = MAX_PAGES, "drive credit history exceeded page cap; truncating");
+    if truncated {
+        tracing::warn!(account_id, max_pages = MAX_PAGES, "drive credit history exceeded page cap; truncating");
+    }
+
+    dump_raw_history(account_id, &raw_pages);
     Ok(all)
+}
+
+/// Best-effort diagnostic dump of the raw indexer response to
+/// `~/.hippius/logs/drive-credits-history.json`.
+///
+/// Overwritten every fetch cycle, so the file always reflects the most recent
+/// response. Every failure is logged and swallowed — this is an inspection aid,
+/// never part of the chart's contract, so it must not fail a render. The
+/// `tracing::info!` on success doubles as the "console log" of where to look.
+fn dump_raw_history(account_id: &str, pages: &[serde_json::Value]) {
+    let Some(home) = dirs::home_dir() else {
+        tracing::warn!("drive credit history dump skipped: no home directory");
+        return;
+    };
+    let dir = home.join(".hippius").join("logs");
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        tracing::warn!(error = %e, "drive credit history dump skipped: create_dir_all failed");
+        return;
+    }
+    let path = dir.join("drive-credits-history.json");
+    let wrapper = serde_json::json!({
+        "account_id": account_id,
+        "fetched_at": chrono::Utc::now().to_rfc3339(),
+        "endpoint": ENDPOINT,
+        "storage_type": DRIVE_STORAGE_TYPE,
+        "page_count": pages.len(),
+        "pages": pages,
+    });
+    match serde_json::to_string_pretty(&wrapper) {
+        Ok(text) => match std::fs::write(&path, text) {
+            Ok(()) => tracing::info!(path = %path.display(), pages = pages.len(), "drive credit history raw response saved"),
+            Err(e) => tracing::warn!(error = %e, "drive credit history dump: write failed"),
+        },
+        Err(e) => tracing::warn!(error = %e, "drive credit history dump: serialize failed"),
+    }
 }
 
 /// Parse a (possibly fractional) planck string into HIP credits.

@@ -53,6 +53,40 @@ impl IndexerClient {
         })
     }
 
+    /// GET returning the raw, unparsed response body as a `String`.
+    ///
+    /// Mirrors [`get`](Self::get) but skips deserialization so a caller can
+    /// inspect or persist the full body — including fields the typed struct
+    /// drops. Prefer [`get`](Self::get) for normal typed access.
+    ///
+    /// # Errors
+    /// Returns [`ApiError::Other`] on a transport/body-read failure and
+    /// [`ApiError::Http`] (status + body) on a non-2xx response.
+    pub async fn get_text(&self, path: &str, params: &[(&str, &str)]) -> Result<String, ApiError> {
+        let url = url_with_params(self.base_url, path, params);
+        let resp = self
+            .client
+            .get(&url)
+            .header(ACCEPT, "application/json")
+            .header("X-API-KEY", self.api_key)
+            .send()
+            .await
+            .map_err(|e| ApiError::Other(e.to_string()))?;
+
+        let status = resp.status();
+        if status.is_success() {
+            resp.text().await.map_err(|e| ApiError::Other(e.to_string()))
+        } else {
+            let req_path = resp.url().path().to_string();
+            let body = resp.text().await.unwrap_or_default();
+            tracing::warn!(status = status.as_u16(), path = %req_path, "Indexer API request failed");
+            Err(ApiError::Http {
+                status: status.as_u16(),
+                body,
+            })
+        }
+    }
+
     /// GET with query parameters.
     pub async fn get<T: DeserializeOwned>(&self, path: &str, params: &[(&str, &str)]) -> Result<T, ApiError> {
         let url = url_with_params(self.base_url, path, params);
