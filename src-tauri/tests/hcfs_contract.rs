@@ -17,6 +17,7 @@
 //! BEFORE the bump ships. If you change an algorithm ON PURPOSE, regenerate the
 //! goldens deliberately and document the migration.
 
+use hcfs_client::crypto::{decrypt_small, encrypt_small};
 use hcfs_client::drive::keys::{derive_folder_mnemonic, folder_hash};
 use hcfs_client::drive::remote::derive_encryption_key;
 use proptest::prelude::*;
@@ -95,4 +96,71 @@ proptest! {
         prop_assert!(h.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()), "must be lowercase hex: {}", h);
         prop_assert_eq!(folder_hash(&label), h, "folder_hash must be deterministic");
     }
+
+    /// `derive_encryption_key` determinism across the realistic label space (the
+    /// golden above pins only "alpha"). The security property at-rest encryption
+    /// relies on is per-`(master, label)` stability — a non-deterministic key
+    /// would make a file written one launch undecryptable the next.
+    #[test]
+    fn derive_encryption_key_is_deterministic(label in "[A-Za-z0-9 _/.-]{0,64}") {
+        let a = derive_encryption_key(TEST_MNEMONIC, &label).expect("derive");
+        let b = derive_encryption_key(TEST_MNEMONIC, &label).expect("re-derive");
+        prop_assert_eq!(a, b);
+    }
+
+    /// At-rest round-trip over arbitrary plaintext: `decrypt(encrypt(x)) == x`.
+    /// The shrinker probes lengths and byte patterns the fixed fixtures below
+    /// miss — an off-by-one in chunk framing surfaces here. Bounded under the
+    /// 256 KiB chunk size so each case is a single chunk (fast).
+    #[test]
+    fn at_rest_round_trips_any_plaintext(plaintext in proptest::collection::vec(any::<u8>(), 0..4096)) {
+        let key = enc_key_alpha();
+        let ciphertext = encrypt_small(&plaintext, &key).expect("encrypt");
+        let decrypted = decrypt_small(&ciphertext, &key).expect("decrypt");
+        prop_assert_eq!(decrypted, plaintext);
+    }
+}
+
+// ── At-rest AEAD decrypt known-answer tests ────────────────────────────────
+//
+// The golden vectors above pin the deterministic KEY-DERIVATION functions. These
+// pin the at-rest ENCRYPTION FORMAT itself — the XChaCha20-Poly1305 streaming
+// layout (`[nonce:24][chunk_count:u32][len:u32][ciphertext][tag:16]`) the
+// desktop's `download_remote_file` uses to decrypt every user file. A wire-shape
+// test cannot see a format change here; this is the data-loss guard.
+
+/// The per-folder content key for label `"alpha"` under the canonical test
+/// mnemonic — the exact value pinned by `derive_encryption_key_is_pinned`.
+/// Hardcoded (not re-derived) so this KAT isolates the at-rest AEAD format from
+/// the key-derivation algorithm, which has its own golden above.
+const ENC_KEY_ALPHA_HEX: &str = "b8a5eaafb059a3ed9860023f33622205851004ea2ee3750bb2b5c06653b45eec";
+
+/// Fixed plaintext for the at-rest decrypt KATs.
+const KAT_PLAINTEXT: &[u8] = b"hippius hcfs at-rest decrypt KAT v1";
+
+/// One ciphertext of `KAT_PLAINTEXT` under `ENC_KEY_ALPHA`, captured at the pinned
+/// hcfs rev `829ceb67`. The XChaCha20-Poly1305 nonce is random per encrypt, so
+/// this is a single frozen instance — but `decrypt_small` of it is deterministic.
+/// If an hcfs bump changes the streaming at-rest format (header layout, chunk
+/// framing, nonce derivation, AEAD construction), every already-uploaded user file
+/// becomes undecryptable and THIS test fails before the bump ships. Regenerate
+/// deliberately — and ship a migration — only when changing the format on purpose.
+const FROZEN_CIPHERTEXT_HEX: &str = "b76413f1c1633749ed02dfaee004b11d44a8126ee12f0ed10100000033000000cfd276eb49236f6c3a83df13c42a769f2c478a0415ae380801be09e0d30c1052eb4bf1a090bba946bc2d284f7e621ee0137eb2";
+
+fn enc_key_alpha() -> [u8; 32] {
+    hex::decode(ENC_KEY_ALPHA_HEX)
+        .expect("valid hex key")
+        .try_into()
+        .expect("32-byte key")
+}
+
+#[test]
+fn at_rest_decrypt_frozen_ciphertext_is_pinned() {
+    let key = enc_key_alpha();
+    let ciphertext = hex::decode(FROZEN_CIPHERTEXT_HEX).expect("valid frozen ciphertext hex");
+    let plaintext = decrypt_small(&ciphertext, &key).expect("a file encrypted at the pinned rev must still decrypt");
+    assert_eq!(
+        plaintext, KAT_PLAINTEXT,
+        "at-rest format drifted: a file encrypted at the pinned hcfs rev no longer decrypts to its plaintext"
+    );
 }

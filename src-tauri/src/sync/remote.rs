@@ -539,6 +539,45 @@ mod tests {
         assert_ne!(thumbnail_cache_name("abc", 256), thumbnail_cache_name("xyz", 256));
     }
 
+    /// Wire-contract pin for the FOREIGN `hcfs_client::drive::remote::RemoteFileInfo`,
+    /// which `list_remote_folder_files` returns RAW (no desktop wrapper) and the FE
+    /// `RemoteFolderBrowser` reads as `{file_id, path, name, size_bytes, arion_hash,
+    /// created_at, updated_at}`. The struct is foreign and `#[derive(Serialize)]`
+    /// with NO `rename_all`, so an hcfs bump that renames a field — or adds
+    /// `rename_all = "camelCase"` — would break the browser with NO compile error
+    /// here (the desktop never names these fields) and NO existing test failure.
+    /// This pins the snake_case key set so such a bump fails CI instead. AUDIT gap H3.
+    #[test]
+    fn remote_file_info_pins_wire_shape() {
+        use std::collections::BTreeSet;
+
+        let info = RemoteFileInfo {
+            file_id: "deadbeef".to_string(),
+            path: "photos/beach.jpg".to_string(),
+            name: "beach.jpg".to_string(),
+            size_bytes: 2048,
+            arion_hash: Some("Qm123".to_string()),
+            created_at: 1_700_000_000,
+            updated_at: 1_700_000_005,
+        };
+        let json = serde_json::to_value(&info).expect("serialize RemoteFileInfo");
+        let keys: BTreeSet<String> = json.as_object().expect("object").keys().cloned().collect();
+        let expected: BTreeSet<String> = ["arion_hash", "created_at", "file_id", "name", "path", "size_bytes", "updated_at"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        assert_eq!(keys, expected, "RemoteFileInfo wire keys drifted — FE RemoteFolderBrowser reads these snake_case keys");
+
+        // `arion_hash` is `Option` with no `skip_serializing_if`, so the key must
+        // stay present (serialized `null`) when None — the FE types it `string | null`.
+        let none_hash = RemoteFileInfo { arion_hash: None, ..info };
+        let json_none = serde_json::to_value(&none_hash).expect("serialize None arion_hash");
+        assert!(
+            json_none.get("arion_hash").is_some_and(serde_json::Value::is_null),
+            "arion_hash must serialize as null, not be omitted"
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn local_source_path_only_resolves_existing_regular_files() {
         let dir = tempfile::TempDir::new().expect("tempdir");

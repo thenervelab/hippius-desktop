@@ -2845,6 +2845,112 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
+    /// Wire-contract pin for `UserFileEntry`, which crosses IPC from `get_user_files`,
+    /// `get_recent_uploads`, and `search_files` into the FE `FormattedUserFile`. It is
+    /// desktop-owned (a bump can't rename it) but carries serde attributes an in-repo
+    /// "consistency" refactor could silently break: `#[serde(rename_all = "camelCase")]`,
+    /// `#[serde(rename = "type")]` on `file_type`, and `#[serde(default)]` on `file_id`.
+    /// The sibling `recent_uploads.rs` tests assert Rust FIELD accessors (`entry.sync_status`),
+    /// which never serialize — they would stay green through a `rename_all` flip. This pins
+    /// the actual JSON keys, with the two non-obvious ones (`type`, `fileId`). AUDIT gap M2.
+    #[test]
+    fn user_file_entry_pins_camel_case_wire() {
+        use std::collections::BTreeSet;
+
+        let entry = UserFileEntry {
+            name: "report.pdf".to_string(),
+            actual_file_name: "Work/report.pdf".to_string(),
+            size: 2048,
+            created_at: 1_700_000_000_000,
+            arion_hash: "Qm123".to_string(),
+            arion_cid: "cid".to_string(),
+            file_id: "0".repeat(64),
+            source: "/home/me/Docs/Work/report.pdf".to_string(),
+            miner_ids: vec!["m1".to_string()],
+            is_assigned: true,
+            last_charged_at: 1_700_000_005_000,
+            is_folder: false,
+            file_type: "pdf".to_string(),
+            is_erasure_coded: false,
+            main_req_hash: "req".to_string(),
+            sync_status: "synced".to_string(),
+            label: "Docs".to_string(),
+            file_count: Some(0),
+            deleted: false,
+        };
+        let json = serde_json::to_value(&entry).expect("serialize UserFileEntry");
+        let keys: BTreeSet<String> = json.as_object().expect("object").keys().cloned().collect();
+        let expected: BTreeSet<String> = [
+            "name", "actualFileName", "size", "createdAt", "arionHash", "arionCid", "fileId", "source", "minerIds",
+            "isAssigned", "lastChargedAt", "isFolder", "type", "isErasureCoded", "mainReqHash", "syncStatus", "label",
+            "fileCount", "deleted",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        assert_eq!(keys, expected, "UserFileEntry wire keys drifted — FE FormattedUserFile reads these camelCase keys");
+
+        // The two keys a naive rename would silently move: `file_type` serializes
+        // under `type` (per-field rename beats rename_all), NOT `fileType`; and the
+        // `default` field still serializes under `fileId`.
+        assert_eq!(json["type"], "pdf", "file_type must serialize under key `type`");
+        assert!(json.get("fileType").is_none(), "must not emit `fileType` (rename = \"type\" overrides camelCase)");
+        assert_eq!(json["fileId"], "0".repeat(64), "file_id must serialize under key `fileId`");
+    }
+
+    /// Wire-contract pin for the `GroupedListing` / `FileEntry` pair returned by
+    /// `list_sync_folder_grouped` and read by `use-nested-folder-listing.ts`. The
+    /// casing is a DELIBERATE split the FE depends on: `GroupedListing` is
+    /// `rename_all = "camelCase"` (`pendingBackfill`) but its inner `FileEntry` is
+    /// plain snake_case (`is_folder`/`arion_hash`/`sync_status`). A "consistency"
+    /// refactor adding `rename_all` to `FileEntry` would make every entry read
+    /// `undefined` for those keys — collapsing folders to files and dropping sync
+    /// status — with no compile error. This locks both halves. AUDIT gap M3.
+    #[test]
+    fn grouped_listing_pins_mixed_case_wire() {
+        use std::collections::BTreeSet;
+
+        let child = FileEntry {
+            name: "child.txt".to_string(),
+            is_folder: false,
+            size: 10,
+            modified: Some(1),
+            sync_status: "synced".to_string(),
+            arion_hash: "Qm".to_string(),
+            arion_cid: "cid".to_string(),
+            file_count: 0,
+            uploaded_at: 2,
+            updated_at: 3,
+        };
+        let file_keys: BTreeSet<String> = serde_json::to_value(&child)
+            .expect("serialize FileEntry")
+            .as_object()
+            .expect("object")
+            .keys()
+            .cloned()
+            .collect();
+        let expected_file: BTreeSet<String> = [
+            "name", "is_folder", "size", "modified", "sync_status", "arion_hash", "arion_cid", "file_count", "uploaded_at",
+            "updated_at",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        assert_eq!(expected_file, file_keys, "FileEntry must stay snake_case — FE use-nested-folder-listing reads is_folder/arion_hash/sync_status");
+
+        let listing = GroupedListing {
+            folders: vec![],
+            files: vec![child],
+            pending_backfill: true,
+        };
+        let outer = serde_json::to_value(&listing).expect("serialize GroupedListing");
+        let outer_keys: BTreeSet<String> = outer.as_object().expect("object").keys().cloned().collect();
+        let expected_outer: BTreeSet<String> = ["folders", "files", "pendingBackfill"].into_iter().map(String::from).collect();
+        assert_eq!(expected_outer, outer_keys, "GroupedListing outer keys drifted — FE reads pendingBackfill (camelCase)");
+        // The inner FileEntry stays snake_case even nested inside the camelCase outer.
+        assert_eq!(outer["files"][0]["is_folder"], false, "nested FileEntry must keep snake_case is_folder");
+    }
+
     // --- bundles_for_wanted_keys (F10: bounded recent-files metadata) ---
 
     /// The bounded lookup must allocate a `MetadataBundle` only for keys in the

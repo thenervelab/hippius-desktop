@@ -257,6 +257,53 @@ mod tests {
         }
     }
 
+    /// Wire-contract pin for the FOREIGN `hcfs_client::engine::types::SyncEngineHealth`,
+    /// which crosses to the FE via TWO paths — the `get_sync_engine_health` command
+    /// return AND the `hcfs_connectivity_changed` event (tauri_bridge.rs emits `&health`
+    /// raw). The FE `syncAtoms.ts::SyncEngineHealthState` reads the six snake_case keys
+    /// below. Foreign + `#[derive(Serialize)]` with no `rename_all`, so an hcfs rename
+    /// would break the connection indicator with no compile error here. AUDIT gap H4.
+    #[test]
+    fn sync_engine_health_pins_wire_shape() {
+        use std::collections::BTreeSet;
+
+        let json = serde_json::to_value(SyncEngineHealth::default()).expect("serialize SyncEngineHealth");
+        let keys: BTreeSet<String> = json.as_object().expect("object").keys().cloned().collect();
+        let expected: BTreeSet<String> = [
+            "status",
+            "last_check_time",
+            "last_successful_check",
+            "consecutive_failures",
+            "server_version",
+            "error_message",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        assert_eq!(keys, expected, "SyncEngineHealth wire keys drifted — FE SyncEngineHealthState reads these");
+    }
+
+    /// The `ConnectivityStatus` variant strings are matched literally by the FE
+    /// (`syncAtoms.ts::ConnectivityStatusType`) to drive the connection label. A
+    /// rename in hcfs would collapse the FE to its `connected` default — HIDING a
+    /// real outage. `#[serde(rename_all = "snake_case")]`, pinned here. AUDIT gap H4.
+    #[test]
+    fn connectivity_status_pins_wire_strings() {
+        use hcfs_client::engine::types::ConnectivityStatus;
+
+        let cases = [
+            (ConnectivityStatus::Connected, "connected"),
+            (ConnectivityStatus::ServerUnreachable, "server_unreachable"),
+            (ConnectivityStatus::NetworkOffline, "network_offline"),
+            (ConnectivityStatus::AuthExpired, "auth_expired"),
+            (ConnectivityStatus::Degraded, "degraded"),
+        ];
+        for (status, wire) in cases {
+            let json = serde_json::to_value(status).expect("serialize ConnectivityStatus");
+            assert_eq!(json, serde_json::Value::String(wire.to_string()), "ConnectivityStatus wire string drifted (expected {wire})");
+        }
+    }
+
     #[test]
     fn normalize_deduplicates_by_action_and_name() {
         let items = vec![

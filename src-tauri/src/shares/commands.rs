@@ -624,6 +624,47 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    /// Wire-contract pin for the FOREIGN `hcfs_client::client::share::ShareProgress`,
+    /// which `share_progress_forwarder` rides straight onto a `Channel<ShareProgress>`
+    /// to the webview — no desktop adapter. The FE `shares.ts` reads `{bytesDone,
+    /// bytesTotal, phase}` and its own doc comment says the casing "must not drift
+    /// from the backend serde derive", yet nothing pinned it. `ShareProgress` is
+    /// `#[serde(rename_all = "camelCase")]`; this pins the keys. AUDIT gap H5.
+    #[test]
+    fn share_progress_pins_wire_shape() {
+        use hcfs_client::client::share::{SharePhase, ShareProgress};
+        use std::collections::BTreeSet;
+
+        let update = ShareProgress {
+            phase: SharePhase::Uploading,
+            bytes_done: 10,
+            bytes_total: 20,
+        };
+        let json = serde_json::to_value(update).expect("serialize ShareProgress");
+        let keys: BTreeSet<String> = json.as_object().expect("object").keys().cloned().collect();
+        let expected: BTreeSet<String> = ["bytesDone", "bytesTotal", "phase"].into_iter().map(String::from).collect();
+        assert_eq!(keys, expected, "ShareProgress wire keys drifted — FE shares.ts reads bytesDone/bytesTotal/phase");
+    }
+
+    /// The `SharePhase` variant strings drive the FE share-progress bar's label
+    /// (`shares.ts::SharePhase = "encrypting" | "uploading" | "finalizing"`). A
+    /// rename in hcfs would break the bar silently. `#[serde(rename_all =
+    /// "lowercase")]`, pinned here. AUDIT gap H5.
+    #[test]
+    fn share_phase_pins_wire_strings() {
+        use hcfs_client::client::share::SharePhase;
+
+        let cases = [
+            (SharePhase::Encrypting, "encrypting"),
+            (SharePhase::Uploading, "uploading"),
+            (SharePhase::Finalizing, "finalizing"),
+        ];
+        for (phase, wire) in cases {
+            let json = serde_json::to_value(phase).expect("serialize SharePhase");
+            assert_eq!(json, serde_json::Value::String(wire.to_string()), "SharePhase wire string drifted (expected {wire})");
+        }
+    }
+
     /// Extract the `{ ... }` body of the first fn whose declaration contains
     /// `sig`, by brace matching. Same static-invariant style as `sync::folders`
     /// uses for teardown ordering — the reshare ordering is impractical to
