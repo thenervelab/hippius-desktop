@@ -431,15 +431,54 @@ pub(crate) const MAX_EVENT_FILES: usize = 50;
 /// 10,000-file migration doesn't produce a 2 MB JSON payload.
 pub(crate) const MAX_NOTIFICATION_FILES: usize = 200;
 
+/// Number of completed rows always kept when truncating an oversized snapshot.
+///
+/// `build_snapshot` sorts files by status group (errors, in-progress, pending,
+/// then completed) so completed rows are a contiguous tail; a blind
+/// `truncate(MAX_EVENT_FILES)` therefore drops completed rows FIRST, and in a
+/// cycle with more than [`MAX_EVENT_FILES`] files a finished upload never
+/// appears in the widget at all (the audit's "completed files don't show up").
+/// Reserving a small slice keeps recent completions visible while still letting
+/// the in-flight/error rows — the ones the user is actively watching —
+/// dominate the list. Small relative to [`MAX_EVENT_FILES`] by design.
+const COMPLETED_RETAINED: usize = 10;
+
 /// Truncate `snapshot.files` to at most [`MAX_EVENT_FILES`] entries while
 /// preserving the priority order already established by `build_snapshot`
-/// (errors, then in-progress, then pending, then completed). Aggregate
-/// counters on the snapshot are untouched.
+/// (errors, then in-progress, then pending, then completed) AND guaranteeing
+/// that some completed rows survive — see [`COMPLETED_RETAINED`] for why a
+/// blind truncate hid finished files. Aggregate counters on the snapshot are
+/// untouched.
+///
+/// Relies on `build_snapshot`'s invariant that completed rows form a single
+/// contiguous tail (status rank `Completed` is the highest, sorted last), so
+/// the first completed index splits the vec cleanly into "in-flight/error/
+/// pending" (kept from the front) and "completed" (kept from the front of that
+/// run, which `build_snapshot` orders largest-first).
 pub(crate) fn cap_snapshot_files(snapshot: &mut SyncSnapshot) {
     if snapshot.files.len() <= MAX_EVENT_FILES {
         return;
     }
-    snapshot.files.truncate(MAX_EVENT_FILES);
+    let split = snapshot
+        .files
+        .iter()
+        .position(|f| f.status == FileProgressStatus::Completed)
+        .unwrap_or(snapshot.files.len());
+    let completed_len = snapshot.files.len() - split;
+    if completed_len == 0 {
+        // No completed rows to protect — keep the highest-priority front.
+        snapshot.files.truncate(MAX_EVENT_FILES);
+        return;
+    }
+    // reserve <= COMPLETED_RETAINED < MAX_EVENT_FILES, so every subtraction
+    // below stays non-negative (no usize underflow).
+    let reserve = COMPLETED_RETAINED.min(completed_len);
+    let non_completed_keep = split.min(MAX_EVENT_FILES - reserve);
+    let completed_keep = completed_len.min(MAX_EVENT_FILES - non_completed_keep);
+    // Drop the non-completed rows beyond the budget (closing the gap so the
+    // completed tail shifts forward), then trim the completed tail to its budget.
+    snapshot.files.drain(non_completed_keep..split);
+    snapshot.files.truncate(non_completed_keep + completed_keep);
 }
 
 /// Truncate a file-path vector to at most [`MAX_EVENT_FILES`] entries.
@@ -798,6 +837,133 @@ mod tests {
         prepare_snapshot_for_emit(&mut snap, &preparing);
 
         assert_eq!(snap.files.len(), MAX_EVENT_FILES);
+    }
+
+    /// Regression for the audit's "completed files don't show up": when a cycle
+    /// has more than `MAX_EVENT_FILES` files, completed rows (sorted last by
+    /// `build_snapshot`) must NOT all be truncated away — `COMPLETED_RETAINED`
+    /// of them survive so a finished upload still appears in the widget.
+    #[test]
+    fn cap_snapshot_files_retains_completed_rows() {
+        use hcfs_client::engine::progress::state::{FileAction, FileProgress, FileProgressStatus};
+        let make = |i: usize, status: FileProgressStatus| FileProgress {
+            path: std::sync::Arc::from(format!("f{i}.txt")),
+            file_name: std::sync::Arc::from(format!("f{i}.txt")),
+            label: std::sync::Arc::from("default"),
+            action: FileAction::Upload,
+            status,
+            progress_percent: 0,
+            bytes_encrypted: 0,
+            bytes_transferred: 0,
+            total_bytes: 100,
+            resumed_from_bytes: None,
+            error: None,
+        };
+        let mut snap = base_snapshot();
+        // 60 in-progress (rank 1) then 20 completed (rank 3) — the order
+        // `build_snapshot` produces. 80 > MAX_EVENT_FILES, so the cap fires.
+        snap.files = (0..60)
+            .map(|i| make(i, FileProgressStatus::InProgress))
+            .chain((60..80).map(|i| make(i, FileProgressStatus::Completed)))
+            .collect();
+
+        cap_snapshot_files(&mut snap);
+
+        assert_eq!(snap.files.len(), MAX_EVENT_FILES, "total is capped");
+        let completed = snap
+            .files
+            .iter()
+            .filter(|f| f.status == FileProgressStatus::Completed)
+            .count();
+        assert_eq!(completed, COMPLETED_RETAINED, "completed rows survive the cap");
+        // The in-flight rows still lead and fill the remaining budget.
+        assert_eq!(snap.files.len() - completed, MAX_EVENT_FILES - COMPLETED_RETAINED);
+    }
+
+    /// With no completed rows, the cap is a plain front-truncate (the old
+    /// behavior) — the reserve logic must not change this case.
+    #[test]
+    fn cap_snapshot_files_without_completed_is_plain_truncate() {
+        use hcfs_client::engine::progress::state::{FileAction, FileProgress, FileProgressStatus};
+        let mut snap = base_snapshot();
+        snap.files = (0..MAX_EVENT_FILES + 25)
+            .map(|i| FileProgress {
+                path: std::sync::Arc::from(format!("f{i}.txt")),
+                file_name: std::sync::Arc::from(format!("f{i}.txt")),
+                label: std::sync::Arc::from("default"),
+                action: FileAction::Upload,
+                status: FileProgressStatus::InProgress,
+                progress_percent: 0,
+                bytes_encrypted: 0,
+                bytes_transferred: 0,
+                total_bytes: 100,
+                resumed_from_bytes: None,
+                error: None,
+            })
+            .collect();
+
+        cap_snapshot_files(&mut snap);
+
+        assert_eq!(snap.files.len(), MAX_EVENT_FILES);
+        assert!(snap.files.iter().all(|f| f.status == FileProgressStatus::InProgress));
+    }
+
+    proptest::proptest! {
+        /// Invariants of `cap_snapshot_files` over any mix of in-flight and
+        /// completed counts (matching `build_snapshot`'s "non-completed then
+        /// completed" layout): the result never exceeds the cap, never reorders
+        /// the two groups, and — the whole point of the reserve — keeps at least
+        /// `min(COMPLETED_RETAINED, completed)` completed rows whenever the cap
+        /// actually fires and any completed rows exist.
+        #[test]
+        fn cap_snapshot_files_invariants(n_non in 0usize..150, n_comp in 0usize..150) {
+            use hcfs_client::engine::progress::state::{FileAction, FileProgress, FileProgressStatus};
+            let make = |i: usize, status: FileProgressStatus| FileProgress {
+                path: std::sync::Arc::from(format!("f{i}.txt")),
+                file_name: std::sync::Arc::from(format!("f{i}.txt")),
+                label: std::sync::Arc::from("default"),
+                action: FileAction::Upload,
+                status,
+                progress_percent: 0,
+                bytes_encrypted: 0,
+                bytes_transferred: 0,
+                total_bytes: 100,
+                resumed_from_bytes: None,
+                error: None,
+            };
+            let mut snap = base_snapshot();
+            snap.files = (0..n_non)
+                .map(|i| make(i, FileProgressStatus::InProgress))
+                .chain((0..n_comp).map(|i| make(n_non + i, FileProgressStatus::Completed)))
+                .collect();
+            let total = n_non + n_comp;
+
+            cap_snapshot_files(&mut snap);
+
+            proptest::prop_assert!(snap.files.len() <= MAX_EVENT_FILES);
+            if total <= MAX_EVENT_FILES {
+                proptest::prop_assert_eq!(snap.files.len(), total, "small snapshots are untouched");
+            }
+            // Groups never interleave: every completed row follows every
+            // non-completed row (the prefix/suffix split is preserved).
+            let first_completed = snap
+                .files
+                .iter()
+                .position(|f| f.status == FileProgressStatus::Completed);
+            if let Some(idx) = first_completed {
+                proptest::prop_assert!(
+                    snap.files[idx..].iter().all(|f| f.status == FileProgressStatus::Completed)
+                );
+            }
+            let completed_kept = snap
+                .files
+                .iter()
+                .filter(|f| f.status == FileProgressStatus::Completed)
+                .count();
+            if total > MAX_EVENT_FILES && n_comp > 0 {
+                proptest::prop_assert!(completed_kept >= COMPLETED_RETAINED.min(n_comp));
+            }
+        }
     }
 
     /// When a drive is marked preparing AND the snapshot would otherwise

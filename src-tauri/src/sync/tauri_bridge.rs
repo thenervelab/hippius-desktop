@@ -26,6 +26,24 @@ use crate::sync::progress::{SyncSnapshot, cap_file_list, prepare_snapshot_for_em
 /// emitted, always allow first emit through."
 static LAST_EMITTED_FINGERPRINT: AtomicU64 = AtomicU64::new(0);
 
+/// Monotonic ticket source: each `ProgressSnapshot` is stamped with the next
+/// value at `on_event` time, BEFORE it is handed to a spawned emit task. The
+/// stamp records the order the bridge observed snapshots, which the spawned
+/// tasks then can't reorder.
+static SNAPSHOT_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Highest snapshot ticket emitted so far. A spawned emit task only emits when
+/// its ticket strictly exceeds this (see [`try_claim_snapshot_seq`]).
+///
+/// Why this exists: each snapshot is emitted from its OWN spawned task that
+/// first awaits a variable-latency SQLite read (`build_intent_overlay`). An
+/// earlier snapshot's read can finish AFTER a later one's, so without an
+/// ordering gate the older frame would reach the FE last; the fingerprint
+/// cursor then freezes that stale frame until the next distinct snapshot — and
+/// at end-of-cycle there is no next snapshot, so the widget stuck below 100%.
+/// `0` means nothing has been emitted yet.
+static LAST_EMITTED_SEQ: AtomicU64 = AtomicU64::new(0);
+
 /// Bridge between the hcfs-client sync engine and Tauri's event system.
 ///
 /// The `app` handle is set exactly once during app setup via [`set_app_handle`]
@@ -770,7 +788,16 @@ impl SyncEventHandler for TauriSyncBridge {
                 // the calling thread's context — see `spawn_snapshot_emit`
                 // and the in-repo precedent at
                 // `sync::upload_processing::spawn_watchdog`.
-                spawn_snapshot_emit(app.clone(), snapshot);
+                // Stamp the snapshot with its observation-order ticket HERE, in
+                // the synchronous handler, BEFORE the spawn — so the ticket
+                // reflects the order the bridge saw snapshots, not the order
+                // their async DB reads happen to finish in. `fetch_add` returns
+                // the prior value; `+1` keeps the first ticket at 1 (0 means
+                // "nothing emitted yet"). Relaxed: this is a unique-ticket
+                // counter, the ordering guarantee is enforced by the AcqRel
+                // claim in `try_claim_snapshot_seq`.
+                let seq = SNAPSHOT_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
+                spawn_snapshot_emit(app.clone(), snapshot, seq);
             }
         }
     }
@@ -918,22 +945,32 @@ struct SyncSnapshotWire<'a> {
 /// `sync::upload_processing::spawn_watchdog` and used by
 /// `lifecycle::spawn_record_intent_plan` / `spawn_mark_intent_completed`.
 ///
-/// # Ordering / dedup contract (unchanged by the runtime-handle swap)
+/// # Ordering / dedup contract
 ///
-/// Two close-spaced snapshots can complete their DB read in either order.
-/// `try_claim_snapshot_fingerprint` uses `swap` (not CAS): differing
-/// fingerprints both emit (safe — the FE renders the most recent message;
-/// a reordered fingerprint-identical pair is a harmless duplicate IPC).
-/// The spawn collapses each snapshot's own duplicate but not a
-/// cross-snapshot race — acceptable because the FE re-renders either way.
+/// Each snapshot runs in its own task that first awaits a variable-latency
+/// `build_intent_overlay` SQLite read, so two close-spaced snapshots can finish
+/// that read in EITHER order. `seq` (stamped at `on_event` time, before the
+/// spawn) records the order the bridge actually observed them, and
+/// `try_claim_snapshot_seq` drops any task whose ticket is not strictly newer
+/// than the last emitted — so the FE always converges on the newest frame even
+/// when reads complete out of order. This fixes the stuck-below-100%/stale
+/// frame the old "reorder is acceptable, the FE re-renders either way" contract
+/// allowed: at end-of-cycle there is no later snapshot to correct a reordered
+/// older frame. The seq gate is checked FIRST; the fingerprint gate
+/// (`try_claim_snapshot_fingerprint`) then collapses content-identical emits.
 ///
 /// Ownership: `app` is `Clone` (cheap `Arc`); `snapshot` is moved into the
 /// future and the `&snapshot` borrow inside is owned-by-future, so the
 /// future is `'static + Send`, satisfying `tauri::async_runtime::spawn`'s
-/// bound (identical to `tokio::spawn`'s).
-fn spawn_snapshot_emit<R: tauri::Runtime>(app: tauri::AppHandle<R>, snapshot: SyncSnapshot) {
+/// bound (identical to `tokio::spawn`'s). `seq` is `Copy`.
+fn spawn_snapshot_emit<R: tauri::Runtime>(app: tauri::AppHandle<R>, snapshot: SyncSnapshot, seq: u64) {
     tauri::async_runtime::spawn(async move {
         let overlay = build_intent_overlay(&app).await;
+        // Ordering gate first: a snapshot that lost the DB-read race to a newer
+        // one must NOT emit (and must NOT touch the fingerprint cursor).
+        if !try_claim_snapshot_seq(&LAST_EMITTED_SEQ, seq) {
+            return;
+        }
         let fp = snapshot_fingerprint(&snapshot, overlay);
         if try_claim_snapshot_fingerprint(&LAST_EMITTED_FINGERPRINT, fp) {
             let wire = SyncSnapshotWire {
@@ -1091,6 +1128,34 @@ fn try_claim_snapshot_fingerprint(last: &AtomicU64, fp: u64) -> bool {
     prev != fp
 }
 
+/// Atomically claim the right to emit the snapshot stamped with ticket `seq`.
+///
+/// Returns `true` only if `seq` is strictly newer than every ticket emitted so
+/// far, advancing the high-water mark to `seq`; returns `false` for a stale
+/// (reordered) snapshot, leaving the mark untouched. This is the monotonic-max
+/// guard that makes the FE converge on the newest frame regardless of the order
+/// the spawned emit tasks finish their DB reads.
+///
+/// Unlike [`try_claim_snapshot_fingerprint`]'s `swap`, this MUST be a CAS loop:
+/// the emit tasks run concurrently, and a plain `swap(seq)` could let an older
+/// ticket overwrite a newer mark. `AcqRel`/`Acquire` mirrors the fingerprint
+/// claim for consistency (axiom `rust_quality_92`); `compare_exchange_weak` is
+/// used over the 1.99-deprecated `fetch_update`. The `seq` value carries no
+/// shared data (the snapshot is moved into the task), so the ordering is
+/// conservative, not load-bearing.
+fn try_claim_snapshot_seq(last: &AtomicU64, seq: u64) -> bool {
+    let mut prev = last.load(Ordering::Acquire);
+    loop {
+        if seq <= prev {
+            return false;
+        }
+        match last.compare_exchange_weak(prev, seq, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => return true,
+            Err(observed) => prev = observed,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1117,6 +1182,22 @@ mod tests {
         assert!(try_claim_snapshot_fingerprint(&last, 42));
         assert!(try_claim_snapshot_fingerprint(&last, 99));
         assert_eq!(last.load(Ordering::Acquire), 99);
+    }
+
+    #[test]
+    fn snapshot_seq_only_newest_wins() {
+        let last = AtomicU64::new(0);
+        // First ticket always passes.
+        assert!(try_claim_snapshot_seq(&last, 1));
+        // A newer ticket passes and advances the mark.
+        assert!(try_claim_snapshot_seq(&last, 2));
+        assert_eq!(last.load(Ordering::Acquire), 2);
+        // A reordered older ticket (lost the DB-read race) is dropped and does
+        // NOT move the mark back — this is the stale-frame fix.
+        assert!(!try_claim_snapshot_seq(&last, 1));
+        assert_eq!(last.load(Ordering::Acquire), 2);
+        // An equal ticket is also rejected (strictly-newer only).
+        assert!(!try_claim_snapshot_seq(&last, 2));
     }
 
     /// Build a fixture `SyncSnapshot` with no files. Used as the baseline
@@ -1369,7 +1450,7 @@ mod tests {
         let app = tauri::test::mock_app().handle().clone();
         let snapshot = fixture_snapshot();
         let outcome = std::thread::spawn(move || {
-            spawn_snapshot_emit(app, snapshot);
+            spawn_snapshot_emit(app, snapshot, 1);
         })
         .join();
         assert!(
