@@ -61,9 +61,11 @@ static LINE_REDACTORS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
         // `key: value` / `key=value` for known secret-bearing keys — redact the
         // value through end of line. The explicit `:`/`=` requirement keeps
         // benign prose that merely mentions the word ("refresh the token soon")
-        // intact. `${1}` preserves the original key (and its case).
+        // intact. The optional quote on either side of the delimiter also covers
+        // JSON / `Debug`-formatted forms like {"password":"..."} that a bare
+        // `\s*[:=]` missed (audit M-8). `${1}` preserves the original key/case.
         (
-            Regex::new(r"(?i)\b(authorization|bearer|token|api[_-]?key|secret|password|passphrase|seed|mnemonic|private[_-]?key)\b\s*[:=]\s*\S.*")
+            Regex::new(r#"(?i)\b(authorization|bearer|token|api[_-]?key|secret|password|passphrase|seed|mnemonic|private[_-]?key)\b["']?\s*[:=]\s*["']?\S.*"#)
                 .expect("labeled-secret regex"),
             "${1}=[REDACTED]",
         ),
@@ -338,6 +340,23 @@ mod tests {
         let out = redact_log_line(line);
         assert!(!out.contains("hunter2supersecret"), "password leaked: {out}");
         assert!(out.contains("password=[REDACTED]"), "got: {out}");
+    }
+
+    #[test]
+    fn redacts_json_and_quoted_secret_forms() {
+        // The quote between key and `:` previously bypassed the labeled-secret
+        // regex (audit M-8). Cover JSON and single-quoted Debug-style forms.
+        for line in [
+            r#"{"password":"hunter2supersecret"}"#,
+            r#"{"apiKey":"sk_live_abc123def456"}"#,
+            "'token':'abc123def456ghi'",
+        ] {
+            let out = redact_log_line(line);
+            assert!(!out.contains("hunter2supersecret"), "json password leaked: {out}");
+            assert!(!out.contains("sk_live_abc123def456"), "json apiKey leaked: {out}");
+            assert!(!out.contains("abc123def456ghi"), "quoted token leaked: {out}");
+            assert!(out.contains("[REDACTED]"), "expected redaction in: {out}");
+        }
     }
 
     #[test]
