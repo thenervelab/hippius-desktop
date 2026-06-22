@@ -50,6 +50,7 @@ use crate::billing::queries::{
 };
 use crate::billing::subscriptions::{create_subscription, get_customer_portal_url, get_subscription_data};
 use crate::blockchain::convert::{planck_to_hip_full, to_plancks};
+use crate::blockchain::bridge::deposit::bridge_alpha_to_halpha;
 use crate::blockchain::bridge::queries::{bridge_estimate_fees, bridge_min_transfers};
 use crate::blockchain::bridge::withdraw::bridge_halpha_to_alpha;
 use crate::blockchain::queries::{
@@ -347,11 +348,13 @@ fn main() {
             validate_send_balance,
             get_referral_links,
             generate_referral_link,
-            // Bridge (Alpha <-> hAlpha). bridge_alpha_to_halpha (deposit) is not
-            // yet registered — its ink! contract dry-run path is still in TS.
+            // Bridge (Alpha <-> hAlpha). ⚠️ The write paths are FUNDS-CRITICAL and
+            // compile-verified only — smoke-test on a funded testnet wallet
+            // before release (see bridge/DEPOSIT_PORT_NOTES.md).
             bridge_estimate_fees,
             bridge_min_transfers,
             bridge_halpha_to_alpha,
+            bridge_alpha_to_halpha,
             to_plancks,
             planck_to_hip_full,
             compute_max_transferable,

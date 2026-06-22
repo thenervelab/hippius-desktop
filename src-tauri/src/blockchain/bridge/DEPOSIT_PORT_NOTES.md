@@ -1,11 +1,22 @@
-# Bridge deposit-path port notes (stage 4) — testnet-gated
+# Bridge deposit-path port notes (stage 4)
 
-The Alpha→hAlpha **deposit** path is the only part of the bridge not yet ported.
-It is funds-critical and its on-chain semantics cannot be validated without a
-funded Bittensor-testnet wallet + a live node, so it is intentionally left for a
-focused session WITH testnet access rather than shipped compile-only. Everything
-needed to implement it directly is captured below (all de-risked against the
-chain source at `~/Source/thebrain`).
+**STATUS: implemented in `deposit.rs` (`bridge_alpha_to_halpha`), compile-verified
+and registered.** ⚠️ FUNDS-CRITICAL and NOT runtime-validated — the dry-run
+gas/storage handling and the contract submit MUST be smoke-tested against a
+funded Bittensor-testnet wallet + live node before release. Two follow-ups remain
+(below): the `deposit_request_id` event extraction and the on-chain smoke test.
+
+This was de-risked against the chain source at `~/Source/thebrain`; the design
+and the discovered generated type paths are recorded here for the reviewer.
+
+### Outstanding follow-ups
+1. **`deposit_request_id` extraction** — currently returns `None`. The id is an
+   `#[ink(topic)]` on `DepositRequestCreated`, so it's a hashed topic on the
+   `Contracts.ContractEmitted` event, not plain data; recovering it needs
+   ink!-ABI-driven event decoding subxt doesn't do natively. The deposit itself
+   succeeds without it (the id is only a UI tracking handle).
+2. **Testnet smoke test** — verify the dry-run gas/storage values are sane, the
+   contract call lands, and a real deposit is created.
 
 ## Authoritative references
 - ink! contract source: `thebrain/contracts/bridge/src/{lib,events,errors}.rs`.
