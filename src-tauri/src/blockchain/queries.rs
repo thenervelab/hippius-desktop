@@ -366,6 +366,37 @@ pub async fn get_referral_links(
     Ok(links)
 }
 
+/// Generate (server-side) a referral code for `address`.
+///
+/// The write counterpart to [`get_referral_links`]: it POSTs to the Hippius API
+/// from Rust instead of a renderer `fetch`, so the referral action goes through
+/// the IPC boundary like every other domain call (audit M-17). Mirrors the read
+/// side by taking the address explicitly.
+///
+/// # Errors
+///
+/// [`crate::error::AppError::Api`] if the server rejects the request;
+/// [`crate::error::AppError::Other`] on a transport failure.
+#[tauri::command]
+pub async fn generate_referral_link(state: tauri::State<'_, crate::app_state::AppState>, address: String) -> Result<(), crate::error::AppError> {
+    let base = crate::auth::service::base_url();
+    let resp = state
+        .api_client
+        .post(format!("{base}/api/referrals/generate"))
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json")
+        .json(&serde_json::json!({ "address": address }))
+        .send()
+        .await
+        .map_err(|e| crate::error::AppError::Other(format!("Referral request failed: {e}")))?;
+    if !resp.status().is_success() {
+        let status = resp.status().as_u16();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(crate::error::AppError::Api { status, body });
+    }
+    Ok(())
+}
+
 /// Validate whether a string is a valid SS58 (Substrate) address.
 #[tauri::command]
 pub fn validate_address(address: String) -> bool {

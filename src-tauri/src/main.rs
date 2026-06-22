@@ -50,7 +50,9 @@ use crate::billing::queries::{
 };
 use crate::billing::subscriptions::{create_subscription, get_customer_portal_url, get_subscription_data};
 use crate::blockchain::convert::{planck_to_hip_full, to_plancks};
-use crate::blockchain::queries::{get_account_balance, get_block_timestamp, get_referral_links, get_staking_info, validate_address};
+use crate::blockchain::queries::{
+    generate_referral_link, get_account_balance, get_block_timestamp, get_referral_links, get_staking_info, validate_address,
+};
 use crate::blockchain::runtime::{get_wss_endpoint, test_rpc_endpoint_command, update_wss_endpoint_command};
 use crate::blockchain::staking::{stake_bond, stake_claim_rewards, stake_unbond, stake_withdraw_unbonded};
 use crate::blockchain::subscription::{start_block_subscription, stop_block_subscription};
@@ -342,6 +344,7 @@ fn main() {
             validate_address,
             validate_send_balance,
             get_referral_links,
+            generate_referral_link,
             to_plancks,
             planck_to_hip_full,
             compute_max_transferable,
