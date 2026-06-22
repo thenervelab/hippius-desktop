@@ -8,6 +8,7 @@
  */
 
 import { createClient, FixedSizeBinary, type PolkadotClient, type SS58String } from 'polkadot-api';
+import { errorMessage } from "@/lib/utils/errorUtils";
 import { getWsProvider } from 'polkadot-api/ws-provider/web';
 import { withPolkadotSdkCompat } from 'polkadot-api/polkadot-sdk-compat';
 import { getPolkadotSigner } from 'polkadot-api/signer';
@@ -700,7 +701,7 @@ export async function bridgeAlphaToHAlpha(
 
         return { success: true, txHash: result.txHash, bridgeTransactionId: txId };
     } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
+        const msg = errorMessage(error);
         const isCancelled = isUserCancellation(msg);
         // Safety: mark any step still "active" as "error" so spinners stop
         const activeIdx = steps.findIndex(s => s.state === 'active');
@@ -821,7 +822,7 @@ export async function bridgeHAlphaToAlpha(
 
         return { success: true, txHash: result.txHash, bridgeTransactionId: txId };
     } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
+        const msg = errorMessage(error);
         const isCancelled = isUserCancellation(msg);
         // Safety: mark any step still "active" as "error" so spinners stop
         if (steps[0].state === 'active') {

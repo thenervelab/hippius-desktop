@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useMemo, useRef, useState } from "react";
+import { errorMessage } from "@/lib/utils/errorUtils";
 import { invoke } from "@tauri-apps/api/core";
 import { AlertCircle } from "lucide-react";
 import { toast } from "sonner";
@@ -146,7 +147,7 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
       setAmountError(undefined);
       return result.planckAmount;
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       setAmountError(msg);
       return null;
     }
@@ -205,7 +206,7 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
           refetchBalance?.();
           resetForm();
         } else {
-          const msg = e instanceof Error ? e.message : String(e);
+          const msg = errorMessage(e);
           setFlowState("error");
           toast.error("Transfer failed", { description: msg });
         }

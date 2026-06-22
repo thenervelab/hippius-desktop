@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
+import { errorMessage } from "@/lib/utils/errorUtils";
 import { AlertCircle, Folder, X } from "lucide-react";
 import { toast } from "sonner";
 import { open as openSelection } from "@tauri-apps/plugin-dialog";
@@ -90,7 +91,7 @@ export default function FolderUploadDialog({
     } catch (error) {
       console.error("Error selecting folder:", error);
       toast.error(
-        `Failed to select folder: ${error instanceof Error ? error.message : String(error)}`,
+        `Failed to select folder: ${errorMessage(error)}`,
       );
     }
   };
@@ -243,7 +244,7 @@ export default function FolderUploadDialog({
     } catch (error) {
       console.error("Error uploading folder:", error);
       toast.error(
-        `Failed to upload folder: ${error instanceof Error ? error.message : String(error)}`,
+        `Failed to upload folder: ${errorMessage(error)}`,
       );
     } finally {
       setIsSubmitting(false);

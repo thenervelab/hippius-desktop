@@ -18,6 +18,7 @@ import {
   HippiusLogo,
 } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
+import { errorMessage } from "@/lib/utils/errorUtils";
 import { formatUnitsTruncated, parseUnitsToBase } from "@/lib/utils/planckUnits";
 
 import { WalletDialogShell } from "./shared/WalletDesign";
@@ -63,7 +64,7 @@ const formatBalance2dp = (value: bigint, decimals: number) => {
 };
 
 const parseBridgeError = (error: string | Error | unknown): string => {
-  const errorStr = error instanceof Error ? error.message : String(error || "");
+  const errorStr = errorMessage(error);
   if (errorStr.toLowerCase().includes("insufficient")) return errorStr;
   if (errorStr.toLowerCase().includes("timeout")) {
     return "Transaction timed out. Please try again.";
@@ -400,7 +401,7 @@ const BridgeDialog: React.FC<BridgeDialogProps> = ({
       await runBridgeFlow(decimal, password);
     } catch (e) {
       setConfirmError(
-        e instanceof Error ? e.message : "Failed to verify password.",
+        errorMessage(e),
       );
     } finally {
       setVerifyingPassword(false);

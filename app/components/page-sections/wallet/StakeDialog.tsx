@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { errorMessage } from "@/lib/utils/errorUtils";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 
@@ -144,7 +145,7 @@ const StakeDialog: React.FC<StakeDialogProps> = ({
           // invalidated by the staking hook before this threw.
           setFlowState("submitted");
         } else {
-          const msg = e instanceof Error ? e.message : String(e);
+          const msg = errorMessage(e);
           setFlowState("error");
           toast.error("Stake failed", { description: msg });
         }

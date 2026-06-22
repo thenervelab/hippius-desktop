@@ -8,6 +8,7 @@ import React, {
   useCallback,
   useRef,
 } from "react";
+import { errorMessage } from "@/lib/utils/errorUtils";
 import { useRouter } from "next/navigation";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import useUserFiles, {
@@ -1016,7 +1017,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     } catch (err) {
       console.error("Error downloading folder:", err);
       toast.error(
-        `Failed to download folder: ${err instanceof Error ? err.message : String(err)}`,
+        `Failed to download folder: ${errorMessage(err)}`,
       );
     } finally {
       setIsDownloadingFolder(false);
@@ -1250,7 +1251,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
           Couldn&apos;t load your files right now.
         </Typography.P>
         <Typography.P size="sm" className="text-grey-50 max-w-md">
-          {error instanceof Error ? error.message : String(error)}
+          {errorMessage(error)}
         </Typography.P>
         <button
           type="button"
