@@ -266,8 +266,9 @@ describe("SyncStatusDialog", () => {
     // only whole-FILE-completed bytes (and is account-wide), so wiring it into
     // the live transferred counter made it disagree with the percent/speed.
     // Even with an active intent overlay claiming 5GB/10GB, the header must
-    // render the byte-granular combined counters that the percent is weighted
-    // on (2.5MB transferred / 7.5MB expected here).
+    // render the single-count byte counters the percent is weighted on
+    // (2.5MB transferred / 7.5MB expected here) — never the doubled combined
+    // total (which would read 15MB here).
     const files = [
       makeFileProgress("a.bin", {
         status: "inProgress",
@@ -328,9 +329,9 @@ describe("SyncStatusDialog", () => {
     expect(summaryTexts.some((t) => /^41\.6MB\//.test(t))).toBe(true);
   });
 
-  it("uses the per-cycle pair when combined counters are unavailable", () => {
-    // Legacy / pre-login snapshot shape with no intent overlay still renders
-    // the byte-granular transferred line (combined == progress in the factory).
+  it("sums the single-count byte pair across multiple files", () => {
+    // No intent overlay: the transferred line sums each file's real size
+    // (2.5MB in-flight of a 5MB + 2.5MB plan = 2.5MB / 7.5MB).
     const files = [
       makeFileProgress("a.bin", {
         status: "inProgress",

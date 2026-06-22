@@ -30,7 +30,7 @@ import {
 import { appStore } from "@/lib/store/jotaiStore";
 import { toast } from "sonner";
 import type { SyncSnapshot } from "../types/syncSnapshot";
-import { formatBytes } from "@/app/lib/utils/formatBytes";
+import { getTrayProgressText } from "@/app/lib/tray/trayProgressText";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
 
 /* ─ IDs ───────────────────────────────────────────────────────── */
@@ -1401,69 +1401,17 @@ function startSyncActivityWatcher() {
 
       // Build progress + size rows only when there's an active or completed sync session
       if (isActive || effectiveCompleted) {
-        let progressText: string;
-        let sizeText: string | null = null;
-
-        if (isActive && !latchedComplete) {
-          // In-progress: show current progress
-          if (
-            progress.totalFiles > 0 &&
-            progress.overallPercent === 0 &&
-            progress.completedFiles === 0 &&
-            progress.progressBytes === 0
-          ) {
-            progressText = `${progress.totalFiles} ${progress.totalFiles === 1 ? "file" : "files"} pending`;
-          } else {
-            progressText =
-              progress.totalFiles > 0
-                ? `${progress.completedFiles} of ${progress.totalFiles} ${progress.totalFiles === 1 ? "file" : "files"} synced`
-                : "Preparing files…";
-          }
-          // The byte readout MUST share its source with the percent the widget
-          // shows, or they contradict: the intent overlay counts only whole-
-          // FILE-completed bytes (and is summed account-wide), so for a single
-          // in-flight file it reads 0 the entire upload while the percent
-          // climbs on partial bytes (the "0B / 260MB at 16%" report). The
-          // intent overlay's "X of Y" survives in `progressText` (the file
-          // count) above; the byte line uses the byte-granular, current-cycle
-          // counters. `combinedBytesExpected` is preferred (it includes encrypt
-          // bytes); fall back to the per-cycle pair when it's unavailable.
-          if (progress.combinedBytesExpected > 0) {
-            sizeText = `${formatBytes(progress.combinedProgressBytes)} / ${formatBytes(progress.combinedBytesExpected)}`;
-          } else if (progress.bytesExpected > 0) {
-            sizeText = `${formatBytes(progress.progressBytes)} / ${formatBytes(progress.bytesExpected)}`;
-          }
-        } else if (effectiveCompleted && effectiveSnapshot.failedFiles > 0) {
-          // Failed: show failure counts
-          const totalFiles =
-            effectiveSnapshot.completedFiles + effectiveSnapshot.failedFiles;
-          progressText = `${effectiveSnapshot.failedFiles} of ${totalFiles} ${totalFiles === 1 ? "file" : "files"} failed`;
-          if (effectiveSnapshot.bytesExpected > 0) {
-            sizeText = `${formatBytes(effectiveSnapshot.progressBytes)} / ${formatBytes(effectiveSnapshot.bytesExpected)}`;
-          }
-        } else {
-          // Completed successfully: show final counts
-          const syncedFiles = effectiveSnapshot.completedFiles;
-          const deletedInSession = effectiveSnapshot.files.filter(
-            (f) =>
-              (f.action === "local_delete" || f.action === "remote_delete") &&
-              f.status === "completed",
-          ).length;
-          const nonDeleteSynced = syncedFiles - deletedInSession;
-
-          if (deletedInSession > 0 && nonDeleteSynced <= 0) {
-            progressText = `${deletedInSession} ${deletedInSession === 1 ? "file" : "files"} deleted`;
-          } else if (deletedInSession > 0 && nonDeleteSynced > 0) {
-            progressText = `${nonDeleteSynced} synced · ${deletedInSession} deleted`;
-          } else {
-            const totalFiles =
-              effectiveSnapshot.completedFiles + effectiveSnapshot.failedFiles;
-            progressText = `${effectiveSnapshot.completedFiles} of ${totalFiles} ${totalFiles === 1 ? "file" : "files"} synced`;
-          }
-          if (effectiveSnapshot.bytesExpected > 0) {
-            sizeText = formatBytes(effectiveSnapshot.bytesExpected);
-          }
-        }
+        // The progress + size text is a pure function of the snapshot and the
+        // derived state flags — extracted to `getTrayProgressText` so it is
+        // unit-tested and shares the single-count byte source with the sidebar
+        // widget (both go through `selectLiveTransferBytes`).
+        const { progressText, sizeText } = getTrayProgressText({
+          progress,
+          effectiveSnapshot,
+          isActive,
+          latchedComplete,
+          effectiveCompleted,
+        });
 
         // Find insert position: right after the sync header (SYNC_ID)
         const items = await menu.items();

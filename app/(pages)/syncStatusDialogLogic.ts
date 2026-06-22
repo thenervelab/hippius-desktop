@@ -8,30 +8,26 @@ export interface TransferBytes {
 /**
  * Pick the byte pair for the widget's live "transferred / total" readout.
  *
- * It MUST come from the same byte-granular, current-cycle counters that drive
- * the percent ring (`overallPercent` is weighted on these) and the speed/ETA
- * (which finite-difference `combinedProgressBytes`). The intent overlay is
- * deliberately NOT consulted here: it counts only whole-FILE-completed bytes
- * and is summed account-wide, so for a single in-flight file it reads 0 for the
- * entire upload while the ring and speed climb on partial bytes — the
- * "0B / 260MB at 16%" report. The intent overlay drives the file-count
- * "X of Y" line only.
+ * Uses the single-count `progressBytes` / `bytesExpected` pair — the sum of
+ * each file's real size — for two reasons:
+ *   1. It is the SAME pair the ring's `overallPercent` is weighted on
+ *      (hcfs-client `build_snapshot`: `overall_percent = total_progress_bytes
+ *      / total_bytes_expected`), so the "A / B" fraction can never contradict
+ *      the percent the ring shows.
+ *   2. It is the real file size the user expects as the total.
+ *
+ * It deliberately does NOT use the `combined*` pair: hcfs-client counts a
+ * transfer as two phases of work (`total_bytes * 2` — encrypt then upload), so
+ * a single 162 MB upload has `combinedBytesExpected = 324 MB`. Displaying that
+ * is the "doubled total" bug. (`combined*` legitimately drives the speed/ETA
+ * finite-difference, where double-counting cancels — but not this readout.)
+ * The intent overlay is also not consulted here; it drives the "X of Y" file
+ * count only (it reads 0 transferred bytes mid-file — the old "0B / 260MB"
+ * report).
  */
 export function selectLiveTransferBytes(
-  snapshot: Pick<
-    SyncSnapshot,
-    | "combinedProgressBytes"
-    | "combinedBytesExpected"
-    | "progressBytes"
-    | "bytesExpected"
-  >,
+  snapshot: Pick<SyncSnapshot, "progressBytes" | "bytesExpected">,
 ): TransferBytes | null {
-  if (snapshot.combinedBytesExpected > 0) {
-    return {
-      progress: snapshot.combinedProgressBytes,
-      expected: snapshot.combinedBytesExpected,
-    };
-  }
   if (snapshot.bytesExpected > 0) {
     return { progress: snapshot.progressBytes, expected: snapshot.bytesExpected };
   }
