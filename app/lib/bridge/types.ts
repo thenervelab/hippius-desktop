@@ -50,13 +50,29 @@ export interface StakedHotkey {
 
 /* ── Explorer views (mirror Rust `bridge_fetch_onchain_data`) ─────── */
 //
-// NOTE: there is no `bittensorSide` field — the Bittensor-contract
-// cross-reference was deferred. Consumers must use the unified
-// `unifiedStatus` instead of recomputing a per-row status, and fall back
-// to "-" / 0 where Bittensor-side detail used to appear.
+// Use the backend-resolved `unifiedStatus` directly. `bittensorSide` is the
+// best-effort Bittensor-contract cross-ref and is `null` when that read was
+// unavailable — consumers fall back to "-" / 0.
 
 /** Unified, FE-facing status already resolved by the backend. */
 export type BridgeExplorerStatus = 'pending' | 'processing' | 'completed' | 'failed';
+
+/** Bittensor-contract-side deposit detail (mirror Rust `DepositBittensorSide`). */
+export interface DepositBittensorSide {
+    status: string;
+    createdAtBlock: string;
+    amountDisplay: string;
+    nonce: string;
+}
+
+/** Bittensor-contract-side withdrawal detail (mirror Rust `WithdrawalBittensorSide`). */
+export interface WithdrawalBittensorSide {
+    status: string;
+    createdAtBlock: string;
+    amountDisplay: string;
+    voteCount: number;
+    finalizedAtBlock: string | null;
+}
 
 export interface DepositView {
     requestId: string;
@@ -70,6 +86,7 @@ export interface DepositView {
     unifiedStatus: BridgeExplorerStatus;
     createdAtBlock: string;
     finalizedAtBlock: string | null;
+    bittensorSide: DepositBittensorSide | null;
 }
 
 export interface WithdrawalView {
@@ -82,6 +99,7 @@ export interface WithdrawalView {
     /** Backend-resolved unified status — use this directly for display. */
     unifiedStatus: BridgeExplorerStatus;
     createdAtBlock: string;
+    bittensorSide: WithdrawalBittensorSide | null;
 }
 
 export interface BridgeStats {

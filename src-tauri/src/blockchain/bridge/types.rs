@@ -56,9 +56,31 @@ pub struct MinTransfers {
     pub h_alpha: String,
 }
 
+/// Bittensor-contract-side view of a deposit (from `get_deposit_request`), when
+/// the cross-ref read succeeds. Enriches the Hippius-side `DepositView`.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DepositBittensorSide {
+    pub status: String,
+    pub created_at_block: String,
+    pub amount_display: String,
+    pub nonce: String,
+}
+
+/// Bittensor-contract-side view of a withdrawal (from `get_withdrawal`).
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WithdrawalBittensorSide {
+    pub status: String,
+    pub created_at_block: String,
+    pub amount_display: String,
+    pub vote_count: u32,
+    pub finalized_at_block: Option<String>,
+}
+
 /// One deposit (Alpha→hAlpha) as read from `AlphaBridge.Deposits`. `status` is
 /// the raw chain status; `unified_status` is the display status from `status.rs`.
-/// `bittensorSide` enrichment (contract cross-ref) is a follow-up — omitted for now.
+/// `bittensor_side` is the best-effort contract cross-ref (`None` if unavailable).
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DepositView {
@@ -72,6 +94,7 @@ pub struct DepositView {
     pub unified_status: String,
     pub created_at_block: String,
     pub finalized_at_block: Option<String>,
+    pub bittensor_side: Option<DepositBittensorSide>,
 }
 
 /// One withdrawal (hAlpha→Alpha) as read from `AlphaBridge.WithdrawalRequests`.
@@ -86,6 +109,7 @@ pub struct WithdrawalView {
     pub status: String,
     pub unified_status: String,
     pub created_at_block: String,
+    pub bittensor_side: Option<WithdrawalBittensorSide>,
 }
 
 /// Bridge-wide stats for the explorer header.

@@ -19,6 +19,13 @@
 //! index 9 up. Because the enum the *deployed* contract uses can't be confirmed
 //! here, `variant_name` always emits the raw index too (see its docs).
 
+use subxt::ext::codec::Decode;
+use subxt::utils::AccountId32;
+use subxt::{OnlineClient, PolkadotConfig};
+
+use super::runtime::bittensor;
+use crate::error::{AppError, Result};
+
 /// `bridge::Error` variants by discriminant (0-24).
 const CONTRACT_ERROR_VARIANTS: [&str; 24] = [
     "Unauthorized",                   // 0
@@ -83,6 +90,106 @@ pub fn describe_contract_error(bytes: &[u8]) -> Option<String> {
         // Any other non-empty shape: treat the leading byte as the variant.
         [variant, ..] => Some(variant_name(*variant)),
         [] => None,
+    }
+}
+
+// ── ink! contract read-message return types ─────────────────────────────────
+//
+// Decode-only mirrors of `thebrain` `contracts/bridge/src/types.rs`. Contract
+// side: `Balance = u64`, `Nonce = u64`, `DepositRequestId`/`WithdrawalId =
+// Hash([u8; 32])`, `AccountId = [u8; 32]`, `BlockNumber = u32`. Field order is
+// the SCALE encoding order, so it MUST match the contract struct declaration.
+
+/// `DepositRequestStatus` (`thebrain` types.rs).
+#[derive(Decode, Debug, Clone)]
+#[codec(crate = subxt::ext::codec)]
+pub enum DepositRequestStatus {
+    Requested,
+    Failed,
+}
+
+/// `WithdrawalStatus` (`thebrain` types.rs).
+#[derive(Decode, Debug, Clone)]
+#[codec(crate = subxt::ext::codec)]
+pub enum WithdrawalStatus {
+    Pending,
+    Completed,
+    Cancelled,
+}
+
+/// Bittensor-side deposit record from the contract `get_deposit_request` read.
+#[derive(Decode, Debug, Clone)]
+#[codec(crate = subxt::ext::codec)]
+pub struct DepositRequest {
+    pub sender: [u8; 32],
+    pub recipient: [u8; 32],
+    pub amount: u64,
+    pub nonce: u64,
+    pub hotkey: [u8; 32],
+    pub netuid: u16,
+    pub status: DepositRequestStatus,
+    pub created_at_block: u32,
+}
+
+/// Bittensor-side withdrawal record from the contract `get_withdrawal` read.
+#[derive(Decode, Debug, Clone)]
+#[codec(crate = subxt::ext::codec)]
+pub struct Withdrawal {
+    pub request_id: [u8; 32],
+    pub recipient: [u8; 32],
+    pub amount: u64,
+    pub votes: Vec<[u8; 32]>,
+    pub status: WithdrawalStatus,
+    pub created_at_block: u32,
+    pub finalized_at_block: Option<u32>,
+}
+
+/// Decode an ink! `MessageResult<T>` (`Result<T, LangError>`) from a contract
+/// call's return bytes: a 1-byte discriminant (`0x00` Ok / `0x01` Err), then on
+/// Ok the SCALE of `T`. `LangError` itself isn't modelled — only its presence
+/// matters (the message couldn't be dispatched).
+fn decode_msg_result<T: Decode>(data: &[u8]) -> Result<T> {
+    let mut input = data;
+    match u8::decode(&mut input) {
+        Ok(0) => T::decode(&mut input).map_err(|e| AppError::Substrate(format!("decode contract return: {e}"))),
+        Ok(_) => Err(AppError::Substrate("contract message returned a LangError".into())),
+        Err(e) => Err(AppError::Substrate(format!("decode contract result tag: {e}"))),
+    }
+}
+
+/// Read-only ink! contract call via the `ContractsApi.call` dry-run (no signing,
+/// no funds): build `selector ++ args`, dry-run against `contract` as `origin`,
+/// require a non-reverted `Ok`, and decode the ink! `MessageResult<T>` return.
+///
+/// # Errors
+/// [`AppError::Substrate`] on RPC failure, a revert, a module dispatch error, or
+/// a decode failure.
+pub async fn query_contract<T: Decode>(
+    client: &OnlineClient<PolkadotConfig>,
+    contract: &AccountId32,
+    origin: AccountId32,
+    selector: [u8; 4],
+    args: Vec<u8>,
+) -> Result<T> {
+    let mut input = selector.to_vec();
+    input.extend_from_slice(&args);
+    let dry = bittensor::apis().contracts_api().call(origin, contract.clone(), 0, None, None, input);
+    let result = client
+        .runtime_api()
+        .at_latest()
+        .await
+        .map_err(|e| AppError::Substrate(format!("runtime api: {e}")))?
+        .call(dry)
+        .await
+        .map_err(|e| AppError::Substrate(format!("contract read failed: {e}")))?;
+    match result.result {
+        Ok(exec) => {
+            if exec.flags.bits & 0x0000_0001 != 0 {
+                return Err(AppError::Substrate("contract read reverted".into()));
+            }
+            decode_msg_result::<T>(&exec.data)
+        }
+        Err(e) => Err(AppError::Substrate(format!("contract read dispatch error: {e:?}"))),
     }
 }
 

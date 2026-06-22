@@ -19,3 +19,9 @@ pub const NETUID: u16 = 2;
 /// `deposit(amount: Balance, hotkey: AccountId)` ink! message selector, from
 /// `.papi/contracts/bridge.json`. The call data is `selector ++ scale(args)`.
 pub const DEPOSIT_SELECTOR: [u8; 4] = [0x2d, 0x10, 0xc9, 0xbd];
+
+/// Read-only ink! message selectors (same ABI source). Used by
+/// `contract::query_contract` for the explorer cross-ref + deposit-id lookup.
+pub const GET_DEPOSIT_REQUEST_SELECTOR: [u8; 4] = [0x63, 0x70, 0xed, 0x0c];
+pub const GET_WITHDRAWAL_SELECTOR: [u8; 4] = [0x6a, 0x66, 0x76, 0x20];
+pub const GET_DEPOSIT_REQUEST_ID_BY_NONCE_SELECTOR: [u8; 4] = [0xa1, 0xbb, 0x85, 0xdc];

@@ -15,8 +15,10 @@
 //! and the contract submit MUST be smoke-tested against a funded
 //! Bittensor-testnet wallet + live node before release (see DEPOSIT_PORT_NOTES.md).
 
-use subxt::ext::codec::Encode;
+use subxt::blocks::ExtrinsicEvents;
+use subxt::ext::codec::{Decode, Encode};
 use subxt::utils::{AccountId32, MultiAddress};
+use subxt::{OnlineClient, PolkadotConfig};
 
 use super::runtime::bittensor;
 use super::runtime::bittensor::runtime_types::{
@@ -107,7 +109,7 @@ pub async fn bridge_alpha_to_halpha(
     // Step 2: dry-run via the ContractsApi runtime API.
     let dry = bittensor::apis()
         .contracts_api()
-        .call(origin, contract_addr.clone(), 0, None, None, input.clone());
+        .call(origin.clone(), contract_addr.clone(), 0, None, None, input.clone());
     let result = client
         .runtime_api()
         .at_latest()
@@ -158,23 +160,51 @@ pub async fn bridge_alpha_to_halpha(
     // Step 4: best-effort revoke the proxy grant (deposit already succeeded).
     let remove = bittensor::tx()
         .proxy()
-        .remove_proxy(MultiAddress::Id(contract_addr), ProxyType::Any, 0);
+        .remove_proxy(MultiAddress::Id(contract_addr.clone()), ProxyType::Any, 0);
     if let Err(e) = client.tx().sign_and_submit_then_watch_default(&remove, &signer).await {
         tracing::warn!(error = %e, "remove_proxy after deposit failed (deposit already succeeded)");
     }
 
-    // Record locally for the history view (best-effort).
-    super::history::record_submitted(&state, "alpha-to-halpha", amount, &origin_ss58, Some(&origin_ss58), &tx_hash, None).await;
+    // Recover the Bittensor-side deposit_request_id for tracking (best-effort).
+    let deposit_id = extract_deposit_id(&client, &contract_addr, origin, &events).await;
 
-    // The deposit_request_id lives in the contract's DepositRequestCreated event
-    // as an #[ink(topic)] — recovering it from a raw Contracts.ContractEmitted
-    // needs ink!-ABI-driven event decoding subxt doesn't do natively. Left as a
-    // follow-up (the deposit itself succeeds; the id is only a tracking handle).
-    // See DEPOSIT_PORT_NOTES.md.
+    // Record locally for the history view (best-effort).
+    super::history::record_submitted(&state, "alpha-to-halpha", amount, &origin_ss58, Some(&origin_ss58), &tx_hash, deposit_id.as_deref()).await;
+
     Ok(BridgeOutcome {
         tx_hash,
         withdrawal_id: None,
-        deposit_id: None,
+        deposit_id,
         success: true,
     })
+}
+
+/// Recover the deposit_request_id for the just-submitted deposit.
+///
+/// The `deposit_request_id` is an `#[ink(topic)]` on `DepositRequestCreated`
+/// (hashed into the event topics, not the data), so it can't be read straight
+/// out of the event. Instead we decode the event's first non-topic field —
+/// `deposit_nonce` — and ask the contract to map it back via the
+/// `get_deposit_request_id_by_nonce` read. Returns `None` on any failure (the
+/// id is a tracking handle; its absence never affects the successful deposit).
+///
+/// ⚠️ The event-data decode assumes ink! v5 lays the non-topic fields
+/// (`deposit_nonce`, `amount`) into `data` with no leading discriminant — verify
+/// against a live deposit on testnet.
+async fn extract_deposit_id(
+    client: &OnlineClient<PolkadotConfig>,
+    contract: &AccountId32,
+    origin: AccountId32,
+    events: &ExtrinsicEvents<PolkadotConfig>,
+) -> Option<String> {
+    let emitted = events
+        .find::<bittensor::contracts::events::ContractEmitted>()
+        .filter_map(std::result::Result::ok)
+        .find(|e| e.contract == *contract)?;
+    let mut data = emitted.data.as_slice();
+    let nonce = u64::decode(&mut data).ok()?;
+    let id: Option<[u8; 32]> = contract::query_contract(client, contract, origin, config::GET_DEPOSIT_REQUEST_ID_BY_NONCE_SELECTOR, nonce.encode())
+        .await
+        .ok()?;
+    id.map(|h| format!("0x{}", hex::encode(h)))
 }

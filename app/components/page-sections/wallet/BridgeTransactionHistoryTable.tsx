@@ -325,8 +325,8 @@ const BridgeTransactionHistoryTable: React.FC<
 
   /* Unify deposits + withdrawals into the row shape the table expects,
    * overlaying a single in-flight pending row if applicable. The backend
-   * already resolves `unifiedStatus`, so it is used directly. Bittensor
-   * columns fall back to "-" because the cross-ref was deferred. */
+   * already resolves `unifiedStatus`, so it is used directly, and supplies the
+   * best-effort `bittensorSide` cross-ref (null → the Bittensor columns "-"). */
   const allTransactions = useMemo(() => {
     const depositTxs: BridgeTransaction[] = deposits.map((d) => {
       const hpsStatus = getHpsStatus(d.voteCount, threshold, d.status, "deposit");
@@ -335,8 +335,11 @@ const BridgeTransactionHistoryTable: React.FC<
         type: "deposit" as const,
         recipient: d.recipient,
         amount: d.amountDisplay,
-        btStatus: "-",
-        btBlock: "-",
+        btStatus:
+          d.bittensorSide?.status === "Requested"
+            ? "Locked"
+            : d.bittensorSide?.status ?? "-",
+        btBlock: d.bittensorSide?.createdAtBlock ?? "-",
         hVotes: `${d.voteCount}/${threshold}`,
         hStatus: hpsStatus,
         hBlock: d.createdAtBlock,
@@ -345,8 +348,7 @@ const BridgeTransactionHistoryTable: React.FC<
     });
 
     const withdrawalTxs: BridgeTransaction[] = withdrawals.map((w) => {
-      // No Bittensor-side vote data (cross-ref deferred) → 0 votes.
-      const withdrawalVoteCount = 0;
+      const withdrawalVoteCount = w.bittensorSide?.voteCount ?? 0;
       const hpsStatus = getHpsStatus(
         withdrawalVoteCount,
         threshold,
@@ -358,8 +360,8 @@ const BridgeTransactionHistoryTable: React.FC<
         type: "withdrawal" as const,
         sender: w.sender,
         amount: w.amountDisplay,
-        btStatus: "-",
-        btBlock: "-",
+        btStatus: w.bittensorSide?.status ?? "-",
+        btBlock: w.bittensorSide?.createdAtBlock ?? "-",
         hVotes: `${withdrawalVoteCount}/${threshold}`,
         hStatus: hpsStatus,
         hBlock: w.createdAtBlock,

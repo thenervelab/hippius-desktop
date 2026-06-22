@@ -3,20 +3,31 @@
 **STATUS: implemented in `deposit.rs` (`bridge_alpha_to_halpha`), compile-verified
 and registered.** ⚠️ FUNDS-CRITICAL and NOT runtime-validated — the dry-run
 gas/storage handling and the contract submit MUST be smoke-tested against a
-funded Bittensor-testnet wallet + live node before release. Two follow-ups remain
-(below): the `deposit_request_id` event extraction and the on-chain smoke test.
+funded Bittensor-testnet wallet + live node before release.
 
 This was de-risked against the chain source at `~/Source/thebrain`; the design
 and the discovered generated type paths are recorded here for the reviewer.
 
-### Outstanding follow-ups
-1. **`deposit_request_id` extraction** — currently returns `None`. The id is an
-   `#[ink(topic)]` on `DepositRequestCreated`, so it's a hashed topic on the
-   `Contracts.ContractEmitted` event, not plain data; recovering it needs
-   ink!-ABI-driven event decoding subxt doesn't do natively. The deposit itself
-   succeeds without it (the id is only a UI tracking handle).
-2. **Testnet smoke test** — verify the dry-run gas/storage values are sane, the
-   contract call lands, and a real deposit is created.
+### deposit_request_id — IMPLEMENTED (`extract_deposit_id`)
+The id is an `#[ink(topic)]` on `DepositRequestCreated` (hashed into the event
+topics, not the data), so rather than topic archaeology we decode the event's
+first non-topic field — `deposit_nonce` — from `Contracts.ContractEmitted.data`
+and map it back via the `get_deposit_request_id_by_nonce` contract read. Returns
+`None` on any failure (tracking-only; never affects the successful deposit).
+⚠️ The event-`data` decode assumes ink! v5 lays the non-topic fields
+(`deposit_nonce`, `amount`) with no leading discriminant — VERIFY against a live
+deposit on testnet.
+
+### bittensor_side cross-ref — IMPLEMENTED (`explorer::*_cross_ref`)
+`query_contract<T>` (`contract.rs`) drives the `get_deposit_request` /
+`get_withdrawal` reads; the decoded `DepositRequest`/`Withdrawal` mirrors enrich
+each explorer row (`bittensor_side`, `null` on a failed read). One dry-run per
+row per refetch — same as the original TS.
+
+### Remaining: testnet smoke test
+Verify the deposit dry-run gas/storage values are sane, the contract call lands,
+a real deposit is created, the recovered `deposit_request_id` matches, and the
+explorer `bittensor_side` cross-ref decodes correctly.
 
 ## Authoritative references
 - ink! contract source: `thebrain/contracts/bridge/src/{lib,events,errors}.rs`.
