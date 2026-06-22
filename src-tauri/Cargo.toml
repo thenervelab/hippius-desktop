@@ -94,12 +94,12 @@ alloy-signer = { version = "0.8", default-features = false }
 alloy-signer-local = { version = "0.8", default-features = false, features = [
     "mnemonic",
 ] }
-hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "829ceb67f1fd5899aef9a8b6044d2195093cc996" }
+hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "ed9a50fd401cd4e3d2fcfeedf619ef38473b4c47" }
 # hcfs-shared pulls in the `network` module types (RegisterRelativePathEntry,
 # MAX_REGISTER_RELATIVE_PATHS_BATCH, ...) that hcfs-client takes/returns on
 # its public API but does not re-export. Pinned to the same git rev so the
 # wire types stay in lockstep with the client.
-hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "829ceb67f1fd5899aef9a8b6044d2195093cc996" }
+hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "ed9a50fd401cd4e3d2fcfeedf619ef38473b4c47" }
 # NFC-normalise relative_path strings before posting them to the server's
 # register_relative_paths endpoint. macOS APFS hands filenames back in NFD
 # and the server's path_validator hard-rejects anything non-NFC — see the
