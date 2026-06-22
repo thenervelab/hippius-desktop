@@ -55,3 +55,59 @@ pub struct MinTransfers {
     pub alpha: String,
     pub h_alpha: String,
 }
+
+/// One deposit (Alpha→hAlpha) as read from `AlphaBridge.Deposits`. `status` is
+/// the raw chain status; `unified_status` is the display status from `status.rs`.
+/// `bittensorSide` enrichment (contract cross-ref) is a follow-up — omitted for now.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DepositView {
+    pub request_id: String,
+    pub recipient: String,
+    pub amount: String,
+    pub amount_display: String,
+    pub votes: Vec<String>,
+    pub vote_count: u32,
+    pub status: String,
+    pub unified_status: String,
+    pub created_at_block: String,
+    pub finalized_at_block: Option<String>,
+}
+
+/// One withdrawal (hAlpha→Alpha) as read from `AlphaBridge.WithdrawalRequests`.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WithdrawalView {
+    pub request_id: String,
+    pub sender: String,
+    pub recipient: String,
+    pub amount: String,
+    pub amount_display: String,
+    pub status: String,
+    pub unified_status: String,
+    pub created_at_block: String,
+}
+
+/// Bridge-wide stats for the explorer header.
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BridgeStats {
+    pub total_deposits: u32,
+    pub total_withdrawals: u32,
+    pub pending_deposits: u32,
+    pub pending_withdrawals: u32,
+    pub hippius_height: u64,
+    pub bittensor_height: u64,
+    pub approve_threshold: u16,
+    pub cleanup_ttl_blocks: String,
+    pub guardians: Vec<String>,
+}
+
+/// Aggregate on-chain explorer snapshot returned to the FE history table.
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BridgeOnChainData {
+    pub deposits: Vec<DepositView>,
+    pub withdrawals: Vec<WithdrawalView>,
+    pub stats: BridgeStats,
+}

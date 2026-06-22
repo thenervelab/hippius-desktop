@@ -100,9 +100,35 @@ pub fn to_rao(decimal: &str, decimals: u32) -> Result<u128, AppError> {
         .map_err(|e| AppError::Validation(format!("Amount is out of range: {e}")))
 }
 
+/// Format a rao amount for display: whole part with up to `decimals` fractional
+/// digits, trailing zeros trimmed (e.g. `15_500_000_000` @ 9 → `"15.5"`). Used
+/// for the explorer views' `amountDisplay` (mirrors the TS `formatHalphaRao` /
+/// `formatAlphaRao`). Pure string-divmod — no float.
+#[must_use]
+pub fn format_rao(rao: u128, decimals: u32) -> String {
+    let scale = 10u128.pow(decimals);
+    let whole = rao / scale;
+    let frac = rao % scale;
+    if frac == 0 {
+        return whole.to_string();
+    }
+    let frac = format!("{frac:0width$}", width = decimals as usize);
+    let frac = frac.trim_end_matches('0');
+    format!("{whole}.{frac}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn format_rao_trims_trailing_zeros() {
+        assert_eq!(format_rao(15_500_000_000, ALPHA_DECIMALS), "15.5");
+        assert_eq!(format_rao(15_000_000_000, ALPHA_DECIMALS), "15");
+        assert_eq!(format_rao(1_000_000_000_000_000_000, HALPHA_DECIMALS), "1");
+        assert_eq!(format_rao(1, ALPHA_DECIMALS), "0.000000001");
+        assert_eq!(format_rao(0, ALPHA_DECIMALS), "0");
+    }
 
     #[test]
     fn fee_matches_ts_integer_math() {

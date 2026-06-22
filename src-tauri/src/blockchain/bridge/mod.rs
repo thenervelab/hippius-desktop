@@ -14,6 +14,7 @@ pub mod config;
 pub mod contract;
 pub mod convert;
 pub mod deposit;
+pub mod explorer;
 pub mod history;
 pub mod status;
 pub mod queries;
