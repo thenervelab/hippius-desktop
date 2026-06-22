@@ -88,6 +88,11 @@ pub struct AppState {
     /// returning the partial summary. A plain flag (not a `CancellationToken`)
     /// because recovery is a single foreground pull, not a fan-out.
     pub recovery_cancel: std::sync::atomic::AtomicBool,
+    /// True while a `recover_account_files` pull is running. A second concurrent
+    /// recovery is rejected so the shared `recovery_cancel` flag is unambiguous
+    /// (audit RB-4) — without this, a second run's entry reset would clear a
+    /// cancel the first run was waiting on.
+    pub recovery_in_progress: std::sync::atomic::AtomicBool,
     /// Accounts whose default recovery binding has already succeeded this
     /// process session. Guards `recovery_binding::spawn_default_recovery_binding`
     /// so the per-drive sync-init funnel doesn't re-bind on every init/resume; a
@@ -207,6 +212,7 @@ impl AppState {
             sync_session_epoch: AtomicU64::new(0),
             tray_panel_hidden_at: AtomicU64::new(0),
             recovery_cancel: std::sync::atomic::AtomicBool::new(false),
+            recovery_in_progress: std::sync::atomic::AtomicBool::new(false),
             recovery_bound: std::sync::Mutex::new(std::collections::HashSet::new()),
             health_client,
             // Explicit timeouts. Without them a hung connection (e.g. a
