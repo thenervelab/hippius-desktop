@@ -6,12 +6,16 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { bridgeInFlightAtom } from "@/lib/global-atoms/bridgeAtoms";
 
+import { invoke } from "@tauri-apps/api/core";
+
+// Reads still go through the TS bridge service for now; the funds-critical
+// WRITE paths (deposit/withdraw) were moved to Rust IPC (audit H-8) so the
+// wallet no longer blind-signs renderer-built extrinsics. Porting the read
+// paths + deleting this service is the remaining cleanup.
 import {
   initializeBridge,
   disconnectBridge,
   getBalances,
-  bridgeAlphaToHAlpha as serviceBridgeAlphaToHAlpha,
-  bridgeHAlphaToAlpha as serviceBridgeHAlphaToAlpha,
   getAllTransactions as serviceGetAllTransactions,
   subscribeToTransactionUpdates,
   getStakedHotkeys as serviceGetStakedHotkeys,
@@ -19,11 +23,15 @@ import {
   type StakedHotkey,
 } from "@/lib/bridge/service";
 import { BRIDGE_CONFIG } from "@/lib/bridge/config";
-import type {
-  BridgeResult,
-  TrackedTransaction,
-} from "@/lib/bridge/types";
-import { buildBridgeSigner } from "@/lib/bridge/local-keypair";
+import type { TrackedTransaction } from "@/lib/bridge/types";
+
+/** Mirror of the Rust `BridgeOutcome` (serde camelCase). */
+interface BridgeOutcome {
+  txHash: string;
+  withdrawalId?: string | null;
+  depositId?: string | null;
+  success: boolean;
+}
 
 import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
 
@@ -96,18 +104,15 @@ const BALANCES_KEY = "bridge-balances";
 /**
  * Top-level bridge hook used by the wallet dialog + history table.
  *
- * Mirrors the architecture in hippius-web's `useBridge`: live chain
- * queries via polkadot-api against the testnet endpoints, balances +
- * staked-hotkey lookups for the active wallet, and direct calls to
- * `bridgeAlphaToHAlpha` / `bridgeHAlphaToAlpha` for submissions.
+ * Reads (balances, staked hotkeys, transactions) still use the TS bridge
+ * service's polkadot-api queries against the testnet endpoints.
  *
- * The desktop difference is signing — we never use a Polkadot.js
- * extension. Instead, `buildBridgeSigner` wires the bridge service's
- * `keypair.sign` callback into the Rust `local_wallet_sign` IPC: the
- * user's password is captured once in a closure on submit, each sign
- * round-trips through Rust which decrypts the mnemonic, signs, and
- * drops everything before returning the 64-byte signature. The
- * plaintext mnemonic never enters renderer memory.
+ * Submissions go through Rust IPC — `bridge_alpha_to_halpha` /
+ * `bridge_halpha_to_alpha` construct, sign (with the active wallet), and submit
+ * the extrinsics entirely in the backend. The renderer no longer builds an
+ * extrinsic for the wallet to blind-sign (audit H-8); it sends only
+ * `{amount, recipient/hotkey, password}`. Porting the read paths to Rust and
+ * deleting the TS service is the remaining cleanup.
  */
 export function useBridge() {
   const { activeWallet } = useLocalWallet();
@@ -237,32 +242,20 @@ export function useBridge() {
       // secret material.
       setBridgeInFlight((c) => c + 1);
       try {
-        const keypair = await buildBridgeSigner(
-          activeWallet.id,
-          params.password,
-        );
-
-        const result: BridgeResult = await serviceBridgeHAlphaToAlpha(
-          {
-            direction: "halpha-to-alpha",
-            amount: BigInt(params.amount),
-            senderAddress: activeWallet.address,
-            recipientAddress: params.recipientAddress,
-            keypair,
-          },
-          setWizardSteps,
-        );
-
-        if (!result.success) {
-          throw new Error(result.error || "Bridge submission failed");
-        }
+        // Construct + sign + submit in Rust — the wallet password never builds
+        // a renderer-side extrinsic (audit H-8). amount is a rao decimal string.
+        const outcome = await invoke<BridgeOutcome>("bridge_halpha_to_alpha", {
+          amount: params.amount,
+          recipient: params.recipientAddress || null,
+          password: params.password,
+        });
 
         void queryClient.invalidateQueries({ queryKey: [BALANCES_KEY] });
         void refetchTransactions();
 
         return {
-          bridgeTransactionId: result.bridgeTransactionId ?? "",
-          txHash: result.txHash ?? "",
+          bridgeTransactionId: outcome.withdrawalId ?? "",
+          txHash: outcome.txHash ?? "",
         };
       } finally {
         setBridgeInFlight((c) => Math.max(0, c - 1));
@@ -288,32 +281,19 @@ export function useBridge() {
       // matters more here in practice.
       setBridgeInFlight((c) => c + 1);
       try {
-        const keypair = await buildBridgeSigner(
-          activeWallet.id,
-          params.password,
-        );
-
-        const result: BridgeResult = await serviceBridgeAlphaToHAlpha(
-          {
-            direction: "alpha-to-halpha",
-            amount: BigInt(params.amount),
-            senderAddress: activeWallet.address,
-            hotkey: params.hotkey,
-            keypair,
-          },
-          setWizardSteps,
-        );
-
-        if (!result.success) {
-          throw new Error(result.error || "Bridge submission failed");
-        }
+        // 4-step deposit constructed + signed + submitted in Rust (audit H-8).
+        const outcome = await invoke<BridgeOutcome>("bridge_alpha_to_halpha", {
+          amount: params.amount,
+          hotkey: params.hotkey ?? null,
+          password: params.password,
+        });
 
         void queryClient.invalidateQueries({ queryKey: [BALANCES_KEY] });
         void refetchTransactions();
 
         return {
-          bridgeTransactionId: result.bridgeTransactionId ?? "",
-          txHash: result.txHash ?? "",
+          bridgeTransactionId: outcome.depositId ?? "",
+          txHash: outcome.txHash ?? "",
         };
       } finally {
         setBridgeInFlight((c) => Math.max(0, c - 1));
