@@ -285,10 +285,10 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
           setShowHcfsSetup(true);
           return;
         }
-      } catch {
-        setBrowseDialog({ open: false, folder, isLocal });
-        setPendingAction("browse");
-        setShowHcfsSetup(true);
+      } catch (err) {
+        // A failed config read ≠ "no password set" (audit FE-low).
+        console.error("Failed to read sync config:", err);
+        toast.error("Couldn't check your sync configuration. Please try again.");
         return;
       }
     }
@@ -402,10 +402,10 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
         setShowHcfsSetup(true);
         return;
       }
-    } catch {
-      setPendingAction("sync");
-      setSyncDialog((prev) => ({ ...prev, open: false }));
-      setShowHcfsSetup(true);
+    } catch (err) {
+      // A failed config read ≠ "no password set" (audit FE-low).
+      console.error("Failed to read sync config:", err);
+      toast.error("Couldn't check your sync configuration. Please try again.");
       return;
     }
 

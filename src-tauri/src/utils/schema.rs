@@ -36,6 +36,7 @@ const EXPECTED_TABLES: &[&str] = &[
     "shared_link_history",
     "local_wallets",
     "bridge_transactions",
+    "credit_notification_flags",
 ];
 
 /// Read the column names of a table via `PRAGMA table_info(...)`.
@@ -134,6 +135,7 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     ensure_share_keystore(&mut tx).await?;
     ensure_share_origin(&mut tx).await?;
     ensure_bridge_transactions(&mut tx).await?;
+    ensure_credit_notification_flags(&mut tx).await?;
     ensure_shared_link_history(&mut tx).await?;
 
     // No `bridge_transactions` helper by design: the first cut of the bridge
@@ -820,6 +822,25 @@ async fn ensure_bridge_transactions(conn: &mut SqliteConnection) -> Result<(), s
     sqlx::query("CREATE INDEX IF NOT EXISTS bridge_transactions_owner_idx ON bridge_transactions (owner, created_at)")
         .execute(&mut *conn)
         .await?;
+    Ok(())
+}
+
+/// `credit_notification_flags` — per-account low-credit notification state
+/// (`is_first_time`, `is_above_half_credit`), owner-scoped by `account_key`
+/// (audit NOTIF-4). These were a single global `app_state` row, so on a
+/// multi-account device one account's first-time/above-half state leaked into
+/// another's credit warnings. A missing row means defaults (first_time=1,
+/// above_half=0), so a brand-new account starts fresh without seeding.
+async fn ensure_credit_notification_flags(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS credit_notification_flags (
+            owner                TEXT PRIMARY KEY,
+            is_first_time        INTEGER NOT NULL DEFAULT 1,
+            is_above_half_credit INTEGER NOT NULL DEFAULT 0
+        )",
+    )
+    .execute(&mut *conn)
+    .await?;
     Ok(())
 }
 

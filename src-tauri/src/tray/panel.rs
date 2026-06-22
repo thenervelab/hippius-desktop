@@ -58,15 +58,40 @@ pub struct TrayIconRect {
     pub height: f64,
 }
 
+/// Largest absolute physical-pixel coordinate accepted from a tray rect. Real
+/// monitors are orders of magnitude smaller; clamping to this bound keeps the
+/// downstream `i32` geometry arithmetic (`x + width`, `x + width / 2`) well
+/// clear of overflow even on garbage/adversarial input.
+const MAX_COORD: f64 = 1_000_000.0;
+
 impl TrayIconRect {
-    /// Round the floating-point screen rect to the integer [`Rect`] the
-    /// geometry math operates on.
+    /// Round + sanitize the floating-point screen rect into the integer [`Rect`]
+    /// the geometry math operates on.
+    ///
+    /// JS `f64` values reach here unvalidated, so a malformed tray event could
+    /// carry `NaN`/`±Inf` or an absurd magnitude. A non-finite value maps to `0`
+    /// and every component is clamped to [`MAX_COORD`] so `tray::geometry`'s
+    /// unchecked `i32` arithmetic cannot overflow (which would debug-panic).
     fn to_rect(self) -> Rect {
+        let coord = |v: f64| -> i32 {
+            if v.is_finite() {
+                v.round().clamp(-MAX_COORD, MAX_COORD) as i32
+            } else {
+                0
+            }
+        };
+        let dim = |v: f64| -> i32 {
+            if v.is_finite() {
+                v.round().clamp(0.0, MAX_COORD) as i32
+            } else {
+                0
+            }
+        };
         Rect {
-            x: self.x.round() as i32,
-            y: self.y.round() as i32,
-            width: self.width.round() as i32,
-            height: self.height.round() as i32,
+            x: coord(self.x),
+            y: coord(self.y),
+            width: dim(self.width),
+            height: dim(self.height),
         }
     }
 }
@@ -144,6 +169,10 @@ pub fn toggle_tray_panel(app: AppHandle, state: tauri::State<'_, AppState>, rect
         .map_err(|e| AppError::Other(format!("failed to position tray panel: {e}")))?;
     win.show().map_err(|e| AppError::Other(format!("failed to show tray panel: {e}")))?;
     win.set_focus().map_err(|e| AppError::Other(format!("failed to focus tray panel: {e}")))?;
+    // Clear the dismiss timestamp now that the panel is open again, so a stale
+    // value can never interfere with a later toggle (the cooldown only guards the
+    // blur→click gesture immediately after a hide).
+    state.tray_panel_hidden_at.store(0, Ordering::Relaxed);
     Ok(())
 }
 
@@ -296,4 +325,36 @@ fn target_work_area(app: &AppHandle, icon: Rect) -> Result<(Rect, f64)> {
 /// Hide a panel window, mapping any failure to [`AppError::Other`].
 fn hide_window(win: &WebviewWindow) -> Result<()> {
     win.hide().map_err(|e| AppError::Other(format!("failed to hide tray panel: {e}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rect(x: f64, y: f64, w: f64, h: f64) -> Rect {
+        TrayIconRect { x, y, width: w, height: h }.to_rect()
+    }
+
+    #[test]
+    fn to_rect_maps_non_finite_to_zero() {
+        assert_eq!(
+            rect(f64::NAN, f64::INFINITY, f64::NEG_INFINITY, f64::NAN),
+            Rect { x: 0, y: 0, width: 0, height: 0 }
+        );
+    }
+
+    #[test]
+    fn to_rect_clamps_absurd_magnitudes() {
+        let max = MAX_COORD as i32;
+        let huge = rect(1e300, -1e300, 1e300, -5.0);
+        assert_eq!(huge.x, max);
+        assert_eq!(huge.y, -max);
+        assert_eq!(huge.width, max, "width clamped to the safe bound");
+        assert_eq!(huge.height, 0, "negative dimension clamps to 0");
+    }
+
+    #[test]
+    fn to_rect_rounds_normal_values() {
+        assert_eq!(rect(10.4, 20.6, 30.0, 40.0), Rect { x: 10, y: 21, width: 30, height: 40 });
+    }
 }
