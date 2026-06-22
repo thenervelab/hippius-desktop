@@ -13,6 +13,10 @@ export interface FileProgress {
   totalBytes: number;
   resumedFromBytes?: number;
   error?: string;
+  /** Epoch-ms of this file's terminal transition (Completed OR Error), or
+   *  null/absent while pending/in-flight. The widget cap uses it server-side
+   *  to keep the newest completions; the FE does not render it. */
+  completedAt?: number | null;
 }
 
 export interface SyncSnapshot {
