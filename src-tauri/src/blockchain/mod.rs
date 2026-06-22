@@ -1,5 +1,6 @@
 //! Blockchain interaction — Substrate RPC, queries, staking, transfers.
 
+pub mod bridge;
 pub mod client;
 pub mod convert;
 pub(crate) mod helpers;
