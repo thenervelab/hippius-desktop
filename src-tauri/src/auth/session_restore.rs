@@ -313,13 +313,17 @@ pub async fn restore_session(
                                 });
                             }
                         };
-                        // If the FE session carries a token that disagrees with the
-                        // DB's for this address, the localStorage was tampered with
-                        // — refuse rather than run on an attacker-chosen token.
-                        if let Some(fe_token) = session_data.get("token").and_then(|v| v.as_str())
-                            && fe_token != db_token
-                        {
-                            info!("OAuth session token does not match DB; treating as tampered/unauthenticated");
+                        // Bind the session to the DB token: the FE session MUST
+                        // carry a `token` equal to it. A missing OR differing token
+                        // means the renderer-controlled localStorage was tampered
+                        // with — refuse rather than run on an attacker-chosen token.
+                        // Requiring *presence* (not only rejecting a mismatch) is
+                        // what closes the account-pivot: a renderer could otherwise
+                        // name another local account's `substrateAddress` and omit
+                        // the token it cannot possess, and the old `&& fe_token !=
+                        // db_token` guard short-circuited to "no refusal" (audit H-2).
+                        if !fe_session_proves_token(&session_data, &db_token) {
+                            info!("OAuth session token missing or mismatched vs DB; treating as tampered/unauthenticated");
                             return Ok(SessionRestoreResult {
                                 authenticated: false,
                                 substrate_address: None,
@@ -651,10 +655,22 @@ pub async fn is_token_valid(state: tauri::State<'_, crate::app_state::AppState>,
     ))
 }
 
+/// True when the FE-persisted OAuth session proves possession of `db_token`:
+/// it must carry a string `token` field exactly equal to the authoritative DB
+/// token. A missing field, a non-string value, or a differing token all return
+/// `false` — each means the renderer-controlled `oauth_session_json` was
+/// tampered with, and restoring it would let a renderer pivot into a local
+/// account whose token it does not hold (audit H-2). Pure so the tamper rule is
+/// unit-tested without a DB or a live session.
+fn fe_session_proves_token(session_data: &serde_json::Value, db_token: &str) -> bool {
+    session_data.get("token").and_then(|v| v.as_str()) == Some(db_token)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::recovery::{RecoveryCheck, RecoveryFlow, RecoveryGateState};
+    use serde_json::json;
 
     fn sample_check() -> RecoveryCheck {
         RecoveryCheck {
@@ -723,5 +739,36 @@ mod tests {
     #[test]
     fn gate_target_absent_probe_is_pending() {
         assert_eq!(recovery_gate_target(None), RecoveryGateState::Pending);
+    }
+
+    // H-2: the FE session restores only if it proves possession of the DB
+    // token. An exact string match is the sole accept case.
+    #[test]
+    fn fe_session_proves_token_accepts_exact_match() {
+        assert!(fe_session_proves_token(&json!({ "token": "db-tok" }), "db-tok"));
+    }
+
+    // The regression guard: a renderer that omits the token field must NOT
+    // restore. The original `&& fe_token != db_token` guard short-circuited to
+    // "no refusal" here, letting a tampered session name another local
+    // account's address and pivot into it (audit H-2).
+    #[test]
+    fn fe_session_proves_token_rejects_missing_token() {
+        assert!(!fe_session_proves_token(&json!({ "substrateAddress": "5xyz" }), "db-tok"));
+    }
+
+    // A differing token is tampering.
+    #[test]
+    fn fe_session_proves_token_rejects_mismatch() {
+        assert!(!fe_session_proves_token(&json!({ "token": "attacker" }), "db-tok"));
+    }
+
+    // serde_json edge (axiom 110): `Value::as_str` yields `None` for a null or
+    // numeric `token`, so neither can equal the DB token — a non-string token
+    // is not a valid proof.
+    #[test]
+    fn fe_session_proves_token_rejects_non_string_token() {
+        assert!(!fe_session_proves_token(&json!({ "token": null }), "db-tok"));
+        assert!(!fe_session_proves_token(&json!({ "token": 12345 }), "db-tok"));
     }
 }
