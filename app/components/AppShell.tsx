@@ -25,6 +25,15 @@ import SplashWrapper from "./splash-screen-v2";
 const TRAY_PANEL_ROUTE = "/tray-panel";
 
 /**
+ * E2E harness routes (`app/e2e/*`). Like the tray panel, they must NOT boot the
+ * full app (auth/session restore/splash would gate or delay the harness page),
+ * so they render with only the theme provider. Harmless in production: the
+ * routes are unlinked and render a disabled placeholder unless the app was
+ * built with `NEXT_PUBLIC_E2E=1`.
+ */
+const E2E_ROUTE = "/e2e";
+
+/**
  * Toaster that follows the user's resolved theme rather than the OS
  * (`theme="system"` reads prefers-color-scheme directly, which diverges
  * when the user forces Light/Dark in settings). The Tailwind `dark:`
@@ -72,7 +81,7 @@ function ThemedToaster() {
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
 
-  if (pathname?.startsWith(TRAY_PANEL_ROUTE)) {
+  if (pathname?.startsWith(TRAY_PANEL_ROUTE) || pathname?.startsWith(E2E_ROUTE)) {
     // The popover skips the app providers but still mounts the theme
     // provider so it follows the System/Light/Dark preference (shared
     // via localStorage) and tracks live OS theme changes. It uses the

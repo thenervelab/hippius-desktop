@@ -55,6 +55,7 @@
   ],
   "exclude": [
     "node_modules",
-    "src-tauri"
+    "src-tauri",
+    "e2e"
   ]
 }

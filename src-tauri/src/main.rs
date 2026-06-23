@@ -510,6 +510,15 @@ fn main() {
     let builder = setup(builder);
     let builder = on_window_event(builder);
 
+    // E2E only: register the in-process WebDriver automation server so the
+    // WebdriverIO smoke suite (`e2e/`) can drive a real macOS WKWebView build.
+    // Gated behind the off-by-default `e2e-webdriver` feature — the server is
+    // unauthenticated localhost automation and must never reach a release
+    // artifact. Plugin registration order is irrelevant, so appending it here
+    // (after `setup`/`on_window_event`) keeps the gate to a single line.
+    #[cfg(feature = "e2e-webdriver")]
+    let builder = builder.plugin(tauri_plugin_webdriver::init());
+
     info!("Running Tauri application...");
     let app = builder.build(tauri::generate_context!()).expect("error while building tauri application");
 

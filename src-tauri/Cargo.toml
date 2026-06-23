@@ -17,6 +17,18 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+[features]
+# E2E ONLY — must NEVER be enabled in a release/production build. Turns on the
+# `tauri-plugin-webdriver` in-process WebDriver automation server registered in
+# `main.rs`, which exposes UNAUTHENTICATED automation over localhost HTTP (the
+# crate's own README: "Never include it in production builds"). It is off by
+# default and `tauri build` enables no features, so a normal release can never
+# pull it into the dependency graph. Driven by the WebdriverIO smoke suite in
+# `e2e/` — build with `--features e2e-webdriver`. The `dep:` prefix keeps the
+# optional crate from implicitly minting a same-named feature
+# (axiom rust_quality_121 — feature-matrix hygiene).
+e2e-webdriver = ["dep:tauri-plugin-webdriver"]
+
 [dependencies]
 tauri = { version = "2", features = [
     "protocol-asset",
@@ -36,6 +48,13 @@ tauri = { version = "2", features = [
 tauri-plugin-opener = "2"
 tauri-plugin-deep-link = "2.0.0"
 tauri-plugin-shell = "2"
+# Optional, dev/E2E-only: embeds an in-process W3C WebDriver server so
+# WebdriverIO/Selenium can drive a REAL macOS WKWebView build (the official
+# `tauri-driver` can't — Apple ships no WKWebView driver). Pinned exact because
+# it is a young, pre-1.0, unofficial crate that injects an automation server;
+# only ever compiled under the off-by-default `e2e-webdriver` feature. See the
+# `[features]` note above.
+tauri-plugin-webdriver = { version = "=0.2.1", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
