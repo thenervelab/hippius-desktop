@@ -7,6 +7,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { bridgeInFlightAtom } from "@/lib/global-atoms/bridgeAtoms";
 
 import { invoke } from "@tauri-apps/api/core";
+import { resolveTxOutcome, type TxOutcome } from "@/lib/utils/txOutcome";
 
 // All bridge logic now lives in the Rust backend. Reads (balances, staked
 // hotkeys) go through `bridge_get_*` IPC; the funds-critical WRITE paths
@@ -22,13 +23,17 @@ import type {
 
 export type { BridgeBalances, StakedHotkey } from "@/lib/bridge/types";
 
-/** Mirror of the Rust `BridgeOutcome` (serde camelCase). */
-interface BridgeOutcome {
-  txHash: string;
+/**
+ * Mirror of the Rust `BridgeOutcome` (serde camelCase): the flattened
+ * {@link TxOutcome} (status/txHash/reason) plus the bridge request ids, which
+ * are present only on a `finalized` outcome. Fed to `resolveTxOutcome` so an
+ * ambiguous submit becomes a no-retry "submitted" state (the bridge
+ * double-spend, R-01) instead of a generic error the dialog offers to resend.
+ */
+type BridgeOutcome = TxOutcome & {
   withdrawalId?: string | null;
   depositId?: string | null;
-  success: boolean;
-}
+};
 
 import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
 
@@ -205,9 +210,15 @@ export function useBridge() {
         void queryClient.invalidateQueries({ queryKey: [BALANCES_KEY] });
         void refetchTransactions();
 
+        // Throws TxSubmittedUnconfirmedError on an ambiguous submit (the bridge
+        // double-spend, R-01) so the dialog shows a no-retry "submitted" state;
+        // throws a plain Error on a definitively rejected/failed submit (safe to
+        // retry). Only a `finalized` outcome falls through to success here.
+        const { txHash } = resolveTxOutcome(outcome);
+
         return {
           bridgeTransactionId: outcome.withdrawalId ?? "",
-          txHash: outcome.txHash ?? "",
+          txHash,
         };
       } finally {
         setBridgeInFlight((c) => Math.max(0, c - 1));
@@ -243,9 +254,13 @@ export function useBridge() {
         void queryClient.invalidateQueries({ queryKey: [BALANCES_KEY] });
         void refetchTransactions();
 
+        // See submitHalphaToAlpha — resolveTxOutcome throws (no retry) on an
+        // ambiguous/failed submit so the deposit can't be double-sent (R-01).
+        const { txHash } = resolveTxOutcome(outcome);
+
         return {
           bridgeTransactionId: outcome.depositId ?? "",
-          txHash: outcome.txHash ?? "",
+          txHash,
         };
       } finally {
         setBridgeInFlight((c) => Math.max(0, c - 1));

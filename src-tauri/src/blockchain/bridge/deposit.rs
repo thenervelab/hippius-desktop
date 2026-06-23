@@ -26,7 +26,8 @@ use super::runtime::bittensor::runtime_types::{
     subtensor_runtime_common::ProxyType,
 };
 use super::{client, config, contract, convert, types::BridgeOutcome};
-use crate::blockchain::helpers::get_signer_and_address;
+use crate::blockchain::helpers::{get_signer_and_address, submit_tracked, TrackedSubmission};
+use crate::blockchain::types::TxOutcome;
 use crate::error::{AppError, Result};
 
 /// Double a dry-run gas estimate (TS `doubleGas`) for headroom.
@@ -139,7 +140,12 @@ pub async fn bridge_alpha_to_halpha(
     // `Contracts.call` takes the storage-deposit limit as a Compact-encoded balance.
     let storage_deposit_limit = storage_limit(&result.storage_deposit).map(subxt::ext::codec::Compact);
 
-    // Step 3: submit the real contract call.
+    // Step 3: submit the real contract call. Tracked (mortal era + typed
+    // outcome) because this is the funds-moving step: an ambiguous post-broadcast
+    // result MUST surface as `SubmittedUnconfirmed` (FE suppresses "Try Again")
+    // rather than a generic error the user could resubmit into a double deposit
+    // (audit R-01/R-12). Steps 1/4 (add/remove proxy) are idempotent /
+    // best-effort and stay on the simple path.
     let call = bittensor::tx().contracts().call(
         MultiAddress::Id(contract_addr.clone()),
         0,
@@ -147,36 +153,38 @@ pub async fn bridge_alpha_to_halpha(
         storage_deposit_limit,
         input,
     );
-    let events = client
-        .tx()
-        .sign_and_submit_then_watch_default(&call, &signer)
-        .await
-        .map_err(|e| AppError::Substrate(format!("Deposit submit failed: {e}")))?
-        .wait_for_finalized_success()
-        .await
-        .map_err(|e| AppError::Substrate(format!("Deposit transaction failed: {e}")))?;
-    let tx_hash = format!("{:?}", events.extrinsic_hash());
+    let outcome = match submit_tracked(&client, &call, &signer).await? {
+        TrackedSubmission::Finalized { tx_hash, events } => {
+            // Step 4: best-effort revoke the proxy grant (deposit confirmed).
+            let remove = bittensor::tx()
+                .proxy()
+                .remove_proxy(MultiAddress::Id(contract_addr.clone()), ProxyType::Any, 0);
+            if let Err(e) = client.tx().sign_and_submit_then_watch_default(&remove, &signer).await {
+                tracing::warn!(error = %e, "remove_proxy after deposit failed (deposit already succeeded)");
+            }
 
-    // Step 4: best-effort revoke the proxy grant (deposit already succeeded).
-    let remove = bittensor::tx()
-        .proxy()
-        .remove_proxy(MultiAddress::Id(contract_addr.clone()), ProxyType::Any, 0);
-    if let Err(e) = client.tx().sign_and_submit_then_watch_default(&remove, &signer).await {
-        tracing::warn!(error = %e, "remove_proxy after deposit failed (deposit already succeeded)");
-    }
+            // Recover the Bittensor-side deposit_request_id for tracking (best-effort).
+            let deposit_id = extract_deposit_id(&client, &contract_addr, origin, &events).await;
 
-    // Recover the Bittensor-side deposit_request_id for tracking (best-effort).
-    let deposit_id = extract_deposit_id(&client, &contract_addr, origin, &events).await;
+            // Record locally for the history view (best-effort) — only a
+            // confirmed (finalized) deposit is recorded.
+            super::history::record_submitted(&state, "alpha-to-halpha", amount, &origin_ss58, Some(&origin_ss58), &tx_hash, deposit_id.as_deref())
+                .await;
+            BridgeOutcome {
+                withdrawal_id: None,
+                deposit_id,
+                outcome: TxOutcome::Finalized { tx_hash },
+            }
+        }
+        // Non-finalized: the deposit either never landed or its outcome is
+        // unproven, so no id and no history record. We deliberately do NOT
+        // auto-remove the proxy here — unchanged from the prior error path,
+        // which `?`-returned before step 4. Revoking the standing proxy grant on
+        // an ambiguous deposit is a tracked testnet follow-up.
+        other => BridgeOutcome::status_only(other.into_tx_outcome()),
+    };
 
-    // Record locally for the history view (best-effort).
-    super::history::record_submitted(&state, "alpha-to-halpha", amount, &origin_ss58, Some(&origin_ss58), &tx_hash, deposit_id.as_deref()).await;
-
-    Ok(BridgeOutcome {
-        tx_hash,
-        withdrawal_id: None,
-        deposit_id,
-        success: true,
-    })
+    Ok(outcome)
 }
 
 /// Recover the deposit_request_id for the just-submitted deposit.

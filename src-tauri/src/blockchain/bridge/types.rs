@@ -1,20 +1,41 @@
 //! Wire types returned to the frontend by the bridge IPC commands.
 
+use crate::blockchain::types::TxOutcome;
 use serde::Serialize;
 
 /// Outcome of a bridge submission. `deposit_id`/`withdrawal_id` are the bridge
-/// request ids extracted from the chain events (hex of the 32-byte id), used by
-/// the UI to track the cross-chain transfer.
-#[derive(Clone, Debug, Default, Serialize)]
+/// request ids extracted from the chain events (hex of the 32-byte id); they are
+/// present only on a `finalized` outcome (the others never observed a confirmed
+/// event).
+///
+/// The submission result is the **flattened [`TxOutcome`]** (its `status`,
+/// `txHash` and `reason` fields) — the SAME wire shape transfers/staking return —
+/// so the FE runs it through `resolveTxOutcome`, which THROWS (and the dialog
+/// suppresses "Try Again") on a `submittedUnconfirmed` outcome. That is what
+/// closes the bridge double-spend (R-01): a withdraw/deposit whose extrinsic
+/// landed but whose finalization watch dropped is reported `submittedUnconfirmed`,
+/// not a generic error the dialog offers to resubmit. There is no `Default` or
+/// `Clone`: `TxOutcome` has no meaningful default and is built fresh per submission.
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BridgeOutcome {
-    /// Hex extrinsic hash of the submitted transaction.
-    pub tx_hash: String,
-    /// `AlphaBridge.WithdrawalRequestCreated.id`, set on hAlpha→Alpha.
+    /// `AlphaBridge.WithdrawalRequestCreated.id`, set on a finalized hAlpha→Alpha.
     pub withdrawal_id: Option<String>,
-    /// Contract `DepositRequestCreated.deposit_request_id`, set on Alpha→hAlpha.
+    /// Contract `DepositRequestCreated.deposit_request_id`, set on a finalized Alpha→hAlpha.
     pub deposit_id: Option<String>,
-    pub success: bool,
+    /// Submission status/txHash/reason, flattened into this object so the FE can
+    /// reuse `resolveTxOutcome` (`{ status, txHash, reason, withdrawalId, depositId }`).
+    #[serde(flatten)]
+    pub outcome: TxOutcome,
+}
+
+impl BridgeOutcome {
+    /// A submission outcome with no bridge ids — every non-finalized state
+    /// (rejected / submitted-unconfirmed / finalized-failed), where no confirmed
+    /// `DepositRequestCreated` / `WithdrawalRequestCreated` event was observed.
+    pub(crate) fn status_only(outcome: TxOutcome) -> Self {
+        Self { withdrawal_id: None, deposit_id: None, outcome }
+    }
 }
 
 /// Balances shown in the bridge dialog, as smallest-unit ("rao") decimal

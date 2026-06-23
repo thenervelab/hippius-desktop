@@ -20,6 +20,7 @@ import {
 import { cn } from "@/lib/utils";
 import { errorMessage } from "@/lib/utils/errorUtils";
 import { formatUnitsTruncated, parseUnitsToBase } from "@/lib/utils/planckUnits";
+import { TxSubmittedUnconfirmedError } from "@/lib/utils/txOutcome";
 
 import { WalletDialogShell } from "./shared/WalletDesign";
 import WalletPasswordField from "./shared/WalletPasswordField";
@@ -170,7 +171,11 @@ const BridgeDialog: React.FC<BridgeDialogProps> = ({
     // dialog. A still-running ("pending") bridge is intentionally left alone:
     // its progress toast must survive until it resolves, and a second
     // concurrent bridge is blocked at the confirm step below.
-    if (flowState === "success" || flowState === "error") {
+    if (
+      flowState === "success" ||
+      flowState === "error" ||
+      flowState === "submitted"
+    ) {
       setFlowState("idle");
       setIsMinimized(false);
       setSubmittedAmount("");
@@ -346,9 +351,18 @@ const BridgeDialog: React.FC<BridgeDialogProps> = ({
         await refetchBalances();
         onSuccess?.();
       } catch (e: unknown) {
-        const msg = parseBridgeError(e);
-        setFlowState("error");
-        toast.error("Bridge failed", { description: msg });
+        if (e instanceof TxSubmittedUnconfirmedError) {
+          // The bridge extrinsic may already be on-chain (its finalization
+          // watch dropped). Surface a no-retry "submitted" state and refresh
+          // balances/history, but NEVER offer to resend — resubmitting would
+          // double-bridge the funds (audit R-01).
+          setFlowState("submitted");
+          void refetchBalances();
+        } else {
+          const msg = parseBridgeError(e);
+          setFlowState("error");
+          toast.error("Bridge failed", { description: msg });
+        }
       } finally {
         isProcessingRef.current = false;
       }
@@ -771,7 +785,7 @@ const BridgeDialog: React.FC<BridgeDialogProps> = ({
       {/* Minimized progress toast */}
       {showFlowToast && (
         <TransactionFlowToast
-          state={flowState as "pending" | "success" | "error"}
+          state={flowState as "pending" | "success" | "error" | "submitted"}
           config={{
             pending: {
               title: `Bridging ${sourceToken} to ${destToken}…`,
@@ -790,6 +804,13 @@ const BridgeDialog: React.FC<BridgeDialogProps> = ({
                 label: "Try Again",
                 onClick: handleRetryBridge,
               },
+            },
+            // No `action`: a submitted-but-unconfirmed bridge may already be
+            // on-chain, so it must never offer a resend (the double-bridge, R-01).
+            submitted: {
+              title: "Bridge submitted — awaiting confirmation",
+              description:
+                "Your transaction was submitted but not yet confirmed. It may already be processing — do NOT resubmit; check the transaction history.",
             },
           }}
           onDismiss={closeFlowDialogs}

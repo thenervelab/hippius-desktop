@@ -23,21 +23,62 @@ use crate::auth::account_key::account_key;
 use crate::blockchain::types::TxOutcome;
 use crate::error::{AppError, NotReadyKind};
 use crate::wallet::{crypto, repo};
+use subxt::blocks::ExtrinsicEvents;
 use subxt::tx::Payload;
 use subxt::config::DefaultExtrinsicParamsBuilder;
 use subxt::{OnlineClient, PolkadotConfig};
 use subxt_signer::{bip39::Mnemonic as SubxtMnemonic, sr25519::Keypair};
 
-/// Sign, submit, and track an extrinsic to a precise [`TxOutcome`].
+/// Richer sibling of [`TxOutcome`] that retains the finalized [`ExtrinsicEvents`]
+/// on the success path. `TxOutcome` is the FE-facing wire type and discards the
+/// events; callers that must read event data from a confirmed extrinsic (the
+/// bridge, for `withdrawal_id` / `deposit_id`) match on this instead and then
+/// project to `TxOutcome` for the FE. Same four states, same retry-safety
+/// meaning as `TxOutcome` (see [`submit_tracked`]); only `Finalized` differs.
+///
+/// `pub(crate)` and deliberately NOT `Serialize` — it is an internal carrier;
+/// the events do not cross the IPC boundary.
+pub(crate) enum TrackedSubmission {
+    /// Pre-broadcast failure — nothing reached the chain. Safe to retry.
+    RejectedAtSubmission { reason: String },
+    /// Broadcast / finalization-watch error — the extrinsic MAY be in the pool
+    /// or already on-chain, so it must NOT be auto-retried (the double-spend the
+    /// audit flagged, R-01).
+    SubmittedUnconfirmed { tx_hash: String, reason: String },
+    /// Finalized and dispatched successfully; carries the block's events.
+    Finalized { tx_hash: String, events: ExtrinsicEvents<PolkadotConfig> },
+    /// Finalized but the on-chain dispatch failed (the nonce was consumed). Safe
+    /// to retry as a NEW transaction.
+    FinalizedFailed { tx_hash: String, reason: String },
+}
+
+impl TrackedSubmission {
+    /// Project to the FE-facing [`TxOutcome`], dropping the events. Used by
+    /// [`sign_submit_track`] and by the bridge for its non-finalized arms.
+    pub(crate) fn into_tx_outcome(self) -> TxOutcome {
+        match self {
+            Self::RejectedAtSubmission { reason } => TxOutcome::RejectedAtSubmission { reason },
+            Self::SubmittedUnconfirmed { tx_hash, reason } => TxOutcome::SubmittedUnconfirmed { tx_hash, reason },
+            Self::Finalized { tx_hash, .. } => TxOutcome::Finalized { tx_hash },
+            Self::FinalizedFailed { tx_hash, reason } => TxOutcome::FinalizedFailed { tx_hash, reason },
+        }
+    }
+}
+
+/// Sign, submit, and track an extrinsic, **retaining the finalized events** on
+/// success. This is the core that [`sign_submit_track`] wraps; the bridge calls
+/// it directly because it must read `WithdrawalRequestCreated` /
+/// `DepositRequestCreated` out of the confirmed block.
 ///
 /// The extrinsic is **mortal** (audit R-12): it carries a bounded era anchored
 /// to the latest finalized block, so a signed payload can't be replayed
 /// indefinitely. subxt's `_default` path is Immortal, so we build params
-/// explicitly.
+/// explicitly — and this is precisely why every funds-moving extrinsic (including
+/// the bridge writes) must go through here, never `sign_and_submit_then_watch`.
 ///
 /// Signing and broadcasting are deliberately SEPARATE awaits (`create_signed`
-/// then `submit_and_watch`, not the fused `sign_and_submit_then_watch`),
-/// because only the first is provably pre-broadcast. Classification:
+/// then `submit_and_watch`, not the fused `sign_and_submit_then_watch`), because
+/// only the first is provably pre-broadcast. Classification:
 /// 1. `create_signed` — metadata/nonce fetch + offline signing; no bytes leave
 ///    the machine, so an error here means nothing reached the chain →
 ///    `RejectedAtSubmission` (safe to retry).
@@ -49,20 +90,14 @@ use subxt_signer::{bip39::Mnemonic as SubxtMnemonic, sr25519::Keypair};
 ///    we lost the watch before seeing it land → `SubmittedUnconfirmed` (it MAY
 ///    be on-chain; the FE must not auto-resubmit).
 /// 4. `wait_for_success` — runs only once the extrinsic IS in a finalized
-///    block, but it re-fetches that block's events over RPC, so its errors are
-///    classified by [`classify_post_finalization_error`]: only a decoded
-///    on-chain dispatch error proves the call failed (`FinalizedFailed`);
-///    anything else (transport, block fetch, event decode) leaves a finalized
-///    extrinsic whose outcome is unproven → `SubmittedUnconfirmed`.
+///    block; its errors are classified by [`classify_post_finalization`]: only a
+///    decoded on-chain dispatch error proves the call failed (`FinalizedFailed`);
+///    anything else leaves a finalized extrinsic whose outcome is unproven →
+///    `SubmittedUnconfirmed`.
 ///
-/// The extrinsic hash is captured from the signed extrinsic BEFORE broadcast,
-/// so it is available on every `SubmittedUnconfirmed` path for the FE / user
-/// to reconcile against the chain.
-///
-/// Returns `Err` only for the impossible-to-have-submitted cases handled by the
-/// caller earlier; every post-submission state is an `Ok(TxOutcome)` so the FE
-/// branches on one typed value instead of guessing from an error string.
-pub(crate) async fn sign_submit_track<Call>(client: &OnlineClient<PolkadotConfig>, tx: &Call, signer: &Keypair) -> Result<TxOutcome, AppError>
+/// The extrinsic hash is captured BEFORE broadcast, so it is available on every
+/// `SubmittedUnconfirmed` path for the FE / user to reconcile against the chain.
+pub(crate) async fn submit_tracked<Call>(client: &OnlineClient<PolkadotConfig>, tx: &Call, signer: &Keypair) -> Result<TrackedSubmission, AppError>
 where
     Call: Payload,
 {
@@ -87,7 +122,7 @@ where
     // nothing, so an error here is provably pre-pool.
     let signed = match client.tx().create_signed(tx, signer, params).await {
         Ok(s) => s,
-        Err(e) => return Ok(TxOutcome::RejectedAtSubmission { reason: e.to_string() }),
+        Err(e) => return Ok(TrackedSubmission::RejectedAtSubmission { reason: e.to_string() }),
     };
 
     // Hash of the signed bytes — identical to what the watch handle would
@@ -100,32 +135,55 @@ where
     // classify this as retry-safe.
     let progress = match signed.submit_and_watch().await {
         Ok(p) => p,
-        Err(e) => return Ok(TxOutcome::SubmittedUnconfirmed { tx_hash, reason: e.to_string() }),
+        Err(e) => return Ok(TrackedSubmission::SubmittedUnconfirmed { tx_hash, reason: e.to_string() }),
     };
 
     match progress.wait_for_finalized().await {
-        Err(e) => Ok(TxOutcome::SubmittedUnconfirmed { tx_hash, reason: e.to_string() }),
+        Err(e) => Ok(TrackedSubmission::SubmittedUnconfirmed { tx_hash, reason: e.to_string() }),
         Ok(in_block) => match in_block.wait_for_success().await {
-            Ok(_events) => Ok(TxOutcome::Finalized { tx_hash }),
-            Err(e) => Ok(classify_post_finalization_error(&e, tx_hash)),
+            Ok(events) => Ok(TrackedSubmission::Finalized { tx_hash, events }),
+            Err(e) => Ok(match classify_post_finalization(&e) {
+                PostFinalization::Failed => TrackedSubmission::FinalizedFailed { tx_hash, reason: e.to_string() },
+                PostFinalization::Unconfirmed => TrackedSubmission::SubmittedUnconfirmed { tx_hash, reason: e.to_string() },
+            }),
         },
     }
 }
 
-/// Classify a `wait_for_success` error for an extrinsic that is already in a
-/// FINALIZED block. Only `subxt::Error::Runtime(_)` is a decoded on-chain
-/// `System.ExtrinsicFailed` — proof the dispatch failed and the call took no
-/// effect (the nonce was consumed, so retrying as a NEW transaction is safe).
-/// Every other variant (RPC/transport drop, `BlockNotFound`, event/metadata
-/// decode failures — which can even mask a real dispatch failure whose error
-/// bytes failed to decode) means the outcome is unprovable: the extrinsic IS
-/// finalized and MAY have succeeded → `SubmittedUnconfirmed`, never a retry.
-/// The wildcard arm is also future-proof: `subxt::Error` is `#[non_exhaustive]`,
-/// and any variant we don't know about gets the conservative answer.
-fn classify_post_finalization_error(e: &subxt::Error, tx_hash: String) -> TxOutcome {
+/// Sign, submit, and track an extrinsic to a precise [`TxOutcome`] for the FE.
+///
+/// Thin wrapper over [`submit_tracked`] that drops the finalized events — the
+/// shape transfers/staking return. The mortal-era + four-state classification
+/// (and the rationale) live on `submit_tracked`.
+pub(crate) async fn sign_submit_track<Call>(client: &OnlineClient<PolkadotConfig>, tx: &Call, signer: &Keypair) -> Result<TxOutcome, AppError>
+where
+    Call: Payload,
+{
+    Ok(submit_tracked(client, tx, signer).await?.into_tx_outcome())
+}
+
+/// The two post-finalization error classes (the success path carries events and
+/// is handled separately). Keeping this distinct from the outcome enums lets the
+/// one Runtime-vs-other rule below be shared by both `TxOutcome` and
+/// `TrackedSubmission` callers without duplicating it.
+enum PostFinalization {
+    /// A decoded on-chain dispatch failure (`subxt::Error::Runtime`) — proof the
+    /// call took no effect; the nonce was consumed, so a NEW tx is safe.
+    Failed,
+    /// Anything else (RPC/transport drop, `BlockNotFound`, event/metadata decode
+    /// failures — which can even mask a real dispatch failure whose error bytes
+    /// failed to decode): the extrinsic IS finalized and MAY have succeeded, so
+    /// the outcome is unprovable and must never be auto-retried.
+    Unconfirmed,
+}
+
+/// Classify a `wait_for_success` error for an already-FINALIZED extrinsic. The
+/// wildcard arm is future-proof: `subxt::Error` is `#[non_exhaustive]`, and any
+/// variant we don't know about gets the conservative `Unconfirmed`.
+fn classify_post_finalization(e: &subxt::Error) -> PostFinalization {
     match e {
-        subxt::Error::Runtime(_) => TxOutcome::FinalizedFailed { tx_hash, reason: e.to_string() },
-        _ => TxOutcome::SubmittedUnconfirmed { tx_hash, reason: e.to_string() },
+        subxt::Error::Runtime(_) => PostFinalization::Failed,
+        _ => PostFinalization::Unconfirmed,
     }
 }
 
@@ -268,15 +326,16 @@ async fn migrate_to_argon2(
 
 #[cfg(test)]
 mod tests {
-    /// Static regression guard (audit R-12): `sign_submit_track` MUST build a
-    /// mortal era and submit with explicit params — never fall back to subxt's
-    /// `_default` path, which is Immortal. A refactor that drops `.mortal(` (or
-    /// reverts to `sign_and_submit_then_watch_default`) silently reopens the
-    /// indefinite-replay window, so pin it here.
+    /// Static regression guard (audit R-12): `submit_tracked` — the core every
+    /// signing path (transfers, staking, AND the bridge writes) goes through —
+    /// MUST build a mortal era and submit with explicit params, never the
+    /// Immortal `_default` path. A refactor that drops `.mortal(` (or reverts to
+    /// `sign_and_submit_then_watch_default`) silently reopens the indefinite-
+    /// replay window, so pin it on the core where the logic actually lives.
     #[test]
     fn signing_helper_uses_a_mortal_era() {
         let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/blockchain/helpers.rs")).expect("read helpers.rs");
-        let sig_idx = src.find("pub(crate) async fn sign_submit_track").expect("sign_submit_track present");
+        let sig_idx = src.find("pub(crate) async fn submit_tracked").expect("submit_tracked present");
         let body_start = src[sig_idx..].find('{').expect("fn body opens") + sig_idx;
         let mut depth = 0usize;
         let mut body_end = body_start;
@@ -294,10 +353,10 @@ mod tests {
             }
         }
         let body = &src[body_start..=body_end];
-        assert!(body.contains(".mortal("), "sign_submit_track must build a mortal era (R-12)");
+        assert!(body.contains(".mortal("), "submit_tracked must build a mortal era (R-12)");
         assert!(
             !body.contains("sign_and_submit_then_watch_default"),
-            "sign_submit_track must NOT use the Immortal `_default` path (R-12)",
+            "submit_tracked must NOT use the Immortal `_default` path (R-12)",
         );
     }
 
@@ -311,7 +370,7 @@ mod tests {
     #[test]
     fn signing_helper_splits_sign_from_broadcast() {
         let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/blockchain/helpers.rs")).expect("read helpers.rs");
-        let sig_idx = src.find("pub(crate) async fn sign_submit_track").expect("sign_submit_track present");
+        let sig_idx = src.find("pub(crate) async fn submit_tracked").expect("submit_tracked present");
         let body_start = src[sig_idx..].find('{').expect("fn body opens") + sig_idx;
         let mut depth = 0usize;
         let mut body_end = body_start;
@@ -336,44 +395,59 @@ mod tests {
             "must NOT use the fused sign_and_submit_then_watch — it conflates pre- and post-broadcast errors (R-01)",
         );
         assert!(
-            body.contains("classify_post_finalization_error("),
-            "wait_for_success errors must go through classify_post_finalization_error (only Runtime proves dispatch failure)",
+            body.contains("classify_post_finalization("),
+            "wait_for_success errors must go through classify_post_finalization (only Runtime proves dispatch failure)",
         );
     }
 
     /// A decoded on-chain dispatch error is the ONLY proof that a finalized
-    /// extrinsic's call failed — that and only that may be surfaced as the
-    /// retryable `FinalizedFailed`.
+    /// extrinsic's call failed — that and only that classifies as `Failed`
+    /// (which both outcome enums surface as the retryable `FinalizedFailed`).
     #[test]
-    fn runtime_error_after_finalization_is_finalized_failed() {
+    fn runtime_error_after_finalization_is_failed() {
         let e = subxt::Error::Runtime(subxt::error::DispatchError::Other);
-        match super::classify_post_finalization_error(&e, "0xabc".into()) {
-            super::TxOutcome::FinalizedFailed { tx_hash, reason } => {
-                assert_eq!(tx_hash, "0xabc");
-                assert!(!reason.is_empty());
-            }
-            other => panic!("Runtime error must classify as FinalizedFailed, got {other:?}"),
-        }
+        assert!(
+            matches!(super::classify_post_finalization(&e), super::PostFinalization::Failed),
+            "Runtime error must classify as Failed",
+        );
     }
 
     /// Transport drops, missing blocks, and decode failures after finalization
-    /// do NOT disprove success — they must classify as the no-retry
-    /// `SubmittedUnconfirmed`, preserving the hash for reconciliation.
+    /// do NOT disprove success — they classify as `Unconfirmed` (the no-retry
+    /// `SubmittedUnconfirmed` for both outcome enums).
     #[test]
-    fn non_runtime_errors_after_finalization_are_submitted_unconfirmed() {
+    fn non_runtime_errors_after_finalization_are_unconfirmed() {
         let errors: Vec<subxt::Error> = vec![
             subxt::Error::Other("websocket connection closed".into()),
             subxt::Error::Transaction(subxt::error::TransactionError::BlockNotFound),
             subxt::Error::Io(std::io::Error::other("connection reset")),
         ];
         for e in errors {
-            match super::classify_post_finalization_error(&e, "0xdef".into()) {
-                super::TxOutcome::SubmittedUnconfirmed { tx_hash, reason } => {
-                    assert_eq!(tx_hash, "0xdef");
-                    assert!(!reason.is_empty());
-                }
-                other => panic!("{e:?} must classify as SubmittedUnconfirmed, got {other:?}"),
-            }
+            assert!(
+                matches!(super::classify_post_finalization(&e), super::PostFinalization::Unconfirmed),
+                "{e:?} must classify as Unconfirmed",
+            );
         }
+    }
+
+    /// `TrackedSubmission::into_tx_outcome` projects each non-success state to the
+    /// matching `TxOutcome` variant, preserving tx_hash/reason (the `Finalized`
+    /// arm needs real `ExtrinsicEvents` so it is exercised by the testnet smoke
+    /// test, not here). Pins that the bridge↔transfers outcome mapping can't drift.
+    #[test]
+    fn tracked_submission_projects_to_tx_outcome() {
+        use super::{TrackedSubmission, TxOutcome};
+        assert!(matches!(
+            TrackedSubmission::RejectedAtSubmission { reason: "r".into() }.into_tx_outcome(),
+            TxOutcome::RejectedAtSubmission { reason } if reason == "r"
+        ));
+        assert!(matches!(
+            TrackedSubmission::SubmittedUnconfirmed { tx_hash: "0x1".into(), reason: "r".into() }.into_tx_outcome(),
+            TxOutcome::SubmittedUnconfirmed { tx_hash, reason } if tx_hash == "0x1" && reason == "r"
+        ));
+        assert!(matches!(
+            TrackedSubmission::FinalizedFailed { tx_hash: "0x2".into(), reason: "r".into() }.into_tx_outcome(),
+            TxOutcome::FinalizedFailed { tx_hash, reason } if tx_hash == "0x2" && reason == "r"
+        ));
     }
 }

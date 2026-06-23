@@ -10,7 +10,8 @@
 
 use super::runtime::hippius_tn;
 use super::{client, convert, types::BridgeOutcome};
-use crate::blockchain::helpers::get_signer_and_address;
+use crate::blockchain::helpers::{get_signer_and_address, submit_tracked, TrackedSubmission};
+use crate::blockchain::types::TxOutcome;
 use crate::error::{AppError, Result};
 
 /// Submit an hAlpha→Alpha withdrawal for `amount` (18-dec rao decimal string),
@@ -44,31 +45,33 @@ pub async fn bridge_halpha_to_alpha(
     let client = client::connect_hippius().await?;
 
     let tx = hippius_tn::tx().alpha_bridge().withdraw(amount);
-    let events = client
-        .tx()
-        .sign_and_submit_then_watch_default(&tx, &signer)
-        .await
-        .map_err(|e| AppError::Substrate(format!("Withdraw submit failed: {e}")))?
-        .wait_for_finalized_success()
-        .await
-        .map_err(|e| AppError::Substrate(format!("Withdraw transaction failed: {e}")))?;
+    // Route through the tracked submitter (mortal era + typed outcome) instead
+    // of the fused Immortal `sign_and_submit_then_watch_default`: a withdraw
+    // burns hAlpha, so an ambiguous post-broadcast result MUST surface as
+    // `SubmittedUnconfirmed` (the FE then suppresses "Try Again") rather than a
+    // generic error the user could resubmit into a double-burn (audit R-01/R-12).
+    let outcome = match submit_tracked(&client, &tx, &signer).await? {
+        TrackedSubmission::Finalized { tx_hash, events } => {
+            // Extract the withdrawal request id from WithdrawalRequestCreated.
+            let withdrawal_id = events
+                .find_first::<hippius_tn::alpha_bridge::events::WithdrawalRequestCreated>()
+                .ok()
+                .flatten()
+                .map(|ev| format!("0x{}", hex::encode(ev.id.0)));
+            // Record locally for the history view (best-effort) — only a
+            // confirmed (finalized) submission is recorded.
+            super::history::record_submitted(&state, "halpha-to-alpha", amount, &address, recipient.as_deref(), &tx_hash, withdrawal_id.as_deref())
+                .await;
+            BridgeOutcome {
+                withdrawal_id,
+                deposit_id: None,
+                outcome: TxOutcome::Finalized { tx_hash },
+            }
+        }
+        // Every non-finalized state carries no ids and is NOT recorded — the
+        // submission either never landed or its outcome is unproven.
+        other => BridgeOutcome::status_only(other.into_tx_outcome()),
+    };
 
-    let tx_hash = format!("{:?}", events.extrinsic_hash());
-
-    // Extract the withdrawal request id from WithdrawalRequestCreated.
-    let withdrawal_id = events
-        .find_first::<hippius_tn::alpha_bridge::events::WithdrawalRequestCreated>()
-        .ok()
-        .flatten()
-        .map(|ev| format!("0x{}", hex::encode(ev.id.0)));
-
-    // Record locally for the history view (best-effort).
-    super::history::record_submitted(&state, "halpha-to-alpha", amount, &address, recipient.as_deref(), &tx_hash, withdrawal_id.as_deref()).await;
-
-    Ok(BridgeOutcome {
-        tx_hash,
-        withdrawal_id,
-        deposit_id: None,
-        success: true,
-    })
+    Ok(outcome)
 }
