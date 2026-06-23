@@ -331,6 +331,32 @@ fn build_recovery_client(state: &AppState, base_url: &str, bearer: &str, owner: 
     hcfs_client::client::HcfsClient::new(config).map_err(|e| AppError::Hcfs(format!("Failed to create recovery HCFS client: {e}")))
 }
 
+/// Reject a recovery destination that is empty, contains `..`, is the
+/// filesystem root, or is the user's home directory itself — recovered files
+/// must land in a chosen SUBfolder, not be sprayed across `/` or `$HOME`
+/// (audit RB-3). Per-file paths within the root are guarded by [`safe_join`].
+///
+/// # Errors
+///
+/// [`AppError::Validation`] for an empty / `..` / root / home destination.
+fn validate_recovery_destination(dest: &Path) -> Result<()> {
+    if dest.as_os_str().is_empty() {
+        return Err(AppError::Validation("Recovery destination is empty".into()));
+    }
+    if dest.components().any(|c| matches!(c, Component::ParentDir)) {
+        return Err(AppError::Validation("Recovery destination must not contain '..'".into()));
+    }
+    if dest == Path::new("/") {
+        return Err(AppError::Validation("Recovery destination cannot be the filesystem root".into()));
+    }
+    if dirs::home_dir().is_some_and(|home| dest == home) {
+        return Err(AppError::Validation(
+            "Choose a subfolder, not your home directory, as the recovery destination".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Download and decrypt every file the recovery identity can read from
 /// `owner_address` into `destination_dir`, laid out as `<dest>/<label>/<rel>`.
 ///
@@ -354,6 +380,30 @@ pub async fn recover_account_files(
     owner_address: String,
     destination_dir: String,
 ) -> Result<RecoverySummary> {
+    // Reject a second concurrent recovery so the shared cancel flag stays
+    // unambiguous (audit RB-4). The RAII guard clears the in-progress flag on
+    // every exit path (success, error, or `?`-propagation).
+    if state
+        .recovery_in_progress
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return Err(AppError::Other("A recovery is already in progress.".into()));
+    }
+    struct InProgressGuard<'a>(&'a std::sync::atomic::AtomicBool);
+    impl Drop for InProgressGuard<'_> {
+        fn drop(&mut self) {
+            self.0.store(false, Ordering::SeqCst);
+        }
+    }
+    let _in_progress = InProgressGuard(&state.recovery_in_progress);
+
+    // Recovered files must land in a chosen SUBfolder, never sprayed across `/`
+    // or `$HOME` itself (audit RB-3). Per-file paths are containment-guarded by
+    // `safe_join` within this root.
+    let dest_root = PathBuf::from(&destination_dir);
+    validate_recovery_destination(&dest_root)?;
+
     // Clear any stale cancel request from a prior run before we start.
     state.recovery_cancel.store(false, Ordering::SeqCst);
 
@@ -366,7 +416,6 @@ pub async fn recover_account_files(
         .await
         .map_err(|e| AppError::Hcfs(e.to_string()))?;
 
-    let dest_root = PathBuf::from(&destination_dir);
     tokio::fs::create_dir_all(&dest_root)
         .await
         .map_err(|e| AppError::Other(format!("Could not create recovery destination '{destination_dir}': {e}")))?;
@@ -558,6 +607,18 @@ mod tests {
             ]
         );
         assert!(to_recoverable(vec![]).is_empty());
+    }
+
+    #[test]
+    fn validate_recovery_destination_rejects_dangerous_targets() {
+        // Empty, root, and `..` are refused (audit RB-3); a normal subfolder is ok.
+        assert!(validate_recovery_destination(Path::new("")).is_err());
+        assert!(validate_recovery_destination(Path::new("/")).is_err());
+        assert!(validate_recovery_destination(Path::new("/tmp/../etc")).is_err());
+        if let Some(home) = dirs::home_dir() {
+            assert!(validate_recovery_destination(&home).is_err(), "home dir must be rejected");
+        }
+        assert!(validate_recovery_destination(Path::new("/tmp/hippius-recovery-2026")).is_ok());
     }
 
     #[test]

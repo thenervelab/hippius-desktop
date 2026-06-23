@@ -88,6 +88,11 @@ pub struct AppState {
     /// returning the partial summary. A plain flag (not a `CancellationToken`)
     /// because recovery is a single foreground pull, not a fan-out.
     pub recovery_cancel: std::sync::atomic::AtomicBool,
+    /// True while a `recover_account_files` pull is running. A second concurrent
+    /// recovery is rejected so the shared `recovery_cancel` flag is unambiguous
+    /// (audit RB-4) — without this, a second run's entry reset would clear a
+    /// cancel the first run was waiting on.
+    pub recovery_in_progress: std::sync::atomic::AtomicBool,
     /// Accounts whose default recovery binding has already succeeded this
     /// process session. Guards `recovery_binding::spawn_default_recovery_binding`
     /// so the per-drive sync-init funnel doesn't re-bind on every init/resume; a
@@ -129,6 +134,16 @@ pub struct AppState {
     /// recovery flow has had a chance to install the unsealed one.
     /// See `docs/plans/2026-04-14-oauth-account-recovery.md`.
     recovery_gate: tokio::sync::watch::Sender<RecoveryGateState>,
+    /// Serializes the mnemonic-mutating recovery/rotation commands
+    /// (`change_recovery_password`, `recover_mnemonic`, `seal_and_upload_mnemonic`,
+    /// `resume_recovery_password_rotation`). Each holds this for its whole
+    /// POST → install → align sequence, so two overlapping rotations (a rapid
+    /// double-submit, or a rotation racing another device's resume) can't
+    /// interleave the master-file write, the per-folder rewrites, and the
+    /// DB-row flip and leave a drive wedged under a half-applied password
+    /// (audit R-18). The FE `has_pending_rotation` gate is advisory only; this
+    /// is the real guard.
+    pub recovery_lock: tokio::sync::Mutex<()>,
     /// Per-account snapshot of the most recent `hcfs_list_shares`
     /// result. Used by `crate::shares::history::diff_active_lists` to
     /// detect tokens that have left the active set since the last
@@ -197,6 +212,7 @@ impl AppState {
             sync_session_epoch: AtomicU64::new(0),
             tray_panel_hidden_at: AtomicU64::new(0),
             recovery_cancel: std::sync::atomic::AtomicBool::new(false),
+            recovery_in_progress: std::sync::atomic::AtomicBool::new(false),
             recovery_bound: std::sync::Mutex::new(std::collections::HashSet::new()),
             health_client,
             // Explicit timeouts. Without them a hung connection (e.g. a
@@ -219,6 +235,7 @@ impl AppState {
             // `complete_oauth_flow` flips this to `Pending` at its start so
             // the dialog gets a chance to run before any sync init races in.
             recovery_gate: tokio::sync::watch::channel(RecoveryGateState::Skipped).0,
+            recovery_lock: tokio::sync::Mutex::new(()),
             share_active_list_cache: Mutex::new(HashMap::new()),
             wallet_rate_limit: Arc::new(crate::wallet::rate_limit::RateLimitState::new()),
         }

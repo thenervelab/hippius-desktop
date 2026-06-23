@@ -366,10 +366,11 @@ export default function MultiFolderSyncManager() {
         setShowHcfsSetup(true);
         return;
       }
-    } catch {
-      setPendingAction("sync");
-      setSyncDialog((prev) => ({ ...prev, open: false }));
-      setShowHcfsSetup(true);
+    } catch (err) {
+      // A failed config read ≠ "no password set" — don't misroute a transient
+      // error to the password setup screen (audit FE-low).
+      console.error("Failed to read sync config:", err);
+      toast.error("Couldn't check your sync configuration. Please try again.");
       return;
     }
 
@@ -410,10 +411,10 @@ export default function MultiFolderSyncManager() {
           setShowHcfsSetup(true);
           return;
         }
-      } catch {
-        setBrowseDialog({ open: false, folder, isLocal });
-        setPendingAction("browse");
-        setShowHcfsSetup(true);
+      } catch (err) {
+        // A failed config read ≠ "no password set" (audit FE-low).
+        console.error("Failed to read sync config:", err);
+        toast.error("Couldn't check your sync configuration. Please try again.");
         return;
       }
     }

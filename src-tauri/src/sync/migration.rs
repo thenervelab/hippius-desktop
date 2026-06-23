@@ -19,7 +19,7 @@ use sqlx::Row;
 use sqlx::sqlite::SqlitePool;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
-use tracing::{info, warn};
+use tracing::info;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -546,22 +546,34 @@ pub async fn complete_migration_transition(
 
     // 2. Ensure a sync path exists for the label. New migration users won't
     //    have one yet; existing users who already configured sync will.
-    let has_sync_path = crate::sync::config::get_sync_path_for_label(pool, &account_id, &label).await.is_ok();
+    let existing_path = crate::sync::config::get_sync_path_for_label(pool, &account_id, &label).await.ok();
 
-    if !has_sync_path {
+    if existing_path.is_none() {
         let sync_path = match custom_sync_path.filter(|p| !p.is_empty()) {
             Some(path) => std::path::PathBuf::from(path),
             None => compute_default_sync_path()?,
         };
-        std::fs::create_dir_all(&sync_path)?;
         let path_str = sync_path.to_string_lossy().to_string();
+        // Validate (incl. overlap) BEFORE materializing the directory so a
+        // rejected path leaves no empty folder behind (audit H-6).
         crate::sync::paths::set_sync_path_internal(pool, &account_id, &path_str, false, Some(&label)).await?;
+        std::fs::create_dir_all(&sync_path)?;
         info!("Created sync path at '{}' for migration label '{}'", path_str, label);
-    } else if custom_sync_path.as_ref().is_some_and(|p| !p.is_empty()) {
-        warn!(
-            "custom_sync_path provided but sync path already exists for '{}'; ignoring custom path",
-            label
-        );
+    } else if let Some(custom) = custom_sync_path.as_ref().filter(|p| !p.is_empty()) {
+        // A drive with this label already exists. The label is the basename of
+        // `custom_sync_path`, so a DIFFERENT folder whose basename collides with
+        // an existing drive would otherwise bind migration to the EXISTING
+        // drive's path + `sync_state.json` baseline (folder_hash and folder
+        // mnemonic are label-keyed), silently discarding the user's choice — and
+        // reconciling against another drive's tree can emit spurious
+        // local_deletes/re-uploads. Reject rather than warn-and-ignore (audit
+        // H-6). Re-running migration at the SAME existing folder is idempotent.
+        let existing = existing_path.as_deref().unwrap_or_default();
+        if std::path::Path::new(custom.as_str()) != std::path::Path::new(existing) {
+            return Err(crate::error::AppError::Validation(format!(
+                "A sync folder named \"{label}\" already exists at \"{existing}\". Pick a different destination folder for migration."
+            )));
+        }
     }
 
     // 3. Initialize the drive for the migration label.

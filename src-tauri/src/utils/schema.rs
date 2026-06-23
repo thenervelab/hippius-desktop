@@ -13,8 +13,6 @@ use tracing::{debug, info, warn};
 /// new table to [`ensure_table_schema`], append its name here.
 #[cfg(test)]
 const EXPECTED_TABLES: &[&str] = &[
-    // Declarative TABLE_SCHEMAS block (1 table)
-    "sub_accounts",
     // Imperative CREATE TABLE statements (17 tables)
     "sync_paths",
     "sync_intent",
@@ -37,6 +35,8 @@ const EXPECTED_TABLES: &[&str] = &[
     "share_origin",
     "shared_link_history",
     "local_wallets",
+    "bridge_transactions",
+    "credit_notification_flags",
 ];
 
 /// Read the column names of a table via `PRAGMA table_info(...)`.
@@ -108,7 +108,12 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // decoupled from the schema-init lifecycle.
     let mut tx = pool.begin().await?;
 
-    ensure_sub_accounts(&mut tx).await?;
+    // The `sub_accounts` table was created but never read or written (audit
+    // R-35 / W-07): its `NOT NULL` plaintext `sub_account_seed_phrase` column
+    // (default `encryption_version = 0`) was a latent footgun — a future writer
+    // would default to storing seeds in plaintext, which `migrate_if_needed`
+    // does not cover. Drop it. Safe and idempotent: no data was ever stored.
+    sqlx::query("DROP TABLE IF EXISTS sub_accounts").execute(&mut *tx).await?;
     ensure_sync_paths(&mut tx).await?;
     ensure_sync_intent(&mut tx).await?;
     ensure_sync_file_failures(&mut tx).await?;
@@ -129,6 +134,8 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     ensure_user_preferences(&mut tx).await?;
     ensure_share_keystore(&mut tx).await?;
     ensure_share_origin(&mut tx).await?;
+    ensure_bridge_transactions(&mut tx).await?;
+    ensure_credit_notification_flags(&mut tx).await?;
     ensure_shared_link_history(&mut tx).await?;
 
     // No `bridge_transactions` helper by design: the first cut of the bridge
@@ -140,47 +147,6 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // `ensure_bridge_transactions` helper here alongside the new writer.
 
     tx.commit().await?;
-    Ok(())
-}
-
-/// `sub_accounts` — create the table and add any columns missing on older DBs.
-///
-/// Driven by a declarative schema table so a new column is added by editing
-/// one tuple; the create-then-add-missing-columns loop is idempotent.
-async fn ensure_sub_accounts(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
-    // Define the expected table schemas (only tables still needed)
-    const TABLE_SCHEMAS: &[(&str, &[(&str, &str)])] = &[(
-        "sub_accounts",
-        &[
-            ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
-            ("account_id", "TEXT NOT NULL"),
-            ("sub_account_seed_phrase", "TEXT NOT NULL"),
-            ("created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
-            ("encryption_version", "INTEGER NOT NULL DEFAULT 0"),
-        ],
-    )];
-
-    for (table_name, columns) in TABLE_SCHEMAS {
-        // Create table if it doesn't exist with basic structure
-        let create_table = format!(
-            "CREATE TABLE IF NOT EXISTS {} ({})",
-            table_name,
-            columns.iter().map(|(name, typ)| format!("{name} {typ}")).collect::<Vec<_>>().join(", ")
-        );
-        sqlx::query(&create_table).execute(&mut *conn).await?;
-
-        // Check and add any missing columns
-        let existing_cols = table_columns(&mut *conn, table_name).await?;
-
-        for (column_name, column_type) in *columns {
-            if !existing_cols.contains(*column_name) {
-                info!("Adding column {} to table {}", column_name, table_name);
-                sqlx::query(&format!("ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"))
-                    .execute(&mut *conn)
-                    .await?;
-            }
-        }
-    }
     Ok(())
 }
 
@@ -474,22 +440,19 @@ async fn ensure_hcfs_config(conn: &mut SqliteConnection) -> Result<(), sqlx::Err
     Ok(())
 }
 
-/// Encryption-at-rest: add `encryption_version` to `sub_accounts` and
-/// `hcfs_config` on older DBs (idempotent — "duplicate column" is expected
-/// and suppressed).
+/// Encryption-at-rest: add `encryption_version` to `hcfs_config` on older DBs
+/// (idempotent — "duplicate column" is expected and suppressed).
 async fn ensure_encryption_version_columns(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
-    // Encryption-at-rest: add encryption_version to sub_accounts and hcfs_config.
     // ALTER TABLE ADD COLUMN is idempotent in SQLite — the "duplicate column"
     // error is expected and suppressed for databases that already have the column.
-    for stmt in [
-        "ALTER TABLE sub_accounts ADD COLUMN encryption_version INTEGER NOT NULL DEFAULT 0",
-        "ALTER TABLE hcfs_config ADD COLUMN encryption_version INTEGER NOT NULL DEFAULT 0",
-    ] {
-        if let Err(e) = sqlx::query(stmt).execute(&mut *conn).await {
-            let msg = e.to_string();
-            if !msg.contains("duplicate column name") {
-                warn!("Schema migration failed: {msg}");
-            }
+    // (`sub_accounts` was dropped — audit R-35 — so only `hcfs_config` remains.)
+    if let Err(e) = sqlx::query("ALTER TABLE hcfs_config ADD COLUMN encryption_version INTEGER NOT NULL DEFAULT 0")
+        .execute(&mut *conn)
+        .await
+    {
+        let msg = e.to_string();
+        if !msg.contains("duplicate column name") {
+            warn!("Schema migration failed: {msg}");
         }
     }
     Ok(())
@@ -831,6 +794,56 @@ async fn ensure_share_origin(conn: &mut SqliteConnection) -> Result<(), sqlx::Er
     Ok(())
 }
 
+/// `bridge_transactions` — locally-tracked Alpha↔hAlpha bridge submissions
+/// (replaces the renderer's localStorage tracker, audit TSLOGIC-7). Owner-scoped
+/// by `account_key`; the chain explorer reads are the authoritative status, this
+/// just records what this device submitted (incl. a pending row until the chain
+/// reflects it). The `(owner, created_at)` index keeps the DESC list off a scan.
+async fn ensure_bridge_transactions(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS bridge_transactions (
+            id              TEXT PRIMARY KEY,
+            owner           TEXT NOT NULL,
+            direction       TEXT NOT NULL,
+            status          TEXT NOT NULL,
+            amount          TEXT NOT NULL,
+            sender          TEXT,
+            recipient       TEXT,
+            source_tx_hash  TEXT,
+            deposit_id      TEXT,
+            withdrawal_id   TEXT,
+            created_at      INTEGER NOT NULL DEFAULT (unixepoch()),
+            updated_at      INTEGER NOT NULL DEFAULT (unixepoch()),
+            error           TEXT
+        )",
+    )
+    .execute(&mut *conn)
+    .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS bridge_transactions_owner_idx ON bridge_transactions (owner, created_at)")
+        .execute(&mut *conn)
+        .await?;
+    Ok(())
+}
+
+/// `credit_notification_flags` — per-account low-credit notification state
+/// (`is_first_time`, `is_above_half_credit`), owner-scoped by `account_key`
+/// (audit NOTIF-4). These were a single global `app_state` row, so on a
+/// multi-account device one account's first-time/above-half state leaked into
+/// another's credit warnings. A missing row means defaults (first_time=1,
+/// above_half=0), so a brand-new account starts fresh without seeding.
+async fn ensure_credit_notification_flags(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS credit_notification_flags (
+            owner                TEXT PRIMARY KEY,
+            is_first_time        INTEGER NOT NULL DEFAULT 1,
+            is_above_half_credit INTEGER NOT NULL DEFAULT 0
+        )",
+    )
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
+
 /// `shared_link_history` — per-device snapshot of share tokens that have left
 /// the active set (expired/revoked).
 ///
@@ -1085,7 +1098,9 @@ mod tests {
         // Spot-check that ordinary bring-up still ran; an early-return bug in
         // `ensure_table_schema` would silently drop the legacy tables *and*
         // skip the rest of schema init.
-        assert!(after.contains("sub_accounts"), "canonical schema missing after drop+init: {after:?}");
+        assert!(after.contains("sync_paths"), "canonical schema missing after drop+init: {after:?}");
+        // The dead `sub_accounts` table must NOT be (re)created (audit R-35).
+        assert!(!after.contains("sub_accounts"), "dropped sub_accounts table was recreated: {after:?}");
     }
 
     /// Helper: collect user (non-`sqlite_%`) table names from `sqlite_master`.

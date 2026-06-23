@@ -216,7 +216,9 @@ fn build_credits_chart(events: &[DriveCreditEvent], range: &str) -> Vec<ChartPoi
     // ever clamp *up* to `data_start`, so the `pre_range_total` seed below
     // still carries forward earlier spend for windows that begin after it.
     let data_start = consumed[0].0;
-    let start = window_start.max(data_start);
+    // Clamp to `today` so a future-dated event (clock skew / bad server ts)
+    // can't make `start > today` and yield an empty date range (audit low).
+    let start = window_start.max(data_start).min(today);
     let dates = get_all_dates_in_range(start, today);
 
     let pre_range_total: f64 = consumed

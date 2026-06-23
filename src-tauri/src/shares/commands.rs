@@ -401,7 +401,7 @@ pub async fn hcfs_reshare(state: tauri::State<'_, AppState>, share_token: String
             "Reshare: revoke of old token failed; new link is already live"
         );
     }
-    if let Err(e) = origin::forget(pool, &share_token).await {
+    if let Err(e) = origin::forget(pool, &owner, &share_token).await {
         warn!(
             share_token = %share_token,
             error = %e,
@@ -575,7 +575,7 @@ pub async fn hcfs_revoke_share(state: tauri::State<'_, AppState>, share_token: S
     // row is fine — and best-effort: a sidecar leftover after a
     // successful revoke would only show up as a "ghost" badge until
     // the next prune in `hcfs_list_shares`, never as a security issue.
-    if let Err(e) = origin::forget(pool, &share_token).await {
+    if let Err(e) = origin::forget(pool, &account_key(&account_id), &share_token).await {
         warn!(
             share_token = %share_token,
             error = %e,

@@ -491,7 +491,7 @@ pub async fn get_balance_transfers(
 ) -> Result<Vec<TransferObject>, AppError> {
     let indexer = IndexerClient::from_env(state.api_client.clone())?;
     let page_str = page.unwrap_or(1).to_string();
-    let limit_str = limit.unwrap_or(10).to_string();
+    let limit_str = limit.unwrap_or(10).min(INDEXER_MAX_LIMIT).to_string();
     let params = vec![
         ("account", account_id.as_str()),
         ("page", page_str.as_str()),
@@ -560,7 +560,7 @@ pub async fn get_billing_transactions(
 ) -> Result<Vec<BillingTransactionObject>, AppError> {
     let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
     let page_str = page.unwrap_or(1).to_string();
-    let limit_str = limit.unwrap_or(10).to_string();
+    let limit_str = limit.unwrap_or(10).min(INDEXER_MAX_LIMIT).to_string();
     let params = vec![("page", page_str.as_str()), ("limit", limit_str.as_str())];
     let resp: BillingTransactionsResponse = client.get_with_params("/api/billing/transactions/", &params, &account_id).await?;
 
@@ -621,7 +621,7 @@ pub async fn get_add_credit_events(
 ) -> Result<Vec<CreditEventObject>, AppError> {
     let indexer = IndexerClient::from_env(state.api_client.clone())?;
     let page_str = page.unwrap_or(1).to_string();
-    let limit_str = limit.unwrap_or(10).to_string();
+    let limit_str = limit.unwrap_or(10).min(INDEXER_MAX_LIMIT).to_string();
     let params = vec![
         ("event_name", "MintedAccountCredits"),
         ("account_id", account_id.as_str()),

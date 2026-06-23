@@ -29,9 +29,9 @@
 //! # Ciphertext layout
 //!
 //! Stored as base64 of `version_byte || nonce[12] || ciphertext || tag[16]`.
-//! Currently-emitted version is `V_ARGON2`. The legacy `V_HKDF` layout
-//! (no version byte, raw HKDF-SHA256 key) is recognised by sniffing the
-//! decoded length — see [`decrypt_mnemonic`] for the format-detection
+//! Currently-emitted version is `V_ARGON2_AAD` (Argon2id key, address-bound
+//! AAD); `V_ARGON2` (no AAD) and the legacy unversioned HKDF-SHA256 layout
+//! are still decrypted — see [`decrypt_mnemonic`] for the format-detection
 //! comment. Legacy rows are decrypted in-place and the caller is expected
 //! to immediately re-encrypt them under the new format via
 //! [`encrypt_mnemonic`] + a DB write.
@@ -52,7 +52,6 @@ use argon2::{
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
 use chacha20poly1305::{ChaCha20Poly1305, KeyInit, aead::Aead};
 use hkdf::Hkdf;
-use rand::RngCore;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
@@ -70,8 +69,26 @@ const INFO_MNEMONIC: &[u8] = b"hippius-local-wallet-mnemonic";
 const NONCE_LEN: usize = 12;
 const TAG_LEN: usize = 16;
 
-/// Version byte for new ciphertext (Argon2id-derived AEAD key).
+/// Version byte for the previous ciphertext layout: Argon2id-derived AEAD key,
+/// **no** associated data. Still decrypted (never re-encrypted under the old
+/// format), so pre-R-33 wallets keep working unchanged.
 const V_ARGON2: u8 = 0x02;
+
+/// Version byte for current ciphertext: Argon2id-derived AEAD key **with** an
+/// AAD of `version_byte || address` (audit R-33). The AAD authenticates (but
+/// does not encrypt) the address, binding the ciphertext to its wallet
+/// independently of the address-salted key — so integrity holds even if a
+/// future key-derivation change weakened the salt binding.
+const V_ARGON2_AAD: u8 = 0x03;
+
+/// Associated data for [`V_ARGON2_AAD`] ciphertext: the version byte followed
+/// by the wallet's SS58 address bytes.
+fn aad_bytes(address: &str) -> Vec<u8> {
+    let mut aad = Vec::with_capacity(1 + address.len());
+    aad.push(V_ARGON2_AAD);
+    aad.extend_from_slice(address.as_bytes());
+    aad
+}
 
 /// Constant-time equality for two byte slices. Hex strings + PHC
 /// strings are short enough that the timing channel is small, but
@@ -204,8 +221,8 @@ pub fn password_hash_is_legacy(stored_hash: &str) -> bool {
 
 // ─── Mnemonic encrypt / decrypt ──────────────────────────────────────
 
-/// Encrypt a mnemonic under the new (Argon2id, versioned) layout.
-/// Returns base64 of `V_ARGON2 || nonce[12] || ciphertext || tag[16]`.
+/// Encrypt a mnemonic under the new (Argon2id, versioned, AAD-bound) layout.
+/// Returns base64 of `V_ARGON2_AAD || nonce[12] || ciphertext || tag[16]`.
 ///
 /// # Errors
 ///
@@ -214,36 +231,52 @@ pub fn password_hash_is_legacy(stored_hash: &str) -> bool {
 /// for valid inputs — the underlying library only errors on nonce
 /// reuse, which our per-encrypt `OsRng` draw cannot produce.
 pub fn encrypt_mnemonic(mnemonic: &str, password: &str, address: &str) -> Result<String, AppError> {
+    // Locally scoped so chacha's `OsRng` doesn't collide with the argon2
+    // `OsRng` imported at module level. Mirrors `crypto::store::encrypt`.
+    use chacha20poly1305::{AeadCore, aead::OsRng};
+
     let key = derive_aead_key_argon2(password, address)?;
     let cipher = ChaCha20Poly1305::new(key.as_slice().into());
 
-    let mut nonce = [0u8; NONCE_LEN];
-    rand::thread_rng().fill_bytes(&mut nonce);
+    // Fresh per-encrypt 12-byte nonce from the OS CSPRNG.
+    let nonce = ChaCha20Poly1305::generate_nonce(&mut OsRng);
 
+    // Bind the address into the AEAD as associated data (audit R-33).
+    let aad = aad_bytes(address);
     let ciphertext = cipher
-        .encrypt(nonce.as_slice().into(), mnemonic.as_bytes())
+        .encrypt(
+            &nonce,
+            chacha20poly1305::aead::Payload {
+                msg: mnemonic.as_bytes(),
+                aad: &aad,
+            },
+        )
         .map_err(|e| AppError::Crypto(format!("AEAD encrypt failed: {e}")))?;
 
     let mut out = Vec::with_capacity(1 + NONCE_LEN + ciphertext.len());
-    out.push(V_ARGON2);
-    out.extend_from_slice(&nonce);
+    out.push(V_ARGON2_AAD);
+    out.extend_from_slice(nonce.as_slice());
     out.extend_from_slice(&ciphertext);
     Ok(B64.encode(out))
 }
 
-/// Decrypt a mnemonic. Handles both the new (`V_ARGON2`) and legacy
-/// (HKDF, unversioned) layouts.
+/// Decrypt a mnemonic. Handles all three layouts: `V_ARGON2_AAD`
+/// (current), `V_ARGON2` (pre-R-33, no AAD), and the legacy
+/// unversioned HKDF layout.
 ///
 /// # Format detection
 ///
-/// After base64-decoding, we inspect the leading byte. If it's the
-/// `V_ARGON2` sentinel and the remaining length is consistent with a
-/// versioned ciphertext, we proceed under Argon2id. Otherwise we
-/// fall back to the legacy HKDF reader. Legacy ciphertext starts
-/// directly with a 12-byte random nonce — the chance that that random
-/// byte happens to equal `V_ARGON2` (0x02) is 1/256, so the
-/// length-disambiguation isn't strictly necessary, but we do both
-/// checks for robustness.
+/// After base64-decoding, we inspect the leading byte. If it matches a
+/// version sentinel (and the length is consistent with a versioned
+/// ciphertext) we ATTEMPT that format — but a tag failure there falls
+/// through to the legacy HKDF reader rather than returning an error.
+/// Legacy ciphertext starts directly with a 12-byte random nonce, so
+/// its first byte aliases a sentinel with probability 1/256 per wallet
+/// per sentinel; returning early on the versioned attempt permanently
+/// locked those wallets out ("wrong password" with the correct
+/// password). Trying the next format is safe — each attempt is still
+/// gated by its own Poly1305 tag, so a wrong password fails every
+/// format and the right one succeeds in exactly one.
 ///
 /// # Migration signal
 ///
@@ -264,17 +297,35 @@ pub fn decrypt_mnemonic(encrypted_b64: &str, password: &str, address: &str) -> R
         .decode(encrypted_b64)
         .map_err(|e| AppError::Crypto(format!("invalid base64 ciphertext: {e}")))?;
 
-    // Try the new format first: a single version byte then nonce + body.
+    // Current format: `V_ARGON2_AAD` then nonce + body, decrypted with the
+    // address-bound AAD (audit R-33). A tag failure here is NOT returned:
+    // the blob may be a legacy ciphertext whose random first nonce byte
+    // aliases the sentinel, so we fall through to the older formats (see
+    // the format-detection doc above).
+    if raw.first().copied() == Some(V_ARGON2_AAD) && raw.len() >= 1 + NONCE_LEN + TAG_LEN {
+        let body = &raw[1..];
+        let (nonce_bytes, ct_and_tag) = body.split_at(NONCE_LEN);
+        let key = derive_aead_key_argon2(password, address)?;
+        let cipher = ChaCha20Poly1305::new(key.as_slice().into());
+        let aad = aad_bytes(address);
+        if let Ok(plaintext) = cipher.decrypt(nonce_bytes.into(), chacha20poly1305::aead::Payload { msg: ct_and_tag, aad: &aad }) {
+            // Tag verified ⇒ right key ⇒ a UTF-8 failure is genuine corruption.
+            let s = String::from_utf8(plaintext).map_err(|e| AppError::Crypto(format!("decrypted bytes not UTF-8: {e}")))?;
+            return Ok((Zeroizing::new(s), false));
+        }
+    }
+
+    // Previous format (`V_ARGON2`, no AAD) — still decrypted unchanged so
+    // pre-R-33 wallets keep working. Same fall-through rule as above.
     if raw.first().copied() == Some(V_ARGON2) && raw.len() >= 1 + NONCE_LEN + TAG_LEN {
         let body = &raw[1..];
         let (nonce_bytes, ct_and_tag) = body.split_at(NONCE_LEN);
         let key = derive_aead_key_argon2(password, address)?;
         let cipher = ChaCha20Poly1305::new(key.as_slice().into());
-        let plaintext = cipher
-            .decrypt(nonce_bytes.into(), ct_and_tag)
-            .map_err(|_| AppError::Crypto("decrypt failed — wrong password or corrupt data".into()))?;
-        let s = String::from_utf8(plaintext).map_err(|e| AppError::Crypto(format!("decrypted bytes not UTF-8: {e}")))?;
-        return Ok((Zeroizing::new(s), false));
+        if let Ok(plaintext) = cipher.decrypt(nonce_bytes.into(), ct_and_tag) {
+            let s = String::from_utf8(plaintext).map_err(|e| AppError::Crypto(format!("decrypted bytes not UTF-8: {e}")))?;
+            return Ok((Zeroizing::new(s), false));
+        }
     }
 
     // Legacy path: unversioned, HKDF-derived key.
@@ -304,6 +355,37 @@ mod tests {
         let (dec, was_legacy) = decrypt_mnemonic(&enc, "hunter2", ADDRESS).expect("decrypt");
         assert_eq!(MNEMONIC, dec.as_str());
         assert!(!was_legacy, "new ciphertext must not be flagged as legacy");
+    }
+
+    /// New ciphertext is emitted under the AAD-bound version byte (audit R-33).
+    #[test]
+    fn new_ciphertext_uses_aad_version() {
+        let enc = encrypt_mnemonic(MNEMONIC, "pw", ADDRESS).expect("encrypt");
+        let raw = B64.decode(&enc).expect("b64");
+        assert_eq!(raw.first().copied(), Some(V_ARGON2_AAD));
+    }
+
+    /// Backward compatibility: a pre-R-33 `V_ARGON2` (no-AAD) ciphertext MUST
+    /// still decrypt — the version byte routes it to the no-AAD path, so
+    /// existing wallets are untouched.
+    #[test]
+    fn decrypts_pre_r33_v_argon2_without_aad() {
+        // Reproduce the old encrypt: `V_ARGON2 || nonce || AEAD(empty AAD)`.
+        let enc = {
+            use chacha20poly1305::{AeadCore, aead::OsRng};
+            let key = derive_aead_key_argon2("pw", ADDRESS).unwrap();
+            let cipher = ChaCha20Poly1305::new(key.as_slice().into());
+            let nonce = ChaCha20Poly1305::generate_nonce(&mut OsRng);
+            let ct = cipher.encrypt(&nonce, MNEMONIC.as_bytes()).unwrap();
+            let mut out = Vec::with_capacity(1 + NONCE_LEN + ct.len());
+            out.push(V_ARGON2);
+            out.extend_from_slice(nonce.as_slice());
+            out.extend_from_slice(&ct);
+            B64.encode(out)
+        };
+        let (dec, was_legacy) = decrypt_mnemonic(&enc, "pw", ADDRESS).expect("decrypt old format");
+        assert_eq!(MNEMONIC, dec.as_str());
+        assert!(!was_legacy);
     }
 
     #[test]
@@ -344,13 +426,13 @@ mod tests {
     /// migration path can be exercised without keeping the old
     /// `encrypt_mnemonic` API surface.
     fn encrypt_legacy_v1(mnemonic: &str, password: &str, address: &str) -> String {
+        use chacha20poly1305::{AeadCore, aead::OsRng};
         let key = derive_aead_key_hkdf_legacy(password, address);
         let cipher = ChaCha20Poly1305::new(key.as_slice().into());
-        let mut nonce = [0u8; NONCE_LEN];
-        rand::thread_rng().fill_bytes(&mut nonce);
-        let ct = cipher.encrypt(nonce.as_slice().into(), mnemonic.as_bytes()).expect("encrypt");
+        let nonce = ChaCha20Poly1305::generate_nonce(&mut OsRng);
+        let ct = cipher.encrypt(&nonce, mnemonic.as_bytes()).expect("encrypt");
         let mut out = Vec::with_capacity(NONCE_LEN + ct.len());
-        out.extend_from_slice(&nonce);
+        out.extend_from_slice(nonce.as_slice());
         out.extend_from_slice(&ct);
         B64.encode(out)
     }
@@ -370,6 +452,55 @@ mod tests {
         match err {
             AppError::Crypto(_) => {}
             other => panic!("expected Crypto error, got {other:?}"),
+        }
+    }
+
+    /// Build a legacy v1 ciphertext whose RANDOM first nonce byte is forced to
+    /// a chosen value, to exercise the 1/256 sentinel-alias case: a legacy
+    /// blob whose nonce starts with `V_ARGON2_AAD`/`V_ARGON2` must still
+    /// decrypt via fall-through, not die in the versioned branch.
+    fn encrypt_legacy_v1_with_first_byte(mnemonic: &str, password: &str, address: &str, first: u8) -> String {
+        use chacha20poly1305::{AeadCore, aead::OsRng};
+        let key = derive_aead_key_hkdf_legacy(password, address);
+        let cipher = ChaCha20Poly1305::new(key.as_slice().into());
+        let mut nonce = ChaCha20Poly1305::generate_nonce(&mut OsRng);
+        nonce[0] = first;
+        let ct = cipher.encrypt(&nonce, mnemonic.as_bytes()).expect("encrypt");
+        let mut out = Vec::with_capacity(NONCE_LEN + ct.len());
+        out.extend_from_slice(nonce.as_slice());
+        out.extend_from_slice(&ct);
+        B64.encode(out)
+    }
+
+    #[test]
+    fn legacy_ciphertext_with_aad_sentinel_first_byte_still_decrypts() {
+        let enc = encrypt_legacy_v1_with_first_byte(MNEMONIC, "hunter2", ADDRESS, V_ARGON2_AAD);
+        let (dec, was_legacy) = decrypt_mnemonic(&enc, "hunter2", ADDRESS)
+            .expect("legacy blob aliasing V_ARGON2_AAD must fall through and decrypt");
+        assert_eq!(MNEMONIC, dec.as_str());
+        assert!(was_legacy, "fall-through decrypt must still flag for migration");
+    }
+
+    #[test]
+    fn legacy_ciphertext_with_argon2_sentinel_first_byte_still_decrypts() {
+        let enc = encrypt_legacy_v1_with_first_byte(MNEMONIC, "hunter2", ADDRESS, V_ARGON2);
+        let (dec, was_legacy) = decrypt_mnemonic(&enc, "hunter2", ADDRESS)
+            .expect("legacy blob aliasing V_ARGON2 must fall through and decrypt");
+        assert_eq!(MNEMONIC, dec.as_str());
+        assert!(was_legacy, "fall-through decrypt must still flag for migration");
+    }
+
+    /// The fall-through must not weaken rejection: a wrong password fails the
+    /// tag in EVERY attempted format and surfaces the same generic error.
+    #[test]
+    fn wrong_password_rejected_after_fallthrough() {
+        for first in [V_ARGON2_AAD, V_ARGON2] {
+            let enc = encrypt_legacy_v1_with_first_byte(MNEMONIC, "right", ADDRESS, first);
+            let err = decrypt_mnemonic(&enc, "wrong", ADDRESS).unwrap_err();
+            match err {
+                AppError::Crypto(_) => {}
+                other => panic!("expected Crypto error, got {other:?}"),
+            }
         }
     }
 

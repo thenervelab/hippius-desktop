@@ -40,8 +40,28 @@ pub fn allow_asset_directory(app: &tauri::AppHandle, path: &str) {
 
 /// Tauri command to explicitly allow a directory in the asset protocol scope.
 /// Called by the frontend at startup for every known sync path.
+///
+/// Gated (audit H-4): `path` MUST be a registered `sync_paths` row for the
+/// active account. Without this an unauthenticated renderer could grant itself
+/// recursive `asset://` read of any directory (e.g. `/` or `$HOME`), defeating
+/// the `$HOME/.hippius/**` capability scope in `tauri.conf.json`. Internal
+/// callers that already hold a server-trusted path (`set_sync_path`,
+/// `initialize_sync_inner`) call `allow_asset_directory` directly and bypass
+/// this gate by construction. Mirrors `export_file`'s registered-path gate.
 #[tauri::command]
-pub async fn allow_asset_scope(app: tauri::AppHandle, path: String) -> Result<()> {
+pub async fn allow_asset_scope(state: tauri::State<'_, crate::app_state::AppState>, app: tauri::AppHandle, path: String) -> Result<()> {
+    let account_id = state.current_account_id()?;
+    let owner = account_key(&account_id);
+    let registered: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM sync_paths WHERE owner = ? AND path = ? LIMIT 1")
+        .bind(&owner)
+        .bind(&path)
+        .fetch_optional(state.pool()?)
+        .await?;
+    if registered.is_none() {
+        return Err(crate::error::AppError::Other(
+            "path is not a registered sync folder for this account".into(),
+        ));
+    }
     allow_asset_directory(&app, &path);
     Ok(())
 }
@@ -576,10 +596,27 @@ pub async fn delete_files(
     let mut failed = Vec::new();
 
     for file in &files {
-        let effective_label = file.label.as_deref().unwrap_or("default");
-        // Prefer the file's own drive path; fall back to the "default" drive's
-        // path (mirrors the prior per-file default fallback); else empty.
-        let sync_path = label_to_path.get(effective_label).or(default_path.as_ref()).cloned().unwrap_or_default();
+        // Resolve the drive root. An explicitly-named label MUST exist — never
+        // fall back to the default drive (audit H-3: under the old fallback a
+        // delete aimed at a removed/renamed drive retargeted the default drive
+        // and `remove_dir_all` recursively deleted a same-named entry there).
+        // Mirrors `resolve_rename_root`; only a label-less entry uses default.
+        let resolved = match file.label.as_deref() {
+            Some(l) => label_to_path.get(l).cloned(),
+            None => default_path.clone(),
+        };
+        let Some(sync_path) = resolved else {
+            let error = if file.label.is_some() {
+                "This file's sync folder is no longer configured on this device"
+            } else {
+                "No sync folder is configured for this file"
+            };
+            failed.push(FileDeleteError {
+                name: file.name.clone(),
+                error: error.into(),
+            });
+            continue;
+        };
 
         let relative_name = derive_relative_name(&sync_path, file.source.as_deref(), &file.name);
 

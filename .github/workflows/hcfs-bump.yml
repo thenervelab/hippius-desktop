@@ -94,6 +94,10 @@ jobs:
             echo "could not resolve hcfs main HEAD" >&2
             exit 1
           fi
+          if [ -z "$old" ]; then
+            echo "could not parse the pinned hcfs rev from Cargo.toml" >&2
+            exit 1
+          fi
           if [ "$old" = "$new" ]; then
             echo "hcfs already at main HEAD — nothing to do"
             echo "changed=false" >> "$GITHUB_OUTPUT"

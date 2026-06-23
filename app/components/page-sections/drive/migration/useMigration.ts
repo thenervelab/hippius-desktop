@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useEffect, useRef } from "react";
+import { errorMessage } from "@/lib/utils/errorUtils";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { toast } from "sonner";
@@ -338,7 +339,7 @@ export function useMigration(): UseMigrationReturn {
         // needed.
       } catch (err) {
         console.error("[Migration] complete_migration_transition failed:", err);
-        const errorMsg = err instanceof Error ? err.message : String(err);
+        const errorMsg = errorMessage(err);
         setTransitionError(errorMsg);
         setIsTransitioning(false);
         toast.error("Failed to set up file sync after migration. You can set it up later from Settings.");

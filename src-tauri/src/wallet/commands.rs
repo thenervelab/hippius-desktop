@@ -14,7 +14,7 @@
 
 use crate::app_state::AppState;
 use crate::auth::account_key::account_key;
-use crate::error::AppError;
+use crate::error::{AppError, NotReadyKind};
 use crate::wallet::crypto;
 use crate::wallet::repo::{self, LocalWallet, PublicLocalWallet};
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
@@ -315,7 +315,7 @@ pub async fn local_wallet_verify_password(state: State<'_, AppState>, id: i64, p
     // lockout threshold. Held to fn end — covers check → verify → record.
     let _attempt_gate = state.wallet_rate_limit.attempt_gate(id).await;
     if let Err(rl) = state.wallet_rate_limit.check(id) {
-        return Err(AppError::Other(rl.message()));
+        return Err(AppError::NotReady(NotReadyKind::RateLimited { message: rl.message() }));
     }
     let ok = crypto::verify_password(&wallet.password_hash, &password, &wallet.address);
     if ok {
@@ -353,7 +353,7 @@ pub async fn local_wallet_get_decrypted_mnemonic(state: State<'_, AppState>, id:
     // measure Argon2id timing to distinguish "wrong password" from
     // "lockout" — both surface as a plain error string now.
     if let Err(rl) = state.wallet_rate_limit.check(id) {
-        return Err(AppError::Other(rl.message()));
+        return Err(AppError::NotReady(NotReadyKind::RateLimited { message: rl.message() }));
     }
     // Verifier check next for a friendlier error than AEAD-decrypt-failed.
     if !crypto::verify_password(&wallet.password_hash, &password, &wallet.address) {
@@ -384,12 +384,31 @@ pub struct WalletBackup {
 }
 
 #[tauri::command]
-pub async fn local_wallet_export_backup(state: State<'_, AppState>, id: i64) -> Result<WalletBackup, AppError> {
+pub async fn local_wallet_export_backup(state: State<'_, AppState>, id: i64, password: String) -> Result<WalletBackup, AppError> {
+    // Gate export behind the wallet password + rate limiter, exactly like the
+    // sibling secret-revealing commands (`local_wallet_get_decrypted_mnemonic`,
+    // `local_wallet_sign`). The backup is offline-crackable ciphertext plus the
+    // Argon2 verifier hash; without this gate any actor able to invoke IPC in an
+    // unlocked session could exfiltrate it for every wallet without the password
+    // and without tripping the lockout (audit R-07).
+    let password = Zeroizing::new(password);
     let owner = require_owner(&state)?;
     let pool = state.pool()?;
     let Some(wallet) = repo::get_by_id(pool, &owner, id).await? else {
         return Err(AppError::Other(format!("Wallet {id} not found")));
     };
+    // Serialize attempts on this wallet (check → verify → record) so a
+    // concurrent IPC burst can't outrun the lockout threshold.
+    let _attempt_gate = state.wallet_rate_limit.attempt_gate(id).await;
+    if let Err(rl) = state.wallet_rate_limit.check(id) {
+        return Err(AppError::NotReady(NotReadyKind::RateLimited { message: rl.message() }));
+    }
+    if !crypto::verify_password(&wallet.password_hash, &password, &wallet.address) {
+        state.wallet_rate_limit.record_failure(id);
+        return Err(AppError::Other("Incorrect password".into()));
+    }
+    state.wallet_rate_limit.record_success(id);
+
     use std::time::{SystemTime, UNIX_EPOCH};
     let exported_at = {
         // RFC3339-ish: just emit ms since epoch as a string. The FE displays
@@ -466,10 +485,13 @@ const MAX_BACKUP_JSON_BYTES: u64 = 64 * 1024;
 /// format, and (b) give the FE a single binary blob to write instead of
 /// pretty-printed JSON.
 #[tauri::command]
-pub async fn local_wallet_export_backup_zip(state: State<'_, AppState>, id: i64) -> Result<Vec<u8>, AppError> {
+pub async fn local_wallet_export_backup_zip(state: State<'_, AppState>, id: i64, password: String) -> Result<Vec<u8>, AppError> {
     use std::io::{Cursor, Write};
 
-    let backup = local_wallet_export_backup(state, id).await?;
+    // Delegates the password gate to `local_wallet_export_backup` (audit R-07);
+    // it acquires the rate-limit attempt gate, so this wrapper must NOT also
+    // acquire it (that would deadlock the per-wallet gate).
+    let backup = local_wallet_export_backup(state, id, password).await?;
     let json = serde_json::to_vec_pretty(&serde_json::json!({
         "version": 2,
         "name": backup.name,
@@ -603,82 +625,6 @@ pub async fn local_wallet_get_public_key(state: State<'_, AppState>, id: i64) ->
     use subxt::utils::AccountId32;
     let account = AccountId32::from_str(&wallet.address).map_err(|e| AppError::Other(format!("Wallet address is not valid SS58: {e:?}")))?;
     Ok(B64.encode(account.0))
-}
-
-/// Sign an arbitrary payload with a wallet's Sr25519 key. The plaintext
-/// mnemonic is decrypted in-process, used to derive the keypair, used
-/// to produce one signature, and immediately dropped. Nothing
-/// sensitive crosses the IPC boundary in either direction — the input
-/// is a payload to sign and the output is just the 64-byte signature.
-///
-/// This is the primary signing surface for the bridge: the FE keeps
-/// the user's password in a single closure-scoped variable for the
-/// duration of a multi-step submit (one prompt → N signs) and calls
-/// this IPC for each on-chain operation. The mnemonic never reaches
-/// JS memory.
-///
-/// Rate-limited via the same per-wallet counter that protects the
-/// other password-checking IPCs. Lockout messages are returned as the
-/// rate-limiter's text so the FE can show a clear "wait N seconds"
-/// banner instead of an opaque "Incorrect password" loop.
-///
-/// Also performs the same transparent legacy-format migration the
-/// view-recovery-phrase path performs: a legacy HKDF-encrypted row
-/// gets re-encrypted under Argon2id on the first sign.
-///
-/// # Errors
-///
-/// - `Other("Wallet {id} not found")` — bad id or cross-account access.
-/// - `Other("Incorrect password")` — verifier failed.
-/// - `Other("Too many failed attempts. Try again in …")` — rate-limited.
-/// - `Other("…")` — base64 decode of payload failed.
-/// - `Crypto(…)` — AEAD or Argon2id failure (very rare).
-#[tauri::command]
-pub async fn local_wallet_sign(
-    state: State<'_, AppState>,
-    id: i64,
-    password: String,
-    payload_b64: String,
-) -> Result<String, AppError> {
-    let password = Zeroizing::new(password);
-    let owner = require_owner(&state)?;
-    let pool = state.pool()?;
-    let Some(wallet) = repo::get_by_id(pool, &owner, id).await? else {
-        return Err(AppError::Other(format!("Wallet {id} not found")));
-    };
-
-    // Serialize attempts on this wallet so a concurrent IPC burst can't all
-    // clear `check` before any `record_failure` runs and thereby outrun the
-    // lockout threshold. Held to fn end — covers check → verify → record.
-    let _attempt_gate = state.wallet_rate_limit.attempt_gate(id).await;
-    if let Err(rl) = state.wallet_rate_limit.check(id) {
-        return Err(AppError::Other(rl.message()));
-    }
-    if !crypto::verify_password(&wallet.password_hash, &password, &wallet.address) {
-        state.wallet_rate_limit.record_failure(id);
-        return Err(AppError::Other("Incorrect password".into()));
-    }
-    state.wallet_rate_limit.record_success(id);
-
-    let payload = B64
-        .decode(&payload_b64)
-        .map_err(|e| AppError::Other(format!("Invalid payload base64: {e}")))?;
-
-    let (mnemonic, ciphertext_was_legacy) = crypto::decrypt_mnemonic(&wallet.encrypted_mnemonic, &password, &wallet.address)?;
-
-    // Transparent migration on legacy rows — same single audited path as
-    // get_decrypted_mnemonic (best-effort; never blocks the sign).
-    maybe_migrate_secrets(pool, &owner, &wallet, &password, mnemonic.as_str(), ciphertext_was_legacy).await;
-
-    let parsed =
-        SubxtMnemonic::parse_normalized(mnemonic.as_str()).map_err(|e| AppError::Crypto(format!("Stored mnemonic is not parseable: {e}")))?;
-    let keypair = SrKeypair::from_phrase(&parsed, None).map_err(|e| AppError::Crypto(format!("Failed to derive sr25519 keypair: {e}")))?;
-    // `Keypair::sign` returns subxt_signer's Signature wrapper; we
-    // unwrap to the raw 64 bytes via its `.0` since the FE needs a
-    // plain Uint8Array. Keypair drops here, taking the secret key
-    // with it.
-    let sig = keypair.sign(&payload);
-    Ok(B64.encode(sig.0))
 }
 
 #[cfg(test)]

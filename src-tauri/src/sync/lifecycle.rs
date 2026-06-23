@@ -92,6 +92,23 @@ pub async fn setup_and_init_sync(
     let account_id = state.require_session_account(&account_id)?;
     let pool = state.pool()?;
 
+    // Enforce credit eligibility at the IPC boundary before any upload starts
+    // (audit M-4 — parity with `add_local_sync_folder`; this path previously
+    // relied only on `initialize_sync_inner`'s documented fail-open pre-init
+    // balance check). Price by the recursive byte sum of the label's configured
+    // folder when one is set, else fall back to the static FolderSync threshold.
+    let bytes = match crate::sync::config::get_sync_path_for_label(pool, &account_id, &label).await {
+        Ok(p) if !p.is_empty() => crate::sync::files::sum_regular_file_bytes(std::path::Path::new(&p)).await,
+        _ => 0,
+    };
+    crate::billing::eligibility::require_eligible(
+        &state,
+        &account_id,
+        crate::billing::eligibility::InsufficientCreditsAction::FolderSync,
+        bytes,
+    )
+    .await?;
+
     // 1. Save HCFS config
     save_hcfs_config_internal(pool, &account_id, &server_url, &password, mnemonic.as_deref()).await?;
 

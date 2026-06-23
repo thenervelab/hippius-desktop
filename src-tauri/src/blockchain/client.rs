@@ -87,6 +87,22 @@ pub async fn get_rpc_client(app_state: &crate::app_state::AppState) -> crate::er
     read_cached_rpc_client(app_state)?.ok_or_else(|| crate::error::AppError::Substrate("RPC client unavailable after connect".into()))
 }
 
+/// Hippius Mainnet genesis hash, fetched live from `wss://rpc.hippius.network`
+/// (`system_chain` = "Hippius Mainnet", `chain_getBlockHash(0)`). A connected
+/// node whose genesis differs is a *different chain* — we refuse it before it
+/// can be used to sign anything (audit R-11). subxt's `CheckGenesis` already
+/// binds this into every signature, so a wrong-chain node could never produce a
+/// usable one; this explicit check just fails fast with a clear error instead
+/// of letting an extrinsic silently fail at submission.
+///
+/// Decoded on the cold connect path (not hot), so the hex string stays the
+/// single source of truth — no risk of a hand-transcribed byte array drifting.
+fn hippius_mainnet_genesis() -> subxt::utils::H256 {
+    let bytes = hex::decode("28a6b54823f786c5dd8520ef7bdb0ee2639173815bfbb7719bcf58ef9eb5e1f9")
+        .expect("pinned Hippius Mainnet genesis hex is valid");
+    subxt::utils::H256::from_slice(&bytes)
+}
+
 /// One bounded connection attempt. Always returns within
 /// [`CONNECT_ATTEMPT_TIMEOUT_SECS`] — a stalled `from_url`/`from_rpc_client`
 /// on a dead endpoint surfaces as a timeout `Err` rather than hanging while
@@ -99,6 +115,18 @@ async fn connect_once(wss_endpoint: &str) -> crate::error::Result<(RpcClient, On
         let client = OnlineClient::<PolkadotConfig>::from_rpc_client(rpc.clone())
             .await
             .map_err(|e| crate::error::AppError::Substrate(e.to_string()))?;
+        // Refuse a node that isn't the Hippius chain before any signing path can
+        // reach it (audit R-11). `genesis_hash()` is the value subxt cached at
+        // connect — no extra round-trip. Loopback dev nodes are exempt (see
+        // `is_loopback_endpoint`): they are intentionally a different chain.
+        if !is_loopback_endpoint(wss_endpoint) {
+            let genesis = client.genesis_hash();
+            if genesis != hippius_mainnet_genesis() {
+                return Err(crate::error::AppError::Substrate(format!(
+                    "Refusing node at {wss_endpoint}: genesis 0x{genesis:x} is not the Hippius Mainnet chain"
+                )));
+            }
+        }
         Ok::<_, crate::error::AppError>((rpc, client))
     })
     .await;
@@ -150,7 +178,7 @@ fn retry_delay(attempt: usize, rate_limited: bool) -> Duration {
 /// Called while holding `connect_guard` — no other task is connecting.
 async fn connect_and_cache(app_state: &crate::app_state::AppState) -> crate::error::Result<Arc<OnlineClient<PolkadotConfig>>> {
     let pool = app_state.pool()?;
-    let wss_endpoint = get_current_wss_endpoint(pool).await.unwrap_or_else(|_| WSS_ENDPOINT.to_string());
+    let wss_endpoint = validated_endpoint_or_default(get_current_wss_endpoint(pool).await.ok());
 
     let mut attempt = 0;
     loop {
@@ -233,16 +261,101 @@ pub async fn get_current_wss_endpoint(pool: &SqlitePool) -> crate::error::Result
     }
 }
 
+/// Resolve the endpoint to actually connect to: the stored row if it passes
+/// the cleartext guard, else the built-in default.
+///
+/// The scheme check must run on EVERY connect, not only when an endpoint is
+/// saved — a `ws://remote` row persisted before validation existed (or edited
+/// into the DB directly) would otherwise carry chain traffic in cleartext
+/// forever. The genesis pin doesn't close that hole: a transparent MITM
+/// proxying the real node passes the genesis check while still feeding false
+/// balances (audit R-11).
+fn validated_endpoint_or_default(stored: Option<String>) -> String {
+    let Some(endpoint) = stored else {
+        return WSS_ENDPOINT.to_string();
+    };
+    match validate_endpoint_scheme(&endpoint) {
+        Ok(()) => endpoint,
+        Err(e) => {
+            warn!(
+                endpoint = %endpoint,
+                error = %e,
+                "Stored RPC endpoint failed the transport guard; connecting to the default endpoint instead",
+            );
+            WSS_ENDPOINT.to_string()
+        }
+    }
+}
+
+/// Reject endpoints that would carry chain traffic in cleartext.
+///
+/// Plaintext `ws://` is allowed ONLY for loopback (a local dev node); any
+/// non-loopback `ws://` is refused. An on-path attacker on a cleartext link
+/// can feed false balances/staking state and steer the user into a bad send
+/// (audit R-11). `wss://` is always allowed; anything else is rejected.
+///
+/// Note: key theft is separately prevented by subxt's `CheckGenesis` (the
+/// genesis hash is bound into every signature), so a lying node can't forge a
+/// usable signature — but the MITM/false-display surface is real. Pinning the
+/// node's genesis/metadata hash on connect (the other half of R-11) needs the
+/// chain's expected genesis hash and is tracked separately.
+fn validate_endpoint_scheme(endpoint: &str) -> crate::error::Result<()> {
+    if let Some(after) = endpoint.strip_prefix("wss://") {
+        if endpoint_host(after).is_empty() {
+            return Err(crate::error::AppError::Validation("Endpoint host is empty".into()));
+        }
+        return Ok(());
+    }
+    if let Some(after) = endpoint.strip_prefix("ws://") {
+        if is_loopback_host(endpoint_host(after)) {
+            return Ok(());
+        }
+        return Err(crate::error::AppError::Validation(
+            "Plaintext ws:// is only allowed for localhost. Use wss:// for remote nodes.".into(),
+        ));
+    }
+    Err(crate::error::AppError::Validation(
+        "Invalid endpoint format. Must start with ws:// or wss://".into(),
+    ))
+}
+
+/// Extract the host from the part after the scheme (`host[:port][/path]`).
+/// Handles optional userinfo and bracketed IPv6 literals (`[::1]:9944`).
+fn endpoint_host(after_scheme: &str) -> &str {
+    let authority = after_scheme.split(['/', '?', '#']).next().unwrap_or(after_scheme);
+    let authority = authority.rsplit('@').next().unwrap_or(authority);
+    if let Some(rest) = authority.strip_prefix('[') {
+        // Bracketed IPv6: `[::1]:9944` → `::1`
+        return rest.split(']').next().unwrap_or(rest);
+    }
+    authority.split(':').next().unwrap_or(authority)
+}
+
+/// True for `localhost` (any case) or any loopback IP (127.0.0.0/8, ::1).
+fn is_loopback_host(host: &str) -> bool {
+    host.eq_ignore_ascii_case("localhost") || host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
+}
+
+/// True if `endpoint` (a `ws://`/`wss://` URL) points at a loopback host. Used
+/// to exempt local dev nodes from the mainnet genesis pin (audit R-11): a
+/// loopback node is intentionally a *different* chain, the MITM threat the pin
+/// defends against doesn't apply over loopback, and `validate_endpoint_scheme`
+/// already permits plaintext `ws://` only for loopback — so without this
+/// exemption the pin would make that allowance dead.
+fn is_loopback_endpoint(endpoint: &str) -> bool {
+    let after = endpoint
+        .strip_prefix("wss://")
+        .or_else(|| endpoint.strip_prefix("ws://"))
+        .unwrap_or(endpoint);
+    is_loopback_host(endpoint_host(after))
+}
+
 /// Test if an RPC endpoint is reachable by attempting a WebSocket connection.
 ///
 /// Replaces the raw WebSocket test in `CustomizeRPC.tsx`.
 /// Returns Ok(()) on success, Err with message on failure.
 pub async fn test_rpc_endpoint(endpoint: &str) -> crate::error::Result<()> {
-    if !endpoint.starts_with("ws://") && !endpoint.starts_with("wss://") {
-        return Err(crate::error::AppError::Validation(
-            "Invalid endpoint format. Must start with ws:// or wss://".into(),
-        ));
-    }
+    validate_endpoint_scheme(endpoint)?;
 
     // Try to establish an RPC connection with a 10-second timeout
     match tokio::time::timeout(Duration::from_secs(10), async {
@@ -260,12 +373,8 @@ pub async fn test_rpc_endpoint(endpoint: &str) -> crate::error::Result<()> {
 
 /// Update the WSS endpoint in database and clear the current client.
 pub async fn update_wss_endpoint(app_state: &crate::app_state::AppState, new_endpoint: String) -> crate::error::Result<()> {
-    // Validate the endpoint format (basic check)
-    if !new_endpoint.starts_with("ws://") && !new_endpoint.starts_with("wss://") {
-        return Err(crate::error::AppError::Validation(
-            "Invalid WSS endpoint format. Must start with ws:// or wss://".into(),
-        ));
-    }
+    // Reject cleartext ws:// to non-loopback hosts (audit R-11).
+    validate_endpoint_scheme(&new_endpoint)?;
 
     let pool = app_state.pool()?;
 
@@ -288,6 +397,73 @@ pub async fn update_wss_endpoint(app_state: &crate::app_state::AppState, new_end
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pinned_genesis_is_hippius_mainnet() {
+        // The genesis fetched live from wss://rpc.hippius.network (R-11). Pinned
+        // as lower-hex so a typo or a future edit that breaks decoding / length
+        // fails here rather than silently rejecting every node at runtime.
+        let g = hippius_mainnet_genesis();
+        assert_eq!(format!("{g:x}"), "28a6b54823f786c5dd8520ef7bdb0ee2639173815bfbb7719bcf58ef9eb5e1f9");
+    }
+
+    #[test]
+    fn endpoint_scheme_rejects_remote_plaintext_ws() {
+        // R-11: cleartext ws:// to a non-loopback host must be refused.
+        assert!(validate_endpoint_scheme("ws://rpc.hippius.network:443").is_err());
+        assert!(validate_endpoint_scheme("ws://1.2.3.4:9944").is_err());
+        assert!(validate_endpoint_scheme("ws://hippius-testnet.starkleytech.com").is_err());
+    }
+
+    #[test]
+    fn endpoint_scheme_allows_wss_and_loopback_ws() {
+        assert!(validate_endpoint_scheme("wss://rpc.hippius.network").is_ok());
+        assert!(validate_endpoint_scheme("wss://rpc.hippius.network:443/path").is_ok());
+        assert!(validate_endpoint_scheme("ws://localhost:9944").is_ok());
+        assert!(validate_endpoint_scheme("ws://127.0.0.1:9944").is_ok());
+        assert!(validate_endpoint_scheme("ws://[::1]:9944").is_ok());
+    }
+
+    #[test]
+    fn endpoint_scheme_rejects_non_ws_schemes() {
+        assert!(validate_endpoint_scheme("http://rpc.hippius.network").is_err());
+        assert!(validate_endpoint_scheme("rpc.hippius.network").is_err());
+        assert!(validate_endpoint_scheme("wss://").is_err());
+    }
+
+    #[test]
+    fn endpoint_host_parses_authority() {
+        assert_eq!(endpoint_host("1.2.3.4:9944/path"), "1.2.3.4");
+        assert_eq!(endpoint_host("[::1]:9944"), "::1");
+        assert_eq!(endpoint_host("localhost"), "localhost");
+        assert_eq!(endpoint_host("user@host.example:80/x"), "host.example");
+        assert_eq!(endpoint_host("rpc.hippius.network"), "rpc.hippius.network");
+    }
+
+    /// The transport guard must apply to the endpoint LOADED from the DB on
+    /// every connect, not only at save time — a pre-validation `ws://remote`
+    /// row must not keep connecting in cleartext (R-11, review F3).
+    #[test]
+    fn stored_endpoint_is_validated_on_connect() {
+        // Valid stored endpoints are used as-is.
+        assert_eq!(validated_endpoint_or_default(Some("wss://rpc.hippius.network".into())), "wss://rpc.hippius.network");
+        assert_eq!(validated_endpoint_or_default(Some("ws://127.0.0.1:9944".into())), "ws://127.0.0.1:9944");
+        // A cleartext remote row falls back to the default instead of connecting.
+        assert_eq!(validated_endpoint_or_default(Some("ws://rpc.hippius.network:443".into())), WSS_ENDPOINT);
+        assert_eq!(validated_endpoint_or_default(Some("http://rpc.hippius.network".into())), WSS_ENDPOINT);
+        // No stored row at all → default.
+        assert_eq!(validated_endpoint_or_default(None), WSS_ENDPOINT);
+    }
+
+    #[test]
+    fn loopback_endpoints_are_exempt_from_genesis_pin() {
+        // R-11: a localhost dev node is exempt; a remote node is not.
+        assert!(is_loopback_endpoint("ws://localhost:9944"));
+        assert!(is_loopback_endpoint("ws://127.0.0.1:9944"));
+        assert!(is_loopback_endpoint("wss://[::1]:9944"));
+        assert!(!is_loopback_endpoint("wss://rpc.hippius.network"));
+        assert!(!is_loopback_endpoint("wss://hippius-testnet.starkleytech.com"));
+    }
 
     /// A single connection attempt to an unreachable endpoint must return an
     /// `Err` rather than hang. Before the per-attempt timeout, `connect_once`'s

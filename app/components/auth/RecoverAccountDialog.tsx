@@ -23,6 +23,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 
 import { FramedDialog } from "@/components/ui/FramedDialog";
 import { Button, Icons } from "@/components/ui";
+import { errorMessage } from "@/lib/utils/errorUtils";
 
 interface RecoverableAccount {
   ownerAddress: string;
@@ -116,7 +117,7 @@ export function RecoverAccountDialog({
       setSelected(found[0]?.ownerAddress ?? null);
       setStep("select");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not look up recoverable accounts.");
+      setError(errorMessage(err));
     } finally {
       setBusy(false);
     }
@@ -146,7 +147,7 @@ export function RecoverAccountDialog({
       setSummary(result);
       setStep("done");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Recovery failed.");
+      setError(errorMessage(err));
       setStep("select");
     } finally {
       setBusy(false);

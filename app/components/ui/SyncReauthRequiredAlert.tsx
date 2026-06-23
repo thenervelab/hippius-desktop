@@ -45,7 +45,9 @@ export const SyncReauthRequiredAlert: React.FC<SyncReauthRequiredAlertProps> = (
   if (!needsReauth) return null;
 
   const handleReauth = () => {
-    router.push("/login");
+    // `?reauth=1` keeps the login page from bouncing an authenticated user
+    // home, so the seed-phrase form is actually reachable (audit R-13).
+    router.push("/login?reauth=1");
   };
 
   if (variant === "compact") {

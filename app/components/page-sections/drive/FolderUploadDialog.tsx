@@ -1,12 +1,15 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
+import { errorMessage } from "@/lib/utils/errorUtils";
 import { AlertCircle, Folder, X } from "lucide-react";
 import { toast } from "sonner";
 import { open as openSelection } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
-import { useAtomValue } from "jotai";
+import { useAtomValue, useSetAtom } from "jotai";
 import { queryClientAtom } from "jotai-tanstack-query";
+import { isNotReady } from "@/lib/utils/dispatchTauriError";
+import { insufficientCreditsDialogOpenAtom } from "@/app/components/page-sections/drive/atoms/query-atoms";
 
 import { Button, Icons } from "@/components/ui";
 import { FramedDialog } from "@/components/ui/FramedDialog";
@@ -51,6 +54,7 @@ export default function FolderUploadDialog({
 }: Props) {
   const { polkadotAddress } = useWalletAuth();
   const queryClient = useAtomValue(queryClientAtom);
+  const setInsufficient = useSetAtom(insufficientCreditsDialogOpenAtom);
   const hasConfiguredDrives = useAtomValue(hasConfiguredDrivesAtom);
   const { checkEligibility } = useCreditCheck();
 
@@ -90,7 +94,7 @@ export default function FolderUploadDialog({
     } catch (error) {
       console.error("Error selecting folder:", error);
       toast.error(
-        `Failed to select folder: ${error instanceof Error ? error.message : String(error)}`,
+        `Failed to select folder: ${errorMessage(error)}`,
       );
     }
   };
@@ -210,11 +214,6 @@ export default function FolderUploadDialog({
     setIsSubmitting(true);
     handleClose();
 
-    toast.success("Folder added. Your sync will start soon.", {
-      duration: 4000,
-      closeButton: true,
-    });
-
     try {
       const syncPath =
         selectedSyncPath ??
@@ -225,6 +224,14 @@ export default function FolderUploadDialog({
         syncPath,
         folderPath,
         subfolder: null,
+      });
+
+      // Success toast AFTER add_folder resolves — add_folder runs the
+      // require_eligible gate first and can reject (audit M-15), so firing
+      // "Folder added" before the await produced success-then-error.
+      toast.success("Folder added. Your sync will start soon.", {
+        duration: 4000,
+        closeButton: true,
       });
 
       queryClient.invalidateQueries({
@@ -242,9 +249,13 @@ export default function FolderUploadDialog({
       }
     } catch (error) {
       console.error("Error uploading folder:", error);
-      toast.error(
-        `Failed to upload folder: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      // A credit shortfall from add_folder's require_eligible gate (TOCTOU vs
+      // the proactive check) opens the shared dialog, not a raw error (M-15).
+      if (isNotReady(error, "INSUFFICIENT_CREDITS")) {
+        setInsufficient("folder-upload");
+      } else {
+        toast.error(`Failed to upload folder: ${errorMessage(error)}`);
+      }
     } finally {
       setIsSubmitting(false);
     }

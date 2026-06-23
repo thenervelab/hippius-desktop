@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { errorMessage } from "@/lib/utils/errorUtils";
 import { join } from "@tauri-apps/api/path";
 import { open } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
@@ -66,7 +67,7 @@ export const downloadFolder = async ({
         return {
             success: false,
             error: "DOWNLOAD_FAILED",
-            message: error instanceof Error ? error.message : String(error),
+            message: errorMessage(error),
         };
     }
 };

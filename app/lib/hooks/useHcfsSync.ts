@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback } from "react";
+import { errorMessage } from "@/lib/utils/errorUtils";
 import {
   getHcfsConfig,
   type InitSyncResult,
@@ -76,7 +77,7 @@ export function useHcfsSync(): UseHcfsSyncResult {
         console.log("[useHcfsSync] Setup and init completed:", result.user_id);
         return result;
       } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : String(err);
+        const errorMsg = errorMessage(err);
         console.error("[useHcfsSync] Setup failed:", errorMsg);
         setError(errorMsg);
         return null;

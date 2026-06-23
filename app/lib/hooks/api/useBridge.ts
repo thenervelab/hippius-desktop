@@ -1,29 +1,39 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useSetAtom } from "jotai";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { bridgeInFlightAtom } from "@/lib/global-atoms/bridgeAtoms";
 
-import {
-  initializeBridge,
-  disconnectBridge,
-  getBalances,
-  bridgeAlphaToHAlpha as serviceBridgeAlphaToHAlpha,
-  bridgeHAlphaToAlpha as serviceBridgeHAlphaToAlpha,
-  getAllTransactions as serviceGetAllTransactions,
-  subscribeToTransactionUpdates,
-  getStakedHotkeys as serviceGetStakedHotkeys,
-  type BridgeStep,
-  type StakedHotkey,
-} from "@/lib/bridge/service";
+import { invoke } from "@tauri-apps/api/core";
+import { resolveTxOutcome, type TxOutcome } from "@/lib/utils/txOutcome";
+
+// All bridge logic now lives in the Rust backend. Reads (balances, staked
+// hotkeys) go through `bridge_get_*` IPC; the funds-critical WRITE paths
+// (deposit/withdraw) go through `bridge_alpha_to_halpha` /
+// `bridge_halpha_to_alpha` so the wallet never blind-signs a renderer-built
+// extrinsic (audit H-8). The old TS bridge service / local cache are gone.
 import { BRIDGE_CONFIG } from "@/lib/bridge/config";
 import type {
-  BridgeResult,
-  TrackedTransaction,
+  BridgeBalances,
+  BridgeStep,
+  StakedHotkey,
 } from "@/lib/bridge/types";
-import { buildBridgeSigner } from "@/lib/bridge/local-keypair";
+
+export type { BridgeBalances, StakedHotkey } from "@/lib/bridge/types";
+
+/**
+ * Mirror of the Rust `BridgeOutcome` (serde camelCase): the flattened
+ * {@link TxOutcome} (status/txHash/reason) plus the bridge request ids, which
+ * are present only on a `finalized` outcome. Fed to `resolveTxOutcome` so an
+ * ambiguous submit becomes a no-retry "submitted" state (the bridge
+ * double-spend, R-01) instead of a generic error the dialog offers to resend.
+ */
+type BridgeOutcome = TxOutcome & {
+  withdrawalId?: string | null;
+  depositId?: string | null;
+};
 
 import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
 
@@ -69,22 +79,6 @@ function buildFeConfig(): BridgeConfig {
 }
 
 export type { BridgeDirection } from "@/lib/bridge/types";
-/**
- * Re-export of the bridge-service tracked-transaction type under the
- * name the desktop dialog + history table already use. Saves churn in
- * every consumer file.
- */
-export type TrackedBridgeTransaction = TrackedTransaction;
-
-export interface BridgeBalances {
-  /** Free TAO on Bittensor, smallest unit (BigInt). */
-  alpha: bigint;
-  /** Staked Alpha on the configured subnet (BigInt). The bridge source
-   *  for the Alpha → hAlpha direction; the destination for the reverse. */
-  alphaStake: bigint;
-  /** Free hAlpha on Hippius testnet, smallest unit (BigInt). */
-  hAlpha: bigint;
-}
 
 export interface BridgeSubmitResult {
   bridgeTransactionId: string;
@@ -96,18 +90,15 @@ const BALANCES_KEY = "bridge-balances";
 /**
  * Top-level bridge hook used by the wallet dialog + history table.
  *
- * Mirrors the architecture in hippius-web's `useBridge`: live chain
- * queries via polkadot-api against the testnet endpoints, balances +
- * staked-hotkey lookups for the active wallet, and direct calls to
- * `bridgeAlphaToHAlpha` / `bridgeHAlphaToAlpha` for submissions.
+ * Reads (balances, staked hotkeys, transactions) still use the TS bridge
+ * service's polkadot-api queries against the testnet endpoints.
  *
- * The desktop difference is signing — we never use a Polkadot.js
- * extension. Instead, `buildBridgeSigner` wires the bridge service's
- * `keypair.sign` callback into the Rust `local_wallet_sign` IPC: the
- * user's password is captured once in a closure on submit, each sign
- * round-trips through Rust which decrypts the mnemonic, signs, and
- * drops everything before returning the 64-byte signature. The
- * plaintext mnemonic never enters renderer memory.
+ * Submissions go through Rust IPC — `bridge_alpha_to_halpha` /
+ * `bridge_halpha_to_alpha` construct, sign (with the active wallet), and submit
+ * the extrinsics entirely in the backend. The renderer no longer builds an
+ * extrinsic for the wallet to blind-sign (audit H-8); it sends only
+ * `{amount, recipient/hotkey, password}`. Porting the read paths to Rust and
+ * deleting the TS service is the remaining cleanup.
  */
 export function useBridge() {
   const { activeWallet } = useLocalWallet();
@@ -116,42 +107,15 @@ export function useBridge() {
 
   const address = activeWallet?.address ?? null;
 
-  const [isInitialized, setIsInitialized] = useState(false);
-  const [wizardSteps, setWizardSteps] = useState<BridgeStep[]>([]);
-  const [transactions, setTransactions] =
-    useState<TrackedTransaction[]>(() => serviceGetAllTransactions());
+  // Bridge is "initialized" whenever an active wallet address is known —
+  // there is no renderer-side chain connection to establish anymore
+  // (the backend owns all chain I/O), so readiness is purely "do we have
+  // an address to scope queries to".
+  const isInitialized = !!address;
+
+  const [wizardSteps] = useState<BridgeStep[]>([]);
 
   const config = useMemo(buildFeConfig, []);
-
-  /* ── Initialise bridge connections once an address is known ───────── */
-
-  useEffect(() => {
-    if (!address) return;
-    let cancelled = false;
-
-    (async () => {
-      try {
-        await initializeBridge();
-        if (!cancelled) setIsInitialized(true);
-      } catch (e) {
-        console.error("[useBridge] initializeBridge failed:", e);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-      // Keep the connection open across dialog open/close — only
-      // disconnect on the address-change unmount path, not on every
-      // dialog teardown.
-    };
-  }, [address]);
-
-  /* Disconnect when the address goes away (logout / wallet wiped). */
-  useEffect(() => {
-    if (address) return;
-    void disconnectBridge();
-    setIsInitialized(false);
-  }, [address]);
 
   /* ── Balances ─────────────────────────────────────────────────────── */
 
@@ -161,9 +125,20 @@ export function useBridge() {
       if (!address) {
         return { alpha: BigInt(0), alphaStake: BigInt(0), hAlpha: BigInt(0) };
       }
-      return getBalances(address);
+      // Rust returns decimal rao *strings*; map to bigint so the dialog
+      // does exact arithmetic (preserves the existing BridgeBalances shape).
+      const b = await invoke<{
+        alpha: string;
+        alphaStake: string;
+        hAlpha: string;
+      }>("bridge_get_balances", { address });
+      return {
+        alpha: BigInt(b.alpha),
+        alphaStake: BigInt(b.alphaStake),
+        hAlpha: BigInt(b.hAlpha),
+      };
     },
-    enabled: !!address && isInitialized,
+    enabled: !!address,
     staleTime: 15_000,
     refetchInterval: 30_000,
     retry: 2,
@@ -175,46 +150,33 @@ export function useBridge() {
     queryKey: ["bridge-staked-hotkeys", address],
     queryFn: async () => {
       if (!address) return [];
-      return serviceGetStakedHotkeys(address);
+      const rows = await invoke<{ hotkey: string; stake: string }[]>(
+        "bridge_get_staked_hotkeys",
+        { address },
+      );
+      return rows.map((r) => ({ hotkey: r.hotkey, stake: BigInt(r.stake) }));
     },
-    enabled: !!address && isInitialized,
+    enabled: !!address,
     staleTime: 30_000,
   });
 
-  /* ── Transactions (localStorage-backed, live updates) ─────────────── */
-
-  useEffect(() => {
-    let cancelled = false;
-    let unsubscribe: (() => void) | null = null;
-
-    (async () => {
-      const unsub = await subscribeToTransactionUpdates(() => {
-        if (cancelled) return;
-        setTransactions(serviceGetAllTransactions());
-      });
-      if (cancelled) {
-        unsub();
-        return;
-      }
-      unsubscribe = unsub;
-    })();
-
-    return () => {
-      cancelled = true;
-      unsubscribe?.();
-    };
-  }, []);
-
+  /* ── Transaction refetch ──────────────────────────────────────────── */
+  //
+  // The history table owns the persisted bridge-transaction list + the
+  // on-chain explorer data via its own queries; after a successful submit
+  // we just invalidate both so they refetch.
   const refetchTransactions = useCallback(async () => {
-    setTransactions(serviceGetAllTransactions());
-  }, []);
+    await queryClient.invalidateQueries({ queryKey: ["bridge-explorer-data"] });
+    await queryClient.invalidateQueries({ queryKey: ["bridge-tx-list"] });
+  }, [queryClient]);
 
   /* ── Wizard steps ────────────────────────────────────────────────── */
-
-  const wizardStepsRef = useRef<BridgeStep[]>([]);
-  wizardStepsRef.current = wizardSteps;
-
-  const clearWizardSteps = useCallback(() => setWizardSteps([]), []);
+  //
+  // Step progress was emitted by the old in-renderer multi-op submit; the
+  // backend now drives the whole transfer in one IPC, so the wizard array
+  // stays empty and `clearWizardSteps` is a no-op kept for API stability
+  // (the dialog still calls it to reset between opens).
+  const clearWizardSteps = useCallback(() => {}, []);
 
   /* ── Submit: hAlpha → Alpha ──────────────────────────────────────── */
 
@@ -237,32 +199,26 @@ export function useBridge() {
       // secret material.
       setBridgeInFlight((c) => c + 1);
       try {
-        const keypair = await buildBridgeSigner(
-          activeWallet.id,
-          params.password,
-        );
-
-        const result: BridgeResult = await serviceBridgeHAlphaToAlpha(
-          {
-            direction: "halpha-to-alpha",
-            amount: BigInt(params.amount),
-            senderAddress: activeWallet.address,
-            recipientAddress: params.recipientAddress,
-            keypair,
-          },
-          setWizardSteps,
-        );
-
-        if (!result.success) {
-          throw new Error(result.error || "Bridge submission failed");
-        }
+        // Construct + sign + submit in Rust — the wallet password never builds
+        // a renderer-side extrinsic (audit H-8). amount is a rao decimal string.
+        const outcome = await invoke<BridgeOutcome>("bridge_halpha_to_alpha", {
+          amount: params.amount,
+          recipient: params.recipientAddress || null,
+          password: params.password,
+        });
 
         void queryClient.invalidateQueries({ queryKey: [BALANCES_KEY] });
         void refetchTransactions();
 
+        // Throws TxSubmittedUnconfirmedError on an ambiguous submit (the bridge
+        // double-spend, R-01) so the dialog shows a no-retry "submitted" state;
+        // throws a plain Error on a definitively rejected/failed submit (safe to
+        // retry). Only a `finalized` outcome falls through to success here.
+        const { txHash } = resolveTxOutcome(outcome);
+
         return {
-          bridgeTransactionId: result.bridgeTransactionId ?? "",
-          txHash: result.txHash ?? "",
+          bridgeTransactionId: outcome.withdrawalId ?? "",
+          txHash,
         };
       } finally {
         setBridgeInFlight((c) => Math.max(0, c - 1));
@@ -288,32 +244,23 @@ export function useBridge() {
       // matters more here in practice.
       setBridgeInFlight((c) => c + 1);
       try {
-        const keypair = await buildBridgeSigner(
-          activeWallet.id,
-          params.password,
-        );
-
-        const result: BridgeResult = await serviceBridgeAlphaToHAlpha(
-          {
-            direction: "alpha-to-halpha",
-            amount: BigInt(params.amount),
-            senderAddress: activeWallet.address,
-            hotkey: params.hotkey,
-            keypair,
-          },
-          setWizardSteps,
-        );
-
-        if (!result.success) {
-          throw new Error(result.error || "Bridge submission failed");
-        }
+        // 4-step deposit constructed + signed + submitted in Rust (audit H-8).
+        const outcome = await invoke<BridgeOutcome>("bridge_alpha_to_halpha", {
+          amount: params.amount,
+          hotkey: params.hotkey ?? null,
+          password: params.password,
+        });
 
         void queryClient.invalidateQueries({ queryKey: [BALANCES_KEY] });
         void refetchTransactions();
 
+        // See submitHalphaToAlpha — resolveTxOutcome throws (no retry) on an
+        // ambiguous/failed submit so the deposit can't be double-sent (R-01).
+        const { txHash } = resolveTxOutcome(outcome);
+
         return {
-          bridgeTransactionId: result.bridgeTransactionId ?? "",
-          txHash: result.txHash ?? "",
+          bridgeTransactionId: outcome.depositId ?? "",
+          txHash,
         };
       } finally {
         setBridgeInFlight((c) => Math.max(0, c - 1));
@@ -341,9 +288,8 @@ export function useBridge() {
       stakedHotkeysLoading: stakedHotkeysQuery.isLoading,
       refetchStakedHotkeys: stakedHotkeysQuery.refetch,
 
-      // Transactions
-      transactions,
-      transactionsLoading: false,
+      // Transactions — owned by the history table's own queries; this is
+      // just the invalidation trigger fired after a successful submit.
       refetchTransactions,
 
       // Wizard steps
@@ -364,7 +310,6 @@ export function useBridge() {
       stakedHotkeysQuery.data,
       stakedHotkeysQuery.isLoading,
       stakedHotkeysQuery.refetch,
-      transactions,
       refetchTransactions,
       wizardSteps,
       clearWizardSteps,

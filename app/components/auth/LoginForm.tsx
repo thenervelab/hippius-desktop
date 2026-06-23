@@ -15,7 +15,7 @@ import { RecoverAccountDialog } from "./RecoverAccountDialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getVersion } from "@tauri-apps/api/app";
 import { isTauri } from "@tauri-apps/api/core";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { LogoMark } from "@/components/ui/LogoMark";
 
 export function LoginForm({
@@ -23,7 +23,13 @@ export function LoginForm({
 }: {
   onHideHeaderChange?: (hide: boolean) => void;
 }) {
-  const [showAccessKeyForm, setShowAccessKeyForm] = useState(false);
+  const searchParams = useSearchParams();
+  // In re-auth mode (`/login?reauth=1`, from the sync re-auth banner) jump
+  // straight to the seed-phrase form instead of the OAuth chooser — that's the
+  // surface that re-enters the seed and clears the re-auth banner (audit R-13).
+  const [showAccessKeyForm, setShowAccessKeyForm] = useState(
+    searchParams.get("reauth") === "1",
+  );
   const [showRecover, setShowRecover] = useState(false);
   const [version, setVersion] = useState<string>("");
   const router = useRouter();

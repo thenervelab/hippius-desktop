@@ -50,6 +50,34 @@ pub(crate) fn normalize_for_region_probe(server_url: &str) -> String {
     }
 }
 
+/// Reject a `server_url` that isn't a plausible HCFS endpoint before it is
+/// persisted (audit H-5). The stored value becomes the client `base_url` and
+/// the account's API bearer token is sent to it as a header on every request,
+/// so an unvalidated URL is an SSRF + token-exfiltration vector. Rules:
+/// - empty string is allowed — it is the region auto-detect sentinel (hcfs-client
+///   races the regional endpoints itself; there is no single URL to hit);
+/// - otherwise the URL must parse and use `https`;
+/// - plain `http` is permitted ONLY for loopback hosts in debug builds (local dev).
+///
+/// # Errors
+/// Returns [`crate::error::AppError::Validation`] for an unparseable URL or a
+/// non-`https` scheme (outside the debug-loopback exception).
+fn validate_server_url(server_url: &str) -> Result<()> {
+    if server_url.is_empty() {
+        return Ok(());
+    }
+    let parsed =
+        reqwest::Url::parse(server_url).map_err(|e| crate::error::AppError::Validation(format!("Invalid HCFS server URL: {e}")))?;
+    let is_loopback = matches!(parsed.host_str(), Some("localhost" | "127.0.0.1" | "::1"));
+    match parsed.scheme() {
+        "https" => Ok(()),
+        "http" if cfg!(debug_assertions) && is_loopback => Ok(()),
+        _ => Err(crate::error::AppError::Validation(
+            "HCFS server URL must use https (http is allowed only for localhost in debug builds)".into(),
+        )),
+    }
+}
+
 /// Resolve the `/health` URL for the init-time connectivity diagnostic, or
 /// `None` when the drive is in region auto-detect mode.
 ///
@@ -95,6 +123,7 @@ pub async fn save_hcfs_config(
     drive_password: String,
 ) -> Result<()> {
     let account_id = state.require_session_account(&account_id)?;
+    validate_server_url(&server_url)?;
     let db = state.pool()?;
     let owner = account_key(&account_id);
 
@@ -103,8 +132,9 @@ pub async fn save_hcfs_config(
         match guard.mnemonic.as_deref() {
             Some(m) => {
                 let key = store::drive_password_key(m, &account_id)?;
-                let encrypted = store::encrypt(&key, &drive_password)?;
-                (encrypted, 1i32)
+                // encryption_version = 2: AEAD with the account id bound as AAD (audit R-33).
+                let encrypted = store::encrypt_with_aad(&key, &drive_password, account_id.as_bytes())?;
+                (encrypted, 2i32)
             }
             None => (drive_password, 0i32),
         }
@@ -198,7 +228,12 @@ pub(crate) async fn get_drive_password(pool: &SqlitePool, account_id: &str, mnem
             let key = store::drive_password_key(m, account_id)?;
             Ok(store::decrypt(&key, &raw_password)?)
         }
-        (1, None) => Err(crate::error::AppError::Crypto(
+        // v2 (audit R-33): same key, with the account id bound as AAD.
+        (2, Some(m)) => {
+            let key = store::drive_password_key(m, account_id)?;
+            Ok(store::decrypt_with_aad(&key, &raw_password, account_id.as_bytes())?)
+        }
+        (1 | 2, None) => Err(crate::error::AppError::Crypto(
             "Drive password is encrypted but no mnemonic available for decryption".into(),
         )),
         (v, _) => Err(crate::error::AppError::Crypto(format!("unknown drive password encryption_version: {v}"))),
@@ -272,13 +307,17 @@ pub(crate) async fn save_hcfs_config_internal(
     drive_password: &str,
     mnemonic: Option<&str>,
 ) -> Result<()> {
+    // Same SSRF/token-exfil gate as the `save_hcfs_config` command (audit H-5):
+    // this internal path is reached via `setup_and_init_sync`.
+    validate_server_url(server_url)?;
     let owner = account_key(account_id);
 
     let (stored_password, enc_version) = match mnemonic {
         Some(m) => {
             let key = store::drive_password_key(m, account_id)?;
-            let encrypted = store::encrypt(&key, drive_password)?;
-            (encrypted, 1i32)
+            // encryption_version = 2: AEAD with the account id bound as AAD (audit R-33).
+            let encrypted = store::encrypt_with_aad(&key, drive_password, account_id.as_bytes())?;
+            (encrypted, 2i32)
         }
         None => (drive_password.to_string(), 0i32),
     };

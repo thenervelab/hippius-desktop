@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { errorMessage } from "@/lib/utils/errorUtils";
 import { toast } from "sonner";
 
 import { HAlphaCoinLogo, HippiusLogo } from "@/components/ui/icons";
@@ -15,6 +16,9 @@ import TransactionFlowToast, {
 import WalletPasswordField from "./shared/WalletPasswordField";
 import { useStaking } from "@/lib/hooks/useStaking";
 import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
+import { dispatchSigningError } from "@/lib/utils/dispatchTauriError";
+import { useWalletAuth } from "@/lib/wallet-auth-context";
+import { TxSubmittedUnconfirmedError } from "@/lib/utils/txOutcome";
 
 interface WithdrawDialogProps {
   open: boolean;
@@ -34,9 +38,16 @@ const WithdrawDialog: React.FC<WithdrawDialogProps> = ({
 }) => {
   const { stakingInfo, operations, refetch } = useStaking();
   const { verifyPassword } = useLocalWallet();
+  const { logout } = useWalletAuth();
   const withdrawableHip = stakingInfo?.withdrawableHip ?? "0";
-  const hasWithdrawable =
-    !!withdrawableHip && Number.parseFloat(withdrawableHip) > 0;
+  // Gate on the raw planck value, not a float parse of the display string.
+  const hasWithdrawable = useMemo(() => {
+    try {
+      return BigInt(stakingInfo?.withdrawable || "0") > 0n;
+    } catch {
+      return false;
+    }
+  }, [stakingInfo?.withdrawable]);
 
   const [flowState, setFlowState] = useState<TransactionFlowState>("idle");
   const [isMinimized, setIsMinimized] = useState(false);
@@ -69,14 +80,23 @@ const WithdrawDialog: React.FC<WithdrawDialogProps> = ({
         await refetch();
         onSuccess?.();
       } catch (e: unknown) {
-        const msg = e instanceof Error ? e.message : String(e);
-        setFlowState("error");
-        toast.error("Withdraw failed", { description: msg });
+        if (e instanceof TxSubmittedUnconfirmedError) {
+          // May already be on-chain — no retry. Balances were already
+          // invalidated by the staking hook before this threw.
+          setFlowState("submitted");
+        } else {
+          setFlowState("error");
+          // Offer re-auth instead of a dead toast when the signing key is
+          // unavailable (M-14).
+          if (!dispatchSigningError(e, () => logout("/login?reauth=1"))) {
+            toast.error("Withdraw failed", { description: errorMessage(e) });
+          }
+        }
       } finally {
         isProcessingRef.current = false;
       }
     },
-    [operations, refetch, withdrawableHip, onSuccess],
+    [operations, refetch, withdrawableHip, onSuccess, logout],
   );
 
   const handleConfirm = async () => {
@@ -185,7 +205,7 @@ const WithdrawDialog: React.FC<WithdrawDialogProps> = ({
 
       {showFlowToast && (
         <TransactionFlowToast
-          state={flowState as "pending" | "success" | "error"}
+          state={flowState as "pending" | "success" | "error" | "submitted"}
           config={{
             pending: {
               title: "Withdrawing hALPHA…",
@@ -199,6 +219,11 @@ const WithdrawDialog: React.FC<WithdrawDialogProps> = ({
               title: "Something went wrong",
               description: "We couldn’t withdraw your tokens.",
               action: { label: "Try Again", onClick: handleRetry },
+            },
+            submitted: {
+              title: "Transaction submitted",
+              description:
+                "Your withdrawal may already be on-chain. Check your balance before retrying — do not submit again.",
             },
           }}
           onDismiss={closeFlowToast}

@@ -28,12 +28,18 @@
     <true/>
     <key>com.apple.security.files.bookmarks.document-scope</key>
     <true/>
+    <!-- allow-jit + allow-unsigned-executable-memory are required by the
+         WKWebView / JavaScriptCore JIT under the hardened runtime, so they stay. -->
     <key>com.apple.security.cs.allow-jit</key>
     <true/>
     <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
     <true/>
-    <key>com.apple.security.cs.disable-library-validation</key>
-    <true/>
+    <!-- disable-library-validation removed (audit M-11): the app bundles only its
+         own signed dylibs, so letting the notarized process load arbitrary
+         UNSIGNED libraries was needless attack surface. VERIFY with a signed +
+         notarized build that the app still launches before release; if a bundled
+         framework needs it, restore this key. -->
+
     <!-- <key>com.apple.security.files.all</key>
     <dict>
         <key>read</key>
