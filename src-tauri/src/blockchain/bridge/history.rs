@@ -196,7 +196,7 @@ mod tests {
         pool
     }
 
-    fn sample<'a>(hash: &'a str) -> NewBridgeTx<'a> {
+    fn sample(hash: &str) -> NewBridgeTx<'_> {
         NewBridgeTx {
             direction: "halpha-to-alpha",
             status: "pending",
