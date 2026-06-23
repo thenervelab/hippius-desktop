@@ -55,3 +55,37 @@ export function resolveSmoothedPercent(
   if (raw >= 100) return 100;
   return Math.max(previous, raw);
 }
+
+/**
+ * EMA smoothing factor for the transfer speed (and therefore the ETA).
+ *
+ * Snapshots arrive up to ~4x/sec and the raw windowed rate swings hard across
+ * file handoffs: a file's encrypt phase fills `combinedProgressBytes` at local
+ * disk speed, its upload phase fills them at network speed, so the 10-sample
+ * window's rate jumps as its boundary crosses that seam. 0.25 ≈ a 3–4 sample
+ * time constant — responsive enough to track a real slowdown within ~1s, damped
+ * enough that the derived "time remaining" stops bouncing on longer queues.
+ */
+export const SPEED_SMOOTHING_ALPHA = 0.25;
+
+/**
+ * Fold a freshly-measured byte/sec rate into the running smoothed speed.
+ *
+ * Standard exponential moving average: `alpha * sample + (1 - alpha) * previous`.
+ * Seeds directly from the sample whenever `previous` is null or non-positive
+ * (first usable reading, or just after a reset) so the readout starts at the
+ * real rate instead of crawling up from zero. Both the "X/s" label and the ETA
+ * (`remaining / speed`) are derived from this value, so damping it here damps
+ * both — fixing the wildly-fluctuating time-remaining on longer queues.
+ */
+export function smoothSpeed(
+  previous: number | null,
+  sample: number,
+  alpha: number = SPEED_SMOOTHING_ALPHA,
+): number {
+  // `previous <= 0` only ever means "seed/reset": the caller never feeds a
+  // non-positive sample (it guards on processedBytes > 0), so a real reading
+  // can't drive the smoothed value to 0 — re-seeding here can't fire mid-transfer.
+  if (previous === null || previous <= 0) return sample;
+  return alpha * sample + (1 - alpha) * previous;
+}

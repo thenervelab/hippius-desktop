@@ -93,10 +93,11 @@ const StorageUsageCard: React.FC<{ className?: string }> = ({ className }) => {
   const isNarrow = useIsNarrow();
 
   // Skeleton only on the very first load (no cached data yet). On refetches
-  // the previous data stays rendered via TanStack Query's cache, and the
-  // RefreshButton spinner is the only indicator that work is in flight —
-  // chart/headline update in place when the new data arrives.
-  const isFetchingAny = chartFetching || statsFetching;
+  // the previous data stays rendered via TanStack Query's cache and updates in
+  // place when the new data arrives. The RefreshButton only spins for a
+  // user-initiated refresh (see `refetching` below) — the 6s background poll
+  // (useDriveStorageStats) is silent, so the section keeps its appearance
+  // instead of flashing the spinner on every poll.
   const showSkeleton = chartLoading || statsLoading;
 
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -166,7 +167,7 @@ const StorageUsageCard: React.FC<{ className?: string }> = ({ className }) => {
           <div className="flex items-center gap-2.5">
             <RefreshButton
               onClick={handleRefresh}
-              refetching={isRefreshing || isFetchingAny}
+              refetching={isRefreshing}
               ariaLabel="Refresh storage usage"
             />
             <Select

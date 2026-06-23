@@ -355,6 +355,55 @@ describe("SyncStatusDialog", () => {
     expect(summaryTexts).toContain("2.5MB/7.5MB");
   });
 
+  it("keeps the transferred line visible during an encrypt-only phase", () => {
+    // Regression for "X of Y | X MB/s doesn't always show". Between file
+    // transfers the active file is encrypting (no inProgress file), which used
+    // to hide the whole byte line until the upload phase began — so the line
+    // blinked out on every handoff. It must stay up through encrypt/decrypt,
+    // with the trailing slot showing the phase word instead of a speed.
+    const files = [
+      makeFileProgress("a.bin", {
+        status: "encrypting",
+        progressPercent: 50,
+        bytesEncrypted: 2_500_000,
+        totalBytes: 5_000_000,
+      }),
+    ];
+    const snapshot = makeSnapshot(files);
+
+    const { container } = renderWithJotai(
+      <SyncStatusDialog snapshot={snapshot} open={true} />,
+    );
+
+    const summaryTexts = compactSummaryTexts(container);
+    expect(summaryTexts).toContain("2.5MB/5MB");
+    expect(summaryTexts).toContain("Encrypting");
+  });
+
+  it("keeps the transferred line visible during a decrypt-only phase", () => {
+    // Symmetric to the encrypt case: a download decrypts AFTER it has fully
+    // transferred, so bytesTransferred == totalBytes at the decrypt phase and
+    // the line reads the real "5MB/5MB | Decrypting" — not a misleading "0B".
+    const files = [
+      makeFileProgress("a.bin", {
+        action: "download",
+        status: "decrypting",
+        progressPercent: 100,
+        bytesTransferred: 5_000_000,
+        totalBytes: 5_000_000,
+      }),
+    ];
+    const snapshot = makeSnapshot(files);
+
+    const { container } = renderWithJotai(
+      <SyncStatusDialog snapshot={snapshot} open={true} />,
+    );
+
+    const summaryTexts = compactSummaryTexts(container);
+    expect(summaryTexts).toContain("5MB/5MB");
+    expect(summaryTexts).toContain("Decrypting");
+  });
+
   it("renders the compact ring instead of the full card when minimized", () => {
     const files = [
       makeFileProgress("data.csv", {

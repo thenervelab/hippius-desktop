@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   resolveSmoothedPercent,
   selectLiveTransferBytes,
+  smoothSpeed,
+  SPEED_SMOOTHING_ALPHA,
 } from "../syncStatusDialogLogic";
 import {
   makeFileProgress,
@@ -101,5 +103,52 @@ describe("resolveSmoothedPercent", () => {
     expect(resolveSmoothedPercent(null, null, false)).toBeNull();
     expect(resolveSmoothedPercent(null, 30, false)).toBe(30);
     expect(resolveSmoothedPercent(50, null, false)).toBeNull();
+  });
+});
+
+describe("smoothSpeed", () => {
+  it("seeds from the sample on the first reading (no prior smoothed value)", () => {
+    // After a reset the ref is null; the readout must start at the real rate,
+    // not crawl up from zero.
+    expect(smoothSpeed(null, 5_000_000)).toBe(5_000_000);
+    expect(smoothSpeed(0, 5_000_000)).toBe(5_000_000);
+    expect(smoothSpeed(-1, 5_000_000)).toBe(5_000_000);
+  });
+
+  it("blends sample and previous by the EMA factor", () => {
+    // alpha * sample + (1 - alpha) * previous.
+    const a = SPEED_SMOOTHING_ALPHA;
+    expect(smoothSpeed(100, 200)).toBeCloseTo(a * 200 + (1 - a) * 100);
+  });
+
+  it("damps a single spike far below the raw sample (the wild-ETA fix)", () => {
+    // A 10x rate spike on one tick must move the smoothed value only a fraction
+    // of the way, so the derived ETA can't lurch on transient jitter.
+    const smoothed = smoothSpeed(1_000_000, 10_000_000);
+    expect(smoothed).toBeGreaterThan(1_000_000);
+    expect(smoothed).toBeLessThan(10_000_000);
+    // With alpha 0.25 the spike contributes only a quarter of the gap.
+    expect(smoothed).toBeCloseTo(1_000_000 + 0.25 * 9_000_000);
+  });
+
+  it("converges toward a steady rate when fed it repeatedly", () => {
+    // A constant input must drive the smoothed value to that input — the
+    // steady-state readout matches the true rate, no permanent lag.
+    let speed: number | null = null;
+    for (let i = 0; i < 40; i++) {
+      speed = smoothSpeed(speed, 3_000_000);
+    }
+    expect(speed).toBeCloseTo(3_000_000, 0);
+  });
+
+  it("stays within the interval bounded by previous and sample", () => {
+    // EMA is a convex combination, so the result can never overshoot either
+    // endpoint regardless of the inputs.
+    const lo = smoothSpeed(2_000_000, 8_000_000);
+    expect(lo).toBeGreaterThanOrEqual(2_000_000);
+    expect(lo).toBeLessThanOrEqual(8_000_000);
+    const hi = smoothSpeed(8_000_000, 2_000_000);
+    expect(hi).toBeLessThanOrEqual(8_000_000);
+    expect(hi).toBeGreaterThanOrEqual(2_000_000);
   });
 });

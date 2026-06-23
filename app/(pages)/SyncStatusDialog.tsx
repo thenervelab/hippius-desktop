@@ -27,6 +27,7 @@ import SyncStatusMini from "./SyncStatusMini";
 import {
   resolveSmoothedPercent,
   selectLiveTransferBytes,
+  smoothSpeed,
 } from "./syncStatusDialogLogic";
 
 const BODY_MAX_HEIGHT_REM = 11.5;
@@ -443,6 +444,12 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
   ]);
 
   const rateSamplesRef = useRef<RateSample[]>([]);
+  // Running EMA of the transfer rate. Held in a ref (not state) so each tick
+  // folds into the previous smoothed value without re-triggering the effect.
+  const smoothedSpeedRef = useRef<number | null>(null);
+  // The session the rate samples / smoothed speed belong to. Used to re-seed on
+  // a session change — see the comment in the effect below.
+  const speedSessionRef = useRef<number | null>(null);
   const [etaSeconds, setEtaSeconds] = useState<number | null>(null);
   const [speedBytesPerSec, setSpeedBytesPerSec] = useState<number | null>(null);
 
@@ -453,9 +460,23 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
       snapshot.combinedProgressBytes === 0
     ) {
       rateSamplesRef.current = [];
+      smoothedSpeedRef.current = null;
       setEtaSeconds(null);
       setSpeedBytesPerSec(null);
       return;
+    }
+
+    // A new session must not inherit the previous session's samples or smoothed
+    // speed: the EMA persists a stale value for several ticks (α=0.25), so a
+    // carry-over would mis-report speed/ETA at the start of the next sync. The
+    // reset guard above only fires at combinedProgressBytes === 0; if a
+    // session's first snapshot already carries progress (a coalesced first
+    // emit), that guard misses it. Re-seed on startedAt explicitly — exactly as
+    // the percent-smoothing effect does with previousSessionRef.
+    if (snapshot.startedAt !== speedSessionRef.current) {
+      speedSessionRef.current = snapshot.startedAt;
+      rateSamplesRef.current = [];
+      smoothedSpeedRef.current = null;
     }
 
     const now = Date.now();
@@ -484,16 +505,19 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
     }
 
     const rate = processedBytes / elapsed;
-    setSpeedBytesPerSec(rate);
+    const smoothed = smoothSpeed(smoothedSpeedRef.current, rate);
+    smoothedSpeedRef.current = smoothed;
+    setSpeedBytesPerSec(smoothed);
 
     const remainingBytes =
       snapshot.combinedBytesExpected - snapshot.combinedProgressBytes;
-    const eta = remainingBytes / rate;
+    const eta = remainingBytes / smoothed;
     setEtaSeconds(Math.min(eta, 86400));
   }, [
     effectiveInProgress,
     snapshot.combinedBytesExpected,
     snapshot.combinedProgressBytes,
+    snapshot.startedAt,
   ]);
 
   const [retryCountdown, setRetryCountdown] = useState(0);
@@ -585,8 +609,16 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
     isCompleted ||
     isPreparing;
 
+  // Any file actively doing work — transferring OR encrypting OR decrypting.
+  // The "transferred / total" byte line tracks this (not just transferring) so
+  // it stays on screen through the encrypt/decrypt seam between files instead
+  // of blinking out every time a transfer hands off (the "doesn't always show"
+  // report). The speed text below stays gated on an actual transfer.
+  const hasActiveFile =
+    hasTransferringFile || hasEncryptingFile || hasDecryptingFile;
+
   const showTransferDetails =
-    !isSettled && effectiveInProgress && hasTransferringFile;
+    !isSettled && effectiveInProgress && hasActiveFile;
 
   const compactTransferredText = (() => {
     if (!showTransferDetails) return null;
@@ -618,6 +650,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
 
     if (
       showTransferDetails &&
+      hasTransferringFile &&
       speedBytesPerSec !== null &&
       speedBytesPerSec > 0
     ) {
