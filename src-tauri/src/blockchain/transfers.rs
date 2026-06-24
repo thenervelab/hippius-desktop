@@ -22,10 +22,17 @@ const ESTIMATED_TRANSFER_FEE_PLANCK: u128 = 270_233_151;
 /// user doesn't notice it being held back. Mirrors hippius-web's
 /// `GAS_FEE_BUFFER_PLANCKS = PLANCKS_PER_TOKEN / 100` so the two clients
 /// behave identically when the user presses MAX.
+const MAX_GAS_FEE_BUFFER_PLANCK: u128 = 10_000_000_000_000_000;
+
+/// Subtract the gas-fee buffer from a planck balance, saturating at 0.
 ///
-/// Promoted to `pub(crate)` so the bridge's bridgeable-balance calc reuses
-/// the SAME buffer — the constant has one owner (audit M-3).
-pub(crate) const MAX_GAS_FEE_BUFFER_PLANCK: u128 = 10_000_000_000_000_000;
+/// The single place [`MAX_GAS_FEE_BUFFER_PLANCK`] is applied, so the send-max,
+/// available-to-bond, and bridgeable-hAlpha calcs share one definition and
+/// can't drift (PR #26 review). `pub(crate)` so the bridge module reuses it
+/// instead of re-implementing the subtraction.
+pub(crate) fn apply_gas_buffer(planck: u128) -> u128 {
+    planck.saturating_sub(MAX_GAS_FEE_BUFFER_PLANCK)
+}
 
 /// Max-transferable amount for the "Send Max" UX on the balance page.
 ///
@@ -44,7 +51,7 @@ pub struct MaxTransferable {
 #[tauri::command]
 pub fn compute_max_transferable(balance_planck: String) -> MaxTransferable {
     let balance = balance_planck.parse::<u128>().unwrap_or(0);
-    let max_planck = balance.saturating_sub(MAX_GAS_FEE_BUFFER_PLANCK);
+    let max_planck = apply_gas_buffer(balance);
     let planck = max_planck.to_string();
     let hip = crate::blockchain::convert::planck_to_hip_full(planck.clone());
     MaxTransferable { planck, hip }
@@ -54,17 +61,17 @@ pub fn compute_max_transferable(balance_planck: String) -> MaxTransferable {
 ///
 /// `free`/`bonded`/`unbonding`/`withdrawable` are planck decimal strings — the
 /// exact shapes `get_account_balance` and `get_staking_info` already return.
-/// Subtracts the pallet-locked balances AND [`MAX_GAS_FEE_BUFFER_PLANCK`]:
-/// those plancks are already locked by the staking pallet, so a `bond` that
-/// includes them is chain-rejected, and the buffer leaves gas for the bond plus
-/// a later unbond/withdraw. Saturates at 0. Pure — the buffer constant and the
-/// subtraction live in Rust so the renderer never re-derives the rule (audit
-/// M-1); the FE only renders the returned figure.
+/// Subtracts the pallet-locked balances AND the gas buffer (via
+/// [`apply_gas_buffer`]): those plancks are already locked by the staking
+/// pallet, so a `bond` that includes them is chain-rejected, and the buffer
+/// leaves gas for the bond plus a later unbond/withdraw. Saturates at 0. Pure —
+/// the buffer constant and the subtraction live in Rust so the renderer never
+/// re-derives the rule (audit M-1); the FE only renders the returned figure.
 #[tauri::command]
 pub fn compute_available_to_bond(free: String, bonded: String, unbonding: String, withdrawable: String) -> MaxTransferable {
     let parse = |s: String| s.parse::<u128>().unwrap_or(0);
     let locked = parse(bonded).saturating_add(parse(unbonding)).saturating_add(parse(withdrawable));
-    let available = parse(free).saturating_sub(locked).saturating_sub(MAX_GAS_FEE_BUFFER_PLANCK);
+    let available = apply_gas_buffer(parse(free).saturating_sub(locked));
     let planck = available.to_string();
     let hip = crate::blockchain::convert::planck_to_hip_full(planck.clone());
     MaxTransferable { planck, hip }
@@ -234,6 +241,17 @@ mod tests {
     use super::*;
 
     const VALID_SS58: &str = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
+
+    #[test]
+    fn apply_gas_buffer_subtracts_one_buffer_and_saturates() {
+        // Exactly one buffer is removed above the buffer; at/below it saturates
+        // to 0 rather than underflowing. This is the single buffer-application
+        // point shared by send-max, available-to-bond, and bridgeable-hAlpha.
+        assert_eq!(apply_gas_buffer(MAX_GAS_FEE_BUFFER_PLANCK + 5), 5);
+        assert_eq!(apply_gas_buffer(MAX_GAS_FEE_BUFFER_PLANCK), 0);
+        assert_eq!(apply_gas_buffer(1), 0);
+        assert_eq!(apply_gas_buffer(0), 0);
+    }
 
     #[test]
     fn available_to_bond_subtracts_locked_and_buffer() {

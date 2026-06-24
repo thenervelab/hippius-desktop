@@ -247,7 +247,12 @@ export function useBridge() {
     () => ({
       // Config + readiness
       minTransfers: minTransfersQuery.data ?? null,
-      configLoading: false,
+      // True only during the initial bridge_min_transfers fetch, so the dialog
+      // disables submit until the minimum-amount floor is known (PR #26 review).
+      // Before, the minimum came from a sync constant and was always ready;
+      // now it is an async IPC, so an unguarded window let a below-minimum
+      // submit reach Rust before the floor loaded.
+      configLoading: minTransfersQuery.isLoading,
       isInitialized,
 
       // Balances
@@ -276,6 +281,7 @@ export function useBridge() {
     }),
     [
       minTransfersQuery.data,
+      minTransfersQuery.isLoading,
       isInitialized,
       balancesQuery.data,
       balancesQuery.isLoading,

@@ -61,6 +61,11 @@ const StakeDialog: React.FC<StakeDialogProps> = ({
   }, [open, refetch, refetchBalance]);
 
   const [availablePlanck, setAvailablePlanck] = useState<bigint>(0n);
+  // True while the Rust figure is being (re)computed. Gates the percent
+  // buttons so a click during a refetch can't use a stale `availablePlanck`
+  // (PR #26 review); the displayed "You have" figure keeps its last value so
+  // it doesn't flicker to 0 on every refetch.
+  const [availableLoading, setAvailableLoading] = useState(false);
 
   // Available HIP to bond is computed in Rust (audit M-1):
   //   free − bonded − unbonding − withdrawable − gas buffer
@@ -71,9 +76,11 @@ const StakeDialog: React.FC<StakeDialogProps> = ({
     const freeBI = balanceInfo?.data?.free;
     if (!freeBI) {
       setAvailablePlanck(0n);
+      setAvailableLoading(false);
       return;
     }
     const free = typeof freeBI === "bigint" ? freeBI : BigInt(String(freeBI));
+    setAvailableLoading(true);
     invoke<{ planck: string; hip: string }>("compute_available_to_bond", {
       free: free.toString(),
       bonded: stakingInfo.bonded || "0",
@@ -85,6 +92,9 @@ const StakeDialog: React.FC<StakeDialogProps> = ({
       })
       .catch(() => {
         if (!cancelled) setAvailablePlanck(0n);
+      })
+      .finally(() => {
+        if (!cancelled) setAvailableLoading(false);
       });
     return () => {
       cancelled = true;
@@ -304,7 +314,7 @@ const StakeDialog: React.FC<StakeDialogProps> = ({
                 key={key}
                 type="button"
                 onClick={() => handlePercentClick(pct)}
-                disabled={stakingInfo.isLoading || availablePlanck === 0n}
+                disabled={stakingInfo.isLoading || availableLoading || availablePlanck === 0n}
                 className={cn(
                   "rounded-full border px-2.5 py-0.5 text-[13px] font-semibold leading-5 tracking-[-0.26px] transition-colors disabled:opacity-60",
                   activeButton === key

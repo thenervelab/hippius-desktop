@@ -30,13 +30,6 @@ async fn netuid_stakes(bt: &OnlineClient<PolkadotConfig>, acct: &AccountId32) ->
         .collect())
 }
 
-/// Free hAlpha minus one [`crate::blockchain::transfers::MAX_GAS_FEE_BUFFER_PLANCK`],
-/// saturating at 0 — the hAlpha→Alpha bridgeable amount. Pure so it is
-/// unit-testable without a chain.
-fn bridgeable_halpha(h_alpha_free: u128) -> u128 {
-    h_alpha_free.saturating_sub(crate::blockchain::transfers::MAX_GAS_FEE_BUFFER_PLANCK)
-}
-
 /// Free balances + staked Alpha for the bridge dialog (rao decimal strings).
 ///
 /// # Errors
@@ -73,7 +66,7 @@ pub async fn bridge_get_balances(address: String) -> Result<BridgeBalances> {
         alpha: alpha_free.to_string(),
         alpha_stake: alpha_stake.to_string(),
         h_alpha: h_alpha.to_string(),
-        h_alpha_bridgeable: bridgeable_halpha(h_alpha).to_string(),
+        h_alpha_bridgeable: crate::blockchain::transfers::apply_gas_buffer(h_alpha).to_string(),
     })
 }
 
@@ -144,14 +137,5 @@ mod tests {
         let m = bridge_min_transfers();
         assert_eq!(m.alpha, "15000000000");
         assert_eq!(m.h_alpha, "15000000000000000000");
-    }
-
-    #[test]
-    fn bridgeable_halpha_subtracts_one_gas_buffer() {
-        use crate::blockchain::transfers::MAX_GAS_FEE_BUFFER_PLANCK;
-        let free: u128 = 1_000_000_000_000_000_000; // 1 hAlpha
-        assert_eq!(super::bridgeable_halpha(free), free - MAX_GAS_FEE_BUFFER_PLANCK);
-        assert_eq!(super::bridgeable_halpha(1), 0); // saturates, never underflows
-        assert_eq!(super::bridgeable_halpha(0), 0);
     }
 }
