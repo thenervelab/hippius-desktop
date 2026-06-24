@@ -523,6 +523,11 @@ fn main() {
     let app = builder.build(tauri::generate_context!()).expect("error while building tauri application");
 
     app.run(|app_handle, event| {
+        // `app_handle` is consumed only by the macOS-gated `Reopen` arm below;
+        // on other platforms borrow-and-discard it so the unused-binding lint
+        // stays quiet without an `#[allow]`.
+        #[cfg(not(target_os = "macos"))]
+        let _ = &app_handle;
         match event {
             // macOS dock icon click with no visible windows. Mirrors the
             // tray's "Open Hippius" action.
@@ -719,7 +724,7 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
         {
             debug!("Registering deep links for Linux...");
             match app.deep_link().register_all() {
-                Ok(_) => info!("Deep links registered successfully for Linux"),
+                Ok(()) => info!("Deep links registered successfully for Linux"),
                 Err(e) => error!("Failed to register deep links: {}", e),
             }
         }

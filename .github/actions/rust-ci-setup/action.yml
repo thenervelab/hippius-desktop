@@ -1,0 +1,164 @@
+name: Rust CI setup
+description: >-
+  Shared setup for the Rust CI jobs — optional Linux system deps, SSH for the
+  private hcfs git deps, the pinned toolchain + clippy, the Rust cache, a
+  placeholder frontend dist, and src-tauri/.env. Used by both the ubuntu and
+  macOS Rust jobs so their setup can't drift.
+
+inputs:
+  deploy-key:
+    description: Base64-encoded SSH deploy key for the private hcfs git deps.
+    required: true
+  tauri-env:
+    description: Contents of src-tauri/.env (a build-time resource).
+    required: true
+  linux-deps:
+    description: "Install Tauri's Linux system deps (set 'true' on ubuntu runners)."
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    # Tauri's Linux build deps (webkit2gtk 4.1 + gtk + soup3) so the `tauri`
+    # crate compiles on a headless ubuntu runner. The keyring crate uses the
+    # pure-Rust zbus secret-service backend (`sync-secret-service` +
+    # `crypto-rust`), so NO libdbus/libsecret is needed; the keychain
+    # round-trip tests are `#[ignore]`d and never run under `cargo test`.
+    # ubuntu-latest ships only ~14 GB free on /, and clippy --all-targets for
+    # this dep graph (subxt, alloy, tauri, hcfs-client + every test binary) can
+    # exhaust it mid-build — the runner then dies with a "shutdown signal" /
+    # exit 143. Reclaim ~25 GB of preinstalled tooling the Rust job never uses.
+    - name: Free up runner disk (Linux)
+      if: inputs.linux-deps == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "before:"; df -h / | tail -1
+        sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup \
+          /usr/local/lib/android /opt/hostedtoolcache/CodeQL || true
+        sudo docker image prune --all --force >/dev/null 2>&1 || true
+        echo "after:"; df -h / | tail -1
+
+    # The standard 2-core ubuntu runner has only ~7 GB RAM. `clippy --all-targets`
+    # type-checks the lib AND every integration-test crate, each pulling the whole
+    # subxt/alloy/tauri/hcfs-client graph; two parallel rustc front-ends on those
+    # crates peak past 7 GB and the box thrashes to death — observed as ~20 min of
+    # zero compile output, then the watchdog SIGTERMs it (exit 143). A killed job
+    # also SKIPS the post cache-save step, so `cache-on-failure` never fires and
+    # every retry is cold. A swapfile lets that peak spill onto the ~39 GB of disk
+    # the free step just reclaimed, so the cold compile COMPLETES once and primes
+    # the cache (warm runs are then minutes). Inline (no third-party action) to
+    # keep the CI supply-chain surface flat; idempotent on re-run.
+    - name: Add swap (Linux)
+      if: inputs.linux-deps == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        if ! sudo swapon --show=NAME --noheadings | grep -qx /ci-swapfile; then
+          sudo fallocate -l 12G /ci-swapfile || sudo dd if=/dev/zero of=/ci-swapfile bs=1M count=12288
+          sudo chmod 600 /ci-swapfile
+          sudo mkswap /ci-swapfile
+          sudo swapon /ci-swapfile
+        fi
+        free -h
+        swapon --show
+
+    - name: Install Tauri system deps (Linux)
+      if: inputs.linux-deps == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        sudo apt-get update
+        sudo apt-get install -y \
+          libwebkit2gtk-4.1-dev \
+          libgtk-3-dev \
+          libayatana-appindicator3-dev \
+          librsvg2-dev \
+          libsoup-3.0-dev \
+          libxdo-dev \
+          libssl-dev \
+          build-essential \
+          file
+
+    # hcfs-client / hcfs-shared are private git deps fetched over SSH.
+    - name: Setup SSH for private Rust git deps
+      shell: bash
+      env:
+        PRIVATE_GIT_DEPLOY_KEY_B64: ${{ inputs.deploy-key }}
+      run: |
+        set -euo pipefail
+        mkdir -p ~/.ssh
+        chmod 700 ~/.ssh
+        python3 - <<'PY' > ~/.ssh/private_git_key
+        import os, base64, sys
+        sys.stdout.buffer.write(base64.b64decode(os.environ["PRIVATE_GIT_DEPLOY_KEY_B64"].strip()))
+        PY
+        chmod 600 ~/.ssh/private_git_key
+        ssh-keyscan github.com >> ~/.ssh/known_hosts
+        chmod 600 ~/.ssh/known_hosts
+        cat > ~/.ssh/config <<'EOF'
+        Host github.com
+          HostName github.com
+          User git
+          IdentityFile ~/.ssh/private_git_key
+          IdentitiesOnly yes
+          StrictHostKeyChecking yes
+          BatchMode yes
+        EOF
+        chmod 600 ~/.ssh/config
+        eval "$(ssh-agent -s)"
+        echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
+        echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
+        ssh-add ~/.ssh/private_git_key
+
+    - name: Force Cargo to use the git CLI
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p ~/.cargo
+        printf '[net]\ngit-fetch-with-cli = true\n' > ~/.cargo/config.toml
+
+    - name: Install the pinned toolchain with clippy
+      shell: bash
+      run: |
+        set -euo pipefail
+        # rust-toolchain.toml pins the channel; add clippy to THAT toolchain so
+        # the gate runs under the same compiler the app builds with.
+        channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' src-tauri/rust-toolchain.toml)
+        echo "pinned channel: ${channel:-<none, using default>}"
+        if [[ -n "$channel" ]]; then
+          rustup toolchain install "$channel" --component clippy --no-self-update
+        else
+          rustup component add clippy
+        fi
+
+    - name: Rust cache
+      uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      with:
+        workspaces: './src-tauri -> target'
+        # Save the cache even when the job fails/preempts, so a cold cancelled
+        # run doesn't force the next one to recompile the whole graph from
+        # scratch — the difference between a ~20-min and a ~3-min retry.
+        cache-on-failure: "true"
+
+    # tauri-build requires the frontendDist dir (../out) to exist; the Rust
+    # suite never serves the frontend, so a placeholder satisfies the build.
+    - name: Placeholder frontend dist
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p out
+        printf '<!doctype html><title>ci</title>' > out/index.html
+
+    # Write the secret via an env var (never interpolated into the script body)
+    # so a secret containing shell metacharacters can't break or inject.
+    - name: Create src-tauri/.env
+      shell: bash
+      env:
+        TAURI_ENV_FILE: ${{ inputs.tauri-env }}
+      run: |
+        set -euo pipefail
+        mkdir -p src-tauri
+        printf '%s\n' "$TAURI_ENV_FILE" > src-tauri/.env
+        chmod 600 src-tauri/.env
