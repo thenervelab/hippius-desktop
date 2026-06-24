@@ -10,7 +10,7 @@ name: ci
 on:
   pull_request:
   push:
-    branches: [main, redesign]
+    branches: [main, dev, redesign]
 
 # Least privilege: this workflow only reads the checkout.
 permissions:
@@ -25,6 +25,14 @@ env:
 
 jobs:
   rust:
+    # The macOS Rust lane is the slow one (~15-20 min on a cold cache), so run
+    # it only where it gates a release-bound merge — PRs into dev/main and
+    # pushes to them — and SKIP it on redesign so feature iteration stays fast.
+    # redesign's branch protection requires only the `frontend` check; dev/main
+    # require both, so the Rust gate still runs before anything reaches them.
+    if: >-
+      (github.event_name == 'pull_request' && (github.base_ref == 'dev' || github.base_ref == 'main')) ||
+      (github.event_name == 'push' && (github.ref_name == 'dev' || github.ref_name == 'main'))
     # macOS matches the dev/build environment: the Rust suite is known-green
     # there and it sidesteps the Linux Tauri system-deps + secret-service /
     # keychain setup the `keyring` crate would need on a headless runner.
