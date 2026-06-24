@@ -1,4 +1,7 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import { nextChartAnimState } from "@/lib/utils/chartAnimation";
 
 describe("nextChartAnimState (F-8 chart flash guard)", () => {
@@ -39,4 +42,24 @@ describe("nextChartAnimState (F-8 chart flash guard)", () => {
     const arrived = nextChartAnimState("0", "7", false);
     expect(arrived).toEqual({ signature: "7", reanimate: true });
   });
+});
+
+// Static wiring guard (mirrors the repo's Rust source-inspection guards): the
+// pure helper above is only useful if the chart components actually route their
+// animKey through it. If a refactor drops the call and goes back to bumping
+// animKey on every data change, the empty-fallback flash (F-8) silently returns
+// — a pure-helper test can't catch that, but this can.
+describe("chart components route animKey through nextChartAnimState (F-8 wiring)", () => {
+  const appRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+  const charts = [
+    "components/page-sections/home/storage-usage-bars/StorageBarChart.tsx",
+    "components/page-sections/home/available-credits/AvailableCreditsChart.tsx",
+  ];
+
+  for (const rel of charts) {
+    it(`${rel} calls nextChartAnimState`, () => {
+      const src = readFileSync(join(appRoot, rel), "utf8");
+      expect(src).toContain("nextChartAnimState(");
+    });
+  }
 });

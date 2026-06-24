@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import {
   ETA_SMOOTHING_ALPHA,
   resolveSmoothedEta,
@@ -204,5 +207,22 @@ describe("resolveSmoothedEta (F-4 ETA jitter)", () => {
       smoothed = resolveSmoothedEta(smoothed, 60, ETA_SMOOTHING_ALPHA);
     }
     expect(smoothed).toBeCloseTo(60, 1);
+  });
+});
+
+// Static wiring guard (mirrors the repo's Rust source-inspection guards): the
+// pure `resolveSmoothedEta` above only fixes the ETA jitter if the dialog effect
+// actually calls it. A revert to `setEtaSeconds(rawEta)` drops this call and the
+// jitter returns (F-4) — a pure-helper test can't catch that, but this can. (The
+// ETA itself renders as hover-tooltip content, so a behavioral render assertion
+// isn't reachable without bespoke tooltip-mock surgery; this guard is the robust
+// substitute, same pattern as the F-8 chart guard.)
+describe("SyncStatusDialog routes the ETA through resolveSmoothedEta (F-4 wiring)", () => {
+  it("the dialog effect EMA-smooths the ETA rather than rendering the raw value", () => {
+    const src = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), "..", "SyncStatusDialog.tsx"),
+      "utf8",
+    );
+    expect(src).toContain("resolveSmoothedEta(");
   });
 });
