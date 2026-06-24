@@ -678,7 +678,26 @@ mod tests {
     fn delete_remote_folder_rechecks_remote_state_after_unregister() {
         let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/folders.rs")).expect("read folders.rs");
         let sig_idx = src.find("pub async fn delete_remote_folder(").expect("declaration present");
-        let body = &src[sig_idx..];
+        // Scope the search to the function BODY (brace-matched), so a helper
+        // inserted between the signature and the body can't fool the ordering
+        // check — mirrors the sibling guard above.
+        let body_start = src[sig_idx..].find('{').expect("fn body opens") + sig_idx;
+        let mut depth = 0usize;
+        let mut body_end = body_start;
+        for (i, ch) in src[body_start..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        body_end = body_start + i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let body = &src[body_start..=body_end];
         let unregister_idx = body.find(".unregister_folder(").expect("calls unregister_folder");
         let recheck_idx = body.find("remote_folder_absent(").expect(
             "delete_remote_folder must call remote_folder_absent after an unregister error so a durable-but-timed-out delete is reported as success, not a false failure",

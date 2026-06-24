@@ -341,8 +341,9 @@ pub async fn get_sync_path(state: tauri::State<'_, crate::app_state::AppState>, 
 /// Pure helper: pick the first non-conflicting label by appending a numeric
 /// suffix when `base` already exists in `existing`.
 ///
-/// Used by `add_local_sync_folder` (`lifecycle.rs`) so the folder-uniqueness
-/// loop has exactly one source of truth.
+/// Called by `set_sync_path_internal` under the write lock (`Allocate` mode) so
+/// the folder-uniqueness loop has exactly one source of truth and runs inside
+/// the same transaction as the insert — closing the F-1 TOCTOU.
 pub(crate) fn generate_unique_label_internal(existing: &std::collections::HashSet<String>, base: &str) -> String {
     let mut label = base.to_string();
     let mut suffix = 2u32;

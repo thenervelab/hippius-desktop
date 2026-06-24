@@ -136,6 +136,10 @@ export function useTrayPanelData() {
           if (notReadyPollsRef.current >= MAX_NOT_READY_POLLS) {
             setLoading(false);
           }
+        } else {
+          // Logged out: nothing to load, so never hold the skeleton. The popover
+          // is gated to signed-in today, but keep the state self-consistent.
+          setLoading(false);
         }
       }
     } catch (error) {
