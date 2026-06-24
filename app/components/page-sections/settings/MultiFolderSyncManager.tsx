@@ -7,6 +7,8 @@ import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import type { SyncFolder, RemoteFolder } from "@/app/lib/types/sync-folder";
 import { AddLocalFolderDialog } from "./AddLocalFolderDialog";
 import { removeSyncPath } from "@/app/lib/utils/syncPathUtils";
+import { errorMessage } from "@/app/lib/utils/errorUtils";
+import { deleteFolderErrorToast } from "@/app/lib/utils/deleteFolderError";
 import {
   deleteRemoteFolder,
   restoreRemoteFolders,
@@ -458,8 +460,12 @@ export default function MultiFolderSyncManager() {
 
       await checkAndResetIfNoFolders();
     } catch (error) {
-      console.error("Failed to delete folder:", error);
-      toast.error("Failed to delete folder from server");
+      console.error("Failed to delete folder:", errorMessage(error));
+      toast.error(deleteFolderErrorToast(error));
+      // Surface the real reason AND refetch: a folder the server actually
+      // deleted (despite a client-side error) then vanishes from the list
+      // immediately instead of lingering as "failed" (F-2).
+      refreshFoldersAndStats();
     } finally {
       setIsDeletingServer(false);
     }

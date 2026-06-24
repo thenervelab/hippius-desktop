@@ -415,20 +415,49 @@ pub async fn delete_remote_folder(
 
     let client = hcfs_client::client::HcfsClient::new(client_config).map_err(|e| crate::error::AppError::Hcfs(e.to_string()))?;
 
-    let result = client
-        .unregister_folder(&account_id, &fhash)
-        .await
-        .map_err(|e| crate::error::AppError::Hcfs(e.to_string()))?;
+    let files_deleted = match client.unregister_folder(&account_id, &fhash).await {
+        Ok(result) => result.files_deleted,
+        Err(e) => {
+            // hcfs-server commits the folder-row delete before its long,
+            // best-effort per-chunk storage cleanup, so on a large folder the
+            // client's read can time out AFTER the delete is already durable.
+            // Re-list the account's remote folders: if this one is gone, the
+            // delete succeeded and propagating the error would be a FALSE
+            // failure (the FE would show "failed" for a folder that is actually
+            // deleted, then 0 folders on the next refresh).
+            warn!("unregister_folder('{label}') errored; re-checking remote state: {e}");
+            let listed = list_remote_folders_internal(pool, &account_id)
+                .await
+                .ok()
+                .map(|folders| folders.into_iter().map(|f| f.folder_hash).collect::<Vec<_>>());
+            if remote_folder_absent(&fhash, listed.as_deref()) {
+                info!("Remote folder '{label}' already absent after the error — treating the delete as successful (idempotent)");
+                0
+            } else {
+                // Still present (or the re-check itself failed) — a genuine failure.
+                return Err(crate::error::AppError::Hcfs(e.to_string()));
+            }
+        }
+    };
 
-    info!(
-        "Remote folder '{}' deleted: {} files removed, was_local={}",
-        label, result.files_deleted, was_local
-    );
+    info!("Remote folder '{label}' deleted: {files_deleted} files removed, was_local={was_local}");
 
-    Ok(DeleteRemoteFolderResult {
-        files_deleted: result.files_deleted,
-        was_local,
-    })
+    Ok(DeleteRemoteFolderResult { files_deleted, was_local })
+}
+
+/// After an `unregister_folder` error, decide whether the remote folder is
+/// nonetheless gone — i.e. the delete was durable and the error was only a late
+/// read timeout over the server's already-committed delete.
+///
+/// `listed` is the account's current remote folder hashes, or `None` when the
+/// re-list itself failed; in the `None` case we cannot confirm the delete and
+/// must treat the original error as real (returns `false`). Pure so the
+/// decision is unit/proptest-testable without a live server.
+fn remote_folder_absent(fhash: &str, listed: Option<&[String]>) -> bool {
+    match listed {
+        Some(hashes) => !hashes.iter().any(|h| h == fhash),
+        None => false,
+    }
 }
 
 /// Return all sync folders with their stats pre-joined from local DB + remote server.
@@ -602,5 +631,58 @@ mod tests {
             remove_idx < unregister_idx,
             "remove_drive_for_account MUST be called before .unregister_folder so the local drive is dead before the server reports zero files",
         );
+    }
+
+    // ── remote_folder_absent (F-2 idempotent delete) ────────────────
+
+    #[test]
+    fn absent_when_hash_not_in_list() {
+        // The deleted folder's hash is gone from the remote list → the delete
+        // landed despite the client-side error; report success.
+        assert!(remote_folder_absent("abc", Some(&["def".to_string(), "ghi".to_string()])));
+    }
+
+    #[test]
+    fn present_when_hash_still_in_list() {
+        // The folder is still on the server → the error was a genuine failure.
+        assert!(!remote_folder_absent("abc", Some(&["abc".to_string(), "def".to_string()])));
+    }
+
+    #[test]
+    fn absent_when_remote_list_empty() {
+        assert!(remote_folder_absent("abc", Some(&[])));
+    }
+
+    #[test]
+    fn not_confirmed_when_recheck_failed() {
+        // None = the re-list itself failed; we cannot confirm the delete, so the
+        // original error must stand (NOT a false success).
+        assert!(!remote_folder_absent("abc", None));
+    }
+
+    proptest::proptest! {
+        // The decision is exactly "absent iff we have a list AND the hash is not
+        // in it" — a `None` re-check can never report success.
+        #[test]
+        fn absent_iff_listed_and_not_contained(fhash in "[a-f0-9]{0,8}", others in proptest::collection::vec("[a-f0-9]{0,8}", 0..6)) {
+            let contains = others.iter().any(|h| h == &fhash);
+            proptest::prop_assert_eq!(remote_folder_absent(&fhash, Some(&others)), !contains);
+            proptest::prop_assert!(!remote_folder_absent(&fhash, None));
+        }
+    }
+
+    // Static guard: delete_remote_folder must RE-LIST remote folders after the
+    // unregister call so a future refactor can't silently drop the idempotency
+    // re-check and reintroduce the false "delete failed" report (F-2).
+    #[test]
+    fn delete_remote_folder_rechecks_remote_state_after_unregister() {
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/folders.rs")).expect("read folders.rs");
+        let sig_idx = src.find("pub async fn delete_remote_folder(").expect("declaration present");
+        let body = &src[sig_idx..];
+        let unregister_idx = body.find(".unregister_folder(").expect("calls unregister_folder");
+        let recheck_idx = body.find("remote_folder_absent(").expect(
+            "delete_remote_folder must call remote_folder_absent after an unregister error so a durable-but-timed-out delete is reported as success, not a false failure",
+        );
+        assert!(unregister_idx < recheck_idx, "the idempotency re-check must follow the unregister call");
     }
 }

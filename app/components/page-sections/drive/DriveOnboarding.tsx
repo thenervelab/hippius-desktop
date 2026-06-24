@@ -6,6 +6,8 @@ import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import type { SyncFolder, RemoteFolder } from "@/app/lib/types/sync-folder";
 import { AddLocalFolderDialog } from "@/components/page-sections/settings/AddLocalFolderDialog";
 import { removeSyncPath } from "@/app/lib/utils/syncPathUtils";
+import { errorMessage } from "@/app/lib/utils/errorUtils";
+import { deleteFolderErrorToast } from "@/app/lib/utils/deleteFolderError";
 import {
   restoreRemoteFolders,
   deleteRemoteFolder,
@@ -454,8 +456,11 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
       setDeleteConfirmInput("");
       loadFolders();
     } catch (error) {
-      console.error("Failed to delete folder:", error);
-      toast.error("Failed to delete folder from server");
+      console.error("Failed to delete folder:", errorMessage(error));
+      toast.error(deleteFolderErrorToast(error));
+      // Refetch so a folder the server actually deleted (despite a client-side
+      // error) drops off the list instead of lingering as "failed" (F-2).
+      loadFolders();
     } finally {
       setIsDeletingServer(false);
     }
