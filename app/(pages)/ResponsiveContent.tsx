@@ -5,6 +5,7 @@ import cn from "@/app/lib/utils/cn";
 import ConflictsBanner from "@/components/ui/ConflictsBanner";
 import MigrationBanner from "@/components/ui/MigrationBanner";
 import CreditsExhaustedBanner from "@/components/billing/CreditsExhaustedBanner";
+import OfflineBanner from "@/components/ui/OfflineBanner";
 import { SyncReauthRequiredAlert } from "@/components/ui/SyncReauthRequiredAlert";
 import FileDetailsPanel from "../components/page-sections/drive/FileDetailsPanel";
 
@@ -25,6 +26,7 @@ export default function ResponsiveContent({
       >
         {/* System alerts — sticky so they stay visible while scrolling */}
         <div className="sticky top-0 z-30 px-4">
+          <OfflineBanner />
           <ConflictsBanner />
           <MigrationBanner />
           <CreditsExhaustedBanner />
