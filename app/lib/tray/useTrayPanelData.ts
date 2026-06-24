@@ -36,6 +36,13 @@ const FEED_LIMIT = 20;
  *  uploads, unread). Live upload progress is event-driven, not polled. */
 const REFRESH_INTERVAL_MS = 5000;
 
+/** How many consecutive logged-in-but-not-`sessionReady` refreshes to keep the
+ *  boot-gap skeleton before giving up and showing the empty state. One grace
+ *  poll covers the normal restore_session hydration gap; beyond that the
+ *  session is effectively stuck (e.g. a slow/blocked keychain restore) and an
+ *  infinite skeleton is worse than an empty state (F-3). */
+const MAX_NOT_READY_POLLS = 2;
+
 /**
  * Data feed for the tray popover.
  *
@@ -78,6 +85,9 @@ export function useTrayPanelData() {
   // looking at. The popover hides on blur (`on_panel_blur`), so focus tracks
   // visibility 1:1.
   const isShownRef = useRef(false);
+  // Consecutive refreshes that ran logged-in but without a hydrated session.
+  // Caps the boot-gap skeleton so a stuck session can't hang it forever (F-3).
+  const notReadyPollsRef = useRef(0);
 
   const refresh = useCallback(async () => {
     try {
@@ -112,10 +122,21 @@ export function useTrayPanelData() {
         // We now have authoritative data for this session — drop the skeleton.
         // Deferred until the session-ready branch so the boot gap (address known
         // but session not yet hydrated) keeps showing the skeleton, not "empty".
+        notReadyPollsRef.current = 0;
         setLoading(false);
       } else {
         setRecentUploads([]);
         setUnreadCount(0);
+        // Session not hydrated yet. Keep the skeleton for the boot-gap grace
+        // poll, but once a logged-in user has waited past that, stop withholding
+        // the resolved state so the popover shows the empty state rather than an
+        // infinite skeleton (the never-flips-`sessionReady` hang, F-3).
+        if (menuData.loggedIn) {
+          notReadyPollsRef.current += 1;
+          if (notReadyPollsRef.current >= MAX_NOT_READY_POLLS) {
+            setLoading(false);
+          }
+        }
       }
     } catch (error) {
       console.error("[TrayPanel] Failed to load data:", error);
