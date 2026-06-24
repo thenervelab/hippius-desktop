@@ -16,6 +16,11 @@ import { Loader2, AlertCircle } from "lucide-react";
 import type { OAuthSession } from "@/app/lib/types/oAuth";
 import { activeRecoveryCheckAtom } from "@/app/lib/global-atoms/recoveryAtoms";
 import { checkRecoveryState } from "@/app/lib/utils/recovery";
+import { Button } from "@/components/ui/button";
+import { BackgroundContainer } from "@/components/ui/BackgroundContainer";
+import { LogoMark } from "@/components/ui/LogoMark";
+import AppVersion from "@/components/ui/AppVersion";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 export default function OAuthCallbackPage() {
     const router = useRouter();
@@ -175,55 +180,80 @@ export default function OAuthCallbackPage() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    if (error) {
-        return (
-            <div className="fixed inset-0 w-screen h-screen flex items-center justify-center bg-white z-50">
-                <div className="w-full max-w-md mx-auto px-4">
-                    <div className="bg-white rounded-xl shadow-lg p-8 border border-grey-90">
-                        <div className="flex flex-col items-center text-center">
-                            <div className="size-16 rounded-full bg-error-100 flex items-center justify-center mb-4">
-                                <AlertCircle className="size-8 text-error-50" />
-                            </div>
-                            <h1 className="text-2xl font-semibold text-grey-10 mb-2">
-                                Authentication Failed
-                            </h1>
-                            <p className="text-grey-60 mb-6">
-                                {error}
-                            </p>
-                            <button
-                                onClick={() => {
-                                    // Mark as manual navigation to prevent deep link re-processing
-                                    sessionStorage.setItem("manual_navigation", "true");
-                                    router.replace("/login");
-                                }}
-                                className="px-6 py-3 bg-primary-50 text-white rounded-lg font-medium hover:bg-primary-60 transition-colors"
-                            >
-                                Back to Login
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        );
-    }
+    // The callback is reached straight from the login screen, so it reuses
+    // that screen's branded frame (BackgroundContainer) and footer
+    // (Terms/Privacy + version, matching `LoginForm`) instead of a bare white
+    // page — otherwise the flash between login → callback reads as a jarring
+    // unstyled screen, and in dark mode the old `bg-white` blinded the user.
+    const heading = error ? "Authentication Failed" : "Completing Sign In";
+    const description =
+        error ?? "Please wait while we securely authenticate your account...";
 
     return (
-        <div className="fixed inset-0 w-screen h-screen flex items-center justify-center bg-white z-50">
-            <div className="w-full max-w-md mx-auto px-4">
-                <div className="bg-white rounded-xl shadow-lg p-8 border border-grey-90">
-                    <div className="flex flex-col items-center text-center">
-                        <div className="size-16 rounded-full bg-primary-95 flex items-center justify-center mb-4">
-                            <Loader2 className="size-8 text-primary-50 animate-spin" />
-                        </div>
-                        <h1 className="text-2xl font-semibold text-grey-10 mb-2">
-                            Completing Sign In
-                        </h1>
-                        <p className="text-grey-60">
-                            Please wait while we securely authenticate your account...
-                        </p>
+        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-hidden bg-white dark:bg-[#0a0a0a]">
+            <BackgroundContainer
+                addDotWithBlurryEffect
+                hippoIconClassName="fill-[#989898] dark:fill-[#5e5e5e]"
+                cardClassName="w-full max-w-[461px] items-center gap-4 p-6 text-center"
+            >
+                <LogoMark />
+
+                <h1 className="w-full text-center font-medium text-[28px] leading-9 tracking-[-0.03em] text-grey-10 dark:text-grey-light-100">
+                    {heading}
+                </h1>
+
+                {error ? (
+                    <div className="flex size-12 items-center justify-center rounded-full bg-error-100 dark:bg-error-50/15">
+                        <AlertCircle className="size-6 text-error-50" />
                     </div>
-                </div>
-            </div>
+                ) : (
+                    <Loader2 className="size-6 animate-spin text-primary-50 dark:text-primary-65" />
+                )}
+
+                <p className="w-full text-center text-[14px] font-medium leading-5 text-grey-60 dark:text-grey-dark-600">
+                    {description}
+                </p>
+
+                {error ? (
+                    <Button
+                        variant="primary"
+                        className="h-12 w-full"
+                        onClick={() => {
+                            // Mark as manual navigation to prevent deep link re-processing
+                            sessionStorage.setItem("manual_navigation", "true");
+                            router.replace("/login");
+                        }}
+                    >
+                        Back to Login
+                    </Button>
+                ) : null}
+
+                <div className="h-px w-full bg-grey-80 dark:bg-[#494949]" />
+
+                <p className="w-full text-center text-[12px] font-medium leading-[18px] tracking-[-0.02em] text-grey-dark-800">
+                    By continuing you agree to our
+                    <br />
+                    <button
+                        type="button"
+                        onClick={() => openUrl("https://hippius.com/terms-and-conditions")}
+                        className="cursor-pointer font-semibold text-primary-50 transition-colors hover:text-primary-60 dark:text-primary-65"
+                    >
+                        Terms and Conditions
+                    </button>{" "}
+                    and{" "}
+                    <button
+                        type="button"
+                        onClick={() => openUrl("https://hippius.com/privacy-policy")}
+                        className="cursor-pointer font-semibold text-primary-50 transition-colors hover:text-primary-60 dark:text-primary-65"
+                    >
+                        Privacy Policy
+                    </button>
+                </p>
+
+                <p className="text-[12px] font-medium leading-[18px] tracking-[-0.02em] text-grey-dark-600">
+                    Version <AppVersion />
+                </p>
+            </BackgroundContainer>
         </div>
     );
 }
