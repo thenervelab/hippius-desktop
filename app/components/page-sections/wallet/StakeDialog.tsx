@@ -25,14 +25,6 @@ import { useHippiusBalance } from "@/lib/hooks/api/useHippiusBalance";
 import { dispatchSigningError } from "@/lib/utils/dispatchTauriError";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 
-/**
- * 0.01 hAlpha (= 10^16 planck) reserved on MAX so the user always has
- * enough free balance left to pay for the bond extrinsic *and* the
- * eventual unbond/withdraw. Mirrors `MAX_GAS_FEE_BUFFER_PLANCK` in
- * `src-tauri/src/blockchain/transfers.rs` — keep the two in sync.
- */
-const MAX_GAS_FEE_BUFFER_PLANCK = 10_000_000_000_000_000n;
-
 interface StakeDialogProps {
   open: boolean;
   onClose: () => void;
@@ -68,30 +60,45 @@ const StakeDialog: React.FC<StakeDialogProps> = ({
     }
   }, [open, refetch, refetchBalance]);
 
-  // Available HIP to bond. Matches hippius-web's formula:
-  //   available = free − bonded − unbonding − withdrawable − gas buffer
-  //
-  // Subtracting bonded/unbonding/withdrawable is required because those
-  // plancks are already locked by the staking pallet — the chain
-  // rejects a `bond` for amounts that include them, so MAX would have
-  // silently produced a transaction the user couldn't actually submit.
-  // BigInt planck end-to-end (audit R-26): `Number(planck) / 1e18` rounds to
-  // the nearest double before truncating, so MAX could exceed the true
-  // available and the chain rejected the bond.
-  const availablePlanck = useMemo(() => {
+  const [availablePlanck, setAvailablePlanck] = useState<bigint>(0n);
+  // True while the Rust figure is being (re)computed. Gates the percent
+  // buttons so a click during a refetch can't use a stale `availablePlanck`
+  // (PR #26 review); the displayed "You have" figure keeps its last value so
+  // it doesn't flicker to 0 on every refetch.
+  const [availableLoading, setAvailableLoading] = useState(false);
+
+  // Available HIP to bond is computed in Rust (audit M-1):
+  //   free − bonded − unbonding − withdrawable − gas buffer
+  // The buffer constant and the subtraction are owned by `transfers.rs`; the
+  // renderer only renders the returned figure (BigInt planck end-to-end, R-26).
+  useEffect(() => {
+    let cancelled = false;
     const freeBI = balanceInfo?.data?.free;
-    if (!freeBI) return 0n;
-    try {
-      const free = typeof freeBI === "bigint" ? freeBI : BigInt(String(freeBI));
-      const bonded = BigInt(stakingInfo.bonded || "0");
-      const unbonding = BigInt(stakingInfo.unbonding || "0");
-      const withdrawable = BigInt(stakingInfo.withdrawable || "0");
-      const locked = bonded + unbonding + withdrawable;
-      const remaining = free - locked - MAX_GAS_FEE_BUFFER_PLANCK;
-      return remaining > 0n ? remaining : 0n;
-    } catch {
-      return 0n;
+    if (!freeBI) {
+      setAvailablePlanck(0n);
+      setAvailableLoading(false);
+      return;
     }
+    const free = typeof freeBI === "bigint" ? freeBI : BigInt(String(freeBI));
+    setAvailableLoading(true);
+    invoke<{ planck: string; hip: string }>("compute_available_to_bond", {
+      free: free.toString(),
+      bonded: stakingInfo.bonded || "0",
+      unbonding: stakingInfo.unbonding || "0",
+      withdrawable: stakingInfo.withdrawable || "0",
+    })
+      .then((res) => {
+        if (!cancelled) setAvailablePlanck(BigInt(res.planck));
+      })
+      .catch(() => {
+        if (!cancelled) setAvailablePlanck(0n);
+      })
+      .finally(() => {
+        if (!cancelled) setAvailableLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [
     balanceInfo,
     stakingInfo.bonded,
@@ -307,7 +314,7 @@ const StakeDialog: React.FC<StakeDialogProps> = ({
                 key={key}
                 type="button"
                 onClick={() => handlePercentClick(pct)}
-                disabled={stakingInfo.isLoading || availablePlanck === 0n}
+                disabled={stakingInfo.isLoading || availableLoading || availablePlanck === 0n}
                 className={cn(
                   "rounded-full border px-2.5 py-0.5 text-[13px] font-semibold leading-5 tracking-[-0.26px] transition-colors disabled:opacity-60",
                   activeButton === key

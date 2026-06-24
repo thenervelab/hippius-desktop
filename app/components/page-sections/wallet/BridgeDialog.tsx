@@ -39,11 +39,6 @@ import { useBridge, type BridgeDirection } from "@/lib/hooks/api/useBridge";
 const ESTIMATED_TIME_SECONDS = 120;
 const FEE_PERCENTAGE = 0.001; // 0.1%
 
-/** Gas reserve subtracted from the hAlpha MAX so the bridge tx can pay
- *  its own fee. Mirrors `MAX_GAS_FEE_BUFFER_PLANCK` in
- *  `src-tauri/src/blockchain/transfers.rs`. */
-const MAX_GAS_FEE_BUFFER_PLANCK = BigInt("10000000000000000");
-
 /* ── Helpers ──────────────────────────────────────────────── */
 
 const formatDisplayAmount = (amount: string) => {
@@ -218,8 +213,7 @@ const BridgeDialog: React.FC<BridgeDialogProps> = ({
   const sourceBalancePlanck = useMemo<bigint | null>(() => {
     if (!balances) return null;
     if (isAlphaToHAlpha) return balances.alphaStake > 0n ? balances.alphaStake : 0n;
-    const after = balances.hAlpha - MAX_GAS_FEE_BUFFER_PLANCK;
-    return after > 0n ? after : 0n;
+    return balances.hAlphaBridgeable > 0n ? balances.hAlphaBridgeable : 0n;
   }, [balances, isAlphaToHAlpha]);
 
   const destBalancePlanck = useMemo<bigint | null>(() => {
@@ -233,16 +227,14 @@ const BridgeDialog: React.FC<BridgeDialogProps> = ({
   /* Per-direction minimum sourced from the Rust BridgeConfig so the
    * hint matches the chain-enforced floor. In source base units. */
   const minAmountPlanck = useMemo<bigint>(() => {
-    if (!bridge.config) return 0n;
-    const planck = isAlphaToHAlpha
-      ? bridge.config.minAlphaPlanck
-      : bridge.config.minHalphaPlanck;
+    const m = bridge.minTransfers;
+    if (!m) return 0n;
     try {
-      return BigInt(planck);
+      return BigInt(isAlphaToHAlpha ? m.alpha : m.hAlpha);
     } catch {
       return 0n;
     }
-  }, [bridge.config, isAlphaToHAlpha]);
+  }, [bridge.minTransfers, isAlphaToHAlpha]);
 
   const handleSwapBridgeDirection = useCallback(() => {
     setBridgeDirection((prev) =>

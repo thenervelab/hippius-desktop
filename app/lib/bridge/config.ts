@@ -48,30 +48,6 @@ export const BRIDGE_CONFIG = {
         },
     },
 
-    // Bridge fees and limits
-    fees: {
-        // Minimum bridge amount (in smallest unit)
-        minAmount: BigInt(1_000_000_000), // 1 token
-        // Maximum bridge amount (in smallest unit)
-        maxAmount: BigInt(1_000_000_000_000_000), // 1M tokens
-        // Bridge fee percentage (0.1%)
-        feePercentage: 0.001,
-        // Buffer percentage to add to minimum amount (to account for price fluctuations)
-        // This ensures the user sends enough even if price drops during processing
-        // Default is 5% (0.05)
-        minimumBufferPercentage: parseFloat(process.env.NEXT_PUBLIC_BRIDGE_MIN_BUFFER_PERCENTAGE || '0.05'),
-    },
-
-    // Minimum transfer amounts (hardcoded for now, can be updated here)
-    minimumTransfer: {
-        // Minimum Alpha amount for Alpha → hAlpha bridge (in Alpha units, 9 decimals)
-        // 15 Alpha = 15 * 10^9 = 15_000_000_000
-        alpha: BigInt(15_000_000_000),
-        // Minimum hAlpha amount for hAlpha → Alpha bridge (in hAlpha units, 18 decimals)
-        // 15 hAlpha = 15 * 10^18 = 15_000_000_000_000_000_000
-        hAlpha: BigInt('15000000000000000000'),
-    },
-
     // Timing configuration
     timing: {
         // Estimated bridge time in seconds
@@ -110,15 +86,4 @@ export interface BridgeTransaction {
     createdAt: Date;
     updatedAt: Date;
     error?: string;
-}
-
-// Helper to calculate bridge fee
-export function calculateBridgeFee(amount: bigint): bigint {
-    const feePercentage = BRIDGE_CONFIG.fees.feePercentage;
-    return (amount * BigInt(Math.floor(feePercentage * 10000))) / BigInt(10000);
-}
-
-// Helper to calculate received amount after fees
-export function calculateReceivedAmount(amount: bigint): bigint {
-    return amount - calculateBridgeFee(amount);
 }

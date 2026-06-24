@@ -66,6 +66,7 @@ pub async fn bridge_get_balances(address: String) -> Result<BridgeBalances> {
         alpha: alpha_free.to_string(),
         alpha_stake: alpha_stake.to_string(),
         h_alpha: h_alpha.to_string(),
+        h_alpha_bridgeable: crate::blockchain::transfers::apply_gas_buffer(h_alpha).to_string(),
     })
 }
 

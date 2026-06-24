@@ -41,6 +41,9 @@ export interface BridgeBalances {
     alphaStake: bigint;
     /** Free hAlpha on Hippius, smallest unit. */
     hAlpha: bigint;
+    /** Free hAlpha minus the gas buffer — Rust-computed bridgeable amount
+     *  for hAlpha → Alpha (audit M-3). */
+    hAlphaBridgeable: bigint;
 }
 
 export interface StakedHotkey {
