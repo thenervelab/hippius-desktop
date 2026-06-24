@@ -233,16 +233,14 @@ const BridgeDialog: React.FC<BridgeDialogProps> = ({
   /* Per-direction minimum sourced from the Rust BridgeConfig so the
    * hint matches the chain-enforced floor. In source base units. */
   const minAmountPlanck = useMemo<bigint>(() => {
-    if (!bridge.config) return 0n;
-    const planck = isAlphaToHAlpha
-      ? bridge.config.minAlphaPlanck
-      : bridge.config.minHalphaPlanck;
+    const m = bridge.minTransfers;
+    if (!m) return 0n;
     try {
-      return BigInt(planck);
+      return BigInt(isAlphaToHAlpha ? m.alpha : m.hAlpha);
     } catch {
       return 0n;
     }
-  }, [bridge.config, isAlphaToHAlpha]);
+  }, [bridge.minTransfers, isAlphaToHAlpha]);
 
   const handleSwapBridgeDirection = useCallback(() => {
     setBridgeDirection((prev) =>

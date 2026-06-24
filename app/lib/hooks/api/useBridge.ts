@@ -14,7 +14,6 @@ import { resolveTxOutcome, type TxOutcome } from "@/lib/utils/txOutcome";
 // (deposit/withdraw) go through `bridge_alpha_to_halpha` /
 // `bridge_halpha_to_alpha` so the wallet never blind-signs a renderer-built
 // extrinsic (audit H-8). The old TS bridge service / local cache are gone.
-import { BRIDGE_CONFIG } from "@/lib/bridge/config";
 import type {
   BridgeBalances,
   BridgeStep,
@@ -36,47 +35,6 @@ type BridgeOutcome = TxOutcome & {
 };
 
 import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
-
-/**
- * Mirror of the Rust `BridgeConfig` shape the legacy dialog code reads.
- * Sourced from {@link BRIDGE_CONFIG} so the FE has a single source of
- * truth and we don't need a round-trip to Rust just to render config.
- */
-export interface BridgeConfig {
-  bittensorWsUrl: string;
-  bittensorName: string;
-  hippiusWsUrl: string;
-  hippiusName: string;
-  bridgeContractAddress: string;
-  defaultValidatorHotkey: string;
-  defaultNetuid: number;
-  alphaDecimals: number;
-  halphaDecimals: number;
-  feeNumerator: number;
-  feeDenominator: number;
-  minAlphaPlanck: string;
-  minHalphaPlanck: string;
-  minBufferBps: number;
-}
-
-function buildFeConfig(): BridgeConfig {
-  return {
-    bittensorWsUrl: BRIDGE_CONFIG.bittensor.wsUrl,
-    bittensorName: BRIDGE_CONFIG.bittensor.name,
-    hippiusWsUrl: BRIDGE_CONFIG.hippius.wsUrl,
-    hippiusName: BRIDGE_CONFIG.hippius.name,
-    bridgeContractAddress: BRIDGE_CONFIG.contract.address,
-    defaultValidatorHotkey: BRIDGE_CONFIG.defaultValidator.hotkey,
-    defaultNetuid: BRIDGE_CONFIG.defaultValidator.netuid,
-    alphaDecimals: BRIDGE_CONFIG.tokens.alpha.decimals,
-    halphaDecimals: BRIDGE_CONFIG.tokens.hAlpha.decimals,
-    feeNumerator: Math.round(BRIDGE_CONFIG.fees.feePercentage * 10000),
-    feeDenominator: 10000,
-    minAlphaPlanck: BRIDGE_CONFIG.minimumTransfer.alpha.toString(),
-    minHalphaPlanck: BRIDGE_CONFIG.minimumTransfer.hAlpha.toString(),
-    minBufferBps: Math.round(BRIDGE_CONFIG.fees.minimumBufferPercentage * 10000),
-  };
-}
 
 export type { BridgeDirection } from "@/lib/bridge/types";
 
@@ -115,7 +73,16 @@ export function useBridge() {
 
   const [wizardSteps] = useState<BridgeStep[]>([]);
 
-  const config = useMemo(buildFeConfig, []);
+  /* ── Minimum transfers (per-direction floor) ─────────────────────── */
+
+  /** Per-direction minimum transfer (rao decimal strings), owned by Rust
+   *  `convert.rs` and exposed via `bridge_min_transfers`. The FE renders the
+   *  floor it gates input on; the chain enforces the real one (audit M-4). */
+  const minTransfersQuery = useQuery<{ alpha: string; hAlpha: string }>({
+    queryKey: ["bridge-min-transfers"],
+    queryFn: () => invoke("bridge_min_transfers"),
+    staleTime: Infinity,
+  });
 
   /* ── Balances ─────────────────────────────────────────────────────── */
 
@@ -272,7 +239,7 @@ export function useBridge() {
   return useMemo(
     () => ({
       // Config + readiness
-      config,
+      minTransfers: minTransfersQuery.data ?? null,
       configLoading: false,
       isInitialized,
 
@@ -301,7 +268,7 @@ export function useBridge() {
       submitAlphaToHalpha,
     }),
     [
-      config,
+      minTransfersQuery.data,
       isInitialized,
       balancesQuery.data,
       balancesQuery.isLoading,
