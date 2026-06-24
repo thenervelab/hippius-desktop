@@ -563,6 +563,30 @@ pub fn get_snapshot(sync: &SyncRunner, preparing: &crate::sync::preparing::Prepa
     Ok(snapshot)
 }
 
+/// Order the completed tail newest-first (by `completed_at` descending) so a
+/// file the user just watched finish sits at the TOP of the completed group,
+/// not buried under larger-but-older completions by `build_snapshot`'s
+/// size-descending tie-break (F-6). `cap_snapshot_files` already does this, but
+/// ONLY when the list is truncated (>`MAX_EVENT_FILES`); doing it here makes the
+/// recency order consistent for the common short-list case too.
+///
+/// Only the completed tail is reordered. `build_snapshot` ranks completed
+/// (status rank `Completed`) last, so the completed rows are a contiguous
+/// suffix; the active/pending ordering ahead of `split` is left untouched, and
+/// the "completed is a contiguous tail" invariant `cap_snapshot_files` relies on
+/// is preserved. `sort_by_key` is stable, so equal-`completed_at` rows keep
+/// `build_snapshot`'s size order. NOTE: the group order (active → pending →
+/// completed) is deliberately NOT changed, and pending stays in `build_snapshot`
+/// order — the snapshot carries no per-file queue index to sort pending by.
+fn sort_completed_tail_by_recency(snapshot: &mut SyncSnapshot) {
+    let split = snapshot
+        .files
+        .iter()
+        .position(|f| f.status == FileProgressStatus::Completed)
+        .unwrap_or(snapshot.files.len());
+    snapshot.files[split..].sort_by_key(|f| std::cmp::Reverse(f.completed_at.unwrap_or(0)));
+}
+
 /// Apply every mutation a snapshot needs before leaving the Rust side for
 /// the frontend. Called from both the `sp_get_snapshot` bootstrap path
 /// (widget/tray mount) and the `SyncEvent::ProgressSnapshot` bridge
@@ -574,12 +598,13 @@ pub fn get_snapshot(sync: &SyncRunner, preparing: &crate::sync::preparing::Prepa
 /// the snapshot into a visible "completed" state; we run it first so
 /// the preparing override does not paper over a real completion.
 /// `apply_preparing_override` runs second and only takes effect when
-/// the snapshot is still invisible (no real session yet). `cap_snapshot_files`
-/// runs last to truncate the file list — order-independent relative
-/// to the previous two.
+/// the snapshot is still invisible (no real session yet).
+/// `sort_completed_tail_by_recency` then surfaces the newest completions, and
+/// `cap_snapshot_files` runs last to truncate the file list.
 pub(crate) fn prepare_snapshot_for_emit(snapshot: &mut SyncSnapshot, preparing: &crate::sync::preparing::PreparingState) {
     fixup_stalled_completion(snapshot);
     apply_preparing_override(snapshot, preparing);
+    sort_completed_tail_by_recency(snapshot);
     cap_snapshot_files(snapshot);
 }
 
@@ -845,6 +870,48 @@ mod tests {
         prepare_snapshot_for_emit(&mut snap, &preparing);
 
         assert_eq!(snap.files.len(), MAX_EVENT_FILES);
+    }
+
+    /// F-6: in a short (un-truncated) list, the completed group must be ordered
+    /// newest-first by `completed_at`, so a just-finished file sits at the top of
+    /// the completed rows instead of buried under a larger-but-older completion
+    /// by `build_snapshot`'s size tie-break. The active/pending order is kept.
+    #[test]
+    fn prepare_snapshot_for_emit_orders_completed_newest_first() {
+        use hcfs_client::engine::progress::state::{FileAction, FileProgress, FileProgressStatus};
+        let make = |name: &str, status: FileProgressStatus, completed_at: Option<i64>, total_bytes: u64| FileProgress {
+            path: std::sync::Arc::from(name),
+            file_name: std::sync::Arc::from(name),
+            label: std::sync::Arc::from("default"),
+            action: FileAction::Upload,
+            status,
+            progress_percent: 0,
+            bytes_encrypted: 0,
+            bytes_transferred: 0,
+            total_bytes,
+            resumed_from_bytes: None,
+            error: None,
+            completed_at,
+        };
+        let mut snap = base_snapshot();
+        snap.is_active = true;
+        snap.effective_in_progress = true;
+        snap.widget_visible = true;
+        // `build_snapshot` order: pending first, completed largest-first — so the
+        // OLDER completion (the bigger file) sorts ahead of the newer-but-smaller
+        // one under its size tie-break.
+        snap.files = vec![
+            make("p1.txt", FileProgressStatus::Pending, None, 500),
+            make("p2.txt", FileProgressStatus::Pending, None, 400),
+            make("c_old_big.txt", FileProgressStatus::Completed, Some(1), 900),
+            make("c_new_small.txt", FileProgressStatus::Completed, Some(2), 100),
+        ];
+
+        let preparing = crate::sync::preparing::PreparingState::new();
+        prepare_snapshot_for_emit(&mut snap, &preparing);
+
+        let order: Vec<&str> = snap.files.iter().map(|f| f.file_name.as_ref()).collect();
+        assert_eq!(order, vec!["p1.txt", "p2.txt", "c_new_small.txt", "c_old_big.txt"]);
     }
 
     /// Regression for the audit's "completed files don't show up": when a cycle
