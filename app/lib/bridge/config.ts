@@ -111,14 +111,3 @@ export interface BridgeTransaction {
     updatedAt: Date;
     error?: string;
 }
-
-// Helper to calculate bridge fee
-export function calculateBridgeFee(amount: bigint): bigint {
-    const feePercentage = BRIDGE_CONFIG.fees.feePercentage;
-    return (amount * BigInt(Math.floor(feePercentage * 10000))) / BigInt(10000);
-}
-
-// Helper to calculate received amount after fees
-export function calculateReceivedAmount(amount: bigint): bigint {
-    return amount - calculateBridgeFee(amount);
-}
