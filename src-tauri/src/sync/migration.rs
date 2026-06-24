@@ -556,7 +556,7 @@ pub async fn complete_migration_transition(
         let path_str = sync_path.to_string_lossy().to_string();
         // Validate (incl. overlap) BEFORE materializing the directory so a
         // rejected path leaves no empty folder behind (audit H-6).
-        crate::sync::paths::set_sync_path_internal(pool, &account_id, &path_str, false, Some(&label)).await?;
+        crate::sync::paths::set_sync_path_internal(pool, &account_id, &path_str, false, crate::sync::paths::LabelMode::Exact(&label)).await?;
         std::fs::create_dir_all(&sync_path)?;
         info!("Created sync path at '{}' for migration label '{}'", path_str, label);
     } else if let Some(custom) = custom_sync_path.as_ref().filter(|p| !p.is_empty()) {

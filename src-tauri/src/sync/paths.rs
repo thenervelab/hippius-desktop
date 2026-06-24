@@ -74,27 +74,51 @@ async fn validate_no_path_overlap(new_path: &Path, new_label: &str, existing: &[
     Ok(())
 }
 
-/// Core DB upsert + macOS bookmark logic.
-pub(crate) async fn set_sync_path_internal(pool: &SqlitePool, account_id: &str, path: &str, is_public: bool, label: Option<&str>) -> Result<String> {
+/// How [`set_sync_path_internal`] resolves the drive label while it holds the
+/// `BEGIN IMMEDIATE` write lock.
+///
+/// Modeling this as an enum — instead of the old implicit "the caller already
+/// suffixed a unique label and passes it in" convention — is the F-1 fix.
+/// `add_local_sync_folder` used to read existing labels, pick a unique one,
+/// then call this function; but that read ran OUTSIDE this transaction, so two
+/// concurrent adds both computed the same label and the second's
+/// `ON CONFLICT DO UPDATE` silently rewrote the first drive's path (data loss).
+/// `Allocate` moves the suffixing inside the lock; `Exact` keeps the upsert the
+/// set/update callers depend on.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum LabelMode<'a> {
+    /// Use this exact label, upserting the path if an `(owner, label)` row
+    /// already exists — the set/update path (default drive, migration restore,
+    /// explicit folder re-point).
+    Exact(&'a str),
+    /// Allocate a fresh, collision-free label by suffixing `base` against the
+    /// labels read in THIS transaction, then plain-`INSERT`. The
+    /// add-a-new-drive path — it never rewrites an existing drive's path.
+    Allocate { base: &'a str },
+}
+
+/// Core DB upsert + macOS bookmark logic. Returns the label actually written
+/// (for `Allocate`, the suffixed label such as `tags-2`).
+pub(crate) async fn set_sync_path_internal(pool: &SqlitePool, account_id: &str, path: &str, is_public: bool, mode: LabelMode<'_>) -> Result<String> {
     let path_type = if is_public { "public" } else { "private" };
-    let label = label.unwrap_or("default");
     let timestamp = Utc::now().timestamp();
     let owner = account_key(account_id);
 
-    // Run the overlap check and the writes inside ONE `BEGIN IMMEDIATE`
-    // transaction so the read-then-act is serialized against concurrent
-    // writers. A default `pool.begin()` is DEFERRED — it takes the write lock
-    // only on the first write, leaving the SELECT-then-INSERT window open — so
-    // we issue `BEGIN IMMEDIATE` to acquire the write lock up front. All errors
-    // are routed through the inner block so the connection is never returned to
-    // the pool with an open transaction (every path COMMITs or ROLLBACKs).
+    // Run the overlap check, label allocation, and the writes inside ONE
+    // `BEGIN IMMEDIATE` transaction so the read-then-act is serialized against
+    // concurrent writers. A default `pool.begin()` is DEFERRED — it takes the
+    // write lock only on the first write, leaving the SELECT-then-INSERT window
+    // open — so we issue `BEGIN IMMEDIATE` to acquire the write lock up front.
+    // All errors are routed through the inner block so the connection is never
+    // returned to the pool with an open transaction (every path COMMITs or
+    // ROLLBACKs).
     let mut conn = pool.acquire().await.map_err(crate::error::AppError::Db)?;
     sqlx::query("BEGIN IMMEDIATE")
         .execute(&mut *conn)
         .await
         .map_err(crate::error::AppError::Db)?;
 
-    let res: Result<()> = async {
+    let res: Result<String> = async {
         let rows = sqlx::query("SELECT label, path FROM sync_paths WHERE owner = ?")
             .bind(&owner)
             .fetch_all(&mut *conn)
@@ -103,47 +127,89 @@ pub(crate) async fn set_sync_path_internal(pool: &SqlitePool, account_id: &str, 
 
         let existing: Vec<(String, String)> = rows.iter().map(|r| (r.get("label"), r.get("path"))).collect();
 
-        validate_no_path_overlap(Path::new(path), label, &existing).await?;
+        // Resolve the label UNDER the write lock. For `Allocate`, suffixing here
+        // against this transaction's own read (not in the caller) is what closes
+        // the F-1 TOCTOU: a concurrent add is serialized by `BEGIN IMMEDIATE`,
+        // so it observes this row and picks the next suffix instead of colliding.
+        let label: String = match mode {
+            LabelMode::Exact(l) => l.to_string(),
+            LabelMode::Allocate { base } => {
+                let taken: std::collections::HashSet<String> = existing.iter().map(|(l, _)| l.clone()).collect();
+                generate_unique_label_internal(&taken, base)
+            }
+        };
 
-        if let Ok(Some(legacy_id)) = sqlx::query_scalar::<_, i64>("SELECT id FROM sync_paths WHERE owner = '' AND type = ? LIMIT 1")
-            .bind(path_type)
-            .fetch_optional(&mut *conn)
-            .await
-            && let Err(e) = sqlx::query("REPLACE INTO sync_paths (id, owner, path, type, label, timestamp) VALUES (?, ?, ?, ?, ?, ?)")
-                .bind(legacy_id)
+        validate_no_path_overlap(Path::new(path), &label, &existing).await?;
+
+        match mode {
+            LabelMode::Exact(_) => {
+                // Adopt a pre-multi-drive ownerless row of this type so the
+                // legacy default drive keeps its id across the migration.
+                if let Ok(Some(legacy_id)) = sqlx::query_scalar::<_, i64>("SELECT id FROM sync_paths WHERE owner = '' AND type = ? LIMIT 1")
+                    .bind(path_type)
+                    .fetch_optional(&mut *conn)
+                    .await
+                    && let Err(e) = sqlx::query("REPLACE INTO sync_paths (id, owner, path, type, label, timestamp) VALUES (?, ?, ?, ?, ?, ?)")
+                        .bind(legacy_id)
+                        .bind(&owner)
+                        .bind(path)
+                        .bind(path_type)
+                        .bind(&label)
+                        .bind(timestamp)
+                        .execute(&mut *conn)
+                        .await
+                {
+                    warn!("Failed to replace legacy sync_paths row: {e}");
+                }
+
+                sqlx::query(
+                    "INSERT INTO sync_paths (owner, path, type, label, timestamp) VALUES (?, ?, ?, ?, ?)
+                     ON CONFLICT(owner, label) DO UPDATE SET path=excluded.path, type=excluded.type, timestamp=excluded.timestamp",
+                )
                 .bind(&owner)
                 .bind(path)
                 .bind(path_type)
-                .bind(label)
+                .bind(&label)
                 .bind(timestamp)
                 .execute(&mut *conn)
                 .await
-        {
-            warn!("Failed to replace legacy sync_paths row: {e}");
+                .map_err(crate::error::AppError::Db)?;
+            }
+            LabelMode::Allocate { .. } => {
+                // Fresh drive: a plain INSERT. The label was just suffixed unique
+                // against this transaction's own read, so it cannot conflict; the
+                // UNIQUE(owner, label) constraint is the backstop that turns any
+                // future regression into a hard error rather than a silent path
+                // overwrite.
+                sqlx::query("INSERT INTO sync_paths (owner, path, type, label, timestamp) VALUES (?, ?, ?, ?, ?)")
+                    .bind(&owner)
+                    .bind(path)
+                    .bind(path_type)
+                    .bind(&label)
+                    .bind(timestamp)
+                    .execute(&mut *conn)
+                    .await
+                    .map_err(crate::error::AppError::Db)?;
+            }
         }
-
-        sqlx::query(
-            "INSERT INTO sync_paths (owner, path, type, label, timestamp) VALUES (?, ?, ?, ?, ?)
-             ON CONFLICT(owner, label) DO UPDATE SET path=excluded.path, type=excluded.type, timestamp=excluded.timestamp",
-        )
-        .bind(&owner)
-        .bind(path)
-        .bind(path_type)
-        .bind(label)
-        .bind(timestamp)
-        .execute(&mut *conn)
-        .await
-        .map_err(crate::error::AppError::Db)?;
-        Ok(())
+        Ok(label)
     }
     .await;
 
-    let res = match res {
-        Ok(()) => sqlx::query("COMMIT").execute(&mut *conn).await.map(|_| ()),
+    // Commit or roll back, carrying the resolved label out on success.
+    let committed: Result<String> = match res {
+        Ok(label) => match sqlx::query("COMMIT").execute(&mut *conn).await {
+            Ok(_) => Ok(label),
+            Err(e) => {
+                let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+                warn!("DB commit failed for owner {owner} type {path_type}: {e}");
+                Err(crate::error::AppError::Db(e))
+            }
+        },
         Err(e) => {
             // Best-effort rollback; surface the original error regardless.
             let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
-            return Err(e);
+            Err(e)
         }
     };
 
@@ -151,25 +217,18 @@ pub(crate) async fn set_sync_path_internal(pool: &SqlitePool, account_id: &str, 
     // own from the pool (avoids contention on a small pool).
     drop(conn);
 
-    match res {
-        Ok(()) => {
-            info!("Sync path for '{}' set successfully in DB", path_type);
+    let label = committed?;
+    info!("Sync path for '{path_type}' set successfully in DB (label '{label}')");
 
-            #[cfg(target_os = "macos")]
-            {
-                use crate::utils::bookmarks::store_bookmark;
-                if let Err(e) = store_bookmark(pool, path, path_type).await {
-                    warn!("Failed to create security-scoped bookmark: {}", e);
-                }
-            }
-
-            Ok(format!("Sync path for '{path_type}' set successfully."))
-        }
-        Err(e) => {
-            warn!("DB write failed for owner {} type {}: {}", owner, path_type, e);
-            Err(crate::error::AppError::Db(e))
+    #[cfg(target_os = "macos")]
+    {
+        use crate::utils::bookmarks::store_bookmark;
+        if let Err(e) = store_bookmark(pool, path, path_type).await {
+            warn!("Failed to create security-scoped bookmark: {e}");
         }
     }
+
+    Ok(label)
 }
 
 /// Set or update a sync path for an account, expanding the asset protocol scope.
@@ -189,12 +248,15 @@ pub async fn set_sync_path(
     // already authenticated; login flows are the only writers to
     // `AuthInfo`. No need to touch active account state here.
     let pool = state.pool()?;
-    let result = set_sync_path_internal(pool, &params.account_id, &params.path, params.is_public, params.label.as_deref()).await?;
+    let path_type = if params.is_public { "public" } else { "private" };
+    // The command always targets an explicit label (or the default drive), so
+    // it upserts via `Exact`; only the multi-drive add path needs `Allocate`.
+    set_sync_path_internal(pool, &params.account_id, &params.path, params.is_public, LabelMode::Exact(params.label.as_deref().unwrap_or("default"))).await?;
 
     crate::sync::files::allow_asset_directory(&app_handle, &params.path);
 
     info!("Sync path set successfully for label '{}'", params.label.as_deref().unwrap_or("default"));
-    Ok(result)
+    Ok(format!("Sync path for '{path_type}' set successfully."))
 }
 
 /// Fetch a single sync path by type for the given account.
@@ -316,6 +378,126 @@ mod label_tests {
         existing.insert("Photos-2".to_string());
         existing.insert("Photos-3".to_string());
         assert_eq!(generate_unique_label_internal(&existing, "Photos"), "Photos-4");
+    }
+}
+
+/// F-1 regression tests: a same-basename second drive must never overwrite the
+/// first drive's path (the silent-merge data-loss bug). These drive the real
+/// `set_sync_path_internal` against a file-backed SQLite pool configured exactly
+/// like production (`main.rs::build_pool`: WAL + `busy_timeout=5s`), so the
+/// concurrency test exercises the same `BEGIN IMMEDIATE` serialization the app
+/// relies on rather than a `:memory:` pool whose connections would each open a
+/// private database.
+#[cfg(test)]
+mod set_path_tests {
+    use super::*;
+    use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
+    use std::str::FromStr;
+
+    async fn make_file_pool(dir: &std::path::Path) -> SqlitePool {
+        let db = dir.join("hippius-test.db");
+        let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db.display()))
+            .expect("connect opts")
+            .create_if_missing(true)
+            .journal_mode(SqliteJournalMode::Wal)
+            .busy_timeout(std::time::Duration::from_secs(5));
+        let pool = SqlitePoolOptions::new().max_connections(8).connect_with(opts).await.expect("pool");
+        // Mirror the production `sync_paths` DDL (utils/schema.rs) incl. the
+        // UNIQUE(owner, label) constraint the fix relies on as its backstop.
+        sqlx::query(
+            "CREATE TABLE sync_paths (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner TEXT NOT NULL DEFAULT '',
+                path TEXT NOT NULL,
+                type TEXT NOT NULL,
+                label TEXT NOT NULL DEFAULT 'default',
+                timestamp INTEGER NOT NULL,
+                is_paused INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(owner, label)
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("schema");
+        pool
+    }
+
+    /// `(label, path)` rows for an account, label-sorted for deterministic asserts.
+    async fn rows_for(pool: &SqlitePool, account_id: &str) -> Vec<(String, String)> {
+        let owner = account_key(account_id);
+        let rows = sqlx::query("SELECT label, path FROM sync_paths WHERE owner = ? ORDER BY label")
+            .bind(&owner)
+            .fetch_all(pool)
+            .await
+            .expect("rows");
+        rows.iter().map(|r| (r.get("label"), r.get("path"))).collect()
+    }
+
+    // The core fix: an `Allocate` add whose basename already exists must suffix
+    // a fresh label AND leave the existing drive's path untouched. Pre-fix the
+    // label was allocated in the caller and the write upserted, so the second
+    // drive's path overwrote the first's, leaving one row.
+    #[tokio::test]
+    async fn allocate_suffixes_and_preserves_existing_drive() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pool = make_file_pool(dir.path()).await;
+        let acct = "5acct";
+
+        let l1 = set_sync_path_internal(&pool, acct, "/a/tags", false, LabelMode::Exact("tags")).await.expect("first add");
+        assert_eq!(l1, "tags");
+
+        let l2 = set_sync_path_internal(&pool, acct, "/b/tags", false, LabelMode::Allocate { base: "tags" }).await.expect("second add");
+        assert_eq!(l2, "tags-2", "a basename clash suffixes instead of overwriting");
+
+        assert_eq!(
+            rows_for(&pool, acct).await,
+            vec![("tags".to_string(), "/a/tags".to_string()), ("tags-2".to_string(), "/b/tags".to_string())],
+            "both drives survive with distinct labels and paths"
+        );
+    }
+
+    // The TOCTOU: two concurrent same-basename adds must serialize under
+    // BEGIN IMMEDIATE and produce two distinct drives, never one overwriting the
+    // other. Pre-fix both reads observed an empty/identical label set outside
+    // the write lock, both wrote the same label, and one row survived.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn concurrent_allocate_yields_two_distinct_drives() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pool = make_file_pool(dir.path()).await;
+
+        let (p1, p2) = (pool.clone(), pool.clone());
+        let t1 = tokio::spawn(async move { set_sync_path_internal(&p1, "5acct", "/a/tags", false, LabelMode::Allocate { base: "tags" }).await });
+        let t2 = tokio::spawn(async move { set_sync_path_internal(&p2, "5acct", "/b/tags", false, LabelMode::Allocate { base: "tags" }).await });
+        let l1 = t1.await.expect("join 1").expect("add 1");
+        let l2 = t2.await.expect("join 2").expect("add 2");
+
+        assert_ne!(l1, l2, "concurrent adds must not resolve the same label");
+        let mut labels = [l1, l2];
+        labels.sort_unstable();
+        assert_eq!(labels, ["tags".to_string(), "tags-2".to_string()]);
+
+        let rows = rows_for(&pool, "5acct").await;
+        assert_eq!(rows.len(), 2, "exactly two drives survive the race");
+        let paths: std::collections::HashSet<&str> = rows.iter().map(|(_, p)| p.as_str()).collect();
+        assert_eq!(paths.len(), 2, "two distinct paths survive — neither overwrote the other");
+    }
+
+    // `Exact` must keep its upsert: re-pointing an existing label updates that
+    // row's path (the legitimate change-folder / migration path), not a new row.
+    #[tokio::test]
+    async fn exact_mode_repoints_existing_label_in_place() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pool = make_file_pool(dir.path()).await;
+        let acct = "5acct";
+
+        set_sync_path_internal(&pool, acct, "/a/docs", false, LabelMode::Exact("docs")).await.expect("set");
+        set_sync_path_internal(&pool, acct, "/b/docs", false, LabelMode::Exact("docs")).await.expect("re-point");
+
+        assert_eq!(
+            rows_for(&pool, acct).await,
+            vec![("docs".to_string(), "/b/docs".to_string())],
+            "same label re-points to the new path in one row"
+        );
     }
 }
 

@@ -240,7 +240,7 @@ async fn restore_single_folder(
 
     let path_str = folder_path.to_string_lossy().to_string();
 
-    crate::sync::paths::set_sync_path_internal(pool, account_id, &path_str, false, Some(label)).await?;
+    crate::sync::paths::set_sync_path_internal(pool, account_id, &path_str, false, crate::sync::paths::LabelMode::Exact(label)).await?;
 
     // Wipe stale sync state so the three-tree algorithm treats all remote
     // files as RemoteCreate (download), not LocalDelete.

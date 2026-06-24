@@ -5,7 +5,6 @@ use notify::Watcher;
 use serde::Serialize;
 use tracing::{debug, error, info, warn};
 
-use crate::auth::account_key::account_key;
 use crate::auth::tokens::get_api_token;
 use crate::error::Result;
 use crate::sync::config::{
@@ -163,22 +162,14 @@ pub async fn add_local_sync_folder(
     )
     .await?;
 
-    // 1. Generate unique label — single source of truth in
-    // `crate::sync::paths::generate_unique_label_internal`.
-    let owner = account_key(&account_id);
-    let rows = sqlx::query("SELECT label FROM sync_paths WHERE owner = ?")
-        .bind(&owner)
-        .fetch_all(pool)
-        .await
-        .map_err(|e| crate::error::AppError::Other(format!("DB error: {e}")))?;
-    use sqlx::Row;
-    let existing: std::collections::HashSet<String> = rows.iter().map(|r| r.get::<String, _>("label")).collect();
-    let label = crate::sync::paths::generate_unique_label_internal(&existing, &folder_name);
+    // Allocate a unique label AND persist the path atomically: the suffixing
+    // happens inside set_sync_path_internal's `BEGIN IMMEDIATE` transaction, so
+    // two concurrent adds of same-basename folders can't both compute the same
+    // label and have the second silently overwrite the first drive's path (F-1).
+    // Returns the label actually written (e.g. `tags-2` on a basename clash).
+    let label = crate::sync::paths::set_sync_path_internal(pool, &account_id, &path, false, crate::sync::paths::LabelMode::Allocate { base: &folder_name }).await?;
 
-    // 2. Set sync path in DB
-    crate::sync::paths::set_sync_path_internal(pool, &account_id, &path, false, Some(&label)).await?;
-
-    // 3. Initialize sync for this drive (start_loop = true)
+    // Initialize sync for this drive (start_loop = true)
     initialize_sync_inner(app, account_id, label.clone(), mnemonic, true, false, None).await?;
 
     info!(label = %label, path = %path, "Local sync folder added");
@@ -1890,7 +1881,7 @@ pub async fn change_sync_folder(
     let _ = remove_drive_for_account(app.clone(), label.clone(), Some(account_id.clone())).await;
 
     // Set the new sync path in the DB
-    crate::sync::paths::set_sync_path_internal(pool, &account_id, &new_path, false, Some(&label)).await?;
+    crate::sync::paths::set_sync_path_internal(pool, &account_id, &new_path, false, crate::sync::paths::LabelMode::Exact(&label)).await?;
 
     info!(label = %label, path = %new_path, "Sync folder changed, initializing new drive");
 
