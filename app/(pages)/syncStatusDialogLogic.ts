@@ -89,3 +89,35 @@ export function smoothSpeed(
   if (previous === null || previous <= 0) return sample;
   return alpha * sample + (1 - alpha) * previous;
 }
+
+/**
+ * EMA smoothing factor for the displayed "time remaining".
+ *
+ * Slightly more responsive than the speed EMA: the ETA already derives from the
+ * smoothed speed, so this layer only needs to absorb the numerator's discrete
+ * steps (see {@link resolveSmoothedEta}). ~0.3 ≈ a 3-sample time constant.
+ */
+export const ETA_SMOOTHING_ALPHA = 0.3;
+
+/**
+ * Fold a freshly-derived raw ETA (`remainingBytes / smoothedSpeed`) into a
+ * running smoothed ETA so the displayed "time remaining" stops lurching.
+ *
+ * Smoothing the SPEED is not enough: the raw ETA's numerator
+ * (`combinedBytesExpected - combinedProgressBytes`) steps UP every time a new
+ * file enters the plan — hcfs-client counts each transfer as `total_bytes * 2`,
+ * so on a long queue the raw estimate repeatedly jumps up, then resumes counting
+ * down. A standard EMA damps those steps while still tracking the genuine
+ * downward trend. Seeds directly from the sample on the first reading or after a
+ * reset (`previous === null`); unlike {@link smoothSpeed} it does NOT re-seed on
+ * a non-positive previous, because an ETA near 0 is a legitimate "almost done"
+ * value, not a reset sentinel.
+ */
+export function resolveSmoothedEta(
+  previous: number | null,
+  sample: number,
+  alpha: number = ETA_SMOOTHING_ALPHA,
+): number {
+  if (previous === null) return sample;
+  return alpha * sample + (1 - alpha) * previous;
+}

@@ -25,6 +25,7 @@ import { getFileIcon } from "../lib/utils/fileTypeUtils";
 import SyncQueueOverallProgress from "./SyncQueueOverallProgress";
 import SyncStatusMini from "./SyncStatusMini";
 import {
+  resolveSmoothedEta,
   resolveSmoothedPercent,
   selectLiveTransferBytes,
   smoothSpeed,
@@ -447,6 +448,10 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
   // Running EMA of the transfer rate. Held in a ref (not state) so each tick
   // folds into the previous smoothed value without re-triggering the effect.
   const smoothedSpeedRef = useRef<number | null>(null);
+  // Running EMA of the derived ETA. Smoothing the speed alone leaves the ETA
+  // lurching when the plan grows (numerator steps up); this damps that. Held in
+  // a ref for the same reason as the speed EMA. Reset alongside the speed EMA.
+  const smoothedEtaRef = useRef<number | null>(null);
   // The session the rate samples / smoothed speed belong to. Used to re-seed on
   // a session change — see the comment in the effect below.
   const speedSessionRef = useRef<number | null>(null);
@@ -461,6 +466,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
     ) {
       rateSamplesRef.current = [];
       smoothedSpeedRef.current = null;
+      smoothedEtaRef.current = null;
       setEtaSeconds(null);
       setSpeedBytesPerSec(null);
       return;
@@ -477,6 +483,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
       speedSessionRef.current = snapshot.startedAt;
       rateSamplesRef.current = [];
       smoothedSpeedRef.current = null;
+      smoothedEtaRef.current = null;
     }
 
     const now = Date.now();
@@ -491,6 +498,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
     }
 
     if (samples.length < 2) {
+      smoothedEtaRef.current = null;
       setEtaSeconds(null);
       return;
     }
@@ -511,8 +519,14 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
 
     const remainingBytes =
       snapshot.combinedBytesExpected - snapshot.combinedProgressBytes;
-    const eta = remainingBytes / smoothed;
-    setEtaSeconds(Math.min(eta, 86400));
+    // Cap the RAW estimate before smoothing so a transient huge value can't
+    // spike the EMA, then EMA-smooth the ETA itself — the speed is already
+    // smoothed, but the numerator steps up as the plan grows, so the raw ETA
+    // still lurches without this (F-4).
+    const rawEta = Math.min(remainingBytes / smoothed, 86400);
+    const smoothedEta = resolveSmoothedEta(smoothedEtaRef.current, rawEta);
+    smoothedEtaRef.current = smoothedEta;
+    setEtaSeconds(smoothedEta);
   }, [
     effectiveInProgress,
     snapshot.combinedBytesExpected,

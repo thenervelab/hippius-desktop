@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  ETA_SMOOTHING_ALPHA,
+  resolveSmoothedEta,
   resolveSmoothedPercent,
   selectLiveTransferBytes,
   smoothSpeed,
@@ -150,5 +152,57 @@ describe("smoothSpeed", () => {
     const hi = smoothSpeed(8_000_000, 2_000_000);
     expect(hi).toBeLessThanOrEqual(8_000_000);
     expect(hi).toBeGreaterThanOrEqual(2_000_000);
+  });
+});
+
+describe("resolveSmoothedEta (F-4 ETA jitter)", () => {
+  it("seeds from the sample on the first reading", () => {
+    expect(resolveSmoothedEta(null, 120)).toBe(120);
+  });
+
+  it("does NOT re-seed on a near-zero previous (an almost-done ETA is real)", () => {
+    // Unlike smoothSpeed, a 0/near-0 previous is a legitimate value, so the EMA
+    // must blend, not seed — otherwise the ETA would snap back up at the finish.
+    const next = resolveSmoothedEta(0, 10, 0.3);
+    expect(next).toBeCloseTo(3, 5); // 0.3*10 + 0.7*0
+  });
+
+  it("blends as a standard EMA", () => {
+    expect(resolveSmoothedEta(100, 200, 0.3)).toBeCloseTo(130, 5);
+  });
+
+  it("damps the plan-growth up-jump far more than the raw ETA swings", () => {
+    // Steady raw ETA, then the plan grows (a new file enters → numerator steps
+    // up), then it resumes counting down. The raw stream lurches; the smoothed
+    // one absorbs the step. This is the F-4 fix: frame-to-frame ETA stability.
+    const raw = [100, 100, 100, 250, 245, 240, 235, 230];
+    let smoothed: number | null = null;
+    const smoothedStream = raw.map((r) => {
+      smoothed = resolveSmoothedEta(smoothed, r, ETA_SMOOTHING_ALPHA);
+      return smoothed;
+    });
+
+    const maxStep = (xs: number[]) =>
+      xs.slice(1).reduce((m, x, i) => Math.max(m, Math.abs(x - xs[i])), 0);
+
+    const rawMaxStep = maxStep(raw); // the 100→250 jump = 150
+    const smoothedMaxStep = maxStep(smoothedStream as number[]);
+
+    expect(rawMaxStep).toBe(150);
+    // The smoother never lets a single frame move more than alpha*the gap.
+    expect(smoothedMaxStep).toBeLessThan(rawMaxStep * ETA_SMOOTHING_ALPHA + 1);
+    // And it never overshoots the raw range.
+    for (const s of smoothedStream as number[]) {
+      expect(s).toBeGreaterThanOrEqual(100);
+      expect(s).toBeLessThanOrEqual(250);
+    }
+  });
+
+  it("converges toward the raw value under a constant input", () => {
+    let smoothed: number | null = 100;
+    for (let i = 0; i < 40; i++) {
+      smoothed = resolveSmoothedEta(smoothed, 60, ETA_SMOOTHING_ALPHA);
+    }
+    expect(smoothed).toBeCloseTo(60, 1);
   });
 });
