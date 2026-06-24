@@ -9,6 +9,7 @@ import React, {
 } from "react";
 import { useSpring, animated } from "@react-spring/web";
 import { ChartPoint } from "@/lib/types/chartTypes";
+import { nextChartAnimState } from "@/lib/utils/chartAnimation";
 import { cn } from "@/app/lib/utils";
 
 // Layout constants. The Y-axis labels and chart-area divs share the same
@@ -127,15 +128,20 @@ const StorageBarChart: React.FC<StorageBarChartProps> = ({
   const [size, setSize] = useState({ w: 0, h: 0 });
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
 
-  // Re-fire mount animations whenever the data series length changes
-  // (e.g. user switches from Last 7 Days to 1 Year).
+  // Re-fire mount animations only when REAL data changes length (e.g. user
+  // switches from Last 7 Days to 1 Year) — NOT on the empty-fallback round-trip
+  // a background refetch causes, which would remount + re-grow every bar (the
+  // periodic flash, F-8). `nextChartAnimState` owns that decision.
   const [animKey, setAnimKey] = useState(0);
-  const prevLenRef = useRef(data.length);
+  const prevAnimSigRef = useRef(String(data.length));
   useEffect(() => {
-    if (data.length !== prevLenRef.current) {
-      prevLenRef.current = data.length;
-      setAnimKey((k) => k + 1);
-    }
+    const { signature, reanimate } = nextChartAnimState(
+      prevAnimSigRef.current,
+      String(data.length),
+      data.length === 0,
+    );
+    prevAnimSigRef.current = signature;
+    if (reanimate) setAnimKey((k) => k + 1);
   }, [data]);
 
   useEffect(() => {
