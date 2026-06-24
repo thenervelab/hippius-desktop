@@ -9,6 +9,10 @@ import { saveHcfsConfig } from "@/lib/utils/hcfsConfigUtils";
 import { migrationCheckAtom, migrationLockAtom, migrationProgressAtom, RESET_MIGRATION_CHECK_STATE } from "@/lib/global-atoms/migrationAtoms";
 import { appStore } from "@/lib/store/jotaiStore";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
+import {
+  getMigrationDisplayCounts,
+  getMigrationTerminalState,
+} from "./migrationCounts";
 
 export type MigrationStep = "prompt" | "skip-confirm" | "setup" | "complete";
 
@@ -110,11 +114,9 @@ export function useMigration(): UseMigrationReturn {
         }
         if (result.status === "poll_error") return;
 
-        // Use logical file count when available for user-facing numbers.
-        // The S3 object count (result.total) is used internally for
-        // processing progress, but users should see real file counts.
-        const displayTotal = result.logical_file_count ?? result.total;
-        const displayCompleted = Math.min(result.completed, displayTotal);
+        // Display numbers prefer the logical file count over the S3 object
+        // count; see migrationCounts.ts for the clamp/fallback rules.
+        const { displayTotal, displayCompleted } = getMigrationDisplayCounts(result);
 
         setSuccessCount(displayCompleted);
 
@@ -126,18 +128,17 @@ export function useMigration(): UseMigrationReturn {
 
         if (result.is_terminal) {
           stopPolling();
-          setMigrationSucceeded(result.status !== "cancelled");
-          // Use the real file count (from file_records) when available,
-          // falling back to the S3 object count for older servers.
-          const realCount = result.logical_file_count ?? result.total;
-          setFileCount(realCount);
-          setSuccessCount(Math.min(result.completed, realCount));
+          const { succeeded, finalCount, finalCompleted } =
+            getMigrationTerminalState(result);
+          setMigrationSucceeded(succeeded);
+          setFileCount(finalCount);
+          setSuccessCount(finalCompleted);
           setCurrentStep("complete");
           appStore.set(migrationLockAtom, false);
           appStore.set(migrationProgressAtom, {
             active: false,
-            completed: Math.min(result.completed, realCount),
-            total: realCount,
+            completed: finalCompleted,
+            total: finalCount,
           });
         }
       });

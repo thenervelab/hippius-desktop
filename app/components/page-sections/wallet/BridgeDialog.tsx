@@ -20,6 +20,7 @@ import {
 import { cn } from "@/lib/utils";
 import { errorMessage } from "@/lib/utils/errorUtils";
 import { formatUnitsTruncated, parseUnitsToBase } from "@/lib/utils/planckUnits";
+import { evaluateBridgeAmount } from "./bridgeValidation";
 import { TxSubmittedUnconfirmedError } from "@/lib/utils/txOutcome";
 
 import { WalletDialogShell } from "./shared/WalletDesign";
@@ -270,15 +271,21 @@ const BridgeDialog: React.FC<BridgeDialogProps> = ({
   );
   const displayAmount = amount && amountPlanck !== null && amountPlanck > 0n ? amount : "0.00";
 
-  const isAmountValid = useMemo(() => {
-    if (amountPlanck === null || amountPlanck <= 0n) return false;
-    if (minAmountPlanck > 0n && amountPlanck < minAmountPlanck) return false;
-    if (sourceBalancePlanck === null) return true;
-    return amountPlanck <= sourceBalancePlanck;
-  }, [amountPlanck, minAmountPlanck, sourceBalancePlanck]);
+  const isAmountValid = useMemo(
+    () =>
+      evaluateBridgeAmount({ amountPlanck, minAmountPlanck, sourceBalancePlanck }).ok,
+    [amountPlanck, minAmountPlanck, sourceBalancePlanck],
+  );
 
   const handleBridgeSubmit = () => {
-    if (!amount || amountPlanck === null || amountPlanck <= 0n) {
+    const verdict = evaluateBridgeAmount({
+      amountPlanck,
+      minAmountPlanck,
+      sourceBalancePlanck,
+    });
+    // Preserve the original error precedence: invalid amount, then the
+    // active-wallet check, then the min/balance reasons.
+    if (!amount || (!verdict.ok && verdict.reason === "invalid")) {
       toast.error("Please enter a valid amount to bridge");
       return;
     }
@@ -286,13 +293,13 @@ const BridgeDialog: React.FC<BridgeDialogProps> = ({
       toast.error("No active wallet — create or unlock one first.");
       return;
     }
-    if (minAmountPlanck > 0n && amountPlanck < minAmountPlanck) {
+    if (!verdict.ok && verdict.reason === "below_min") {
       toast.error(
         `Minimum bridge amount is ${formatBalance2dp(minAmountPlanck, sourceDecimals)} ${sourceToken}`,
       );
       return;
     }
-    if (sourceBalancePlanck !== null && amountPlanck > sourceBalancePlanck) {
+    if (!verdict.ok && verdict.reason === "exceeds_balance") {
       toast.error(`Amount exceeds your ${sourceToken} balance`);
       return;
     }

@@ -26,36 +26,10 @@ import { migrationCheckAtom, DEFAULT_MIGRATION_CHECK_STATE } from "./global-atom
 import { splashCompleteAtom } from "./global-atoms/splashAtoms";
 import { syncRequiresReauthAtom } from "./global-atoms/unpinAtoms";
 import { scheduleOAuthSyncInit } from "./auth/scheduleOAuthSyncInit";
+import { computeLogoutChunk, parseOAuthExpiryMs } from "./auth/sessionTiming";
+import { buildOAuthSession, type LoginResult } from "./auth/buildOAuthSession";
 import { isMasterMnemonicUnrecoverable } from "./utils/dispatchTauriError";
 import { useAtomValue } from "jotai";
-
-/** Result from Rust login_with_mnemonic command */
-interface LoginResult {
-  substrateAddress: string;
-  ethAddress: string;
-  userId: number | string | null;
-  username: string;
-  provider: string;
-  token: string;
-  tokenExpiry: number;
-  isNew: boolean;
-}
-
-/** Build an OAuthSession-compatible object from a login/unlock result. */
-function buildOAuthSession(
-  result: LoginResult,
-  providerOverride?: string
-): import("@/app/lib/types/oAuth").OAuthSession {
-  return {
-    token: result.token,
-    userId: typeof result.userId === "number" ? result.userId : 0,
-    username: result.username,
-    provider: (providerOverride ?? result.provider ?? "mnemonic") as import("@/app/lib/types/oAuth").OAuthSession["provider"],
-    expiresAt: new Date(result.tokenExpiry).toISOString(),
-    substrateAddress: result.substrateAddress,
-    isNew: result.isNew,
-  };
-}
 
 /** Signal MigrationChecker to run the single authoritative check_migration call. */
 function triggerMigrationCheck() {
@@ -80,7 +54,6 @@ interface WalletContextType {
   logout: (redirectPath?: string) => Promise<void>;
   resetHippiusDesktop: () => Promise<void>;
 }
-const MAX_DELAY = 2_147_483_647; // ~24.8 days
 
 const WalletContext = createContext<WalletContextType | undefined>(undefined);
 
@@ -195,16 +168,15 @@ export function WalletAuthProvider({
   );
 
   function scheduleLogout(ms: number) {
-    if (ms === Infinity) return; // keep me logged in
-
-    const delay = Math.min(Math.max(ms, 0), MAX_DELAY);
+    const chunk = computeLogoutChunk(ms);
+    if (chunk.kind === "never") return; // keep me logged in
     logoutTimerRef.current = setTimeout(() => {
-      if (ms > MAX_DELAY) {
-        scheduleLogout(ms - MAX_DELAY); // chain next chunk
+      if (chunk.kind === "chunk") {
+        scheduleLogout(chunk.nextMs); // chain next chunk
       } else {
         logout();
       }
-    }, delay);
+    }, chunk.delayMs);
   }
 
   /** Start sync for the given account, called after any successful auth.
@@ -280,9 +252,7 @@ export function WalletAuthProvider({
         ? localStorage.getItem("hippius_oauth_session_expiry")
         : null;
 
-      const oauthExpiryMs = storedExpiry
-        ? (isNaN(Number(storedExpiry)) ? new Date(storedExpiry).getTime() : parseInt(storedExpiry, 10))
-        : null;
+      const oauthExpiryMs = parseOAuthExpiryMs(storedExpiry);
 
       // Single Rust call handles all validation, token checking, fallback.
       // This cap is an orphan-IPC backstop, NOT a responsiveness budget.
