@@ -39,11 +39,6 @@ import { useBridge, type BridgeDirection } from "@/lib/hooks/api/useBridge";
 const ESTIMATED_TIME_SECONDS = 120;
 const FEE_PERCENTAGE = 0.001; // 0.1%
 
-/** Gas reserve subtracted from the hAlpha MAX so the bridge tx can pay
- *  its own fee. Mirrors `MAX_GAS_FEE_BUFFER_PLANCK` in
- *  `src-tauri/src/blockchain/transfers.rs`. */
-const MAX_GAS_FEE_BUFFER_PLANCK = BigInt("10000000000000000");
-
 /* ── Helpers ──────────────────────────────────────────────── */
 
 const formatDisplayAmount = (amount: string) => {
@@ -218,8 +213,7 @@ const BridgeDialog: React.FC<BridgeDialogProps> = ({
   const sourceBalancePlanck = useMemo<bigint | null>(() => {
     if (!balances) return null;
     if (isAlphaToHAlpha) return balances.alphaStake > 0n ? balances.alphaStake : 0n;
-    const after = balances.hAlpha - MAX_GAS_FEE_BUFFER_PLANCK;
-    return after > 0n ? after : 0n;
+    return balances.hAlphaBridgeable > 0n ? balances.hAlphaBridgeable : 0n;
   }, [balances, isAlphaToHAlpha]);
 
   const destBalancePlanck = useMemo<bigint | null>(() => {

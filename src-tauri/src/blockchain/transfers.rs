@@ -22,7 +22,10 @@ const ESTIMATED_TRANSFER_FEE_PLANCK: u128 = 270_233_151;
 /// user doesn't notice it being held back. Mirrors hippius-web's
 /// `GAS_FEE_BUFFER_PLANCKS = PLANCKS_PER_TOKEN / 100` so the two clients
 /// behave identically when the user presses MAX.
-const MAX_GAS_FEE_BUFFER_PLANCK: u128 = 10_000_000_000_000_000;
+///
+/// Promoted to `pub(crate)` so the bridge's bridgeable-balance calc reuses
+/// the SAME buffer — the constant has one owner (audit M-3).
+pub(crate) const MAX_GAS_FEE_BUFFER_PLANCK: u128 = 10_000_000_000_000_000;
 
 /// Max-transferable amount for the "Send Max" UX on the balance page.
 ///

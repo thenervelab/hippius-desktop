@@ -49,6 +49,10 @@ pub struct BridgeBalances {
     pub alpha_stake: String,
     /// Free hAlpha on the Hippius side (18-dec rao).
     pub h_alpha: String,
+    /// Free hAlpha minus one gas buffer — the amount actually bridgeable
+    /// hAlpha→Alpha. Computed in Rust so the renderer never re-derives the
+    /// buffer (audit M-3). `h_alpha` stays the raw free balance for display.
+    pub h_alpha_bridgeable: String,
 }
 
 /// A hotkey the coldkey has Alpha staked to (on the bridge netuid), for the

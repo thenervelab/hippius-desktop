@@ -90,7 +90,12 @@ export function useBridge() {
     queryKey: [BALANCES_KEY, address],
     queryFn: async () => {
       if (!address) {
-        return { alpha: BigInt(0), alphaStake: BigInt(0), hAlpha: BigInt(0) };
+        return {
+          alpha: BigInt(0),
+          alphaStake: BigInt(0),
+          hAlpha: BigInt(0),
+          hAlphaBridgeable: BigInt(0),
+        };
       }
       // Rust returns decimal rao *strings*; map to bigint so the dialog
       // does exact arithmetic (preserves the existing BridgeBalances shape).
@@ -98,11 +103,13 @@ export function useBridge() {
         alpha: string;
         alphaStake: string;
         hAlpha: string;
+        hAlphaBridgeable: string;
       }>("bridge_get_balances", { address });
       return {
         alpha: BigInt(b.alpha),
         alphaStake: BigInt(b.alphaStake),
         hAlpha: BigInt(b.hAlpha),
+        hAlphaBridgeable: BigInt(b.hAlphaBridgeable),
       };
     },
     enabled: !!address,
