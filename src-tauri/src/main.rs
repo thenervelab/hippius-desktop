@@ -61,7 +61,7 @@ use crate::blockchain::queries::{
 use crate::blockchain::runtime::{get_wss_endpoint, test_rpc_endpoint_command, update_wss_endpoint_command};
 use crate::blockchain::staking::{stake_bond, stake_claim_rewards, stake_unbond, stake_withdraw_unbonded};
 use crate::blockchain::subscription::{start_block_subscription, stop_block_subscription};
-use crate::blockchain::transfers::compute_max_transferable;
+use crate::blockchain::transfers::{compute_available_to_bond, compute_max_transferable};
 use crate::blockchain::transfers::{transfer_balance, validate_send_balance};
 use crate::console_access::validate_recovery_password;
 use crate::infra::vm::{
@@ -364,6 +364,7 @@ fn main() {
             to_plancks,
             planck_to_hip_full,
             compute_max_transferable,
+            compute_available_to_bond,
             // Console access
             // Account recovery (OAuth-based)
             validate_recovery_password,

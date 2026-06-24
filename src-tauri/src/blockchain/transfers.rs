@@ -50,6 +50,26 @@ pub fn compute_max_transferable(balance_planck: String) -> MaxTransferable {
     MaxTransferable { planck, hip }
 }
 
+/// Available-to-bond amount for the "Stake Max" UX on the wallet page.
+///
+/// `free`/`bonded`/`unbonding`/`withdrawable` are planck decimal strings — the
+/// exact shapes `get_account_balance` and `get_staking_info` already return.
+/// Subtracts the pallet-locked balances AND [`MAX_GAS_FEE_BUFFER_PLANCK`]:
+/// those plancks are already locked by the staking pallet, so a `bond` that
+/// includes them is chain-rejected, and the buffer leaves gas for the bond plus
+/// a later unbond/withdraw. Saturates at 0. Pure — the buffer constant and the
+/// subtraction live in Rust so the renderer never re-derives the rule (audit
+/// M-1); the FE only renders the returned figure.
+#[tauri::command]
+pub fn compute_available_to_bond(free: String, bonded: String, unbonding: String, withdrawable: String) -> MaxTransferable {
+    let parse = |s: String| s.parse::<u128>().unwrap_or(0);
+    let locked = parse(bonded).saturating_add(parse(unbonding)).saturating_add(parse(withdrawable));
+    let available = parse(free).saturating_sub(locked).saturating_sub(MAX_GAS_FEE_BUFFER_PLANCK);
+    let planck = available.to_string();
+    let hip = crate::blockchain::convert::planck_to_hip_full(planck.clone());
+    MaxTransferable { planck, hip }
+}
+
 /// Transfer balance using the active local wallet's keypair.
 /// Requires the wallet's password — decrypted in Rust, never cached.
 #[tauri::command]
@@ -214,6 +234,41 @@ mod tests {
     use super::*;
 
     const VALID_SS58: &str = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
+
+    #[test]
+    fn available_to_bond_subtracts_locked_and_buffer() {
+        let r = compute_available_to_bond(
+            "2000000000000000000".into(), // 2e18 free
+            "300000000000000000".into(),  // 0.3 bonded
+            "100000000000000000".into(),  // 0.1 unbonding
+            "100000000000000000".into(),  // 0.1 withdrawable
+        );
+        // 2e18 - 0.5e18 - 1e16 buffer = 1_490_000_000_000_000_000
+        assert_eq!(r.planck, "1490000000000000000");
+        let zero = compute_available_to_bond("1".into(), "5".into(), "0".into(), "0".into());
+        assert_eq!(zero.planck, "0");
+        let bad = compute_available_to_bond("abc".into(), String::new(), "x".into(), "0".into());
+        assert_eq!(bad.planck, "0");
+    }
+
+    proptest::proptest! {
+        /// The available figure never exceeds free, saturates at 0, and is
+        /// monotonically non-increasing as locked grows — the staking-gate invariants.
+        #[test]
+        fn available_to_bond_invariants(
+            free in 0u128..u128::MAX,
+            b in 0u128..u128::MAX/4,
+            u in 0u128..u128::MAX/4,
+            w in 0u128..u128::MAX/4,
+        ) {
+            let r = compute_available_to_bond(free.to_string(), b.to_string(), u.to_string(), w.to_string());
+            let got: u128 = r.planck.parse().unwrap();
+            proptest::prop_assert!(got <= free);
+            let more = compute_available_to_bond(free.to_string(), b.saturating_add(1).to_string(), u.to_string(), w.to_string());
+            let got2: u128 = more.planck.parse().unwrap();
+            proptest::prop_assert!(got2 <= got);
+        }
+    }
 
     #[test]
     fn validate_transfer_inputs_accepts_valid() {
