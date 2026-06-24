@@ -1,8 +1,15 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
+import { nextSkeletonState } from "@/lib/utils/skeletonGate";
 
 import { RefreshButton, Select } from "@/components/ui";
 import CustomTooltip2 from "@/components/ui/CustomTooltip2";
@@ -94,7 +101,19 @@ const AvailableCreditsCard: React.FC<{ className?: string }> = ({
   ]);
 
   const isLoading = creditsLoading || chartLoading;
+  // Headline skeleton keeps the existing "show on every fetch" behavior
+  // (intentional — mirrors the console dashboard).
   const showSkeleton = isLoading || isFetchingAny;
+
+  // The CHART, however, must NOT re-show its skeleton on a refetch — doing so
+  // unmounts→remounts the bars/line and replays the entrance "swoop". Gate the
+  // chart on the chart query alone, latched to its first settle, so it animates
+  // only on a real mount (page transition) or a range switch. Mirrors the
+  // Storage Usage card fix. See `@/lib/utils/skeletonGate`.
+  const chartSettledRef = useRef(false);
+  const chartGate = nextSkeletonState(chartSettledRef.current, chartLoading);
+  chartSettledRef.current = chartGate.settled;
+  const chartSkeleton = chartGate.showSkeleton;
 
   const balanceDisplay = useMemo(() => {
     if (creditsLoading) return null;
@@ -232,7 +251,7 @@ const AvailableCreditsCard: React.FC<{ className?: string }> = ({
             data={chartData ?? []}
             color="#3167DD"
             height="100%"
-            isLoading={showSkeleton}
+            isLoading={chartSkeleton}
             tooltipValueLabel="Drive credits used"
             formatTooltipValue={(point) => {
               const date = new Date(point.x);

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useMemo, useRef, useState } from "react";
 
 import { toast } from "sonner";
 
@@ -12,6 +12,7 @@ import { cn } from "@/app/lib/utils";
 
 import StorageBarChart from "./StorageBarChart";
 import { buildStorageDeltaBars, StorageRange } from "./storageDeltaUtils";
+import { nextSkeletonState } from "@/lib/utils/skeletonGate";
 
 const timeRangeOptions = [
   { value: "last7days", label: "THIS WEEK" },
@@ -92,13 +93,32 @@ const StorageUsageCard: React.FC<{ className?: string }> = ({ className }) => {
   } = useDriveStorageStats();
   const isNarrow = useIsNarrow();
 
-  // Skeleton only on the very first load (no cached data yet). On refetches
-  // the previous data stays rendered via TanStack Query's cache and updates in
-  // place when the new data arrives. The RefreshButton only spins for a
-  // user-initiated refresh (see `refetching` below) — the 6s background poll
-  // (useDriveStorageStats) is silent, so the section keeps its appearance
-  // instead of flashing the spinner on every poll.
-  const showSkeleton = chartLoading || statsLoading;
+  // Skeletons show ONLY until each query first settles, then never again — even
+  // while a background refetch is in flight. Two independent latches, because
+  // the chart and the headline are fed by two different queries:
+  //
+  //   • the chart bars come from `useDriveStorageChart` (chartLoading)
+  //   • the headline total/$ come from `useDriveStorageStats` (statsLoading)
+  //
+  // `useDriveStorageStats` runs with `staleTime: 0` + a 6s `refetchInterval`
+  // against the indexer, which can lag/stay pending — so its `isLoading`
+  // OSCILLATES true↔false on every poll and never settles. The old
+  // `showSkeleton = chartLoading || statsLoading` piped that oscillation into
+  // the CHART's skeleton, so the bars+labels unmounted→remounted every ~6s and
+  // replayed their entrance animation (and flashed the skeleton placeholders).
+  // Decoupling the chart from the stats query — and latching each skeleton to
+  // its first settle — keeps the card visually static across refreshes; the
+  // entrance animation now plays only on real mount (page transition) and on a
+  // user range switch.
+  const chartSettledRef = useRef(false);
+  const chartGate = nextSkeletonState(chartSettledRef.current, chartLoading);
+  chartSettledRef.current = chartGate.settled;
+  const chartSkeleton = chartGate.showSkeleton;
+
+  const statsSettledRef = useRef(false);
+  const statsGate = nextSkeletonState(statsSettledRef.current, statsLoading);
+  statsSettledRef.current = statsGate.settled;
+  const headlineSkeleton = statsGate.showSkeleton;
 
   const [isRefreshing, setIsRefreshing] = useState(false);
   const handleRefresh = useCallback(async () => {
@@ -199,7 +219,7 @@ const StorageUsageCard: React.FC<{ className?: string }> = ({ className }) => {
         <div className="flex w-full items-start justify-center gap-1 pt-3 px-4">
           <div className="flex flex-1 min-w-0 items-center justify-between gap-3">
             <div className="flex items-end gap-1">
-              {showSkeleton ? (
+              {headlineSkeleton ? (
                 <div
                   className="h-[30px] w-[140px] rounded bg-grey-light-700 dark:bg-grey-dark-200 animate-pulse"
                   aria-label="Loading storage usage"
@@ -215,7 +235,7 @@ const StorageUsageCard: React.FC<{ className?: string }> = ({ className }) => {
                 </>
               )}
             </div>
-            {showSkeleton ? (
+            {headlineSkeleton ? (
               <div
                 className="h-[20px] w-[80px] rounded bg-grey-light-700 dark:bg-grey-dark-200 animate-pulse"
                 aria-hidden="true"
@@ -231,7 +251,7 @@ const StorageUsageCard: React.FC<{ className?: string }> = ({ className }) => {
         <div className="relative w-full h-[220px] px-5 py-4">
           <StorageBarChart
             data={barData}
-            isLoading={showSkeleton}
+            isLoading={chartSkeleton}
             yTickFormat={(v) => formatBytes(v, 1)}
             tooltipValueLabel="Storage Used"
             formatTooltipValue={(point) => {
