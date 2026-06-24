@@ -634,8 +634,18 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
   const showTransferDetails =
     !isSettled && effectiveInProgress && hasActiveFile;
 
+  // The byte readout only needs the session to be in progress with a known
+  // total — it must NOT also require an active-status file, or it blinks out
+  // during the all-pending/indexing seam (files queued but none yet flipped to
+  // inProgress/encrypting/decrypting) even though the plan size is known (F-5).
+  // The SPEED suffix below stays gated on `showTransferDetails` (a real
+  // transfer). `selectLiveTransferBytes` returns null when bytesExpected===0,
+  // so the genuine preparing phase (no total yet) still shows "Preparing"
+  // rather than a misleading 0B/0B line.
+  const showTransferBytes = !isSettled && effectiveInProgress;
+
   const compactTransferredText = (() => {
-    if (!showTransferDetails) return null;
+    if (!showTransferBytes) return null;
     const bytes = selectLiveTransferBytes(snapshot);
     if (!bytes) return null;
     return `${formatCompactBytes(bytes.progress)}/${formatCompactBytes(bytes.expected)}`;

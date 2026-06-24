@@ -404,6 +404,28 @@ describe("SyncStatusDialog", () => {
     expect(summaryTexts).toContain("Decrypting");
   });
 
+  it("keeps the transferred line visible while files are still queued (all-pending seam)", () => {
+    // F-5: a sync in progress whose files are all still 'pending' (none yet
+    // flipped to inProgress/encrypting/decrypting) used to drop the whole byte
+    // line because it required an active-status file — even though the plan
+    // total is already known. It must stay up reading the session totals
+    // ("0B/5MB"); only the speed suffix waits for a real transfer.
+    const files = [
+      makeFileProgress("queued.bin", {
+        status: "pending",
+        totalBytes: 5_000_000,
+      }),
+    ];
+    const snapshot = makeSnapshot(files);
+
+    const { container } = renderWithJotai(
+      <SyncStatusDialog snapshot={snapshot} open={true} />,
+    );
+
+    const summaryTexts = compactSummaryTexts(container);
+    expect(summaryTexts).toContain("0B/5MB");
+  });
+
   it("renders the compact ring instead of the full card when minimized", () => {
     const files = [
       makeFileProgress("data.csv", {
