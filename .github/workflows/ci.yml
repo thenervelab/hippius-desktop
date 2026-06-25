@@ -150,6 +150,38 @@ jobs:
         working-directory: src-tauri
         run: cargo deny check advisories bans sources
 
+  actionlint:
+    # Lint the workflow files themselves so a malformed/insecure workflow fails
+    # CI instead of only failing at run time. actionlint also runs shellcheck on
+    # every `run:` script (the ubuntu runner ships shellcheck), which is what
+    # catches the unquoted-`$GITHUB_ENV` SC2086 class. zizmor (workflow security
+    # audit) is a deliberate follow-up: it currently surfaces pre-existing
+    # findings in the release workflows that need fixing under their signing
+    # setup first.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      # actionlint is a Go binary, not a crate, so taiki-e/install-action can't
+      # provide it (it fell back to cargo-binstall and errored). Install the
+      # pinned release tarball and verify its SHA256 — transparent, no curl|bash.
+      - name: Install actionlint
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=1.7.12
+          sha256=8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+          curl -fsSL -o actionlint.tar.gz \
+            "https://github.com/rhysd/actionlint/releases/download/v${version}/actionlint_${version}_linux_amd64.tar.gz"
+          echo "${sha256}  actionlint.tar.gz" | sha256sum -c -
+          tar xzf actionlint.tar.gz actionlint
+
+      - name: Lint workflows
+        run: ./actionlint -color
+
   frontend:
     runs-on: ubuntu-latest
     steps:
