@@ -529,7 +529,15 @@ pub(crate) async fn label_for_sync_path(pool: &SqlitePool, account_id: &str, syn
 }
 
 /// Set the `is_paused` flag for a sync path in the DB.
-pub(crate) async fn set_sync_path_paused(pool: &SqlitePool, account_id: &str, label: &str, paused: bool) -> Result<()> {
+///
+/// `pub` (not `pub(crate)`) so the `drive_lifecycle_race` integration suite can
+/// drive the REAL writer on the pause-producer side instead of a hand-rolled
+/// `UPDATE`. That matters: the producer's `set_sync_path_paused(.., true)` and
+/// `apply_init_commit`'s `set_sync_path_paused(.., false)` must resolve the same
+/// `account_key`-hashed `owner` row, and only exercising the production writer
+/// on both sides pins that agreement. `apply_init_commit` is the sole runtime
+/// caller of the clearing direction; pause/resume own the rest.
+pub async fn set_sync_path_paused(pool: &SqlitePool, account_id: &str, label: &str, paused: bool) -> Result<()> {
     let owner = account_key(account_id);
     let val: i32 = i32::from(paused);
 
