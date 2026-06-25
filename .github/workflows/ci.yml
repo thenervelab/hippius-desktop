@@ -237,5 +237,9 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      - name: Tests
-        run: pnpm test
+      # Run WITH coverage so the per-scope ratcheted thresholds in
+      # vitest.config.ts actually gate — `pnpm test` (no --coverage) collects no
+      # coverage and would silently skip the floors. A drop below a logic-scope
+      # floor (lib/utils, lib/upload-feed, lib/tray, lib/hooks) fails here.
+      - name: Tests (with coverage thresholds)
+        run: pnpm test:coverage
