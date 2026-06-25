@@ -42,7 +42,7 @@ fn require_owner(state: &State<'_, AppState>) -> Result<String, AppError> {
 /// internally (during create/import) and from the FE for previewing.
 fn derive_address(mnemonic: &str) -> Result<String, AppError> {
     let parsed = SubxtMnemonic::parse(mnemonic).map_err(|e| AppError::Validation(format!("Invalid BIP-39 mnemonic: {e}")))?;
-    let pair = SrKeypair::from_phrase(&parsed, None).map_err(|e| AppError::Other(format!("Failed to derive sr25519 keypair: {e}")))?;
+    let pair = SrKeypair::from_phrase(&parsed, None).map_err(|e| AppError::Crypto(format!("sr25519 keypair derivation failed: {e}")))?;
     Ok(pair.public_key().to_account_id().to_string())
 }
 
@@ -162,7 +162,7 @@ fn validate_new_password(password: &str) -> Result<(), AppError> {
 /// stored encrypted; nothing in Rust holds onto it.
 #[tauri::command]
 pub fn local_wallet_generate_mnemonic() -> Result<String, AppError> {
-    let mnemonic = bip39::Mnemonic::generate(12).map_err(|e| AppError::Other(format!("bip39 generate failed: {e}")))?;
+    let mnemonic = bip39::Mnemonic::generate(12).map_err(|e| AppError::Crypto(format!("BIP-39 mnemonic generation failed: {e}")))?;
     Ok(mnemonic.to_string())
 }
 
@@ -264,7 +264,7 @@ pub async fn local_wallet_set_active(state: State<'_, AppState>, id: i64) -> Res
     let owner = require_owner(&state)?;
     let pool = state.pool()?;
     if repo::get_by_id(pool, &owner, id).await?.is_none() {
-        return Err(AppError::Other(format!("Wallet {id} not found")));
+        return Err(AppError::NotFound(format!("Wallet {id} not found")));
     }
     repo::set_active(pool, &owner, id).await?;
     Ok(())
@@ -308,7 +308,7 @@ pub async fn local_wallet_verify_password(state: State<'_, AppState>, id: i64, p
     let owner = require_owner(&state)?;
     let pool = state.pool()?;
     let Some(wallet) = repo::get_by_id(pool, &owner, id).await? else {
-        return Err(AppError::Other(format!("Wallet {id} not found")));
+        return Err(AppError::NotFound(format!("Wallet {id} not found")));
     };
     // Serialize attempts on this wallet so a concurrent IPC burst can't all
     // clear `check` before any `record_failure` runs and thereby outrun the
@@ -343,7 +343,7 @@ pub async fn local_wallet_get_decrypted_mnemonic(state: State<'_, AppState>, id:
     let owner = require_owner(&state)?;
     let pool = state.pool()?;
     let Some(wallet) = repo::get_by_id(pool, &owner, id).await? else {
-        return Err(AppError::Other(format!("Wallet {id} not found")));
+        return Err(AppError::NotFound(format!("Wallet {id} not found")));
     };
     // Serialize attempts on this wallet so a concurrent IPC burst can't all
     // clear `check` before any `record_failure` runs and thereby outrun the
@@ -395,7 +395,7 @@ pub async fn local_wallet_export_backup(state: State<'_, AppState>, id: i64, pas
     let owner = require_owner(&state)?;
     let pool = state.pool()?;
     let Some(wallet) = repo::get_by_id(pool, &owner, id).await? else {
-        return Err(AppError::Other(format!("Wallet {id} not found")));
+        return Err(AppError::NotFound(format!("Wallet {id} not found")));
     };
     // Serialize attempts on this wallet (check → verify → record) so a
     // concurrent IPC burst can't outrun the lockout threshold.
@@ -610,7 +610,7 @@ pub async fn local_wallet_get_public_key(state: State<'_, AppState>, id: i64) ->
     let owner = require_owner(&state)?;
     let pool = state.pool()?;
     let Some(wallet) = repo::get_by_id(pool, &owner, id).await? else {
-        return Err(AppError::Other(format!("Wallet {id} not found")));
+        return Err(AppError::NotFound(format!("Wallet {id} not found")));
     };
     // The public key in question is the 32-byte sr25519 public key
     // that the SS58 address encodes. We don't need the password to
@@ -620,7 +620,7 @@ pub async fn local_wallet_get_public_key(state: State<'_, AppState>, id: i64) ->
     // operation.
     use std::str::FromStr;
     use subxt::utils::AccountId32;
-    let account = AccountId32::from_str(&wallet.address).map_err(|e| AppError::Other(format!("Wallet address is not valid SS58: {e:?}")))?;
+    let account = AccountId32::from_str(&wallet.address).map_err(|e| AppError::Crypto(format!("wallet address is not valid SS58: {e:?}")))?;
     Ok(B64.encode(account.0))
 }
 

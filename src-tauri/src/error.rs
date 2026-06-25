@@ -41,6 +41,14 @@ pub enum AppError {
     #[error("{0}")]
     Validation(String),
 
+    /// A requested entity (wallet, record) does not exist. Distinct from
+    /// `Validation` (bad input) and the catch-all `Other` so the FE can
+    /// tell "this wallet was removed" apart from a generic failure.
+    /// `#[error("{0}")]` like `Validation`/`Other`, so the message is the
+    /// caller's text verbatim.
+    #[error("{0}")]
+    NotFound(String),
+
     #[error("Authentication error: {0}")]
     Auth(String),
 
@@ -222,6 +230,7 @@ impl Serialize for AppError {
             Self::Crypto(_) => "Crypto",
             Self::Api { .. } => "Api",
             Self::Validation(_) => "Validation",
+            Self::NotFound(_) => "NotFound",
             Self::Auth(_) => "Auth",
             Self::NotReady(_) => "NotReady",
             Self::Progress(_) => "Progress",
@@ -580,6 +589,7 @@ mod tests {
         let variants: Vec<AppError> = vec![
             AppError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "missing")),
             AppError::Json(serde_json::from_str::<String>("bad").unwrap_err()),
+            AppError::Zip(zip::result::ZipError::FileNotFound),
             AppError::Substrate("rpc".into()),
             AppError::Hcfs("sync".into()),
             AppError::Crypto("key".into()),
@@ -588,6 +598,7 @@ mod tests {
                 body: "forbidden".into(),
             },
             AppError::Validation("invalid".into()),
+            AppError::NotFound("wallet 1 not found".into()),
             AppError::Auth("unauth".into()),
             AppError::NotReady(NotReadyKind::ConfigMissing),
             AppError::Progress("tracker".into()),
@@ -598,11 +609,13 @@ mod tests {
         let expected_kinds = [
             "Io",
             "Json",
+            "Zip",
             "Substrate",
             "Hcfs",
             "Crypto",
             "Api",
             "Validation",
+            "NotFound",
             "Auth",
             "NotReady",
             "Progress",
