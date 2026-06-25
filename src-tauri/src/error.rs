@@ -19,6 +19,13 @@ pub enum AppError {
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
 
+    /// Archive (de)compression failures, e.g. reading/writing a wallet
+    /// backup `.zip`. A typed `#[from]` wrapper (not folded into `Io` or
+    /// `Other`) so `ZipError`'s `source()` chain survives `?` and the FE
+    /// gets a stable `kind: "Zip"` instead of an opaque string.
+    #[error("ZIP archive error: {0}")]
+    Zip(#[from] zip::result::ZipError),
+
     #[error("Blockchain RPC error: {0}")]
     Substrate(String),
 
@@ -209,6 +216,7 @@ impl Serialize for AppError {
             Self::Io(_) => "Io",
             Self::Http(_) => "Http",
             Self::Json(_) => "Json",
+            Self::Zip(_) => "Zip",
             Self::Substrate(_) => "Substrate",
             Self::Hcfs(_) => "Hcfs",
             Self::Crypto(_) => "Crypto",

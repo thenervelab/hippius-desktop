@@ -499,16 +499,14 @@ pub async fn local_wallet_export_backup_zip(state: State<'_, AppState>, id: i64,
         "encryptedMnemonic": backup.encrypted_mnemonic,
         "passwordHash": backup.password_hash,
         "exportedAt": backup.exported_at,
-    }))
-    .map_err(|e| AppError::Other(format!("failed to serialise backup json: {e}")))?;
+    }))?;
 
     let buf = Cursor::new(Vec::new());
     let mut zip = zip::ZipWriter::new(buf);
     let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-    zip.start_file(BACKUP_ZIP_ENTRY, options)
-        .map_err(|e| AppError::Other(format!("zip start_file: {e}")))?;
-    zip.write_all(&json).map_err(|e| AppError::Other(format!("zip write_all: {e}")))?;
-    let cursor = zip.finish().map_err(|e| AppError::Other(format!("zip finish: {e}")))?;
+    zip.start_file(BACKUP_ZIP_ENTRY, options)?;
+    zip.write_all(&json)?;
+    let cursor = zip.finish()?;
     Ok(cursor.into_inner())
 }
 
@@ -536,7 +534,7 @@ pub async fn local_wallet_import_encrypted_backup_from_zip(
     }
 
     let reader = Cursor::new(zip_bytes);
-    let mut archive = zip::ZipArchive::new(reader).map_err(|e| AppError::Other(format!("Couldn't open backup zip: {e}")))?;
+    let mut archive = zip::ZipArchive::new(reader)?;
 
     let mut entry = archive
         .by_name(BACKUP_ZIP_ENTRY)
@@ -551,14 +549,13 @@ pub async fn local_wallet_import_encrypted_backup_from_zip(
     let mut json_bytes = Vec::new();
     (&mut entry)
         .take(MAX_BACKUP_JSON_BYTES + 1)
-        .read_to_end(&mut json_bytes)
-        .map_err(|e| AppError::Other(format!("Couldn't read backup entry: {e}")))?;
+        .read_to_end(&mut json_bytes)?;
     drop(entry);
     if json_bytes.len() as u64 > MAX_BACKUP_JSON_BYTES {
         return Err(AppError::Other("Backup entry is unexpectedly large".into()));
     }
 
-    let parsed: serde_json::Value = serde_json::from_slice(&json_bytes).map_err(|e| AppError::Other(format!("Backup file isn't valid JSON: {e}")))?;
+    let parsed: serde_json::Value = serde_json::from_slice(&json_bytes)?;
     let address = parsed
         .get("address")
         .and_then(|v| v.as_str())
