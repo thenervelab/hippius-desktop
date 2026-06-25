@@ -177,6 +177,23 @@ export function useTrayPanelData() {
       })
       .catch((error) => console.error("[TrayPanel] focus listener failed:", error));
 
+    // Explicit "the popover is now visible" signal from Rust's
+    // `toggle_tray_panel` (fires on every show). The webview's own focus event
+    // is unreliable across re-shows of this reused/prewarmed window — when it
+    // doesn't fire, the popover keeps the stale boot-gap menu (credits "—",
+    // endless skeleton). This guarantees a fresh fetch on every open. It also
+    // marks the popover shown so the background poll resumes even if the focus
+    // event was missed.
+    let unlistenShown: (() => void) | undefined;
+    void listen("hippius:tray-panel-shown", () => {
+      isShownRef.current = true;
+      void refresh();
+    })
+      .then((un) => {
+        unlistenShown = un;
+      })
+      .catch((error) => console.error("[TrayPanel] shown listener failed:", error));
+
     // Live sync progress (uploading / failed). Events reach every window.
     // The `sync_files_completed_changed` DOM event the main window uses to
     // refresh the server list is window-local (dispatched by `useSyncEvents`,
@@ -214,6 +231,7 @@ export function useTrayPanelData() {
     return () => {
       window.clearInterval(interval);
       unlistenFocus?.();
+      unlistenShown?.();
       unlistenSnapshot?.();
       unlistenBlock?.();
     };

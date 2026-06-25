@@ -426,6 +426,95 @@ describe("SyncStatusDialog", () => {
     expect(summaryTexts).toContain("0B/5MB");
   });
 
+  it("keeps the speed suffix visible across an encrypt seam once a rate is known", () => {
+    // Regression for "upload speed only shows intermittently". The speed is
+    // derived from the byte delta across frames (smoothed, retained in a ref).
+    // Between files the active file is `encrypting` (no `inProgress` file); the
+    // old gate required `hasTransferringFile`, so the suffix blanked on every
+    // such seam even though bytes kept climbing and the smoothed speed was
+    // still valid. It must now stay on screen (gated on the session + a
+    // positive rate, like the byte line) instead of falling back to the phase
+    // word.
+    const nowSpy = vi.spyOn(Date, "now");
+    const session = 100_000;
+    const frame = (
+      combinedProgressBytes: number,
+      status: "inProgress" | "encrypting",
+    ) =>
+      makeSnapshot(
+        [
+          makeFileProgress("big.bin", {
+            status,
+            totalBytes: 10_000_000,
+            bytesTransferred: status === "inProgress" ? combinedProgressBytes : 0,
+            bytesEncrypted: status === "encrypting" ? combinedProgressBytes : 0,
+          }),
+        ],
+        {
+          startedAt: session,
+          effectiveInProgress: true,
+          combinedProgressBytes,
+          combinedBytesExpected: 20_000_000,
+        },
+      );
+
+    // One store reused across rerenders so the engine-health atom (set to
+    // "connected") survives — a fresh store per frame would read unhealthy and
+    // settle the widget, hiding the speed for the wrong reason.
+    const store = createStore();
+    store.set(syncEngineHealthAtom, {
+      status: "connected",
+      last_check_time: Date.now(),
+      last_successful_check: Date.now(),
+      consecutive_failures: 0,
+      server_version: null,
+      error_message: null,
+    });
+    const view = (combinedProgressBytes: number, status: "inProgress" | "encrypting") => (
+      <Provider store={store}>
+        <SyncStatusDialog snapshot={frame(combinedProgressBytes, status)} open={true} />
+      </Provider>
+    );
+
+    // Two transferring frames 1s apart → a measured ~1MB/s rate.
+    nowSpy.mockReturnValue(1_000);
+    const { container, rerender } = render(view(1_000_000, "inProgress"));
+    nowSpy.mockReturnValue(2_000);
+    rerender(view(2_000_000, "inProgress"));
+
+    // Now the active file flips to `encrypting` (the seam) while bytes keep
+    // climbing. The speed suffix must persist, NOT revert to "Encrypting".
+    nowSpy.mockReturnValue(3_000);
+    rerender(view(3_000_000, "encrypting"));
+
+    const summaryTexts = compactSummaryTexts(container);
+    expect(summaryTexts.some((t) => t.endsWith("/s"))).toBe(true);
+    expect(summaryTexts).not.toContain("Encrypting");
+
+    nowSpy.mockRestore();
+  });
+
+  it("renders the Preparing state with no files yet (does not early-return to null)", () => {
+    // Regression for "widget takes 5-10s to show after adding a folder". Rust
+    // marks widgetState="preparing" + widgetVisible the moment a folder is
+    // added — before the plan is built, so totalFiles===0 and the session is
+    // not yet active. The early-return used to swallow the card in exactly that
+    // state, so the widget only appeared once files populated. It must now show
+    // the Preparing card immediately.
+    const snapshot = makeSnapshot([], {
+      widgetState: "preparing",
+      widgetVisible: true,
+      effectiveInProgress: false,
+    });
+
+    const { container } = renderWithJotai(
+      <SyncStatusDialog snapshot={snapshot} open={true} />,
+    );
+
+    expect(container.innerHTML).not.toBe("");
+    expect(compactSummaryTexts(container)).toContain("Preparing");
+  });
+
   it("renders the compact ring instead of the full card when minimized", () => {
     const files = [
       makeFileProgress("data.csv", {

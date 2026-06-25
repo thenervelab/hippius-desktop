@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
+import { useRefreshWhileSyncing } from "@/app/lib/hooks/useRefreshWhileSyncing";
 import { toast } from "sonner";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import type { SyncFolder, RemoteFolder } from "@/app/lib/types/sync-folder";
@@ -120,14 +121,16 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
   const [deleteConfirmInput, setDeleteConfirmInput] = useState("");
   const [isDeletingServer, setIsDeletingServer] = useState(false);
 
-  const loadFolders = useCallback(async () => {
+  const loadFolders = useCallback(async (opts?: { silent?: boolean }) => {
     if (!polkadotAddress) {
       setIsLoading(false);
       return;
     }
 
     try {
-      setIsLoading(true);
+      // `silent` refreshes (the during-sync poll) must NOT toggle isLoading or
+      // the folder list flashes its skeleton on every poll.
+      if (!opts?.silent) setIsLoading(true);
 
       // Single Rust call: fetches local + remote folders, joins data, determines status
       const result = await invoke<{
@@ -180,13 +183,23 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
     } catch (error) {
       console.error("Failed to load folders:", error);
     } finally {
-      setIsLoading(false);
+      if (!opts?.silent) setIsLoading(false);
     }
   }, [polkadotAddress]);
 
   useEffect(() => {
     loadFolders();
   }, [loadFolders]);
+
+  // Keep each folder's size + file count climbing as the sync uploads (the
+  // server-side totals grow per committed file). Silent so the list updates in
+  // place. See useRefreshWhileSyncing.
+  useRefreshWhileSyncing(
+    useCallback(() => {
+      void loadFolders({ silent: true });
+    }, [loadFolders]),
+    !!polkadotAddress,
+  );
 
   // Refresh when sync path state changes (e.g., Settings dialog closed)
   useEffect(() => {

@@ -169,8 +169,41 @@ pub async fn add_local_sync_folder(
     // Returns the label actually written (e.g. `tags-2` on a basename clash).
     let label = crate::sync::paths::set_sync_path_internal(pool, &account_id, &path, false, crate::sync::paths::LabelMode::Allocate { base: &folder_name }).await?;
 
-    // Initialize sync for this drive (start_loop = true)
-    initialize_sync_inner(app, account_id, label.clone(), mnemonic, true, false, None).await?;
+    // Capture the Arcs we need on BOTH sides of the init `.await` before it
+    // consumes `app`/`account_id`/`state` (Arc clones are cheap pointer bumps).
+    let preparing = state.preparing.clone();
+    let sync = state.sync.clone();
+
+    // Surface the sync widget immediately as "Preparing sync…" for this drive.
+    // `initialize_sync_inner` below runs the watcher-debounce + `scan_local_files`
+    // + `fetch_remote_state` indexing window — 20-30s for a large folder — before
+    // the engine reaches `PlanReady`, where the file-watcher path normally marks
+    // preparing (see `crate::sync::preparing`). For a user-initiated add we KNOW
+    // real work is imminent, so mark it now and emit so the widget appears within
+    // a tick instead of only after indexing (the confusing "nothing shows for
+    // 20-30s" gap the user reported).
+    //
+    // This does NOT reintroduce the periodic-no-op-cycle red-flash that moved the
+    // mark from `SyncStarted` to `PlanReady`: it fires exactly once per explicit
+    // add, never on a watcher cycle. Every existing clear path still applies —
+    // the per-file `ProgressSnapshot` handler clears this label once files
+    // populate (the real per-file widget takes over), the terminal
+    // `SyncCompleted`/`SyncError`/`SyncStopped` handlers clear it, and the 60s
+    // watchdog is the backstop.
+    if preparing.mark_preparing(&label) {
+        sync.emit_snapshot(true);
+    }
+
+    // Initialize sync for this drive (start_loop = true). On failure, clear the
+    // preparing override we just set: init can fail before any terminal sync
+    // event fires, which would otherwise pin the widget on "Preparing sync…" for
+    // the full watchdog timeout after a failed add.
+    if let Err(e) = initialize_sync_inner(app, account_id, label.clone(), mnemonic, true, false, None).await {
+        if preparing.clear(&label) {
+            sync.emit_snapshot(true);
+        }
+        return Err(e);
+    }
 
     info!(label = %label, path = %path, "Local sync folder added");
     Ok(label)
@@ -2084,6 +2117,38 @@ async fn auto_init_sync_inner(
     }
 
     info!(total = sync_paths.len(), active = regular.len(), "Auto-initializing sync paths");
+
+    // 6b. Seed the startup "preparing" summary. For each non-paused drive,
+    //     compute its local pending (on-disk files not in the synced baseline)
+    //     directly off disk — fast, no per-drive lock, no remote fetch — and
+    //     mark it preparing-with-summary so the widget + tray show
+    //     "N files · X · Preparing" within a tick of launch instead of after the
+    //     20-30s remote scan. These tasks run CONCURRENTLY with the init loop
+    //     below; the live `ProgressSnapshot` supersedes the summary the moment
+    //     the engine's first cycle reaches the FE (the `ProgressSnapshot` handler
+    //     clears the seeded label). Drives with zero pending mark nothing, so
+    //     fully-synced users see no flash. Spawned (not awaited) so it never
+    //     delays init.
+    for sp in &regular {
+        let Ok(folder_dir) = config_dir_for_folder(&account_id, &sp.label) else {
+            continue;
+        };
+        let preparing = state.preparing.clone();
+        let sync = state.sync.clone();
+        let label = sp.label.clone();
+        let sync_path = sp.path.clone();
+        tauri::async_runtime::spawn(async move {
+            let (files, bytes) = crate::sync::files::compute_startup_pending_summary(
+                &folder_dir,
+                std::path::Path::new(&sync_path),
+            )
+            .await;
+            if files > 0 {
+                preparing.mark_preparing_with_summary(&label, files, bytes);
+                sync.emit_snapshot(true);
+            }
+        });
+    }
 
     // 7. Resolve the mnemonic exactly once — BEFORE the init loop — and
     //    pass it explicitly to every `initialize_sync_inner` call below.

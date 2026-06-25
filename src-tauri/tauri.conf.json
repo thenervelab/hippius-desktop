@@ -53,7 +53,7 @@
     ],
     "withGlobalTauri": false,
     "security": {
-      "capabilities": ["default"],
+      "capabilities": ["default", "tray-panel"],
       "dangerousDisableAssetCspModification": ["style-src"],
       "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost https: data: blob:; media-src 'self' asset: http://asset.localhost data: blob:; frame-src 'self' asset: http://asset.localhost blob:; connect-src 'self' ipc: http://ipc.localhost asset: http://asset.localhost https://api.hippius.com https://arion.hippius.com https://eu-central-1-arion.hippius.com https://us-east-1-arion.hippius.com https://console.hippius.com wss://rpc.hippius.network wss://hippius-testnet.starkleytech.com wss://test.finney.opentensor.ai:443; font-src 'self' data:",
       "assetProtocol": {

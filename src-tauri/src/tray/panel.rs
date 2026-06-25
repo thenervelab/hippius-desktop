@@ -16,7 +16,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
 use tauri::window::{Effect, EffectState, EffectsBuilder};
-use tauri::{AppHandle, Manager, PhysicalPosition, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tracing::warn;
 
 use crate::app_state::AppState;
@@ -173,6 +173,16 @@ pub fn toggle_tray_panel(app: AppHandle, state: tauri::State<'_, AppState>, rect
     // value can never interfere with a later toggle (the cooldown only guards the
     // blur→click gesture immediately after a hide).
     state.tray_panel_hidden_at.store(0, Ordering::Relaxed);
+
+    // Tell the (reused, prewarmed) popover webview it is now visible so it
+    // re-fetches its account / credits / uploads. The webview's own
+    // `onFocusChanged` is unreliable across re-shows of a reused window — when
+    // it fails to fire, the popover keeps the stale boot-gap menu it fetched
+    // before `restore_session` hydrated the in-memory session, showing credits
+    // "—" and an endless loading skeleton (the F-3 recurrence). An explicit
+    // event on every show guarantees a fresh fetch; a duplicate refresh when
+    // the focus event also fires is harmless (the fetch is idempotent).
+    let _ = win.emit("hippius:tray-panel-shown", ());
     Ok(())
 }
 

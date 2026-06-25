@@ -475,6 +475,81 @@ pub(super) async fn sum_regular_file_bytes(root: &std::path::Path) -> u64 {
 /// to walk further is consistent with the rest of the module.
 const FOLDER_BYTE_WALK_MAX_DEPTH: usize = 4096;
 
+/// Fast, LOCAL "pending upload" summary for a drive at startup: the count and
+/// byte total of on-disk files under `sync_root` that are NOT yet in the drive's
+/// synced baseline (`sync_state.json` in `folder_dir`).
+///
+/// Reads the baseline directly off disk and deserializes it — deliberately NOT
+/// via the drive manager's `load_sync_state`, which needs the per-drive lock the
+/// sync loop grabs at init (we'd lose that race at cold start) and waits on the
+/// remote reconcile (the slow window we're front-running). A missing/unreadable
+/// baseline yields an EMPTY synced set, so a never-synced drive correctly
+/// reports all of its files as pending.
+///
+/// This is a PROVISIONAL estimate, shown only during the startup "preparing"
+/// window: it ignores exclude patterns (rare; a handful of files at most) and
+/// the download direction (server-only files are unknowable without a fetch).
+/// The authoritative live `ProgressSnapshot` supersedes it the moment the
+/// engine's first cycle reaches the FE. The rel-path key is built by joining
+/// `Component::Normal` segments with '/' to match hcfs-client's
+/// `relative_path.to_string_lossy()` index keys cross-platform.
+pub(super) async fn compute_startup_pending_summary(
+    folder_dir: &std::path::Path,
+    sync_root: &std::path::Path,
+) -> (u64, u64) {
+    use tokio::fs;
+
+    // 1. Load the synced baseline (sync_state.json, .bak fallback) → key set.
+    let synced: std::collections::HashSet<String> = {
+        let raw = match fs::read_to_string(folder_dir.join("sync_state.json")).await {
+            Ok(s) => Some(s),
+            Err(_) => fs::read_to_string(folder_dir.join("sync_state.json.bak")).await.ok(),
+        };
+        match raw.and_then(|s| serde_json::from_str::<hcfs_client::sync::SyncState>(&s).ok()) {
+            Some(state) => hcfs_client::engine::types::build_synced_paths_from_state(&state)
+                .into_keys()
+                .collect(),
+            None => std::collections::HashSet::new(),
+        }
+    };
+
+    // 2. Walk on-disk files; count + sum those absent from the synced set.
+    let mut files: u64 = 0;
+    let mut bytes: u64 = 0;
+    let mut stack: Vec<std::path::PathBuf> = vec![sync_root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        if stack.len() > FOLDER_BYTE_WALK_MAX_DEPTH {
+            break;
+        }
+        let Ok(mut entries) = fs::read_dir(&dir).await else { continue };
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let Ok(ft) = entry.file_type().await else { continue };
+            let path = entry.path();
+            if ft.is_dir() {
+                stack.push(path);
+            } else if ft.is_file() {
+                let Ok(rel_path) = path.strip_prefix(sync_root) else { continue };
+                let rel: String = rel_path
+                    .components()
+                    .filter_map(|c| match c {
+                        std::path::Component::Normal(s) => Some(s.to_string_lossy().into_owned()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("/");
+                if rel.is_empty() || synced.contains(&rel) {
+                    continue;
+                }
+                if let Ok(meta) = entry.metadata().await {
+                    files = files.saturating_add(1);
+                    bytes = bytes.saturating_add(meta.len());
+                }
+            }
+        }
+    }
+    (files, bytes)
+}
+
 /// Single pass over a heterogeneous batch of paths (a mix of regular files and
 /// directories) returning `(total_bytes, regular_file_count)`. Used by
 /// `add_files` for both the credit-eligibility byte total and the banner count
@@ -3042,6 +3117,69 @@ mod tests {
         let (bytes, count) = walk_regular_files_stats(root).await;
         assert_eq!(count, 3, "all three regular files counted across the nested dir");
         assert_eq!(bytes, 10, "byte total summed across the nested dir (5+2+3)");
+    }
+
+    // ── compute_startup_pending_summary ──────────────────────────────
+
+    /// No baseline on disk → empty synced set → ALL on-disk files are pending.
+    /// Also pins the nested-walk byte/count totals and the graceful missing-file
+    /// behavior (a never-synced or freshly-added drive reports everything).
+    #[tokio::test]
+    async fn pending_summary_no_baseline_counts_all_files() {
+        let folder_dir = tempfile::TempDir::new().unwrap(); // empty: no sync_state.json
+        let sync_root = tempfile::TempDir::new().unwrap();
+        let root = sync_root.path();
+        tokio::fs::write(root.join("a.bin"), b"hello").await.unwrap(); // 5
+        let sub = root.join("ui/shell");
+        tokio::fs::create_dir_all(&sub).await.unwrap();
+        tokio::fs::write(sub.join("c.bin"), b"xyz").await.unwrap(); // 3
+
+        let (files, bytes) =
+            compute_startup_pending_summary(folder_dir.path(), root).await;
+        assert_eq!(files, 2);
+        assert_eq!(bytes, 8);
+    }
+
+    #[tokio::test]
+    async fn pending_summary_empty_folder_is_zero() {
+        let folder_dir = tempfile::TempDir::new().unwrap();
+        let sync_root = tempfile::TempDir::new().unwrap();
+        let (files, bytes) =
+            compute_startup_pending_summary(folder_dir.path(), sync_root.path()).await;
+        assert_eq!((files, bytes), (0, 0));
+    }
+
+    /// A VALID (default/empty) `sync_state.json` parses, yields an empty synced
+    /// set, so files still count as pending — proving the deserialize +
+    /// `build_synced_paths_from_state` path works end to end (not just the
+    /// missing-file fallback).
+    #[tokio::test]
+    async fn pending_summary_valid_empty_baseline_still_pending() {
+        let folder_dir = tempfile::TempDir::new().unwrap();
+        let json = serde_json::to_string(&hcfs_client::sync::SyncState::default()).unwrap();
+        tokio::fs::write(folder_dir.path().join("sync_state.json"), json)
+            .await
+            .unwrap();
+        let sync_root = tempfile::TempDir::new().unwrap();
+        tokio::fs::write(sync_root.path().join("a.bin"), b"data").await.unwrap(); // 4
+        let (files, bytes) =
+            compute_startup_pending_summary(folder_dir.path(), sync_root.path()).await;
+        assert_eq!((files, bytes), (1, 4));
+    }
+
+    /// A corrupt baseline must NOT panic or error — it degrades to an empty
+    /// synced set (everything pending), the graceful path the startup seed needs.
+    #[tokio::test]
+    async fn pending_summary_corrupt_baseline_degrades_gracefully() {
+        let folder_dir = tempfile::TempDir::new().unwrap();
+        tokio::fs::write(folder_dir.path().join("sync_state.json"), b"{ not json")
+            .await
+            .unwrap();
+        let sync_root = tempfile::TempDir::new().unwrap();
+        tokio::fs::write(sync_root.path().join("a.bin"), b"data").await.unwrap();
+        let (files, _bytes) =
+            compute_startup_pending_summary(folder_dir.path(), sync_root.path()).await;
+        assert_eq!(files, 1);
     }
 
     /// An empty wanted set yields an empty map — the recent-files path returns

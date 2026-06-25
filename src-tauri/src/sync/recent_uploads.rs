@@ -25,6 +25,7 @@
 use crate::app_state::AppState;
 use crate::error::{AppError, Result};
 use crate::sync::files::UserFileEntry;
+use crate::sync::mnemonic::folder_hash;
 use hcfs_shared::network::{NetworkResponse, SearchFileHit, SearchFilesResponse};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -52,9 +53,11 @@ const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 /// Map one `/search_files` hit onto the `UserFileEntry` shape the frontend
 /// already knows how to render and preview.
 ///
-/// `label_to_path` maps a drive label to its local sync-root path. A hit
-/// whose `folder_label` is configured on this device gets a real `source`
-/// path so preview/download resolve locally.
+/// `hash_to_drive` maps a drive's `folder_hash` to its `(local_label, path)`. A
+/// hit is matched to a local drive by its UNIQUE `folder_hash` (not the
+/// non-unique `folder_label` basename) — see the keying note in the body — so a
+/// configured drive gets a real `source` path and the entry's local label for
+/// preview/download resolution.
 ///
 /// `sync_status` is the badge the Recent-Files / search UI renders. It is
 /// deliberately conservative about `pending`, which the table renders as a
@@ -83,7 +86,7 @@ const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 /// can `filter_map` it away.
 fn map_search_hit_to_entry(
     hit: &SearchFileHit,
-    label_to_path: &HashMap<String, String>,
+    hash_to_drive: &HashMap<String, (String, String)>,
     path_exists: &dyn Fn(&str) -> bool,
 ) -> Option<UserFileEntry> {
     // Prefer the plaintext relative path — it carries the full in-folder path
@@ -107,7 +110,17 @@ fn map_search_hit_to_entry(
 
     let display_name = actual_file_name.rsplit('/').next().unwrap_or(&actual_file_name).to_string();
 
-    let local_path = label_to_path.get(&hit.folder_label).filter(|p| !p.is_empty());
+    // Resolve the local drive by the hit's UNIQUE `folder_hash`, NOT its
+    // `folder_label`: the server reports `folder_label` as the basename, which
+    // COLLIDES for two same-basename drives (e.g. haloce_mcc/tags +
+    // halo2_mcc/tags → both "tags"). Keying on the label cross-attributed a
+    // file to the wrong drive — wrong on-disk path, wrong pending/synced badge,
+    // and (since the entry's `label` drives `download_remote_file`'s
+    // `folder_hash` derivation on the FE) a cloud preview/download that targeted
+    // the WRONG server folder. `folder_hash` is the unique per-drive identity.
+    // Same bug class as the `get_sync_folders_with_stats` fix.
+    let local = hash_to_drive.get(&hit.folder_hash);
+    let local_path = local.map(|(_, path)| path).filter(|p| !p.is_empty());
     let source = match local_path {
         Some(path) => format!("{path}/{actual_file_name}"),
         None => String::new(),
@@ -151,7 +164,10 @@ fn map_search_hit_to_entry(
         is_erasure_coded: false,
         main_req_hash: String::new(),
         sync_status: sync_status.to_string(),
-        label: hit.folder_label.clone(),
+        // The drive's LOCAL (unique) label when configured here — so the FE's
+        // cloud download re-derives the correct `folder_hash` — else the
+        // server's display basename for a folder not configured on this device.
+        label: local.map_or_else(|| hit.folder_label.clone(), |(label, _)| label.clone()),
         file_count: None,
         deleted: false,
     })
@@ -327,10 +343,14 @@ async fn fetch_search_files(state: &AppState, account_id: &str, query: &[(&'stat
     // Build label → local sync-root map so previews/downloads resolve for
     // drives configured on this device.
     let sync_paths = crate::sync::folders::get_all_sync_paths_or_warn(pool, account_id, "fetch_search_files").await;
-    let label_to_path: HashMap<String, String> = sync_paths
+    // Key by the UNIQUE folder_hash, not the local label, so server hits join to
+    // the right drive even when two drives share a basename (see
+    // map_search_hit_to_entry). Value carries the local label (for the FE
+    // download path) + the on-disk root.
+    let hash_to_drive: HashMap<String, (String, String)> = sync_paths
         .iter()
         .filter(|sp| !sp.path.is_empty() && !sp.label.is_empty())
-        .map(|sp| (sp.label.clone(), sp.path.clone()))
+        .map(|sp| (folder_hash(&sp.label), (sp.label.clone(), sp.path.clone())))
         .collect();
 
     // Real filesystem probe for the "configured drive but not yet downloaded"
@@ -340,7 +360,7 @@ async fn fetch_search_files(state: &AppState, account_id: &str, query: &[(&'stat
     let entries = result
         .files
         .iter()
-        .filter_map(|hit| map_search_hit_to_entry(hit, &label_to_path, &path_exists))
+        .filter_map(|hit| map_search_hit_to_entry(hit, &hash_to_drive, &path_exists))
         .collect();
     Ok(entries)
 }
@@ -407,9 +427,13 @@ mod tests {
     /// Constructed via JSON so the test isn't coupled to every
     /// `RemoteFileEntry` field (most are `#[serde(default)]`); the 32-byte
     /// hash arrays are the only structurally-required extras.
-    fn hit(folder_label: &str, relative_path: Option<&str>, file_name: Option<&str>, created_at: i64, updated_at: i64) -> SearchFileHit {
+    /// Full fixture: `folder_label` is the server's DISPLAY basename, while the
+    /// hit's `folder_hash` is derived from `hash_label` — modeling production,
+    /// where two same-basename drives share `folder_label` but have distinct
+    /// `folder_hash`es derived from their unique local labels (`tags`/`tags-2`).
+    fn hit_full(folder_label: &str, hash_label: &str, relative_path: Option<&str>, file_name: Option<&str>, created_at: i64, updated_at: i64) -> SearchFileHit {
         let mut value = json!({
-            "folder_hash": "fh",
+            "folder_hash": folder_hash(hash_label),
             "folder_label": folder_label,
             "path_hash": vec![0u8; 32],
             "salted_hash": vec![0u8; 32],
@@ -429,8 +453,18 @@ mod tests {
         serde_json::from_value(value).expect("hit fixture must deserialize")
     }
 
-    fn label_map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
-        pairs.iter().map(|(l, p)| ((*l).to_string(), (*p).to_string())).collect()
+    /// Common case: the server display label equals the drive's local label, so
+    /// `folder_hash` derives from the same string.
+    fn hit(folder_label: &str, relative_path: Option<&str>, file_name: Option<&str>, created_at: i64, updated_at: i64) -> SearchFileHit {
+        hit_full(folder_label, folder_label, relative_path, file_name, created_at, updated_at)
+    }
+
+    /// Build the production `hash_to_drive` map: `folder_hash(label) → (label, path)`.
+    fn drive_map(pairs: &[(&str, &str)]) -> HashMap<String, (String, String)> {
+        pairs
+            .iter()
+            .map(|(l, p)| (folder_hash(l), ((*l).to_string(), (*p).to_string())))
+            .collect()
     }
 
     /// Test predicate that reports every path as present on disk.
@@ -444,7 +478,7 @@ mod tests {
 
     #[test]
     fn maps_local_drive_hit_on_disk_as_synced() {
-        let map = label_map(&[("Docs", "/home/me/Docs")]);
+        let map = drive_map(&[("Docs", "/home/me/Docs")]);
         let entry = map_search_hit_to_entry(
             &hit("Docs", Some("Work/report.pdf"), Some("report.pdf"), 1_700_000_000, 1_700_000_005),
             &map,
@@ -474,7 +508,7 @@ mod tests {
     /// down on the next cycle).
     #[test]
     fn marks_configured_drive_pending_when_file_absent_on_disk() {
-        let map = label_map(&[("Docs", "/home/me/Docs")]);
+        let map = drive_map(&[("Docs", "/home/me/Docs")]);
         let entry = map_search_hit_to_entry(
             &hit("Docs", Some("Work/report.pdf"), Some("report.pdf"), 1_700_000_000, 0),
             &map,
@@ -492,7 +526,7 @@ mod tests {
     /// "waiting in the sync queue" pill. Nothing is queued for it locally.
     #[test]
     fn marks_non_local_drive_synced_with_empty_source() {
-        let map = label_map(&[("Docs", "/home/me/Docs")]);
+        let map = drive_map(&[("Docs", "/home/me/Docs")]);
         let entry = map_search_hit_to_entry(
             &hit("OtherDevice", Some("a/b.txt"), Some("b.txt"), 1_700_000_000, 0),
             &map,
@@ -508,16 +542,45 @@ mod tests {
         assert_eq!(entry.last_charged_at, 1_700_000_000_000);
     }
 
+    /// Same-basename collision regression: two local drives share the basename
+    /// `tags` (local labels `tags` / `tags-2`), so the server reports BOTH under
+    /// `folder_label = "tags"`. A hit belonging to the SECOND drive (its
+    /// `folder_hash` derives from `tags-2`) must resolve to THAT drive's path +
+    /// local label — not be cross-attributed to the first `tags` drive. Keying
+    /// on `folder_label` (the old bug) would always pick the first.
+    #[test]
+    fn same_basename_hit_resolves_by_folder_hash_not_label() {
+        let map = drive_map(&[
+            ("tags", "/Users/me/haloce_mcc/tags"),
+            ("tags-2", "/Users/me/halo2_mcc/tags"),
+        ]);
+        // Server display label is the basename "tags"; the hit truly belongs to
+        // the tags-2 drive (folder_hash derived from "tags-2").
+        let entry = map_search_hit_to_entry(
+            &hit_full("tags", "tags-2", Some("ui/x.bitmap"), Some("x.bitmap"), 1, 1),
+            &map,
+            &on_disk,
+        )
+        .expect("same-basename hit maps");
+
+        assert_eq!(entry.label, "tags-2", "must use the matched drive's LOCAL label");
+        assert_eq!(
+            entry.source, "/Users/me/halo2_mcc/tags/ui/x.bitmap",
+            "must join onto the tags-2 root, not the colliding tags root",
+        );
+        assert_eq!(entry.sync_status, "synced");
+    }
+
     #[test]
     fn falls_back_to_file_name_when_relative_path_absent() {
-        let entry = map_search_hit_to_entry(&hit("Docs", None, Some("loose.png"), 1, 1), &label_map(&[]), &on_disk).expect("file_name-only hit maps");
+        let entry = map_search_hit_to_entry(&hit("Docs", None, Some("loose.png"), 1, 1), &drive_map(&[]), &on_disk).expect("file_name-only hit maps");
         assert_eq!(entry.actual_file_name, "loose.png");
         assert_eq!(entry.name, "loose.png");
     }
 
     #[test]
     fn strips_leading_slash_from_relative_path() {
-        let map = label_map(&[("Docs", "/root")]);
+        let map = drive_map(&[("Docs", "/root")]);
         let entry = map_search_hit_to_entry(&hit("Docs", Some("/x/y.txt"), None, 1, 1), &map, &on_disk).expect("leading-slash hit maps");
         assert_eq!(entry.actual_file_name, "x/y.txt");
         assert_eq!(entry.source, "/root/x/y.txt");
@@ -525,7 +588,7 @@ mod tests {
 
     #[test]
     fn skips_pre_backfill_rows_with_no_name_or_path() {
-        assert!(map_search_hit_to_entry(&hit("Docs", None, None, 1, 1), &label_map(&[]), &on_disk).is_none());
+        assert!(map_search_hit_to_entry(&hit("Docs", None, None, 1, 1), &drive_map(&[]), &on_disk).is_none());
     }
 
     // ── build_search_query ──────────────────────────────────────────────

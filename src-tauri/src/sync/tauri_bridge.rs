@@ -908,6 +908,13 @@ struct SyncSnapshotWire<'a> {
     intent_completed_files: Option<u64>,
     intent_completed_bytes: Option<u64>,
     intent_active: Option<bool>,
+    /// Local-pending summary for the startup "preparing" window: on-disk files
+    /// not yet in the synced baseline, summed across drives. `None` outside that
+    /// window (no startup-seeded drive). The FE shows "N files · X · Preparing"
+    /// when present and `widgetState == "preparing"`, then the live session
+    /// supersedes it. See `crate::sync::preparing::PreparingState::pending_summary`.
+    preparing_pending_files: Option<u64>,
+    preparing_pending_bytes: Option<u64>,
 }
 
 /// Build the intent-overlay numbers for the current account, summed
@@ -973,6 +980,16 @@ fn spawn_snapshot_emit<R: tauri::Runtime>(app: tauri::AppHandle<R>, snapshot: Sy
         }
         let fp = snapshot_fingerprint(&snapshot, overlay);
         if try_claim_snapshot_fingerprint(&LAST_EMITTED_FINGERPRINT, fp) {
+            // Local-pending summary for the startup "preparing" window. Read here
+            // (not threaded through the snapshot) so it tracks the live
+            // PreparingState and clears automatically once the seeded labels are
+            // dropped by the ProgressSnapshot handler.
+            let (preparing_pending_files, preparing_pending_bytes) = {
+                use tauri::Manager;
+                app.try_state::<crate::app_state::AppState>()
+                    .and_then(|st| st.preparing.pending_summary())
+                    .map_or((None, None), |(f, b)| (Some(f), Some(b)))
+            };
             let wire = SyncSnapshotWire {
                 inner: &snapshot,
                 intent_total_files: overlay.total_files,
@@ -980,6 +997,8 @@ fn spawn_snapshot_emit<R: tauri::Runtime>(app: tauri::AppHandle<R>, snapshot: Sy
                 intent_completed_files: overlay.completed_files,
                 intent_completed_bytes: overlay.completed_bytes,
                 intent_active: overlay.active,
+                preparing_pending_files,
+                preparing_pending_bytes,
             };
             let _ = app.emit(events::PROGRESS_SNAPSHOT, &wire);
         }
@@ -1303,6 +1322,8 @@ mod tests {
             intent_completed_files: Some(5),
             intent_completed_bytes: Some(500),
             intent_active: Some(true),
+            preparing_pending_files: Some(7),
+            preparing_pending_bytes: Some(700),
         };
         let json = serde_json::to_value(&wire).expect("serialize wire");
 
@@ -1312,6 +1333,8 @@ mod tests {
         assert_eq!(json["intentCompletedFiles"], 5);
         assert_eq!(json["intentCompletedBytes"], 500);
         assert_eq!(json["intentActive"], true);
+        assert_eq!(json["preparingPendingFiles"], 7);
+        assert_eq!(json["preparingPendingBytes"], 700);
 
         // No `inner` nesting — flatten promoted the inner fields up.
         assert!(json.get("inner").is_none(), "flatten must inline `inner`");
@@ -1337,6 +1360,8 @@ mod tests {
             intent_completed_files: None,
             intent_completed_bytes: None,
             intent_active: None,
+            preparing_pending_files: None,
+            preparing_pending_bytes: None,
         };
         let json = serde_json::to_value(&wire).expect("serialize wire");
         assert!(json["intentTotalFiles"].is_null());
@@ -1344,6 +1369,8 @@ mod tests {
         assert!(json["intentCompletedFiles"].is_null());
         assert!(json["intentCompletedBytes"].is_null());
         assert!(json["intentActive"].is_null());
+        assert!(json["preparingPendingFiles"].is_null());
+        assert!(json["preparingPendingBytes"].is_null());
     }
 
     /// IPC wire-contract guard (Layer 0): pin the COMPLETE set of JSON keys
@@ -1369,6 +1396,8 @@ mod tests {
             intent_completed_files: Some(1),
             intent_completed_bytes: Some(1),
             intent_active: Some(true),
+            preparing_pending_files: Some(1),
+            preparing_pending_bytes: Some(1),
         };
         let json = serde_json::to_value(&wire).expect("serialize wire");
         let obj = json.as_object().expect("wire serializes to a JSON object");
@@ -1376,8 +1405,9 @@ mod tests {
         let mut actual: Vec<&str> = obj.keys().map(String::as_str).collect();
         actual.sort_unstable();
 
-        // The 27 flattened `SyncSnapshot` fields (camelCase) plus the 5 intent
-        // overlay fields `SyncSnapshotWire` appends. Source for the field set:
+        // The 27 flattened `SyncSnapshot` fields (camelCase) plus the 7 desktop
+        // overlay fields `SyncSnapshotWire` appends (5 intent + 2 preparing).
+        // Source for the field set:
         // `fixture_snapshot()` above + `hcfs-client/src/engine/progress/snapshot.rs`
         // (`#[serde(rename_all = "camelCase")]`, no per-field rename/skip).
         let mut expected = [
@@ -1413,6 +1443,8 @@ mod tests {
             "intentCompletedFiles",
             "intentTotalBytes",
             "intentTotalFiles",
+            "preparingPendingFiles",
+            "preparingPendingBytes",
         ];
         expected.sort_unstable();
 

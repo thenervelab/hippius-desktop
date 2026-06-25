@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import useAddCreditEvent from "@/app/lib/hooks/api/useAddCreditEvent";
 import { addNotification } from "@/app/lib/helpers/notificationsDb";
+import { isExpectedNoSessionError } from "@/app/lib/utils/errorUtils";
 
 import { invoke } from "@tauri-apps/api/core";
 import { useSetAtom, useAtom } from "jotai";
@@ -65,7 +66,11 @@ export function useCreditsNotification() {
           await refreshUnread();
         }
       } catch (err) {
-        console.error("Credit balance check failed:", err);
+        // Skip the expected no-session / account-transition rejection (the
+        // account-scoped command can race a stale address during a switch).
+        if (!isExpectedNoSessionError(err)) {
+          console.error("Credit balance check failed:", err);
+        }
       }
     };
 
@@ -115,7 +120,9 @@ export function useCreditsNotification() {
           await refreshUnread();
         }
       } catch (err) {
-        console.error("Credit-event processing failed:", err);
+        if (!isExpectedNoSessionError(err)) {
+          console.error("Credit-event processing failed:", err);
+        }
       }
     };
 

@@ -476,8 +476,17 @@ pub async fn get_sync_folders_with_stats(state: tauri::State<'_, crate::app_stat
     });
     let sync_paths = sync_paths.unwrap_or_default();
 
-    // Build remote lookup by label
-    let remote_by_label: HashMap<String, &RemoteFolderInfoResult> = remote_folders.iter().map(|f| (f.label.clone(), f)).collect();
+    // Build remote lookup by folder_hash (NOT label). Two local folders with the
+    // same BASENAME (e.g. haloce_mcc/tags + halo2_mcc/tags → labels "tags" and
+    // "tags-2") are registered on the server under the same DISPLAY label "tags"
+    // but distinct folder_hashes. folder_hash is derived from the unique label
+    // and is what the server stores each folder's files under, so it is the
+    // correct per-drive join key. Keying by label collapsed the two into one map
+    // entry, so the second drive matched nothing (blank size/file count) and the
+    // first could even show the other folder's stats. (No data was conflated —
+    // only this display join was; files are correctly separated by folder_hash.)
+    let remote_by_hash: HashMap<String, &RemoteFolderInfoResult> =
+        remote_folders.iter().map(|f| (f.folder_hash.clone(), f)).collect();
 
     // Build local folders with status and remote stats
     let mut local = Vec::with_capacity(sync_paths.len());
@@ -505,7 +514,7 @@ pub async fn get_sync_folders_with_stats(state: tauri::State<'_, crate::app_stat
         // the post-login paused-drive reports.
         let status = if sp.is_paused { "paused" } else { "syncing" }.to_string();
 
-        let remote = remote_by_label.get(&sp.label);
+        let remote = remote_by_hash.get(&folder_hash(&sp.label));
 
         local.push(SyncFolderInfo {
             id: sp.label.clone(),
@@ -521,11 +530,15 @@ pub async fn get_sync_folders_with_stats(state: tauri::State<'_, crate::app_stat
         });
     }
 
-    // Remote folders not in local list
-    let local_labels: std::collections::HashSet<&str> = sync_paths.iter().map(|sp| sp.label.as_str()).collect();
+    // Remote folders not configured locally (the "sync from other devices"
+    // section). Match on folder_hash, not label, for the same basename-collision
+    // reason above: a local "tags-2" drive registers on the server under display
+    // label "tags", so a label filter would fail to suppress it here.
+    let local_hashes: std::collections::HashSet<String> =
+        sync_paths.iter().map(|sp| folder_hash(&sp.label)).collect();
     let mut remote_display: Vec<RemoteFolderDisplay> = remote_folders
         .iter()
-        .filter(|f| !local_labels.contains(f.label.as_str()))
+        .filter(|f| !local_hashes.contains(&f.folder_hash))
         .map(|f| {
             let ts = if f.updated_at != 0 { f.updated_at } else { f.created_at };
             RemoteFolderDisplay {
@@ -552,6 +565,52 @@ pub async fn get_sync_folders_with_stats(state: tauri::State<'_, crate::app_stat
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+
+    // ── remote-stats join (folder_hash, not label) ──────────────────
+
+    fn remote(label: &str, hash_of_label: &str, file_count: u64) -> RemoteFolderInfoResult {
+        RemoteFolderInfoResult {
+            // Same DISPLAY label on the server for both folders (the bug: they
+            // were registered under the basename), but distinct folder_hash.
+            label: label.to_string(),
+            folder_hash: folder_hash(hash_of_label),
+            file_count,
+            total_bytes: file_count * 1000,
+            created_at: 0,
+            updated_at: 0,
+            device_name: String::new(),
+        }
+    }
+
+    /// The join in `get_sync_folders_with_stats` MUST key on folder_hash. Two
+    /// same-basename local folders (labels "tags" and "tags-2") register on the
+    /// server under the SAME display label "tags" but distinct folder_hashes.
+    /// Keying by label collapses them — the second drive shows blank stats and
+    /// the first can show the wrong folder's. Keying by folder_hash joins each
+    /// drive to its own remote stats. This pins that invariant.
+    #[test]
+    fn remote_stats_join_keys_on_folder_hash_not_label() {
+        // Sanity: distinct unique labels hash distinctly even with same basename.
+        assert_ne!(folder_hash("tags"), folder_hash("tags-2"));
+
+        let remotes = [
+            remote("tags", "tags", 988),    // haloce_mcc/tags  (label "tags")
+            remote("tags", "tags-2", 512),  // halo2_mcc/tags   (label "tags-2")
+        ];
+        let by_hash: HashMap<String, &RemoteFolderInfoResult> =
+            remotes.iter().map(|f| (f.folder_hash.clone(), f)).collect();
+
+        // Both same-basename local drives resolve to their OWN stats.
+        assert_eq!(by_hash.get(&folder_hash("tags")).map(|r| r.file_count), Some(988));
+        assert_eq!(by_hash.get(&folder_hash("tags-2")).map(|r| r.file_count), Some(512));
+
+        // The old label-keyed map would collapse both into one entry, so the
+        // second drive ("tags-2") would have matched nothing.
+        let by_label: HashMap<String, &RemoteFolderInfoResult> =
+            remotes.iter().map(|f| (f.label.clone(), f)).collect();
+        assert_eq!(by_label.len(), 1, "label keying collapses same-basename folders (the bug)");
+    }
 
     // ── sanitize_label ──────────────────────────────────────────────
 

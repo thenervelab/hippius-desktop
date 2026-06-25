@@ -1,4 +1,5 @@
 import type { SyncSnapshot } from "@/app/lib/types/syncSnapshot";
+import { formatBytes } from "@/app/lib/utils/formatBytes";
 
 /** Visual tone for the tray sync-summary row, driving its icon + accent color. */
 export type TraySyncTone = "active" | "completed" | "failed" | "preparing";
@@ -79,11 +80,19 @@ export function getTraySyncSummary(
   const plural = (n: number) => (n === 1 ? "" : "s");
 
   if (isPreparing) {
+    // At startup the backend attaches a local-pending summary (on-disk files not
+    // yet in the synced baseline) so the user sees the scope of pending work
+    // immediately, not a bare "Preparing sync…". Absent for file-watcher cycles.
+    const pendingFiles = snapshot.preparingPendingFiles ?? 0;
+    const detail =
+      pendingFiles > 0
+        ? `${pendingFiles.toLocaleString()} file${plural(pendingFiles)} · ${formatBytes(snapshot.preparingPendingBytes ?? 0)} pending`
+        : "Preparing sync…";
     return {
       tone: "preparing",
       percent: clampPercent(overallPercent),
       statusLabel: "Preparing",
-      detail: "Preparing sync…",
+      detail,
     };
   }
 

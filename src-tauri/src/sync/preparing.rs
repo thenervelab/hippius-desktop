@@ -103,6 +103,15 @@ pub const PREPARING_WATCHDOG_SCAN_INTERVAL: Duration = Duration::from_secs(10);
 /// forever and defeat the watchdog.
 struct PreparingInner {
     marked_at: Instant,
+    /// Optional local-pending summary attached at startup: the count and byte
+    /// total of on-disk files not yet in this drive's synced baseline
+    /// (`sync_state.json`). Lets the widget/tray show "N files · X · Preparing"
+    /// immediately on launch — before the slow remote fetch — instead of a bare
+    /// "Preparing". 0 for the file-watcher `PlanReady` path, which has no cheap
+    /// pre-scan count (it shows the generic preparing state). Summed across
+    /// labels by [`PreparingState::pending_summary`].
+    pending_files: u64,
+    pending_bytes: u64,
 }
 
 /// Map of drive labels currently in the "preparing" window between
@@ -152,11 +161,23 @@ impl PreparingState {
     /// and on the `false` path the existing `marked_at` is preserved,
     /// NOT refreshed, so the watchdog measures from the first
     /// `SyncStarted` of the window.
-    fn mark_at(&self, now: Instant, label: &str) -> bool {
+    fn mark_at(&self, now: Instant, label: &str, pending_files: u64, pending_bytes: u64) -> bool {
         match self.lock().entry(label.to_string()) {
-            Entry::Occupied(_) => false,
+            Entry::Occupied(mut slot) => {
+                // Preserve `marked_at` (the watchdog measures from the FIRST
+                // mark) but let a later, richer summary populate the count — e.g.
+                // the startup pre-scan landing after a `PlanReady` mark that had
+                // none. Only overwrite with a non-zero count so a bare re-mark
+                // can't wipe a summary we already have.
+                if pending_files > 0 {
+                    let inner = slot.get_mut();
+                    inner.pending_files = pending_files;
+                    inner.pending_bytes = pending_bytes;
+                }
+                false
+            }
             Entry::Vacant(slot) => {
-                slot.insert(PreparingInner { marked_at: now });
+                slot.insert(PreparingInner { marked_at: now, pending_files, pending_bytes });
                 true
             }
         }
@@ -183,7 +204,35 @@ impl PreparingState {
     /// would deadlock. The `mark_then_read_does_not_deadlock_in_sequence`
     /// test below pins this invariant.
     pub fn mark_preparing(&self, label: &str) -> bool {
-        self.mark_at(Instant::now(), label)
+        self.mark_at(Instant::now(), label, 0, 0)
+    }
+
+    /// Like [`Self::mark_preparing`] but attaches a local-pending summary (file
+    /// count + byte total) so the widget/tray can render "N files · X ·
+    /// Preparing" during the startup window — before the engine's remote fetch.
+    /// If the label is already preparing, the summary is updated in place and
+    /// the watchdog timer is NOT reset. Returns `true` if the label was newly
+    /// added (callers gate an immediate `emit_snapshot` on it).
+    pub fn mark_preparing_with_summary(&self, label: &str, pending_files: u64, pending_bytes: u64) -> bool {
+        self.mark_at(Instant::now(), label, pending_files, pending_bytes)
+    }
+
+    /// Sum of every label's local-pending summary, or `None` when no label
+    /// carries a non-zero count.
+    ///
+    /// Read by the snapshot wire wrapper so the FE can show a
+    /// "N files · X bytes · Preparing" header while a startup-seeded drive waits
+    /// for its first real session snapshot. `None` means "no summary known —
+    /// render the generic preparing state". Cheap: one mutex lock, no allocation.
+    pub fn pending_summary(&self) -> Option<(u64, u64)> {
+        let g = self.lock();
+        let mut files = 0u64;
+        let mut bytes = 0u64;
+        for inner in g.values() {
+            files = files.saturating_add(inner.pending_files);
+            bytes = bytes.saturating_add(inner.pending_bytes);
+        }
+        (files > 0).then_some((files, bytes))
     }
 
     /// Remove `label` from the preparing set.
@@ -420,7 +469,7 @@ mod tests {
     fn drain_expired_removes_label_older_than_timeout() {
         let state = PreparingState::new();
         let t0 = Instant::now();
-        assert!(state.mark_at(t0, "drive-a"));
+        assert!(state.mark_at(t0, "drive-a", 0, 0));
         let later = t0 + PREPARING_WATCHDOG_TIMEOUT + Duration::from_secs(1);
         assert_eq!(state.drain_expired(later), vec!["drive-a".to_string()]);
         assert!(!state.is_any_preparing());
@@ -432,7 +481,7 @@ mod tests {
     fn drain_expired_keeps_fresh_label() {
         let state = PreparingState::new();
         let t0 = Instant::now();
-        state.mark_at(t0, "drive-a");
+        state.mark_at(t0, "drive-a", 0, 0);
         let soon = t0 + Duration::from_secs(5);
         assert!(state.drain_expired(soon).is_empty());
         assert_eq!(state.snapshot_labels(), vec!["drive-a".to_string()]);
@@ -447,10 +496,10 @@ mod tests {
     fn duplicate_mark_does_not_extend_timeout() {
         let state = PreparingState::new();
         let t0 = Instant::now();
-        state.mark_at(t0, "drive-a");
+        state.mark_at(t0, "drive-a", 0, 0);
         // Re-marked well into the window (simulating a watcher storm).
         let restamp_attempt = (t0 + PREPARING_WATCHDOG_TIMEOUT).checked_sub(Duration::from_secs(1)).unwrap();
-        assert!(!state.mark_at(restamp_attempt, "drive-a"));
+        assert!(!state.mark_at(restamp_attempt, "drive-a", 0, 0));
         // Past the timeout relative to the FIRST mark only.
         let later = t0 + PREPARING_WATCHDOG_TIMEOUT + Duration::from_secs(1);
         assert_eq!(state.drain_expired(later), vec!["drive-a".to_string()]);
@@ -463,7 +512,7 @@ mod tests {
     fn drain_expired_ignores_entry_marked_in_the_future() {
         let state = PreparingState::new();
         let t0 = Instant::now();
-        state.mark_at(t0 + Duration::from_mins(2), "drive-a");
+        state.mark_at(t0 + Duration::from_mins(2), "drive-a", 0, 0);
         assert!(state.drain_expired(t0).is_empty());
         assert_eq!(state.snapshot_labels(), vec!["drive-a".to_string()]);
     }
@@ -472,5 +521,47 @@ mod tests {
     fn drain_expired_on_empty_returns_empty() {
         let state = PreparingState::new();
         assert!(state.drain_expired(Instant::now()).is_empty());
+    }
+
+    // ── startup pending summary ──────────────────────────────────────
+
+    #[test]
+    fn pending_summary_none_when_empty_or_all_zero() {
+        let state = PreparingState::new();
+        assert_eq!(state.pending_summary(), None);
+        // A bare (file-watcher PlanReady) mark carries no count.
+        state.mark_preparing("drive-a");
+        assert_eq!(state.pending_summary(), None);
+    }
+
+    #[test]
+    fn pending_summary_sums_across_labels() {
+        let state = PreparingState::new();
+        assert!(state.mark_preparing_with_summary("drive-a", 3, 300));
+        assert!(state.mark_preparing_with_summary("drive-b", 2, 200));
+        assert_eq!(state.pending_summary(), Some((5, 500)));
+    }
+
+    /// A startup summary landing AFTER a bare `PlanReady` mark must populate the
+    /// existing entry's count in place (and NOT reset the watchdog timer).
+    #[test]
+    fn summary_updates_existing_mark_in_place() {
+        let state = PreparingState::new();
+        let t0 = Instant::now();
+        assert!(state.mark_at(t0, "drive-a", 0, 0)); // PlanReady-style, no count
+        assert!(!state.mark_preparing_with_summary("drive-a", 4, 400)); // already present
+        assert_eq!(state.pending_summary(), Some((4, 400)));
+        // Timer still measured from the first (t0) mark.
+        let later = t0 + PREPARING_WATCHDOG_TIMEOUT + Duration::from_secs(1);
+        assert_eq!(state.drain_expired(later), vec!["drive-a".to_string()]);
+    }
+
+    /// A bare re-mark must NOT wipe a summary already attached.
+    #[test]
+    fn bare_remark_preserves_existing_summary() {
+        let state = PreparingState::new();
+        assert!(state.mark_preparing_with_summary("drive-a", 7, 700));
+        assert!(!state.mark_preparing("drive-a")); // bare re-mark (count 0)
+        assert_eq!(state.pending_summary(), Some((7, 700)));
     }
 }

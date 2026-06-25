@@ -79,6 +79,14 @@ export interface SyncSnapshot {
    * the "X of Y" line — backend computes this so the FE doesn't have
    * to redo the comparison. */
   intentActive?: boolean;
+  /** Startup "preparing" summary: on-disk files not yet in the synced
+   * baseline, summed across drives — set only during the cold-start window
+   * before the engine's first session snapshot, so the widget/tray can show
+   * "N files · X · Preparing" immediately instead of a bare "Preparing".
+   * Absent (undefined) outside that window. Only meaningful when
+   * `widgetState === "preparing"`. */
+  preparingPendingFiles?: number;
+  preparingPendingBytes?: number;
 }
 
 export const EMPTY_SNAPSHOT: SyncSnapshot = {

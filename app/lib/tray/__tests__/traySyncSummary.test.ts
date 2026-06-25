@@ -127,6 +127,20 @@ describe("getTraySyncSummary", () => {
   it("reports the preparing state", () => {
     const out = getTraySyncSummary(snap({ widgetState: "preparing" }));
     expect(out).toMatchObject({ tone: "preparing", statusLabel: "Preparing" });
+    expect(out?.detail).toBe("Preparing sync…");
+  });
+
+  it("shows the startup local-pending summary in the preparing detail", () => {
+    const out = getTraySyncSummary(
+      snap({
+        widgetState: "preparing",
+        preparingPendingFiles: 1240,
+        preparingPendingBytes: 8_300_000_000,
+      }),
+    );
+    expect(out).toMatchObject({ tone: "preparing", statusLabel: "Preparing" });
+    expect(out?.detail).toContain("1,240 files");
+    expect(out?.detail).toContain("pending");
   });
 
   it("clamps a stray out-of-range percent", () => {

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import { errorMessage } from "@/lib/utils/errorUtils";
+import { errorMessage, isExpectedNoSessionError } from "@/lib/utils/errorUtils";
 import {
   getHcfsConfig,
   type InitSyncResult,
@@ -205,6 +205,15 @@ export async function tryAutoInitSync(
       if (isNotReady(err, "MASTER_MNEMONIC_UNRECOVERABLE")) {
         console.warn(
           "[AutoSync] mnemonic not yet recoverable — will retry when auth is ready"
+        );
+        return "retry";
+      }
+      // A generic no-session/boot-gap auth rejection (not the specific
+      // mnemonic-unrecoverable signal above) is still a retry-on-`hippius_auth_ready`
+      // condition, not a real failure — don't log it as an error (boot-gap noise).
+      if (isExpectedNoSessionError(err)) {
+        console.warn(
+          "[AutoSync] auto_init_sync deferred — session not ready yet; will retry"
         );
         return "retry";
       }

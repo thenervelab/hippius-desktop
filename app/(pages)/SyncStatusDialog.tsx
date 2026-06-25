@@ -564,11 +564,21 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
 
   if (!open) return null;
 
+  // Render the "Preparing sync…" state even with no files yet. During the
+  // preparing window (Rust marks `widgetState="preparing"` + `widgetVisible` the
+  // moment a folder is added, before the engine has built the plan) the snapshot
+  // has `totalFiles === 0` and is not yet in-progress/retrying/completed — so
+  // without the `!isPreparing` guard this early-return swallowed the preparing
+  // card entirely and the widget only appeared once files populated (the
+  // "widget takes 5-10s to show after adding a folder" report). `isPreparing`
+  // is driven by `widgetState`, which the handler already gates `widgetVisible`
+  // on, so this can't render a stray empty card outside a real preparing window.
   if (
     snapshot.totalFiles === 0 &&
     !isInProgress &&
     !isRetrying &&
-    !isCompleted
+    !isCompleted &&
+    !isPreparing
   ) {
     return null;
   }
@@ -623,28 +633,32 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
     isCompleted ||
     isPreparing;
 
-  // Any file actively doing work — transferring OR encrypting OR decrypting.
-  // The "transferred / total" byte line tracks this (not just transferring) so
-  // it stays on screen through the encrypt/decrypt seam between files instead
-  // of blinking out every time a transfer hands off (the "doesn't always show"
-  // report). The speed text below stays gated on an actual transfer.
-  const hasActiveFile =
-    hasTransferringFile || hasEncryptingFile || hasDecryptingFile;
-
-  const showTransferDetails =
-    !isSettled && effectiveInProgress && hasActiveFile;
-
-  // The byte readout only needs the session to be in progress with a known
-  // total — it must NOT also require an active-status file, or it blinks out
-  // during the all-pending/indexing seam (files queued but none yet flipped to
-  // inProgress/encrypting/decrypting) even though the plan size is known (F-5).
-  // The SPEED suffix below stays gated on `showTransferDetails` (a real
-  // transfer). `selectLiveTransferBytes` returns null when bytesExpected===0,
-  // so the genuine preparing phase (no total yet) still shows "Preparing"
-  // rather than a misleading 0B/0B line.
+  // The byte readout (and now the speed suffix) only need the session to be in
+  // progress with a known total — they must NOT also require an active-status
+  // file, or they blink out during the all-pending/indexing seam and on every
+  // encrypt→upload / file→file handoff (files queued or encrypting but none
+  // momentarily in `inProgress`) even though the plan size is known and bytes
+  // keep climbing (F-5, "speed only shows intermittently").
+  // `selectLiveTransferBytes` returns null when bytesExpected===0, so the
+  // genuine preparing phase (no total yet) still shows "Preparing" rather than a
+  // misleading 0B/0B line; the speed suffix additionally requires a positive
+  // measured rate, so it only appears once a real transfer has been observed.
   const showTransferBytes = !isSettled && effectiveInProgress;
 
   const compactTransferredText = (() => {
+    // Startup window: before the engine's first session snapshot, show the
+    // local-pending summary ("N files · X") the backend computed from the
+    // on-disk-vs-baseline diff, so the user sees the scope of pending work
+    // immediately instead of a bare "Preparing". Supersedes once the live
+    // session takes over (widgetState leaves "preparing").
+    if (isPreparing) {
+      const f = snapshot.preparingPendingFiles ?? 0;
+      if (f > 0) {
+        const b = snapshot.preparingPendingBytes ?? 0;
+        return `${f.toLocaleString()} file${f === 1 ? "" : "s"} · ${formatCompactBytes(b)}`;
+      }
+      return null;
+    }
     if (!showTransferBytes) return null;
     const bytes = selectLiveTransferBytes(snapshot);
     if (!bytes) return null;
@@ -672,9 +686,18 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
     if (effectiveCompleted || isCompleted) return "Complete";
     if (isPreparing) return "Preparing";
 
+    // Show the speed whenever the session is actively transferring and we have
+    // a real measured rate — gated on `showTransferBytes` (the same condition
+    // the "X of Y bytes" line uses), NOT on `hasTransferringFile`. The smoothed
+    // speed (`smoothedSpeedRef`) is retained across the encrypt→upload and
+    // file→file seams where no file is momentarily in `inProgress`; the old
+    // `hasTransferringFile` gate blanked the suffix on every one of those seams
+    // even though bytes kept climbing (the reported "speed only shows
+    // intermittently"). Falls through to the Encrypting/Decrypting labels only
+    // when there is no positive rate yet (e.g. the initial encrypt before any
+    // upload). F-5.
     if (
-      showTransferDetails &&
-      hasTransferringFile &&
+      showTransferBytes &&
       speedBytesPerSec !== null &&
       speedBytesPerSec > 0
     ) {

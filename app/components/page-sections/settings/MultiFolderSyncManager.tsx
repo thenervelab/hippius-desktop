@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { useRefreshWhileSyncing } from "@/app/lib/hooks/useRefreshWhileSyncing";
 import { toast } from "sonner";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import type { SyncFolder, RemoteFolder } from "@/app/lib/types/sync-folder";
@@ -129,14 +130,17 @@ export default function MultiFolderSyncManager() {
 
   // ── Data loading ──────────────────────────────────────────────────────
 
-  const loadFolders = useCallback(async () => {
+  const loadFolders = useCallback(async (opts?: { silent?: boolean }) => {
     if (!polkadotAddress) {
       setIsLoading(false);
       return;
     }
 
     try {
-      setIsLoading(true);
+      // `silent` refreshes (the during-sync poll below) must NOT toggle
+      // `isLoading`, or the folder list would flash its skeleton on every
+      // poll. Only the initial / user-action loads show the skeleton.
+      if (!opts?.silent) setIsLoading(true);
 
       // Single Rust call: fetches local paths + remote folders, joins data,
       // determines status, filters, and sorts. No business logic in TypeScript.
@@ -182,15 +186,26 @@ export default function MultiFolderSyncManager() {
       setRemoteFolders(remoteFoldersData);
     } catch (error) {
       console.error("Failed to load folders:", error);
-      toast.error("Failed to load sync folders");
+      // A background poll failure must stay quiet — only the visible
+      // initial / user-action load surfaces a toast.
+      if (!opts?.silent) toast.error("Failed to load sync folders");
     } finally {
-      setIsLoading(false);
+      if (!opts?.silent) setIsLoading(false);
     }
   }, [polkadotAddress]);
 
   useEffect(() => {
     loadFolders();
   }, [loadFolders]);
+
+  // Keep each folder's size + file count climbing as the sync uploads. See
+  // useRefreshWhileSyncing — silent refresh so the list updates in place.
+  useRefreshWhileSyncing(
+    useCallback(() => {
+      void loadFolders({ silent: true });
+    }, [loadFolders]),
+    !!polkadotAddress,
+  );
 
   const refreshFoldersAndStats = useCallback((delayMs = 0) => {
     const refresh = () => {
