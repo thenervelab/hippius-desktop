@@ -154,10 +154,8 @@ jobs:
     # Lint the workflow files themselves so a malformed/insecure workflow fails
     # CI instead of only failing at run time. actionlint also runs shellcheck on
     # every `run:` script (the ubuntu runner ships shellcheck), which is what
-    # catches the unquoted-`$GITHUB_ENV` SC2086 class. zizmor (workflow security
-    # audit) is a deliberate follow-up: it currently surfaces pre-existing
-    # findings in the release workflows that need fixing under their signing
-    # setup first.
+    # catches the unquoted-`$GITHUB_ENV` SC2086 class. Workflow SECURITY (vs
+    # correctness) is gated separately by the `zizmor` job below.
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -181,6 +179,34 @@ jobs:
 
       - name: Lint workflows
         run: ./actionlint -color
+
+  zizmor:
+    # Security audit of the workflow files (credential persistence, cache
+    # poisoning of privileged/signed builds, template injection, …). Run
+    # `--offline` so the gate is hermetic — no GITHUB_TOKEN or network — and
+    # pinned by SHA256 like actionlint. The single accepted finding (an uncached
+    # setup-node in the release workflow) is justified inline with a
+    # `# zizmor: ignore[cache-poisoning]` comment.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Install zizmor
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=1.26.1
+          sha256=8556289a64e7aaf2400cd516f61a471aa91c5902cc56ad96a82fd12f90c2ef73
+          curl -fsSL -o zizmor.tar.gz \
+            "https://github.com/zizmorcore/zizmor/releases/download/v${version}/zizmor-x86_64-unknown-linux-gnu.tar.gz"
+          echo "${sha256}  zizmor.tar.gz" | sha256sum -c -
+          tar xzf zizmor.tar.gz zizmor
+
+      - name: Audit workflows
+        run: ./zizmor --offline --persona regular .github/workflows/
 
   frontend:
     runs-on: ubuntu-latest

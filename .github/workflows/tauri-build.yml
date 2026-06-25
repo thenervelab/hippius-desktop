@@ -42,6 +42,12 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0 # Fetch all history to get commit messages
+          # Don't leave the GITHUB_TOKEN in .git/config — it would otherwise
+          # persist into any artifact built from this checkout (zizmor
+          # artipacked). The release-notes step uses the token via the API, and
+          # the private hcfs dep is fetched over a separate SSH deploy key, so
+          # no git operation here needs the persisted credential.
+          persist-credentials: false
 
       # CI has no developer SSH key, so install the hcfs deploy key and trust
       # github.com. Without this the build dies at "failed to authenticate when
@@ -199,13 +205,15 @@ jobs:
           rustup target add --toolchain "${channel}" aarch64-apple-darwin x86_64-apple-darwin
           rustup show
 
-      - name: Rust cache
-        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-        with:
-          workspaces: "./src-tauri -> target"
-
+      # A SIGNED release must not restore build caches that a less-privileged PR
+      # workflow can populate — a poisoned `target/` or pnpm store could be baked
+      # into the signed bundle (zizmor cache-poisoning). Releases are infrequent,
+      # so a cold build is the right trade; the Rust + PNPM caches the PR CI
+      # (ci.yml) relies on are deliberately ABSENT here.
       - name: Setup Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        # setup-node only caches when a `cache:` input is given (it isn't here),
+        # so the cache-poisoning finding is a false positive for this uncached use.
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0 # zizmor: ignore[cache-poisoning]
         with:
           node-version: "lts/*"
 
@@ -214,16 +222,6 @@ jobs:
         with:
           version: 9.12.3
           run_install: false
-
-      - name: PNPM store path
-        run: echo "STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_ENV"
-
-      - name: PNPM cache
-        uses: actions/cache@6f8efc29b200d32929f49075959781ed54ec270c # v3
-        with:
-          path: ${{ env.STORE_PATH }}
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
-          restore-keys: ${{ runner.os }}-pnpm-
 
       - name: Install deps
         run: pnpm install --frozen-lockfile

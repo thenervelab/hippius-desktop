@@ -25,6 +25,10 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0
+          # Don't persist the GITHUB_TOKEN into .git/config (zizmor artipacked);
+          # the hcfs dep uses a separate SSH deploy key and the release upload
+          # uses the token via tauri-action's env, not git.
+          persist-credentials: false
 
       - name: Setup SSH for private Rust git deps
         shell: bash
