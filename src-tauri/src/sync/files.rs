@@ -3842,6 +3842,33 @@ mod tests {
         }
     }
 
+    /// Cross-boundary drift pin: the accept/reject VERDICT of `validate_new_name`
+    /// must agree with the FE `getRenameValidationError` (which returns `null`
+    /// iff it accepts) on a SHARED fixture. The same JSON drives the vitest test
+    /// `app/lib/__tests__/crossBoundaryContract.test.ts`, so a change to either
+    /// side's rule SET fails its own CI job. We pin the verdict, not the message —
+    /// the two validators word their errors differently and check in a different
+    /// order by design; only "accept ⇔ accept" is the contract. The fixture
+    /// probes the documented edges (axiom 110): the 255-BYTE limit on both ASCII
+    /// and multibyte input (pins UTF-8-byte counting, not UTF-16 length), the
+    /// exact-stem reserved check (`con` rejected, `context` accepted), NUL, and
+    /// the Windows-unsafe `:`/trailing-dot shapes.
+    #[test]
+    fn validate_new_name_verdict_matches_shared_fixture() {
+        #[derive(serde::Deserialize)]
+        struct NameCase {
+            input: String,
+            valid: bool,
+            note: String,
+        }
+        let cases: Vec<NameCase> = serde_json::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/name_validation_cases.json")))
+            .expect("name_validation_cases.json is valid JSON");
+        assert!(!cases.is_empty(), "fixture must carry cases");
+        for case in &cases {
+            assert_eq!(validate_new_name(&case.input).is_ok(), case.valid, "validate_new_name({:?}).is_ok() — {}", case.input, case.note);
+        }
+    }
+
     #[test]
     fn resolve_rename_root_requires_named_label_to_exist() {
         let mut map = HashMap::new();

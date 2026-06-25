@@ -50,6 +50,26 @@ const SEARCH_DEFAULT_LIMIT: usize = 50;
 /// interactive palette, not a bulk operation.
 const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// Strip every leading `/` from a sync-root-relative path, returning the
+/// canonical identity key used to join a server "last uploads" row against the
+/// live sync snapshot.
+///
+/// This MUST stay byte-for-byte identical to the frontend `normalizeRelPath`
+/// (`app/lib/utils/relPath.ts`, `path.replace(/^\/+/, "")`): the FE dedups the
+/// two independently-produced views of the same file by this key, so any drift
+/// (e.g. switching to `strip_prefix('/')`, which removes only ONE slash)
+/// silently splits one file into two rows again. The agreement is pinned by a
+/// shared known-answer fixture (`tests/fixtures/path_normalization_cases.json`)
+/// exercised from this module's tests AND from
+/// `app/lib/__tests__/crossBoundaryContract.test.ts`.
+///
+/// `trim_start_matches('/')` removes the whole leading run (`"///a"` → `"a"`)
+/// but nothing internal (`"/a//b"` → `"a//b"`); it borrows, so there is no
+/// allocation here.
+pub(crate) fn normalize_rel_path(path: &str) -> &str {
+    path.trim_start_matches('/')
+}
+
 /// Map one `/search_files` hit onto the `UserFileEntry` shape the frontend
 /// already knows how to render and preview.
 ///
@@ -99,7 +119,7 @@ fn map_search_hit_to_entry(
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .map(|s| s.trim_start_matches('/').to_string());
+        .map(|s| normalize_rel_path(s).to_string());
     let file_name = hit.file.file_name.as_deref().map(str::trim).filter(|s| !s.is_empty());
 
     let actual_file_name = match (rel_path, file_name) {
@@ -421,6 +441,7 @@ pub async fn search_files(state: tauri::State<'_, AppState>, account_id: String,
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
     use serde_json::json;
 
     /// Build a `SearchFileHit` from the fields the mapper actually reads.
@@ -709,5 +730,45 @@ mod tests {
         assert_eq!(query_value(&pairs, "date_from"), Some("1700000000"));
         assert_eq!(query_value(&pairs, "date_to"), Some("1700100000"));
         assert_eq!(query_value(&pairs, "folder_hash"), Some("abc123"));
+    }
+
+    // --- cross-boundary drift pin: `normalize_rel_path` must stay byte-for-byte
+    //     identical to the FE `normalizeRelPath` (app/lib/utils/relPath.ts). The
+    //     SAME JSON fixture drives this Rust test and the vitest test
+    //     `app/lib/__tests__/crossBoundaryContract.test.ts`, so a change to
+    //     either side's leading-slash handling fails its own CI job. ---
+
+    #[derive(Deserialize)]
+    struct PathCase {
+        input: String,
+        expected: String,
+        note: String,
+    }
+
+    #[test]
+    fn normalize_rel_path_matches_shared_fixture() {
+        let cases: Vec<PathCase> = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/path_normalization_cases.json"
+        )))
+        .expect("path_normalization_cases.json is valid JSON");
+        assert!(!cases.is_empty(), "fixture must carry cases");
+        for case in &cases {
+            assert_eq!(normalize_rel_path(&case.input), case.expected, "normalize_rel_path({:?}) — {}", case.input, case.note);
+        }
+    }
+
+    proptest! {
+        /// The two post-conditions the cross-boundary dedup key relies on:
+        /// idempotence (re-normalizing is a no-op) and that no result keeps a
+        /// leading slash — so the server key and the FE key can never diverge
+        /// by an un-stripped prefix. The input alphabet includes `/` and space
+        /// so the shrinker can probe the leading-run and non-slash boundaries.
+        #[test]
+        fn normalize_rel_path_is_idempotent_and_unprefixed(s in "[/ a-z]{0,16}") {
+            let once = normalize_rel_path(&s).to_string();
+            prop_assert_eq!(normalize_rel_path(&once), once.as_str());
+            prop_assert!(!once.starts_with('/'));
+        }
     }
 }
