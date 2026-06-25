@@ -104,7 +104,9 @@ describe("useInvokeMutation", () => {
     );
 
     await act(async () => {
-      await result.current.mutateAsync();
+      // No variables for this command; pass undefined explicitly because the
+      // userOnSuccess inference site widens TVariables off `void`.
+      await result.current.mutateAsync(undefined);
     });
 
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["balance"] });

@@ -3,7 +3,10 @@ import { renderHook, waitFor, act } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { Provider, createStore } from "jotai";
 import React from "react";
-import type { Store } from "jotai";
+
+// jotai 2.x no longer exports a `Store` type; the store handle is the return
+// of `createStore` (what `appStore` in jotaiStore.ts actually is).
+type JotaiStore = ReturnType<typeof createStore>;
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { EMPTY_SNAPSHOT, type SyncSnapshot } from "@/app/lib/types/syncSnapshot";
@@ -189,7 +192,7 @@ vi.mock("sonner", () => ({
 // The hook reads from `appStore` (the shared Jotai store) for its
 // initial drain-rebuild call. We need the test store to BE that
 // module, so the hook sees the drive entries we seed.
-function mockAppStoreAs(store: Store) {
+function mockAppStoreAs(store: JotaiStore) {
   vi.doMock("@/lib/store/jotaiStore", () => ({ appStore: store }));
 }
 

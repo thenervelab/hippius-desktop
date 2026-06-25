@@ -230,5 +230,12 @@ jobs:
       - name: Lint
         run: pnpm lint
 
+      # `pnpm lint` (eslint) does NOT type-check. Without this a wrong IPC
+      # return shape consumed in TS merges green and only surfaces at release
+      # build time (`next build`), which runs on tags, never on PRs. This is the
+      # cheap gate for the FE↔Rust boundary the audit flagged.
+      - name: Typecheck
+        run: pnpm typecheck
+
       - name: Tests
         run: pnpm test

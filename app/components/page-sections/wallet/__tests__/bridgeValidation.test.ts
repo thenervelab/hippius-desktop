@@ -14,12 +14,10 @@ describe("evaluateBridgeAmount", () => {
   it("rejects zero and negative amounts", () => {
     expect(
       evaluateBridgeAmount({ amountPlanck: 0n, minAmountPlanck: min, sourceBalancePlanck: balance })
-        .reason
-    ).toBe("invalid");
+    ).toEqual({ ok: false, reason: "invalid" });
     expect(
       evaluateBridgeAmount({ amountPlanck: -5n, minAmountPlanck: min, sourceBalancePlanck: balance })
-        .reason
-    ).toBe("invalid");
+    ).toEqual({ ok: false, reason: "invalid" });
   });
 
   it("rejects below the minimum, but accepts exactly the minimum", () => {
@@ -78,7 +76,6 @@ describe("evaluateBridgeAmount", () => {
     // Below both min and balance bounds → the min reason wins.
     expect(
       evaluateBridgeAmount({ amountPlanck: 5n, minAmountPlanck: 10n, sourceBalancePlanck: 3n })
-        .reason
-    ).toBe("below_min");
+    ).toEqual({ ok: false, reason: "below_min" });
   });
 });

@@ -9,7 +9,7 @@ describe("FilterChips", () => {
   it("applies moe chip styling to active filters", () => {
     const filters: ActiveFilter[] = [
       {
-        type: "date",
+        type: "dateRange",
         value: "last7days",
         label: "Date",
         displayValue: "Last 7 days",

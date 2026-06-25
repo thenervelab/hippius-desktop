@@ -8,6 +8,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
+    "typecheck": "tsc --noEmit",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:static": "rm -rf out && next build && tauri dev --config '{\"build\":{\"beforeDevCommand\":\"npx -y serve out -l 3000 -s\"}}'",
