@@ -41,7 +41,7 @@ fn require_owner(state: &State<'_, AppState>) -> Result<String, AppError> {
 /// Derive a polkadot SS58 address from a BIP-39 mnemonic. Used both
 /// internally (during create/import) and from the FE for previewing.
 fn derive_address(mnemonic: &str) -> Result<String, AppError> {
-    let parsed = SubxtMnemonic::parse(mnemonic).map_err(|e| AppError::Other(format!("Invalid BIP-39 mnemonic: {e}")))?;
+    let parsed = SubxtMnemonic::parse(mnemonic).map_err(|e| AppError::Validation(format!("Invalid BIP-39 mnemonic: {e}")))?;
     let pair = SrKeypair::from_phrase(&parsed, None).map_err(|e| AppError::Other(format!("Failed to derive sr25519 keypair: {e}")))?;
     Ok(pair.public_key().to_account_id().to_string())
 }
@@ -233,13 +233,13 @@ pub async fn local_wallet_create(
     let mnemonic = Zeroizing::new(mnemonic);
     let password = Zeroizing::new(password);
     if bip39::Mnemonic::parse_normalized(&mnemonic).is_err() {
-        return Err(AppError::Other("Invalid mnemonic".into()));
+        return Err(AppError::Validation("Invalid mnemonic".into()));
     }
     if name.trim().is_empty() {
-        return Err(AppError::Other("Wallet name is required".into()));
+        return Err(AppError::Validation("Wallet name is required".into()));
     }
     if password.is_empty() {
-        return Err(AppError::Other("Password is required".into()));
+        return Err(AppError::Validation("Password is required".into()));
     }
     // Enforce the password policy server-side so the create gate is
     // authoritative even for direct IPC calls (see `validate_new_password`).
@@ -273,7 +273,7 @@ pub async fn local_wallet_set_active(state: State<'_, AppState>, id: i64) -> Res
 #[tauri::command]
 pub async fn local_wallet_rename(state: State<'_, AppState>, id: i64, name: String) -> Result<(), AppError> {
     if name.trim().is_empty() {
-        return Err(AppError::Other("Wallet name is required".into()));
+        return Err(AppError::Validation("Wallet name is required".into()));
     }
     let owner = require_owner(&state)?;
     let pool = state.pool()?;
@@ -358,7 +358,7 @@ pub async fn local_wallet_get_decrypted_mnemonic(state: State<'_, AppState>, id:
     // Verifier check next for a friendlier error than AEAD-decrypt-failed.
     if !crypto::verify_password(&wallet.password_hash, &password, &wallet.address) {
         state.wallet_rate_limit.record_failure(id);
-        return Err(AppError::Other("Incorrect password".into()));
+        return Err(AppError::Validation("Incorrect password".into()));
     }
     state.wallet_rate_limit.record_success(id);
     let (plain, ciphertext_was_legacy) = crypto::decrypt_mnemonic(&wallet.encrypted_mnemonic, &password, &wallet.address)?;
@@ -405,7 +405,7 @@ pub async fn local_wallet_export_backup(state: State<'_, AppState>, id: i64, pas
     }
     if !crypto::verify_password(&wallet.password_hash, &password, &wallet.address) {
         state.wallet_rate_limit.record_failure(id);
-        return Err(AppError::Other("Incorrect password".into()));
+        return Err(AppError::Validation("Incorrect password".into()));
     }
     state.wallet_rate_limit.record_success(id);
 
@@ -440,17 +440,17 @@ pub async fn local_wallet_import_encrypted_backup(
 ) -> Result<PublicLocalWallet, AppError> {
     let password = Zeroizing::new(password);
     if name.trim().is_empty() {
-        return Err(AppError::Other("Wallet name is required".into()));
+        return Err(AppError::Validation("Wallet name is required".into()));
     }
     if address.trim().is_empty() {
-        return Err(AppError::Other("Address is required".into()));
+        return Err(AppError::Validation("Address is required".into()));
     }
     // Verify the user typed the correct password against the hash from
     // the backup. `crypto::verify_password` accepts both the new
     // Argon2id PHC format and the legacy hex-SHA256 format, so backups
     // produced by either version of the app are accepted.
     if !crypto::verify_password(&password_hash, &password, address.trim()) {
-        return Err(AppError::Other("Incorrect password for this backup".into()));
+        return Err(AppError::Validation("Incorrect password for this backup".into()));
     }
     // Reject a backup whose address doesn't derive from its mnemonic, so a
     // tampered file can't persist a row that later signs under a different key.
@@ -530,7 +530,7 @@ pub async fn local_wallet_import_encrypted_backup_from_zip(
 
     let password = Zeroizing::new(password);
     if name.trim().is_empty() {
-        return Err(AppError::Other("Wallet name is required".into()));
+        return Err(AppError::Validation("Wallet name is required".into()));
     }
 
     let reader = Cursor::new(zip_bytes);
@@ -538,13 +538,13 @@ pub async fn local_wallet_import_encrypted_backup_from_zip(
 
     let mut entry = archive
         .by_name(BACKUP_ZIP_ENTRY)
-        .map_err(|_| AppError::Other(format!("Backup zip is missing `{BACKUP_ZIP_ENTRY}`")))?;
+        .map_err(|_| AppError::Validation(format!("Backup zip is missing `{BACKUP_ZIP_ENTRY}`")))?;
     // Reject an entry whose declared size is already oversized (cheap,
     // header-based), then read with a hard cap so a lying header can't make us
     // allocate/read unbounded memory. `Vec::with_capacity` is intentionally NOT
     // sized from the attacker-controlled `entry.size()`.
     if entry.size() > MAX_BACKUP_JSON_BYTES {
-        return Err(AppError::Other("Backup entry is unexpectedly large".into()));
+        return Err(AppError::Validation("Backup entry is unexpectedly large".into()));
     }
     let mut json_bytes = Vec::new();
     (&mut entry)
@@ -552,30 +552,30 @@ pub async fn local_wallet_import_encrypted_backup_from_zip(
         .read_to_end(&mut json_bytes)?;
     drop(entry);
     if json_bytes.len() as u64 > MAX_BACKUP_JSON_BYTES {
-        return Err(AppError::Other("Backup entry is unexpectedly large".into()));
+        return Err(AppError::Validation("Backup entry is unexpectedly large".into()));
     }
 
     let parsed: serde_json::Value = serde_json::from_slice(&json_bytes)?;
     let address = parsed
         .get("address")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| AppError::Other("Backup is missing `address`".into()))?
+        .ok_or_else(|| AppError::Validation("Backup is missing `address`".into()))?
         .trim()
         .to_owned();
     let encrypted_mnemonic = parsed
         .get("encryptedMnemonic")
         .or_else(|| parsed.get("encrypted_mnemonic"))
         .and_then(|v| v.as_str())
-        .ok_or_else(|| AppError::Other("Backup is missing `encryptedMnemonic`".into()))?
+        .ok_or_else(|| AppError::Validation("Backup is missing `encryptedMnemonic`".into()))?
         .to_owned();
     let password_hash = parsed
         .get("passwordHash")
         .or_else(|| parsed.get("password_hash"))
         .and_then(|v| v.as_str())
-        .ok_or_else(|| AppError::Other("Backup is missing `passwordHash`".into()))?
+        .ok_or_else(|| AppError::Validation("Backup is missing `passwordHash`".into()))?
         .to_owned();
     if address.is_empty() {
-        return Err(AppError::Other("Backup `address` is empty".into()));
+        return Err(AppError::Validation("Backup `address` is empty".into()));
     }
 
     // Same verification as the JSON path: the user's typed password
@@ -583,7 +583,7 @@ pub async fn local_wallet_import_encrypted_backup_from_zip(
     // store a wallet they can't actually sign with. Accepts legacy +
     // new hash formats via `crypto::verify_password`.
     if !crypto::verify_password(&password_hash, &password, &address) {
-        return Err(AppError::Other("Incorrect password for this backup".into()));
+        return Err(AppError::Validation("Incorrect password for this backup".into()));
     }
     // Reject a backup whose address doesn't derive from its mnemonic (see the
     // JSON import path) so a tampered zip can't persist a mismatched row.
