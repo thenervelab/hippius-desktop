@@ -1,11 +1,19 @@
-//! R-36 — the gas-buffer / estimated-fee planck constants are hand-duplicated
-//! between the Rust source of truth (`blockchain/transfers.rs`) and several
-//! frontend files. A one-sided edit would silently desync the MAX / affordability
-//! math between Rust and the FE. This test fails if any copy drifts.
+//! R-36 — the estimated-transfer-fee planck constant is mirrored between the
+//! Rust source of truth (`blockchain/transfers.rs::ESTIMATED_TRANSFER_FEE_PLANCK`)
+//! and `WalletBalanceCard.tsx`, which uses it for the FE affordability check. A
+//! one-sided edit would silently desync that math; this test fails if the copy
+//! drifts.
+//!
+//! The gas-fee BUFFER (`MAX_GAS_FEE_BUFFER_PLANCK`) is deliberately NOT checked
+//! here: the FE business-logic audit (#26) centralized it in Rust and removed
+//! the `StakeDialog.tsx` / `BridgeDialog.tsx` copies, so asserting they still
+//! contain it would (and did) fail with "const not found". The FE side is now
+//! guarded against *re-introducing* the buffer by
+//! `app/lib/bridge/__tests__/noDuplicatedDomainConstants.test.ts` instead.
 //!
 //! It normalizes each definition to its digit string, so it is agnostic to the
-//! literal format: Rust `10_000_000_000_000_000`, TS `10_000_000_000_000_000n`,
-//! and TS `BigInt("10000000000000000")` all reduce to the same digits.
+//! literal format: Rust `270_233_151` and TS `BigInt("270233151")` reduce to the
+//! same digits.
 
 use std::fs;
 
@@ -31,26 +39,13 @@ fn const_digits(src: &str, name: &str) -> String {
 }
 
 #[test]
-fn gas_buffer_and_fee_constants_match_across_rust_and_ts() {
+fn estimated_transfer_fee_constant_matches_across_rust_and_ts() {
     let transfers = read("src/blockchain/transfers.rs");
-    let stake = read("../app/components/page-sections/wallet/StakeDialog.tsx");
-    let bridge = read("../app/components/page-sections/wallet/BridgeDialog.tsx");
     let balance_card = read("../app/components/page-sections/wallet/WalletBalanceCard.tsx");
 
     // Rust is the source of truth.
-    let max_buffer = const_digits(&transfers, "MAX_GAS_FEE_BUFFER_PLANCK");
     let fee = const_digits(&transfers, "ESTIMATED_TRANSFER_FEE_PLANCK");
 
-    assert_eq!(
-        const_digits(&stake, "MAX_GAS_FEE_BUFFER_PLANCK"),
-        max_buffer,
-        "StakeDialog.tsx MAX_GAS_FEE_BUFFER_PLANCK drifted from blockchain/transfers.rs"
-    );
-    assert_eq!(
-        const_digits(&bridge, "MAX_GAS_FEE_BUFFER_PLANCK"),
-        max_buffer,
-        "BridgeDialog.tsx MAX_GAS_FEE_BUFFER_PLANCK drifted from blockchain/transfers.rs"
-    );
     assert_eq!(
         const_digits(&balance_card, "ESTIMATED_TRANSFER_FEE_PLANCK"),
         fee,
