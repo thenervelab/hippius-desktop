@@ -1,8 +1,7 @@
 //! In-place file/folder rename inside a sync drive.
 
-use super::add::ensure_within;
+use super::pathops::{derive_relative_name, ensure_within};
 use super::recent::synced_paths_for_label;
-use super::resolve::derive_relative_name;
 use crate::error::Result;
 use hcfs_client::engine::runner::trigger_sync;
 use serde::{Deserialize, Serialize};

@@ -1,7 +1,7 @@
 //! Path resolution and export: `export_file`, `resolve_file_path`,
-//! `resolve_file_info`, and the shared `derive_relative_name` / copy helpers.
+//! `resolve_file_info`. Shared path helpers live in `pathops`.
 
-use super::add::ensure_within;
+use super::pathops::{copy_dir_recursive, derive_relative_name, ensure_within};
 use crate::auth::account_key::account_key;
 use crate::error::Result;
 use serde::Serialize;
@@ -138,76 +138,4 @@ pub async fn resolve_file_info(
     let relative_name = derive_relative_name(&sync_path, source.as_deref(), &file_name);
 
     Ok(FilePathInfo { sync_path, relative_name })
-}
-
-/// Derive a file's path relative to the sync root.
-///
-/// If `source` starts with `sync_path/`, strips the prefix to get the
-/// relative path (e.g., `/home/user/Hippius/docs/file.txt` → `docs/file.txt`).
-/// Otherwise returns `fallback_name` as-is.
-pub(super) fn derive_relative_name(sync_path: &str, source: Option<&str>, fallback_name: &str) -> String {
-    if let Some(src) = source
-        && !sync_path.is_empty()
-    {
-        let prefix = if sync_path.ends_with('/') {
-            sync_path.to_string()
-        } else {
-            format!("{sync_path}/")
-        };
-        if src.starts_with(&prefix) {
-            return src[prefix.len()..].to_string();
-        }
-    }
-    fallback_name.to_string()
-}
-
-/// Delegates to hcfs-client library.
-pub(super) async fn copy_dir_recursive(src: &Path, dst: &Path, depth: u32) -> Result<()> {
-    hcfs_client::drive::files::copy_dir_recursive(src, dst, depth)
-        .await
-        .map_err(|e| crate::error::AppError::Other(e.to_string()))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn strips_sync_path_prefix() {
-        assert_eq!(
-            derive_relative_name("/home/user/Hippius", Some("/home/user/Hippius/docs/file.txt"), "fallback.txt"),
-            "docs/file.txt",
-        );
-    }
-
-    #[test]
-    fn strips_prefix_with_trailing_slash() {
-        assert_eq!(
-            derive_relative_name("/home/user/Hippius/", Some("/home/user/Hippius/file.txt"), "fallback.txt"),
-            "file.txt",
-        );
-    }
-
-    #[test]
-    fn falls_back_when_source_doesnt_match() {
-        assert_eq!(
-            derive_relative_name("/home/user/Hippius", Some("/other/path/file.txt"), "fallback.txt"),
-            "fallback.txt",
-        );
-    }
-
-    #[test]
-    fn falls_back_when_no_source() {
-        assert_eq!(derive_relative_name("/home/user/Hippius", None, "fallback.txt"), "fallback.txt",);
-    }
-
-    #[test]
-    fn falls_back_when_empty_sync_path() {
-        assert_eq!(derive_relative_name("", Some("/some/path/file.txt"), "fallback.txt"), "fallback.txt",);
-    }
-
-    #[test]
-    fn handles_nested_subfolder() {
-        assert_eq!(derive_relative_name("/sync", Some("/sync/a/b/c/deep.txt"), "x.txt"), "a/b/c/deep.txt",);
-    }
 }

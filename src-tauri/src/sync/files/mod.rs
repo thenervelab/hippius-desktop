@@ -16,6 +16,7 @@ mod asset_scope;
 mod delete;
 mod dir_stats;
 mod listing;
+mod pathops;
 mod recent;
 mod rename;
 mod resolve;

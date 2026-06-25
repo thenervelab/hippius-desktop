@@ -1,7 +1,6 @@
 //! Batch file/folder deletion.
 
-use super::add::ensure_within;
-use super::resolve::derive_relative_name;
+use super::pathops::{derive_relative_name, ensure_within};
 use crate::error::Result;
 use hcfs_client::engine::runner::trigger_sync;
 use hcfs_client::engine::types::{SyncActivityAction, SyncActivityItem};

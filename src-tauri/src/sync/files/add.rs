@@ -4,19 +4,13 @@
 //! the credit gate.
 
 use super::delete::FileDeleteError;
-use super::resolve::copy_dir_recursive;
+use super::pathops::copy_dir_recursive;
 use crate::error::Result;
 use hcfs_client::engine::runner::trigger_sync;
 use serde::Serialize;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tauri::{AppHandle, Emitter};
 use tracing::{info, warn};
-
-/// Verify that `child` is contained within `parent` after canonicalization.
-/// Delegates to hcfs-client library.
-pub(super) fn ensure_within(parent: &Path, child: &Path) -> Result<PathBuf> {
-    hcfs_client::drive::files::ensure_within(parent, child).map_err(|e| crate::error::AppError::Other(e.to_string()))
-}
 
 /// Pure file-copy implementation, no eligibility check. The check is
 /// performed at the IPC boundary by `add_file` (single-file path) or
@@ -821,6 +815,15 @@ mod tests {
             compute_startup_pending_summary(folder_dir.path(), sync_root.path()).await;
         assert_eq!(files, 1);
     }
+
+    // --- add_folder overlap check ---
+    //
+    // Regression: `add_folder_with_app_inner` and `add_folder_internal` used
+    // to forward whatever the user picked in the OS folder dialog straight to
+    // `copy_dir_recursive`. Picking the sync root itself (or any ancestor)
+    // resulted in 64 levels of nested duplicate folders before
+    // `MAX_COPY_DEPTH` finally tripped. The IPC layer now rejects the call
+    // with an `AppError::Other` so the dialog can render a clear message.
 
     #[tokio::test]
     async fn add_folder_with_app_inner_rejects_sync_root_as_source() {

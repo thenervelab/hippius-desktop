@@ -1,8 +1,8 @@
 //! The files page: `get_user_files`, recursive search, and the shared filter
 //! cascade. Owns `UserFileEntry`, `FileFilterCriteria`, and per-label stats.
 
-use super::add::ensure_within;
 use super::listing::list_sync_folder;
+use super::pathops::ensure_within;
 use super::recent::synced_paths_and_excludes_for_label;
 use crate::error::Result;
 use chrono::Datelike;
