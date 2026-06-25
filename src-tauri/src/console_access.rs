@@ -241,9 +241,10 @@ impl HcfsServerCtx {
 /// also resolves to the sentinel rather than an error — recovery seeds a
 /// row first, but the network layer must still cope if it did not.
 async fn resolve_hcfs_base_url(pool: &sqlx::SqlitePool, account_id: &str) -> Result<String> {
-    let config = crate::sync::config::get_hcfs_config_internal(pool, account_id)
-        .await
-        .map_err(|e| AppError::Other(format!("Could not read sync config: {e}")))?;
+    // Propagate the structured config error (ConfigMissing / Db / …) instead of
+    // flattening it into Other(String) — get_hcfs_config_internal already returns
+    // a typed AppError, so `?` preserves its kind and source chain.
+    let config = crate::sync::config::get_hcfs_config_internal(pool, account_id).await?;
     Ok(config.server_url)
 }
 
@@ -260,11 +261,10 @@ pub(crate) async fn get_json<T: serde::de::DeserializeOwned>(ctx: &HcfsServerCtx
         .header(AUTHORIZATION, format!("Bearer {}", ctx.bearer))
         .header(ACCEPT, "application/json")
         .send()
-        .await
-        .map_err(|e| AppError::Other(format!("HTTP error: {e}")))?;
+        .await?;
     match resp.status() {
         StatusCode::OK => {
-            let v = resp.json::<T>().await.map_err(|e| AppError::Other(format!("JSON parse error: {e}")))?;
+            let v = resp.json::<T>().await?;
             Ok(HttpOutcome::Ok(v))
         }
         StatusCode::NOT_FOUND => Ok(HttpOutcome::NotFound),
@@ -284,8 +284,7 @@ pub(crate) async fn post_json_discard<B: Serialize>(ctx: &HcfsServerCtx, path: &
         .header(ACCEPT, "application/json")
         .json(body)
         .send()
-        .await
-        .map_err(|e| AppError::Other(format!("HTTP error: {e}")))?;
+        .await?;
     if resp.status().is_success() {
         Ok(())
     } else {
@@ -307,10 +306,9 @@ pub(crate) async fn post_json<B: Serialize, T: serde::de::DeserializeOwned>(ctx:
         .header(ACCEPT, "application/json")
         .json(body)
         .send()
-        .await
-        .map_err(|e| AppError::Other(format!("HTTP error: {e}")))?;
+        .await?;
     if resp.status().is_success() {
-        resp.json::<T>().await.map_err(|e| AppError::Other(format!("JSON parse error: {e}")))
+        Ok(resp.json::<T>().await?)
     } else {
         Err(http_err(resp.status(), resp, path).await)
     }
