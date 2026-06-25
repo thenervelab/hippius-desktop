@@ -152,6 +152,13 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // / fallback effects don't fight each other on first mount.
   const [activeFolderHydrated, setActiveFolderHydrated] = useState(false);
 
+  // A label the user JUST selected or added this session that may not yet
+  // appear in `syncFolderLabels` (that list lags behind a `refetchUserFiles`).
+  // The reconcile effect below must not treat such a label as "removed" and
+  // bounce the user back to the first folder — the bug where syncing a 2nd
+  // folder dropped the user onto the 1st. Cleared once the list catches up.
+  const pendingActiveLabelRef = useRef<string | null>(null);
+
   // Search state
   const [searchTerm, setSearchTerm] = useState<string>("");
 
@@ -743,6 +750,10 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
       setIsSyncPathConfigured(true);
       setShowPrivateStartSyncingSelector(false);
       if (newLabel) {
+        // Mark as pending BEFORE the state set so the reconcile effect (which
+        // reruns synchronously on the change) sees the guard and doesn't
+        // clobber the new label against the not-yet-refreshed labels list.
+        pendingActiveLabelRef.current = newLabel;
         setActiveSyncFolderLabel(newLabel);
         setIsOnLocalView(false);
         void saveActiveSyncFolderLabel(newLabel);
@@ -866,6 +877,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // root listing and persists it as the active folder.
   const handleNavigateToSyncFolderRoot = useCallback(
     (label: string) => {
+      pendingActiveLabelRef.current = label;
       setActiveSyncFolderLabel(label);
       setIsOnLocalView(false);
       void saveActiveSyncFolderLabel(label);
@@ -896,6 +908,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // Switch the active sync folder from a click on a LocalFoldersSection
   // card. Persisted so the next session resumes here.
   const handleSelectFolderFromCards = useCallback((label: string) => {
+    pendingActiveLabelRef.current = label;
     setActiveSyncFolderLabel(label);
     setIsOnLocalView(false);
     void saveActiveSyncFolderLabel(label);
@@ -1150,6 +1163,21 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     if (
       activeSyncFolderLabel &&
       syncFolderLabels.includes(activeSyncFolderLabel)
+    ) {
+      // List has caught up to the active label — any pending guard is done.
+      if (pendingActiveLabelRef.current === activeSyncFolderLabel) {
+        pendingActiveLabelRef.current = null;
+      }
+      return;
+    }
+    // The active label isn't in the list yet. If it's one the user just
+    // selected/added this session, the list is merely stale from a
+    // not-yet-landed `refetchUserFiles` — wait for it rather than bouncing
+    // the user to the first folder. (A genuinely-removed label was never
+    // marked pending, so it still falls back correctly.)
+    if (
+      activeSyncFolderLabel &&
+      pendingActiveLabelRef.current === activeSyncFolderLabel
     ) {
       return;
     }
