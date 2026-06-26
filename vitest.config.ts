@@ -37,7 +37,13 @@ export default defineConfig({
         "app/lib/utils/**": { statements: 33, branches: 84, functions: 49, lines: 33 },
         "app/lib/upload-feed/**": { statements: 96, branches: 80, functions: 95, lines: 96 },
         "app/lib/tray/**": { statements: 82, branches: 83, functions: 65, lines: 82 },
-        "app/lib/hooks/**": { statements: 35, branches: 71, functions: 62, lines: 35 },
+        // lines/statements recalibrated 35 → 32 by P1-9: removing ~1000 lines of
+        // dead, never-attached tray-menu code from useTraySync.ts (and its
+        // 1108-line test that exercised it) shrank the covered-line count this
+        // scope's old floor was propped up by. The surviving icon-state logic
+        // moved to the better-covered `app/lib/tray/**` scope (82%). This locks
+        // the new measured level, not a regression — ratchet UP from here.
+        "app/lib/hooks/**": { statements: 32, branches: 71, functions: 62, lines: 32 },
       },
     },
   },
