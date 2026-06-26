@@ -5,7 +5,12 @@ use serde::Serialize;
 /// All Tauri IPC commands return `Result<T, AppError>`. The error is
 /// serialized as JSON for the frontend, preserving the `kind` field
 /// for programmatic matching and `message` for display.
+/// `#[non_exhaustive]` so new typed variants can be added (the ongoing
+/// error-taxonomy migration off `Other(String)`) without it being a breaking
+/// change for the `tauri_project_lib` library consumers — the integration-test
+/// crates that `match` on it must keep a wildcard arm.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum AppError {
     #[error("Database error: {0}")]
     Db(#[from] sqlx::Error),

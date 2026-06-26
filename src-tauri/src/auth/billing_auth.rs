@@ -223,8 +223,7 @@ pub async fn ensure_billing_auth(state: tauri::State<'_, crate::app_state::AppSt
             logout_time_minutes: None, // billing auth refresh — don't touch the user's preference
         },
     )
-    .await
-    .map_err(|e| crate::error::AppError::Other(format!("Failed to persist billing auth session: {e}")))?;
+    .await?;
 
     info!("Billing auth token persisted for {account_id}");
     Ok(())
