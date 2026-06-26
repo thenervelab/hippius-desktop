@@ -1,0 +1,40 @@
+//! File and folder operations on the local sync folder.
+//!
+//! Split from the former flat `files.rs` into sub-domain submodules. Every item
+//! the rest of the crate referenced as `crate::sync::files::X` is re-exported
+//! here so external call sites (main.rs's IPC handler list, lifecycle.rs,
+//! session_restore.rs, paths.rs, recent_uploads.rs) keep resolving unchanged —
+//! this is a move-only refactor with no behavioral change.
+//!
+//! Cross-submodule private helpers (`ensure_within`, `derive_relative_name`,
+//! `copy_dir_recursive`, the `synced_paths_*` reads, `dir_stats_recursive`) are
+//! `pub(super)` in their home submodule and reached by siblings via
+//! `super::<module>::<item>`; they are deliberately NOT re-exported here.
+
+mod add;
+mod asset_scope;
+mod delete;
+mod dir_stats;
+mod listing;
+mod pathops;
+mod recent;
+mod rename;
+mod resolve;
+mod synced_state;
+mod user_files;
+
+pub use add::{AddFilesResult, add_file, add_files, add_folder};
+pub use asset_scope::{allow_asset_directory, allow_asset_scope};
+pub use delete::{DeleteFilesResult, FileDeleteError, FileDeleteRequest, delete_files};
+pub use listing::{FileEntry, GroupedListing, list_sync_folder, list_sync_folder_grouped, list_sync_folder_grouped_inner};
+pub use recent::{RecentFile, get_recent_files};
+pub use rename::{FileRenameRequest, RenameEntryResult, rename_entry};
+pub use resolve::{FilePathInfo, export_file, resolve_file_info, resolve_file_path};
+pub use user_files::{
+    DateRangeFilter, FileFilterCriteria, LabelStats, UserFileEntry, UserFilesResult, filter_file_entries, get_user_files,
+    search_user_files_recursive,
+};
+
+// Reachable from `crate::sync::lifecycle` as `crate::sync::files::X`, matching
+// these helpers' original `pub(super)` (= `crate::sync`) visibility.
+pub(in crate::sync) use add::{compute_startup_pending_summary, sum_regular_file_bytes};
