@@ -1,218 +1,228 @@
-//! Tests for authentication crypto operations.
+//! Orchestration tests for the `login_with_mnemonic` Tauri command.
 //!
-//! Tests key derivation, passcode hashing, mnemonic validation,
-//! and CryptoJS-compatible AES encryption/decryption.
-//! No live server needed — just crypto unit tests.
+//! This file used to be a tautology: it reimplemented `hash_passcode`,
+//! `crypto_js_derive_key_iv`, and the CryptoJS-compatible AES helpers
+//! *locally* and asserted those local copies against hardcoded vectors —
+//! testing nothing in the crate under test. The real production crypto is
+//! covered where it lives: `auth::service::derive_keys` has frozen
+//! Foundry/sr25519 vectors (`service.rs::tests`), and the at-rest AES path is
+//! covered by `wallet/crypto` roundtrips and `tests/crypto_migration.rs`.
+//!
+//! What was actually missing was an *orchestration* test of the login command
+//! itself. These tests drive the REAL `login_with_mnemonic` against an axum
+//! mock of the Hippius challenge/verify API, an in-memory SQLite pool, and the
+//! OS keychain disabled, then assert the full observable contract: the returned
+//! `LoginResult`, the in-memory `AuthInfo` write, and the persisted DB rows —
+//! plus the documented invariant that a failed login leaves the prior session
+//! intact (challenge-response runs BEFORE any `AuthInfo` write).
+//!
+//! Tests share one `#[tokio::test]` because they mutate the process-global
+//! `HIPPIUS_API_BASE_URL`; splitting them would race under cargo's parallel
+//! runner. (Same rationale as `tests/eligibility_enforcement.rs`.)
 
-use sha2::{Digest, Sha256};
+use axum::{Json, Router, http::StatusCode, response::IntoResponse, routing::post};
+use serde_json::{Value, json};
+use sqlx::sqlite::SqlitePool;
+use std::net::SocketAddr;
+use tauri::Manager;
+use tokio::net::TcpListener;
 
-/// Matches the Rust `hash_passcode` function and frontend's CryptoJS.SHA256.
-fn hash_passcode(passcode: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(passcode.as_bytes());
-    hex::encode(hasher.finalize())
+use tauri_project_lib::app_state::AppState;
+use tauri_project_lib::auth::auth_session_repo::get_by_account;
+use tauri_project_lib::auth::login::login_with_mnemonic;
+use tauri_project_lib::auth::state::AuthCapabilities;
+use tauri_project_lib::error::AppError;
+use tauri_project_lib::utils::schema::ensure_table_schema;
+
+/// Well-known Foundry/Anvil/Hardhat test phrase. Its derived addresses are the
+/// frozen vectors pinned in `auth::service::tests::derive_keys_matches_frozen_vectors`,
+/// so asserting them here also proves the login path derives the SAME keys.
+const MNEMONIC: &str = "test test test test test test test test test test test junk";
+const EXPECTED_SUBSTRATE: &str = "5GmS1wtCfR4tK5SSgnZbVT4kYw5W8NmxmijcsxCQE6oLW6A8";
+const EXPECTED_ETH: &str = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
+
+// =========================================================================
+// Mock Hippius auth API (mirrors `auth::service::challenge_response`)
+// =========================================================================
+
+async fn challenge_ok() -> Json<Value> {
+    Json(json!({ "challenge": "challenge-token-abc", "message": "Sign this to log in" }))
 }
 
-/// CryptoJS-compatible key derivation (EVP_BytesToKey with MD5).
-fn crypto_js_derive_key_iv(passphrase: &[u8], salt: &[u8]) -> ([u8; 32], [u8; 16]) {
-    let mut key = [0u8; 32];
-    let mut iv = [0u8; 16];
-    let mut derived = Vec::new();
-    let mut prev_block: Vec<u8> = Vec::new();
+async fn verify_ok() -> Json<Value> {
+    Json(json!({
+        "token": "test-bearer-token",
+        "user_id": 42,
+        "username": "tester",
+        "is_new": true,
+    }))
+}
 
-    while derived.len() < 48 {
-        let mut ctx = md5::Context::new();
-        if !prev_block.is_empty() {
-            ctx.consume(&prev_block);
+async fn challenge_unauthorized() -> impl IntoResponse {
+    (StatusCode::UNAUTHORIZED, "auth rejected")
+}
+
+/// Router whose challenge + verify endpoints both succeed.
+fn success_router() -> Router {
+    Router::new()
+        .route("/api/auth/mnemonic/", post(challenge_ok))
+        .route("/api/auth/verify/", post(verify_ok))
+}
+
+/// Router whose challenge endpoint returns 401 — the verify route is present
+/// but must never be reached (challenge fails first).
+fn challenge_failure_router() -> Router {
+    Router::new()
+        .route("/api/auth/mnemonic/", post(challenge_unauthorized))
+        .route("/api/auth/verify/", post(verify_ok))
+}
+
+/// Bind an ephemeral port, serve `router`, and return its base URL.
+async fn start_server(router: Router) -> String {
+    let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).await.expect("bind ephemeral port");
+    let addr = listener.local_addr().expect("local addr");
+    tokio::spawn(async move {
+        axum::serve(listener, router).await.expect("mock auth server crashed");
+    });
+    format!("http://{addr}")
+}
+
+// =========================================================================
+// AppState harness — manages a real AppState so the `tauri::State` command
+// can be invoked exactly as Tauri would invoke it.
+// =========================================================================
+
+async fn fresh_pool() -> SqlitePool {
+    let pool = SqlitePool::connect("sqlite::memory:").await.expect("open in-memory sqlite");
+    // Build every table through the production schema funnel rather than a
+    // hand-rolled CREATE, so the test exercises the real columns `upsert` /
+    // `save_api_token` write (axiom 111: ingest through the public path).
+    ensure_table_schema(&pool).await.expect("ensure schema");
+    pool
+}
+
+fn managed_app(pool: SqlitePool) -> tauri::App<tauri::test::MockRuntime> {
+    let app = tauri::test::mock_app();
+    let state = AppState::new();
+    state.set_pool(pool);
+    app.manage(state);
+    app
+}
+
+#[tokio::test]
+async fn login_with_mnemonic_orchestration() {
+    // The OS keychain is disabled for the whole test so the success path's
+    // token + mnemonic writes never touch the developer's real Keychain.
+    // SAFETY: process-global env mutation, set once to a constant — matches
+    // the pattern in `auth_session_repo::tests::setup_db`.
+    unsafe {
+        std::env::set_var("HIPPIUS_DISABLE_TOKEN_KEYCHAIN", "1");
+        std::env::set_var("HIPPIUS_DISABLE_MNEMONIC_KEYCHAIN", "1");
+    }
+
+    // -----------------------------------------------------------------
+    // Case 1 — success: the full happy path persists a complete session.
+    // -----------------------------------------------------------------
+    let base = start_server(success_router()).await;
+    // SAFETY: see module note — single test fn, so no parallel test in this
+    // binary can observe a half-set base URL.
+    unsafe {
+        std::env::set_var("HIPPIUS_API_BASE_URL", &base);
+    }
+
+    let app = managed_app(fresh_pool().await);
+    let result = login_with_mnemonic(app.state::<AppState>(), MNEMONIC.to_string(), None, None)
+        .await
+        .expect("login should succeed against the mock API");
+
+    // The returned result carries the derived addresses (proving the login
+    // path derives the SAME keys as the frozen service.rs vectors) and the
+    // server-issued session fields.
+    assert_eq!(result.substrate_address, EXPECTED_SUBSTRATE);
+    assert_eq!(result.eth_address, EXPECTED_ETH);
+    assert_eq!(result.token, "test-bearer-token");
+    assert_eq!(result.username, "tester");
+    assert_eq!(result.provider, "mnemonic");
+    assert!(result.is_new);
+
+    // AuthInfo is now fully populated — capabilities Full and the mnemonic
+    // cached for in-session signing.
+    {
+        let st = app.state::<AppState>();
+        let auth = st.auth.lock().expect("auth lock");
+        assert_eq!(auth.capabilities, AuthCapabilities::Full);
+        assert_eq!(auth.substrate_address.as_deref(), Some(EXPECTED_SUBSTRATE));
+        assert!(auth.mnemonic.is_some(), "mnemonic must be cached after login");
+    }
+
+    // The session row was persisted; with the keychain disabled the token
+    // lands in the `auth_session.auth_token` column.
+    {
+        let st = app.state::<AppState>();
+        let row = get_by_account(st.pool().expect("pool"), EXPECTED_SUBSTRATE)
+            .await
+            .expect("query auth_session")
+            .expect("a session row must exist after login");
+        assert_eq!(row.auth_token.as_deref(), Some("test-bearer-token"));
+        assert_eq!(row.username.as_deref(), Some("tester"));
+        assert_eq!(row.user_id, Some(42));
+        assert_eq!(row.provider.as_deref(), Some("mnemonic"));
+    }
+
+    // -----------------------------------------------------------------
+    // Case 2 — invalid mnemonic: rejected before any I/O, session untouched.
+    // `derive_keys` fails first, so no network call and no AuthInfo write.
+    // -----------------------------------------------------------------
+    let app = managed_app(fresh_pool().await);
+    // `LoginResult` is intentionally not `Debug` (it carries a bearer token),
+    // so unwrap the error via `let...else` rather than `expect_err`.
+    let Err(err) = login_with_mnemonic(app.state::<AppState>(), "not a valid bip39 phrase".to_string(), None, None).await else {
+        panic!("a garbage mnemonic must be rejected");
+    };
+    assert!(matches!(err, AppError::Other(_)), "invalid mnemonic surfaces as Other, got {err:?}");
+    {
+        let st = app.state::<AppState>();
+        let auth = st.auth.lock().expect("auth lock");
+        assert_eq!(auth.capabilities, AuthCapabilities::None, "failed login must leave AuthInfo at default");
+        assert!(auth.substrate_address.is_none());
+        assert!(auth.mnemonic.is_none());
+    }
+
+    // -----------------------------------------------------------------
+    // Case 3 — challenge fails (401): the documented ordering invariant —
+    // challenge-response runs BEFORE the AuthInfo write, so a server-side
+    // failure leaves the prior (empty here) session intact and writes no row.
+    // -----------------------------------------------------------------
+    let base = start_server(challenge_failure_router()).await;
+    // SAFETY: single test fn (see module note) — no parallel test in this
+    // binary reads HIPPIUS_API_BASE_URL while it is being repointed.
+    unsafe {
+        std::env::set_var("HIPPIUS_API_BASE_URL", &base);
+    }
+    let app = managed_app(fresh_pool().await);
+    let Err(err) = login_with_mnemonic(app.state::<AppState>(), MNEMONIC.to_string(), None, None).await else {
+        panic!("a 401 challenge must fail the login");
+    };
+    assert!(matches!(err, AppError::Other(_)), "challenge failure surfaces as Other, got {err:?}");
+    {
+        let st = app.state::<AppState>();
+        // Scope the guard so it drops before the DB await below (no lock held
+        // across `.await`).
+        {
+            let auth = st.auth.lock().expect("auth lock");
+            assert_eq!(auth.capabilities, AuthCapabilities::None, "challenge failure must not write AuthInfo");
+            assert!(auth.substrate_address.is_none());
         }
-        ctx.consume(passphrase);
-        ctx.consume(salt);
-        prev_block = ctx.compute().to_vec();
-        derived.extend_from_slice(&prev_block);
+
+        let row = get_by_account(st.pool().expect("pool"), EXPECTED_SUBSTRATE)
+            .await
+            .expect("query auth_session");
+        assert!(row.is_none(), "no session row may be persisted when the challenge fails");
     }
 
-    key.copy_from_slice(&derived[..32]);
-    iv.copy_from_slice(&derived[32..48]);
-    (key, iv)
-}
-
-fn encrypt_mnemonic(mnemonic: &str, passcode: &str) -> String {
-    use aes::cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
-    use base64::Engine;
-
-    let salt: [u8; 8] = rand::random();
-    let (key, iv) = crypto_js_derive_key_iv(passcode.as_bytes(), &salt);
-
-    type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
-    let encryptor = Aes256CbcEnc::new(&key.into(), &iv.into());
-
-    let plaintext = mnemonic.as_bytes();
-    let mut buf = vec![0u8; plaintext.len() + 16];
-    buf[..plaintext.len()].copy_from_slice(plaintext);
-    let ciphertext = encryptor.encrypt_padded_mut::<Pkcs7>(&mut buf, plaintext.len()).unwrap();
-
-    let mut output = Vec::with_capacity(16 + ciphertext.len());
-    output.extend_from_slice(b"Salted__");
-    output.extend_from_slice(&salt);
-    output.extend_from_slice(ciphertext);
-    base64::engine::general_purpose::STANDARD.encode(&output)
-}
-
-fn decrypt_mnemonic(encrypted: &str, passcode: &str) -> Result<String, String> {
-    use aes::cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7};
-    use base64::Engine;
-
-    let raw = base64::engine::general_purpose::STANDARD
-        .decode(encrypted)
-        .map_err(|e| format!("Base64 decode failed: {e}"))?;
-
-    if raw.len() < 16 || &raw[..8] != b"Salted__" {
-        return Err("Invalid encrypted data format".to_string());
+    // SAFETY: restore the process-global env so it can't leak the mock URL
+    // into another test binary's view of the world.
+    unsafe {
+        std::env::remove_var("HIPPIUS_API_BASE_URL");
     }
-
-    let salt = &raw[8..16];
-    let ciphertext = &raw[16..];
-
-    let (key, iv) = crypto_js_derive_key_iv(passcode.as_bytes(), salt);
-
-    type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
-    let decryptor = Aes256CbcDec::new(&key.into(), &iv.into());
-
-    let mut buf = ciphertext.to_vec();
-    let plaintext = decryptor
-        .decrypt_padded_mut::<Pkcs7>(&mut buf)
-        .map_err(|_| "Decryption failed".to_string())?;
-
-    String::from_utf8(plaintext.to_vec()).map_err(|e| format!("Invalid UTF-8: {e}"))
-}
-
-#[test]
-fn test_passcode_hash_deterministic() {
-    let hash1 = hash_passcode("mypasscode123");
-    let hash2 = hash_passcode("mypasscode123");
-    assert_eq!(hash1, hash2);
-    assert_eq!(hash1.len(), 64); // SHA-256 hex = 64 chars
-}
-
-#[test]
-fn test_passcode_hash_different_inputs() {
-    let hash1 = hash_passcode("password1");
-    let hash2 = hash_passcode("password2");
-    assert_ne!(hash1, hash2);
-}
-
-#[test]
-fn test_mnemonic_validation_valid() {
-    // Standard BIP-39 test mnemonic
-    let valid = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-    assert!(bip39::Mnemonic::parse_in_normalized(bip39::Language::English, valid).is_ok());
-}
-
-#[test]
-fn test_mnemonic_validation_invalid() {
-    assert!(bip39::Mnemonic::parse_in_normalized(bip39::Language::English, "not a valid mnemonic").is_err());
-    assert!(bip39::Mnemonic::parse_in_normalized(bip39::Language::English, "").is_err());
-}
-
-#[test]
-fn test_key_derivation() {
-    use subxt_signer::bip39::Mnemonic as SubxtMnemonic;
-    use subxt_signer::sr25519::Keypair;
-
-    let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-
-    // Derive sr25519 keypair via subxt_signer (the production path).
-    let parsed = SubxtMnemonic::parse(mnemonic).unwrap();
-    let pair = Keypair::from_phrase(&parsed, None).unwrap();
-    let substrate_address = pair.public_key().to_account_id().to_string();
-
-    // Should produce a valid SS58 address
-    assert!(substrate_address.starts_with('5'));
-    assert!(substrate_address.len() > 40);
-
-    // Derive Ethereum keypair
-    use alloy_signer_local::MnemonicBuilder;
-    use alloy_signer_local::coins_bip39::English;
-
-    let eth_signer: alloy_signer_local::PrivateKeySigner = MnemonicBuilder::<English>::default().phrase(mnemonic).index(0).unwrap().build().unwrap();
-    let eth_address = format!("{}", eth_signer.address());
-
-    // Should produce a valid Ethereum address
-    assert!(eth_address.starts_with("0x"));
-    assert_eq!(eth_address.len(), 42);
-}
-
-#[test]
-fn test_key_derivation_deterministic() {
-    use subxt_signer::bip39::Mnemonic as SubxtMnemonic;
-    use subxt_signer::sr25519::Keypair;
-
-    let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-
-    let parsed1 = SubxtMnemonic::parse(mnemonic).unwrap();
-    let parsed2 = SubxtMnemonic::parse(mnemonic).unwrap();
-    let pair1 = Keypair::from_phrase(&parsed1, None).unwrap();
-    let pair2 = Keypair::from_phrase(&parsed2, None).unwrap();
-
-    assert_eq!(
-        pair1.public_key().to_account_id().to_string(),
-        pair2.public_key().to_account_id().to_string()
-    );
-}
-
-#[test]
-fn test_aes_encrypt_decrypt_roundtrip() {
-    let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-    let passcode = "my-secure-passcode";
-
-    let encrypted = encrypt_mnemonic(mnemonic, passcode);
-    let decrypted = decrypt_mnemonic(&encrypted, passcode).unwrap();
-
-    assert_eq!(decrypted, mnemonic);
-}
-
-#[test]
-fn test_aes_decrypt_wrong_passcode_fails() {
-    let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-    let passcode = "correct-passcode";
-
-    let encrypted = encrypt_mnemonic(mnemonic, passcode);
-    let result = decrypt_mnemonic(&encrypted, "wrong-passcode");
-
-    assert!(result.is_err());
-}
-
-#[test]
-fn test_aes_different_encryptions_differ() {
-    let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-    let passcode = "my-passcode";
-
-    // Each encryption should use a different random salt
-    let enc1 = encrypt_mnemonic(mnemonic, passcode);
-    let enc2 = encrypt_mnemonic(mnemonic, passcode);
-
-    assert_ne!(enc1, enc2, "Different salts should produce different ciphertexts");
-
-    // But both should decrypt to the same value
-    assert_eq!(decrypt_mnemonic(&enc1, passcode).unwrap(), mnemonic);
-    assert_eq!(decrypt_mnemonic(&enc2, passcode).unwrap(), mnemonic);
-}
-
-#[test]
-fn test_evp_bytes_to_key_produces_correct_length() {
-    let passphrase = b"test-passphrase";
-    let salt = [1u8; 8];
-    let (key, iv) = crypto_js_derive_key_iv(passphrase, &salt);
-    assert_eq!(key.len(), 32);
-    assert_eq!(iv.len(), 16);
-}
-
-#[test]
-fn test_evp_bytes_to_key_deterministic() {
-    let passphrase = b"test-passphrase";
-    let salt = [42u8; 8];
-    let (key1, iv1) = crypto_js_derive_key_iv(passphrase, &salt);
-    let (key2, iv2) = crypto_js_derive_key_iv(passphrase, &salt);
-    assert_eq!(key1, key2);
-    assert_eq!(iv1, iv2);
 }
