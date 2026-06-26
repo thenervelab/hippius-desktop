@@ -439,7 +439,7 @@ pub fn build_file_synced_callback<R: tauri::Runtime>(app: &AppHandle<R>, sync: A
         // `size_bytes` comes from `mark_file_synced`'s return value —
         // the in-memory progress tracker's `file.total_bytes` read
         // before the row transitions to Completed. The Recent-Files
-        // view (`get_recent_files` in `sync/files.rs`) reads
+        // view (`get_recent_files` in `sync/fileops/files/recent.rs`) reads
         // `item.size_bytes` directly, so without this thread-through
         // every newly-synced file would render with size 0 / "unknown".
         // The byte-progress callback is not trusted for activity rows (it

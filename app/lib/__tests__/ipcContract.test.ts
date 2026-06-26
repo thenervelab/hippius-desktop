@@ -124,7 +124,7 @@ function invokedCommands(): Set<string> {
 function rustEmittedEvents(): Set<string> {
   const names = new Set<string>();
   const events = readFileSync(
-    join(ROOT, "src-tauri", "src", "sync", "events.rs"),
+    join(ROOT, "src-tauri", "src", "sync", "projection", "events.rs"),
     "utf8"
   );
   // Canonical registry: pub const NAME: &str = "value";

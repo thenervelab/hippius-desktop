@@ -264,12 +264,12 @@ async fn cached_status_wins_over_db_derived_status() {
 
 /// Read `src/sync/lifecycle.rs` for the static funnel pins below.
 fn lifecycle_src() -> String {
-    std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/lifecycle.rs")).expect("read lifecycle.rs")
+    std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/drive/lifecycle.rs")).expect("read lifecycle.rs")
 }
 
 /// Read `src/sync/lifecycle_guard.rs` for the commit-step pin below.
 fn lifecycle_guard_src() -> String {
-    std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/lifecycle_guard.rs")).expect("read lifecycle_guard.rs")
+    std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/drive/lifecycle_guard.rs")).expect("read lifecycle_guard.rs")
 }
 
 /// Extract the brace-matched body of the function whose declaration

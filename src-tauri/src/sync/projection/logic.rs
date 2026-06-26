@@ -112,7 +112,7 @@ pub fn try_claim_snapshot_emit(last_emit_ms: &AtomicU64, now_ms: u64, is_file_co
 /// This unifies the "file complete?" check used by two hot-path sites:
 /// - [`crate::sync::progress::update_file_progress`] to bypass the snapshot
 ///   throttle so per-file completions reach the UI immediately, and
-/// - `handle_transfer_progress` in `sync/lifecycle.rs` to decide whether
+/// - `handle_transfer_progress` in `sync/drive/lifecycle.rs` to decide whether
 ///   to emit `FILE_TRANSFER_COMPLETE` and append to the activity log.
 ///
 /// Keeping these two call sites in sync via a single pure function avoids

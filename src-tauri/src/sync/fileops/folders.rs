@@ -656,7 +656,7 @@ mod tests {
     // no sync cycle can ever observe the emptied remote.
     #[test]
     fn delete_remote_folder_stops_local_drive_before_remote_unregister() {
-        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/folders.rs")).expect("read folders.rs");
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/fileops/folders.rs")).expect("read folders.rs");
 
         let sig_idx = src
             .find("pub async fn delete_remote_folder(")
@@ -735,7 +735,7 @@ mod tests {
     // re-check and reintroduce the false "delete failed" report (F-2).
     #[test]
     fn delete_remote_folder_rechecks_remote_state_after_unregister() {
-        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/folders.rs")).expect("read folders.rs");
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/fileops/folders.rs")).expect("read folders.rs");
         let sig_idx = src.find("pub async fn delete_remote_folder(").expect("declaration present");
         // Scope the search to the function BODY (brace-matched), so a helper
         // inserted between the signature and the body can't fool the ordering

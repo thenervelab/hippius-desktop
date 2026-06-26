@@ -628,7 +628,7 @@ mod tests {
     // left a stale baseline behind.
     #[test]
     fn remove_sync_path_delegates_to_remove_drive_for_account() {
-        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/paths.rs")).expect("read paths.rs");
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/drive/paths.rs")).expect("read paths.rs");
         let body = fn_body(&src, "pub async fn remove_sync_path(");
         assert!(
             body.contains("remove_drive_for_account("),

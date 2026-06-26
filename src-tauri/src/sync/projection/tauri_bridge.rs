@@ -11,7 +11,7 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::{AppHandle, Emitter};
 
-use super::events;
+use crate::sync::events;
 use crate::sync::intent::IntentRepo;
 use crate::sync::progress::{SyncSnapshot, cap_file_list, prepare_snapshot_for_emit};
 
@@ -156,7 +156,7 @@ fn update_failure_counts(app: &AppHandle, label: &str) {
         if let Some((pool, owner)) = failure_persist_ctx(&app_state) {
             let label = label.to_string();
             tauri::async_runtime::spawn(async move {
-                let _ = super::failure_repo::clear_failures_for_label(&pool, &owner, &label).await;
+                let _ = crate::sync::failure_repo::clear_failures_for_label(&pool, &owner, &label).await;
             });
         }
         return;
@@ -174,7 +174,7 @@ fn update_failure_counts(app: &AppHandle, label: &str) {
         let paths = succeeded_paths.clone();
         tauri::async_runtime::spawn(async move {
             for p in &paths {
-                let _ = super::failure_repo::clear_failure(&pool, &owner, &label, p).await;
+                let _ = crate::sync::failure_repo::clear_failure(&pool, &owner, &label, p).await;
             }
         });
     }
@@ -193,8 +193,8 @@ fn update_failure_counts(app: &AppHandle, label: &str) {
         let at_threshold = failure_state.files_at_threshold();
         if !at_threshold.is_empty() {
             let _ = app.emit(
-                super::events::FILES_FAILED_REPEATEDLY,
-                super::events::FilesFailedRepeatedlyPayload { files: at_threshold },
+                crate::sync::events::FILES_FAILED_REPEATEDLY,
+                crate::sync::events::FilesFailedRepeatedlyPayload { files: at_threshold },
             );
         }
     }
@@ -568,7 +568,7 @@ fn handle_file_failed(app: &AppHandle, ev: FileFailedEvent) {
             let kind_for_db = kind_payload.clone();
             let now_ms = chrono::Utc::now().timestamp_millis();
             tauri::async_runtime::spawn(async move {
-                if let Err(e) = super::failure_repo::upsert_failure(&pool, &owner, &label, &path, &file_name, &kind_for_db, now_ms).await {
+                if let Err(e) = crate::sync::failure_repo::upsert_failure(&pool, &owner, &label, &path, &file_name, &kind_for_db, now_ms).await {
                     tracing::warn!("[failure_repo] persist failed for {label}/{path}: {e}");
                 }
             });

@@ -21,7 +21,7 @@
 
 /// Brace-match the body of the named function in `lifecycle.rs` and return it.
 fn lifecycle_fn_body(signature: &str) -> String {
-    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/lifecycle.rs")).expect("read lifecycle.rs");
+    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/drive/lifecycle.rs")).expect("read lifecycle.rs");
     let sig_idx = src.find(signature).unwrap_or_else(|| panic!("{signature} declaration present"));
     let body_start = src[sig_idx..].find('{').expect("fn body opens") + sig_idx;
     let mut depth = 0usize;

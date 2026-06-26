@@ -2662,7 +2662,7 @@ mod tests {
     // Static source assertion mirrors remove_sync_path_delegates_to_remove_drive_for_account.
     #[test]
     fn change_sync_folder_tears_down_with_explicit_account() {
-        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/lifecycle.rs")).expect("read lifecycle.rs");
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/drive/lifecycle.rs")).expect("read lifecycle.rs");
         let sig = src.find("pub async fn change_sync_folder(").expect("change_sync_folder present");
         let body_start = src[sig..].find('{').expect("fn body opens") + sig;
         let mut depth = 0usize;
