@@ -361,10 +361,320 @@ pub(crate) fn handle_sync_error(app: &AppHandle, payload: events::SyncErrorPaylo
     let _ = app.emit(events::SYNC_ERROR, payload);
 }
 
+/// Handle `SyncEvent::SyncStarted`: bump the session epoch, reset the per-label
+/// 402 counter, cap the file lists, and forward `SYNC_STARTED`.
+///
+/// Extracted from [`SyncEventHandler::on_event`] so the dispatcher stays a thin
+/// match. The "preparing" override is marked in [`handle_plan_ready`], not here
+/// — see the inline rationale.
+fn handle_sync_started(app: &AppHandle, mut payload: events::SyncStartedPayload) {
+    // Increment the sync session epoch so the
+    // UploadProcessingState clear gate knows a new cycle
+    // has started. See `crate::sync::upload_processing`
+    // for the full rationale.
+    //
+    // Then decide whether this is a file-watcher-triggered
+    // cycle that needs the "preparing" widget override —
+    // skip when the upload-processing banner is already
+    // raised (IPC-initiated uploads cover the gap with
+    // the banner instead, and showing both would be
+    // double-signalling).
+    {
+        use tauri::Manager;
+        let app_state = app.state::<crate::app_state::AppState>();
+        app_state.sync_session_epoch.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
+        // Fresh cycle for this label — reset the running
+        // 402 counter so the next `InsufficientBalance`
+        // failure starts at `file_count = 1` and the FE
+        // banner reflects only the new cycle's failures.
+        // Clearing here (not on SyncCompleted) is correct
+        // because the user-visible state is "this cycle's
+        // failures, banner sticks until next cycle";
+        // clearing on completion would erase the banner
+        // before the user sees it.
+        app_state.credits_exhausted.clear(&payload.label);
+
+        // The "preparing" override is deliberately NOT marked here:
+        // `SyncStarted` fires before the plan is known, so marking
+        // it here would paint the red "Preparing sync…" widget/tray
+        // state for the entire scan + remote-fetch (indexing) window
+        // of every cycle — including periodic no-op cycles with zero
+        // work, flashing the tray icon red on a loop. It is marked
+        // in `handle_plan_ready` instead, gated on a non-empty plan,
+        // so it only appears once there is real work to do. See
+        // `handle_plan_ready` and `sync::preparing`.
+    }
+    cap_file_list(&mut payload.upload_files);
+    cap_file_list(&mut payload.download_files);
+    cap_file_list(&mut payload.local_delete_files);
+    cap_file_list(&mut payload.remote_delete_files);
+    let _ = app.emit(events::SYNC_STARTED, payload);
+}
+
+/// Handle `SyncEvent::SyncStopped`: clear the per-label preparing/credits/error
+/// state for a drive whose cycle ended (pause / remove / logout teardown) and
+/// forward `SYNC_STOPPED`.
+fn handle_sync_stopped(app: &AppHandle, label: String) {
+    use tauri::Manager;
+    let app_state = app.state::<crate::app_state::AppState>();
+    if app_state.preparing.clear(&label) {
+        app_state.sync.emit_snapshot(true);
+    }
+    // The drive's cycle ended (pause / remove / logout
+    // teardown). The 402 banner's running count is a
+    // per-cycle aggregate; clear it so a future resume /
+    // re-add starts at zero. Idempotent.
+    app_state.credits_exhausted.clear(&label);
+    // Re-arm the "Sync Failed" latch: a paused/removed drive that
+    // is later resumed and goes down should notify again.
+    app_state.error_notify.clear(&label);
+    let _ = app.emit(events::SYNC_STOPPED, events::LabelPayload { label });
+}
+
+/// Handle `SyncEvent::SyncReset`: wipe every per-drive preparing/credits/error
+/// counter on account switch / logout / reset and forward `SYNC_RESET`.
+fn handle_sync_reset(app: &AppHandle, account_id: String, message: String) {
+    use tauri::Manager;
+    let app_state = app.state::<crate::app_state::AppState>();
+    if app_state.preparing.clear_all() {
+        app_state.sync.emit_snapshot(true);
+    }
+    // Account switch / logout / reset. Every per-drive
+    // 402 counter must be wiped before different account
+    // data could touch it — a stale `file_count` would
+    // pollute the banner for an unrelated user.
+    app_state.credits_exhausted.clear_all();
+    // Same reasoning for the "Sync Failed" latch: a previous
+    // account's down-episode must not suppress the first
+    // notification for a different account.
+    app_state.error_notify.clear_all();
+    let _ = app.emit(events::SYNC_RESET, events::SyncResetPayload { account_id, message });
+}
+
+/// Handle `SyncEvent::PlanReady`: mark the "preparing" override now that the
+/// plan confirms real work, cap the file lists, and forward `SYNC_PLAN_READY`.
+fn handle_plan_ready(app: &AppHandle, mut payload: events::SyncPlanReadyPayload) {
+    // Mark the "preparing" override now that the plan is known and
+    // confirms real work. Marked here (not at `SyncStarted`, which
+    // fires before the plan exists) so periodic no-op cycles —
+    // whose plan is empty — never flash the red "Preparing sync…"
+    // state during their indexing window. A genuine Finder-drop
+    // still surfaces the indicator: its plan is non-empty, and the
+    // override bridges the small gap from here until the first
+    // files-populated snapshot (after `merge_into_session`), at
+    // which point the `ProgressSnapshot` arm clears it.
+    {
+        use tauri::Manager;
+        let app_state = app.state::<crate::app_state::AppState>();
+        let has_work = payload.uploads + payload.downloads + payload.local_deletes + payload.remote_deletes > 0;
+        // An IPC-initiated upload already shows its own top-of-page
+        // banner for this drive, so suppress the override to avoid
+        // double-signalling. Per-label (not global) so a banner on
+        // drive A can't suppress drive B's preparing widget.
+        let banner_active_for_label = app_state.upload_processing.is_active_for(&payload.label);
+        if has_work && !banner_active_for_label && app_state.preparing.mark_preparing(&payload.label) {
+            // Newly inserted — push one snapshot so the widget
+            // reflects preparing immediately. `emit_snapshot`
+            // synchronously re-enters this same `on_event` with
+            // `ProgressSnapshot`, which reacquires the preparing
+            // mutex; safe because `mark_preparing` returns a `bool`
+            // (its `MutexGuard` is dropped at the fn boundary), so
+            // the lock is already released here. Keep that boundary
+            // — extending the guard across this emit would deadlock
+            // the non-reentrant `std::sync::Mutex`.
+            app_state.sync.emit_snapshot(true);
+        }
+    }
+    cap_file_list(&mut payload.upload_files);
+    cap_file_list(&mut payload.download_files);
+    cap_file_list(&mut payload.local_delete_files);
+    cap_file_list(&mut payload.remote_delete_files);
+    let _ = app.emit(events::SYNC_PLAN_READY, payload);
+}
+
+/// Raw per-file failure straight off `SyncEvent::FileFailed`, before the
+/// non-`Serialize` `kind` is translated to [`events::FileFailureKindPayload`]
+/// for the wire.
+///
+/// Bundled into a struct so [`handle_file_failed`] stays at two parameters and
+/// the raw `kind` — read for the `InsufficientBalance` branch *before*
+/// conversion — crosses the call in a single move. No existing payload type
+/// holds the raw upstream `kind`.
+struct FileFailedEvent {
+    label: String,
+    path: String,
+    file_id: String,
+    kind: hcfs_client::engine::events::FileFailureKind,
+    http_status: Option<u16>,
+}
+
+/// Handle `SyncEvent::FileFailed`: surface the typed per-file failure to the FE,
+/// persist it durably for cross-restart retry UX, and (for `InsufficientBalance`)
+/// raise the "Out of credits" banner. The bridge is a pure forwarder here — the
+/// progress-row mutation already happened in `build_file_failed_callback`.
+fn handle_file_failed(app: &AppHandle, ev: FileFailedEvent) {
+    let FileFailedEvent {
+        label,
+        path,
+        file_id,
+        kind,
+        http_status,
+    } = ev;
+
+    // InsufficientBalance failures additionally raise the
+    // "Out of credits" banner. The branch reads the typed
+    // variant BEFORE the `kind` value is moved into the
+    // FileFailed payload below — copying `balance_cents` /
+    // `required_cents` here avoids a clone of the whole
+    // upstream enum. The counter mutation happens here
+    // (not in the lifecycle callback) because (a) the
+    // counter is a UI-level aggregate, not a progress-row
+    // mutation, and (b) the bridge is the single emit
+    // site for the banner event — keeping the counter
+    // adjacent to its only reader avoids a split-brain
+    // risk where the count and the event disagree.
+    let credits_payload = if let hcfs_client::engine::events::FileFailureKind::InsufficientBalance {
+        balance_cents,
+        required_cents,
+    } = &kind
+    {
+        use tauri::Manager;
+        let app_state = app.state::<crate::app_state::AppState>();
+        let file_count = app_state.credits_exhausted.record_failure(&label);
+        Some(events::CreditsExhaustedPayload {
+            label: label.clone(),
+            balance_cents: *balance_cents,
+            required_cents: *required_cents,
+            file_count,
+        })
+    } else {
+        None
+    };
+
+    // Persist the failure durably so the FE can show *why* it failed
+    // (and offer retry) in any listing view — Recent Files, the Drive
+    // table, the tray — even across restarts. The structured `kind` is
+    // only available here at the failure site. `on_event` is sync, so
+    // the DB write is spawned off-thread; skipped when logged out.
+    let kind_payload = events::FileFailureKindPayload::from(&kind);
+    {
+        use tauri::Manager;
+        let app_state = app.state::<crate::app_state::AppState>();
+        if let Some((pool, owner)) = failure_persist_ctx(&app_state) {
+            let label = label.clone();
+            let path = path.clone();
+            let file_name = path.rsplit('/').next().unwrap_or(path.as_str()).to_string();
+            let kind_for_db = kind_payload.clone();
+            let now_ms = chrono::Utc::now().timestamp_millis();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = super::failure_repo::upsert_failure(&pool, &owner, &label, &path, &file_name, &kind_for_db, now_ms).await {
+                    tracing::warn!("[failure_repo] persist failed for {label}/{path}: {e}");
+                }
+            });
+        }
+    }
+
+    let _ = app.emit(
+        events::FILE_FAILED,
+        events::FileFailedPayload {
+            label,
+            path,
+            file_id,
+            kind: kind_payload,
+            http_status,
+        },
+    );
+
+    // Emit the banner event after the per-file detail so
+    // listeners that subscribe to BOTH (e.g. a future
+    // diagnostics overlay) see them in causal order:
+    // file-row updates first, then the aggregate banner.
+    if let Some(payload) = credits_payload {
+        let _ = app.emit(events::CREDITS_EXHAUSTED, payload);
+    }
+}
+
+/// Handle `SyncEvent::ProgressSnapshot`: clear served preparing overrides, apply
+/// the snapshot fixups, stamp the observation-order ticket, and fire-and-forget
+/// the emit.
+///
+/// Stays synchronous (called directly from the sync `on_event`) so the `seq`
+/// stamp records the order the bridge *observed* snapshots — before the spawned
+/// task's variable-latency intent-overlay DB read — which is what
+/// [`try_claim_snapshot_seq`] relies on to converge the FE on the newest frame.
+fn handle_progress_snapshot(app: &AppHandle, mut snapshot: SyncSnapshot) {
+    use tauri::Manager;
+    let app_state = app.state::<crate::app_state::AppState>();
+
+    // Once a label has real files in the session, its
+    // "preparing" override has served its purpose — the
+    // regular per-file widget takes over. Clearing here
+    // (before the fingerprint check below) keeps the
+    // preparing set tight and prevents a stuck override
+    // surviving past the first plan_ready of a cycle.
+    //
+    // Gated on `is_any_preparing` so the common case (no
+    // drive in preparing — every snapshot after the first
+    // few seconds of a sync cycle) avoids both the
+    // `HashSet` allocation and the per-label `clear` calls.
+    // This path fires at up to 4 Hz during transfers, so
+    // skipping the alloc when there's nothing to clear is
+    // worth a one-line short-circuit.
+    if app_state.preparing.is_any_preparing() {
+        let labels_with_files: std::collections::HashSet<&str> = snapshot.files.iter().map(|f| f.label.as_ref()).collect();
+        for label in &labels_with_files {
+            app_state.preparing.clear(label);
+        }
+    }
+
+    // `prepare_snapshot_for_emit` applies the stalled-completion
+    // fixup, the preparing override (when no real session is yet
+    // visible and any label is preparing), and the file-cap.
+    // Without the stall fixup, hcfs-client's own file-watcher-
+    // driven `changes_pending=true` leaves `is_active` stuck at
+    // `true` indefinitely after all files are synced, so
+    // `widget_state`, `effective_in_progress`, `effective_completed`,
+    // and `status_variant` all still say "syncing" despite 100%
+    // progress. Without the preparing override, file-watcher-
+    // initiated cycles leave the widget hidden through the
+    // scan + remote-state-fetch window even though the system
+    // is actively working. See
+    // `progress::fixup_stalled_completion` and
+    // `progress::apply_preparing_override`.
+    prepare_snapshot_for_emit(&mut snapshot, &app_state.preparing);
+
+    // The intent overlay needs an async SQLite SUM/COUNT query,
+    // but `on_event` is the SYNCHRONOUS half of
+    // `SyncEventHandler` and hcfs-client's
+    // `SyncRunner::emit_snapshot` invokes it on whatever thread
+    // calls it — including the main GUI thread, which is NOT a
+    // Tokio runtime worker (e.g. the console-upload dedup path
+    // routes an emit through a synchronous context). A bare
+    // `tokio::spawn` here panics "there is no reactor running"
+    // on such a thread and the panic double-faults across the
+    // hcfs callback boundary into a process abort. The fire-
+    // and-forget work is therefore delegated to a helper that
+    // schedules onto Tauri's OWNED global runtime regardless of
+    // the calling thread's context — see `spawn_snapshot_emit`
+    // and the in-repo precedent at
+    // `sync::upload_processing::spawn_watchdog`.
+    // Stamp the snapshot with its observation-order ticket HERE, in
+    // the synchronous handler, BEFORE the spawn — so the ticket
+    // reflects the order the bridge saw snapshots, not the order
+    // their async DB reads happen to finish in. `fetch_add` returns
+    // the prior value; `+1` keeps the first ticket at 1 (0 means
+    // "nothing emitted yet"). Relaxed: this is a unique-ticket
+    // counter, the ordering guarantee is enforced by the AcqRel
+    // claim in `try_claim_snapshot_seq`.
+    let seq = SNAPSHOT_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
+    spawn_snapshot_emit(app.clone(), snapshot, seq);
+}
+
 impl SyncEventHandler for TauriSyncBridge {
     #[expect(
         clippy::too_many_lines,
-        reason = "One match arm per SyncEvent variant, each with a distinct payload shape. Splitting per-variant requires either trait objects or N helper functions with different signatures; the giant match keeps the mapping between Rust event and Tauri event name auditable in one place."
+        reason = "Every non-trivial arm now delegates to a handle_* helper, so what remains is per-variant field-mapping boilerplate: destructure the upstream SyncEvent variant and rebuild its distinct typed Tauri payload before delegating. Keeping that 1:1 Rust-event-to-Tauri-event mapping inline in one match is what makes the correspondence auditable in a single place; a generic conversion layer would only hide it behind macros."
     )]
     fn on_event(&self, event: SyncEvent) {
         let Some(app) = self.app() else { return };
@@ -376,67 +686,24 @@ impl SyncEventHandler for TauriSyncBridge {
                 downloads,
                 local_deletes,
                 remote_deletes,
-                mut upload_files,
-                mut download_files,
-                mut local_delete_files,
-                mut remote_delete_files,
-            } => {
-                // Increment the sync session epoch so the
-                // UploadProcessingState clear gate knows a new cycle
-                // has started. See `crate::sync::upload_processing`
-                // for the full rationale.
-                //
-                // Then decide whether this is a file-watcher-triggered
-                // cycle that needs the "preparing" widget override —
-                // skip when the upload-processing banner is already
-                // raised (IPC-initiated uploads cover the gap with
-                // the banner instead, and showing both would be
-                // double-signalling).
-                {
-                    use tauri::Manager;
-                    let app_state = app.state::<crate::app_state::AppState>();
-                    app_state.sync_session_epoch.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-
-                    // Fresh cycle for this label — reset the running
-                    // 402 counter so the next `InsufficientBalance`
-                    // failure starts at `file_count = 1` and the FE
-                    // banner reflects only the new cycle's failures.
-                    // Clearing here (not on SyncCompleted) is correct
-                    // because the user-visible state is "this cycle's
-                    // failures, banner sticks until next cycle";
-                    // clearing on completion would erase the banner
-                    // before the user sees it.
-                    app_state.credits_exhausted.clear(&label);
-
-                    // The "preparing" override is deliberately NOT marked here:
-                    // `SyncStarted` fires before the plan is known, so marking
-                    // it here would paint the red "Preparing sync…" widget/tray
-                    // state for the entire scan + remote-fetch (indexing) window
-                    // of every cycle — including periodic no-op cycles with zero
-                    // work, flashing the tray icon red on a loop. It is marked
-                    // in the `PlanReady` arm instead, gated on a non-empty plan,
-                    // so it only appears once there is real work to do. See the
-                    // `PlanReady` arm below and `sync::preparing`.
-                }
-                cap_file_list(&mut upload_files);
-                cap_file_list(&mut download_files);
-                cap_file_list(&mut local_delete_files);
-                cap_file_list(&mut remote_delete_files);
-                let _ = app.emit(
-                    events::SYNC_STARTED,
-                    events::SyncStartedPayload {
-                        label,
-                        uploads,
-                        downloads,
-                        local_deletes,
-                        remote_deletes,
-                        upload_files,
-                        download_files,
-                        local_delete_files,
-                        remote_delete_files,
-                    },
-                );
-            }
+                upload_files,
+                download_files,
+                local_delete_files,
+                remote_delete_files,
+            } => handle_sync_started(
+                &app,
+                events::SyncStartedPayload {
+                    label,
+                    uploads,
+                    downloads,
+                    local_deletes,
+                    remote_deletes,
+                    upload_files,
+                    download_files,
+                    local_delete_files,
+                    remote_delete_files,
+                },
+            ),
             SyncEvent::SyncCompleted {
                 label,
                 files_uploaded,
@@ -489,100 +756,32 @@ impl SyncEventHandler for TauriSyncBridge {
                     FailureNotify::Gated,
                 );
             }
-            SyncEvent::SyncStopped { label } => {
-                use tauri::Manager;
-                let app_state = app.state::<crate::app_state::AppState>();
-                if app_state.preparing.clear(&label) {
-                    app_state.sync.emit_snapshot(true);
-                }
-                // The drive's cycle ended (pause / remove / logout
-                // teardown). The 402 banner's running count is a
-                // per-cycle aggregate; clear it so a future resume /
-                // re-add starts at zero. Idempotent.
-                app_state.credits_exhausted.clear(&label);
-                // Re-arm the "Sync Failed" latch: a paused/removed drive that
-                // is later resumed and goes down should notify again.
-                app_state.error_notify.clear(&label);
-                let _ = app.emit(events::SYNC_STOPPED, events::LabelPayload { label });
-            }
-            SyncEvent::SyncReset { account_id, message } => {
-                use tauri::Manager;
-                let app_state = app.state::<crate::app_state::AppState>();
-                if app_state.preparing.clear_all() {
-                    app_state.sync.emit_snapshot(true);
-                }
-                // Account switch / logout / reset. Every per-drive
-                // 402 counter must be wiped before different account
-                // data could touch it — a stale `file_count` would
-                // pollute the banner for an unrelated user.
-                app_state.credits_exhausted.clear_all();
-                // Same reasoning for the "Sync Failed" latch: a previous
-                // account's down-episode must not suppress the first
-                // notification for a different account.
-                app_state.error_notify.clear_all();
-                let _ = app.emit(events::SYNC_RESET, events::SyncResetPayload { account_id, message });
-            }
+            SyncEvent::SyncStopped { label } => handle_sync_stopped(&app, label),
+            SyncEvent::SyncReset { account_id, message } => handle_sync_reset(&app, account_id, message),
             SyncEvent::PlanReady {
                 label,
                 uploads,
                 downloads,
                 local_deletes,
                 remote_deletes,
-                mut upload_files,
-                mut download_files,
-                mut local_delete_files,
-                mut remote_delete_files,
-            } => {
-                // Mark the "preparing" override now that the plan is known and
-                // confirms real work. Marked here (not at `SyncStarted`, which
-                // fires before the plan exists) so periodic no-op cycles —
-                // whose plan is empty — never flash the red "Preparing sync…"
-                // state during their indexing window. A genuine Finder-drop
-                // still surfaces the indicator: its plan is non-empty, and the
-                // override bridges the small gap from here until the first
-                // files-populated snapshot (after `merge_into_session`), at
-                // which point the `ProgressSnapshot` arm clears it.
-                {
-                    use tauri::Manager;
-                    let app_state = app.state::<crate::app_state::AppState>();
-                    let has_work = uploads + downloads + local_deletes + remote_deletes > 0;
-                    // An IPC-initiated upload already shows its own top-of-page
-                    // banner for this drive, so suppress the override to avoid
-                    // double-signalling. Per-label (not global) so a banner on
-                    // drive A can't suppress drive B's preparing widget.
-                    let banner_active_for_label = app_state.upload_processing.is_active_for(&label);
-                    if has_work && !banner_active_for_label && app_state.preparing.mark_preparing(&label) {
-                        // Newly inserted — push one snapshot so the widget
-                        // reflects preparing immediately. `emit_snapshot`
-                        // synchronously re-enters this same `on_event` with
-                        // `ProgressSnapshot`, which reacquires the preparing
-                        // mutex; safe because `mark_preparing` returns a `bool`
-                        // (its `MutexGuard` is dropped at the fn boundary), so
-                        // the lock is already released here. Keep that boundary
-                        // — extending the guard across this emit would deadlock
-                        // the non-reentrant `std::sync::Mutex`.
-                        app_state.sync.emit_snapshot(true);
-                    }
-                }
-                cap_file_list(&mut upload_files);
-                cap_file_list(&mut download_files);
-                cap_file_list(&mut local_delete_files);
-                cap_file_list(&mut remote_delete_files);
-                let _ = app.emit(
-                    events::SYNC_PLAN_READY,
-                    events::SyncPlanReadyPayload {
-                        label,
-                        uploads,
-                        downloads,
-                        local_deletes,
-                        remote_deletes,
-                        upload_files,
-                        download_files,
-                        local_delete_files,
-                        remote_delete_files,
-                    },
-                );
-            }
+                upload_files,
+                download_files,
+                local_delete_files,
+                remote_delete_files,
+            } => handle_plan_ready(
+                &app,
+                events::SyncPlanReadyPayload {
+                    label,
+                    uploads,
+                    downloads,
+                    local_deletes,
+                    remote_deletes,
+                    upload_files,
+                    download_files,
+                    local_delete_files,
+                    remote_delete_files,
+                },
+            ),
             SyncEvent::ConflictsPending { label, staged } => {
                 let _ = app.emit(events::CONFLICTS_PENDING, events::ConflictsPendingPayload { label, staged });
             }
@@ -607,113 +806,16 @@ impl SyncEventHandler for TauriSyncBridge {
                 file_id,
                 kind,
                 http_status,
-            } => {
-                // Per-file failure handling has two responsibilities:
-                //   (1) Surface the typed failure to the FE via a dedicated
-                //       Tauri event so the FE can drive category-specific UX
-                //       (e.g. "out of credits" banner for InsufficientBalance).
-                //       The translation to `FileFailureKindPayload` is needed
-                //       because the upstream `FileFailureKind` is NOT
-                //       `Serialize`-able (verified at
-                //       `hcfs-client/src/engine/events.rs:33`).
-                //   (2) Emit a Tauri event AND do nothing else here. The
-                //       in-memory progress mutation (file row → Error) was
-                //       already performed by `build_file_failed_callback`
-                //       (lifecycle.rs) which fired synchronously from the
-                //       same hcfs-client error site BEFORE this event arrived
-                //       at the bridge. Splitting the responsibilities — Tauri
-                //       emit here, progress mutation in the lifecycle callback
-                //       — matches the symmetric `on_file_synced` design and
-                //       keeps the bridge a pure forwarder.
-                //
-                // Deliberately NOT performed:
-                //   - `hcfs_sync_error` emit: per-file failure ≠ cycle
-                //     failure; the cycle-level channel is reserved for
-                //     auth/cancel/transport-level errors. This is also why
-                //     no generic "Sync Failed" notification row is created
-                //     for an InsufficientBalance failure: the FE notification
-                //     handler (`useFilesNotification.ts`) only creates
-                //     "Sync Failed" rows on `hcfs_sync_error`, which per-file
-                //     failures never trigger. Suppression is architectural,
-                //     not gated on a flag.
-                //   - Activity-item enqueue: activity rows only land on
-                //     server-confirmed success. Failures are visible via the
-                //     snapshot's Error status and the FILES_FAILED_REPEATEDLY
-                //     event.
-
-                // InsufficientBalance failures additionally raise the
-                // "Out of credits" banner. The branch reads the typed
-                // variant BEFORE the `kind` value is moved into the
-                // FileFailed payload below — copying `balance_cents` /
-                // `required_cents` here avoids a clone of the whole
-                // upstream enum. The counter mutation happens here
-                // (not in the lifecycle callback) because (a) the
-                // counter is a UI-level aggregate, not a progress-row
-                // mutation, and (b) the bridge is the single emit
-                // site for the banner event — keeping the counter
-                // adjacent to its only reader avoids a split-brain
-                // risk where the count and the event disagree.
-                let credits_payload = if let hcfs_client::engine::events::FileFailureKind::InsufficientBalance {
-                    balance_cents,
-                    required_cents,
-                } = &kind
-                {
-                    use tauri::Manager;
-                    let app_state = app.state::<crate::app_state::AppState>();
-                    let file_count = app_state.credits_exhausted.record_failure(&label);
-                    Some(events::CreditsExhaustedPayload {
-                        label: label.clone(),
-                        balance_cents: *balance_cents,
-                        required_cents: *required_cents,
-                        file_count,
-                    })
-                } else {
-                    None
-                };
-
-                // Persist the failure durably so the FE can show *why* it failed
-                // (and offer retry) in any listing view — Recent Files, the Drive
-                // table, the tray — even across restarts. The structured `kind` is
-                // only available here at the failure site. `on_event` is sync, so
-                // the DB write is spawned off-thread; skipped when logged out.
-                let kind_payload = events::FileFailureKindPayload::from(&kind);
-                {
-                    use tauri::Manager;
-                    let app_state = app.state::<crate::app_state::AppState>();
-                    if let Some((pool, owner)) = failure_persist_ctx(&app_state) {
-                        let label = label.clone();
-                        let path = path.clone();
-                        let file_name = path.rsplit('/').next().unwrap_or(path.as_str()).to_string();
-                        let kind_for_db = kind_payload.clone();
-                        let now_ms = chrono::Utc::now().timestamp_millis();
-                        tauri::async_runtime::spawn(async move {
-                            if let Err(e) = super::failure_repo::upsert_failure(&pool, &owner, &label, &path, &file_name, &kind_for_db, now_ms).await
-                            {
-                                tracing::warn!("[failure_repo] persist failed for {label}/{path}: {e}");
-                            }
-                        });
-                    }
-                }
-
-                let _ = app.emit(
-                    events::FILE_FAILED,
-                    events::FileFailedPayload {
-                        label,
-                        path,
-                        file_id,
-                        kind: kind_payload,
-                        http_status,
-                    },
-                );
-
-                // Emit the banner event after the per-file detail so
-                // listeners that subscribe to BOTH (e.g. a future
-                // diagnostics overlay) see them in causal order:
-                // file-row updates first, then the aggregate banner.
-                if let Some(payload) = credits_payload {
-                    let _ = app.emit(events::CREDITS_EXHAUSTED, payload);
-                }
-            }
+            } => handle_file_failed(
+                &app,
+                FileFailedEvent {
+                    label,
+                    path,
+                    file_id,
+                    kind,
+                    http_status,
+                },
+            ),
             SyncEvent::HealthChanged { health } => {
                 let _ = app.emit(events::CONNECTIVITY_CHANGED, &health);
             }
@@ -732,73 +834,7 @@ impl SyncEventHandler for TauriSyncBridge {
             SyncEvent::AuthRequired { error } => {
                 let _ = app.emit(events::AUTH_RELOGIN_REQUIRED, events::AuthRequiredPayload { error });
             }
-            SyncEvent::ProgressSnapshot { mut snapshot } => {
-                use tauri::Manager;
-                let app_state = app.state::<crate::app_state::AppState>();
-
-                // Once a label has real files in the session, its
-                // "preparing" override has served its purpose — the
-                // regular per-file widget takes over. Clearing here
-                // (before the fingerprint check below) keeps the
-                // preparing set tight and prevents a stuck override
-                // surviving past the first plan_ready of a cycle.
-                //
-                // Gated on `is_any_preparing` so the common case (no
-                // drive in preparing — every snapshot after the first
-                // few seconds of a sync cycle) avoids both the
-                // `HashSet` allocation and the per-label `clear` calls.
-                // This path fires at up to 4 Hz during transfers, so
-                // skipping the alloc when there's nothing to clear is
-                // worth a one-line short-circuit.
-                if app_state.preparing.is_any_preparing() {
-                    let labels_with_files: std::collections::HashSet<&str> = snapshot.files.iter().map(|f| f.label.as_ref()).collect();
-                    for label in &labels_with_files {
-                        app_state.preparing.clear(label);
-                    }
-                }
-
-                // `prepare_snapshot_for_emit` applies the stalled-completion
-                // fixup, the preparing override (when no real session is yet
-                // visible and any label is preparing), and the file-cap.
-                // Without the stall fixup, hcfs-client's own file-watcher-
-                // driven `changes_pending=true` leaves `is_active` stuck at
-                // `true` indefinitely after all files are synced, so
-                // `widget_state`, `effective_in_progress`, `effective_completed`,
-                // and `status_variant` all still say "syncing" despite 100%
-                // progress. Without the preparing override, file-watcher-
-                // initiated cycles leave the widget hidden through the
-                // scan + remote-state-fetch window even though the system
-                // is actively working. See
-                // `progress::fixup_stalled_completion` and
-                // `progress::apply_preparing_override`.
-                prepare_snapshot_for_emit(&mut snapshot, &app_state.preparing);
-
-                // The intent overlay needs an async SQLite SUM/COUNT query,
-                // but `on_event` is the SYNCHRONOUS half of
-                // `SyncEventHandler` and hcfs-client's
-                // `SyncRunner::emit_snapshot` invokes it on whatever thread
-                // calls it — including the main GUI thread, which is NOT a
-                // Tokio runtime worker (e.g. the console-upload dedup path
-                // routes an emit through a synchronous context). A bare
-                // `tokio::spawn` here panics "there is no reactor running"
-                // on such a thread and the panic double-faults across the
-                // hcfs callback boundary into a process abort. The fire-
-                // and-forget work is therefore delegated to a helper that
-                // schedules onto Tauri's OWNED global runtime regardless of
-                // the calling thread's context — see `spawn_snapshot_emit`
-                // and the in-repo precedent at
-                // `sync::upload_processing::spawn_watchdog`.
-                // Stamp the snapshot with its observation-order ticket HERE, in
-                // the synchronous handler, BEFORE the spawn — so the ticket
-                // reflects the order the bridge saw snapshots, not the order
-                // their async DB reads happen to finish in. `fetch_add` returns
-                // the prior value; `+1` keeps the first ticket at 1 (0 means
-                // "nothing emitted yet"). Relaxed: this is a unique-ticket
-                // counter, the ordering guarantee is enforced by the AcqRel
-                // claim in `try_claim_snapshot_seq`.
-                let seq = SNAPSHOT_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
-                spawn_snapshot_emit(app.clone(), snapshot, seq);
-            }
+            SyncEvent::ProgressSnapshot { snapshot } => handle_progress_snapshot(&app, snapshot),
         }
     }
 }
