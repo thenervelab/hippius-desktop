@@ -55,10 +55,6 @@ import {
   driveStatusesAtom,
 } from "@/app/lib/global-atoms/unpinAtoms";
 import { FileSelectionProvider } from "@/app/contexts/FileSelectionContext";
-import {
-  SyncPausedAlert,
-  IS_SYNC_PAUSED,
-} from "@/components/ui/SyncPausedAlert";
 import { SyncConnectivityAlert } from "@/components/ui/SyncConnectivityAlert";
 import { HcfsSetupDialog } from "../settings/HcfsSetupDialog";
 import { MnemonicBackupDialog } from "../settings/MnemonicBackupDialog";
@@ -1332,13 +1328,6 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
             excluded here: it renders on the Overview/home page, which owns the
             equivalent bottom gap on its `#recent-files` wrapper. */}
         <div className={cn("w-full relative", !isRecentFiles && "px-3 pb-10")}>
-          {/* Sync Paused Alert */}
-          {IS_SYNC_PAUSED && !isRecentFiles && (
-            <div className="mb-4">
-              <SyncPausedAlert variant="inline" />
-            </div>
-          )}
-
           {/* Sync connectivity alert. `SyncReauthRequiredAlert` is
               mounted globally in `ResponsiveContent` so it's visible
               on every authenticated route (not just /files). */}

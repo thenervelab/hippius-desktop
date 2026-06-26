@@ -9,7 +9,6 @@ import PageHeader from "./PageHeader";
 import AvailableCreditsCard from "./available-credits";
 import StorageUsageCard from "./storage-usage-bars";
 import Drive from "@/app/components/page-sections/drive/DriveContainer";
-import { IS_SYNC_PAUSED, SyncPausedAlert } from "@/components/ui";
 
 const Home: React.FC = () => {
   const setActiveSubMenuItem = useSetAtom(activeSubMenuItemAtom);
@@ -30,12 +29,6 @@ const Home: React.FC = () => {
         <div className="px-3">
           <PageHeader />
           <div className="mt-3">
-            {IS_SYNC_PAUSED && (
-              <div className="mb-4">
-                <SyncPausedAlert variant="inline" />
-              </div>
-            )}
-
             <div className="mb-3 grid gap-4 grid-cols-1 @xl:grid-cols-2">
               <AvailableCreditsCard />
               <StorageUsageCard />

@@ -17,7 +17,6 @@ export { default as FileTypeIcon } from "./file-type-icon";
 export { default as FormattedTimestamp } from "./formatted-timestamp";
 export { default as AppVersion } from "./AppVersion";
 export { default as ComingSoon } from "./ComingSoon";
-export { default as SyncPausedAlert, IS_SYNC_PAUSED, SYNC_PAUSED_MESSAGE, useSyncPaused } from "./SyncPausedAlert";
 export { BackgroundContainerFrame } from "./BackgroundContainerFrame";
 export { BackgroundHippo } from "./BackgroundHippo";
 export { BackgroundContainer, default as BackgroundContainerDefault } from "./BackgroundContainer";

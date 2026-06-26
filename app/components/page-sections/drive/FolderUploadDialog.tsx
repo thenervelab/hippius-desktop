@@ -21,10 +21,6 @@ import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { getPrivateSyncPath } from "@/lib/utils/syncPathUtils";
 import { DRIVE_STORAGE_STATS_QUERY_KEY } from "@/app/lib/hooks/api/useDriveStorageStats";
 import { GET_USER_IPFS_FILES_QUERY_KEY } from "@/app/lib/hooks/use-user-files";
-import {
-  SyncPausedAlert,
-  IS_SYNC_PAUSED,
-} from "@/components/ui/SyncPausedAlert";
 import SyncFolderSelect from "@/components/ui/SyncFolderSelect";
 import { hasConfiguredDrivesAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import {
@@ -283,14 +279,8 @@ export default function FolderUploadDialog({
         <span className="font-geist text-sm font-medium text-grey-60 dark:text-grey-dark-700 tracking-[-0.28px]">
           Folder Location
         </span>
-        {!IS_SYNC_PAUSED && <PrivacyBadge variant="folder" />}
+        <PrivacyBadge variant="folder" />
       </div>
-
-      {IS_SYNC_PAUSED && (
-        <div className="mb-3">
-          <SyncPausedAlert variant="inline" />
-        </div>
-      )}
 
       <form onSubmit={handleSubmit} className="flex flex-col gap-3">
         {/* Folder dropzone — same styling as AddLocalFolderDialog */}
@@ -417,7 +407,7 @@ export default function FolderUploadDialog({
             type="submit"
             variant="primary"
             size="auto"
-            disabled={IS_SYNC_PAUSED || isSubmitting}
+            disabled={isSubmitting}
             loading={isSubmitting}
             className={cn(
               "h-[52px] w-full rounded-[6px] border text-base font-normal tracking-[-0.36px]",
@@ -426,7 +416,7 @@ export default function FolderUploadDialog({
               "dark:hover:bg-[#2a5ad0] dark:hover:border-[#2a5ad0]",
             )}
           >
-            {IS_SYNC_PAUSED ? "Sync Paused" : "Upload Folder"}
+            Upload Folder
           </Button>
           <Button
             type="button"
@@ -436,7 +426,7 @@ export default function FolderUploadDialog({
             disabled={isSubmitting}
             className="h-[52px] w-full rounded-[6px] text-base font-normal tracking-[-0.36px]"
           >
-            {IS_SYNC_PAUSED ? "Close" : "Cancel"}
+            Cancel
           </Button>
         </div>
       </form>

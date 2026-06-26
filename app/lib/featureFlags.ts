@@ -1,6 +1,5 @@
-// Single-source feature flags. Same pattern as `IS_SYNC_PAUSED` in
-// `app/components/ui/SyncPausedAlert.tsx`: a literal `boolean` constant
-// every consumer imports, so flipping a release just edits one line.
+// Single-source feature flags: a literal `boolean` constant every consumer
+// imports, so flipping a release just edits one line.
 //
 // Add new flags here only when they gate user-visible behaviour and a
 // future release is expected to flip them.
