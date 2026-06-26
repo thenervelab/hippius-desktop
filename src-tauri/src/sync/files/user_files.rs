@@ -3,7 +3,7 @@
 
 use super::listing::list_sync_folder;
 use super::pathops::ensure_within;
-use super::recent::synced_paths_and_excludes_for_label;
+use super::synced_state::synced_paths_and_excludes_for_label;
 use crate::error::Result;
 use chrono::Datelike;
 use serde::{Deserialize, Serialize};

@@ -20,6 +20,7 @@ mod pathops;
 mod recent;
 mod rename;
 mod resolve;
+mod synced_state;
 mod user_files;
 
 pub use add::{AddFilesResult, add_file, add_files, add_folder};

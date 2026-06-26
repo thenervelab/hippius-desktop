@@ -303,7 +303,7 @@ async fn add_folder_with_app_inner(sync_path: &str, folder_path: &str, subfolder
 /// into one traversal. Same invariants as [`sum_regular_file_bytes`]: symlinks
 /// are not followed, per-subdir I/O errors are skipped, the stack is capped at
 /// [`FOLDER_BYTE_WALK_MAX_DEPTH`], and both accumulators use `saturating_add`.
-pub(super) async fn walk_regular_files_stats(root: &std::path::Path) -> (u64, u64) {
+async fn walk_regular_files_stats(root: &std::path::Path) -> (u64, u64) {
     use tokio::fs;
 
     let mut bytes: u64 = 0;

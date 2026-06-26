@@ -3,7 +3,7 @@
 
 use super::dir_stats::dir_stats_recursive;
 use super::pathops::ensure_within;
-use super::recent::{synced_paths_and_excludes_for_label, synced_paths_for_label};
+use super::synced_state::{synced_paths_and_excludes_for_label, synced_paths_for_label};
 use crate::auth::account_key::account_key;
 use crate::error::Result;
 use serde::Serialize;
