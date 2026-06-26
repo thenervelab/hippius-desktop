@@ -125,8 +125,7 @@ pub(crate) async fn get_migration_status_db(pool: &SqlitePool, account_id: &str)
     )
     .bind(account_id)
     .fetch_optional(pool)
-    .await
-    .map_err(|e| crate::error::AppError::Other(format!("DB error reading migration_status: {e}")))?;
+    .await?;
 
     match row {
         Some(r) => Ok(Some((
@@ -175,8 +174,7 @@ pub(crate) async fn upsert_migration_status(
     .bind(sync_path)
     .bind(server_url)
     .execute(pool)
-    .await
-    .map_err(|e| crate::error::AppError::Other(format!("DB error upserting migration_status: {e}")))?;
+    .await?;
     Ok(())
 }
 
@@ -208,7 +206,7 @@ pub(crate) async fn fetch_migration_summary(client: &reqwest::Client, server_url
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
-        return Err(crate::error::AppError::Other(format!("Migration check failed (status {status}): {text}")));
+        return Err(crate::error::AppError::Hcfs(format!("Migration check failed (status {status}): {text}")));
     }
 
     let mut summary: ServerMigrationResponse = resp.json().await?;
@@ -229,6 +227,10 @@ pub(crate) async fn fetch_migration_summary(client: &reqwest::Client, server_url
 /// The server-side migration worker uses these credentials to download the
 /// user's files from the legacy S3 storage (s3.hippius.com).
 async fn fetch_s3_credentials(client: &reqwest::Client, pool: &SqlitePool, account_id: &str) -> Result<(String, String)> {
+    // Kept as `Other`, NOT `Auth`: the FE's `errorUtils.isExpectedNoSessionError`
+    // silences `Auth`/`NotReady` kinds, which would swallow this migration
+    // failure instead of surfacing it. There is no FE-safe typed home for
+    // "not logged in", so this stays a documented last-resort `Other`.
     let api_token = crate::auth::tokens::get_api_token(pool, account_id)
         .await?
         .ok_or_else(|| crate::error::AppError::Other("No API token available — log in first".into()))?;
@@ -259,7 +261,7 @@ async fn fetch_s3_credentials(client: &reqwest::Client, pool: &SqlitePool, accou
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
-        return Err(crate::error::AppError::Other(format!(
+        return Err(crate::error::AppError::Hcfs(format!(
             "S3 credentials request failed (status {status}): {text}"
         )));
     }
@@ -274,6 +276,10 @@ async fn fetch_s3_credentials(client: &reqwest::Client, pool: &SqlitePool, accou
 
 #[cfg(unix)]
 fn check_disk_space(path: &std::path::Path, required_bytes: u64) -> Result<()> {
+    // Documented last-resort `Other`: a `statvfs(2)` failure is a rare nix
+    // syscall error (`nix::Errno`) with no upstream `AppError` `#[from]` and no
+    // user-actionable category — it is not the "disk full" case (that is the
+    // explicit `NotReadyKind::NotEnoughDiskSpace` check below).
     let stat = nix::sys::statvfs::statvfs(path).map_err(|e| crate::error::AppError::Other(e.to_string()))?;
     // POSIX counts f_bavail (`blocks_available`) in units of f_frsize
     // (`fragment_size`), NOT f_bsize (`block_size`, the preferred I/O transfer
@@ -483,6 +489,9 @@ pub async fn dismiss_migration(state: tauri::State<'_, crate::app_state::AppStat
 /// exists, a numeric suffix is appended (`-2`, `-3`, ...) to guarantee
 /// uniqueness.
 pub(crate) fn compute_default_sync_path() -> Result<PathBuf> {
+    // Documented last-resort `Other`: a missing home directory is an
+    // environment fault, not bad user input (`Validation`) nor a typed upstream
+    // error — there is no better-fitting `AppError` variant.
     let base = dirs::home_dir().ok_or_else(|| crate::error::AppError::Other("Could not determine a suitable directory for sync folder".into()))?;
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let stem = format!("Hippius-Migration-{today}");
@@ -496,7 +505,7 @@ pub(crate) fn compute_default_sync_path() -> Result<PathBuf> {
             return Ok(suffixed);
         }
     }
-    Err(crate::error::AppError::Other("Too many migration folders exist for today's date".into()))
+    Err(crate::error::AppError::Validation("Too many migration folders exist for today's date".into()))
 }
 
 /// Return the auto-generated default migration sync path as a string.
@@ -795,16 +804,20 @@ pub async fn start_server_migration(
         let master_path = crate::sync::mnemonic::master_mnemonic_path(&account_id)?;
         if !master_path.exists() {
             let acct_dir = crate::sync::mnemonic::account_dir(&account_id)?;
-            std::fs::create_dir_all(&acct_dir)
-                .map_err(|e| crate::error::AppError::Other(format!("Failed to create account directory at {}: {e}", acct_dir.display())))?;
+            std::fs::create_dir_all(&acct_dir).map_err(|e| {
+                // Keep the path in the logs (an `Io` `#[from]` carries the OS
+                // error but not the path) while still surfacing a typed `Io`.
+                tracing::error!(dir = %acct_dir.display(), "[Migration] failed to create account directory: {e}");
+                crate::error::AppError::Io(e)
+            })?;
             hcfs_client::auth::save_encrypted_mnemonic(&master_path, &mnemonic_str, &drive_password)
-                .map_err(|e| crate::error::AppError::Other(format!("Failed to persist master mnemonic at {}: {e}", master_path.display())))?;
+                .map_err(|e| crate::error::AppError::Hcfs(format!("Failed to persist master mnemonic at {}: {e}", master_path.display())))?;
             info!("[Migration] Eagerly persisted master mnemonic for crash recovery");
         }
     }
 
     let mnemonic = bip39::Mnemonic::parse_in_normalized(bip39::Language::English, &mnemonic_str)
-        .map_err(|e| crate::error::AppError::Other(format!("Invalid mnemonic from cache: {e}")))?;
+        .map_err(|e| crate::error::AppError::Crypto(format!("Invalid mnemonic from cache: {e}")))?;
 
     let seed = mnemonic.to_seed("");
 
@@ -813,17 +826,17 @@ pub async fn start_server_migration(
     // raw master seed. The server must encrypt with the same derived key.
     let folder_mnemonic_str = hcfs_client::drive::keys::derive_folder_mnemonic(&mnemonic.to_string(), &label).map_err(|e| {
         tracing::error!("[Migration] Failed to derive folder mnemonic: {e}");
-        crate::error::AppError::Other(format!("Failed to derive folder mnemonic: {e}"))
+        crate::error::AppError::Crypto(format!("Failed to derive folder mnemonic: {e}"))
     })?;
     let folder_mnemonic = bip39::Mnemonic::parse_in_normalized(bip39::Language::English, &folder_mnemonic_str)
-        .map_err(|e| crate::error::AppError::Other(format!("Invalid folder mnemonic: {e}")))?;
+        .map_err(|e| crate::error::AppError::Crypto(format!("Invalid folder mnemonic: {e}")))?;
     let folder_seed = folder_mnemonic.to_seed("");
     let encryption_key_hex = hex::encode(&folder_seed[..32]);
 
     // Derive Ed25519 signing key from the master seed (not the folder key)
     let signing_key = hcfs_client::auth::recover_signing_key(seed).map_err(|e| {
         tracing::error!("[Migration] Failed to derive signing key: {e}");
-        crate::error::AppError::Other(format!("Failed to derive signing key: {e}"))
+        crate::error::AppError::Crypto(format!("Failed to derive signing key: {e}"))
     })?;
 
     // Sign the migration request
@@ -843,6 +856,8 @@ pub async fn start_server_migration(
     // Retrieve API token for authorization
     let api_token = crate::auth::tokens::get_api_token(pool, &account_id).await?.ok_or_else(|| {
         tracing::error!("[Migration] No API token available");
+        // Documented `Other` (not `Auth`): the FE silences `Auth`/`NotReady` via
+        // `isExpectedNoSessionError`, which would hide this migration failure.
         crate::error::AppError::Other("No API token available — log in first".into())
     })?;
 
@@ -948,13 +963,13 @@ pub async fn start_server_migration(
             }
 
             tracing::error!("[Migration] Retry exhausted after {MAX_MIGRATION_START_RETRIES} attempts: {last_error}");
-            return Err(crate::error::AppError::Other(format!(
+            return Err(crate::error::AppError::Hcfs(format!(
                 "Migration start failed after {MAX_MIGRATION_START_RETRIES} retries: {last_error}"
             )));
         }
 
         tracing::error!("[Migration] Server returned error: {text}");
-        return Err(crate::error::AppError::Other(format!("Migration start failed: {text}")));
+        return Err(crate::error::AppError::Hcfs(format!("Migration start failed: {text}")));
     }
 
     let result: StartServerMigrationResult = resp.json().await?;
@@ -1005,7 +1020,7 @@ async fn poll_migration_status_internal(state: &crate::app_state::AppState, acco
         let resp = state.migration.client.get(&url).send().await?;
         if !resp.status().is_success() {
             let text = resp.text().await.unwrap_or_default();
-            return Err(crate::error::AppError::Other(format!("Status check failed: {text}")));
+            return Err(crate::error::AppError::Hcfs(format!("Status check failed: {text}")));
         }
         resp.json::<RawServerMigrationStatus>().await.map_err(Into::into)
     }
