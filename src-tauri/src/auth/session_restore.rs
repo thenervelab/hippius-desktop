@@ -235,6 +235,34 @@ pub struct SessionRestoreResult {
     pub sync_requires_reauth: bool,
 }
 
+impl SessionRestoreResult {
+    /// Build the "not signed in" result returned by every bounce-to-login path
+    /// in [`restore_session`].
+    ///
+    /// Collapses the six identical hand-written literals (audit P1-3): every
+    /// field that means "no authenticated identity" is fixed here —
+    /// `authenticated: false`, no `substrate_address`/`auth_type`/`oauth_session`,
+    /// no logout timer, no sync mnemonic, and not the reauth-required state — so
+    /// a future field added to the struct can't be forgotten in one branch and
+    /// silently leak a half-populated unauthenticated result. The callers choose
+    /// only the two axes that genuinely vary across the failure paths:
+    /// `should_clear_oauth` (wipe the FE's OAuth localStorage?) and `redirect_to`
+    /// (`Some("/login")` to bounce, `None` to leave navigation untouched).
+    fn unauthenticated(should_clear_oauth: bool, redirect_to: Option<String>) -> Self {
+        Self {
+            authenticated: false,
+            substrate_address: None,
+            auth_type: None,
+            oauth_session: None,
+            logout_time_ms: None,
+            should_clear_oauth,
+            needs_sync_mnemonic: false,
+            redirect_to,
+            sync_requires_reauth: false,
+        }
+    }
+}
+
 /// Restore the user's session at app boot.
 ///
 /// Replaces the 150-line boot cascade in `wallet-auth-context.tsx`.
@@ -271,17 +299,7 @@ pub async fn restore_session(
                     // unauthenticated and bounce to login.
                     if substrate_address.is_none() {
                         info!("OAuth session JSON missing substrateAddress — treating as unauthenticated");
-                        return Ok(SessionRestoreResult {
-                            authenticated: false,
-                            substrate_address: None,
-                            auth_type: None,
-                            oauth_session: None,
-                            logout_time_ms: None,
-                            should_clear_oauth: true,
-                            needs_sync_mnemonic: false,
-                            redirect_to: Some("/login".into()),
-                            sync_requires_reauth: false,
-                        });
+                        return Ok(SessionRestoreResult::unauthenticated(true, Some("/login".into())));
                     }
 
                     // Validate the token against the Rust DB AND bind the session
@@ -300,17 +318,7 @@ pub async fn restore_session(
                             }) if exp == 0 || exp > now_ms => t,
                             _ => {
                                 info!("OAuth token missing/expired in DB, clearing session");
-                                return Ok(SessionRestoreResult {
-                                    authenticated: false,
-                                    substrate_address: None,
-                                    auth_type: None,
-                                    oauth_session: None,
-                                    logout_time_ms: None,
-                                    should_clear_oauth: true,
-                                    needs_sync_mnemonic: false,
-                                    redirect_to: Some("/login".into()),
-                                    sync_requires_reauth: false,
-                                });
+                                return Ok(SessionRestoreResult::unauthenticated(true, Some("/login".into())));
                             }
                         };
                         // Bind the session to the DB token: the FE session MUST
@@ -324,17 +332,7 @@ pub async fn restore_session(
                         // db_token` guard short-circuited to "no refusal" (audit H-2).
                         if !fe_session_proves_token(&session_data, &db_token) {
                             info!("OAuth session token missing or mismatched vs DB; treating as tampered/unauthenticated");
-                            return Ok(SessionRestoreResult {
-                                authenticated: false,
-                                substrate_address: None,
-                                auth_type: None,
-                                oauth_session: None,
-                                logout_time_ms: None,
-                                should_clear_oauth: true,
-                                needs_sync_mnemonic: false,
-                                redirect_to: Some("/login".into()),
-                                sync_requires_reauth: false,
-                            });
+                            return Ok(SessionRestoreResult::unauthenticated(true, Some("/login".into())));
                         }
                         // Run on the authoritative DB token regardless of what the
                         // FE stored, so the returned session can never carry an
@@ -504,31 +502,11 @@ pub async fn restore_session(
     let row = auth_session_repo::get_latest(pool).await?;
 
     let Some(row) = row else {
-        return Ok(SessionRestoreResult {
-            authenticated: false,
-            substrate_address: None,
-            auth_type: None,
-            oauth_session: None,
-            logout_time_ms: None,
-            should_clear_oauth: should_clear,
-            needs_sync_mnemonic: false,
-            redirect_to: None,
-            sync_requires_reauth: false,
-        });
+        return Ok(SessionRestoreResult::unauthenticated(should_clear, None));
     };
 
     let Some(auth_token) = row.auth_token else {
-        return Ok(SessionRestoreResult {
-            authenticated: false,
-            substrate_address: None,
-            auth_type: None,
-            oauth_session: None,
-            logout_time_ms: None,
-            should_clear_oauth: should_clear,
-            needs_sync_mnemonic: false,
-            redirect_to: None,
-            sync_requires_reauth: false,
-        });
+        return Ok(SessionRestoreResult::unauthenticated(should_clear, None));
     };
 
     // Check token expiry
@@ -540,17 +518,7 @@ pub async fn restore_session(
         if let Some(ref addr) = row.substrate_address {
             let _ = auth_session_repo::clear(pool, addr).await;
         }
-        return Ok(SessionRestoreResult {
-            authenticated: false,
-            substrate_address: None,
-            auth_type: None,
-            oauth_session: None,
-            logout_time_ms: None,
-            should_clear_oauth: should_clear,
-            needs_sync_mnemonic: false,
-            redirect_to: Some("/login".into()),
-            sync_requires_reauth: false,
-        });
+        return Ok(SessionRestoreResult::unauthenticated(should_clear, Some("/login".into())));
     }
 
     // Valid session — build OAuth session object for frontend display
