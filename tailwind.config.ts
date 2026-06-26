@@ -292,6 +292,24 @@ export default {
             transform: "scale(1)",
           },
         },
+        // Sidebar variant of `widget-grow`: a gentler scale (0.96 → 1) used when
+        // the sync widget lives in the sidebar footer. The sidebar rail/content
+        // animate their width/margin with `ease-in-out`, so this keyframe is
+        // paired (below) with the SAME easing + duration. The softer start scale
+        // avoids a second "grow" reading on top of the rail's own width reveal —
+        // together they read as one coordinated collapse/expand instead of the
+        // widget popping on its own expo curve. See SyncStatusDialog /
+        // SyncStatusMini (gated on `expandOrigin === "bottom-left"`).
+        ["widget-grow-soft"]: {
+          "0%": {
+            opacity: "0",
+            transform: "scale(0.96)",
+          },
+          "100%": {
+            opacity: "1",
+            transform: "scale(1)",
+          },
+        },
         ["tooltip-reveal-left"]: {
           "0%": {
             opacity: "0",
@@ -419,6 +437,13 @@ export default {
         "scale-in-95-0.2": "scale-in-95 0.2s ease-in-out forwards",
         "scale-out-95-0.2": "scale-out-95 0.2s ease-in-out forwards",
         "widget-grow-0.3": "widget-grow 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards",
+        // Lockstep with the sidebar rail/content. They transition with the
+        // Tailwind `ease-in-out` UTILITY, which resolves to cubic-bezier(0.4, 0,
+        // 0.2, 1) — NOT the CSS `ease-in-out` keyword (0.42, 0, 0.58, 1). Use the
+        // utility's exact value so the widget grows on the same curve as the rail
+        // width / content FLIP rather than a near-but-different one.
+        "widget-grow-soft-0.3":
+          "widget-grow-soft 0.3s cubic-bezier(0.4, 0, 0.2, 1) forwards",
         ["slideDown"]: "slide-down 0.3s ease-out",
         ["slideUp"]: "slide-up 0.3s ease-out",
         ["translate-from-bottom"]:

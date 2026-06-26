@@ -747,10 +747,13 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
     <div
       onClick={(event: React.MouseEvent) => event.stopPropagation()}
       className={cn(
-        "w-[239px] animate-widget-grow-0.3",
+        "w-[239px]",
+        // In the sidebar the rail animates its width with ease-in-out; use the
+        // matched soft grow so the card settles in lockstep with the rail. The
+        // portal overlay has no rail to track, so it keeps the standalone pop.
         expandOrigin === "bottom-left"
-          ? "origin-bottom-left"
-          : "origin-bottom-right",
+          ? "animate-widget-grow-soft-0.3 origin-bottom-left"
+          : "animate-widget-grow-0.3 origin-bottom-right",
       )}
     >
       <div className="w-full overflow-hidden rounded-[12px] shadow-lg bg-[#d8d8d9] dark:bg-[#4b4b4c]">
