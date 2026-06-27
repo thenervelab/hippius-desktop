@@ -14,6 +14,10 @@ use std::path::{Path, PathBuf};
 
 /// Compute the account-level directory: `~/.hippius/drives/<account_key>/`
 pub(crate) fn account_dir(account_id: &str) -> Result<PathBuf> {
+    // `$HOME` unset is a genuine environment fault with no fitting typed
+    // variant, so it deliberately stays the catch-all `Other`: the FE displays
+    // it generically and never silences it (silencing is reserved for the
+    // `Auth`/`NotReady` kinds), which is exactly the behaviour we want here.
     let home = dirs::home_dir().ok_or(crate::error::AppError::Other("Could not determine home directory".into()))?;
     let key = account_key(account_id);
     Ok(home.join(".hippius").join("drives").join(key))
@@ -40,7 +44,10 @@ pub(crate) fn master_mnemonic_path(account_id: &str) -> Result<PathBuf> {
 /// Derive a folder-specific mnemonic from the master mnemonic + folder label.
 /// Delegates to the hcfs-client library.
 pub(crate) fn derive_folder_mnemonic(master_mnemonic: &str, label: &str) -> Result<String> {
-    hcfs_client::drive::keys::derive_folder_mnemonic(master_mnemonic, label).map_err(|e| crate::error::AppError::Other(e.to_string()))
+    // A BIP-39 key-derivation failure (invalid master / seed) is cryptographic,
+    // not an un-triaged catch-all — surface it as `Crypto` so the FE gets a
+    // stable `kind: "Crypto"` instead of an opaque `Other` string.
+    hcfs_client::drive::keys::derive_folder_mnemonic(master_mnemonic, label).map_err(|e| crate::error::AppError::Crypto(e.to_string()))
 }
 
 /// Ensure the folder uses the correct derived mnemonic for the current master.
@@ -413,11 +420,13 @@ pub async fn create_encrypted_backup(mnemonic: String, password: String, output_
         .compression_method(zip::CompressionMethod::Deflated)
         .with_aes_encryption(zip::AesMode::Aes256, &password);
 
-    zip.start_file("recovery-phrase.txt", options)
-        .map_err(|e| crate::error::AppError::Other(e.to_string()))?;
+    // `ZipError` flows through `?` via `AppError::Zip(#[from] …)`, preserving
+    // its `source()` chain and surfacing as a stable `kind: "Zip"` to the FE —
+    // the `.to_string()` collapse into `Other` discarded both.
+    zip.start_file("recovery-phrase.txt", options)?;
     zip.write_all(mnemonic.as_bytes())?;
 
-    let cursor = zip.finish().map_err(|e| crate::error::AppError::Other(e.to_string()))?;
+    let cursor = zip.finish()?;
     std::fs::write(&output_path, cursor.into_inner())?;
 
     // `mnemonic` and `password` are zeroized here via Drop, even on panic unwind.
@@ -573,7 +582,10 @@ pub(crate) async fn reencrypt_all_folder_mnemonics(
     let results = futures_util::future::join_all(futures).await;
     let failed: Vec<String> = results.into_iter().filter_map(std::result::Result::err).collect();
     if !failed.is_empty() {
-        return Err(crate::error::AppError::Other(format!(
+        // A re-derive / AEAD-encrypt failure for one or more folders is
+        // cryptographic; surface it as `Crypto` while keeping the inspectable
+        // folder-list message the rotation retry sidecar logs and converges on.
+        return Err(crate::error::AppError::Crypto(format!(
             "failed to re-encrypt folder mnemonics for: {}",
             failed.join(", ")
         )));
@@ -645,7 +657,11 @@ mod tests {
     #[test]
     fn derive_folder_mnemonic_rejects_invalid_master() {
         let result = derive_folder_mnemonic("not a valid mnemonic", "x");
-        assert!(result.is_err());
+        // Pin the taxonomy: a derivation failure is `Crypto`, not the old `Other`.
+        assert!(
+            matches!(result, Err(crate::error::AppError::Crypto(_))),
+            "invalid master must surface as Crypto, got {result:?}"
+        );
     }
 
     // ── config_dir_for_folder / master_mnemonic_path ────────────────
@@ -904,6 +920,11 @@ mod tests {
         assert!(
             msg.contains("alpha") && msg.contains("beta"),
             "error must name every failed folder, got: {msg}"
+        );
+        // Pin the taxonomy: the aggregate re-encrypt failure is `Crypto`.
+        assert!(
+            matches!(err, crate::error::AppError::Crypto(_)),
+            "aggregate re-encrypt failure must surface as Crypto, got {err:?}"
         );
 
         for label in ["alpha", "beta"] {
