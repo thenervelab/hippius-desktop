@@ -38,16 +38,17 @@ pub struct RenameEntryResult {
 /// existing) destination never needs its own canonicalize-and-contain check.
 fn validate_new_name(new_name: &str) -> Result<&str> {
     let name = new_name.trim();
+    // Every reject here is invalid user input → Validation (the FE renders the message).
     if name.is_empty() {
-        return Err(crate::error::AppError::Other("New name cannot be empty".into()));
+        return Err(crate::error::AppError::Validation("New name cannot be empty".into()));
     }
     // 255 bytes is the basename limit on APFS/ext4/NTFS; rejecting here gives
     // a clear message instead of an opaque OS error from `rename`.
     if name.len() > 255 {
-        return Err(crate::error::AppError::Other("New name is too long (255 bytes max)".into()));
+        return Err(crate::error::AppError::Validation("New name is too long (255 bytes max)".into()));
     }
     if name.contains('/') || name.contains('\\') || name.contains('\0') || name == "." || name == ".." {
-        return Err(crate::error::AppError::Other("New name cannot contain path separators".into()));
+        return Err(crate::error::AppError::Validation("New name cannot contain path separators".into()));
     }
     // Cross-platform safety: drives sync to Windows devices, where ':' is
     // the NTFS alternate-data-stream separator, a trailing dot is invalid,
@@ -56,7 +57,7 @@ fn validate_new_name(new_name: &str) -> Result<&str> {
     // an opaque sync failure on another device later. Trailing spaces are
     // already gone via the trim above.
     if name.contains(':') || name.ends_with('.') {
-        return Err(crate::error::AppError::Other("New name cannot contain ':' or end with '.'".into()));
+        return Err(crate::error::AppError::Validation("New name cannot contain ':' or end with '.'".into()));
     }
     const WINDOWS_RESERVED: [&str; 22] = [
         "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5",
@@ -64,7 +65,7 @@ fn validate_new_name(new_name: &str) -> Result<&str> {
     ];
     let stem = name.split('.').next().unwrap_or(name).to_ascii_uppercase();
     if WINDOWS_RESERVED.contains(&stem.as_str()) {
-        return Err(crate::error::AppError::Other("That name is reserved by the operating system".into()));
+        return Err(crate::error::AppError::Validation("That name is reserved by the operating system".into()));
     }
     Ok(name)
 }
@@ -99,15 +100,18 @@ fn validate_new_name(new_name: &str) -> Result<&str> {
 ///   gap needs an engine-side accessor for server-known paths
 ///   (hcfs-client `state.remote`); tracked follow-up.
 async fn rename_entry_inner(sync_root: &Path, old_rel: &str, new_name: &str, synced_rel_paths: Option<&[String]>) -> Result<String> {
+    // ensure_within here fails when the joined path can't canonicalize — i.e.
+    // the file isn't on disk locally → NotFound (keeps the helpful message).
     let old_abs = ensure_within(sync_root, &sync_root.join(old_rel))
-        .map_err(|_| crate::error::AppError::Other("File is not available on this device yet — only locally synced files can be renamed".into()))?;
+        .map_err(|_| crate::error::AppError::NotFound("File is not available on this device yet — only locally synced files can be renamed".into()))?;
 
     let old_basename = old_abs.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
     if old_rel.is_empty() || old_basename.is_empty() {
-        return Err(crate::error::AppError::Other("Cannot rename the sync folder itself".into()));
+        // Rejecting an invalid rename target (the sync root) → Validation.
+        return Err(crate::error::AppError::Validation("Cannot rename the sync folder itself".into()));
     }
     if old_basename == new_name {
-        return Err(crate::error::AppError::Other("New name is the same as the current name".into()));
+        return Err(crate::error::AppError::Validation("New name is the same as the current name".into()));
     }
 
     if old_abs.is_dir()
@@ -116,6 +120,9 @@ async fn rename_entry_inner(sync_root: &Path, old_rel: &str, new_name: &str, syn
         let prefix = format!("{}/", old_rel.trim_end_matches('/'));
         for rel in rel_paths {
             if rel.starts_with(&prefix) && !sync_root.join(rel).exists() {
+                // Transient mid-sync state (no MigrationInProgress-style variant fits;
+                // NotReady would be FE-silenced) → documented Other, kept surfaced so
+                // the user sees the "wait for sync to finish" guidance.
                 return Err(crate::error::AppError::Other(
                     "This folder has changes that are still syncing on this device. Wait for sync to finish, then try again".into(),
                 ));
@@ -127,19 +134,19 @@ async fn rename_entry_inner(sync_root: &Path, old_rel: &str, new_name: &str, syn
     // guarded against, but stay total rather than panic on the impossible.
     let parent_dir = old_abs
         .parent()
-        .ok_or(crate::error::AppError::Other("Cannot rename the sync folder itself".into()))?;
+        .ok_or_else(|| crate::error::AppError::Validation("Cannot rename the sync folder itself".into()))?;
     let new_abs = parent_dir.join(new_name);
 
     if tokio::fs::try_exists(&new_abs).await.unwrap_or(false) {
         let same_entry = tokio::fs::canonicalize(&new_abs).await.is_ok_and(|c| c == old_abs);
         if !same_entry {
-            return Err(crate::error::AppError::Other(format!("\"{new_name}\" already exists in this folder")));
+            // The destination name is already taken — a rejected rename target → Validation.
+            return Err(crate::error::AppError::Validation(format!("\"{new_name}\" already exists in this folder")));
         }
     }
 
-    tokio::fs::rename(&old_abs, &new_abs)
-        .await
-        .map_err(|e| crate::error::AppError::Other(format!("Rename failed: {e}")))?;
+    // The actual rename failing is an I/O fault → Io (#[from]).
+    tokio::fs::rename(&old_abs, &new_abs).await?;
 
     // New rel path = old rel parent + new name, built from the caller's
     // `old_rel` rather than the canonical absolute path. NOTE: `Path::join`
@@ -168,13 +175,14 @@ fn resolve_rename_root<'a>(label: Option<&'a str>, label_to_path: &HashMap<Strin
     match label {
         Some(l) => match label_to_path.get(l) {
             Some(p) => Ok((p.clone(), l)),
-            None => Err(crate::error::AppError::Other(
+            // The named drive has no configured row → NotFound (entity missing).
+            None => Err(crate::error::AppError::NotFound(
                 "This file's sync folder is no longer configured on this device".into(),
             )),
         },
         None => match label_to_path.get("default") {
             Some(p) => Ok((p.clone(), "default")),
-            None => Err(crate::error::AppError::Other("No sync folder is configured for this file".into())),
+            None => Err(crate::error::AppError::NotFound("No sync folder is configured for this file".into())),
         },
     }
 }
@@ -249,13 +257,20 @@ mod tests {
 
     #[test]
     fn validate_new_name_rejects_empty_traversal_and_separators() {
+        // Pin the taxonomy: every reject is Validation, not the old Other.
         for bad in ["", "   ", ".", "..", "a/b", "a\\b", "a\0b"] {
-            assert!(validate_new_name(bad).is_err(), "{bad:?} should be rejected");
+            assert!(
+                matches!(validate_new_name(bad), Err(crate::error::AppError::Validation(_))),
+                "{bad:?} should be rejected as Validation"
+            );
         }
         // Windows-unsafe shapes: ADS colon, trailing dot, DOS device names
         // (reserved even with an extension, case-insensitively).
         for bad in ["a:b", "name.", "CON", "con.txt", "Nul", "COM7", "lpt9.log"] {
-            assert!(validate_new_name(bad).is_err(), "{bad:?} should be rejected");
+            assert!(
+                matches!(validate_new_name(bad), Err(crate::error::AppError::Validation(_))),
+                "{bad:?} should be rejected as Validation"
+            );
         }
         // Near-misses of the reserved list must stay legal.
         for ok in ["console.txt", "common", "LPT10", "aux-cable.jpg"] {
@@ -331,6 +346,8 @@ mod tests {
         // (a same-named entry in the default drive must never be renamed).
         let err = resolve_rename_root(Some("gone"), &map).unwrap_err();
         assert!(err.to_string().contains("no longer configured"), "got: {err}");
+        // Pin the taxonomy: a missing named drive is NotFound, not Other.
+        assert!(matches!(err, crate::error::AppError::NotFound(_)), "got: {err:?}");
 
         // No label at all → the default drive, when configured.
         let (path, guard) = resolve_rename_root(None, &map).unwrap();
@@ -373,6 +390,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let err = rename_entry_inner(tmp.path(), "ghost.txt", "real.txt", None).await.unwrap_err();
         assert!(err.to_string().contains("not available on this device"), "got: {err}");
+        // Pin the taxonomy: a locally-absent file is NotFound, not Other.
+        assert!(matches!(err, crate::error::AppError::NotFound(_)), "got: {err:?}");
     }
 
     #[tokio::test]
@@ -415,6 +434,8 @@ mod tests {
 
         let same = rename_entry_inner(root, "a.txt", "a.txt", None).await.unwrap_err();
         assert!(same.to_string().contains("same as the current name"), "got: {same}");
+        // Pin the taxonomy: an operation reject is Validation, not Other.
+        assert!(matches!(same, crate::error::AppError::Validation(_)), "got: {same:?}");
 
         let root_rename = rename_entry_inner(root, "", "new-root", None).await.unwrap_err();
         assert!(root_rename.to_string().contains("sync folder itself"), "got: {root_rename}");
