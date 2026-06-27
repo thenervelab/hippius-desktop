@@ -25,7 +25,9 @@ pub async fn get_device_name(state: tauri::State<'_, crate::app_state::AppState>
 pub async fn set_device_name(state: tauri::State<'_, crate::app_state::AppState>, name: String) -> Result<()> {
     let name = name.trim().to_string();
     if name.is_empty() {
-        return Err(crate::error::AppError::Other("Device name cannot be empty".into()));
+        // Rejected user input → Validation (the FE renders these messages
+        // directly), not the catch-all Other.
+        return Err(crate::error::AppError::Validation("Device name cannot be empty".into()));
     }
     let pool = state.pool()?;
     sqlx::query(

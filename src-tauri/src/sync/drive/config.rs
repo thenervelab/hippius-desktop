@@ -220,7 +220,12 @@ pub(crate) async fn get_drive_password(pool: &SqlitePool, account_id: &str, mnem
     .fetch_optional(db)
     .await?;
 
-    let (raw_password, enc_ver) = result.ok_or_else(|| crate::error::AppError::Other("HCFS config not found".into()))?;
+    // A missing `hcfs_config` row is a NotFound (the entity doesn't exist),
+    // not the FE-silenced NotReady(ConfigMissing): most callers probe this with
+    // `if let Ok(..)`, but the few that propagate it must keep it surfaced and
+    // with its verbatim message — NotReady would both reword it and risk the
+    // FE's `isExpectedNoSessionError` swallowing it.
+    let (raw_password, enc_ver) = result.ok_or_else(|| crate::error::AppError::NotFound("HCFS config not found".into()))?;
 
     match (enc_ver, mnemonic) {
         (0, _) => Ok(Zeroizing::new(raw_password)),
@@ -343,6 +348,36 @@ pub(crate) async fn save_hcfs_config_internal(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── get_drive_password ──────────────────────────────────────────
+
+    /// Pin the taxonomy: a missing `hcfs_config` row surfaces as `NotFound`
+    /// (typed + surfaced, verbatim message), not the old catch-all `Other` and
+    /// not the FE-silenced `NotReady(ConfigMissing)`.
+    #[tokio::test]
+    async fn get_drive_password_missing_config_is_not_found() {
+        use sqlx::sqlite::SqlitePool;
+        let pool = SqlitePool::connect("sqlite::memory:").await.expect("open in-memory db");
+        sqlx::query(
+            "CREATE TABLE hcfs_config (
+                owner TEXT NOT NULL UNIQUE,
+                drive_password TEXT NOT NULL DEFAULT '',
+                encryption_version INTEGER NOT NULL DEFAULT 0
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // No row for this account → the missing-config branch.
+        let Err(err) = get_drive_password(&pool, "5SomeAccountWithNoConfigRow000000000000000", None).await else {
+            panic!("a missing hcfs_config row must error");
+        };
+        assert!(
+            matches!(err, crate::error::AppError::NotFound(_)),
+            "missing hcfs_config must surface as NotFound, got {err:?}"
+        );
+    }
 
     // ── build_hcfs_config ───────────────────────────────────────────
 

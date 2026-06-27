@@ -123,7 +123,7 @@ pub(crate) async fn set_sync_path_internal(pool: &SqlitePool, account_id: &str, 
             .bind(&owner)
             .fetch_all(&mut *conn)
             .await
-            .map_err(|e| crate::error::AppError::Other(format!("DB error checking path overlap: {e}")))?;
+            .map_err(crate::error::AppError::Db)?;
 
         let existing: Vec<(String, String)> = rows.iter().map(|r| (r.get("label"), r.get("path"))).collect();
 
@@ -268,7 +268,7 @@ pub async fn get_sync_path_internal(pool: &SqlitePool, is_public: bool, owner: &
             .bind(path_type)
             .fetch_optional(pool)
             .await
-            .map_err(|e| crate::error::AppError::Other(format!("DB error: {e}")))?;
+            .map_err(crate::error::AppError::Db)?;
 
         if let Some(row) = row {
             let paused_int: i32 = row.try_get("is_paused").unwrap_or(0);
@@ -286,7 +286,7 @@ pub async fn get_sync_path_internal(pool: &SqlitePool, is_public: bool, owner: &
         .bind(path_type)
         .fetch_optional(pool)
         .await
-        .map_err(|e| crate::error::AppError::Other(format!("DB error (legacy check): {e}")))?;
+        .map_err(crate::error::AppError::Db)?;
 
     if let Some(legacy) = legacy_row {
         let has_scoped = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM sync_paths WHERE owner = ? AND owner != ''")
@@ -320,7 +320,11 @@ pub async fn get_sync_path_internal(pool: &SqlitePool, is_public: bool, owner: &
         }
     }
 
-    Err(crate::error::AppError::Other(format!("{path_type} sync path not set yet")))
+    // "Not configured yet" is a NotFound (the requested sync path doesn't
+    // exist), NOT a NotReady: NotReady is silenced by the FE's
+    // `isExpectedNoSessionError`, and this error must stay surfaced. NotFound
+    // keeps the message verbatim while giving the FE a stable `kind`.
+    Err(crate::error::AppError::NotFound(format!("{path_type} sync path not set yet")))
 }
 
 /// Fetch a single sync path via IPC.
@@ -593,6 +597,38 @@ mod tests {
 
     fn pairs(items: &[(&str, &str)]) -> Vec<(String, String)> {
         items.iter().map(|(l, p)| (l.to_string(), p.to_string())).collect()
+    }
+
+    /// Pin the taxonomy: an unconfigured sync path surfaces as `NotFound`
+    /// (typed + surfaced), not the old catch-all `Other` nor the FE-silenced
+    /// `NotReady`. A regression of either kind fails here.
+    #[tokio::test]
+    async fn get_sync_path_internal_unset_is_not_found() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.expect("open in-memory db");
+        sqlx::query(
+            "CREATE TABLE sync_paths (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner TEXT NOT NULL,
+                path TEXT NOT NULL,
+                type TEXT NOT NULL,
+                label TEXT NOT NULL DEFAULT 'default',
+                is_paused INTEGER NOT NULL DEFAULT 0,
+                timestamp INTEGER NOT NULL DEFAULT 0
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Empty table: no row for this owner and no legacy ownerless row, so
+        // both lookups miss and the function reaches the "not set yet" branch.
+        let Err(err) = get_sync_path_internal(&pool, true, "owner-with-no-paths").await else {
+            panic!("an unconfigured sync path must error");
+        };
+        assert!(
+            matches!(err, crate::error::AppError::NotFound(_)),
+            "unset sync path must surface as NotFound, got {err:?}"
+        );
     }
 
     /// Extract the `{ ... }` body of the first fn whose declaration contains
