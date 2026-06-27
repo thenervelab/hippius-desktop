@@ -20,27 +20,29 @@ use tracing::{info, warn};
 /// Takes an already-canonicalized parent directory so a batch caller can
 /// canonicalize once outside the loop instead of paying the `realpath`
 /// syscall per file (10–100 ms each on slow filesystems).
+// Error-taxonomy convention for this module: rejected name/path input (bad name,
+// traversal, path-escape, self-add) is `Validation` (the FE renders the message);
+// filesystem faults (copy / canonicalize / create_dir) are `Io` (#[from], via `?`
+// where control flow allows, else `Io(e)` in a cleanup-then-return arm).
 async fn add_file_internal(canonical_parent: &Path, file_path: &str) -> Result<String> {
     let source = Path::new(file_path);
     let name = source
         .file_name()
         .and_then(|n| n.to_str())
-        .ok_or(crate::error::AppError::Other("Invalid file name".into()))?
+        .ok_or(crate::error::AppError::Validation("Invalid file name".into()))?
         .to_string();
 
     // Reject names containing path separators or traversal components
     if name.contains('/') || name.contains('\\') || name == ".." || name == "." {
-        return Err(crate::error::AppError::Other("Invalid file name".into()));
+        return Err(crate::error::AppError::Validation("Invalid file name".into()));
     }
 
     let canonical_dest = canonical_parent.join(&name);
     if !canonical_dest.starts_with(canonical_parent) {
-        return Err(crate::error::AppError::Other("Path escapes sync folder".into()));
+        return Err(crate::error::AppError::Validation("Path escapes sync folder".into()));
     }
 
-    tokio::fs::copy(source, &canonical_dest)
-        .await
-        .map_err(|e| crate::error::AppError::Other(format!("Copy failed: {e}")))?;
+    tokio::fs::copy(source, &canonical_dest).await?;
 
     Ok(name)
 }
@@ -120,7 +122,7 @@ pub async fn add_file(
             if let Some(label) = label_opt.as_deref() {
                 state.upload_processing.reset(&app, label);
             }
-            return Err(crate::error::AppError::Other(format!("Invalid sync path: {e}")));
+            return Err(crate::error::AppError::Io(e));
         }
     };
     match add_file_internal(&canonical_parent, &file_path).await {
@@ -218,12 +220,12 @@ async fn add_folder_with_app_inner(sync_path: &str, folder_path: &str, subfolder
     let name = source
         .file_name()
         .and_then(|n| n.to_str())
-        .ok_or(crate::error::AppError::Other("Invalid folder name".into()))?
+        .ok_or(crate::error::AppError::Validation("Invalid folder name".into()))?
         .to_string();
 
     // Reject names containing path separators or traversal components
     if name.contains('/') || name.contains('\\') || name == ".." || name == "." {
-        return Err(crate::error::AppError::Other("Invalid folder name".into()));
+        return Err(crate::error::AppError::Validation("Invalid folder name".into()));
     }
 
     // Resolve target directory (with optional subfolder)
@@ -231,22 +233,18 @@ async fn add_folder_with_app_inner(sync_path: &str, folder_path: &str, subfolder
     let target_dir = if let Some(sub) = subfolder {
         // Reject traversal components before creating directories
         if sub.contains("..") {
-            return Err(crate::error::AppError::Other("Subfolder path contains traversal component".into()));
+            return Err(crate::error::AppError::Validation("Subfolder path contains traversal component".into()));
         }
         let t = sync_root.join(sub);
         if !t.exists() {
-            std::fs::create_dir_all(&t).map_err(|e| crate::error::AppError::Other(format!("Failed to create subfolder: {e}")))?;
+            std::fs::create_dir_all(&t)?;
         }
         // Verify resolved path is within sync root (async canonicalize so
         // we don't block the tokio worker thread on `realpath`).
-        let canonical_root = tokio::fs::canonicalize(sync_root)
-            .await
-            .map_err(|e| crate::error::AppError::Other(format!("Invalid sync path: {e}")))?;
-        let canonical_target = tokio::fs::canonicalize(&t)
-            .await
-            .map_err(|e| crate::error::AppError::Other(format!("Invalid subfolder path: {e}")))?;
+        let canonical_root = tokio::fs::canonicalize(sync_root).await?;
+        let canonical_target = tokio::fs::canonicalize(&t).await?;
         if !canonical_target.starts_with(&canonical_root) {
-            return Err(crate::error::AppError::Other("Subfolder escapes sync folder".into()));
+            return Err(crate::error::AppError::Validation("Subfolder escapes sync folder".into()));
         }
         t
     } else {
@@ -254,12 +252,10 @@ async fn add_folder_with_app_inner(sync_path: &str, folder_path: &str, subfolder
     };
 
     // Validate destination is within the sync folder BEFORE writing.
-    let canonical_parent = tokio::fs::canonicalize(&target_dir)
-        .await
-        .map_err(|e| crate::error::AppError::Other(format!("Invalid sync path: {e}")))?;
+    let canonical_parent = tokio::fs::canonicalize(&target_dir).await?;
     let canonical_dest = canonical_parent.join(&name);
     if !canonical_dest.starts_with(&canonical_parent) {
-        return Err(crate::error::AppError::Other("Path escapes sync folder".into()));
+        return Err(crate::error::AppError::Validation("Path escapes sync folder".into()));
     }
 
     // Reject self-/ancestor-source picks at the IPC boundary so the dialog
@@ -267,11 +263,9 @@ async fn add_folder_with_app_inner(sync_path: &str, folder_path: &str, subfolder
     // run 64 levels of self-similar copies before erroring. See the
     // `add_folder_rejects_*` tests in hcfs-client for the bug that motivated
     // this guard.
-    let canonical_source = tokio::fs::canonicalize(source)
-        .await
-        .map_err(|e| crate::error::AppError::Other(format!("Invalid folder path: {e}")))?;
+    let canonical_source = tokio::fs::canonicalize(source).await?;
     if canonical_dest.starts_with(&canonical_source) {
-        return Err(crate::error::AppError::Other(
+        return Err(crate::error::AppError::Validation(
             "Cannot add the sync folder (or one of its ancestors) to itself".into(),
         ));
     }
@@ -503,26 +497,24 @@ async fn add_folder_internal(canonical_parent: &Path, folder_path: &str) -> Resu
     let name = source
         .file_name()
         .and_then(|n| n.to_str())
-        .ok_or(crate::error::AppError::Other("Invalid folder name".into()))?
+        .ok_or(crate::error::AppError::Validation("Invalid folder name".into()))?
         .to_string();
 
     if name.contains('/') || name.contains('\\') || name == ".." || name == "." {
-        return Err(crate::error::AppError::Other("Invalid folder name".into()));
+        return Err(crate::error::AppError::Validation("Invalid folder name".into()));
     }
 
     let canonical_dest = canonical_parent.join(&name);
     if !canonical_dest.starts_with(canonical_parent) {
-        return Err(crate::error::AppError::Other("Path escapes sync folder".into()));
+        return Err(crate::error::AppError::Validation("Path escapes sync folder".into()));
     }
 
     // Same guard as `add_folder_with_app_inner` — see that function for the
     // bug that motivated this check. `add_files` reaches this helper when
     // the batch contains directories, so the protection has to live here too.
-    let canonical_source = tokio::fs::canonicalize(source)
-        .await
-        .map_err(|e| crate::error::AppError::Other(format!("Invalid folder path: {e}")))?;
+    let canonical_source = tokio::fs::canonicalize(source).await?;
     if canonical_dest.starts_with(&canonical_source) {
-        return Err(crate::error::AppError::Other(
+        return Err(crate::error::AppError::Validation(
             "Cannot add the sync folder (or one of its ancestors) to itself".into(),
         ));
     }
@@ -629,33 +621,33 @@ pub async fn add_files(
         // Reject traversal components
         if sub.contains("..") {
             reset_banner(&app, &state);
-            return Err(crate::error::AppError::Other("Subfolder path contains traversal component".into()));
+            return Err(crate::error::AppError::Validation("Subfolder path contains traversal component".into()));
         }
         let target = Path::new(&sync_path).join(sub);
         if !target.exists()
             && let Err(e) = std::fs::create_dir_all(&target)
         {
             reset_banner(&app, &state);
-            return Err(crate::error::AppError::Other(format!("Failed to create subfolder: {e}")));
+            return Err(crate::error::AppError::Io(e));
         }
         // Verify resolved path stays within sync root.
         let canonical_root = match tokio::fs::canonicalize(Path::new(&sync_path)).await {
             Ok(p) => p,
             Err(e) => {
                 reset_banner(&app, &state);
-                return Err(crate::error::AppError::Other(format!("Invalid sync path: {e}")));
+                return Err(crate::error::AppError::Io(e));
             }
         };
         let canonical_target = match tokio::fs::canonicalize(&target).await {
             Ok(p) => p,
             Err(e) => {
                 reset_banner(&app, &state);
-                return Err(crate::error::AppError::Other(format!("Invalid subfolder path: {e}")));
+                return Err(crate::error::AppError::Io(e));
             }
         };
         if !canonical_target.starts_with(&canonical_root) {
             reset_banner(&app, &state);
-            return Err(crate::error::AppError::Other("Subfolder escapes sync folder".into()));
+            return Err(crate::error::AppError::Validation("Subfolder escapes sync folder".into()));
         }
         target.to_string_lossy().to_string()
     } else {
@@ -669,7 +661,7 @@ pub async fn add_files(
         Ok(p) => p,
         Err(e) => {
             reset_banner(&app, &state);
-            return Err(crate::error::AppError::Other(format!("Invalid sync path: {e}")));
+            return Err(crate::error::AppError::Io(e));
         }
     };
 
@@ -823,7 +815,7 @@ mod tests {
     // `copy_dir_recursive`. Picking the sync root itself (or any ancestor)
     // resulted in 64 levels of nested duplicate folders before
     // `MAX_COPY_DEPTH` finally tripped. The IPC layer now rejects the call
-    // with an `AppError::Other` so the dialog can render a clear message.
+    // with an `AppError::Validation` so the dialog can render a clear message.
 
     #[tokio::test]
     async fn add_folder_with_app_inner_rejects_sync_root_as_source() {
@@ -834,6 +826,8 @@ mod tests {
         let err = add_folder_with_app_inner(&sync_path, &sync_path, None)
             .await
             .expect_err("must reject sync root as source");
+        // Pin the taxonomy: a self-add reject is Validation, not the old Other.
+        assert!(matches!(err, crate::error::AppError::Validation(_)), "self-add must be Validation, got {err:?}");
         let msg = err.to_string();
         assert!(msg.contains("Cannot add the sync folder"), "unexpected error message: {msg}");
 
