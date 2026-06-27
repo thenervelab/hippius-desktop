@@ -19,7 +19,10 @@ use zeroize::Zeroize;
 // ─── DB Helpers (desktop-specific) ─────────────────────────────────────────
 
 fn master_mnemonic_path(account_id: &str) -> Result<PathBuf> {
-    let home = dirs::home_dir().ok_or(AppError::Validation("Could not determine home directory".into()))?;
+    // `home_dir()==None` is an environment fault, not user input — no typed
+    // variant fits, so it stays the catch-all `Other` (the FE displays it
+    // generically). Kept identical to the two other home_dir sites below.
+    let home = dirs::home_dir().ok_or_else(|| AppError::Other("Could not determine home directory".into()))?;
     let key = account_key(account_id);
     Ok(home.join(".hippius").join("drives").join(key).join("master_enc_mnemonic.json"))
 }
@@ -81,7 +84,11 @@ async fn encryption_key_for_label(pool: &SqlitePool, account_id: &str, label: &s
 /// after every preview/download (audit R-20). Callers pass `&mnemonic` to
 /// `&str` params, which deref-coerces unchanged.
 fn session_mnemonic(state: &AppState) -> Result<zeroize::Zeroizing<String>> {
-    let auth = state.auth.lock().map_err(|e| AppError::Other(format!("auth lock poisoned: {e}")))?;
+    // A poisoned mutex flows through `?` to `AppError::Lock` via the blanket
+    // `From<PoisonError>` impl (matching every other `state.auth.lock()?` call
+    // site), instead of a hand-rolled `Other`. The guard never crosses an await
+    // (this fn is sync), so holding it here is fine.
+    let auth = state.auth.lock()?;
     auth.mnemonic
         .as_ref()
         .map(|z| zeroize::Zeroizing::new(z.as_str().to_string()))
@@ -251,6 +258,8 @@ pub async fn cache_remote_file(
     // dir is OUTSIDE the scope, so a preview pointed there is blocked by the
     // asset protocol even though the download + decrypt succeeded — which is
     // why download worked but preview didn't.
+    // home_dir None → documented Other (environment fault, no typed variant
+    // fits); same rationale as master_mnemonic_path.
     let cache_root = dirs::home_dir()
         .ok_or_else(|| AppError::Other("could not determine home directory".into()))?
         .join(".hippius")
@@ -267,6 +276,8 @@ pub async fn cache_remote_file(
 
     // Cache hit: reuse the already-decrypted copy.
     if matches!(tokio::fs::metadata(&target).await, Ok(meta) if meta.len() > 0) {
+        // A non-UTF-8 cache path we can't hand to the webview: no typed variant
+        // fits a `to_str()` None, so it stays the documented catch-all `Other`.
         return target
             .to_str()
             .map(str::to_string)
@@ -304,11 +315,16 @@ pub async fn cache_remote_file(
         return Err(AppError::Hcfs(e.to_string()));
     }
 
-    tokio::fs::rename(&part, &target)
-        .await
-        .map_err(|e| AppError::Other(format!("failed to promote preview cache {} -> {}: {e}", part.display(), target.display())))?;
+    // A rename failure is an I/O fault → `AppError::Io` (typed `#[from]`), which
+    // can't carry the path pair, so log it first (the migration-slice pattern:
+    // Io for the kind, a tracing line for the context the variant can't hold).
+    if let Err(e) = tokio::fs::rename(&part, &target).await {
+        error!(part = %part.display(), target = %target.display(), "failed to promote preview cache: {e}");
+        return Err(AppError::Io(e));
+    }
 
     info!(file_id = %file_id, "Remote file cached for preview");
+    // Same non-UTF-8 path case as the cache-hit return above → documented Other.
     target
         .to_str()
         .map(str::to_string)
@@ -321,6 +337,7 @@ pub async fn cache_remote_file(
 /// load them via `convertFileSrc` — same asset-scope reasoning as the preview
 /// cache (the OS cache dir is outside the scope and would be blocked).
 fn thumbnail_cache_root() -> Result<PathBuf> {
+    // home_dir None → documented Other (environment fault); see master_mnemonic_path.
     Ok(dirs::home_dir()
         .ok_or_else(|| AppError::Other("could not determine home directory".into()))?
         .join(".hippius")
@@ -395,6 +412,10 @@ pub async fn download_cloud_file_to(state: &AppState, account_id: &str, label: &
 /// [`AppError::Other`] when the source can't be decoded or the JPEG can't be
 /// written; [`AppError::Io`] when the atomic rename into place fails.
 fn generate_thumbnail_file(src: &Path, cache_root: &Path, cache_name: &str, target: &Path, max_dim: u32) -> Result<()> {
+    // The whole decode pipeline reports the documented `Other` (see the fn doc):
+    // `image`'s `ImageError` has no `AppError` variant, and the io-typed
+    // open/guess steps are grouped with it so a thumbnail failure is ONE kind
+    // rather than a confusing Io-vs-Other split mid-pipeline.
     let img = image::ImageReader::open(src)
         .map_err(|e| AppError::Other(format!("open image for thumbnail: {e}")))?
         .with_guessed_format()
@@ -420,6 +441,8 @@ fn generate_thumbnail_file(src: &Path, cache_root: &Path, cache_name: &str, targ
 }
 
 fn thumbnail_path_to_string(p: &Path) -> Result<String> {
+    // Non-UTF-8 path → documented Other (no typed variant fits `to_str()` None);
+    // same rationale as the preview-cache paths.
     p.to_str()
         .map(str::to_string)
         .ok_or_else(|| AppError::Other("thumbnail cache path is not valid UTF-8".into()))
@@ -493,6 +516,8 @@ pub async fn get_thumbnail(
         let cache_root = cache_root.clone();
         let cache_name = cache_name.clone();
         let target = target.clone();
+        // A tokio `JoinError` (the blocking task panicked) has no typed variant
+        // → documented Other.
         tokio::task::spawn_blocking(move || generate_thumbnail_file(&src, &cache_root, &cache_name, &target, max_dim))
             .await
             .map_err(|e| AppError::Other(format!("thumbnail task panicked: {e}")))?
