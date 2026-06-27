@@ -87,7 +87,9 @@ pub(crate) fn sanitize_label(label: &str) -> Result<String> {
         .collect();
     let trimmed = sanitized.trim_matches('.').trim();
     if trimmed.is_empty() {
-        return Err(crate::error::AppError::Other(format!("Invalid folder label: '{label}'")));
+        // Rejected user input (a label that sanitizes to empty) → Validation;
+        // the FE renders these messages directly.
+        return Err(crate::error::AppError::Validation(format!("Invalid folder label: '{label}'")));
     }
     Ok(trimmed.to_string())
 }
@@ -99,8 +101,7 @@ pub(crate) async fn get_all_sync_paths_internal(pool: &SqlitePool, account_id: &
     let rows = sqlx::query("SELECT path, type, label, is_paused FROM sync_paths WHERE owner = ?")
         .bind(&owner)
         .fetch_all(pool)
-        .await
-        .map_err(|e| crate::error::AppError::Other(format!("DB error: {e}")))?;
+        .await?;
 
     Ok(rows
         .iter()
@@ -139,6 +140,11 @@ pub(crate) async fn list_remote_folders_internal(pool: &SqlitePool, account_id: 
     // transparently opt in. See `normalize_for_region_probe`.
     let server_url = normalize_for_region_probe(&config.server_url);
 
+    // A missing token stays the surfaced catch-all `Other`, deliberately NOT
+    // `Auth`: the FE treats `Auth`/`NotReady` as expected no-session noise
+    // (errorUtils `isExpectedNoSessionError`) and dispatches on them, so a
+    // genuine token-missing on a user-driven folder op must surface as a plain
+    // error rather than be swallowed. (See the migration-slice decision.)
     let bearer_token = get_api_token(pool, account_id)
         .await?
         .ok_or_else(|| crate::error::AppError::Other("No authentication token found".into()))?;
@@ -186,6 +192,7 @@ pub async fn list_remote_folders(state: tauri::State<'_, crate::app_state::AppSt
     // race the regional endpoints; legacy single-region URL also empties.
     let server_url = normalize_for_region_probe(&config.server_url);
 
+    // Surfaced catch-all Other (not FE-silenced Auth) — see list_remote_folders_internal.
     let bearer_token = get_api_token(pool, &account_id)
         .await?
         .ok_or_else(|| crate::error::AppError::Other("No authentication token found. Please log in again.".into()))?;
@@ -383,6 +390,7 @@ pub async fn delete_remote_folder(
     // race the regional endpoints; legacy single-region URL also empties.
     let server_url = normalize_for_region_probe(&config.server_url);
 
+    // Surfaced catch-all Other (not FE-silenced Auth) — see list_remote_folders_internal.
     let bearer_token = get_api_token(pool, &account_id)
         .await?
         .ok_or_else(|| crate::error::AppError::Other("No authentication token found. Please log in again.".into()))?;
@@ -632,7 +640,11 @@ mod tests {
     #[test]
     fn sanitize_label_rejects_empty_after_sanitization() {
         let result = sanitize_label("///");
-        assert!(result.is_err());
+        // Pin the taxonomy: a rejected label is `Validation`, not the old `Other`.
+        assert!(
+            matches!(result, Err(crate::error::AppError::Validation(_))),
+            "an empty-after-sanitize label must surface as Validation, got {result:?}"
+        );
     }
 
     #[test]
