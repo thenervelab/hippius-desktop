@@ -11,7 +11,9 @@ use std::path::{Path, PathBuf};
 /// Verify that `child` is contained within `parent` after canonicalization.
 /// Delegates to hcfs-client library.
 pub(super) fn ensure_within(parent: &Path, child: &Path) -> Result<PathBuf> {
-    hcfs_client::drive::files::ensure_within(parent, child).map_err(|e| crate::error::AppError::Other(e.to_string()))
+    // A containment failure means `child` escapes `parent` — a path-boundary
+    // (security) reject → Validation, not the catch-all Other.
+    hcfs_client::drive::files::ensure_within(parent, child).map_err(|e| crate::error::AppError::Validation(e.to_string()))
 }
 
 /// Derive a file's path relative to the sync root.
@@ -37,9 +39,11 @@ pub(super) fn derive_relative_name(sync_path: &str, source: Option<&str>, fallba
 
 /// Delegates to hcfs-client library.
 pub(super) async fn copy_dir_recursive(src: &Path, dst: &Path, depth: u32) -> Result<()> {
+    // A recursive-copy failure surfaces from the hcfs-client fs layer → Hcfs
+    // (keeps the descriptive message), not the catch-all Other.
     hcfs_client::drive::files::copy_dir_recursive(src, dst, depth)
         .await
-        .map_err(|e| crate::error::AppError::Other(e.to_string()))
+        .map_err(|e| crate::error::AppError::Hcfs(e.to_string()))
 }
 
 #[cfg(test)]

@@ -32,7 +32,8 @@ pub async fn export_file(
         .fetch_optional(state.pool()?)
         .await?;
     if registered.is_none() {
-        return Err(crate::error::AppError::Other(
+        // An unregistered sync_path is rejected caller input (the security gate) → Validation.
+        return Err(crate::error::AppError::Validation(
             "sync_path is not a registered sync folder for this account".into(),
         ));
     }
@@ -44,9 +45,8 @@ pub async fn export_file(
     if source.is_dir() {
         copy_dir_recursive(&source, Path::new(&output_path), 0).await?;
     } else {
-        tokio::fs::copy(&source, &output_path)
-            .await
-            .map_err(|e| crate::error::AppError::Other(format!("Export failed: {e}")))?;
+        // A copy failure is an I/O fault → Io (#[from]); the io::Error message is descriptive.
+        tokio::fs::copy(&source, &output_path).await?;
     }
     Ok(())
 }
@@ -67,7 +67,8 @@ pub async fn resolve_file_path(
     let account_id = state.require_session_account(&account_id)?;
     // Reject path traversal attempts — slashes are allowed for subfolder access
     if file_name.contains("..") {
-        return Err(crate::error::AppError::Other("Invalid file name".into()));
+        // Rejected path-traversal input → Validation.
+        return Err(crate::error::AppError::Validation("Invalid file name".into()));
     }
 
     let db = state.pool()?;
@@ -81,17 +82,23 @@ pub async fn resolve_file_path(
 
     let sync_path = result
         .map(|(p,)| p)
-        .ok_or_else(|| format!("No sync path configured for label '{label}'"))?;
+        // No configured sync path for the label (entity missing) → NotFound, not the
+        // implicit From<String> → Other this used to produce.
+        .ok_or_else(|| crate::error::AppError::NotFound(format!("No sync path configured for label '{label}'")))?;
 
     let full_path = Path::new(&sync_path).join(&file_name);
 
     // Validate the resolved path stays within the sync folder
-    let canonical_parent = Path::new(&sync_path)
+    // canonicalize() failing on the registered sync root is an I/O fault
+    // (folder moved/removed/inaccessible) → Io.
+    let canonical_parent = Path::new(&sync_path).canonicalize().map_err(crate::error::AppError::Io)?;
+    let canonical_file = full_path
         .canonicalize()
-        .map_err(|e| crate::error::AppError::Other(format!("Invalid sync path: {e}")))?;
-    let canonical_file = full_path.canonicalize().map_err(|_| format!("File not found: {file_name}"))?;
+        // The requested file isn't on disk → NotFound (keeps the user-facing message).
+        .map_err(|_| crate::error::AppError::NotFound(format!("File not found: {file_name}")))?;
     if !canonical_file.starts_with(&canonical_parent) {
-        return Err(crate::error::AppError::Other("Path escapes sync folder".into()));
+        // Path-escape security reject → Validation.
+        return Err(crate::error::AppError::Validation("Path escapes sync folder".into()));
     }
 
     Ok(canonical_file.to_string_lossy().to_string())

@@ -82,9 +82,8 @@ async fn list_sync_folder_inner(
     };
 
     let mut entries = Vec::new();
-    let mut dir = tokio::fs::read_dir(&target)
-        .await
-        .map_err(|e| crate::error::AppError::Other(format!("Read dir failed: {e}")))?;
+    // A read_dir failure is an I/O fault → Io (#[from]).
+    let mut dir = tokio::fs::read_dir(&target).await?;
 
     while let Some(entry) = dir.next_entry().await? {
         let name = entry.file_name().to_string_lossy().to_string();

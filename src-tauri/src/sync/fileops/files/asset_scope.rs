@@ -47,7 +47,8 @@ pub async fn allow_asset_scope(state: tauri::State<'_, crate::app_state::AppStat
         .fetch_optional(state.pool()?)
         .await?;
     if registered.is_none() {
-        return Err(crate::error::AppError::Other(
+        // Unregistered path is rejected caller input (the H-4 security gate) → Validation.
+        return Err(crate::error::AppError::Validation(
             "path is not a registered sync folder for this account".into(),
         ));
     }
