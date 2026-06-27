@@ -30,16 +30,26 @@ pub async fn stage_changes(app: tauri::AppHandle, label: String) -> Result<Stage
         guard
             .get(&label)
             .map(|slot| slot.manager.clone())
-            .ok_or_else(|| crate::error::AppError::Other(format!("No active drive with label '{label}'")))?
+            // The label isn't in the active-drive map → NotFound (entity missing).
+            .ok_or_else(|| crate::error::AppError::NotFound(format!("No active drive with label '{label}'")))?
     };
 
     // RAII guard: sets review_mode for this drive, resets on drop unless commit()ed.
     let review_guard = ReviewModeGuard::new(sync.clone(), label);
 
-    let m = first_arc.try_lock().map_err(|_| "Sync is in progress, please wait".to_string())?;
+    // try_lock fails iff a sync cycle currently holds the manager → the dedicated
+    // NotReady(SyncInProgress) (same Display text, structured SYNC_IN_PROGRESS subkind),
+    // not a String→Other via From<String>.
+    let m = first_arc
+        .try_lock()
+        .map_err(|_| crate::error::AppError::NotReady(crate::error::NotReadyKind::SyncInProgress))?;
 
     if !m.is_unlocked() {
-        return Err(crate::error::AppError::Other("Drive is not unlocked".into()));
+        // Exactly the dedicated NotReady(DriveNotUnlocked) state — its Display is the
+        // same "Drive is not unlocked" and the FE knows the DRIVE_NOT_UNLOCKED subkind
+        // (dispatchTauriError). stage_changes' caller doesn't route through
+        // isExpectedNoSessionError, so this stays surfaced while gaining the structured kind.
+        return Err(crate::error::AppError::NotReady(crate::error::NotReadyKind::DriveNotUnlocked));
     }
 
     let changes = m.stage_with_paths().await?;
@@ -55,12 +65,13 @@ pub async fn stage_changes(app: tauri::AppHandle, label: String) -> Result<Stage
 /// — exercise the logic through a testable surface, not a mocked runtime).
 ///
 /// # Errors
-/// Returns [`crate::error::AppError::Other`] naming the offending value and its
-/// file id on the first invalid entry. An empty map is vacuously valid.
+/// Returns [`crate::error::AppError::Validation`] naming the offending value and
+/// its file id on the first invalid entry. An empty map is vacuously valid.
 pub(crate) fn validate_resolutions(resolutions: &HashMap<String, String>) -> Result<()> {
     for (file_id, resolution) in resolutions {
         if !matches!(resolution.as_str(), "keep_local" | "accept_remote" | "keep_both" | "skip") {
-            return Err(crate::error::AppError::Other(format!(
+            // Rejected frontend-supplied input → Validation.
+            return Err(crate::error::AppError::Validation(format!(
                 "Invalid resolution '{resolution}' for file {file_id}"
             )));
         }
@@ -260,7 +271,8 @@ pub(crate) fn resolve_drive_path(paths: Vec<crate::sync::paths::SyncPathResult>,
         .into_iter()
         .find(|p| p.label == label)
         .map(|p| p.path)
-        .ok_or_else(|| crate::error::AppError::Other(format!("No sync path with label '{label}'")))
+        // No row for the label → NotFound (entity missing).
+        .ok_or_else(|| crate::error::AppError::NotFound(format!("No sync path with label '{label}'")))
 }
 
 /// Reveal the on-disk folder for a configured drive in the OS file
@@ -275,7 +287,7 @@ pub(crate) fn resolve_drive_path(paths: Vec<crate::sync::paths::SyncPathResult>,
 ///
 /// Errors:
 /// - `NotReady` (no logged-in account)
-/// - `Other("No sync path with label '...'")` when the label is unknown
+/// - `NotFound("No sync path with label '...'")` when the label is unknown
 /// - `Other("Failed to reveal ...")` when the opener plugin call fails
 #[tauri::command]
 pub async fn reveal_drive_in_finder(state: tauri::State<'_, crate::app_state::AppState>, label: String) -> Result<()> {
@@ -285,6 +297,7 @@ pub async fn reveal_drive_in_finder(state: tauri::State<'_, crate::app_state::Ap
     let paths = crate::sync::folders::get_all_sync_paths_internal(pool, &account_id).await?;
     let path = resolve_drive_path(paths, &label)?;
 
+    // The opener plugin's error has no fitting typed variant → documented Other.
     tauri_plugin_opener::reveal_item_in_dir(&path).map_err(|e| crate::error::AppError::Other(format!("Failed to reveal '{path}': {e}")))?;
 
     info!("Revealed drive '{}' at '{}' in file manager", label, path);
@@ -353,6 +366,11 @@ mod tests {
         // toast and the logs are unambiguous about which entry was wrong.
         let map = resolutions(&[("deadbeef", "overwrite")]);
         let err = validate_resolutions(&map).unwrap_err();
+        // Pin the taxonomy: a rejected resolution verb is Validation, not Other.
+        assert!(
+            matches!(err, crate::error::AppError::Validation(_)),
+            "invalid resolution must surface as Validation, got {err:?}"
+        );
         let msg = err.to_string();
         assert!(msg.contains("overwrite"), "error must name the bad value; got {msg}");
         assert!(msg.contains("deadbeef"), "error must name the file id; got {msg}");

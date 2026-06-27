@@ -50,6 +50,8 @@ pub(crate) async fn start_sync_loop(app: tauri::AppHandle) {
 async fn create_dir_all_async(path: PathBuf) -> Result<()> {
     tokio::task::spawn_blocking(move || std::fs::create_dir_all(path))
         .await
+        // tokio JoinError (the blocking task panicked) has no typed variant → documented
+        // Other; the inner create_dir_all io::Error propagates as Io via the second `?`.
         .map_err(|e| crate::error::AppError::Other(format!("Join error creating dir: {e}")))??;
     Ok(())
 }
@@ -117,11 +119,17 @@ pub async fn setup_and_init_sync(
     {
         let master_path = master_mnemonic_path(&account_id)?;
         let acct_dir = account_dir(&account_id)?;
-        create_dir_all_async(acct_dir.clone())
-            .await
-            .map_err(|e| crate::error::AppError::Other(format!("Failed to create account directory at {}: {e}", acct_dir.display())))?;
+        // create_dir_all_async already returns a typed AppError (Io / Other-JoinError);
+        // wrapping it in Other(format!) was a double-wrap. Propagate the typed error and
+        // log the path (which the inner Io variant can't carry).
+        create_dir_all_async(acct_dir.clone()).await.map_err(|e| {
+            tracing::error!(dir = %acct_dir.display(), "failed to create account directory: {e}");
+            e
+        })?;
+        // save_encrypted_mnemonic failures come from the hcfs-client layer → Hcfs
+        // (keeps the path-bearing message), not the catch-all Other.
         hcfs_client::auth::save_encrypted_mnemonic(&master_path, m, &pw)
-            .map_err(|e| crate::error::AppError::Other(format!("Failed to persist master mnemonic at {}: {e}", master_path.display())))?;
+            .map_err(|e| crate::error::AppError::Hcfs(format!("Failed to persist master mnemonic at {}: {e}", master_path.display())))?;
     }
 
     // 3. Initialize sync
@@ -644,7 +652,9 @@ fn run_migration(sync_path: &str, account_dir: &Path, folder_dir: &Path, master_
         // Copy all files into folder_dir
         copy_dir_contents(&legacy_a_dir, folder_dir)?;
 
-        // Verify critical file
+        // Verify critical file. This is an internal post-migration integrity
+        // assertion (the file must exist after the copy) — no typed variant fits
+        // a self-check post-condition, so it stays the documented catch-all Other.
         if !folder_dir.join("enc_mnemonic.json").exists() {
             return Err(crate::error::AppError::Other(
                 "Migration A verification failed: enc_mnemonic.json not in folder dir".into(),
@@ -697,7 +707,8 @@ fn run_migration(sync_path: &str, account_dir: &Path, folder_dir: &Path, master_
             debug!("Copied temp/ to folder dir");
         }
 
-        // Verify critical file
+        // Verify critical file — same internal post-migration integrity assertion
+        // as Legacy A above; documented Other (no typed variant fits a self-check).
         if !folder_dir.join("enc_mnemonic.json").exists() {
             return Err(crate::error::AppError::Other(
                 "Migration B verification failed: enc_mnemonic.json not in folder dir".into(),
@@ -726,7 +737,11 @@ fn run_migration(sync_path: &str, account_dir: &Path, folder_dir: &Path, master_
 
 /// Copy all entries from `src` into `dst`, recursing into subdirectories.
 fn copy_dir_contents(src: &Path, dst: &Path) -> Result<()> {
-    let entries = std::fs::read_dir(src).map_err(|e| crate::error::AppError::Other(format!("Failed to read dir {}: {e}", src.display())))?;
+    // A read_dir failure is an I/O fault → Io; log the path the Io variant can't carry.
+    let entries = std::fs::read_dir(src).map_err(|e| {
+        tracing::error!(dir = %src.display(), "copy_dir_contents: failed to read dir: {e}");
+        crate::error::AppError::Io(e)
+    })?;
 
     for entry in entries.flatten() {
         let path = entry.path();
@@ -1086,7 +1101,9 @@ pub(crate) async fn initialize_sync_inner(
     // instead of resurrecting the drive (see sync::lifecycle_guard).
     let lifecycle_snapshot = lifecycle_snapshot.unwrap_or_else(|| app_state.drive_lifecycle.snapshot(&label));
 
-    // Block non-migration sync init while a migration is running
+    // Block non-migration sync init while a migration is running. This is a
+    // transient internal coordination block (no MigrationInProgress variant
+    // exists; NotReady would be FE-silenced) → documented Other, surfaced.
     if label != "migration" && app_state.migration.in_progress.load(std::sync::atomic::Ordering::SeqCst) {
         return Err(crate::error::AppError::Other(
             "Migration in progress — sync blocked until migration completes".into(),
@@ -1168,6 +1185,8 @@ pub(crate) async fn initialize_sync_inner(
         }
     }
 
+    // Token-missing stays the surfaced catch-all Other (not FE-silenced Auth),
+    // matching the folders.rs token sites — see that module's rationale.
     let bearer_token = get_api_token(pool, &account_id)
         .await?
         .ok_or_else(|| crate::error::AppError::Other("No authentication token found. Please log in again.".into()))?;
