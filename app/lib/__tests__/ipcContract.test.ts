@@ -120,16 +120,22 @@ function invokedCommands(): Set<string> {
   return names;
 }
 
-/** Event names Rust can emit: the `sync/events.rs` const registry ∪ literal emits. */
+/** Event names Rust can emit: the const registries ∪ literal emits. */
 function rustEmittedEvents(): Set<string> {
   const names = new Set<string>();
-  const events = readFileSync(
+  // Canonical const registries: `pub const NAME: &str = "value";`. One per
+  // module that owns events — `sync/projection/events.rs` and `vpn/events.rs`.
+  // (The VPN commands emit via these consts, not quoted literals, so the
+  // literal-emit window scan below would miss them.)
+  const registryFiles = [
     join(ROOT, "src-tauri", "src", "sync", "projection", "events.rs"),
-    "utf8"
-  );
-  // Canonical registry: pub const NAME: &str = "value";
-  for (const m of events.matchAll(/pub const [A-Z_0-9]+:\s*&str\s*=\s*"([^"]+)"/g)) {
-    names.add(m[1]);
+    join(ROOT, "src-tauri", "src", "vpn", "events.rs"),
+  ];
+  for (const file of registryFiles) {
+    const events = readFileSync(file, "utf8");
+    for (const m of events.matchAll(/pub const [A-Z_0-9]+:\s*&str\s*=\s*"([^"]+)"/g)) {
+      names.add(m[1]);
+    }
   }
   // Literal emits not routed through a const (migration_progress,
   // recovery_progress, block_number_updated, …). Match any event-shaped quoted

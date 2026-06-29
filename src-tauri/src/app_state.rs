@@ -167,6 +167,12 @@ pub struct AppState {
     /// stolen-DB attacker this layer adds nothing; its job is to clamp
     /// online IPC abuse during a single session).
     pub wallet_rate_limit: Arc<crate::wallet::rate_limit::RateLimitState>,
+    /// App-scoped NetBird VPN for VM connections. Embeds a userspace mesh peer
+    /// (no OS TUN / root / separate binary) used only for opt-in connections to
+    /// Hippius VMs — never for the app's regular traffic. The default engine is
+    /// disabled unless the `netbird-vpn` Cargo feature is built; see
+    /// `crate::vpn`.
+    pub vpn: Arc<crate::vpn::VpnState>,
 }
 
 impl Default for AppState {
@@ -238,6 +244,7 @@ impl AppState {
             recovery_lock: tokio::sync::Mutex::new(()),
             share_active_list_cache: Mutex::new(HashMap::new()),
             wallet_rate_limit: Arc::new(crate::wallet::rate_limit::RateLimitState::new()),
+            vpn: Arc::new(crate::vpn::VpnState::new(crate::vpn::engine::default_engine())),
         }
     }
 

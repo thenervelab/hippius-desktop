@@ -82,6 +82,15 @@ pub async fn logout_full(app: tauri::AppHandle, account_id: String) -> Result<()
     //     CAS refuse to start a fresh subscription.
     crate::blockchain::subscription::stop_block_subscription_inner(&app).await;
 
+    // 1c. Tear down the VM-connection VPN: leave the NetBird overlay and close
+    //     every localhost forward, so the next signed-in account can't inherit
+    //     the previous tenant's live `127.0.0.1:<port>` forwards. No-op on
+    //     default builds (the disabled engine's `disconnect` is `Ok`).
+    //     Best-effort — a failure must not block logout.
+    if let Err(e) = app.state::<crate::app_state::AppState>().vpn.disconnect().await {
+        warn!("vpn disconnect during logout failed: {e}");
+    }
+
     // 2. Clear auth state. PROPAGATE a failure here instead of swallowing it:
     //    `auth_logout_internal` clears the persisted `auth_session` row BEFORE
     //    wiping in-memory `AuthInfo`, so on failure it returns Err with the

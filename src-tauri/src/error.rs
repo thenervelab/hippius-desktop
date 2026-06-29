@@ -74,6 +74,14 @@ pub enum AppError {
     #[error("Sync intent error: {0}")]
     Intent(#[from] crate::sync::intent::IntentError),
 
+    /// Failures from the VM-connection VPN module. A typed `#[from]` wrapper
+    /// (not folded into `Other`) so `VpnError`'s `source()` chain survives `?`
+    /// and the FE gets a stable `kind: "Vpn"`. Note the VPN command layer maps
+    /// `VpnError::NotConnected` to `NotReady(VpnNotConnected)` instead of this,
+    /// so a "connect first" precondition reaches the FE as a structured subkind.
+    #[error("VPN error: {0}")]
+    Vpn(#[from] crate::vpn::error::VpnError),
+
     #[error("{0}")]
     Other(String),
 }
@@ -140,6 +148,12 @@ pub enum NotReadyKind {
     /// does NOT use this — on the scripted signing path, lockouts stay
     /// indistinguishable from wrong passwords (`SigningKeyUnavailable`).
     RateLimited { message: String },
+    /// A VM connection over the VPN was requested before the mesh peer was
+    /// connected. Raised by `vpn::commands::vpn_open_vm_connection` (mapped from
+    /// `VpnError::NotConnected`) so the FE can prompt the user to connect the
+    /// VPN first, dispatched structurally on the `subkind` rather than the
+    /// error message.
+    VpnNotConnected,
 }
 
 impl NotReadyKind {
@@ -163,6 +177,7 @@ impl NotReadyKind {
             Self::SupersededByPause => "SUPERSEDED_BY_PAUSE",
             Self::DatabaseNotReady => "DATABASE_NOT_READY",
             Self::RateLimited { .. } => "RATE_LIMITED",
+            Self::VpnNotConnected => "VPN_NOT_CONNECTED",
         }
     }
 }
@@ -207,6 +222,9 @@ impl std::fmt::Display for NotReadyKind {
                 write!(f, "The application is still starting up. Please try again in a moment.")
             }
             Self::RateLimited { message } => write!(f, "{message}"),
+            Self::VpnNotConnected => {
+                write!(f, "Connect to the VPN before opening a VM connection.")
+            }
         }
     }
 }
@@ -241,6 +259,7 @@ impl Serialize for AppError {
             Self::Progress(_) => "Progress",
             Self::Lock(_) => "Lock",
             Self::Intent(_) => "Intent",
+            Self::Vpn(_) => "Vpn",
             Self::Other(_) => "Other",
         };
 
@@ -485,6 +504,7 @@ mod tests {
                 NotReadyKind::SupersededByPause => "SUPERSEDED_BY_PAUSE",
                 NotReadyKind::DatabaseNotReady => "DATABASE_NOT_READY",
                 NotReadyKind::RateLimited { .. } => "RATE_LIMITED",
+                NotReadyKind::VpnNotConnected => "VPN_NOT_CONNECTED",
             }
         }
         for kind in [
@@ -501,6 +521,7 @@ mod tests {
             NotReadyKind::SupersededByPause,
             NotReadyKind::DatabaseNotReady,
             NotReadyKind::RateLimited { message: "Try again in 5 minutes.".into() },
+            NotReadyKind::VpnNotConnected,
         ] {
             let expected = expected_wire_name(&kind);
             let json = serde_json::to_value(AppError::NotReady(kind.clone())).expect("serialize");
@@ -609,6 +630,7 @@ mod tests {
             AppError::Progress("tracker".into()),
             AppError::Lock("poisoned".into()),
             AppError::Intent(crate::sync::intent::IntentError::Db(sqlx::Error::ColumnNotFound("test_col".into()))),
+            AppError::Vpn(crate::vpn::error::VpnError::NotConfigured),
             AppError::Other("misc".into()),
         ];
         let expected_kinds = [
@@ -626,6 +648,7 @@ mod tests {
             "Progress",
             "Lock",
             "Intent",
+            "Vpn",
             "Other",
         ];
 
@@ -665,6 +688,10 @@ mod tests {
             (
                 NotReadyKind::DatabaseNotReady,
                 "The application is still starting up. Please try again in a moment.",
+            ),
+            (
+                NotReadyKind::VpnNotConnected,
+                "Connect to the VPN before opening a VM connection.",
             ),
         ];
         for (kind, expected) in cases {

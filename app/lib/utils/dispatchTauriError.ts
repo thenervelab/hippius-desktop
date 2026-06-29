@@ -20,7 +20,8 @@ export type NotReadyKind =
   | "INSUFFICIENT_CREDITS"
   | "SUPERSEDED_BY_PAUSE"
   | "DATABASE_NOT_READY"
-  | "RATE_LIMITED";
+  | "RATE_LIMITED"
+  | "VPN_NOT_CONNECTED";
 
 /**
  * Shape of an `AppError` returned by Tauri commands. The `kind` field
@@ -74,6 +75,21 @@ interface TauriError {
  * does NOT look at `message` (the Display text) — that string is presentation
  * and may be reworded without breaking control flow.
  */
+/**
+ * Extract a human-readable message from a Tauri command rejection.
+ *
+ * `invoke()` rejects with the serialized `AppError` — a plain `{ kind, message }`
+ * object, NOT an `Error` instance — so `err instanceof Error` is always false and
+ * `err.message` must be read off the plain object. Falls back to the raw string
+ * (for a thrown string) and finally a generic label.
+ */
+export function tauriErrorMessage(error: unknown): string {
+  const e = error as TauriError | null;
+  if (e?.message) return e.message;
+  if (typeof error === "string" && error.length > 0) return error;
+  return "Unknown error";
+}
+
 export function isNotReady(error: unknown, expected?: NotReadyKind): boolean {
   const e = error as TauriError | null;
   if (e?.kind !== "NotReady") return false;

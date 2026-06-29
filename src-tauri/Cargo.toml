@@ -29,6 +29,16 @@ tauri-build = { version = "2", features = [] }
 # (axiom rust_quality_121 — feature-matrix hygiene).
 e2e-webdriver = ["dep:tauri-plugin-webdriver"]
 
+# App-scoped NetBird VPN for VM connections. OFF by default so normal builds and
+# CI pull NO Go toolchain / cgo / ~50MB embedded library, and the disabled
+# engine (`vpn::engine::DisabledEngine`) reports `UnsupportedBuild`. Enabling it
+# pulls `netbird-embed`, whose `build.rs` compiles a Go c-shared library
+# (NetBird `client/embed` + wireguard-go) — so a `--features netbird-vpn` build
+# REQUIRES a Go (>=1.25) toolchain + cgo. The `dep:` prefix keeps the optional
+# crate from implicitly minting a same-named feature (axiom rust_quality_121).
+# See docs/plans/2026-06-29-netbird-vpn-vm-connections.md.
+netbird-vpn = ["dep:netbird-embed"]
+
 [dependencies]
 tauri = { version = "2", features = [
     "protocol-asset",
@@ -55,6 +65,9 @@ tauri-plugin-shell = "2"
 # only ever compiled under the off-by-default `e2e-webdriver` feature. See the
 # `[features]` note above.
 tauri-plugin-webdriver = { version = "=0.2.1", optional = true }
+# Embedded NetBird userspace mesh client — see the `netbird-vpn` feature note
+# above. Optional + gated so default/CI builds never invoke its Go/cgo build.rs.
+netbird-embed = { version = "0.3", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"

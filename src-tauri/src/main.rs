@@ -29,6 +29,7 @@ pub mod sync;
 mod test_helpers;
 pub mod tray;
 mod utils;
+pub mod vpn;
 pub mod wallet;
 
 use crate::auth::contacts::{add_contact, delete_contact, get_contacts, update_contact};
@@ -66,6 +67,9 @@ use crate::blockchain::transfers::{transfer_balance, validate_send_balance};
 use crate::console_access::validate_recovery_password;
 use crate::infra::vm::{
     create_vm, get_vm_instance, list_vm_applications, list_vm_flavors, list_vm_images, list_vm_instances, reboot_vm, start_vm, stop_vm, terminate_vm,
+};
+use crate::vpn::commands::{
+    vpn_close_vm_connection, vpn_connect, vpn_disconnect, vpn_list_connections, vpn_open_vm_connection, vpn_status,
 };
 use crate::notifications::credits::{
     check_low_credit_notification, check_low_credit_notification_live, create_credit_notifications, create_sync_notification, get_is_above_half_credit, is_first_time,
@@ -392,6 +396,13 @@ fn main() {
             start_vm,
             stop_vm,
             terminate_vm,
+            // VM-connection VPN (NetBird, app-scoped, opt-in)
+            vpn_status,
+            vpn_connect,
+            vpn_disconnect,
+            vpn_open_vm_connection,
+            vpn_close_vm_connection,
+            vpn_list_connections,
             // SSH keys
             list_ssh_keys,
             create_ssh_key,
@@ -747,9 +758,14 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
         // pushes the cleared state to the FE.
         let preparing_weak = std::sync::Arc::downgrade(&app_state.preparing);
         let sync_weak = std::sync::Arc::downgrade(&app_state.sync);
+        // Subscribe to VPN status transitions BEFORE `manage` consumes the
+        // AppState; the bridge task (spawned just below) is the single emitter of
+        // VPN_STATUS_CHANGED. See vpn::state / vpn::commands::spawn_status_bridge.
+        let vpn_status_rx = app_state.vpn.subscribe();
         app_handle.manage(app_state);
         crate::sync::upload_processing::spawn_watchdog(upload_processing_weak, app_handle.clone());
         crate::sync::preparing::spawn_watchdog(preparing_weak, sync_weak);
+        crate::vpn::commands::spawn_status_bridge(app_handle.clone(), vpn_status_rx);
 
         // Pre-create the (hidden) tray popover so the first tray click shows it
         // instantly instead of paying webview + route load cost on click.

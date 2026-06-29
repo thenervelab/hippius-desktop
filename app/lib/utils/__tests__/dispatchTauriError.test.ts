@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const toastError = vi.fn();
 vi.mock("sonner", () => ({ toast: { error: (...args: unknown[]) => toastError(...args) } }));
 
-import { isNotReady, dispatchSigningError } from "@/lib/utils/dispatchTauriError";
+import { isNotReady, dispatchSigningError, tauriErrorMessage } from "@/lib/utils/dispatchTauriError";
 
 describe("isNotReady", () => {
   it("matches a specific NotReadyKind via subkind, independent of message text", () => {
@@ -26,6 +26,28 @@ describe("isNotReady", () => {
   it("returns false for non-NotReady errors and null", () => {
     expect(isNotReady({ kind: "Auth", message: "x" }, "INSUFFICIENT_CREDITS")).toBe(false);
     expect(isNotReady(null)).toBe(false);
+  });
+});
+
+describe("tauriErrorMessage", () => {
+  it("reads .message off the plain serialized AppError object (NOT instanceof Error)", () => {
+    // The regression this targets: Tauri rejects invoke() with a plain
+    // {kind,message} object, so `err instanceof Error` is always false and the
+    // real message must be read off the object.
+    const err = { kind: "Vpn", message: "mesh enrollment failed: boom" };
+    expect(err instanceof Error).toBe(false);
+    expect(tauriErrorMessage(err)).toBe("mesh enrollment failed: boom");
+  });
+
+  it("surfaces the NotReady display message", () => {
+    const err = { kind: "NotReady", subkind: "VPN_NOT_CONNECTED", message: "Connect to the VPN before opening a VM connection." };
+    expect(tauriErrorMessage(err)).toContain("Connect to the VPN");
+  });
+
+  it("falls back to a thrown string, then a generic label", () => {
+    expect(tauriErrorMessage("raw string error")).toBe("raw string error");
+    expect(tauriErrorMessage(null)).toBe("Unknown error");
+    expect(tauriErrorMessage({})).toBe("Unknown error");
   });
 });
 

@@ -6,6 +6,8 @@ import Skeleton from "@/components/ui/skeleton";
 import { CopyableCell } from "../../ui/alt-table";
 import { useDeleteInstance } from "../hooks/useDeleteInstance";
 import { useRebootInstance } from "../hooks/useRebootInstance";
+import VmVpnConnect from "./VmVpnConnect";
+import { VM_VPN_ENABLED } from "@/app/lib/featureFlags";
 
 interface NetworksInfoProps {
   instanceData?: VMInstanceDetailsResponse;
@@ -94,6 +96,10 @@ const NetworksInfo: React.FC<NetworksInfoProps> = ({
             />
           )}
         </InfoPanel>
+
+        {VM_VPN_ENABLED && (
+          <VmVpnConnect overlayAddress={instanceData?.nebula_ip} isLoading={isLoading} />
+        )}
 
         <InfoPanel
           label="VM Controls"

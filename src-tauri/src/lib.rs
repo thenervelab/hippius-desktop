@@ -21,6 +21,7 @@ pub mod shares;
 pub mod sync;
 pub mod tray;
 pub mod utils;
+pub mod vpn;
 pub mod wallet;
 
 #[cfg(test)]
