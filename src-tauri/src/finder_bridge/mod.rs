@@ -19,3 +19,8 @@ pub mod socket;
 /// Linux CI job can test it against a temp path.
 #[cfg(target_os = "macos")]
 pub mod container;
+
+/// Boot-time startup + inbound-click drain — macOS-only (it stores the bridge
+/// in `AppState` and runs inside the Tauri async runtime).
+#[cfg(target_os = "macos")]
+pub mod lifecycle;
