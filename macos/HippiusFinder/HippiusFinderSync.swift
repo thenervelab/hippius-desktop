@@ -32,10 +32,8 @@ final class HippiusFinderSync: FIFinderSync {
             guard let message = WireProtocol.parse(line) else { return }
             DispatchQueue.main.async { self?.handle(message) }
         }
-        socket.onDisconnect = { [weak self] in
-            // The app may start later; retry shortly.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { self?.socket.connect() }
-        }
+        // BridgeSocket self-heals: connect() retries every second until the app
+        // is up, and reconnects automatically if the app later restarts.
         socket.connect()
     }
 

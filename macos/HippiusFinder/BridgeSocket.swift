@@ -23,10 +23,30 @@ final class BridgeSocket {
         self.path = path
     }
 
-    /// Attempt to connect and begin reading. Safe to call repeatedly; a no-op
-    /// while already connected.
+    /// Delay between reconnect attempts. The app may not be running yet (or may
+    /// restart), so the socket retries until it succeeds.
+    private let reconnectDelay: TimeInterval = 1.0
+
+    /// Start connecting and keep retrying until connected. Safe to call
+    /// repeatedly; a no-op while already connected.
     func connect() {
-        queue.async { self.connectLocked() }
+        queue.async { self.attemptConnect() }
+    }
+
+    /// Try once; on failure (no listener yet) schedule another attempt. This is
+    /// the self-healing loop — a failed *attempt* must retry, not just an
+    /// *established* connection that later drops.
+    private func attemptConnect() {
+        guard fd < 0 else { return }
+        if connectLocked() {
+            startReadingLocked()
+        } else {
+            scheduleReconnect()
+        }
+    }
+
+    private func scheduleReconnect() {
+        queue.asyncAfter(deadline: .now() + reconnectDelay) { [weak self] in self?.attemptConnect() }
     }
 
     /// Whether the socket is currently connected.
@@ -56,10 +76,13 @@ final class BridgeSocket {
 
     // MARK: - internals (all on `queue`)
 
-    private func connectLocked() {
-        guard fd < 0 else { return }
+    /// Try to establish the connection. Returns true and sets `fd` on success;
+    /// returns false (closing any partial descriptor) on failure so the caller
+    /// can schedule a retry. Does NOT start reading — `attemptConnect` does.
+    private func connectLocked() -> Bool {
+        guard fd < 0 else { return true }
         let descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard descriptor >= 0 else { return }
+        guard descriptor >= 0 else { return false }
 
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
@@ -67,7 +90,7 @@ final class BridgeSocket {
         let capacity = MemoryLayout.size(ofValue: addr.sun_path)
         guard pathBytes.count <= capacity else {
             Darwin.close(descriptor)
-            return
+            return false
         }
         withUnsafeMutablePointer(to: &addr.sun_path) { dst in
             dst.withMemoryRebound(to: CChar.self, capacity: capacity) { dstChars in
@@ -84,11 +107,11 @@ final class BridgeSocket {
         }
         guard rc == 0 else {
             Darwin.close(descriptor)
-            return
+            return false
         }
         fd = descriptor
         readBuffer.removeAll(keepingCapacity: true)
-        startReadingLocked()
+        return true
     }
 
     private func startReadingLocked() {
@@ -119,6 +142,8 @@ final class BridgeSocket {
     private func handleClosed() {
         closeLocked()
         onDisconnect?()
+        // Keep trying to reconnect (the app may have restarted).
+        scheduleReconnect()
     }
 
     private func closeLocked() {
