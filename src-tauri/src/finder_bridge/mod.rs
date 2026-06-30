@@ -12,6 +12,7 @@
 
 pub mod error;
 pub mod protocol;
+pub mod resolve;
 pub mod socket;
 
 /// App Group container path resolution — macOS-only (the container is a macOS
