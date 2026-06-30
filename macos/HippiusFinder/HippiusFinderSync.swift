@@ -96,9 +96,23 @@ final class HippiusFinderSync: FIFinderSync {
             item = NSMenuItem(title: "Upload & Share via Hippius", action: #selector(uploadShareSelection(_:)), keyEquivalent: "")
         }
         item.target = self
+        item.image = HippiusFinderSync.menuIcon
         menu.addItem(item)
         return menu
     }
+
+    /// The Hippius logo rendered next to each menu item, sized for a menu row
+    /// (16pt; AppKit scales the 512px source down on retina). Loaded once from
+    /// the extension's own bundle — `NSImage(named:)` looks in the host app's
+    /// bundle, which an .appex is not, so we resolve the URL explicitly. `nil`
+    /// (asset missing) just yields a text-only item rather than a crash.
+    private static let menuIcon: NSImage? = {
+        let bundle = Bundle(for: HippiusFinderSync.self)
+        guard let url = bundle.url(forResource: "HippiusMenuIcon", withExtension: "png"),
+              let image = NSImage(contentsOf: url) else { return nil }
+        image.size = NSSize(width: 16, height: 16)
+        return image
+    }()
 
     private func selectionIsInsideRoots() -> Bool {
         let urls = FIFinderSyncController.default().selectedItemURLs() ?? []

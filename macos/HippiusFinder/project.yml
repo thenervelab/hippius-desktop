@@ -21,6 +21,10 @@ targets:
       - path: .
         includes:
           - "*.swift"
+      # The Hippius logo shown next to each right-click menu item. xcodegen
+      # routes a non-source file into the target's Copy Bundle Resources phase,
+      # so it ships inside the .appex and `Bundle(for:).url(forResource:)` finds it.
+      - path: HippiusMenuIcon.png
     info:
       path: Info.plist
       properties:

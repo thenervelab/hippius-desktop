@@ -12,7 +12,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tracing::{info, warn};
 
 use crate::app_state::AppState;
-use crate::error::{AppError, Result};
+use crate::error::Result;
 use crate::finder_bridge::protocol::ClientMessage;
 use crate::finder_bridge::resolve::{resolve_share_target, ShareTarget};
 use crate::shares::commands::ShareLink;
@@ -35,17 +35,24 @@ pub async fn handle(app: AppHandle, message: ClientMessage) {
 async fn share_for_path(app: &AppHandle, clicked: &Path) -> Result<ShareLink> {
     let state = app.state::<AppState>();
     let account_id = state.current_account_id()?;
+
+    // A directory (in-drive or outside) is shared as one zip blob — the share
+    // engine has no folder concept. Resolve file-vs-dir BEFORE the in-drive
+    // check so an in-drive folder takes the zip path rather than
+    // `share_synced_file`, which rejects directories.
+    let metadata = tokio::fs::metadata(clicked).await?;
+    if metadata.is_dir() {
+        return crate::shares::commands::share_directory_as_zip(&state, &account_id, clicked).await;
+    }
+
     let roots = crate::sync::paths::list_drive_roots(state.pool()?, &account_id).await?;
     match resolve_share_target(clicked, &roots) {
+        // In-drive file: mint by (label, relative_path) and record a reshare origin.
         ShareTarget::InDrive { label, relative_path } => {
-            // create_share_inner rejects a directory, so a folder click surfaces
-            // as a "Cannot share a directory" error here until Phase 2C adds the
-            // zip path.
             crate::shares::commands::share_synced_file(&state, &account_id, &label, &relative_path).await
         }
-        ShareTarget::Outside => Err(AppError::Other(
-            "Sharing files outside a Hippius folder is not yet implemented (Phase 2C)".into(),
-        )),
+        // Outside file: "upload & share" by streaming its bytes; no origin row.
+        ShareTarget::Outside => crate::shares::commands::share_external_file(&state, &account_id, clicked).await,
     }
 }
 

@@ -336,10 +336,95 @@ pub async fn hcfs_create_share(
 /// guards as [`hcfs_create_share`] but no progress channel. Entry point for the
 /// macOS Finder bridge dispatcher, where a right-click has no webview channel to
 /// stream progress into.
+///
+/// macOS-only: the Finder dispatcher is its sole caller, so leaving it un-gated
+/// would be dead code on the Linux CI job.
+#[cfg(target_os = "macos")]
 pub(crate) async fn share_synced_file(state: &AppState, account_id: &str, folder_label: &str, relative_path: &str) -> Result<ShareLink> {
     require_shares_supported(state, account_id).await?;
     require_eligible(state, account_id, InsufficientCreditsAction::Sharing, 0).await?;
     create_share_inner(state, account_id, folder_label, relative_path, None).await
+}
+
+/// Stream an already-resolved local plaintext file through the share engine.
+///
+/// Shared by the two Finder paths that have no synced-folder identity — an
+/// outside file and a folder zipped to a temp archive. No reshare-origin row is
+/// recorded (there is no `(folder_label, relative_path)` to reshare from). The
+/// caller has already run the capability + eligibility gates.
+#[cfg(target_os = "macos")]
+async fn share_local_file(state: &AppState, account_id: &str, local_path: &Path, filename: &str, mime_type: &str) -> Result<ShareLink> {
+    let pool = state.pool()?;
+    let metadata = tokio::fs::metadata(local_path).await?;
+    if !metadata.is_file() {
+        return Err(AppError::Validation("Cannot share a directory".into()));
+    }
+    let plaintext_size = metadata.len();
+
+    info!(filename, plaintext_size, mime_type, "Creating share from local file");
+
+    let client = build_account_client(pool, account_id).await?;
+    let mut reader = tokio::fs::File::open(local_path).await?;
+    let keystore = SqliteShareKeystore::new(pool.clone());
+    let result = client
+        .create_share(&mut reader, plaintext_size, filename, mime_type, &keystore, CONSOLE_BASE_URL, None)
+        .await
+        .map_err(|e| {
+            warn!(error = %e, "create_share failed");
+            AppError::Hcfs(format!("create_share: {e}"))
+        })?;
+
+    Ok(ShareLink {
+        share_token: result.share_token,
+        share_url: result.share_url,
+        expires_at: result.expires_at.to_rfc3339(),
+    })
+}
+
+/// Mint a public share for a file that is NOT inside a synced folder by reading
+/// its bytes directly ("upload & share"). The byte stream is uploaded to the
+/// same encrypted-share storage as a synced file; only the reshare-origin
+/// sidecar is skipped. Entry point for the macOS Finder dispatcher.
+#[cfg(target_os = "macos")]
+pub(crate) async fn share_external_file(state: &AppState, account_id: &str, abs_path: &Path) -> Result<ShareLink> {
+    require_shares_supported(state, account_id).await?;
+    require_eligible(state, account_id, InsufficientCreditsAction::Sharing, 0).await?;
+
+    let filename = abs_path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| AppError::Validation("File has no usable name".into()))?;
+    let mime_type = mime_guess::from_path(abs_path).first_or_octet_stream().essence_str().to_owned();
+
+    share_local_file(state, account_id, abs_path, filename, &mime_type).await
+}
+
+/// Mint a public share for a folder by packing it into one `application/zip`
+/// blob and sharing that. The share engine shares one byte stream, so a folder
+/// has no first-class representation — the recipient downloads `<name>.zip`.
+/// Used for both in-drive and outside folders. Entry point for the macOS Finder
+/// dispatcher.
+#[cfg(target_os = "macos")]
+pub(crate) async fn share_directory_as_zip(state: &AppState, account_id: &str, dir_path: &Path) -> Result<ShareLink> {
+    require_shares_supported(state, account_id).await?;
+    require_eligible(state, account_id, InsufficientCreditsAction::Sharing, 0).await?;
+
+    let dir_name = dir_path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| AppError::Validation("Folder has no usable name".into()))?;
+    let zip_filename = format!("{dir_name}.zip");
+
+    // Pack on a blocking thread: the zip crate and `std::fs` are synchronous,
+    // and a large folder would otherwise stall the async runtime. The temp file
+    // is moved back out and lives in this frame across the upload await below;
+    // its `Drop` unlinks the archive only after `create_share` has streamed it.
+    let src = dir_path.to_path_buf();
+    let temp = tokio::task::spawn_blocking(move || crate::shares::zip_dir::zip_directory_to_temp(&src))
+        .await
+        .map_err(|e| AppError::Io(std::io::Error::other(e)))??;
+
+    share_local_file(state, account_id, temp.path(), &zip_filename, "application/zip").await
 }
 
 /// Revoke an existing share and immediately mint a new one for the
