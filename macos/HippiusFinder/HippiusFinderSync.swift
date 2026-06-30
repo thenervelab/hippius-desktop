@@ -21,10 +21,12 @@ final class HippiusFinderSync: FIFinderSync {
         super.init()
 
         registerBadges()
-        // Monitor the home directory so the menu is reachable on any file the
-        // user might want to share; badges are only painted on Hippius files
-        // (see requestBadgeIdentifier).
-        FIFinderSyncController.default().directoryURLs = [URL(fileURLWithPath: NSHomeDirectory())]
+        // Monitor the user's REAL home directory so the menu is reachable on
+        // any file they might want to share; badges are only painted on Hippius
+        // files (see requestBadgeIdentifier). NOTE: `NSHomeDirectory()` is
+        // sandbox-redirected to this extension's container — useless for
+        // monitoring — so we read the real home from the password database.
+        FIFinderSyncController.default().directoryURLs = [URL(fileURLWithPath: HippiusFinderSync.realHomeDirectory())]
 
         socket.onLine = { [weak self] line in
             guard let message = WireProtocol.parse(line) else { return }
@@ -143,7 +145,16 @@ final class HippiusFinderSync: FIFinderSync {
             return container.appendingPathComponent("finder.sock").path
         }
         // Fallback to the literal path (matches the Rust side) if the sandbox
-        // container API returns nil.
-        return NSHomeDirectory() + "/Library/Group Containers/\(group)/finder.sock"
+        // container API returns nil. Use the REAL home, not the sandbox one.
+        return realHomeDirectory() + "/Library/Group Containers/\(group)/finder.sock"
+    }
+
+    /// The user's real home directory. `NSHomeDirectory()` is sandbox-redirected
+    /// inside an app extension; the password database gives the true path.
+    private static func realHomeDirectory() -> String {
+        if let pw = getpwuid(getuid()) {
+            return String(cString: pw.pointee.pw_dir)
+        }
+        return NSHomeDirectory()
     }
 }
