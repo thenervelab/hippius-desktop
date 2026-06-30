@@ -183,6 +183,12 @@ pub struct AppState {
     /// disabled unless the `netbird-vpn` Cargo feature is built; see
     /// `crate::vpn`.
     pub vpn: Arc<crate::vpn::VpnState>,
+    /// macOS Finder Sync extension bridge (the socket server). Boot-scoped: set
+    /// once by `finder_bridge::lifecycle::start` from `setup()`, then read by
+    /// the share dispatch to register drive roots and push badges. Absent on
+    /// other platforms — Finder integration is macOS-only.
+    #[cfg(target_os = "macos")]
+    finder_bridge: OnceLock<Arc<crate::finder_bridge::socket::FinderBridge>>,
 }
 
 impl Default for AppState {
@@ -256,7 +262,25 @@ impl AppState {
             share_active_list_cache: Mutex::new(HashMap::new()),
             wallet_rate_limit: Arc::new(crate::wallet::rate_limit::RateLimitState::new()),
             vpn: Arc::new(crate::vpn::VpnState::new(crate::vpn::engine::default_engine())),
+            #[cfg(target_os = "macos")]
+            finder_bridge: OnceLock::new(),
         }
+    }
+
+    /// Store the Finder bridge handle (once, at startup). Returns `Err` handing
+    /// the handle back if one was already set.
+    #[cfg(target_os = "macos")]
+    pub fn set_finder_bridge(
+        &self,
+        bridge: Arc<crate::finder_bridge::socket::FinderBridge>,
+    ) -> Result<(), Arc<crate::finder_bridge::socket::FinderBridge>> {
+        self.finder_bridge.set(bridge)
+    }
+
+    /// The Finder bridge handle, if it has started.
+    #[cfg(target_os = "macos")]
+    pub fn finder_bridge(&self) -> Option<&Arc<crate::finder_bridge::socket::FinderBridge>> {
+        self.finder_bridge.get()
     }
 
     /// Current recovery gate state.

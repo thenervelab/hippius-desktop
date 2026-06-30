@@ -31,6 +31,16 @@ export interface ShareLink {
   expiresAt: string;
 }
 
+/**
+ * Payload of the `finder:share-created` event (macOS Finder share). A superset
+ * of {@link ShareLink}: a password-protected ("private") share also carries the
+ * randomly generated `password` the recipient needs to open the link. Absent
+ * (`undefined`) for a public share — the Rust side omits the field.
+ */
+export interface FinderShareCreated extends ShareLink {
+  password?: string;
+}
+
 /** Phase of an in-flight share creation. */
 export type SharePhase = "encrypting" | "uploading" | "finalizing";
 

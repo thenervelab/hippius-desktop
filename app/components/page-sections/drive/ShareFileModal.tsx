@@ -34,7 +34,10 @@ import { toast } from "sonner";
 import { Button, Icons } from "@/components/ui";
 import { FramedDialog } from "@/components/ui/FramedDialog";
 import { cn } from "@/lib/utils";
-import { shareModalFileAtom } from "@/app/lib/global-atoms/sharesAtoms";
+import {
+  finderShareLinkAtom,
+  shareModalFileAtom,
+} from "@/app/lib/global-atoms/sharesAtoms";
 import {
   createShare,
   revokeShare,
@@ -48,11 +51,17 @@ type ModalState =
   // indeterminate in that case. Wiring the future `ShareProgress` channel
   // is just `setState({ kind: "running", progress })` from its callback.
   | { kind: "running"; progress?: ShareProgress }
-  | { kind: "done"; link: ShareLink }
+  // `password` is set only for a Finder password-protected share — the
+  // recipient needs it, so the done view shows it alongside the link.
+  | { kind: "done"; link: ShareLink; password?: string }
   | { kind: "error"; message: string };
 
 export default function ShareFileModal() {
   const [file, setFile] = useAtom(shareModalFileAtom);
+  // A share minted from the macOS Finder right-click flow arrives already
+  // created (see `FinderShareListener`); when set, the modal opens straight
+  // into `done` rather than running the file-driven `createShare` lifecycle.
+  const [finderLink, setFinderLink] = useAtom(finderShareLinkAtom);
   const [state, setState] = useState<ModalState>({ kind: "running" });
   // Auto-copy fires once per `done` transition. Reopening the dialog
   // without closing must not double-copy a stale URL.
@@ -61,7 +70,10 @@ export default function ShareFileModal() {
   const filename = file?.actualFileName || file?.name || "";
   const folderLabel = file?.label;
 
-  const close = useCallback(() => setFile(null), [setFile]);
+  const close = useCallback(() => {
+    setFile(null);
+    setFinderLink(null);
+  }, [setFile, setFinderLink]);
 
   const startShare = useCallback(async () => {
     if (!file || !folderLabel) return;
@@ -93,6 +105,14 @@ export default function ShareFileModal() {
     if (file) startShare();
   }, [file, startShare]);
 
+  // A Finder share is already minted, so open directly in `done`. Resetting
+  // the auto-copy latch lets the copy-on-`done` effect run for this link.
+  useEffect(() => {
+    if (!finderLink) return;
+    autoCopiedRef.current = false;
+    setState({ kind: "done", link: finderLink, password: finderLink.password });
+  }, [finderLink]);
+
   // Auto-copy once we reach `done`. The URL is still rendered in a
   // selectable textbox so the user can re-copy if focus rules block
   // the auto-copy (Safari) or if they just want to verify the value.
@@ -110,7 +130,7 @@ export default function ShareFileModal() {
       });
   }, [state]);
 
-  if (!file) return null;
+  if (!file && !finderLink) return null;
 
   const onCopy = async () => {
     if (state.kind !== "done") return;
@@ -161,6 +181,7 @@ export default function ShareFileModal() {
       {state.kind === "done" && (
         <DoneBody
           link={state.link}
+          password={state.password}
           onCopy={onCopy}
           onOpen={onOpenInBrowser}
           onClose={close}
@@ -331,18 +352,32 @@ function ErrorBody({
 
 function DoneBody({
   link,
+  password,
   onCopy,
   onOpen,
   onClose,
   onRevoke,
 }: {
   link: ShareLink;
+  password?: string;
   onCopy: () => void | Promise<void>;
   onOpen: () => void | Promise<void>;
   onClose: () => void;
   onRevoke: () => void | Promise<void>;
 }) {
   const [copied, setCopied] = useState(false);
+  const [copiedPw, setCopiedPw] = useState(false);
+
+  const handleCopyPassword = async () => {
+    if (!password || copiedPw) return;
+    try {
+      await navigator.clipboard.writeText(password);
+      setCopiedPw(true);
+      setTimeout(() => setCopiedPw(false), 2000);
+    } catch (err) {
+      toast.error(`Could not copy password: ${errorMessage(err)}`);
+    }
+  };
   const expiresAtPretty = formatExpiresAt(link.expiresAt);
   const urlRef = useRef<HTMLTextAreaElement>(null);
   useLayoutEffect(() => {
@@ -411,6 +446,56 @@ function DoneBody({
           )}
         </button>
       </div>
+
+      {password && (
+        <div className="mb-6">
+          <p className="mb-1.5 text-xs font-medium text-grey-30 dark:text-grey-dark-700">
+            Password
+          </p>
+          <div
+            className={cn(
+              "flex items-center gap-2 rounded-[8px] border p-3",
+              "border-grey-80 bg-white",
+              "dark:border-[#494949] dark:bg-[#1f1f1f]",
+            )}
+          >
+            <input
+              readOnly
+              value={password}
+              onFocus={(e) => e.currentTarget.select()}
+              className={cn(
+                "flex-1 bg-transparent font-mono text-xs outline-none",
+                "text-grey-10 dark:text-grey-dark-800",
+              )}
+            />
+            <button
+              type="button"
+              onClick={handleCopyPassword}
+              title={copiedPw ? "Copied!" : "Copy password"}
+              aria-label="Copy password"
+              className={cn(
+                "shrink-0 rounded-md border px-1.5 py-1 transition-colors",
+                copiedPw
+                  ? "border-success-90 bg-success-100 text-success-50 dark:border-success-50/60 dark:bg-success-50/10 dark:text-success-50"
+                  : cn(
+                      "border-grey-80 bg-grey-90 text-grey-10 hover:bg-grey-80",
+                      "dark:border-[#494949] dark:bg-[#2c2c2c] dark:text-white dark:hover:bg-[#363636]",
+                    ),
+              )}
+            >
+              {copiedPw ? (
+                <Check className="size-4" />
+              ) : (
+                <Icons.Copy className="size-4" />
+              )}
+            </button>
+          </div>
+          <p className="mt-1.5 text-xs text-grey-50 dark:text-grey-dark-600">
+            Send this password separately — the link can&apos;t be opened
+            without it.
+          </p>
+        </div>
+      )}
 
       <div className="flex flex-col gap-3">
         <Button

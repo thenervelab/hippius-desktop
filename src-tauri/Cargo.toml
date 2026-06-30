@@ -78,6 +78,8 @@ tokio = { version = "1.49.0", features = [
     "time",
     "fs",
     "process",
+    # Unix-domain socket for the Finder extension bridge (src/finder_bridge).
+    "net",
 ] }
 futures-util = { version = "0.3", default-features = false, features = ["std", "alloc"] }
 tokio-util = "0.7"
@@ -127,16 +129,18 @@ alloy-signer = { version = "0.8", default-features = false }
 alloy-signer-local = { version = "0.8", default-features = false, features = [
     "mnemonic",
 ] }
-# Pinned to the merged hcfs main rev that landed the first-class folder-entry
-# API + wire types (hcfs#250, squash acf3c3b). Bumping this rev is the only way
+# Pinned to the hcfs `feat/share-password-links` rev (descends from the merged
+# folder-entry rev acf3c3b) that adds the password-share key wrap/unwrap
+# (wrap_share_key / build_share_url_private). Bumping this rev is the only way
 # a hcfs change reaches the desktop, so it stays exact and is guarded by the
-# wire-contract pins in tests/hcfs_contract.rs.
-hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "acf3c3bc1783756aa4defe2e17d1b04aade847cc" }
+# wire-contract pins in tests/hcfs_contract.rs. Repin to the merged main rev
+# once the hcfs PR lands.
+hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "0211b331ee6f4688bfdfbdc8457dd653204d0ec1" }
 # hcfs-shared pulls in the `network` module types (RegisterRelativePathEntry,
 # MAX_REGISTER_RELATIVE_PATHS_BATCH, ...) that hcfs-client takes/returns on
 # its public API but does not re-export. Pinned to the same git rev so the
 # wire types stay in lockstep with the client.
-hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "acf3c3bc1783756aa4defe2e17d1b04aade847cc" }
+hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "0211b331ee6f4688bfdfbdc8457dd653204d0ec1" }
 # NFC-normalise relative_path strings before posting them to the server's
 # register_relative_paths endpoint. macOS APFS hands filenames back in NFD
 # and the server's path_validator hard-rejects anything non-NFC — see the
