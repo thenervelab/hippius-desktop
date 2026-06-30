@@ -386,6 +386,21 @@ mod label_tests {
     }
 }
 
+/// All configured drive roots for an account as `(label, on-disk path)`,
+/// skipping the internal `migration` pseudo-drive. Used by the macOS Finder
+/// bridge to register monitored roots and to resolve a clicked path to its drive.
+pub(crate) async fn list_drive_roots(pool: &SqlitePool, account_id: &str) -> Result<Vec<(String, std::path::PathBuf)>> {
+    let owner = account_key(account_id);
+    let rows = sqlx::query("SELECT label, path FROM sync_paths WHERE owner = ? AND label != 'migration' ORDER BY label")
+        .bind(&owner)
+        .fetch_all(pool)
+        .await?;
+    Ok(rows
+        .iter()
+        .map(|row| (row.get::<String, _>("label"), std::path::PathBuf::from(row.get::<String, _>("path"))))
+        .collect())
+}
+
 /// F-1 regression tests: a same-basename second drive must never overwrite the
 /// first drive's path (the silent-merge data-loss bug). These drive the real
 /// `set_sync_path_internal` against a file-backed SQLite pool configured exactly
@@ -436,6 +451,26 @@ mod set_path_tests {
             .await
             .expect("rows");
         rows.iter().map(|r| (r.get("label"), r.get("path"))).collect()
+    }
+
+    #[tokio::test]
+    async fn list_drive_roots_skips_migration_and_returns_label_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pool = make_file_pool(dir.path()).await;
+        let acct = "5roots";
+        set_sync_path_internal(&pool, acct, "/a/docs", false, LabelMode::Exact("docs")).await.expect("docs");
+        set_sync_path_internal(&pool, acct, "/a/pics", false, LabelMode::Exact("pics")).await.expect("pics");
+        set_sync_path_internal(&pool, acct, "/a/mig", false, LabelMode::Exact("migration")).await.expect("migration");
+
+        let roots = list_drive_roots(&pool, acct).await.expect("roots");
+        assert_eq!(
+            roots,
+            vec![
+                ("docs".to_string(), std::path::PathBuf::from("/a/docs")),
+                ("pics".to_string(), std::path::PathBuf::from("/a/pics")),
+            ],
+            "the migration pseudo-drive is skipped; rows are (label, path), label-sorted"
+        );
     }
 
     // The core fix: an `Allocate` add whose basename already exists must suffix

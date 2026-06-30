@@ -42,10 +42,14 @@ pub fn start(app: &AppHandle) {
         }
         info!(path = %socket_path.display(), "finder bridge: listening for the Finder extension");
 
-        // Phase 1 stub dispatcher: log each menu action. The loop ends when the
-        // bridge handle is dropped (process exit), which closes the channel.
+        // Dispatch each inbound menu action to the share engine. Each runs on
+        // its own task so a slow share (network) doesn't block the next click.
+        // The loop ends when the bridge handle is dropped (process exit).
         while let Some(action) = incoming.recv().await {
-            info!(?action, "finder bridge: inbound menu action (stub — share dispatch lands in Phase 2)");
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                crate::finder_bridge::dispatch::handle(app, action).await;
+            });
         }
         info!("finder bridge: inbound channel closed");
     });

@@ -332,6 +332,16 @@ pub async fn hcfs_create_share(
     create_share_inner(&state, &account_id, &folder_label, &relative_path, Some(progress)).await
 }
 
+/// Mint a public share for a synced file with the same capability + eligibility
+/// guards as [`hcfs_create_share`] but no progress channel. Entry point for the
+/// macOS Finder bridge dispatcher, where a right-click has no webview channel to
+/// stream progress into.
+pub(crate) async fn share_synced_file(state: &AppState, account_id: &str, folder_label: &str, relative_path: &str) -> Result<ShareLink> {
+    require_shares_supported(state, account_id).await?;
+    require_eligible(state, account_id, InsufficientCreditsAction::Sharing, 0).await?;
+    create_share_inner(state, account_id, folder_label, relative_path, None).await
+}
+
 /// Revoke an existing share and immediately mint a new one for the
 /// same source file. Effectively a TTL extension built out of the
 /// primitives we already have, since hcfs-server doesn't expose an

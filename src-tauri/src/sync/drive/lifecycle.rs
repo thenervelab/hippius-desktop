@@ -1970,7 +1970,12 @@ pub async fn auto_init_sync(
     // FE entry that flows account_id into the secret-using inner; authorize
     // against the session before it reaches the mnemonic/token paths.
     let account_id = state.require_session_account(&account_id)?;
-    auto_init_sync_inner(app.clone(), &state, account_id, mnemonic).await
+    let result = auto_init_sync_inner(app.clone(), &state, account_id.clone(), mnemonic).await?;
+    // Register the configured drive roots with the macOS Finder extension so a
+    // right-click inside a synced folder offers "Share via Hippius". Best-effort.
+    #[cfg(target_os = "macos")]
+    crate::finder_bridge::dispatch::register_drive_roots(&app, &account_id).await;
+    Ok(result)
 }
 
 // =========================================================================

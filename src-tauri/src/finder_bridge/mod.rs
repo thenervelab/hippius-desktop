@@ -25,3 +25,8 @@ pub mod container;
 /// in `AppState` and runs inside the Tauri async runtime).
 #[cfg(target_os = "macos")]
 pub mod lifecycle;
+
+/// Inbound-click → share dispatch + drive-root registration — macOS-only (it
+/// reaches the share engine and the bridge handle in `AppState`).
+#[cfg(target_os = "macos")]
+pub mod dispatch;
