@@ -37,6 +37,13 @@ enum WireProtocol {
         return "\(verb):\(encodePath(url))"
     }
 
+    /// Encode a `SHARE_PRIVATE` line for a clicked URL (file or folder). The app
+    /// re-derives in-drive/outside and file/folder from the path, so one private
+    /// verb covers every target.
+    static func sharePrivateLine(for url: URL) -> String {
+        return "SHARE_PRIVATE:\(encodePath(url))"
+    }
+
     // MARK: - Path codec (mirrors Rust encode_path / decode_path)
 
     /// Percent-encode a file URL's raw filesystem bytes to printable ASCII.

@@ -22,6 +22,10 @@ use crate::shares::history::{self, HistoryEntry};
 use crate::shares::origin;
 use chrono::Utc;
 use hcfs_client::client::share::{ShareProgress, ShareProgressFn, ShareSummary as UpstreamShareSummary};
+// The keystore trait's `get` is only used by the macOS private-share path
+// (`make_private`), so gate the import to avoid an unused-import warning on Linux.
+#[cfg(target_os = "macos")]
+use hcfs_client::client::share::ShareKeystore;
 use serde::Serialize;
 use sqlx::sqlite::SqlitePool;
 use std::path::{Component, Path, PathBuf};
@@ -425,6 +429,62 @@ pub(crate) async fn share_directory_as_zip(state: &AppState, account_id: &str, d
         .map_err(|e| AppError::Io(std::io::Error::other(e)))??;
 
     share_local_file(state, account_id, temp.path(), &zip_filename, "application/zip").await
+}
+
+/// A freshly-minted share turned into a password-protected (`#p=`) link, plus
+/// the password the recipient needs. Returned by [`make_private`] so the Finder
+/// dispatcher can show both to the user.
+#[cfg(target_os = "macos")]
+pub(crate) struct PrivateShare {
+    /// The share link, with its URL rewritten to the `#p=` (wrapped-key) form.
+    pub link: ShareLink,
+    /// The generated password. The recipient cannot open the link without it.
+    pub password: String,
+}
+
+/// Wrap an already-minted public share into a password-protected one: generate a
+/// random password, read the share's key back from the keystore (where
+/// `create_share` just stored it), wrap it under the password, and replace the
+/// `#k=` URL with a `#p=` one. The raw key never appears in the returned URL.
+///
+/// There is no password-entry UI yet, so a fresh random password is generated
+/// every time (see [`generate_share_password`]); the caller surfaces it to the
+/// user to convey out-of-band.
+// No `account_id`: the keystore is keyed by the globally-unique share token,
+// which we just minted for this account, so the key lookup needs no account scope.
+#[cfg(target_os = "macos")]
+pub(crate) async fn make_private(state: &AppState, public: ShareLink) -> Result<PrivateShare> {
+    let pool = state.pool()?;
+    let keystore = SqliteShareKeystore::new(pool.clone());
+    let key = keystore
+        .get(&public.share_token)
+        .map_err(|e| AppError::Crypto(format!("share keystore lookup: {e}")))?
+        // The key was written by create_share moments ago on this same device,
+        // so a miss here means the keystore write failed silently — surface it
+        // rather than emit an unopenable link.
+        .ok_or_else(|| AppError::Crypto("share key missing from keystore right after minting".into()))?;
+
+    let password = generate_share_password();
+    let blob = hcfs_client::client::share::wrap_share_key(&password, &key).map_err(|e| AppError::Crypto(format!("wrap share key: {e}")))?;
+    let share_url = hcfs_client::client::share::build_share_url_private(CONSOLE_BASE_URL, &public.share_token, &blob);
+
+    Ok(PrivateShare {
+        link: ShareLink { share_url, ..public },
+        password,
+    })
+}
+
+/// Generate a random share password: 20 alphanumeric characters (~119 bits of
+/// entropy) drawn from the OS CSPRNG via `rand`. Combined with the recipient's
+/// Argon2id work factor this is strong against brute force.
+///
+/// TEMPORARY: there is no password-entry UI yet, so every private share gets a
+/// fresh random password the user conveys to the recipient out-of-band.
+#[cfg(target_os = "macos")]
+fn generate_share_password() -> String {
+    use rand::Rng;
+    use rand::distributions::Alphanumeric;
+    rand::thread_rng().sample_iter(&Alphanumeric).take(20).map(char::from).collect()
 }
 
 /// Revoke an existing share and immediately mint a new one for the
@@ -833,5 +893,14 @@ mod tests {
         let dir = TempDir::new().expect("tempdir");
         let err = resolve_inside_sync_root(dir.path(), "missing.txt").await.unwrap_err();
         assert!(matches!(err, AppError::Validation(_)));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn generated_password_is_20_alphanumeric_and_random() {
+        let a = generate_share_password();
+        assert_eq!(a.len(), 20, "password length is fixed at 20");
+        assert!(a.chars().all(|c| c.is_ascii_alphanumeric()), "alphanumeric only: {a}");
+        assert_ne!(a, generate_share_password(), "two draws must differ with overwhelming probability");
     }
 }

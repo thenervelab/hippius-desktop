@@ -6,7 +6,10 @@
 
 import { atom } from "jotai";
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
-import type { ServerCapabilities, ShareLink } from "@/app/lib/tauri/shares";
+import type {
+  FinderShareCreated,
+  ServerCapabilities,
+} from "@/app/lib/tauri/shares";
 
 /**
  * Cached server capabilities. Populated once after login by
@@ -61,4 +64,4 @@ export const shareModalFileAtom = atom<FormattedUserFile | null>(null);
  * drivers separate means the in-app flow never has to special-case "the link
  * already exists".
  */
-export const finderShareLinkAtom = atom<ShareLink | null>(null);
+export const finderShareLinkAtom = atom<FinderShareCreated | null>(null);

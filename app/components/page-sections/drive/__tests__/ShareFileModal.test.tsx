@@ -21,7 +21,7 @@ import {
   finderShareLinkAtom,
   shareModalFileAtom,
 } from "@/app/lib/global-atoms/sharesAtoms";
-import type { ShareLink } from "@/app/lib/tauri/shares";
+import type { FinderShareCreated } from "@/app/lib/tauri/shares";
 
 // `invoke` is the only side effect the modal performs; mocking it
 // gives us full control over which terminal state we land in.
@@ -72,7 +72,7 @@ function withProvider(node: ReactNode, file: { actualFileName?: string; name: st
 // Seeds the Finder-driven atom instead of the file atom — the same signal
 // `FinderShareListener` delivers when the macOS extension's click is minted
 // into a share in Rust.
-function withFinderLink(node: ReactNode, link: ShareLink) {
+function withFinderLink(node: ReactNode, link: FinderShareCreated) {
   const store = createStore();
   store.set(finderShareLinkAtom, link);
   return <Provider store={store}>{node}</Provider>;
@@ -212,6 +212,43 @@ describe("ShareFileModal", () => {
         "https://console.hippius.com/share/finder-tok#k=FK",
       );
     });
+  });
+
+  it("shows the generated password for a private Finder share", async () => {
+    const { writeText } = installClipboard();
+    render(
+      withFinderLink(<ShareFileModal />, {
+        shareToken: "priv-tok",
+        shareUrl: "https://console.hippius.com/share/priv-tok#p=BLOB",
+        expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+        password: "s3cretPASSWORD123abc",
+      }),
+    );
+
+    // URL is shown, plus the password and the "send separately" guidance.
+    await screen.findByDisplayValue(/share\/priv-tok#p=BLOB/);
+    expect(screen.getByDisplayValue("s3cretPASSWORD123abc")).toBeInTheDocument();
+    expect(screen.getByText(/send this password separately/i)).toBeInTheDocument();
+    // Auto-copy still copies the URL, not the password.
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(
+        "https://console.hippius.com/share/priv-tok#p=BLOB",
+      );
+    });
+  });
+
+  it("omits the password field for a public Finder share", async () => {
+    installClipboard();
+    render(
+      withFinderLink(<ShareFileModal />, {
+        shareToken: "pub-tok",
+        shareUrl: "https://console.hippius.com/share/pub-tok#k=KEY",
+        expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+      }),
+    );
+
+    await screen.findByDisplayValue(/share\/pub-tok#k=KEY/);
+    expect(screen.queryByText(/send this password separately/i)).not.toBeInTheDocument();
   });
 
   it("calls hcfs_revoke_share when the user revokes from the done state", async () => {

@@ -1,10 +1,11 @@
 //! Dispatch inbound Finder menu actions to the share engine (macOS).
 //!
 //! A click forwarded by the extension carries an absolute path. We resolve it
-//! to its Hippius drive ([`super::resolve`]); for an in-drive file we mint a
-//! share via the existing engine and emit `finder:share-created` to the
-//! frontend (which copies the link + shows the share modal). Files outside a
-//! drive, and folders, are handled in Phase 2C.
+//! to its Hippius drive ([`super::resolve`]) and mint a share via the existing
+//! engine: an in-drive file shares by `(label, relative_path)`, an outside file
+//! by raw bytes, and a folder by zipping it into one blob. A private click also
+//! wraps the key under a random password (`#p=`). On success we emit
+//! `finder:share-created`, which the frontend copies + shows in the share modal.
 
 use std::path::Path;
 
@@ -17,19 +18,77 @@ use crate::finder_bridge::protocol::ClientMessage;
 use crate::finder_bridge::resolve::{resolve_share_target, ShareTarget};
 use crate::shares::commands::ShareLink;
 
+/// Payload for the `finder:share-created` event. Both public and private shares
+/// surface through this one event; the frontend distinguishes them by whether
+/// `password` is present (a private link is unopenable without it, so the FE
+/// shows it next to the URL for the user to pass on out-of-band).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FinderShareCreated {
+    share_token: String,
+    share_url: String,
+    expires_at: String,
+    /// `Some` only for a password-protected (`#p=`) share — the randomly
+    /// generated password. Omitted from the JSON for a public share.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    password: Option<String>,
+}
+
+impl FinderShareCreated {
+    /// A public (`#k=`) share carries no password.
+    fn public(link: ShareLink) -> Self {
+        Self {
+            share_token: link.share_token,
+            share_url: link.share_url,
+            expires_at: link.expires_at,
+            password: None,
+        }
+    }
+}
+
 /// Resolve a clicked path and mint a share; log the outcome and, on success,
-/// emit `finder:share-created` for the frontend.
+/// emit `finder:share-created` for the frontend. A `SharePrivate` click wraps
+/// the key under a random password (no prompt yet) and carries it in the
+/// payload; the public verbs mint a `#k=` link with no password.
 pub async fn handle(app: AppHandle, message: ClientMessage) {
-    let clicked = match message {
-        ClientMessage::Share(path) | ClientMessage::UploadShare(path) => path,
+    let (clicked, result) = match message {
+        ClientMessage::Share(path) | ClientMessage::UploadShare(path) => {
+            let created = share_for_path(&app, &path).await.map(FinderShareCreated::public);
+            (path, created)
+        }
+        ClientMessage::SharePrivate(path) => {
+            let created = share_private_for_path(&app, &path).await;
+            (path, created)
+        }
     };
-    match share_for_path(&app, &clicked).await {
-        Ok(link) => {
-            info!(url = %link.share_url, path = %clicked.display(), "finder bridge: share link created");
-            let _ = app.emit("finder:share-created", &link);
+    match result {
+        Ok(created) => {
+            info!(
+                url = %created.share_url,
+                private = created.password.is_some(),
+                path = %clicked.display(),
+                "finder bridge: share link created"
+            );
+            let _ = app.emit("finder:share-created", &created);
         }
         Err(error) => warn!(%error, path = %clicked.display(), "finder bridge: share failed"),
     }
+}
+
+/// Mint a share for `clicked`, then wrap its key under a freshly generated
+/// random password into a `#p=` private link. Reuses [`share_for_path`] for the
+/// in-drive/outside/file/folder resolution — the wrap is a pure post-step that
+/// reads the just-stored key back from the keystore.
+async fn share_private_for_path(app: &AppHandle, clicked: &Path) -> Result<FinderShareCreated> {
+    let public = share_for_path(app, clicked).await?;
+    let state = app.state::<AppState>();
+    let private = crate::shares::commands::make_private(&state, public).await?;
+    Ok(FinderShareCreated {
+        share_token: private.link.share_token,
+        share_url: private.link.share_url,
+        expires_at: private.link.expires_at,
+        password: Some(private.password),
+    })
 }
 
 async fn share_for_path(app: &AppHandle, clicked: &Path) -> Result<ShareLink> {

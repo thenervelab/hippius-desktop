@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import { useSetAtom } from "jotai";
 import { finderShareLinkAtom } from "@/app/lib/global-atoms/sharesAtoms";
-import type { ShareLink } from "@/app/lib/tauri/shares";
+import type { FinderShareCreated } from "@/app/lib/tauri/shares";
 import { registerTauriListeners } from "@/lib/utils/tauriListeners";
 
 /**
@@ -28,7 +28,7 @@ export default function FinderShareListener() {
     const { cleanup } = registerTauriListeners([
       [
         "finder:share-created",
-        (event) => setFinderShareLink(event.payload as ShareLink),
+        (event) => setFinderShareLink(event.payload as FinderShareCreated),
       ],
     ]);
     return cleanup;

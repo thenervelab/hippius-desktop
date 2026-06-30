@@ -63,6 +63,11 @@ pub enum ClientMessage {
     Share(PathBuf),
     /// "Upload & Share via Hippius" on a path outside every Hippius drive.
     UploadShare(PathBuf),
+    /// "Share via Hippius (Password)" — mint a password-protected (`#p=`) link.
+    /// The verb carries only the private *intent*; the app re-derives
+    /// in-drive/outside and file/folder from the path, exactly like the public
+    /// verbs, so one private verb covers every target.
+    SharePrivate(PathBuf),
 }
 
 impl ClientMessage {
@@ -72,6 +77,7 @@ impl ClientMessage {
         match self {
             ClientMessage::Share(path) => format!("SHARE:{}", encode_path(path)),
             ClientMessage::UploadShare(path) => format!("UPLOAD_SHARE:{}", encode_path(path)),
+            ClientMessage::SharePrivate(path) => format!("SHARE_PRIVATE:{}", encode_path(path)),
         }
     }
 
@@ -81,6 +87,7 @@ impl ClientMessage {
         match verb {
             "SHARE" => Ok(ClientMessage::Share(decode_path(rest)?)),
             "UPLOAD_SHARE" => Ok(ClientMessage::UploadShare(decode_path(rest)?)),
+            "SHARE_PRIVATE" => Ok(ClientMessage::SharePrivate(decode_path(rest)?)),
             other => Err(ProtocolError::UnknownVerb(other.to_string())),
         }
     }
@@ -249,6 +256,18 @@ mod tests {
     fn upload_share_round_trips() {
         let m = ClientMessage::UploadShare(PathBuf::from("/tmp/outside.pdf"));
         assert_eq!(ClientMessage::parse(&m.to_wire()), Ok(m));
+    }
+
+    #[test]
+    fn share_private_round_trips_and_has_distinct_verb() {
+        let m = ClientMessage::SharePrivate(PathBuf::from("/Users/x/My: Notes/a b.txt"));
+        assert!(m.to_wire().starts_with("SHARE_PRIVATE:"), "private share must use its own verb");
+        assert_eq!(ClientMessage::parse(&m.to_wire()), Ok(m));
+        // The longer verb must not be mis-parsed as the public SHARE verb.
+        assert_eq!(
+            ClientMessage::parse("SHARE_PRIVATE:/x"),
+            Ok(ClientMessage::SharePrivate(PathBuf::from("/x")))
+        );
     }
 
     #[test]

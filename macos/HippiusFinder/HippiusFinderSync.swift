@@ -87,18 +87,33 @@ final class HippiusFinderSync: FIFinderSync {
         let menu = NSMenu(title: "")
         guard menuKind == .contextualMenuForItems else { return menu }
 
-        let item: NSMenuItem
+        // App down / not logged in: a single "open the app" item, no half-working
+        // share attempts (the socket is the only way to mint a link).
         if !socket.isConnected {
-            item = NSMenuItem(title: "Open Hippius to share", action: #selector(openHippius(_:)), keyEquivalent: "")
-        } else if selectionIsInsideRoots() {
-            item = NSMenuItem(title: "Share via Hippius", action: #selector(shareSelection(_:)), keyEquivalent: "")
-        } else {
-            item = NSMenuItem(title: "Upload & Share via Hippius", action: #selector(uploadShareSelection(_:)), keyEquivalent: "")
+            addItem(to: menu, title: "Open Hippius to share", action: #selector(openHippius(_:)))
+            return menu
         }
+
+        // Public share — the label depends on whether the selection is inside a
+        // Hippius drive; either way the app re-derives the real action from the path.
+        let inside = selectionIsInsideRoots()
+        addItem(
+            to: menu,
+            title: inside ? "Share via Hippius" : "Upload & Share via Hippius",
+            action: inside ? #selector(shareSelection(_:)) : #selector(uploadShareSelection(_:))
+        )
+        // Password-protected share — one item for any target; the app generates
+        // the password (no prompt yet) and returns it alongside the link.
+        addItem(to: menu, title: "Share via Hippius (Password)", action: #selector(shareSelectionPrivate(_:)))
+        return menu
+    }
+
+    /// Append a menu item carrying the Hippius logo, targeted at this extension.
+    private func addItem(to menu: NSMenu, title: String, action: Selector) {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
         item.target = self
         item.image = HippiusFinderSync.menuIcon
         menu.addItem(item)
-        return menu
     }
 
     /// The Hippius logo rendered next to each menu item, sized for a menu row
@@ -132,6 +147,16 @@ final class HippiusFinderSync: FIFinderSync {
 
     @objc private func uploadShareSelection(_ sender: AnyObject?) {
         sendSelection(upload: true)
+    }
+
+    /// Password-protected share for every selected item. The app mints the link,
+    /// generates the password, and returns both — there is no per-item verb for
+    /// in-drive vs outside because the app re-resolves the path.
+    @objc private func shareSelectionPrivate(_ sender: AnyObject?) {
+        let urls = FIFinderSyncController.default().selectedItemURLs() ?? []
+        for url in urls {
+            socket.send(WireProtocol.sharePrivateLine(for: url))
+        }
     }
 
     /// The app re-resolves the path authoritatively against its drive list, so
