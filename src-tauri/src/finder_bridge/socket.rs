@@ -331,9 +331,16 @@ mod tests {
         let mut lines = BufReader::new(client).lines();
         bridge.shutdown();
 
-        // The server drops both stream halves on cancel, so the client read
-        // returns EOF rather than hanging.
-        let eof = timeout(TIMEOUT, lines.next_line()).await.expect("timeout").expect("io");
-        assert!(eof.is_none(), "expected EOF after shutdown, got {eof:?}");
+        // After shutdown the server drops both stream halves, so the client's
+        // read must COMPLETE (not hang). It yields a clean EOF (`Ok(None)`) on
+        // macOS, but Linux can surface the abrupt server-side close as a
+        // `ConnectionReset` error instead — both mean "the connection closed",
+        // which is the property under test. We only reject a hang (timeout) or
+        // the connection somehow delivering more data.
+        let closed = timeout(TIMEOUT, lines.next_line()).await.expect("read hung after shutdown");
+        match closed {
+            Ok(None) | Err(_) => {} // EOF (macOS) or connection reset (Linux)
+            Ok(Some(line)) => panic!("expected the connection to close after shutdown, got a line: {line:?}"),
+        }
     }
 }

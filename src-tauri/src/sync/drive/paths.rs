@@ -388,7 +388,10 @@ mod label_tests {
 
 /// All configured drive roots for an account as `(label, on-disk path)`,
 /// skipping the internal `migration` pseudo-drive. Used by the macOS Finder
-/// bridge to register monitored roots and to resolve a clicked path to its drive.
+/// bridge to register monitored roots and to resolve a clicked path to its
+/// drive — macOS-gated because that bridge is its only caller (un-gated it is
+/// dead code on the Linux CI build).
+#[cfg(target_os = "macos")]
 pub(crate) async fn list_drive_roots(pool: &SqlitePool, account_id: &str) -> Result<Vec<(String, std::path::PathBuf)>> {
     let owner = account_key(account_id);
     let rows = sqlx::query("SELECT label, path FROM sync_paths WHERE owner = ? AND label != 'migration' ORDER BY label")
@@ -453,6 +456,9 @@ mod set_path_tests {
         rows.iter().map(|r| (r.get("label"), r.get("path"))).collect()
     }
 
+    // macOS-gated to match `list_drive_roots` itself (its sole caller is the
+    // macOS Finder bridge); on Linux the fn does not exist.
+    #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn list_drive_roots_skips_migration_and_returns_label_path() {
         let dir = tempfile::tempdir().expect("tempdir");
