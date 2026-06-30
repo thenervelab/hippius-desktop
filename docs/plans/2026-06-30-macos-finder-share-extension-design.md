@@ -97,7 +97,7 @@ Already in place and reused unchanged:
 
 New work required for the extension:
 
-1. **App Group** — add `com.apple.security.application-groups` to **both** the app's `entitlements.plist` and the extension's entitlements, and **register the group ID in the Apple Developer portal** (Account-Holder action — the one external dependency).
+1. **App Group** — add `com.apple.security.application-groups` to **both** the app's `entitlements.plist` and the extension's entitlements. Using a **Team-ID-prefixed** group ID (`<TEAMID>.com.hippius.shared`) needs **no Apple-portal registration** for Developer ID distribution — the entitlement is unrestricted on macOS. (See the Phase 0 signing runbook.)
 2. **Team ID as config** — currently only embedded inside the `APPLE_SIGNING_IDENTITY` secret string; the App Group ID and extension entitlements need it as an explicit value.
 3. **Extension bundle + entitlements** — a second signable bundle (e.g. `hippius.com.FinderSync`) that **must be sandboxed** (`app-sandbox = true`), unlike the main app (deliberately `false`). App Groups bridge the sandbox boundary.
 4. **Build/CI inject + inside-out re-sign** — Tauri does not natively embed `.appex`. Add a sidecar Xcode target that builds the extension, plus a post-build step (mirroring `tauri-plugin-widgets`): inject into `Contents/PlugIns/`, sign the extension first, then re-sign the app (inside-out) with hardened runtime, rebuild the DMG. Set the bundle `targets` so Tauri's built-in DMG (which omits the extension) is replaced by the script's.
