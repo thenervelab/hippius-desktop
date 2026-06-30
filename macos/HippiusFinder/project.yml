@@ -7,8 +7,11 @@
 name: HippiusFinder
 options:
   bundleIdPrefix: hippius.com
+  # 11.0 for SF Symbol badge images (NSImage(systemSymbolName:)). The main app
+  # targets 10.13, but an app extension may set its own (higher) minimum — it
+  # simply won't load on older macOS, where the rich Finder popover isn't a goal.
   deploymentTarget:
-    macOS: "10.13"
+    macOS: "11.0"
   createIntermediateGroups: true
 targets:
   HippiusFinder:
