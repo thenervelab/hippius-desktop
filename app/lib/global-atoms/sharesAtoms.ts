@@ -6,7 +6,7 @@
 
 import { atom } from "jotai";
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
-import type { ServerCapabilities } from "@/app/lib/tauri/shares";
+import type { ServerCapabilities, ShareLink } from "@/app/lib/tauri/shares";
 
 /**
  * Cached server capabilities. Populated once after login by
@@ -48,3 +48,17 @@ export const shareFeatureEnabledAtom = atom(() => true);
  * IPC round-trip to fetch metadata.
  */
 export const shareModalFileAtom = atom<FormattedUserFile | null>(null);
+
+/**
+ * An already-minted share link to present in `ShareFileModal`, driven by
+ * the macOS Finder right-click flow (`finder:share-created`). `null` means
+ * closed.
+ *
+ * This is distinct from `shareModalFileAtom`: that atom drives the modal to
+ * *create* a share from a file (the `running → done` lifecycle), whereas a
+ * Finder share is already minted in Rust before the FE hears about it — the
+ * modal opens straight into its `done` state with this link. Keeping the two
+ * drivers separate means the in-app flow never has to special-case "the link
+ * already exists".
+ */
+export const finderShareLinkAtom = atom<ShareLink | null>(null);

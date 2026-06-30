@@ -17,7 +17,11 @@ import type { ReactNode } from "react";
 import { Channel } from "@tauri-apps/api/core";
 
 import ShareFileModal from "../ShareFileModal";
-import { shareModalFileAtom } from "@/app/lib/global-atoms/sharesAtoms";
+import {
+  finderShareLinkAtom,
+  shareModalFileAtom,
+} from "@/app/lib/global-atoms/sharesAtoms";
+import type { ShareLink } from "@/app/lib/tauri/shares";
 
 // `invoke` is the only side effect the modal performs; mocking it
 // gives us full control over which terminal state we land in.
@@ -62,6 +66,15 @@ function withProvider(node: ReactNode, file: { actualFileName?: string; name: st
   // context menu would deliver in production.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   store.set(shareModalFileAtom, file as any);
+  return <Provider store={store}>{node}</Provider>;
+}
+
+// Seeds the Finder-driven atom instead of the file atom — the same signal
+// `FinderShareListener` delivers when the macOS extension's click is minted
+// into a share in Rust.
+function withFinderLink(node: ReactNode, link: ShareLink) {
+  const store = createStore();
+  store.set(finderShareLinkAtom, link);
   return <Provider store={store}>{node}</Provider>;
 }
 
@@ -171,6 +184,34 @@ describe("ShareFileModal", () => {
     // Second call succeeds; URL appears.
     await screen.findByDisplayValue(/console\.hippius\.com\/share\/tok-xyz#k=KEY2/);
     expect(invokeMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("opens directly in done for a Finder-minted link without re-minting", async () => {
+    const { writeText } = installClipboard();
+    // The Finder flow mints the share in Rust before the FE hears about it,
+    // so the modal must present the existing link — never call create_share.
+    render(
+      withFinderLink(<ShareFileModal />, {
+        shareToken: "finder-tok",
+        shareUrl: "https://console.hippius.com/share/finder-tok#k=FK",
+        expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+      }),
+    );
+
+    // The URL is shown straight away (done state), and the running copy never
+    // appears because the create lifecycle is skipped entirely.
+    await screen.findByDisplayValue(/share\/finder-tok#k=FK/);
+    expect(screen.queryByText(/encrypting and uploading/i)).not.toBeInTheDocument();
+    expect(invokeMock).not.toHaveBeenCalledWith(
+      "hcfs_create_share",
+      expect.anything(),
+    );
+    // Auto-copy still runs for the seeded link.
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(
+        "https://console.hippius.com/share/finder-tok#k=FK",
+      );
+    });
   });
 
   it("calls hcfs_revoke_share when the user revokes from the done state", async () => {

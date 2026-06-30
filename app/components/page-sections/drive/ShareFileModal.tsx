@@ -34,7 +34,10 @@ import { toast } from "sonner";
 import { Button, Icons } from "@/components/ui";
 import { FramedDialog } from "@/components/ui/FramedDialog";
 import { cn } from "@/lib/utils";
-import { shareModalFileAtom } from "@/app/lib/global-atoms/sharesAtoms";
+import {
+  finderShareLinkAtom,
+  shareModalFileAtom,
+} from "@/app/lib/global-atoms/sharesAtoms";
 import {
   createShare,
   revokeShare,
@@ -53,6 +56,10 @@ type ModalState =
 
 export default function ShareFileModal() {
   const [file, setFile] = useAtom(shareModalFileAtom);
+  // A share minted from the macOS Finder right-click flow arrives already
+  // created (see `FinderShareListener`); when set, the modal opens straight
+  // into `done` rather than running the file-driven `createShare` lifecycle.
+  const [finderLink, setFinderLink] = useAtom(finderShareLinkAtom);
   const [state, setState] = useState<ModalState>({ kind: "running" });
   // Auto-copy fires once per `done` transition. Reopening the dialog
   // without closing must not double-copy a stale URL.
@@ -61,7 +68,10 @@ export default function ShareFileModal() {
   const filename = file?.actualFileName || file?.name || "";
   const folderLabel = file?.label;
 
-  const close = useCallback(() => setFile(null), [setFile]);
+  const close = useCallback(() => {
+    setFile(null);
+    setFinderLink(null);
+  }, [setFile, setFinderLink]);
 
   const startShare = useCallback(async () => {
     if (!file || !folderLabel) return;
@@ -93,6 +103,14 @@ export default function ShareFileModal() {
     if (file) startShare();
   }, [file, startShare]);
 
+  // A Finder share is already minted, so open directly in `done`. Resetting
+  // the auto-copy latch lets the copy-on-`done` effect run for this link.
+  useEffect(() => {
+    if (!finderLink) return;
+    autoCopiedRef.current = false;
+    setState({ kind: "done", link: finderLink });
+  }, [finderLink]);
+
   // Auto-copy once we reach `done`. The URL is still rendered in a
   // selectable textbox so the user can re-copy if focus rules block
   // the auto-copy (Safari) or if they just want to verify the value.
@@ -110,7 +128,7 @@ export default function ShareFileModal() {
       });
   }, [state]);
 
-  if (!file) return null;
+  if (!file && !finderLink) return null;
 
   const onCopy = async () => {
     if (state.kind !== "done") return;
