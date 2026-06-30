@@ -1,0 +1,36 @@
+# xcodegen project for the Hippius Finder Sync extension.
+# Generate the Xcode project with:  cd macos/HippiusFinder && xcodegen generate
+# Build the unsigned .appex with:
+#   xcodebuild -project HippiusFinder.xcodeproj -scheme HippiusFinder \
+#     -configuration Release CODE_SIGNING_ALLOWED=NO build
+# Signing + embedding into Hippius.app is done by macos/embed-finder-extension.sh.
+name: HippiusFinder
+options:
+  bundleIdPrefix: hippius.com
+  deploymentTarget:
+    macOS: "10.13"
+  createIntermediateGroups: true
+targets:
+  HippiusFinder:
+    type: app-extension
+    platform: macOS
+    sources:
+      - path: .
+        includes:
+          - "*.swift"
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: Hippius
+        CFBundleName: HippiusFinder
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.FinderSync
+          NSExtensionPrincipalClass: HippiusFinder.HippiusFinderSync
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: hippius.com.FinderSync
+        CODE_SIGN_ENTITLEMENTS: ../FinderSync.entitlements
+        CODE_SIGN_STYLE: Manual
+        SWIFT_VERSION: "5.0"
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
