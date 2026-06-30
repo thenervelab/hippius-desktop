@@ -18,6 +18,8 @@ pub mod blockchain;
 pub mod console_access;
 pub mod crypto;
 pub mod error;
+#[cfg(unix)]
+pub mod finder_bridge;
 pub mod infra;
 pub mod notifications;
 pub mod recovery;
