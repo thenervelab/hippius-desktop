@@ -1354,6 +1354,14 @@ pub(crate) async fn initialize_sync_inner(
     // call site stays dumb even under re-init storms.
     crate::sync::relative_path_backfill::spawn_backfill(app.clone(), account_id.clone(), label.clone());
 
+    // One-shot folder-entity backfill for this drive: registers every on-disk
+    // directory (including empty ones, which leave no trace in `path_index`)
+    // as a server folder entity so pre-existing empty folders become visible.
+    // Like the relative-path backfill above, the task re-checks its own
+    // `folder_entries_backfilled_at` flag first, so this call site stays dumb
+    // under re-init storms.
+    crate::sync::folder_entries_backfill::spawn_folder_entries_backfill(app.clone(), account_id.clone(), label.clone());
+
     // Recovery is default-on: ensure this account's mnemonic is registered as a
     // read-only recovery principal, with no user action. Best-effort and guarded
     // to one success per account per session, so the per-drive funnel is a safe

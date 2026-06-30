@@ -256,6 +256,19 @@ pub(crate) fn handle_sync_completed(app: &AppHandle, mut payload: events::SyncCo
     let max_files = reported_count.min(crate::sync::progress::MAX_NOTIFICATION_FILES);
     payload.files = crate::sync::progress::collect_cycle_files_for_label(&app_state.sync, &payload.label, max_files);
 
+    // Side-channel: keep the server's folder entities and the on-disk directory
+    // tree in step. ONE combined fire-and-forget task reconciles local→server
+    // FIRST (register newly-created empty/file-less dirs, unregister removed
+    // ones), THEN materializes server→local over the now-consistent server set
+    // (create empty folders other devices made, remove ones deleted elsewhere).
+    // Sequencing both halves in one task under one throttle is what prevents a
+    // concurrent reconcile + materialize from resurrecting a locally-deleted
+    // empty folder. It does NOT touch the file sync plan, and is throttled +
+    // gated on the backfill flag, so a throttled or pre-backfill cycle is cheap.
+    if let Ok(account_id) = app_state.current_account_id() {
+        crate::sync::folder_entries_materialize::spawn_folder_entity_sync(app.clone(), account_id, payload.label.clone());
+    }
+
     let _ = app.emit(events::SYNC_COMPLETED, payload);
 }
 
@@ -429,6 +442,10 @@ fn handle_sync_stopped(app: &AppHandle, label: String) {
     // Re-arm the "Sync Failed" latch: a paused/removed drive that
     // is later resumed and goes down should notify again.
     app_state.error_notify.clear(&label);
+    // Drop this drive's folder-entity-sync throttle stamp so a resume / re-add
+    // syncs immediately instead of being gated by the prior episode's last-run
+    // time.
+    app_state.folder_entity_sync.clear(&label);
     let _ = app.emit(events::SYNC_STOPPED, events::LabelPayload { label });
 }
 
@@ -449,6 +466,9 @@ fn handle_sync_reset(app: &AppHandle, account_id: String, message: String) {
     // account's down-episode must not suppress the first
     // notification for a different account.
     app_state.error_notify.clear_all();
+    // Wipe every folder-entity-sync throttle stamp: a previous account's
+    // last-run times must not gate the new account's first sync after a switch.
+    app_state.folder_entity_sync.clear_all();
     let _ = app.emit(events::SYNC_RESET, events::SyncResetPayload { account_id, message });
 }
 

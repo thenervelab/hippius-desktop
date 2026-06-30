@@ -399,6 +399,12 @@ pub async fn list_sync_folder_grouped_inner(
         }
     }
     for (name, file_count) in server_only_folders {
+        // Record the name so the empty-folder overlay (step 4b) dedups against
+        // a folder already shown here from a server-only file's PARENT. Without
+        // this, a folder that has both a server-only descendant file AND a
+        // `folder_entries_local` row would be pushed twice — the file-derived
+        // row with its real count, plus a duplicate pending(0) from the cache.
+        seen_names.insert(name.clone());
         folders.push(FileEntry {
             name,
             is_folder: true,
@@ -414,6 +420,30 @@ pub async fn list_sync_folder_grouped_inner(
     }
     files.extend(server_only_files);
 
+    // 4b. Empty-folder overlay. `folder_entries_local` (Task 1.11) is this
+    // device's cache of registered directories — including EMPTY ones, which
+    // leave no file in the rel-path index (it's keyed by file `path_hash`) and
+    // so never reach `server_only_folders`. Add each cached directory that is a
+    // direct child of `subfolder`, grouped by the same first-path-component
+    // rule used above, and dedup via `seen_names` so a folder already shown
+    // (from disk or a file's parent) is never doubled. Owner-scoped so a second
+    // account's cache can't leak in. This is what makes empty folders appear in
+    // the desktop listing, matching the web console's `/browse` UNION.
+    let owner = account_key(&account_id);
+    if let Some(l) = &label
+        && let Ok(pool) = state.pool()
+    {
+        let level_dir = subfolder.as_deref().filter(|s| !s.is_empty()).map_or_else(|| PathBuf::from(&sync_path), |s| PathBuf::from(&sync_path).join(s));
+        for entry in cache_only_folder_candidates(pool, &owner, l, &prefix, &level_dir).await {
+            // `HashSet::insert` returns false when the name is already shown
+            // (from disk or a file's parent) — the dedup-by-name the task
+            // requires, so an on-disk folder is never doubled by its cache row.
+            if seen_names.insert(entry.name.clone()) {
+                folders.push(entry);
+            }
+        }
+    }
+
     // Sort both lists to match macOS Finder name ordering:
     // punctuation/symbols first, then digits, then letters, with natural
     // number ordering within digit runs.
@@ -426,7 +456,6 @@ pub async fn list_sync_folder_grouped_inner(
     // listing. The backfill task itself is the source of truth and will
     // flip the flag once it completes.
     let pending_backfill = if let Some(l) = &label {
-        let owner = account_key(&account_id);
         match state.pool() {
             Ok(pool) => !crate::sync::relative_path_backfill::is_backfilled(pool, &owner, l).await.unwrap_or(true),
             Err(_) => false,
@@ -440,6 +469,85 @@ pub async fn list_sync_folder_grouped_inner(
         files,
         pending_backfill,
     })
+}
+
+/// Build the direct-child folders implied by the `folder_entries_local` cache
+/// (Task 1.11) for one listing level, ready to overlay onto the grouped view.
+///
+/// `folder_entries_local` is this device's cache of registered directories —
+/// including EMPTY ones that leave no file in the rel-path index, so they never
+/// reach `server_only_folders`. This is the source that makes empty folders
+/// appear, matching the web console's `/browse` UNION.
+///
+/// Each cached directory rel-path is grouped by the first path component under
+/// `prefix` (the same rule the file overlay uses). One [`FileEntry`] is emitted
+/// per DISTINCT direct-child name (deduped internally so cache rows `a` and
+/// `a/b` yield `a` once). The caller is responsible for the final dedup against
+/// names already shown from disk / files.
+///
+/// `sync_status` is `synced` when the directory is materialized on disk at this
+/// level (`level_dir/<name>` exists), else `pending` — registered on another
+/// device or not yet downloaded here, mirroring the not-yet-synced convention
+/// `server_only_folders` uses.
+///
+/// The read is `owner`-scoped (the cross-account-leak guard the cache table's
+/// composite PK was designed around) and degrades to an empty overlay on any DB
+/// error: the listing still renders from disk + the rel-path index, the same
+/// "miss the overlay rather than block the listing" trade-off `pending_backfill`
+/// makes.
+async fn cache_only_folder_candidates(
+    pool: &sqlx::sqlite::SqlitePool,
+    owner: &str,
+    label: &str,
+    prefix: &str,
+    level_dir: &std::path::Path,
+) -> Vec<FileEntry> {
+    // Degrade to an empty overlay on a read failure — the overlay is additive
+    // and must never block the listing — but log it: a persistent failure
+    // (corrupt/locked DB) would otherwise be indistinguishable from "no empty
+    // folders" with no diagnostic trail.
+    let rel_paths: Vec<String> = match sqlx::query_scalar::<_, String>("SELECT relative_path FROM folder_entries_local WHERE owner = ? AND label = ?")
+        .bind(owner)
+        .bind(label)
+        .fetch_all(pool)
+        .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            warn!(owner = %owner, label = %label, error = %e, "folder_entries_local read failed; empty-folder overlay skipped this listing");
+            Vec::new()
+        }
+    };
+
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut out: Vec<FileEntry> = Vec::new();
+    for rel in rel_paths {
+        if !rel.starts_with(prefix) {
+            continue;
+        }
+        let remainder = &rel[prefix.len()..];
+        let first_component = match remainder.split_once('/') {
+            Some((first, _rest)) => first,
+            None => remainder,
+        };
+        if first_component.is_empty() || !seen.insert(first_component.to_string()) {
+            continue;
+        }
+        let on_disk = level_dir.join(first_component).is_dir();
+        out.push(FileEntry {
+            name: first_component.to_string(),
+            is_folder: true,
+            size: 0,
+            modified: None,
+            sync_status: if on_disk { "synced" } else { "pending" }.to_string(),
+            arion_hash: String::new(),
+            arion_cid: String::new(),
+            file_count: 0,
+            uploaded_at: 0,
+            updated_at: 0,
+        });
+    }
+    out
 }
 
 #[cfg(test)]

@@ -69,6 +69,16 @@ pub struct AppState {
     /// (`SyncCompleted`), `SyncStopped`, and globally on `SyncReset`. See
     /// `crate::sync::error_notify`.
     pub error_notify: std::sync::Arc<crate::sync::error_notify::ErrorNotifyState>,
+    /// Single per-label min-interval throttle gating the combined per-cycle
+    /// folder-entity sync (reconcile disk→server THEN materialize server→disk).
+    /// The per-cycle completion funnel (`handle_sync_completed`) fires the
+    /// combined sync per drive; this collapses a burst of short cycles into at
+    /// most one walk + folder-entity sync per `MIN_FOLDER_ENTITY_SYNC_INTERVAL`.
+    /// ONE throttle for both halves so they can never run out of step and race
+    /// over the shared cache + server set. In-memory (no timestamp column),
+    /// mirroring the other per-label state objects above. See
+    /// `crate::sync::folder_entries_materialize`.
+    pub folder_entity_sync: std::sync::Arc<crate::sync::folder_entries_reconcile::PerLabelThrottle>,
     /// Monotonically increasing counter, incremented on every
     /// `SyncStarted` event. The `UploadProcessingState` clear gate
     /// reads this to distinguish events from a cycle that began
@@ -215,6 +225,7 @@ impl AppState {
             preparing: std::sync::Arc::new(crate::sync::preparing::PreparingState::new()),
             credits_exhausted: std::sync::Arc::new(crate::sync::credits_exhausted::CreditsExhaustedState::new()),
             error_notify: std::sync::Arc::new(crate::sync::error_notify::ErrorNotifyState::new()),
+            folder_entity_sync: std::sync::Arc::new(crate::sync::folder_entries_reconcile::PerLabelThrottle::new()),
             sync_session_epoch: AtomicU64::new(0),
             tray_panel_hidden_at: AtomicU64::new(0),
             recovery_cancel: std::sync::atomic::AtomicBool::new(false),

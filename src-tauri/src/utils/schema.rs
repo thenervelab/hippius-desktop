@@ -17,6 +17,7 @@ const EXPECTED_TABLES: &[&str] = &[
     "sync_paths",
     "sync_intent",
     "sync_file_failures",
+    "folder_entries_local",
     "wss_endpoint",
     "security_scoped_bookmarks",
     "auth_session",
@@ -117,6 +118,7 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     ensure_sync_paths(&mut tx).await?;
     ensure_sync_intent(&mut tx).await?;
     ensure_sync_file_failures(&mut tx).await?;
+    ensure_folder_entries_local(&mut tx).await?;
     ensure_wss_endpoint(&mut tx).await?;
     ensure_security_scoped_bookmarks(&mut tx).await?;
     ensure_auth_session(&mut tx).await?;
@@ -175,7 +177,7 @@ async fn ensure_sync_paths(conn: &mut SqliteConnection) -> Result<(), sqlx::Erro
     .execute(&mut *conn)
     .await?;
 
-    // Read sync_paths columns ONCE and reuse across the three column-add
+    // Read sync_paths columns ONCE and reuse across the four column-add
     // migration blocks below. Saves three round-trips on every cold start.
     let sync_paths_cols = table_columns(&mut *conn, "sync_paths").await?;
 
@@ -210,6 +212,21 @@ async fn ensure_sync_paths(conn: &mut SqliteConnection) -> Result<(), sqlx::Erro
             .await?;
     }
 
+    // Migration: add `folder_entries_backfilled_at` column if missing.
+    //
+    // Unix epoch timestamp marking when the one-shot folder-entity backfill
+    // (Task 1.12) succeeded for this drive — registering every existing local
+    // directory as a server folder entity so empty folders appear in the
+    // Console. Exactly mirrors `relative_paths_backfilled_at` above: NULL means
+    // "not yet backfilled", any non-NULL value is a set-once audit breadcrumb.
+    // Kept as a separate flag because the two backfills run independently.
+    if !sync_paths_cols.contains("folder_entries_backfilled_at") {
+        info!("Adding folder_entries_backfilled_at column to sync_paths");
+        sqlx::query("ALTER TABLE sync_paths ADD COLUMN folder_entries_backfilled_at INTEGER")
+            .execute(&mut *conn)
+            .await?;
+    }
+
     // Older DDLs (e.g. `UNIQUE(owner, type)`) get rebuilt to the correct
     // constraint — SQLite cannot ALTER a constraint in place.
     ensure_sync_paths_unique_constraint(&mut *conn).await?;
@@ -223,11 +240,12 @@ async fn ensure_sync_paths(conn: &mut SqliteConnection) -> Result<(), sqlx::Erro
 /// SQLite cannot `ALTER TABLE DROP CONSTRAINT`, so the table is recreated
 /// inside a nested savepoint — `begin()` on a connection already in a
 /// transaction issues a `SAVEPOINT`, so a failed swap rolls back to it without
-/// aborting the rest of schema init. The copy MUST carry `is_paused` and
-/// `relative_paths_backfilled_at` (the caller's ALTERs guarantee both exist on
-/// the source) so a paused drive stays paused and the one-shot backfill
-/// breadcrumb survives — omitting them silently un-paused drives and
-/// re-triggered the backfill on legacy `UNIQUE(owner, type)` DBs.
+/// aborting the rest of schema init. The copy MUST carry `is_paused`,
+/// `relative_paths_backfilled_at`, and `folder_entries_backfilled_at` (the
+/// caller's ALTERs guarantee all three exist on the source) so a paused drive
+/// stays paused and both one-shot backfill breadcrumbs survive — omitting them
+/// silently un-paused drives and re-triggered a backfill on legacy
+/// `UNIQUE(owner, type)` DBs.
 async fn ensure_sync_paths_unique_constraint(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
     let table_sql = sqlx::query("SELECT sql FROM sqlite_master WHERE type='table' AND name='sync_paths'")
         .fetch_optional(&mut *conn)
@@ -261,6 +279,7 @@ async fn ensure_sync_paths_unique_constraint(conn: &mut SqliteConnection) -> Res
             timestamp INTEGER NOT NULL,
             is_paused INTEGER NOT NULL DEFAULT 0,
             relative_paths_backfilled_at INTEGER,
+            folder_entries_backfilled_at INTEGER,
             UNIQUE(owner, label)
         )",
     )
@@ -272,8 +291,8 @@ async fn ensure_sync_paths_unique_constraint(conn: &mut SqliteConnection) -> Res
     // only the private one (higher priority). OR IGNORE drops remaining dupes.
     sqlx::query(
         "INSERT OR IGNORE INTO sync_paths_new
-             (id, owner, path, type, label, timestamp, is_paused, relative_paths_backfilled_at)
-         SELECT id, owner, path, type, label, timestamp, is_paused, relative_paths_backfilled_at
+             (id, owner, path, type, label, timestamp, is_paused, relative_paths_backfilled_at, folder_entries_backfilled_at)
+         SELECT id, owner, path, type, label, timestamp, is_paused, relative_paths_backfilled_at, folder_entries_backfilled_at
          FROM sync_paths
          ORDER BY CASE type WHEN 'private' THEN 0 ELSE 1 END",
     )
@@ -355,6 +374,38 @@ async fn ensure_sync_file_failures(conn: &mut SqliteConnection) -> Result<(), sq
     sqlx::query(
         "CREATE INDEX IF NOT EXISTS idx_sync_file_failures_drive
             ON sync_file_failures (owner, label, last_failed_at DESC)",
+    )
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
+
+/// `folder_entries_local` — per-drive cache of the directory rel-paths this
+/// device has registered with the server as first-class folder entities, so the
+/// per-cycle reconcile can diff on-disk dirs against it without re-walking and
+/// re-sending the whole tree every cycle.
+///
+/// Scoped by `owner` (the account-key hash) like every other per-drive
+/// sync-state table — `sync_paths` (`UNIQUE(owner, label)`) and
+/// `sync_file_failures` (`PRIMARY KEY (owner, label, relative_path)`) — because
+/// a `label` is unique only *within* an account, and `sync_paths` rows survive
+/// logout/login while the app supports account switching. Without `owner`, two
+/// accounts on one device that both label a drive "docs" would share rows and
+/// the Task 1.13 reconcile would read another account's cached folder set — the
+/// cross-account-leak class previously fixed for `notification_preferences` and
+/// `address_book`. The composite `PRIMARY KEY (owner, label, relative_path)`
+/// also makes "the same directory registered twice for one drive"
+/// unrepresentable, which the reconcile delta (register/unregister) relies on
+/// for an exact diff. Read/write logic lands with the backfill (Task 1.12) and
+/// reconcile (Task 1.13).
+async fn ensure_folder_entries_local(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS folder_entries_local (
+            owner         TEXT NOT NULL,
+            label         TEXT NOT NULL,
+            relative_path TEXT NOT NULL,
+            PRIMARY KEY (owner, label, relative_path)
+        )",
     )
     .execute(&mut *conn)
     .await?;
@@ -1126,7 +1177,16 @@ mod tests {
             .await
             .expect("PRAGMA failed");
         let names: HashSet<String> = cols.iter().map(|r| r.get::<String, _>("name")).collect();
-        for required in ["owner", "path", "type", "label", "timestamp", "is_paused", "relative_paths_backfilled_at"] {
+        for required in [
+            "owner",
+            "path",
+            "type",
+            "label",
+            "timestamp",
+            "is_paused",
+            "relative_paths_backfilled_at",
+            "folder_entries_backfilled_at",
+        ] {
             assert!(names.contains(required), "sync_paths missing column `{required}`; present: {names:?}");
         }
     }
@@ -1308,5 +1368,99 @@ mod tests {
                 .unwrap_or_else(|e| panic!("row in {table} must exist: {e}"));
             assert_eq!(owner, new_key, "{table}.owner must be migrated to the new key");
         }
+    }
+
+    /// Schema pin for the first-class-empty-folders feature: the per-drive
+    /// directory cache `folder_entries_local` and the `sync_paths`
+    /// `folder_entries_backfilled_at` breadcrumb must both materialize from a
+    /// fresh `ensure_table_schema` run.
+    ///
+    /// Exercises the SQLite contract this schema relies on, not Rust analogues
+    /// (axiom 110): the composite `PRIMARY KEY (owner, label, relative_path)`
+    /// raises a UNIQUE/PRIMARY KEY violation on a duplicate triple (SQLite
+    /// `SQLITE_CONSTRAINT_PRIMARYKEY`, surfaced through `is_unique_violation`)
+    /// while leaving a distinct rel-path, a distinct label, or — critically — the
+    /// same `(label, relative_path)` under a DIFFERENT owner as separate rows
+    /// (the account-scoping guard); and the nullable `INTEGER` column round-trips
+    /// both a written timestamp and a NULL (the set-once "not yet backfilled"
+    /// marker, mirroring `relative_paths_backfilled_at`).
+    #[tokio::test]
+    async fn folder_entries_local_table_and_backfill_flag_exist() {
+        let pool = temp_pool().await;
+        ensure_table_schema(&pool).await.expect("ensure_table_schema failed");
+
+        // The table exists and accepts an (owner, label, relative_path) row.
+        sqlx::query("INSERT INTO folder_entries_local (owner, label, relative_path) VALUES ('5Alice', 'docs', 'a/b')")
+            .execute(&pool)
+            .await
+            .expect("folder_entries_local must accept an insert");
+
+        // A distinct rel-path under the same drive, and a distinct label, are
+        // separate rows — the PK is the (owner, label, relative_path) triple.
+        sqlx::query("INSERT INTO folder_entries_local (owner, label, relative_path) VALUES ('5Alice', 'docs', 'a/c')")
+            .execute(&pool)
+            .await
+            .expect("distinct relative_path under the same drive is a new row");
+        sqlx::query("INSERT INTO folder_entries_local (owner, label, relative_path) VALUES ('5Alice', 'photos', 'a/b')")
+            .execute(&pool)
+            .await
+            .expect("distinct label under the same owner is a new row");
+
+        // Account-scoping guard: the SAME (label, relative_path) under a DIFFERENT
+        // owner is a separate row, so two accounts that both label a drive "docs"
+        // never share folder-cache rows (the cross-account leak this scoping
+        // prevents).
+        sqlx::query("INSERT INTO folder_entries_local (owner, label, relative_path) VALUES ('5Bob', 'docs', 'a/b')")
+            .execute(&pool)
+            .await
+            .expect("same (label, relative_path) under a different owner is a new row");
+
+        // Re-inserting the SAME (owner, label, relative_path) must be a UNIQUE/PK
+        // violation specifically — not an incidental NOT NULL or other error.
+        let dup = sqlx::query("INSERT INTO folder_entries_local (owner, label, relative_path) VALUES ('5Alice', 'docs', 'a/b')")
+            .execute(&pool)
+            .await;
+        match dup {
+            Err(sqlx::Error::Database(e)) => assert!(
+                e.is_unique_violation(),
+                "duplicate (owner, label, relative_path) must be a UNIQUE/PRIMARY KEY violation; got: {e}"
+            ),
+            other => panic!("expected a database unique violation on duplicate PK, got: {other:?}"),
+        }
+
+        // sync_paths gained the nullable folder_entries_backfilled_at column.
+        let cols = sqlx::query("PRAGMA table_info(sync_paths)")
+            .fetch_all(&pool)
+            .await
+            .expect("PRAGMA failed");
+        let names: HashSet<String> = cols.iter().map(|r| r.get::<String, _>("name")).collect();
+        assert!(
+            names.contains("folder_entries_backfilled_at"),
+            "sync_paths missing column `folder_entries_backfilled_at`; present: {names:?}"
+        );
+
+        // The column round-trips a written timestamp and a NULL.
+        sqlx::query(
+            "INSERT INTO sync_paths (owner, path, type, label, timestamp, folder_entries_backfilled_at)
+             VALUES ('o', '/p1', 'private', 'set', 1, 4242)",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert row with a set backfill timestamp");
+        sqlx::query("INSERT INTO sync_paths (owner, path, type, label, timestamp) VALUES ('o', '/p2', 'private', 'unset', 2)")
+            .execute(&pool)
+            .await
+            .expect("insert row leaving the backfill timestamp NULL");
+
+        let set: Option<i64> = sqlx::query_scalar("SELECT folder_entries_backfilled_at FROM sync_paths WHERE label = 'set'")
+            .fetch_one(&pool)
+            .await
+            .expect("read the set row");
+        let unset: Option<i64> = sqlx::query_scalar("SELECT folder_entries_backfilled_at FROM sync_paths WHERE label = 'unset'")
+            .fetch_one(&pool)
+            .await
+            .expect("read the unset row");
+        assert_eq!(set, Some(4242), "a written backfill timestamp must round-trip");
+        assert_eq!(unset, None, "an unwritten backfill timestamp must read back NULL");
     }
 }

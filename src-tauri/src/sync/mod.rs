@@ -20,6 +20,9 @@ mod shared;
 pub use drive::{config, control, device, drive_status, lifecycle, lifecycle_guard, paths, selective};
 pub use failure::{credits_exhausted, error_notify, failure_commands, failure_repo, failure_tracking};
 pub use fileops::{files, folders, recent_uploads, remote};
-pub use migrate::{migration, relative_path_backfill, relative_path_backfill_reset, user_stopped_migration, user_stopped_reversal};
+pub use migrate::{
+    folder_entries_backfill, folder_entries_materialize, folder_entries_reconcile, migration, relative_path_backfill, relative_path_backfill_reset,
+    user_stopped_migration, user_stopped_reversal,
+};
 pub use projection::{events, intent, logic, preparing, progress, status, tauri_bridge, upload_processing};
 pub use shared::{mnemonic, region};

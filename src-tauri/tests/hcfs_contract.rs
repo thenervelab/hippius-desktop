@@ -20,7 +20,9 @@
 use hcfs_client::crypto::{decrypt_small, encrypt_small};
 use hcfs_client::drive::keys::{derive_folder_mnemonic, folder_hash};
 use hcfs_client::drive::remote::derive_encryption_key;
+use hcfs_shared::network::{ListFolderEntriesResult, RegisterFolderEntriesRequest, UnregisterFolderEntriesRequest};
 use proptest::prelude::*;
+use std::collections::BTreeSet;
 
 /// Canonical public BIP-39 zero-vector ("entropy = all zeros"). A well-known
 /// test mnemonic — NEVER a real wallet — safe to commit as a fixture.
@@ -163,4 +165,92 @@ fn at_rest_decrypt_frozen_ciphertext_is_pinned() {
         plaintext, KAT_PLAINTEXT,
         "at-rest format drifted: a file encrypted at the pinned hcfs rev no longer decrypts to its plaintext"
     );
+}
+
+// ── Folder-entry wire-contract pins ────────────────────────────────────────
+//
+// The first-class-empty-folders feature added three foreign `hcfs_shared::network`
+// types the desktop serializes onto / deserializes off the hcfs-server folder-entry
+// endpoints (backfill + per-cycle directory reconcile). The FE is decoupled from
+// Rust types (no codegen), but these cross the desktop↔hcfs DEPENDENCY boundary:
+// the desktop's `hcfs-client` register/unregister calls send/receive exactly this
+// JSON. A future `hcfs-shared` rev that reshapes them (a stray `rename_all`, a
+// renamed field, a dropped `#[serde(alias = "user_id")]`) would silently break
+// those calls at runtime. These pins fail desktop CI on the bump instead.
+//
+// The hcfs-shared crate has its own copies of these tests, but they live in its
+// `#[cfg(test)]` module and never compile into the desktop — only a pin in THIS
+// crate guards the desktop's use of the bumped dep.
+
+#[test]
+fn register_folder_entries_request_wire_pinned() {
+    let req = RegisterFolderEntriesRequest {
+        ss58_address: "5GTestAddress".to_string(),
+        folder_hash: "abc123".to_string(),
+        relative_paths: vec!["Work".to_string(), "Work/Reports".to_string()],
+    };
+
+    let json = serde_json::to_value(&req).expect("serialize");
+    let keys: BTreeSet<&str> = json.as_object().expect("object").keys().map(String::as_str).collect();
+    assert_eq!(
+        keys,
+        ["folder_hash", "relative_paths", "ss58_address"].into_iter().collect::<BTreeSet<_>>(),
+        "RegisterFolderEntriesRequest wire keys must stay exactly these snake_case names"
+    );
+
+    // Round-trip: serialize → deserialize → field equality.
+    let decoded: RegisterFolderEntriesRequest = serde_json::from_value(json).expect("deserialize");
+    assert_eq!(decoded.ss58_address, "5GTestAddress");
+    assert_eq!(decoded.folder_hash, "abc123");
+    assert_eq!(decoded.relative_paths, vec!["Work", "Work/Reports"]);
+
+    // The desktop relies on the legacy `user_id` key still deserializing into
+    // `ss58_address`; a bump dropping the `#[serde(alias = "user_id")]` breaks here.
+    let aliased: RegisterFolderEntriesRequest =
+        serde_json::from_str(r#"{"user_id":"5GLegacy","folder_hash":"h","relative_paths":[]}"#).expect("user_id alias deserializes");
+    assert_eq!(aliased.ss58_address, "5GLegacy", "user_id alias must map onto ss58_address");
+}
+
+#[test]
+fn unregister_folder_entries_request_wire_pinned() {
+    let req = UnregisterFolderEntriesRequest {
+        ss58_address: "5GTestAddress".to_string(),
+        folder_hash: "abc123".to_string(),
+        relative_paths: vec!["Work/Reports".to_string()],
+    };
+
+    let json = serde_json::to_value(&req).expect("serialize");
+    let keys: BTreeSet<&str> = json.as_object().expect("object").keys().map(String::as_str).collect();
+    assert_eq!(
+        keys,
+        ["folder_hash", "relative_paths", "ss58_address"].into_iter().collect::<BTreeSet<_>>(),
+        "UnregisterFolderEntriesRequest wire keys must stay exactly these snake_case names"
+    );
+
+    let decoded: UnregisterFolderEntriesRequest = serde_json::from_value(json).expect("deserialize");
+    assert_eq!(decoded.ss58_address, "5GTestAddress");
+    assert_eq!(decoded.folder_hash, "abc123");
+    assert_eq!(decoded.relative_paths, vec!["Work/Reports"]);
+
+    let aliased: UnregisterFolderEntriesRequest =
+        serde_json::from_str(r#"{"user_id":"5GLegacy","folder_hash":"h","relative_paths":[]}"#).expect("user_id alias deserializes");
+    assert_eq!(aliased.ss58_address, "5GLegacy", "user_id alias must map onto ss58_address");
+}
+
+#[test]
+fn list_folder_entries_result_wire_pinned() {
+    let resp = ListFolderEntriesResult {
+        relative_paths: vec!["Work".to_string(), "Work/Reports".to_string()],
+    };
+
+    let json = serde_json::to_value(&resp).expect("serialize");
+    let keys: BTreeSet<&str> = json.as_object().expect("object").keys().map(String::as_str).collect();
+    assert_eq!(
+        keys,
+        ["relative_paths"].into_iter().collect::<BTreeSet<_>>(),
+        "ListFolderEntriesResult must carry exactly the relative_paths key"
+    );
+
+    let decoded: ListFolderEntriesResult = serde_json::from_value(json).expect("deserialize");
+    assert_eq!(decoded.relative_paths, vec!["Work", "Work/Reports"]);
 }

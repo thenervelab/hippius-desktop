@@ -64,7 +64,39 @@ async fn make_pool() -> SqlitePool {
     .execute(&pool)
     .await
     .expect("create sync_paths");
+    // Mirror the production `folder_entries_local` schema (utils/schema.rs):
+    // this device's cache of registered directories, including empty ones the
+    // rel-path index can't represent. Composite PK = owner + label + path.
+    sqlx::query(
+        "CREATE TABLE folder_entries_local (
+            owner         TEXT NOT NULL,
+            label         TEXT NOT NULL,
+            relative_path TEXT NOT NULL,
+            PRIMARY KEY (owner, label, relative_path)
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("create folder_entries_local");
     pool
+}
+
+/// Insert a `folder_entries_local` cache row for the default account/label.
+async fn insert_folder_entry(pool: &SqlitePool, relative_path: &str) {
+    insert_folder_entry_for_owner(pool, &account_owner(ACCOUNT), relative_path).await;
+}
+
+/// Insert a `folder_entries_local` cache row scoped to an explicit `owner` —
+/// used to prove another account's registered folders never leak into this
+/// account's listing.
+async fn insert_folder_entry_for_owner(pool: &SqlitePool, owner: &str, relative_path: &str) {
+    sqlx::query("INSERT INTO folder_entries_local (owner, label, relative_path) VALUES (?, ?, ?)")
+        .bind(owner)
+        .bind(LABEL)
+        .bind(relative_path)
+        .execute(pool)
+        .await
+        .expect("insert folder_entries_local");
 }
 
 async fn insert_sync_path(pool: &SqlitePool, path: &str, backfilled_at: Option<i64>) {
@@ -273,6 +305,110 @@ async fn subfolder_prefix_is_boundary_safe() {
 
     let file_names: Vec<&str> = docs.files.iter().map(|f| f.name.as_str()).collect();
     assert_eq!(file_names, vec!["in.txt"], "docs2 must NOT leak into docs");
+}
+
+#[tokio::test]
+async fn registered_empty_folder_surfaces_from_cache_overlay() {
+    // The first-class-empty-folders core: a directory registered as a folder
+    // entity (folder_entries_local row) but with NO file under it and NOT
+    // materialized on this device's disk. The rel-path index can't represent
+    // it (no file → no path_hash), so without the cache overlay it is invisible
+    // here even though the server (and the web console) show it. The overlay
+    // surfaces it as `pending` (registered elsewhere / not downloaded).
+    let tmp = tempfile::tempdir().unwrap();
+
+    let pool = make_pool().await;
+    insert_sync_path(&pool, &tmp.path().to_string_lossy(), Some(1_700_000_000)).await;
+    let state = make_state(pool.clone());
+    // No files seeded, no on-disk dir — only the folder-entity cache row.
+    insert_folder_entry(&pool, "Empty").await;
+
+    let root = list_sync_folder_grouped_inner(&state, ACCOUNT.into(), tmp.path().to_string_lossy().into(), None, Some(LABEL.into()))
+        .await
+        .expect("root listing");
+
+    let empty = root
+        .folders
+        .iter()
+        .find(|f| f.name == "Empty")
+        .unwrap_or_else(|| panic!("Empty folder must surface from cache; got {:?}", root.folders.iter().map(|f| &f.name).collect::<Vec<_>>()));
+    assert!(empty.is_folder, "cache overlay entry must be a folder");
+    assert_eq!(empty.sync_status, "pending", "a registered folder not on local disk is pending");
+    assert!(root.files.is_empty(), "overlay must not touch the files list");
+}
+
+#[tokio::test]
+async fn on_disk_empty_folder_with_cache_entry_appears_once() {
+    // Dedup: an empty directory present BOTH on disk and in the folder-entity
+    // cache must appear exactly once — the on-disk entry wins (`synced`), the
+    // cache overlay must not double it.
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir(tmp.path().join("Empty")).expect("mkdir Empty");
+
+    let pool = make_pool().await;
+    insert_sync_path(&pool, &tmp.path().to_string_lossy(), Some(1_700_000_000)).await;
+    let state = make_state(pool.clone());
+    insert_folder_entry(&pool, "Empty").await;
+
+    let root = list_sync_folder_grouped_inner(&state, ACCOUNT.into(), tmp.path().to_string_lossy().into(), None, Some(LABEL.into()))
+        .await
+        .expect("root listing");
+
+    let matches: Vec<&str> = root.folders.iter().filter(|f| f.name == "Empty").map(|f| f.sync_status.as_str()).collect();
+    assert_eq!(matches, vec!["synced"], "on-disk empty folder must appear exactly once as synced (deduped against the cache overlay)");
+}
+
+#[tokio::test]
+async fn server_file_parent_folder_with_cache_entry_appears_once() {
+    // Dedup on the OTHER axis: a folder that exists only because the rel-path
+    // index has a server-only file under it (NOT on local disk, so it's NOT in
+    // the disk-seeded `seen_names`) AND also has a folder_entries_local row.
+    // The server-only-folder push (with its real nested file_count) must win;
+    // the cache overlay must NOT add a second pending(0) row for the same name.
+    let tmp = tempfile::tempdir().unwrap();
+
+    let pool = make_pool().await;
+    insert_sync_path(&pool, &tmp.path().to_string_lossy(), Some(1_700_000_000)).await;
+    let state = make_state(pool.clone());
+    // Server knows one file under "Reports/"; nothing is on disk.
+    seed_cache(&state, &["Reports/q1.txt"]);
+    // The same folder is also registered in the folder-entity cache.
+    insert_folder_entry(&pool, "Reports").await;
+
+    let root = list_sync_folder_grouped_inner(&state, ACCOUNT.into(), tmp.path().to_string_lossy().into(), None, Some(LABEL.into()))
+        .await
+        .expect("root listing");
+
+    let reports: Vec<&_> = root.folders.iter().filter(|f| f.name == "Reports").collect();
+    assert_eq!(
+        reports.len(),
+        1,
+        "Reports must appear exactly once (server-only-folder push wins, not a duplicate cache row); got {:?}",
+        root.folders.iter().map(|f| (&f.name, f.file_count)).collect::<Vec<_>>()
+    );
+    // The surviving row is the file-derived one: pending, with the real nested
+    // count — proving the cache row didn't clobber it with a pending(0) dup.
+    assert_eq!(reports[0].sync_status, "pending");
+    assert_eq!(reports[0].file_count, 1, "file-derived nested count must survive, not a cache pending(0)");
+}
+
+#[tokio::test]
+async fn cache_overlay_is_owner_scoped() {
+    // Another account's registered folder must never leak into this account's
+    // listing — the overlay SELECT is scoped to account_key(account_id).
+    let tmp = tempfile::tempdir().unwrap();
+
+    let pool = make_pool().await;
+    insert_sync_path(&pool, &tmp.path().to_string_lossy(), Some(1_700_000_000)).await;
+    let state = make_state(pool.clone());
+    insert_folder_entry_for_owner(&pool, "some-other-account-owner-hash", "Secret").await;
+
+    let root = list_sync_folder_grouped_inner(&state, ACCOUNT.into(), tmp.path().to_string_lossy().into(), None, Some(LABEL.into()))
+        .await
+        .expect("root listing");
+
+    let names: Vec<&str> = root.folders.iter().map(|f| f.name.as_str()).collect();
+    assert!(!names.contains(&"Secret"), "another owner's folder leaked: {names:?}");
 }
 
 #[tokio::test]

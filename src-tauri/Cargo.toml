@@ -1,6 +1,6 @@
 [package]
 name = "Hippius"
-version = "0.2.0"
+version = "0.3.0"
 description = "Hippius Desktop App"
 authors = ["you"]
 edition = "2024"
@@ -127,12 +127,16 @@ alloy-signer = { version = "0.8", default-features = false }
 alloy-signer-local = { version = "0.8", default-features = false, features = [
     "mnemonic",
 ] }
-hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "a5a686bf561b79bda175b2fce1c5feebc5c2c0fa" }
+# Pinned to the merged hcfs main rev that landed the first-class folder-entry
+# API + wire types (hcfs#250, squash acf3c3b). Bumping this rev is the only way
+# a hcfs change reaches the desktop, so it stays exact and is guarded by the
+# wire-contract pins in tests/hcfs_contract.rs.
+hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "acf3c3bc1783756aa4defe2e17d1b04aade847cc" }
 # hcfs-shared pulls in the `network` module types (RegisterRelativePathEntry,
 # MAX_REGISTER_RELATIVE_PATHS_BATCH, ...) that hcfs-client takes/returns on
 # its public API but does not re-export. Pinned to the same git rev so the
 # wire types stay in lockstep with the client.
-hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "a5a686bf561b79bda175b2fce1c5feebc5c2c0fa" }
+hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "acf3c3bc1783756aa4defe2e17d1b04aade847cc" }
 # NFC-normalise relative_path strings before posting them to the server's
 # register_relative_paths endpoint. macOS APFS hands filenames back in NFD
 # and the server's path_validator hard-rejects anything non-NFC — see the
