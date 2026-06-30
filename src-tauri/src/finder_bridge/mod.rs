@@ -10,4 +10,12 @@
 //! sockets, no async). The socket server and App Group container resolution
 //! are macOS-only and land in later tasks behind `#[cfg(target_os = "macos")]`.
 
+pub mod error;
 pub mod protocol;
+pub mod socket;
+
+/// App Group container path resolution — macOS-only (the container is a macOS
+/// sandbox concept). The socket server itself ([`socket`]) is portable so the
+/// Linux CI job can test it against a temp path.
+#[cfg(target_os = "macos")]
+pub mod container;

@@ -78,6 +78,8 @@ tokio = { version = "1.49.0", features = [
     "time",
     "fs",
     "process",
+    # Unix-domain socket for the Finder extension bridge (src/finder_bridge).
+    "net",
 ] }
 futures-util = { version = "0.3", default-features = false, features = ["std", "alloc"] }
 tokio-util = "0.7"
