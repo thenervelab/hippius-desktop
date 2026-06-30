@@ -6,6 +6,16 @@
 //! by raw bytes, and a folder by zipping it into one blob. A private click also
 //! wraps the key under a random password (`#p=`). On success we emit
 //! `finder:share-created`, which the frontend copies + shows in the share modal.
+//!
+//! ## Security: socket peer trust (accepted risk)
+//! The App Group socket ([`super::socket`]) is reachable by any local process
+//! running as the logged-in user, and the accept loop does not authenticate the
+//! peer's code signature. Such a process already has full read access to the
+//! user's files, but it can additionally use *this* path to mint a public share
+//! of an arbitrary file under the user's Hippius account and credits — a
+//! confused-deputy escalation. Accepted for v1 (the bar is "a process already
+//! running as you"); a follow-up should verify the connecting peer is the
+//! codesigned extension (`LOCAL_PEERCRED` → pid → `SecCode` requirement).
 
 use std::path::Path;
 
@@ -63,13 +73,22 @@ pub async fn handle(app: AppHandle, message: ClientMessage) {
     };
     match result {
         Ok(created) => {
+            // Log the token (non-secret), NEVER `share_url`: a public share's URL
+            // carries the `#k=<key>` content key in its fragment, and the
+            // support-log scrubber (`utils/logs.rs`) does not catch a base64url
+            // fragment — logging the URL would ship the key in
+            // `attach_logs_to_ticket` bundles, defeating the "key never leaves
+            // the client" property.
             info!(
-                url = %created.share_url,
+                share_token = %created.share_token,
                 private = created.password.is_some(),
                 path = %clicked.display(),
                 "finder bridge: share link created"
             );
-            let _ = app.emit("finder:share-created", &created);
+            // Target the main window only: a private share's payload carries the
+            // generated `password`, which must not be delivered to the borderless
+            // `tray-panel` webview. `FinderShareListener` runs only in main.
+            let _ = app.emit_to("main", "finder:share-created", &created);
         }
         Err(error) => warn!(%error, path = %clicked.display(), "finder bridge: share failed"),
     }

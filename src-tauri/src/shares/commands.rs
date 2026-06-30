@@ -408,6 +408,11 @@ pub(crate) async fn share_external_file(state: &AppState, account_id: &str, abs_
 /// has no first-class representation — the recipient downloads `<name>.zip`.
 /// Used for both in-drive and outside folders. Entry point for the macOS Finder
 /// dispatcher.
+///
+/// KNOWN LIMITATION: there is no size/entry/time cap on the zip — a click on a
+/// very large tree fills the temp disk and starts an unbounded upload. A
+/// follow-up should bound it (max bytes/entries) before the walk. The
+/// eligibility gate is a positive-balance floor, not a byte budget.
 #[cfg(target_os = "macos")]
 pub(crate) async fn share_directory_as_zip(state: &AppState, account_id: &str, dir_path: &Path) -> Result<ShareLink> {
     require_shares_supported(state, account_id).await?;
