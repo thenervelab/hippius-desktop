@@ -221,6 +221,55 @@ jobs:
         env:
           NODE_ENV: production
 
+      # macOS packaging tools for the Finder extension: xcodegen builds the
+      # universal .appex; create-dmg builds the installer (the finalize step
+      # owns the DMG since the extension is embedded after Tauri builds the app).
+      - name: Install macOS packaging tools
+        run: brew install xcodegen create-dmg
+
+      # Apple code signing. The App Group the Finder extension needs is granted
+      # only to code signed by Team V28B5X732P, so a real Developer ID cert is
+      # required (the preview build was previously ad-hoc/unsigned). The CERT
+      # goes to GITHUB_ENV so tauri-action signs the app; notarization is
+      # withheld from tauri-action (the extension is embedded + the app re-signed
+      # afterwards, which invalidates any earlier notarization) and surfaced as
+      # step OUTPUTS consumed by the finalize step. The preview UPDATER key
+      # (TAURI_SIGNING_PRIVATE_KEY / preview pubkey) is unchanged — only the
+      # Apple code-signing cert is added here.
+      - name: Set up Apple signing
+        id: apple
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: |
+          if [[ -n "$APPLE_CERTIFICATE" && -n "$APPLE_SIGNING_IDENTITY" ]]; then
+            {
+              echo "APPLE_CERTIFICATE=$APPLE_CERTIFICATE"
+              echo "APPLE_CERTIFICATE_PASSWORD=$APPLE_CERTIFICATE_PASSWORD"
+              echo "APPLE_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY"
+            } >> "$GITHUB_ENV"
+            echo "Code signing enabled."
+          else
+            echo "APPLE_CERTIFICATE / APPLE_SIGNING_IDENTITY not set — building unsigned; the Finder extension will be skipped (App Groups need a real Team ID)."
+          fi
+          if [[ -n "$APPLE_API_KEY_CONTENT" && -n "$APPLE_API_KEY_ID" && -n "$APPLE_API_ISSUER_ID" ]]; then
+            KEY_PATH="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
+            printf '%s' "$APPLE_API_KEY_CONTENT" | base64 --decode > "$KEY_PATH"
+            {
+              echo "api_key_path=$KEY_PATH"
+              echo "api_key=$APPLE_API_KEY_ID"
+              echo "api_issuer=$APPLE_API_ISSUER_ID"
+            } >> "$GITHUB_OUTPUT"
+            echo "Notarization enabled (finalize step)."
+          else
+            echo "App Store Connect API key not set — skipping notarization + Finder embed."
+          fi
+
       - name: Build & publish
         uses: tauri-apps/tauri-action@v0
         env:
@@ -239,4 +288,37 @@ jobs:
           prerelease: true
           makeLatest: false
           overwrite: true
-          args: '--target universal-apple-darwin'
+          # App-only: the DMG + updater tarball are (re)built by the finalize step
+          # after the Finder extension is embedded (embedding re-signs the app and
+          # would invalidate a Tauri-built DMG/notarization).
+          args: '--target universal-apple-darwin --bundles app'
+
+      # Embed the universal Finder extension into the app (Tauri built app-only),
+      # inside-out re-sign, notarize + staple, then build the DMG + regenerate the
+      # updater tarball from the embedded app, and attach them to the preview
+      # release. Runs only when notarization creds are present (else the preview
+      # stays app-only, as before). See
+      # docs/plans/2026-07-01-finder-release-packaging.md.
+      - name: Finalize macOS preview (embed Finder extension)
+        if: steps.apple.outputs.api_key != ''
+        shell: bash
+        env:
+          APPLE_API_KEY_PATH: ${{ steps.apple.outputs.api_key_path }}
+          APPLE_API_KEY: ${{ steps.apple.outputs.api_key }}
+          APPLE_API_ISSUER: ${{ steps.apple.outputs.api_issuer }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # APPLE_SIGNING_IDENTITY is already in the environment from the signing step.
+          APP="src-tauri/target/universal-apple-darwin/release/bundle/macos/Hippius.app"
+          OUT="$RUNNER_TEMP/hippius-macos-dist"
+          macos/finalize-macos-release.sh "$APP" "$OUT"
+          TAG="v$(jq -r .version src-tauri/tauri.conf.json)-preview"
+          # The preview release already exists (tauri-action created it above).
+          gh release upload "$TAG" \
+            "$OUT"/*.dmg \
+            "$OUT"/Hippius.app.tar.gz \
+            "$OUT"/Hippius.app.tar.gz.sig \
+            --clobber
