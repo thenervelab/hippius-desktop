@@ -41,6 +41,27 @@ export interface FinderShareCreated extends ShareLink {
   password?: string;
 }
 
+/**
+ * Payload of the `finder:share-started` event, emitted the instant a Finder
+ * share begins minting — before the link exists. Lets the modal open into a
+ * spinner so a big-file share is never silent. `private` mirrors the Rust
+ * `#[serde(rename_all = "camelCase")]` field (a single word, so unchanged).
+ */
+export interface FinderShareStarted {
+  name: string;
+  private: boolean;
+}
+
+/**
+ * Payload of the `finder:share-failed` event, emitted when a Finder share
+ * errors. `message` is the backend `AppError`'s display string, shown in the
+ * modal's error state.
+ */
+export interface FinderShareFailed {
+  name: string;
+  message: string;
+}
+
 /** Phase of an in-flight share creation. */
 export type SharePhase = "encrypting" | "uploading" | "finalizing";
 
