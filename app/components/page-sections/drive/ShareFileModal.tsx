@@ -69,10 +69,12 @@ export default function ShareFileModal() {
   const autoCopiedRef = useRef(false);
 
   // The Finder flow has no `FormattedUserFile`, so fall back to the name the
-  // backend sent with `finder:share-started` for the in-flight label.
-  const finderPendingName =
-    finderShare?.kind === "pending" ? finderShare.name : "";
-  const filename = file?.actualFileName || file?.name || finderPendingName;
+  // backend sent with the started/failed event for the in-flight / error label.
+  const finderName =
+    finderShare?.kind === "pending" || finderShare?.kind === "failed"
+      ? finderShare.name
+      : "";
+  const filename = file?.actualFileName || file?.name || finderName;
   const folderLabel = file?.label;
 
   const close = useCallback(() => {
@@ -213,6 +215,7 @@ export default function ShareFileModal() {
       {state.kind === "error" && (
         <ErrorBody
           message={state.message}
+          filename={filename}
           // A Finder share is minted in Rust with no re-runnable file handle
           // here, so "Try again" only applies to the in-app (`file`) flow.
           onRetry={file ? startShare : undefined}
@@ -323,10 +326,14 @@ function runningLabel(progress?: ShareProgress): string {
 
 function ErrorBody({
   message,
+  filename,
   onRetry,
   onClose,
 }: {
   message: string;
+  // Shown when known (Finder share sends it on `finder:share-failed`; the in-app
+  // flow has the file) so the user sees which file failed, not just the error.
+  filename?: string;
   // Undefined for a Finder-minted share — there is no in-app retry path, so the
   // "Try again" button is omitted rather than shown as a dead control.
   onRetry?: () => void;
@@ -340,6 +347,14 @@ function ErrorBody({
           <p className="text-sm font-medium text-error-70">
             Couldn&apos;t create share link
           </p>
+          {filename && (
+            <p
+              className="mt-1 break-all font-mono text-xs text-grey-50 dark:text-grey-dark-600"
+              title={filename}
+            >
+              {filename}
+            </p>
+          )}
           <p className="mt-1 break-words text-xs text-grey-50 dark:text-grey-dark-600">
             {message}
           </p>

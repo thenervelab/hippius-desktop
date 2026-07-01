@@ -292,6 +292,8 @@ describe("ShareFileModal", () => {
 
     expect(await screen.findByText(/couldn.?t create share link/i)).toBeInTheDocument();
     expect(screen.getByText(/insufficient credits to create a share/i)).toBeInTheDocument();
+    // The failed event's file name is surfaced so the user knows what failed.
+    expect(screen.getByText("big-movie.mov")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /try again/i })).not.toBeInTheDocument();
     // Still dismissible — the error body offers a Close action (the dialog's own
     // "X" also matches, so assert at least one Close affordance).

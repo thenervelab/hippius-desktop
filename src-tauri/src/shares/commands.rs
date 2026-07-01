@@ -499,6 +499,24 @@ pub(crate) async fn make_private(state: &AppState, public: ShareLink) -> Result<
     })
 }
 
+/// Best-effort revoke of a just-minted public share, WITHOUT the history
+/// bookkeeping the user-facing `hcfs_revoke_share` does. `make_private` upgrades
+/// a public share into a private one by minting the public share first; if the
+/// wrap then fails, a private-share click would otherwise strand an unintended
+/// public `#k=` link to the file on the server. This undoes that. macOS-only —
+/// its sole caller is the Finder private-share path.
+#[cfg(target_os = "macos")]
+pub(crate) async fn revoke_public_share(state: &AppState, share_token: &str) -> Result<()> {
+    let account_id = state.current_account_id()?;
+    let pool = state.pool()?;
+    let client = build_account_client(pool, &account_id).await?;
+    let keystore = SqliteShareKeystore::new(pool.clone());
+    client
+        .revoke_share(share_token, &keystore)
+        .await
+        .map_err(|e| AppError::Hcfs(format!("revoke_share (private-wrap cleanup): {e}")))
+}
+
 /// Generate a random share password: 20 alphanumeric characters (~119 bits of
 /// entropy) drawn from the OS CSPRNG via `rand`. Combined with the recipient's
 /// Argon2id work factor this is strong against brute force.
@@ -803,7 +821,20 @@ pub async fn hcfs_clear_share_history(state: tauri::State<'_, AppState>) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
     use tempfile::TempDir;
+
+    proptest! {
+        // Normalizing an already-resolved base is a no-op: whatever the resolver
+        // produces from arbitrary input must be a fixed point. Guards against a
+        // future edit that trims or re-defaults inconsistently on the second pass.
+        #[test]
+        fn resolve_console_base_url_is_idempotent(raw in ".*") {
+            let once = resolve_console_base_url(Some(raw));
+            let twice = resolve_console_base_url(Some(once.clone()));
+            prop_assert_eq!(once, twice);
+        }
+    }
 
     #[test]
     fn console_base_url_defaults_when_override_absent_or_blank() {

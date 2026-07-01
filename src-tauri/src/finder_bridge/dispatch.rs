@@ -88,10 +88,13 @@ struct FinderShareFailed {
     message: String,
 }
 
-/// Resolve a clicked path and mint a share; log the outcome and, on success,
-/// emit `finder:share-created` for the frontend. A `SharePrivate` click wraps
-/// the key under a random password (no prompt yet) and carries it in the
-/// payload; the public verbs mint a `#k=` link with no password.
+/// Resolve a clicked path and mint a share, bracketing the mint with frontend
+/// events so a slow share is never silent: emit `finder:share-started` (and
+/// bring the app forward) BEFORE minting, then log the outcome and emit exactly
+/// one of `finder:share-created` (success) or `finder:share-failed` (error). A
+/// `SharePrivate` click wraps the key under a random password (no prompt yet)
+/// and carries it in the created payload; the public verbs mint a `#k=` link
+/// with no password.
 pub async fn handle(app: AppHandle, message: ClientMessage) {
     // Announce the share and bring the app forward BEFORE the mint runs. The
     // mint (encrypt + upload, or zip-then-upload for a folder) can take many
@@ -173,16 +176,32 @@ fn display_name(path: &Path) -> String {
 /// random password into a `#p=` private link. Reuses [`share_for_path`] for the
 /// in-drive/outside/file/folder resolution — the wrap is a pure post-step that
 /// reads the just-stored key back from the keystore.
+///
+/// `make_private` upgrades an already-minted PUBLIC share, so if the wrap fails
+/// the public token is already live on the server while the user asked for a
+/// private share. We revoke that orphaned public share (best-effort) before
+/// returning the error, so a failed private click never leaves an unintended
+/// public link to the file behind.
 async fn share_private_for_path(app: &AppHandle, clicked: &Path) -> Result<FinderShareCreated> {
     let public = share_for_path(app, clicked).await?;
     let state = app.state::<AppState>();
-    let private = crate::shares::commands::make_private(&state, public).await?;
-    Ok(FinderShareCreated {
-        share_token: private.link.share_token,
-        share_url: private.link.share_url,
-        expires_at: private.link.expires_at,
-        password: Some(private.password),
-    })
+    // Capture the token before `make_private` consumes `public` — the error arm
+    // needs it to revoke the orphaned public share.
+    let public_token = public.share_token.clone();
+    match crate::shares::commands::make_private(&state, public).await {
+        Ok(private) => Ok(FinderShareCreated {
+            share_token: private.link.share_token,
+            share_url: private.link.share_url,
+            expires_at: private.link.expires_at,
+            password: Some(private.password),
+        }),
+        Err(error) => {
+            if let Err(revoke_err) = crate::shares::commands::revoke_public_share(&state, &public_token).await {
+                warn!(%revoke_err, share_token = %public_token, "finder bridge: could not revoke orphaned public share after private-wrap failure");
+            }
+            Err(error)
+        }
+    }
 }
 
 async fn share_for_path(app: &AppHandle, clicked: &Path) -> Result<ShareLink> {
@@ -252,5 +271,26 @@ mod tests {
     fn display_name_falls_back_to_full_path_when_no_leaf() {
         // `/` has no `file_name`; fall back to the whole path rather than "".
         assert_eq!(display_name(&PathBuf::from("/")), "/");
+    }
+
+    /// Pin the core feedback invariant against a silent refactor: `handle` must
+    /// emit `finder:share-started` BEFORE the mint and, after it, both terminal
+    /// events (`finder:share-created` on the Ok arm, `finder:share-failed` on the
+    /// Err arm). A refactor that reordered or dropped one would reintroduce the
+    /// "big-file share shows nothing / hangs on failure" bug. Source-text pin —
+    /// scoped to `handle`'s definition onward so the module/fn doc mentions of the
+    /// event names (which precede it) don't match.
+    #[test]
+    fn handle_emits_started_before_mint_then_a_terminal_event() {
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/finder_bridge/dispatch.rs")).expect("read dispatch.rs");
+        let handle_at = src.find("pub async fn handle(").expect("handle fn exists");
+        let body = &src[handle_at..];
+        let started = body.find("\"finder:share-started\"").expect("must emit finder:share-started");
+        let mint = body.find("let result =").expect("must run the mint into `let result`");
+        let created = body.find("\"finder:share-created\"").expect("must emit finder:share-created");
+        let failed = body.find("\"finder:share-failed\"").expect("must emit finder:share-failed");
+        assert!(started < mint, "finder:share-started must be emitted before the mint runs");
+        assert!(mint < created, "finder:share-created must come after the mint");
+        assert!(mint < failed, "finder:share-failed must come after the mint");
     }
 }
