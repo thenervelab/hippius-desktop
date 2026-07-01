@@ -194,7 +194,7 @@ jobs:
           run_install: false
 
       - name: PNPM store path
-        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_ENV"
 
       - name: PNPM cache
         uses: actions/cache@v4
@@ -306,6 +306,9 @@ jobs:
         if: steps.apple.outputs.api_key != ''
         shell: bash
         env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_API_KEY_PATH: ${{ steps.apple.outputs.api_key_path }}
           APPLE_API_KEY: ${{ steps.apple.outputs.api_key }}
           APPLE_API_ISSUER: ${{ steps.apple.outputs.api_issuer }}
@@ -314,7 +317,40 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          # APPLE_SIGNING_IDENTITY is already in the environment from the signing step.
+
+          # Re-import the Developer ID cert into a keychain THIS step owns.
+          # tauri-action imported the cert into its own temporary keychain
+          # during "Build & publish" and tore it down when that step ended, so
+          # codesign here would otherwise fail with "no identity found" (run
+          # 28510203939). The inside-out re-sign resolves the identity from the
+          # search list (embed-finder-extension.sh / finalize-macos-release.sh
+          # call `codesign --sign "$APPLE_SIGNING_IDENTITY"` with no explicit
+          # keychain), so create an unlocked keychain, import the cert, allow
+          # codesign to use its key non-interactively, and prepend it to the
+          # user search list. RUNNER_TEMP is ephemeral, so no teardown needed.
+          KEYCHAIN_PATH="$RUNNER_TEMP/finalize-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
+          CERT_PATH="$RUNNER_TEMP/finalize-cert.p12"
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$CERT_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          # -S grants codesign (and Apple tools) access to the private key with
+          # no GUI prompt — required on a headless runner.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" >/dev/null
+          # Put our keychain first on the search list, keeping the existing ones
+          # (login.keychain-db etc.) so codesign resolves the Developer ID.
+          # Word-splitting the inner command is intentional — each existing
+          # keychain path must be a separate `-s` argument; quoting would pass
+          # them as one and drop the rest of the search list.
+          # shellcheck disable=SC2046
+          security list-keychains -d user -s "$KEYCHAIN_PATH" \
+            $(security list-keychains -d user | sed 's/"//g')
+          rm -f "$CERT_PATH"
+
           APP="src-tauri/target/universal-apple-darwin/release/bundle/macos/Hippius.app"
           OUT="$RUNNER_TEMP/hippius-macos-dist"
           macos/finalize-macos-release.sh "$APP" "$OUT"
