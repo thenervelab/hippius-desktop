@@ -33,14 +33,32 @@ use std::sync::Arc;
 use tauri::ipc::Channel;
 use tracing::{debug, info, warn};
 
-/// Public console origin used to build the recipient URL fragment.
-/// Hard-coded for v1 to match the rest of the app's "static prod URL"
-/// pattern — see the OAuth-recovery memory note. Bumping it later is
-/// a single-constant change.
-///
-/// `hippius.com` is the production hostname for the recipient page;
-/// the share UI in `hippius-console` is served from this origin.
-const CONSOLE_BASE_URL: &str = "https://console.hippius.com";
+/// Default (production) console origin used to build the recipient URL.
+/// `console.hippius.com` serves the share recipient page in `hippius-console`.
+const DEFAULT_CONSOLE_BASE_URL: &str = "https://console.hippius.com";
+
+/// The console origin to embed in minted share links, honoring the
+/// `HIPPIUS_CONSOLE_BASE_URL` env override (dev/test only) over the production
+/// default. Mirrors the app's other `HIPPIUS_*_URL` overrides (see
+/// `api/client.rs`, `auth/service.rs`): a plain desktop build points at prod,
+/// while a build launched with `HIPPIUS_CONSOLE_BASE_URL=https://console.hippicode.com`
+/// mints links at a staging console — e.g. to exercise the `#p=` private-share
+/// recipient page before it ships to prod.
+fn console_base_url() -> String {
+    resolve_console_base_url(std::env::var("HIPPIUS_CONSOLE_BASE_URL").ok())
+}
+
+/// Pure resolver for [`console_base_url`], split out so the env-independent
+/// logic is unit-testable without mutating process env under the parallel test
+/// runner (env writes are process-global and racy). A blank/whitespace override
+/// falls back to the default, and any trailing `/` is trimmed so callers can
+/// join `/share/<token>` without doubling the separator.
+fn resolve_console_base_url(override_value: Option<String>) -> String {
+    override_value
+        .map(|value| value.trim().trim_end_matches('/').to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| DEFAULT_CONSOLE_BASE_URL.to_string())
+}
 
 // ─── Wire types ────────────────────────────────────────────────────────────
 
@@ -245,8 +263,9 @@ async fn create_share_inner(
     let client = build_account_client(pool, account_id).await?;
     let mut reader = tokio::fs::File::open(&local_path).await?;
     let keystore = SqliteShareKeystore::new(pool.clone());
+    let console_base = console_base_url();
     let result = client
-        .create_share(&mut reader, plaintext_size, &filename, &mime_type, &keystore, CONSOLE_BASE_URL, progress)
+        .create_share(&mut reader, plaintext_size, &filename, &mime_type, &keystore, &console_base, progress)
         .await
         .map_err(|e| {
             warn!(error = %e, "create_share failed");
@@ -370,8 +389,9 @@ async fn share_local_file(state: &AppState, account_id: &str, local_path: &Path,
     let client = build_account_client(pool, account_id).await?;
     let mut reader = tokio::fs::File::open(local_path).await?;
     let keystore = SqliteShareKeystore::new(pool.clone());
+    let console_base = console_base_url();
     let result = client
-        .create_share(&mut reader, plaintext_size, filename, mime_type, &keystore, CONSOLE_BASE_URL, None)
+        .create_share(&mut reader, plaintext_size, filename, mime_type, &keystore, &console_base, None)
         .await
         .map_err(|e| {
             warn!(error = %e, "create_share failed");
@@ -471,7 +491,7 @@ pub(crate) async fn make_private(state: &AppState, public: ShareLink) -> Result<
 
     let password = generate_share_password();
     let blob = hcfs_client::client::share::wrap_share_key(&password, &key).map_err(|e| AppError::Crypto(format!("wrap share key: {e}")))?;
-    let share_url = hcfs_client::client::share::build_share_url_private(CONSOLE_BASE_URL, &public.share_token, &blob);
+    let share_url = hcfs_client::client::share::build_share_url_private(&console_base_url(), &public.share_token, &blob);
 
     Ok(PrivateShare {
         link: ShareLink { share_url, ..public },
@@ -657,10 +677,11 @@ pub async fn hcfs_list_shares(state: tauri::State<'_, AppState>) -> Result<Vec<S
         cache.insert(account_id.clone(), summaries.clone());
     }
 
+    let console_base = console_base_url();
     let wire = summaries
         .into_iter()
         .map(|s| {
-            let share_url = key_map.get(&s.share_token).map(|k| build_share_url(CONSOLE_BASE_URL, &s.share_token, k));
+            let share_url = key_map.get(&s.share_token).map(|k| build_share_url(&console_base, &s.share_token, k));
             let (folder_label, relative_path) = origin_map
                 .get(&s.share_token)
                 .map_or((None, None), |o| (Some(o.folder_label.clone()), Some(o.relative_path.clone())));
@@ -783,6 +804,30 @@ pub async fn hcfs_clear_share_history(state: tauri::State<'_, AppState>) -> Resu
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn console_base_url_defaults_when_override_absent_or_blank() {
+        assert_eq!(resolve_console_base_url(None), DEFAULT_CONSOLE_BASE_URL);
+        // A set-but-empty / whitespace-only env value is a no-op, not a broken base.
+        assert_eq!(resolve_console_base_url(Some(String::new())), DEFAULT_CONSOLE_BASE_URL);
+        assert_eq!(resolve_console_base_url(Some("   ".into())), DEFAULT_CONSOLE_BASE_URL);
+        // A value that is only slashes trims to empty → still the default.
+        assert_eq!(resolve_console_base_url(Some("/".into())), DEFAULT_CONSOLE_BASE_URL);
+    }
+
+    #[test]
+    fn console_base_url_uses_override_and_normalizes_it() {
+        assert_eq!(
+            resolve_console_base_url(Some("https://console.hippicode.com".into())),
+            "https://console.hippicode.com"
+        );
+        // Surrounding whitespace and trailing slashes are stripped so callers can
+        // append `/share/<token>` without doubling the separator.
+        assert_eq!(
+            resolve_console_base_url(Some("  https://console.hippicode.com///  ".into())),
+            "https://console.hippicode.com"
+        );
+    }
 
     /// Wire-contract pin for the FOREIGN `hcfs_client::client::share::ShareProgress`,
     /// which `share_progress_forwarder` rides straight onto a `Channel<ShareProgress>`

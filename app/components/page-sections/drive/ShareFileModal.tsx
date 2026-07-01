@@ -35,7 +35,7 @@ import { Button, Icons } from "@/components/ui";
 import { FramedDialog } from "@/components/ui/FramedDialog";
 import { cn } from "@/lib/utils";
 import {
-  finderShareLinkAtom,
+  finderShareAtom,
   shareModalFileAtom,
 } from "@/app/lib/global-atoms/sharesAtoms";
 import {
@@ -58,22 +58,27 @@ type ModalState =
 
 export default function ShareFileModal() {
   const [file, setFile] = useAtom(shareModalFileAtom);
-  // A share minted from the macOS Finder right-click flow arrives already
-  // created (see `FinderShareListener`); when set, the modal opens straight
-  // into `done` rather than running the file-driven `createShare` lifecycle.
-  const [finderLink, setFinderLink] = useAtom(finderShareLinkAtom);
+  // A share minted from the macOS Finder right-click flow is driven entirely by
+  // the backend (see `FinderShareListener`): it opens the modal into a spinner
+  // on `pending`, swaps in the link on `done`, or an error on `failed` — the
+  // file-driven `createShare` lifecycle is never run for it.
+  const [finderShare, setFinderShare] = useAtom(finderShareAtom);
   const [state, setState] = useState<ModalState>({ kind: "running" });
   // Auto-copy fires once per `done` transition. Reopening the dialog
   // without closing must not double-copy a stale URL.
   const autoCopiedRef = useRef(false);
 
-  const filename = file?.actualFileName || file?.name || "";
+  // The Finder flow has no `FormattedUserFile`, so fall back to the name the
+  // backend sent with `finder:share-started` for the in-flight label.
+  const finderPendingName =
+    finderShare?.kind === "pending" ? finderShare.name : "";
+  const filename = file?.actualFileName || file?.name || finderPendingName;
   const folderLabel = file?.label;
 
   const close = useCallback(() => {
     setFile(null);
-    setFinderLink(null);
-  }, [setFile, setFinderLink]);
+    setFinderShare(null);
+  }, [setFile, setFinderShare]);
 
   const startShare = useCallback(async () => {
     if (!file || !folderLabel) return;
@@ -105,13 +110,29 @@ export default function ShareFileModal() {
     if (file) startShare();
   }, [file, startShare]);
 
-  // A Finder share is already minted, so open directly in `done`. Resetting
-  // the auto-copy latch lets the copy-on-`done` effect run for this link.
+  // Drive the modal from the Finder share lifecycle. `pending` shows the
+  // indeterminate spinner (no `createShare` runs — the backend owns the mint),
+  // `done` swaps in the ready link (resetting the auto-copy latch so the
+  // copy-on-`done` effect fires), and `failed` shows the error state.
   useEffect(() => {
-    if (!finderLink) return;
-    autoCopiedRef.current = false;
-    setState({ kind: "done", link: finderLink, password: finderLink.password });
-  }, [finderLink]);
+    if (!finderShare) return;
+    switch (finderShare.kind) {
+      case "pending":
+        setState({ kind: "running" });
+        break;
+      case "done":
+        autoCopiedRef.current = false;
+        setState({
+          kind: "done",
+          link: finderShare.share,
+          password: finderShare.share.password,
+        });
+        break;
+      case "failed":
+        setState({ kind: "error", message: finderShare.message });
+        break;
+    }
+  }, [finderShare]);
 
   // Auto-copy once we reach `done`. The URL is still rendered in a
   // selectable textbox so the user can re-copy if focus rules block
@@ -130,7 +151,7 @@ export default function ShareFileModal() {
       });
   }, [state]);
 
-  if (!file && !finderLink) return null;
+  if (!file && !finderShare) return null;
 
   const onCopy = async () => {
     if (state.kind !== "done") return;
@@ -192,7 +213,9 @@ export default function ShareFileModal() {
       {state.kind === "error" && (
         <ErrorBody
           message={state.message}
-          onRetry={startShare}
+          // A Finder share is minted in Rust with no re-runnable file handle
+          // here, so "Try again" only applies to the in-app (`file`) flow.
+          onRetry={file ? startShare : undefined}
           onClose={close}
         />
       )}
@@ -304,7 +327,9 @@ function ErrorBody({
   onClose,
 }: {
   message: string;
-  onRetry: () => void;
+  // Undefined for a Finder-minted share — there is no in-app retry path, so the
+  // "Try again" button is omitted rather than shown as a dead control.
+  onRetry?: () => void;
   onClose: () => void;
 }) {
   return (
@@ -322,20 +347,22 @@ function ErrorBody({
       </div>
 
       <div className="flex flex-col gap-3">
-        <Button
-          type="button"
-          variant="primary"
-          size="auto"
-          onClick={onRetry}
-          className={cn(
-            "h-[52px] w-full rounded-[6px] border text-base font-normal tracking-[-0.36px]",
-            "border-[#3167DD] bg-[#3167DD] text-white",
-            "hover:bg-[#2454c4] hover:border-[#2454c4]",
-            "dark:hover:bg-[#2a5ad0] dark:hover:border-[#2a5ad0]",
-          )}
-        >
-          Try again
-        </Button>
+        {onRetry && (
+          <Button
+            type="button"
+            variant="primary"
+            size="auto"
+            onClick={onRetry}
+            className={cn(
+              "h-[52px] w-full rounded-[6px] border text-base font-normal tracking-[-0.36px]",
+              "border-[#3167DD] bg-[#3167DD] text-white",
+              "hover:bg-[#2454c4] hover:border-[#2454c4]",
+              "dark:hover:bg-[#2a5ad0] dark:hover:border-[#2a5ad0]",
+            )}
+          >
+            Try again
+          </Button>
+        )}
         <Button
           type="button"
           variant="defaultStable"

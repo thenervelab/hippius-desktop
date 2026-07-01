@@ -4,8 +4,13 @@
 //! to its Hippius drive ([`super::resolve`]) and mint a share via the existing
 //! engine: an in-drive file shares by `(label, relative_path)`, an outside file
 //! by raw bytes, and a folder by zipping it into one blob. A private click also
-//! wraps the key under a random password (`#p=`). On success we emit
-//! `finder:share-created`, which the frontend copies + shows in the share modal.
+//! wraps the key under a random password (`#p=`).
+//!
+//! We bracket the mint with three frontend events so a slow share (a big file or
+//! a folder-zip) is never silent: `finder:share-started` fires immediately (the
+//! modal opens into a spinner and the app comes forward), then exactly one of
+//! `finder:share-created` (success — copied + shown) or `finder:share-failed`
+//! (the modal shows an error instead of a hung spinner).
 //!
 //! ## Security: socket peer trust (accepted risk)
 //! The App Group socket ([`super::socket`]) is reachable by any local process
@@ -56,20 +61,58 @@ impl FinderShareCreated {
     }
 }
 
+/// Payload for `finder:share-started`, emitted the instant a Finder share begins
+/// — before the (possibly many-second) encrypt+upload. A big file or a
+/// folder-zip mints slowly, and the modal only opens on the *finished* link, so
+/// without this the user sees nothing and assumes the click did nothing. The FE
+/// opens the share modal into a spinner on this event.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FinderShareStarted {
+    /// The clicked file/folder's display name, shown while the share runs.
+    name: String,
+    /// Whether this is a password-protected (`#p=`) share — lets the modal label
+    /// the in-flight state without waiting for the outcome.
+    private: bool,
+}
+
+/// Payload for `finder:share-failed`, emitted when the mint errors. Pairs with
+/// the existing `warn!`: the log alone left the user staring at a spinner that
+/// never resolved, so the FE turns this into the modal's error state.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FinderShareFailed {
+    /// The clicked file/folder's display name.
+    name: String,
+    /// A user-facing failure message (the `AppError`'s `Display`).
+    message: String,
+}
+
 /// Resolve a clicked path and mint a share; log the outcome and, on success,
 /// emit `finder:share-created` for the frontend. A `SharePrivate` click wraps
 /// the key under a random password (no prompt yet) and carries it in the
 /// payload; the public verbs mint a `#k=` link with no password.
 pub async fn handle(app: AppHandle, message: ClientMessage) {
-    let (clicked, result) = match message {
-        ClientMessage::Share(path) | ClientMessage::UploadShare(path) => {
-            let created = share_for_path(&app, &path).await.map(FinderShareCreated::public);
-            (path, created)
-        }
-        ClientMessage::SharePrivate(path) => {
-            let created = share_private_for_path(&app, &path).await;
-            (path, created)
-        }
+    // Announce the share and bring the app forward BEFORE the mint runs. The
+    // mint (encrypt + upload, or zip-then-upload for a folder) can take many
+    // seconds on a big target, and the modal only opens on the finished link —
+    // so this early signal is what turns "nothing happened" into a spinner.
+    let (clicked, is_private) = match &message {
+        ClientMessage::Share(path) | ClientMessage::UploadShare(path) => (path.clone(), false),
+        ClientMessage::SharePrivate(path) => (path.clone(), true),
+    };
+    let name = display_name(&clicked);
+    reveal_main_window(&app);
+    let _ = app.emit_to(
+        "main",
+        "finder:share-started",
+        &FinderShareStarted { name: name.clone(), private: is_private },
+    );
+
+    let result = if is_private {
+        share_private_for_path(&app, &clicked).await
+    } else {
+        share_for_path(&app, &clicked).await.map(FinderShareCreated::public)
     };
     match result {
         Ok(created) => {
@@ -90,8 +133,40 @@ pub async fn handle(app: AppHandle, message: ClientMessage) {
             // `tray-panel` webview. `FinderShareListener` runs only in main.
             let _ = app.emit_to("main", "finder:share-created", &created);
         }
-        Err(error) => warn!(%error, path = %clicked.display(), "finder bridge: share failed"),
+        Err(error) => {
+            warn!(%error, path = %clicked.display(), "finder bridge: share failed");
+            // Surface the failure to the FE so the spinner opened by
+            // `finder:share-started` resolves to an error state instead of
+            // hanging. Best-effort like the success emit above.
+            let _ = app.emit_to(
+                "main",
+                "finder:share-failed",
+                &FinderShareFailed { name, message: error.to_string() },
+            );
+        }
     }
+}
+
+/// Bring the main app window to the foreground so a Finder-initiated share is
+/// visible right away (the share modal lives in the main window). Mirrors the
+/// reopen path in `main.rs`. Best-effort: each step is a no-op if the window is
+/// gone (shutdown) or already in that state.
+fn reveal_main_window(app: &AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let _ = window.unminimize();
+    let _ = window.show();
+    let _ = window.set_focus();
+}
+
+/// The clicked path's file name for display in the share modal, falling back to
+/// the full path when the path has no final component (e.g. `/`). See the
+/// `std::path::Path::file_name` contract: a trailing slash still yields the leaf
+/// (`/a/b/` → `b`), and only `/` or a `..`-terminated path yields `None`.
+fn display_name(path: &Path) -> String {
+    path.file_name()
+        .map_or_else(|| path.display().to_string(), |name| name.to_string_lossy().into_owned())
 }
 
 /// Mint a share for `clicked`, then wrap its key under a freshly generated
@@ -153,5 +228,29 @@ pub async fn register_drive_roots(app: &AppHandle, account_id: &str) {
             }
         }
         Err(error) => warn!(%error, "finder bridge: could not list drive roots to register"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn display_name_uses_the_file_basename() {
+        assert_eq!(display_name(&PathBuf::from("/Users/me/Hippius/report.pdf")), "report.pdf");
+    }
+
+    #[test]
+    fn display_name_of_a_directory_is_its_leaf() {
+        assert_eq!(display_name(&PathBuf::from("/Users/me/Hippius/Photos")), "Photos");
+        // A trailing slash does not add an empty final component (std contract).
+        assert_eq!(display_name(&PathBuf::from("/Users/me/Photos/")), "Photos");
+    }
+
+    #[test]
+    fn display_name_falls_back_to_full_path_when_no_leaf() {
+        // `/` has no `file_name`; fall back to the whole path rather than "".
+        assert_eq!(display_name(&PathBuf::from("/")), "/");
     }
 }
