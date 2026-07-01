@@ -94,17 +94,19 @@ final class HippiusFinderSync: FIFinderSync {
             return menu
         }
 
-        // Public share — the label depends on whether the selection is inside a
-        // Hippius drive; either way the app re-derives the real action from the path.
+        // Public share. One consistent label whether or not the selection sits
+        // inside a Hippius drive — the app re-derives the real action (share vs
+        // upload-then-share) from the path — but the selector still carries the
+        // inside/outside hint so the right verb is sent over the socket.
         let inside = selectionIsInsideRoots()
         addItem(
             to: menu,
-            title: inside ? "Share via Hippius" : "Upload & Share via Hippius",
+            title: "Share with Hippius (public)",
             action: inside ? #selector(shareSelection(_:)) : #selector(uploadShareSelection(_:))
         )
         // Password-protected share — one item for any target; the app generates
         // the password (no prompt yet) and returns it alongside the link.
-        addItem(to: menu, title: "Share via Hippius (Password)", action: #selector(shareSelectionPrivate(_:)))
+        addItem(to: menu, title: "Share with Hippius (private)", action: #selector(shareSelectionPrivate(_:)))
         return menu
     }
 
