@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
+    "finder:dev": "bash macos/dev-finder.sh",
     "tauri:static": "rm -rf out && next build && tauri dev --config '{\"build\":{\"beforeDevCommand\":\"npx -y serve out -l 3000 -s\"}}'",
     "tauri:static:nobuild": "test -f out/index.html && tauri dev --config '{\"build\":{\"beforeDevCommand\":\"npx -y serve out -l 3000 -s\"}}' || echo 'No static build found in out/. Run `pnpm tauri:static` first.'",
     "tauri:build": "next build && tauri build",

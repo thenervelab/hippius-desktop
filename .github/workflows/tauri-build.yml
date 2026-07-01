@@ -29,7 +29,10 @@ jobs:
       matrix:
         include:
           - platform: macos-latest
-            args: "--target universal-apple-darwin" # One universal mac build
+            # App-only: the DMG + updater tarball are (re)built by the finalize
+            # step AFTER the Finder extension is embedded, since embedding
+            # re-signs the app and would invalidate a Tauri-built DMG/notarization.
+            args: "--target universal-apple-darwin --bundles app"
           - platform: ubuntu-22.04
             args: "--bundles deb"
           - platform: windows-latest
@@ -235,14 +238,26 @@ jobs:
         env:
           NODE_ENV: production
 
-      # Apple code signing + notarization (macOS only). Exported via GITHUB_ENV
-      # instead of the tauri-action env block because an unset secret renders as
-      # an empty string there, and tauri treats empty APPLE_SIGNING_IDENTITY /
-      # APPLE_API_KEY as "present" — failing the build instead of skipping.
-      # With secrets set: tauri-action imports the base64 .p12 into a throwaway
-      # keychain and signs; the bundler then notarizes the app + DMG with the
-      # App Store Connect API key and staples the ticket.
-      - name: Set up Apple signing & notarization
+      # macOS packaging tools for the Finder extension: xcodegen builds the
+      # universal .appex from macos/HippiusFinder/project.yml; create-dmg builds
+      # the styled installer (Tauri's own DMG step is disabled below because the
+      # extension is embedded AFTER Tauri finishes — see the finalize step).
+      - name: Install macOS packaging tools
+        if: matrix.platform == 'macos-latest'
+        run: brew install xcodegen create-dmg
+
+      # Apple code signing (macOS only). The CERT goes to GITHUB_ENV so
+      # tauri-action imports the .p12 and SIGNS the app. Notarization is
+      # DELIBERATELY withheld from tauri-action: embedding the Finder extension
+      # after the build re-signs the app and invalidates any earlier notarization,
+      # so notarization is done in the finalize step below, on the fully embedded
+      # bundle. The App Store Connect key is therefore surfaced as STEP OUTPUTS
+      # (consumed only by the finalize step), not GITHUB_ENV. Exported via
+      # GITHUB_ENV rather than the tauri-action env block because an unset secret
+      # renders as an empty string there, which tauri treats as "present" and
+      # fails on instead of skipping.
+      - name: Set up Apple signing
+        id: apple
         if: matrix.platform == 'macos-latest'
         shell: bash
         env:
@@ -267,11 +282,11 @@ jobs:
             KEY_PATH="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
             printf '%s' "$APPLE_API_KEY_CONTENT" | base64 --decode > "$KEY_PATH"
             {
-              echo "APPLE_API_KEY_PATH=$KEY_PATH"
-              echo "APPLE_API_KEY=$APPLE_API_KEY_ID"
-              echo "APPLE_API_ISSUER=$APPLE_API_ISSUER_ID"
-            } >> "$GITHUB_ENV"
-            echo "Notarization enabled."
+              echo "api_key_path=$KEY_PATH"
+              echo "api_key=$APPLE_API_KEY_ID"
+              echo "api_issuer=$APPLE_API_ISSUER_ID"
+            } >> "$GITHUB_OUTPUT"
+            echo "Notarization enabled (finalize step)."
           else
             echo "App Store Connect API key secrets not set — skipping notarization."
           fi
@@ -292,3 +307,37 @@ jobs:
           prerelease: false
           overwrite: true
           args: ${{ matrix.args }}
+
+      # macOS only, and only when notarization creds are present. Tauri built the
+      # app app-only above (no DMG); here we embed the universal Finder extension,
+      # inside-out re-sign, notarize + staple, then build the DMG + regenerate the
+      # updater tarball FROM the embedded app, and attach them to the draft
+      # release. See docs/plans/2026-07-01-finder-release-packaging.md for the
+      # design and the remaining updater-manifest (latest.json) validation item.
+      - name: Finalize macOS release (embed Finder extension)
+        if: matrix.platform == 'macos-latest' && steps.apple.outputs.api_key != ''
+        shell: bash
+        env:
+          APPLE_API_KEY_PATH: ${{ steps.apple.outputs.api_key_path }}
+          APPLE_API_KEY: ${{ steps.apple.outputs.api_key }}
+          APPLE_API_ISSUER: ${{ steps.apple.outputs.api_issuer }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # APPLE_SIGNING_IDENTITY is already in the environment from the signing
+          # step (exported to GITHUB_ENV). The universal app the app-only Tauri
+          # build produced:
+          APP="src-tauri/target/universal-apple-darwin/release/bundle/macos/Hippius.app"
+          OUT="$RUNNER_TEMP/hippius-macos-dist"
+          macos/finalize-macos-release.sh "$APP" "$OUT"
+          TAG="v$(jq -r .version src-tauri/tauri.conf.json)"
+          # The draft release already exists (tauri-action created it above, same
+          # tag). Attach the notarized DMG (fresh installs) plus the regenerated
+          # updater tarball + signature. --clobber replaces any same-named asset.
+          gh release upload "$TAG" \
+            "$OUT"/*.dmg \
+            "$OUT"/Hippius.app.tar.gz \
+            "$OUT"/Hippius.app.tar.gz.sig \
+            --clobber
