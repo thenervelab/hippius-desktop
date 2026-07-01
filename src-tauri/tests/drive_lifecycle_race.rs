@@ -20,6 +20,7 @@ use std::time::Duration;
 use sqlx::sqlite::SqlitePool;
 
 use tauri_project_lib::sync::lifecycle_guard::{apply_init_commit, CommitOutcome, DriveLifecycle};
+use tauri_project_lib::sync::paths::set_sync_path_paused;
 
 /// Build an in-memory pool with the minimum schema these tests touch:
 /// just `sync_paths` plus the unique constraint that production uses.
@@ -104,16 +105,13 @@ async fn commit_yields_when_pause_intervened() {
     let lifecycle = DriveLifecycle::default();
     let snapshot = lifecycle.snapshot("photos");
 
-    // Simulate a pause landing mid-init: bump the epoch, then write the
-    // pause's flag (direct UPDATE — the pause-side command isn't wired
-    // through the guard yet; Task 2.4 does that).
+    // Simulate a pause landing mid-init via the SAME sequence `pause_drive`
+    // runs under its commit lock: bump the epoch, then write the pause's flag
+    // through the production `set_sync_path_paused` writer (not a hand-rolled
+    // UPDATE), so the pause-producer write and the init-commit clear are proven
+    // to target the same `account_key`-hashed row.
     lifecycle.bump("photos");
-    sqlx::query("UPDATE sync_paths SET is_paused = 1 WHERE owner = ? AND label = ?")
-        .bind(account_key(ACCOUNT))
-        .bind("photos")
-        .execute(&pool)
-        .await
-        .unwrap();
+    set_sync_path_paused(&pool, ACCOUNT, "photos", true).await.unwrap();
 
     let outcome = apply_init_commit(&lifecycle, &pool, ACCOUNT, "photos", snapshot, || {}).await.unwrap();
 
@@ -151,14 +149,10 @@ async fn concurrent_pause_and_commit_serialize_on_the_lock() {
     let probe = tokio::time::timeout(Duration::from_millis(100), &mut commit_task).await;
     assert!(probe.is_err(), "apply_init_commit must not complete while the commit lock is held");
 
-    // Still under the lock: the pause supersedes the init and records it.
+    // Still under the lock: the pause supersedes the init and records it via
+    // the production writer (mirrors `pause_drive`'s locked bump + write).
     lifecycle.bump("photos");
-    sqlx::query("UPDATE sync_paths SET is_paused = 1 WHERE owner = ? AND label = ?")
-        .bind(account_key(ACCOUNT))
-        .bind("photos")
-        .execute(&pool)
-        .await
-        .unwrap();
+    set_sync_path_paused(&pool, ACCOUNT, "photos", true).await.unwrap();
 
     drop(guard);
 
@@ -236,4 +230,87 @@ async fn committed_hook_runs_under_the_lock_and_only_on_commit() {
     .unwrap();
     assert_eq!(outcome, CommitOutcome::Committed);
     assert!(hook_ran.load(Ordering::SeqCst), "a committed init must run its status-emit hook");
+}
+
+/// Production-writer protocol agreement: the pause producer runs its real
+/// locked sequence (`commit_lock` → `bump` → `set_sync_path_paused(true)`) and
+/// an init that snapshotted the epoch BEFORE it must yield at commit — leaving
+/// the pause's `is_paused=1` intact AND never emitting an Active status. The
+/// existing `commit_yields_when_pause_intervened` proves the yield; this adds
+/// the two outcomes a stale Active emit would corrupt — the surviving flag and
+/// the un-run hook — and drives the production writer on BOTH sides, so a
+/// future divergence in `set_sync_path_paused`'s `owner` derivation (which would
+/// make the pause-write and the init-clear target different rows) fails here
+/// instead of silently breaking the protocol. Sequential by construction (the
+/// pause completes before the commit) so the assertion is deterministic.
+#[tokio::test]
+async fn real_pause_write_supersedes_init_and_blocks_active_emit() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let pool = make_pool().await;
+    insert_path(&pool, ACCOUNT, "photos", false).await; // starts Active
+
+    let lifecycle = DriveLifecycle::default();
+    // Init side: snapshot the epoch at entry, before the pause lands.
+    let init_snapshot = lifecycle.snapshot("photos");
+
+    // Pause producer: the exact locked mutation `pause_drive` performs.
+    {
+        let commit_lock = lifecycle.commit_lock("photos");
+        let _guard = commit_lock.lock().await;
+        lifecycle.bump("photos");
+        set_sync_path_paused(&pool, ACCOUNT, "photos", true).await.unwrap();
+    }
+
+    // Init reaches its commit against the now-stale snapshot. The Active-emit
+    // hook is the slot a stale init would use to poison the status cache.
+    let active_emitted = AtomicBool::new(false);
+    let outcome = apply_init_commit(&lifecycle, &pool, ACCOUNT, "photos", init_snapshot, || {
+        active_emitted.store(true, Ordering::SeqCst);
+    })
+    .await
+    .unwrap();
+
+    assert_eq!(outcome, CommitOutcome::Superseded, "init must yield to the real pause write");
+    assert!(is_paused(&pool, ACCOUNT, "photos").await, "the pause's is_paused=1 must survive the superseded init");
+    assert!(!active_emitted.load(Ordering::SeqCst), "a superseded init must emit no Active status");
+}
+
+/// Resume-ordering invariant (mirrors `resume_drive`): resume pre-clears
+/// `is_paused` and captures the init's commit snapshot in ONE locked block, so
+/// a pause that lands AFTER that block still supersedes the resumed init. If
+/// resume instead let the init snapshot at its own (later) entry, a pause
+/// completing in the gap would be silently overwritten by the resumed Active —
+/// the exact window `resume_drive`'s same-locked-block snapshot capture closes.
+#[tokio::test]
+async fn resume_snapshot_superseded_by_later_pause() {
+    let pool = make_pool().await;
+    insert_path(&pool, ACCOUNT, "photos", true).await; // starts Paused
+
+    let lifecycle = DriveLifecycle::default();
+
+    // Resume's locked pre-clear: clear the flag and capture the snapshot the
+    // init will commit against, atomically under the commit lock.
+    let resume_snapshot = {
+        let commit_lock = lifecycle.commit_lock("photos");
+        let _guard = commit_lock.lock().await;
+        let snap = lifecycle.snapshot("photos");
+        set_sync_path_paused(&pool, ACCOUNT, "photos", false).await.unwrap();
+        snap
+    };
+    assert!(!is_paused(&pool, ACCOUNT, "photos").await, "resume must clear is_paused");
+
+    // A pause lands after resume's block, via the production locked sequence.
+    {
+        let commit_lock = lifecycle.commit_lock("photos");
+        let _guard = commit_lock.lock().await;
+        lifecycle.bump("photos");
+        set_sync_path_paused(&pool, ACCOUNT, "photos", true).await.unwrap();
+    }
+
+    // The resumed init commits against resume_snapshot → superseded; the later
+    // pause wins.
+    let outcome = apply_init_commit(&lifecycle, &pool, ACCOUNT, "photos", resume_snapshot, || {}).await.unwrap();
+    assert_eq!(outcome, CommitOutcome::Superseded, "the later pause must supersede the resumed init");
+    assert!(is_paused(&pool, ACCOUNT, "photos").await, "the later pause's is_paused=1 must win");
 }

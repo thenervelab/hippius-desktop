@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { toast } from "sonner";
 
 import { appStore } from "@/app/lib/store/jotaiStore";
 import { syncRequiresReauthAtom } from "@/app/lib/global-atoms/unpinAtoms";
@@ -38,7 +39,18 @@ export function scheduleOAuthSyncInit(
             // `Crypto: decryption failed` a few ticks later.
             if (isMasterMnemonicUnrecoverable(err)) {
                 appStore.set(syncRequiresReauthAtom, true);
+            } else {
+                // Transient failure (e.g. network): surface a non-silent signal
+                // so the user knows sync didn't start (audit R-25 — the prior
+                // code failed completely silently). Sync re-attempts on the next
+                // auth cycle; the reauth banner covers the unrecoverable case.
+                toast.error("Couldn't start file sync. It will retry the next time you sign in.");
             }
+            // Do NOT call onReady on failure. `onReady` is `initSync`, which
+            // latches `syncInitialized=true` and runs `tryAutoInitSync`; doing
+            // that with no usable mnemonic in AuthInfo wedges the sync engine
+            // and suppresses re-init until the next full auth cycle (audit R-25).
+            return;
         }
         onReady(accountId);
     })();

@@ -235,6 +235,34 @@ pub struct SessionRestoreResult {
     pub sync_requires_reauth: bool,
 }
 
+impl SessionRestoreResult {
+    /// Build the "not signed in" result returned by every bounce-to-login path
+    /// in [`restore_session`].
+    ///
+    /// Collapses the six identical hand-written literals (audit P1-3): every
+    /// field that means "no authenticated identity" is fixed here —
+    /// `authenticated: false`, no `substrate_address`/`auth_type`/`oauth_session`,
+    /// no logout timer, no sync mnemonic, and not the reauth-required state — so
+    /// a future field added to the struct can't be forgotten in one branch and
+    /// silently leak a half-populated unauthenticated result. The callers choose
+    /// only the two axes that genuinely vary across the failure paths:
+    /// `should_clear_oauth` (wipe the FE's OAuth localStorage?) and `redirect_to`
+    /// (`Some("/login")` to bounce, `None` to leave navigation untouched).
+    fn unauthenticated(should_clear_oauth: bool, redirect_to: Option<String>) -> Self {
+        Self {
+            authenticated: false,
+            substrate_address: None,
+            auth_type: None,
+            oauth_session: None,
+            logout_time_ms: None,
+            should_clear_oauth,
+            needs_sync_mnemonic: false,
+            redirect_to,
+            sync_requires_reauth: false,
+        }
+    }
+}
+
 /// Restore the user's session at app boot.
 ///
 /// Replaces the 150-line boot cascade in `wallet-auth-context.tsx`.
@@ -259,7 +287,7 @@ pub async fn restore_session(
     if let (Some(json), Some(expiry)) = (&oauth_session_json, oauth_expiry_ms) {
         if now_ms < expiry {
             match serde_json::from_str::<serde_json::Value>(json) {
-                Ok(session_data) => {
+                Ok(mut session_data) => {
                     let substrate_address = session_data.get("substrateAddress").and_then(|v| v.as_str()).map(String::from);
 
                     // A valid OAuth session MUST carry a substrateAddress. The
@@ -271,44 +299,46 @@ pub async fn restore_session(
                     // unauthenticated and bounce to login.
                     if substrate_address.is_none() {
                         info!("OAuth session JSON missing substrateAddress — treating as unauthenticated");
-                        return Ok(SessionRestoreResult {
-                            authenticated: false,
-                            substrate_address: None,
-                            auth_type: None,
-                            oauth_session: None,
-                            logout_time_ms: None,
-                            should_clear_oauth: true,
-                            needs_sync_mnemonic: false,
-                            redirect_to: Some("/login".into()),
-                            sync_requires_reauth: false,
-                        });
+                        return Ok(SessionRestoreResult::unauthenticated(true, Some("/login".into())));
                     }
 
-                    // Validate token in Rust DB
+                    // Validate the token against the Rust DB AND bind the session
+                    // to the DB token — never the FE-supplied one (audit H-2). The
+                    // renderer fully controls `oauth_session_json` (localStorage),
+                    // so trusting its token, or returning it verbatim, is an
+                    // identity-confusion / IDOR vector on a multi-account install.
+                    // `expiry_ms == 0` means "never expires" (same sentinel as the
+                    // DB-fallback check and `is_token_valid`).
                     if let Some(ref addr) = substrate_address {
                         let token_row = auth_session_repo::get_token_and_expiry(pool, addr).await?;
-                        // `expiry_ms == 0` means "never expires" — the same
-                        // convention the DB-fallback check (`expiry > 0 && expiry
-                        // < now`) and `is_token_valid` use. Treating 0 as the
-                        // never-expires sentinel here keeps a non-expiring token
-                        // accepted on restore, matching everywhere else.
-                        let token_valid = matches!(
-                            token_row,
-                            Some(TokenStatus { token: Some(_), expiry_ms: Some(exp) }) if exp == 0 || exp > now_ms
-                        );
-                        if !token_valid {
-                            info!("OAuth token expired in DB, clearing session");
-                            return Ok(SessionRestoreResult {
-                                authenticated: false,
-                                substrate_address: None,
-                                auth_type: None,
-                                oauth_session: None,
-                                logout_time_ms: None,
-                                should_clear_oauth: true,
-                                needs_sync_mnemonic: false,
-                                redirect_to: Some("/login".into()),
-                                sync_requires_reauth: false,
-                            });
+                        let db_token = match token_row {
+                            Some(TokenStatus {
+                                token: Some(t),
+                                expiry_ms: Some(exp),
+                            }) if exp == 0 || exp > now_ms => t,
+                            _ => {
+                                info!("OAuth token missing/expired in DB, clearing session");
+                                return Ok(SessionRestoreResult::unauthenticated(true, Some("/login".into())));
+                            }
+                        };
+                        // Bind the session to the DB token: the FE session MUST
+                        // carry a `token` equal to it. A missing OR differing token
+                        // means the renderer-controlled localStorage was tampered
+                        // with — refuse rather than run on an attacker-chosen token.
+                        // Requiring *presence* (not only rejecting a mismatch) is
+                        // what closes the account-pivot: a renderer could otherwise
+                        // name another local account's `substrateAddress` and omit
+                        // the token it cannot possess, and the old `&& fe_token !=
+                        // db_token` guard short-circuited to "no refusal" (audit H-2).
+                        if !fe_session_proves_token(&session_data, &db_token) {
+                            info!("OAuth session token missing or mismatched vs DB; treating as tampered/unauthenticated");
+                            return Ok(SessionRestoreResult::unauthenticated(true, Some("/login".into())));
+                        }
+                        // Run on the authoritative DB token regardless of what the
+                        // FE stored, so the returned session can never carry an
+                        // unverified token downstream.
+                        if let Some(obj) = session_data.as_object_mut() {
+                            obj.insert("token".to_string(), serde_json::Value::String(db_token));
                         }
                     }
 
@@ -472,31 +502,11 @@ pub async fn restore_session(
     let row = auth_session_repo::get_latest(pool).await?;
 
     let Some(row) = row else {
-        return Ok(SessionRestoreResult {
-            authenticated: false,
-            substrate_address: None,
-            auth_type: None,
-            oauth_session: None,
-            logout_time_ms: None,
-            should_clear_oauth: should_clear,
-            needs_sync_mnemonic: false,
-            redirect_to: None,
-            sync_requires_reauth: false,
-        });
+        return Ok(SessionRestoreResult::unauthenticated(should_clear, None));
     };
 
     let Some(auth_token) = row.auth_token else {
-        return Ok(SessionRestoreResult {
-            authenticated: false,
-            substrate_address: None,
-            auth_type: None,
-            oauth_session: None,
-            logout_time_ms: None,
-            should_clear_oauth: should_clear,
-            needs_sync_mnemonic: false,
-            redirect_to: None,
-            sync_requires_reauth: false,
-        });
+        return Ok(SessionRestoreResult::unauthenticated(should_clear, None));
     };
 
     // Check token expiry
@@ -508,17 +518,7 @@ pub async fn restore_session(
         if let Some(ref addr) = row.substrate_address {
             let _ = auth_session_repo::clear(pool, addr).await;
         }
-        return Ok(SessionRestoreResult {
-            authenticated: false,
-            substrate_address: None,
-            auth_type: None,
-            oauth_session: None,
-            logout_time_ms: None,
-            should_clear_oauth: should_clear,
-            needs_sync_mnemonic: false,
-            redirect_to: Some("/login".into()),
-            sync_requires_reauth: false,
-        });
+        return Ok(SessionRestoreResult::unauthenticated(should_clear, Some("/login".into())));
     }
 
     // Valid session — build OAuth session object for frontend display
@@ -623,10 +623,22 @@ pub async fn is_token_valid(state: tauri::State<'_, crate::app_state::AppState>,
     ))
 }
 
+/// True when the FE-persisted OAuth session proves possession of `db_token`:
+/// it must carry a string `token` field exactly equal to the authoritative DB
+/// token. A missing field, a non-string value, or a differing token all return
+/// `false` — each means the renderer-controlled `oauth_session_json` was
+/// tampered with, and restoring it would let a renderer pivot into a local
+/// account whose token it does not hold (audit H-2). Pure so the tamper rule is
+/// unit-tested without a DB or a live session.
+fn fe_session_proves_token(session_data: &serde_json::Value, db_token: &str) -> bool {
+    session_data.get("token").and_then(|v| v.as_str()) == Some(db_token)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::recovery::{RecoveryCheck, RecoveryFlow, RecoveryGateState};
+    use serde_json::json;
 
     fn sample_check() -> RecoveryCheck {
         RecoveryCheck {
@@ -695,5 +707,36 @@ mod tests {
     #[test]
     fn gate_target_absent_probe_is_pending() {
         assert_eq!(recovery_gate_target(None), RecoveryGateState::Pending);
+    }
+
+    // H-2: the FE session restores only if it proves possession of the DB
+    // token. An exact string match is the sole accept case.
+    #[test]
+    fn fe_session_proves_token_accepts_exact_match() {
+        assert!(fe_session_proves_token(&json!({ "token": "db-tok" }), "db-tok"));
+    }
+
+    // The regression guard: a renderer that omits the token field must NOT
+    // restore. The original `&& fe_token != db_token` guard short-circuited to
+    // "no refusal" here, letting a tampered session name another local
+    // account's address and pivot into it (audit H-2).
+    #[test]
+    fn fe_session_proves_token_rejects_missing_token() {
+        assert!(!fe_session_proves_token(&json!({ "substrateAddress": "5xyz" }), "db-tok"));
+    }
+
+    // A differing token is tampering.
+    #[test]
+    fn fe_session_proves_token_rejects_mismatch() {
+        assert!(!fe_session_proves_token(&json!({ "token": "attacker" }), "db-tok"));
+    }
+
+    // serde_json edge (axiom 110): `Value::as_str` yields `None` for a null or
+    // numeric `token`, so neither can equal the DB token — a non-string token
+    // is not a valid proof.
+    #[test]
+    fn fe_session_proves_token_rejects_non_string_token() {
+        assert!(!fe_session_proves_token(&json!({ "token": null }), "db-tok"));
+        assert!(!fe_session_proves_token(&json!({ "token": 12345 }), "db-tok"));
     }
 }

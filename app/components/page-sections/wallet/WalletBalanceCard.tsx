@@ -16,6 +16,7 @@ import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
 import SendBalanceDialog from "./SendBalanceDialog";
 import ReceiveBalanceDialog from "./ReceiveBalanceDialog";
+import { formatPlanckToHip } from "@/lib/utils/formatPlanckToHip";
 import { toast } from "sonner";
 
 interface WalletBalanceCardProps {
@@ -28,22 +29,6 @@ interface WalletBalanceCardProps {
 // keeps users from trying to send when balance can't cover the fee.
 const ESTIMATED_TRANSFER_FEE_PLANCK = BigInt("270233151");
 
-/**
- * Format a planck BigInt as a HIP display string the way hippius-web
- * does: divide by 1e18, floor to 6 decimals (never round up), strip
- * trailing zeros. Matches the "Available" line web shows in its Send
- * dialog so the two clients display identical numbers for the same
- * account.
- */
-const formatPlanckToHip = (planck: bigint): string => {
-  if (planck <= BigInt(0)) return "0";
-  // Divide once to a Number and floor to 6 decimals — same loss tolerated
-  // by web for display values. (Planck math elsewhere stays in BigInt.)
-  const asNumber = Number(planck) / 1e18;
-  if (!Number.isFinite(asNumber)) return "0";
-  const truncated = (Math.floor(asNumber * 1e6) / 1e6).toFixed(6);
-  return truncated.replace(/\.?0+$/, "");
-};
 
 const WalletBalanceCard: FC<WalletBalanceCardProps> = ({
   className,

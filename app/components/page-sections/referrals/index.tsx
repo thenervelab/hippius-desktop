@@ -27,7 +27,9 @@ import ReferralHistoryTable from "./ReferralHistoryTable";
 import { useReferralLinks } from "@/lib/hooks/api/useReferralLinks";
 import { useUserReferrals } from "@/lib/hooks/api/useUserReferrals";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
-import { API_CONFIG, REFERRAL_CODE_CONFIG } from "@/lib/config";
+import { REFERRAL_CODE_CONFIG } from "@/lib/config";
+import { invoke } from "@tauri-apps/api/core";
+import { errorMessage } from "@/lib/utils/errorUtils";
 
 /* Referrals dashboard — restyled to match the desktop card pattern used
  * across the wallet, billing and settings pages: rounded shell + mono
@@ -126,25 +128,15 @@ const Referrals: React.FC = () => {
     }
     setGenerating(true);
     try {
-      const res = await fetch(`${API_CONFIG.baseUrl}/api/referrals/generate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ address: polkadotAddress }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => null);
-        throw new Error(err?.message || `Request failed (${res.status})`);
-      }
+      // Goes through Rust IPC (audit M-17) instead of a renderer fetch, so the
+      // referral action crosses the same boundary as every other domain call.
+      await invoke("generate_referral_link", { address: polkadotAddress });
       toast.success("Referral Code Generated Successfully!");
       reloadLinks?.();
       refetchReferrals();
     } catch (err) {
       console.error("Generate referral failed:", err);
-      toast.error(
-        err instanceof Error
-          ? err.message
-          : "Failed to generate referral code.",
-      );
+      toast.error(errorMessage(err));
     } finally {
       setGenerating(false);
     }

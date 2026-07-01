@@ -104,37 +104,104 @@ pub fn decrypt(key: &[u8; 32], encoded: &str) -> Result<Zeroizing<String>, crate
     Ok(Zeroizing::new(plaintext))
 }
 
-/// Encrypts all plaintext drive passwords for the given account.
+/// Like [`encrypt`] but binds `aad` (associated data) into the AEAD tag.
 ///
-/// Scans `hcfs_config` for rows where `encryption_version = 0`, encrypts the
-/// `drive_password` in a single transaction, and sets `encryption_version = 1`.
-/// Safe to call repeatedly — rows already at version 1 are skipped, and the key
-/// derivation is performed only when there is at least one row to migrate.
+/// Used for `drive_password` rows at `encryption_version = 2`, where `aad` is
+/// the account id (audit R-33): an extra integrity binding on top of the
+/// account-derived key, so a ciphertext can't be lifted into another account's
+/// row even if a future key-derivation change weakened that binding. AAD is
+/// authenticated, NOT encrypted. The on-disk layout is identical to [`encrypt`]
+/// (`base64(nonce || ct || tag)`) — only the version column distinguishes them,
+/// so decryption MUST pass the same `aad`.
 ///
-/// NOTE: despite living next to the sub-account helpers, this migrates ONLY
-/// `hcfs_config.drive_password`. It does NOT encrypt `sub_accounts` seed
-/// phrases. If sub-account seed phrases need encryption-at-rest, that is a
-/// separate, currently-unimplemented migration.
+/// # Errors
+/// Returns [`AppError::Crypto`] on AEAD failure (effectively never for valid input).
+pub fn encrypt_with_aad(key: &[u8; 32], plaintext: &str, aad: &[u8]) -> Result<String, crate::error::AppError> {
+    use base64::Engine;
+    use chacha20poly1305::AeadCore;
+    use chacha20poly1305::aead::OsRng;
+
+    let cipher = ChaCha20Poly1305::new(key.into());
+    let nonce = ChaCha20Poly1305::generate_nonce(&mut OsRng);
+    let ciphertext = cipher
+        .encrypt(&nonce, chacha20poly1305::aead::Payload { msg: plaintext.as_bytes(), aad })
+        .map_err(|e| crate::error::AppError::Crypto(format!("encryption failed: {e}")))?;
+
+    let mut combined = Vec::with_capacity(12 + ciphertext.len());
+    combined.extend_from_slice(&nonce);
+    combined.extend_from_slice(&ciphertext);
+    Ok(base64::engine::general_purpose::STANDARD.encode(&combined))
+}
+
+/// Decrypt a value produced by [`encrypt_with_aad`], verifying the bound `aad`.
 ///
-/// # Single-user assumption
+/// # Errors
+/// Returns [`AppError::Crypto`] on bad base64, a too-short blob, an AEAD tag
+/// mismatch (wrong key, corruption, or a mismatched `aad`), or non-UTF-8 output.
+pub fn decrypt_with_aad(key: &[u8; 32], encoded: &str, aad: &[u8]) -> Result<Zeroizing<String>, crate::error::AppError> {
+    use base64::Engine;
+
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|e| crate::error::AppError::Crypto(format!("invalid base64: {e}")))?;
+    if decoded.len() < MIN_DECODED_LEN {
+        return Err(crate::error::AppError::Crypto(format!(
+            "ciphertext too short: {} bytes (minimum {})",
+            decoded.len(),
+            MIN_DECODED_LEN
+        )));
+    }
+    let (nonce_bytes, ciphertext) = decoded.split_at(12);
+    let nonce = chacha20poly1305::Nonce::from_slice(nonce_bytes);
+    let cipher = ChaCha20Poly1305::new(key.into());
+    let plaintext_bytes = cipher
+        .decrypt(nonce, chacha20poly1305::aead::Payload { msg: ciphertext, aad })
+        .map_err(|_| crate::error::AppError::Crypto("decryption failed — wrong key or corrupted data".into()))?;
+    let plaintext =
+        String::from_utf8(plaintext_bytes).map_err(|e| crate::error::AppError::Crypto(format!("decrypted data is not valid UTF-8: {e}")))?;
+    Ok(Zeroizing::new(plaintext))
+}
+
+/// Encrypts this account's plaintext drive passwords.
 ///
-/// This function selects ALL matching rows regardless of any parent-account
-/// column. This is intentional: Hippius Desktop is a single-user application —
-/// each SQLite database belongs to exactly one logged-in user. If multi-user
-/// support is ever added, a `parent_account_id` column will need to be
-/// introduced and this query scoped accordingly.
+/// Scans `hcfs_config` for the current account's rows where
+/// `encryption_version = 0`, encrypts the `drive_password` in a single
+/// transaction, and sets `encryption_version = 1`. Safe to call repeatedly —
+/// rows already at version 1 are skipped, and the key derivation is performed
+/// only when there is at least one row to migrate.
+///
+/// NOTE: this migrates ONLY `hcfs_config.drive_password`. (The dead
+/// `sub_accounts` table — which once prompted a caveat here — was removed in
+/// the R-35 cleanup.)
+///
+/// # Account scoping
+///
+/// The scan and update are scoped to `owner = account_key(account_id)` — the
+/// same per-account key `sync::config` reads/writes under. Although Hippius
+/// Desktop is single-user, multiple accounts' rows can coexist in one database
+/// (logout never deletes `hcfs_config` rows), and the migration key below is
+/// derived from the *restoring* account's mnemonic. Without this scope,
+/// restoring account A would re-encrypt account B's lingering plaintext row
+/// under A's key and permanently lock B out of its own sync config — silent,
+/// irreversible cross-account data loss (audit finding R-04).
 pub async fn migrate_if_needed(pool: &SqlitePool, mnemonic: &str, account_id: &str) -> Result<(), crate::error::AppError> {
     let mut tx = pool.begin().await?;
+
+    // The per-account owner key (mirrors `sync::config::{get,save}_hcfs_config`).
+    let owner = crate::auth::account_key::account_key(account_id);
 
     // Fetch the unmigrated rows BEFORE deriving the key. derive_key runs BIP-39
     // PBKDF2-HMAC-SHA512 (2048 iterations), so deriving it unconditionally — as
     // the previous version did — paid that cost on EVERY login and boot even
     // though the steady state (everything already at encryption_version = 1) has
     // nothing to migrate. The key is derived only when a row needs it.
-    let drive_rows: Vec<(i64, String)> =
-        sqlx::query_as("SELECT id, drive_password FROM hcfs_config WHERE encryption_version = 0 AND drive_password != ''")
-            .fetch_all(&mut *tx)
-            .await?;
+    let drive_rows: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT id, drive_password FROM hcfs_config \
+         WHERE owner = ? AND encryption_version = 0 AND drive_password != ''",
+    )
+    .bind(&owner)
+    .fetch_all(&mut *tx)
+    .await?;
 
     let drive_count = drive_rows.len();
     if !drive_rows.is_empty() {
@@ -144,11 +211,18 @@ pub async fn migrate_if_needed(pool: &SqlitePool, mnemonic: &str, account_id: &s
                 continue;
             }
             let ciphertext = encrypt(&drive_key, plaintext)?;
-            sqlx::query("UPDATE hcfs_config SET drive_password = ?, encryption_version = 1 WHERE id = ?")
-                .bind(&ciphertext)
-                .bind(id)
-                .execute(&mut *tx)
-                .await?;
+            // `owner` re-asserted on the UPDATE as defense-in-depth, so a future
+            // change to the SELECT above can't silently widen the write across
+            // accounts.
+            sqlx::query(
+                "UPDATE hcfs_config SET drive_password = ?, encryption_version = 1 \
+                 WHERE id = ? AND owner = ?",
+            )
+            .bind(&ciphertext)
+            .bind(id)
+            .bind(&owner)
+            .execute(&mut *tx)
+            .await?;
         }
     }
 
@@ -207,6 +281,24 @@ mod tests {
         let ciphertext = encrypt(&key, plaintext).unwrap();
         let decrypted = decrypt(&key, &ciphertext).unwrap();
         assert_eq!(&*decrypted, plaintext);
+    }
+
+    #[test]
+    fn aad_round_trip_and_binding() {
+        // R-33: encrypt_with_aad round-trips with the same AAD...
+        let key = derive_key(TEST_MNEMONIC, TEST_ACCOUNT, "drive").unwrap();
+        let aad = TEST_ACCOUNT.as_bytes();
+        let ct = encrypt_with_aad(&key, "drive-pw", aad).unwrap();
+        assert_eq!(&*decrypt_with_aad(&key, &ct, aad).unwrap(), "drive-pw");
+
+        // ...but a different AAD (e.g. another account id) fails the tag check,
+        // so a v2 row can't be lifted into another account's context.
+        assert!(decrypt_with_aad(&key, &ct, b"different-account").is_err());
+
+        // And a v2 (AAD) ciphertext is NOT decryptable by the plain no-AAD path
+        // (the empty AAD won't match) — the encryption_version column is what
+        // routes them, so they never cross.
+        assert!(decrypt(&key, &ct).is_err());
     }
 
     #[test]

@@ -34,6 +34,14 @@ export function makeSnapshot(
   // Failed files count toward expected but NOT toward progress bytes.
   let bytesExpected = 0;
   let progressBytes = 0;
+  // The combined pair mirrors hcfs-client `build_snapshot` EXACTLY (snapshot.rs):
+  // a transfer (upload/download) is two phases of work, so its expected bytes
+  // are counted twice (`total_bytes * 2`) and its progress is `encrypted +
+  // transferred`. Replicating the doubling here — instead of the old
+  // `combined = single` shortcut — is what lets a test reproduce the
+  // "doubled total" the widget showed; the shortcut silently masked it.
+  let combinedBytesExpected = 0;
+  let combinedProgressBytes = 0;
   for (const f of files) {
     if (f.status === "completed") {
       bytesExpected += f.totalBytes;
@@ -44,6 +52,9 @@ export function makeSnapshot(
       bytesExpected += f.totalBytes;
       progressBytes += f.bytesTransferred > 0 ? f.bytesTransferred : f.bytesEncrypted;
     }
+    const isTransfer = f.action === "upload" || f.action === "download";
+    combinedBytesExpected += f.totalBytes * (isTransfer ? 2 : 1);
+    combinedProgressBytes += f.bytesEncrypted + f.bytesTransferred;
   }
   const overallPercent =
     files.length === 0
@@ -83,8 +94,8 @@ export function makeSnapshot(
     files,
     widgetState: isActive ? "active" : isCompleted ? "completed" : "idle",
     widgetVisible: (isActive && files.length > 0) || isCompleted,
-    combinedProgressBytes: progressBytes,
-    combinedBytesExpected: bytesExpected,
+    combinedProgressBytes,
+    combinedBytesExpected,
     deletedCount,
     syncedCount,
     actualTotal: files.length,

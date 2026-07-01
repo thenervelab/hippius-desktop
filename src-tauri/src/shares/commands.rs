@@ -22,6 +22,10 @@ use crate::shares::history::{self, HistoryEntry};
 use crate::shares::origin;
 use chrono::Utc;
 use hcfs_client::client::share::{ShareProgress, ShareProgressFn, ShareSummary as UpstreamShareSummary};
+// The keystore trait's `get` is only used by the macOS private-share path
+// (`make_private`), so gate the import to avoid an unused-import warning on Linux.
+#[cfg(target_os = "macos")]
+use hcfs_client::client::share::ShareKeystore;
 use serde::Serialize;
 use sqlx::sqlite::SqlitePool;
 use std::path::{Component, Path, PathBuf};
@@ -332,6 +336,162 @@ pub async fn hcfs_create_share(
     create_share_inner(&state, &account_id, &folder_label, &relative_path, Some(progress)).await
 }
 
+/// Mint a public share for a synced file with the same capability + eligibility
+/// guards as [`hcfs_create_share`] but no progress channel. Entry point for the
+/// macOS Finder bridge dispatcher, where a right-click has no webview channel to
+/// stream progress into.
+///
+/// macOS-only: the Finder dispatcher is its sole caller, so leaving it un-gated
+/// would be dead code on the Linux CI job.
+#[cfg(target_os = "macos")]
+pub(crate) async fn share_synced_file(state: &AppState, account_id: &str, folder_label: &str, relative_path: &str) -> Result<ShareLink> {
+    require_shares_supported(state, account_id).await?;
+    require_eligible(state, account_id, InsufficientCreditsAction::Sharing, 0).await?;
+    create_share_inner(state, account_id, folder_label, relative_path, None).await
+}
+
+/// Stream an already-resolved local plaintext file through the share engine.
+///
+/// Shared by the two Finder paths that have no synced-folder identity — an
+/// outside file and a folder zipped to a temp archive. No reshare-origin row is
+/// recorded (there is no `(folder_label, relative_path)` to reshare from). The
+/// caller has already run the capability + eligibility gates.
+#[cfg(target_os = "macos")]
+async fn share_local_file(state: &AppState, account_id: &str, local_path: &Path, filename: &str, mime_type: &str) -> Result<ShareLink> {
+    let pool = state.pool()?;
+    let metadata = tokio::fs::metadata(local_path).await?;
+    if !metadata.is_file() {
+        return Err(AppError::Validation("Cannot share a directory".into()));
+    }
+    let plaintext_size = metadata.len();
+
+    info!(filename, plaintext_size, mime_type, "Creating share from local file");
+
+    let client = build_account_client(pool, account_id).await?;
+    let mut reader = tokio::fs::File::open(local_path).await?;
+    let keystore = SqliteShareKeystore::new(pool.clone());
+    let result = client
+        .create_share(&mut reader, plaintext_size, filename, mime_type, &keystore, CONSOLE_BASE_URL, None)
+        .await
+        .map_err(|e| {
+            warn!(error = %e, "create_share failed");
+            AppError::Hcfs(format!("create_share: {e}"))
+        })?;
+
+    Ok(ShareLink {
+        share_token: result.share_token,
+        share_url: result.share_url,
+        expires_at: result.expires_at.to_rfc3339(),
+    })
+}
+
+/// Mint a public share for a file that is NOT inside a synced folder by reading
+/// its bytes directly ("upload & share"). The byte stream is uploaded to the
+/// same encrypted-share storage as a synced file; only the reshare-origin
+/// sidecar is skipped. Entry point for the macOS Finder dispatcher.
+#[cfg(target_os = "macos")]
+pub(crate) async fn share_external_file(state: &AppState, account_id: &str, abs_path: &Path) -> Result<ShareLink> {
+    require_shares_supported(state, account_id).await?;
+    require_eligible(state, account_id, InsufficientCreditsAction::Sharing, 0).await?;
+
+    let filename = abs_path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| AppError::Validation("File has no usable name".into()))?;
+    let mime_type = mime_guess::from_path(abs_path).first_or_octet_stream().essence_str().to_owned();
+
+    share_local_file(state, account_id, abs_path, filename, &mime_type).await
+}
+
+/// Mint a public share for a folder by packing it into one `application/zip`
+/// blob and sharing that. The share engine shares one byte stream, so a folder
+/// has no first-class representation — the recipient downloads `<name>.zip`.
+/// Used for both in-drive and outside folders. Entry point for the macOS Finder
+/// dispatcher.
+///
+/// KNOWN LIMITATION: there is no size/entry/time cap on the zip — a click on a
+/// very large tree fills the temp disk and starts an unbounded upload. A
+/// follow-up should bound it (max bytes/entries) before the walk. The
+/// eligibility gate is a positive-balance floor, not a byte budget.
+#[cfg(target_os = "macos")]
+pub(crate) async fn share_directory_as_zip(state: &AppState, account_id: &str, dir_path: &Path) -> Result<ShareLink> {
+    require_shares_supported(state, account_id).await?;
+    require_eligible(state, account_id, InsufficientCreditsAction::Sharing, 0).await?;
+
+    let dir_name = dir_path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| AppError::Validation("Folder has no usable name".into()))?;
+    let zip_filename = format!("{dir_name}.zip");
+
+    // Pack on a blocking thread: the zip crate and `std::fs` are synchronous,
+    // and a large folder would otherwise stall the async runtime. The temp file
+    // is moved back out and lives in this frame across the upload await below;
+    // its `Drop` unlinks the archive only after `create_share` has streamed it.
+    let src = dir_path.to_path_buf();
+    let temp = tokio::task::spawn_blocking(move || crate::shares::zip_dir::zip_directory_to_temp(&src))
+        .await
+        .map_err(|e| AppError::Io(std::io::Error::other(e)))??;
+
+    share_local_file(state, account_id, temp.path(), &zip_filename, "application/zip").await
+}
+
+/// A freshly-minted share turned into a password-protected (`#p=`) link, plus
+/// the password the recipient needs. Returned by [`make_private`] so the Finder
+/// dispatcher can show both to the user.
+#[cfg(target_os = "macos")]
+pub(crate) struct PrivateShare {
+    /// The share link, with its URL rewritten to the `#p=` (wrapped-key) form.
+    pub link: ShareLink,
+    /// The generated password. The recipient cannot open the link without it.
+    pub password: String,
+}
+
+/// Wrap an already-minted public share into a password-protected one: generate a
+/// random password, read the share's key back from the keystore (where
+/// `create_share` just stored it), wrap it under the password, and replace the
+/// `#k=` URL with a `#p=` one. The raw key never appears in the returned URL.
+///
+/// There is no password-entry UI yet, so a fresh random password is generated
+/// every time (see [`generate_share_password`]); the caller surfaces it to the
+/// user to convey out-of-band.
+// No `account_id`: the keystore is keyed by the globally-unique share token,
+// which we just minted for this account, so the key lookup needs no account scope.
+#[cfg(target_os = "macos")]
+pub(crate) async fn make_private(state: &AppState, public: ShareLink) -> Result<PrivateShare> {
+    let pool = state.pool()?;
+    let keystore = SqliteShareKeystore::new(pool.clone());
+    let key = keystore
+        .get(&public.share_token)
+        .map_err(|e| AppError::Crypto(format!("share keystore lookup: {e}")))?
+        // The key was written by create_share moments ago on this same device,
+        // so a miss here means the keystore write failed silently — surface it
+        // rather than emit an unopenable link.
+        .ok_or_else(|| AppError::Crypto("share key missing from keystore right after minting".into()))?;
+
+    let password = generate_share_password();
+    let blob = hcfs_client::client::share::wrap_share_key(&password, &key).map_err(|e| AppError::Crypto(format!("wrap share key: {e}")))?;
+    let share_url = hcfs_client::client::share::build_share_url_private(CONSOLE_BASE_URL, &public.share_token, &blob);
+
+    Ok(PrivateShare {
+        link: ShareLink { share_url, ..public },
+        password,
+    })
+}
+
+/// Generate a random share password: 20 alphanumeric characters (~119 bits of
+/// entropy) drawn from the OS CSPRNG via `rand`. Combined with the recipient's
+/// Argon2id work factor this is strong against brute force.
+///
+/// TEMPORARY: there is no password-entry UI yet, so every private share gets a
+/// fresh random password the user conveys to the recipient out-of-band.
+#[cfg(target_os = "macos")]
+fn generate_share_password() -> String {
+    use rand::Rng;
+    use rand::distributions::Alphanumeric;
+    rand::thread_rng().sample_iter(&Alphanumeric).take(20).map(char::from).collect()
+}
+
 /// Revoke an existing share and immediately mint a new one for the
 /// same source file. Effectively a TTL extension built out of the
 /// primitives we already have, since hcfs-server doesn't expose an
@@ -401,7 +561,7 @@ pub async fn hcfs_reshare(state: tauri::State<'_, AppState>, share_token: String
             "Reshare: revoke of old token failed; new link is already live"
         );
     }
-    if let Err(e) = origin::forget(pool, &share_token).await {
+    if let Err(e) = origin::forget(pool, &owner, &share_token).await {
         warn!(
             share_token = %share_token,
             error = %e,
@@ -575,7 +735,7 @@ pub async fn hcfs_revoke_share(state: tauri::State<'_, AppState>, share_token: S
     // row is fine — and best-effort: a sidecar leftover after a
     // successful revoke would only show up as a "ghost" badge until
     // the next prune in `hcfs_list_shares`, never as a security issue.
-    if let Err(e) = origin::forget(pool, &share_token).await {
+    if let Err(e) = origin::forget(pool, &account_key(&account_id), &share_token).await {
         warn!(
             share_token = %share_token,
             error = %e,
@@ -623,6 +783,47 @@ pub async fn hcfs_clear_share_history(state: tauri::State<'_, AppState>) -> Resu
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    /// Wire-contract pin for the FOREIGN `hcfs_client::client::share::ShareProgress`,
+    /// which `share_progress_forwarder` rides straight onto a `Channel<ShareProgress>`
+    /// to the webview — no desktop adapter. The FE `shares.ts` reads `{bytesDone,
+    /// bytesTotal, phase}` and its own doc comment says the casing "must not drift
+    /// from the backend serde derive", yet nothing pinned it. `ShareProgress` is
+    /// `#[serde(rename_all = "camelCase")]`; this pins the keys. AUDIT gap H5.
+    #[test]
+    fn share_progress_pins_wire_shape() {
+        use hcfs_client::client::share::{SharePhase, ShareProgress};
+        use std::collections::BTreeSet;
+
+        let update = ShareProgress {
+            phase: SharePhase::Uploading,
+            bytes_done: 10,
+            bytes_total: 20,
+        };
+        let json = serde_json::to_value(update).expect("serialize ShareProgress");
+        let keys: BTreeSet<String> = json.as_object().expect("object").keys().cloned().collect();
+        let expected: BTreeSet<String> = ["bytesDone", "bytesTotal", "phase"].into_iter().map(String::from).collect();
+        assert_eq!(keys, expected, "ShareProgress wire keys drifted — FE shares.ts reads bytesDone/bytesTotal/phase");
+    }
+
+    /// The `SharePhase` variant strings drive the FE share-progress bar's label
+    /// (`shares.ts::SharePhase = "encrypting" | "uploading" | "finalizing"`). A
+    /// rename in hcfs would break the bar silently. `#[serde(rename_all =
+    /// "lowercase")]`, pinned here. AUDIT gap H5.
+    #[test]
+    fn share_phase_pins_wire_strings() {
+        use hcfs_client::client::share::SharePhase;
+
+        let cases = [
+            (SharePhase::Encrypting, "encrypting"),
+            (SharePhase::Uploading, "uploading"),
+            (SharePhase::Finalizing, "finalizing"),
+        ];
+        for (phase, wire) in cases {
+            let json = serde_json::to_value(phase).expect("serialize SharePhase");
+            assert_eq!(json, serde_json::Value::String(wire.to_string()), "SharePhase wire string drifted (expected {wire})");
+        }
+    }
 
     /// Extract the `{ ... }` body of the first fn whose declaration contains
     /// `sig`, by brace matching. Same static-invariant style as `sync::folders`
@@ -697,5 +898,14 @@ mod tests {
         let dir = TempDir::new().expect("tempdir");
         let err = resolve_inside_sync_root(dir.path(), "missing.txt").await.unwrap_err();
         assert!(matches!(err, AppError::Validation(_)));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn generated_password_is_20_alphanumeric_and_random() {
+        let a = generate_share_password();
+        assert_eq!(a.len(), 20, "password length is fixed at 20");
+        assert!(a.chars().all(|c| c.is_ascii_alphanumeric()), "alphanumeric only: {a}");
+        assert_ne!(a, generate_share_password(), "two draws must differ with overwhelming probability");
     }
 }

@@ -12,24 +12,15 @@ use serde::Serialize;
 /// (18 decimals) without floating-point intermediary. Returns the integer as a
 /// string so TypeScript can convert to BigInt losslessly.
 fn credits_to_planck(balance_str: &str) -> String {
-    let s = balance_str.trim();
-    if s.is_empty() || s == "0" {
-        return "0".to_string();
-    }
-    let (int_part, frac_part) = match s.split_once('.') {
-        Some((i, f)) => (i, f),
-        None => (s, ""),
-    };
-    // Pad or truncate fractional part to exactly 18 digits
-    let padded: String = if frac_part.len() >= 18 {
-        frac_part[..18].to_string()
-    } else {
-        format!("{frac_part:0<18}")
-    };
-    let combined = format!("{int_part}{padded}");
-    // Strip leading zeros but keep at least "0"
-    let stripped = combined.trim_start_matches('0');
-    if stripped.is_empty() { "0".to_string() } else { stripped.to_string() }
+    // Delegate to the canonical decimal→planck converter (same 18-decimal
+    // pad/truncate/strip-leading-zeros logic + fail-closed validation) so the
+    // two can't drift (audit R-09). Policy difference vs `to_plancks`: the
+    // billing balance is first-party, but a malformed 200 must render as "0" —
+    // never a corrupt planck string (the FE feeds it to `BigInt()`) and never a
+    // panic — so we trim surrounding whitespace and fail *soft* to "0" where
+    // `to_plancks` (a user-typed send amount) fails *hard* with a validation
+    // error.
+    crate::blockchain::convert::to_plancks(balance_str.trim().to_owned()).unwrap_or_else(|_| "0".to_string())
 }
 
 /// Credit balance in both representations the frontend needs: raw planck
@@ -60,15 +51,25 @@ pub(crate) struct CreditBalanceResponse {
 /// planck via `credits_to_planck` (string divmod, no float), then runs
 /// the planck string through `planck_to_hip` so the FE has both shapes
 /// in a single round-trip.
+/// Fetch this account's LIVE credit balance from the billing API and convert it
+/// to a planck string. Shared by `get_user_credits` (display) and
+/// `check_low_credit_notification_live` (the low-balance warning) so the warning
+/// decision runs against a freshly-fetched balance instead of the FE's
+/// `staleTime: Infinity` cache, which was never invalidated — a user who dropped
+/// below the threshold mid-session was never warned (audit R-08).
+pub(crate) async fn fetch_credit_balance_planck(state: &crate::app_state::AppState, account_id: &crate::app_state::SessionAccount) -> Result<String, AppError> {
+    let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
+    let resp: CreditBalanceResponse = client.get("/api/billing/credits/balance/", account_id).await?;
+    let balance_str = resp.balance.as_deref().unwrap_or("0");
+    Ok(credits_to_planck(balance_str))
+}
+
 #[tauri::command]
 pub async fn get_user_credits(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: crate::app_state::SessionAccount,
 ) -> Result<CreditBalance, AppError> {
-    let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
-    let resp: CreditBalanceResponse = client.get("/api/billing/credits/balance/", &account_id).await?;
-    let balance_str = resp.balance.as_deref().unwrap_or("0");
-    let planck = credits_to_planck(balance_str);
+    let planck = fetch_credit_balance_planck(&state, &account_id).await?;
     let hip = crate::blockchain::convert::planck_to_hip(&planck);
     Ok(CreditBalance { planck, hip })
 }
@@ -161,5 +162,39 @@ mod tests {
     fn credits_to_planck_many_decimals() {
         // Truncates beyond 18 digits
         assert_eq!(credits_to_planck("1.1234567890123456789"), "1123456789012345678");
+    }
+
+    // ── R-09: fail-closed validation + panic-safety ────────────────────────
+
+    #[test]
+    fn credits_to_planck_rejects_negative() {
+        // Previously survived as "-5000000000000000000".
+        assert_eq!(credits_to_planck("-5"), "0");
+        assert_eq!(credits_to_planck("-0.5"), "0");
+    }
+
+    #[test]
+    fn credits_to_planck_rejects_scientific_notation() {
+        // Previously mangled to "15e3000000000000000".
+        assert_eq!(credits_to_planck("1.5e3"), "0");
+        assert_eq!(credits_to_planck("1E18"), "0");
+    }
+
+    #[test]
+    fn credits_to_planck_rejects_non_digits_and_extra_dots() {
+        assert_eq!(credits_to_planck("abc"), "0");
+        assert_eq!(credits_to_planck("1.2.3"), "0");
+        assert_eq!(credits_to_planck("0x10"), "0");
+        assert_eq!(credits_to_planck("1,5"), "0");
+    }
+
+    #[test]
+    fn credits_to_planck_does_not_panic_on_multibyte_fraction() {
+        // A multibyte char at/after byte 18 of the fraction used to panic the
+        // raw `frac_part[..18]` slice. It must now fail closed to "0" instead.
+        let malformed = format!("0.{}é", "1".repeat(17)); // 'é' is 2 bytes at offset 17
+        assert_eq!(credits_to_planck(&malformed), "0");
+        // Long all-digit fraction (> 18) still truncates cleanly, no panic.
+        assert_eq!(credits_to_planck("0.1234567890123456789012345"), "123456789012345678");
     }
 }

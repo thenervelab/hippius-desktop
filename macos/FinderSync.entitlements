@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- App extensions MUST run sandboxed (Apple requirement); the main app
+         deliberately does not (src-tauri/entitlements.plist). The shared App
+         Group below is what lets this sandboxed process reach the same
+         container as the non-sandboxed app for the IPC socket. -->
+    <key>com.apple.security.app-sandbox</key>
+    <true/>
+    <key>com.apple.security.application-groups</key>
+    <array>
+        <string>V28B5X732P.com.hippius.shared</string>
+    </array>
+</dict>
+</plist>

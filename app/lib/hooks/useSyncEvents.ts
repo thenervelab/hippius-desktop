@@ -22,6 +22,7 @@ import {
 } from "../store/syncAtoms";
 import { queryClientAtom } from "jotai-tanstack-query";
 import { DRIVE_STORAGE_STATS_QUERY_KEY } from "./api/useDriveStorageStats";
+import { DRIVE_STORAGE_CHART_QUERY_KEY } from "./api/useDriveStorageChart";
 
 interface SyncOutcome {
   label?: string;
@@ -133,6 +134,13 @@ export function useSyncEvents() {
           if (totalCompleted > 0) {
             queryClient.invalidateQueries({
               queryKey: [DRIVE_STORAGE_STATS_QUERY_KEY],
+            });
+            // Also refresh the storage bar CHART (`useDriveStorageChart`) — it
+            // has no refetchInterval, so without this it sat frozen while the
+            // headline total (which polls) climbed beside it, a visible
+            // divergence within the same card during/after a sync.
+            queryClient.invalidateQueries({
+              queryKey: [DRIVE_STORAGE_CHART_QUERY_KEY],
             });
           }
         }],

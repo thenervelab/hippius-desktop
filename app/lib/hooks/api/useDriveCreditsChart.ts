@@ -1,3 +1,4 @@
+import { keepPreviousData } from "@tanstack/react-query";
 import { ChartPoint } from "@/lib/types/chartTypes";
 import { useInvokeQuery } from "./useInvokeQuery";
 
@@ -18,6 +19,10 @@ export function useDriveCreditsChart(range: CreditsChartRange) {
     options: {
       staleTime: 30_000,
       refetchOnWindowFocus: false,
+      // Keep the prior series on a refetch / range switch so the chart never
+      // renders the empty fallback mid-refresh — pairs with the component
+      // animKey guard against the periodic re-grow flash (F-8).
+      placeholderData: keepPreviousData,
     },
   });
 }

@@ -24,7 +24,7 @@
 //! contract is unit-tested as a pure function in `sync::control::tests`.
 
 /// Source of the reviewed-conflict command, embedded at compile time.
-const CONTROL_RS: &str = include_str!("../src/sync/control.rs");
+const CONTROL_RS: &str = include_str!("../src/sync/drive/control.rs");
 
 /// The reviewed path MUST route completion through the shared bridge helper.
 #[test]

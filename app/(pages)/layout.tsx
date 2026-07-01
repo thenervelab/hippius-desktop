@@ -8,6 +8,7 @@ import SyncFilesHandler from "./SyncFilesHandler";
 import MigrationChecker from "./MigrationChecker";
 import InsufficientCreditsDialog from "@/components/page-sections/drive/InsufficientCreditsDialog";
 import FailedFilesListener from "./FailedFilesListener";
+import FinderShareListener from "./FinderShareListener";
 import FailedFilesModal from "@/components/page-sections/drive/FailedFilesModal";
 import ShareFileModal from "@/components/page-sections/drive/ShareFileModal";
 import RenameDialog from "@/components/page-sections/drive/RenameDialog";
@@ -26,6 +27,7 @@ export default function ProtectedLayout({
         <SyncEventLogger />
         <ConflictEventListener />
         <FailedFilesListener />
+        <FinderShareListener />
         <MigrationChecker />
         <InsufficientCreditsDialog />
         <FailedFilesModal />

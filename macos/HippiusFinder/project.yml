@@ -1,0 +1,43 @@
+# xcodegen project for the Hippius Finder Sync extension.
+# Generate the Xcode project with:  cd macos/HippiusFinder && xcodegen generate
+# Build the unsigned .appex with:
+#   xcodebuild -project HippiusFinder.xcodeproj -scheme HippiusFinder \
+#     -configuration Release CODE_SIGNING_ALLOWED=NO build
+# Signing + embedding into Hippius.app is done by macos/embed-finder-extension.sh.
+name: HippiusFinder
+options:
+  bundleIdPrefix: hippius.com
+  # 11.0 for SF Symbol badge images (NSImage(systemSymbolName:)). The main app
+  # targets 10.13, but an app extension may set its own (higher) minimum — it
+  # simply won't load on older macOS, where the rich Finder popover isn't a goal.
+  deploymentTarget:
+    macOS: "11.0"
+  createIntermediateGroups: true
+targets:
+  HippiusFinder:
+    type: app-extension
+    platform: macOS
+    sources:
+      - path: .
+        includes:
+          - "*.swift"
+      # The Hippius logo shown next to each right-click menu item. xcodegen
+      # routes a non-source file into the target's Copy Bundle Resources phase,
+      # so it ships inside the .appex and `Bundle(for:).url(forResource:)` finds it.
+      - path: HippiusMenuIcon.png
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: Hippius
+        CFBundleName: HippiusFinder
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.FinderSync
+          NSExtensionPrincipalClass: HippiusFinder.HippiusFinderSync
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: hippius.com.FinderSync
+        CODE_SIGN_ENTITLEMENTS: ../FinderSync.entitlements
+        CODE_SIGN_STYLE: Manual
+        SWIFT_VERSION: "5.0"
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"

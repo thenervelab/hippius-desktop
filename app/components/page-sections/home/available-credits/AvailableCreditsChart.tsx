@@ -8,6 +8,7 @@ import React, {
   useState,
 } from "react";
 import { ChartPoint } from "@/lib/types/chartTypes";
+import { nextChartAnimState } from "@/lib/utils/chartAnimation";
 import { cn } from "@/app/lib/utils";
 
 const Y_TICK_COUNT = 6;
@@ -104,13 +105,19 @@ const AvailableCreditsChart: React.FC<AvailableCreditsChartProps> = ({
       `${data.length}-${data[0]?.balance ?? ""}-${data[data.length - 1]?.balance ?? ""}`,
     [data],
   );
+  // Re-animate only when REAL data changes — skip the empty-fallback round-trip
+  // a background refetch causes, which would otherwise remount + re-grow the
+  // chart (the periodic flash, F-8). `nextChartAnimState` owns that decision.
   const prevSigRef = useRef(dataSignature);
   useEffect(() => {
-    if (dataSignature !== prevSigRef.current) {
-      prevSigRef.current = dataSignature;
-      setAnimKey((k) => k + 1);
-    }
-  }, [dataSignature]);
+    const { signature, reanimate } = nextChartAnimState(
+      prevSigRef.current,
+      dataSignature,
+      data.length === 0,
+    );
+    prevSigRef.current = signature;
+    if (reanimate) setAnimKey((k) => k + 1);
+  }, [dataSignature, data.length]);
 
   useEffect(() => {
     const el = containerRef.current;

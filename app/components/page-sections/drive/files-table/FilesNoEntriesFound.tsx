@@ -1,5 +1,4 @@
 import NoEntriesFound from "@/components/ui/NoEntriesFound";
-import { IS_SYNC_PAUSED } from "@/components/ui";
 import React, { useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -57,8 +56,6 @@ const FilesNoEntriesFound: React.FC<FilesNoEntriesFoundProps> = ({
   );
 
   const handlePrimaryClick = useCallback(() => {
-    if (IS_SYNC_PAUSED) return;
-
     // No credits — send the user to the plans page to top up. Checked
     // FIRST so the button copy ("Add Credits") matches the click
     // destination even when sync isn't configured yet.

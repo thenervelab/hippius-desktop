@@ -1,0 +1,271 @@
+name: ci
+
+# Test + lint gate for every PR and for pushes to the long-lived branches.
+#
+# Rust runs in two lanes that share `.github/actions/rust-ci-setup`:
+#   - `rust-linux` (ubuntu): the FAST lane, runs on every branch incl. redesign.
+#     Covers all cross-platform code. macOS-only `#[cfg(target_os = "macos")]`
+#     code is compiled out here.
+#   - `rust-macos` (macOS): the SLOW lane (~15-20 min), gated to release-bound
+#     merges (PRs into dev/main + pushes to them). Covers the macOS-only code
+#     (security-scoped bookmarks, App Translocation, apple-native keychain).
+# Branch protection requires `rust-linux` + `frontend` on redesign, and
+# `rust-linux` + `rust-macos` + `frontend` on dev/main.
+on:
+  pull_request:
+  push:
+    branches: [main, dev, redesign]
+
+# Least privilege: this workflow only reads the checkout.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
+jobs:
+  rust-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # No step pushes or reuses the GITHUB_TOKEN; the private hcfs dep is
+          # fetched over a separate SSH key. Don't leave the token in .git/config.
+          persist-credentials: false
+
+      - name: Rust CI setup
+        uses: ./.github/actions/rust-ci-setup
+        with:
+          deploy-key: ${{ secrets.HCFS_DEPLOY_KEY_B64 }}
+          tauri-env: ${{ secrets.TAURI_ENV_FILE }}
+          linux-deps: "true"
+
+      - name: Clippy (deny warnings)
+        working-directory: src-tauri
+        env:
+          SQLX_OFFLINE: "true"
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Tests
+        working-directory: src-tauri
+        env:
+          SQLX_OFFLINE: "true"
+        run: cargo test
+
+  rust-macos:
+    # The macOS lane is the slow one (~15-20 min cold), so run it only where it
+    # gates a release-bound merge — PRs into dev/main and pushes to them — and
+    # skip it on redesign. It exists to cover the macOS-only code the Linux lane
+    # compiles out; `rust-linux` is the everywhere gate.
+    if: >-
+      (github.event_name == 'pull_request' && (github.base_ref == 'dev' || github.base_ref == 'main')) ||
+      (github.event_name == 'push' && (github.ref_name == 'dev' || github.ref_name == 'main'))
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Rust CI setup
+        uses: ./.github/actions/rust-ci-setup
+        with:
+          deploy-key: ${{ secrets.HCFS_DEPLOY_KEY_B64 }}
+          tauri-env: ${{ secrets.TAURI_ENV_FILE }}
+
+      - name: Clippy (deny warnings)
+        working-directory: src-tauri
+        env:
+          SQLX_OFFLINE: "true"
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Tests
+        working-directory: src-tauri
+        env:
+          SQLX_OFFLINE: "true"
+        run: cargo test
+
+  supply-chain:
+    # Supply-chain advisory gate for the Rust backend. Lighter than the Rust
+    # build jobs — it skips the toolchain, build cache and compile — but it
+    # still needs the HCFS deploy key: cargo-deny builds the dependency graph
+    # via `cargo metadata`, which resolves EVERY source, including the private
+    # hcfs git dep over SSH. Without the key the graph can't resolve and the
+    # gate errors out before it ever reaches the advisory check. Scoped to
+    # `advisories bans sources` (the security-relevant checks); `licenses` is
+    # configured in deny.toml but not yet enforced — see the [licenses] note
+    # there for the sign-off it's blocked on.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      # cargo metadata fetches the private hcfs-client/hcfs-shared git deps over
+      # SSH. Mirrors the rust-ci-setup composite's key step; the agent vars are
+      # exported to GITHUB_ENV so the cargo-deny step (a separate step) inherits
+      # the loaded key.
+      - name: Setup SSH for private Rust git deps
+        shell: bash
+        env:
+          PRIVATE_GIT_DEPLOY_KEY_B64: ${{ secrets.HCFS_DEPLOY_KEY_B64 }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          python3 - <<'PY' > ~/.ssh/private_git_key
+          import os, base64, sys
+          sys.stdout.buffer.write(base64.b64decode(os.environ["PRIVATE_GIT_DEPLOY_KEY_B64"].strip()))
+          PY
+          chmod 600 ~/.ssh/private_git_key
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          cat > ~/.ssh/config <<'EOF'
+          Host github.com
+            HostName github.com
+            User git
+            IdentityFile ~/.ssh/private_git_key
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+            BatchMode yes
+          EOF
+          chmod 600 ~/.ssh/config
+          eval "$(ssh-agent -s)"
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
+          echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
+          ssh-add ~/.ssh/private_git_key
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@ace6ebe54a6a0c86dfb5f7764b17f793b6925bc3 # v2.82.3
+        with:
+          tool: cargo-deny
+
+      - name: cargo-deny (advisories, bans, sources)
+        working-directory: src-tauri
+        run: cargo deny check advisories bans sources
+
+  actionlint:
+    # Lint the workflow files themselves so a malformed/insecure workflow fails
+    # CI instead of only failing at run time. actionlint also runs shellcheck on
+    # every `run:` script (the ubuntu runner ships shellcheck), which is what
+    # catches the unquoted-`$GITHUB_ENV` SC2086 class. Workflow SECURITY (vs
+    # correctness) is gated separately by the `zizmor` job below.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      # actionlint is a Go binary, not a crate, so taiki-e/install-action can't
+      # provide it (it fell back to cargo-binstall and errored). Install the
+      # pinned release tarball and verify its SHA256 — transparent, no curl|bash.
+      - name: Install actionlint
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=1.7.12
+          sha256=8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+          curl -fsSL -o actionlint.tar.gz \
+            "https://github.com/rhysd/actionlint/releases/download/v${version}/actionlint_${version}_linux_amd64.tar.gz"
+          echo "${sha256}  actionlint.tar.gz" | sha256sum -c -
+          tar xzf actionlint.tar.gz actionlint
+
+      - name: Lint workflows
+        run: ./actionlint -color
+
+  zizmor:
+    # Security audit of the workflow files (credential persistence, cache
+    # poisoning of privileged/signed builds, template injection, …). Run
+    # `--offline` so the gate is hermetic — no GITHUB_TOKEN or network — and
+    # pinned by SHA256 like actionlint. The single accepted finding (an uncached
+    # setup-node in the release workflow) is justified inline with a
+    # `# zizmor: ignore[cache-poisoning]` comment.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Install zizmor
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=1.26.1
+          sha256=8556289a64e7aaf2400cd516f61a471aa91c5902cc56ad96a82fd12f90c2ef73
+          curl -fsSL -o zizmor.tar.gz \
+            "https://github.com/zizmorcore/zizmor/releases/download/v${version}/zizmor-x86_64-unknown-linux-gnu.tar.gz"
+          echo "${sha256}  zizmor.tar.gz" | sha256sum -c -
+          tar xzf zizmor.tar.gz zizmor
+
+      - name: Audit workflows
+        run: ./zizmor --offline --persona regular .github/workflows/
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 'lts/*'
+
+      - name: Setup PNPM
+        uses: pnpm/action-setup@eae0cfeb286e66ffb5155f1a79b90583a127a68b # v2.4.1
+        with:
+          version: 9.12.3
+          run_install: false
+
+      - name: PNPM store path
+        shell: bash
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_ENV"
+
+      - name: PNPM cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-pnpm-
+
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+
+      # Informational, NOT blocking (continue-on-error). Scoped to --prod so it
+      # reports only advisories in dependencies that actually ship in the
+      # desktop bundle (dev tooling — eslint/wdio/mocha/vitest — never reaches a
+      # user and is excluded). It is non-blocking for now because the shipped
+      # tree carries a pre-existing backlog the gate can't fix in place — most
+      # notably a CRITICAL prototype-pollution advisory in swiper@11 (fixed only
+      # in the 12.x major, which needs an API migration + UI validation). Ratchet
+      # this to a blocking `--audit-level=high` once that backlog is cleared.
+      - name: Audit prod dependencies (informational)
+        run: pnpm audit --prod --audit-level=moderate
+        continue-on-error: true
+
+      - name: Lint
+        run: pnpm lint
+
+      # `pnpm lint` (eslint) does NOT type-check. Without this a wrong IPC
+      # return shape consumed in TS merges green and only surfaces at release
+      # build time (`next build`), which runs on tags, never on PRs. This is the
+      # cheap gate for the FE↔Rust boundary the audit flagged.
+      - name: Typecheck
+        run: pnpm typecheck
+
+      # Run WITH coverage so the per-scope ratcheted thresholds in
+      # vitest.config.ts actually gate — `pnpm test` (no --coverage) collects no
+      # coverage and would silently skip the floors. A drop below a logic-scope
+      # floor (lib/utils, lib/upload-feed, lib/tray, lib/hooks) fails here.
+      - name: Tests (with coverage thresholds)
+        run: pnpm test:coverage

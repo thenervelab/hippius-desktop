@@ -188,8 +188,13 @@ const SyncStatusMini: React.FC<SyncStatusMiniProps> = ({
   return (
     <span
       className={cn(
-        "inline-flex animate-widget-grow-0.3",
-        expandOrigin === "bottom-left" ? "origin-bottom-left" : "origin-bottom-right",
+        "inline-flex",
+        // Match the easing/duration of the sidebar rail (ease-in-out, 0.3s) so
+        // the ring grows in lockstep with the collapsing rail; the portal
+        // overlay keeps the standalone expo pop.
+        expandOrigin === "bottom-left"
+          ? "animate-widget-grow-soft-0.3 origin-bottom-left"
+          : "animate-widget-grow-0.3 origin-bottom-right",
       )}
     >
       {content}

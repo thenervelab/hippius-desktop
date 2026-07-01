@@ -36,6 +36,17 @@ use zeroize::Zeroizing;
 /// Service name registered in the OS keychain.
 const SERVICE: &str = "com.hippius.desktop";
 
+/// Escape hatch for tests and headless CI. When set to any non-empty value,
+/// every keychain call short-circuits without touching the real OS keychain.
+/// Parallels [`crate::auth::token_keychain`]'s `HIPPIUS_DISABLE_TOKEN_KEYCHAIN`
+/// so a login/restore test (which writes the master mnemonic on success) can't
+/// leave residue in the developer's macOS Keychain or pop a dialog.
+const DISABLE_ENV_VAR: &str = "HIPPIUS_DISABLE_MNEMONIC_KEYCHAIN";
+
+fn keychain_disabled() -> bool {
+    std::env::var_os(DISABLE_ENV_VAR).is_some_and(|v| !v.is_empty())
+}
+
 /// What this process has observed about the keychain entry for a given
 /// account. The mnemonic string is wrapped in [`Zeroizing`] so it is
 /// scrubbed from memory when the cache entry is overwritten or the
@@ -94,6 +105,13 @@ pub enum KeychainResult<T> {
 /// returns `Ok(())` without touching the OS keychain — see the
 /// module-level docs for why this matters on dev builds.
 pub fn store_mnemonic(account_id: &str, mnemonic: &str) -> Result<(), String> {
+    // Disabled mode is a silent no-op: unlike the API token there is no DB
+    // fallback to route to — keychain persistence is a pure convenience
+    // (skip the seed-phrase re-prompt next launch), so "not persisted" is a
+    // valid outcome the caller already treats as non-fatal.
+    if keychain_disabled() {
+        return Ok(());
+    }
     if let Some(CachedEntry::Present(existing)) = cached(account_id)
         && existing.as_str() == mnemonic
     {
@@ -117,6 +135,9 @@ pub fn store_mnemonic(account_id: &str, mnemonic: &str) -> Result<(), String> {
 /// Returns `Found` if present, `NotFound` if no entry exists for this
 /// account, `Unavailable` if the OS keychain itself is inaccessible.
 pub fn load_mnemonic(account_id: &str) -> KeychainResult<Zeroizing<String>> {
+    if keychain_disabled() {
+        return KeychainResult::Unavailable("disabled via HIPPIUS_DISABLE_MNEMONIC_KEYCHAIN".into());
+    }
     match cached(account_id) {
         Some(CachedEntry::Present(m)) => return KeychainResult::Found(m),
         Some(CachedEntry::Absent) => return KeychainResult::NotFound,
@@ -147,6 +168,10 @@ pub fn load_mnemonic(account_id: &str) -> KeychainResult<Zeroizing<String>> {
 /// entry — the real keychain state is ambiguous, force the next call
 /// to re-probe.
 pub fn delete_mnemonic(account_id: &str) -> Result<(), String> {
+    if keychain_disabled() {
+        // Disabled mode treats the store as nonexistent: nothing to delete.
+        return Ok(());
+    }
     let entry = Entry::new(SERVICE, account_id).map_err(|e| format!("keychain entry init failed: {e}"))?;
     let result = match entry.delete_credential() {
         // `NoEntry` is treated the same as a successful delete — the
@@ -211,6 +236,44 @@ mod tests {
 
         forget(a);
         forget(b);
+    }
+
+    /// The `HIPPIUS_DISABLE_MNEMONIC_KEYCHAIN` guard must make every public
+    /// op a no-op that never touches the real OS keychain — store reports
+    /// success without caching, load reports `Unavailable`, delete succeeds.
+    /// This is the seam the `login_with_mnemonic` orchestration test relies on
+    /// to run without leaving a master mnemonic in the developer's Keychain.
+    ///
+    /// Safe alongside the parallel non-ignored tests in this module: they only
+    /// exercise the cache helpers, never the guarded store/load/delete fns, so
+    /// the brief process-global flag window can't disturb them.
+    #[test]
+    fn disabled_flag_makes_every_op_a_noop() {
+        let acct = "test-mnemonic-disabled-noop-acct";
+        forget(acct);
+        // SAFETY: process-global env mutation with a deterministic value,
+        // restored before return — mirrors `token_keychain`'s disabled test.
+        unsafe {
+            std::env::set_var(DISABLE_ENV_VAR, "1");
+        }
+
+        // Store is a silent success that does NOT populate the cache — proof
+        // it short-circuited before any keychain or cache write.
+        assert!(store_mnemonic(acct, "phrase-should-not-persist").is_ok());
+        assert!(cached(acct).is_none(), "disabled store must not touch the cache");
+
+        assert!(
+            matches!(load_mnemonic(acct), KeychainResult::Unavailable(_)),
+            "disabled load must report Unavailable so restore falls back to re-prompt"
+        );
+        assert!(delete_mnemonic(acct).is_ok(), "disabled delete is a no-op success");
+
+        // SAFETY: restore the process-global flag so later tests in this
+        // binary see the default (enabled) state — mirrors `token_keychain`.
+        unsafe {
+            std::env::remove_var(DISABLE_ENV_VAR);
+        }
+        forget(acct);
     }
 
     /// Touches the real OS keychain — pops a permission dialog on the

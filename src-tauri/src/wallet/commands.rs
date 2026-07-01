@@ -14,7 +14,7 @@
 
 use crate::app_state::AppState;
 use crate::auth::account_key::account_key;
-use crate::error::AppError;
+use crate::error::{AppError, NotReadyKind};
 use crate::wallet::crypto;
 use crate::wallet::repo::{self, LocalWallet, PublicLocalWallet};
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
@@ -41,8 +41,8 @@ fn require_owner(state: &State<'_, AppState>) -> Result<String, AppError> {
 /// Derive a polkadot SS58 address from a BIP-39 mnemonic. Used both
 /// internally (during create/import) and from the FE for previewing.
 fn derive_address(mnemonic: &str) -> Result<String, AppError> {
-    let parsed = SubxtMnemonic::parse(mnemonic).map_err(|e| AppError::Other(format!("Invalid BIP-39 mnemonic: {e}")))?;
-    let pair = SrKeypair::from_phrase(&parsed, None).map_err(|e| AppError::Other(format!("Failed to derive sr25519 keypair: {e}")))?;
+    let parsed = SubxtMnemonic::parse(mnemonic).map_err(|e| AppError::Validation(format!("Invalid BIP-39 mnemonic: {e}")))?;
+    let pair = SrKeypair::from_phrase(&parsed, None).map_err(|e| AppError::Crypto(format!("sr25519 keypair derivation failed: {e}")))?;
     Ok(pair.public_key().to_account_id().to_string())
 }
 
@@ -162,7 +162,7 @@ fn validate_new_password(password: &str) -> Result<(), AppError> {
 /// stored encrypted; nothing in Rust holds onto it.
 #[tauri::command]
 pub fn local_wallet_generate_mnemonic() -> Result<String, AppError> {
-    let mnemonic = bip39::Mnemonic::generate(12).map_err(|e| AppError::Other(format!("bip39 generate failed: {e}")))?;
+    let mnemonic = bip39::Mnemonic::generate(12).map_err(|e| AppError::Crypto(format!("BIP-39 mnemonic generation failed: {e}")))?;
     Ok(mnemonic.to_string())
 }
 
@@ -233,13 +233,13 @@ pub async fn local_wallet_create(
     let mnemonic = Zeroizing::new(mnemonic);
     let password = Zeroizing::new(password);
     if bip39::Mnemonic::parse_normalized(&mnemonic).is_err() {
-        return Err(AppError::Other("Invalid mnemonic".into()));
+        return Err(AppError::Validation("Invalid mnemonic".into()));
     }
     if name.trim().is_empty() {
-        return Err(AppError::Other("Wallet name is required".into()));
+        return Err(AppError::Validation("Wallet name is required".into()));
     }
     if password.is_empty() {
-        return Err(AppError::Other("Password is required".into()));
+        return Err(AppError::Validation("Password is required".into()));
     }
     // Enforce the password policy server-side so the create gate is
     // authoritative even for direct IPC calls (see `validate_new_password`).
@@ -264,7 +264,7 @@ pub async fn local_wallet_set_active(state: State<'_, AppState>, id: i64) -> Res
     let owner = require_owner(&state)?;
     let pool = state.pool()?;
     if repo::get_by_id(pool, &owner, id).await?.is_none() {
-        return Err(AppError::Other(format!("Wallet {id} not found")));
+        return Err(AppError::NotFound(format!("Wallet {id} not found")));
     }
     repo::set_active(pool, &owner, id).await?;
     Ok(())
@@ -273,7 +273,7 @@ pub async fn local_wallet_set_active(state: State<'_, AppState>, id: i64) -> Res
 #[tauri::command]
 pub async fn local_wallet_rename(state: State<'_, AppState>, id: i64, name: String) -> Result<(), AppError> {
     if name.trim().is_empty() {
-        return Err(AppError::Other("Wallet name is required".into()));
+        return Err(AppError::Validation("Wallet name is required".into()));
     }
     let owner = require_owner(&state)?;
     let pool = state.pool()?;
@@ -308,14 +308,14 @@ pub async fn local_wallet_verify_password(state: State<'_, AppState>, id: i64, p
     let owner = require_owner(&state)?;
     let pool = state.pool()?;
     let Some(wallet) = repo::get_by_id(pool, &owner, id).await? else {
-        return Err(AppError::Other(format!("Wallet {id} not found")));
+        return Err(AppError::NotFound(format!("Wallet {id} not found")));
     };
     // Serialize attempts on this wallet so a concurrent IPC burst can't all
     // clear `check` before any `record_failure` runs and thereby outrun the
     // lockout threshold. Held to fn end — covers check → verify → record.
     let _attempt_gate = state.wallet_rate_limit.attempt_gate(id).await;
     if let Err(rl) = state.wallet_rate_limit.check(id) {
-        return Err(AppError::Other(rl.message()));
+        return Err(AppError::NotReady(NotReadyKind::RateLimited { message: rl.message() }));
     }
     let ok = crypto::verify_password(&wallet.password_hash, &password, &wallet.address);
     if ok {
@@ -343,7 +343,7 @@ pub async fn local_wallet_get_decrypted_mnemonic(state: State<'_, AppState>, id:
     let owner = require_owner(&state)?;
     let pool = state.pool()?;
     let Some(wallet) = repo::get_by_id(pool, &owner, id).await? else {
-        return Err(AppError::Other(format!("Wallet {id} not found")));
+        return Err(AppError::NotFound(format!("Wallet {id} not found")));
     };
     // Serialize attempts on this wallet so a concurrent IPC burst can't all
     // clear `check` before any `record_failure` runs and thereby outrun the
@@ -353,12 +353,12 @@ pub async fn local_wallet_get_decrypted_mnemonic(state: State<'_, AppState>, id:
     // measure Argon2id timing to distinguish "wrong password" from
     // "lockout" — both surface as a plain error string now.
     if let Err(rl) = state.wallet_rate_limit.check(id) {
-        return Err(AppError::Other(rl.message()));
+        return Err(AppError::NotReady(NotReadyKind::RateLimited { message: rl.message() }));
     }
     // Verifier check next for a friendlier error than AEAD-decrypt-failed.
     if !crypto::verify_password(&wallet.password_hash, &password, &wallet.address) {
         state.wallet_rate_limit.record_failure(id);
-        return Err(AppError::Other("Incorrect password".into()));
+        return Err(AppError::Validation("Incorrect password".into()));
     }
     state.wallet_rate_limit.record_success(id);
     let (plain, ciphertext_was_legacy) = crypto::decrypt_mnemonic(&wallet.encrypted_mnemonic, &password, &wallet.address)?;
@@ -384,12 +384,31 @@ pub struct WalletBackup {
 }
 
 #[tauri::command]
-pub async fn local_wallet_export_backup(state: State<'_, AppState>, id: i64) -> Result<WalletBackup, AppError> {
+pub async fn local_wallet_export_backup(state: State<'_, AppState>, id: i64, password: String) -> Result<WalletBackup, AppError> {
+    // Gate export behind the wallet password + rate limiter, exactly like the
+    // sibling secret-revealing commands (`local_wallet_get_decrypted_mnemonic`,
+    // `local_wallet_sign`). The backup is offline-crackable ciphertext plus the
+    // Argon2 verifier hash; without this gate any actor able to invoke IPC in an
+    // unlocked session could exfiltrate it for every wallet without the password
+    // and without tripping the lockout (audit R-07).
+    let password = Zeroizing::new(password);
     let owner = require_owner(&state)?;
     let pool = state.pool()?;
     let Some(wallet) = repo::get_by_id(pool, &owner, id).await? else {
-        return Err(AppError::Other(format!("Wallet {id} not found")));
+        return Err(AppError::NotFound(format!("Wallet {id} not found")));
     };
+    // Serialize attempts on this wallet (check → verify → record) so a
+    // concurrent IPC burst can't outrun the lockout threshold.
+    let _attempt_gate = state.wallet_rate_limit.attempt_gate(id).await;
+    if let Err(rl) = state.wallet_rate_limit.check(id) {
+        return Err(AppError::NotReady(NotReadyKind::RateLimited { message: rl.message() }));
+    }
+    if !crypto::verify_password(&wallet.password_hash, &password, &wallet.address) {
+        state.wallet_rate_limit.record_failure(id);
+        return Err(AppError::Validation("Incorrect password".into()));
+    }
+    state.wallet_rate_limit.record_success(id);
+
     use std::time::{SystemTime, UNIX_EPOCH};
     let exported_at = {
         // RFC3339-ish: just emit ms since epoch as a string. The FE displays
@@ -421,17 +440,17 @@ pub async fn local_wallet_import_encrypted_backup(
 ) -> Result<PublicLocalWallet, AppError> {
     let password = Zeroizing::new(password);
     if name.trim().is_empty() {
-        return Err(AppError::Other("Wallet name is required".into()));
+        return Err(AppError::Validation("Wallet name is required".into()));
     }
     if address.trim().is_empty() {
-        return Err(AppError::Other("Address is required".into()));
+        return Err(AppError::Validation("Address is required".into()));
     }
     // Verify the user typed the correct password against the hash from
     // the backup. `crypto::verify_password` accepts both the new
     // Argon2id PHC format and the legacy hex-SHA256 format, so backups
     // produced by either version of the app are accepted.
     if !crypto::verify_password(&password_hash, &password, address.trim()) {
-        return Err(AppError::Other("Incorrect password for this backup".into()));
+        return Err(AppError::Validation("Incorrect password for this backup".into()));
     }
     // Reject a backup whose address doesn't derive from its mnemonic, so a
     // tampered file can't persist a row that later signs under a different key.
@@ -466,10 +485,13 @@ const MAX_BACKUP_JSON_BYTES: u64 = 64 * 1024;
 /// format, and (b) give the FE a single binary blob to write instead of
 /// pretty-printed JSON.
 #[tauri::command]
-pub async fn local_wallet_export_backup_zip(state: State<'_, AppState>, id: i64) -> Result<Vec<u8>, AppError> {
+pub async fn local_wallet_export_backup_zip(state: State<'_, AppState>, id: i64, password: String) -> Result<Vec<u8>, AppError> {
     use std::io::{Cursor, Write};
 
-    let backup = local_wallet_export_backup(state, id).await?;
+    // Delegates the password gate to `local_wallet_export_backup` (audit R-07);
+    // it acquires the rate-limit attempt gate, so this wrapper must NOT also
+    // acquire it (that would deadlock the per-wallet gate).
+    let backup = local_wallet_export_backup(state, id, password).await?;
     let json = serde_json::to_vec_pretty(&serde_json::json!({
         "version": 2,
         "name": backup.name,
@@ -477,16 +499,14 @@ pub async fn local_wallet_export_backup_zip(state: State<'_, AppState>, id: i64)
         "encryptedMnemonic": backup.encrypted_mnemonic,
         "passwordHash": backup.password_hash,
         "exportedAt": backup.exported_at,
-    }))
-    .map_err(|e| AppError::Other(format!("failed to serialise backup json: {e}")))?;
+    }))?;
 
     let buf = Cursor::new(Vec::new());
     let mut zip = zip::ZipWriter::new(buf);
     let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-    zip.start_file(BACKUP_ZIP_ENTRY, options)
-        .map_err(|e| AppError::Other(format!("zip start_file: {e}")))?;
-    zip.write_all(&json).map_err(|e| AppError::Other(format!("zip write_all: {e}")))?;
-    let cursor = zip.finish().map_err(|e| AppError::Other(format!("zip finish: {e}")))?;
+    zip.start_file(BACKUP_ZIP_ENTRY, options)?;
+    zip.write_all(&json)?;
+    let cursor = zip.finish()?;
     Ok(cursor.into_inner())
 }
 
@@ -510,53 +530,52 @@ pub async fn local_wallet_import_encrypted_backup_from_zip(
 
     let password = Zeroizing::new(password);
     if name.trim().is_empty() {
-        return Err(AppError::Other("Wallet name is required".into()));
+        return Err(AppError::Validation("Wallet name is required".into()));
     }
 
     let reader = Cursor::new(zip_bytes);
-    let mut archive = zip::ZipArchive::new(reader).map_err(|e| AppError::Other(format!("Couldn't open backup zip: {e}")))?;
+    let mut archive = zip::ZipArchive::new(reader)?;
 
     let mut entry = archive
         .by_name(BACKUP_ZIP_ENTRY)
-        .map_err(|_| AppError::Other(format!("Backup zip is missing `{BACKUP_ZIP_ENTRY}`")))?;
+        .map_err(|_| AppError::Validation(format!("Backup zip is missing `{BACKUP_ZIP_ENTRY}`")))?;
     // Reject an entry whose declared size is already oversized (cheap,
     // header-based), then read with a hard cap so a lying header can't make us
     // allocate/read unbounded memory. `Vec::with_capacity` is intentionally NOT
     // sized from the attacker-controlled `entry.size()`.
     if entry.size() > MAX_BACKUP_JSON_BYTES {
-        return Err(AppError::Other("Backup entry is unexpectedly large".into()));
+        return Err(AppError::Validation("Backup entry is unexpectedly large".into()));
     }
     let mut json_bytes = Vec::new();
     (&mut entry)
         .take(MAX_BACKUP_JSON_BYTES + 1)
-        .read_to_end(&mut json_bytes)
-        .map_err(|e| AppError::Other(format!("Couldn't read backup entry: {e}")))?;
+        .read_to_end(&mut json_bytes)?;
     drop(entry);
     if json_bytes.len() as u64 > MAX_BACKUP_JSON_BYTES {
-        return Err(AppError::Other("Backup entry is unexpectedly large".into()));
+        return Err(AppError::Validation("Backup entry is unexpectedly large".into()));
     }
 
-    let parsed: serde_json::Value = serde_json::from_slice(&json_bytes).map_err(|e| AppError::Other(format!("Backup file isn't valid JSON: {e}")))?;
+    let parsed: serde_json::Value = serde_json::from_slice(&json_bytes)?;
     let address = parsed
         .get("address")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| AppError::Other("Backup is missing `address`".into()))?
+        .ok_or_else(|| AppError::Validation("Backup is missing `address`".into()))?
         .trim()
         .to_owned();
     let encrypted_mnemonic = parsed
         .get("encryptedMnemonic")
         .or_else(|| parsed.get("encrypted_mnemonic"))
         .and_then(|v| v.as_str())
-        .ok_or_else(|| AppError::Other("Backup is missing `encryptedMnemonic`".into()))?
+        .ok_or_else(|| AppError::Validation("Backup is missing `encryptedMnemonic`".into()))?
         .to_owned();
     let password_hash = parsed
         .get("passwordHash")
         .or_else(|| parsed.get("password_hash"))
         .and_then(|v| v.as_str())
-        .ok_or_else(|| AppError::Other("Backup is missing `passwordHash`".into()))?
+        .ok_or_else(|| AppError::Validation("Backup is missing `passwordHash`".into()))?
         .to_owned();
     if address.is_empty() {
-        return Err(AppError::Other("Backup `address` is empty".into()));
+        return Err(AppError::Validation("Backup `address` is empty".into()));
     }
 
     // Same verification as the JSON path: the user's typed password
@@ -564,7 +583,7 @@ pub async fn local_wallet_import_encrypted_backup_from_zip(
     // store a wallet they can't actually sign with. Accepts legacy +
     // new hash formats via `crypto::verify_password`.
     if !crypto::verify_password(&password_hash, &password, &address) {
-        return Err(AppError::Other("Incorrect password for this backup".into()));
+        return Err(AppError::Validation("Incorrect password for this backup".into()));
     }
     // Reject a backup whose address doesn't derive from its mnemonic (see the
     // JSON import path) so a tampered zip can't persist a mismatched row.
@@ -591,7 +610,7 @@ pub async fn local_wallet_get_public_key(state: State<'_, AppState>, id: i64) ->
     let owner = require_owner(&state)?;
     let pool = state.pool()?;
     let Some(wallet) = repo::get_by_id(pool, &owner, id).await? else {
-        return Err(AppError::Other(format!("Wallet {id} not found")));
+        return Err(AppError::NotFound(format!("Wallet {id} not found")));
     };
     // The public key in question is the 32-byte sr25519 public key
     // that the SS58 address encodes. We don't need the password to
@@ -601,84 +620,8 @@ pub async fn local_wallet_get_public_key(state: State<'_, AppState>, id: i64) ->
     // operation.
     use std::str::FromStr;
     use subxt::utils::AccountId32;
-    let account = AccountId32::from_str(&wallet.address).map_err(|e| AppError::Other(format!("Wallet address is not valid SS58: {e:?}")))?;
+    let account = AccountId32::from_str(&wallet.address).map_err(|e| AppError::Crypto(format!("wallet address is not valid SS58: {e:?}")))?;
     Ok(B64.encode(account.0))
-}
-
-/// Sign an arbitrary payload with a wallet's Sr25519 key. The plaintext
-/// mnemonic is decrypted in-process, used to derive the keypair, used
-/// to produce one signature, and immediately dropped. Nothing
-/// sensitive crosses the IPC boundary in either direction — the input
-/// is a payload to sign and the output is just the 64-byte signature.
-///
-/// This is the primary signing surface for the bridge: the FE keeps
-/// the user's password in a single closure-scoped variable for the
-/// duration of a multi-step submit (one prompt → N signs) and calls
-/// this IPC for each on-chain operation. The mnemonic never reaches
-/// JS memory.
-///
-/// Rate-limited via the same per-wallet counter that protects the
-/// other password-checking IPCs. Lockout messages are returned as the
-/// rate-limiter's text so the FE can show a clear "wait N seconds"
-/// banner instead of an opaque "Incorrect password" loop.
-///
-/// Also performs the same transparent legacy-format migration the
-/// view-recovery-phrase path performs: a legacy HKDF-encrypted row
-/// gets re-encrypted under Argon2id on the first sign.
-///
-/// # Errors
-///
-/// - `Other("Wallet {id} not found")` — bad id or cross-account access.
-/// - `Other("Incorrect password")` — verifier failed.
-/// - `Other("Too many failed attempts. Try again in …")` — rate-limited.
-/// - `Other("…")` — base64 decode of payload failed.
-/// - `Crypto(…)` — AEAD or Argon2id failure (very rare).
-#[tauri::command]
-pub async fn local_wallet_sign(
-    state: State<'_, AppState>,
-    id: i64,
-    password: String,
-    payload_b64: String,
-) -> Result<String, AppError> {
-    let password = Zeroizing::new(password);
-    let owner = require_owner(&state)?;
-    let pool = state.pool()?;
-    let Some(wallet) = repo::get_by_id(pool, &owner, id).await? else {
-        return Err(AppError::Other(format!("Wallet {id} not found")));
-    };
-
-    // Serialize attempts on this wallet so a concurrent IPC burst can't all
-    // clear `check` before any `record_failure` runs and thereby outrun the
-    // lockout threshold. Held to fn end — covers check → verify → record.
-    let _attempt_gate = state.wallet_rate_limit.attempt_gate(id).await;
-    if let Err(rl) = state.wallet_rate_limit.check(id) {
-        return Err(AppError::Other(rl.message()));
-    }
-    if !crypto::verify_password(&wallet.password_hash, &password, &wallet.address) {
-        state.wallet_rate_limit.record_failure(id);
-        return Err(AppError::Other("Incorrect password".into()));
-    }
-    state.wallet_rate_limit.record_success(id);
-
-    let payload = B64
-        .decode(&payload_b64)
-        .map_err(|e| AppError::Other(format!("Invalid payload base64: {e}")))?;
-
-    let (mnemonic, ciphertext_was_legacy) = crypto::decrypt_mnemonic(&wallet.encrypted_mnemonic, &password, &wallet.address)?;
-
-    // Transparent migration on legacy rows — same single audited path as
-    // get_decrypted_mnemonic (best-effort; never blocks the sign).
-    maybe_migrate_secrets(pool, &owner, &wallet, &password, mnemonic.as_str(), ciphertext_was_legacy).await;
-
-    let parsed =
-        SubxtMnemonic::parse_normalized(mnemonic.as_str()).map_err(|e| AppError::Crypto(format!("Stored mnemonic is not parseable: {e}")))?;
-    let keypair = SrKeypair::from_phrase(&parsed, None).map_err(|e| AppError::Crypto(format!("Failed to derive sr25519 keypair: {e}")))?;
-    // `Keypair::sign` returns subxt_signer's Signature wrapper; we
-    // unwrap to the raw 64 bytes via its `.0` since the FE needs a
-    // plain Uint8Array. Keypair drops here, taking the secret key
-    // with it.
-    let sig = keypair.sign(&payload);
-    Ok(B64.encode(sig.0))
 }
 
 #[cfg(test)]

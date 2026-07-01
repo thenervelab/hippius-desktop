@@ -1,8 +1,15 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
+import { nextSkeletonState } from "@/lib/utils/skeletonGate";
 
 import { RefreshButton, Select } from "@/components/ui";
 import CustomTooltip2 from "@/components/ui/CustomTooltip2";
@@ -15,11 +22,14 @@ import { cn } from "@/app/lib/utils";
 
 import AvailableCreditsChart from "./AvailableCreditsChart";
 
+// Drive credit history only exists from the endpoint's first event onward, so
+// longer fixed windows (60 days, 1 year) would render mostly flat-zero before
+// the data begins. We offer just these three; MAX clamps to the first real
+// event in Rust (`build_credits_chart`) and auto-grows as the span lengthens,
+// so this set stays correct in future years without per-year special-casing.
 const timeRangeOptions = [
   { value: "last7days", label: "THIS WEEK" },
   { value: "last30days", label: "LAST 30 DAYS" },
-  { value: "last60days", label: "LAST 60 DAYS" },
-  { value: "year", label: "1 YEAR" },
   { value: "max", label: "MAX" },
 ];
 
@@ -51,6 +61,7 @@ const AvailableCreditsCard: React.FC<{ className?: string }> = ({
   const {
     data: credits,
     isLoading: creditsLoading,
+    isError: creditsError,
     isFetching: creditsFetching,
     refetch: refetchCredits,
   } = useUserCredits();
@@ -90,12 +101,27 @@ const AvailableCreditsCard: React.FC<{ className?: string }> = ({
   ]);
 
   const isLoading = creditsLoading || chartLoading;
+  // Headline skeleton keeps the existing "show on every fetch" behavior
+  // (intentional — mirrors the console dashboard).
   const showSkeleton = isLoading || isFetchingAny;
+
+  // The CHART, however, must NOT re-show its skeleton on a refetch — doing so
+  // unmounts→remounts the bars/line and replays the entrance "swoop". Gate the
+  // chart on the chart query alone, latched to its first settle, so it animates
+  // only on a real mount (page transition) or a range switch. Mirrors the
+  // Storage Usage card fix. See `@/lib/utils/skeletonGate`.
+  const chartSettledRef = useRef(false);
+  const chartGate = nextSkeletonState(chartSettledRef.current, chartLoading);
+  chartSettledRef.current = chartGate.settled;
+  const chartSkeleton = chartGate.showSkeleton;
 
   const balanceDisplay = useMemo(() => {
     if (creditsLoading) return null;
+    // A failed balance fetch must NOT read as a real zero balance (audit M-16) —
+    // show a distinct placeholder so the user can tell "unknown" from "0 HIP".
+    if (creditsError) return "—";
     return credits?.hip ?? "0";
-  }, [credits, creditsLoading]);
+  }, [credits, creditsLoading, creditsError]);
 
   // Blue dollar estimate next to the headline. 1 credit ≈ $1 (matches the
   // console's `getDollarValue`), shown to two decimals.
@@ -225,7 +251,7 @@ const AvailableCreditsCard: React.FC<{ className?: string }> = ({
             data={chartData ?? []}
             color="#3167DD"
             height="100%"
-            isLoading={showSkeleton}
+            isLoading={chartSkeleton}
             tooltipValueLabel="Drive credits used"
             formatTooltipValue={(point) => {
               const date = new Date(point.x);

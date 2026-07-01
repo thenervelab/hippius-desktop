@@ -3,6 +3,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
 import { check, Update } from "@tauri-apps/plugin-updater";
+import { errorMessage as toErrorMessage } from "@/lib/utils/errorUtils";
 import { relaunch } from "@tauri-apps/plugin-process";
 import {
   addNotification,
@@ -199,7 +200,7 @@ function handleUpdateError(err: any, downloadToastId?: string | number) {
   console.log("Error in updating:", err);
 
   // Handle signature verification errors specifically
-  const errorMessage = err instanceof Error ? err.message : String(err);
+  const errorMessage = toErrorMessage(err);
   if (
     errorMessage.includes("signature") ||
     errorMessage.includes("verification")

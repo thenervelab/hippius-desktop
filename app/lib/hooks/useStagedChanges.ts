@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback } from "react";
+import { errorMessage } from "@/lib/utils/errorUtils";
 import { invoke } from "@tauri-apps/api/core";
 import type { StagedChanges, ConflictResolution } from "@/lib/types/syncTypes";
 
@@ -28,7 +29,7 @@ export function useStagedChanges(
       setStagedChanges(changes);
       return changes;
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = errorMessage(e);
       setError(msg);
       return null;
     } finally {
@@ -47,7 +48,7 @@ export function useStagedChanges(
         });
         setStagedChanges(null);
       } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
+        const msg = errorMessage(e);
         setError(msg);
       } finally {
         setIsSyncing(false);

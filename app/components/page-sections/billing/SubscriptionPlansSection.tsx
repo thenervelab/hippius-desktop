@@ -52,7 +52,11 @@ export default function SubscriptionPlansSection() {
         });
         setStorageInfo(map);
       })
-      .catch(() => {});
+      .catch((err) => {
+        // Storage capacity is display enrichment — the plans still render
+        // without it — but the failure must not vanish silently (audit FE-low).
+        console.error("Failed to calculate plan storage capacity:", err);
+      });
   }, [plans]);
 
   const handleSubscribe = async (planId: string) => {

@@ -17,8 +17,6 @@ export { default as Github } from "./Github";
 export { default as Google } from "./Google";
 export { default as Apple } from "./Apple";
 export { default as DollarSquare } from "./DollarSquare";
-export { default as CPU } from "./Cpu";
-export { default as CPUCharge } from "./CpuCharge";
 export { default as Coin } from "./Coin";
 export { default as CreditCard } from "./CreditCard";
 export { default as DocumentDownload } from "./DocumentDownload";

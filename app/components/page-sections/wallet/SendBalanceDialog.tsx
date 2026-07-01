@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useMemo, useRef, useState } from "react";
+import { errorMessage } from "@/lib/utils/errorUtils";
 import { invoke } from "@tauri-apps/api/core";
 import { AlertCircle } from "lucide-react";
 import { toast } from "sonner";
@@ -10,6 +11,11 @@ import { Input } from "@/components/ui";
 import { Button } from "@/components/ui/button";
 import { OutGoing } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
+import {
+  resolveTxOutcome,
+  TxSubmittedUnconfirmedError,
+  type TxOutcome,
+} from "@/lib/utils/txOutcome";
 
 import AddressSelect from "./AddressSelect";
 import SendBalanceConfirmationDialog from "./SendBalanceConfirmationDialog";
@@ -18,13 +24,17 @@ import TransactionFlowToast, {
   type TransactionFlowState,
 } from "./shared/TransactionFlowToast";
 import { useAddressValidation } from "@/lib/hooks/useAddressValidation";
+import { dispatchSigningError } from "@/lib/utils/dispatchTauriError";
+import { useWalletAuth } from "@/lib/wallet-auth-context";
 
 export interface SendBalanceDialogProps {
   open: boolean;
   onClose: () => void;
   /** Raw planck string — source of truth for the max calculation. */
   availableBalancePlanck: string;
-  /** Pre-formatted HIP string from Rust (`planck_to_hip`) for display. */
+  /** Pre-formatted HIP display string from the precise BigInt `formatPlanckToHip`
+   *  helper (NOT a float). Display only — the authoritative over-balance gate is
+   *  Rust `validate_send_balance`, fed the raw `availableBalancePlanck`. */
   availableBalanceHip: string;
   refetchBalance?: () => void;
   polkadotAddress: string;
@@ -50,6 +60,7 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
     disallowedAddressMessage: "Cannot send to your own address",
   });
 
+  const { logout } = useWalletAuth();
   const [amount, setAmount] = useState("");
   const [amountError, setAmountError] = useState<string | undefined>();
   const [activeButton, setActiveButton] = useState<"max" | null>(null);
@@ -139,7 +150,7 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
       setAmountError(undefined);
       return result.planckAmount;
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       setAmountError(msg);
       return null;
     }
@@ -181,24 +192,36 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
       setSubmittedAmount(amountForToast);
       setSubmittedAddress(addrForToast);
       try {
-        await invoke<{ txHash: string; success: boolean }>("transfer_balance", {
+        const outcome = await invoke<TxOutcome>("transfer_balance", {
           recipientAddress: addrForToast,
           amount: planck,
           password,
         });
+        resolveTxOutcome(outcome);
         setFlowState("success");
         refetchBalance?.();
         resetForm();
       } catch (e: unknown) {
-        const msg = e instanceof Error ? e.message : String(e);
-        setFlowState("error");
-        toast.error("Transfer failed", { description: msg });
+        if (e instanceof TxSubmittedUnconfirmedError) {
+          // The transfer may already be on-chain — surface a no-retry
+          // "pending" state and refresh the balance, but never re-send.
+          setFlowState("submitted");
+          refetchBalance?.();
+          resetForm();
+        } else {
+          setFlowState("error");
+          // Offer re-auth instead of a dead toast when the signing key is
+          // unavailable (M-14).
+          if (!dispatchSigningError(e, () => logout("/login?reauth=1"))) {
+            toast.error("Transfer failed", { description: errorMessage(e) });
+          }
+        }
       } finally {
         setLoading(false);
         isProcessingRef.current = false;
       }
     },
-    [refetchBalance, resetForm],
+    [refetchBalance, resetForm, logout],
   );
 
   // The confirmation dialog now collects the password inline, so there's
@@ -376,7 +399,7 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
 
       {showFlowToast && (
         <TransactionFlowToast
-          state={flowState as "pending" | "success" | "error"}
+          state={flowState as "pending" | "success" | "error" | "submitted"}
           config={{
             pending: {
               title: "Sending hALPHA…",
@@ -390,6 +413,11 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
               title: "Something went wrong",
               description: "We couldn’t send your hALPHA.",
               action: { label: "Try Again", onClick: handleRetryTransfer },
+            },
+            submitted: {
+              title: "Transaction submitted",
+              description:
+                "It may already be on-chain. Check your balance before resending — do not send again.",
             },
           }}
           onDismiss={closeFlowToast}

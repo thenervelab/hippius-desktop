@@ -12,5 +12,9 @@ pub mod commands;
 pub mod history;
 pub mod keystore;
 pub mod origin;
+/// Folder→zip packing for the macOS Finder folder-share. macOS-only because
+/// that is its sole consumer (see the module docs).
+#[cfg(target_os = "macos")]
+pub(crate) mod zip_dir;
 
 pub use keystore::SqliteShareKeystore;
