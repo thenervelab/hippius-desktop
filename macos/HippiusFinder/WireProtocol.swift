@@ -31,17 +31,12 @@ enum WireProtocol {
         }
     }
 
-    /// Encode a `SHARE` / `UPLOAD_SHARE` line for a clicked file URL.
-    static func shareLine(for url: URL, upload: Bool) -> String {
-        let verb = upload ? "UPLOAD_SHARE" : "SHARE"
-        return "\(verb):\(encodePath(url))"
-    }
-
-    /// Encode a `SHARE_PRIVATE` line for a clicked URL (file or folder). The app
-    /// re-derives in-drive/outside and file/folder from the path, so one private
-    /// verb covers every target.
-    static func sharePrivateLine(for url: URL) -> String {
-        return "SHARE_PRIVATE:\(encodePath(url))"
+    /// Encode a `SHARE` line for a clicked file or folder URL. The public/private
+    /// choice and the in-drive/outside + file/folder resolution all happen in the
+    /// app, so this one verb covers every target (mirrors the Rust
+    /// `ClientMessage::Share`).
+    static func shareLine(for url: URL) -> String {
+        return "SHARE:\(encodePath(url))"
     }
 
     // MARK: - Path codec (mirrors Rust encode_path / decode_path)
