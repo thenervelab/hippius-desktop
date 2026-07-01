@@ -288,10 +288,13 @@ jobs:
           prerelease: true
           makeLatest: false
           overwrite: true
-          # App-only: the DMG + updater tarball are (re)built by the finalize step
-          # after the Finder extension is embedded (embedding re-signs the app and
-          # would invalidate a Tauri-built DMG/notarization).
-          args: '--target universal-apple-darwin --bundles app'
+          # When notarization creds are present, build app-only — the finalize
+          # step (re)builds the DMG + updater tarball AFTER embedding the Finder
+          # extension (embedding re-signs the app and would invalidate a
+          # Tauri-built DMG/notarization). Without those creds, finalize is
+          # skipped, so fall back to Tauri's full build so a DMG is still produced
+          # (unsigned, no extension) rather than nothing.
+          args: ${{ steps.apple.outputs.api_key != '' && '--target universal-apple-darwin --bundles app' || '--target universal-apple-darwin' }}
 
       # Embed the universal Finder extension into the app (Tauri built app-only),
       # inside-out re-sign, notarize + staple, then build the DMG + regenerate the
