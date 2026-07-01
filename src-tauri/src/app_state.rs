@@ -199,11 +199,6 @@ pub struct AppState {
     /// bridge is its sole producer.
     #[cfg(target_os = "macos")]
     pending_finder_shares: Mutex<HashMap<String, crate::finder_bridge::dispatch::PendingFinderShare>>,
-    /// Monotonic id source for [`AppState::pending_finder_shares`] keys.
-    /// Lock-free `AtomicU64` (not a `Mutex`) per the interior-mutability-selection
-    /// axiom — a bare increasing counter needs no compound-state lock.
-    #[cfg(target_os = "macos")]
-    finder_share_seq: AtomicU64,
 }
 
 impl Default for AppState {
@@ -281,8 +276,6 @@ impl AppState {
             finder_bridge: OnceLock::new(),
             #[cfg(target_os = "macos")]
             pending_finder_shares: Mutex::new(HashMap::new()),
-            #[cfg(target_os = "macos")]
-            finder_share_seq: AtomicU64::new(0),
         }
     }
 
@@ -302,13 +295,19 @@ impl AppState {
         self.finder_bridge.get()
     }
 
-    /// Store a pending Finder share request, returning its fresh id (a decimal
-    /// string from a process-monotonic counter — unique for the app's lifetime,
-    /// which is all a single-use, short-lived pending entry needs). The lock is
-    /// held only for the insert, never across an `.await` (axiom 74).
+    /// Store a pending Finder share request, returning its fresh id.
+    ///
+    /// The id is an unguessable random token (128 bits, OS CSPRNG), NOT a
+    /// sequential counter: it is the ONLY authority the renderer round-trips to
+    /// confirm/cancel a mint, so a predictable id would let a compromised webview
+    /// enumerate in-flight requests to hijack the visibility choice or cancel the
+    /// chooser (illu review L1). The lock is held only for the insert, never
+    /// across an `.await` (axiom 74).
     #[cfg(target_os = "macos")]
     pub fn store_finder_share(&self, req: crate::finder_bridge::dispatch::PendingFinderShare) -> String {
-        let id = self.finder_share_seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed).to_string();
+        use rand::Rng;
+        use rand::distributions::Alphanumeric;
+        let id: String = rand::thread_rng().sample_iter(&Alphanumeric).take(22).map(char::from).collect();
         self.pending_finder_shares
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)

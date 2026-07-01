@@ -120,7 +120,10 @@ pub async fn hcfs_finder_confirm_share(
     #[cfg(not(target_os = "macos"))]
     {
         let _ = (&state, request_id, visibility, on_progress);
-        Err(AppError::Other("Finder sharing is only available on macOS.".into()))
+        // Unreachable from the UI (the FE only invokes this on macOS); a typed
+        // Validation rather than the catch-all Other keeps it consistent with the
+        // error-taxonomy migration (illu review L4).
+        Err(AppError::Validation("Finder sharing is only available on macOS.".into()))
     }
 }
 
