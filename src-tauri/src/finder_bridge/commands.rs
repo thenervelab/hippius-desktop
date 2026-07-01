@@ -115,7 +115,22 @@ pub async fn hcfs_finder_confirm_share(
             .take_finder_share(&request_id)
             .ok_or_else(|| AppError::NotFound("This share request has expired. Right-click the file and choose Share with Hippius again.".into()))?;
         let progress = crate::shares::commands::share_progress_forwarder(on_progress);
-        crate::finder_bridge::dispatch::mint_confirmed(&state, &pending.path, visibility, Some(progress)).await
+        // Register a cancel handle and run the mint inside a `select!` against it,
+        // so a `hcfs_finder_cancel_share` (the modal's Cancel button) DROPS the
+        // mint future and aborts its in-flight upload rather than letting a large
+        // outside-file / folder-zip upload run to completion unseen (illu L2). The
+        // guard removes the handle when this scope ends — on success, error,
+        // cancel, OR the command future being dropped (window closed mid-upload).
+        let cancel = state.register_finder_mint(&request_id);
+        let _guard = FinderMintGuard {
+            state: state.inner(),
+            request_id: &request_id,
+        };
+        tokio::select! {
+            biased;
+            () = cancel.cancelled() => Err(AppError::Validation("Share cancelled.".into())),
+            minted = crate::finder_bridge::dispatch::mint_confirmed(&state, &pending.path, visibility, Some(progress)) => minted,
+        }
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -127,14 +142,34 @@ pub async fn hcfs_finder_confirm_share(
     }
 }
 
-/// Drop a parked Finder share request when the user closes the chooser without
-/// confirming, so an abandoned modal never leaks a pending entry. Idempotent: an
-/// already-taken or unknown `request_id` is a no-op.
+/// RAII teardown for an in-flight Finder mint: drops the cancel handle registered
+/// by [`hcfs_finder_confirm_share`] when the mint scope ends — whether it
+/// completes, errors, is cancelled, or the whole command future is dropped
+/// (window closed mid-upload). Paired begin/end teardown via `Drop` is the
+/// cancellation-safe way to run cleanup on every exit path (RfR ch. 8
+/// §Cancellation; axiom `rust_quality_71_drop_order`).
+#[cfg(target_os = "macos")]
+struct FinderMintGuard<'a> {
+    state: &'a AppState,
+    request_id: &'a str,
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for FinderMintGuard<'_> {
+    fn drop(&mut self) {
+        self.state.finish_finder_mint(self.request_id);
+    }
+}
+
+/// Cancel a Finder share when the user dismisses the modal. Covers both stages:
+/// drops a still-parked request (the chooser was open, mint not started) AND
+/// signals an in-flight mint's cancel token (an upload is running) so it aborts.
+/// Idempotent: an already-finished or unknown `request_id` is a no-op.
 #[tauri::command]
 pub async fn hcfs_finder_cancel_share(state: tauri::State<'_, AppState>, request_id: String) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
-        state.take_finder_share(&request_id);
+        state.cancel_finder_share(&request_id);
     }
     #[cfg(not(target_os = "macos"))]
     {

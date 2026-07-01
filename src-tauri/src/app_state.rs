@@ -199,6 +199,16 @@ pub struct AppState {
     /// bridge is its sole producer.
     #[cfg(target_os = "macos")]
     pending_finder_shares: Mutex<HashMap<String, crate::finder_bridge::dispatch::PendingFinderShare>>,
+    /// Cancellation handles for Finder shares that are currently minting. A
+    /// confirmed share can upload a large outside file or a zipped folder for
+    /// many seconds; without this, clicking Cancel only closed the modal while
+    /// the upload ran to completion and minted a link with no UI trace (illu
+    /// review L2). `hcfs_finder_confirm_share` registers a token here and runs
+    /// the mint inside a `tokio::select!` against it, so `cancel_finder_share`
+    /// signalling the token drops the mint future and aborts the in-flight
+    /// upload. Keyed by the same random request id as `pending_finder_shares`.
+    #[cfg(target_os = "macos")]
+    finder_share_cancels: Mutex<HashMap<String, tokio_util::sync::CancellationToken>>,
 }
 
 impl Default for AppState {
@@ -276,6 +286,8 @@ impl AppState {
             finder_bridge: OnceLock::new(),
             #[cfg(target_os = "macos")]
             pending_finder_shares: Mutex::new(HashMap::new()),
+            #[cfg(target_os = "macos")]
+            finder_share_cancels: Mutex::new(HashMap::new()),
         }
     }
 
@@ -316,15 +328,60 @@ impl AppState {
     }
 
     /// Take (remove) a pending Finder share request by id. Single-use: a second
-    /// confirm/cancel for the same id yields `None`. Returns the OWNED request so
-    /// the guard drops before the caller's mint `.await` — no lock spans the
-    /// await (axiom 74).
+    /// confirm for the same id yields `None`. Returns the OWNED request so the
+    /// guard drops before the caller's mint `.await` — no lock spans the await
+    /// (axiom 74).
     #[cfg(target_os = "macos")]
     pub fn take_finder_share(&self, id: &str) -> Option<crate::finder_bridge::dispatch::PendingFinderShare> {
         self.pending_finder_shares
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(id)
+    }
+
+    /// Register an in-flight mint for `id`, returning a fresh
+    /// [`tokio_util::sync::CancellationToken`] the confirm command selects on.
+    /// Signalling this token (via [`AppState::cancel_finder_share`]) drops the
+    /// mint future and aborts its upload.
+    #[cfg(target_os = "macos")]
+    pub fn register_finder_mint(&self, id: &str) -> tokio_util::sync::CancellationToken {
+        let token = tokio_util::sync::CancellationToken::new();
+        self.finder_share_cancels
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(id.to_string(), token.clone());
+        token
+    }
+
+    /// Drop the in-flight cancel handle for `id`. Called when the mint ends
+    /// (success, error, cancel, or the command future being dropped), so the
+    /// registry never retains a completed mint's token.
+    #[cfg(target_os = "macos")]
+    pub fn finish_finder_mint(&self, id: &str) {
+        self.finder_share_cancels
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(id);
+    }
+
+    /// Cancel a Finder share by id, covering BOTH lifecycle stages: remove any
+    /// still-parked request (so a mint that hasn't started never will) AND signal
+    /// any in-flight mint's token (so an upload already running is aborted).
+    /// Idempotent — an unknown id is a no-op.
+    #[cfg(target_os = "macos")]
+    pub fn cancel_finder_share(&self, id: &str) {
+        self.pending_finder_shares
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(id);
+        if let Some(token) = self
+            .finder_share_cancels
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(id)
+        {
+            token.cancel();
+        }
     }
 
     /// Current recovery gate state.
@@ -606,6 +663,39 @@ mod tests {
         let a = state.store_finder_share(mk());
         let b = state.store_finder_share(mk());
         assert_ne!(a, b, "each store must mint a fresh id so concurrent clicks don't collide");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn cancel_signals_an_in_flight_mint_token() {
+        // The confirm command registers a token and selects on it; cancel must
+        // fire that token so the mint future is dropped and its upload aborted.
+        let state = AppState::new();
+        let token = state.register_finder_mint("abc");
+        assert!(!token.is_cancelled());
+        state.cancel_finder_share("abc");
+        assert!(token.is_cancelled(), "cancel must signal the in-flight mint token");
+        // finish is idempotent cleanup after the mint's select! unwinds.
+        state.finish_finder_mint("abc");
+        // A second cancel after finish is a harmless no-op (token gone).
+        state.cancel_finder_share("abc");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn cancel_drops_a_still_parked_request() {
+        // Cancel while the chooser is open (mint not started) removes the parked
+        // request so a later confirm can't mint it.
+        use crate::finder_bridge::dispatch::PendingFinderShare;
+        use std::path::PathBuf;
+
+        let state = AppState::new();
+        let id = state.store_finder_share(PendingFinderShare {
+            path: PathBuf::from("/Users/me/Hippius/a.txt"),
+            name: "a.txt".into(),
+        });
+        state.cancel_finder_share(&id);
+        assert!(state.take_finder_share(&id).is_none(), "cancel must drop the parked request");
     }
 
     #[tokio::test]
