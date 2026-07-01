@@ -189,6 +189,21 @@ pub struct AppState {
     /// other platforms — Finder integration is macOS-only.
     #[cfg(target_os = "macos")]
     finder_bridge: OnceLock<Arc<crate::finder_bridge::socket::FinderBridge>>,
+    /// Pending "Share with Hippius" requests from Finder awaiting the user's
+    /// public/private choice in the app. A right-click stores the resolved path
+    /// here keyed by a fresh id and emits `finder:share-choosing{id,name}`; the
+    /// modal's confirm/cancel command takes the entry back by id. The renderer
+    /// therefore round-trips only `{id, visibility}` and never an arbitrary path
+    /// — a compromised webview cannot mint a share of a file it merely names
+    /// (least authority; boundary-validation axiom). macOS-only: the Finder
+    /// bridge is its sole producer.
+    #[cfg(target_os = "macos")]
+    pending_finder_shares: Mutex<HashMap<String, crate::finder_bridge::dispatch::PendingFinderShare>>,
+    /// Monotonic id source for [`AppState::pending_finder_shares`] keys.
+    /// Lock-free `AtomicU64` (not a `Mutex`) per the interior-mutability-selection
+    /// axiom — a bare increasing counter needs no compound-state lock.
+    #[cfg(target_os = "macos")]
+    finder_share_seq: AtomicU64,
 }
 
 impl Default for AppState {
@@ -264,6 +279,10 @@ impl AppState {
             vpn: Arc::new(crate::vpn::VpnState::new(crate::vpn::engine::default_engine())),
             #[cfg(target_os = "macos")]
             finder_bridge: OnceLock::new(),
+            #[cfg(target_os = "macos")]
+            pending_finder_shares: Mutex::new(HashMap::new()),
+            #[cfg(target_os = "macos")]
+            finder_share_seq: AtomicU64::new(0),
         }
     }
 
@@ -281,6 +300,32 @@ impl AppState {
     #[cfg(target_os = "macos")]
     pub fn finder_bridge(&self) -> Option<&Arc<crate::finder_bridge::socket::FinderBridge>> {
         self.finder_bridge.get()
+    }
+
+    /// Store a pending Finder share request, returning its fresh id (a decimal
+    /// string from a process-monotonic counter — unique for the app's lifetime,
+    /// which is all a single-use, short-lived pending entry needs). The lock is
+    /// held only for the insert, never across an `.await` (axiom 74).
+    #[cfg(target_os = "macos")]
+    pub fn store_finder_share(&self, req: crate::finder_bridge::dispatch::PendingFinderShare) -> String {
+        let id = self.finder_share_seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed).to_string();
+        self.pending_finder_shares
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(id.clone(), req);
+        id
+    }
+
+    /// Take (remove) a pending Finder share request by id. Single-use: a second
+    /// confirm/cancel for the same id yields `None`. Returns the OWNED request so
+    /// the guard drops before the caller's mint `.await` — no lock spans the
+    /// await (axiom 74).
+    #[cfg(target_os = "macos")]
+    pub fn take_finder_share(&self, id: &str) -> Option<crate::finder_bridge::dispatch::PendingFinderShare> {
+        self.pending_finder_shares
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(id)
     }
 
     /// Current recovery gate state.
@@ -525,6 +570,43 @@ mod tests {
         assert_eq!(acct.as_str(), "addr-A");
         assert_eq!(&*acct, "addr-A");
         assert_eq!(acct.clone().into_inner(), "addr-A");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn finder_share_store_take_is_single_use() {
+        use crate::finder_bridge::dispatch::PendingFinderShare;
+        use std::path::PathBuf;
+
+        let state = AppState::new();
+        let id = state.store_finder_share(PendingFinderShare {
+            path: PathBuf::from("/Users/me/Hippius/report.pdf"),
+            name: "report.pdf".into(),
+        });
+        // First take returns the parked request…
+        let taken = state.take_finder_share(&id).expect("first take yields the request");
+        assert_eq!(taken.name, "report.pdf");
+        assert_eq!(taken.path, PathBuf::from("/Users/me/Hippius/report.pdf"));
+        // …and it is single-use: a second take (double confirm / cancel-after-confirm) is None.
+        assert!(state.take_finder_share(&id).is_none(), "second take must be None");
+        // An unknown id is also None (no panic, no cross-talk).
+        assert!(state.take_finder_share("does-not-exist").is_none());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn finder_share_ids_are_distinct_per_store() {
+        use crate::finder_bridge::dispatch::PendingFinderShare;
+        use std::path::PathBuf;
+
+        let state = AppState::new();
+        let mk = || PendingFinderShare {
+            path: PathBuf::from("/x"),
+            name: "x".into(),
+        };
+        let a = state.store_finder_share(mk());
+        let b = state.store_finder_share(mk());
+        assert_ne!(a, b, "each store must mint a fresh id so concurrent clicks don't collide");
     }
 
     #[tokio::test]

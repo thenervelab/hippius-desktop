@@ -33,12 +33,15 @@ import { toast } from "sonner";
 
 import { Button, Icons } from "@/components/ui";
 import { FramedDialog } from "@/components/ui/FramedDialog";
+import { SegmentedControl } from "@/components/ui/SegmentedControl";
 import { cn } from "@/lib/utils";
 import {
   finderShareAtom,
   shareModalFileAtom,
 } from "@/app/lib/global-atoms/sharesAtoms";
 import {
+  cancelFinderShare,
+  confirmFinderShare,
   createShare,
   revokeShare,
   type ShareLink,
@@ -46,41 +49,55 @@ import {
 } from "@/app/lib/tauri/shares";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
 
+// The two visibility choices the Finder chooser offers; the values are the wire
+// tokens the Rust `ShareVisibility::parse` accepts.
+type ShareVisibility = "public" | "private";
+
 type ModalState =
+  // Finder-only entry point: the user picks public vs password before anything
+  // is minted (`confirmFinder` runs the mint on their choice). The in-app flow
+  // never enters this state — it goes straight to `running`.
+  | { kind: "choosing" }
   // `progress` is undefined until the backend reports it; the bar stays
-  // indeterminate in that case. Wiring the future `ShareProgress` channel
-  // is just `setState({ kind: "running", progress })` from its callback.
+  // indeterminate in that case.
   | { kind: "running"; progress?: ShareProgress }
-  // `password` is set only for a Finder password-protected share — the
-  // recipient needs it, so the done view shows it alongside the link.
+  // `password` is set only for a password-protected share — the recipient needs
+  // it, so the done view shows it alongside the link.
   | { kind: "done"; link: ShareLink; password?: string }
   | { kind: "error"; message: string };
 
 export default function ShareFileModal() {
   const [file, setFile] = useAtom(shareModalFileAtom);
-  // A share minted from the macOS Finder right-click flow is driven entirely by
-  // the backend (see `FinderShareListener`): it opens the modal into a spinner
-  // on `pending`, swaps in the link on `done`, or an error on `failed` — the
-  // file-driven `createShare` lifecycle is never run for it.
+  // A share from the macOS Finder right-click opens the in-app chooser (see
+  // `FinderShareListener`): the atom carries only the `choosing` state, and this
+  // modal then owns the `confirmFinderShare` → running → done/error lifecycle,
+  // symmetric with the file-driven `createShare` flow.
   const [finderShare, setFinderShare] = useAtom(finderShareAtom);
-  const [state, setState] = useState<ModalState>({ kind: "running" });
+  // Seed `choosing` when a Finder request is already parked at mount (covers the
+  // event that fires before this effect-driven component re-renders, and the
+  // test harness that renders with the atom pre-seeded); otherwise the in-app
+  // flow starts in `running`.
+  const [state, setState] = useState<ModalState>(() =>
+    finderShare?.kind === "choosing" ? { kind: "choosing" } : { kind: "running" },
+  );
   // Auto-copy fires once per `done` transition. Reopening the dialog
   // without closing must not double-copy a stale URL.
   const autoCopiedRef = useRef(false);
 
   // The Finder flow has no `FormattedUserFile`, so fall back to the name the
-  // backend sent with the started/failed event for the in-flight / error label.
-  const finderName =
-    finderShare?.kind === "pending" || finderShare?.kind === "failed"
-      ? finderShare.name
-      : "";
+  // backend sent with the choosing event for the label shown in every state.
+  const finderName = finderShare?.kind === "choosing" ? finderShare.name : "";
   const filename = file?.actualFileName || file?.name || finderName;
   const folderLabel = file?.label;
 
   const close = useCallback(() => {
+    // Release a still-parked Finder request (chooser open, or the user bailed).
+    // Idempotent server-side: after a confirm mints it the id is already taken,
+    // so closing from done/error is a harmless no-op.
+    if (finderShare?.kind === "choosing") void cancelFinderShare(finderShare.id);
     setFile(null);
     setFinderShare(null);
-  }, [setFile, setFinderShare]);
+  }, [finderShare, setFile, setFinderShare]);
 
   const startShare = useCallback(async () => {
     if (!file || !folderLabel) return;
@@ -107,33 +124,40 @@ export default function ShareFileModal() {
     }
   }, [file, folderLabel]);
 
+  // Confirm a Finder share once the user picks visibility in the chooser: mint
+  // via `confirmFinderShare` (backend holds the resolved path — we send only the
+  // id + choice), streaming progress into `running`, then land on `done`/`error`.
+  const confirmFinder = useCallback(
+    async (visibility: ShareVisibility) => {
+      if (finderShare?.kind !== "choosing") return;
+      const { id } = finderShare;
+      setState({ kind: "running" });
+      autoCopiedRef.current = false;
+      try {
+        const created = await confirmFinderShare(id, visibility, (progress) =>
+          setState((prev) =>
+            prev.kind === "running" ? { kind: "running", progress } : prev,
+          ),
+        );
+        setState({ kind: "done", link: created, password: created.password });
+      } catch (err) {
+        setState({ kind: "error", message: errorMessage(err) });
+      }
+    },
+    [finderShare],
+  );
+
   // Kick off the share when the modal opens.
   useEffect(() => {
     if (file) startShare();
   }, [file, startShare]);
 
-  // Drive the modal from the Finder share lifecycle. `pending` shows the
-  // indeterminate spinner (no `createShare` runs — the backend owns the mint),
-  // `done` swaps in the ready link (resetting the auto-copy latch so the
-  // copy-on-`done` effect fires), and `failed` shows the error state.
+  // Open the chooser for a Finder request. No mint runs here — `confirmFinder`
+  // does that on the user's choice. Fires once when the atom becomes `choosing`;
+  // it does not run again during confirm (the atom identity is unchanged), so a
+  // reached `done`/`error` state is never clobbered back to the picker.
   useEffect(() => {
-    if (!finderShare) return;
-    switch (finderShare.kind) {
-      case "pending":
-        setState({ kind: "running" });
-        break;
-      case "done":
-        autoCopiedRef.current = false;
-        setState({
-          kind: "done",
-          link: finderShare.share,
-          password: finderShare.share.password,
-        });
-        break;
-      case "failed":
-        setState({ kind: "error", message: finderShare.message });
-        break;
-    }
+    if (finderShare?.kind === "choosing") setState({ kind: "choosing" });
   }, [finderShare]);
 
   // Auto-copy once we reach `done`. The URL is still rendered in a
@@ -193,6 +217,10 @@ export default function ShareFileModal() {
       icon={<Icons.Link className="size-4 text-white" />}
       maxWidth="max-w-[585px]"
     >
+      {state.kind === "choosing" && (
+        <ChoosingBody filename={filename} onConfirm={confirmFinder} onCancel={close} />
+      )}
+
       {state.kind === "running" && (
         <RunningBody
           filename={filename}
@@ -223,6 +251,82 @@ export default function ShareFileModal() {
         />
       )}
     </FramedDialog>
+  );
+}
+
+/**
+ * The Finder-only "General access" picker, shown before anything is minted. The
+ * user chooses Anyone-with-the-link (public) or Password-protected (private) and
+ * confirms; the parent then runs the mint. Reuses the shared `SegmentedControl`
+ * and `Button` so it reads as first-class app UI (matches the done/error bodies).
+ */
+function ChoosingBody({
+  filename,
+  onConfirm,
+  onCancel,
+}: {
+  filename: string;
+  onConfirm: (visibility: ShareVisibility) => void;
+  onCancel: () => void;
+}) {
+  const [visibility, setVisibility] = useState<ShareVisibility>("public");
+
+  return (
+    <div className="font-geist">
+      <div className="mb-6 flex flex-col gap-1.5">
+        <p className="text-xs font-medium text-grey-30 dark:text-grey-dark-700">
+          General access
+        </p>
+        <SegmentedControl<ShareVisibility>
+          ariaLabel="Share access"
+          fullWidth
+          showActiveIndicator={false}
+          value={visibility}
+          onChange={setVisibility}
+          options={[
+            { label: "Anyone with the link", value: "public" },
+            { label: "Password protected", value: "private" },
+          ]}
+        />
+        <p className="text-xs text-grey-50 dark:text-grey-dark-600">
+          {visibility === "public"
+            ? "Anyone with the link can view and download this file until it expires."
+            : "We'll generate a password — the link can't be opened without it. You can copy it on the next screen."}
+        </p>
+        <p
+          className="mt-1 break-all font-mono text-xs text-grey-50 dark:text-grey-dark-600"
+          title={filename}
+        >
+          {filename}
+        </p>
+      </div>
+
+      <div className="flex flex-col gap-3">
+        <Button
+          type="button"
+          variant="primary"
+          size="auto"
+          onClick={() => onConfirm(visibility)}
+          className={cn(
+            "h-[52px] w-full rounded-[6px] border text-base font-normal tracking-[-0.36px]",
+            "border-[#3167DD] bg-[#3167DD] text-white",
+            "hover:bg-[#2454c4] hover:border-[#2454c4]",
+            "dark:hover:bg-[#2a5ad0] dark:hover:border-[#2a5ad0]",
+          )}
+        >
+          Create share link
+        </Button>
+        <Button
+          type="button"
+          variant="defaultStable"
+          size="auto"
+          onClick={onCancel}
+          className="h-[52px] w-full rounded-[6px] text-base font-normal tracking-[-0.36px]"
+        >
+          Cancel
+        </Button>
+      </div>
+    </div>
   );
 }
 

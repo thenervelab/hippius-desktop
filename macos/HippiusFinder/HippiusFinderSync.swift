@@ -94,19 +94,13 @@ final class HippiusFinderSync: FIFinderSync {
             return menu
         }
 
-        // Public share. One consistent label whether or not the selection sits
-        // inside a Hippius drive — the app re-derives the real action (share vs
-        // upload-then-share) from the path — but the selector still carries the
-        // inside/outside hint so the right verb is sent over the socket.
-        let inside = selectionIsInsideRoots()
-        addItem(
-            to: menu,
-            title: "Share with Hippius (public)",
-            action: inside ? #selector(shareSelection(_:)) : #selector(uploadShareSelection(_:))
-        )
-        // Password-protected share — one item for any target; the app generates
-        // the password (no prompt yet) and returns it alongside the link.
-        addItem(to: menu, title: "Share with Hippius (private)", action: #selector(shareSelectionPrivate(_:)))
+        // A single "Share with Hippius" item for every target. The public vs
+        // password-protected choice now lives in the app (Google-Drive model):
+        // this click only forwards the path, and the app opens its share chooser
+        // and mints once the user confirms. The app also re-derives
+        // in-drive/outside and file/folder from the path, so no inside/outside
+        // hint is sent from here anymore.
+        addItem(to: menu, title: "Share with Hippius", action: #selector(shareSelection(_:)))
         return menu
     }
 
@@ -131,42 +125,20 @@ final class HippiusFinderSync: FIFinderSync {
         return image
     }()
 
-    private func selectionIsInsideRoots() -> Bool {
-        let urls = FIFinderSyncController.default().selectedItemURLs() ?? []
-        guard !urls.isEmpty else { return false }
-        return urls.allSatisfy { url in roots.contains { isDescendant(url, of: $0) } }
-    }
-
     private func isDescendant(_ url: URL, of root: URL) -> Bool {
         let target = url.standardizedFileURL.path
         let base = root.standardizedFileURL.path
         return target == base || target.hasPrefix(base.hasSuffix("/") ? base : base + "/")
     }
 
+    /// Forward every selected item to the app as a share request. One `SHARE`
+    /// line per URL; the app resolves the path, opens its public/private chooser,
+    /// and mints on confirm — this side makes no visibility or in-drive/outside
+    /// decision.
     @objc private func shareSelection(_ sender: AnyObject?) {
-        sendSelection(upload: false)
-    }
-
-    @objc private func uploadShareSelection(_ sender: AnyObject?) {
-        sendSelection(upload: true)
-    }
-
-    /// Password-protected share for every selected item. The app mints the link,
-    /// generates the password, and returns both — there is no per-item verb for
-    /// in-drive vs outside because the app re-resolves the path.
-    @objc private func shareSelectionPrivate(_ sender: AnyObject?) {
         let urls = FIFinderSyncController.default().selectedItemURLs() ?? []
         for url in urls {
-            socket.send(WireProtocol.sharePrivateLine(for: url))
-        }
-    }
-
-    /// The app re-resolves the path authoritatively against its drive list, so
-    /// the verb here is advisory; we send the one the menu offered.
-    private func sendSelection(upload: Bool) {
-        let urls = FIFinderSyncController.default().selectedItemURLs() ?? []
-        for url in urls {
-            socket.send(WireProtocol.shareLine(for: url, upload: upload))
+            socket.send(WireProtocol.shareLine(for: url))
         }
     }
 

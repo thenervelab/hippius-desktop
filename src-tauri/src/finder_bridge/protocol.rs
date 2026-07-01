@@ -59,15 +59,14 @@ impl BadgeState {
 /// A message the Finder extension sends to the app — always a user menu action.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClientMessage {
-    /// "Share via Hippius" on a path already inside a Hippius drive.
+    /// "Share with Hippius" on any clicked path. The verb carries only the
+    /// *intent* to share — NOT the public/private choice, which now lives in the
+    /// app: the desktop opens its share chooser (Anyone-with-the-link vs
+    /// Password-protected) and mints only once the user confirms. The app also
+    /// re-derives in-drive/outside and file/folder from the path, so this one
+    /// verb covers every target and both visibilities (Google-Drive model — the
+    /// decision moved out of Finder).
     Share(PathBuf),
-    /// "Upload & Share via Hippius" on a path outside every Hippius drive.
-    UploadShare(PathBuf),
-    /// "Share via Hippius (Password)" — mint a password-protected (`#p=`) link.
-    /// The verb carries only the private *intent*; the app re-derives
-    /// in-drive/outside and file/folder from the path, exactly like the public
-    /// verbs, so one private verb covers every target.
-    SharePrivate(PathBuf),
 }
 
 impl ClientMessage {
@@ -76,18 +75,17 @@ impl ClientMessage {
     pub fn to_wire(&self) -> String {
         match self {
             ClientMessage::Share(path) => format!("SHARE:{}", encode_path(path)),
-            ClientMessage::UploadShare(path) => format!("UPLOAD_SHARE:{}", encode_path(path)),
-            ClientMessage::SharePrivate(path) => format!("SHARE_PRIVATE:{}", encode_path(path)),
         }
     }
 
-    /// Parse one wire line (without its terminating newline).
+    /// Parse one wire line (without its terminating newline). Only `SHARE` is
+    /// recognized now; the retired `UPLOAD_SHARE` / `SHARE_PRIVATE` verbs fall
+    /// through to [`ProtocolError::UnknownVerb`] (a stale extension binary that
+    /// still sends them is safely ignored rather than mis-dispatched).
     pub fn parse(line: &str) -> Result<Self, ProtocolError> {
         let (verb, rest) = split_verb(line)?;
         match verb {
             "SHARE" => Ok(ClientMessage::Share(decode_path(rest)?)),
-            "UPLOAD_SHARE" => Ok(ClientMessage::UploadShare(decode_path(rest)?)),
-            "SHARE_PRIVATE" => Ok(ClientMessage::SharePrivate(decode_path(rest)?)),
             other => Err(ProtocolError::UnknownVerb(other.to_string())),
         }
     }
@@ -253,20 +251,18 @@ mod tests {
     }
 
     #[test]
-    fn upload_share_round_trips() {
-        let m = ClientMessage::UploadShare(PathBuf::from("/tmp/outside.pdf"));
-        assert_eq!(ClientMessage::parse(&m.to_wire()), Ok(m));
-    }
-
-    #[test]
-    fn share_private_round_trips_and_has_distinct_verb() {
-        let m = ClientMessage::SharePrivate(PathBuf::from("/Users/x/My: Notes/a b.txt"));
-        assert!(m.to_wire().starts_with("SHARE_PRIVATE:"), "private share must use its own verb");
-        assert_eq!(ClientMessage::parse(&m.to_wire()), Ok(m));
-        // The longer verb must not be mis-parsed as the public SHARE verb.
+    fn retired_verbs_are_now_unknown() {
+        // The public/private + upload distinctions collapsed into the single
+        // SHARE verb (the app decides visibility and re-resolves the target). A
+        // stale extension binary still emitting the old verbs must be rejected,
+        // not silently mapped onto a share — pin that they no longer parse.
+        assert_eq!(
+            ClientMessage::parse("UPLOAD_SHARE:/tmp/outside.pdf"),
+            Err(ProtocolError::UnknownVerb("UPLOAD_SHARE".into()))
+        );
         assert_eq!(
             ClientMessage::parse("SHARE_PRIVATE:/x"),
-            Ok(ClientMessage::SharePrivate(PathBuf::from("/x")))
+            Err(ProtocolError::UnknownVerb("SHARE_PRIVATE".into()))
         );
     }
 
@@ -370,7 +366,7 @@ mod tests {
         // invariant the socket layer relies on.
         #[test]
         fn encoded_line_is_ascii_single_line(bytes in proptest::collection::vec(1u8..=255, 0..64)) {
-            let wire = ClientMessage::UploadShare(PathBuf::from(OsString::from_vec(bytes))).to_wire();
+            let wire = ClientMessage::Share(PathBuf::from(OsString::from_vec(bytes))).to_wire();
             prop_assert!(wire.is_ascii());
             prop_assert!(!wire.contains('\n') && !wire.contains('\r'));
         }

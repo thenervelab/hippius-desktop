@@ -3,27 +3,24 @@
 import { useEffect } from "react";
 import { useSetAtom } from "jotai";
 import { finderShareAtom } from "@/app/lib/global-atoms/sharesAtoms";
-import type {
-  FinderShareCreated,
-  FinderShareFailed,
-  FinderShareStarted,
-} from "@/app/lib/tauri/shares";
+import type { FinderShareChoosing } from "@/app/lib/tauri/shares";
 import { registerTauriListeners } from "@/lib/utils/tauriListeners";
 
 /**
- * Invisible component that surfaces a share minted from the macOS Finder
- * right-click menu.
+ * Invisible component that opens the share chooser for a "Share with Hippius"
+ * click from the macOS Finder right-click menu.
  *
- * The share is minted entirely in Rust (`finder_bridge::dispatch`), which
- * brackets the (possibly slow) mint with three events; this listener does no
- * minting, it just drives `finderShareAtom` through them so `ShareFileModal`
- * shows a spinner immediately, then the ready link — or an error. The modal
- * owns the clipboard copy and toast, so a Finder share and an in-app share
- * present identically.
+ * The backend no longer mints on click (the public/private decision moved into
+ * the app): it parks the resolved path and emits a single `finder:share-choosing`
+ * event with the request `id` + display `name`. This listener does no minting —
+ * it just drives `finderShareAtom` into the `choosing` state so `ShareFileModal`
+ * shows the picker. From there the modal owns the confirm/cancel IPC and the
+ * running → done/error lifecycle, so a Finder share and an in-app share present
+ * identically.
  *
- * These events only ever fire on macOS once a click has actually been
- * dispatched, so the listener is safe to mount unconditionally on every
- * platform — elsewhere it simply never receives one.
+ * This event only ever fires on macOS once a click has been dispatched, so the
+ * listener is safe to mount unconditionally on every platform — elsewhere it
+ * simply never receives one.
  */
 export default function FinderShareListener() {
   const setFinderShare = useSetAtom(finderShareAtom);
@@ -31,26 +28,10 @@ export default function FinderShareListener() {
   useEffect(() => {
     const { cleanup } = registerTauriListeners([
       [
-        "finder:share-started",
+        "finder:share-choosing",
         (event) => {
-          const { name, private: isPrivate } =
-            event.payload as FinderShareStarted;
-          setFinderShare({ kind: "pending", name, private: isPrivate });
-        },
-      ],
-      [
-        "finder:share-created",
-        (event) =>
-          setFinderShare({
-            kind: "done",
-            share: event.payload as FinderShareCreated,
-          }),
-      ],
-      [
-        "finder:share-failed",
-        (event) => {
-          const { name, message } = event.payload as FinderShareFailed;
-          setFinderShare({ kind: "failed", name, message });
+          const { id, name } = event.payload as FinderShareChoosing;
+          setFinderShare({ kind: "choosing", id, name });
         },
       ],
     ]);

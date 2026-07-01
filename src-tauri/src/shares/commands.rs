@@ -55,7 +55,13 @@ fn console_base_url() -> String {
 /// join `/share/<token>` without doubling the separator.
 fn resolve_console_base_url(override_value: Option<String>) -> String {
     override_value
-        .map(|value| value.trim().trim_end_matches('/').to_string())
+        // Strip leading whitespace, and any trailing run of whitespace-OR-`/`, in
+        // ONE pass, so the result's last char is neither — which makes the
+        // normalization idempotent. The two-step `.trim().trim_end_matches('/')`
+        // was NOT idempotent: removing a trailing slash can re-expose trailing
+        // whitespace (e.g. "x\u{b}/" → "x\u{b}"), which a second pass would then
+        // trim (proptest `resolve_console_base_url_is_idempotent`).
+        .map(|value| value.trim_start().trim_end_matches(|c: char| c.is_whitespace() || c == '/').to_string())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| DEFAULT_CONSOLE_BASE_URL.to_string())
 }
@@ -309,7 +315,7 @@ async fn create_share_inner(
 /// deliberately `send`-only and panic-free because hcfs-client may call
 /// it from the chunked path's blocking encryption thread, where a panic
 /// would surface as a misleading `ShareError::Crypto`.
-fn share_progress_forwarder(channel: Channel<ShareProgress>) -> ShareProgressFn {
+pub(crate) fn share_progress_forwarder(channel: Channel<ShareProgress>) -> ShareProgressFn {
     Arc::new(move |update: ShareProgress| {
         if let Err(e) = channel.send(update) {
             debug!(error = %e, "share progress channel send failed (receiver gone)");
@@ -356,17 +362,24 @@ pub async fn hcfs_create_share(
 }
 
 /// Mint a public share for a synced file with the same capability + eligibility
-/// guards as [`hcfs_create_share`] but no progress channel. Entry point for the
-/// macOS Finder bridge dispatcher, where a right-click has no webview channel to
-/// stream progress into.
+/// guards as [`hcfs_create_share`]. Entry point for the macOS Finder bridge
+/// dispatcher. `progress` streams the encrypt/upload bar to the confirm modal
+/// (`Some`) — the Finder confirm flow now opens a webview `Channel`, unlike the
+/// old fire-and-forget right-click.
 ///
 /// macOS-only: the Finder dispatcher is its sole caller, so leaving it un-gated
 /// would be dead code on the Linux CI job.
 #[cfg(target_os = "macos")]
-pub(crate) async fn share_synced_file(state: &AppState, account_id: &str, folder_label: &str, relative_path: &str) -> Result<ShareLink> {
+pub(crate) async fn share_synced_file(
+    state: &AppState,
+    account_id: &str,
+    folder_label: &str,
+    relative_path: &str,
+    progress: Option<ShareProgressFn>,
+) -> Result<ShareLink> {
     require_shares_supported(state, account_id).await?;
     require_eligible(state, account_id, InsufficientCreditsAction::Sharing, 0).await?;
-    create_share_inner(state, account_id, folder_label, relative_path, None).await
+    create_share_inner(state, account_id, folder_label, relative_path, progress).await
 }
 
 /// Stream an already-resolved local plaintext file through the share engine.
@@ -374,9 +387,17 @@ pub(crate) async fn share_synced_file(state: &AppState, account_id: &str, folder
 /// Shared by the two Finder paths that have no synced-folder identity — an
 /// outside file and a folder zipped to a temp archive. No reshare-origin row is
 /// recorded (there is no `(folder_label, relative_path)` to reshare from). The
-/// caller has already run the capability + eligibility gates.
+/// caller has already run the capability + eligibility gates. `progress` streams
+/// the encrypt/upload bar to the confirm modal when `Some`.
 #[cfg(target_os = "macos")]
-async fn share_local_file(state: &AppState, account_id: &str, local_path: &Path, filename: &str, mime_type: &str) -> Result<ShareLink> {
+async fn share_local_file(
+    state: &AppState,
+    account_id: &str,
+    local_path: &Path,
+    filename: &str,
+    mime_type: &str,
+    progress: Option<ShareProgressFn>,
+) -> Result<ShareLink> {
     let pool = state.pool()?;
     let metadata = tokio::fs::metadata(local_path).await?;
     if !metadata.is_file() {
@@ -391,7 +412,7 @@ async fn share_local_file(state: &AppState, account_id: &str, local_path: &Path,
     let keystore = SqliteShareKeystore::new(pool.clone());
     let console_base = console_base_url();
     let result = client
-        .create_share(&mut reader, plaintext_size, filename, mime_type, &keystore, &console_base, None)
+        .create_share(&mut reader, plaintext_size, filename, mime_type, &keystore, &console_base, progress)
         .await
         .map_err(|e| {
             warn!(error = %e, "create_share failed");
@@ -410,7 +431,7 @@ async fn share_local_file(state: &AppState, account_id: &str, local_path: &Path,
 /// same encrypted-share storage as a synced file; only the reshare-origin
 /// sidecar is skipped. Entry point for the macOS Finder dispatcher.
 #[cfg(target_os = "macos")]
-pub(crate) async fn share_external_file(state: &AppState, account_id: &str, abs_path: &Path) -> Result<ShareLink> {
+pub(crate) async fn share_external_file(state: &AppState, account_id: &str, abs_path: &Path, progress: Option<ShareProgressFn>) -> Result<ShareLink> {
     require_shares_supported(state, account_id).await?;
     require_eligible(state, account_id, InsufficientCreditsAction::Sharing, 0).await?;
 
@@ -420,7 +441,7 @@ pub(crate) async fn share_external_file(state: &AppState, account_id: &str, abs_
         .ok_or_else(|| AppError::Validation("File has no usable name".into()))?;
     let mime_type = mime_guess::from_path(abs_path).first_or_octet_stream().essence_str().to_owned();
 
-    share_local_file(state, account_id, abs_path, filename, &mime_type).await
+    share_local_file(state, account_id, abs_path, filename, &mime_type, progress).await
 }
 
 /// Mint a public share for a folder by packing it into one `application/zip`
@@ -434,7 +455,12 @@ pub(crate) async fn share_external_file(state: &AppState, account_id: &str, abs_
 /// follow-up should bound it (max bytes/entries) before the walk. The
 /// eligibility gate is a positive-balance floor, not a byte budget.
 #[cfg(target_os = "macos")]
-pub(crate) async fn share_directory_as_zip(state: &AppState, account_id: &str, dir_path: &Path) -> Result<ShareLink> {
+pub(crate) async fn share_directory_as_zip(
+    state: &AppState,
+    account_id: &str,
+    dir_path: &Path,
+    progress: Option<ShareProgressFn>,
+) -> Result<ShareLink> {
     require_shares_supported(state, account_id).await?;
     require_eligible(state, account_id, InsufficientCreditsAction::Sharing, 0).await?;
 
@@ -453,7 +479,7 @@ pub(crate) async fn share_directory_as_zip(state: &AppState, account_id: &str, d
         .await
         .map_err(|e| AppError::Io(std::io::Error::other(e)))??;
 
-    share_local_file(state, account_id, temp.path(), &zip_filename, "application/zip").await
+    share_local_file(state, account_id, temp.path(), &zip_filename, "application/zip", progress).await
 }
 
 /// A freshly-minted share turned into a password-protected (`#p=`) link, plus
@@ -879,7 +905,10 @@ mod tests {
         let json = serde_json::to_value(update).expect("serialize ShareProgress");
         let keys: BTreeSet<String> = json.as_object().expect("object").keys().cloned().collect();
         let expected: BTreeSet<String> = ["bytesDone", "bytesTotal", "phase"].into_iter().map(String::from).collect();
-        assert_eq!(keys, expected, "ShareProgress wire keys drifted — FE shares.ts reads bytesDone/bytesTotal/phase");
+        assert_eq!(
+            keys, expected,
+            "ShareProgress wire keys drifted — FE shares.ts reads bytesDone/bytesTotal/phase"
+        );
     }
 
     /// The `SharePhase` variant strings drive the FE share-progress bar's label
@@ -897,7 +926,11 @@ mod tests {
         ];
         for (phase, wire) in cases {
             let json = serde_json::to_value(phase).expect("serialize SharePhase");
-            assert_eq!(json, serde_json::Value::String(wire.to_string()), "SharePhase wire string drifted (expected {wire})");
+            assert_eq!(
+                json,
+                serde_json::Value::String(wire.to_string()),
+                "SharePhase wire string drifted (expected {wire})"
+            );
         }
     }
 
