@@ -40,8 +40,25 @@ if [[ -z "${APPLE_SIGNING_IDENTITY:-}" ]]; then
     sed -n 's/.*"\(Developer ID Application: .*\)"/\1/p' | head -n1)"
 fi
 if [[ -z "${APPLE_SIGNING_IDENTITY}" ]]; then
-  echo "ERROR: no 'Developer ID Application' identity found. Import the Hippius" >&2
-  echo "       cert or set APPLE_SIGNING_IDENTITY — App Groups need a real Team ID." >&2
+  cat >&2 <<'EOHELP'
+ERROR: no 'Developer ID Application' code-signing identity found in your keychain.
+
+The Finder extension is sandboxed and reaches the app ONLY through the App Group
+container "V28B5X732P.com.hippius.shared". macOS grants that container only to code
+signed by Apple Team V28B5X732P, so a real Team-V28B5X732P certificate is required —
+ad-hoc ("-") or another team's cert cannot work. (Everything EXCEPT the Finder
+feature still runs fine under a plain `pnpm tauri:dev` with no cert.)
+
+Fix with ONE of:
+  • Import the shared Hippius "Developer ID Application" cert (the same .p12 CI uses
+    as the APPLE_CERTIFICATE secret) into your login keychain, then re-run:
+        security import Hippius-DeveloperID.p12 \
+          -k ~/Library/Keychains/login.keychain-db -P '<p12-password>' -T /usr/bin/codesign
+  • Or, if you already have a Team-V28B5X732P identity under a different name, point at it:
+        APPLE_SIGNING_IDENTITY="Developer ID Application: … (V28B5X732P)" pnpm finder:dev
+
+List what you currently have:  security find-identity -v -p codesigning
+EOHELP
   exit 1
 fi
 export APPLE_SIGNING_IDENTITY
