@@ -214,6 +214,13 @@ jobs:
           cat > src-tauri/.env << 'EOF'
           ${{ secrets.TAURI_ENV_FILE }}
           EOF
+          # PREVIEW-ONLY — DO NOT PORT TO redesign/main. Point share links at the
+          # staging console (dev-branch deploy) instead of the prod default, so
+          # internal testers can open private "#p=" links (that recipient page
+          # ships only on staging, not yet on console.hippius.com). The app loads
+          # this bundled .env at runtime (main.rs) and dotenvy won't override a
+          # real env var, so a tester's unset shell means the staging URL wins.
+          printf '\nHIPPIUS_CONSOLE_BASE_URL=https://console.hippicode.com\n' >> src-tauri/.env
           chmod 600 src-tauri/.env
 
       - name: Build frontend
