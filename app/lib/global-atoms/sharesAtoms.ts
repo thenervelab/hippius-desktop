@@ -53,15 +53,28 @@ export const shareFeatureEnabledAtom = atom(() => true);
 export const shareModalFileAtom = atom<FormattedUserFile | null>(null);
 
 /**
- * An already-minted share link to present in `ShareFileModal`, driven by
- * the macOS Finder right-click flow (`finder:share-created`). `null` means
- * closed.
+ * The lifecycle of a share minted from the macOS Finder right-click flow, as
+ * seen by `ShareFileModal`. `null` means the modal is closed.
  *
- * This is distinct from `shareModalFileAtom`: that atom drives the modal to
- * *create* a share from a file (the `running → done` lifecycle), whereas a
- * Finder share is already minted in Rust before the FE hears about it — the
- * modal opens straight into its `done` state with this link. Keeping the two
- * drivers separate means the in-app flow never has to special-case "the link
- * already exists".
+ * Unlike an in-app share (driven by {@link shareModalFileAtom} through a
+ * `running → done` `createShare` call), a Finder share is minted entirely in
+ * Rust. But the mint can take many seconds for a big file or a folder-zip, so
+ * the backend brackets it with three events the modal maps here:
+ *
+ *   - `finder:share-started` → `pending`: opens the modal into a spinner
+ *     immediately, before the finished link exists, so the click is never
+ *     silent.
+ *   - `finder:share-created` → `done`: the ready link (public `#k=`, or a
+ *     private `#p=` link carrying its generated `password`).
+ *   - `finder:share-failed` → `failed`: the mint errored; show a message
+ *     instead of a spinner that never resolves.
+ *
+ * Keeping this separate from the in-app driver means neither flow has to
+ * special-case the other's states.
  */
-export const finderShareLinkAtom = atom<FinderShareCreated | null>(null);
+export type FinderShareState =
+  | { kind: "pending"; name: string; private: boolean }
+  | { kind: "done"; share: FinderShareCreated }
+  | { kind: "failed"; name: string; message: string };
+
+export const finderShareAtom = atom<FinderShareState | null>(null);

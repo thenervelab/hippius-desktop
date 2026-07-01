@@ -18,8 +18,9 @@ import { Channel } from "@tauri-apps/api/core";
 
 import ShareFileModal from "../ShareFileModal";
 import {
-  finderShareLinkAtom,
+  finderShareAtom,
   shareModalFileAtom,
+  type FinderShareState,
 } from "@/app/lib/global-atoms/sharesAtoms";
 import type { FinderShareCreated } from "@/app/lib/tauri/shares";
 
@@ -69,13 +70,19 @@ function withProvider(node: ReactNode, file: { actualFileName?: string; name: st
   return <Provider store={store}>{node}</Provider>;
 }
 
-// Seeds the Finder-driven atom instead of the file atom — the same signal
-// `FinderShareListener` delivers when the macOS extension's click is minted
-// into a share in Rust.
-function withFinderLink(node: ReactNode, link: FinderShareCreated) {
+// Seeds the Finder-driven atom in an explicit lifecycle state — the same signal
+// `FinderShareListener` delivers as it maps the backend's
+// started/created/failed events.
+function withFinderState(node: ReactNode, share: FinderShareState) {
   const store = createStore();
-  store.set(finderShareLinkAtom, link);
+  store.set(finderShareAtom, share);
   return <Provider store={store}>{node}</Provider>;
+}
+
+// Convenience for the common "share already minted" (`done`) case used by the
+// existing Finder tests: the macOS extension's click resolved to a link.
+function withFinderLink(node: ReactNode, link: FinderShareCreated) {
+  return withFinderState(node, { kind: "done", share: link });
 }
 
 describe("ShareFileModal", () => {
@@ -249,6 +256,48 @@ describe("ShareFileModal", () => {
 
     await screen.findByDisplayValue(/share\/pub-tok#k=KEY/);
     expect(screen.queryByText(/send this password separately/i)).not.toBeInTheDocument();
+  });
+
+  it("opens into a spinner on a pending Finder share before the link exists", async () => {
+    // `finder:share-started` fires the instant a big-file/folder share begins,
+    // long before the link is minted — the modal must show the spinner (not a
+    // blank window) and must NOT run the in-app create lifecycle.
+    render(
+      withFinderState(<ShareFileModal />, {
+        kind: "pending",
+        name: "big-movie.mov",
+        private: false,
+      }),
+    );
+
+    // Spinner copy + the pending file name are shown; no URL yet.
+    expect(screen.getByText(/encrypting and uploading/i)).toBeInTheDocument();
+    expect(screen.getByText("big-movie.mov")).toBeInTheDocument();
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    // The mint happens in Rust — the FE never calls create_share for a Finder share.
+    expect(invokeMock).not.toHaveBeenCalledWith("hcfs_create_share", expect.anything());
+  });
+
+  it("shows an error with no 'Try again' when a Finder share fails", async () => {
+    // `finder:share-failed` resolves the spinner to an error state. Because the
+    // mint ran in Rust with no re-runnable file handle here, "Try again" is
+    // omitted — only "Close" is offered.
+    render(
+      withFinderState(<ShareFileModal />, {
+        kind: "failed",
+        name: "big-movie.mov",
+        message: "Insufficient credits to create a share",
+      }),
+    );
+
+    expect(await screen.findByText(/couldn.?t create share link/i)).toBeInTheDocument();
+    expect(screen.getByText(/insufficient credits to create a share/i)).toBeInTheDocument();
+    // The failed event's file name is surfaced so the user knows what failed.
+    expect(screen.getByText("big-movie.mov")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /try again/i })).not.toBeInTheDocument();
+    // Still dismissible — the error body offers a Close action (the dialog's own
+    // "X" also matches, so assert at least one Close affordance).
+    expect(screen.getAllByRole("button", { name: /close/i }).length).toBeGreaterThan(0);
   });
 
   it("calls hcfs_revoke_share when the user revokes from the done state", async () => {
