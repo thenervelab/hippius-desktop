@@ -6,10 +6,7 @@
 
 import { atom } from "jotai";
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
-import type {
-  FinderShareCreated,
-  ServerCapabilities,
-} from "@/app/lib/tauri/shares";
+import type { ServerCapabilities } from "@/app/lib/tauri/shares";
 
 /**
  * Cached server capabilities. Populated once after login by
@@ -53,28 +50,19 @@ export const shareFeatureEnabledAtom = atom(() => true);
 export const shareModalFileAtom = atom<FormattedUserFile | null>(null);
 
 /**
- * The lifecycle of a share minted from the macOS Finder right-click flow, as
- * seen by `ShareFileModal`. `null` means the modal is closed.
+ * A pending "Share with Hippius" request from the macOS Finder right-click, as
+ * seen by `ShareFileModal`. `null` means no Finder share is open.
  *
- * Unlike an in-app share (driven by {@link shareModalFileAtom} through a
- * `running → done` `createShare` call), a Finder share is minted entirely in
- * Rust. But the mint can take many seconds for a big file or a folder-zip, so
- * the backend brackets it with three events the modal maps here:
- *
- *   - `finder:share-started` → `pending`: opens the modal into a spinner
- *     immediately, before the finished link exists, so the click is never
- *     silent.
- *   - `finder:share-created` → `done`: the ready link (public `#k=`, or a
- *     private `#p=` link carrying its generated `password`).
- *   - `finder:share-failed` → `failed`: the mint errored; show a message
- *     instead of a spinner that never resolves.
- *
- * Keeping this separate from the in-app driver means neither flow has to
- * special-case the other's states.
+ * The redesign moved the public/private decision into the app (Google-Drive
+ * model): the backend no longer mints on click — it emits `finder:share-choosing`
+ * with the parked request's `id` + display `name`, and the modal opens its
+ * chooser. So this atom carries exactly ONE state, `choosing`; the subsequent
+ * `running → done`/`error` lifecycle is local `ShareFileModal` state driven by
+ * the {@link confirmFinderShare} call (symmetric with the in-app
+ * {@link shareModalFileAtom} → `createShare` flow). The `id` is echoed back to
+ * the confirm/cancel IPC so the backend mints the file it resolved, never one
+ * the renderer names.
  */
-export type FinderShareState =
-  | { kind: "pending"; name: string; private: boolean }
-  | { kind: "done"; share: FinderShareCreated }
-  | { kind: "failed"; name: string; message: string };
+export type FinderShareState = { kind: "choosing"; id: string; name: string };
 
 export const finderShareAtom = atom<FinderShareState | null>(null);

@@ -1,16 +1,19 @@
 //! Dispatch inbound Finder menu actions to the share engine (macOS).
 //!
-//! A click forwarded by the extension carries an absolute path. We resolve it
-//! to its Hippius drive ([`super::resolve`]) and mint a share via the existing
-//! engine: an in-drive file shares by `(label, relative_path)`, an outside file
-//! by raw bytes, and a folder by zipping it into one blob. A private click also
-//! wraps the key under a random password (`#p=`).
+//! A "Share with Hippius" click forwarded by the extension carries an absolute
+//! path but NOT a public/private choice — that decision moved into the app
+//! (Google-Drive model). So [`handle`] does not mint: it resolves the display
+//! name, parks the path in [`crate::app_state::AppState`] under a fresh id,
+//! brings the app forward, and emits `finder:share-choosing{id,name}` to open
+//! the share chooser. The user picks Anyone-with-the-link vs Password-protected
+//! and confirms; the modal then calls [`super::commands::hcfs_finder_confirm_share`],
+//! which takes the parked request back by id and mints via [`mint_confirmed`].
 //!
-//! We bracket the mint with three frontend events so a slow share (a big file or
-//! a folder-zip) is never silent: `finder:share-started` fires immediately (the
-//! modal opens into a spinner and the app comes forward), then exactly one of
-//! `finder:share-created` (success — copied + shown) or `finder:share-failed`
-//! (the modal shows an error instead of a hung spinner).
+//! Minting reuses the existing engine ([`super::resolve`] +
+//! `crate::shares::commands`): an in-drive file shares by `(label,
+//! relative_path)`, an outside file by raw bytes, and a folder by zipping it
+//! into one blob. A password-protected choice additionally wraps the key under a
+//! random password (`#p=`).
 //!
 //! ## Security: socket peer trust (accepted risk)
 //! The App Group socket ([`super::socket`]) is reachable by any local process
@@ -22,130 +25,109 @@
 //! running as you"); a follow-up should verify the connecting peer is the
 //! codesigned extension (`LOCAL_PEERCRED` → pid → `SecCode` requirement).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use tauri::{AppHandle, Emitter, Manager};
 use tracing::{info, warn};
 
 use crate::app_state::AppState;
 use crate::error::Result;
+use crate::finder_bridge::commands::{FinderShareCreated, ShareVisibility};
 use crate::finder_bridge::protocol::ClientMessage;
-use crate::finder_bridge::resolve::{resolve_share_target, ShareTarget};
+use crate::finder_bridge::resolve::{ShareTarget, resolve_share_target};
 use crate::shares::commands::ShareLink;
+use hcfs_client::client::share::ShareProgressFn;
 
-/// Payload for the `finder:share-created` event. Both public and private shares
-/// surface through this one event; the frontend distinguishes them by whether
-/// `password` is present (a private link is unopenable without it, so the FE
-/// shows it next to the URL for the user to pass on out-of-band).
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct FinderShareCreated {
-    share_token: String,
-    share_url: String,
-    expires_at: String,
-    /// `Some` only for a password-protected (`#p=`) share — the randomly
-    /// generated password. Omitted from the JSON for a public share.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    password: Option<String>,
+/// A "Share with Hippius" click parked in [`crate::app_state::AppState`] while
+/// the app asks the user for the public/private choice. Holds the resolved path
+/// and its display name; the confirm/cancel command takes it back by id (the id
+/// itself is the map key, so it is not repeated here).
+#[derive(Debug, Clone)]
+pub struct PendingFinderShare {
+    /// Absolute path the extension forwarded — minted only on confirm.
+    pub path: PathBuf,
+    /// The clicked file/folder's display name, shown in the chooser modal.
+    pub name: String,
 }
 
-impl FinderShareCreated {
-    /// A public (`#k=`) share carries no password.
-    fn public(link: ShareLink) -> Self {
-        Self {
-            share_token: link.share_token,
-            share_url: link.share_url,
-            expires_at: link.expires_at,
-            password: None,
-        }
-    }
-}
-
-/// Payload for `finder:share-started`, emitted the instant a Finder share begins
-/// — before the (possibly many-second) encrypt+upload. A big file or a
-/// folder-zip mints slowly, and the modal only opens on the *finished* link, so
-/// without this the user sees nothing and assumes the click did nothing. The FE
-/// opens the share modal into a spinner on this event.
+/// Payload for `finder:share-choosing`, emitted the instant a share is
+/// requested from Finder — before anything is minted. Opens the app's share
+/// chooser on the file so the user picks Anyone-with-the-link vs
+/// Password-protected. The `id` is echoed back to
+/// [`super::commands::hcfs_finder_confirm_share`] / `hcfs_finder_cancel_share`.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-struct FinderShareStarted {
-    /// The clicked file/folder's display name, shown while the share runs.
+struct FinderShareChoosing {
+    /// Opaque handle to the parked [`PendingFinderShare`]; the modal returns it
+    /// verbatim so the backend mints the file it resolved (never one the
+    /// renderer names).
+    id: String,
+    /// The clicked file/folder's display name, shown while choosing / minting.
     name: String,
-    /// Whether this is a password-protected (`#p=`) share — lets the modal label
-    /// the in-flight state without waiting for the outcome.
-    private: bool,
 }
 
-/// Payload for `finder:share-failed`, emitted when the mint errors. Pairs with
-/// the existing `warn!`: the log alone left the user staring at a spinner that
-/// never resolved, so the FE turns this into the modal's error state.
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct FinderShareFailed {
-    /// The clicked file/folder's display name.
-    name: String,
-    /// A user-facing failure message (the `AppError`'s `Display`).
-    message: String,
-}
-
-/// Resolve a clicked path and mint a share, bracketing the mint with frontend
-/// events so a slow share is never silent: emit `finder:share-started` (and
-/// bring the app forward) BEFORE minting, then log the outcome and emit exactly
-/// one of `finder:share-created` (success) or `finder:share-failed` (error). A
-/// `SharePrivate` click wraps the key under a random password (no prompt yet)
-/// and carries it in the created payload; the public verbs mint a `#k=` link
-/// with no password.
+/// Handle a "Share with Hippius" click: resolve the display name, park the path
+/// in [`AppState`] under a fresh id, bring the app forward, and emit
+/// `finder:share-choosing` so the app opens its share chooser. Deliberately does
+/// NOT mint — the public/private decision now happens in the app, and minting is
+/// deferred to [`super::commands::hcfs_finder_confirm_share`] once the user
+/// confirms.
 pub async fn handle(app: AppHandle, message: ClientMessage) {
-    // Announce the share and bring the app forward BEFORE the mint runs. The
-    // mint (encrypt + upload, or zip-then-upload for a folder) can take many
-    // seconds on a big target, and the modal only opens on the finished link —
-    // so this early signal is what turns "nothing happened" into a spinner.
-    let (clicked, is_private) = match &message {
-        ClientMessage::Share(path) | ClientMessage::UploadShare(path) => (path.clone(), false),
-        ClientMessage::SharePrivate(path) => (path.clone(), true),
-    };
+    let ClientMessage::Share(clicked) = message;
     let name = display_name(&clicked);
+    let id = app.state::<AppState>().store_finder_share(PendingFinderShare {
+        path: clicked.clone(),
+        name: name.clone(),
+    });
+    // Bring the app forward so the chooser modal is visible immediately (the
+    // modal lives in the main window).
     reveal_main_window(&app);
-    let _ = app.emit_to(
-        "main",
-        "finder:share-started",
-        &FinderShareStarted { name: name.clone(), private: is_private },
-    );
+    info!(request_id = %id, path = %clicked.display(), "finder bridge: share requested; opening chooser");
+    // Target the main window only — `FinderShareListener` runs there, and the
+    // borderless `tray-panel` webview must never drive the share modal.
+    let _ = app.emit_to("main", "finder:share-choosing", &FinderShareChoosing { id, name });
+}
 
-    let result = if is_private {
-        share_private_for_path(&app, &clicked).await
-    } else {
-        share_for_path(&app, &clicked).await.map(FinderShareCreated::public)
-    };
-    match result {
-        Ok(created) => {
-            // Log the token (non-secret), NEVER `share_url`: a public share's URL
-            // carries the `#k=<key>` content key in its fragment, and the
-            // support-log scrubber (`utils/logs.rs`) does not catch a base64url
-            // fragment — logging the URL would ship the key in
-            // `attach_logs_to_ticket` bundles, defeating the "key never leaves
-            // the client" property.
-            info!(
-                share_token = %created.share_token,
-                private = created.password.is_some(),
-                path = %clicked.display(),
-                "finder bridge: share link created"
-            );
-            // Target the main window only: a private share's payload carries the
-            // generated `password`, which must not be delivered to the borderless
-            // `tray-panel` webview. `FinderShareListener` runs only in main.
-            let _ = app.emit_to("main", "finder:share-created", &created);
+/// Mint a share for a previously-parked path using the visibility the user chose
+/// in the app. Public → a `#k=` link with no password; private → the same mint
+/// wrapped under a freshly generated random password into a `#p=` link.
+///
+/// `progress`, when `Some`, streams encrypt→upload→finalize updates to the
+/// modal's bar (see [`share_for_path`]).
+///
+/// The private path upgrades an already-minted PUBLIC share, so if the wrap
+/// fails the public token is already live on the server while the user asked for
+/// a private link. We revoke that orphaned public share (best-effort) before
+/// returning the error, so a failed private confirm never leaves an unintended
+/// public link behind.
+pub(super) async fn mint_confirmed(
+    state: &AppState,
+    clicked: &Path,
+    visibility: ShareVisibility,
+    progress: Option<ShareProgressFn>,
+) -> Result<FinderShareCreated> {
+    let public = share_for_path(state, clicked, progress).await?;
+    match visibility {
+        ShareVisibility::Public => {
+            info!(share_token = %public.share_token, path = %clicked.display(), "finder bridge: public share link created");
+            Ok(FinderShareCreated::public(public))
         }
-        Err(error) => {
-            warn!(%error, path = %clicked.display(), "finder bridge: share failed");
-            // Surface the failure to the FE so the spinner opened by
-            // `finder:share-started` resolves to an error state instead of
-            // hanging. Best-effort like the success emit above.
-            let _ = app.emit_to(
-                "main",
-                "finder:share-failed",
-                &FinderShareFailed { name, message: error.to_string() },
-            );
+        ShareVisibility::Private => {
+            // Capture the token before `make_private` consumes `public` — the
+            // error arm needs it to revoke the orphaned public share.
+            let public_token = public.share_token.clone();
+            match crate::shares::commands::make_private(state, public).await {
+                Ok(private) => {
+                    info!(share_token = %private.link.share_token, path = %clicked.display(), "finder bridge: private share link created");
+                    Ok(FinderShareCreated::private(private))
+                }
+                Err(error) => {
+                    if let Err(revoke_err) = crate::shares::commands::revoke_public_share(state, &public_token).await {
+                        warn!(%revoke_err, share_token = %public_token, "finder bridge: could not revoke orphaned public share after private-wrap failure");
+                    }
+                    Err(error)
+                }
+            }
         }
     }
 }
@@ -172,40 +154,12 @@ fn display_name(path: &Path) -> String {
         .map_or_else(|| path.display().to_string(), |name| name.to_string_lossy().into_owned())
 }
 
-/// Mint a share for `clicked`, then wrap its key under a freshly generated
-/// random password into a `#p=` private link. Reuses [`share_for_path`] for the
-/// in-drive/outside/file/folder resolution — the wrap is a pure post-step that
-/// reads the just-stored key back from the keystore.
-///
-/// `make_private` upgrades an already-minted PUBLIC share, so if the wrap fails
-/// the public token is already live on the server while the user asked for a
-/// private share. We revoke that orphaned public share (best-effort) before
-/// returning the error, so a failed private click never leaves an unintended
-/// public link to the file behind.
-async fn share_private_for_path(app: &AppHandle, clicked: &Path) -> Result<FinderShareCreated> {
-    let public = share_for_path(app, clicked).await?;
-    let state = app.state::<AppState>();
-    // Capture the token before `make_private` consumes `public` — the error arm
-    // needs it to revoke the orphaned public share.
-    let public_token = public.share_token.clone();
-    match crate::shares::commands::make_private(&state, public).await {
-        Ok(private) => Ok(FinderShareCreated {
-            share_token: private.link.share_token,
-            share_url: private.link.share_url,
-            expires_at: private.link.expires_at,
-            password: Some(private.password),
-        }),
-        Err(error) => {
-            if let Err(revoke_err) = crate::shares::commands::revoke_public_share(&state, &public_token).await {
-                warn!(%revoke_err, share_token = %public_token, "finder bridge: could not revoke orphaned public share after private-wrap failure");
-            }
-            Err(error)
-        }
-    }
-}
-
-async fn share_for_path(app: &AppHandle, clicked: &Path) -> Result<ShareLink> {
-    let state = app.state::<AppState>();
+/// Mint a PUBLIC share for `clicked`, resolving its shape (in-drive file /
+/// outside file / folder-as-zip) against the account's drive roots. `progress`,
+/// when `Some`, is hcfs-client's encrypt→upload→finalize callback, forwarded so
+/// the confirm modal can render a determinate bar during the (possibly slow)
+/// upload of a big file or a zipped folder.
+async fn share_for_path(state: &AppState, clicked: &Path, progress: Option<ShareProgressFn>) -> Result<ShareLink> {
     let account_id = state.current_account_id()?;
 
     // A directory (in-drive or outside) is shared as one zip blob — the share
@@ -214,17 +168,17 @@ async fn share_for_path(app: &AppHandle, clicked: &Path) -> Result<ShareLink> {
     // `share_synced_file`, which rejects directories.
     let metadata = tokio::fs::metadata(clicked).await?;
     if metadata.is_dir() {
-        return crate::shares::commands::share_directory_as_zip(&state, &account_id, clicked).await;
+        return crate::shares::commands::share_directory_as_zip(state, &account_id, clicked, progress).await;
     }
 
     let roots = crate::sync::paths::list_drive_roots(state.pool()?, &account_id).await?;
     match resolve_share_target(clicked, &roots) {
         // In-drive file: mint by (label, relative_path) and record a reshare origin.
         ShareTarget::InDrive { label, relative_path } => {
-            crate::shares::commands::share_synced_file(&state, &account_id, &label, &relative_path).await
+            crate::shares::commands::share_synced_file(state, &account_id, &label, &relative_path, progress).await
         }
         // Outside file: "upload & share" by streaming its bytes; no origin row.
-        ShareTarget::Outside => crate::shares::commands::share_external_file(&state, &account_id, clicked).await,
+        ShareTarget::Outside => crate::shares::commands::share_external_file(state, &account_id, clicked, progress).await,
     }
 }
 
@@ -273,24 +227,53 @@ mod tests {
         assert_eq!(display_name(&PathBuf::from("/")), "/");
     }
 
-    /// Pin the core feedback invariant against a silent refactor: `handle` must
-    /// emit `finder:share-started` BEFORE the mint and, after it, both terminal
-    /// events (`finder:share-created` on the Ok arm, `finder:share-failed` on the
-    /// Err arm). A refactor that reordered or dropped one would reintroduce the
-    /// "big-file share shows nothing / hangs on failure" bug. Source-text pin —
-    /// scoped to `handle`'s definition onward so the module/fn doc mentions of the
-    /// event names (which precede it) don't match.
+    /// Wire-shape pin for the `finder:share-choosing` payload the FE
+    /// `FinderShareListener` reads as `{ id, name }`. A serde rename here would
+    /// leave the listener mapping `undefined` and a right-click doing nothing.
     #[test]
-    fn handle_emits_started_before_mint_then_a_terminal_event() {
+    fn finder_share_choosing_wire_shape() {
+        use std::collections::BTreeSet;
+        let json = serde_json::to_value(FinderShareChoosing {
+            id: "req-1".into(),
+            name: "a.txt".into(),
+        })
+        .expect("serialize");
+        let keys: BTreeSet<String> = json.as_object().expect("object").keys().cloned().collect();
+        let expected: BTreeSet<String> = ["id", "name"].into_iter().map(String::from).collect();
+        assert_eq!(
+            keys, expected,
+            "finder:share-choosing wire keys drifted (FE FinderShareListener reads id/name)"
+        );
+        assert_eq!(json["id"], "req-1");
+        assert_eq!(json["name"], "a.txt");
+    }
+
+    /// Pin the deferred-mint invariant against a silent refactor: `handle` must
+    /// PARK the request (`store_finder_share`) and emit `finder:share-choosing`,
+    /// and must NOT mint — no `share_for_path` / `mint_confirmed` call in its
+    /// body. A refactor that reintroduced eager minting here would put the
+    /// public/private decision back in Finder, defeating the whole redesign.
+    /// Source-text pin scoped to `handle`'s body (bounded at the next `async fn`
+    /// so `mint_confirmed`/`share_for_path` definitions below don't match).
+    #[test]
+    fn handle_defers_mint_and_emits_choosing() {
         let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/finder_bridge/dispatch.rs")).expect("read dispatch.rs");
         let handle_at = src.find("pub async fn handle(").expect("handle fn exists");
-        let body = &src[handle_at..];
-        let started = body.find("\"finder:share-started\"").expect("must emit finder:share-started");
-        let mint = body.find("let result =").expect("must run the mint into `let result`");
-        let created = body.find("\"finder:share-created\"").expect("must emit finder:share-created");
-        let failed = body.find("\"finder:share-failed\"").expect("must emit finder:share-failed");
-        assert!(started < mint, "finder:share-started must be emitted before the mint runs");
-        assert!(mint < created, "finder:share-created must come after the mint");
-        assert!(mint < failed, "finder:share-failed must come after the mint");
+        let after_handle = &src[handle_at + "pub async fn handle(".len()..];
+        let next_fn = after_handle.find("async fn ").map_or(after_handle.len(), |i| i);
+        let body = &after_handle[..next_fn];
+        assert!(
+            body.contains("store_finder_share("),
+            "handle must park the request via store_finder_share"
+        );
+        assert!(body.contains("\"finder:share-choosing\""), "handle must emit finder:share-choosing");
+        assert!(
+            !body.contains("mint_confirmed("),
+            "handle must NOT mint — minting is deferred to the confirm command"
+        );
+        assert!(
+            !body.contains("share_for_path("),
+            "handle must NOT mint — minting is deferred to the confirm command"
+        );
     }
 }

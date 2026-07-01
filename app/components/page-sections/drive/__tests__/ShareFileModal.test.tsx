@@ -22,7 +22,6 @@ import {
   shareModalFileAtom,
   type FinderShareState,
 } from "@/app/lib/global-atoms/sharesAtoms";
-import type { FinderShareCreated } from "@/app/lib/tauri/shares";
 
 // `invoke` is the only side effect the modal performs; mocking it
 // gives us full control over which terminal state we land in.
@@ -70,20 +69,17 @@ function withProvider(node: ReactNode, file: { actualFileName?: string; name: st
   return <Provider store={store}>{node}</Provider>;
 }
 
-// Seeds the Finder-driven atom in an explicit lifecycle state — the same signal
-// `FinderShareListener` delivers as it maps the backend's
-// started/created/failed events.
+// Seeds the Finder-driven atom in the `choosing` state — the same signal
+// `FinderShareListener` delivers when it maps the backend's
+// `finder:share-choosing` event. The modal then opens its public/private picker.
 function withFinderState(node: ReactNode, share: FinderShareState) {
   const store = createStore();
   store.set(finderShareAtom, share);
   return <Provider store={store}>{node}</Provider>;
 }
 
-// Convenience for the common "share already minted" (`done`) case used by the
-// existing Finder tests: the macOS extension's click resolved to a link.
-function withFinderLink(node: ReactNode, link: FinderShareCreated) {
-  return withFinderState(node, { kind: "done", share: link });
-}
+// A parked Finder request awaiting the user's visibility choice.
+const CHOOSING: FinderShareState = { kind: "choosing", id: "req-1", name: "big-movie.mov" };
 
 describe("ShareFileModal", () => {
   beforeEach(() => {
@@ -193,107 +189,100 @@ describe("ShareFileModal", () => {
     expect(invokeMock).toHaveBeenCalledTimes(2);
   });
 
-  it("opens directly in done for a Finder-minted link without re-minting", async () => {
+  it("opens into the visibility chooser (not a spinner) for a Finder request", async () => {
+    // `finder:share-choosing` fires the instant a right-click is received —
+    // before anything is minted. The modal must show the public/private picker,
+    // NOT a spinner, and must not call any mint IPC until the user confirms.
+    render(withFinderState(<ShareFileModal />, CHOOSING));
+
+    expect(screen.getByText(/general access/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /anyone with the link/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /password protected/i })).toBeInTheDocument();
+    expect(screen.getByText("big-movie.mov")).toBeInTheDocument();
+    // Nothing minted yet, and never the in-app create path.
+    expect(screen.queryByText(/encrypting and uploading/i)).not.toBeInTheDocument();
+    expect(invokeMock).not.toHaveBeenCalled();
+  });
+
+  it("confirms a public Finder share and shows the link without a password", async () => {
     const { writeText } = installClipboard();
-    // The Finder flow mints the share in Rust before the FE hears about it,
-    // so the modal must present the existing link — never call create_share.
-    render(
-      withFinderLink(<ShareFileModal />, {
-        shareToken: "finder-tok",
-        shareUrl: "https://console.hippius.com/share/finder-tok#k=FK",
-        expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+    invokeMock.mockResolvedValueOnce({
+      shareToken: "finder-tok",
+      shareUrl: "https://console.hippius.com/share/finder-tok#k=FK",
+      expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+    });
+
+    render(withFinderState(<ShareFileModal />, CHOOSING));
+
+    // Default choice is public; confirm mints it.
+    fireEvent.click(screen.getByRole("button", { name: /create share link/i }));
+
+    await screen.findByDisplayValue(/share\/finder-tok#k=FK/);
+    // The confirm IPC carries the parked id + chosen visibility + a progress Channel.
+    expect(invokeMock).toHaveBeenCalledWith(
+      "hcfs_finder_confirm_share",
+      expect.objectContaining({
+        requestId: "req-1",
+        visibility: "public",
+        onProgress: expect.any(Channel),
       }),
     );
-
-    // The URL is shown straight away (done state), and the running copy never
-    // appears because the create lifecycle is skipped entirely.
-    await screen.findByDisplayValue(/share\/finder-tok#k=FK/);
-    expect(screen.queryByText(/encrypting and uploading/i)).not.toBeInTheDocument();
-    expect(invokeMock).not.toHaveBeenCalledWith(
-      "hcfs_create_share",
-      expect.anything(),
-    );
-    // Auto-copy still runs for the seeded link.
+    // Public link → no password field.
+    expect(screen.queryByText(/send this password separately/i)).not.toBeInTheDocument();
+    // Auto-copy runs for the minted link.
     await waitFor(() => {
-      expect(writeText).toHaveBeenCalledWith(
-        "https://console.hippius.com/share/finder-tok#k=FK",
-      );
+      expect(writeText).toHaveBeenCalledWith("https://console.hippius.com/share/finder-tok#k=FK");
     });
   });
 
-  it("shows the generated password for a private Finder share", async () => {
-    const { writeText } = installClipboard();
-    render(
-      withFinderLink(<ShareFileModal />, {
-        shareToken: "priv-tok",
-        shareUrl: "https://console.hippius.com/share/priv-tok#p=BLOB",
-        expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
-        password: "s3cretPASSWORD123abc",
-      }),
-    );
+  it("confirms a password-protected Finder share and shows the generated password", async () => {
+    installClipboard();
+    invokeMock.mockResolvedValueOnce({
+      shareToken: "priv-tok",
+      shareUrl: "https://console.hippius.com/share/priv-tok#p=BLOB",
+      expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+      password: "s3cretPASSWORD123abc",
+    });
 
-    // URL is shown, plus the password and the "send separately" guidance.
+    render(withFinderState(<ShareFileModal />, CHOOSING));
+
+    // Switch to "Password protected", then confirm.
+    fireEvent.click(screen.getByRole("button", { name: /password protected/i }));
+    fireEvent.click(screen.getByRole("button", { name: /create share link/i }));
+
     await screen.findByDisplayValue(/share\/priv-tok#p=BLOB/);
+    expect(invokeMock).toHaveBeenCalledWith(
+      "hcfs_finder_confirm_share",
+      expect.objectContaining({ requestId: "req-1", visibility: "private" }),
+    );
+    // The generated password and its "send separately" guidance are shown.
     expect(screen.getByDisplayValue("s3cretPASSWORD123abc")).toBeInTheDocument();
     expect(screen.getByText(/send this password separately/i)).toBeInTheDocument();
-    // Auto-copy still copies the URL, not the password.
+  });
+
+  it("cancels a Finder request without minting when the chooser is dismissed", async () => {
+    invokeMock.mockResolvedValueOnce(undefined); // cancel returns void
+    render(withFinderState(<ShareFileModal />, CHOOSING));
+
+    fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+
+    // Cancel releases the parked request and never mints.
     await waitFor(() => {
-      expect(writeText).toHaveBeenCalledWith(
-        "https://console.hippius.com/share/priv-tok#p=BLOB",
-      );
+      expect(invokeMock).toHaveBeenCalledWith("hcfs_finder_cancel_share", { requestId: "req-1" });
     });
+    expect(invokeMock).not.toHaveBeenCalledWith("hcfs_finder_confirm_share", expect.anything());
   });
 
-  it("omits the password field for a public Finder share", async () => {
-    installClipboard();
-    render(
-      withFinderLink(<ShareFileModal />, {
-        shareToken: "pub-tok",
-        shareUrl: "https://console.hippius.com/share/pub-tok#k=KEY",
-        expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
-      }),
-    );
+  it("shows an error with no 'Try again' when a Finder confirm fails", async () => {
+    // A failed confirm lands in the error state. The parked request was consumed
+    // (single-use), so there is no in-app retry handle — only "Close" is offered.
+    invokeMock.mockRejectedValueOnce({ kind: "NotReady", message: "Insufficient credits to create a share" });
+    render(withFinderState(<ShareFileModal />, CHOOSING));
 
-    await screen.findByDisplayValue(/share\/pub-tok#k=KEY/);
-    expect(screen.queryByText(/send this password separately/i)).not.toBeInTheDocument();
-  });
-
-  it("opens into a spinner on a pending Finder share before the link exists", async () => {
-    // `finder:share-started` fires the instant a big-file/folder share begins,
-    // long before the link is minted — the modal must show the spinner (not a
-    // blank window) and must NOT run the in-app create lifecycle.
-    render(
-      withFinderState(<ShareFileModal />, {
-        kind: "pending",
-        name: "big-movie.mov",
-        private: false,
-      }),
-    );
-
-    // Spinner copy + the pending file name are shown; no URL yet.
-    expect(screen.getByText(/encrypting and uploading/i)).toBeInTheDocument();
-    expect(screen.getByText("big-movie.mov")).toBeInTheDocument();
-    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
-    // The mint happens in Rust — the FE never calls create_share for a Finder share.
-    expect(invokeMock).not.toHaveBeenCalledWith("hcfs_create_share", expect.anything());
-  });
-
-  it("shows an error with no 'Try again' when a Finder share fails", async () => {
-    // `finder:share-failed` resolves the spinner to an error state. Because the
-    // mint ran in Rust with no re-runnable file handle here, "Try again" is
-    // omitted — only "Close" is offered.
-    render(
-      withFinderState(<ShareFileModal />, {
-        kind: "failed",
-        name: "big-movie.mov",
-        message: "Insufficient credits to create a share",
-      }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: /create share link/i }));
 
     expect(await screen.findByText(/couldn.?t create share link/i)).toBeInTheDocument();
     expect(screen.getByText(/insufficient credits to create a share/i)).toBeInTheDocument();
-    // The failed event's file name is surfaced so the user knows what failed.
-    expect(screen.getByText("big-movie.mov")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /try again/i })).not.toBeInTheDocument();
     // Still dismissible — the error body offers a Close action (the dialog's own
     // "X" also matches, so assert at least one Close affordance).

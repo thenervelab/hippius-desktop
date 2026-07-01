@@ -10,6 +10,7 @@
 //! sockets, no async). The socket server and App Group container resolution
 //! are macOS-only and land in later tasks behind `#[cfg(target_os = "macos")]`.
 
+pub mod commands;
 pub mod error;
 pub mod protocol;
 pub mod resolve;

@@ -52,12 +52,12 @@ use crate::billing::queries::{
     get_marketplace_credits, get_system_balance,
 };
 use crate::billing::subscriptions::{create_subscription, get_customer_portal_url, get_subscription_data};
-use crate::blockchain::convert::{planck_to_hip_full, to_plancks};
 use crate::blockchain::bridge::deposit::bridge_alpha_to_halpha;
 use crate::blockchain::bridge::explorer::bridge_fetch_onchain_data;
 use crate::blockchain::bridge::history::bridge_list_transactions;
 use crate::blockchain::bridge::queries::{bridge_estimate_fees, bridge_get_balances, bridge_get_staked_hotkeys, bridge_min_transfers};
 use crate::blockchain::bridge::withdraw::bridge_halpha_to_alpha;
+use crate::blockchain::convert::{planck_to_hip_full, to_plancks};
 use crate::blockchain::queries::{
     generate_referral_link, get_account_balance, get_block_timestamp, get_referral_links, get_staking_info, validate_address,
 };
@@ -70,12 +70,9 @@ use crate::console_access::validate_recovery_password;
 use crate::infra::vm::{
     create_vm, get_vm_instance, list_vm_applications, list_vm_flavors, list_vm_images, list_vm_instances, reboot_vm, start_vm, stop_vm, terminate_vm,
 };
-use crate::vpn::commands::{
-    vpn_close_vm_connection, vpn_connect, vpn_disconnect, vpn_list_connections, vpn_open_vm_connection, vpn_status,
-};
 use crate::notifications::credits::{
-    check_low_credit_notification, check_low_credit_notification_live, create_credit_notifications, create_sync_notification, get_is_above_half_credit, is_first_time,
-    mark_first_time_seen, process_credit_events, update_is_above_half_credit,
+    check_low_credit_notification, check_low_credit_notification_live, create_credit_notifications, create_sync_notification,
+    get_is_above_half_credit, is_first_time, mark_first_time_seen, process_credit_events, update_is_above_half_credit,
 };
 use crate::notifications::crud::{
     add_notification, clear_all_notifications, credit_already_notified, delete_all_notifications, delete_notification,
@@ -108,14 +105,15 @@ use crate::sync::recent_uploads::{get_recent_uploads, search_files};
 use crate::sync::remote::{cache_remote_file, download_remote_file, get_thumbnail, list_remote_folder_files};
 use crate::sync::status::{app_close, get_all_drive_statuses, get_sync_activity_rows, get_sync_engine_health};
 use crate::tray::panel::{hide_tray_panel, toggle_tray_panel};
-use crate::utils::logs::attach_logs_to_ticket;
 use crate::utils::app_location::is_app_translocated;
+use crate::utils::logs::attach_logs_to_ticket;
 use crate::utils::platform_info::get_platform_info;
 use crate::utils::preferences::{get_user_preference, is_onboarding_done, save_user_preference, set_onboarding_done};
 use crate::utils::support::{
     create_support_ticket, get_support_ticket_messages, list_support_tickets, post_ticket_message, update_support_ticket, upload_ticket_attachment,
 };
 use crate::utils::tray_menu::get_tray_menu_data;
+use crate::vpn::commands::{vpn_close_vm_connection, vpn_connect, vpn_disconnect, vpn_list_connections, vpn_open_vm_connection, vpn_status};
 use crate::wallet::commands::{
     local_wallet_create, local_wallet_delete, local_wallet_derive_address, local_wallet_export_backup, local_wallet_export_backup_zip,
     local_wallet_generate_mnemonic, local_wallet_get_active, local_wallet_get_decrypted_mnemonic, local_wallet_get_public_key, local_wallet_has_any,
@@ -331,6 +329,10 @@ fn main() {
             crate::shares::commands::hcfs_remove_share_history,
             crate::shares::commands::hcfs_clear_share_history,
             crate::shares::capabilities::hcfs_get_capabilities,
+            // Finder "Share with Hippius": confirm/cancel the in-app visibility
+            // chooser (macOS-only feature; inert bodies elsewhere).
+            crate::finder_bridge::commands::hcfs_finder_confirm_share,
+            crate::finder_bridge::commands::hcfs_finder_cancel_share,
             // Device settings
             get_device_name,
             set_device_name,
@@ -587,9 +589,10 @@ pub fn on_window_event(builder: Builder<Wry>) -> Builder<Wry> {
         // re-open cooldown timestamp is recorded against the same `AppState`
         // that `toggle_tray_panel` reads.
         if let tauri::WindowEvent::Focused(false) = event
-            && window.label() == crate::tray::panel::PANEL_LABEL {
-                crate::tray::panel::on_panel_blur(window.app_handle());
-            }
+            && window.label() == crate::tray::panel::PANEL_LABEL
+        {
+            crate::tray::panel::on_panel_blur(window.app_handle());
+        }
 
         if let tauri::WindowEvent::CloseRequested { api, .. } = event {
             // Only intercept the main window. If a future refactor adds a
@@ -702,11 +705,7 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
             // NSData copies the byte buffer; NSImage may return nil on
             // malformed data, which we guard instead of unwrapping.
             unsafe {
-                let data = NSData::dataWithBytes_length_(
-                    nil,
-                    DOCK_ICON_PNG.as_ptr().cast(),
-                    DOCK_ICON_PNG.len() as u64,
-                );
+                let data = NSData::dataWithBytes_length_(nil, DOCK_ICON_PNG.as_ptr().cast(), DOCK_ICON_PNG.len() as u64);
                 let image = NSImage::initWithData_(NSImage::alloc(nil), data);
                 if image == nil {
                     warn!("dock icon: NSImage init failed; keeping bundle icon");
