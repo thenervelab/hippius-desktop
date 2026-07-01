@@ -434,6 +434,21 @@ pub(in crate::sync) async fn compute_startup_pending_summary(
         }
         let Ok(mut entries) = fs::read_dir(&dir).await else { continue };
         while let Ok(Some(entry)) = entries.next_entry().await {
+            // Mirror hcfs-client's `drive::exclude::should_skip_path` — the rule
+            // its real `Drive::collect_files` scan applies: skip the `.hippius`
+            // config dir and every hidden entry (name starting with '.'). Those
+            // are never uploaded, so they never enter `sync_state.json`; without
+            // this skip a macOS `.DS_Store` (never synced) is counted as pending
+            // on every launch, painting a spurious "N files · Preparing" the
+            // engine then never transfers. `to_str()`-gated so a non-UTF-8 name
+            // is NOT skipped — matching upstream exactly. Same local
+            // reproduction as `migrate::folder_entries_backfill::is_skipped_dir_name`
+            // (upstream `should_skip_path` is `pub(super)`, hence re-derived).
+            // Skipping a hidden dir here means its whole subtree is never pushed,
+            // so descendants are excluded too — again matching the engine walk.
+            if entry.file_name().to_str().is_some_and(|name| name.starts_with('.')) {
+                continue;
+            }
             let Ok(ft) = entry.file_type().await else { continue };
             let path = entry.path();
             if ft.is_dir() {
@@ -806,6 +821,34 @@ mod tests {
         let (files, _bytes) =
             compute_startup_pending_summary(folder_dir.path(), sync_root.path()).await;
         assert_eq!(files, 1);
+    }
+
+    /// Hidden entries — a macOS `.DS_Store`, a generic dotfile, and a hidden
+    /// directory's entire subtree — are skipped, mirroring hcfs-client's
+    /// `should_skip_path` (the rule its real scan applies). Regression for the
+    /// spurious "1 file · 8 KB · Preparing" flash on every launch: a `.DS_Store`
+    /// is never uploaded, so it must never be counted as pending. A normal
+    /// unsynced file alongside them is still counted, proving the skip is scoped
+    /// to hidden names only (and does not swallow real pending work).
+    #[tokio::test]
+    async fn pending_summary_skips_hidden_entries() {
+        let folder_dir = tempfile::TempDir::new().unwrap(); // no baseline: every non-hidden file is pending
+        let sync_root = tempfile::TempDir::new().unwrap();
+        let root = sync_root.path();
+        // A real file the engine WOULD upload — the only thing that should count.
+        tokio::fs::write(root.join("real.bin"), b"hello").await.unwrap(); // 5 bytes
+        // macOS Finder metadata + a generic dotfile at the root — both skipped.
+        tokio::fs::write(root.join(".DS_Store"), b"12345678").await.unwrap(); // 8 bytes
+        tokio::fs::write(root.join(".hidden"), b"x").await.unwrap();
+        // A hidden directory whose contents must NOT be walked at all (the
+        // subtree-exclusion half of the skip).
+        let hidden_dir = root.join(".hippius");
+        tokio::fs::create_dir(&hidden_dir).await.unwrap();
+        tokio::fs::write(hidden_dir.join("state.json"), b"deep").await.unwrap();
+
+        let (files, bytes) = compute_startup_pending_summary(folder_dir.path(), root).await;
+        assert_eq!(files, 1, "only the non-hidden file is pending");
+        assert_eq!(bytes, 5, "only the non-hidden file's bytes are summed");
     }
 
     // --- add_folder overlap check ---
