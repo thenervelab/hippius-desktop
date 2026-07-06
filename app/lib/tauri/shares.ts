@@ -31,6 +31,28 @@ export interface ShareLink {
   expiresAt: string;
 }
 
+/**
+ * Result of a confirmed Finder share, returned by {@link confirmFinderShare}. A
+ * superset of {@link ShareLink}: a password-protected ("private") share also
+ * carries the randomly generated `password` the recipient needs to open the
+ * link. Absent (`undefined`) for a public share — the Rust side omits the field.
+ */
+export interface FinderShareCreated extends ShareLink {
+  password?: string;
+}
+
+/**
+ * Payload of the `finder:share-choosing` event, emitted the instant a "Share
+ * with Hippius" right-click is received — before anything is minted. The app
+ * opens its share chooser on `name`; the user picks public vs password and the
+ * modal calls {@link confirmFinderShare} with the echoed `id`. Nothing is
+ * uploaded until then (the public/private decision now lives in the app).
+ */
+export interface FinderShareChoosing {
+  id: string;
+  name: string;
+}
+
 /** Phase of an in-flight share creation. */
 export type SharePhase = "encrypting" | "uploading" | "finalizing";
 
@@ -138,4 +160,38 @@ export async function revokeShare(shareToken: string): Promise<void> {
  */
 export async function reshare(shareToken: string): Promise<ShareLink> {
   return invoke<ShareLink>("hcfs_reshare", { shareToken });
+}
+
+/**
+ * Confirm a Finder-initiated share with the visibility the user chose in the
+ * app's chooser, then mint it. `requestId` is the `id` from the
+ * `finder:share-choosing` event; the backend holds the resolved path, so the FE
+ * never passes it. `onProgress` receives the encrypt/upload updates for the bar
+ * (same `Channel` mechanics as {@link createShare}).
+ *
+ * Returns the link — and, for a `"private"` share, the generated `password`.
+ * Rejects with a `NotFound` error if the request has expired (app restarted, or
+ * confirmed twice); the modal surfaces that as "right-click again".
+ */
+export async function confirmFinderShare(
+  requestId: string,
+  visibility: "public" | "private",
+  onProgress?: (progress: ShareProgress) => void,
+): Promise<FinderShareCreated> {
+  const onProgressChannel = new Channel<ShareProgress>();
+  if (onProgress) onProgressChannel.onmessage = onProgress;
+  return invoke<FinderShareCreated>("hcfs_finder_confirm_share", {
+    requestId,
+    visibility,
+    onProgress: onProgressChannel,
+  });
+}
+
+/**
+ * Release a parked Finder share request when the user closes the chooser without
+ * confirming, so an abandoned modal doesn't leak the pending entry. Idempotent:
+ * an already-confirmed or expired `requestId` is a no-op on the backend.
+ */
+export async function cancelFinderShare(requestId: string): Promise<void> {
+  await invoke<void>("hcfs_finder_cancel_share", { requestId });
 }

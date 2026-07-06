@@ -1,22 +1,6 @@
 import React, { createContext, useContext, useState, ReactNode, useMemo, useCallback } from 'react';
 import { FormattedUserFile } from '../lib/hooks/use-user-files';
-
-/**
- * Identity key for a selected row. `label` + `actualFileName` is globally
- * unique for files (whose actualFileName is the full sync-root-relative
- * path) but folder rows carry only their basename in `actualFileName`, so
- * `parentRelativePath` is the disambiguator that makes the same folder
- * name in two different locations distinct. Stored when the row is added
- * to selection and re-used by every downstream selection check.
- */
-const selectionKey = (file: FormattedUserFile): string => {
-    const name = file.actualFileName ?? file.name;
-    if (file.isFolder) {
-        const parent = file.parentRelativePath ?? "";
-        return `folder:${file.label ?? ""}::${parent ? `${parent}/` : ""}${name}`;
-    }
-    return `file:${file.label ?? ""}::${name}`;
-};
+import { selectionKey, removeDescendantsFromSelection } from './fileSelectionLogic';
 
 interface FileSelectionContextProps {
     isSelectionMode: boolean;
@@ -94,11 +78,6 @@ export const FileSelectionProvider: React.FC<FileSelectionProviderProps> = ({ ch
             return;
         }
         const folderKey = selectionKey(folder);
-        const label = folder.label ?? "";
-        const folderName = folder.actualFileName ?? folder.name;
-        const folderParent = folder.parentRelativePath ?? "";
-        const folderFullPath = folderParent ? `${folderParent}/${folderName}` : folderName;
-        const descendantPrefix = `${folderFullPath}/`;
         setSelectedFiles(prevSelected => {
             const alreadySelected = prevSelected.some(f => selectionKey(f) === folderKey);
             if (alreadySelected) {
@@ -106,17 +85,7 @@ export const FileSelectionProvider: React.FC<FileSelectionProviderProps> = ({ ch
             }
             // Drop any descendants of this folder — the folder itself
             // now represents them in the selection set.
-            const withoutDescendants = prevSelected.filter(f => {
-                if ((f.label ?? "") !== label) return true;
-                if (f.isFolder) {
-                    const parent = f.parentRelativePath ?? "";
-                    const name = f.actualFileName ?? f.name;
-                    const fullPath = parent ? `${parent}/${name}` : name;
-                    return fullPath !== folderFullPath && !fullPath.startsWith(descendantPrefix);
-                }
-                const filePath = f.actualFileName ?? f.name;
-                return !filePath.startsWith(descendantPrefix);
-            });
+            const withoutDescendants = removeDescendantsFromSelection(prevSelected, folder);
             return [...withoutDescendants, folder];
         });
     }, []);
@@ -170,23 +139,7 @@ export const FileSelectionProvider: React.FC<FileSelectionProviderProps> = ({ ch
     }, []);
 
     const removeDescendantsOf = useCallback((folder: FormattedUserFile) => {
-        const label = folder.label ?? "";
-        const folderName = folder.actualFileName ?? folder.name;
-        const folderParent = folder.parentRelativePath ?? "";
-        const folderFullPath = folderParent ? `${folderParent}/${folderName}` : folderName;
-        const descendantPrefix = `${folderFullPath}/`;
-        setSelectedFiles(prevSelected => prevSelected.filter(f => {
-            if ((f.label ?? "") !== label) return true;
-            if (f.isFolder) {
-                const parent = f.parentRelativePath ?? "";
-                const name = f.actualFileName ?? f.name;
-                const fullPath = parent ? `${parent}/${name}` : name;
-                if (fullPath === folderFullPath) return true;
-                return !fullPath.startsWith(descendantPrefix);
-            }
-            const filePath = f.actualFileName ?? f.name;
-            return !filePath.startsWith(descendantPrefix);
-        }));
+        setSelectedFiles(prevSelected => removeDescendantsFromSelection(prevSelected, folder));
     }, []);
 
     const contextValue = useMemo(() => ({

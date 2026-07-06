@@ -470,7 +470,7 @@ async fn three_cycle_402_402_200_full_chain() {
 /// test catches it before the runtime invariant above does.
 #[test]
 fn bridge_routes_file_failed_to_credits_exhausted_state() {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/tauri_bridge.rs");
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/projection/tauri_bridge.rs");
     let src = std::fs::read_to_string(path).expect("read src/sync/tauri_bridge.rs");
 
     // The bridge handles `SyncEvent::FileFailed` and dispatches on the

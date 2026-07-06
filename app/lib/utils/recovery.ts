@@ -84,14 +84,15 @@ export async function markRecoverySkipped(): Promise<void> {
  * blob, decrypts with `currentPassword`, re-seals under `newPassword`,
  * POSTs the upsert, and rewrites the local master_enc_mnemonic.json.
  * If the local rewrite fails after a successful upload, a sidecar is
- * written and the next launch prompts the user to finish — callers
- * here can still treat a resolved Promise as success.
+ * written and the next launch finishes it. That case resolves with
+ * `alignPending: true` so the caller can warn instead of claiming a clean
+ * success (audit R-19); a fully-applied rotation resolves with `false`.
  */
 export async function changeRecoveryPassword(
   currentPassword: string,
   newPassword: string,
-): Promise<void> {
-  await invoke("change_recovery_password", {
+): Promise<{ alignPending: boolean }> {
+  return await invoke<{ alignPending: boolean }>("change_recovery_password", {
     current: currentPassword,
     new: newPassword,
   });

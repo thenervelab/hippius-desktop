@@ -21,7 +21,6 @@ import StartSyncingButton from "@/app/components/StartSyncingButton";
 import FilterPills from "./FilterPills";
 import type { FileExtension } from "@/app/lib/utils/fileTypeMapper";
 import type { DateRange } from "@/app/lib/types/dateRange";
-import { IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
 import { useAtomValue } from "jotai";
 import { hasConfiguredDrivesAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import { shareFeatureEnabledAtom } from "@/app/lib/global-atoms/sharesAtoms";
@@ -203,7 +202,6 @@ const DriveHeader: FC<DriveHeaderProps> = ({
             }
             setIsFolderUploadOpen(true);
           }}
-          disabled={IS_SYNC_PAUSED}
           className={SECONDARY_PILL_CLASSES}
         >
           + New Folder
@@ -254,7 +252,6 @@ const DriveHeader: FC<DriveHeaderProps> = ({
         !isSyncPathEmpty && (
           <AddButton
             ref={addButtonRef}
-            disabled={IS_SYNC_PAUSED}
             defaultFolderLabel={defaultFolderLabel}
             nestedUpload={
               isNested && nestedFolderName

@@ -6,6 +6,7 @@ import { selectAtom } from "jotai/utils";
 
 import { snapshotAtom } from "./useSyncSnapshot";
 import type { FileProgress } from "../types/syncSnapshot";
+import { normalizeRelPath } from "../utils/relPath";
 
 export type LiveFileStatus =
   | "pending"
@@ -53,25 +54,52 @@ function deriveLiveStatus(file: FileProgress): LiveFileStatus | null {
 const PROGRESS_BUCKET = 1;
 
 /**
+ * Resolve the snapshot row for a file row's key.
+ *
+ * `path` is the unique sync-root-relative identity, so it is matched first
+ * (normalized, since the snapshot side can carry a leading slash the server
+ * side trims). The basename fallback exists for rows that only know their
+ * display name, but it binds ONLY on a unique match: two in-flight files
+ * sharing a basename in different folders previously made a row latch onto the
+ * wrong file's progress (and look "stuck" because completion landed on the
+ * sibling). 0 or >1 matches now yield no live progress — a blank badge is
+ * correct, another file's percent is not. `label` scopes both passes when known
+ * so same-path-different-drive can't collide.
+ */
+export function findLiveFileMatch(
+  files: FileProgress[],
+  key: string,
+  label?: string,
+): FileProgress | null {
+  const scoped =
+    label === undefined ? files : files.filter((f) => f.label === label);
+  const target = normalizeRelPath(key);
+  const byPath = scoped.filter((f) => normalizeRelPath(f.path) === target);
+  if (byPath.length === 1) return byPath[0];
+  if (byPath.length > 1) return null;
+  const byName = scoped.filter((f) => f.fileName === key);
+  return byName.length === 1 ? byName[0] : null;
+}
+
+/**
  * Subscribes to the sync snapshot and returns the live progress entry
  * matching this file, or `EMPTY` if the file is not currently in flight.
  *
- * Each row creates its own derived atom keyed by `actualName + fileName`
- * with a custom equality function — the row only re-renders when its own
+ * Each row creates its own derived atom keyed by `actualName + fileName +
+ * label` with a custom equality function — the row only re-renders when its own
  * status or its bucketed percent changes, not on every snapshot tick.
  */
 export function useFileLiveProgress(
   actualName: string | undefined,
   fileName: string,
+  label?: string,
 ): LiveFileProgress {
   const derivedAtom = useMemo(() => {
     const key = actualName || fileName;
     return selectAtom(
       snapshotAtom,
       (snapshot): LiveFileProgress => {
-        const match = snapshot.files.find(
-          (f) => f.path === key || f.fileName === key,
-        );
+        const match = findLiveFileMatch(snapshot.files, key, label);
         if (!match) return EMPTY;
         const status = deriveLiveStatus(match);
         if (!status) return EMPTY;
@@ -83,7 +111,7 @@ export function useFileLiveProgress(
       (a, b) =>
         a.status === b.status && a.progressPercent === b.progressPercent,
     );
-  }, [actualName, fileName]);
+  }, [actualName, fileName, label]);
 
   return useAtomValue(derivedAtom);
 }

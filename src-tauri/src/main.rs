@@ -18,9 +18,12 @@ pub mod blockchain;
 pub mod console_access;
 pub mod crypto;
 pub mod error;
+#[cfg(unix)]
+pub mod finder_bridge;
 pub mod infra;
 pub mod notifications;
 pub mod recovery;
+pub mod recovery_binding;
 pub mod shares;
 pub mod splash;
 pub mod sync;
@@ -28,6 +31,7 @@ pub mod sync;
 mod test_helpers;
 pub mod tray;
 mod utils;
+pub mod vpn;
 pub mod wallet;
 
 use crate::auth::contacts::{add_contact, delete_contact, get_contacts, update_contact};
@@ -48,20 +52,27 @@ use crate::billing::queries::{
     get_marketplace_credits, get_system_balance,
 };
 use crate::billing::subscriptions::{create_subscription, get_customer_portal_url, get_subscription_data};
+use crate::blockchain::bridge::deposit::bridge_alpha_to_halpha;
+use crate::blockchain::bridge::explorer::bridge_fetch_onchain_data;
+use crate::blockchain::bridge::history::bridge_list_transactions;
+use crate::blockchain::bridge::queries::{bridge_estimate_fees, bridge_get_balances, bridge_get_staked_hotkeys, bridge_min_transfers};
+use crate::blockchain::bridge::withdraw::bridge_halpha_to_alpha;
 use crate::blockchain::convert::{planck_to_hip_full, to_plancks};
-use crate::blockchain::queries::{get_account_balance, get_block_timestamp, get_referral_links, get_staking_info, validate_address};
+use crate::blockchain::queries::{
+    generate_referral_link, get_account_balance, get_block_timestamp, get_referral_links, get_staking_info, validate_address,
+};
 use crate::blockchain::runtime::{get_wss_endpoint, test_rpc_endpoint_command, update_wss_endpoint_command};
 use crate::blockchain::staking::{stake_bond, stake_claim_rewards, stake_unbond, stake_withdraw_unbonded};
 use crate::blockchain::subscription::{start_block_subscription, stop_block_subscription};
-use crate::blockchain::transfers::compute_max_transferable;
+use crate::blockchain::transfers::{compute_available_to_bond, compute_max_transferable};
 use crate::blockchain::transfers::{transfer_balance, validate_send_balance};
 use crate::console_access::validate_recovery_password;
 use crate::infra::vm::{
     create_vm, get_vm_instance, list_vm_applications, list_vm_flavors, list_vm_images, list_vm_instances, reboot_vm, start_vm, stop_vm, terminate_vm,
 };
 use crate::notifications::credits::{
-    check_low_credit_notification, create_credit_notifications, create_sync_notification, get_is_above_half_credit, is_first_time,
-    mark_first_time_seen, process_credit_events, update_is_above_half_credit,
+    check_low_credit_notification, check_low_credit_notification_live, create_credit_notifications, create_sync_notification,
+    get_is_above_half_credit, is_first_time, mark_first_time_seen, process_credit_events, update_is_above_half_credit,
 };
 use crate::notifications::crud::{
     add_notification, clear_all_notifications, credit_already_notified, delete_all_notifications, delete_notification,
@@ -75,6 +86,7 @@ use crate::recovery::{
     change_recovery_password, check_recovery_state, has_pending_rotation, mark_recovery_skipped, recover_mnemonic, resume_recovery_password_rotation,
     seal_and_upload_mnemonic,
 };
+use crate::recovery_binding::{cancel_account_recovery, list_recoverable_accounts, recover_account_files};
 use crate::sync::control::{reveal_drive_in_finder, trigger_sync_now};
 use crate::sync::device::{get_device_name, set_device_name};
 use crate::sync::files::{
@@ -93,6 +105,7 @@ use crate::sync::recent_uploads::{get_recent_uploads, search_files};
 use crate::sync::remote::{cache_remote_file, download_remote_file, get_thumbnail, list_remote_folder_files};
 use crate::sync::status::{app_close, get_all_drive_statuses, get_sync_activity_rows, get_sync_engine_health};
 use crate::tray::panel::{hide_tray_panel, toggle_tray_panel};
+use crate::utils::app_location::is_app_translocated;
 use crate::utils::logs::attach_logs_to_ticket;
 use crate::utils::platform_info::get_platform_info;
 use crate::utils::preferences::{get_user_preference, is_onboarding_done, save_user_preference, set_onboarding_done};
@@ -100,11 +113,12 @@ use crate::utils::support::{
     create_support_ticket, get_support_ticket_messages, list_support_tickets, post_ticket_message, update_support_ticket, upload_ticket_attachment,
 };
 use crate::utils::tray_menu::get_tray_menu_data;
+use crate::vpn::commands::{vpn_close_vm_connection, vpn_connect, vpn_disconnect, vpn_list_connections, vpn_open_vm_connection, vpn_status};
 use crate::wallet::commands::{
     local_wallet_create, local_wallet_delete, local_wallet_derive_address, local_wallet_export_backup, local_wallet_export_backup_zip,
     local_wallet_generate_mnemonic, local_wallet_get_active, local_wallet_get_decrypted_mnemonic, local_wallet_get_public_key, local_wallet_has_any,
     local_wallet_import_encrypted_backup, local_wallet_import_encrypted_backup_from_zip, local_wallet_list, local_wallet_rename,
-    local_wallet_set_active, local_wallet_sign, local_wallet_validate_mnemonic, local_wallet_verify_password,
+    local_wallet_set_active, local_wallet_validate_mnemonic, local_wallet_verify_password,
 };
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous};
 use tauri::{Builder, Emitter, Manager, Wry, path::BaseDirectory};
@@ -315,6 +329,10 @@ fn main() {
             crate::shares::commands::hcfs_remove_share_history,
             crate::shares::commands::hcfs_clear_share_history,
             crate::shares::capabilities::hcfs_get_capabilities,
+            // Finder "Share with Hippius": confirm/cancel the in-app visibility
+            // chooser (macOS-only feature; inert bodies elsewhere).
+            crate::finder_bridge::commands::hcfs_finder_confirm_share,
+            crate::finder_bridge::commands::hcfs_finder_cancel_share,
             // Device settings
             get_device_name,
             set_device_name,
@@ -339,9 +357,22 @@ fn main() {
             validate_address,
             validate_send_balance,
             get_referral_links,
+            generate_referral_link,
+            // Bridge (Alpha <-> hAlpha). ⚠️ The write paths are FUNDS-CRITICAL and
+            // compile-verified only — smoke-test on a funded testnet wallet
+            // before release (see bridge/DEPOSIT_PORT_NOTES.md).
+            bridge_estimate_fees,
+            bridge_min_transfers,
+            bridge_get_balances,
+            bridge_get_staked_hotkeys,
+            bridge_list_transactions,
+            bridge_fetch_onchain_data,
+            bridge_halpha_to_alpha,
+            bridge_alpha_to_halpha,
             to_plancks,
             planck_to_hip_full,
             compute_max_transferable,
+            compute_available_to_bond,
             // Console access
             // Account recovery (OAuth-based)
             validate_recovery_password,
@@ -352,6 +383,9 @@ fn main() {
             change_recovery_password,
             resume_recovery_password_rotation,
             has_pending_rotation,
+            list_recoverable_accounts,
+            recover_account_files,
+            cancel_account_recovery,
             // Block subscription
             start_block_subscription,
             stop_block_subscription,
@@ -366,6 +400,13 @@ fn main() {
             start_vm,
             stop_vm,
             terminate_vm,
+            // VM-connection VPN (NetBird, app-scoped, opt-in)
+            vpn_status,
+            vpn_connect,
+            vpn_disconnect,
+            vpn_open_vm_connection,
+            vpn_close_vm_connection,
+            vpn_list_connections,
             // SSH keys
             list_ssh_keys,
             create_ssh_key,
@@ -415,6 +456,7 @@ fn main() {
             toggle_tray_panel,
             hide_tray_panel,
             get_platform_info,
+            is_app_translocated,
             // Local DB (notifications, address book, onboarding, preferences, app state)
             add_notification,
             list_notifications,
@@ -429,6 +471,7 @@ fn main() {
             low_credit_subtype_exists,
             has_active_low_credit_notification,
             check_low_credit_notification,
+            check_low_credit_notification_live,
             process_credit_events,
             create_credit_notifications,
             create_sync_notification,
@@ -460,7 +503,6 @@ fn main() {
             local_wallet_verify_password,
             local_wallet_get_decrypted_mnemonic,
             local_wallet_get_public_key,
-            local_wallet_sign,
             local_wallet_export_backup,
             local_wallet_export_backup_zip,
             local_wallet_import_encrypted_backup,
@@ -484,10 +526,24 @@ fn main() {
     let builder = setup(builder);
     let builder = on_window_event(builder);
 
+    // E2E only: register the in-process WebDriver automation server so the
+    // WebdriverIO smoke suite (`e2e/`) can drive a real macOS WKWebView build.
+    // Gated behind the off-by-default `e2e-webdriver` feature — the server is
+    // unauthenticated localhost automation and must never reach a release
+    // artifact. Plugin registration order is irrelevant, so appending it here
+    // (after `setup`/`on_window_event`) keeps the gate to a single line.
+    #[cfg(feature = "e2e-webdriver")]
+    let builder = builder.plugin(tauri_plugin_webdriver::init());
+
     info!("Running Tauri application...");
     let app = builder.build(tauri::generate_context!()).expect("error while building tauri application");
 
     app.run(|app_handle, event| {
+        // `app_handle` is consumed only by the macOS-gated `Reopen` arm below;
+        // on other platforms borrow-and-discard it so the unused-binding lint
+        // stays quiet without an `#[allow]`.
+        #[cfg(not(target_os = "macos"))]
+        let _ = &app_handle;
         match event {
             // macOS dock icon click with no visible windows. Mirrors the
             // tray's "Open Hippius" action.
@@ -533,9 +589,10 @@ pub fn on_window_event(builder: Builder<Wry>) -> Builder<Wry> {
         // re-open cooldown timestamp is recorded against the same `AppState`
         // that `toggle_tray_panel` reads.
         if let tauri::WindowEvent::Focused(false) = event
-            && window.label() == crate::tray::panel::PANEL_LABEL {
-                crate::tray::panel::on_panel_blur(window.app_handle());
-            }
+            && window.label() == crate::tray::panel::PANEL_LABEL
+        {
+            crate::tray::panel::on_panel_blur(window.app_handle());
+        }
 
         if let tauri::WindowEvent::CloseRequested { api, .. } = event {
             // Only intercept the main window. If a future refactor adds a
@@ -586,7 +643,31 @@ async fn open_db_pool(db_path: &std::path::Path) -> Result<SqlitePool, sqlx::Err
         .busy_timeout(std::time::Duration::from_secs(5))
         .foreign_keys(true);
 
-    SqlitePoolOptions::new().max_connections(8).connect_with(connect_opts).await
+    let pool = SqlitePoolOptions::new().max_connections(8).connect_with(connect_opts).await?;
+
+    // Restrict the DB and its WAL/SHM sidecars to owner-only (0600). The DB can
+    // hold a plaintext bearer-token fallback (keychain-less hosts) and encrypted
+    // drive-password ciphertext; under a default umask it would be created
+    // world-readable, so a second local user on a shared host could read it
+    // (audit R-17). Best-effort — a perms failure must never block launch.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for suffix in ["", "-wal", "-shm"] {
+            let path = {
+                let mut s = db_path.as_os_str().to_owned();
+                s.push(suffix);
+                std::path::PathBuf::from(s)
+            };
+            if path.exists()
+                && let Err(e) = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            {
+                tracing::warn!(path = %path.display(), error = %e, "failed to chmod 0600 on DB file");
+            }
+        }
+    }
+
+    Ok(pool)
 }
 
 /// Attach the Tauri `setup` hook to `builder` and return it for chaining.
@@ -598,7 +679,7 @@ async fn open_db_pool(db_path: &std::path::Path) -> Result<SqlitePool, sqlx::Err
 /// in `main()`'s builder chain.
 #[expect(
     clippy::too_many_lines,
-    reason = "Linear one-shot startup pipeline — env load, deep links, AppState, migrations, tray. Splitting it fragments the strict ordering between the steps without reducing complexity."
+    reason = "Linear one-shot startup pipeline — env load, dir hardening (R-17 chmod), deep links, AppState, migrations, tray. Splitting it fragments the strict ordering between the steps without reducing complexity."
 )]
 pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
     builder.setup(|app| {
@@ -624,11 +705,7 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
             // NSData copies the byte buffer; NSImage may return nil on
             // malformed data, which we guard instead of unwrapping.
             unsafe {
-                let data = NSData::dataWithBytes_length_(
-                    nil,
-                    DOCK_ICON_PNG.as_ptr().cast(),
-                    DOCK_ICON_PNG.len() as u64,
-                );
+                let data = NSData::dataWithBytes_length_(nil, DOCK_ICON_PNG.as_ptr().cast(), DOCK_ICON_PNG.len() as u64);
                 let image = NSImage::initWithData_(NSImage::alloc(nil), data);
                 if image == nil {
                     warn!("dock icon: NSImage init failed; keeping bundle icon");
@@ -636,6 +713,19 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                     NSApp().setApplicationIconImage_(image);
                 }
             }
+        }
+
+        // Gatekeeper App Translocation makes macOS forget folder permissions on
+        // every launch (the "asks 10 times" symptom). Record it at startup so it
+        // shows up in support-log bundles even when the UI never mounts; the
+        // frontend separately queries `is_app_translocated` to surface a notice.
+        #[cfg(target_os = "macos")]
+        if crate::utils::app_location::current_exe_is_translocated() {
+            warn!(
+                "Hippius is running from a Gatekeeper App Translocation mount — macOS will not \
+                 persist folder permissions across launches. The user should move Hippius into \
+                 /Applications."
+            );
         }
 
         if let Ok(env_path) = app.path().resolve(".env", BaseDirectory::Resource) {
@@ -647,7 +737,7 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
         {
             debug!("Registering deep links for Linux...");
             match app.deep_link().register_all() {
-                Ok(_) => info!("Deep links registered successfully for Linux"),
+                Ok(()) => info!("Deep links registered successfully for Linux"),
                 Err(e) => error!("Failed to register deep links: {}", e),
             }
         }
@@ -669,9 +759,19 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
         // pushes the cleared state to the FE.
         let preparing_weak = std::sync::Arc::downgrade(&app_state.preparing);
         let sync_weak = std::sync::Arc::downgrade(&app_state.sync);
+        // Subscribe to VPN status transitions BEFORE `manage` consumes the
+        // AppState; the bridge task (spawned just below) is the single emitter of
+        // VPN_STATUS_CHANGED. See vpn::state / vpn::commands::spawn_status_bridge.
+        let vpn_status_rx = app_state.vpn.subscribe();
         app_handle.manage(app_state);
         crate::sync::upload_processing::spawn_watchdog(upload_processing_weak, app_handle.clone());
         crate::sync::preparing::spawn_watchdog(preparing_weak, sync_weak);
+        crate::vpn::commands::spawn_status_bridge(app_handle.clone(), vpn_status_rx);
+
+        // Start the macOS Finder Sync extension bridge (boot-scoped). Best-effort:
+        // a bind failure disables Finder integration but never blocks launch.
+        #[cfg(target_os = "macos")]
+        crate::finder_bridge::lifecycle::start(&app_handle);
 
         // Pre-create the (hidden) tray popover so the first tray click shows it
         // instantly instead of paying webview + route load cost on click.
@@ -742,7 +842,29 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
 
             // create_dir_all is blocking std::fs — run it off the async executor.
             let db_dir_for_mkdir = db_dir.clone();
-            match tokio::task::spawn_blocking(move || std::fs::create_dir_all(&db_dir_for_mkdir)).await {
+            match tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+                std::fs::create_dir_all(&db_dir_for_mkdir)?;
+                // Owner-only (0700): ~/.hippius holds the encrypted master
+                // mnemonic, the SQLite DB (with a plaintext token fallback on
+                // keychain-less hosts), and logs. Tighten regardless of the
+                // inherited umask so a second local user can't read them, and
+                // re-tighten existing installs on launch (audit R-17).
+                //
+                // Warn-only, like the DB-file 0600 chmod in `open_db_pool`: a
+                // missing directory is fatal (no dir ⇒ no DB), but a hardening
+                // chmod that fails on a no-POSIX-perms $HOME (network/FAT
+                // mounts) must not brick launch.
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    if let Err(e) = std::fs::set_permissions(&db_dir_for_mkdir, std::fs::Permissions::from_mode(0o700)) {
+                        warn!(dir = %db_dir_for_mkdir.display(), error = %e, "failed to chmod 0700 on ~/.hippius (continuing)");
+                    }
+                }
+                Ok(())
+            })
+            .await
+            {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => {
                     error!("FATAL: failed to create {}: {e}", db_dir.display());
@@ -822,4 +944,32 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
         });
         Ok(())
     })
+}
+
+#[cfg(all(test, unix))]
+mod db_perms_tests {
+    use super::open_db_pool;
+    use std::os::unix::fs::PermissionsExt;
+
+    /// R-17: a freshly-created DB file must be owner-only `0600`, not
+    /// umask-dependent — it can hold a plaintext token fallback on
+    /// keychain-less hosts.
+    #[tokio::test]
+    async fn open_db_pool_creates_0600_file() {
+        let dir = tempfile::tempdir().expect("tmpdir");
+        let db_path = dir.path().join("hippius.db");
+
+        let _pool = open_db_pool(&db_path).await.expect("open pool");
+
+        let mode = std::fs::metadata(&db_path).expect("stat db").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "DB file must be chmod 0600, got {mode:o}");
+
+        // The WAL sidecar (created by WAL journal mode on connect) must also be
+        // locked down — it can contain not-yet-checkpointed writes.
+        let wal = dir.path().join("hippius.db-wal");
+        if wal.exists() {
+            let wal_mode = std::fs::metadata(&wal).unwrap().permissions().mode() & 0o777;
+            assert_eq!(wal_mode, 0o600, "WAL sidecar must be chmod 0600, got {wal_mode:o}");
+        }
+    }
 }

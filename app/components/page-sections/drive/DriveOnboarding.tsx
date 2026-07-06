@@ -1,11 +1,14 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
+import { useRefreshWhileSyncing } from "@/app/lib/hooks/useRefreshWhileSyncing";
 import { toast } from "sonner";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import type { SyncFolder, RemoteFolder } from "@/app/lib/types/sync-folder";
 import { AddLocalFolderDialog } from "@/components/page-sections/settings/AddLocalFolderDialog";
 import { removeSyncPath } from "@/app/lib/utils/syncPathUtils";
+import { errorMessage } from "@/app/lib/utils/errorUtils";
+import { deleteFolderErrorToast } from "@/app/lib/utils/deleteFolderError";
 import {
   restoreRemoteFolders,
   deleteRemoteFolder,
@@ -118,14 +121,16 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
   const [deleteConfirmInput, setDeleteConfirmInput] = useState("");
   const [isDeletingServer, setIsDeletingServer] = useState(false);
 
-  const loadFolders = useCallback(async () => {
+  const loadFolders = useCallback(async (opts?: { silent?: boolean }) => {
     if (!polkadotAddress) {
       setIsLoading(false);
       return;
     }
 
     try {
-      setIsLoading(true);
+      // `silent` refreshes (the during-sync poll) must NOT toggle isLoading or
+      // the folder list flashes its skeleton on every poll.
+      if (!opts?.silent) setIsLoading(true);
 
       // Single Rust call: fetches local + remote folders, joins data, determines status
       const result = await invoke<{
@@ -178,13 +183,23 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
     } catch (error) {
       console.error("Failed to load folders:", error);
     } finally {
-      setIsLoading(false);
+      if (!opts?.silent) setIsLoading(false);
     }
   }, [polkadotAddress]);
 
   useEffect(() => {
     loadFolders();
   }, [loadFolders]);
+
+  // Keep each folder's size + file count climbing as the sync uploads (the
+  // server-side totals grow per committed file). Silent so the list updates in
+  // place. See useRefreshWhileSyncing.
+  useRefreshWhileSyncing(
+    useCallback(() => {
+      void loadFolders({ silent: true });
+    }, [loadFolders]),
+    !!polkadotAddress,
+  );
 
   // Refresh when sync path state changes (e.g., Settings dialog closed)
   useEffect(() => {
@@ -285,10 +300,10 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
           setShowHcfsSetup(true);
           return;
         }
-      } catch {
-        setBrowseDialog({ open: false, folder, isLocal });
-        setPendingAction("browse");
-        setShowHcfsSetup(true);
+      } catch (err) {
+        // A failed config read ≠ "no password set" (audit FE-low).
+        console.error("Failed to read sync config:", err);
+        toast.error("Couldn't check your sync configuration. Please try again.");
         return;
       }
     }
@@ -402,10 +417,10 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
         setShowHcfsSetup(true);
         return;
       }
-    } catch {
-      setPendingAction("sync");
-      setSyncDialog((prev) => ({ ...prev, open: false }));
-      setShowHcfsSetup(true);
+    } catch (err) {
+      // A failed config read ≠ "no password set" (audit FE-low).
+      console.error("Failed to read sync config:", err);
+      toast.error("Couldn't check your sync configuration. Please try again.");
       return;
     }
 
@@ -454,8 +469,11 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
       setDeleteConfirmInput("");
       loadFolders();
     } catch (error) {
-      console.error("Failed to delete folder:", error);
-      toast.error("Failed to delete folder from server");
+      console.error("Failed to delete folder:", errorMessage(error));
+      toast.error(deleteFolderErrorToast(error));
+      // Refetch so a folder the server actually deleted (despite a client-side
+      // error) drops off the list instead of lingering as "failed" (F-2).
+      loadFolders();
     } finally {
       setIsDeletingServer(false);
     }

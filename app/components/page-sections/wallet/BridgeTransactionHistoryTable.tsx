@@ -9,6 +9,7 @@ import {
   useReactTable,
 } from "@tanstack/react-table";
 import { useQuery } from "@tanstack/react-query";
+import { invoke } from "@tauri-apps/api/core";
 import { XCircle } from "lucide-react";
 
 import {
@@ -29,35 +30,30 @@ import { SegmentedControl } from "@/components/ui/SegmentedControl";
 import { ArrowDownToLine, ArrowUpToLine } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
 
-import {
-  fetchExplorerData,
-  getDepositStatus,
-  getWithdrawalStatus,
-  type BridgeExplorerStatus,
-} from "@/lib/bridge/explorer-api";
-import {
-  getCachedTransactions,
-  getPendingTransaction,
-  mergeAndPersist,
-  type CachedDeposit,
-  type CachedWithdrawal,
-} from "@/lib/bridge/local-cache";
+import type {
+  BridgeOnChainData,
+  BridgeExplorerStatus,
+  BridgeTxRow,
+} from "@/lib/bridge/types";
 
 import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
 
 /* Bridge transactions tab — mirrors hippius-web's
  * `BridgeTransactionHistoryTable`. Reads bridge deposits + withdrawals
- * directly from the Hippius / Bittensor testnet chains via
- * `fetchExplorerData`, filters them to the active local wallet's SS58,
- * and renders the same columns + filter + pagination web does.
+ * from the Rust backend (`bridge_fetch_onchain_data`, which queries the
+ * Hippius / Bittensor chains), filters them to the active local wallet's
+ * SS58, and renders the same columns + filter + pagination web does.
  *
  * Differences vs web:
  *  - `useActiveWallet` → `useLocalWallet` so the view is scoped to the
- *    desktop's active local wallet. Local-cache keys already include
- *    the wallet address, so switching wallets shows a clean view.
- *  - `currentHippiusHeight` comes from `explorerData.stats.hippiusHeight`
- *    instead of a global block-number context — the chain we care about
- *    here is always testnet, never the user's configured RPC.
+ *    desktop's active local wallet.
+ *  - The backend already resolves each row's `unifiedStatus`, so there is
+ *    no per-row status recomputation here.
+ *  - The Bittensor-contract cross-reference was deferred, so there is no
+ *    `bittensorSide` detail — the Bittensor columns fall back to "-".
+ *  - An in-flight pending row is overlaid from the persisted
+ *    bridge-transaction log (`bridge_list_transactions`) rather than a
+ *    renderer-side local cache.
  *  - Explorer link uses `https://hipstats.com` directly (matches the
  *    existing pattern used by `ActiveWalletSelector`).
  */
@@ -269,8 +265,8 @@ const BridgeTransactionHistoryTable: React.FC<
   const [pageSize, setPageSize] = useState(ITEMS_PER_PAGE_DEFAULT);
   const [activeFilter, setActiveFilter] = useState<FilterType>("all");
 
-  /* Pull deposits + withdrawals straight from the testnet chains, same
-   * cadence web uses. */
+  /* Pull deposits + withdrawals from the Rust backend (which queries the
+   * chains), same cadence web uses. */
   const {
     data: explorerData,
     isLoading,
@@ -278,45 +274,37 @@ const BridgeTransactionHistoryTable: React.FC<
     refetch,
   } = useQuery({
     queryKey: ["bridge-explorer-data"],
-    queryFn: fetchExplorerData,
+    queryFn: () => invoke<BridgeOnChainData>("bridge_fetch_onchain_data"),
     staleTime: 10_000,
     refetchInterval: 15_000,
     enabled: !!effectiveAddress,
   });
 
-  /* Current hippius height + approval threshold come from the chain
-   * snapshot so the per-row status math matches web exactly without a
-   * separate block-number context. */
-  const currentHippiusHeight = explorerData?.stats?.hippiusHeight ?? 0;
+  /* Persisted bridge-transaction log — used only to overlay an in-flight
+   * "pending" row that the on-chain explorer hasn't surfaced yet. */
+  const { data: txList } = useQuery({
+    queryKey: ["bridge-tx-list"],
+    queryFn: () => invoke<BridgeTxRow[]>("bridge_list_transactions"),
+    staleTime: 10_000,
+    refetchInterval: 15_000,
+  });
+
+  /* Approval threshold for the votes column comes from the chain
+   * snapshot. The Bittensor cross-ref is deferred, so vote counts are
+   * Hippius-side only. */
   const threshold = explorerData?.stats?.approveThreshold ?? 3;
 
   /* Filter to the active local wallet's SS58 so switching wallets
    * doesn't leak other accounts' history into the view. */
   const { deposits, withdrawals } = useMemo(() => {
-    if (!effectiveAddress) return { deposits: [], withdrawals: [] };
-
-    const allDeposits: CachedDeposit[] = [];
-    const allWithdrawals: CachedWithdrawal[] = [];
-
-    if (explorerData) {
-      const merged = mergeAndPersist(
-        effectiveAddress,
-        explorerData.deposits,
-        explorerData.withdrawals,
-        explorerData.stats,
-      );
-      allDeposits.push(...merged.deposits);
-      allWithdrawals.push(...merged.withdrawals);
-    } else {
-      const cached = getCachedTransactions(effectiveAddress);
-      allDeposits.push(...cached.deposits);
-      allWithdrawals.push(...cached.withdrawals);
+    if (!effectiveAddress || !explorerData) {
+      return { deposits: [], withdrawals: [] };
     }
 
-    const filteredDeposits = allDeposits.filter(
+    const filteredDeposits = explorerData.deposits.filter(
       (d) => d.recipient.toLowerCase() === effectiveAddress.toLowerCase(),
     );
-    const filteredWithdrawals = allWithdrawals.filter(
+    const filteredWithdrawals = explorerData.withdrawals.filter(
       (w) => w.sender.toLowerCase() === effectiveAddress.toLowerCase(),
     );
 
@@ -336,7 +324,9 @@ const BridgeTransactionHistoryTable: React.FC<
   };
 
   /* Unify deposits + withdrawals into the row shape the table expects,
-   * overlaying a single in-flight local pending row if applicable. */
+   * overlaying a single in-flight pending row if applicable. The backend
+   * already resolves `unifiedStatus`, so it is used directly, and supplies the
+   * best-effort `bittensorSide` cross-ref (null → the Bittensor columns "-"). */
   const allTransactions = useMemo(() => {
     const depositTxs: BridgeTransaction[] = deposits.map((d) => {
       const hpsStatus = getHpsStatus(d.voteCount, threshold, d.status, "deposit");
@@ -348,12 +338,12 @@ const BridgeTransactionHistoryTable: React.FC<
         btStatus:
           d.bittensorSide?.status === "Requested"
             ? "Locked"
-            : d.bittensorSide?.status || "-",
-        btBlock: d.bittensorSide?.createdAtBlock || "-",
+            : d.bittensorSide?.status ?? "-",
+        btBlock: d.bittensorSide?.createdAtBlock ?? "-",
         hVotes: `${d.voteCount}/${threshold}`,
         hStatus: hpsStatus,
         hBlock: d.createdAtBlock,
-        overallStatus: getDepositStatus(d, currentHippiusHeight),
+        overallStatus: d.unifiedStatus,
       };
     });
 
@@ -370,52 +360,57 @@ const BridgeTransactionHistoryTable: React.FC<
         type: "withdrawal" as const,
         sender: w.sender,
         amount: w.amountDisplay,
-        btStatus: w.bittensorSide?.status || "-",
-        btBlock: w.bittensorSide?.createdAtBlock || "-",
+        btStatus: w.bittensorSide?.status ?? "-",
+        btBlock: w.bittensorSide?.createdAtBlock ?? "-",
         hVotes: `${withdrawalVoteCount}/${threshold}`,
         hStatus: hpsStatus,
         hBlock: w.createdAtBlock,
-        overallStatus: getWithdrawalStatus(w, currentHippiusHeight),
+        overallStatus: w.unifiedStatus,
       };
     });
 
-    const pendingTx = effectiveAddress
-      ? getPendingTransaction(effectiveAddress)
-      : null;
+    /* In-flight overlay: the first still-pending row from the persisted
+     * log that matches this wallet and isn't already on chain. Matched by
+     * the deposit/withdrawal id so a confirmed row doesn't double-render. */
+    const onChainIds = new Set<string>([
+      ...depositTxs.map((d) => d.id),
+      ...withdrawalTxs.map((w) => w.id),
+    ]);
+
     const pendingTransactions: BridgeTransaction[] = [];
-
-    if (pendingTx && pendingTx.status === "in-progress") {
-      const alreadyExists =
-        pendingTx.type === "deposit"
-          ? depositTxs.some(
-              (d) =>
-                d.hBlock &&
-                parseInt(d.hBlock) > pendingTx.createdAt / 1000 - 60,
-            )
-          : withdrawalTxs.some(
-              (w) =>
-                w.hBlock &&
-                parseInt(w.hBlock) > pendingTx.createdAt / 1000 - 60,
-            );
-
-      if (!alreadyExists) {
-        pendingTransactions.push({
-          id: pendingTx.id,
-          type: pendingTx.type,
-          recipient:
-            pendingTx.type === "deposit" ? pendingTx.walletAddress : undefined,
-          sender:
-            pendingTx.type === "withdrawal" ? pendingTx.walletAddress : undefined,
-          amount: pendingTx.amount,
-          btStatus: pendingTx.type === "deposit" ? "Pending" : "-",
-          btBlock: "-",
-          hVotes: `0/${threshold}`,
-          hStatus: pendingTx.type === "withdrawal" ? "Submitting" : "Pending",
-          hBlock: "-",
-          overallStatus: "pending",
-          isPending: true,
-        });
+    const pendingRow = (txList ?? []).find((row) => {
+      if (row.status !== "pending") return false;
+      const isDeposit = row.direction === "alpha-to-halpha";
+      const party = isDeposit ? row.recipient : row.sender;
+      if (
+        !party ||
+        party.toLowerCase() !== effectiveAddress.toLowerCase()
+      ) {
+        return false;
       }
+      const id = isDeposit ? row.depositId : row.withdrawalId;
+      // Treat as in-flight only while not yet reflected on chain.
+      return !id || !onChainIds.has(id);
+    });
+
+    if (effectiveAddress && pendingRow) {
+      const isDeposit = pendingRow.direction === "alpha-to-halpha";
+      pendingTransactions.push({
+        id: pendingRow.id,
+        type: isDeposit ? "deposit" : "withdrawal",
+        recipient: isDeposit ? pendingRow.recipient ?? undefined : undefined,
+        sender: !isDeposit ? pendingRow.sender ?? undefined : undefined,
+        // Display the raw rao string the backend stored; the on-chain row
+        // (with its formatted `amountDisplay`) replaces it once confirmed.
+        amount: pendingRow.amount,
+        btStatus: "-",
+        btBlock: "-",
+        hVotes: `0/${threshold}`,
+        hStatus: isDeposit ? "Pending" : "Submitting",
+        hBlock: "-",
+        overallStatus: "pending",
+        isPending: true,
+      });
     }
 
     return [...pendingTransactions, ...depositTxs, ...withdrawalTxs].sort(
@@ -425,7 +420,7 @@ const BridgeTransactionHistoryTable: React.FC<
         return parseInt(b.hBlock || "0") - parseInt(a.hBlock || "0");
       },
     );
-  }, [deposits, withdrawals, currentHippiusHeight, threshold, effectiveAddress]);
+  }, [deposits, withdrawals, threshold, effectiveAddress, txList]);
 
   /* Filter + counts for the segmented control. */
   const filteredTransactions = useMemo(() => {

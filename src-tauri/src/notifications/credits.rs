@@ -4,53 +4,71 @@
 //! processing credit events, and creating sync completion notifications.
 
 use crate::app_state::AppState;
+use crate::auth::account_key::account_key;
 use crate::error::AppError;
+
+// ── Per-account low-credit notification flags (audit NOTIF-4) ───────────────
+//
+// `is_first_time` / `is_above_half_credit` are keyed by `account_key(owner)` in
+// the `credit_notification_flags` table, NOT a single global `app_state` row, so
+// one account's state can't drive another's credit warnings on a shared device.
+// A missing row means defaults: first-time = true, above-half = false.
+
+/// Read `(is_first_time, is_above_half_credit)` for `owner`, defaulting a missing
+/// row to `(true, false)`.
+async fn read_flags(pool: &sqlx::SqlitePool, owner: &str) -> Result<(bool, bool), AppError> {
+    let row = sqlx::query_as::<_, (i32, i32)>("SELECT is_first_time, is_above_half_credit FROM credit_notification_flags WHERE owner = ?")
+        .bind(owner)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.map_or((true, false), |(ft, ah)| (ft != 0, ah != 0)))
+}
+
+/// Mark `owner`'s first-time flag seen. The INSERT path leaves `is_above_half`
+/// at its column default (0) for a brand-new account, which is correct.
+async fn set_first_time_seen(pool: &sqlx::SqlitePool, owner: &str) -> Result<(), AppError> {
+    sqlx::query("INSERT INTO credit_notification_flags (owner, is_first_time) VALUES (?, 0) ON CONFLICT(owner) DO UPDATE SET is_first_time = 0")
+        .bind(owner)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Set `owner`'s above-half-credit flag.
+async fn set_above_half(pool: &sqlx::SqlitePool, owner: &str, value: bool) -> Result<(), AppError> {
+    sqlx::query("INSERT INTO credit_notification_flags (owner, is_above_half_credit) VALUES (?, ?) ON CONFLICT(owner) DO UPDATE SET is_above_half_credit = excluded.is_above_half_credit")
+        .bind(owner)
+        .bind(i32::from(value))
+        .execute(pool)
+        .await?;
+    Ok(())
+}
 
 #[tauri::command]
 pub async fn is_first_time(state: tauri::State<'_, AppState>) -> Result<bool, AppError> {
-    let pool = state.pool()?;
-
-    let row = sqlx::query_as::<_, (i32,)>("SELECT is_first_time FROM app_state WHERE id = 1")
-        .fetch_optional(pool)
-        .await?;
-
-    Ok(row.is_none_or(|(v,)| v != 0))
+    let owner = account_key(&state.current_account_id()?);
+    Ok(read_flags(state.pool()?, &owner).await?.0)
 }
 
-/// Mark the first-time flag as seen (set to 0).
+/// Mark the first-time flag as seen for the active account.
 #[tauri::command]
 pub async fn mark_first_time_seen(state: tauri::State<'_, AppState>) -> Result<(), AppError> {
-    let pool = state.pool()?;
-
-    sqlx::query("UPDATE app_state SET is_first_time = 0 WHERE id = 1").execute(pool).await?;
-
-    Ok(())
+    let owner = account_key(&state.current_account_id()?);
+    set_first_time_seen(state.pool()?, &owner).await
 }
 
-/// Get the is_above_half_credit flag.
+/// Get the is_above_half_credit flag for the active account.
 #[tauri::command]
 pub async fn get_is_above_half_credit(state: tauri::State<'_, AppState>) -> Result<bool, AppError> {
-    let pool = state.pool()?;
-
-    let row = sqlx::query_as::<_, (i32,)>("SELECT is_above_half_credit FROM app_state WHERE id = 1")
-        .fetch_optional(pool)
-        .await?;
-
-    Ok(row.is_some_and(|(v,)| v != 0))
+    let owner = account_key(&state.current_account_id()?);
+    Ok(read_flags(state.pool()?, &owner).await?.1)
 }
 
-/// Update the is_above_half_credit flag.
+/// Update the is_above_half_credit flag for the active account.
 #[tauri::command]
 pub async fn update_is_above_half_credit(state: tauri::State<'_, AppState>, value: bool) -> Result<(), AppError> {
-    let pool = state.pool()?;
-    let val: i32 = i32::from(value);
-
-    sqlx::query("UPDATE app_state SET is_above_half_credit = ? WHERE id = 1")
-        .bind(val)
-        .execute(pool)
-        .await?;
-
-    Ok(())
+    let owner = account_key(&state.current_account_id()?);
+    set_above_half(state.pool()?, &owner, value).await
 }
 
 // ── Credit Notification Logic ───────────────────────────────────────────
@@ -98,21 +116,17 @@ pub async fn check_low_credit_notification(
     };
     let credit_balance = planck as f64 / 1e18;
 
-    // Read both state flags in a single query (1 round-trip instead of 2)
-    let (first_time, above_half) = sqlx::query_as::<_, (i32, i32)>("SELECT is_first_time, is_above_half_credit FROM app_state WHERE id = 1")
-        .fetch_optional(pool)
-        .await?
-        .map_or((true, false), |(ft, ah)| (ft != 0, ah != 0));
+    // Per-account flags (audit NOTIF-4), keyed by the validated session account.
+    let owner = account_key(&account_id);
+    let (first_time, above_half) = read_flags(pool, &owner).await?;
 
     // Credits >= 0.5: update flags and return no notification
     if credit_balance >= 0.5 {
         if first_time {
-            sqlx::query("UPDATE app_state SET is_first_time = 0 WHERE id = 1").execute(pool).await?;
+            set_first_time_seen(pool, &owner).await?;
         }
         if !above_half {
-            sqlx::query("UPDATE app_state SET is_above_half_credit = 1 WHERE id = 1")
-                .execute(pool)
-                .await?;
+            set_above_half(pool, &owner, true).await?;
         }
         return Ok(CreditNotificationCheck {
             should_notify: false,
@@ -122,7 +136,7 @@ pub async fn check_low_credit_notification(
 
     // Credits < 0.5: mark first time seen
     if first_time {
-        sqlx::query("UPDATE app_state SET is_first_time = 0 WHERE id = 1").execute(pool).await?;
+        set_first_time_seen(pool, &owner).await?;
     }
 
     // Check if there's already an active low-credit notification FOR THIS USER.
@@ -133,9 +147,7 @@ pub async fn check_low_credit_notification(
     if active_count > 0 {
         // Already showing a notification — just update state
         if above_half {
-            sqlx::query("UPDATE app_state SET is_above_half_credit = 0 WHERE id = 1")
-                .execute(pool)
-                .await?;
+            set_above_half(pool, &owner, false).await?;
         }
         return Ok(CreditNotificationCheck {
             should_notify: false,
@@ -155,9 +167,7 @@ pub async fn check_low_credit_notification(
 
     // Update above-half state
     if above_half {
-        sqlx::query("UPDATE app_state SET is_above_half_credit = 0 WHERE id = 1")
-            .execute(pool)
-            .await?;
+        set_above_half(pool, &owner, false).await?;
     }
 
     if !can_notify {
@@ -172,6 +182,23 @@ pub async fn check_low_credit_notification(
         should_notify: true,
         credit_balance,
     })
+}
+
+/// Low-credit check that fetches the **live** balance server-side and then runs
+/// the same decision as [`check_low_credit_notification`].
+///
+/// The FE used to pass `useUserCredits`'s cached planck, but that query is
+/// `staleTime: Infinity` and is never invalidated — so a user who spent below
+/// the threshold mid-session was never warned (audit R-08). This command takes
+/// no FE-supplied balance: it fetches the balance from the billing API itself,
+/// so the warning can never be decided against stale data.
+#[tauri::command]
+pub async fn check_low_credit_notification_live(state: tauri::State<'_, AppState>, account_id: String) -> Result<CreditNotificationCheck, AppError> {
+    let account = state.require_session_account_typed(&account_id)?;
+    let planck = crate::billing::credits::fetch_credit_balance_planck(&state, &account).await?;
+    // Delegate to the existing decision (it re-validates the session account and
+    // owns all the one-per-day / dedup / flag-state logic).
+    check_low_credit_notification(state, account_id, planck).await
 }
 
 /// Count active (non-deleted) low-credit warnings for a single user.

@@ -101,8 +101,15 @@ export function useInvokeQuery<TResponse, TData = TResponse>(
       ? config.queryKey(address)
       : config.queryKey;
 
+  // A provided `params` builder owns the result, INCLUDING a `null` return,
+  // which the contract says disables the query. `?? { accountId }` would have
+  // coalesced that null back to the default, silently re-enabling the query —
+  // so distinguish "no builder" (use the default) from "builder returned null"
+  // (disable).
   const invokeParams = address
-    ? config.params?.(address) ?? { accountId: address }
+    ? config.params
+      ? config.params(address)
+      : { accountId: address }
     : null;
 
   const enabled =

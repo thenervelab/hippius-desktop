@@ -261,9 +261,14 @@ describe("SyncStatusDialog", () => {
     );
   }
 
-  it("renders 'X of Y' intent line when intentActive is true", () => {
-    // Multi-file in-progress snapshot — required for the "Overall progress"
-    // section to render (gated by !isSingleFile && effectiveInProgress).
+  it("shows the byte-granular transferred line, NOT the intent overlay bytes", () => {
+    // Regression for the "0B / 260MB at 16%" report. The intent overlay counts
+    // only whole-FILE-completed bytes (and is account-wide), so wiring it into
+    // the live transferred counter made it disagree with the percent/speed.
+    // Even with an active intent overlay claiming 5GB/10GB, the header must
+    // render the single-count byte counters the percent is weighted on
+    // (2.5MB transferred / 7.5MB expected here) — never the doubled combined
+    // total (which would read 15MB here).
     const files = [
       makeFileProgress("a.bin", {
         status: "inProgress",
@@ -289,13 +294,44 @@ describe("SyncStatusDialog", () => {
     );
 
     const summaryTexts = compactSummaryTexts(container);
-    expect(summaryTexts).toContain("5GB/10GB");
-    expect(summaryTexts).not.toContain("2.5MB/7.5MB");
+    expect(summaryTexts).toContain("2.5MB/7.5MB");
+    expect(summaryTexts).not.toContain("5GB/10GB");
   });
 
-  it("falls back to per-cycle line when intent fields are undefined", () => {
-    // Legacy / pre-login snapshot shape: no intent overlay. The size row
-    // must keep showing the per-cycle "progressBytes / bytesExpected".
+  it("never shows 0 transferred while a single large file is in flight", () => {
+    // The exact screenshot scenario: one 260MB file, 16% uploaded. The intent
+    // overlay would read 0 completed bytes (no whole file done yet); the
+    // byte-granular counter must show the partial progress instead of "0B".
+    const files = [
+      makeFileProgress("Air-261.681.18-aarch64.dmg", {
+        status: "inProgress",
+        progressPercent: 16,
+        bytesTransferred: 41_600_000,
+        totalBytes: 260_070_000,
+      }),
+    ];
+    const snapshot = makeSnapshot(files, {
+      intentTotalFiles: 1,
+      intentCompletedFiles: 0,
+      intentTotalBytes: 260_070_000,
+      intentCompletedBytes: 0,
+      intentActive: true,
+    });
+
+    const { container } = renderWithJotai(
+      <SyncStatusDialog snapshot={snapshot} open={true} />,
+    );
+
+    const summaryTexts = compactSummaryTexts(container);
+    // The intent overlay's "0B" must NOT be what we render.
+    expect(summaryTexts).not.toContain("0B/260.07MB");
+    // The transferred figure tracks the byte-granular counter (~41.6MB).
+    expect(summaryTexts.some((t) => /^41\.6MB\//.test(t))).toBe(true);
+  });
+
+  it("sums the single-count byte pair across multiple files", () => {
+    // No intent overlay: the transferred line sums each file's real size
+    // (2.5MB in-flight of a 5MB + 2.5MB plan = 2.5MB / 7.5MB).
     const files = [
       makeFileProgress("a.bin", {
         status: "inProgress",
@@ -309,9 +345,7 @@ describe("SyncStatusDialog", () => {
       }),
     ];
     const snapshot = makeSnapshot(files);
-    // Sanity check: factory did not silently populate intent fields.
     expect(snapshot.intentActive).toBeUndefined();
-    expect(snapshot.intentTotalBytes).toBeUndefined();
 
     const { container } = renderWithJotai(
       <SyncStatusDialog snapshot={snapshot} open={true} />,
@@ -319,41 +353,166 @@ describe("SyncStatusDialog", () => {
 
     const summaryTexts = compactSummaryTexts(container);
     expect(summaryTexts).toContain("2.5MB/7.5MB");
-    expect(summaryTexts).not.toContain("5GB/10GB");
   });
 
-  it("falls back to per-cycle line when intentActive is true but intentTotalBytes is 0", () => {
-    // Manifest exists but is empty — the `> 0` guard on intentTotalBytes
-    // catches this so we do not render "0 B of 0 B". The `??` operator
-    // (not `||`) lets us distinguish absent (undefined) from explicit 0
-    // in the type, even though both fail the guard here.
+  it("keeps the transferred line visible during an encrypt-only phase", () => {
+    // Regression for "X of Y | X MB/s doesn't always show". Between file
+    // transfers the active file is encrypting (no inProgress file), which used
+    // to hide the whole byte line until the upload phase began — so the line
+    // blinked out on every handoff. It must stay up through encrypt/decrypt,
+    // with the trailing slot showing the phase word instead of a speed.
     const files = [
       makeFileProgress("a.bin", {
-        status: "inProgress",
+        status: "encrypting",
         progressPercent: 50,
-        bytesTransferred: 2_500_000,
+        bytesEncrypted: 2_500_000,
         totalBytes: 5_000_000,
       }),
-      makeFileProgress("b.bin", {
-        status: "pending",
-        totalBytes: 2_500_000,
+    ];
+    const snapshot = makeSnapshot(files);
+
+    const { container } = renderWithJotai(
+      <SyncStatusDialog snapshot={snapshot} open={true} />,
+    );
+
+    const summaryTexts = compactSummaryTexts(container);
+    expect(summaryTexts).toContain("2.5MB/5MB");
+    expect(summaryTexts).toContain("Encrypting");
+  });
+
+  it("keeps the transferred line visible during a decrypt-only phase", () => {
+    // Symmetric to the encrypt case: a download decrypts AFTER it has fully
+    // transferred, so bytesTransferred == totalBytes at the decrypt phase and
+    // the line reads the real "5MB/5MB | Decrypting" — not a misleading "0B".
+    const files = [
+      makeFileProgress("a.bin", {
+        action: "download",
+        status: "decrypting",
+        progressPercent: 100,
+        bytesTransferred: 5_000_000,
+        totalBytes: 5_000_000,
       }),
     ];
-    const snapshot = makeSnapshot(files, {
-      intentTotalFiles: 0,
-      intentCompletedFiles: 0,
-      intentTotalBytes: 0,
-      intentCompletedBytes: 0,
-      intentActive: true,
+    const snapshot = makeSnapshot(files);
+
+    const { container } = renderWithJotai(
+      <SyncStatusDialog snapshot={snapshot} open={true} />,
+    );
+
+    const summaryTexts = compactSummaryTexts(container);
+    expect(summaryTexts).toContain("5MB/5MB");
+    expect(summaryTexts).toContain("Decrypting");
+  });
+
+  it("keeps the transferred line visible while files are still queued (all-pending seam)", () => {
+    // F-5: a sync in progress whose files are all still 'pending' (none yet
+    // flipped to inProgress/encrypting/decrypting) used to drop the whole byte
+    // line because it required an active-status file — even though the plan
+    // total is already known. It must stay up reading the session totals
+    // ("0B/5MB"); only the speed suffix waits for a real transfer.
+    const files = [
+      makeFileProgress("queued.bin", {
+        status: "pending",
+        totalBytes: 5_000_000,
+      }),
+    ];
+    const snapshot = makeSnapshot(files);
+
+    const { container } = renderWithJotai(
+      <SyncStatusDialog snapshot={snapshot} open={true} />,
+    );
+
+    const summaryTexts = compactSummaryTexts(container);
+    expect(summaryTexts).toContain("0B/5MB");
+  });
+
+  it("keeps the speed suffix visible across an encrypt seam once a rate is known", () => {
+    // Regression for "upload speed only shows intermittently". The speed is
+    // derived from the byte delta across frames (smoothed, retained in a ref).
+    // Between files the active file is `encrypting` (no `inProgress` file); the
+    // old gate required `hasTransferringFile`, so the suffix blanked on every
+    // such seam even though bytes kept climbing and the smoothed speed was
+    // still valid. It must now stay on screen (gated on the session + a
+    // positive rate, like the byte line) instead of falling back to the phase
+    // word.
+    const nowSpy = vi.spyOn(Date, "now");
+    const session = 100_000;
+    const frame = (
+      combinedProgressBytes: number,
+      status: "inProgress" | "encrypting",
+    ) =>
+      makeSnapshot(
+        [
+          makeFileProgress("big.bin", {
+            status,
+            totalBytes: 10_000_000,
+            bytesTransferred: status === "inProgress" ? combinedProgressBytes : 0,
+            bytesEncrypted: status === "encrypting" ? combinedProgressBytes : 0,
+          }),
+        ],
+        {
+          startedAt: session,
+          effectiveInProgress: true,
+          combinedProgressBytes,
+          combinedBytesExpected: 20_000_000,
+        },
+      );
+
+    // One store reused across rerenders so the engine-health atom (set to
+    // "connected") survives — a fresh store per frame would read unhealthy and
+    // settle the widget, hiding the speed for the wrong reason.
+    const store = createStore();
+    store.set(syncEngineHealthAtom, {
+      status: "connected",
+      last_check_time: Date.now(),
+      last_successful_check: Date.now(),
+      consecutive_failures: 0,
+      server_version: null,
+      error_message: null,
+    });
+    const view = (combinedProgressBytes: number, status: "inProgress" | "encrypting") => (
+      <Provider store={store}>
+        <SyncStatusDialog snapshot={frame(combinedProgressBytes, status)} open={true} />
+      </Provider>
+    );
+
+    // Two transferring frames 1s apart → a measured ~1MB/s rate.
+    nowSpy.mockReturnValue(1_000);
+    const { container, rerender } = render(view(1_000_000, "inProgress"));
+    nowSpy.mockReturnValue(2_000);
+    rerender(view(2_000_000, "inProgress"));
+
+    // Now the active file flips to `encrypting` (the seam) while bytes keep
+    // climbing. The speed suffix must persist, NOT revert to "Encrypting".
+    nowSpy.mockReturnValue(3_000);
+    rerender(view(3_000_000, "encrypting"));
+
+    const summaryTexts = compactSummaryTexts(container);
+    expect(summaryTexts.some((t) => t.endsWith("/s"))).toBe(true);
+    expect(summaryTexts).not.toContain("Encrypting");
+
+    nowSpy.mockRestore();
+  });
+
+  it("renders the Preparing state with no files yet (does not early-return to null)", () => {
+    // Regression for "widget takes 5-10s to show after adding a folder". Rust
+    // marks widgetState="preparing" + widgetVisible the moment a folder is
+    // added — before the plan is built, so totalFiles===0 and the session is
+    // not yet active. The early-return used to swallow the card in exactly that
+    // state, so the widget only appeared once files populated. It must now show
+    // the Preparing card immediately.
+    const snapshot = makeSnapshot([], {
+      widgetState: "preparing",
+      widgetVisible: true,
+      effectiveInProgress: false,
     });
 
     const { container } = renderWithJotai(
       <SyncStatusDialog snapshot={snapshot} open={true} />,
     );
 
-    const summaryTexts = compactSummaryTexts(container);
-    expect(summaryTexts).toContain("2.5MB/7.5MB");
-    expect(summaryTexts).not.toContain("0B/0B");
+    expect(container.innerHTML).not.toBe("");
+    expect(compactSummaryTexts(container)).toContain("Preparing");
   });
 
   it("renders the compact ring instead of the full card when minimized", () => {

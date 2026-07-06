@@ -69,12 +69,40 @@ pub struct StakingInfo {
     pub unbonding_periods: Vec<UnbondingPeriod>,
 }
 
-/// Result of a submitted extrinsic.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TxResult {
-    pub tx_hash: String,
-    pub success: bool,
+/// Outcome of a submitted extrinsic.
+///
+/// Distinguishes the four operationally-different end states so the frontend
+/// never blindly re-submits a transaction that may already be on-chain
+/// (audit findings R-01 / R-15). The submit step and the finalization watch
+/// are separate awaits: submission can succeed and the extrinsic land on-chain
+/// while the watch later errors (RPC/websocket drop, timeout). Collapsing that
+/// into a bare `Err` led the FE to offer an unconditional "Try Again" that
+/// re-signed a fresh, valid extrinsic — a double-spend.
+///
+/// Retry-safety per variant:
+/// - `Finalized` — succeeded; nothing to retry.
+/// - `FinalizedFailed` — landed but the dispatch failed; the nonce was
+///   consumed, so the call definitively did not take effect. Safe to retry as
+///   a NEW transaction; `reason` is the on-chain error.
+/// - `SubmittedUnconfirmed` — the outcome cannot be proven. Covers three
+///   distinct situations behind one wire status (deliberate variant reuse, so
+///   the FE contract stays frozen): the broadcast RPC errored after the node
+///   may have received the bytes; the watch was lost before finalization; or
+///   the extrinsic IS finalized but its dispatch result could not be fetched/
+///   decoded. It MAY be on-chain and MAY have succeeded — the FE must surface
+///   "pending, do not resend", NOT a retry.
+/// - `RejectedAtSubmission` — the submission was rejected; the extrinsic never
+///   entered the pool. Safe to retry.
+///
+/// Serializes as an internally-tagged object, e.g.
+/// `{ "status": "submittedUnconfirmed", "txHash": "0x…", "reason": "…" }`.
+#[derive(Serialize, Debug)]
+#[serde(tag = "status", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum TxOutcome {
+    Finalized { tx_hash: String },
+    FinalizedFailed { tx_hash: String, reason: String },
+    SubmittedUnconfirmed { tx_hash: String, reason: String },
+    RejectedAtSubmission { reason: String },
 }
 
 /// On-chain timestamp for a specific block number.
@@ -98,4 +126,45 @@ pub struct ValidatedTransfer {
     pub estimated_fee_hip: String,
     pub available_balance_planck: String,
     pub available_balance_hip: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TxOutcome;
+
+    /// Wire-contract pin for `app/lib/utils/txOutcome.ts`.
+    ///
+    /// The FE switches on the exact `status` strings and reads the camelCase
+    /// fields below; its safety property — "Submitted/unknown outcomes never
+    /// offer a retry" — depends on this serialization never drifting. A serde
+    /// attribute change or variant rename must fail HERE, not silently fall
+    /// into the FE's unknown-status arm.
+    #[test]
+    fn tx_outcome_wire_shape_is_pinned() {
+        let cases = [
+            (
+                TxOutcome::Finalized { tx_hash: "0xabc".into() },
+                serde_json::json!({"status": "finalized", "txHash": "0xabc"}),
+            ),
+            (
+                TxOutcome::FinalizedFailed { tx_hash: "0xabc".into(), reason: "r".into() },
+                serde_json::json!({"status": "finalizedFailed", "txHash": "0xabc", "reason": "r"}),
+            ),
+            (
+                TxOutcome::SubmittedUnconfirmed { tx_hash: "0xabc".into(), reason: "r".into() },
+                serde_json::json!({"status": "submittedUnconfirmed", "txHash": "0xabc", "reason": "r"}),
+            ),
+            (
+                TxOutcome::RejectedAtSubmission { reason: "r".into() },
+                serde_json::json!({"status": "rejectedAtSubmission", "reason": "r"}),
+            ),
+        ];
+        for (outcome, expected) in cases {
+            assert_eq!(
+                serde_json::to_value(&outcome).expect("serialize"),
+                expected,
+                "TxOutcome wire shape drifted from the txOutcome.ts contract",
+            );
+        }
+    }
 }

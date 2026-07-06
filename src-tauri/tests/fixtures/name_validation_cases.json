@@ -1,0 +1,142 @@
+[
+  {
+    "input": "file.txt",
+    "valid": true,
+    "note": "plain name"
+  },
+  {
+    "input": "a",
+    "valid": true,
+    "note": "single char"
+  },
+  {
+    "input": ".env",
+    "valid": true,
+    "note": "dotfile: stem is empty, not reserved, no trailing dot"
+  },
+  {
+    "input": "my-photo_2024.jpeg",
+    "valid": true,
+    "note": "hyphens/underscores/digits"
+  },
+  {
+    "input": "café.txt",
+    "valid": true,
+    "note": "unicode accepted"
+  },
+  {
+    "input": "context.txt",
+    "valid": true,
+    "note": "stem 'context' is NOT the reserved 'con' (exact stem, not substring)"
+  },
+  {
+    "input": "lpt10.log",
+    "valid": true,
+    "note": "lpt10 is not reserved (only LPT1-9)"
+  },
+  {
+    "input": "  spaced.txt  ",
+    "valid": true,
+    "note": "leading/trailing ASCII spaces trimmed by both sides"
+  },
+  {
+    "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "valid": true,
+    "note": "exactly 255 bytes: at the limit, accepted"
+  },
+  {
+    "input": "ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+    "valid": true,
+    "note": "254 UTF-8 bytes (127*2): under limit"
+  },
+  {
+    "input": "",
+    "valid": false,
+    "note": "empty"
+  },
+  {
+    "input": "   ",
+    "valid": false,
+    "note": "all spaces -> empty after trim"
+  },
+  {
+    "input": ".",
+    "valid": false,
+    "note": "current dir"
+  },
+  {
+    "input": "..",
+    "valid": false,
+    "note": "parent dir"
+  },
+  {
+    "input": "a/b",
+    "valid": false,
+    "note": "forward slash separator"
+  },
+  {
+    "input": "a\\b",
+    "valid": false,
+    "note": "back slash separator"
+  },
+  {
+    "input": "a\u0000b",
+    "valid": false,
+    "note": "embedded NUL"
+  },
+  {
+    "input": "a:b",
+    "valid": false,
+    "note": "colon (NTFS stream separator)"
+  },
+  {
+    "input": "name.",
+    "valid": false,
+    "note": "trailing dot (invalid on Windows)"
+  },
+  {
+    "input": "con",
+    "valid": false,
+    "note": "reserved device name, exact"
+  },
+  {
+    "input": "CON",
+    "valid": false,
+    "note": "reserved, case-insensitive"
+  },
+  {
+    "input": "con.txt",
+    "valid": false,
+    "note": "reserved stem before extension"
+  },
+  {
+    "input": "nul",
+    "valid": false,
+    "note": "reserved"
+  },
+  {
+    "input": "lpt9",
+    "valid": false,
+    "note": "reserved LPT9"
+  },
+  {
+    "input": "PRN.tar.gz",
+    "valid": false,
+    "note": "reserved stem 'PRN'"
+  },
+  {
+    "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "valid": false,
+    "note": "256 bytes: over the 255-byte limit"
+  },
+  {
+    "input": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+    "valid": false,
+    "note": "256 UTF-8 bytes (128*2): over limit -> pins UTF-8 BYTE counting, not UTF-16 length"
+  },
+  {
+    "input": "a/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "valid": false,
+    "note": "both over-length AND a separator: verdict (reject) agrees despite different reason/order"
+  }
+]

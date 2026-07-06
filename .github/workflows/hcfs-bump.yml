@@ -1,0 +1,143 @@
+name: hcfs-bump
+
+# Weekly automation that bumps the pinned `hcfs` git rev to thenervelab/hcfs
+# `main` HEAD and opens a PR. The `ci` workflow then runs the full Rust +
+# frontend suite (including the IPC wire-contract guards) on that PR, so a
+# breaking hcfs bump fails review instead of shipping. This is the automated
+# half of the dependency-bump safety net — the manual audit becomes a gated PR.
+#
+# Renovate/Dependabot can't drive this: a Cargo dep pinned by a bare
+# `rev = "<sha>"` git hash is skipped by their cargo managers, and the dep is a
+# private SSH repo. This workflow already has the hcfs deploy key, so it does
+# the resolve + update + PR itself.
+on:
+  schedule:
+    # Mondays 06:00 UTC — a weekly cadence (matches the 7-day cooldown norm).
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: hcfs-bump
+  cancel-in-progress: false
+
+env:
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # create-pull-request authenticates with its own `token:` input below,
+          # so the checkout needs no persisted git credentials (and shouldn't
+          # leave them in .git/config). The PAT-vs-GITHUB_TOKEN note is on that
+          # step — a PAT (HCFS_BUMP_TOKEN) makes the opened PR trigger `ci`.
+          persist-credentials: false
+
+      # hcfs is a private SSH dep; needed both to resolve main HEAD and for
+      # `cargo update` to fetch the new rev. Mirrors publish-dev.yml / ci.yml.
+      - name: Setup SSH for private Rust git deps
+        shell: bash
+        env:
+          PRIVATE_GIT_DEPLOY_KEY_B64: ${{ secrets.HCFS_DEPLOY_KEY_B64 }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          python3 - <<'PY' > ~/.ssh/private_git_key
+          import os, base64, sys
+          sys.stdout.buffer.write(base64.b64decode(os.environ["PRIVATE_GIT_DEPLOY_KEY_B64"].strip()))
+          PY
+          chmod 600 ~/.ssh/private_git_key
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          cat > ~/.ssh/config <<'EOF'
+          Host github.com
+            HostName github.com
+            User git
+            IdentityFile ~/.ssh/private_git_key
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+            BatchMode yes
+          EOF
+          chmod 600 ~/.ssh/config
+          eval "$(ssh-agent -s)"
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
+          echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
+          ssh-add ~/.ssh/private_git_key
+
+      - name: Force Cargo to use the git CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.cargo
+          printf '[net]\ngit-fetch-with-cli = true\n' > ~/.cargo/config.toml
+
+      # Resolve main HEAD, compare to the pinned rev, and update both hcfs deps
+      # + the lockfile when they differ. `cargo update` runs no build scripts,
+      # so no toolchain components / frontend dist are needed here.
+      - name: Resolve and apply hcfs bump
+        id: bump
+        shell: bash
+        run: |
+          set -euo pipefail
+          new=$(git ls-remote ssh://git@github.com/thenervelab/hcfs.git refs/heads/main | awk 'NR==1 {print $1}')
+          old=$(grep -m1 'thenervelab/hcfs.git' src-tauri/Cargo.toml | sed 's/.*rev *= *"\([^"]*\)".*/\1/')
+          echo "pinned=$old  main_head=$new"
+          if [ -z "$new" ]; then
+            echo "could not resolve hcfs main HEAD" >&2
+            exit 1
+          fi
+          if [ -z "$old" ]; then
+            echo "could not parse the pinned hcfs rev from Cargo.toml" >&2
+            exit 1
+          fi
+          if [ "$old" = "$new" ]; then
+            echo "hcfs already at main HEAD — nothing to do"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Both hcfs-client and hcfs-shared share the same rev — update together.
+          sed -i "s/$old/$new/g" src-tauri/Cargo.toml
+          ( cd src-tauri && cargo update --package hcfs-client --package hcfs-shared )
+          {
+            echo "changed=true"
+            echo "old=$old"
+            echo "new=$new"
+            echo "short_new=${new:0:12}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Open bump PR
+        if: steps.bump.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          token: ${{ secrets.HCFS_BUMP_TOKEN || github.token }}
+          branch: automated/hcfs-bump
+          base: ${{ github.event.repository.default_branch }}
+          add-paths: |
+            src-tauri/Cargo.toml
+            src-tauri/Cargo.lock
+          commit-message: "chore(deps): bump hcfs to ${{ steps.bump.outputs.short_new }}"
+          title: "chore(deps): bump hcfs-client/hcfs-shared to main HEAD"
+          delete-branch: true
+          body: |
+            Automated bump of the pinned `hcfs` git rev to `thenervelab/hcfs` **main** HEAD.
+
+            - from: `${{ steps.bump.outputs.old }}`
+            - to: `${{ steps.bump.outputs.new }}`
+            - compare: https://github.com/thenervelab/hcfs/compare/${{ steps.bump.outputs.old }}...${{ steps.bump.outputs.new }}
+
+            Updates `hcfs-client` and `hcfs-shared` in `src-tauri/Cargo.toml` + `Cargo.lock`.
+
+            The `ci` workflow runs the full Rust + frontend suite (including the IPC
+            wire-contract guards) on this PR — **review its result before merging**.
+            A breaking bump fails CI here instead of shipping.
+
+            > If CI did not start on this PR, add a `HCFS_BUMP_TOKEN` PAT secret:
+            > PRs opened with the default `GITHUB_TOKEN` do not trigger other workflows.

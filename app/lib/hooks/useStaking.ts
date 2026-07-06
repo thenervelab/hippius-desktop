@@ -4,6 +4,7 @@ import { useLocalWallet } from '@/app/contexts/LocalWalletContext';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { invoke } from '@tauri-apps/api/core';
 import { LIVE_DATA_REFRESH_MS } from '@/lib/constants';
+import { resolveTxOutcome, type TxOutcome } from '@/lib/utils/txOutcome';
 
 interface UnbondingPeriod {
     /** Raw planck amount as a decimal-digit string (full precision). */
@@ -52,10 +53,6 @@ interface StakingInfo extends StakingInfoResult {
     error: string | null;
 }
 
-interface TxResult {
-    txHash: string;
-    success: boolean;
-}
 
 interface StakingOperations {
     bond: (amount: string, password: string) => Promise<void>;
@@ -128,30 +125,39 @@ export const useStaking = (addressSource: StakingAddressSource = "activeWallet")
         queryClient.invalidateQueries({ queryKey: ['hippius-balance'] });
     }, [queryClient]);
 
+    // Each op invalidates BEFORE interpreting the outcome: a
+    // `submittedUnconfirmed` tx may still land, so refreshing balances/staking
+    // is useful regardless, and `resolveTxOutcome` then throws the right error
+    // (incl. the no-retry `TxSubmittedUnconfirmedError`) for the dialog to show.
     const bond = useCallback(async (amount: string, password: string): Promise<void> => {
-        await invoke<TxResult>('stake_bond', { amount, password });
+        const outcome = await invoke<TxOutcome>('stake_bond', { amount, password });
         invalidate();
+        resolveTxOutcome(outcome);
     }, [invalidate]);
 
     const bondExtra = useCallback(async (amount: string, password: string): Promise<void> => {
         // stake_bond auto-detects whether to use bond or bond_extra
-        await invoke<TxResult>('stake_bond', { amount, password });
+        const outcome = await invoke<TxOutcome>('stake_bond', { amount, password });
         invalidate();
+        resolveTxOutcome(outcome);
     }, [invalidate]);
 
     const unbond = useCallback(async (amount: string, password: string): Promise<void> => {
-        await invoke<TxResult>('stake_unbond', { amount, password });
+        const outcome = await invoke<TxOutcome>('stake_unbond', { amount, password });
         invalidate();
+        resolveTxOutcome(outcome);
     }, [invalidate]);
 
     const withdrawUnbonded = useCallback(async (password: string): Promise<void> => {
-        await invoke<TxResult>('stake_withdraw_unbonded', { password });
+        const outcome = await invoke<TxOutcome>('stake_withdraw_unbonded', { password });
         invalidate();
+        resolveTxOutcome(outcome);
     }, [invalidate]);
 
     const claimRewards = useCallback(async (password: string): Promise<void> => {
-        await invoke<TxResult>('stake_claim_rewards', { password });
+        const outcome = await invoke<TxOutcome>('stake_claim_rewards', { password });
         invalidate();
+        resolveTxOutcome(outcome);
     }, [invalidate]);
 
     const operations: StakingOperations = {

@@ -1,6 +1,5 @@
-// Single-source feature flags. Same pattern as `IS_SYNC_PAUSED` in
-// `app/components/ui/SyncPausedAlert.tsx`: a literal `boolean` constant
-// every consumer imports, so flipping a release just edits one line.
+// Single-source feature flags: a literal `boolean` constant every consumer
+// imports, so flipping a release just edits one line.
 //
 // Add new flags here only when they gate user-visible behaviour and a
 // future release is expected to flip them.
@@ -61,7 +60,33 @@ export const WALLET_FEATURE_ENABLED = false;
 export const VM_FEATURE_ENABLED = false;
 
 /**
- * Referrals readiness. When `true`, the referrals page renders behind the
+ * VM-connection VPN (NetBird, app-scoped). When `false`, the per-VM "Connect
+ * via VPN" surface in the VM instance-details view is hidden. The VPN is
+ * **opt-in and VM-only**: it never routes the app's regular traffic, only
+ * explicit connections to a VM's overlay address (the `nebula_ip` successor)
+ * via a localhost forward.
+ *
+ * Independent of the legacy `VPN_FEATURE_ENABLED` (which gated the removed
+ * whole-system Nebula menu). Off until (a) the backend mints the desktop's
+ * per-tenant NetBird credential, (b) the `netbird-vpn` Cargo feature ships the
+ * real embedded engine, and (c) VM functionality is live. The Rust `vpn_*` IPC
+ * commands stay registered regardless, so flipping this needs no other change.
+ * Also gated by `VM_FEATURE_ENABLED` since it lives inside the VM views.
+ */
+export const VM_VPN_ENABLED = false;
+
+/**
+ * Referrals page. When `false`, referrals is fully invisible: the sidebar
+ * entry is filtered out (`filterNavSections` in NavData.tsx) and a direct
+ * `/referrals` navigation redirects to the overview (`FeatureDisabledRedirect`
+ * in the page). All referrals code stays in place — same keep-don't-delete
+ * policy as wallet/VPN. Flip to `true` to restore the page and sidebar entry.
+ */
+export const REFERRALS_FEATURE_ENABLED = false;
+
+/**
+ * Referrals readiness. Only consulted while `REFERRALS_FEATURE_ENABLED` is
+ * `true`: when this is also `true`, the referrals page renders behind the
  * blurred `ComingSoon` overlay (the sidebar link still routes there and the
  * page still mounts — matching the web console's referrals gating). Flip to
  * `false` when the program goes live.

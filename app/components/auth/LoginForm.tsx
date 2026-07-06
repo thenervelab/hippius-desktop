@@ -11,10 +11,11 @@
 import { useState, useEffect } from "react";
 import { OAuthButtonsGroup } from "./OAuthButtons";
 import { AccessKeyLoginForm } from "./AccessKeyLoginForm";
+import { RecoverAccountDialog } from "./RecoverAccountDialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getVersion } from "@tauri-apps/api/app";
 import { isTauri } from "@tauri-apps/api/core";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { LogoMark } from "@/components/ui/LogoMark";
 
 export function LoginForm({
@@ -22,7 +23,14 @@ export function LoginForm({
 }: {
   onHideHeaderChange?: (hide: boolean) => void;
 }) {
-  const [showAccessKeyForm, setShowAccessKeyForm] = useState(false);
+  const searchParams = useSearchParams();
+  // In re-auth mode (`/login?reauth=1`, from the sync re-auth banner) jump
+  // straight to the seed-phrase form instead of the OAuth chooser — that's the
+  // surface that re-enters the seed and clears the re-auth banner (audit R-13).
+  const [showAccessKeyForm, setShowAccessKeyForm] = useState(
+    searchParams.get("reauth") === "1",
+  );
+  const [showRecover, setShowRecover] = useState(false);
   const [version, setVersion] = useState<string>("");
   const router = useRouter();
 
@@ -285,6 +293,14 @@ export function LoginForm({
             </div>
           )}
 
+          <button
+            type="button"
+            onClick={() => setShowRecover(true)}
+            className="w-full text-center text-[min(0.875rem,14px)] font-medium text-primary-50 dark:text-primary-65 hover:text-primary-60 transition-colors cursor-pointer"
+          >
+            Recover an account with your seed phrase
+          </button>
+
           <div className="h-px w-full bg-grey-80 dark:bg-[#494949]" />
 
           <p className="w-full text-center text-[min(0.75rem,12px)] leading-[min(1.125rem,18px)] tracking-[-0.02em] text-grey-dark-800 font-medium">
@@ -314,6 +330,8 @@ export function LoginForm({
           </p>
         </div>
       </div>
+
+      <RecoverAccountDialog open={showRecover} onClose={() => setShowRecover(false)} />
     </div>
   );
 }

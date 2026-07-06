@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import type { FileExtension } from "@/app/lib/utils/fileTypeMapper";
@@ -67,32 +67,28 @@ export function useFilteredFiles<T extends FormattedUserFile>(
         (!criteria.fileSizes || criteria.fileSizes.length === 0) &&
         !criteria.folderTab;
 
-    // Identity of the FILTER CRITERIA that produced the current `data`.
+    // VALUE identity of the filter criteria that produced the current `data`.
+    //
+    // Serialized to a string ON PURPOSE: callers build `criteria` inline and
+    // pass fresh array/object references for the SAME values every render (e.g.
+    // an inline `fileExtensions` array). A reference-keyed identity therefore
+    // changed every render, which — combined with the post-settle `forceRender`
+    // below — re-ran the effect every render and blew past React's update depth
+    // (the "Maximum update depth exceeded" loop). A string compares by value, so
+    // equal criteria no longer re-trigger the effect regardless of references.
+    //
     // Deliberately EXCLUDES `files`: a background refetch (sync completed) swaps
-    // the `files` reference for the SAME view, and surfacing `isFiltering: true`
-    // for that flashed the loading skeleton on every silent refresh (the
-    // flicker bug). The effect below still re-runs on `files` changes (so the
-    // new data gets re-filtered) and resets this ref to the unchanged criteria,
-    // so the refresh applies silently. `isFiltering` is therefore true only when
-    // the USER changed a criterion (search / filter / folder tab) and the new
-    // IPC result hasn't landed yet.
-    const currentCriteria = useMemo(
-        () => ({
-            searchTerm: criteria.searchTerm,
-            fileExtensions: criteria.fileExtensions,
-            dateRange: criteria.dateRange,
-            fileSizes: criteria.fileSizes,
-            folderTab: criteria.folderTab,
-        }),
-        [
-            criteria.searchTerm,
-            criteria.fileExtensions,
-            criteria.dateRange,
-            criteria.fileSizes,
-            criteria.folderTab,
-        ],
-    );
-    const loadedCriteriaRef = useRef<typeof currentCriteria | null>(null);
+    // the `files` reference for the SAME view; keying `isFiltering` only on the
+    // criteria keeps that refresh silent (no skeleton flash). The effect still
+    // re-runs on `files` changes to re-filter the new data.
+    const criteriaKey = JSON.stringify({
+        searchTerm: criteria.searchTerm ?? null,
+        fileExtensions: criteria.fileExtensions ?? null,
+        dateRange: criteria.dateRange ?? null,
+        fileSizes: criteria.fileSizes ?? null,
+        folderTab: criteria.folderTab ?? null,
+    });
+    const loadedCriteriaKeyRef = useRef<string | null>(null);
     // Bumped after every settled fetch so the render-time `isFiltering`
     // derivation re-evaluates against the updated `loadedCriteriaRef`. A
     // bare ref mutation wouldn't trigger a re-render on its own.
@@ -100,12 +96,12 @@ export function useFilteredFiles<T extends FormattedUserFile>(
 
     useEffect(() => {
         if (isNoopCriteria) {
-            // Keep `result` in sync with `files` for the next render, but
-            // the return value already short-circuits to `files` directly
-            // below — so there's no one-frame lag when files changes.
-            setResult(files);
-            loadedCriteriaRef.current = currentCriteria;
-            forceRender((tick) => tick + 1);
+            // No filters: the hook's return short-circuits to `files` directly
+            // (below), so there is nothing to compute here AND — critically —
+            // nothing to setState. The old code called `setResult`/`forceRender`
+            // here, which re-rendered the host every time the effect ran; when a
+            // caller passed an unstable criterion reference the effect ran every
+            // render, so that `forceRender` looped forever. Just bail.
             return;
         }
 
@@ -124,31 +120,26 @@ export function useFilteredFiles<T extends FormattedUserFile>(
                 });
                 if (callId === latestCallIdRef.current) {
                     setResult(filtered);
-                    loadedCriteriaRef.current = currentCriteria;
+                    loadedCriteriaKeyRef.current = criteriaKey;
                     forceRender((tick) => tick + 1);
                 }
             } catch (err) {
                 console.error("filter_file_entries failed:", err);
                 if (callId === latestCallIdRef.current) {
                     setResult(files);
-                    loadedCriteriaRef.current = currentCriteria;
+                    loadedCriteriaKeyRef.current = criteriaKey;
                     forceRender((tick) => tick + 1);
                 }
             }
         }, debounceMs);
 
         return () => clearTimeout(handle);
-    }, [
-        files,
-        criteria.searchTerm,
-        criteria.fileExtensions,
-        criteria.dateRange,
-        criteria.fileSizes,
-        criteria.folderTab,
-        debounceMs,
-        isNoopCriteria,
-        currentCriteria,
-    ]);
+        // `criteriaKey` captures every criterion by value, so the individual
+        // `criteria.*` reads inside the IPC payload (which run with this render's
+        // `criteria`) need not be listed — and listing the array/object fields
+        // directly is exactly what reintroduces the unstable-reference loop.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [files, criteriaKey, debounceMs, isNoopCriteria]);
 
     // When there are no filters at all, skip the result-state roundtrip and
     // return `files` directly. The effect-driven path lags by one render
@@ -161,6 +152,6 @@ export function useFilteredFiles<T extends FormattedUserFile>(
     if (isNoopCriteria) {
         return { data: files, isFiltering: false };
     }
-    const isFiltering = loadedCriteriaRef.current !== currentCriteria;
+    const isFiltering = loadedCriteriaKeyRef.current !== criteriaKey;
     return { data: result, isFiltering };
 }

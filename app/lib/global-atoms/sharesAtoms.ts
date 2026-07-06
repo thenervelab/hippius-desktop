@@ -48,3 +48,21 @@ export const shareFeatureEnabledAtom = atom(() => true);
  * IPC round-trip to fetch metadata.
  */
 export const shareModalFileAtom = atom<FormattedUserFile | null>(null);
+
+/**
+ * A pending "Share with Hippius" request from the macOS Finder right-click, as
+ * seen by `ShareFileModal`. `null` means no Finder share is open.
+ *
+ * The redesign moved the public/private decision into the app (Google-Drive
+ * model): the backend no longer mints on click — it emits `finder:share-choosing`
+ * with the parked request's `id` + display `name`, and the modal opens its
+ * chooser. So this atom carries exactly ONE state, `choosing`; the subsequent
+ * `running → done`/`error` lifecycle is local `ShareFileModal` state driven by
+ * the {@link confirmFinderShare} call (symmetric with the in-app
+ * {@link shareModalFileAtom} → `createShare` flow). The `id` is echoed back to
+ * the confirm/cancel IPC so the backend mints the file it resolved, never one
+ * the renderer names.
+ */
+export type FinderShareState = { kind: "choosing"; id: string; name: string };
+
+export const finderShareAtom = atom<FinderShareState | null>(null);

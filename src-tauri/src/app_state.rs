@@ -59,6 +59,26 @@ pub struct AppState {
     /// of `SyncError`, and globally on `SyncReset`). See
     /// `crate::sync::credits_exhausted`.
     pub credits_exhausted: std::sync::Arc<crate::sync::credits_exhausted::CreditsExhaustedState>,
+    /// Per-label consecutive-failure count deciding whether a `SyncError`
+    /// becomes a persisted "Sync Failed" notification. A flaky endpoint fires
+    /// a `SyncError` every retry cycle; this surfaces ONE notification once a
+    /// drive has failed `ERROR_NOTIFY_THRESHOLD` consecutive cycles and
+    /// suppresses the rest until the drive recovers. Counted per-label here
+    /// rather than read from the payload's runner-global `consecutive_failures`
+    /// (which any healthy drive resets). Cleared on the recovery edge
+    /// (`SyncCompleted`), `SyncStopped`, and globally on `SyncReset`. See
+    /// `crate::sync::error_notify`.
+    pub error_notify: std::sync::Arc<crate::sync::error_notify::ErrorNotifyState>,
+    /// Single per-label min-interval throttle gating the combined per-cycle
+    /// folder-entity sync (reconcile disk→server THEN materialize server→disk).
+    /// The per-cycle completion funnel (`handle_sync_completed`) fires the
+    /// combined sync per drive; this collapses a burst of short cycles into at
+    /// most one walk + folder-entity sync per `MIN_FOLDER_ENTITY_SYNC_INTERVAL`.
+    /// ONE throttle for both halves so they can never run out of step and race
+    /// over the shared cache + server set. In-memory (no timestamp column),
+    /// mirroring the other per-label state objects above. See
+    /// `crate::sync::folder_entries_materialize`.
+    pub folder_entity_sync: std::sync::Arc<crate::sync::folder_entries_reconcile::PerLabelThrottle>,
     /// Monotonically increasing counter, incremented on every
     /// `SyncStarted` event. The `UploadProcessingState` clear gate
     /// reads this to distinguish events from a cycle that began
@@ -72,6 +92,22 @@ pub struct AppState {
     /// panel, then fires the toggle, which would see it hidden and re-show it.
     /// `0` means "never hidden by blur". See `tray::panel` for the cooldown.
     pub tray_panel_hidden_at: AtomicU64,
+    /// Set by `cancel_account_recovery` to request that an in-flight
+    /// `recover_account_files` pull stop after the current file. The recover
+    /// command resets it to `false` at entry and checks it each iteration,
+    /// returning the partial summary. A plain flag (not a `CancellationToken`)
+    /// because recovery is a single foreground pull, not a fan-out.
+    pub recovery_cancel: std::sync::atomic::AtomicBool,
+    /// True while a `recover_account_files` pull is running. A second concurrent
+    /// recovery is rejected so the shared `recovery_cancel` flag is unambiguous
+    /// (audit RB-4) — without this, a second run's entry reset would clear a
+    /// cancel the first run was waiting on.
+    pub recovery_in_progress: std::sync::atomic::AtomicBool,
+    /// Accounts whose default recovery binding has already succeeded this
+    /// process session. Guards `recovery_binding::spawn_default_recovery_binding`
+    /// so the per-drive sync-init funnel doesn't re-bind on every init/resume; a
+    /// failed attempt leaves the account absent, so it retries on the next init.
+    pub recovery_bound: std::sync::Mutex<std::collections::HashSet<String>>,
     /// HTTP client for HCFS health checks (accepts self-signed certs in debug).
     pub health_client: reqwest::Client,
     /// HTTP client for Hippius API calls (reuses connection pool + TLS cache).
@@ -108,6 +144,16 @@ pub struct AppState {
     /// recovery flow has had a chance to install the unsealed one.
     /// See `docs/plans/2026-04-14-oauth-account-recovery.md`.
     recovery_gate: tokio::sync::watch::Sender<RecoveryGateState>,
+    /// Serializes the mnemonic-mutating recovery/rotation commands
+    /// (`change_recovery_password`, `recover_mnemonic`, `seal_and_upload_mnemonic`,
+    /// `resume_recovery_password_rotation`). Each holds this for its whole
+    /// POST → install → align sequence, so two overlapping rotations (a rapid
+    /// double-submit, or a rotation racing another device's resume) can't
+    /// interleave the master-file write, the per-folder rewrites, and the
+    /// DB-row flip and leave a drive wedged under a half-applied password
+    /// (audit R-18). The FE `has_pending_rotation` gate is advisory only; this
+    /// is the real guard.
+    pub recovery_lock: tokio::sync::Mutex<()>,
     /// Per-account snapshot of the most recent `hcfs_list_shares`
     /// result. Used by `crate::shares::history::diff_active_lists` to
     /// detect tokens that have left the active set since the last
@@ -131,6 +177,38 @@ pub struct AppState {
     /// stolen-DB attacker this layer adds nothing; its job is to clamp
     /// online IPC abuse during a single session).
     pub wallet_rate_limit: Arc<crate::wallet::rate_limit::RateLimitState>,
+    /// App-scoped NetBird VPN for VM connections. Embeds a userspace mesh peer
+    /// (no OS TUN / root / separate binary) used only for opt-in connections to
+    /// Hippius VMs — never for the app's regular traffic. The default engine is
+    /// disabled unless the `netbird-vpn` Cargo feature is built; see
+    /// `crate::vpn`.
+    pub vpn: Arc<crate::vpn::VpnState>,
+    /// macOS Finder Sync extension bridge (the socket server). Boot-scoped: set
+    /// once by `finder_bridge::lifecycle::start` from `setup()`, then read by
+    /// the share dispatch to register drive roots and push badges. Absent on
+    /// other platforms — Finder integration is macOS-only.
+    #[cfg(target_os = "macos")]
+    finder_bridge: OnceLock<Arc<crate::finder_bridge::socket::FinderBridge>>,
+    /// Pending "Share with Hippius" requests from Finder awaiting the user's
+    /// public/private choice in the app. A right-click stores the resolved path
+    /// here keyed by a fresh id and emits `finder:share-choosing{id,name}`; the
+    /// modal's confirm/cancel command takes the entry back by id. The renderer
+    /// therefore round-trips only `{id, visibility}` and never an arbitrary path
+    /// — a compromised webview cannot mint a share of a file it merely names
+    /// (least authority; boundary-validation axiom). macOS-only: the Finder
+    /// bridge is its sole producer.
+    #[cfg(target_os = "macos")]
+    pending_finder_shares: Mutex<HashMap<String, crate::finder_bridge::dispatch::PendingFinderShare>>,
+    /// Cancellation handles for Finder shares that are currently minting. A
+    /// confirmed share can upload a large outside file or a zipped folder for
+    /// many seconds; without this, clicking Cancel only closed the modal while
+    /// the upload ran to completion and minted a link with no UI trace (illu
+    /// review L2). `hcfs_finder_confirm_share` registers a token here and runs
+    /// the mint inside a `tokio::select!` against it, so `cancel_finder_share`
+    /// signalling the token drops the mint future and aborts the in-flight
+    /// upload. Keyed by the same random request id as `pending_finder_shares`.
+    #[cfg(target_os = "macos")]
+    finder_share_cancels: Mutex<HashMap<String, tokio_util::sync::CancellationToken>>,
 }
 
 impl Default for AppState {
@@ -172,8 +250,13 @@ impl AppState {
             upload_processing: std::sync::Arc::new(crate::sync::upload_processing::UploadProcessingState::new()),
             preparing: std::sync::Arc::new(crate::sync::preparing::PreparingState::new()),
             credits_exhausted: std::sync::Arc::new(crate::sync::credits_exhausted::CreditsExhaustedState::new()),
+            error_notify: std::sync::Arc::new(crate::sync::error_notify::ErrorNotifyState::new()),
+            folder_entity_sync: std::sync::Arc::new(crate::sync::folder_entries_reconcile::PerLabelThrottle::new()),
             sync_session_epoch: AtomicU64::new(0),
             tray_panel_hidden_at: AtomicU64::new(0),
+            recovery_cancel: std::sync::atomic::AtomicBool::new(false),
+            recovery_in_progress: std::sync::atomic::AtomicBool::new(false),
+            recovery_bound: std::sync::Mutex::new(std::collections::HashSet::new()),
             health_client,
             // Explicit timeouts. Without them a hung connection (e.g. a
             // billing-server blip during `check_action_eligibility`) would
@@ -195,8 +278,109 @@ impl AppState {
             // `complete_oauth_flow` flips this to `Pending` at its start so
             // the dialog gets a chance to run before any sync init races in.
             recovery_gate: tokio::sync::watch::channel(RecoveryGateState::Skipped).0,
+            recovery_lock: tokio::sync::Mutex::new(()),
             share_active_list_cache: Mutex::new(HashMap::new()),
             wallet_rate_limit: Arc::new(crate::wallet::rate_limit::RateLimitState::new()),
+            vpn: Arc::new(crate::vpn::VpnState::new(crate::vpn::engine::default_engine())),
+            #[cfg(target_os = "macos")]
+            finder_bridge: OnceLock::new(),
+            #[cfg(target_os = "macos")]
+            pending_finder_shares: Mutex::new(HashMap::new()),
+            #[cfg(target_os = "macos")]
+            finder_share_cancels: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Store the Finder bridge handle (once, at startup). Returns `Err` handing
+    /// the handle back if one was already set.
+    #[cfg(target_os = "macos")]
+    pub fn set_finder_bridge(
+        &self,
+        bridge: Arc<crate::finder_bridge::socket::FinderBridge>,
+    ) -> Result<(), Arc<crate::finder_bridge::socket::FinderBridge>> {
+        self.finder_bridge.set(bridge)
+    }
+
+    /// The Finder bridge handle, if it has started.
+    #[cfg(target_os = "macos")]
+    pub fn finder_bridge(&self) -> Option<&Arc<crate::finder_bridge::socket::FinderBridge>> {
+        self.finder_bridge.get()
+    }
+
+    /// Store a pending Finder share request, returning its fresh id.
+    ///
+    /// The id is an unguessable random token (128 bits, OS CSPRNG), NOT a
+    /// sequential counter: it is the ONLY authority the renderer round-trips to
+    /// confirm/cancel a mint, so a predictable id would let a compromised webview
+    /// enumerate in-flight requests to hijack the visibility choice or cancel the
+    /// chooser (illu review L1). The lock is held only for the insert, never
+    /// across an `.await` (axiom 74).
+    #[cfg(target_os = "macos")]
+    pub fn store_finder_share(&self, req: crate::finder_bridge::dispatch::PendingFinderShare) -> String {
+        use rand::Rng;
+        use rand::distributions::Alphanumeric;
+        let id: String = rand::thread_rng().sample_iter(&Alphanumeric).take(22).map(char::from).collect();
+        self.pending_finder_shares
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(id.clone(), req);
+        id
+    }
+
+    /// Take (remove) a pending Finder share request by id. Single-use: a second
+    /// confirm for the same id yields `None`. Returns the OWNED request so the
+    /// guard drops before the caller's mint `.await` — no lock spans the await
+    /// (axiom 74).
+    #[cfg(target_os = "macos")]
+    pub fn take_finder_share(&self, id: &str) -> Option<crate::finder_bridge::dispatch::PendingFinderShare> {
+        self.pending_finder_shares
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(id)
+    }
+
+    /// Register an in-flight mint for `id`, returning a fresh
+    /// [`tokio_util::sync::CancellationToken`] the confirm command selects on.
+    /// Signalling this token (via [`AppState::cancel_finder_share`]) drops the
+    /// mint future and aborts its upload.
+    #[cfg(target_os = "macos")]
+    pub fn register_finder_mint(&self, id: &str) -> tokio_util::sync::CancellationToken {
+        let token = tokio_util::sync::CancellationToken::new();
+        self.finder_share_cancels
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(id.to_string(), token.clone());
+        token
+    }
+
+    /// Drop the in-flight cancel handle for `id`. Called when the mint ends
+    /// (success, error, cancel, or the command future being dropped), so the
+    /// registry never retains a completed mint's token.
+    #[cfg(target_os = "macos")]
+    pub fn finish_finder_mint(&self, id: &str) {
+        self.finder_share_cancels
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(id);
+    }
+
+    /// Cancel a Finder share by id, covering BOTH lifecycle stages: remove any
+    /// still-parked request (so a mint that hasn't started never will) AND signal
+    /// any in-flight mint's token (so an upload already running is aborted).
+    /// Idempotent — an unknown id is a no-op.
+    #[cfg(target_os = "macos")]
+    pub fn cancel_finder_share(&self, id: &str) {
+        self.pending_finder_shares
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(id);
+        if let Some(token) = self
+            .finder_share_cancels
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(id)
+        {
+            token.cancel();
         }
     }
 
@@ -442,6 +626,76 @@ mod tests {
         assert_eq!(acct.as_str(), "addr-A");
         assert_eq!(&*acct, "addr-A");
         assert_eq!(acct.clone().into_inner(), "addr-A");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn finder_share_store_take_is_single_use() {
+        use crate::finder_bridge::dispatch::PendingFinderShare;
+        use std::path::PathBuf;
+
+        let state = AppState::new();
+        let id = state.store_finder_share(PendingFinderShare {
+            path: PathBuf::from("/Users/me/Hippius/report.pdf"),
+            name: "report.pdf".into(),
+        });
+        // First take returns the parked request…
+        let taken = state.take_finder_share(&id).expect("first take yields the request");
+        assert_eq!(taken.name, "report.pdf");
+        assert_eq!(taken.path, PathBuf::from("/Users/me/Hippius/report.pdf"));
+        // …and it is single-use: a second take (double confirm / cancel-after-confirm) is None.
+        assert!(state.take_finder_share(&id).is_none(), "second take must be None");
+        // An unknown id is also None (no panic, no cross-talk).
+        assert!(state.take_finder_share("does-not-exist").is_none());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn finder_share_ids_are_distinct_per_store() {
+        use crate::finder_bridge::dispatch::PendingFinderShare;
+        use std::path::PathBuf;
+
+        let state = AppState::new();
+        let mk = || PendingFinderShare {
+            path: PathBuf::from("/x"),
+            name: "x".into(),
+        };
+        let a = state.store_finder_share(mk());
+        let b = state.store_finder_share(mk());
+        assert_ne!(a, b, "each store must mint a fresh id so concurrent clicks don't collide");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn cancel_signals_an_in_flight_mint_token() {
+        // The confirm command registers a token and selects on it; cancel must
+        // fire that token so the mint future is dropped and its upload aborted.
+        let state = AppState::new();
+        let token = state.register_finder_mint("abc");
+        assert!(!token.is_cancelled());
+        state.cancel_finder_share("abc");
+        assert!(token.is_cancelled(), "cancel must signal the in-flight mint token");
+        // finish is idempotent cleanup after the mint's select! unwinds.
+        state.finish_finder_mint("abc");
+        // A second cancel after finish is a harmless no-op (token gone).
+        state.cancel_finder_share("abc");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn cancel_drops_a_still_parked_request() {
+        // Cancel while the chooser is open (mint not started) removes the parked
+        // request so a later confirm can't mint it.
+        use crate::finder_bridge::dispatch::PendingFinderShare;
+        use std::path::PathBuf;
+
+        let state = AppState::new();
+        let id = state.store_finder_share(PendingFinderShare {
+            path: PathBuf::from("/Users/me/Hippius/a.txt"),
+            name: "a.txt".into(),
+        });
+        state.cancel_finder_share(&id);
+        assert!(state.take_finder_share(&id).is_none(), "cancel must drop the parked request");
     }
 
     #[tokio::test]

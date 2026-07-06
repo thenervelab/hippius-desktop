@@ -13,6 +13,10 @@ export interface FileProgress {
   totalBytes: number;
   resumedFromBytes?: number;
   error?: string;
+  /** Epoch-ms of this file's terminal transition (Completed OR Error), or
+   *  null/absent while pending/in-flight. The widget cap uses it server-side
+   *  to keep the newest completions; the FE does not render it. */
+  completedAt?: number | null;
 }
 
 export interface SyncSnapshot {
@@ -75,6 +79,14 @@ export interface SyncSnapshot {
    * the "X of Y" line — backend computes this so the FE doesn't have
    * to redo the comparison. */
   intentActive?: boolean;
+  /** Startup "preparing" summary: on-disk files not yet in the synced
+   * baseline, summed across drives — set only during the cold-start window
+   * before the engine's first session snapshot, so the widget/tray can show
+   * "N files · X · Preparing" immediately instead of a bare "Preparing".
+   * Absent (undefined) outside that window. Only meaningful when
+   * `widgetState === "preparing"`. */
+  preparingPendingFiles?: number;
+  preparingPendingBytes?: number;
 }
 
 export const EMPTY_SNAPSHOT: SyncSnapshot = {

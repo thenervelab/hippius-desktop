@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { isExpectedNoSessionError } from "@/app/lib/utils/errorUtils";
 
 /** Row shape returned by the Rust `list_notifications` command (camelCase). */
 export interface NotificationRow {
@@ -50,7 +51,9 @@ export async function getEnabledNotificationTypes(): Promise<string[]> {
   try {
     return await invoke<string[]>("get_local_enabled_notification_types");
   } catch (error) {
-    console.error("Failed to get enabled notification types:", error);
+    if (!isExpectedNoSessionError(error)) {
+      console.error("Failed to get enabled notification types:", error);
+    }
     return [];
   }
 }
@@ -101,7 +104,9 @@ export async function listNotifications(limit = 50) {
   try {
     return await invoke<NotificationRow[]>("list_notifications", { limit });
   } catch (error) {
-    console.error("Failed to list notifications:", error);
+    if (!isExpectedNoSessionError(error)) {
+      console.error("Failed to list notifications:", error);
+    }
     return [];
   }
 }

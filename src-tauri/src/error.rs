@@ -5,7 +5,12 @@ use serde::Serialize;
 /// All Tauri IPC commands return `Result<T, AppError>`. The error is
 /// serialized as JSON for the frontend, preserving the `kind` field
 /// for programmatic matching and `message` for display.
+/// `#[non_exhaustive]` so new typed variants can be added (the ongoing
+/// error-taxonomy migration off `Other(String)`) without it being a breaking
+/// change for the `tauri_project_lib` library consumers — the integration-test
+/// crates that `match` on it must keep a wildcard arm.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum AppError {
     #[error("Database error: {0}")]
     Db(#[from] sqlx::Error),
@@ -18,6 +23,13 @@ pub enum AppError {
 
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
+
+    /// Archive (de)compression failures, e.g. reading/writing a wallet
+    /// backup `.zip`. A typed `#[from]` wrapper (not folded into `Io` or
+    /// `Other`) so `ZipError`'s `source()` chain survives `?` and the FE
+    /// gets a stable `kind: "Zip"` instead of an opaque string.
+    #[error("ZIP archive error: {0}")]
+    Zip(#[from] zip::result::ZipError),
 
     #[error("Blockchain RPC error: {0}")]
     Substrate(String),
@@ -33,6 +45,14 @@ pub enum AppError {
 
     #[error("{0}")]
     Validation(String),
+
+    /// A requested entity (wallet, record) does not exist. Distinct from
+    /// `Validation` (bad input) and the catch-all `Other` so the FE can
+    /// tell "this wallet was removed" apart from a generic failure.
+    /// `#[error("{0}")]` like `Validation`/`Other`, so the message is the
+    /// caller's text verbatim.
+    #[error("{0}")]
+    NotFound(String),
 
     #[error("Authentication error: {0}")]
     Auth(String),
@@ -54,15 +74,24 @@ pub enum AppError {
     #[error("Sync intent error: {0}")]
     Intent(#[from] crate::sync::intent::IntentError),
 
+    /// Failures from the VM-connection VPN module. A typed `#[from]` wrapper
+    /// (not folded into `Other`) so `VpnError`'s `source()` chain survives `?`
+    /// and the FE gets a stable `kind: "Vpn"`. Note the VPN command layer maps
+    /// `VpnError::NotConnected` to `NotReady(VpnNotConnected)` instead of this,
+    /// so a "connect first" precondition reaches the FE as a structured subkind.
+    #[error("VPN error: {0}")]
+    Vpn(#[from] crate::vpn::error::VpnError),
+
     #[error("{0}")]
     Other(String),
 }
 
 /// Machine-readable error kinds for state precondition failures.
 /// The frontend can match on these structurally instead of
-/// pattern-matching English error strings.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+/// pattern-matching English error strings. The wire form is the plain
+/// string from [`NotReadyKind::wire_name`] (no serde derive — see that
+/// method for why).
+#[derive(Debug, Clone)]
 pub enum NotReadyKind {
     /// Sync setup required before this operation can proceed.
     SyncSetup,
@@ -108,6 +137,49 @@ pub enum NotReadyKind {
     /// effectively unreachable from the UI, but it stays a precise
     /// machine-readable signal for any early-startup path that reaches `pool()`.
     DatabaseNotReady,
+    /// Too many failed wallet-password attempts; the per-wallet rate
+    /// limiter is in lockout. `message` carries the human-readable
+    /// retry-after text ("Try again in N minute(s)/second(s)") produced
+    /// by `wallet::rate_limit`. Structured (rather than `Other`) so the
+    /// FE can tell a lockout apart from a genuinely wrong password —
+    /// before this variant, a locked-out user typing the CORRECT
+    /// password was told it was incorrect and kept retrying blind.
+    /// NOTE: `blockchain::helpers::get_signer_and_address` deliberately
+    /// does NOT use this — on the scripted signing path, lockouts stay
+    /// indistinguishable from wrong passwords (`SigningKeyUnavailable`).
+    RateLimited { message: String },
+    /// A VM connection over the VPN was requested before the mesh peer was
+    /// connected. Raised by `vpn::commands::vpn_open_vm_connection` (mapped from
+    /// `VpnError::NotConnected`) so the FE can prompt the user to connect the
+    /// VPN first, dispatched structurally on the `subkind` rather than the
+    /// error message.
+    VpnNotConnected,
+}
+
+impl NotReadyKind {
+    /// SCREAMING_SNAKE_CASE wire name — the value of the serialized
+    /// `subkind` field. An explicit method rather than serde's derived
+    /// enum serialization so variants may carry payload fields (e.g.
+    /// `RateLimited.message`) without changing `subkind`'s wire shape
+    /// from a plain string.
+    pub fn wire_name(&self) -> &'static str {
+        match self {
+            Self::SyncSetup => "SYNC_SETUP",
+            Self::DriveNotInitialized => "DRIVE_NOT_INITIALIZED",
+            Self::DriveNotUnlocked => "DRIVE_NOT_UNLOCKED",
+            Self::SyncInProgress => "SYNC_IN_PROGRESS",
+            Self::NoEncryptionKey => "NO_ENCRYPTION_KEY",
+            Self::ConfigMissing => "CONFIG_MISSING",
+            Self::MasterMnemonicUnrecoverable => "MASTER_MNEMONIC_UNRECOVERABLE",
+            Self::NotEnoughDiskSpace => "NOT_ENOUGH_DISK_SPACE",
+            Self::SigningKeyUnavailable => "SIGNING_KEY_UNAVAILABLE",
+            Self::InsufficientCredits => "INSUFFICIENT_CREDITS",
+            Self::SupersededByPause => "SUPERSEDED_BY_PAUSE",
+            Self::DatabaseNotReady => "DATABASE_NOT_READY",
+            Self::RateLimited { .. } => "RATE_LIMITED",
+            Self::VpnNotConnected => "VPN_NOT_CONNECTED",
+        }
+    }
 }
 
 impl std::fmt::Display for NotReadyKind {
@@ -149,6 +221,10 @@ impl std::fmt::Display for NotReadyKind {
             Self::DatabaseNotReady => {
                 write!(f, "The application is still starting up. Please try again in a moment.")
             }
+            Self::RateLimited { message } => write!(f, "{message}"),
+            Self::VpnNotConnected => {
+                write!(f, "Connect to the VPN before opening a VM connection.")
+            }
         }
     }
 }
@@ -171,23 +247,26 @@ impl Serialize for AppError {
             Self::Io(_) => "Io",
             Self::Http(_) => "Http",
             Self::Json(_) => "Json",
+            Self::Zip(_) => "Zip",
             Self::Substrate(_) => "Substrate",
             Self::Hcfs(_) => "Hcfs",
             Self::Crypto(_) => "Crypto",
             Self::Api { .. } => "Api",
             Self::Validation(_) => "Validation",
+            Self::NotFound(_) => "NotFound",
             Self::Auth(_) => "Auth",
             Self::NotReady(_) => "NotReady",
             Self::Progress(_) => "Progress",
             Self::Lock(_) => "Lock",
             Self::Intent(_) => "Intent",
+            Self::Vpn(_) => "Vpn",
             Self::Other(_) => "Other",
         };
 
         if let Self::NotReady(subkind) = self {
             let mut s = serializer.serialize_struct("AppError", 3)?;
             s.serialize_field("kind", kind)?;
-            s.serialize_field("subkind", subkind)?;
+            s.serialize_field("subkind", subkind.wire_name())?;
             s.serialize_field("message", &self.to_string())?;
             s.end()
         } else {
@@ -313,9 +392,9 @@ mod tests {
 
     #[test]
     fn not_ready_kind_serializes_screaming_snake() {
-        let kind = NotReadyKind::DriveNotInitialized;
-        let json = serde_json::to_value(&kind).expect("serialize");
-        assert_eq!(json, "DRIVE_NOT_INITIALIZED");
+        let err = AppError::NotReady(NotReadyKind::DriveNotInitialized);
+        let json = serde_json::to_value(&err).expect("serialize");
+        assert_eq!(json["subkind"], "DRIVE_NOT_INITIALIZED");
     }
 
     /// Regression pin: an uninitialized pool surfaces as
@@ -402,14 +481,15 @@ mod tests {
     // ── NotReadyKind round-trip through JSON ────────────────────────
 
     /// Drift guard between the Rust `NotReadyKind` and the mirrored TS union in
-    /// `app/lib/utils/dispatchTauriError.ts`. `wire_name`'s match is exhaustive,
-    /// so adding a variant fails to COMPILE here until its wire name is declared
-    /// — a forcing reminder to also update the TS union. The assertion then pins
-    /// that serde's actual `rename_all` output equals the declared name (so a
-    /// rename of either side is caught, not silently skipped as a list would).
+    /// `app/lib/utils/dispatchTauriError.ts`. `expected_wire_name`'s match is
+    /// exhaustive, so adding a variant fails to COMPILE here until its wire name
+    /// is declared — a forcing reminder to also update the TS union. The
+    /// assertion then pins the FULL wire path (the `subkind` field of a
+    /// serialized `AppError::NotReady`) against the declared name, so a rename
+    /// in `wire_name()` or the Serialize impl is caught, not silently skipped.
     #[test]
     fn not_ready_kind_all_variants_serialize_screaming_snake() {
-        fn wire_name(kind: &NotReadyKind) -> &'static str {
+        fn expected_wire_name(kind: &NotReadyKind) -> &'static str {
             match kind {
                 NotReadyKind::SyncSetup => "SYNC_SETUP",
                 NotReadyKind::DriveNotInitialized => "DRIVE_NOT_INITIALIZED",
@@ -423,6 +503,8 @@ mod tests {
                 NotReadyKind::InsufficientCredits => "INSUFFICIENT_CREDITS",
                 NotReadyKind::SupersededByPause => "SUPERSEDED_BY_PAUSE",
                 NotReadyKind::DatabaseNotReady => "DATABASE_NOT_READY",
+                NotReadyKind::RateLimited { .. } => "RATE_LIMITED",
+                NotReadyKind::VpnNotConnected => "VPN_NOT_CONNECTED",
             }
         }
         for kind in [
@@ -438,11 +520,27 @@ mod tests {
             NotReadyKind::InsufficientCredits,
             NotReadyKind::SupersededByPause,
             NotReadyKind::DatabaseNotReady,
+            NotReadyKind::RateLimited { message: "Try again in 5 minutes.".into() },
+            NotReadyKind::VpnNotConnected,
         ] {
-            let expected = wire_name(&kind);
-            let json = serde_json::to_value(&kind).expect("serialize");
-            assert_eq!(json, expected, "variant {kind:?} should serialize to {expected}");
+            let expected = expected_wire_name(&kind);
+            let json = serde_json::to_value(AppError::NotReady(kind.clone())).expect("serialize");
+            assert_eq!(json["subkind"], expected, "variant {kind:?} should serialize subkind {expected}");
         }
+    }
+
+    /// The lockout variant must surface the rate limiter's retry-after text as
+    /// the message (the FE shows it verbatim) while keeping the structural
+    /// `RATE_LIMITED` subkind the FE dispatches on.
+    #[test]
+    fn rate_limited_carries_retry_after_message_on_the_wire() {
+        let err = AppError::NotReady(NotReadyKind::RateLimited {
+            message: "Too many failed attempts. Try again in 5 minute(s).".into(),
+        });
+        let json = serde_json::to_value(&err).expect("serialize");
+        assert_eq!(json["kind"], "NotReady");
+        assert_eq!(json["subkind"], "RATE_LIMITED");
+        assert_eq!(json["message"], "Too many failed attempts. Try again in 5 minute(s).");
     }
 
     // ── Display for every variant ───────────────────────────────────
@@ -517,6 +615,7 @@ mod tests {
         let variants: Vec<AppError> = vec![
             AppError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "missing")),
             AppError::Json(serde_json::from_str::<String>("bad").unwrap_err()),
+            AppError::Zip(zip::result::ZipError::FileNotFound),
             AppError::Substrate("rpc".into()),
             AppError::Hcfs("sync".into()),
             AppError::Crypto("key".into()),
@@ -525,26 +624,31 @@ mod tests {
                 body: "forbidden".into(),
             },
             AppError::Validation("invalid".into()),
+            AppError::NotFound("wallet 1 not found".into()),
             AppError::Auth("unauth".into()),
             AppError::NotReady(NotReadyKind::ConfigMissing),
             AppError::Progress("tracker".into()),
             AppError::Lock("poisoned".into()),
             AppError::Intent(crate::sync::intent::IntentError::Db(sqlx::Error::ColumnNotFound("test_col".into()))),
+            AppError::Vpn(crate::vpn::error::VpnError::NotConfigured),
             AppError::Other("misc".into()),
         ];
         let expected_kinds = [
             "Io",
             "Json",
+            "Zip",
             "Substrate",
             "Hcfs",
             "Crypto",
             "Api",
             "Validation",
+            "NotFound",
             "Auth",
             "NotReady",
             "Progress",
             "Lock",
             "Intent",
+            "Vpn",
             "Other",
         ];
 
@@ -584,6 +688,10 @@ mod tests {
             (
                 NotReadyKind::DatabaseNotReady,
                 "The application is still starting up. Please try again in a moment.",
+            ),
+            (
+                NotReadyKind::VpnNotConnected,
+                "Connect to the VPN before opening a VM connection.",
             ),
         ];
         for (kind, expected) in cases {

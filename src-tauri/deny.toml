@@ -1,0 +1,138 @@
+# cargo-deny configuration — supply-chain gate for the Rust backend.
+#
+# WHY this exists: this app custodies wallet mnemonics and signs blockchain
+# transactions, so a vulnerable transitive crate is a top-tier threat. Before
+# this gate there was no automated backstop — a RUSTSEC advisory (e.g.
+# quinn-proto RUSTSEC-2026-0185, which transited a sibling repo's tree) could
+# ship unnoticed. CI runs `cargo deny check advisories bans sources` (see
+# .github/workflows/ci.yml); the `licenses` check is configured below but NOT
+# yet wired into CI — see the [licenses] note for the follow-up it's blocked on.
+#
+# Schema is cargo-deny 0.19 (matches the locally-installed version). Regenerate
+# the canonical template with `cargo deny init` after a major version bump.
+
+[graph]
+# Empty `targets` = evaluate every platform's dependency tree. Intentional: the
+# advisory check must see Linux-only (gtk), Windows-only (windows-sys) and
+# macOS-only crates, since a vuln on any shipped platform is a real exposure.
+targets = []
+all-features = false
+no-default-features = false
+
+[advisories]
+# Vulnerability-class advisories deny by default — the security purpose of this
+# gate, which we do not relax. A *matched* unsound advisory also errors: on first
+# run the gate caught RUSTSEC-2026-0097 (rand 0.8.5 unsound on reseed), fixed by
+# bumping our direct rand to the patched 0.8.6 AND production hcfs-client's rand
+# to the patched 0.9.3. Caveat worth knowing so the green check isn't read as
+# "zero affected crates": RUSTSEC-2026-0097 is *function-scoped* (to rand::rng /
+# rand::thread_rng), so cargo-deny does NOT flag the residual transitive rand
+# 0.7.3 — build-time only via phf -> tauri-build, plus bip39's upstream-capped
+# rand which can't reach the 0.8.6 patch — on version range alone. Neither meets
+# the advisory's exotic trigger (a custom `log` logger calling rng() during a
+# reseed), so this is a known, accepted residual, not an unguarded vulnerability.
+#
+# `unmaintained = "workspace"` scopes the unmaintained check to crates we
+# directly control (workspace members + their direct deps). The graph today
+# carries ~18 unmaintained *transitive* crates that are unactionable here — the
+# entire gtk-rs GTK3 Linux-webview stack pulled in by Tauri (RUSTSEC-2024-041x),
+# plus paste / proc-macro-error / fxhash / unic-* deep in the tree. Firing on
+# those would make the gate pure noise and train everyone to ignore it; firing
+# on a *direct* unmaintained dep we add is the signal worth keeping.
+unmaintained = "workspace"
+# One known yanked transitive: tauri-plugin-deep-link 2.4.8 (resolved from our
+# direct `tauri-plugin-deep-link = "2.0.0"`). Left at the default (warn) so it
+# surfaces in CI logs without failing the gate-introduction PR; bumping past the
+# yanked version is a separate dependency change (tracked follow-up).
+#
+# quick-xml 0.38.4 — RUSTSEC-2026-0194 (quadratic duplicate-attribute check) and
+# RUSTSEC-2026-0195 (unbounded namespace-declaration allocation). Both are DoS
+# advisories reachable only when parsing *adversarial* XML — a start tag with
+# millions of duplicate attributes / namespace declarations. Ignored because:
+#   1. No upgrade path today. quick-xml is pulled transitively by `plist 1.8.0`
+#      (via `tauri 2.10.3` + `tauri-codegen`), which constrains it to `0.38`;
+#      the fix landed only in `quick-xml >= 0.41.0`. Reaching it needs a new
+#      `plist` release AND a `tauri` bump — a separate dependency change.
+#   2. Not reachable in our usage. tauri uses `plist` to read *trusted, local*
+#      bundle Info.plist / config, never attacker-controlled XML, so the
+#      quadratic-parse / allocation vectors don't apply.
+# Re-check and remove once tauri/plist ship a quick-xml >= 0.41 tree.
+ignore = ["RUSTSEC-2026-0194", "RUSTSEC-2026-0195"]
+
+[bans]
+# Lenient on purpose for the first gate. The graph has many legitimately
+# duplicated versions (windows-sys 0.42/0.48/0.52/…, hashbrown, rand) from
+# transitive pins; denying them would fail immediately with no security win.
+# Kept at "warn" so duplication is visible and can be deduped incrementally.
+multiple-versions = "warn"
+# Several first-party deps use a bare-major requirement (`regex = "1"`,
+# `anyhow = "1.0"`); "deny" here would fail the existing manifest, so "warn".
+wildcards = "warn"
+allow = []
+deny = []
+skip = []
+skip-tree = []
+
+[sources]
+# Only crates.io and our own org's git are trusted sources. A dependency
+# appearing from an unknown registry or an unknown git host is a supply-chain
+# red flag and fails the gate.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+
+[sources.allow-org]
+# The hcfs-client / hcfs-shared git deps are pinned to a rev under this org
+# (ssh://git@github.com/thenervelab/hcfs.git). Allowing the org — rather than a
+# single URL — keeps sibling first-party git deps from tripping the gate.
+github = ["thenervelab"]
+
+# ---------------------------------------------------------------------------
+# [licenses] — configured but NOT yet enforced in CI (the CI command omits
+# `licenses`). Two pre-existing items must get a deliberate decision first:
+#   1. GPL-3.0: the subxt-* family (7 crates) is GPL-3.0. For a distributed
+#      desktop binary that is a real compliance question, not one a CI gate
+#      should silently bless — it belongs in the scoped `exceptions` below after
+#      a human/legal sign-off, which is why licenses isn't gating yet.
+#   2. "Unlicensed" first-party crates: this app's own `Hippius` bin and the
+#      private `hcfs-client` / `hcfs-shared` git deps carry no `license` field.
+#      The correct fix is to set `license`/`publish = false` on those crates
+#      upstream, after which `private.ignore` covers the workspace bin.
+# When those are resolved, add `licenses` to the CI `cargo deny check` command.
+[licenses]
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-1-Clause",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "LGPL-2.1-or-later",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.8
+# Scoped GPL-3.0 allowance: ONLY these subxt crates, so any *new* GPL dependency
+# still fails. Pending the compliance sign-off noted above.
+exceptions = [
+    { crate = "subxt", allow = ["GPL-3.0"] },
+    { crate = "subxt-codegen", allow = ["GPL-3.0"] },
+    { crate = "subxt-core", allow = ["GPL-3.0"] },
+    { crate = "subxt-macro", allow = ["GPL-3.0"] },
+    { crate = "subxt-metadata", allow = ["GPL-3.0"] },
+    { crate = "subxt-signer", allow = ["GPL-3.0"] },
+    { crate = "subxt-utils-fetchmetadata", allow = ["GPL-3.0"] },
+]
+
+[licenses.private]
+# Ignore the unpublished workspace bin (`Hippius`). Does not cover the hcfs git
+# deps — those need an upstream `license` field (item 2 above).
+ignore = true

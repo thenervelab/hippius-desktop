@@ -1,12 +1,15 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { errorMessage } from "@/lib/utils/errorUtils";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { HAlphaCoinLogo, HippiusLogo } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
+import { formatUnitsTruncated, parseUnitsToBase } from "@/lib/utils/planckUnits";
+import { TxSubmittedUnconfirmedError } from "@/lib/utils/txOutcome";
 
 import {
   WalletDialogShell,
@@ -19,14 +22,8 @@ import WalletPasswordField from "./shared/WalletPasswordField";
 import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
 import { useStaking } from "@/lib/hooks/useStaking";
 import { useHippiusBalance } from "@/lib/hooks/api/useHippiusBalance";
-
-/**
- * 0.01 hAlpha (= 10^16 planck) reserved on MAX so the user always has
- * enough free balance left to pay for the bond extrinsic *and* the
- * eventual unbond/withdraw. Mirrors `MAX_GAS_FEE_BUFFER_PLANCK` in
- * `src-tauri/src/blockchain/transfers.rs` — keep the two in sync.
- */
-const MAX_GAS_FEE_BUFFER_PLANCK = 10_000_000_000_000_000n;
+import { dispatchSigningError } from "@/lib/utils/dispatchTauriError";
+import { useWalletAuth } from "@/lib/wallet-auth-context";
 
 interface StakeDialogProps {
   open: boolean;
@@ -41,6 +38,7 @@ const StakeDialog: React.FC<StakeDialogProps> = ({
 }) => {
   const { stakingInfo, operations, refetch } = useStaking();
   const { data: balanceInfo, refetch: refetchBalance } = useHippiusBalance();
+  const { logout } = useWalletAuth();
 
   const [amount, setAmount] = useState("");
   const [activeButton, setActiveButton] = useState<
@@ -62,28 +60,45 @@ const StakeDialog: React.FC<StakeDialogProps> = ({
     }
   }, [open, refetch, refetchBalance]);
 
-  // Available HIP to bond. Matches hippius-web's formula:
-  //   available = free − bonded − unbonding − withdrawable − gas buffer
-  //
-  // Subtracting bonded/unbonding/withdrawable is required because those
-  // plancks are already locked by the staking pallet — the chain
-  // rejects a `bond` for amounts that include them, so MAX would have
-  // silently produced a transaction the user couldn't actually submit.
-  const availableHip = useMemo(() => {
+  const [availablePlanck, setAvailablePlanck] = useState<bigint>(0n);
+  // True while the Rust figure is being (re)computed. Gates the percent
+  // buttons so a click during a refetch can't use a stale `availablePlanck`
+  // (PR #26 review); the displayed "You have" figure keeps its last value so
+  // it doesn't flicker to 0 on every refetch.
+  const [availableLoading, setAvailableLoading] = useState(false);
+
+  // Available HIP to bond is computed in Rust (audit M-1):
+  //   free − bonded − unbonding − withdrawable − gas buffer
+  // The buffer constant and the subtraction are owned by `transfers.rs`; the
+  // renderer only renders the returned figure (BigInt planck end-to-end, R-26).
+  useEffect(() => {
+    let cancelled = false;
     const freeBI = balanceInfo?.data?.free;
-    if (!freeBI) return 0;
-    try {
-      const free = typeof freeBI === "bigint" ? freeBI : BigInt(String(freeBI));
-      const bonded = BigInt(stakingInfo.bonded || "0");
-      const unbonding = BigInt(stakingInfo.unbonding || "0");
-      const withdrawable = BigInt(stakingInfo.withdrawable || "0");
-      const locked = bonded + unbonding + withdrawable;
-      const remaining = free - locked - MAX_GAS_FEE_BUFFER_PLANCK;
-      if (remaining <= 0n) return 0;
-      return Number(remaining) / 1e18;
-    } catch {
-      return 0;
+    if (!freeBI) {
+      setAvailablePlanck(0n);
+      setAvailableLoading(false);
+      return;
     }
+    const free = typeof freeBI === "bigint" ? freeBI : BigInt(String(freeBI));
+    setAvailableLoading(true);
+    invoke<{ planck: string; hip: string }>("compute_available_to_bond", {
+      free: free.toString(),
+      bonded: stakingInfo.bonded || "0",
+      unbonding: stakingInfo.unbonding || "0",
+      withdrawable: stakingInfo.withdrawable || "0",
+    })
+      .then((res) => {
+        if (!cancelled) setAvailablePlanck(BigInt(res.planck));
+      })
+      .catch(() => {
+        if (!cancelled) setAvailablePlanck(0n);
+      })
+      .finally(() => {
+        if (!cancelled) setAvailableLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [
     balanceInfo,
     stakingInfo.bonded,
@@ -91,10 +106,10 @@ const StakeDialog: React.FC<StakeDialogProps> = ({
     stakingInfo.withdrawable,
   ]);
 
-  const formattedAvailable = useMemo(() => {
-    if (availableHip === 0) return "0";
-    return availableHip.toFixed(6).replace(/\.?0+$/, "");
-  }, [availableHip]);
+  const formattedAvailable = useMemo(
+    () => formatUnitsTruncated(availablePlanck, 18),
+    [availablePlanck],
+  );
 
   const handleAmountChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
@@ -106,20 +121,18 @@ const StakeDialog: React.FC<StakeDialogProps> = ({
   };
 
   const handlePercentClick = (pct: 100 | 50 | 25) => {
-    const next = (availableHip * pct) / 100;
-    // Floor to 6 decimals so we never exceed the displayed available.
-    const truncated = Math.floor(next * 1e6) / 1e6;
-    setAmount(truncated > 0 ? truncated.toFixed(6).replace(/\.?0+$/, "") : "");
+    const next = (availablePlanck * BigInt(pct)) / 100n;
+    // Truncated to 6 decimals, so the typed amount never exceeds available.
+    const display = formatUnitsTruncated(next, 18);
+    setAmount(next > 0n ? display : "");
     setActiveButton(pct === 100 ? "max" : pct === 50 ? "50" : "25");
     setAmountError(undefined);
   };
 
   const isAmountValid = useMemo(() => {
-    const n = Number.parseFloat(amount);
-    return (
-      Number.isFinite(n) && n > 0 && Math.round(n * 1e6) <= Math.round(availableHip * 1e6)
-    );
-  }, [amount, availableHip]);
+    const parsed = parseUnitsToBase(amount, 18);
+    return parsed !== null && parsed > 0n && parsed <= availablePlanck;
+  }, [amount, availablePlanck]);
 
   const runStakeFlow = useCallback(
     async (hipAmount: string, password: string) => {
@@ -137,14 +150,23 @@ const StakeDialog: React.FC<StakeDialogProps> = ({
         await refetchBalance();
         onSuccess?.();
       } catch (e: unknown) {
-        const msg = e instanceof Error ? e.message : String(e);
-        setFlowState("error");
-        toast.error("Stake failed", { description: msg });
+        if (e instanceof TxSubmittedUnconfirmedError) {
+          // May already be on-chain — no retry. Balances were already
+          // invalidated by the staking hook before this threw.
+          setFlowState("submitted");
+        } else {
+          setFlowState("error");
+          // If the wallet has no signing key (e.g. an OAuth session with no
+          // seed), offer a re-auth path instead of a dead error toast (M-14).
+          if (!dispatchSigningError(e, () => logout("/login?reauth=1"))) {
+            toast.error("Stake failed", { description: errorMessage(e) });
+          }
+        }
       } finally {
         isProcessingRef.current = false;
       }
     },
-    [operations, refetch, refetchBalance, onSuccess],
+    [operations, refetch, refetchBalance, onSuccess, logout],
   );
 
   const handleOpenConfirm = () => {
@@ -235,7 +257,8 @@ const StakeDialog: React.FC<StakeDialogProps> = ({
         onClose={onClose}
         title="Stake"
         description="Stake your hAlpha tokens on Hippius"
-        icon={<HippiusLogo className="size-4 text-white" />}
+        icon={<HippiusLogo className="size-8" />}
+        iconBgClassName="bg-transparent"
         maxWidth="max-w-[600px]"
         titleDescriptionGap="mt-2"
         footer={
@@ -291,7 +314,7 @@ const StakeDialog: React.FC<StakeDialogProps> = ({
                 key={key}
                 type="button"
                 onClick={() => handlePercentClick(pct)}
-                disabled={stakingInfo.isLoading || availableHip === 0}
+                disabled={stakingInfo.isLoading || availableLoading || availablePlanck === 0n}
                 className={cn(
                   "rounded-full border px-2.5 py-0.5 text-[13px] font-semibold leading-5 tracking-[-0.26px] transition-colors disabled:opacity-60",
                   activeButton === key
@@ -317,7 +340,8 @@ const StakeDialog: React.FC<StakeDialogProps> = ({
         onClose={() => setShowConfirmation(false)}
         title="Confirm Staking"
         description="Stake your hAlpha tokens on Hippius"
-        icon={<HippiusLogo className="size-4 text-white" />}
+        icon={<HippiusLogo className="size-8" />}
+        iconBgClassName="bg-transparent"
         maxWidth="max-w-[600px]"
         titleDescriptionGap="mt-2"
         footer={
@@ -374,7 +398,7 @@ const StakeDialog: React.FC<StakeDialogProps> = ({
 
       {showFlowToast && (
         <TransactionFlowToast
-          state={flowState as "pending" | "success" | "error"}
+          state={flowState as "pending" | "success" | "error" | "submitted"}
           config={{
             pending: {
               title: "Staking hALPHA…",
@@ -388,6 +412,11 @@ const StakeDialog: React.FC<StakeDialogProps> = ({
               title: "Something went wrong",
               description: "We couldn’t stake your hALPHA.",
               action: { label: "Try Again", onClick: handleRetryStake },
+            },
+            submitted: {
+              title: "Transaction submitted",
+              description:
+                "Your stake may already be on-chain. Check your staked balance before retrying — do not submit again.",
             },
           }}
           onDismiss={closeFlowToast}

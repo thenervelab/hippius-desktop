@@ -2,18 +2,25 @@
 //!
 //! On macOS, the app sandbox requires bookmarks to retain access to
 //! user-chosen directories across app restarts. This module stores
-//! those bookmarks in SQLite. On other platforms, all functions are
-//! no-ops.
+//! those bookmarks in SQLite. Every item here is macOS-only — the sole
+//! caller (`sync::paths::set_sync_path_internal`) is itself macOS-gated,
+//! so on other platforms this module compiles to nothing (no stubs needed).
 
+// `SqlitePool` is referenced only by the macOS `store_bookmark`; gate the import
+// so the non-macOS build — where this module compiles to nothing — has no unused
+// import under `-D warnings`.
+#[cfg(target_os = "macos")]
 use sqlx::sqlite::SqlitePool;
-use tracing::debug;
 
 #[cfg(target_os = "macos")]
 use cocoa::base::id;
 #[cfg(target_os = "macos")]
 use objc::{class, msg_send, sel, sel_impl};
+// `debug`/`error` are used only inside the macOS-gated functions below, so the
+// import must be gated too — otherwise the non-macOS build sees an unused import
+// and fails under `-D warnings` (only the new Linux CI lane surfaces this).
 #[cfg(target_os = "macos")]
-use tracing::error;
+use tracing::{debug, error};
 
 // Every `unsafe` block below is scoped to a single Objective-C message send (or
 // the one raw-pointer read at the end) with its own `// SAFETY:` note. All the
@@ -122,11 +129,6 @@ pub fn create_security_scoped_bookmark(path: &str) -> Result<Vec<u8>, String> {
     Ok(data)
 }
 
-#[cfg(not(target_os = "macos"))]
-pub fn create_security_scoped_bookmark(_path: &str) -> Result<Vec<u8>, String> {
-    Ok(Vec::new())
-}
-
 /// Stores a security-scoped bookmark for a path in the database.
 #[cfg(target_os = "macos")]
 pub async fn store_bookmark(pool: &SqlitePool, path: &str, scope_type: &str) -> Result<(), String> {
@@ -144,11 +146,5 @@ pub async fn store_bookmark(pool: &SqlitePool, path: &str, scope_type: &str) -> 
     .map_err(|e| format!("Failed to store bookmark: {e}"))?;
 
     debug!("Stored security-scoped bookmark for: {}", path);
-    Ok(())
-}
-
-// Non-macOS stubs
-#[cfg(not(target_os = "macos"))]
-pub async fn store_bookmark(_pool: &SqlitePool, _path: &str, _scope_type: &str) -> Result<(), String> {
     Ok(())
 }

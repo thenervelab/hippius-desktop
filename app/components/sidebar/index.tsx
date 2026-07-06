@@ -78,7 +78,12 @@ const Sidebar: React.FC = () => {
         <div
           ref={ref}
           className={cn(
-            "fixed left-0 bottom-0 bg-transparent  flex flex-col overflow-hidden transition-all duration-300 ease-in-out z-50",
+            // Animate ONLY width (not `transition-all`, which also tracks
+            // colour/transform/etc.). `transform-gpu` promotes this fixed,
+            // transparent overlay onto its own compositor layer so the page
+            // content behind it is not repainted on every frame of the width
+            // slide — the main source of the collapse/expand jank.
+            "fixed left-0 bottom-0 bg-transparent  flex flex-col overflow-hidden transition-[width] duration-300 ease-in-out z-50 transform-gpu",
             // Tracks the top bar's zoom-compensated band height so the rail
             // never rises into the macOS traffic lights when zoomed out.
             BELOW_TITLEBAR_TOP_54,

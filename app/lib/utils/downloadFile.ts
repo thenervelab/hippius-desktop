@@ -1,4 +1,5 @@
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
+import { errorMessage } from "@/lib/utils/errorUtils";
 import { toast } from "sonner";
 import { invoke } from "@tauri-apps/api/core";
 import { save, open } from "@tauri-apps/plugin-dialog";
@@ -154,7 +155,7 @@ const downloadFolderExport = async (
     toast.dismiss(toastId);
     console.error("Folder download failed:", err);
     toast.error(
-      `Download failed: ${err instanceof Error ? err.message : String(err)}`
+      `Download failed: ${errorMessage(err)}`
     );
     return { success: false, error: "DOWNLOAD_FAILED", message: String(err) };
   }

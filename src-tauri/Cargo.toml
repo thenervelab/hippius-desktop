@@ -1,6 +1,6 @@
 [package]
 name = "Hippius"
-version = "0.2.0"
+version = "0.2.1"
 description = "Hippius Desktop App"
 authors = ["you"]
 edition = "2024"
@@ -16,6 +16,28 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+
+[features]
+# E2E ONLY — must NEVER be enabled in a release/production build. Turns on the
+# `tauri-plugin-webdriver` in-process WebDriver automation server registered in
+# `main.rs`, which exposes UNAUTHENTICATED automation over localhost HTTP (the
+# crate's own README: "Never include it in production builds"). It is off by
+# default and `tauri build` enables no features, so a normal release can never
+# pull it into the dependency graph. Driven by the WebdriverIO smoke suite in
+# `e2e/` — build with `--features e2e-webdriver`. The `dep:` prefix keeps the
+# optional crate from implicitly minting a same-named feature
+# (axiom rust_quality_121 — feature-matrix hygiene).
+e2e-webdriver = ["dep:tauri-plugin-webdriver"]
+
+# App-scoped NetBird VPN for VM connections. OFF by default so normal builds and
+# CI pull NO Go toolchain / cgo / ~50MB embedded library, and the disabled
+# engine (`vpn::engine::DisabledEngine`) reports `UnsupportedBuild`. Enabling it
+# pulls `netbird-embed`, whose `build.rs` compiles a Go c-shared library
+# (NetBird `client/embed` + wireguard-go) — so a `--features netbird-vpn` build
+# REQUIRES a Go (>=1.25) toolchain + cgo. The `dep:` prefix keeps the optional
+# crate from implicitly minting a same-named feature (axiom rust_quality_121).
+# See docs/plans/2026-06-29-netbird-vpn-vm-connections.md.
+netbird-vpn = ["dep:netbird-embed"]
 
 [dependencies]
 tauri = { version = "2", features = [
@@ -36,6 +58,16 @@ tauri = { version = "2", features = [
 tauri-plugin-opener = "2"
 tauri-plugin-deep-link = "2.0.0"
 tauri-plugin-shell = "2"
+# Optional, dev/E2E-only: embeds an in-process W3C WebDriver server so
+# WebdriverIO/Selenium can drive a REAL macOS WKWebView build (the official
+# `tauri-driver` can't — Apple ships no WKWebView driver). Pinned exact because
+# it is a young, pre-1.0, unofficial crate that injects an automation server;
+# only ever compiled under the off-by-default `e2e-webdriver` feature. See the
+# `[features]` note above.
+tauri-plugin-webdriver = { version = "=0.2.1", optional = true }
+# Embedded NetBird userspace mesh client — see the `netbird-vpn` feature note
+# above. Optional + gated so default/CI builds never invoke its Go/cgo build.rs.
+netbird-embed = { version = "0.3", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
@@ -46,6 +78,8 @@ tokio = { version = "1.49.0", features = [
     "time",
     "fs",
     "process",
+    # Unix-domain socket for the Finder extension bridge (src/finder_bridge).
+    "net",
 ] }
 futures-util = { version = "0.3", default-features = false, features = ["std", "alloc"] }
 tokio-util = "0.7"
@@ -62,6 +96,7 @@ ed25519-dalek = "2.2"
 zip = { version = "4.2.0", default-features = false, features = ["deflate", "aes-crypto"] }
 dotenvy = "0.15"
 base64 = "0.22"
+bs58 = "0.5"
 sha2 = "0.10"
 subxt = "0.38"
 subxt-signer = { version = "0.38", default-features = false, features = ["sr25519", "subxt", "std"] }
@@ -94,12 +129,16 @@ alloy-signer = { version = "0.8", default-features = false }
 alloy-signer-local = { version = "0.8", default-features = false, features = [
     "mnemonic",
 ] }
-hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "1b8d90dfb0cfadddaab7bcbd7ff3e2ce3d17168b" }
+# Pinned to the merged hcfs main rev (PR #251) that adds the password-share
+# key wrap/unwrap (wrap_share_key / build_share_url_private). Bumping this rev
+# is the only way a hcfs change reaches the desktop, so it stays exact and is
+# guarded by the wire-contract pins in tests/hcfs_contract.rs.
+hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "602381e865a15eb77e3a94953c98a8c4b2e6f9db" }
 # hcfs-shared pulls in the `network` module types (RegisterRelativePathEntry,
 # MAX_REGISTER_RELATIVE_PATHS_BATCH, ...) that hcfs-client takes/returns on
 # its public API but does not re-export. Pinned to the same git rev so the
 # wire types stay in lockstep with the client.
-hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "1b8d90dfb0cfadddaab7bcbd7ff3e2ce3d17168b" }
+hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "602381e865a15eb77e3a94953c98a8c4b2e6f9db" }
 # NFC-normalise relative_path strings before posting them to the server's
 # register_relative_paths endpoint. macOS APFS hands filenames back in NFD
 # and the server's path_validator hard-rejects anything non-NFC — see the

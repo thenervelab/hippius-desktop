@@ -1,10 +1,24 @@
 //! Staking transaction commands — bond, unbond, withdraw, claim rewards.
 
 use crate::blockchain::client::get_substrate_client;
-use crate::blockchain::helpers::{get_signer, get_signer_and_address};
+use crate::blockchain::helpers::{get_signer, get_signer_and_address, sign_submit_track};
 use crate::blockchain::runtime::custom_runtime;
-use crate::blockchain::types::TxResult;
+use crate::blockchain::types::TxOutcome;
 use tracing::info;
+
+/// Parse and validate a stake/unstake amount BEFORE any signing work.
+/// Mirrors `transfers::validate_transfer_inputs` (audit R-29): a zero
+/// amount would be signed, submitted, and rejected on-chain — consuming
+/// the fee for a call that can never take effect.
+fn validate_stake_amount(amount: &str) -> Result<u128, crate::error::AppError> {
+    let amount: u128 = amount
+        .parse()
+        .map_err(|e| crate::error::AppError::Validation(format!("Invalid amount: {e}")))?;
+    if amount == 0 {
+        return Err(crate::error::AppError::Validation("Amount must be greater than zero".into()));
+    }
+    Ok(amount)
+}
 
 /// Bond tokens for staking. If already bonded, calls `bond_extra` instead.
 /// Requires the active local wallet's password to derive a signing keypair.
@@ -13,13 +27,10 @@ pub async fn stake_bond(
     state: tauri::State<'_, crate::app_state::AppState>,
     amount: String,
     password: String,
-) -> Result<TxResult, crate::error::AppError> {
+) -> Result<TxOutcome, crate::error::AppError> {
+    let amount = validate_stake_amount(&amount)?;
     let (signer, address) = get_signer_and_address(&state, &password).await?;
     let client = get_substrate_client(&state).await?;
-
-    let amount: u128 = amount
-        .parse()
-        .map_err(|e| crate::error::AppError::Validation(format!("Invalid amount: {e}")))?;
 
     let account_id = address
         .parse::<subxt::utils::AccountId32>()
@@ -36,39 +47,20 @@ pub async fn stake_bond(
         .map_err(|e| crate::error::AppError::Substrate(format!("Ledger query failed: {e}")))?
         .is_some();
 
-    let tx_hash = if already_bonded {
+    let outcome = if already_bonded {
         info!("Submitting bond_extra transaction...");
         let tx = custom_runtime::tx().staking().bond_extra(amount);
-        client
-            .tx()
-            .sign_and_submit_then_watch_default(&tx, &signer)
-            .await
-            .map_err(|e| crate::error::AppError::Substrate(format!("Submit failed: {e}")))?
-            .wait_for_finalized_success()
-            .await
-            .map_err(|e| crate::error::AppError::Substrate(format!("Transaction failed: {e}")))?
-            .extrinsic_hash()
+        sign_submit_track(&client, &tx, &signer).await?
     } else {
         info!("Submitting bond transaction...");
         let tx = custom_runtime::tx()
             .staking()
             .bond(amount, custom_runtime::runtime_types::pallet_staking::RewardDestination::Staked);
-        client
-            .tx()
-            .sign_and_submit_then_watch_default(&tx, &signer)
-            .await
-            .map_err(|e| crate::error::AppError::Substrate(format!("Submit failed: {e}")))?
-            .wait_for_finalized_success()
-            .await
-            .map_err(|e| crate::error::AppError::Substrate(format!("Transaction failed: {e}")))?
-            .extrinsic_hash()
+        sign_submit_track(&client, &tx, &signer).await?
     };
 
-    info!("Bond tx finalized: {:?}", tx_hash);
-    Ok(TxResult {
-        tx_hash: format!("{tx_hash:?}"),
-        success: true,
-    })
+    info!("Bond outcome: {outcome:?}");
+    Ok(outcome)
 }
 
 /// Unbond tokens (schedule for withdrawal after the unbonding period).
@@ -78,31 +70,16 @@ pub async fn stake_unbond(
     state: tauri::State<'_, crate::app_state::AppState>,
     amount: String,
     password: String,
-) -> Result<TxResult, crate::error::AppError> {
+) -> Result<TxOutcome, crate::error::AppError> {
+    let amount = validate_stake_amount(&amount)?;
     let signer = get_signer(&state, &password).await?;
     let client = get_substrate_client(&state).await?;
 
-    let amount: u128 = amount
-        .parse()
-        .map_err(|e| crate::error::AppError::Validation(format!("Invalid amount: {e}")))?;
-
     info!("Submitting unbond transaction...");
     let tx = custom_runtime::tx().staking().unbond(amount);
-    let tx_hash = client
-        .tx()
-        .sign_and_submit_then_watch_default(&tx, &signer)
-        .await
-        .map_err(|e| crate::error::AppError::Substrate(format!("Submit failed: {e}")))?
-        .wait_for_finalized_success()
-        .await
-        .map_err(|e| crate::error::AppError::Substrate(format!("Transaction failed: {e}")))?
-        .extrinsic_hash();
-
-    info!("Unbond tx finalized: {:?}", tx_hash);
-    Ok(TxResult {
-        tx_hash: format!("{tx_hash:?}"),
-        success: true,
-    })
+    let outcome = sign_submit_track(&client, &tx, &signer).await?;
+    info!("Unbond outcome: {outcome:?}");
+    Ok(outcome)
 }
 
 /// Withdraw unbonded tokens (after the unbonding period completes).
@@ -111,7 +88,7 @@ pub async fn stake_unbond(
 pub async fn stake_withdraw_unbonded(
     state: tauri::State<'_, crate::app_state::AppState>,
     password: String,
-) -> Result<TxResult, crate::error::AppError> {
+) -> Result<TxOutcome, crate::error::AppError> {
     let (signer, address) = get_signer_and_address(&state, &password).await?;
     let client = get_substrate_client(&state).await?;
 
@@ -135,27 +112,15 @@ pub async fn stake_withdraw_unbonded(
 
     info!("Submitting withdraw_unbonded transaction (spans={num_slashing_spans})...");
     let tx = custom_runtime::tx().staking().withdraw_unbonded(num_slashing_spans);
-    let tx_hash = client
-        .tx()
-        .sign_and_submit_then_watch_default(&tx, &signer)
-        .await
-        .map_err(|e| crate::error::AppError::Substrate(format!("Submit failed: {e}")))?
-        .wait_for_finalized_success()
-        .await
-        .map_err(|e| crate::error::AppError::Substrate(format!("Transaction failed: {e}")))?
-        .extrinsic_hash();
-
-    info!("Withdraw tx finalized: {:?}", tx_hash);
-    Ok(TxResult {
-        tx_hash: format!("{tx_hash:?}"),
-        success: true,
-    })
+    let outcome = sign_submit_track(&client, &tx, &signer).await?;
+    info!("Withdraw outcome: {outcome:?}");
+    Ok(outcome)
 }
 
 /// Claim staking rewards via `payout_stakers` for the previous era.
 /// Requires the active local wallet's password.
 #[tauri::command]
-pub async fn stake_claim_rewards(state: tauri::State<'_, crate::app_state::AppState>, password: String) -> Result<TxResult, crate::error::AppError> {
+pub async fn stake_claim_rewards(state: tauri::State<'_, crate::app_state::AppState>, password: String) -> Result<TxOutcome, crate::error::AppError> {
     let (signer, address) = get_signer_and_address(&state, &password).await?;
     let client = get_substrate_client(&state).await?;
 
@@ -180,19 +145,31 @@ pub async fn stake_claim_rewards(state: tauri::State<'_, crate::app_state::AppSt
 
     info!("Submitting payout_stakers for era {}...", current_era - 1);
     let tx = custom_runtime::tx().staking().payout_stakers(account_id, current_era - 1);
-    let tx_hash = client
-        .tx()
-        .sign_and_submit_then_watch_default(&tx, &signer)
-        .await
-        .map_err(|e| crate::error::AppError::Substrate(format!("Submit failed: {e}")))?
-        .wait_for_finalized_success()
-        .await
-        .map_err(|e| crate::error::AppError::Substrate(format!("Transaction failed: {e}")))?
-        .extrinsic_hash();
+    let outcome = sign_submit_track(&client, &tx, &signer).await?;
+    info!("Payout outcome: {outcome:?}");
+    Ok(outcome)
+}
 
-    info!("Payout tx finalized: {:?}", tx_hash);
-    Ok(TxResult {
-        tx_hash: format!("{tx_hash:?}"),
-        success: true,
-    })
+#[cfg(test)]
+mod tests {
+    use super::validate_stake_amount;
+
+    #[test]
+    fn validate_stake_amount_rejects_zero() {
+        assert!(validate_stake_amount("0").is_err());
+    }
+
+    #[test]
+    fn validate_stake_amount_rejects_non_numeric() {
+        assert!(validate_stake_amount("1.5").is_err());
+        assert!(validate_stake_amount("abc").is_err());
+        assert!(validate_stake_amount("").is_err());
+        assert!(validate_stake_amount("-1").is_err());
+    }
+
+    #[test]
+    fn validate_stake_amount_accepts_positive_planck() {
+        assert_eq!(validate_stake_amount("1").unwrap(), 1);
+        assert_eq!(validate_stake_amount("1000000000000000000").unwrap(), 1_000_000_000_000_000_000);
+    }
 }

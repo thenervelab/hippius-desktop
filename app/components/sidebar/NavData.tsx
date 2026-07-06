@@ -5,6 +5,7 @@ import SidebarVm from "../ui/icons/SidebarVm";
 import {
   VM_FEATURE_ENABLED,
   WALLET_FEATURE_ENABLED,
+  REFERRALS_FEATURE_ENABLED,
 } from "@/app/lib/featureFlags";
 
 export interface SubMenuItemData {
@@ -28,9 +29,10 @@ export interface NavItemData {
   // Capability gate consulted by the sidebar before rendering this
   // item. `"shares"` hides the entry until the connected hcfs-server
   // advertises `shares: true` (see `shareFeatureEnabledAtom`); `"wallet"`
-  // hides it while `WALLET_FEATURE_ENABLED` is off. Adding a new gate is
-  // one entry here plus one branch in `filterNavSections`.
-  featureFlag?: "shares" | "wallet";
+  // hides it while `WALLET_FEATURE_ENABLED` is off; `"referrals"` hides it
+  // while `REFERRALS_FEATURE_ENABLED` is off. Adding a new gate is one
+  // entry here plus one branch in `filterNavSections`.
+  featureFlag?: "shares" | "wallet" | "referrals";
 }
 
 export interface NavSection {
@@ -95,6 +97,7 @@ export const navSections: NavSection[] = [
         label: "Referrals",
         path: "/referrals",
         icon: <Share2Icon className={ICON_CLASS} strokeWidth={1.5} />,
+        featureFlag: "referrals",
       },
     ],
   },
@@ -121,21 +124,29 @@ export const navSections: NavSection[] = [
  *
  * Pure so the gating rules are unit-testable: `shares` is a runtime server
  * capability (passed in by the sidebar from `shareFeatureEnabledAtom`),
- * `wallet` is the build-time `WALLET_FEATURE_ENABLED` flag (defaulted here
- * so callers don't re-import it). Sections whose items are all filtered out
- * are dropped entirely so no orphaned heading renders.
+ * while `wallet` and `referrals` are the build-time `WALLET_FEATURE_ENABLED`
+ * / `REFERRALS_FEATURE_ENABLED` flags (defaulted here so callers don't
+ * re-import them). Sections whose items are all filtered out are dropped
+ * entirely so no orphaned heading renders.
  */
 export function filterNavSections(
   sections: NavSection[],
-  gates: { shareEnabled: boolean; walletEnabled?: boolean },
+  gates: {
+    shareEnabled: boolean;
+    walletEnabled?: boolean;
+    referralsEnabled?: boolean;
+  },
 ): NavSection[] {
   const walletEnabled = gates.walletEnabled ?? WALLET_FEATURE_ENABLED;
+  const referralsEnabled =
+    gates.referralsEnabled ?? REFERRALS_FEATURE_ENABLED;
   return sections
     .map((section) => ({
       ...section,
       items: section.items.filter((item) => {
         if (item.featureFlag === "shares") return gates.shareEnabled;
         if (item.featureFlag === "wallet") return walletEnabled;
+        if (item.featureFlag === "referrals") return referralsEnabled;
         return true;
       }),
     }))

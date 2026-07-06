@@ -277,7 +277,7 @@ fn fixture_entries(count: usize) -> Vec<RegisterRelativePathEntry> {
 /// it to a path that isn't on the init funnel — fails this test.
 #[test]
 fn lifecycle_initialize_sync_inner_spawns_backfill() {
-    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/lifecycle.rs")).expect("read lifecycle.rs");
+    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/drive/lifecycle.rs")).expect("read lifecycle.rs");
 
     // Find the function signature and its brace-matched body; simpler than
     // pulling in a full parser and more precise than a bare substring match

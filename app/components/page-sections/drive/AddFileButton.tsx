@@ -17,10 +17,6 @@ import PrivacyBadge from "@/components/ui/PrivacyBadge";
 import { FramedDialog } from "@/components/ui/FramedDialog";
 
 import { cn } from "@/lib/utils";
-import {
-  SyncPausedAlert,
-  IS_SYNC_PAUSED,
-} from "@/components/ui/SyncPausedAlert";
 import { hasConfiguredDrivesAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import { toast } from "sonner";
 import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
@@ -199,7 +195,6 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
             className,
           )}
           onClick={async () => {
-            if (IS_SYNC_PAUSED) return;
             if (!(await checkEligibility("file-upload"))) return;
             if (!hasConfiguredDrives) {
               toast.warning(
@@ -235,25 +230,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
             <PrivacyBadge variant="file" />
           </div>
 
-          {/* Sync Paused Alert */}
-          {IS_SYNC_PAUSED && (
-            <div className="mb-3">
-              <SyncPausedAlert variant="inline" />
-            </div>
-          )}
-
-          {!IS_SYNC_PAUSED && renderStepContent}
-          {IS_SYNC_PAUSED && (
-            <div className="text-center py-6 text-grey-60 dark:text-grey-dark-600">
-              <p>
-                File uploads are temporarily paused while we transition to our
-                new sync engine.
-              </p>
-              <p className="mt-2 text-sm">
-                This will be available again in the coming days.
-              </p>
-            </div>
-          )}
+          {renderStepContent}
         </FramedDialog>
       </>
     );
