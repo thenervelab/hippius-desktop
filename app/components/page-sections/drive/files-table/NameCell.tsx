@@ -64,6 +64,10 @@ type NameCellProps = {
    *  the badge hides so static, long-synced rows stay visually quiet.
    *  Defaults to 5000ms. */
   syncedBadgeMs?: number;
+  /** Opens share-link management for this row. Passed through to the
+   *  shared-link badge so clicking the link icon manages the share
+   *  instead of opening the file preview. */
+  onManageShare?: () => void;
 };
 
 type BadgeStatus = LiveFileStatus;
@@ -289,6 +293,7 @@ const NameCell: FC<NameCellProps> = ({
   label,
   parentSubFolderPath,
   syncedBadgeMs = 5000,
+  onManageShare,
 }) => {
   const { icon: Icon, color } = getFileIcon(fileType, isFolder);
   const { getParam } = useUrlParams();
@@ -390,6 +395,7 @@ const NameCell: FC<NameCellProps> = ({
                   label={label}
                   actualName={actualName}
                   isFolder={isFolder}
+                  onManageShare={onManageShare}
                   className="ml-1.5"
                 />
               }

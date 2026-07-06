@@ -44,7 +44,20 @@ unmaintained = "workspace"
 # direct `tauri-plugin-deep-link = "2.0.0"`). Left at the default (warn) so it
 # surfaces in CI logs without failing the gate-introduction PR; bumping past the
 # yanked version is a separate dependency change (tracked follow-up).
-ignore = []
+#
+# quick-xml 0.38.4 — RUSTSEC-2026-0194 (quadratic duplicate-attribute check) and
+# RUSTSEC-2026-0195 (unbounded namespace-declaration allocation). Both are DoS
+# advisories reachable only when parsing *adversarial* XML — a start tag with
+# millions of duplicate attributes / namespace declarations. Ignored because:
+#   1. No upgrade path today. quick-xml is pulled transitively by `plist 1.8.0`
+#      (via `tauri 2.10.3` + `tauri-codegen`), which constrains it to `0.38`;
+#      the fix landed only in `quick-xml >= 0.41.0`. Reaching it needs a new
+#      `plist` release AND a `tauri` bump — a separate dependency change.
+#   2. Not reachable in our usage. tauri uses `plist` to read *trusted, local*
+#      bundle Info.plist / config, never attacker-controlled XML, so the
+#      quadratic-parse / allocation vectors don't apply.
+# Re-check and remove once tauri/plist ship a quick-xml >= 0.41 tree.
+ignore = ["RUSTSEC-2026-0194", "RUSTSEC-2026-0195"]
 
 [bans]
 # Lenient on purpose for the first gate. The graph has many legitimately
