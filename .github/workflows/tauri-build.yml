@@ -314,7 +314,9 @@ jobs:
           # the auto-updater never serves a half-built release (residual H-12
           # guard even though we auto-publish on main again).
           releaseDraft: true
-          prerelease: false
+          # TEST-ONLY (internal validation branch): mark this a prerelease so the
+          # run never becomes a "latest" release. Revert to false for real releases.
+          prerelease: true
           overwrite: true
           args: ${{ matrix.args }}
 
@@ -474,7 +476,8 @@ jobs:
             echo "::warning::No macOS updater signature on $TAG — publishing without a darwin entry; macOS auto-update is unavailable this release."
           fi
 
-          # Flip the draft to a published, marked-latest release. Only now does
-          # the updater endpoint (releases/latest/download/latest.json) resolve.
-          gh release edit "$TAG" --repo "$REPO" --draft=false --latest
+          # TEST-ONLY (internal validation branch): publish but as a PRERELEASE
+          # and explicitly NOT latest, so it can never be served as the fleet's
+          # "latest". For real releases this is `--draft=false --latest`.
+          gh release edit "$TAG" --repo "$REPO" --draft=false --prerelease --latest=false
           echo "Published $TAG."
