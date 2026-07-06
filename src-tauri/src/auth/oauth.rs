@@ -411,6 +411,19 @@ pub async fn complete_oauth_flow(
         }
     };
 
+    // The provider the user actually authenticated with (google/github/apple),
+    // recovered from the matched PKCE state, so the session carries the real
+    // provider and the account card can show the correct provider badge without
+    // a client-side shim. `start_oauth_flow` validates it to one of those three;
+    // the empty guard is belt-and-suspenders that keeps the old generic "oauth"
+    // tag if it is ever blank. Cloned here because `matched_provider` is moved
+    // into the exchange request body below (the code-grant path).
+    let provider_name = if matched_provider.is_empty() {
+        "oauth".to_string()
+    } else {
+        matched_provider.clone()
+    };
+
     let (token, user_id, username, email, substrate_address) = if let Some(ref t) = params.token {
         (
             t.clone(),
@@ -468,11 +481,6 @@ pub async fn complete_oauth_flow(
         expiry.to_rfc3339()
     };
     let token_expiry_ms = chrono::Utc::now().timestamp_millis() + 30 * 24 * 60 * 60 * 1000;
-
-    // Both OAuth grant paths persist the same provider tag. If per-provider
-    // tagging is ever needed, derive it from the matched PkceState.provider
-    // instead.
-    let provider_name = "oauth".to_string();
 
     if !substrate_address.is_empty() {
         let pool = state.pool()?;
