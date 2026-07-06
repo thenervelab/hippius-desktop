@@ -9,9 +9,11 @@
 //! compromised webview can never mint a share of a file it merely names (the
 //! path came from Finder and stays server-side).
 //!
-//! This module is compiled on every platform so `generate_handler!` in `main.rs`
-//! can reference the commands unconditionally, but the Finder feature itself is
-//! macOS-only: off macOS the bodies are inert (the FE never invokes them).
+//! The `finder_bridge` module is `#[cfg(unix)]` (macOS + Linux) because its
+//! socket layer uses Unix-domain sockets, so `generate_handler!` in `main.rs`
+//! registers these two commands under a matching `#[cfg(unix)]` — they are
+//! absent on Windows. The Finder feature itself is macOS-only: off macOS (i.e.
+//! on Linux) the bodies are inert, and the FE never invokes them.
 
 use crate::app_state::AppState;
 use crate::error::{AppError, Result};
