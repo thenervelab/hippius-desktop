@@ -24,6 +24,15 @@ interface SharedLinkBadgeProps {
   actualName: string | null | undefined;
   isFolder?: boolean;
   className?: string;
+  /**
+   * Navigates to share-link management (the `/shares` page) for this file.
+   * When provided the badge becomes clickable and stops the click from
+   * bubbling to the row/card, whose own click opens the file preview —
+   * matching Dropbox/Drive, where the link icon takes you to manage the
+   * link, it doesn't open the file (or re-create the share). Omit it to keep
+   * the badge display-only.
+   */
+  onManageShare?: () => void;
 }
 
 const SharedLinkBadge: FC<SharedLinkBadgeProps> = ({
@@ -31,6 +40,7 @@ const SharedLinkBadge: FC<SharedLinkBadgeProps> = ({
   actualName,
   isFolder,
   className,
+  onManageShare,
 }) => {
   const { getSharesFor } = useSharedFiles();
 
@@ -44,17 +54,49 @@ const SharedLinkBadge: FC<SharedLinkBadgeProps> = ({
   // doubles as the "don't render the badge" signal.
   if (!tooltipLines) return null;
 
+  const interactive = !!onManageShare;
+
+  // Open share management, and — crucially — stop the click from reaching the
+  // row/card, whose own handler opens the file preview. preventDefault guards
+  // against the badge sitting inside a preview <button> trigger.
+  const handleActivate = (
+    e: React.MouseEvent | React.KeyboardEvent,
+  ) => {
+    e.stopPropagation();
+    e.preventDefault();
+    onManageShare?.();
+  };
+
+  const triggerClassName = cn(
+    "inline-flex items-center justify-center text-primary-50 flex-shrink-0",
+    "bg-primary-95 rounded-full px-1 pt-1",
+    interactive &&
+      "cursor-pointer transition-colors hover:bg-primary-90 hover:text-primary-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-50/40",
+    className,
+  );
+
   return (
     <Tooltip.Provider delayDuration={200}>
       <Tooltip.Root>
         <Tooltip.Trigger asChild>
+          {/* role=button (not a real <button>) because the badge can render
+              inside the row's preview <button> trigger — a nested <button>
+              breaks hydration. Space/Enter mirror a native button. */}
           <span
-            className={cn(
-              "inline-flex items-center justify-center text-primary-50 flex-shrink-0",
-              "bg-primary-95 rounded-full px-1 pt-1",
-              className,
-            )}
-            aria-label="Shared via public link"
+            className={triggerClassName}
+            aria-label={
+              interactive ? "Manage share link" : "Shared via public link"
+            }
+            {...(interactive
+              ? {
+                  role: "button",
+                  tabIndex: 0,
+                  onClick: handleActivate,
+                  onKeyDown: (e: React.KeyboardEvent) => {
+                    if (e.key === "Enter" || e.key === " ") handleActivate(e);
+                  },
+                }
+              : {})}
           >
             <LinkIcon className="size-3.5" />
           </span>
@@ -75,6 +117,11 @@ const SharedLinkBadge: FC<SharedLinkBadgeProps> = ({
             {tooltipLines.map((line, i) => (
               <div key={i}>{line}</div>
             ))}
+            {interactive && (
+              <div className="mt-1 text-grey-60 dark:text-grey-dark-80">
+                Click to manage link
+              </div>
+            )}
             <Tooltip.Arrow className="fill-white dark:fill-[#1c1c1e]" />
           </Tooltip.Content>
         </Tooltip.Portal>

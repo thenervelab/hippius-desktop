@@ -20,6 +20,7 @@ import { useThumbnail } from "@/app/lib/hooks/useThumbnail";
 import { useInView } from "@/app/lib/hooks/useInView";
 import { buildFolderPath } from '@/app/utils/folderPathUtils';
 import { useFileSelection } from '@/app/contexts/FileSelectionContext';
+import { useRouter } from "next/navigation";
 import * as Checkbox from "@radix-ui/react-checkbox";
 import { Check } from "lucide-react";
 interface FileCardProps {
@@ -36,6 +37,7 @@ const FileCard: React.FC<FileCardProps> = ({
   actionMenu,
 }) => {
   const { fileName, fileFormat } = getFilePartsFromFileName(file.name);
+  const router = useRouter();
   const { isSelectionMode, isFileSelected, toggleFileSelection } = useFileSelection();
   const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
   const [thumbnailError, setThumbnailError] = useState(false);
@@ -313,6 +315,7 @@ const FileCard: React.FC<FileCardProps> = ({
               label={file.label}
               actualName={file.actualFileName}
               isFolder={file.isFolder}
+              onManageShare={() => router.push("/shares")}
               className="ml-1.5"
             />
           </div>

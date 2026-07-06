@@ -17,6 +17,7 @@ import {
   getFileTypeDisplayLabel,
   getFileTypeFromExtension,
 } from "@/lib/utils/getTileTypeFromExtension";
+import { useRouter } from "next/navigation";
 import { useInfiniteScroll } from "@/lib/hooks/use-infinite-scroll";
 import { useNestedFolderListing } from "@/app/lib/hooks/use-nested-folder-listing";
 import { FILES_MUTATED_EVENT } from "@/app/lib/utils/fileMutationEvents";
@@ -214,6 +215,7 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
   ancestorChain = [],
   isItemDeleting,
 }) => {
+  const router = useRouter();
   const {
     isSelectionMode,
     toggleFileSelection,
@@ -495,6 +497,7 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
             mainReqHash={childFile.mainReqHash}
             syncStatus={childFile.syncStatus}
             parentSubFolderPath={folderRelativePath}
+            onManageShare={() => router.push("/shares")}
           />
         );
 
