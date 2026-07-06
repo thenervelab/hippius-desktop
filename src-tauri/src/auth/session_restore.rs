@@ -13,20 +13,6 @@ use crate::error::AppError;
 use tauri::Emitter;
 use tracing::{info, warn};
 
-/// Maps a stored session `provider` tag to the frontend `authType`.
-///
-/// Any concrete OAuth provider (`google`/`github`/`apple`) — or the legacy
-/// generic `oauth` tag older sessions still carry — is an OAuth session; only
-/// an explicit `mnemonic` (or an absent provider) is a mnemonic login. The
-/// old inline `== Some("oauth")` check silently reclassified real provider
-/// tags as mnemonic once the backend started persisting them (see `oauth.rs`).
-fn auth_type_for_provider(provider: Option<&str>) -> &'static str {
-    match provider {
-        Some(p) if p != "mnemonic" => "oauth",
-        _ => "mnemonic",
-    }
-}
-
 /// Wall-clock bound for the OAuth-branch recovery-state network probe.
 ///
 /// `restore_session` itself is deliberately *not* given an outer
@@ -357,7 +343,7 @@ pub async fn restore_session(
                     }
 
                     let provider = session_data.get("provider").and_then(|v| v.as_str()).unwrap_or("oauth");
-                    let auth_type = auth_type_for_provider(Some(provider));
+                    let auth_type = if provider == "mnemonic" { "mnemonic" } else { "oauth" };
                     let needs_mnemonic = provider != "mnemonic";
 
                     let mut sync_requires_reauth = false;
@@ -546,7 +532,7 @@ pub async fn restore_session(
         "isNew": false,
     });
 
-    let auth_type = auth_type_for_provider(row.provider.as_deref());
+    let auth_type = if row.provider.as_deref() == Some("oauth") { "oauth" } else { "mnemonic" };
     let eff_minutes = row.logout_time_minutes.unwrap_or(1440);
     let logout_time_ms = if eff_minutes == -1 { None } else { Some(eff_minutes * 60_000) };
 
@@ -653,20 +639,6 @@ mod tests {
     use super::*;
     use crate::recovery::{RecoveryCheck, RecoveryFlow, RecoveryGateState};
     use serde_json::json;
-
-    #[test]
-    fn auth_type_treats_every_concrete_provider_as_oauth() {
-        // Real providers the backend now persists (was silently misread as
-        // "mnemonic" by the old exact-`"oauth"` check).
-        assert_eq!(auth_type_for_provider(Some("google")), "oauth");
-        assert_eq!(auth_type_for_provider(Some("github")), "oauth");
-        assert_eq!(auth_type_for_provider(Some("apple")), "oauth");
-        // Legacy generic tag older sessions still carry.
-        assert_eq!(auth_type_for_provider(Some("oauth")), "oauth");
-        // Mnemonic logins and absent providers are not OAuth.
-        assert_eq!(auth_type_for_provider(Some("mnemonic")), "mnemonic");
-        assert_eq!(auth_type_for_provider(None), "mnemonic");
-    }
 
     fn sample_check() -> RecoveryCheck {
         RecoveryCheck {
