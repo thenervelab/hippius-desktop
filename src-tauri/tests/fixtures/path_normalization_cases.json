@@ -1,0 +1,67 @@
+[
+  {
+    "input": "",
+    "expected": "",
+    "note": "empty"
+  },
+  {
+    "input": "a",
+    "expected": "a",
+    "note": "no leading slash"
+  },
+  {
+    "input": "/a",
+    "expected": "a",
+    "note": "single leading slash"
+  },
+  {
+    "input": "//a",
+    "expected": "a",
+    "note": "double leading slash"
+  },
+  {
+    "input": "///a/b",
+    "expected": "a/b",
+    "note": "triple leading slash run stripped"
+  },
+  {
+    "input": "/a/b/",
+    "expected": "a/b/",
+    "note": "trailing slash preserved"
+  },
+  {
+    "input": "a/b",
+    "expected": "a/b",
+    "note": "internal slash untouched"
+  },
+  {
+    "input": "/a//b",
+    "expected": "a//b",
+    "note": "only the LEADING run is stripped, not internal double slash (trim_start, not replace-all)"
+  },
+  {
+    "input": "/",
+    "expected": "",
+    "note": "single slash -> empty"
+  },
+  {
+    "input": "///",
+    "expected": "",
+    "note": "all slashes -> empty"
+  },
+  {
+    "input": "\\a",
+    "expected": "\\a",
+    "note": "backslash is not stripped"
+  },
+  {
+    "input": " /a",
+    "expected": " /a",
+    "note": "leading space (not a slash) -> nothing stripped"
+  },
+  {
+    "input": "/café/x",
+    "expected": "café/x",
+    "note": "unicode preserved"
+  }
+]

@@ -1,12 +1,15 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
+import { errorMessage } from "@/lib/utils/errorUtils";
 import { AlertCircle, Folder, X } from "lucide-react";
 import { toast } from "sonner";
 import { open as openSelection } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
-import { useAtomValue } from "jotai";
+import { useAtomValue, useSetAtom } from "jotai";
 import { queryClientAtom } from "jotai-tanstack-query";
+import { isNotReady } from "@/lib/utils/dispatchTauriError";
+import { insufficientCreditsDialogOpenAtom } from "@/app/components/page-sections/drive/atoms/query-atoms";
 
 import { Button, Icons } from "@/components/ui";
 import { FramedDialog } from "@/components/ui/FramedDialog";
@@ -18,10 +21,6 @@ import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { getPrivateSyncPath } from "@/lib/utils/syncPathUtils";
 import { DRIVE_STORAGE_STATS_QUERY_KEY } from "@/app/lib/hooks/api/useDriveStorageStats";
 import { GET_USER_IPFS_FILES_QUERY_KEY } from "@/app/lib/hooks/use-user-files";
-import {
-  SyncPausedAlert,
-  IS_SYNC_PAUSED,
-} from "@/components/ui/SyncPausedAlert";
 import SyncFolderSelect from "@/components/ui/SyncFolderSelect";
 import { hasConfiguredDrivesAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import {
@@ -51,6 +50,7 @@ export default function FolderUploadDialog({
 }: Props) {
   const { polkadotAddress } = useWalletAuth();
   const queryClient = useAtomValue(queryClientAtom);
+  const setInsufficient = useSetAtom(insufficientCreditsDialogOpenAtom);
   const hasConfiguredDrives = useAtomValue(hasConfiguredDrivesAtom);
   const { checkEligibility } = useCreditCheck();
 
@@ -90,7 +90,7 @@ export default function FolderUploadDialog({
     } catch (error) {
       console.error("Error selecting folder:", error);
       toast.error(
-        `Failed to select folder: ${error instanceof Error ? error.message : String(error)}`,
+        `Failed to select folder: ${errorMessage(error)}`,
       );
     }
   };
@@ -210,11 +210,6 @@ export default function FolderUploadDialog({
     setIsSubmitting(true);
     handleClose();
 
-    toast.success("Folder added. Your sync will start soon.", {
-      duration: 4000,
-      closeButton: true,
-    });
-
     try {
       const syncPath =
         selectedSyncPath ??
@@ -225,6 +220,14 @@ export default function FolderUploadDialog({
         syncPath,
         folderPath,
         subfolder: null,
+      });
+
+      // Success toast AFTER add_folder resolves — add_folder runs the
+      // require_eligible gate first and can reject (audit M-15), so firing
+      // "Folder added" before the await produced success-then-error.
+      toast.success("Folder added. Your sync will start soon.", {
+        duration: 4000,
+        closeButton: true,
       });
 
       queryClient.invalidateQueries({
@@ -242,9 +245,13 @@ export default function FolderUploadDialog({
       }
     } catch (error) {
       console.error("Error uploading folder:", error);
-      toast.error(
-        `Failed to upload folder: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      // A credit shortfall from add_folder's require_eligible gate (TOCTOU vs
+      // the proactive check) opens the shared dialog, not a raw error (M-15).
+      if (isNotReady(error, "INSUFFICIENT_CREDITS")) {
+        setInsufficient("folder-upload");
+      } else {
+        toast.error(`Failed to upload folder: ${errorMessage(error)}`);
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -272,14 +279,8 @@ export default function FolderUploadDialog({
         <span className="font-geist text-sm font-medium text-grey-60 dark:text-grey-dark-700 tracking-[-0.28px]">
           Folder Location
         </span>
-        {!IS_SYNC_PAUSED && <PrivacyBadge variant="folder" />}
+        <PrivacyBadge variant="folder" />
       </div>
-
-      {IS_SYNC_PAUSED && (
-        <div className="mb-3">
-          <SyncPausedAlert variant="inline" />
-        </div>
-      )}
 
       <form onSubmit={handleSubmit} className="flex flex-col gap-3">
         {/* Folder dropzone — same styling as AddLocalFolderDialog */}
@@ -406,7 +407,7 @@ export default function FolderUploadDialog({
             type="submit"
             variant="primary"
             size="auto"
-            disabled={IS_SYNC_PAUSED || isSubmitting}
+            disabled={isSubmitting}
             loading={isSubmitting}
             className={cn(
               "h-[52px] w-full rounded-[6px] border text-base font-normal tracking-[-0.36px]",
@@ -415,7 +416,7 @@ export default function FolderUploadDialog({
               "dark:hover:bg-[#2a5ad0] dark:hover:border-[#2a5ad0]",
             )}
           >
-            {IS_SYNC_PAUSED ? "Sync Paused" : "Upload Folder"}
+            Upload Folder
           </Button>
           <Button
             type="button"
@@ -425,7 +426,7 @@ export default function FolderUploadDialog({
             disabled={isSubmitting}
             className="h-[52px] w-full rounded-[6px] text-base font-normal tracking-[-0.36px]"
           >
-            {IS_SYNC_PAUSED ? "Close" : "Cancel"}
+            Cancel
           </Button>
         </div>
       </form>

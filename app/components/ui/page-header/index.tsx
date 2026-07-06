@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { WalletMinimal } from "@/components/ui/icons";
 import { useStaking } from "@/app/lib/hooks/useStaking";
 import useSubscriptionData from "@/app/lib/hooks/useSubscriptionData";
+import { WALLET_FEATURE_ENABLED } from "@/app/lib/featureFlags";
 import { cn } from "@/app/lib/utils";
 
 interface PageHeaderProps {
@@ -79,8 +80,21 @@ const PageHeader: React.FC<PageHeaderProps> = ({
 
       {/* ─── Right: Wallet + Active Plan card — ~40% of header ─── */}
       {!hideStats && (
-        <div className="hidden xl:flex min-w-[480px] items-stretch rounded-lg bg-[#F3F3F3] dark:bg-[#1E1E1E] border border-[#F4F4F4] dark:border-[#313131] overflow-hidden">
-          {/* Wallet cell — 60% of card width */}
+        <div
+          className={cn(
+            "hidden xl:flex items-stretch rounded-lg overflow-hidden",
+            WALLET_FEATURE_ENABLED
+              ? "min-w-[480px] bg-[#F3F3F3] dark:bg-[#1E1E1E] border border-[#F4F4F4] dark:border-[#313131]"
+              : // Wallet feature off: only the Active Plan cell remains, so the
+                // card is content-sized and matches the compact Active-Plan box
+                // on the Billing header (home/PageHeader's wallet-off layout).
+                "w-fit border border-grey-light-500 bg-grey-light-600 dark:border-black-300 dark:bg-black-primary-bg",
+          )}
+        >
+          {/* Wallet cell — 60% of card width. Hidden with the wallet feature
+              (its Stake button links to the gated /wallet page); the Active
+              Plan cell then becomes the card's only content. */}
+          {WALLET_FEATURE_ENABLED && (
           <div className="flex flex-[3] items-center justify-between gap-4 px-4 py-3 border-r border-[#E3E3E3] dark:border-[#161616]">
             <div className="flex flex-col gap-0.5">
               <div className="flex items-center gap-1 mb-0.5">
@@ -116,9 +130,17 @@ const PageHeader: React.FC<PageHeaderProps> = ({
               Stake
             </Button>
           </div>
+          )}
 
-          {/* Active Plan cell — 40% of card width */}
-          <div className="flex flex-[2] flex-col items-start justify-center gap-0.5 pl-4 pr-5 py-3">
+          {/* Active Plan cell — 40% of card width when the wallet cell is
+              present; the sole, content-sized cell when the wallet feature
+              is off. */}
+          <div
+            className={cn(
+              "flex flex-col items-start justify-center gap-0.5 py-3",
+              WALLET_FEATURE_ENABLED ? "flex-[2] pl-4 pr-5" : "px-4",
+            )}
+          >
             <div className="flex items-center gap-1 mb-0.5">
               <span className="inline-flex shrink-0 items-center justify-center rounded-full bg-primary-40/20 size-4">
                 <span className="rounded-full size-[6.15px] bg-primary-40" />

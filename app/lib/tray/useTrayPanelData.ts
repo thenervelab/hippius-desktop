@@ -11,6 +11,7 @@ import {
   mergeUploadFeed,
   type UploadFeedItem,
 } from "@/app/lib/upload-feed/mergeUploadFeed";
+import { useRetainedCompletedUploads } from "@/app/lib/upload-feed/useRetainedCompletedUploads";
 
 /**
  * Account / credits summary for the tray popover header + footer.
@@ -34,6 +35,13 @@ const FEED_LIMIT = 20;
 /** Background refresh cadence for the server-backed slices (credits, recent
  *  uploads, unread). Live upload progress is event-driven, not polled. */
 const REFRESH_INTERVAL_MS = 5000;
+
+/** How many consecutive logged-in-but-not-`sessionReady` refreshes to keep the
+ *  boot-gap skeleton before giving up and showing the empty state. One grace
+ *  poll covers the normal restore_session hydration gap; beyond that the
+ *  session is effectively stuck (e.g. a slow/blocked keychain restore) and an
+ *  infinite skeleton is worse than an empty state (F-3). */
+const MAX_NOT_READY_POLLS = 2;
 
 /**
  * Data feed for the tray popover.
@@ -77,6 +85,9 @@ export function useTrayPanelData() {
   // looking at. The popover hides on blur (`on_panel_blur`), so focus tracks
   // visibility 1:1.
   const isShownRef = useRef(false);
+  // Consecutive refreshes that ran logged-in but without a hydrated session.
+  // Caps the boot-gap skeleton so a stuck session can't hang it forever (F-3).
+  const notReadyPollsRef = useRef(0);
 
   const refresh = useCallback(async () => {
     try {
@@ -111,10 +122,25 @@ export function useTrayPanelData() {
         // We now have authoritative data for this session — drop the skeleton.
         // Deferred until the session-ready branch so the boot gap (address known
         // but session not yet hydrated) keeps showing the skeleton, not "empty".
+        notReadyPollsRef.current = 0;
         setLoading(false);
       } else {
         setRecentUploads([]);
         setUnreadCount(0);
+        // Session not hydrated yet. Keep the skeleton for the boot-gap grace
+        // poll, but once a logged-in user has waited past that, stop withholding
+        // the resolved state so the popover shows the empty state rather than an
+        // infinite skeleton (the never-flips-`sessionReady` hang, F-3).
+        if (menuData.loggedIn) {
+          notReadyPollsRef.current += 1;
+          if (notReadyPollsRef.current >= MAX_NOT_READY_POLLS) {
+            setLoading(false);
+          }
+        } else {
+          // Logged out: nothing to load, so never hold the skeleton. The popover
+          // is gated to signed-in today, but keep the state self-consistent.
+          setLoading(false);
+        }
       }
     } catch (error) {
       console.error("[TrayPanel] Failed to load data:", error);
@@ -150,6 +176,23 @@ export function useTrayPanelData() {
         unlistenFocus = un;
       })
       .catch((error) => console.error("[TrayPanel] focus listener failed:", error));
+
+    // Explicit "the popover is now visible" signal from Rust's
+    // `toggle_tray_panel` (fires on every show). The webview's own focus event
+    // is unreliable across re-shows of this reused/prewarmed window — when it
+    // doesn't fire, the popover keeps the stale boot-gap menu (credits "—",
+    // endless skeleton). This guarantees a fresh fetch on every open. It also
+    // marks the popover shown so the background poll resumes even if the focus
+    // event was missed.
+    let unlistenShown: (() => void) | undefined;
+    void listen("hippius:tray-panel-shown", () => {
+      isShownRef.current = true;
+      void refresh();
+    })
+      .then((un) => {
+        unlistenShown = un;
+      })
+      .catch((error) => console.error("[TrayPanel] shown listener failed:", error));
 
     // Live sync progress (uploading / failed). Events reach every window.
     // The `sync_files_completed_changed` DOM event the main window uses to
@@ -188,19 +231,26 @@ export function useTrayPanelData() {
     return () => {
       window.clearInterval(interval);
       unlistenFocus?.();
+      unlistenShown?.();
       unlistenSnapshot?.();
       unlistenBlock?.();
     };
   }, [refresh]);
+
+  const retainedCompleted = useRetainedCompletedUploads(
+    snapshot.files,
+    recentUploads,
+  );
 
   const feed: UploadFeedItem[] = useMemo(
     () =>
       mergeUploadFeed({
         recentUploads,
         snapshotFiles: snapshot.files,
+        retainedCompleted,
         limit: FEED_LIMIT,
       }),
-    [recentUploads, snapshot.files],
+    [recentUploads, snapshot.files, retainedCompleted],
   );
 
   return { menu, feed, snapshot, blockNumber, isConnected, unreadCount, loading, refresh };

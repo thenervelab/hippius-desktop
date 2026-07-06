@@ -24,6 +24,12 @@ import {
 import { getFileIcon } from "../lib/utils/fileTypeUtils";
 import SyncQueueOverallProgress from "./SyncQueueOverallProgress";
 import SyncStatusMini from "./SyncStatusMini";
+import {
+  resolveSmoothedEta,
+  resolveSmoothedPercent,
+  selectLiveTransferBytes,
+  smoothSpeed,
+} from "./syncStatusDialogLogic";
 
 const BODY_MAX_HEIGHT_REM = 11.5;
 const RATE_WINDOW = 10;
@@ -407,36 +413,48 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
   );
   const previousSessionRef = useRef<number | null>(null);
   const previousTotalFilesRef = useRef<number>(snapshot.totalFiles);
+  const previousFailedFilesRef = useRef<number>(snapshot.failedFiles);
+  const previousBytesExpectedRef = useRef<number>(snapshot.bytesExpected);
 
   useEffect(() => {
-    if (snapshot.startedAt !== previousSessionRef.current) {
-      previousSessionRef.current = snapshot.startedAt;
-      previousTotalFilesRef.current = snapshot.totalFiles;
-      setSmoothedPercent(rawPercent);
-      return;
-    }
+    const newSession = snapshot.startedAt !== previousSessionRef.current;
+    // A re-plan (bytesExpected changes), a retry that resets transferred bytes,
+    // a partial failure (failedFiles grows), or more files queued (totalFiles
+    // grows) all legitimately LOWER overallPercent. Re-seed in those cases so
+    // the monotonic-max smoothing can't pin the ring at a stale high-water mark
+    // for the rest of the session (the "stuck high" bug).
+    const replanned =
+      snapshot.totalFiles > previousTotalFilesRef.current ||
+      snapshot.failedFiles > previousFailedFilesRef.current ||
+      snapshot.bytesExpected !== previousBytesExpectedRef.current;
 
-    if (snapshot.totalFiles > previousTotalFilesRef.current) {
-      previousTotalFilesRef.current = snapshot.totalFiles;
-      setSmoothedPercent(rawPercent);
-      return;
-    }
-
+    previousSessionRef.current = snapshot.startedAt;
     previousTotalFilesRef.current = snapshot.totalFiles;
+    previousFailedFilesRef.current = snapshot.failedFiles;
+    previousBytesExpectedRef.current = snapshot.bytesExpected;
 
-    if (rawPercent === null) {
-      setSmoothedPercent(null);
-      return;
-    }
-
-    setSmoothedPercent((previous) => {
-      if (previous === null) return rawPercent;
-      if (rawPercent >= 100) return 100;
-      return Math.max(previous, rawPercent);
-    });
-  }, [rawPercent, snapshot.startedAt, snapshot.totalFiles]);
+    setSmoothedPercent((previous) =>
+      resolveSmoothedPercent(previous, rawPercent, newSession || replanned),
+    );
+  }, [
+    rawPercent,
+    snapshot.startedAt,
+    snapshot.totalFiles,
+    snapshot.failedFiles,
+    snapshot.bytesExpected,
+  ]);
 
   const rateSamplesRef = useRef<RateSample[]>([]);
+  // Running EMA of the transfer rate. Held in a ref (not state) so each tick
+  // folds into the previous smoothed value without re-triggering the effect.
+  const smoothedSpeedRef = useRef<number | null>(null);
+  // Running EMA of the derived ETA. Smoothing the speed alone leaves the ETA
+  // lurching when the plan grows (numerator steps up); this damps that. Held in
+  // a ref for the same reason as the speed EMA. Reset alongside the speed EMA.
+  const smoothedEtaRef = useRef<number | null>(null);
+  // The session the rate samples / smoothed speed belong to. Used to re-seed on
+  // a session change — see the comment in the effect below.
+  const speedSessionRef = useRef<number | null>(null);
   const [etaSeconds, setEtaSeconds] = useState<number | null>(null);
   const [speedBytesPerSec, setSpeedBytesPerSec] = useState<number | null>(null);
 
@@ -447,9 +465,25 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
       snapshot.combinedProgressBytes === 0
     ) {
       rateSamplesRef.current = [];
+      smoothedSpeedRef.current = null;
+      smoothedEtaRef.current = null;
       setEtaSeconds(null);
       setSpeedBytesPerSec(null);
       return;
+    }
+
+    // A new session must not inherit the previous session's samples or smoothed
+    // speed: the EMA persists a stale value for several ticks (α=0.25), so a
+    // carry-over would mis-report speed/ETA at the start of the next sync. The
+    // reset guard above only fires at combinedProgressBytes === 0; if a
+    // session's first snapshot already carries progress (a coalesced first
+    // emit), that guard misses it. Re-seed on startedAt explicitly — exactly as
+    // the percent-smoothing effect does with previousSessionRef.
+    if (snapshot.startedAt !== speedSessionRef.current) {
+      speedSessionRef.current = snapshot.startedAt;
+      rateSamplesRef.current = [];
+      smoothedSpeedRef.current = null;
+      smoothedEtaRef.current = null;
     }
 
     const now = Date.now();
@@ -464,6 +498,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
     }
 
     if (samples.length < 2) {
+      smoothedEtaRef.current = null;
       setEtaSeconds(null);
       return;
     }
@@ -478,16 +513,25 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
     }
 
     const rate = processedBytes / elapsed;
-    setSpeedBytesPerSec(rate);
+    const smoothed = smoothSpeed(smoothedSpeedRef.current, rate);
+    smoothedSpeedRef.current = smoothed;
+    setSpeedBytesPerSec(smoothed);
 
     const remainingBytes =
       snapshot.combinedBytesExpected - snapshot.combinedProgressBytes;
-    const eta = remainingBytes / rate;
-    setEtaSeconds(Math.min(eta, 86400));
+    // Cap the RAW estimate before smoothing so a transient huge value can't
+    // spike the EMA, then EMA-smooth the ETA itself — the speed is already
+    // smoothed, but the numerator steps up as the plan grows, so the raw ETA
+    // still lurches without this (F-4).
+    const rawEta = Math.min(remainingBytes / smoothed, 86400);
+    const smoothedEta = resolveSmoothedEta(smoothedEtaRef.current, rawEta);
+    smoothedEtaRef.current = smoothedEta;
+    setEtaSeconds(smoothedEta);
   }, [
     effectiveInProgress,
     snapshot.combinedBytesExpected,
     snapshot.combinedProgressBytes,
+    snapshot.startedAt,
   ]);
 
   const [retryCountdown, setRetryCountdown] = useState(0);
@@ -520,11 +564,21 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
 
   if (!open) return null;
 
+  // Render the "Preparing sync…" state even with no files yet. During the
+  // preparing window (Rust marks `widgetState="preparing"` + `widgetVisible` the
+  // moment a folder is added, before the engine has built the plan) the snapshot
+  // has `totalFiles === 0` and is not yet in-progress/retrying/completed — so
+  // without the `!isPreparing` guard this early-return swallowed the preparing
+  // card entirely and the widget only appeared once files populated (the
+  // "widget takes 5-10s to show after adding a folder" report). `isPreparing`
+  // is driven by `widgetState`, which the handler already gates `widgetVisible`
+  // on, so this can't render a stray empty card outside a real preparing window.
   if (
     snapshot.totalFiles === 0 &&
     !isInProgress &&
     !isRetrying &&
-    !isCompleted
+    !isCompleted &&
+    !isPreparing
   ) {
     return null;
   }
@@ -579,21 +633,36 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
     isCompleted ||
     isPreparing;
 
-  const showTransferDetails =
-    !isSettled && effectiveInProgress && hasTransferringFile;
+  // The byte readout (and now the speed suffix) only need the session to be in
+  // progress with a known total — they must NOT also require an active-status
+  // file, or they blink out during the all-pending/indexing seam and on every
+  // encrypt→upload / file→file handoff (files queued or encrypting but none
+  // momentarily in `inProgress`) even though the plan size is known and bytes
+  // keep climbing (F-5, "speed only shows intermittently").
+  // `selectLiveTransferBytes` returns null when bytesExpected===0, so the
+  // genuine preparing phase (no total yet) still shows "Preparing" rather than a
+  // misleading 0B/0B line; the speed suffix additionally requires a positive
+  // measured rate, so it only appears once a real transfer has been observed.
+  const showTransferBytes = !isSettled && effectiveInProgress;
 
   const compactTransferredText = (() => {
-    if (!showTransferDetails) return null;
-    if (
-      (snapshot.intentActive ?? false) &&
-      (snapshot.intentTotalBytes ?? 0) > 0
-    ) {
-      return `${formatCompactBytes(snapshot.intentCompletedBytes ?? 0)}/${formatCompactBytes(snapshot.intentTotalBytes ?? 0)}`;
+    // Startup window: before the engine's first session snapshot, show the
+    // local-pending summary ("N files · X") the backend computed from the
+    // on-disk-vs-baseline diff, so the user sees the scope of pending work
+    // immediately instead of a bare "Preparing". Supersedes once the live
+    // session takes over (widgetState leaves "preparing").
+    if (isPreparing) {
+      const f = snapshot.preparingPendingFiles ?? 0;
+      if (f > 0) {
+        const b = snapshot.preparingPendingBytes ?? 0;
+        return `${f.toLocaleString()} file${f === 1 ? "" : "s"} · ${formatCompactBytes(b)}`;
+      }
+      return null;
     }
-    if (snapshot.bytesExpected > 0) {
-      return `${formatCompactBytes(snapshot.progressBytes)}/${formatCompactBytes(snapshot.bytesExpected)}`;
-    }
-    return null;
+    if (!showTransferBytes) return null;
+    const bytes = selectLiveTransferBytes(snapshot);
+    if (!bytes) return null;
+    return `${formatCompactBytes(bytes.progress)}/${formatCompactBytes(bytes.expected)}`;
   })();
 
   const compactTrailingText: React.ReactNode = (() => {
@@ -617,8 +686,18 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
     if (effectiveCompleted || isCompleted) return "Complete";
     if (isPreparing) return "Preparing";
 
+    // Show the speed whenever the session is actively transferring and we have
+    // a real measured rate — gated on `showTransferBytes` (the same condition
+    // the "X of Y bytes" line uses), NOT on `hasTransferringFile`. The smoothed
+    // speed (`smoothedSpeedRef`) is retained across the encrypt→upload and
+    // file→file seams where no file is momentarily in `inProgress`; the old
+    // `hasTransferringFile` gate blanked the suffix on every one of those seams
+    // even though bytes kept climbing (the reported "speed only shows
+    // intermittently"). Falls through to the Encrypting/Decrypting labels only
+    // when there is no positive rate yet (e.g. the initial encrypt before any
+    // upload). F-5.
     if (
-      showTransferDetails &&
+      showTransferBytes &&
       speedBytesPerSec !== null &&
       speedBytesPerSec > 0
     ) {
@@ -668,10 +747,13 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
     <div
       onClick={(event: React.MouseEvent) => event.stopPropagation()}
       className={cn(
-        "w-[239px] animate-widget-grow-0.3",
+        "w-[239px]",
+        // In the sidebar the rail animates its width with ease-in-out; use the
+        // matched soft grow so the card settles in lockstep with the rail. The
+        // portal overlay has no rail to track, so it keeps the standalone pop.
         expandOrigin === "bottom-left"
-          ? "origin-bottom-left"
-          : "origin-bottom-right",
+          ? "animate-widget-grow-soft-0.3 origin-bottom-left"
+          : "animate-widget-grow-0.3 origin-bottom-right",
       )}
     >
       <div className="w-full overflow-hidden rounded-[12px] shadow-lg bg-[#d8d8d9] dark:bg-[#4b4b4c]">

@@ -3,7 +3,6 @@ import { Inter as InterFont, Geist, Geist_Mono } from "next/font/google";
 import localFont from "next/font/local";
 import "@/app/globals.css";
 import "sonner/dist/styles.css";
-import "react-circular-progressbar/dist/styles.css";
 import AppShell from "@/app/components/AppShell";
 import { cn } from "./lib/utils";
 import { THEME_STORAGE_KEY } from "./lib/theme";

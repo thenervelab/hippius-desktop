@@ -17,7 +17,15 @@ import { AlertCircle, CheckCircle, Loader2, X } from "lucide-react";
  * Renders through a portal to document.body so it escapes any parent
  * stacking context (z-indexed wrappers etc. on the wallet page). */
 
-export type TransactionFlowState = "idle" | "pending" | "success" | "error";
+export type TransactionFlowState =
+  | "idle"
+  | "pending"
+  | "success"
+  | "error"
+  // The extrinsic was submitted but its finalization could not be confirmed
+  // (RPC/websocket drop). It may already be on-chain, so this state never
+  // offers a retry — resending would risk a double-spend (audit R-01).
+  | "submitted";
 
 export interface TransactionFlowToastConfig {
   /** Accent color for the outer border. Defaults based on state. */
@@ -35,7 +43,7 @@ export interface TransactionFlowToastConfig {
 
 export interface TransactionFlowToastProps {
   /** Current flow state */
-  state: "pending" | "success" | "error";
+  state: "pending" | "success" | "error" | "submitted";
   /** Config map keyed by state */
   config: Record<string, TransactionFlowToastConfig>;
   /** Called when X is pressed to dismiss */
@@ -48,6 +56,9 @@ const defaultAccentColors: Record<string, string> = {
   pending: "#3167dd",
   success: "#04C870",
   error: "#FC7D73",
+  // Amber — a caution distinct from the red error tone, signalling
+  // "submitted, awaiting confirmation" rather than a clean failure.
+  submitted: "#F5A623",
 };
 
 const defaultIcons: Record<string, ReactNode> = {
@@ -56,6 +67,9 @@ const defaultIcons: Record<string, ReactNode> = {
   ),
   success: <CheckCircle className="mt-0.5 size-5 shrink-0 text-[#04C870]" />,
   error: <AlertCircle className="mt-0.5 size-5 shrink-0 text-[#FC7D73]" />,
+  submitted: (
+    <AlertCircle className="mt-0.5 size-5 shrink-0 text-[#F5A623]" />
+  ),
 };
 
 const TransactionFlowToast: React.FC<TransactionFlowToastProps> = ({

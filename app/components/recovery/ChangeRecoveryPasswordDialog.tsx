@@ -19,6 +19,12 @@ import {
   UNLOCK_PASSWORD_DOCS_URL,
 } from "./_shared";
 import { cn } from "@/lib/utils";
+import {
+  isPasswordMismatch,
+  isSameAsCurrent,
+  canSubmitRecoveryRotation,
+  classifyRotationError,
+} from "./recoveryRotationLogic";
 
 interface Props {
   open: boolean;
@@ -58,30 +64,38 @@ const ChangeRecoveryPasswordDialog: React.FC<Props> = ({
     onOpenChange(false);
   };
 
-  const mismatch = confirm.length > 0 && confirm !== next;
-  const sameAsCurrent = next.length > 0 && next === current;
-  const canSubmit =
-    !submitting &&
-    current.length > 0 &&
-    next.length > 0 &&
-    strength?.acceptableForSubmit === true &&
-    !mismatch &&
-    !sameAsCurrent &&
-    next === confirm;
+  const mismatch = isPasswordMismatch(next, confirm);
+  const sameAsCurrent = isSameAsCurrent(current, next);
+  const canSubmit = canSubmitRecoveryRotation({
+    submitting,
+    current,
+    next,
+    confirm,
+    strength,
+  });
 
   const handleSubmit = useCallback(async () => {
     if (!canSubmit) return;
     setSubmitting(true);
     setCurrentError(null);
     try {
-      await changeRecoveryPassword(current, next);
-      toast.success("Password updated.");
+      const { alignPending } = await changeRecoveryPassword(current, next);
+      if (alignPending) {
+        // Server rotation succeeded but this device's folder keys are still
+        // finishing realignment to the new password (audit R-19). It completes
+        // automatically on the next launch; warn rather than claim a clean done.
+        toast.warning(
+          "Password updated. Finishing applying it to your synced folders — this completes automatically the next time you open the app.",
+        );
+      } else {
+        toast.success("Password updated.");
+      }
       reset();
       onOpenChange(false);
     } catch (err) {
       const msg = errMessage(err);
       // Rust surfaces wrong current password as Validation("Wrong passphrase.")
-      if (/wrong passphrase/i.test(msg)) {
+      if (classifyRotationError(msg) === "wrong_password") {
         setCurrentError("Incorrect current password.");
         setCurrent("");
       } else {

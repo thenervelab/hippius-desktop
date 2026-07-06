@@ -1,0 +1,18 @@
+{
+    "$schema": "../gen/schemas/desktop-schema.json",
+    "identifier": "tray-panel",
+    "description": "Least-privilege capability for the borderless tray popover (audit H-13). The popover renders remote-derived data (account address, credits, upload filenames), so it must NOT inherit the main window's broad grants. It needs only: cross-window events (it listens for block_number_updated / sync_progress_snapshot and emits hippius:tray-* navigation events) and the ability to reveal + focus the main window. It deliberately EXCLUDES opener (open-path /**/*), fs (read $HOME/**), process:allow-restart, deep-link, updater, dialog, and the asset protocol — none of which the popover uses. Its own data commands (get_tray_menu_data, get_unread_count, get_recent_uploads, sp_get_snapshot, get_platform_info, hide_tray_panel) are app-defined commands and are not capability-gated.",
+    "windows": ["tray-panel"],
+    "permissions": [
+        "core:default",
+        "core:event:allow-listen",
+        "core:event:allow-unlisten",
+        "core:event:allow-emit",
+        "core:event:allow-emit-to",
+        "core:window:allow-show",
+        "core:window:allow-set-focus",
+        "core:window:allow-unminimize",
+        "core:window:allow-hide",
+        "core:window:allow-start-dragging"
+    ]
+}

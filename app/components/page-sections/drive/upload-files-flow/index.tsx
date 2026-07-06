@@ -1,5 +1,6 @@
 // Unified file upload flow component — handles both root-level uploads and folder-targeted uploads.
 import { FC, useState, useEffect, useCallback } from "react";
+import { errorMessage } from "@/lib/utils/errorUtils";
 import useFilesUpload from "@/lib/hooks/useFilesUpload";
 import { Icons, Button } from "@/components/ui";
 import { ArrowRight } from "lucide-react";
@@ -273,7 +274,7 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
       console.error("Error preparing files:", error);
       toast.error(
         `Error preparing ${firstFileName} for upload: ${
-          error instanceof Error ? error.message : String(error)
+          errorMessage(error)
         }`,
         { id: toastId }
       );
@@ -365,7 +366,7 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
       // toast instead of stacking — matches the partial-failure path.
       toast.error(
         `Failed to add ${fileCount === 1 ? "file" : "files"}: ${
-          error instanceof Error ? error.message : String(error)
+          errorMessage(error)
         }`,
         { id: loadingToastId, closeButton: true }
       );

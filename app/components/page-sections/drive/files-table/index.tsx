@@ -972,6 +972,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                 source={file.source}
                 mainReqHash={file.mainReqHash}
                 syncStatus={file.syncStatus}
+                onManageShare={() => router.push("/shares")}
               />
             );
 

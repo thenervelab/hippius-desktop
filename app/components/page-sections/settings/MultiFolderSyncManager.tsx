@@ -2,11 +2,14 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { useRefreshWhileSyncing } from "@/app/lib/hooks/useRefreshWhileSyncing";
 import { toast } from "sonner";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import type { SyncFolder, RemoteFolder } from "@/app/lib/types/sync-folder";
 import { AddLocalFolderDialog } from "./AddLocalFolderDialog";
 import { removeSyncPath } from "@/app/lib/utils/syncPathUtils";
+import { errorMessage } from "@/app/lib/utils/errorUtils";
+import { deleteFolderErrorToast } from "@/app/lib/utils/deleteFolderError";
 import {
   deleteRemoteFolder,
   restoreRemoteFolders,
@@ -127,14 +130,17 @@ export default function MultiFolderSyncManager() {
 
   // ── Data loading ──────────────────────────────────────────────────────
 
-  const loadFolders = useCallback(async () => {
+  const loadFolders = useCallback(async (opts?: { silent?: boolean }) => {
     if (!polkadotAddress) {
       setIsLoading(false);
       return;
     }
 
     try {
-      setIsLoading(true);
+      // `silent` refreshes (the during-sync poll below) must NOT toggle
+      // `isLoading`, or the folder list would flash its skeleton on every
+      // poll. Only the initial / user-action loads show the skeleton.
+      if (!opts?.silent) setIsLoading(true);
 
       // Single Rust call: fetches local paths + remote folders, joins data,
       // determines status, filters, and sorts. No business logic in TypeScript.
@@ -180,15 +186,26 @@ export default function MultiFolderSyncManager() {
       setRemoteFolders(remoteFoldersData);
     } catch (error) {
       console.error("Failed to load folders:", error);
-      toast.error("Failed to load sync folders");
+      // A background poll failure must stay quiet — only the visible
+      // initial / user-action load surfaces a toast.
+      if (!opts?.silent) toast.error("Failed to load sync folders");
     } finally {
-      setIsLoading(false);
+      if (!opts?.silent) setIsLoading(false);
     }
   }, [polkadotAddress]);
 
   useEffect(() => {
     loadFolders();
   }, [loadFolders]);
+
+  // Keep each folder's size + file count climbing as the sync uploads. See
+  // useRefreshWhileSyncing — silent refresh so the list updates in place.
+  useRefreshWhileSyncing(
+    useCallback(() => {
+      void loadFolders({ silent: true });
+    }, [loadFolders]),
+    !!polkadotAddress,
+  );
 
   const refreshFoldersAndStats = useCallback((delayMs = 0) => {
     const refresh = () => {
@@ -366,10 +383,11 @@ export default function MultiFolderSyncManager() {
         setShowHcfsSetup(true);
         return;
       }
-    } catch {
-      setPendingAction("sync");
-      setSyncDialog((prev) => ({ ...prev, open: false }));
-      setShowHcfsSetup(true);
+    } catch (err) {
+      // A failed config read ≠ "no password set" — don't misroute a transient
+      // error to the password setup screen (audit FE-low).
+      console.error("Failed to read sync config:", err);
+      toast.error("Couldn't check your sync configuration. Please try again.");
       return;
     }
 
@@ -410,10 +428,10 @@ export default function MultiFolderSyncManager() {
           setShowHcfsSetup(true);
           return;
         }
-      } catch {
-        setBrowseDialog({ open: false, folder, isLocal });
-        setPendingAction("browse");
-        setShowHcfsSetup(true);
+      } catch (err) {
+        // A failed config read ≠ "no password set" (audit FE-low).
+        console.error("Failed to read sync config:", err);
+        toast.error("Couldn't check your sync configuration. Please try again.");
         return;
       }
     }
@@ -457,8 +475,12 @@ export default function MultiFolderSyncManager() {
 
       await checkAndResetIfNoFolders();
     } catch (error) {
-      console.error("Failed to delete folder:", error);
-      toast.error("Failed to delete folder from server");
+      console.error("Failed to delete folder:", errorMessage(error));
+      toast.error(deleteFolderErrorToast(error));
+      // Surface the real reason AND refetch: a folder the server actually
+      // deleted (despite a client-side error) then vanishes from the list
+      // immediately instead of lingering as "failed" (F-2).
+      refreshFoldersAndStats();
     } finally {
       setIsDeletingServer(false);
     }

@@ -197,9 +197,13 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
         setShowHcfsSetup(true);
         return;
       }
-    } catch {
-      onClose();
-      setShowHcfsSetup(true);
+    } catch (err) {
+      // A failed config read is NOT the same as "no password configured" —
+      // routing a transient IPC/DB error to the password setup screen would
+      // prompt the user to re-enter a password they already have. Surface the
+      // error and abort instead (audit FE-low).
+      console.error("Failed to read sync config:", err);
+      toast.error("Couldn't check your sync configuration. Please try again.");
       return;
     }
 

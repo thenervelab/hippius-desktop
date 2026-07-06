@@ -125,8 +125,8 @@ fn seed_one_file_session(sync: &SyncRunner, path: &str, label: &str, total_bytes
 /// wherever they live. Pinned via `CARGO_MANIFEST_DIR` so the test stays
 /// runnable from any cwd.
 fn lifecycle_source() -> String {
-    let base = concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/lifecycle.rs");
-    let callbacks = concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/lifecycle/callbacks.rs");
+    let base = concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/drive/lifecycle.rs");
+    let callbacks = concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/drive/lifecycle/callbacks.rs");
     // callbacks first: the real `build_file_synced_callback` / `handle_transfer_progress`
     // definitions live there, and `lifecycle.rs`'s test module contains functions
     // named `build_file_synced_callback_*` that would otherwise be matched first by

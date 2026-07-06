@@ -169,4 +169,73 @@ describe("mergeUploadFeed", () => {
     });
     expect(out.map((f) => f.name)).toEqual(["live.png", "c1.png"]);
   });
+
+  it("dedups across a leading-slash path difference (snapshot vs server)", () => {
+    // macOS/APFS hands the snapshot a leading slash; the server mapper trims
+    // it. Without normalization these split into two rows and the completed
+    // live row re-stamps "Just now" forever. They must collapse to one.
+    const out = mergeUploadFeed({
+      recentUploads: [completed("a.png", { actualFileName: "a.png", createdAt: 7 })],
+      snapshotFiles: [progress("/a.png", "completed")],
+      limit: 50,
+    });
+    expect(out).toHaveLength(1);
+    expect(out[0].createdAt).toBe(7); // server row (real time) won
+  });
+
+  it("keeps a retained completed row until the server confirms it", () => {
+    // After the live row has left snapshot.files but before the server refetch
+    // lands, the retained row keeps the finished file visible (no flicker-out).
+    const retained = mergeUploadFeed({
+      recentUploads: [],
+      snapshotFiles: [progress("done.png", "completed")],
+      limit: 50,
+    });
+    const out = mergeUploadFeed({
+      recentUploads: [],
+      snapshotFiles: [], // gone from the live snapshot
+      retainedCompleted: retained,
+      limit: 50,
+    });
+    expect(out.map((f) => f.name)).toEqual(["done.png"]);
+    expect(out[0].feedStatus).toBe("completed");
+  });
+
+  it("drops a retained row once the server list includes it", () => {
+    const retained = mergeUploadFeed({
+      recentUploads: [],
+      snapshotFiles: [progress("done.png", "completed")],
+      limit: 50,
+    });
+    const out = mergeUploadFeed({
+      recentUploads: [completed("done.png", { createdAt: 99 })],
+      snapshotFiles: [],
+      retainedCompleted: retained,
+      limit: 50,
+    });
+    expect(out).toHaveLength(1);
+    expect(out[0].createdAt).toBe(99); // server row (real time), not the retained stamp
+  });
+
+  it("keeps retained completed rows below active/failed rows", () => {
+    const retained = mergeUploadFeed({
+      recentUploads: [],
+      snapshotFiles: [progress("old.png", "completed")],
+      limit: 50,
+    });
+    const out = mergeUploadFeed({
+      recentUploads: [],
+      snapshotFiles: [
+        progress("up.png", "inProgress", { progressPercent: 20 }),
+        progress("bad.png", "error", { error: "x" }),
+      ],
+      retainedCompleted: retained,
+      limit: 50,
+    });
+    expect(out.map((f) => f.feedStatus)).toEqual([
+      "uploading",
+      "failed",
+      "completed",
+    ]);
+  });
 });

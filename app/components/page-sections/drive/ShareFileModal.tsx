@@ -33,9 +33,15 @@ import { toast } from "sonner";
 
 import { Button, Icons } from "@/components/ui";
 import { FramedDialog } from "@/components/ui/FramedDialog";
+import { SegmentedControl } from "@/components/ui/SegmentedControl";
 import { cn } from "@/lib/utils";
-import { shareModalFileAtom } from "@/app/lib/global-atoms/sharesAtoms";
 import {
+  finderShareAtom,
+  shareModalFileAtom,
+} from "@/app/lib/global-atoms/sharesAtoms";
+import {
+  cancelFinderShare,
+  confirmFinderShare,
   createShare,
   revokeShare,
   type ShareLink,
@@ -43,25 +49,55 @@ import {
 } from "@/app/lib/tauri/shares";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
 
+// The two visibility choices the Finder chooser offers; the values are the wire
+// tokens the Rust `ShareVisibility::parse` accepts.
+type ShareVisibility = "public" | "private";
+
 type ModalState =
+  // Finder-only entry point: the user picks public vs password before anything
+  // is minted (`confirmFinder` runs the mint on their choice). The in-app flow
+  // never enters this state — it goes straight to `running`.
+  | { kind: "choosing" }
   // `progress` is undefined until the backend reports it; the bar stays
-  // indeterminate in that case. Wiring the future `ShareProgress` channel
-  // is just `setState({ kind: "running", progress })` from its callback.
+  // indeterminate in that case.
   | { kind: "running"; progress?: ShareProgress }
-  | { kind: "done"; link: ShareLink }
+  // `password` is set only for a password-protected share — the recipient needs
+  // it, so the done view shows it alongside the link.
+  | { kind: "done"; link: ShareLink; password?: string }
   | { kind: "error"; message: string };
 
 export default function ShareFileModal() {
   const [file, setFile] = useAtom(shareModalFileAtom);
-  const [state, setState] = useState<ModalState>({ kind: "running" });
+  // A share from the macOS Finder right-click opens the in-app chooser (see
+  // `FinderShareListener`): the atom carries only the `choosing` state, and this
+  // modal then owns the `confirmFinderShare` → running → done/error lifecycle,
+  // symmetric with the file-driven `createShare` flow.
+  const [finderShare, setFinderShare] = useAtom(finderShareAtom);
+  // Seed `choosing` when a Finder request is already parked at mount (covers the
+  // event that fires before this effect-driven component re-renders, and the
+  // test harness that renders with the atom pre-seeded); otherwise the in-app
+  // flow starts in `running`.
+  const [state, setState] = useState<ModalState>(() =>
+    finderShare?.kind === "choosing" ? { kind: "choosing" } : { kind: "running" },
+  );
   // Auto-copy fires once per `done` transition. Reopening the dialog
   // without closing must not double-copy a stale URL.
   const autoCopiedRef = useRef(false);
 
-  const filename = file?.actualFileName || file?.name || "";
+  // The Finder flow has no `FormattedUserFile`, so fall back to the name the
+  // backend sent with the choosing event for the label shown in every state.
+  const finderName = finderShare?.kind === "choosing" ? finderShare.name : "";
+  const filename = file?.actualFileName || file?.name || finderName;
   const folderLabel = file?.label;
 
-  const close = useCallback(() => setFile(null), [setFile]);
+  const close = useCallback(() => {
+    // Release a still-parked Finder request (chooser open, or the user bailed).
+    // Idempotent server-side: after a confirm mints it the id is already taken,
+    // so closing from done/error is a harmless no-op.
+    if (finderShare?.kind === "choosing") void cancelFinderShare(finderShare.id);
+    setFile(null);
+    setFinderShare(null);
+  }, [finderShare, setFile, setFinderShare]);
 
   const startShare = useCallback(async () => {
     if (!file || !folderLabel) return;
@@ -88,10 +124,41 @@ export default function ShareFileModal() {
     }
   }, [file, folderLabel]);
 
+  // Confirm a Finder share once the user picks visibility in the chooser: mint
+  // via `confirmFinderShare` (backend holds the resolved path — we send only the
+  // id + choice), streaming progress into `running`, then land on `done`/`error`.
+  const confirmFinder = useCallback(
+    async (visibility: ShareVisibility) => {
+      if (finderShare?.kind !== "choosing") return;
+      const { id } = finderShare;
+      setState({ kind: "running" });
+      autoCopiedRef.current = false;
+      try {
+        const created = await confirmFinderShare(id, visibility, (progress) =>
+          setState((prev) =>
+            prev.kind === "running" ? { kind: "running", progress } : prev,
+          ),
+        );
+        setState({ kind: "done", link: created, password: created.password });
+      } catch (err) {
+        setState({ kind: "error", message: errorMessage(err) });
+      }
+    },
+    [finderShare],
+  );
+
   // Kick off the share when the modal opens.
   useEffect(() => {
     if (file) startShare();
   }, [file, startShare]);
+
+  // Open the chooser for a Finder request. No mint runs here — `confirmFinder`
+  // does that on the user's choice. Fires once when the atom becomes `choosing`;
+  // it does not run again during confirm (the atom identity is unchanged), so a
+  // reached `done`/`error` state is never clobbered back to the picker.
+  useEffect(() => {
+    if (finderShare?.kind === "choosing") setState({ kind: "choosing" });
+  }, [finderShare]);
 
   // Auto-copy once we reach `done`. The URL is still rendered in a
   // selectable textbox so the user can re-copy if focus rules block
@@ -110,7 +177,7 @@ export default function ShareFileModal() {
       });
   }, [state]);
 
-  if (!file) return null;
+  if (!file && !finderShare) return null;
 
   const onCopy = async () => {
     if (state.kind !== "done") return;
@@ -150,6 +217,10 @@ export default function ShareFileModal() {
       icon={<Icons.Link className="size-4 text-white" />}
       maxWidth="max-w-[585px]"
     >
+      {state.kind === "choosing" && (
+        <ChoosingBody filename={filename} onConfirm={confirmFinder} onCancel={close} />
+      )}
+
       {state.kind === "running" && (
         <RunningBody
           filename={filename}
@@ -161,6 +232,7 @@ export default function ShareFileModal() {
       {state.kind === "done" && (
         <DoneBody
           link={state.link}
+          password={state.password}
           onCopy={onCopy}
           onOpen={onOpenInBrowser}
           onClose={close}
@@ -171,11 +243,90 @@ export default function ShareFileModal() {
       {state.kind === "error" && (
         <ErrorBody
           message={state.message}
-          onRetry={startShare}
+          filename={filename}
+          // A Finder share is minted in Rust with no re-runnable file handle
+          // here, so "Try again" only applies to the in-app (`file`) flow.
+          onRetry={file ? startShare : undefined}
           onClose={close}
         />
       )}
     </FramedDialog>
+  );
+}
+
+/**
+ * The Finder-only "General access" picker, shown before anything is minted. The
+ * user chooses Anyone-with-the-link (public) or Password-protected (private) and
+ * confirms; the parent then runs the mint. Reuses the shared `SegmentedControl`
+ * and `Button` so it reads as first-class app UI (matches the done/error bodies).
+ */
+function ChoosingBody({
+  filename,
+  onConfirm,
+  onCancel,
+}: {
+  filename: string;
+  onConfirm: (visibility: ShareVisibility) => void;
+  onCancel: () => void;
+}) {
+  const [visibility, setVisibility] = useState<ShareVisibility>("public");
+
+  return (
+    <div className="font-geist">
+      <div className="mb-6 flex flex-col gap-1.5">
+        <p className="text-xs font-medium text-grey-30 dark:text-grey-dark-700">
+          General access
+        </p>
+        <SegmentedControl<ShareVisibility>
+          ariaLabel="Share access"
+          fullWidth
+          showActiveIndicator={false}
+          value={visibility}
+          onChange={setVisibility}
+          options={[
+            { label: "Anyone with the link", value: "public" },
+            { label: "Password protected", value: "private" },
+          ]}
+        />
+        <p className="text-xs text-grey-50 dark:text-grey-dark-600">
+          {visibility === "public"
+            ? "Anyone with the link can view and download this file until it expires."
+            : "We'll generate a password — the link can't be opened without it. You can copy it on the next screen."}
+        </p>
+        <p
+          className="mt-1 break-all font-mono text-xs text-grey-50 dark:text-grey-dark-600"
+          title={filename}
+        >
+          {filename}
+        </p>
+      </div>
+
+      <div className="flex flex-col gap-3">
+        <Button
+          type="button"
+          variant="primary"
+          size="auto"
+          onClick={() => onConfirm(visibility)}
+          className={cn(
+            "h-[52px] w-full rounded-[6px] border text-base font-normal tracking-[-0.36px]",
+            "border-[#3167DD] bg-[#3167DD] text-white",
+            "hover:bg-[#2454c4] hover:border-[#2454c4]",
+            "dark:hover:bg-[#2a5ad0] dark:hover:border-[#2a5ad0]",
+          )}
+        >
+          Create share link
+        </Button>
+        <Button
+          type="button"
+          variant="defaultStable"
+          size="auto"
+          onClick={onCancel}
+          className="h-[52px] w-full rounded-[6px] text-base font-normal tracking-[-0.36px]"
+        >
+          Cancel
+        </Button>
+      </div>
+    </div>
   );
 }
 
@@ -279,11 +430,17 @@ function runningLabel(progress?: ShareProgress): string {
 
 function ErrorBody({
   message,
+  filename,
   onRetry,
   onClose,
 }: {
   message: string;
-  onRetry: () => void;
+  // Shown when known (Finder share sends it on `finder:share-failed`; the in-app
+  // flow has the file) so the user sees which file failed, not just the error.
+  filename?: string;
+  // Undefined for a Finder-minted share — there is no in-app retry path, so the
+  // "Try again" button is omitted rather than shown as a dead control.
+  onRetry?: () => void;
   onClose: () => void;
 }) {
   return (
@@ -294,6 +451,14 @@ function ErrorBody({
           <p className="text-sm font-medium text-error-70">
             Couldn&apos;t create share link
           </p>
+          {filename && (
+            <p
+              className="mt-1 break-all font-mono text-xs text-grey-50 dark:text-grey-dark-600"
+              title={filename}
+            >
+              {filename}
+            </p>
+          )}
           <p className="mt-1 break-words text-xs text-grey-50 dark:text-grey-dark-600">
             {message}
           </p>
@@ -301,20 +466,22 @@ function ErrorBody({
       </div>
 
       <div className="flex flex-col gap-3">
-        <Button
-          type="button"
-          variant="primary"
-          size="auto"
-          onClick={onRetry}
-          className={cn(
-            "h-[52px] w-full rounded-[6px] border text-base font-normal tracking-[-0.36px]",
-            "border-[#3167DD] bg-[#3167DD] text-white",
-            "hover:bg-[#2454c4] hover:border-[#2454c4]",
-            "dark:hover:bg-[#2a5ad0] dark:hover:border-[#2a5ad0]",
-          )}
-        >
-          Try again
-        </Button>
+        {onRetry && (
+          <Button
+            type="button"
+            variant="primary"
+            size="auto"
+            onClick={onRetry}
+            className={cn(
+              "h-[52px] w-full rounded-[6px] border text-base font-normal tracking-[-0.36px]",
+              "border-[#3167DD] bg-[#3167DD] text-white",
+              "hover:bg-[#2454c4] hover:border-[#2454c4]",
+              "dark:hover:bg-[#2a5ad0] dark:hover:border-[#2a5ad0]",
+            )}
+          >
+            Try again
+          </Button>
+        )}
         <Button
           type="button"
           variant="defaultStable"
@@ -331,18 +498,32 @@ function ErrorBody({
 
 function DoneBody({
   link,
+  password,
   onCopy,
   onOpen,
   onClose,
   onRevoke,
 }: {
   link: ShareLink;
+  password?: string;
   onCopy: () => void | Promise<void>;
   onOpen: () => void | Promise<void>;
   onClose: () => void;
   onRevoke: () => void | Promise<void>;
 }) {
   const [copied, setCopied] = useState(false);
+  const [copiedPw, setCopiedPw] = useState(false);
+
+  const handleCopyPassword = async () => {
+    if (!password || copiedPw) return;
+    try {
+      await navigator.clipboard.writeText(password);
+      setCopiedPw(true);
+      setTimeout(() => setCopiedPw(false), 2000);
+    } catch (err) {
+      toast.error(`Could not copy password: ${errorMessage(err)}`);
+    }
+  };
   const expiresAtPretty = formatExpiresAt(link.expiresAt);
   const urlRef = useRef<HTMLTextAreaElement>(null);
   useLayoutEffect(() => {
@@ -411,6 +592,56 @@ function DoneBody({
           )}
         </button>
       </div>
+
+      {password && (
+        <div className="mb-6">
+          <p className="mb-1.5 text-xs font-medium text-grey-30 dark:text-grey-dark-700">
+            Password
+          </p>
+          <div
+            className={cn(
+              "flex items-center gap-2 rounded-[8px] border p-3",
+              "border-grey-80 bg-white",
+              "dark:border-[#494949] dark:bg-[#1f1f1f]",
+            )}
+          >
+            <input
+              readOnly
+              value={password}
+              onFocus={(e) => e.currentTarget.select()}
+              className={cn(
+                "flex-1 bg-transparent font-mono text-xs outline-none",
+                "text-grey-10 dark:text-grey-dark-800",
+              )}
+            />
+            <button
+              type="button"
+              onClick={handleCopyPassword}
+              title={copiedPw ? "Copied!" : "Copy password"}
+              aria-label="Copy password"
+              className={cn(
+                "shrink-0 rounded-md border px-1.5 py-1 transition-colors",
+                copiedPw
+                  ? "border-success-90 bg-success-100 text-success-50 dark:border-success-50/60 dark:bg-success-50/10 dark:text-success-50"
+                  : cn(
+                      "border-grey-80 bg-grey-90 text-grey-10 hover:bg-grey-80",
+                      "dark:border-[#494949] dark:bg-[#2c2c2c] dark:text-white dark:hover:bg-[#363636]",
+                    ),
+              )}
+            >
+              {copiedPw ? (
+                <Check className="size-4" />
+              ) : (
+                <Icons.Copy className="size-4" />
+              )}
+            </button>
+          </div>
+          <p className="mt-1.5 text-xs text-grey-50 dark:text-grey-dark-600">
+            Send this password separately — the link can&apos;t be opened
+            without it.
+          </p>
+        </div>
+      )}
 
       <div className="flex flex-col gap-3">
         <Button

@@ -207,23 +207,39 @@ export default function SplashWrapper({
 
     setupStartedRef.current = true;
 
+    // Cancellation guard (audit FE-low): `runSetupPhases` is a long, fire-and-
+    // forget async sequence. On an abrupt unmount (e.g. a fast login swapping
+    // the splash out) every `await` resumption must bail before its setState,
+    // and every timer must be cleared, so we neither leak intervals nor call
+    // setState after unmount. The cleanup flips `cancelled` and clears `timers`.
+    let cancelled = false;
+    const timers = new Set<ReturnType<typeof setInterval>>();
+    const track = <T extends ReturnType<typeof setInterval>>(id: T): T => {
+      timers.add(id);
+      return id;
+    };
+
     const runSetupPhases = async () => {
       // ========== UPDATE CHECK PHASE (at 0% - before main phases) ==========
       setIsUpdateCheckPhase(true);
       setPhase("checking_updates");
 
       const updateCheckPromise = new Promise<void>((resolve) => {
-        const checkInterval = setInterval(() => {
-          if (updateCheckCompleteRef.current || updateDialogOpenRef.current) {
+        const checkInterval = track(
+          setInterval(() => {
+            if (updateCheckCompleteRef.current || updateDialogOpenRef.current || cancelled) {
+              clearInterval(checkInterval);
+              resolve();
+            }
+          }, 50),
+        );
+
+        track(
+          setTimeout(() => {
             clearInterval(checkInterval);
             resolve();
-          }
-        }, 50);
-
-        setTimeout(() => {
-          clearInterval(checkInterval);
-          resolve();
-        }, 10000);
+          }, 10000),
+        );
       });
 
       // Hold the bar at 0% while the opening dissolve plays so the percentage
@@ -231,6 +247,7 @@ export default function SplashWrapper({
       // in the background (updateCheckPromise) the whole time.
       setPhaseInternalProgress(0);
       await wait(INTRO_TOTAL_MS);
+      if (cancelled) return;
 
       // After the intro, animate the beat's internal progress 0->100 over the
       // remaining update-check window. `progressAtom` maps that onto
@@ -240,17 +257,20 @@ export default function SplashWrapper({
       // it rather than lengthening the splash.
       const rampDuration = Math.max(0, UPDATE_CHECK_MIN_DURATION - INTRO_TOTAL_MS);
       let updateCheckProgress = 0;
-      const updateCheckProgressInterval = setInterval(() => {
-        updateCheckProgress = Math.min(100, updateCheckProgress + 4);
-        setPhaseInternalProgress(updateCheckProgress);
-      }, rampDuration / 25);
+      const updateCheckProgressInterval = track(
+        setInterval(() => {
+          updateCheckProgress = Math.min(100, updateCheckProgress + 4);
+          setPhaseInternalProgress(updateCheckProgress);
+        }, rampDuration / 25),
+      );
 
       // Held so the "Checking for Updates" beat never flickers off too fast
       // when the updater resolves immediately (cached / offline) — it needs to
       // stay up long enough to actually read.
       await runWithMinDuration(updateCheckPromise, rampDuration);
-
       clearInterval(updateCheckProgressInterval);
+      if (cancelled) return;
+
       setPhaseInternalProgress(100);
 
       // If an update dialog opened, wait for the user to resolve it
@@ -284,12 +304,14 @@ export default function SplashWrapper({
         );
       }
 
+      if (cancelled) return;
       setIsUpdateCheckPhase(false);
 
       // ========== MAIN PHASES (quick animation, no blocking) ==========
       const phaseNames = Object.keys(PHASE_CONTENT);
 
       for (let i = 0; i < phaseNames.length; i++) {
+        if (cancelled) return;
         const phaseName = phaseNames[i];
         console.log(
           `[Setup] Starting phase ${i + 1}/${phaseNames.length}: ${phaseName}`,
@@ -315,7 +337,7 @@ export default function SplashWrapper({
           // Smooth fake progress for all phases — no blocking backend calls
           let currentProgress = 0;
 
-          progressIntervalId = setInterval(() => {
+          progressIntervalId = track(setInterval(() => {
             currentProgress += 4;
             if (currentProgress <= 100) {
               setPhaseInternalProgress(currentProgress);
@@ -325,11 +347,11 @@ export default function SplashWrapper({
                 progressIntervalId = null;
               }
             }
-          }, 75);
+          }, 75));
 
           await new Promise<void>((resolve) => {
-            const checkInterval = setInterval(() => {
-              if (currentProgress >= 100) {
+            const checkInterval = track(setInterval(() => {
+              if (currentProgress >= 100 || cancelled) {
                 clearInterval(checkInterval);
                 if (progressIntervalId) {
                   clearInterval(progressIntervalId);
@@ -337,8 +359,9 @@ export default function SplashWrapper({
                 }
                 resolve();
               }
-            }, 50);
+            }, 50));
           });
+          if (cancelled) return;
 
           setPhaseInternalProgress(100);
           await wait(100);
@@ -367,11 +390,18 @@ export default function SplashWrapper({
         });
       }
 
+      if (cancelled) return;
       setIsFullyComplete(true);
       setSplashComplete(true);
     };
 
     runSetupPhases();
+
+    // Abrupt-unmount cleanup: stop the sequence and clear every tracked timer.
+    return () => {
+      cancelled = true;
+      timers.forEach((t) => clearInterval(t));
+    };
   }, [
     setPhase,
     setCompletedPhases,

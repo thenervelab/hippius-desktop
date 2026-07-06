@@ -1,8 +1,8 @@
 {
     "$schema": "../gen/schemas/desktop-schema.json",
     "identifier": "default",
-    "description": "Allow read, write & exists on AppLocalData/hippius-desktop.db and enable event communication",
-    "windows": ["main", "tray-panel"],
+    "description": "Main-window capability: DB read/write, fs/opener/updater/process, event communication. NOT granted to the tray-panel popover (see tray-panel.json) — audit H-13.",
+    "windows": ["main"],
     "permissions": [
         "core:default",
         "opener:default",
@@ -41,6 +41,11 @@
                 "path": "$APPLOCALDATA/hippius-desktop.db"
             }, {
                 "path": "$HOME/**"
+            }],
+            "deny": [{
+                "path": "$HOME/.hippius/**"
+            }, {
+                "path": "$HOME/.hippius"
             }]
         },
         {

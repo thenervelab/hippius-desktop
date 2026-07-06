@@ -93,7 +93,15 @@ export function useSyncSnapshotListener() {
 
     invoke<SyncSnapshot>("sp_get_snapshot")
       .then((snapshot) => {
-        if (!cancelled) setSnapshot(snapshot);
+        // The seed and the live event stream are independent async sources. On
+        // a fast-starting sync a `sync_progress_snapshot` event can land before
+        // this seed resolves; applying the seed unconditionally would then
+        // clobber the newer live state with the stale bootstrap. Only seed if
+        // no event has written yet — `EMPTY_SNAPSHOT` is the shared initial
+        // reference, so `cur === EMPTY_SNAPSHOT` reliably means "untouched".
+        if (!cancelled) {
+          setSnapshot((cur) => (cur === EMPTY_SNAPSHOT ? snapshot : cur));
+        }
       })
       .catch((err: unknown) => {
         console.error("[SyncSnapshot] Failed to get initial snapshot:", errorMessage(err));

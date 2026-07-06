@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { errorMessage } from "@/lib/utils/errorUtils";
 import { ArrowLeft, ArrowRight, Eye, EyeOff, X } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -268,7 +269,7 @@ const ImportWalletScreen: React.FC<ImportWalletScreenProps> = ({
       // typed password doesn't match the hash inside the backup; pass
       // that straight through so the user knows to retry the password
       // instead of suspecting a corrupt file.
-      const message = e instanceof Error ? e.message : String(e);
+      const message = errorMessage(e);
       setError(message || "Failed to import wallet");
       setWarningOpen(false);
     } finally {

@@ -17,6 +17,7 @@ import {
   getFileTypeDisplayLabel,
   getFileTypeFromExtension,
 } from "@/lib/utils/getTileTypeFromExtension";
+import { useRouter } from "next/navigation";
 import { useInfiniteScroll } from "@/lib/hooks/use-infinite-scroll";
 import { useNestedFolderListing } from "@/app/lib/hooks/use-nested-folder-listing";
 import { FILES_MUTATED_EVENT } from "@/app/lib/utils/fileMutationEvents";
@@ -214,6 +215,7 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
   ancestorChain = [],
   isItemDeleting,
 }) => {
+  const router = useRouter();
   const {
     isSelectionMode,
     toggleFileSelection,
@@ -350,18 +352,51 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
     </>
   );
 
-  if (!listingEnabled) {
+  // Single-row placeholder states (listing unavailable / folder empty).
+  // The message goes in the NAME cell — indented to this folder's child
+  // depth (so it lines up with where contents would render) — and the
+  // remaining columns are rendered as real empty `BASE_CELL_CLASS` cells.
+  // Using per-column cells instead of one `colSpan` cell keeps the vertical
+  // column borders aligned with every other row; a colSpan merges them and
+  // the separators disappear for the placeholder row. The w-5 spacer mirrors
+  // the child row's chevron slot so the text aligns with sibling names.
+  const renderMessageRow = (key: string, message: string) => {
+    // Trailing cells = all columns minus the selection rail minus the name
+    // cell, matching the size/date/type/actions a normal child row renders.
+    const trailingCellCount = Math.max(
+      columnCount - (hasSelectionColumn ? 1 : 0) - 1,
+      0,
+    );
     return (
-      <tr className="bg-grey-light-200 dark:bg-black-500">
-        {renderLeadingRailCells("unavailable")}
-        <td
-          colSpan={columnCount - (hasSelectionColumn ? 1 : 0)}
-          className="px-3 py-2 text-xs text-grey-60"
-        >
-          Folder listing is unavailable.
+      <tr
+        className={cn(
+          // Same zebra striping (and border) a data row uses, so the
+          // placeholder keeps the odd/even alternation instead of painting
+          // a fixed colour that breaks the pattern. nth-child counts all
+          // flat <tr> siblings in the shared tbody, so this lands on the
+          // correct stripe for its position.
+          "border-b-0 odd:bg-grey-light-200 even:bg-grey-light-400 dark:odd:bg-black-500 dark:even:bg-black-primary-bg",
+        )}
+      >
+        {renderLeadingRailCells(key)}
+        <td className={cn(BASE_CELL_CLASS, "p-0 relative")}>
+          <div
+            className="flex items-center min-w-0 gap-2 py-[5px] pr-2 text-grey-60"
+            style={depthIndentStyle}
+          >
+            <span className="w-5 shrink-0" aria-hidden />
+            <span>{message}</span>
+          </div>
         </td>
+        {Array.from({ length: trailingCellCount }).map((_, i) => (
+          <td key={`${key}-fill-${i}`} className={BASE_CELL_CLASS} />
+        ))}
       </tr>
     );
+  };
+
+  if (!listingEnabled) {
+    return renderMessageRow("unavailable", "Folder listing is unavailable.");
   }
 
   if (showLoadingSkeleton) {
@@ -374,17 +409,7 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
   }
 
   if (!visibleData.length) {
-    return (
-      <tr className="bg-grey-light-200 dark:bg-black-500">
-        {renderLeadingRailCells("empty")}
-        <td
-          colSpan={columnCount - (hasSelectionColumn ? 1 : 0)}
-          className="px-3 py-2 text-xs text-grey-60"
-        >
-          Folder is empty.
-        </td>
-      </tr>
-    );
+    return renderMessageRow("empty", "Folder is empty.");
   }
 
   return (
@@ -472,6 +497,7 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
             mainReqHash={childFile.mainReqHash}
             syncStatus={childFile.syncStatus}
             parentSubFolderPath={folderRelativePath}
+            onManageShare={() => router.push("/shares")}
           />
         );
 

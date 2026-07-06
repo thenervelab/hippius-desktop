@@ -1,5 +1,6 @@
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import type { FileProgress } from "@/app/lib/types/syncSnapshot";
+import { normalizeRelPath } from "@/app/lib/utils/relPath";
 
 /**
  * Unified "upload feed" shared by the Recent Files section and the tray
@@ -39,6 +40,15 @@ export interface MergeUploadFeedParams {
   recentUploads: FormattedUserFile[];
   /** Live per-file progress for the current sync session (`SyncSnapshot.files`). */
   snapshotFiles: FileProgress[];
+  /**
+   * Completed uploads the caller has retained across merges with stable
+   * timestamps, kept visible until the server list confirms them — see
+   * {@link useRetainedCompletedUploads}. This bridges the window between a
+   * just-finished file leaving `snapshotFiles` and the debounced server
+   * refetch landing (the "appear then vanish" report). Defaults to none so the
+   * pure function and its tests need not supply it.
+   */
+  retainedCompleted?: UploadFeedItem[];
   /** Hard cap on the returned rows (Recent Files: 50, tray popover: 20). */
   limit: number;
 }
@@ -63,13 +73,15 @@ function rankOf(status: UploadFeedStatus): number {
 
 /** Dedup identity: a file is the same row whether it's mid-upload (snapshot)
  *  or already on the server (recent uploads). Keyed by drive label + the
- *  sync-root-relative path, falling back to the display name. */
-function dedupKey(file: {
+ *  sync-root-relative path, falling back to the display name. The path is
+ *  normalized so a leading-slash difference between the snapshot side and the
+ *  server side can't split one file into two rows — see {@link normalizeRelPath}. */
+export function dedupKey(file: {
   label?: string;
   actualFileName?: string;
   name: string;
 }): string {
-  return `${file.label ?? ""}::${file.actualFileName || file.name}`;
+  return `${file.label ?? ""}::${normalizeRelPath(file.actualFileName || file.name)}`;
 }
 
 function basename(path: string): string {
@@ -80,9 +92,12 @@ function basename(path: string): string {
 
 /** Map a live snapshot upload entry onto a feed row. Only upload-direction
  *  files reach here (downloads/deletes are not "uploads"). `actualFileName`
- *  is set to the snapshot `path` so the Drive table's `useFileLiveProgress`
- *  matches the row back to its live progress. */
-function snapshotToItem(fp: FileProgress): UploadFeedItem {
+ *  is set to the raw snapshot `path` (NOT normalized) so the Drive table's
+ *  `useFileLiveProgress` matches the row back to its live progress, and
+ *  `createdAt` is stamped at call time — a completed row must therefore be
+ *  captured once with a stable stamp (see {@link useRetainedCompletedUploads})
+ *  rather than re-mapped every merge, or it reads "Just now" forever. */
+export function snapshotToItem(fp: FileProgress): UploadFeedItem {
   const actualFileName = fp.path || fp.fileName;
   const name = basename(fp.fileName || fp.path);
 
@@ -142,36 +157,49 @@ function snapshotToItem(fp: FileProgress): UploadFeedItem {
 export function mergeUploadFeed({
   recentUploads,
   snapshotFiles,
+  retainedCompleted = [],
   limit,
 }: MergeUploadFeedParams): UploadFeedItem[] {
-  // Server rows carry the real upload time. A completed live snapshot row is
-  // re-stamped `createdAt: Date.now()` on every merge (FileProgress has no
-  // timestamp), so a just-finished file that lingers in the snapshot would
-  // render "Just now" forever. Once the server list includes that file, drop
-  // the completed live row and let the server row (real time) represent it.
-  // Live rows for in-flight states (uploading / pending / failed) always win —
-  // they carry progress/error the server list can't show yet.
   const serverByKey = new Map(recentUploads.map((f) => [dedupKey(f), f]));
 
-  const liveItems = snapshotFiles
+  const liveAll = snapshotFiles
     .filter((f) => f.action === "upload")
-    .map(snapshotToItem)
-    .filter(
-      (item) =>
-        !(item.feedStatus === "completed" && serverByKey.has(dedupKey(item))),
-    )
+    .map(snapshotToItem);
+  // In-flight + failed rows carry progress/error the server list can't show
+  // yet, so they always win. Completed live rows are handled in the completed
+  // group below (after retained rows) so a stable-stamped retained copy can
+  // take precedence over the per-merge re-stamped snapshot copy.
+  const liveActive = liveAll
+    .filter((item) => item.feedStatus !== "completed")
     .sort((a, b) => rankOf(a.feedStatus) - rankOf(b.feedStatus));
+  const liveCompleted = liveAll.filter(
+    (item) => item.feedStatus === "completed",
+  );
 
   const seen = new Set<string>();
   const ordered: UploadFeedItem[] = [];
 
-  for (const item of liveItems) {
+  // 1. Active (uploading/pending) then failed.
+  for (const item of liveActive) {
     const key = dedupKey(item);
     if (seen.has(key)) continue;
     seen.add(key);
     ordered.push(item);
   }
 
+  // 2. Completed rows, in precedence: retained (stable timestamp, survives the
+  //    window before the server refetch lands) → live-snapshot completed
+  //    (fallback when no retention is wired) → server list (real upload time,
+  //    pushed in step 3). A completed row the server already has is dropped so
+  //    the server row represents it with the authoritative time.
+  for (const item of [...retainedCompleted, ...liveCompleted]) {
+    const key = dedupKey(item);
+    if (seen.has(key) || serverByKey.has(key)) continue;
+    seen.add(key);
+    ordered.push(item);
+  }
+
+  // 3. Server completed list (newest-first), minus anything already shown.
   for (const file of recentUploads) {
     const key = dedupKey(file);
     if (seen.has(key)) continue;

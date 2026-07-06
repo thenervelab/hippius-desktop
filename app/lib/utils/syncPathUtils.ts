@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { errorMessage } from "@/lib/utils/errorUtils";
 
 export interface SyncPathResult {
     path: string;
@@ -13,7 +14,7 @@ export async function getPrivateSyncPath(accountId?: string): Promise<SyncPathRe
             params: { isPublic: false, accountId },
         });
     } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
+        const msg = errorMessage(error);
         if (msg.includes("not set yet")) {
             return null;
         }

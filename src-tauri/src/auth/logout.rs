@@ -29,6 +29,13 @@ pub async fn auth_logout_internal(state: &crate::app_state::AppState, account_id
     // next restore while the UI believes it has logged out.
     crate::auth::auth_session_repo::clear(state.pool()?, account_id).await?;
 
+    // Clear the plaintext token fallbacks (`objectstore_auth_scoped` +
+    // legacy `objectstore_auth`) that `auth_session_repo::clear` leaves
+    // behind. Without this, on a keychain-less host `get_api_token` resolves
+    // the still-present plaintext token after logout and the session is
+    // silently resurrected (audit R-05).
+    crate::auth::tokens::clear_api_token(state.pool()?, account_id).await?;
+
     {
         let mut auth = state.auth.lock()?;
         auth.capabilities = crate::auth::state::AuthCapabilities::None;
@@ -37,6 +44,11 @@ pub async fn auth_logout_internal(state: &crate::app_state::AppState, account_id
         auth.eth_address = None;
         auth.mnemonic = None;
     }
+
+    // Reset the recovery gate so an OAuth account's `Pending` gate can't leak
+    // into a subsequent mnemonic login and hang its `ensure_sync_mnemonic`
+    // (audit R-30). Default-after-logout is `Skipped`, the non-blocking state.
+    state.set_recovery_state(crate::recovery::RecoveryGateState::Skipped);
 
     // Best-effort OS keychain cleanup so the next user on this machine
     // doesn't inherit credentials. Non-fatal — the user is already
@@ -69,6 +81,15 @@ pub async fn logout_full(app: tauri::AppHandle, account_id: String) -> Result<()
     //     `running` flag would make the next login's `start_block_subscription`
     //     CAS refuse to start a fresh subscription.
     crate::blockchain::subscription::stop_block_subscription_inner(&app).await;
+
+    // 1c. Tear down the VM-connection VPN: leave the NetBird overlay and close
+    //     every localhost forward, so the next signed-in account can't inherit
+    //     the previous tenant's live `127.0.0.1:<port>` forwards. No-op on
+    //     default builds (the disabled engine's `disconnect` is `Ok`).
+    //     Best-effort — a failure must not block logout.
+    if let Err(e) = app.state::<crate::app_state::AppState>().vpn.disconnect().await {
+        warn!("vpn disconnect during logout failed: {e}");
+    }
 
     // 2. Clear auth state. PROPAGATE a failure here instead of swallowing it:
     //    `auth_logout_internal` clears the persisted `auth_session` row BEFORE

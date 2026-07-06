@@ -191,6 +191,7 @@ const PanelBody: React.FC<PanelBodyProps> = ({ file, onClose }) => {
                         toastMessage="Arion Hash Copied Successfully!"
                         copyAbleText={arionCid || ""}
                         isTable={true}
+                        textColor="text-grey-20 dark:text-white"
                         className="max-w-full h-full"
                       />
                     </div>
@@ -231,16 +232,19 @@ const PanelBody: React.FC<PanelBodyProps> = ({ file, onClose }) => {
 const FileDetailsPanel: React.FC = () => {
   const [file, setFile] = useAtom(fileDetailsPanelAtom);
   const isOpen = file !== null;
-  const { isDesktop } = useBreakpoint();
+  const { isDesktop, isLargeDesktop } = useBreakpoint();
 
   const onClose = useCallback(() => {
     setFile(null);
   }, [setFile]);
 
-  // Inline panel — animated width slide on 2xl. Sits as a sibling of <main>
-  // (in ResponsiveContent) so it stays pinned to the available screen height
-  // and never scrolls with page content.
-  if (isDesktop) {
+  // Inline panel — animated width slide from `xl` up (xl AND 2xl). Sits as a
+  // sibling of <main> (in ResponsiveContent) so it stays pinned to the
+  // available screen height and never scrolls with page content. Below `xl`
+  // it falls through to the slide-in overlay Dialog. `isDesktop` alone matched
+  // only the `xl` range, so on large monitors (`2xl`) the panel wrongly
+  // rendered as the overlay instead of inline.
+  if (isDesktop || isLargeDesktop) {
     return (
       <AnimatePresence initial={false}>
         {isOpen && file && (

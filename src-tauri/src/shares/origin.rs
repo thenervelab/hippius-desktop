@@ -83,8 +83,12 @@ pub async fn record(pool: &SqlitePool, share_token: &str, owner: &str, folder_la
 /// # Errors
 ///
 /// Returns `Err` only on a hard SQLite failure (not on a missing row).
-pub async fn forget(pool: &SqlitePool, share_token: &str) -> Result<()> {
-    sqlx::query("DELETE FROM share_origin WHERE share_token = ?")
+///
+/// Scoped by `owner` (audit M-7): on a multi-account device one account must
+/// not be able to delete another's origin row by passing its `share_token`.
+pub async fn forget(pool: &SqlitePool, owner: &str, share_token: &str) -> Result<()> {
+    sqlx::query("DELETE FROM share_origin WHERE owner = ? AND share_token = ?")
+        .bind(owner)
         .bind(share_token)
         .execute(pool)
         .await?;
@@ -214,10 +218,13 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn forget_is_idempotent_on_missing_token() {
         let (_dir, pool) = fresh_pool().await;
-        forget(&pool, "never-existed").await.expect("forget-empty");
+        forget(&pool, "owner1", "never-existed").await.expect("forget-empty");
         record(&pool, "tok", "owner1", "Drive", "a.txt").await.expect("record");
-        forget(&pool, "tok").await.expect("forget-existing");
-        forget(&pool, "tok").await.expect("forget-twice");
+        // A different owner must NOT delete owner1's row (audit M-7).
+        forget(&pool, "owner2", "tok").await.expect("forget-other-owner");
+        assert!(fetch_for_tokens(&pool, "owner1", &["tok"]).await.expect("fetch").contains_key("tok"));
+        forget(&pool, "owner1", "tok").await.expect("forget-existing");
+        forget(&pool, "owner1", "tok").await.expect("forget-twice");
         let map = fetch_for_tokens(&pool, "owner1", &["tok"]).await.expect("fetch");
         assert!(map.is_empty());
     }

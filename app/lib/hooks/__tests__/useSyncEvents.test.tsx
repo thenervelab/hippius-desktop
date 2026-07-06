@@ -60,7 +60,12 @@ async function waitForHandlerRegistration() {
 }
 
 describe("useSyncEvents — debounced sync_files_completed_changed dispatch", () => {
-  let dispatchSpy: ReturnType<typeof vi.spyOn>;
+  // Derive the spy type from the actual call — `MockInstance` is invariant in
+  // its signature param, so the bare `ReturnType<typeof vi.spyOn>` default does
+  // not accept the specific `dispatchEvent` mock, and explicit type args trip
+  // spyOn's key constraint. A wrapper makes the type exactly the call's result.
+  const spyDispatch = () => vi.spyOn(window, "dispatchEvent");
+  let dispatchSpy: ReturnType<typeof spyDispatch>;
 
   beforeEach(() => {
     listenHandlers.clear();
@@ -68,7 +73,7 @@ describe("useSyncEvents — debounced sync_files_completed_changed dispatch", ()
     // and Promise chains).  Switch to fake timers per-test once setup
     // is complete.
     vi.useRealTimers();
-    dispatchSpy = vi.spyOn(window, "dispatchEvent");
+    dispatchSpy = spyDispatch();
   });
 
   afterEach(() => {

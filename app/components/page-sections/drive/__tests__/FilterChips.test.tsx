@@ -9,7 +9,7 @@ describe("FilterChips", () => {
   it("applies moe chip styling to active filters", () => {
     const filters: ActiveFilter[] = [
       {
-        type: "date",
+        type: "dateRange",
         value: "last7days",
         label: "Date",
         displayValue: "Last 7 days",
@@ -30,7 +30,7 @@ describe("FilterChips", () => {
     expect(chip).toHaveClass("bg-grey-light-700");
     expect(chip).toHaveClass("font-mono");
     expect(chip).toHaveClass("uppercase");
-    expect(closeButton).toHaveClass("bg-grey-light-100");
+    expect(closeButton).toHaveClass("bg-grey-dark-100");
     expect(closeButton).toHaveClass("rounded-[3px]");
   });
 });
