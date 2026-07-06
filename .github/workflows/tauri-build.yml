@@ -1,16 +1,21 @@
 name: publish
 
 on:
-  # Publish only on an explicit version tag or manual dispatch — NEVER on every
-  # push to main (audit H-12: that auto-signed + auto-published a release the
-  # updater served to the whole fleet, so one bad commit shipped a signed update).
+  # Auto-publish on every push to main (the pre-0.2.1 behavior, restored by
+  # request). The matrix job builds the release as a DRAFT; the final
+  # publish-release job flips it to published only AFTER the macOS Finder
+  # extension is embedded and a correct latest.json is written — so a failed
+  # build or a rejected notarization never becomes the fleet's "latest", and the
+  # auto-updater never sees a half-finished release (the residual H-12 guard).
   workflow_dispatch:
   push:
-    tags: ["v*"]
+    branches: [main]
 
+# Least privilege at the workflow level. The two jobs that create and publish
+# the GitHub release request `contents: write` per-job below — a workflow-level
+# write grant spanning multiple jobs trips zizmor's excessive-permissions audit.
 permissions:
-  contents: write
-  pull-requests: read
+  contents: read
 
 concurrency:
   group: publish-${{ github.ref }}
@@ -24,6 +29,9 @@ env:
 
 jobs:
   publish-tauri:
+    permissions:
+      contents: write # create the draft release + upload platform assets
+      pull-requests: read # release-notes step reads the linked PR via the API
     strategy:
       fail-fast: false
       matrix:
@@ -301,8 +309,10 @@ jobs:
           tagName: v__VERSION__
           releaseName: "${{ steps.release_notes.outputs.title }}"
           releaseBody: ${{ steps.release_notes.outputs.body }}
-          # Draft so a human promotes the release before the updater serves it
-          # to the fleet (audit H-12).
+          # Build as a DRAFT. The final publish-release job flips it to published
+          # once every platform's assets + a correct latest.json are attached, so
+          # the auto-updater never serves a half-built release (residual H-12
+          # guard even though we auto-publish on main again).
           releaseDraft: true
           prerelease: false
           overwrite: true
@@ -377,3 +387,94 @@ jobs:
             "$OUT"/Hippius.app.tar.gz \
             "$OUT"/Hippius.app.tar.gz.sig \
             --clobber
+
+  # ---------------------------------------------------------------------------
+  # Final job: fix latest.json for macOS, then publish the draft release.
+  #
+  # Runs ONCE, after all three platform builds have uploaded their assets to the
+  # draft release (needs: publish-tauri waits for every matrix leg to succeed).
+  # Two things the matrix legs structurally cannot do:
+  #
+  #   1. Correct latest.json — macOS is built app-only (--bundles app) so the
+  #      Finder extension can be embedded afterwards. That means tauri-action
+  #      never builds a macOS updater tarball, and its generated latest.json has
+  #      NO darwin entry. The correct universal tarball + its minisign signature
+  #      are produced later, by the macOS finalize step. Here we merge the two
+  #      darwin-* entries into tauri-action's manifest, leaving the windows entry
+  #      it already wrote untouched. Without this, a 0.2.0 macOS user is never
+  #      offered the update (the reported gap).
+  #
+  #   2. Publish last — flipping draft -> published as the final step means a
+  #      failed build or a rejected notarization never becomes the fleet's
+  #      "latest" (releases/latest/download/latest.json resolves to the newest
+  #      PUBLISHED, non-draft, non-prerelease release only).
+  publish-release:
+    needs: publish-tauri
+    permissions:
+      contents: write # edit the release (draft -> published) + upload latest.json
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (read version -> tag)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Fix latest.json (macOS) and publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          cd "$work"
+
+          # tauri-action tagged the release v__VERSION__; read the version from
+          # the checked-in config so this job needs no build artifacts.
+          TAG="v$(jq -r .version "$GITHUB_WORKSPACE/src-tauri/tauri.conf.json")"
+          echo "Finalizing release $TAG"
+
+          # tauri-action's manifest: correct windows entry, no darwin entry
+          # (macOS was app-only). Absent only if no updater artifact was produced.
+          gh release download "$TAG" --repo "$REPO" --pattern 'latest.json' --dir . || true
+
+          # The macOS updater signature the finalize step attached — present
+          # whenever notarization secrets are configured, absent otherwise.
+          MAC_SIG=""
+          if gh release download "$TAG" --repo "$REPO" \
+               --pattern 'Hippius.app.tar.gz.sig' --dir . 2>/dev/null \
+             && [[ -f Hippius.app.tar.gz.sig ]]; then
+            MAC_SIG="$(cat Hippius.app.tar.gz.sig)"
+          fi
+
+          if [[ -n "$MAC_SIG" ]]; then
+            # The universal tarball serves BOTH Apple slices, so both darwin keys
+            # point at the same asset (mirrors tauri-action's own universal
+            # handling). The URL is the public tagged path, valid once published.
+            URL="https://github.com/${REPO}/releases/download/${TAG}/Hippius.app.tar.gz"
+            if [[ -f latest.json ]]; then
+              jq --arg url "$URL" --arg sig "$MAC_SIG" '
+                .platforms["darwin-aarch64"] = {signature: $sig, url: $url}
+                | .platforms["darwin-x86_64"] = {signature: $sig, url: $url}
+              ' latest.json > latest.json.new
+            else
+              # No manifest from tauri-action -> emit a darwin-only one so macOS
+              # still updates (a windows-updater gap would need separate triage).
+              jq -n --arg v "${TAG#v}" --arg url "$URL" --arg sig "$MAC_SIG" '
+                {version: $v, notes: "", pub_date: (now | todate),
+                 platforms: {
+                   "darwin-aarch64": {signature: $sig, url: $url},
+                   "darwin-x86_64":  {signature: $sig, url: $url}}}
+              ' > latest.json.new
+            fi
+            mv latest.json.new latest.json
+            gh release upload "$TAG" --repo "$REPO" latest.json --clobber
+            echo "latest.json updated with the macOS updater entry."
+          else
+            echo "::warning::No macOS updater signature on $TAG — publishing without a darwin entry; macOS auto-update is unavailable this release."
+          fi
+
+          # Flip the draft to a published, marked-latest release. Only now does
+          # the updater endpoint (releases/latest/download/latest.json) resolve.
+          gh release edit "$TAG" --repo "$REPO" --draft=false --latest
+          echo "Published $TAG."
