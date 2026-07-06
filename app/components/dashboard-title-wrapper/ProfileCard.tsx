@@ -422,7 +422,11 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
                   {providerLabel ? (
                     <span className="flex shrink-0 items-center gap-1 rounded-full border border-[#e3e3e3] bg-[#f5f5f5] px-1.5 py-0.5 dark:border-[#313131] dark:bg-[#222222]">
                       {ProviderIcon ? (
-                        <ProviderIcon className="size-3 shrink-0" />
+                        // Monochrome provider marks (GitHub, Apple) use
+                        // currentColor — force dark-in-light / white-in-dark so
+                        // they stand out on the badge. Google is multicolor and
+                        // ignores this.
+                        <ProviderIcon className="size-3 shrink-0 text-grey-10 dark:text-white" />
                       ) : null}
                       <span className="font-inter text-[10px] font-medium leading-none text-[#52525c] dark:text-[#a3a3a3]">
                         {providerLabel}
