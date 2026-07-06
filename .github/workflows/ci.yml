@@ -2,15 +2,22 @@ name: ci
 
 # Test + lint gate for every PR and for pushes to the long-lived branches.
 #
-# Rust runs in two lanes that share `.github/actions/rust-ci-setup`:
+# Rust runs in three lanes:
 #   - `rust-linux` (ubuntu): the FAST lane, runs on every branch incl. redesign.
 #     Covers all cross-platform code. macOS-only `#[cfg(target_os = "macos")]`
 #     code is compiled out here.
 #   - `rust-macos` (macOS): the SLOW lane (~15-20 min), gated to release-bound
 #     merges (PRs into dev/main + pushes to them). Covers the macOS-only code
 #     (security-scoped bookmarks, App Translocation, apple-native keychain).
+#   - `rust-windows` (windows): a `cargo check` compile lane, gated to dev/main
+#     like rust-macos. It exists because ONLY the release (publish) workflow ever
+#     built on Windows, so Windows-specific breakage (e.g. a `#[cfg(unix)]` module
+#     referenced unconditionally in `generate_handler!`) surfaced at release time
+#     instead of at PR time. This lane catches that class before a release.
 # Branch protection requires `rust-linux` + `frontend` on redesign, and
-# `rust-linux` + `rust-macos` + `frontend` on dev/main.
+# `rust-linux` + `rust-macos` + `frontend` on dev/main. `rust-windows` is added
+# as a NON-required lane first; make it required once it has run green on a
+# dev/main PR (branch-protection is an admin change).
 on:
   pull_request:
   push:
@@ -89,6 +96,102 @@ jobs:
         env:
           SQLX_OFFLINE: "true"
         run: cargo test
+
+  rust-windows:
+    # Windows compile lane. Only the publish (release) workflow builds on Windows,
+    # so a Windows-only compile break (a `#[cfg(unix)]` module referenced
+    # unconditionally in `generate_handler!`) failed at release time, not PR time.
+    # A fast `cargo check` (lib + bins — what actually ships, no test crates) here
+    # catches it. Gated to release-bound merges like rust-macos so redesign PRs
+    # stay quick. The shared rust-ci-setup composite is Linux/macOS-oriented
+    # (ssh-agent, apt), so this job mirrors the PROVEN Windows setup from
+    # tauri-build.yml: an ~/.ssh/config IdentityFile (no ssh-agent) + git-CLI
+    # fetch for the private hcfs dep.
+    if: >-
+      (github.event_name == 'pull_request' && (github.base_ref == 'dev' || github.base_ref == 'main')) ||
+      (github.event_name == 'push' && (github.ref_name == 'dev' || github.ref_name == 'main'))
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      # Private hcfs git deps over SSH. Git Bash on windows-latest provides bash +
+      # python3 + ssh-keyscan; the IdentityFile config (no ssh-agent) is the same
+      # approach the release workflow's Windows leg uses successfully.
+      - name: Setup SSH for private Rust git deps
+        shell: bash
+        env:
+          PRIVATE_GIT_DEPLOY_KEY_B64: ${{ secrets.HCFS_DEPLOY_KEY_B64 }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          python3 - <<'PY' > ~/.ssh/private_git_key
+          import os, base64, sys
+          sys.stdout.buffer.write(base64.b64decode(os.environ["PRIVATE_GIT_DEPLOY_KEY_B64"].strip()))
+          PY
+          chmod 600 ~/.ssh/private_git_key
+          ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+          cat > ~/.ssh/config <<'EOF'
+          Host github.com
+            HostName github.com
+            User git
+            IdentityFile ~/.ssh/private_git_key
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+            BatchMode yes
+          EOF
+
+      - name: Force Cargo to use the git CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.cargo
+          printf '[net]\ngit-fetch-with-cli = true\n' > ~/.cargo/config.toml
+
+      - name: Install the pinned toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          # rust-toolchain.toml pins the channel; install it so `cargo` uses the
+          # same compiler the app ships with.
+          channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' src-tauri/rust-toolchain.toml)
+          echo "pinned channel: ${channel:-<none, using default>}"
+          if [[ -n "$channel" ]]; then
+            rustup toolchain install "$channel" --no-self-update
+          fi
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: './src-tauri -> target'
+          cache-on-failure: "true"
+
+      # tauri-build requires the frontendDist dir (../out) to exist; the check
+      # never serves the frontend, so a placeholder satisfies the build script.
+      - name: Placeholder frontend dist
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          printf '<!doctype html><title>ci</title>' > out/index.html
+
+      - name: Create src-tauri/.env
+        shell: bash
+        env:
+          TAURI_ENV_FILE: ${{ secrets.TAURI_ENV_FILE }}
+        run: |
+          set -euo pipefail
+          mkdir -p src-tauri
+          printf '%s\n' "$TAURI_ENV_FILE" > src-tauri/.env
+
+      - name: Cargo check (Windows)
+        working-directory: src-tauri
+        shell: bash
+        env:
+          SQLX_OFFLINE: "true"
+        run: cargo check
 
   supply-chain:
     # Supply-chain advisory gate for the Rust backend. Lighter than the Rust
