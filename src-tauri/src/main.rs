@@ -330,8 +330,14 @@ fn main() {
             crate::shares::commands::hcfs_clear_share_history,
             crate::shares::capabilities::hcfs_get_capabilities,
             // Finder "Share with Hippius": confirm/cancel the in-app visibility
-            // chooser (macOS-only feature; inert bodies elsewhere).
+            // chooser. The `finder_bridge` module is `#[cfg(unix)]` (its socket
+            // layer needs Unix-domain sockets), so these registrations must be
+            // gated to match — otherwise Windows references a compiled-out module
+            // (E0433). Feature is macOS-only; on Linux the bodies are inert and
+            // the FE never invokes them, on Windows the commands are absent.
+            #[cfg(unix)]
             crate::finder_bridge::commands::hcfs_finder_confirm_share,
+            #[cfg(unix)]
             crate::finder_bridge::commands::hcfs_finder_cancel_share,
             // Device settings
             get_device_name,
