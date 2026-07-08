@@ -102,13 +102,16 @@ jobs:
     # so a Windows-only compile break (a `#[cfg(unix)]` module referenced
     # unconditionally in `generate_handler!`) failed at release time, not PR time.
     # A fast `cargo check` (lib + bins — what actually ships, no test crates) here
-    # catches it. Gated to release-bound merges like rust-macos so redesign PRs
-    # stay quick. The shared rust-ci-setup composite is Linux/macOS-oriented
+    # catches it. Normally gated to release-bound merges like rust-macos so
+    # redesign PRs stay quick; `redesign` is included here TEMPORARILY while the
+    # cross-platform shell-share PR (#88) lands the Windows COM DLL and needs the
+    # Windows compile lane on its redesign PR — revert to dev/main-only after it
+    # merges. The shared rust-ci-setup composite is Linux/macOS-oriented
     # (ssh-agent, apt), so this job mirrors the PROVEN Windows setup from
     # tauri-build.yml: an ~/.ssh/config IdentityFile (no ssh-agent) + git-CLI
     # fetch for the private hcfs dep.
     if: >-
-      (github.event_name == 'pull_request' && (github.base_ref == 'dev' || github.base_ref == 'main')) ||
+      (github.event_name == 'pull_request' && (github.base_ref == 'dev' || github.base_ref == 'main' || github.base_ref == 'redesign')) ||
       (github.event_name == 'push' && (github.ref_name == 'dev' || github.ref_name == 'main'))
     runs-on: windows-latest
     steps:
