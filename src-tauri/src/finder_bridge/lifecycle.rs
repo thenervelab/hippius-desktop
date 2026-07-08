@@ -9,27 +9,24 @@ use tauri::{AppHandle, Manager};
 use tracing::{info, warn};
 
 use crate::app_state::AppState;
-use crate::finder_bridge::{container, socket::FinderBridge};
+use crate::finder_bridge::{endpoint, socket::FinderBridge};
 
-/// Start the Finder bridge: bind the App Group socket, store the handle in
-/// [`AppState`], and drain inbound menu-click messages.
-///
-/// Phase 1 stub: the drain handler only logs each click. The Phase 2 share
-/// dispatch (resolve path → mint / upload / zip + password wrap) replaces it.
+/// Start the Finder bridge: bind the platform transport, store the handle in
+/// [`AppState`], and drain inbound menu-click messages to the share dispatch.
 pub fn start(app: &AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        let socket_path = match container::socket_path() {
-            Ok(path) => path,
+        let endpoint = match endpoint::resolve() {
+            Ok(endpoint) => endpoint,
             Err(e) => {
-                warn!(error = %e, "finder bridge: cannot resolve App Group container; not starting");
+                warn!(error = %e, "finder bridge: cannot resolve transport endpoint; not starting");
                 return;
             }
         };
-        let (bridge, mut incoming) = match FinderBridge::start(socket_path.clone()) {
+        let (bridge, mut incoming) = match FinderBridge::start(endpoint) {
             Ok(pair) => pair,
             Err(e) => {
-                warn!(error = %e, path = %socket_path.display(), "finder bridge: failed to start; Finder integration disabled");
+                warn!(error = %e, "finder bridge: failed to start; Finder integration disabled");
                 return;
             }
         };
@@ -40,7 +37,7 @@ pub fn start(app: &AppHandle) {
             warn!("finder bridge: already started; ignoring duplicate start");
             return;
         }
-        info!(path = %socket_path.display(), "finder bridge: listening for the Finder extension");
+        info!("finder bridge: listening for the file-manager extension");
 
         // Dispatch each inbound menu action to the share engine. Each runs on
         // its own task so a slow share (network) doesn't block the next click.

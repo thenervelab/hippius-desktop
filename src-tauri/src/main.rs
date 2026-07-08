@@ -18,7 +18,7 @@ pub mod blockchain;
 pub mod console_access;
 pub mod crypto;
 pub mod error;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub mod finder_bridge;
 pub mod infra;
 pub mod notifications;
