@@ -368,3 +368,214 @@ jobs:
             "$OUT"/Hippius.app.tar.gz \
             "$OUT"/Hippius.app.tar.gz.sig \
             --clobber
+
+  # Linux preview: the .deb (with the file-manager "Share with Hippius" action
+  # files wired in via tauri.conf.json's bundle.linux.deb). All three platform
+  # jobs upsert the same v<version>-preview release.
+  publish-tauri-linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup SSH for private Rust git deps
+        shell: bash
+        env:
+          PRIVATE_GIT_DEPLOY_KEY_B64: ${{ secrets.HCFS_DEPLOY_KEY_B64 }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          python3 - <<'PY' > ~/.ssh/private_git_key
+          import os, base64, sys
+          sys.stdout.buffer.write(base64.b64decode(os.environ["PRIVATE_GIT_DEPLOY_KEY_B64"].strip()))
+          PY
+          chmod 600 ~/.ssh/private_git_key
+          ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+          cat > ~/.ssh/config <<'EOF'
+          Host github.com
+            HostName github.com
+            User git
+            IdentityFile ~/.ssh/private_git_key
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+            BatchMode yes
+          EOF
+          chmod 600 ~/.ssh/config
+
+      - name: Linux deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+
+      - name: Setup PNPM
+        uses: pnpm/action-setup@v2
+        with:
+          version: 9.12.3
+          run_install: false
+
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Create src-tauri/.env
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p src-tauri
+          cat > src-tauri/.env << 'EOF'
+          ${{ secrets.TAURI_ENV_FILE }}
+          EOF
+          # PREVIEW-ONLY staging console (see the macOS job).
+          printf '\nHIPPIUS_CONSOLE_BASE_URL=https://console.hippicode.com\n' >> src-tauri/.env
+          chmod 600 src-tauri/.env
+
+      - name: Build frontend
+        run: pnpm build
+        env:
+          NODE_ENV: production
+
+      - name: Build & publish (deb)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+        with:
+          tagName: v__VERSION__-preview
+          releaseName: '[PREVIEW] Hippius (redesign)'
+          releaseBody: |
+            **🎨 Redesign Preview Build**
+          releaseDraft: false
+          prerelease: true
+          makeLatest: false
+          overwrite: true
+          args: '--bundles deb'
+
+  # Windows preview: the app installer (NSIS) + a separate, self-signed shell
+  # extension bundle testers register manually (register-preview.ps1). The
+  # sparse MSIX can't be auto-registered by the installer without a procured
+  # cert, so for internal preview the extension ships as a side bundle.
+  publish-tauri-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup SSH for private Rust git deps
+        shell: bash
+        env:
+          PRIVATE_GIT_DEPLOY_KEY_B64: ${{ secrets.HCFS_DEPLOY_KEY_B64 }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          python3 - <<'PY' > ~/.ssh/private_git_key
+          import os, base64, sys
+          sys.stdout.buffer.write(base64.b64decode(os.environ["PRIVATE_GIT_DEPLOY_KEY_B64"].strip()))
+          PY
+          chmod 600 ~/.ssh/private_git_key
+          ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+          cat > ~/.ssh/config <<'EOF'
+          Host github.com
+            HostName github.com
+            User git
+            IdentityFile ~/.ssh/private_git_key
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+            BatchMode yes
+          EOF
+
+      - name: Force Cargo to use the git CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.cargo
+          printf '[net]\ngit-fetch-with-cli = true\n' > ~/.cargo/config.toml
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+
+      - name: Setup PNPM
+        uses: pnpm/action-setup@v2
+        with:
+          version: 9.12.3
+          run_install: false
+
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Create src-tauri/.env
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p src-tauri
+          cat > src-tauri/.env << 'EOF'
+          ${{ secrets.TAURI_ENV_FILE }}
+          EOF
+          printf '\nHIPPIUS_CONSOLE_BASE_URL=https://console.hippicode.com\n' >> src-tauri/.env
+
+      - name: Build frontend
+        run: pnpm build
+        env:
+          NODE_ENV: production
+
+      - name: Build the shell extension (self-signed sparse MSIX)
+        shell: pwsh
+        run: ./package-selfsigned.ps1
+        working-directory: windows/HippiusShell
+
+      - name: Build & publish (NSIS installer)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+        with:
+          tagName: v__VERSION__-preview
+          releaseName: '[PREVIEW] Hippius (redesign)'
+          releaseBody: |
+            **🎨 Redesign Preview Build**
+          releaseDraft: false
+          prerelease: true
+          makeLatest: false
+          overwrite: true
+          args: '--bundles nsis'
+
+      - name: Bundle + upload the shell extension for testers
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ver = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          $tag = "v$ver-preview"
+          $out = "windows/HippiusShell/out"
+          Copy-Item windows/HippiusShell/register-preview.ps1 "$out/"
+          @"
+          Hippius Explorer 'Share with Hippius' — PREVIEW (self-signed).
+
+          1. Install Hippius from the *-setup.exe in this release.
+          2. Extract this zip; open an ADMIN PowerShell in the extracted folder.
+          3. Run:  ./register-preview.ps1
+          4. Right-click a file/folder in Explorer -> Share with Hippius.
+
+          Remove: Get-AppxPackage *Hippius.ShellExtension* | Remove-AppxPackage
+          "@ | Set-Content "$out/README-INSTALL.txt"
+          Compress-Archive -Path "$out/HippiusShell.dll","$out/HippiusShellSparse.msix","$out/HippiusPreviewCert.cer","$out/register-preview.ps1","$out/README-INSTALL.txt" -DestinationPath "HippiusShellExtension-preview.zip" -Force
+          gh release upload $tag HippiusShellExtension-preview.zip --clobber
