@@ -46,11 +46,16 @@ $cert = New-SelfSignedCertificate `
 $thumb = $cert.Thumbprint
 Write-Host "    thumbprint: $thumb"
 
-Write-Host "==> Stamping AppxManifest.xml"
+Write-Host "==> Stamping AppxManifest.xml (into a manifest-only pack dir)"
+# A SPARSE package packs the MANIFEST ONLY — the DLL lives in the ExternalLocation
+# (the app install dir), not inside the package. So stamp into an isolated dir
+# that contains nothing but AppxManifest.xml.
+$packDir = Join-Path $out "pack"
+New-Item -ItemType Directory -Force -Path $packDir | Out-Null
 (Get-Content "$here\AppxManifest.xml" -Raw).
   Replace("{PUBLISHER}", $Publisher).
   Replace("{VERSION}", $Version).
-  Replace("{CLSID}", $Clsid) | Set-Content "$out\AppxManifest.xml" -Encoding UTF8
+  Replace("{CLSID}", $Clsid) | Set-Content "$packDir\AppxManifest.xml" -Encoding UTF8
 
 Write-Host "==> Locating Windows SDK tools (makeappx, signtool)"
 $sdkBin = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Directory |
@@ -63,8 +68,8 @@ Write-Host "    using $($sdkBin.Name)"
 
 Write-Host "==> Packing sparse package"
 $msix = "$out\HippiusShellSparse.msix"
-# /nv = no semantic validation (a payload-less sparse layout has no real files).
-& $makeappx pack /d $out /p $msix /nv /o
+# Pack the manifest-only dir. /nv = no semantic validation (payload-less sparse).
+& $makeappx pack /d $packDir /p $msix /nv /o
 if ($LASTEXITCODE -ne 0) { throw "makeappx failed ($LASTEXITCODE)" }
 
 Write-Host "==> Signing + verifying"
