@@ -91,3 +91,7 @@ Export-Certificate -Cert $cert -FilePath "$out\HippiusPreviewCert.cer" | Out-Nul
 
 Write-Host "==> Done. Artifacts in $out"
 Get-ChildItem $out | Select-Object Name, Length | Format-Table
+
+# The informational `signtool verify` left $LASTEXITCODE=1; the packaging itself
+# succeeded, so exit clean (PowerShell propagates the last native exit code).
+exit 0
