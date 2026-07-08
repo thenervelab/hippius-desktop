@@ -9,9 +9,10 @@
 //! compromised webview can never mint a share of a file it merely names (the
 //! path came from Finder and stays server-side).
 //!
-//! This module is compiled on every platform so `generate_handler!` in `main.rs`
-//! can reference the commands unconditionally, but the Finder feature itself is
-//! macOS-only: off macOS the bodies are inert (the FE never invokes them).
+//! These commands are registered under `#[cfg(any(unix, windows))]` in `main.rs`
+//! and their real bodies run on macOS + Linux (the Unix-socket bridge) AND on
+//! Windows (the named-pipe bridge). The `#[cfg(not(any(unix, windows)))]` arm is
+//! a dead inert fallback for any other target the module doesn't cover.
 
 use crate::app_state::AppState;
 use crate::error::{AppError, Result};
@@ -38,7 +39,7 @@ pub struct FinderShareCreated {
 impl FinderShareCreated {
     /// A public (`#k=`) share carries no password. macOS-only: its sole caller is
     /// the Finder mint path.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(unix, windows))]
     pub(crate) fn public(link: crate::shares::commands::ShareLink) -> Self {
         Self {
             share_token: link.share_token,
@@ -50,7 +51,7 @@ impl FinderShareCreated {
 
     /// A private (`#p=`) share carries the generated password the recipient needs
     /// out-of-band. macOS-only.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(unix, windows))]
     pub(crate) fn private(private: crate::shares::commands::PrivateShare) -> Self {
         Self {
             share_token: private.link.share_token,
@@ -66,7 +67,7 @@ impl FinderShareCreated {
 /// value is rejected once, at the boundary, rather than re-checked downstream
 /// (axiom `rust_api_axiom_25_validate_boundary`). macOS-only — the only consumer
 /// is the Finder confirm command's macOS body.
-#[cfg(target_os = "macos")]
+#[cfg(any(unix, windows))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ShareVisibility {
     /// "Anyone with the link" — a public `#k=` share.
@@ -75,7 +76,7 @@ pub(crate) enum ShareVisibility {
     Private,
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(unix, windows))]
 impl ShareVisibility {
     /// Parse the untrusted `visibility` IPC argument into the typed choice,
     /// rejecting anything else with [`AppError::Validation`]. The two accepted
@@ -105,7 +106,7 @@ pub async fn hcfs_finder_confirm_share(
     visibility: String,
     on_progress: Channel<ShareProgress>,
 ) -> Result<FinderShareCreated> {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(unix, windows))]
     {
         // Validate the untrusted visibility at the boundary, then take the parked
         // request (single-use). `take_finder_share` returns the owned value, so
@@ -132,13 +133,13 @@ pub async fn hcfs_finder_confirm_share(
             minted = crate::finder_bridge::dispatch::mint_confirmed(&state, &pending.path, visibility, Some(progress)) => minted,
         }
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (&state, request_id, visibility, on_progress);
-        // Unreachable from the UI (the FE only invokes this on macOS); a typed
+        // Unreachable from the UI (the command isn't registered off unix); a typed
         // Validation rather than the catch-all Other keeps it consistent with the
         // error-taxonomy migration (illu review L4).
-        Err(AppError::Validation("Finder sharing is only available on macOS.".into()))
+        Err(AppError::Validation("Shell sharing is not available on this platform yet.".into()))
     }
 }
 
@@ -148,13 +149,13 @@ pub async fn hcfs_finder_confirm_share(
 /// (window closed mid-upload). Paired begin/end teardown via `Drop` is the
 /// cancellation-safe way to run cleanup on every exit path (RfR ch. 8
 /// §Cancellation; axiom `rust_quality_71_drop_order`).
-#[cfg(target_os = "macos")]
+#[cfg(any(unix, windows))]
 struct FinderMintGuard<'a> {
     state: &'a AppState,
     request_id: &'a str,
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(unix, windows))]
 impl Drop for FinderMintGuard<'_> {
     fn drop(&mut self) {
         self.state.finish_finder_mint(self.request_id);
@@ -167,18 +168,18 @@ impl Drop for FinderMintGuard<'_> {
 /// Idempotent: an already-finished or unknown `request_id` is a no-op.
 #[tauri::command]
 pub async fn hcfs_finder_cancel_share(state: tauri::State<'_, AppState>, request_id: String) -> Result<()> {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(unix, windows))]
     {
         state.cancel_finder_share(&request_id);
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (&state, request_id);
     }
     Ok(())
 }
 
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(all(test, any(unix, windows)))]
 mod tests {
     use super::*;
 

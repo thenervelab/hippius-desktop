@@ -18,7 +18,7 @@ pub mod blockchain;
 pub mod console_access;
 pub mod crypto;
 pub mod error;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub mod finder_bridge;
 pub mod infra;
 pub mod notifications;
@@ -195,6 +195,24 @@ fn init_logging() -> Option<tracing_appender::non_blocking::WorkerGuard> {
 
 #[expect(clippy::too_many_lines, reason = "Tauri builder chain: handler registration must stay together")]
 fn main() {
+    // Shell-extension "Share" click, forwarded as a CLI invocation: talk to the
+    // running app over the bridge socket and exit BEFORE booting the UI. The
+    // Linux file-manager action files invoke `hippius --finder-share <abs-path>`.
+    // This is the same binary in a short-lived second mode (the one-binary
+    // requirement — no separate helper ships).
+    #[cfg(unix)]
+    {
+        let args: Vec<String> = std::env::args().collect();
+        if let Some(pos) = args.iter().position(|a| a == "--finder-share") {
+            let Some(path) = args.get(pos + 1) else {
+                use std::io::Write;
+                let _ = writeln!(std::io::stderr(), "hippius: --finder-share requires a path argument");
+                std::process::exit(2);
+            };
+            crate::finder_bridge::cli::run(path); // never returns
+        }
+    }
+
     load_env();
 
     // Initialize tracing (stdout + daily rolling file under ~/.hippius/logs/).
@@ -329,9 +347,13 @@ fn main() {
             crate::shares::commands::hcfs_remove_share_history,
             crate::shares::commands::hcfs_clear_share_history,
             crate::shares::capabilities::hcfs_get_capabilities,
-            // Finder "Share with Hippius": confirm/cancel the in-app visibility
-            // chooser (macOS-only feature; inert bodies elsewhere).
+            // Shell "Share with Hippius": confirm/cancel the in-app visibility
+            // chooser. Registered on all desktop platforms (macOS/Linux socket +
+            // Windows named-pipe bridge); gated to `any(unix, windows)` to match
+            // the `finder_bridge` module so no other target references it.
+            #[cfg(any(unix, windows))]
             crate::finder_bridge::commands::hcfs_finder_confirm_share,
+            #[cfg(any(unix, windows))]
             crate::finder_bridge::commands::hcfs_finder_cancel_share,
             // Device settings
             get_device_name,
@@ -768,9 +790,11 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
         crate::sync::preparing::spawn_watchdog(preparing_weak, sync_weak);
         crate::vpn::commands::spawn_status_bridge(app_handle.clone(), vpn_status_rx);
 
-        // Start the macOS Finder Sync extension bridge (boot-scoped). Best-effort:
-        // a bind failure disables Finder integration but never blocks launch.
-        #[cfg(target_os = "macos")]
+        // Start the file-manager/Explorer extension bridge (boot-scoped) on every
+        // desktop platform: the Unix-socket server on macOS/Linux, the named-pipe
+        // server on Windows. Best-effort — a bind failure disables the integration
+        // but never blocks launch.
+        #[cfg(any(unix, windows))]
         crate::finder_bridge::lifecycle::start(&app_handle);
 
         // Pre-create the (hidden) tray popover so the first tray click shows it

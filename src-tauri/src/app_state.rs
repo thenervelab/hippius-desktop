@@ -187,7 +187,7 @@ pub struct AppState {
     /// once by `finder_bridge::lifecycle::start` from `setup()`, then read by
     /// the share dispatch to register drive roots and push badges. Absent on
     /// other platforms — Finder integration is macOS-only.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(unix, windows))]
     finder_bridge: OnceLock<Arc<crate::finder_bridge::socket::FinderBridge>>,
     /// Pending "Share with Hippius" requests from Finder awaiting the user's
     /// public/private choice in the app. A right-click stores the resolved path
@@ -197,7 +197,7 @@ pub struct AppState {
     /// — a compromised webview cannot mint a share of a file it merely names
     /// (least authority; boundary-validation axiom). macOS-only: the Finder
     /// bridge is its sole producer.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(unix, windows))]
     pending_finder_shares: Mutex<HashMap<String, crate::finder_bridge::dispatch::PendingFinderShare>>,
     /// Cancellation handles for Finder shares that are currently minting. A
     /// confirmed share can upload a large outside file or a zipped folder for
@@ -207,7 +207,7 @@ pub struct AppState {
     /// the mint inside a `tokio::select!` against it, so `cancel_finder_share`
     /// signalling the token drops the mint future and aborts the in-flight
     /// upload. Keyed by the same random request id as `pending_finder_shares`.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(unix, windows))]
     finder_share_cancels: Mutex<HashMap<String, tokio_util::sync::CancellationToken>>,
 }
 
@@ -282,18 +282,18 @@ impl AppState {
             share_active_list_cache: Mutex::new(HashMap::new()),
             wallet_rate_limit: Arc::new(crate::wallet::rate_limit::RateLimitState::new()),
             vpn: Arc::new(crate::vpn::VpnState::new(crate::vpn::engine::default_engine())),
-            #[cfg(target_os = "macos")]
+            #[cfg(any(unix, windows))]
             finder_bridge: OnceLock::new(),
-            #[cfg(target_os = "macos")]
+            #[cfg(any(unix, windows))]
             pending_finder_shares: Mutex::new(HashMap::new()),
-            #[cfg(target_os = "macos")]
+            #[cfg(any(unix, windows))]
             finder_share_cancels: Mutex::new(HashMap::new()),
         }
     }
 
     /// Store the Finder bridge handle (once, at startup). Returns `Err` handing
     /// the handle back if one was already set.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(unix, windows))]
     pub fn set_finder_bridge(
         &self,
         bridge: Arc<crate::finder_bridge::socket::FinderBridge>,
@@ -302,7 +302,7 @@ impl AppState {
     }
 
     /// The Finder bridge handle, if it has started.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(unix, windows))]
     pub fn finder_bridge(&self) -> Option<&Arc<crate::finder_bridge::socket::FinderBridge>> {
         self.finder_bridge.get()
     }
@@ -315,7 +315,7 @@ impl AppState {
     /// enumerate in-flight requests to hijack the visibility choice or cancel the
     /// chooser (illu review L1). The lock is held only for the insert, never
     /// across an `.await` (axiom 74).
-    #[cfg(target_os = "macos")]
+    #[cfg(any(unix, windows))]
     pub fn store_finder_share(&self, req: crate::finder_bridge::dispatch::PendingFinderShare) -> String {
         use rand::Rng;
         use rand::distributions::Alphanumeric;
@@ -331,7 +331,7 @@ impl AppState {
     /// confirm for the same id yields `None`. Returns the OWNED request so the
     /// guard drops before the caller's mint `.await` — no lock spans the await
     /// (axiom 74).
-    #[cfg(target_os = "macos")]
+    #[cfg(any(unix, windows))]
     pub fn take_finder_share(&self, id: &str) -> Option<crate::finder_bridge::dispatch::PendingFinderShare> {
         self.pending_finder_shares
             .lock()
@@ -343,7 +343,7 @@ impl AppState {
     /// [`tokio_util::sync::CancellationToken`] the confirm command selects on.
     /// Signalling this token (via [`AppState::cancel_finder_share`]) drops the
     /// mint future and aborts its upload.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(unix, windows))]
     pub fn register_finder_mint(&self, id: &str) -> tokio_util::sync::CancellationToken {
         let token = tokio_util::sync::CancellationToken::new();
         self.finder_share_cancels
@@ -356,7 +356,7 @@ impl AppState {
     /// Drop the in-flight cancel handle for `id`. Called when the mint ends
     /// (success, error, cancel, or the command future being dropped), so the
     /// registry never retains a completed mint's token.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(unix, windows))]
     pub fn finish_finder_mint(&self, id: &str) {
         self.finder_share_cancels
             .lock()
@@ -368,7 +368,7 @@ impl AppState {
     /// still-parked request (so a mint that hasn't started never will) AND signal
     /// any in-flight mint's token (so an upload already running is aborted).
     /// Idempotent — an unknown id is a no-op.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(unix, windows))]
     pub fn cancel_finder_share(&self, id: &str) {
         self.pending_finder_shares
             .lock()
@@ -628,7 +628,7 @@ mod tests {
         assert_eq!(acct.clone().into_inner(), "addr-A");
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(unix, windows))]
     #[test]
     fn finder_share_store_take_is_single_use() {
         use crate::finder_bridge::dispatch::PendingFinderShare;
@@ -649,7 +649,7 @@ mod tests {
         assert!(state.take_finder_share("does-not-exist").is_none());
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(unix, windows))]
     #[test]
     fn finder_share_ids_are_distinct_per_store() {
         use crate::finder_bridge::dispatch::PendingFinderShare;
@@ -665,7 +665,7 @@ mod tests {
         assert_ne!(a, b, "each store must mint a fresh id so concurrent clicks don't collide");
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(unix, windows))]
     #[test]
     fn cancel_signals_an_in_flight_mint_token() {
         // The confirm command registers a token and selects on it; cancel must
@@ -681,7 +681,7 @@ mod tests {
         state.cancel_finder_share("abc");
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(unix, windows))]
     #[test]
     fn cancel_drops_a_still_parked_request() {
         // Cancel while the chooser is open (mint not started) removes the parked
