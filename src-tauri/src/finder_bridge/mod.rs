@@ -26,13 +26,13 @@ pub mod socket;
 #[cfg(unix)]
 pub mod cli;
 
-/// Boot-time startup + inbound-click drain. Active on macOS + Linux (`unix` —
-/// both drive the Unix-socket bridge); it stores the bridge in `AppState` and
-/// runs inside the Tauri async runtime. Windows joins once its COM-DLL shim ships.
-#[cfg(unix)]
+/// Boot-time startup + inbound-click drain. Active on all desktop platforms
+/// (macOS/Linux Unix-socket bridge + Windows named-pipe bridge); it stores the
+/// bridge in `AppState` and runs inside the Tauri async runtime.
+#[cfg(any(unix, windows))]
 pub mod lifecycle;
 
 /// Inbound-click → share dispatch + drive-root registration. Portable (reaches
-/// the platform-agnostic share engine); active on `unix` alongside `lifecycle`.
-#[cfg(unix)]
+/// the platform-agnostic share engine); active alongside `lifecycle`.
+#[cfg(any(unix, windows))]
 pub mod dispatch;

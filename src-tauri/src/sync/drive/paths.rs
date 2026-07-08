@@ -391,7 +391,7 @@ mod label_tests {
 /// bridge to register monitored roots and to resolve a clicked path to its
 /// drive — `unix`-gated because that bridge (macOS + Linux) is its only caller
 /// (un-gated it would be dead code on the Windows build).
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(crate) async fn list_drive_roots(pool: &SqlitePool, account_id: &str) -> Result<Vec<(String, std::path::PathBuf)>> {
     let owner = account_key(account_id);
     let rows = sqlx::query("SELECT label, path FROM sync_paths WHERE owner = ? AND label != 'migration' ORDER BY label")
@@ -458,7 +458,7 @@ mod set_path_tests {
 
     // `unix`-gated to match `list_drive_roots` itself (its callers are the
     // macOS + Linux file-manager bridge); on Windows the fn does not exist.
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[tokio::test]
     async fn list_drive_roots_skips_migration_and_returns_label_path() {
         let dir = tempfile::tempdir().expect("tempdir");

@@ -14,7 +14,7 @@ pub mod keystore;
 pub mod origin;
 /// Folder→zip packing for the file-manager folder-share. `unix`-gated because
 /// its sole consumer is the macOS + Linux shell-share bridge (`share_directory_as_zip`).
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(crate) mod zip_dir;
 
 pub use keystore::SqliteShareKeystore;

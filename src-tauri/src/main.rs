@@ -347,15 +347,13 @@ fn main() {
             crate::shares::commands::hcfs_remove_share_history,
             crate::shares::commands::hcfs_clear_share_history,
             crate::shares::capabilities::hcfs_get_capabilities,
-            // Finder "Share with Hippius": confirm/cancel the in-app visibility
-            // chooser. The `finder_bridge` module is `#[cfg(unix)]` (its socket
-            // layer needs Unix-domain sockets), so these registrations must be
-            // gated to match — otherwise Windows references a compiled-out module
-            // (E0433). Feature is macOS-only; on Linux the bodies are inert and
-            // the FE never invokes them, on Windows the commands are absent.
-            #[cfg(unix)]
+            // Shell "Share with Hippius": confirm/cancel the in-app visibility
+            // chooser. Registered on all desktop platforms (macOS/Linux socket +
+            // Windows named-pipe bridge); gated to `any(unix, windows)` to match
+            // the `finder_bridge` module so no other target references it.
+            #[cfg(any(unix, windows))]
             crate::finder_bridge::commands::hcfs_finder_confirm_share,
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             crate::finder_bridge::commands::hcfs_finder_cancel_share,
             // Device settings
             get_device_name,
@@ -792,10 +790,11 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
         crate::sync::preparing::spawn_watchdog(preparing_weak, sync_weak);
         crate::vpn::commands::spawn_status_bridge(app_handle.clone(), vpn_status_rx);
 
-        // Start the file-manager extension bridge (boot-scoped) on macOS + Linux.
-        // Best-effort: a bind failure disables the integration but never blocks
-        // launch. Windows starts once its native shim (COM DLL) ships.
-        #[cfg(unix)]
+        // Start the file-manager/Explorer extension bridge (boot-scoped) on every
+        // desktop platform: the Unix-socket server on macOS/Linux, the named-pipe
+        // server on Windows. Best-effort — a bind failure disables the integration
+        // but never blocks launch.
+        #[cfg(any(unix, windows))]
         crate::finder_bridge::lifecycle::start(&app_handle);
 
         // Pre-create the (hidden) tray popover so the first tray click shows it

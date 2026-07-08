@@ -24,7 +24,7 @@ use chrono::Utc;
 use hcfs_client::client::share::{ShareProgress, ShareProgressFn, ShareSummary as UpstreamShareSummary};
 // The keystore trait's `get` is only used by the macOS private-share path
 // (`make_private`); used on macOS + Linux (the unix Finder/shell share bridge).
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use hcfs_client::client::share::ShareKeystore;
 use serde::Serialize;
 use sqlx::sqlite::SqlitePool;
@@ -369,7 +369,7 @@ pub async fn hcfs_create_share(
 ///
 /// macOS-only: the Finder dispatcher is its sole caller, so leaving it un-gated
 /// would be dead code on the Linux CI job.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(crate) async fn share_synced_file(
     state: &AppState,
     account_id: &str,
@@ -389,7 +389,7 @@ pub(crate) async fn share_synced_file(
 /// recorded (there is no `(folder_label, relative_path)` to reshare from). The
 /// caller has already run the capability + eligibility gates. `progress` streams
 /// the encrypt/upload bar to the confirm modal when `Some`.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 async fn share_local_file(
     state: &AppState,
     account_id: &str,
@@ -430,7 +430,7 @@ async fn share_local_file(
 /// its bytes directly ("upload & share"). The byte stream is uploaded to the
 /// same encrypted-share storage as a synced file; only the reshare-origin
 /// sidecar is skipped. Entry point for the macOS Finder dispatcher.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(crate) async fn share_external_file(state: &AppState, account_id: &str, abs_path: &Path, progress: Option<ShareProgressFn>) -> Result<ShareLink> {
     require_shares_supported(state, account_id).await?;
     require_eligible(state, account_id, InsufficientCreditsAction::Sharing, 0).await?;
@@ -454,7 +454,7 @@ pub(crate) async fn share_external_file(state: &AppState, account_id: &str, abs_
 /// very large tree fills the temp disk and starts an unbounded upload. A
 /// follow-up should bound it (max bytes/entries) before the walk. The
 /// eligibility gate is a positive-balance floor, not a byte budget.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(crate) async fn share_directory_as_zip(
     state: &AppState,
     account_id: &str,
@@ -485,7 +485,7 @@ pub(crate) async fn share_directory_as_zip(
 /// A freshly-minted share turned into a password-protected (`#p=`) link, plus
 /// the password the recipient needs. Returned by [`make_private`] so the Finder
 /// dispatcher can show both to the user.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(crate) struct PrivateShare {
     /// The share link, with its URL rewritten to the `#p=` (wrapped-key) form.
     pub link: ShareLink,
@@ -503,7 +503,7 @@ pub(crate) struct PrivateShare {
 /// user to convey out-of-band.
 // No `account_id`: the keystore is keyed by the globally-unique share token,
 // which we just minted for this account, so the key lookup needs no account scope.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(crate) async fn make_private(state: &AppState, public: ShareLink) -> Result<PrivateShare> {
     let pool = state.pool()?;
     let keystore = SqliteShareKeystore::new(pool.clone());
@@ -531,7 +531,7 @@ pub(crate) async fn make_private(state: &AppState, public: ShareLink) -> Result<
 /// wrap then fails, a private-share click would otherwise strand an unintended
 /// public `#k=` link to the file on the server. This undoes that. macOS-only —
 /// its sole caller is the Finder private-share path.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(crate) async fn revoke_public_share(state: &AppState, share_token: &str) -> Result<()> {
     let account_id = state.current_account_id()?;
     let pool = state.pool()?;
@@ -549,7 +549,7 @@ pub(crate) async fn revoke_public_share(state: &AppState, share_token: &str) -> 
 ///
 /// TEMPORARY: there is no password-entry UI yet, so every private share gets a
 /// fresh random password the user conveys to the recipient out-of-band.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn generate_share_password() -> String {
     use rand::Rng;
     use rand::distributions::Alphanumeric;
@@ -1009,7 +1009,7 @@ mod tests {
         assert!(matches!(err, AppError::Validation(_)));
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[test]
     fn generated_password_is_20_alphanumeric_and_random() {
         let a = generate_share_password();
