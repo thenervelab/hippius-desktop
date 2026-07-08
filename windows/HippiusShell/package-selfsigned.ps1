@@ -72,11 +72,19 @@ $msix = "$out\HippiusShellSparse.msix"
 & $makeappx pack /d $packDir /p $msix /nv /o
 if ($LASTEXITCODE -ne 0) { throw "makeappx failed ($LASTEXITCODE)" }
 
-Write-Host "==> Signing + verifying"
+Write-Host "==> Signing"
 & $signtool sign /fd SHA256 /sha1 $thumb $msix
 if ($LASTEXITCODE -ne 0) { throw "signtool sign failed ($LASTEXITCODE)" }
+
+# `verify /pa` requires a chain to a TRUSTED root. A self-signed cert is not
+# trusted on the CI runner, so a non-zero result here is EXPECTED and NOT fatal —
+# the signing above succeeded. On the tester's machine, importing
+# HippiusPreviewCert.cer into Trusted Root + Trusted People makes it valid.
+Write-Host "==> Verifying (informational for a self-signed cert)"
 & $signtool verify /pa $msix
-if ($LASTEXITCODE -ne 0) { throw "signtool verify failed ($LASTEXITCODE)" }
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "note: signtool verify returned $LASTEXITCODE — expected for a self-signed cert not yet trusted on this machine (the tester trusts the exported .cer)."
+}
 
 Write-Host "==> Exporting the self-signed cert for testers"
 Export-Certificate -Cert $cert -FilePath "$out\HippiusPreviewCert.cer" | Out-Null
