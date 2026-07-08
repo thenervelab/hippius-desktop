@@ -22,7 +22,11 @@ name = "hippius_shell"
 [target.'cfg(windows)'.dependencies]
 # Pinned; the #[implement] macro + interface signatures are version-sensitive —
 # if the Windows build reports signature mismatches, this is the first knob.
+# `implement` generates the `*_Impl` traits + the `windows_core` runtime the
+# `#[implement]` COM macro references — without it the macro fails with
+# "cannot find windows_core" and the `_Impl` trait imports are unresolved.
 windows = { version = "0.58", features = [
+    "implement",
     "Win32_Foundation",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",

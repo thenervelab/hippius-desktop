@@ -30,8 +30,8 @@ use std::ffi::{c_void, OsString};
 use std::io::Write;
 use std::os::windows::ffi::OsStringExt;
 
-use windows::core::{implement, Interface, Result, BOOL, GUID, HRESULT, PCWSTR, PWSTR};
-use windows::Win32::Foundation::{CLASS_E_CLASSNOTAVAILABLE, E_NOTIMPL, E_POINTER, S_OK};
+use windows::core::{implement, Interface, Result, GUID, HRESULT, PWSTR};
+use windows::Win32::Foundation::{BOOL, CLASS_E_CLASSNOTAVAILABLE, E_NOTIMPL, E_POINTER, S_OK};
 use windows::Win32::System::Com::{IClassFactory, IClassFactory_Impl};
 use windows::Win32::UI::Shell::{
     IEnumExplorerCommand, IExplorerCommand, IExplorerCommand_Impl, IObjectWithSelection, IObjectWithSelection_Impl, IShellItemArray, SIGDN_FILESYSPATH,
