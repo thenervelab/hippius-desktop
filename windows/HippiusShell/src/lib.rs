@@ -56,9 +56,9 @@ impl ShareCommand {
 }
 
 impl IObjectWithSelection_Impl for ShareCommand_Impl {
-    fn SetSelection(&self, psia: windows::core::Ref<'_, IShellItemArray>) -> Result<()> {
+    fn SetSelection(&self, psia: Option<&IShellItemArray>) -> Result<()> {
         // VERIFY(windows 0.58): `Ref::ok()` yields `Result<&T>`; clone to own it.
-        *self.selection.borrow_mut() = psia.ok().ok().cloned();
+        *self.selection.borrow_mut() = psia.cloned();
         Ok(())
     }
 
@@ -71,17 +71,17 @@ impl IObjectWithSelection_Impl for ShareCommand_Impl {
 }
 
 impl IExplorerCommand_Impl for ShareCommand_Impl {
-    fn GetTitle(&self, _items: windows::core::Ref<'_, IShellItemArray>) -> Result<PWSTR> {
+    fn GetTitle(&self, _items: Option<&IShellItemArray>) -> Result<PWSTR> {
         // The shell frees this with CoTaskMemFree; allocate accordingly.
         to_task_mem_pwstr("Share with Hippius")
     }
 
-    fn GetIcon(&self, _items: windows::core::Ref<'_, IShellItemArray>) -> Result<PWSTR> {
+    fn GetIcon(&self, _items: Option<&IShellItemArray>) -> Result<PWSTR> {
         // Point at the app's icon resource once packaging is wired; empty = none.
         Err(E_NOTIMPL.into())
     }
 
-    fn GetToolTip(&self, _items: windows::core::Ref<'_, IShellItemArray>) -> Result<PWSTR> {
+    fn GetToolTip(&self, _items: Option<&IShellItemArray>) -> Result<PWSTR> {
         Err(E_NOTIMPL.into())
     }
 
@@ -89,15 +89,15 @@ impl IExplorerCommand_Impl for ShareCommand_Impl {
         Ok(GUID::zeroed())
     }
 
-    fn GetState(&self, _items: windows::core::Ref<'_, IShellItemArray>, _ok_to_be_slow: BOOL) -> Result<u32> {
+    fn GetState(&self, _items: Option<&IShellItemArray>, _ok_to_be_slow: BOOL) -> Result<u32> {
         // Always enabled. Do NO slow/network work here — this runs on the shell
         // UI thread (Microsoft's IExplorerCommand guidance). ECS_ENABLED = 0.
         Ok(0)
     }
 
-    fn Invoke(&self, items: windows::core::Ref<'_, IShellItemArray>, _bind_ctx: windows::core::Ref<'_, windows::Win32::System::Com::IBindCtx>) -> Result<()> {
+    fn Invoke(&self, items: Option<&IShellItemArray>, _bind_ctx: Option<&windows::Win32::System::Com::IBindCtx>) -> Result<()> {
         // Prefer the invoke-time selection; fall back to the one SetSelection stored.
-        let array = items.ok().ok().cloned().or_else(|| self.selection.borrow().clone());
+        let array = items.cloned().or_else(|| self.selection.borrow().clone());
         let Some(array) = array else {
             return Ok(());
         };
@@ -195,7 +195,7 @@ fn pwstr_to_osstring(pwstr: PWSTR) -> OsString {
 struct ShareCommandFactory;
 
 impl IClassFactory_Impl for ShareCommandFactory_Impl {
-    fn CreateInstance(&self, outer: windows::core::Ref<'_, windows::core::IUnknown>, riid: *const GUID, ppv: *mut *mut c_void) -> Result<()> {
+    fn CreateInstance(&self, outer: Option<&windows::core::IUnknown>, riid: *const GUID, ppv: *mut *mut c_void) -> Result<()> {
         if outer.is_some() {
             return Err(windows::Win32::Foundation::CLASS_E_NOAGGREGATION.into());
         }
