@@ -1,0 +1,21 @@
+#!/usr/bin/env sh
+# Nautilus (GNOME Files) script: right-click -> Scripts -> "Share with Hippius".
+#
+# Installed at ~/.local/share/nautilus/scripts/ (must be executable). Scripts are
+# used instead of a nautilus-python extension because Nautilus 43+/GTK4 broke the
+# python extension ABI, while standalone scripts are unaffected.
+#
+# Nautilus passes the selected paths newline-separated in this env var (and also
+# as positional args as a fallback). Each is forwarded to the running app via the
+# main binary's `--finder-share` CLI mode (no separate helper — one binary).
+set -eu
+
+if [ -n "${NAUTILUS_SCRIPT_SELECTED_FILE_PATHS:-}" ]; then
+	printf '%s\n' "$NAUTILUS_SCRIPT_SELECTED_FILE_PATHS" | while IFS= read -r path; do
+		[ -n "$path" ] && Hippius --finder-share "$path"
+	done
+else
+	for path in "$@"; do
+		Hippius --finder-share "$path"
+	done
+fi

@@ -1,0 +1,25 @@
+<!--
+  Thunar (XFCE) custom action for "Share with Hippius".
+
+  Thunar stores ALL custom actions in one file, ~/.config/Thunar/uca.xml, so this
+  cannot be dropped in as a standalone file — it must be MERGED: copy the <action>
+  element below inside the top-level <actions> element of uca.xml (create the file
+  with an <actions></actions> root if it does not exist). install-shell-integration.sh
+  does this merge idempotently.
+
+  `sh -c ... _ %F` loops so a multi-select mints one share per path.
+-->
+<action>
+	<icon>hippius</icon>
+	<name>Share with Hippius</name>
+	<unique-id>hippius-share-1</unique-id>
+	<command>sh -c 'for path in "$@"; do Hippius --finder-share "$path"; done' _ %F</command>
+	<description>Create a Hippius share link</description>
+	<patterns>*</patterns>
+	<directories/>
+	<audio-files/>
+	<image-files/>
+	<other-files/>
+	<text-files/>
+	<video-files/>
+</action>

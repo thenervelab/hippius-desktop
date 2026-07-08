@@ -1,0 +1,16 @@
+#!/usr/bin/env sh
+# Caja (MATE) script: right-click -> Scripts -> "Share with Hippius".
+#
+# Installed at ~/.config/caja/scripts/ (must be executable). Caja passes the
+# selected paths newline-separated in $CAJA_SCRIPT_SELECTED_FILE_PATHS.
+set -eu
+
+if [ -n "${CAJA_SCRIPT_SELECTED_FILE_PATHS:-}" ]; then
+	printf '%s\n' "$CAJA_SCRIPT_SELECTED_FILE_PATHS" | while IFS= read -r path; do
+		[ -n "$path" ] && Hippius --finder-share "$path"
+	done
+else
+	for path in "$@"; do
+		Hippius --finder-share "$path"
+	done
+fi
