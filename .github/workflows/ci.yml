@@ -196,6 +196,39 @@ jobs:
           SQLX_OFFLINE: "true"
         run: cargo check
 
+  windows-shell-ext:
+    # Compile + test the standalone IExplorerCommand COM DLL crate
+    # (windows/HippiusShell) on Windows. It can't build on the author's macOS
+    # host (windows-crate COM), and the app's rust-windows lane only checks
+    # src-tauri (not this separate crate). No private deps, so no SSH key needed.
+    # Same redesign-PR gating as rust-windows; TEMPORARY on redesign for PR #88.
+    if: >-
+      (github.event_name == 'pull_request' && (github.base_ref == 'dev' || github.base_ref == 'main' || github.base_ref == 'redesign')) ||
+      (github.event_name == 'push' && (github.ref_name == 'dev' || github.ref_name == 'main'))
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: './windows/HippiusShell -> target'
+          cache-on-failure: "true"
+
+      - name: Build + test the shell extension
+        working-directory: windows/HippiusShell
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --release
+          cargo test
+
   supply-chain:
     # Supply-chain advisory gate for the Rust backend. Lighter than the Rust
     # build jobs — it skips the toolchain, build cache and compile — but it
