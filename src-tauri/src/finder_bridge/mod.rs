@@ -19,6 +19,13 @@ pub mod protocol;
 pub mod resolve;
 pub mod socket;
 
+/// `--finder-share <path>` CLI mode: the Linux file-manager action files invoke
+/// the main binary in this short-lived second mode to forward a click over the
+/// bridge socket (the one-binary requirement — no separate helper). `unix` so it
+/// compiles alongside the socket transport; only the Linux shims call it.
+#[cfg(unix)]
+pub mod cli;
+
 /// Boot-time startup + inbound-click drain. Active on macOS + Linux (`unix` —
 /// both drive the Unix-socket bridge); it stores the bridge in `AppState` and
 /// runs inside the Tauri async runtime. Windows joins once its COM-DLL shim ships.

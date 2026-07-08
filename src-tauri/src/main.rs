@@ -195,6 +195,25 @@ fn init_logging() -> Option<tracing_appender::non_blocking::WorkerGuard> {
 
 #[expect(clippy::too_many_lines, reason = "Tauri builder chain: handler registration must stay together")]
 fn main() {
+    // Shell-extension "Share" click, forwarded as a CLI invocation: talk to the
+    // running app over the bridge socket and exit BEFORE booting the UI. The
+    // Linux file-manager action files invoke `hippius --finder-share <abs-path>`.
+    // This is the same binary in a short-lived second mode (the one-binary
+    // requirement — no separate helper ships).
+    #[cfg(unix)]
+    {
+        let args: Vec<String> = std::env::args().collect();
+        if let Some(pos) = args.iter().position(|a| a == "--finder-share") {
+            match args.get(pos + 1) {
+                Some(path) => crate::finder_bridge::cli::run(path), // never returns
+                None => {
+                    eprintln!("hippius: --finder-share requires a path argument");
+                    std::process::exit(2);
+                }
+            }
+        }
+    }
+
     load_env();
 
     // Initialize tracing (stdout + daily rolling file under ~/.hippius/logs/).
