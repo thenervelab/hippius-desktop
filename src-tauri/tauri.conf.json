@@ -105,6 +105,22 @@
         "sidebarImage": "installer/sidebar.bmp",
         "displayLanguageSelector": false
       }
+    },
+    "linux": {
+      "deb": {
+        "files": {
+          "/usr/share/kio/servicemenus/hippius-share.desktop": "../linux/servicemenus/hippius-share.desktop",
+          "/usr/share/nemo/actions/hippius-share.nemo_action": "../linux/nemo/hippius-share.nemo_action",
+          "/usr/share/hippius/shell-integration/install-shell-integration.sh": "../linux/install-shell-integration.sh",
+          "/usr/share/hippius/shell-integration/README.md": "../linux/README.md",
+          "/usr/share/hippius/shell-integration/nautilus/Share with Hippius": "../linux/nautilus/Share with Hippius",
+          "/usr/share/hippius/shell-integration/caja/Share with Hippius": "../linux/caja/Share with Hippius",
+          "/usr/share/hippius/shell-integration/nemo/hippius-share.nemo_action": "../linux/nemo/hippius-share.nemo_action",
+          "/usr/share/hippius/shell-integration/servicemenus/hippius-share.desktop": "../linux/servicemenus/hippius-share.desktop",
+          "/usr/share/hippius/shell-integration/thunar/uca-snippet.xml": "../linux/thunar/uca-snippet.xml"
+        },
+        "postInstallScript": "../linux/deb/postinst.sh"
+      }
     }
   }
 }
