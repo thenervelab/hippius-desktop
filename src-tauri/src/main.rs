@@ -204,13 +204,12 @@ fn main() {
     {
         let args: Vec<String> = std::env::args().collect();
         if let Some(pos) = args.iter().position(|a| a == "--finder-share") {
-            match args.get(pos + 1) {
-                Some(path) => crate::finder_bridge::cli::run(path), // never returns
-                None => {
-                    eprintln!("hippius: --finder-share requires a path argument");
-                    std::process::exit(2);
-                }
-            }
+            let Some(path) = args.get(pos + 1) else {
+                use std::io::Write;
+                let _ = writeln!(std::io::stderr(), "hippius: --finder-share requires a path argument");
+                std::process::exit(2);
+            };
+            crate::finder_bridge::cli::run(path); // never returns
         }
     }
 

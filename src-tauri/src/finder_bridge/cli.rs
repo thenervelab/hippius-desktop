@@ -34,7 +34,7 @@ fn forward(path: &str) -> i32 {
     use crate::finder_bridge::protocol::ClientMessage;
 
     let Ok(Endpoint::Unix(sock)) = endpoint::resolve() else {
-        eprintln!("hippius: cannot resolve the share socket path");
+        warn("hippius: cannot resolve the share socket path");
         return 1;
     };
     let line = ClientMessage::Share(PathBuf::from(path)).to_wire();
@@ -55,8 +55,17 @@ fn forward(path: &str) -> i32 {
             std::thread::sleep(Duration::from_millis(200));
         }
     }
-    eprintln!("hippius: the app did not become reachable; share not sent");
+    warn("hippius: the app did not become reachable; share not sent");
     1
+}
+
+/// Emit a one-line diagnostic to stderr. Uses `writeln!` on the stderr handle
+/// rather than the `eprintln!` macro (which the crate's `clippy::print_stderr`
+/// denies), and because a tracing subscriber is not yet installed in CLI mode.
+#[cfg(unix)]
+fn warn(msg: &str) {
+    use std::io::Write;
+    let _ = writeln!(std::io::stderr(), "{msg}");
 }
 
 /// Connect to the bridge socket and write one newline-terminated wire line.
