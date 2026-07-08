@@ -774,9 +774,10 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
         crate::sync::preparing::spawn_watchdog(preparing_weak, sync_weak);
         crate::vpn::commands::spawn_status_bridge(app_handle.clone(), vpn_status_rx);
 
-        // Start the macOS Finder Sync extension bridge (boot-scoped). Best-effort:
-        // a bind failure disables Finder integration but never blocks launch.
-        #[cfg(target_os = "macos")]
+        // Start the file-manager extension bridge (boot-scoped) on macOS + Linux.
+        // Best-effort: a bind failure disables the integration but never blocks
+        // launch. Windows starts once its native shim (COM DLL) ships.
+        #[cfg(unix)]
         crate::finder_bridge::lifecycle::start(&app_handle);
 
         // Pre-create the (hidden) tray popover so the first tray click shows it

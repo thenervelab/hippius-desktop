@@ -19,14 +19,13 @@ pub mod protocol;
 pub mod resolve;
 pub mod socket;
 
-/// Boot-time startup + inbound-click drain. macOS-only until the Windows/Linux
-/// native shims land (they wire the same `lifecycle::start` on each platform);
-/// it stores the bridge in `AppState` and runs inside the Tauri async runtime.
-#[cfg(target_os = "macos")]
+/// Boot-time startup + inbound-click drain. Active on macOS + Linux (`unix` —
+/// both drive the Unix-socket bridge); it stores the bridge in `AppState` and
+/// runs inside the Tauri async runtime. Windows joins once its COM-DLL shim ships.
+#[cfg(unix)]
 pub mod lifecycle;
 
 /// Inbound-click → share dispatch + drive-root registration. Portable (reaches
-/// the platform-agnostic share engine); gated to macOS until the other native
-/// shims deliver clicks.
-#[cfg(target_os = "macos")]
+/// the platform-agnostic share engine); active on `unix` alongside `lifecycle`.
+#[cfg(unix)]
 pub mod dispatch;
