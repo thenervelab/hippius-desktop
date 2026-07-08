@@ -19,7 +19,9 @@
 param(
   [string]$Publisher = "CN=Hippius Preview (Self-Signed)",
   [string]$Version = "0.3.1.0",
-  [string]$Clsid = "{0F1E2D3C-4B5A-6978-8796-A5B4C3D2E1F0}"
+  # BARE GUID (no braces) — the MSIX manifest com:Class Id / Verb Clsid schema
+  # rejects braces. The Rust GUID value is unaffected (matched by value at runtime).
+  [string]$Clsid = "0F1E2D3C-4B5A-6978-8796-A5B4C3D2E1F0"
 )
 $ErrorActionPreference = "Stop"
 $here = $PSScriptRoot

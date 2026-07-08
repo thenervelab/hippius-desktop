@@ -16,7 +16,7 @@
 param(
   [string]$Publisher = "CN=Hippius",
   [string]$Version = "0.3.1.0",
-  [string]$Clsid = "{0F1E2D3C-4B5A-6978-8796-A5B4C3D2E1F0}",
+  [string]$Clsid = "0F1E2D3C-4B5A-6978-8796-A5B4C3D2E1F0",
   [string]$InstallDir = "$PSScriptRoot\out",
   [string]$CertThumbprint = ""   # signing cert in CurrentUser\My; empty => skip signing (dev)
 )
