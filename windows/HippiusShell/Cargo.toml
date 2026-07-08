@@ -1,0 +1,35 @@
+# Standalone Windows shell-extension crate — the `IExplorerCommand` COM DLL that
+# adds "Share with Hippius" to the Explorer right-click menu.
+#
+# DELIBERATELY NOT a member of the src-tauri workspace: it is windows-only and
+# built by the packaging step, so keeping it separate means the macOS/Linux/
+# Windows `cargo check` of the app itself is unaffected. Build it explicitly:
+#   cargo build --release --manifest-path windows/HippiusShell/Cargo.toml
+[package]
+name = "hippius-shell"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+# COM in-proc server: a cdylib exporting DllGetClassObject / DllCanUnloadNow.
+# snake_case lib name (avoids non_snake_case); the build script copies the
+# resulting `hippius_shell.dll` to `HippiusShell.dll` (the manifest's name).
+crate-type = ["cdylib"]
+name = "hippius_shell"
+
+# Only builds on Windows; on other targets there are no deps and lib.rs is empty.
+[target.'cfg(windows)'.dependencies]
+# Pinned; the #[implement] macro + interface signatures are version-sensitive —
+# if the Windows build reports signature mismatches, this is the first knob.
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_Common",
+    "Win32_System_LibraryLoader",
+] }
+
+[profile.release]
+strip = true
