@@ -231,11 +231,13 @@ jobs:
 
       # Validate the full packaging pipeline (build DLL -> self-signed cert ->
       # stamp manifest -> makeappx pack -> signtool sign/verify -> export cert)
-      # here in the fast lane, before wiring it into the slow preview build.
+      # here in the fast lane, before wiring it into the slow release build. No
+      # -Azure* args => the script's self-signed (preview) mode; the release
+      # workflow passes the Azure args for a production-signed package.
       - name: Package sparse MSIX (self-signed)
         working-directory: windows/HippiusShell
         shell: pwsh
-        run: ./package-selfsigned.ps1
+        run: ./package-shell-ext.ps1
 
   supply-chain:
     # Supply-chain advisory gate for the Rust backend. Lighter than the Rust

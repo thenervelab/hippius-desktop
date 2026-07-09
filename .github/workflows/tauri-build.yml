@@ -299,12 +299,113 @@ jobs:
             echo "App Store Connect API key secrets not set — skipping notarization."
           fi
 
+      # Windows code signing via Azure Artifact Signing (formerly Trusted
+      # Signing). Mirrors the Apple block's secret-gating: with the signing
+      # secrets absent this emits azure=0 and every downstream Windows signing
+      # step + the --config injection is skipped, so the Windows build stays
+      # byte-identical to the current unsigned one. With them present, the shell
+      # extension is built + signed + embedded, and the app itself is signed by
+      # tauri via the injected bundle.windows.signCommand. Secret list +
+      # procurement: windows/README.md.
+      - name: Set up Windows signing
+        id: winsign
+        if: matrix.platform == 'windows-latest'
+        shell: bash
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          WINDOWS_SIGN_ENDPOINT: ${{ secrets.WINDOWS_SIGN_ENDPOINT }}
+          WINDOWS_SIGN_ACCOUNT: ${{ secrets.WINDOWS_SIGN_ACCOUNT }}
+          WINDOWS_SIGN_PROFILE: ${{ secrets.WINDOWS_SIGN_PROFILE }}
+          WINDOWS_SIGN_PUBLISHER: ${{ secrets.WINDOWS_SIGN_PUBLISHER }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$AZURE_CLIENT_ID" && -n "$AZURE_CLIENT_SECRET" && -n "$AZURE_TENANT_ID" \
+                && -n "$WINDOWS_SIGN_ENDPOINT" && -n "$WINDOWS_SIGN_ACCOUNT" \
+                && -n "$WINDOWS_SIGN_PROFILE" && -n "$WINDOWS_SIGN_PUBLISHER" ]]; then
+            echo "azure=1" >> "$GITHUB_OUTPUT"
+            # Appended verbatim to tauri-action's args (see Build & publish); the
+            # leading space keeps it separate from matrix.args. tauri-action runs
+            # the CLI from the tauri project dir (src-tauri), where the config is
+            # written below.
+            echo "extra_args= --config win-release.conf.json" >> "$GITHUB_OUTPUT"
+            echo "Windows Azure signing enabled."
+          else
+            echo "azure=0" >> "$GITHUB_OUTPUT"
+            echo "extra_args=" >> "$GITHUB_OUTPUT"
+            echo "Windows signing secrets not set — building unsigned, no shell extension embedded."
+          fi
+
+      - name: Build + sign the Windows shell extension
+        if: matrix.platform == 'windows-latest' && steps.winsign.outputs.azure == '1'
+        shell: pwsh
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          WINDOWS_SIGN_ENDPOINT: ${{ secrets.WINDOWS_SIGN_ENDPOINT }}
+          WINDOWS_SIGN_ACCOUNT: ${{ secrets.WINDOWS_SIGN_ACCOUNT }}
+          WINDOWS_SIGN_PROFILE: ${{ secrets.WINDOWS_SIGN_PROFILE }}
+          WINDOWS_SIGN_PUBLISHER: ${{ secrets.WINDOWS_SIGN_PUBLISHER }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          # artifact-signing-cli authenticates from the AZURE_* service principal.
+          cargo install artifact-signing-cli --locked
+          # 4-part MSIX version from the app version (e.g. 0.3.1 -> 0.3.1.0).
+          $ver = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          ./windows/HippiusShell/package-shell-ext.ps1 `
+            -Publisher "$env:WINDOWS_SIGN_PUBLISHER" `
+            -Version "$ver.0" `
+            -AzureEndpoint "$env:WINDOWS_SIGN_ENDPOINT" `
+            -AzureAccount "$env:WINDOWS_SIGN_ACCOUNT" `
+            -AzureProfile "$env:WINDOWS_SIGN_PROFILE"
+
+      - name: Generate Windows release config (resources + hooks + signCommand)
+        if: matrix.platform == 'windows-latest' && steps.winsign.outputs.azure == '1'
+        shell: bash
+        env:
+          WINDOWS_SIGN_ENDPOINT: ${{ secrets.WINDOWS_SIGN_ENDPOINT }}
+          WINDOWS_SIGN_ACCOUNT: ${{ secrets.WINDOWS_SIGN_ACCOUNT }}
+          WINDOWS_SIGN_PROFILE: ${{ secrets.WINDOWS_SIGN_PROFILE }}
+        run: |
+          set -euo pipefail
+          # Merged into tauri.conf.json via `--config` ONLY for this signed build,
+          # so a no-secret / dev `tauri build` never references artifacts that
+          # don't exist. resources + installerHooks paths are relative to the
+          # main tauri.conf.json (src-tauri); signCommand signs the app's own
+          # exe/nsis (%1 is the tauri file placeholder).
+          jq -n \
+            --arg endpoint "$WINDOWS_SIGN_ENDPOINT" \
+            --arg account "$WINDOWS_SIGN_ACCOUNT" \
+            --arg profile "$WINDOWS_SIGN_PROFILE" \
+            '{
+              bundle: {
+                resources: {
+                  "../windows/HippiusShell/out/HippiusShell.dll": "HippiusShell.dll",
+                  "../windows/HippiusShell/out/HippiusShellSparse.msix": "HippiusShellSparse.msix"
+                },
+                windows: {
+                  signCommand: ("artifact-signing-cli -e " + $endpoint + " -a " + $account + " -c " + $profile + " -d Hippius %1"),
+                  nsis: { installerHooks: "../windows/nsis-hooks.nsh" }
+                }
+              }
+            }' > src-tauri/win-release.conf.json
+          echo "Wrote src-tauri/win-release.conf.json:"
+          cat src-tauri/win-release.conf.json
+
       - name: Build & publish
         uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # signCommand (Windows, when injected above) runs artifact-signing-cli,
+          # which authenticates from these. Empty on every no-secret build, where
+          # signCommand is absent from the config and they are never read.
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
         with:
           tagName: v__VERSION__
           releaseName: "${{ steps.release_notes.outputs.title }}"
@@ -316,7 +417,10 @@ jobs:
           releaseDraft: true
           prerelease: false
           overwrite: true
-          args: ${{ matrix.args }}
+          # winsign.extra_args is ` --config win-release.conf.json` only on the
+          # signed Windows build; empty on every other leg (the winsign step is
+          # windows-only, so its outputs are unset elsewhere).
+          args: ${{ matrix.args }}${{ steps.winsign.outputs.extra_args }}
 
       # macOS only, and only when notarization creds are present. Tauri built the
       # app app-only above (no DMG); here we embed the universal Finder extension,

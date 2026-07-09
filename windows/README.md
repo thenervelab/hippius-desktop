@@ -14,7 +14,7 @@ chooser and mints. Design:
 | `HippiusShell/src/lib.rs` | COM server: `IExplorerCommand` + `IObjectWithSelection` + `IClassFactory` + `DllGetClassObject` |
 | `HippiusShell/src/wire.rs` | Pipe name + `SHARE:<path>` encoder, byte-pinned (KATs) to the app's `finder_bridge::protocol`/`endpoint` |
 | `HippiusShell/AppxManifest.xml` | Sparse MSIX manifest (package identity + `fileExplorerContextMenus` verb) |
-| `HippiusShell/build-and-package.ps1` | Build DLL → stamp manifest → `makeappx pack` → `signtool sign` |
+| `HippiusShell/package-shell-ext.ps1` | Build DLL → stamp manifest → `makeappx pack` → sign (self-signed **or** Azure) |
 | `nsis-hooks.nsh` | Tauri NSIS `POSTINSTALL`/`PREUNINSTALL` to (de)register the sparse package |
 
 The DLL crate is **deliberately NOT in the `src-tauri` workspace** (it's
@@ -30,48 +30,82 @@ windows-only and built by packaging), so the app's macOS/Linux/Windows
   only, `ExternalLocation` = the install dir). Supported on Win10 2004+ and Win11.
 - The COM DLL is the Windows analog of the macOS `.appex`: an OS-loaded, in-proc
   extension binary embedded in the one installer — not a separate process we run.
+  "One binary like macOS" here means one installer, zero manual steps — not one
+  `.exe`, because Explorer loads an in-proc COM **DLL**, never our `.exe`.
 
-## Build + register (Windows dev host)
+## Two signing modes (one script)
 
-Prereqs: Rust (MSVC), Windows SDK (`makeappx`, `signtool`), a code-signing cert
-whose **Subject exactly matches** the manifest `Publisher`.
+`package-shell-ext.ps1` builds the DLL and packs + signs the sparse package. The
+cert is what decides whether a user has to import anything:
+
+- **Self-signed (default, no `-Azure*` args)** — INTERNAL/PREVIEW only. Exports
+  `HippiusPreviewCert.cer`; a tester imports it once (Trusted People + Trusted
+  Root) and the menu registers. This is what the CI `windows-shell-ext` lane
+  runs, and what the preview `.zip` ships for manual registration.
+- **Azure Artifact Signing (pass `-AzureEndpoint/-AzureAccount/-AzureProfile`)** —
+  PUBLIC releases. Signs the DLL + package with a publicly-trusted cert, so the
+  installer's `Add-AppxPackage` succeeds on any machine with **no cert import**.
+  This is the mode the release workflow uses.
 
 ```powershell
-# From repo root, on Windows:
-cargo build --release --manifest-path windows/HippiusShell/Cargo.toml
-# Build DLL + sparse package (dev: unsigned; prod: pass -CertThumbprint):
-windows/HippiusShell/build-and-package.ps1 -Publisher "CN=Hippius, O=Hippius, C=US" -CertThumbprint <thumb>
-# Register for dev (self-signed cert must be trusted in Trusted People first):
-Add-AppxPackage -Path <out>/HippiusShellSparse.msix -ExternalLocation <out>
+# Preview / dev (self-signed):
+windows/HippiusShell/package-shell-ext.ps1
+# Production (Azure Artifact Signing; Publisher MUST equal the cert profile Subject):
+windows/HippiusShell/package-shell-ext.ps1 `
+  -Publisher "CN=Hippius, O=Hippius, C=US" -Version 0.3.1.0 `
+  -AzureEndpoint https://wus2.codesigning.azure.net -AzureAccount <acct> -AzureProfile <profile>
 ```
 
-Signing notes: a sparse package **must be signed** and chain to a trusted root
-(reuse the installer's Developer-ID-equivalent cert; **cert Subject must equal
-the manifest `Publisher`**). Self-signed works for dev only (import into Trusted
-People, cert needs `BasicConstraints CA=false`).
+## Release wiring (auto-embed, zero manual steps)
 
-## Status: SCAFFOLD — remaining work
+`.github/workflows/tauri-build.yml`'s Windows leg is **secret-gated exactly like
+the macOS Apple block**: without the signing secrets it builds today's unsigned
+installer with no extension; with them it (1) `cargo install artifact-signing-cli`
++ runs `package-shell-ext.ps1` in Azure mode, (2) writes a `win-release.conf.json`
+merged into the config via `tauri build --config`, adding the DLL/MSIX as
+`resources`, wiring `nsis-hooks.nsh` as `installerHooks`, and setting
+`bundle.windows.signCommand` so tauri signs the app's own `.exe`/NSIS.
 
-This is a compile-ready scaffold; finish it on a Windows host (fast local
-iterate) — it cannot compile on macOS/Linux.
+Tauri places bundled resources under `$INSTDIR\resources\`. The sparse manifest
+declares the COM DLL by a path relative to the `ExternalLocation` (`$INSTDIR`),
+so `nsis-hooks.nsh` **copies `HippiusShell.dll` up to `$INSTDIR\`** on install and
+registers the package with `-ExternalLocation "$INSTDIR"`. Registration is
+non-fatal — a failure leaves the app fully working, just without the menu item.
 
-1. **Compile `hippius-shell`** and fix any `// VERIFY(windows 0.58)` interface
-   signature mismatches (the `windows`-crate `*_Impl` method shapes are
-   version-sensitive). `cargo test -p hippius-shell` runs the `wire.rs` KATs.
-2. **Generate a real CLSID** (`uuidgen`) and paste it in BOTH `src/lib.rs`
-   (`CLSID_HIPPIUS_SHARE`) and `AppxManifest.xml` (`{CLSID}`).
-3. **`GetIcon`**: return the app icon resource path (currently `E_NOTIMPL`).
-4. **App-down fallback** in `forward_paths`: `ShellExecuteW` the install-dir
-   `Hippius.exe` and retry the pipe, mirroring the Linux `--finder-share`
-   launch-and-retry (see `finder_bridge/cli.rs`).
-5. **Backend activation on Windows**: widen the finder feature gates from `unix`
-   to `any(unix, windows)` so `lifecycle::start` binds the named pipe on Windows
-   (today the transport compiles on Windows but is only started on `unix`). See
-   the hippius-mem gotcha "Activating the Finder/shell-share feature on a new
-   platform needs a CASCADE of cfg widenings".
-6. **Packaging**: wire `build-and-package.ps1` into `tauri-build.yml` (embed the
-   DLL + sparse package in the installer) and reference `nsis-hooks.nsh` from
-   `tauri.conf.json` (`bundle.windows.nsis.installerHooks`).
-7. **One-time enable UX**: after install, nudge the user to enable the extension
-   (Win11 doesn't auto-activate third-party context menus for unsigned/dev; a
-   signed prod package is enabled on register).
+The config is injected only at release time so a plain `pnpm tauri build` or the
+`cargo check` lane never references the (uncommitted, CI-built) DLL/MSIX.
+
+## Azure Artifact Signing — procurement + secrets
+
+Setup (the long pole; identity validation can take days–weeks):
+
+1. Paid Azure subscription (free/trial rejected). US/CA/EU/UK.
+2. Register the `Microsoft.CodeSigning` resource provider.
+3. Create a **Trusted Signing account** + complete **Public Trust** identity
+   validation (the validated org name becomes the cert Subject).
+4. Create a **certificate profile**.
+5. Create a **service principal** and grant it **Trusted Signing Certificate
+   Profile Signer**.
+
+Then set these GitHub Actions secrets (all seven required to activate):
+
+| Secret | Value |
+|---|---|
+| `AZURE_TENANT_ID` / `AZURE_CLIENT_ID` / `AZURE_CLIENT_SECRET` | Service principal (non-interactive auth) |
+| `WINDOWS_SIGN_ENDPOINT` | e.g. `https://wus2.codesigning.azure.net` |
+| `WINDOWS_SIGN_ACCOUNT` | Trusted Signing account name |
+| `WINDOWS_SIGN_PROFILE` | Certificate profile name |
+| `WINDOWS_SIGN_PUBLISHER` | The **exact** cert Subject DN (stamped into the MSIX `Identity Publisher` — a mismatch makes Explorer silently refuse the extension) |
+
+Once set, the next `main` release auto-embeds + auto-registers the extension and
+the app is publicly trusted — the full macOS-equivalent: install the `.exe`,
+right-click → **Share with Hippius**, nothing else.
+
+## Follow-ups
+
+- `GetIcon` returns the app icon (currently `E_NOTIMPL`).
+- App-down fallback in `forward_paths`: `ShellExecuteW` the install-dir
+  `Hippius.exe` and retry the pipe, mirroring the Linux `--finder-share`
+  launch-and-retry (`finder_bridge/cli.rs`).
+- First signed release validates the release-workflow Windows leg end-to-end
+  (it can't be exercised until the secrets exist).
