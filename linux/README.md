@@ -9,32 +9,41 @@ path to the running app over the bridge Unix socket. See
 
 ## What's here
 
-| File | File manager | Installed to (per-user) |
+| File | File manager | How the `.deb` installs it |
 |---|---|---|
-| `nautilus/Share with Hippius` | GNOME Files (Nautilus) | `~/.local/share/nautilus/scripts/` (executable) |
-| `caja/Share with Hippius` | MATE (Caja) | `~/.config/caja/scripts/` (executable) |
-| `servicemenus/hippius-share.desktop` | KDE (Dolphin) | `~/.local/share/kio/servicemenus/` (executable) |
-| `nemo/hippius-share.nemo_action` | Cinnamon (Nemo) | `~/.local/share/nemo/actions/` |
-| `thunar/uca-snippet.xml` | XFCE (Thunar) | merged into `~/.config/Thunar/uca.xml` |
+| `nautilus-python/hippius-share.py` | GNOME Files (Nautilus) | **system-wide** `/usr/share/nautilus-python/extensions/` — a real top-level item, all users |
+| `servicemenus/hippius-share.desktop` | KDE (Dolphin) | **system-wide** `/usr/share/kio/servicemenus/` |
+| `nemo/hippius-share.nemo_action` | Cinnamon (Nemo) | **system-wide** `/usr/share/nemo/actions/` |
+| `nautilus/Share with Hippius` | GNOME Files (Nautilus) — fallback | per-user `~/.local/share/nautilus/scripts/` via the manual installer |
+| `caja/Share with Hippius` | MATE (Caja) | per-user `~/.config/caja/scripts/` via the manual installer |
+| `thunar/uca-snippet.xml` | XFCE (Thunar) | merged into `~/.config/Thunar/uca.xml` via the manual installer |
 
 There is **no cross-desktop standard** for file-manager context menus, so each
-desktop needs its own small declarative file. All of them shell out to the same
-`Hippius --finder-share` command. Nautilus/Caja use **scripts** rather than a
-`nautilus-python` extension because Nautilus 43+/GTK4 broke the python extension
-ABI while standalone scripts are unaffected.
+desktop needs its own small declarative file. All of them run the same
+`Hippius --finder-share` command.
+
+**GNOME (Ubuntu's default) uses a `nautilus-python` extension**, not a script:
+it is installed system-wide by the `.deb`, gives a real **top-level** "Share with
+Hippius" item (a script would appear only under the "Scripts" submenu and only
+for the installing user), and works on both Nautilus 3.x/GTK3 (Ubuntu 22.04) and
+4.x/GTK4 (Ubuntu 23.10+) via a version-agnostic `get_file_items`. It needs the
+`python3-nautilus` runtime, declared as a `.deb` `depends`. The per-user
+`nautilus/…` script stays as a fallback (AppImage, or hosts without
+`python3-nautilus`).
 
 ## Installing
 
-- **`.deb` / rpm (primary):** the package postinst drops these into the system
-  dirs (`/usr/share/nautilus/scripts`, `/usr/share/kio/servicemenus`,
-  `/usr/share/nemo/actions`, …) and installs the `Hippius` binary on `PATH`.
-- **AppImage / manual:** run [`install-shell-integration.sh`](install-shell-integration.sh),
-  which copies the files into your per-user config dirs (and idempotently merges
-  the Thunar action). Re-runnable; safe to run again after an update.
+- **`.deb` (primary):** the package installs the GNOME extension + the Dolphin
+  and Nemo entries into the system dirs, pulls in `python3-nautilus`, and puts
+  the `Hippius` binary on `PATH` — **no per-user step for GNOME/KDE/Cinnamon**.
+  MATE/XFCE users run the manual installer below.
+- **AppImage / manual / MATE / XFCE:** run
+  [`install-shell-integration.sh`](install-shell-integration.sh), which copies
+  the per-user files into your config dirs (and idempotently merges the Thunar
+  action). Re-runnable; safe to run again after an update.
 
-After install, restart the file manager (or log out/in) if the item doesn't
-appear immediately. Dolphin re-reads service menus on change; Nautilus/Caja pick
-up new scripts on the next window.
+After install, **restart the file manager** (`nautilus -q`, or log out/in) so it
+loads the new extension/menu. Dolphin re-reads service menus on change.
 
 ## Flatpak / Snap: not supported
 

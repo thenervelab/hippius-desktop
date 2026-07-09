@@ -108,7 +108,9 @@
     },
     "linux": {
       "deb": {
+        "depends": ["python3-nautilus"],
         "files": {
+          "/usr/share/nautilus-python/extensions/hippius-share.py": "../linux/nautilus-python/hippius-share.py",
           "/usr/share/kio/servicemenus/hippius-share.desktop": "../linux/servicemenus/hippius-share.desktop",
           "/usr/share/nemo/actions/hippius-share.nemo_action": "../linux/nemo/hippius-share.nemo_action",
           "/usr/share/hippius/shell-integration/install-shell-integration.sh": "../linux/install-shell-integration.sh",
