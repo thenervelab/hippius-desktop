@@ -79,6 +79,8 @@ export default function ShareFileModal() {
   // event that fires before this effect-driven component re-renders, and the
   // test harness that renders with the atom pre-seeded); otherwise the in-app
   // flow starts in `running`.
+  // This component is mounted permanently by the pages layout, so `state`
+  // outlives any single share. See `sessionKey` below for why that matters.
   const [state, setState] = useState<ModalState>({ kind: "choosing" });
   // Remembered so "Try again" after a failure re-mints with the same choice
   // instead of silently falling back to a default the user never picked.
@@ -176,6 +178,35 @@ export default function ShareFileModal() {
     const choice = lastChoiceRef.current;
     if (file && choice) void startShare(choice);
   }, [file, startShare]);
+
+  // Identity of the share session currently open — `null` while closed.
+  //
+  // A STRING, not the file object: the atom may hand back a fresh object for
+  // the same file on re-render, which would restart the session mid-upload.
+  const sessionKey =
+    finderShare?.kind === "choosing"
+      ? `finder:${finderShare.id}`
+      : file
+        ? `file:${file.label}:${file.actualFileName || file.name}`
+        : null;
+
+  // Reset on every session transition, close included.
+  //
+  // The modal never unmounts, so without this a finished share's `done` state
+  // survives into the next one and the user is shown the PREVIOUS file's link.
+  // Resetting on close (`sessionKey → null`) rather than only on open is what
+  // makes re-sharing the same file twice work — the null in between changes
+  // the key. It also covers a Finder request arriving while the modal is still
+  // open on a previous result.
+  //
+  // Deliberately not driven off `close()`: any caller that clears the atoms
+  // directly (`FinderShareListener`, a future surface) would bypass it, and
+  // the failure mode is showing someone the wrong share link.
+  useEffect(() => {
+    setState({ kind: "choosing" });
+    autoCopiedRef.current = false;
+    lastChoiceRef.current = null;
+  }, [sessionKey]);
 
   // Auto-copy once we reach `done`. The URL is still rendered in a
   // selectable textbox so the user can re-copy if focus rules block
