@@ -113,7 +113,8 @@ pub struct HistoryEntry {
     pub plaintext_size: Option<i64>,
     pub mime_type: Option<String>,
     pub created_at: String,
-    pub expires_at: String,
+    /// `None` for a share that never expired (ended by revocation).
+    pub expires_at: Option<String>,
     pub ended_at: String,
     pub end_reason: EndReason,
 }
@@ -184,7 +185,7 @@ type HistoryRow = (
     Option<i64>,    // plaintext_size
     Option<String>, // mime_type
     String,         // created_at
-    String,         // expires_at
+    Option<String>, // expires_at (NULL for a never-expiring share)
     String,         // ended_at
     String,         // end_reason
 );
@@ -281,7 +282,7 @@ fn entry_from_upstream(summary: &UpstreamShareSummary, ended_at: DateTime<Utc>, 
         plaintext_size,
         mime_type: Some(summary.mime_type.clone()),
         created_at: summary.created_at.to_rfc3339(),
-        expires_at: summary.expires_at.to_rfc3339(),
+        expires_at: summary.expires_at.map(|e| e.to_rfc3339()),
         ended_at: ended_at.to_rfc3339(),
         end_reason,
     }
@@ -297,6 +298,8 @@ fn entry_from_upstream(summary: &UpstreamShareSummary, ended_at: DateTime<Utc>, 
 /// classify:
 /// - `expires_at <= now` → [`EndReason::Expired`]
 /// - `expires_at >  now` → [`EndReason::RevokedElsewhere`]
+/// - `expires_at` is `None` (never expires) → [`EndReason::RevokedElsewhere`],
+///   since the only way such a share can leave the active set is revocation.
 ///
 /// Tokens that are still in `current` produce no event. If they later
 /// expire or vanish, a future call will surface them — diffing is
@@ -314,7 +317,7 @@ pub fn diff_active_lists(previous: &[UpstreamShareSummary], current: &[UpstreamS
         if current_tokens.contains(prev.share_token.as_str()) {
             continue;
         }
-        let end_reason = if prev.expires_at <= now {
+        let end_reason = if prev.expires_at.is_some_and(|e| e <= now) {
             EndReason::Expired
         } else {
             EndReason::RevokedElsewhere
@@ -356,7 +359,7 @@ pub fn entry_for_revoke_here(share_token: String, cached: Option<&UpstreamShareS
         // and `expires_at` as `now` keeps the columns NOT NULL without
         // inventing a timestamp from a different timezone or epoch.
         created_at: now.to_rfc3339(),
-        expires_at: now.to_rfc3339(),
+        expires_at: Some(now.to_rfc3339()),
         ended_at: now.to_rfc3339(),
         end_reason: EndReason::RevokedHere,
     }
@@ -382,7 +385,7 @@ mod tests {
             ciphertext_size: 1280,
             mime_type: "application/octet-stream".to_string(),
             created_at: now,
-            expires_at: now + offset,
+            expires_at: Some(now + offset),
         }
     }
 
@@ -494,7 +497,7 @@ mod tests {
             plaintext_size: Some(42),
             mime_type: Some("text/plain".to_string()),
             created_at: now.to_rfc3339(),
-            expires_at: (now + Duration::hours(1)).to_rfc3339(),
+            expires_at: Some((now + Duration::hours(1)).to_rfc3339()),
             ended_at: now.to_rfc3339(),
             end_reason: reason,
         }
@@ -625,7 +628,7 @@ mod tests {
         assert_eq!(entry.filename, None);
         assert_eq!(entry.plaintext_size, None);
         assert_eq!(entry.created_at, now.to_rfc3339());
-        assert_eq!(entry.expires_at, now.to_rfc3339());
+        assert_eq!(entry.expires_at, Some(now.to_rfc3339()));
         assert_eq!(entry.end_reason, EndReason::RevokedHere);
     }
 }
