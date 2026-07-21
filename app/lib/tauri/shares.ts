@@ -27,17 +27,31 @@ export interface ServerCapabilities {
 export interface ShareLink {
   shareToken: string;
   shareUrl: string;
-  /** RFC 3339 timestamp. */
-  expiresAt: string;
+  /** RFC 3339 timestamp, or `null` when the link never expires. */
+  expiresAt: string | null;
+  /**
+   * Set only for a password-protected share, and only on the response that
+   * created it. The password is never persisted, so this is the one and only
+   * time the app can show it — the Shares page cannot recover it later, by
+   * design. Absent for a public share.
+   */
+  password?: string;
 }
 
+/** How long a share link stays reachable. Matches the Rust/server presets. */
+export type ShareTtl = "24h" | "7d" | "30d" | "never";
+
+/** Whether the link is open to anyone holding it, or password-protected. */
+export type ShareVisibility = "public" | "private";
+
 /**
- * Result of a confirmed Finder share, returned by {@link confirmFinderShare}. A
- * superset of {@link ShareLink}: a password-protected ("private") share also
- * carries the randomly generated `password` the recipient needs to open the
- * link. Absent (`undefined`) for a public share — the Rust side omits the field.
+ * What the user chose in the share modal. `password` is only meaningful when
+ * `visibility` is `"private"`; leaving it `undefined` there asks the backend to
+ * generate one and return it on the {@link ShareLink}.
  */
-export interface FinderShareCreated extends ShareLink {
+export interface ShareChoice {
+  ttl: ShareTtl;
+  visibility: ShareVisibility;
   password?: string;
 }
 
@@ -92,10 +106,22 @@ export interface ShareSummary {
   mimeType: string;
   /** RFC 3339 timestamp. */
   createdAt: string;
-  /** RFC 3339 timestamp. */
-  expiresAt: string;
-  /** Recipient URL with the `#k=<key>` fragment, or `null` if the key is unknown locally. */
+  /** RFC 3339 timestamp, or `null` when the link never expires. */
+  expiresAt: string | null;
+  /**
+   * Recipient URL, or `null` if the key is unknown locally. Carries a `#k=`
+   * fragment for a public share and a `#p=` one for a password-protected
+   * share — the backend derives it from the stored secret's kind, so this can
+   * never be a password-free link to a protected share.
+   */
   shareUrl: string | null;
+  /**
+   * Whether this link is password-protected. Drives the lock badge and warns
+   * that Copy hands out a link the recipient still needs a password for.
+   * `false` when this device holds no key material for the row, which is also
+   * when `shareUrl` is `null`.
+   */
+  isPrivate: boolean;
   /**
    * Drive label and relative path of the source file. `null` for legacy
    * shares created before the `share_origin` sidecar table existed and
@@ -127,6 +153,7 @@ export async function getServerCapabilities(accountId: string): Promise<ServerCa
 export async function createShare(
   folderLabel: string,
   relativePath: string,
+  choice: ShareChoice,
   onProgress?: (progress: ShareProgress) => void,
 ): Promise<ShareLink> {
   const onProgressChannel = new Channel<ShareProgress>();
@@ -134,6 +161,9 @@ export async function createShare(
   return invoke<ShareLink>("hcfs_create_share", {
     folderLabel,
     relativePath,
+    ttl: choice.ttl,
+    visibility: choice.visibility,
+    password: choice.password ?? null,
     onProgress: onProgressChannel,
   });
 }
@@ -147,19 +177,22 @@ export async function revokeShare(shareToken: string): Promise<void> {
 }
 
 /**
- * Revoke an existing share and immediately mint a fresh one for the
- * same source file. Effectively extends the TTL — hcfs-server has no
- * native "extend share" endpoint, so the desktop synthesises one out
- * of the existing primitives.
+ * Change an existing link's expiry without re-uploading the file, returning
+ * the new expiry (`null` when it now never expires).
  *
- * Throws a `Validation` error from the Rust layer when this device
- * doesn't know which file the share came from (legacy share, different
- * device, wiped DB). The `/shares` page disables the Reshare button
- * for those rows up front so the user shouldn't reach that branch via
- * UI, but the IPC enforces the same invariant for direct callers.
+ * Only the expiry is mutable. A share's password is fixed when the link is
+ * minted — the server holds no key material and this device does not persist a
+ * private share's raw key — so handing out a different password means revoking
+ * and re-sharing.
+ *
+ * Rejects with a `Validation` error when the link is no longer active
+ * (revoked, already expired, or minted by another account).
  */
-export async function reshare(shareToken: string): Promise<ShareLink> {
-  return invoke<ShareLink>("hcfs_reshare", { shareToken });
+export async function updateShareExpiry(
+  shareToken: string,
+  ttl: ShareTtl,
+): Promise<string | null> {
+  return invoke<string | null>("hcfs_update_share_expiry", { shareToken, ttl });
 }
 
 /**
@@ -175,14 +208,16 @@ export async function reshare(shareToken: string): Promise<ShareLink> {
  */
 export async function confirmFinderShare(
   requestId: string,
-  visibility: "public" | "private",
+  choice: ShareChoice,
   onProgress?: (progress: ShareProgress) => void,
-): Promise<FinderShareCreated> {
+): Promise<ShareLink> {
   const onProgressChannel = new Channel<ShareProgress>();
   if (onProgress) onProgressChannel.onmessage = onProgress;
-  return invoke<FinderShareCreated>("hcfs_finder_confirm_share", {
+  return invoke<ShareLink>("hcfs_finder_confirm_share", {
     requestId,
-    visibility,
+    ttl: choice.ttl,
+    visibility: choice.visibility,
+    password: choice.password ?? null,
     onProgress: onProgressChannel,
   });
 }
@@ -194,4 +229,19 @@ export async function confirmFinderShare(
  */
 export async function cancelFinderShare(requestId: string): Promise<void> {
   await invoke<void>("hcfs_finder_cancel_share", { requestId });
+}
+
+/**
+ * Ask the backend for a strong random share password.
+ *
+ * The share modal pre-fills its password field with this when the user picks
+ * "Password protected", so the default path is strong without the user having
+ * to invent one. Generating it in Rust (rather than in the browser) keeps one
+ * CSPRNG and one alphabet behind every password the app produces.
+ *
+ * Purely a convenience: the user may overwrite it, and omitting the password
+ * entirely still makes the backend generate one during the mint.
+ */
+export async function generateSharePassword(): Promise<string> {
+  return invoke<string>("hcfs_generate_share_password");
 }

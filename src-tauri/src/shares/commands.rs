@@ -662,6 +662,21 @@ pub(crate) async fn share_directory_as_zip(
     .await
 }
 
+/// Generate a share password for the modal to pre-fill.
+///
+/// Exists so the password the user sees is produced by the same CSPRNG and the
+/// same alphabet as the one the backend would pick for them — rather than the
+/// frontend rolling its own, which would put key-adjacent crypto in
+/// TypeScript and let the two drift.
+///
+/// Purely a UI convenience: the user can overwrite it, and leaving the
+/// password unset entirely still makes the backend generate one during the
+/// mint. Nothing here is persisted.
+#[tauri::command]
+pub fn hcfs_generate_share_password() -> String {
+    generate_share_password()
+}
+
 /// Change an existing share's expiry.
 ///
 /// Replaces the former `hcfs_reshare`, which "extended" a link by revoking it
