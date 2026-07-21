@@ -92,6 +92,56 @@ function confirmChooser() {
 }
 
 describe("ShareFileModal", () => {
+  /**
+   * REGRESSION: the modal is mounted permanently in the pages layout, so its
+   * `useState` survives between shares. Before the chooser existed, the
+   * auto-start effect reset state on every new file; when the chooser replaced
+   * it, nothing did — so sharing a second file re-rendered straight into the
+   * first file's `done` view, showing the wrong link.
+   */
+  it("starts a second share on the chooser, not the previous share's link", async () => {
+    invokeMock.mockResolvedValue({
+      shareToken: "tok-first",
+      shareUrl: "https://console.hippius.com/share/tok-first#k=FIRST",
+      expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+    });
+
+    const store = createStore();
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    store.set(shareModalFileAtom, {
+      name: "first.pdf",
+      actualFileName: "first.pdf",
+      label: "Drive",
+    } as any);
+    render(
+      <Provider store={store}>
+        <ShareFileModal />
+      </Provider>,
+    );
+
+    confirmChooser();
+    await screen.findByDisplayValue(/tok-first#k=FIRST/);
+
+    // Close the modal the way every dismiss path does, then open it for a
+    // different file — exactly the sequence a user performs.
+    act(() => {
+      store.set(shareModalFileAtom, null as any);
+    });
+    act(() => {
+      store.set(shareModalFileAtom, {
+        name: "second.pdf",
+        actualFileName: "second.pdf",
+        label: "Drive",
+      } as any);
+    });
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+
+    // The second share must begin at the chooser with nothing minted yet.
+    expect(await screen.findByText(/general access/i)).toBeInTheDocument();
+    expect(screen.queryByDisplayValue(/tok-first/)).not.toBeInTheDocument();
+    expect(screen.getByText("second.pdf")).toBeInTheDocument();
+  });
+
   beforeEach(() => {
     invokeMock.mockReset();
     installClipboard();
