@@ -129,17 +129,18 @@ alloy-signer = { version = "0.8", default-features = false }
 alloy-signer-local = { version = "0.8", default-features = false, features = [
     "mnemonic",
 ] }
-# Pinned to the merged hcfs main rev (PR #264) that makes chunked uploads
-# concurrent with per-chunk retry — the client-side fix for latency-bound
-# upload throughput on large files. Bumping this rev is the only way a hcfs
-# change reaches the desktop, so it stays exact and is guarded by the
-# wire-contract pins in tests/hcfs_contract.rs.
-hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "55649e634d2ed1a6c3057801cfbdfe776ded8b2e" }
+# Pinned to the merged hcfs main rev (PR #265) that adds idle heartbeat
+# backoff and collapses remote folder listings to one per sync round — the
+# engine-side fix for no-op cycles re-indexing every remote path (the
+# red-flashing tray). Bumping this rev is the only way a hcfs change reaches
+# the desktop, so it stays exact and is guarded by the wire-contract pins in
+# tests/hcfs_contract.rs.
+hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "d566877c957573425e527230ca5bbb95eb8534f7" }
 # hcfs-shared pulls in the `network` module types (RegisterRelativePathEntry,
 # MAX_REGISTER_RELATIVE_PATHS_BATCH, ...) that hcfs-client takes/returns on
 # its public API but does not re-export. Pinned to the same git rev so the
 # wire types stay in lockstep with the client.
-hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "55649e634d2ed1a6c3057801cfbdfe776ded8b2e" }
+hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "d566877c957573425e527230ca5bbb95eb8534f7" }
 # NFC-normalise relative_path strings before posting them to the server's
 # register_relative_paths endpoint. macOS APFS hands filenames back in NFD
 # and the server's path_validator hard-rejects anything non-NFC — see the
