@@ -87,6 +87,14 @@ export interface SyncSnapshot {
    * `widgetState === "preparing"`. */
   preparingPendingFiles?: number;
   preparingPendingBytes?: number;
+  /** Live indexing detail for the preparing window, summed across
+   * preparing drives: the engine's cumulative scan counter ("Preparing —
+   * 1,234 files scanned") and the remote-state fetch progress. Each is
+   * absent (undefined) when no preparing drive is in that phase. Only
+   * meaningful when `widgetState === "preparing"`. */
+  preparingScannedFiles?: number;
+  preparingFetchedEntries?: number;
+  preparingFetchTotalEntries?: number;
 }
 
 export const EMPTY_SNAPSHOT: SyncSnapshot = {

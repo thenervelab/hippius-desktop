@@ -82,12 +82,25 @@ export function getTraySyncSummary(
   if (isPreparing) {
     // At startup the backend attaches a local-pending summary (on-disk files not
     // yet in the synced baseline) so the user sees the scope of pending work
-    // immediately, not a bare "Preparing sync…". Absent for file-watcher cycles.
+    // immediately, not a bare "Preparing sync…". Absent for file-watcher cycles
+    // — those instead carry the LIVE indexing counters (scan / remote-fetch
+    // progress) so the detail line shows active work during a long scan.
     const pendingFiles = snapshot.preparingPendingFiles ?? 0;
-    const detail =
-      pendingFiles > 0
-        ? `${pendingFiles.toLocaleString()} file${plural(pendingFiles)} · ${formatBytes(snapshot.preparingPendingBytes ?? 0)} pending`
-        : "Preparing sync…";
+    const detail = (() => {
+      if (pendingFiles > 0) {
+        return `${pendingFiles.toLocaleString()} file${plural(pendingFiles)} · ${formatBytes(snapshot.preparingPendingBytes ?? 0)} pending`;
+      }
+      const scanned = snapshot.preparingScannedFiles ?? 0;
+      if (scanned > 0) {
+        return `${scanned.toLocaleString()} file${plural(scanned)} scanned`;
+      }
+      const fetchTotal = snapshot.preparingFetchTotalEntries ?? 0;
+      if (fetchTotal > 0) {
+        const fetched = snapshot.preparingFetchedEntries ?? 0;
+        return `${fetched.toLocaleString()} of ${fetchTotal.toLocaleString()} entries checked`;
+      }
+      return "Preparing sync…";
+    })();
     return {
       tone: "preparing",
       percent: clampPercent(overallPercent),

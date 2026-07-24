@@ -657,6 +657,18 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
         const b = snapshot.preparingPendingBytes ?? 0;
         return `${f.toLocaleString()} file${f === 1 ? "" : "s"} · ${formatCompactBytes(b)}`;
       }
+      // File-watcher cycles have no startup summary; show the LIVE
+      // indexing counters instead ("1,234 files scanned" next to the
+      // trailing "Preparing" label) so a long scan reads as active work.
+      const scanned = snapshot.preparingScannedFiles ?? 0;
+      if (scanned > 0) {
+        return `${scanned.toLocaleString()} file${scanned === 1 ? "" : "s"} scanned`;
+      }
+      const fetchTotal = snapshot.preparingFetchTotalEntries ?? 0;
+      if (fetchTotal > 0) {
+        const fetched = snapshot.preparingFetchedEntries ?? 0;
+        return `${fetched.toLocaleString()}/${fetchTotal.toLocaleString()} entries`;
+      }
       return null;
     }
     if (!showTransferBytes) return null;

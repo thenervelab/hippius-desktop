@@ -18,6 +18,66 @@ pub(crate) enum TransferDirection {
     Download,
 }
 
+/// Which sync-cycle phase an engine progress tick belongs to, for the
+/// idle-based UI watchdogs. An enum (not a bool) so the intent reads at
+/// the call site.
+enum ActivityPhase {
+    /// Scan / remote-state-fetch ticks: carry the live indexing detail
+    /// ("N files scanned" / "f of t entries") and may also PROMOTE an
+    /// armed preparing label once the cycle has been indexing past the
+    /// surfacing grace (see `sync::preparing`, "Armed vs Marked").
+    PrePlan(crate::sync::preparing::PreparingActivity),
+    /// Encrypt / decrypt / per-chunk transfer ticks: pure liveness —
+    /// refresh idle windows only, never surface anything new.
+    PostPlan,
+}
+
+/// Feed one engine progress tick into the idle-based UI watchdogs.
+///
+/// Every tick refreshes the upload-processing banner's idle window
+/// (`touch` — a no-op when the label has no banner) and the preparing
+/// override's idle window. This is what lets both states survive the
+/// multi-minute scan/hash + encryption phase of a large add instead of
+/// being force-cleared at 60s of wall clock, while a stuck engine —
+/// which emits no ticks — still idles out.
+///
+/// For [`ActivityPhase::PrePlan`] ticks, an armed preparing label may be
+/// promoted to the visible override; promotion is suppressed while the
+/// label's IPC banner is active (double-signalling rule, mirroring the
+/// `PlanReady` mark gate in `tauri_bridge::handle_plan_ready`). A
+/// promotion pushes one immediate snapshot so the widget appears — safe
+/// from any thread, including the rayon scan workers these callbacks run
+/// on: `emit_snapshot` re-enters the bridge synchronously, which spawns
+/// the actual emit onto Tauri's owned runtime.
+///
+/// `try_state` (not `state`): callbacks are wired after `AppState` is
+/// managed, but a tick racing app teardown must degrade to a no-op, not
+/// a panic across the hcfs callback boundary.
+fn note_engine_activity(app: &AppHandle, sync: &Arc<SyncRunner>, label: &str, phase: ActivityPhase) {
+    use tauri::Manager;
+    let Some(app_state) = app.try_state::<crate::app_state::AppState>() else {
+        return;
+    };
+    app_state.upload_processing.touch(label);
+    match phase {
+        ActivityPhase::PrePlan(activity) => {
+            use crate::sync::preparing::PrePlanTick;
+            let allow_promote = !app_state.upload_processing.is_active_for(label);
+            match app_state.preparing.note_pre_plan_activity(label, allow_promote, activity) {
+                // Newly surfaced: bypass the throttle so the widget
+                // appears (with the counter populated) within one tick.
+                PrePlanTick::Promoted => sync.emit_snapshot(true),
+                // Counter moved on an already-visible override: ride
+                // the engine's 250ms snapshot throttle so per-file scan
+                // ticks don't flood the webview.
+                PrePlanTick::Refreshed => sync.emit_snapshot(false),
+                PrePlanTick::Invisible => {}
+            }
+        }
+        ActivityPhase::PostPlan => app_state.preparing.note_activity(label),
+    }
+}
+
 /// Shared state for a transfer progress callback.
 struct TransferContext {
     sync: Arc<SyncRunner>,
@@ -38,6 +98,7 @@ struct TransferContext {
 /// the webview for no consumer.
 fn handle_transfer_progress(ctx: &TransferContext, bytes: u64, total: u64, path: Option<&str>) {
     ctx.sync.touch_progress_time();
+    note_engine_activity(&ctx.app, &ctx.sync, &ctx.label, ActivityPhase::PostPlan);
     let (dir_name, file_action) = match ctx.direction {
         TransferDirection::Upload => ("Upload", crate::sync::progress::FileAction::Upload),
         TransferDirection::Download => ("Download", crate::sync::progress::FileAction::Download),
@@ -321,6 +382,7 @@ fn build_plan_ready_callback<R: tauri::Runtime>(app: &AppHandle<R>, label: Arc<s
 /// and `FileAction` variant differ — so this helper is parameterized
 /// over both.
 fn build_crypto_callback(
+    app: AppHandle,
     sync: Arc<SyncRunner>,
     label: Arc<str>,
     action: crate::sync::progress::FileAction,
@@ -328,6 +390,7 @@ fn build_crypto_callback(
 ) -> hcfs_client::sync::SyncProgressFn {
     Arc::new(move |b, t, p| {
         sync.touch_progress_time();
+        note_engine_activity(&app, &sync, &label, ActivityPhase::PostPlan);
         if b == 0 {
             info!("{direction_name} starting [{label}]: {p:?} ({t} bytes)");
         } else if b == t && t > 0 {
@@ -344,6 +407,12 @@ fn build_crypto_callback(
 fn build_scan_callback(sync: Arc<SyncRunner>, app: AppHandle, label: Arc<str>) -> hcfs_client::sync::ScanProgressFn {
     Arc::new(move |n, p| {
         sync.touch_progress_time();
+        note_engine_activity(
+            &app,
+            &sync,
+            &label,
+            ActivityPhase::PrePlan(crate::sync::preparing::PreparingActivity::Scanning { scanned_files: n }),
+        );
         info!("Scan [{label}]: {n} files scanned, current: {p:?}");
         let _ = app.emit(
             crate::sync::events::SCAN_PROGRESS,
@@ -361,6 +430,15 @@ fn build_scan_callback(sync: Arc<SyncRunner>, app: AppHandle, label: Arc<str>) -
 fn build_fetch_callback(sync: Arc<SyncRunner>, app: AppHandle, label: Arc<str>) -> hcfs_client::sync::FetchProgressFn {
     Arc::new(move |f, t| {
         sync.touch_progress_time();
+        note_engine_activity(
+            &app,
+            &sync,
+            &label,
+            ActivityPhase::PrePlan(crate::sync::preparing::PreparingActivity::Fetching {
+                fetched_entries: f,
+                total_entries: t,
+            }),
+        );
         info!("Fetch state [{label}]: {f}/{t} entries");
         let _ = app.emit(
             crate::sync::events::FETCH_PROGRESS,
@@ -623,12 +701,14 @@ pub(crate) fn setup_progress_handlers(app: &AppHandle, manager: &mut DriveManage
             handle_transfer_progress(&download_ctx, b, t, p);
         })),
         on_encrypt_progress: Some(build_crypto_callback(
+            app.clone(),
             sync.clone(),
             Arc::clone(&label),
             crate::sync::progress::FileAction::Encrypt,
             "Encrypt",
         )),
         on_decrypt_progress: Some(build_crypto_callback(
+            app.clone(),
             sync.clone(),
             Arc::clone(&label),
             crate::sync::progress::FileAction::Decrypt,
