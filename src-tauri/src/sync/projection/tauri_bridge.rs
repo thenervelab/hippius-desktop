@@ -350,6 +350,13 @@ pub(crate) fn handle_sync_error(app: &AppHandle, payload: events::SyncErrorPaylo
         app_state.credits_exhausted.clear(&payload.label);
     }
 
+    // Keep-awake: a failed cycle marks its remaining files terminal, so the
+    // fresh snapshot normally releases the sleep assertion here (hcfs-client's
+    // retry starts a NEW cycle whose snapshots re-acquire). Re-evaluating
+    // (not unconditionally releasing) keeps the hold when another drive's
+    // transfers are still in flight.
+    reevaluate_keep_awake(&app_state, "sync error");
+
     // Decide BEFORE emitting whether this failure should surface a persisted
     // "Sync Failed" notification. For the auto-retry loop, `record_failure`
     // counts THIS label's consecutive failed cycles (not the payload's
@@ -375,23 +382,18 @@ pub(crate) fn handle_sync_error(app: &AppHandle, payload: events::SyncErrorPaylo
 }
 
 /// Handle `SyncEvent::SyncStarted`: bump the session epoch, reset the per-label
-/// 402 counter, cap the file lists, and forward `SYNC_STARTED`.
+/// 402 counter, ARM the preparing override's scan-window grace, cap the file
+/// lists, and forward `SYNC_STARTED`.
 ///
 /// Extracted from [`SyncEventHandler::on_event`] so the dispatcher stays a thin
-/// match. The "preparing" override is marked in [`handle_plan_ready`], not here
-/// — see the inline rationale.
+/// match. The "preparing" override is only ARMED here (invisible); it is
+/// surfaced by [`handle_plan_ready`] or by a past-grace scan/fetch tick — see
+/// the inline rationale.
 fn handle_sync_started(app: &AppHandle, mut payload: events::SyncStartedPayload) {
     // Increment the sync session epoch so the
     // UploadProcessingState clear gate knows a new cycle
     // has started. See `crate::sync::upload_processing`
     // for the full rationale.
-    //
-    // Then decide whether this is a file-watcher-triggered
-    // cycle that needs the "preparing" widget override —
-    // skip when the upload-processing banner is already
-    // raised (IPC-initiated uploads cover the gap with
-    // the banner instead, and showing both would be
-    // double-signalling).
     {
         use tauri::Manager;
         let app_state = app.state::<crate::app_state::AppState>();
@@ -408,15 +410,17 @@ fn handle_sync_started(app: &AppHandle, mut payload: events::SyncStartedPayload)
         // before the user sees it.
         app_state.credits_exhausted.clear(&payload.label);
 
-        // The "preparing" override is deliberately NOT marked here:
-        // `SyncStarted` fires before the plan is known, so marking
-        // it here would paint the red "Preparing sync…" widget/tray
-        // state for the entire scan + remote-fetch (indexing) window
-        // of every cycle — including periodic no-op cycles with zero
-        // work, flashing the tray icon red on a loop. It is marked
-        // in `handle_plan_ready` instead, gated on a non-empty plan,
-        // so it only appears once there is real work to do. See
-        // `handle_plan_ready` and `sync::preparing`.
+        // ARM (don't mark) the preparing override. Marking here would
+        // paint the red "Preparing sync…" widget/tray state across the
+        // scan + remote-fetch window of every cycle — including
+        // periodic no-op cycles — flashing the tray on a loop (the
+        // regression that originally moved marking to
+        // `handle_plan_ready`). Arming is invisible: it only anchors
+        // the grace clock so a scan/fetch progress tick can surface
+        // the override once the cycle has provably been indexing for
+        // a while (large watcher-dropped adds scan for minutes before
+        // `PlanReady`). See `sync::preparing`, "Armed vs Marked".
+        app_state.preparing.note_cycle_started(&payload.label);
     }
     cap_file_list(&mut payload.upload_files);
     cap_file_list(&mut payload.download_files);
@@ -446,7 +450,25 @@ fn handle_sync_stopped(app: &AppHandle, label: String) {
     // syncs immediately instead of being gated by the prior episode's last-run
     // time.
     app_state.folder_entity_sync.clear(&label);
+    // Keep-awake: the teardown paths that fire SyncStopped (pause / remove /
+    // logout) usually also emit a snapshot via `remove_files_for_label`, but
+    // re-evaluate here explicitly so the assertion drops even on a teardown
+    // path that skips the progress emit. If ANOTHER drive is still
+    // transferring, the fresh snapshot keeps the hold.
+    reevaluate_keep_awake(&app_state, "sync stopped");
     let _ = app.emit(events::SYNC_STOPPED, events::LabelPayload { label });
+}
+
+/// Recompute the keep-awake hold from a FRESH progress snapshot and apply it.
+///
+/// Belt-and-braces for the terminal/reset arms: the `ProgressSnapshot` funnel
+/// is the primary driver (it sees every live frame), but `SyncStopped` /
+/// `SyncReset` / a real `SyncError` can, on some teardown orderings, be the
+/// LAST thing the bridge observes — re-evaluating here guarantees the sleep
+/// assertion can never outlive the transfers it was held for.
+fn reevaluate_keep_awake(app_state: &crate::app_state::AppState, context: &'static str) {
+    let snapshot = app_state.sync.progress.build_snapshot();
+    app_state.keep_awake.apply(crate::power::should_hold_keep_awake(&snapshot), context);
 }
 
 /// Handle `SyncEvent::SyncReset`: wipe every per-drive preparing/credits/error
@@ -469,21 +491,26 @@ fn handle_sync_reset(app: &AppHandle, account_id: String, message: String) {
     // Wipe every folder-entity-sync throttle stamp: a previous account's
     // last-run times must not gate the new account's first sync after a switch.
     app_state.folder_entity_sync.clear_all();
+    // Keep-awake: logout / account switch tears down every drive — release the
+    // sleep assertion unless a fresh snapshot still shows transfers (it won't
+    // once `clear_all_data` has run; this covers orderings where the reset
+    // event lands first).
+    reevaluate_keep_awake(&app_state, "sync reset");
     let _ = app.emit(events::SYNC_RESET, events::SyncResetPayload { account_id, message });
 }
 
 /// Handle `SyncEvent::PlanReady`: mark the "preparing" override now that the
 /// plan confirms real work, cap the file lists, and forward `SYNC_PLAN_READY`.
 fn handle_plan_ready(app: &AppHandle, mut payload: events::SyncPlanReadyPayload) {
-    // Mark the "preparing" override now that the plan is known and
-    // confirms real work. Marked here (not at `SyncStarted`, which
-    // fires before the plan exists) so periodic no-op cycles —
-    // whose plan is empty — never flash the red "Preparing sync…"
-    // state during their indexing window. A genuine Finder-drop
-    // still surfaces the indicator: its plan is non-empty, and the
-    // override bridges the small gap from here until the first
-    // files-populated snapshot (after `merge_into_session`), at
-    // which point the `ProgressSnapshot` arm clears it.
+    // Resolve the scan-window Armed entry now that the plan is known.
+    // Real work → surface the "preparing" override (unless the label's
+    // scan ran long enough that a past-grace scan/fetch tick already
+    // promoted it — then `mark_preparing` just refreshes it); it
+    // bridges the gap from here until the first files-populated
+    // snapshot (after `merge_into_session`), at which point the
+    // `ProgressSnapshot` arm clears it. Empty plan → disarm, so
+    // periodic no-op cycles never flash the red "Preparing sync…"
+    // state. See `sync::preparing`, "Armed vs Marked".
     {
         use tauri::Manager;
         let app_state = app.state::<crate::app_state::AppState>();
@@ -493,17 +520,29 @@ fn handle_plan_ready(app: &AppHandle, mut payload: events::SyncPlanReadyPayload)
         // double-signalling. Per-label (not global) so a banner on
         // drive A can't suppress drive B's preparing widget.
         let banner_active_for_label = app_state.upload_processing.is_active_for(&payload.label);
-        if has_work && !banner_active_for_label && app_state.preparing.mark_preparing(&payload.label) {
-            // Newly inserted — push one snapshot so the widget
-            // reflects preparing immediately. `emit_snapshot`
-            // synchronously re-enters this same `on_event` with
-            // `ProgressSnapshot`, which reacquires the preparing
-            // mutex; safe because `mark_preparing` returns a `bool`
-            // (its `MutexGuard` is dropped at the fn boundary), so
-            // the lock is already released here. Keep that boundary
-            // — extending the guard across this emit would deadlock
-            // the non-reentrant `std::sync::Mutex`.
-            app_state.sync.emit_snapshot(true);
+        if has_work && !banner_active_for_label {
+            if app_state.preparing.mark_preparing(&payload.label) {
+                // Newly surfaced — push one snapshot so the widget
+                // reflects preparing immediately. `emit_snapshot`
+                // synchronously re-enters this same `on_event` with
+                // `ProgressSnapshot`, which reacquires the preparing
+                // mutex; safe because `mark_preparing` returns a `bool`
+                // (its `MutexGuard` is dropped at the fn boundary), so
+                // the lock is already released here. Keep that boundary
+                // — extending the guard across this emit would deadlock
+                // the non-reentrant `std::sync::Mutex`.
+                app_state.sync.emit_snapshot(true);
+            }
+        } else {
+            // Empty plan, or the IPC banner already covers this label:
+            // indexing is over with nothing for the override to bridge,
+            // so drop the scan-window Armed entry stamped at
+            // `SyncStarted`. Without this, a still-armed label could be
+            // promoted by a stray later tick. A visible Marked override
+            // (startup seed / scan promotion) is left alone — its clear
+            // paths are the files-populated snapshot and the terminal
+            // events, which follow promptly.
+            app_state.preparing.disarm(&payload.label);
         }
     }
     cap_file_list(&mut payload.upload_files);
@@ -626,6 +665,18 @@ fn handle_file_failed(app: &AppHandle, ev: FileFailedEvent) {
 fn handle_progress_snapshot(app: &AppHandle, mut snapshot: SyncSnapshot) {
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
+
+    // Keep-awake: every snapshot re-evaluates the "prevent idle system
+    // sleep" assertion from the RAW aggregate counters (before the display
+    // fixups below, which don't touch the counters). This funnel observes
+    // every progress frame AND the forced emit of every terminal/cleanup
+    // transition (`finalize_session_for_label`, `remove_files_for_label`,
+    // `clear_all_data`, …), so it doubles as the safety net: a missed
+    // terminal event is corrected by the next frame that says idle. `apply`
+    // is edge-triggered — the 4 Hz steady state is a no-op.
+    app_state
+        .keep_awake
+        .apply(crate::power::should_hold_keep_awake(&snapshot), "progress snapshot");
 
     // Once a label has real files in the session, its
     // "preparing" override has served its purpose — the
@@ -971,6 +1022,56 @@ struct SyncSnapshotWire<'a> {
     /// supersedes it. See `crate::sync::preparing::PreparingState::pending_summary`.
     preparing_pending_files: Option<u64>,
     preparing_pending_bytes: Option<u64>,
+    /// Live indexing detail for the preparing window ("Preparing — 1,234
+    /// files scanned"): the engine's cumulative scan counter, and the
+    /// fetched/total remote-state entries, summed across visibly-preparing
+    /// drives. Each is `None` when no preparing drive is in that phase.
+    /// Rendered by the FE only while `widgetState == "preparing"`. See
+    /// `crate::sync::preparing::PreparingState::activity_totals`.
+    preparing_scanned_files: Option<u64>,
+    preparing_fetched_entries: Option<u64>,
+    preparing_fetch_total_entries: Option<u64>,
+}
+
+/// The desktop-side preparing tail of the snapshot wire, read from
+/// [`crate::sync::preparing::PreparingState`] at emit time.
+///
+/// Bundled into one `Copy` + `Hash` struct so the SAME values feed both
+/// [`snapshot_fingerprint`] and the emitted [`SyncSnapshotWire`]. The
+/// fingerprint inclusion is load-bearing: during a long scan the
+/// underlying `SyncSnapshot` is frame-to-frame identical (empty session,
+/// preparing override applied), so without these fields in the hash the
+/// duplicate-emit gate would freeze the live counter on its first value.
+#[derive(Clone, Copy, Default, Eq, Hash, PartialEq)]
+struct PreparingWireTail {
+    pending_files: Option<u64>,
+    pending_bytes: Option<u64>,
+    scanned_files: Option<u64>,
+    fetched_entries: Option<u64>,
+    fetch_total_entries: Option<u64>,
+}
+
+/// Read the live preparing tail (startup pending summary + indexing
+/// activity totals) for the snapshot wire. All-`None` when `AppState` is
+/// not managed yet (an emit racing app setup) — the FE treats absent
+/// fields as "no detail".
+fn read_preparing_wire_tail<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> PreparingWireTail {
+    use tauri::Manager;
+    let Some(state) = app.try_state::<crate::app_state::AppState>() else {
+        return PreparingWireTail::default();
+    };
+    let (pending_files, pending_bytes) = state
+        .preparing
+        .pending_summary()
+        .map_or((None, None), |(f, b)| (Some(f), Some(b)));
+    let totals = state.preparing.activity_totals();
+    PreparingWireTail {
+        pending_files,
+        pending_bytes,
+        scanned_files: totals.scanned_files,
+        fetched_entries: totals.fetched_entries,
+        fetch_total_entries: totals.fetch_total_entries,
+    }
 }
 
 /// Build the intent-overlay numbers for the current account, summed
@@ -1034,18 +1135,14 @@ fn spawn_snapshot_emit<R: tauri::Runtime>(app: tauri::AppHandle<R>, snapshot: Sy
         if !try_claim_snapshot_seq(&LAST_EMITTED_SEQ, seq) {
             return;
         }
-        let fp = snapshot_fingerprint(&snapshot, overlay);
+        // Preparing tail (startup pending summary + live indexing counters).
+        // Read here — not threaded through the snapshot — so it tracks the
+        // live PreparingState, and BEFORE the fingerprint so counter motion
+        // alone (identical underlying snapshot during a scan) still defeats
+        // the duplicate-emit gate.
+        let preparing = read_preparing_wire_tail(&app);
+        let fp = snapshot_fingerprint(&snapshot, overlay, preparing);
         if try_claim_snapshot_fingerprint(&LAST_EMITTED_FINGERPRINT, fp) {
-            // Local-pending summary for the startup "preparing" window. Read here
-            // (not threaded through the snapshot) so it tracks the live
-            // PreparingState and clears automatically once the seeded labels are
-            // dropped by the ProgressSnapshot handler.
-            let (preparing_pending_files, preparing_pending_bytes) = {
-                use tauri::Manager;
-                app.try_state::<crate::app_state::AppState>()
-                    .and_then(|st| st.preparing.pending_summary())
-                    .map_or((None, None), |(f, b)| (Some(f), Some(b)))
-            };
             let wire = SyncSnapshotWire {
                 inner: &snapshot,
                 intent_total_files: overlay.total_files,
@@ -1053,8 +1150,11 @@ fn spawn_snapshot_emit<R: tauri::Runtime>(app: tauri::AppHandle<R>, snapshot: Sy
                 intent_completed_files: overlay.completed_files,
                 intent_completed_bytes: overlay.completed_bytes,
                 intent_active: overlay.active,
-                preparing_pending_files,
-                preparing_pending_bytes,
+                preparing_pending_files: preparing.pending_files,
+                preparing_pending_bytes: preparing.pending_bytes,
+                preparing_scanned_files: preparing.scanned_files,
+                preparing_fetched_entries: preparing.fetched_entries,
+                preparing_fetch_total_entries: preparing.fetch_total_entries,
             };
             let _ = app.emit(events::PROGRESS_SNAPSHOT, &wire);
         }
@@ -1102,7 +1202,7 @@ async fn build_intent_overlay<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> S
 }
 
 /// Compute a small content fingerprint for a `SyncSnapshot` + its
-/// intent-overlay tail.
+/// intent-overlay and preparing tails.
 ///
 /// Hashes every scalar field the FE renders plus a per-file
 /// (path, action, status, bytes_transferred, bytes_encrypted, total_bytes,
@@ -1131,7 +1231,7 @@ async fn build_intent_overlay<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> S
 /// fingerprints might both emit (one duplicate IPC, harmless) or might
 /// dedupe to one (the winning racer's `swap` matches the loser's later
 /// `prev`); both outcomes are acceptable.
-fn snapshot_fingerprint(s: &SyncSnapshot, overlay: SyncIntentOverlay) -> u64 {
+fn snapshot_fingerprint(s: &SyncSnapshot, overlay: SyncIntentOverlay, preparing: PreparingWireTail) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     s.is_active.hash(&mut h);
     s.progress_bytes.hash(&mut h);
@@ -1184,6 +1284,11 @@ fn snapshot_fingerprint(s: &SyncSnapshot, overlay: SyncIntentOverlay) -> u64 {
     overlay.completed_files.hash(&mut h);
     overlay.completed_bytes.hash(&mut h);
     overlay.active.hash(&mut h);
+    // Preparing tail: the live "N files scanned" / "f of t entries"
+    // counters must flip the fingerprint on their own — during a scan the
+    // rest of the snapshot is frame-to-frame identical, and a frozen
+    // fingerprint would freeze the counter on the FE.
+    preparing.hash(&mut h);
     let h = h.finish();
     if h == 0 { 1 } else { h }
 }
@@ -1317,11 +1422,11 @@ mod tests {
         let mut b = fixture_snapshot();
         b.progress_bytes = 1500;
         let empty = SyncIntentOverlay::default();
-        assert_ne!(snapshot_fingerprint(&a, empty), snapshot_fingerprint(&b, empty));
+        assert_ne!(snapshot_fingerprint(&a, empty, PreparingWireTail::default()), snapshot_fingerprint(&b, empty, PreparingWireTail::default()));
         // And while we're here, verify identical snapshots produce
         // identical fingerprints (the gate's whole reason for existing).
         a.progress_bytes = 1500;
-        assert_eq!(snapshot_fingerprint(&a, empty), snapshot_fingerprint(&b, empty));
+        assert_eq!(snapshot_fingerprint(&a, empty, PreparingWireTail::default()), snapshot_fingerprint(&b, empty, PreparingWireTail::default()));
     }
 
     /// Regression for the `started_at` gap: a session that ends and
@@ -1333,9 +1438,9 @@ mod tests {
         let mut b = fixture_snapshot();
         b.started_at = Some(1_700_000_001_000);
         let empty = SyncIntentOverlay::default();
-        assert_ne!(snapshot_fingerprint(&a, empty), snapshot_fingerprint(&b, empty));
+        assert_ne!(snapshot_fingerprint(&a, empty, PreparingWireTail::default()), snapshot_fingerprint(&b, empty, PreparingWireTail::default()));
         a.started_at = b.started_at;
-        assert_eq!(snapshot_fingerprint(&a, empty), snapshot_fingerprint(&b, empty));
+        assert_eq!(snapshot_fingerprint(&a, empty, PreparingWireTail::default()), snapshot_fingerprint(&b, empty, PreparingWireTail::default()));
     }
 
     /// Regression: an overlay-only change MUST flip the
@@ -1356,9 +1461,47 @@ mod tests {
             completed_bytes: Some(500),
             active: Some(true),
         };
-        assert_ne!(snapshot_fingerprint(&a, empty), snapshot_fingerprint(&a, with_totals),);
+        assert_ne!(snapshot_fingerprint(&a, empty, PreparingWireTail::default()), snapshot_fingerprint(&a, with_totals, PreparingWireTail::default()),);
         // Sanity: identical overlays produce identical fingerprints.
-        assert_eq!(snapshot_fingerprint(&a, with_totals), snapshot_fingerprint(&a, with_totals),);
+        assert_eq!(snapshot_fingerprint(&a, with_totals, PreparingWireTail::default()), snapshot_fingerprint(&a, with_totals, PreparingWireTail::default()),);
+    }
+
+    /// Regression: preparing-tail motion alone MUST flip the fingerprint.
+    /// During a long scan the underlying `SyncSnapshot` is frame-to-frame
+    /// identical (empty session + preparing override), so if the live
+    /// "N files scanned" counter were outside the hash, the duplicate-emit
+    /// gate would freeze the widget on the first emitted value.
+    #[test]
+    fn fingerprint_changes_when_preparing_counter_moves() {
+        let a = fixture_snapshot();
+        let empty = SyncIntentOverlay::default();
+        let scanned_100 = PreparingWireTail {
+            scanned_files: Some(100),
+            ..PreparingWireTail::default()
+        };
+        let scanned_200 = PreparingWireTail {
+            scanned_files: Some(200),
+            ..PreparingWireTail::default()
+        };
+        assert_ne!(
+            snapshot_fingerprint(&a, empty, scanned_100),
+            snapshot_fingerprint(&a, empty, scanned_200),
+        );
+        // Phase flip (scan → fetch) also re-emits.
+        let fetching = PreparingWireTail {
+            fetched_entries: Some(10),
+            fetch_total_entries: Some(90),
+            ..PreparingWireTail::default()
+        };
+        assert_ne!(
+            snapshot_fingerprint(&a, empty, scanned_200),
+            snapshot_fingerprint(&a, empty, fetching),
+        );
+        // Sanity: identical tails produce identical fingerprints.
+        assert_eq!(
+            snapshot_fingerprint(&a, empty, scanned_100),
+            snapshot_fingerprint(&a, empty, scanned_100),
+        );
     }
 
     /// Wire-format contract: serializing `SyncSnapshotWire` must
@@ -1380,6 +1523,9 @@ mod tests {
             intent_active: Some(true),
             preparing_pending_files: Some(7),
             preparing_pending_bytes: Some(700),
+            preparing_scanned_files: Some(1234),
+            preparing_fetched_entries: Some(40),
+            preparing_fetch_total_entries: Some(90),
         };
         let json = serde_json::to_value(&wire).expect("serialize wire");
 
@@ -1418,6 +1564,9 @@ mod tests {
             intent_active: None,
             preparing_pending_files: None,
             preparing_pending_bytes: None,
+            preparing_scanned_files: None,
+            preparing_fetched_entries: None,
+            preparing_fetch_total_entries: None,
         };
         let json = serde_json::to_value(&wire).expect("serialize wire");
         assert!(json["intentTotalFiles"].is_null());
@@ -1454,6 +1603,9 @@ mod tests {
             intent_active: Some(true),
             preparing_pending_files: Some(1),
             preparing_pending_bytes: Some(1),
+            preparing_scanned_files: Some(1),
+            preparing_fetched_entries: Some(1),
+            preparing_fetch_total_entries: Some(1),
         };
         let json = serde_json::to_value(&wire).expect("serialize wire");
         let obj = json.as_object().expect("wire serializes to a JSON object");
@@ -1461,8 +1613,8 @@ mod tests {
         let mut actual: Vec<&str> = obj.keys().map(String::as_str).collect();
         actual.sort_unstable();
 
-        // The 27 flattened `SyncSnapshot` fields (camelCase) plus the 7 desktop
-        // overlay fields `SyncSnapshotWire` appends (5 intent + 2 preparing).
+        // The 27 flattened `SyncSnapshot` fields (camelCase) plus the 10 desktop
+        // overlay fields `SyncSnapshotWire` appends (5 intent + 5 preparing).
         // Source for the field set:
         // `fixture_snapshot()` above + `hcfs-client/src/engine/progress/snapshot.rs`
         // (`#[serde(rename_all = "camelCase")]`, no per-field rename/skip).
@@ -1501,6 +1653,9 @@ mod tests {
             "intentTotalFiles",
             "preparingPendingFiles",
             "preparingPendingBytes",
+            "preparingScannedFiles",
+            "preparingFetchedEntries",
+            "preparingFetchTotalEntries",
         ];
         expected.sort_unstable();
 

@@ -22,6 +22,7 @@ pub mod error;
 pub mod finder_bridge;
 pub mod infra;
 pub mod notifications;
+pub mod power;
 pub mod recovery;
 pub mod recovery_binding;
 pub mod shares;
@@ -342,7 +343,8 @@ fn main() {
             crate::shares::commands::hcfs_create_share,
             crate::shares::commands::hcfs_list_shares,
             crate::shares::commands::hcfs_revoke_share,
-            crate::shares::commands::hcfs_reshare,
+            crate::shares::commands::hcfs_update_share_expiry,
+            crate::shares::commands::hcfs_generate_share_password,
             crate::shares::commands::hcfs_list_share_history,
             crate::shares::commands::hcfs_remove_share_history,
             crate::shares::commands::hcfs_clear_share_history,

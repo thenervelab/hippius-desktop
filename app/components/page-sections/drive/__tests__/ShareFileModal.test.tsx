@@ -1,11 +1,11 @@
 // State-machine coverage for `ShareFileModal`.
 //
-// The component fans out to three terminal states from a single async
-// IPC call: `running → done` on success, `running → error` on failure,
-// and the user can drive `error → running` via "Try again" or
-// `done → closed` via "Revoke". Each transition is the seam where
-// users have historically gotten stuck (frozen spinner, silent
-// failure, double-revoke), so we cover all three.
+// Both entry points now open on the chooser (expiry + public/password), then
+// fan out to three terminal states from a single async IPC call: `running →
+// done` on success, `running → error` on failure, and the user can drive
+// `error → running` via "Try again" or `done → closed` via "Revoke". Each
+// transition is the seam where users have historically gotten stuck (frozen
+// spinner, silent failure, double-revoke), so we cover all three.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
@@ -81,7 +81,67 @@ function withFinderState(node: ReactNode, share: FinderShareState) {
 // A parked Finder request awaiting the user's visibility choice.
 const CHOOSING: FinderShareState = { kind: "choosing", id: "req-1", name: "big-movie.mov" };
 
+/**
+ * Accept the chooser's defaults (public, 24h) and start the mint.
+ *
+ * Both entry points open on the chooser now, so every test that wants to reach
+ * `running`/`done`/`error` goes through here first.
+ */
+function confirmChooser() {
+  fireEvent.click(screen.getByRole("button", { name: /create share link/i }));
+}
+
 describe("ShareFileModal", () => {
+  /**
+   * REGRESSION: the modal is mounted permanently in the pages layout, so its
+   * `useState` survives between shares. Before the chooser existed, the
+   * auto-start effect reset state on every new file; when the chooser replaced
+   * it, nothing did — so sharing a second file re-rendered straight into the
+   * first file's `done` view, showing the wrong link.
+   */
+  it("starts a second share on the chooser, not the previous share's link", async () => {
+    invokeMock.mockResolvedValue({
+      shareToken: "tok-first",
+      shareUrl: "https://console.hippius.com/share/tok-first#k=FIRST",
+      expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+    });
+
+    const store = createStore();
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    store.set(shareModalFileAtom, {
+      name: "first.pdf",
+      actualFileName: "first.pdf",
+      label: "Drive",
+    } as any);
+    render(
+      <Provider store={store}>
+        <ShareFileModal />
+      </Provider>,
+    );
+
+    confirmChooser();
+    await screen.findByDisplayValue(/tok-first#k=FIRST/);
+
+    // Close the modal the way every dismiss path does, then open it for a
+    // different file — exactly the sequence a user performs.
+    act(() => {
+      store.set(shareModalFileAtom, null as any);
+    });
+    act(() => {
+      store.set(shareModalFileAtom, {
+        name: "second.pdf",
+        actualFileName: "second.pdf",
+        label: "Drive",
+      } as any);
+    });
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+
+    // The second share must begin at the chooser with nothing minted yet.
+    expect(await screen.findByText(/general access/i)).toBeInTheDocument();
+    expect(screen.queryByDisplayValue(/tok-first/)).not.toBeInTheDocument();
+    expect(screen.getByText("second.pdf")).toBeInTheDocument();
+  });
+
   beforeEach(() => {
     invokeMock.mockReset();
     installClipboard();
@@ -96,7 +156,13 @@ describe("ShareFileModal", () => {
 
     render(withProvider(<ShareFileModal />, { name: "doc.pdf", actualFileName: "doc.pdf", label: "Drive" }));
 
-    // Running state shows the spinner copy first.
+    // The in-app flow opens on the chooser, not a spinner — nothing is minted
+    // until the user has picked an expiry and a visibility.
+    expect(screen.getByText(/general access/i)).toBeInTheDocument();
+    expect(invokeMock).not.toHaveBeenCalled();
+    confirmChooser();
+
+    // Running state shows the spinner copy next.
     expect(screen.getByText(/encrypting and uploading/i)).toBeInTheDocument();
 
     // Then the URL surfaces in the read-only textarea.
@@ -109,6 +175,9 @@ describe("ShareFileModal", () => {
       expect.objectContaining({
         folderLabel: "Drive",
         relativePath: "doc.pdf",
+        ttl: "24h",
+        visibility: "public",
+        password: null,
         onProgress: expect.any(Channel),
       }),
     );
@@ -119,6 +188,7 @@ describe("ShareFileModal", () => {
     invokeMock.mockReturnValueOnce(new Promise(() => {}));
 
     render(withProvider(<ShareFileModal />, { name: "doc.pdf", actualFileName: "doc.pdf", label: "Drive" }));
+    confirmChooser();
 
     const bar = await screen.findByRole("progressbar");
     // No backend progress yet, so the bar must be indeterminate — a
@@ -132,6 +202,7 @@ describe("ShareFileModal", () => {
     invokeMock.mockReturnValueOnce(new Promise(() => {}));
 
     render(withProvider(<ShareFileModal />, { name: "doc.pdf", actualFileName: "doc.pdf", label: "Drive" }));
+    confirmChooser();
 
     // Indeterminate until the first update lands.
     expect(await screen.findByRole("progressbar")).not.toHaveAttribute("aria-valuenow");
@@ -158,6 +229,7 @@ describe("ShareFileModal", () => {
     invokeMock.mockRejectedValueOnce({ kind: "Hcfs", message: "create_share: server unhappy" });
 
     render(withProvider(<ShareFileModal />, { name: "doc.pdf", actualFileName: "doc.pdf", label: "Drive" }));
+    confirmChooser();
 
     await waitFor(() => {
       expect(screen.getByText(/couldn.?t create share link/i)).toBeInTheDocument();
@@ -177,6 +249,7 @@ describe("ShareFileModal", () => {
       });
 
     render(withProvider(<ShareFileModal />, { name: "doc.pdf", actualFileName: "doc.pdf", label: "Drive" }));
+    confirmChooser();
 
     await waitFor(() => {
       expect(screen.getByText(/couldn.?t create share link/i)).toBeInTheDocument();
@@ -201,7 +274,8 @@ describe("ShareFileModal", () => {
     expect(screen.getByText("big-movie.mov")).toBeInTheDocument();
     // Nothing minted yet, and never the in-app create path.
     expect(screen.queryByText(/encrypting and uploading/i)).not.toBeInTheDocument();
-    expect(invokeMock).not.toHaveBeenCalled();
+    expect(invokeMock).not.toHaveBeenCalledWith("hcfs_finder_confirm_share", expect.anything());
+    expect(invokeMock).not.toHaveBeenCalledWith("hcfs_create_share", expect.anything());
   });
 
   it("confirms a public Finder share and shows the link without a password", async () => {
@@ -214,8 +288,8 @@ describe("ShareFileModal", () => {
 
     render(withFinderState(<ShareFileModal />, CHOOSING));
 
-    // Default choice is public; confirm mints it.
-    fireEvent.click(screen.getByRole("button", { name: /create share link/i }));
+    // Default choice is public + 24h; confirm mints it.
+    confirmChooser();
 
     await screen.findByDisplayValue(/share\/finder-tok#k=FK/);
     // The confirm IPC carries the parked id + chosen visibility + a progress Channel.
@@ -223,7 +297,9 @@ describe("ShareFileModal", () => {
       "hcfs_finder_confirm_share",
       expect.objectContaining({
         requestId: "req-1",
+        ttl: "24h",
         visibility: "public",
+        password: null,
         onProgress: expect.any(Channel),
       }),
     );
@@ -237,27 +313,113 @@ describe("ShareFileModal", () => {
 
   it("confirms a password-protected Finder share and shows the generated password", async () => {
     installClipboard();
-    invokeMock.mockResolvedValueOnce({
-      shareToken: "priv-tok",
-      shareUrl: "https://console.hippius.com/share/priv-tok#p=BLOB",
-      expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
-      password: "s3cretPASSWORD123abc",
+    // Switching to "Password protected" asks the backend for a default first,
+    // then the confirm mints with it.
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "hcfs_generate_share_password") {
+        return Promise.resolve("s3cretPASSWORD123abc");
+      }
+      if (cmd === "hcfs_finder_confirm_share") {
+        return Promise.resolve({
+          shareToken: "priv-tok",
+          shareUrl: "https://console.hippius.com/share/priv-tok#p=BLOB",
+          expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+          password: "s3cretPASSWORD123abc",
+        });
+      }
+      return Promise.resolve(undefined);
     });
 
     render(withFinderState(<ShareFileModal />, CHOOSING));
 
-    // Switch to "Password protected", then confirm.
+    // Switch to "Password protected"; the field pre-fills with the generated
+    // password so the common path is strong without the user inventing one.
     fireEvent.click(screen.getByRole("button", { name: /password protected/i }));
-    fireEvent.click(screen.getByRole("button", { name: /create share link/i }));
+    await screen.findByDisplayValue("s3cretPASSWORD123abc");
+
+    confirmChooser();
 
     await screen.findByDisplayValue(/share\/priv-tok#p=BLOB/);
     expect(invokeMock).toHaveBeenCalledWith(
       "hcfs_finder_confirm_share",
-      expect.objectContaining({ requestId: "req-1", visibility: "private" }),
+      expect.objectContaining({
+        requestId: "req-1",
+        visibility: "private",
+        password: "s3cretPASSWORD123abc",
+      }),
     );
-    // The generated password and its "send separately" guidance are shown.
-    expect(screen.getByDisplayValue("s3cretPASSWORD123abc")).toBeInTheDocument();
+    // The password and its "send separately" guidance are shown.
     expect(screen.getByText(/send this password separately/i)).toBeInTheDocument();
+  });
+
+  it("sends the user's own password when they overwrite the generated one", async () => {
+    installClipboard();
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "hcfs_generate_share_password") return Promise.resolve("generated-one-here");
+      if (cmd === "hcfs_finder_confirm_share") {
+        return Promise.resolve({
+          shareToken: "custom-tok",
+          shareUrl: "https://console.hippius.com/share/custom-tok#p=B",
+          expiresAt: null,
+          password: "my own strong password",
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(withFinderState(<ShareFileModal />, CHOOSING));
+    fireEvent.click(screen.getByRole("button", { name: /password protected/i }));
+    const field = await screen.findByDisplayValue("generated-one-here");
+
+    fireEvent.change(field, { target: { value: "my own strong password" } });
+    confirmChooser();
+
+    await screen.findByDisplayValue(/share\/custom-tok#p=B/);
+    expect(invokeMock).toHaveBeenCalledWith(
+      "hcfs_finder_confirm_share",
+      expect.objectContaining({ password: "my own strong password" }),
+    );
+  });
+
+  it("blocks confirming while the typed password is too short", async () => {
+    invokeMock.mockImplementation((cmd: string) =>
+      cmd === "hcfs_generate_share_password"
+        ? Promise.resolve("generated-one-here")
+        : Promise.resolve(undefined),
+    );
+
+    render(withFinderState(<ShareFileModal />, CHOOSING));
+    fireEvent.click(screen.getByRole("button", { name: /password protected/i }));
+    const field = await screen.findByDisplayValue("generated-one-here");
+
+    fireEvent.change(field, { target: { value: "short" } });
+
+    expect(screen.getByRole("button", { name: /create share link/i })).toBeDisabled();
+    confirmChooser();
+    // Rust re-validates anyway, but the UI must not even attempt the mint.
+    expect(invokeMock).not.toHaveBeenCalledWith("hcfs_finder_confirm_share", expect.anything());
+  });
+
+  it("passes the chosen expiry preset through to the mint", async () => {
+    installClipboard();
+    invokeMock.mockResolvedValueOnce({
+      shareToken: "never-tok",
+      shareUrl: "https://console.hippius.com/share/never-tok#k=K",
+      expiresAt: null,
+    });
+
+    render(withFinderState(<ShareFileModal />, CHOOSING));
+
+    fireEvent.change(screen.getByLabelText(/link expires/i), { target: { value: "never" } });
+    confirmChooser();
+
+    await screen.findByDisplayValue(/share\/never-tok#k=K/);
+    expect(invokeMock).toHaveBeenCalledWith(
+      "hcfs_finder_confirm_share",
+      expect.objectContaining({ ttl: "never" }),
+    );
+    // A never-expiring link must not render a countdown line.
+    expect(screen.queryByText(/^Expires /)).not.toBeInTheDocument();
   });
 
   it("cancels a Finder request without minting when the chooser is dismissed", async () => {
@@ -279,7 +441,7 @@ describe("ShareFileModal", () => {
     invokeMock.mockRejectedValueOnce({ kind: "NotReady", message: "Insufficient credits to create a share" });
     render(withFinderState(<ShareFileModal />, CHOOSING));
 
-    fireEvent.click(screen.getByRole("button", { name: /create share link/i }));
+    confirmChooser();
 
     expect(await screen.findByText(/couldn.?t create share link/i)).toBeInTheDocument();
     expect(screen.getByText(/insufficient credits to create a share/i)).toBeInTheDocument();
@@ -299,6 +461,7 @@ describe("ShareFileModal", () => {
       .mockResolvedValueOnce(undefined); // revoke_share returns void
 
     render(withProvider(<ShareFileModal />, { name: "doc.pdf", actualFileName: "doc.pdf", label: "Drive" }));
+    confirmChooser();
 
     await screen.findByDisplayValue(/tok-rev/);
 

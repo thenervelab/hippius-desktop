@@ -32,11 +32,11 @@ use tracing::{info, warn};
 
 use crate::app_state::AppState;
 use crate::error::Result;
-use crate::finder_bridge::commands::{FinderShareCreated, ShareVisibility};
+
 use crate::finder_bridge::protocol::ClientMessage;
 use crate::finder_bridge::resolve::{ShareTarget, resolve_share_target};
-use crate::shares::commands::ShareLink;
-use hcfs_client::client::share::ShareProgressFn;
+use crate::shares::commands::{ShareChoice, ShareLink};
+use hcfs_client::client::share::{ShareProgressFn, ShareTtl};
 
 /// A "Share with Hippius" click parked in [`crate::app_state::AppState`] while
 /// the app asks the user for the public/private choice. Holds the resolved path
@@ -95,41 +95,27 @@ pub async fn handle(app: AppHandle, message: ClientMessage) {
 /// `progress`, when `Some`, streams encrypt→upload→finalize updates to the
 /// modal's bar (see [`share_for_path`]).
 ///
-/// The private path upgrades an already-minted PUBLIC share, so if the wrap
-/// fails the public token is already live on the server while the user asked for
-/// a private link. We revoke that orphaned public share (best-effort) before
-/// returning the error, so a failed private confirm never leaves an unintended
-/// public link behind.
+/// The password (when the user chose a private share) is applied during the
+/// mint itself, so there is no window in which an unintended public link
+/// exists. The previous flow minted a public share and wrapped it afterwards,
+/// which needed a compensating revoke whenever the wrap failed — that whole
+/// branch is gone.
 pub(super) async fn mint_confirmed(
     state: &AppState,
     clicked: &Path,
-    visibility: ShareVisibility,
+    ttl: ShareTtl,
+    choice: ShareChoice,
     progress: Option<ShareProgressFn>,
-) -> Result<FinderShareCreated> {
-    let public = share_for_path(state, clicked, progress).await?;
-    match visibility {
-        ShareVisibility::Public => {
-            info!(share_token = %public.share_token, path = %clicked.display(), "finder bridge: public share link created");
-            Ok(FinderShareCreated::public(public))
-        }
-        ShareVisibility::Private => {
-            // Capture the token before `make_private` consumes `public` — the
-            // error arm needs it to revoke the orphaned public share.
-            let public_token = public.share_token.clone();
-            match crate::shares::commands::make_private(state, public).await {
-                Ok(private) => {
-                    info!(share_token = %private.link.share_token, path = %clicked.display(), "finder bridge: private share link created");
-                    Ok(FinderShareCreated::private(private))
-                }
-                Err(error) => {
-                    if let Err(revoke_err) = crate::shares::commands::revoke_public_share(state, &public_token).await {
-                        warn!(%revoke_err, share_token = %public_token, "finder bridge: could not revoke orphaned public share after private-wrap failure");
-                    }
-                    Err(error)
-                }
-            }
-        }
-    }
+) -> Result<ShareLink> {
+    let is_private = matches!(choice, ShareChoice::Private { .. });
+    let link = share_for_path(state, clicked, ttl, choice, progress).await?;
+    info!(
+        share_token = %link.share_token,
+        path = %clicked.display(),
+        is_private,
+        "finder bridge: share link created",
+    );
+    Ok(link)
 }
 
 /// Bring the main app window to the foreground so a Finder-initiated share is
@@ -159,7 +145,13 @@ fn display_name(path: &Path) -> String {
 /// when `Some`, is hcfs-client's encrypt→upload→finalize callback, forwarded so
 /// the confirm modal can render a determinate bar during the (possibly slow)
 /// upload of a big file or a zipped folder.
-async fn share_for_path(state: &AppState, clicked: &Path, progress: Option<ShareProgressFn>) -> Result<ShareLink> {
+async fn share_for_path(
+    state: &AppState,
+    clicked: &Path,
+    ttl: ShareTtl,
+    choice: ShareChoice,
+    progress: Option<ShareProgressFn>,
+) -> Result<ShareLink> {
     let account_id = state.current_account_id()?;
 
     // A directory (in-drive or outside) is shared as one zip blob — the share
@@ -168,17 +160,17 @@ async fn share_for_path(state: &AppState, clicked: &Path, progress: Option<Share
     // `share_synced_file`, which rejects directories.
     let metadata = tokio::fs::metadata(clicked).await?;
     if metadata.is_dir() {
-        return crate::shares::commands::share_directory_as_zip(state, &account_id, clicked, progress).await;
+        return crate::shares::commands::share_directory_as_zip(state, &account_id, clicked, ttl, choice, progress).await;
     }
 
     let roots = crate::sync::paths::list_drive_roots(state.pool()?, &account_id).await?;
     match resolve_share_target(clicked, &roots) {
         // In-drive file: mint by (label, relative_path) and record a reshare origin.
         ShareTarget::InDrive { label, relative_path } => {
-            crate::shares::commands::share_synced_file(state, &account_id, &label, &relative_path, progress).await
+            crate::shares::commands::share_synced_file(state, &account_id, &label, &relative_path, ttl, choice, progress).await
         }
         // Outside file: "upload & share" by streaming its bytes; no origin row.
-        ShareTarget::Outside => crate::shares::commands::share_external_file(state, &account_id, clicked, progress).await,
+        ShareTarget::Outside => crate::shares::commands::share_external_file(state, &account_id, clicked, ttl, choice, progress).await,
     }
 }
 

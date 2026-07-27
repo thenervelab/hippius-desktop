@@ -13,6 +13,7 @@ const row = (overrides: Partial<ShareSummary> = {}): ShareSummary => ({
   createdAt: "2026-04-30T10:00:00Z",
   expiresAt: "2026-05-04T12:00:00Z",
   shareUrl: "https://x#k=y",
+  isPrivate: false,
   folderLabel: "default",
   relativePath: "f.pdf",
   ...overrides,
@@ -46,7 +47,7 @@ describe("buildSharedBadgeTooltip", () => {
       row({ shareToken: "b", expiresAt: "2026-05-06T12:00:00Z" }),
     ]);
     expect(lines).toEqual([
-      "Shared via 2 public links · soonest expires in 3h",
+      "Shared via 2 links · soonest expires in 3h",
     ]);
   });
 });
