@@ -350,6 +350,13 @@ pub(crate) fn handle_sync_error(app: &AppHandle, payload: events::SyncErrorPaylo
         app_state.credits_exhausted.clear(&payload.label);
     }
 
+    // Keep-awake: a failed cycle marks its remaining files terminal, so the
+    // fresh snapshot normally releases the sleep assertion here (hcfs-client's
+    // retry starts a NEW cycle whose snapshots re-acquire). Re-evaluating
+    // (not unconditionally releasing) keeps the hold when another drive's
+    // transfers are still in flight.
+    reevaluate_keep_awake(&app_state, "sync error");
+
     // Decide BEFORE emitting whether this failure should surface a persisted
     // "Sync Failed" notification. For the auto-retry loop, `record_failure`
     // counts THIS label's consecutive failed cycles (not the payload's
@@ -443,7 +450,25 @@ fn handle_sync_stopped(app: &AppHandle, label: String) {
     // syncs immediately instead of being gated by the prior episode's last-run
     // time.
     app_state.folder_entity_sync.clear(&label);
+    // Keep-awake: the teardown paths that fire SyncStopped (pause / remove /
+    // logout) usually also emit a snapshot via `remove_files_for_label`, but
+    // re-evaluate here explicitly so the assertion drops even on a teardown
+    // path that skips the progress emit. If ANOTHER drive is still
+    // transferring, the fresh snapshot keeps the hold.
+    reevaluate_keep_awake(&app_state, "sync stopped");
     let _ = app.emit(events::SYNC_STOPPED, events::LabelPayload { label });
+}
+
+/// Recompute the keep-awake hold from a FRESH progress snapshot and apply it.
+///
+/// Belt-and-braces for the terminal/reset arms: the `ProgressSnapshot` funnel
+/// is the primary driver (it sees every live frame), but `SyncStopped` /
+/// `SyncReset` / a real `SyncError` can, on some teardown orderings, be the
+/// LAST thing the bridge observes — re-evaluating here guarantees the sleep
+/// assertion can never outlive the transfers it was held for.
+fn reevaluate_keep_awake(app_state: &crate::app_state::AppState, context: &'static str) {
+    let snapshot = app_state.sync.progress.build_snapshot();
+    app_state.keep_awake.apply(crate::power::should_hold_keep_awake(&snapshot), context);
 }
 
 /// Handle `SyncEvent::SyncReset`: wipe every per-drive preparing/credits/error
@@ -466,6 +491,11 @@ fn handle_sync_reset(app: &AppHandle, account_id: String, message: String) {
     // Wipe every folder-entity-sync throttle stamp: a previous account's
     // last-run times must not gate the new account's first sync after a switch.
     app_state.folder_entity_sync.clear_all();
+    // Keep-awake: logout / account switch tears down every drive — release the
+    // sleep assertion unless a fresh snapshot still shows transfers (it won't
+    // once `clear_all_data` has run; this covers orderings where the reset
+    // event lands first).
+    reevaluate_keep_awake(&app_state, "sync reset");
     let _ = app.emit(events::SYNC_RESET, events::SyncResetPayload { account_id, message });
 }
 
@@ -635,6 +665,18 @@ fn handle_file_failed(app: &AppHandle, ev: FileFailedEvent) {
 fn handle_progress_snapshot(app: &AppHandle, mut snapshot: SyncSnapshot) {
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
+
+    // Keep-awake: every snapshot re-evaluates the "prevent idle system
+    // sleep" assertion from the RAW aggregate counters (before the display
+    // fixups below, which don't touch the counters). This funnel observes
+    // every progress frame AND the forced emit of every terminal/cleanup
+    // transition (`finalize_session_for_label`, `remove_files_for_label`,
+    // `clear_all_data`, …), so it doubles as the safety net: a missed
+    // terminal event is corrected by the next frame that says idle. `apply`
+    // is edge-triggered — the 4 Hz steady state is a no-op.
+    app_state
+        .keep_awake
+        .apply(crate::power::should_hold_keep_awake(&snapshot), "progress snapshot");
 
     // Once a label has real files in the session, its
     // "preparing" override has served its purpose — the

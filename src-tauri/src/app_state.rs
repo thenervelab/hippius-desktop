@@ -69,6 +69,15 @@ pub struct AppState {
     /// (`SyncCompleted`), `SyncStopped`, and globally on `SyncReset`. See
     /// `crate::sync::error_notify`.
     pub error_notify: std::sync::Arc<crate::sync::error_notify::ErrorNotifyState>,
+    /// Edge-triggered owner of the OS "prevent idle system sleep" assertion
+    /// held while any sync session still has non-terminal files, so macOS/
+    /// Windows can't idle-sleep mid-transfer of a large folder. Display sleep
+    /// is never blocked. Driven exclusively by the snapshot/event funnel in
+    /// `sync::projection::tauri_bridge` via the pure resolver
+    /// `power::should_hold_keep_awake`; released whenever a frame says idle
+    /// (pause/remove/logout/stall all converge there). Linux no-ops (v1).
+    /// See `crate::power`.
+    pub keep_awake: std::sync::Arc<crate::power::SyncKeepAwake>,
     /// Single per-label min-interval throttle gating the combined per-cycle
     /// folder-entity sync (reconcile disk→server THEN materialize server→disk).
     /// The per-cycle completion funnel (`handle_sync_completed`) fires the
@@ -251,6 +260,7 @@ impl AppState {
             preparing: std::sync::Arc::new(crate::sync::preparing::PreparingState::new()),
             credits_exhausted: std::sync::Arc::new(crate::sync::credits_exhausted::CreditsExhaustedState::new()),
             error_notify: std::sync::Arc::new(crate::sync::error_notify::ErrorNotifyState::new()),
+            keep_awake: std::sync::Arc::new(crate::power::SyncKeepAwake::new_native()),
             folder_entity_sync: std::sync::Arc::new(crate::sync::folder_entries_reconcile::PerLabelThrottle::new()),
             sync_session_epoch: AtomicU64::new(0),
             tray_panel_hidden_at: AtomicU64::new(0),
