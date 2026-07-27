@@ -180,6 +180,16 @@ nix = { version = "0.31.2", features = ["fs"] }
 cocoa = "0.25"
 objc = "0.2"
 
+# Keep the system awake while sync transfers are active (see src/power.rs).
+# macOS backend = IOPMAssertionCreateWithName(kIOPMAssertionTypePreventUserIdleSystemSleep);
+# Windows backend = SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED).
+# Deliberately NOT a Linux dependency: keepawake's Linux backend pulls the zbus
+# D-Bus stack for a nice-to-have — power.rs no-ops there for v1. Pinned exact
+# (pre-1.0 crate; audit: pure-Rust deps + objc2-io-kit/windows bindings, no
+# build.rs downloads — covered by the CI `cargo deny check`).
+[target.'cfg(any(target_os = "macos", windows))'.dependencies]
+keepawake = "=0.6.0"
+
 [target."cfg(any(target_os = \"macos\", windows, target_os = \"linux\"))".dependencies]
 tauri-plugin-single-instance = { version = "2.0.0", features = ["deep-link"] }
 
