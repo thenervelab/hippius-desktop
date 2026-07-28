@@ -2,6 +2,7 @@
 
 import { useState, useCallback } from "react";
 import { useAtomValue, useSetAtom } from "jotai";
+import { toast } from "sonner";
 import { pendingConflictsAtom } from "@/lib/store/syncAtoms";
 import { useStagedChanges } from "@/lib/hooks/useStagedChanges";
 import StagedChangesDialog from "@/components/page-sections/drive/StagedChangesDialog";
@@ -68,9 +69,29 @@ function ConflictBannerRow({
 
   const handleSync = useCallback(
     async (resolutions: Record<string, ConflictResolution>) => {
-      await syncWithResolutions(resolutions);
-      dropSelf();
-      setDialogOpen(false);
+      const result = await syncWithResolutions(resolutions);
+      if (result.ok) {
+        dropSelf();
+        setDialogOpen(false);
+        return;
+      }
+      // Failure: keep the dialog open so the user's chosen resolutions
+      // survive a retry. (On a genuine engine failure Rust also emits
+      // `hcfs_sync_error`, which drops this row via ConflictEventListener —
+      // the toast is then the surviving feedback; the engine re-detects the
+      // conflicts on the next cycle.)
+      if (result.syncInProgress) {
+        toast.warning("A sync cycle is already running for this drive", {
+          description:
+            "Keep this dialog open and press Sync Now again in a moment — it holds your choices while open.",
+          duration: 8000,
+        });
+      } else {
+        toast.error("Couldn't apply the conflict resolutions", {
+          description: result.message,
+          duration: 8000,
+        });
+      }
     },
     [syncWithResolutions, dropSelf]
   );

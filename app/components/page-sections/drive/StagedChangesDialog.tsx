@@ -45,7 +45,10 @@ const RESOLUTION_OPTIONS: { value: ConflictResolution; label: string }[] = [
   { value: "keep_local", label: "Keep Local" },
   { value: "accept_remote", label: "Accept Remote" },
   { value: "keep_both", label: "Keep Both" },
-  { value: "skip", label: "Skip" },
+  // "Skip for now" (not "Skip"): the verb DEFERS the conflict — the engine
+  // re-detects it next cycle and the banner returns. Users read a bare
+  // "Skip" as "make this go away", then report the returning banner as a bug.
+  { value: "skip", label: "Skip for now" },
 ];
 
 // Distinct Button variant per bulk action so the "Apply to all" row reads at a
