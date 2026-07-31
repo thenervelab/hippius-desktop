@@ -129,20 +129,24 @@ alloy-signer = { version = "0.8", default-features = false }
 alloy-signer-local = { version = "0.8", default-features = false, features = [
     "mnemonic",
 ] }
-# Pinned to the merged hcfs main rev (PR #277) where hcfs-client stamps
-# `Manifest.source = "desktop"` on every upload it builds. That label is what
-# feeds hcfs-server's per-source storage breakdown (`GET /get_source_summary`),
-# so this rev is the only reason desktop uploads are attributed to the desktop
-# bucket instead of falling into "other" — no desktop code declares it, because
-# every upload here goes through hcfs-client's own sync engine. Bumping this rev
-# is the only way a hcfs change reaches the desktop, so it stays exact and is
-# guarded by the wire-contract pins in tests/hcfs_contract.rs.
-hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "1249a2cf8cbd0a188faf39a5f2c9fe7c60c7cc40" }
+# Pinned to the merged hcfs main rev (PR #278) that teaches `stage_with_paths`
+# the display-path ladder `drive/download.rs` already used — path_index, then
+# the server's encrypted path blob decrypted with the folder key, then the
+# legacy basename. Without it a staged plan named remote-only files by a hex
+# FileId, so the "Review Changes" dialog asked users to confirm deleting
+# 64-char hashes. Carries forward PR #277's `Manifest.source = "desktop"` stamp
+# on every upload hcfs-client builds, which is what feeds hcfs-server's
+# per-source storage breakdown (`GET /get_source_summary`) — no desktop code
+# declares it, because every upload here goes through hcfs-client's own sync
+# engine. Bumping this rev is the only way a hcfs change reaches the desktop,
+# so it stays exact and is guarded by the wire-contract pins in
+# tests/hcfs_contract.rs.
+hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "2e33c2a55bd2bcf706caa646c420a24ee5ab1a65" }
 # hcfs-shared pulls in the `network` module types (RegisterRelativePathEntry,
 # MAX_REGISTER_RELATIVE_PATHS_BATCH, ...) that hcfs-client takes/returns on
 # its public API but does not re-export. Pinned to the same git rev so the
 # wire types stay in lockstep with the client.
-hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "1249a2cf8cbd0a188faf39a5f2c9fe7c60c7cc40" }
+hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "2e33c2a55bd2bcf706caa646c420a24ee5ab1a65" }
 # NFC-normalise relative_path strings before posting them to the server's
 # register_relative_paths endpoint. macOS APFS hands filenames back in NFD
 # and the server's path_validator hard-rejects anything non-NFC — see the

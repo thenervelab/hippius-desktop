@@ -6,17 +6,28 @@
 //
 // Chrome is the shared `FramedDialog` (decoration grid + brand-blue icon badge
 // + centered title + close button), so light/dark theming, padding and the
-// close-on-outside-click semantics match every other dialog in the app — the
-// same treatment as the sibling `FailedFilesModal`. All buttons are the shared
-// `Button` primitive and each conflict's resolver is the shared
-// `HomepageChartSelect` (the chart-card filter dropdown), so the controls read
-// as first-class app UI instead of raw HTML `<button>`/`<select>`.
+// close-on-outside-click semantics match every other dialog in the app. The
+// bulk resolver is the shared `SegmentedControl` — the app's canonical
+// pick-one-of-N control — and each conflict's resolver is the shared
+// `HomepageChartSelect`, so the controls read as first-class app UI.
+//
+// Layout note: conflicts lead. They are the only part of the plan that needs a
+// decision, and burying them under a flat list of every upload/download/delete
+// (63 delete rows in the report that prompted this) meant users scrolled past
+// the actionable section to reach it. The informational sections are collapsed
+// behind disclosure rows carrying their counts.
+//
+// This component owns no resolution state. `resolutions` is lifted to the
+// caller so a closed-and-reopened dialog — or a failed sync — does not discard
+// an in-progress review. See `ConflictsBanner`.
 
-import { FC, useState, useMemo, useEffect } from "react";
+import { FC, useMemo, useState } from "react";
+import { ChevronRight } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import FramedDialog from "@/components/ui/FramedDialog";
 import HomepageChartSelect from "@/components/ui/HomepageChartSelect";
+import SegmentedControl from "@/components/ui/SegmentedControl";
 import { Icons } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import type {
@@ -24,13 +35,24 @@ import type {
   StagedConflict,
   ConflictResolution,
 } from "@/lib/types/syncTypes";
+import {
+  applyToAll,
+  areAllConflictsResolved,
+  deriveBulkSelection,
+  describeStagedPath,
+  isEntirelyDeferred,
+  type ResolutionMap,
+} from "./stagedChangesLogic";
 
 interface StagedChangesDialogProps {
   open: boolean;
   onClose: () => void;
   stagedChanges: StagedChanges | null;
   isSyncing: boolean;
-  onSync: (resolutions: Record<string, ConflictResolution>) => void;
+  /** Controlled resolution map, owned by the caller. */
+  resolutions: ResolutionMap;
+  onResolutionsChange: (next: ResolutionMap) => void;
+  onSync: () => void;
   onCancel: () => void;
 }
 
@@ -51,84 +73,52 @@ const RESOLUTION_OPTIONS: { value: ConflictResolution; label: string }[] = [
   { value: "skip", label: "Skip for now" },
 ];
 
-// Distinct Button variant per bulk action so the "Apply to all" row reads at a
-// glance instead of four identical greys. The two symmetric "pick a side"
-// choices deliberately SHARE the neutral grey (giving them different colours
-// would wrongly imply one is preferred); "Keep Both" — the safe, no-data-loss
-// option — gets the brand-blue tint; "Skip" (defer) is the lightest, ghost
-// treatment.
-const APPLY_ALL_VARIANTS: Record<
-  ConflictResolution,
-  "defaultStable" | "primaryLight" | "ghost"
-> = {
-  keep_local: "defaultStable",
-  accept_remote: "defaultStable",
-  keep_both: "primaryLight",
-  skip: "ghost",
-};
-
 const StagedChangesDialog: FC<StagedChangesDialogProps> = ({
   open,
   onClose,
   stagedChanges,
   isSyncing,
+  resolutions,
+  onResolutionsChange,
   onSync,
   onCancel,
 }) => {
-  const [resolutions, setResolutions] = useState<
-    Record<string, ConflictResolution>
-  >({});
-
-  // Reset resolutions when staged changes update (new dialog open or data refresh)
-  useEffect(() => {
-    setResolutions({});
-  }, [stagedChanges]);
+  const conflicts = useMemo(
+    () => stagedChanges?.conflicts ?? [],
+    [stagedChanges],
+  );
 
   const handleResolutionChange = (
     fileId: string,
     resolution: ConflictResolution,
   ) => {
-    setResolutions((prev) => ({ ...prev, [fileId]: resolution }));
-  };
-
-  const handleApplyAll = (resolution: ConflictResolution) => {
-    if (!stagedChanges) return;
-    const all: Record<string, ConflictResolution> = {};
-    for (const c of stagedChanges.conflicts) {
-      all[c.file_id] = resolution;
-    }
-    setResolutions(all);
-  };
-
-  const handleSync = () => {
-    onSync(resolutions);
+    onResolutionsChange({ ...resolutions, [fileId]: resolution });
   };
 
   // User explicitly cancelled — calls cancel_review to resume auto-sync. Also
   // the FramedDialog close (X / Escape / click-outside) target.
   const handleCancel = () => {
     onCancel();
-    setResolutions({});
     onClose();
   };
 
-  const hasConflicts = (stagedChanges?.conflicts.length ?? 0) > 0;
+  const hasConflicts = conflicts.length > 0;
+  const conflictCount = conflicts.length;
+  const unchangedCount = stagedChanges?.unchanged_count ?? 0;
 
-  const allConflictsResolved = useMemo(() => {
-    if (!stagedChanges || stagedChanges.conflicts.length === 0) return true;
-    return stagedChanges.conflicts.every((c) => resolutions[c.file_id]);
-  }, [stagedChanges, resolutions]);
+  // Derived, never stored: the bulk control and the per-row selects read the
+  // same map, so the highlight cannot disagree with the rows.
+  const bulkSelection = deriveBulkSelection(resolutions, conflicts);
+  const allConflictsResolved = areAllConflictsResolved(resolutions, conflicts);
+  const entirelyDeferred = isEntirelyDeferred(resolutions, conflicts);
 
   const totalOperations = stagedChanges
     ? stagedChanges.uploads.length +
       stagedChanges.downloads.length +
       stagedChanges.local_deletes.length +
       stagedChanges.remote_deletes.length +
-      stagedChanges.conflicts.length
+      conflictCount
     : 0;
-
-  const conflictCount = stagedChanges?.conflicts.length ?? 0;
-  const unchangedCount = stagedChanges?.unchanged_count ?? 0;
 
   const syncDisabled =
     isSyncing ||
@@ -169,37 +159,12 @@ const StagedChangesDialog: FC<StagedChangesDialogProps> = ({
               : "Review the staged changes below before syncing."}
           </p>
 
-          {/* The change plan scrolls inside the dialog so the footer buttons
-              below stay reachable even with a long list. `pr-3` keeps the
-              full-width conflict rows clear of the scrollbar — `scrollbar-gutter`
-              is unreliable for WKWebView's overlay scrollbars, which otherwise
-              draw on top of the content. */}
+          {/* The plan scrolls inside the dialog so the footer buttons below
+              stay reachable. `pr-3` keeps the full-width conflict rows clear
+              of the scrollbar — `scrollbar-gutter` is unreliable for
+              WKWebView's overlay scrollbars, which otherwise draw on top of
+              the content. */}
           <div className="max-h-[420px] space-y-4 overflow-y-auto pr-3">
-            <FileSection
-              title="Upload"
-              icon="upload"
-              files={stagedChanges.uploads}
-              color="text-success-50"
-            />
-            <FileSection
-              title="Download"
-              icon="download"
-              files={stagedChanges.downloads}
-              color="text-primary-50"
-            />
-            <FileSection
-              title="Delete Locally"
-              icon="delete"
-              files={stagedChanges.local_deletes}
-              color="text-error-50"
-            />
-            <FileSection
-              title="Delete from Server"
-              icon="delete"
-              files={stagedChanges.remote_deletes}
-              color="text-error-50/70"
-            />
-
             {hasConflicts && (
               <div>
                 <div className="mb-2 flex items-center gap-1.5">
@@ -212,52 +177,79 @@ const StagedChangesDialog: FC<StagedChangesDialogProps> = ({
                   </h3>
                 </div>
 
-                {/* Bulk resolver bar — mirrors FailedFilesModal's "apply to
-                    all" row so the two conflict surfaces feel identical. */}
-                <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-md border border-grey-80 bg-grey-95/40 px-3 py-2 dark:border-[#2c2c2c] dark:bg-[#1f1f1f]/60">
-                  <span className="text-xs font-medium text-grey-50 dark:text-grey-dark-700">
-                    Apply to all {conflictCount}:
+                {/* Bulk resolver. `value` is derived from the rows, so it
+                    shows no active segment while they disagree instead of
+                    asserting a selection that isn't real. */}
+                <div className="mb-3 rounded-md border border-grey-80 bg-grey-95/40 px-3 py-2.5 dark:border-[#2c2c2c] dark:bg-[#1f1f1f]/60">
+                  <span className="mb-2 block text-xs font-medium text-grey-50 dark:text-grey-dark-700">
+                    Apply to all {conflictCount}
                   </span>
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    {RESOLUTION_OPTIONS.map((opt) => (
-                      <Button
-                        key={opt.value}
-                        variant={APPLY_ALL_VARIANTS[opt.value]}
-                        size="sm"
-                        dotSize={3}
-                        // Smaller than the default `sm` (h-9 / text-sm): these
-                        // are compact bulk shortcuts, not primary actions.
-                        className={cn(
-                          "h-7 px-2.5 text-xs",
-                          // The ghost "Skip" has no fill of its own — give it an
-                          // outline + hover so it reads as a button (the lightest
-                          // of the four) instead of plain text.
-                          opt.value === "skip" &&
-                            "rounded-md border border-grey-80 text-grey-50 hover:bg-grey-90 dark:border-[#494949] dark:text-grey-dark-700 dark:hover:bg-[#2c2c2c]",
-                        )}
-                        onClick={() => handleApplyAll(opt.value)}
-                        disabled={isSyncing}
-                      >
-                        {opt.label}
-                      </Button>
-                    ))}
-                  </div>
+                  <SegmentedControl
+                    ariaLabel={`Apply one resolution to all ${conflictCount} conflicts`}
+                    fullWidth
+                    showActiveIndicator={false}
+                    options={RESOLUTION_OPTIONS}
+                    value={bulkSelection}
+                    onChange={(resolution) =>
+                      onResolutionsChange(applyToAll(conflicts, resolution))
+                    }
+                    disabled={isSyncing}
+                  />
                 </div>
 
                 <div className="space-y-2">
-                  {stagedChanges.conflicts.map((conflict) => (
+                  {conflicts.map((conflict) => (
                     <ConflictRow
                       key={conflict.file_id}
                       conflict={conflict}
                       resolution={resolutions[conflict.file_id]}
+                      disabled={isSyncing}
                       onResolutionChange={(r) =>
                         handleResolutionChange(conflict.file_id, r)
                       }
                     />
                   ))}
                 </div>
+
+                {entirelyDeferred && (
+                  <p className="mt-2 flex items-start gap-1.5 rounded-md border border-warning-50/40 bg-warning-50/[0.08] px-3 py-2 text-xs leading-relaxed text-grey-20 dark:text-grey-dark-800">
+                    <Icons.OctagonAlert className="mt-px size-3.5 shrink-0 text-warning-50" />
+                    <span>
+                      Every conflict is set to <b>Skip for now</b>, so none will
+                      be resolved. The rest of the plan still syncs and these
+                      files will be flagged again on the next check.
+                    </span>
+                  </p>
+                )}
               </div>
             )}
+
+            <PlanSection
+              title="Upload"
+              icon="upload"
+              files={stagedChanges.uploads}
+              color="text-success-50"
+            />
+            <PlanSection
+              title="Download"
+              icon="download"
+              files={stagedChanges.downloads}
+              color="text-primary-50"
+            />
+            <PlanSection
+              title="Delete Locally"
+              icon="delete"
+              files={stagedChanges.local_deletes}
+              color="text-error-50"
+              destructive
+            />
+            <PlanSection
+              title="Delete from Server"
+              icon="delete"
+              files={stagedChanges.remote_deletes}
+              color="text-error-50/70"
+              destructive
+            />
           </div>
         </>
       )}
@@ -279,11 +271,11 @@ const StagedChangesDialog: FC<StagedChangesDialogProps> = ({
         <Button
           variant="primary"
           className="h-[52px] flex-1"
-          onClick={handleSync}
+          onClick={onSync}
           loading={isSyncing}
           disabled={syncDisabled}
         >
-          {isSyncing ? "Syncing…" : "Sync Now"}
+          {isSyncing ? "Starting…" : "Sync Now"}
         </Button>
       </div>
     </FramedDialog>
@@ -292,17 +284,29 @@ const StagedChangesDialog: FC<StagedChangesDialogProps> = ({
 
 // --- Sub-components ---
 
-function FileSection({
+/**
+ * One informational part of the plan, collapsed by default.
+ *
+ * These sections are context, not decisions — but a build directory can put
+ * dozens of rows in each, which is what pushed the conflicts off-screen. The
+ * count is visible without expanding, and destructive sections carry a warning
+ * edge so "63 files will be deleted from the server" is legible at a glance.
+ */
+function PlanSection({
   title,
   icon,
   files,
   color,
+  destructive = false,
 }: {
   title: string;
   icon: "upload" | "download" | "delete";
   files: { file_id: string; path: string }[];
   color: string;
+  destructive?: boolean;
 }) {
+  const [expanded, setExpanded] = useState(false);
+
   if (files.length === 0) return null;
 
   const IconComponent =
@@ -313,8 +317,26 @@ function FileSection({
         : Icons.Trash;
 
   return (
-    <div>
-      <div className="mb-1.5 flex items-center gap-1.5">
+    <div
+      className={cn(
+        "overflow-hidden rounded-md border",
+        destructive
+          ? "border-error-50/30 bg-error-50/[0.04]"
+          : "border-grey-80 bg-grey-95/40 dark:border-[#2c2c2c] dark:bg-[#1f1f1f]/60",
+      )}
+    >
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        aria-expanded={expanded}
+        className="flex w-full items-center gap-1.5 px-3 py-2.5 text-left transition-colors hover:bg-grey-90/50 dark:hover:bg-[#2c2c2c]/50"
+      >
+        <ChevronRight
+          className={cn(
+            "size-3.5 shrink-0 text-grey-50 transition-transform duration-200 dark:text-grey-dark-600",
+            expanded && "rotate-90",
+          )}
+        />
         <IconComponent className={cn("size-4 shrink-0", color)} />
         <h3 className="text-sm font-semibold text-grey-10 dark:text-white">
           {title}{" "}
@@ -322,29 +344,64 @@ function FileSection({
             ({files.length})
           </span>
         </h3>
-      </div>
-      <ul className="space-y-0.5">
-        {files.map((f) => (
-          <li
-            key={f.file_id}
-            className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-grey-20 dark:text-grey-dark-800"
-          >
-            <Icons.Document className="size-4 shrink-0 text-grey-50 dark:text-grey-dark-600" />
-            <span className="truncate">{f.path}</span>
-          </li>
-        ))}
-      </ul>
+      </button>
+
+      {expanded && (
+        <ul className="space-y-0.5 border-t border-grey-80 px-2 py-1.5 dark:border-[#2c2c2c]">
+          {files.map((f) => (
+            <li
+              key={f.file_id}
+              className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-grey-20 dark:text-grey-dark-800"
+            >
+              <Icons.Document className="size-4 shrink-0 text-grey-50 dark:text-grey-dark-600" />
+              <StagedPath path={f.path} />
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
+  );
+}
+
+/**
+ * Render a staged path, or say so when the engine could not name the file.
+ *
+ * The engine falls back to a hex `FileId` for files no local side-table knows
+ * (see `SyncState::display_path`). Printing that in the filename column made a
+ * hash look like a filename — worst of all in "Delete from Server", where the
+ * user is being asked to approve the deletion.
+ */
+function StagedPath({ path }: { path: string }) {
+  const described = describeStagedPath(path);
+
+  if (described.kind === "path") {
+    return <span className="truncate">{described.value}</span>;
+  }
+
+  return (
+    <span className="flex min-w-0 items-baseline gap-1.5">
+      <span className="shrink-0 italic text-grey-50 dark:text-grey-dark-600">
+        Unknown file
+      </span>
+      <span
+        className="truncate font-geist-mono text-xs text-grey-60 dark:text-grey-dark-600"
+        title={`This device has no record of this file's name. Sync engine id: ${described.hash}`}
+      >
+        {described.hash.slice(0, 12)}…
+      </span>
+    </span>
   );
 }
 
 function ConflictRow({
   conflict,
   resolution,
+  disabled,
   onResolutionChange,
 }: {
   conflict: StagedConflict;
   resolution: ConflictResolution | undefined;
+  disabled: boolean;
   onResolutionChange: (r: ConflictResolution) => void;
 }) {
   return (
@@ -362,7 +419,7 @@ function ConflictRow({
     >
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-medium text-grey-10 dark:text-white">
-          {conflict.path}
+          <StagedPath path={conflict.path} />
         </p>
         <p className="mt-0.5 text-xs text-grey-50 dark:text-grey-dark-600">
           {CONFLICT_TYPE_LABELS[conflict.conflict_type] ||
@@ -375,6 +432,7 @@ function ConflictRow({
         onValueChange={(v) => onResolutionChange(v as ConflictResolution)}
         placeholder="Choose…"
         className="w-[160px] shrink-0"
+        disabled={disabled}
       />
     </div>
   );

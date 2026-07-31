@@ -28,6 +28,11 @@ interface HomepageChartSelectProps {
    * the original behaviour.
    */
   placeholder?: string;
+  /**
+   * Freeze the control — used while an action the selection feeds is already
+   * in flight, so the value on screen still matches what was submitted.
+   */
+  disabled?: boolean;
 }
 
 const HomepageChartSelect: React.FC<HomepageChartSelectProps> = ({
@@ -36,13 +41,19 @@ const HomepageChartSelect: React.FC<HomepageChartSelectProps> = ({
   onValueChange,
   className,
   placeholder,
+  disabled,
 }) => {
   const selected = options.find((o) => o.value === value);
 
   return (
-    <SelectPrimitive.Root value={value} onValueChange={onValueChange}>
+    <SelectPrimitive.Root
+      value={value}
+      onValueChange={onValueChange}
+      disabled={disabled}
+    >
       <SelectPrimitive.Trigger
         className={cn(
+          disabled && "cursor-not-allowed opacity-50",
           "inline-flex h-[32px] w-fit min-w-[112px] shrink-0 items-center justify-between gap-[6px] rounded-[7px] border border-[#e0e0e0] bg-white px-[10px] py-[6px] font-geist-mono text-[14px] font-medium uppercase leading-5 tracking-[-0.28px] text-grey-10 shadow-[0px_4px_8px_rgba(0,0,0,0.04),0px_1px_2px_rgba(0,0,0,0.12)] outline-none transition-colors hover:border-[#cfcfcf] hover:bg-[#fafafa] focus-visible:ring-2 focus-visible:ring-primary-50 dark:border-[#494949] dark:bg-[#1f1f1f] dark:text-white dark:shadow-[0px_0px_0px_1px_black] dark:hover:border-[#5a5a5a] dark:hover:bg-[#242424]",
           className,
         )}

@@ -1,12 +1,16 @@
 // Failure-path coverage for the conflict banner's "Sync Now" flow.
 //
-// The historical bug (user report 2026-07-28): a failed reviewed sync looked
+// Historical bug (user report 2026-07-28): a failed reviewed sync looked
 // identical to a successful one — `handleSync` unconditionally dropped the
 // banner and closed the dialog, and the hook's error state had no consumer.
-// These tests pin the split: success dismisses everything; a
-// `NotReady(SyncInProgress)` rejection (auto-sync loop holds the drive
-// manager) keeps the dialog open with the user's resolutions and explains
-// itself via a toast.
+//
+// The dialog now closes on submit regardless of outcome and hands progress to
+// the sidebar sync widget (report 2026-07-31: `sync_with_conflict_resolutions`
+// runs the whole cycle inline, so keeping the modal open meant minutes of a
+// spinner with Cancel disabled). The guarantee that mattered is unchanged and
+// still pinned below: a sync that fails or never starts keeps the banner AND
+// the user's resolutions, so reopening the dialog resumes the review rather
+// than restarting it. That is what moving the state up to the banner buys.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
@@ -58,12 +62,16 @@ function renderBanner() {
   return store;
 }
 
-/** Open the dialog, resolve the conflict via "Apply to all", press Sync Now. */
-async function reviewAndSync() {
+async function openReview() {
   fireEvent.click(screen.getByRole("button", { name: /review & resolve/i }));
   await screen.findByText("Review Changes");
+}
+
+/** Open the dialog, resolve the conflict via "Apply to all", press Sync Now. */
+async function reviewAndSync() {
+  await openReview();
   // Bulk-resolve — the per-row Radix select is awkward in jsdom, and the
-  // bulk bar drives the same `resolutions` state.
+  // bulk control drives the same `resolutions` state.
   fireEvent.click(screen.getByRole("button", { name: /keep both/i }));
   const syncNow = await screen.findByRole("button", { name: /sync now/i });
   await waitFor(() => expect(syncNow).toBeEnabled());
@@ -102,7 +110,7 @@ describe("ConflictsBanner reviewed-sync outcomes", () => {
     expect(toastMock.warning).not.toHaveBeenCalled();
   });
 
-  it("SyncInProgress keeps the dialog and banner, and toasts 'retry shortly'", async () => {
+  it("SyncInProgress keeps the banner and toasts 'retry shortly'", async () => {
     // The wire shape of AppError::NotReady(SyncInProgress) — a plain object.
     invokeMock.mockRejectedValue({
       kind: "NotReady",
@@ -114,13 +122,42 @@ describe("ConflictsBanner reviewed-sync outcomes", () => {
     await reviewAndSync();
 
     await waitFor(() => expect(toastMock.warning).toHaveBeenCalled());
-    // Dialog stays open so the user's chosen resolutions survive the retry.
-    expect(screen.getByText("Review Changes")).toBeInTheDocument();
+    // The reviewed sync never started, so the drive still needs resolving.
     expect(screen.getByText(/1 file conflict detected/i)).toBeInTheDocument();
     expect(toastMock.error).not.toHaveBeenCalled();
   });
 
-  it("a real failure keeps the dialog and surfaces an error toast", async () => {
+  it("preserves the user's resolutions when the sync never started", async () => {
+    // The point of lifting `resolutions` out of the dialog: the retry must
+    // resume the review, not restart it. Previously the dialog owned the map
+    // and any remount (or a re-emitted `staged`) discarded it.
+    invokeMock.mockRejectedValue({
+      kind: "NotReady",
+      subkind: "SYNC_IN_PROGRESS",
+      message: "Sync is in progress, please wait",
+    });
+    renderBanner();
+
+    await reviewAndSync();
+    await waitFor(() => expect(toastMock.warning).toHaveBeenCalled());
+
+    // Reopen: the conflict is still resolved to "Keep Both", so Sync Now is
+    // immediately enabled rather than gated on re-picking.
+    await openReview();
+    const syncNow = await screen.findByRole("button", { name: /sync now/i });
+    expect(syncNow).toBeEnabled();
+
+    invokeMock.mockResolvedValue(undefined);
+    await act(async () => {
+      fireEvent.click(syncNow);
+    });
+    expect(invokeMock).toHaveBeenLastCalledWith("sync_with_conflict_resolutions", {
+      label: "Desktop",
+      resolutions: { deadbeef: "keep_both" },
+    });
+  });
+
+  it("a real failure keeps the banner and surfaces an error toast", async () => {
     invokeMock.mockRejectedValue({
       kind: "Hcfs",
       message: "Network error: error sending request",
@@ -132,9 +169,22 @@ describe("ConflictsBanner reviewed-sync outcomes", () => {
     await waitFor(() => expect(toastMock.error).toHaveBeenCalled());
     const [, options] = toastMock.error.mock.calls[0] as [string, { description?: string }];
     expect(options?.description).toContain("Network error");
-    // The dialog is not closed by the click handler itself; on a genuine
-    // engine failure the row is later unmounted by the `hcfs_sync_error`
-    // event (ConflictEventListener), which is out of scope for this render.
-    expect(screen.getByText("Review Changes")).toBeInTheDocument();
+    // The banner survives so the user can retry. (On a genuine engine failure
+    // the row is also later unmounted by the `hcfs_sync_error` event via
+    // ConflictEventListener, which is out of scope for this render.)
+    expect(screen.getByText(/1 file conflict detected/i)).toBeInTheDocument();
+  });
+
+  it("closes the dialog on submit and hands progress to the sync widget", async () => {
+    // A never-settling IPC stands in for the long inline cycle from the
+    // report. The modal must not sit there spinning with Cancel disabled.
+    invokeMock.mockImplementation(() => new Promise(() => {}));
+    renderBanner();
+
+    await reviewAndSync();
+
+    expect(screen.queryByText("Review Changes")).not.toBeInTheDocument();
+    // Still unresolved as far as the app knows, so the banner stays put.
+    expect(screen.getByText(/1 file conflict detected/i)).toBeInTheDocument();
   });
 });

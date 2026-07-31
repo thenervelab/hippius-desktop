@@ -1,15 +1,19 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useAtomValue, useSetAtom } from "jotai";
 import { toast } from "sonner";
 import { pendingConflictsAtom } from "@/lib/store/syncAtoms";
 import { useStagedChanges } from "@/lib/hooks/useStagedChanges";
 import StagedChangesDialog from "@/components/page-sections/drive/StagedChangesDialog";
+import {
+  reconcileResolutions,
+  type ResolutionMap,
+} from "@/components/page-sections/drive/stagedChangesLogic";
 import { Icons } from "@/components/ui";
 import { Button } from "@/components/ui/button";
 import { X } from "lucide-react";
-import type { ConflictResolution, StagedChanges } from "@/lib/types/syncTypes";
+import type { StagedChanges } from "@/lib/types/syncTypes";
 
 /**
  * Renders one independent conflict banner per drive that has pending conflicts.
@@ -50,8 +54,21 @@ function ConflictBannerRow({
 }) {
   const setPendingConflicts = useSetAtom(pendingConflictsAtom);
   const [dialogOpen, setDialogOpen] = useState(false);
+  // Resolutions live HERE, not in the dialog. The engine re-emits
+  // `hcfs_conflicts_pending` (a fresh `staged` object) on every re-stage while
+  // review mode is armed, and the dialog used to wipe its own state on that
+  // identity change — silently discarding an in-progress review. Owning them
+  // one level up also means closing the dialog, or a sync that never started,
+  // doesn't cost the user their choices.
+  const [resolutions, setResolutions] = useState<ResolutionMap>({});
   const { syncWithResolutions, cancelReview, isSyncing } =
     useStagedChanges(label);
+
+  // Keep picks whose conflict the engine still reports; drop the rest so a
+  // stale file_id can never be submitted.
+  useEffect(() => {
+    setResolutions((prev) => reconcileResolutions(prev, staged.conflicts));
+  }, [staged]);
 
   const dropSelf = useCallback(() => {
     setPendingConflicts((prev) => {
@@ -67,34 +84,39 @@ function ConflictBannerRow({
     dropSelf();
   }, [cancelReview, dropSelf]);
 
-  const handleSync = useCallback(
-    async (resolutions: Record<string, ConflictResolution>) => {
-      const result = await syncWithResolutions(resolutions);
-      if (result.ok) {
-        dropSelf();
-        setDialogOpen(false);
-        return;
-      }
-      // Failure: keep the dialog open so the user's chosen resolutions
-      // survive a retry. (On a genuine engine failure Rust also emits
-      // `hcfs_sync_error`, which drops this row via ConflictEventListener —
-      // the toast is then the surviving feedback; the engine re-detects the
-      // conflicts on the next cycle.)
-      if (result.syncInProgress) {
-        toast.warning("A sync cycle is already running for this drive", {
-          description:
-            "Keep this dialog open and press Sync Now again in a moment — it holds your choices while open.",
-          duration: 8000,
-        });
-      } else {
-        toast.error("Couldn't apply the conflict resolutions", {
-          description: result.message,
-          duration: 8000,
-        });
-      }
-    },
-    [syncWithResolutions, dropSelf]
-  );
+  const handleSync = useCallback(async () => {
+    // Close immediately and hand progress off to the sidebar sync widget.
+    // `sync_with_conflict_resolutions` runs the ENTIRE cycle inline — on a
+    // large plan that is minutes of a modal spinner with Cancel disabled,
+    // which users read as a hung button. The dialog's job (collecting
+    // resolutions) is done the moment it's submitted.
+    setDialogOpen(false);
+
+    const result = await syncWithResolutions(resolutions);
+    if (result.ok) {
+      dropSelf();
+      setResolutions({});
+      return;
+    }
+
+    // The sync never started or failed outright. Keep the banner so the user
+    // can reopen — `resolutions` is still here, so their choices are intact.
+    // (On a genuine engine failure Rust also emits `hcfs_sync_error`, which
+    // drops this row via ConflictEventListener; the engine then re-detects the
+    // conflicts on the next cycle and raises a fresh banner.)
+    if (result.syncInProgress) {
+      toast.warning("A sync cycle is already running for this drive", {
+        description:
+          "Your choices are saved — reopen Review & Resolve and press Sync Now again in a moment.",
+        duration: 8000,
+      });
+    } else {
+      toast.error("Couldn't apply the conflict resolutions", {
+        description: result.message,
+        duration: 8000,
+      });
+    }
+  }, [syncWithResolutions, dropSelf, resolutions]);
 
   const conflictCount = staged.conflicts.length;
 
@@ -137,6 +159,8 @@ function ConflictBannerRow({
         onClose={() => setDialogOpen(false)}
         stagedChanges={staged}
         isSyncing={isSyncing}
+        resolutions={resolutions}
+        onResolutionsChange={setResolutions}
         onSync={handleSync}
         onCancel={() => setDialogOpen(false)}
       />
