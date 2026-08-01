@@ -1,7 +1,5 @@
-import {
-    GET_USER_IPFS_FILES_QUERY_KEY,
-} from "@/app/lib/hooks/use-user-files";
 import { DRIVE_STORAGE_STATS_QUERY_KEY } from "@/app/lib/hooks/api/useDriveStorageStats";
+import { notifyFilesMutated } from "@/app/lib/utils/fileMutationEvents";
 import { useMutation } from "@tanstack/react-query";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { queryClientAtom } from "jotai-tanstack-query";
@@ -101,14 +99,12 @@ export const useDeleteFile = ({
             // Notify sync progress system so the widget refreshes immediately
             window.dispatchEvent(new CustomEvent("sync_progress_update"));
 
-            // Refetch file listing and recent files
+            // Refresh every file audience: the TanStack-cached lists AND the
+            // non-cached nested folder listings. The latter is what makes a
+            // delete inside a subfolder visible without navigating away —
+            // see `notifyFilesMutated`.
             await Promise.all([
-                queryClient.refetchQueries({
-                    queryKey: [GET_USER_IPFS_FILES_QUERY_KEY, polkadotAddress],
-                }),
-                queryClient.refetchQueries({
-                    queryKey: ["recent-files"],
-                }),
+                notifyFilesMutated(queryClient, polkadotAddress),
                 queryClient.invalidateQueries({
                     queryKey: [DRIVE_STORAGE_STATS_QUERY_KEY],
                 }),

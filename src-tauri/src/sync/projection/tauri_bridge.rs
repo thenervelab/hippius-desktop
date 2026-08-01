@@ -266,7 +266,12 @@ pub(crate) fn handle_sync_completed(app: &AppHandle, mut payload: events::SyncCo
     // empty folder. It does NOT touch the file sync plan, and is throttled +
     // gated on the backfill flag, so a throttled or pre-backfill cycle is cheap.
     if let Ok(account_id) = app_state.current_account_id() {
-        crate::sync::folder_entries_materialize::spawn_folder_entity_sync(app.clone(), account_id, payload.label.clone());
+        crate::sync::folder_entries_materialize::spawn_folder_entity_sync(
+            app.clone(),
+            account_id,
+            payload.label.clone(),
+            crate::sync::folder_entries_materialize::FolderEntitySyncTrigger::PerCycle,
+        );
     }
 
     let _ = app.emit(events::SYNC_COMPLETED, payload);

@@ -155,6 +155,16 @@ export function useSyncEvents() {
         ["hcfs_activity_updated", () => {
           scheduleCompletedDispatch(0);
         }],
+        // A folder-entity sync changed a drive's registered directory set.
+        // This is the completion signal for a folder delete: the listing's
+        // `folder_entries_local` overlay still returns the deleted folder
+        // until the server unregister lands, which is long after the delete
+        // IPC returned and the FE already refreshed off `hippius:files-mutated`.
+        // Without this the row would linger as `pending` until an unrelated
+        // refresh — a folder-only delete never completes a sync cycle.
+        ["hcfs_folder_entities_changed", () => {
+          scheduleCompletedDispatch(0);
+        }],
         // Connectivity health updates
         ["hcfs_connectivity_changed", (e) => {
           setSyncEngineHealthAtom(e.payload as SyncEngineHealthState);

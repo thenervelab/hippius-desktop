@@ -180,6 +180,31 @@ describe("useSyncEvents — debounced sync_files_completed_changed dispatch", ()
     expect(completedDispatchCount()).toBe(3);
   });
 
+  // Regression: a folder delete produces no file work, so hcfs-client ends the
+  // cycle NoChanges and never emits hcfs_sync_completed. The backend's
+  // folder-entity reconcile is the only thing that knows the deleted folder is
+  // finally gone from the server + the local cache the listing overlays — and it
+  // lands well after the delete IPC returned. Without this listener the deleted
+  // folder keeps rendering as a `pending` row until an unrelated refresh.
+  it("refreshes listings when the backend reports a folder-entity change", async () => {
+    renderHookWithStore();
+    await waitFor(() => {
+      expect(listenHandlers.has("hcfs_folder_entities_changed")).toBe(true);
+    });
+
+    vi.useFakeTimers();
+
+    act(() => {
+      listenHandlers.get("hcfs_folder_entities_changed")!({
+        payload: { label: "default" },
+      });
+    });
+    expect(completedDispatchCount()).toBe(0);
+
+    act(() => { vi.advanceTimersByTime(DEBOUNCE_MS); });
+    expect(completedDispatchCount()).toBe(1);
+  });
+
   // Pins the refetch-storm fix: during a long multi-file sync, per-file
   // completion events drip in every second or so. Each used to trigger its
   // own file-list refetch (expensive list_user_files + full table
