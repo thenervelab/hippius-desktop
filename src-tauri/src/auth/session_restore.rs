@@ -34,12 +34,16 @@ const RECOVERY_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_se
 /// simply skips the `oauth_recovery_check_needed` emit and the dialog
 /// re-fires on the next launch.
 ///
+/// Shared with `complete_oauth_flow` (audit H-1): the fresh-OAuth path
+/// runs the same probe after its session is persisted, where an
+/// unbounded fatal probe used to fail the whole login at its last step.
+///
 /// The probe future is dropped on timeout. That is cancellation-safe
 /// (axiom `rust_quality_128`): `check_recovery_state_inner` is a
 /// read-mostly server probe whose only write
 /// (`seed_hcfs_server_url_if_missing`) is idempotent, so a drop mid-flight
 /// loses no durable state.
-async fn probe_recovery_state_bounded<E: std::fmt::Display>(
+pub(crate) async fn probe_recovery_state_bounded<E: std::fmt::Display>(
     fut: impl std::future::Future<Output = Result<crate::recovery::RecoveryCheck, E>>,
 ) -> Option<crate::recovery::RecoveryCheck> {
     match tokio::time::timeout(RECOVERY_PROBE_TIMEOUT, fut).await {
@@ -72,7 +76,7 @@ async fn probe_recovery_state_bounded<E: std::fmt::Display>(
 /// guards, see `ensure_sync_mnemonic`). The gate's startup default is
 /// `Skipped` (`AppState::new`), so leaving it untouched on a `None` probe is
 /// exactly the unsafe behavior this funnels away from.
-fn recovery_gate_target(check: Option<&crate::recovery::RecoveryCheck>) -> crate::recovery::RecoveryGateState {
+pub(crate) fn recovery_gate_target(check: Option<&crate::recovery::RecoveryCheck>) -> crate::recovery::RecoveryGateState {
     match check {
         Some(c) if matches!(c.recommended_flow, crate::recovery::RecoveryFlow::Proceed) => crate::recovery::RecoveryGateState::Skipped,
         _ => crate::recovery::RecoveryGateState::Pending,
@@ -678,7 +682,10 @@ mod tests {
     }
 
     fn check_with(flow: RecoveryFlow) -> RecoveryCheck {
-        RecoveryCheck { recommended_flow: flow, ..sample_check() }
+        RecoveryCheck {
+            recommended_flow: flow,
+            ..sample_check()
+        }
     }
 
     // Only a resolved Proceed lets sync run immediately.

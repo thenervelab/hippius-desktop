@@ -17,6 +17,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { isTauri } from "@tauri-apps/api/core";
 import { useRouter, useSearchParams } from "next/navigation";
 import { LogoMark } from "@/components/ui/LogoMark";
+import { isDeepLinkAlreadyProcessed } from "@/app/lib/auth/deepLinkDedup";
 
 export function LoginForm({
   onHideHeaderChange,
@@ -64,10 +65,15 @@ export function LoginForm({
       const result = await invoke<{
         isCallback: boolean;
         callbackPath: string | null;
+        dedupKey: string | null;
       }>("parse_oauth_deep_link", { url: trimmed });
       if (result.isCallback && result.callbackPath) {
-        setDevOAuthStatus(`Routing to ${result.callbackPath}`);
-        localStorage.setItem("last_processed_deep_link", trimmed);
+        // Same storage rule as the live handler: persist the token-free
+        // dedupKey, never the raw URL (audit S-1).
+        setDevOAuthStatus("Routing to /auth/callback");
+        if (result.dedupKey) {
+          localStorage.setItem("last_processed_deep_link", result.dedupKey);
+        }
         localStorage.setItem(
           "last_processed_deep_link_time",
           Date.now().toString(),
@@ -135,19 +141,6 @@ export function LoginForm({
 
     const handleDeepLink = async (url: string, isInitial = false) => {
       try {
-        // Dedup: skip if this URL was already processed (persists across restarts)
-        const lastProcessedUrl = localStorage.getItem(
-          "last_processed_deep_link",
-        );
-        if (lastProcessedUrl === url) {
-          console.log("[LoginForm] Deep link already processed, skipping");
-          localStorage.setItem(
-            "last_processed_deep_link_time",
-            Date.now().toString(),
-          );
-          return;
-        }
-
         // Skip initial deep links if user manually navigated to login
         const manualNavigation = sessionStorage.getItem("manual_navigation");
         if (manualNavigation === "true" && isInitial) {
@@ -176,26 +169,46 @@ export function LoginForm({
           }
         }
 
-        // Rust handles URL parsing, malformed URL fixup, session param extraction,
-        // and callback path construction
+        // Rust handles URL parsing, malformed URL fixup, session param
+        // extraction, callback path construction, AND computes the
+        // token-free dedupKey (SHA-256 of the URL) — so parsing runs
+        // before dedup on purpose.
         const { invoke } = await import("@tauri-apps/api/core");
         const result = await invoke<{
           isCallback: boolean;
           callbackPath: string | null;
+          dedupKey: string | null;
         }>("parse_oauth_deep_link", { url });
 
-        if (result.isCallback && result.callbackPath) {
-          console.log(
-            "[LoginForm] Redirecting to callback page:",
-            result.callbackPath,
-          );
-          localStorage.setItem("last_processed_deep_link", url);
+        if (!(result.isCallback && result.callbackPath)) {
+          return;
+        }
+
+        // Dedup: skip if this callback was already routed (persists across
+        // restarts — macOS redelivers the launching deep link). The marker
+        // is the opaque dedupKey, NEVER the raw URL: a direct-grant
+        // callback URL embeds the bearer token, and persisting it kept
+        // that token in localStorage indefinitely (audit S-1).
+        const stored = localStorage.getItem("last_processed_deep_link");
+        if (isDeepLinkAlreadyProcessed(stored, url, result.dedupKey)) {
+          console.log("[LoginForm] Deep link already processed, skipping");
           localStorage.setItem(
             "last_processed_deep_link_time",
             Date.now().toString(),
           );
-          router.push(result.callbackPath);
+          return;
         }
+
+        // NOTE: callbackPath carries the OAuth credentials — never log it.
+        console.log("[LoginForm] Redirecting to OAuth callback page");
+        if (result.dedupKey) {
+          localStorage.setItem("last_processed_deep_link", result.dedupKey);
+        }
+        localStorage.setItem(
+          "last_processed_deep_link_time",
+          Date.now().toString(),
+        );
+        router.push(result.callbackPath);
       } catch (e) {
         console.error("[LoginForm] Failed to process deep link:", e);
       }

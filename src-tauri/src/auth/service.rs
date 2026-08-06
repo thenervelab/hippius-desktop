@@ -66,6 +66,60 @@ pub(crate) fn derive_keys(mnemonic: &str) -> Result<(subxt_signer::sr25519::Keyp
     Ok((sr25519_pair, substrate_address, eth_signer, eth_address))
 }
 
+/// Why a mnemonic-derived keypair failed to authenticate as a specific account.
+///
+/// Split into a typed enum (not a `String`) because the two cases demand
+/// different handling at the call sites: a `DeriveFailed` is a hard error
+/// everywhere, while `Mismatch` is the OAuth-account case — the sync
+/// mnemonic is a locally minted key that is NOT the account's login
+/// identity, so callers must refuse to authenticate but may treat it as a
+/// non-fatal "this account cannot self-refresh" condition
+/// (`ensure_billing_auth` skips; the token refresh errors so the engine's
+/// 401/auth-required path takes over).
+#[derive(Debug)]
+pub(crate) enum IdentityError {
+    /// The mnemonic itself failed key derivation (invalid phrase, etc.).
+    DeriveFailed(String),
+    /// The mnemonic derives a valid keypair, but for a different account.
+    /// Carries the derived SS58 so logs can show both identities.
+    Mismatch { derived: String },
+}
+
+impl std::fmt::Display for IdentityError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DeriveFailed(e) => write!(f, "key derivation failed: {e}"),
+            Self::Mismatch { derived } => write!(
+                f,
+                "mnemonic-derived identity {derived} does not match the account — refusing to re-authenticate as a different identity"
+            ),
+        }
+    }
+}
+
+/// Derive keys from `mnemonic` and verify they belong to `account_id`.
+///
+/// Every path that RE-authenticates an EXISTING account from a stored
+/// mnemonic must go through this guard instead of bare [`derive_keys`].
+/// For mnemonic-login accounts the two identities always coincide; for
+/// OAuth accounts the login SS58 is server-custodied while the sync
+/// mnemonic is minted locally by `ensure_sync_mnemonic` — challenge-
+/// response with it would authenticate as (and potentially CREATE) a
+/// different server account, then persist that phantom identity's
+/// session/token rows (audit `AUDIT_LOGIN_2026-08-06.md` H-3/H-4).
+/// Fresh logins (`login_with_mnemonic`) have no expected account yet and
+/// correctly use `derive_keys` directly.
+pub(crate) fn derive_verified_keys(
+    mnemonic: &str,
+    account_id: &str,
+) -> Result<(subxt_signer::sr25519::Keypair, String, PrivateKeySigner, String), IdentityError> {
+    let (sr25519_pair, substrate_address, eth_signer, eth_address) = derive_keys(mnemonic).map_err(IdentityError::DeriveFailed)?;
+    if substrate_address != account_id {
+        return Err(IdentityError::Mismatch { derived: substrate_address });
+    }
+    Ok((sr25519_pair, substrate_address, eth_signer, eth_address))
+}
+
 /// Execute the two-step challenge-response authentication against the Hippius API.
 ///
 /// 1. POST to `/api/auth/mnemonic/` with addresses to receive a challenge
@@ -180,7 +234,23 @@ pub(crate) async fn refresh_auth_token_internal(pool: &SqlitePool, app: &tauri::
     // ~50ms and fires roughly every 4 hours, so the perf cost is
     // negligible. If this becomes hot, cache `PrivateKeySigner` in
     // `AuthInfo` alongside `eth_address`.
-    let (_sr25519_pair, substrate_address, eth_signer, eth_address) = derive_keys(&mnemonic)?;
+    //
+    // VERIFIED derive: refuse to refresh when the mnemonic does not derive
+    // `account_id`. For OAuth accounts the sync mnemonic is a different
+    // identity than the login SS58 — the old unverified path challenge-
+    // responded as that derived identity (creating a phantom server
+    // account + phantom `auth_session` row) and never refreshed the real
+    // token (audit H-3). OAuth tokens cannot be refreshed client-side;
+    // on this refusal the engine's 401 path emits AUTH_RELOGIN_REQUIRED
+    // and the boot-time expiry check bounces to the login screen. NOTE:
+    // the FE does not yet listen for AUTH_RELOGIN_REQUIRED, so mid-
+    // session the user sees failing sync without a re-login prompt until
+    // the next launch — wiring that listener is a tracked follow-up
+    // (audit M-5 family).
+    let (_sr25519_pair, substrate_address, eth_signer, eth_address) = derive_verified_keys(&mnemonic, account_id).map_err(|e| {
+        warn!(account_id = %account_id, error = %e, "Refusing token refresh: mnemonic does not derive this account's identity");
+        format!("token refresh refused: {e}")
+    })?;
 
     let (token, user_id, username, _is_new, token_expiry) =
         challenge_response(&app_state.api_client, &eth_signer, &eth_address, &substrate_address, None).await?;
@@ -251,11 +321,62 @@ mod tests {
 
         let (_sr, substrate, _eth_signer, eth) = derive_keys(MNEMONIC).expect("valid mnemonic derives");
         assert_eq!(eth, EXPECTED_ETH, "Ethereum derivation drifted from the published Foundry vector");
-        assert_eq!(substrate, EXPECTED_SUBSTRATE, "sr25519 Substrate derivation changed — funds-critical, investigate");
+        assert_eq!(
+            substrate, EXPECTED_SUBSTRATE,
+            "sr25519 Substrate derivation changed — funds-critical, investigate"
+        );
     }
 
     #[test]
     fn derive_keys_rejects_invalid_mnemonic() {
         assert!(derive_keys("not a valid bip39 mnemonic at all").is_err());
+    }
+
+    // ─── Identity guard (audit H-3/H-4) ────────────────────────────
+    //
+    // `derive_verified_keys` is the chokepoint that stops a stored
+    // mnemonic from re-authenticating as a DIFFERENT account — the
+    // OAuth phantom-account bug: an OAuth account's sync mnemonic
+    // derives an identity that is not the login SS58, and the
+    // unguarded path minted server accounts / session rows for it.
+
+    use super::{IdentityError, derive_verified_keys};
+
+    const TEST_MNEMONIC: &str = "test test test test test test test test test test test junk";
+    /// The SS58 this mnemonic derives (pinned by `derive_keys_matches_frozen_vectors`).
+    const TEST_MNEMONIC_SS58: &str = "5GmS1wtCfR4tK5SSgnZbVT4kYw5W8NmxmijcsxCQE6oLW6A8";
+    /// A valid, unrelated SS58 — stands in for an OAuth login address.
+    const OTHER_ACCOUNT: &str = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
+
+    /// The mnemonic-login shape: mnemonic derives exactly the session
+    /// account → the guard passes keys through unchanged.
+    #[test]
+    fn derive_verified_keys_accepts_matching_account() {
+        let (_sr, substrate, _eth_signer, _eth) = derive_verified_keys(TEST_MNEMONIC, TEST_MNEMONIC_SS58).expect("matching identity must derive");
+        assert_eq!(substrate, TEST_MNEMONIC_SS58);
+    }
+
+    /// The OAuth shape: the sync mnemonic derives a different identity
+    /// than the login account. The guard must refuse with `Mismatch`
+    /// (carrying the derived address for the log line) BEFORE any
+    /// network call could authenticate as the wrong identity.
+    #[test]
+    fn derive_verified_keys_refuses_foreign_account() {
+        let err = derive_verified_keys(TEST_MNEMONIC, OTHER_ACCOUNT).expect_err("foreign identity must be refused");
+        let IdentityError::Mismatch { derived } = err else {
+            panic!("expected Mismatch, got {err:?}");
+        };
+        assert_eq!(derived, TEST_MNEMONIC_SS58, "Mismatch must carry the derived SS58");
+    }
+
+    /// A garbage mnemonic is a hard derive failure, not a mismatch —
+    /// callers treat the two differently (mismatch can be a non-fatal
+    /// skip in billing auth; a derive failure never is).
+    #[test]
+    fn derive_verified_keys_distinguishes_derive_failure() {
+        let err = derive_verified_keys("not a valid bip39 mnemonic at all", OTHER_ACCOUNT).expect_err("invalid phrase must fail");
+        let IdentityError::DeriveFailed(_) = err else {
+            panic!("expected DeriveFailed, got {err:?}");
+        };
     }
 }

@@ -12,11 +12,21 @@
 //! threaded through the callback URL as a query parameter so the
 //! Hippius API server and (for code-grant flows) the upstream OAuth
 //! provider pass it back untouched on redirect. [`complete_oauth_flow`]
-//! then requires the incoming callback to carry a `state` value that
-//! matches a non-expired entry in the store — anything without a
-//! matching state, including a deep link delivered by an attacker who
-//! can reach the `hippiusapp://` custom scheme, is rejected as
+//! matches an incoming callback that carries a `state` value against a
+//! non-expired entry in the store and rejects an unknown/expired one as
 //! untrusted.
+//!
+//! CAVEAT — the deployed reality is weaker than the strict binding:
+//! hippius-console does not yet forward `state` on desktop deep links
+//! (mobile only), so today every real callback arrives state-less and
+//! takes the TEMPORARY fallback in `complete_oauth_flow`: consume the
+//! NEWEST pending flow and drain the rest (see `consume_fallback_flow`).
+//! The protection that actually holds is therefore "a pending flow must
+//! exist" — a cold deep link with no login in progress is still
+//! rejected, but a forged state-less callback racing a real login is
+//! not distinguishable from the real one. Restoring the strict binding
+//! (and deleting the fallback) only needs console to forward `state`
+//! for desktop; see `AUDIT_LOGIN_2026-08-06.md` S-3.
 //!
 //! The server's `/accounts/<provider>/login/` endpoint also sets its
 //! own Django `state` cookie for the upstream Google/GitHub leg; ours
@@ -100,6 +110,30 @@ fn purge_expired(states: &mut HashMap<String, PkceState>) -> usize {
         debug!(purged, "Expired OAuth PKCE state entries");
     }
     states.len()
+}
+
+/// Consume the pending flow for a callback that arrived WITHOUT a `state`
+/// parameter (the console does not yet forward it for desktop): the newest
+/// entry wins and the whole map is drained.
+///
+/// Newest-wins because a state-less callback carries nothing to
+/// disambiguate on, and the newest entry is the flow whose browser tab the
+/// user most recently opened. The old rule — accept only when EXACTLY one
+/// flow was pending — rejected every callback for the full 5-minute TTL
+/// whenever the user double-started a login (the sign-in button re-enables
+/// on window refocus, so "click → switch to browser → come back → click
+/// again" was routine), the top intermittent OAuth failure (audit H-2).
+///
+/// Draining the remainder (not just the winner) preserves the fallback's
+/// replay value: with no `state` nothing can legitimately complete the
+/// older entries, and leaving them pending would let a later forged
+/// state-less deep link satisfy the pending-flow check without the user
+/// having started a new login. Returns `None` when nothing is pending.
+fn consume_fallback_flow(states: &mut HashMap<String, PkceState>) -> Option<PkceState> {
+    let newest_key = states.iter().max_by_key(|(_, s)| s.created_at).map(|(k, _)| k.clone())?;
+    let entry = states.remove(&newest_key);
+    states.clear();
+    entry
 }
 
 const API_BASE_URL: &str = "https://api.hippius.com";
@@ -240,6 +274,31 @@ pub struct ParsedDeepLink {
     pub is_callback: bool,
     /// The callback path with query string (e.g. "/auth/callback?token=...&code=...")
     pub callback_path: Option<String>,
+    /// Opaque dedup key (hex SHA-256 of the raw URL), `Some` only for
+    /// callbacks. The FE persists THIS — never the raw URL — to remember
+    /// which callback it already routed: direct-grant callbacks carry the
+    /// bearer token in the query string, and persisting the raw URL kept
+    /// that token in localStorage indefinitely (RFC 6750 §2.3, audit S-1).
+    pub dedup_key: Option<String>,
+}
+
+/// Hex SHA-256 of the raw deep-link URL — see [`ParsedDeepLink::dedup_key`].
+fn deep_link_dedup_key(url: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(url.as_bytes());
+    hex::encode(hasher.finalize())
+}
+
+/// The loggable part of a deep link: everything before the query/fragment.
+///
+/// Direct-grant OAuth callbacks carry the bearer token in the query
+/// string; logging the full URL wrote that token to the on-disk log
+/// (RFC 6750 §2.3, audit S-1) — support-bundle scrubbing redacts at
+/// upload time, but the raw log file lingered. Callers that log an
+/// inbound deep link must log only this part.
+pub fn deep_link_public_part(url: &str) -> &str {
+    url.split(['?', '#']).next().unwrap_or(url)
 }
 
 /// Parse an inbound `hippiusapp://` deep-link URL into a structured
@@ -286,6 +345,7 @@ pub fn parse_oauth_deep_link(url: String) -> Result<ParsedDeepLink, AppError> {
         return Ok(ParsedDeepLink {
             is_callback: false,
             callback_path: None,
+            dedup_key: None,
         });
     }
 
@@ -342,6 +402,9 @@ pub fn parse_oauth_deep_link(url: String) -> Result<ParsedDeepLink, AppError> {
     Ok(ParsedDeepLink {
         is_callback: true,
         callback_path: Some(format!("/auth/callback?{callback_params}")),
+        // Keyed on the URL as delivered (pre-fixup) — that's the exact
+        // string the OS would redeliver, so it's what dedup must match.
+        dedup_key: Some(deep_link_dedup_key(&url)),
     })
 }
 
@@ -370,44 +433,38 @@ pub async fn complete_oauth_flow(
     // `hippiusapp://` custom scheme is OS-wide, so any program or
     // compromised browser tab could deliver one.
     // TEMPORARY — console bridge (`hippius-console`) currently drops the
-    // `state` param when building the desktop deep link, so an OAuth
-    // callback arrives without one. Until that's fixed upstream, we
-    // fall back to a single-pending-flow heuristic: if exactly one
-    // non-expired entry is in `pkce_states`, consume it. This keeps
-    // most of the replay protection (an attacker still has to race a
-    // real login in progress) but tolerates the missing param. Remove
-    // this branch once console forwards `state` correctly.
+    // `state` param when building the desktop deep link (its callback
+    // page forwards it for mobile only), so an OAuth callback arrives
+    // without one. Until that's fixed upstream, a state-less callback
+    // consumes the NEWEST pending flow and drains the rest (see
+    // `consume_fallback_flow` for why newest-wins and why draining
+    // preserves the replay protection). An attacker still has to race a
+    // real login in progress. Remove this branch once console forwards
+    // `state` for desktop.
     let matched_provider = {
         let mut states = state.oauth.pkce_states.lock()?;
         purge_expired(&mut states);
-        match params.state.as_deref() {
-            Some(received_state) => {
-                let Some(entry) = states.remove(received_state) else {
-                    warn!("Rejected OAuth callback: state did not match any pending flow");
-                    return Err(AppError::Auth(
-                        "Unknown or expired OAuth state. Start a new login from the sign-in screen.".into(),
-                    ));
-                };
-                entry.provider
-            }
-            None if states.len() == 1 => {
-                warn!(
-                    "OAuth callback missing state parameter; falling back to the single pending PKCE entry. \
-                     This is a temporary workaround — fix console to propagate `state`."
-                );
-                let only_key = states.keys().next().cloned().expect("len==1 checked above");
-                let entry = states.remove(&only_key).expect("key just read from map");
-                entry.provider
-            }
-            None => {
-                warn!(
-                    pending_flows = states.len(),
-                    "Rejected OAuth callback: no state parameter and fallback only works with exactly one pending flow"
-                );
+        if let Some(received_state) = params.state.as_deref() {
+            let Some(entry) = states.remove(received_state) else {
+                warn!("Rejected OAuth callback: state did not match any pending flow");
+                return Err(AppError::Auth(
+                    "Unknown or expired OAuth state. Start a new login from the sign-in screen.".into(),
+                ));
+            };
+            entry.provider
+        } else {
+            let Some(entry) = consume_fallback_flow(&mut states) else {
+                warn!("Rejected OAuth callback: no state parameter and no pending flow to bind it to");
                 return Err(AppError::Auth(
                     "Missing state parameter. Start a new login from the sign-in screen.".into(),
                 ));
-            }
+            };
+            warn!(
+                "OAuth callback missing state parameter; consuming the newest pending flow. \
+                 This is a temporary workaround — fix console to propagate `state` for desktop \
+                 (its callback page already does so for mobile)."
+            );
+            entry.provider
         }
     };
 
@@ -523,20 +580,30 @@ pub async fn complete_oauth_flow(
         // completed the signup wizard. The decision is based on the
         // `RecoveryCheck` we get from probing the server for a sealed
         // blob and checking local mnemonic presence.
-        let recovery_check = crate::recovery::check_recovery_state_inner(&state).await?;
-        let gate_target = match recovery_check.recommended_flow {
-            // Local mnemonic exists — sync can proceed without the dialog.
-            crate::recovery::RecoveryFlow::Proceed => crate::recovery::RecoveryGateState::Skipped,
-            // Dialog required: signup, unlock, or retry after Unknown.
-            _ => crate::recovery::RecoveryGateState::Pending,
-        };
-        state.set_recovery_state(gate_target);
+        //
+        // Bounded + best-effort (audit H-1): this probe hits hcfs-server
+        // AFTER the session was persisted above, and the old unbounded
+        // fatal `?` failed — or hung — the entire login at its last step
+        // even though authentication had already succeeded (the user saw
+        // "Authentication failed", then found themselves logged in on
+        // the next launch). Timeout and error both collapse to `None`,
+        // which parks the gate `Pending` — never `Skipped` — because an
+        // unknown recovery state must not let `ensure_sync_mnemonic`
+        // mint a fresh mnemonic that collides with a server blob. The
+        // FE callback page runs its own `checkRecoveryState`, and
+        // `restore_session` re-probes on the next launch.
+        let recovery_check = crate::auth::session_restore::probe_recovery_state_bounded(crate::recovery::check_recovery_state_inner(&state)).await;
+        state.set_recovery_state(crate::auth::session_restore::recovery_gate_target(recovery_check.as_ref()));
 
         // Tell the FE which dialog to show, if any. Emit before
         // `auth_ready` so the recovery dialog is mounted before sync
         // init fires — though the gate also prevents the race.
-        if let Err(e) = app.emit("oauth_recovery_check_needed", &recovery_check) {
-            warn!(error = %e, "Failed to emit oauth_recovery_check_needed");
+        if let Some(ref recovery_check) = recovery_check {
+            if let Err(e) = app.emit("oauth_recovery_check_needed", recovery_check) {
+                warn!(error = %e, "Failed to emit oauth_recovery_check_needed");
+            }
+        } else {
+            warn!("complete_oauth_flow: recovery probe unavailable; gate parked Pending (dialog re-fires on next launch)");
         }
 
         // Signal the FE that auth is ready so `tryAutoInitSync` can
@@ -570,8 +637,12 @@ mod tests {
     use super::*;
 
     fn make_state(age: Duration) -> PkceState {
+        make_state_with("google", age)
+    }
+
+    fn make_state_with(provider: &str, age: Duration) -> PkceState {
         PkceState {
-            provider: "google".to_string(),
+            provider: provider.to_string(),
             // `checked_sub` guards against Instant wraparound on exotic
             // clocks; in practice `age` is always small and this can't
             // fail, but clippy prefers the explicit form.
@@ -667,6 +738,99 @@ mod tests {
         // matches a once-valid entry.
         purge_expired(&mut states);
         assert!(states.remove("csrf-token-old").is_none(), "expired state must be purged before lookup");
+    }
+
+    // ─── State-less fallback selection (audit H-2) ─────────────────
+    //
+    // The console does not yet forward `state` for desktop, so every
+    // real callback takes the fallback path. These pin the tolerant
+    // newest-wins rule that replaced the "exactly one pending" rule —
+    // the old rule rejected every callback for the 5-minute TTL after
+    // a routine double-started login.
+
+    /// The regression case: TWO pending flows (double-started login)
+    /// must resolve to the newest one, not reject the callback.
+    #[test]
+    fn fallback_consumes_newest_of_multiple_flows_and_drains_map() {
+        let mut states = HashMap::new();
+        states.insert("flow-old".to_string(), make_state_with("google", Duration::from_mins(1)));
+        states.insert("flow-new".to_string(), make_state_with("github", Duration::from_secs(1)));
+
+        let entry = consume_fallback_flow(&mut states).expect("a pending flow must be consumed");
+        assert_eq!(entry.provider, "github", "the newest flow must win");
+        assert!(
+            states.is_empty(),
+            "remaining state-less flows must be drained — nothing can legitimately complete them, \
+             and leaving them pending would let a later forged deep link satisfy the check"
+        );
+    }
+
+    /// The single-flow case behaves exactly like the old rule.
+    #[test]
+    fn fallback_consumes_single_flow() {
+        let mut states = HashMap::new();
+        states.insert("only".to_string(), make_state(Duration::from_secs(1)));
+        let entry = consume_fallback_flow(&mut states).expect("single pending flow must be consumed");
+        assert_eq!(entry.provider, "google");
+        assert!(states.is_empty());
+    }
+
+    /// No pending flow at all → the callback stays rejected (the cold
+    /// deep-link CSRF protection is unchanged).
+    #[test]
+    fn fallback_rejects_when_nothing_pending() {
+        let mut states: HashMap<String, PkceState> = HashMap::new();
+        assert!(consume_fallback_flow(&mut states).is_none());
+    }
+
+    // ─── Deep-link hygiene (audit S-1) ─────────────────────────────
+
+    /// The loggable part must never include the query or fragment —
+    /// that's where a direct-grant callback carries the bearer token.
+    #[test]
+    fn deep_link_public_part_strips_query_and_fragment() {
+        assert_eq!(
+            deep_link_public_part("hippiusapp://auth/callback?token=SECRET&state=x"),
+            "hippiusapp://auth/callback"
+        );
+        assert_eq!(
+            deep_link_public_part("hippiusapp://auth/callback#token=SECRET"),
+            "hippiusapp://auth/callback"
+        );
+        assert_eq!(deep_link_public_part("hippiusapp://auth/callback"), "hippiusapp://auth/callback");
+    }
+
+    /// Callbacks get a stable, token-free dedup key; the same URL keys
+    /// identically (so an OS redelivery is recognized) and different
+    /// URLs key differently (so a retry with a fresh code is not
+    /// swallowed as a duplicate).
+    #[test]
+    fn parse_deep_link_returns_stable_token_free_dedup_key() {
+        // Triple-slash form: the exact shape hippius-console emits
+        // (`hippiusapp:///auth/callback?...`), which parses with an empty
+        // host and path `/auth/callback`.
+        let url = "hippiusapp:///auth/callback?token=SECRET&state=x".to_string();
+        let a = parse_oauth_deep_link(url.clone()).expect("parses");
+        let b = parse_oauth_deep_link(url).expect("parses");
+        assert!(a.is_callback);
+
+        let key_a = a.dedup_key.expect("callback must carry a dedup key");
+        let key_b = b.dedup_key.expect("callback must carry a dedup key");
+        assert_eq!(key_a, key_b, "same URL must dedup to the same key");
+        assert_eq!(key_a.len(), 64, "hex SHA-256");
+        assert!(!key_a.contains("SECRET"), "dedup key must not embed the token");
+
+        let other = parse_oauth_deep_link("hippiusapp:///auth/callback?token=OTHER&state=y".to_string()).expect("parses");
+        assert_ne!(Some(key_a), other.dedup_key, "a different callback must not be treated as a duplicate");
+    }
+
+    /// Non-callback deep links carry no dedup key — there is nothing to
+    /// dedup and the FE must not store anything for them.
+    #[test]
+    fn parse_deep_link_non_callback_has_no_dedup_key() {
+        let parsed = parse_oauth_deep_link("hippiusapp://some/other/route".to_string()).expect("parses");
+        assert!(!parsed.is_callback);
+        assert!(parsed.dedup_key.is_none());
     }
 
     #[test]

@@ -44,15 +44,6 @@ struct VerifyResponse {
     username: String,
 }
 
-/// Derives billing keys from a mnemonic.
-///
-/// Delegates to [`crate::auth::service::derive_keys`] and discards the
-/// sr25519 keypair (not needed for billing authentication).
-fn derive_keys(mnemonic: &str) -> Result<(String, PrivateKeySigner, String), crate::error::AppError> {
-    let (_pair, substrate_address, eth_signer, eth_address) = crate::auth::service::derive_keys(mnemonic).map_err(crate::error::AppError::Crypto)?;
-    Ok((substrate_address, eth_signer, eth_address))
-}
-
 /// Perform Ethereum challenge-response auth against the billing API.
 ///
 /// 1. Retrieves the mnemonic from the encrypted Drive (or uses the one provided)
@@ -183,9 +174,33 @@ pub async fn ensure_billing_auth(state: tauri::State<'_, crate::app_state::AppSt
     let mnemonic_z = get_mnemonic_for_account(&state, &account_id).await?;
     let mut mnemonic = (*mnemonic_z).clone();
     drop(mnemonic_z);
-    let derive_result = derive_keys(&mnemonic);
+    // VERIFIED derive: the sync mnemonic must derive exactly `account_id`.
+    // For OAuth accounts it derives a DIFFERENT identity (the login SS58 is
+    // server-custodied), and the old unverified path minted a token AS that
+    // identity but persisted it UNDER the OAuth account — silently swapping
+    // the account's credentials to a different server identity (audit H-4).
+    // A mismatch is a non-fatal skip, mirroring the "unconfigured" skips
+    // above: OAuth accounts already receive their API token at login, so
+    // reaching this point just means that token is gone and only a fresh
+    // sign-in can replace it (the boot-time expiry check bounces to the
+    // login screen; a mid-session re-login prompt is a tracked follow-up
+    // — see the AUTH_RELOGIN_REQUIRED note in service.rs).
+    let derive_result = crate::auth::service::derive_verified_keys(&mnemonic, &account_id);
     mnemonic.zeroize();
-    let (substrate_address, eth_signer, eth_address) = derive_result?;
+    let (_sr25519_pair, substrate_address, eth_signer, eth_address) = match derive_result {
+        Ok(keys) => keys,
+        Err(crate::auth::service::IdentityError::Mismatch { derived }) => {
+            warn!(
+                account_id = %account_id,
+                derived = %derived,
+                "Skipping billing auth: sync mnemonic derives a different identity (OAuth account) — a fresh sign-in is the only way to mint this account's token"
+            );
+            return Ok(());
+        }
+        Err(e @ crate::auth::service::IdentityError::DeriveFailed(_)) => {
+            return Err(crate::error::AppError::Crypto(e.to_string()));
+        }
+    };
 
     let client = state.api_client.clone();
     let base = base_url();
