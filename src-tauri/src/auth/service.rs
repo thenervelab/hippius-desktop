@@ -241,12 +241,9 @@ pub(crate) async fn refresh_auth_token_internal(pool: &SqlitePool, app: &tauri::
     // responded as that derived identity (creating a phantom server
     // account + phantom `auth_session` row) and never refreshed the real
     // token (audit H-3). OAuth tokens cannot be refreshed client-side;
-    // on this refusal the engine's 401 path emits AUTH_RELOGIN_REQUIRED
-    // and the boot-time expiry check bounces to the login screen. NOTE:
-    // the FE does not yet listen for AUTH_RELOGIN_REQUIRED, so mid-
-    // session the user sees failing sync without a re-login prompt until
-    // the next launch — wiring that listener is a tracked follow-up
-    // (audit M-5 family).
+    // on this refusal the engine's 401 path emits AUTH_RELOGIN_REQUIRED —
+    // surfaced by `useSyncEvents` as a persistent session-expired toast —
+    // and the boot-time expiry check bounces to the login screen.
     let (_sr25519_pair, substrate_address, eth_signer, eth_address) = derive_verified_keys(&mnemonic, account_id).map_err(|e| {
         warn!(account_id = %account_id, error = %e, "Refusing token refresh: mnemonic does not derive this account's identity");
         format!("token refresh refused: {e}")

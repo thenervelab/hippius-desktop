@@ -81,3 +81,25 @@ fn oauth_completion_probe_is_bounded_and_best_effort() {
         "complete_oauth_flow must not await the recovery probe fatally/unbounded (audit H-1)"
     );
 }
+
+#[test]
+fn db_fallback_restore_checks_expiry_before_keychain_soft_path() {
+    // Audit M-1 review finding (PR #103): the DB-fallback branch of
+    // `restore_session` must apply the same precedence as
+    // `classify_restore_token` — expiry metadata wins over keychain
+    // state. If the keychain-unavailable soft return runs first, an
+    // expired session hit by a keychain hiccup is never cleared and
+    // survives indefinitely.
+    let src = source("src/auth/session_restore.rs");
+    let body = slice_between(&src, "// ── Fall back to Rust DB session", "// Valid session — build OAuth session");
+    let expiry_at = body
+        .find("row.token_expiry")
+        .expect("DB-fallback branch must check row.token_expiry — update this pin if restructured");
+    let soft_at = body
+        .find("row.token_keychain_unavailable")
+        .expect("DB-fallback branch must handle row.token_keychain_unavailable — update this pin if restructured");
+    assert!(
+        expiry_at < soft_at,
+        "expiry check must run BEFORE the keychain-unavailable soft path (expiry wins — audit M-1)"
+    );
+}

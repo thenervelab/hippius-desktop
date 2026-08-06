@@ -183,8 +183,8 @@ pub async fn ensure_billing_auth(state: tauri::State<'_, crate::app_state::AppSt
     // above: OAuth accounts already receive their API token at login, so
     // reaching this point just means that token is gone and only a fresh
     // sign-in can replace it (the boot-time expiry check bounces to the
-    // login screen; a mid-session re-login prompt is a tracked follow-up
-    // — see the AUTH_RELOGIN_REQUIRED note in service.rs).
+    // login screen; mid-session the engine's AUTH_RELOGIN_REQUIRED is
+    // surfaced as a session-expired toast — see service.rs).
     let derive_result = crate::auth::service::derive_verified_keys(&mnemonic, &account_id);
     mnemonic.zeroize();
     let (_sr25519_pair, substrate_address, eth_signer, eth_address) = match derive_result {

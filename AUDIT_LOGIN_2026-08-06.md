@@ -7,10 +7,15 @@
 > best-effort via the shared `probe_recovery_state_bounded` (pinned); state-less fallback
 > is newest-wins + drain (`consume_fallback_flow`, unit-tested); deep-link logging via
 > `deep_link_public_part` and FE dedup via the Rust `dedupKey`
-> (`app/lib/auth/deepLinkDedup.ts` + tests). Console-repo confirmation during the fix:
+> (`app/lib/auth/deepLinkDedup.ts` + tests). **M-1 is also FIXED** (follow-up slice):
+> tri-state token resolution in `auth_session_repo` + `classify_restore_token` in
+> `session_restore.rs` — keychain-unreadable with an unexpired session now fails soft
+> (no localStorage clear, no `/login` logout bounce); and the `hcfs_auth_relogin_required`
+> event now has a frontend listener (deduped persistent toast in `useSyncEvents`), closing
+> the silent-degradation gap the PR #102 review surfaced. Console-repo confirmation during the fix:
 > its callback page sends only `code`/`username`/`id` (never `token`) and forwards
 > `state` for mobile only — the desktop `state` forwarding (S-3) is a one-condition
-> change in `hippius-console/src/app/auth/callback/page.tsx`. Still open: M-1…M-7,
+> change in `hippius-console/src/app/auth/callback/page.tsx`. Still open: M-2…M-7,
 > S-2…S-6 (S-4 deliberately deferred — interacts with the H-2 tamper binding).
 
 Top-to-bottom review of the authentication stack, prompted by two reported symptoms:

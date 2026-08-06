@@ -14,6 +14,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useEffect } from "react";
 import { useSetAtom, useAtomValue } from "jotai";
 import { invoke } from "@tauri-apps/api/core";
+import { toast } from "sonner";
 import { errorMessage } from "../utils/errorUtils";
 import {
   syncEngineHealthAtom,
@@ -164,6 +165,20 @@ export function useSyncEvents() {
         // refresh — a folder-only delete never completes a sync cycle.
         ["hcfs_folder_entities_changed", () => {
           scheduleCompletedDispatch(0);
+        }],
+        // The engine could not re-authenticate this account — e.g. an
+        // OAuth session past its 30-day token, which has no client-side
+        // refresh path (the refresh guard in auth/service.rs refuses to
+        // re-auth as the sync-mnemonic identity). Without this listener
+        // the refusal was silent: sync degraded with no UI signal until
+        // the next launch's expiry logout (PR #102 review follow-up).
+        // The sonner `id` dedups the repeated per-cycle emits into one
+        // persistent toast.
+        ["hcfs_auth_relogin_required", () => {
+          toast.error("Your session has expired. Please sign out and sign back in.", {
+            id: "auth-relogin-required",
+            duration: Infinity,
+          });
         }],
         // Connectivity health updates
         ["hcfs_connectivity_changed", (e) => {

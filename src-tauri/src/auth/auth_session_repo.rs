@@ -40,6 +40,10 @@ pub struct UpsertSession<'a> {
 #[derive(Debug, Clone)]
 pub struct AuthSessionRow {
     pub auth_token: Option<String>,
+    /// True when `auth_token` is `None` because the OS keychain could
+    /// not be read (not because no token is stored). Restore paths must
+    /// fail SOFT on this — the token likely still exists (audit M-1).
+    pub token_keychain_unavailable: bool,
     pub token_expiry: Option<i64>,
     pub user_id: Option<i64>,
     pub username: Option<String>,
@@ -112,24 +116,48 @@ pub async fn upsert(pool: &SqlitePool, params: UpsertSession<'_>) -> Result<()> 
     Ok(())
 }
 
+/// How the bearer token for a row resolved (see [`resolve_token`]).
+///
+/// `KeychainUnavailable` is the load-bearing distinction: after the
+/// keychain migration the DB column is NULL, so a plain `Option` made
+/// "keychain temporarily unreadable" (locked keychain, D-Bus hiccup)
+/// indistinguishable from "no token stored" — and `restore_session`
+/// treated the former as a dead session, destructively clearing the
+/// FE's localStorage over a transient OS condition (audit M-1).
+enum TokenResolution {
+    Found(String),
+    /// The stores are readable and genuinely hold no token.
+    Absent,
+    /// The OS keychain — the only store that can hold the token after
+    /// migration — could not be read, AND the DB column has no
+    /// plaintext fallback. The token may still exist.
+    KeychainUnavailable,
+}
+
 /// Resolve the bearer token for an account: keychain first, then a
 /// plaintext `auth_token` value coming back from the row. On a keychain
 /// miss with a plaintext hit, opportunistically migrate the plaintext
-/// into the keychain and scrub the column. Returns the token or `None`
-/// if neither store has one.
-async fn resolve_token(pool: &SqlitePool, substrate_address: &str, row_token: Option<String>) -> Option<String> {
+/// into the keychain and scrub the column.
+async fn resolve_token(pool: &SqlitePool, substrate_address: &str, row_token: Option<String>) -> TokenResolution {
     // Keychain is authoritative.
-    match token_keychain::load_token(substrate_address) {
-        TokenKeychainResult::Found(t) if !t.is_empty() => return Some(t),
-        TokenKeychainResult::Found(_) | TokenKeychainResult::NotFound => {}
+    let keychain_unavailable = match token_keychain::load_token(substrate_address) {
+        TokenKeychainResult::Found(t) if !t.is_empty() => return TokenResolution::Found(t),
+        TokenKeychainResult::Found(_) | TokenKeychainResult::NotFound => false,
         TokenKeychainResult::Unavailable(reason) => {
             debug!(reason = %reason, "OS keychain unavailable on auth_session read; using DB column");
+            true
         }
-    }
+    };
 
     // Fall back to the DB column for pre-upgrade rows or
     // keychain-unavailable platforms.
-    let plaintext = row_token.filter(|s| !s.is_empty())?;
+    let Some(plaintext) = row_token.filter(|s| !s.is_empty()) else {
+        return if keychain_unavailable {
+            TokenResolution::KeychainUnavailable
+        } else {
+            TokenResolution::Absent
+        };
+    };
 
     // Opportunistic upgrade: if the keychain is now available, move
     // the token over and null the column. Failures here are non-fatal
@@ -146,7 +174,7 @@ async fn resolve_token(pool: &SqlitePool, substrate_address: &str, row_token: Op
             debug!("Migrated auth_session token from plaintext column to OS keychain");
         }
     }
-    Some(plaintext)
+    TokenResolution::Found(plaintext)
 }
 
 /// Null out the credential fields for an account, preserving the row
@@ -241,10 +269,11 @@ pub async fn get_by_account(pool: &SqlitePool, account_id: &str) -> Result<Optio
     // row's column is NULL (happens for cleared rows that still hold
     // a `logout_time_minutes` preference).
     let lookup_addr = substrate_address.as_deref().unwrap_or(account_id);
-    let auth_token = resolve_token(pool, lookup_addr, db_token).await;
+    let (auth_token, token_keychain_unavailable) = split_resolution(resolve_token(pool, lookup_addr, db_token).await);
 
     Ok(Some(AuthSessionRow {
         auth_token,
+        token_keychain_unavailable,
         token_expiry,
         user_id,
         username,
@@ -253,6 +282,16 @@ pub async fn get_by_account(pool: &SqlitePool, account_id: &str) -> Result<Optio
         logout_time_minutes,
         last_login_at,
     }))
+}
+
+/// Flatten a [`TokenResolution`] into the `(token, keychain_unavailable)`
+/// pair the row/status structs carry.
+fn split_resolution(resolution: TokenResolution) -> (Option<String>, bool) {
+    match resolution {
+        TokenResolution::Found(t) => (Some(t), false),
+        TokenResolution::Absent => (None, false),
+        TokenResolution::KeychainUnavailable => (None, true),
+    }
 }
 
 /// Fetch the most recently updated session row across all accounts.
@@ -291,13 +330,14 @@ pub async fn get_latest(pool: &SqlitePool) -> Result<Option<AuthSessionRow>> {
     // If `substrate_address` itself is NULL (a cleared-but-preserved
     // row), we skip the keychain lookup — no token is the correct
     // answer for a cleared row.
-    let auth_token = match substrate_address.as_deref() {
-        Some(addr) => resolve_token(pool, addr, db_token).await,
-        None => db_token,
+    let (auth_token, token_keychain_unavailable) = match substrate_address.as_deref() {
+        Some(addr) => split_resolution(resolve_token(pool, addr, db_token).await),
+        None => (db_token, false),
     };
 
     Ok(Some(AuthSessionRow {
         auth_token,
+        token_keychain_unavailable,
         token_expiry,
         user_id,
         username,
@@ -316,6 +356,9 @@ pub async fn get_latest(pool: &SqlitePool) -> Result<Option<AuthSessionRow>> {
 pub struct TokenStatus {
     pub token: Option<String>,
     pub expiry_ms: Option<i64>,
+    /// True when `token` is `None` because the OS keychain could not be
+    /// read — the token likely still exists. See [`AuthSessionRow::token_keychain_unavailable`].
+    pub keychain_unavailable: bool,
 }
 
 /// Read just the token + expiry for fast validity checks.
@@ -332,8 +375,12 @@ pub async fn get_token_and_expiry(pool: &SqlitePool, account_id: &str) -> Result
     let Some((db_token, expiry_ms)) = row else {
         return Ok(None);
     };
-    let token = resolve_token(pool, account_id, db_token).await;
-    Ok(Some(TokenStatus { token, expiry_ms }))
+    let (token, keychain_unavailable) = split_resolution(resolve_token(pool, account_id, db_token).await);
+    Ok(Some(TokenStatus {
+        token,
+        expiry_ms,
+        keychain_unavailable,
+    }))
 }
 
 #[cfg(test)]
@@ -570,6 +617,73 @@ mod tests {
         assert_eq!(row.logout_time_minutes, Some(-1));
         assert_eq!(row.auth_token.as_deref(), Some("token"), "credentials must not be touched");
         assert_eq!(row.username.as_deref(), Some("bob"));
+    }
+
+    /// M-1: a row whose token lives ONLY in the keychain (DB column NULL
+    /// — the post-migration shape) must report `keychain_unavailable`
+    /// when the keychain cannot be read, so restore can fail soft
+    /// instead of treating the session as dead. The disabled-keychain
+    /// test env (`HIPPIUS_DISABLE_TOKEN_KEYCHAIN=1`) surfaces exactly
+    /// the `Unavailable` result this simulates.
+    #[tokio::test]
+    async fn null_column_with_unreadable_keychain_reports_unavailable() {
+        let pool = setup_db().await;
+        upsert(
+            &pool,
+            UpsertSession {
+                substrate_address: ALICE,
+                token: "kc-token",
+                token_expiry_ms: chrono::Utc::now().timestamp_millis() + 86_400_000,
+                user_id: Some(1),
+                username: "alice",
+                provider: "oauth",
+                logout_time_minutes: Some(1440),
+            },
+        )
+        .await
+        .unwrap();
+        // Simulate the post-migration shape: token scrubbed from the DB
+        // (it lives in the keychain, which this test env can't read).
+        sqlx::query("UPDATE auth_session SET auth_token = NULL WHERE owner = ?")
+            .bind(account_key(ALICE))
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let status = get_token_and_expiry(&pool, ALICE).await.unwrap().unwrap();
+        assert!(status.token.is_none());
+        assert!(
+            status.keychain_unavailable,
+            "NULL column + unreadable keychain must be flagged, not read as logged-out"
+        );
+
+        let row = get_by_account(&pool, ALICE).await.unwrap().unwrap();
+        assert!(row.auth_token.is_none());
+        assert!(row.token_keychain_unavailable);
+    }
+
+    /// The flag stays false when a token actually resolves (plaintext
+    /// fallback), so the soft path can never mask a working session.
+    #[tokio::test]
+    async fn resolved_plaintext_token_is_not_flagged_unavailable() {
+        let pool = setup_db().await;
+        upsert(
+            &pool,
+            UpsertSession {
+                substrate_address: ALICE,
+                token: "plain-token",
+                token_expiry_ms: 1,
+                user_id: Some(1),
+                username: "alice",
+                provider: "mnemonic",
+                logout_time_minutes: Some(1440),
+            },
+        )
+        .await
+        .unwrap();
+        let status = get_token_and_expiry(&pool, ALICE).await.unwrap().unwrap();
+        assert_eq!(status.token.as_deref(), Some("plain-token"));
+        assert!(!status.keychain_unavailable);
     }
 
     #[tokio::test]

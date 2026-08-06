@@ -206,6 +206,46 @@ fn rehydrate_or_restored(state: &crate::app_state::AppState, addr: &str, auth_ty
     RehydrateOutcome::NeedsActiveAccount(fallback)
 }
 
+/// Outcome of validating a restored session's DB token (pure — see tests).
+#[derive(Debug, PartialEq, Eq)]
+enum RestoreTokenOutcome {
+    /// Token resolved and unexpired — restore proceeds on this token.
+    Valid(String),
+    /// The expiry metadata says the session should still be alive, but
+    /// the OS keychain — the only store holding the token after the
+    /// keychain migration — is temporarily unreadable (locked keychain,
+    /// D-Bus hiccup). Restore must fail SOFT: report unauthenticated
+    /// but neither clear the FE's localStorage session nor bounce to
+    /// `/login` (that path runs a full logout), so the next launch —
+    /// keychain back — restores normally. Treating this as
+    /// missing/expired destroyed valid sessions over a transient OS
+    /// condition (audit M-1).
+    KeychainUnavailable,
+    /// No session, no token, or expired — the hard-invalid path
+    /// (clear the FE session and bounce to login).
+    MissingOrExpired,
+}
+
+/// Classify the token row for a session restore. Expiry wins over the
+/// keychain state: a session whose own metadata says it is expired is
+/// dead regardless of whether the keychain could be read, so it takes
+/// the hard path and gets cleaned up.
+fn classify_restore_token(row: Option<TokenStatus>, now_ms: i64) -> RestoreTokenOutcome {
+    match row {
+        Some(TokenStatus {
+            token: Some(t),
+            expiry_ms: Some(exp),
+            ..
+        }) if exp == 0 || exp > now_ms => RestoreTokenOutcome::Valid(t),
+        Some(TokenStatus {
+            token: None,
+            expiry_ms: Some(exp),
+            keychain_unavailable: true,
+        }) if exp == 0 || exp > now_ms => RestoreTokenOutcome::KeychainUnavailable,
+        Some(_) | None => RestoreTokenOutcome::MissingOrExpired,
+    }
+}
+
 /// Result of session restoration, returned to the frontend for state setup.
 ///
 /// The frontend reads localStorage (Rust can't), passes the OAuth data
@@ -315,12 +355,16 @@ pub async fn restore_session(
                     // DB-fallback check and `is_token_valid`).
                     if let Some(ref addr) = substrate_address {
                         let token_row = auth_session_repo::get_token_and_expiry(pool, addr).await?;
-                        let db_token = match token_row {
-                            Some(TokenStatus {
-                                token: Some(t),
-                                expiry_ms: Some(exp),
-                            }) if exp == 0 || exp > now_ms => t,
-                            _ => {
+                        let db_token = match classify_restore_token(token_row, now_ms) {
+                            RestoreTokenOutcome::Valid(t) => t,
+                            RestoreTokenOutcome::KeychainUnavailable => {
+                                warn!(
+                                    "OAuth restore: OS keychain unavailable while the session is unexpired — \
+                                     failing soft (localStorage untouched, retried next launch)"
+                                );
+                                return Ok(SessionRestoreResult::unauthenticated(false, None));
+                            }
+                            RestoreTokenOutcome::MissingOrExpired => {
                                 info!("OAuth token missing/expired in DB, clearing session");
                                 return Ok(SessionRestoreResult::unauthenticated(true, Some("/login".into())));
                             }
@@ -509,11 +553,12 @@ pub async fn restore_session(
         return Ok(SessionRestoreResult::unauthenticated(should_clear, None));
     };
 
-    let Some(auth_token) = row.auth_token else {
-        return Ok(SessionRestoreResult::unauthenticated(should_clear, None));
-    };
-
-    // Check token expiry
+    // Check token expiry FIRST — expiry metadata wins over keychain
+    // state (the same precedence `classify_restore_token` enforces for
+    // the OAuth branch): an expired session is cleaned up even when the
+    // keychain is unreadable, so a permanently broken keychain can never
+    // keep a dead session's row alive across launches. Order pinned by
+    // `tests/auth_wiring_pins.rs`.
     if let Some(expiry) = row.token_expiry
         && expiry > 0
         && expiry < now_ms
@@ -524,6 +569,19 @@ pub async fn restore_session(
         }
         return Ok(SessionRestoreResult::unauthenticated(should_clear, Some("/login".into())));
     }
+
+    let Some(auth_token) = row.auth_token else {
+        // Keychain temporarily unreadable ≠ logged out: the session is
+        // unexpired (checked above) and the token likely still exists,
+        // so fail soft — leave the FE's localStorage alone and let the
+        // next launch retry (audit M-1). A genuinely absent token keeps
+        // the previous behavior.
+        if row.token_keychain_unavailable {
+            warn!("DB-session restore: OS keychain unavailable — failing soft (localStorage untouched, retried next launch)");
+            return Ok(SessionRestoreResult::unauthenticated(false, None));
+        }
+        return Ok(SessionRestoreResult::unauthenticated(should_clear, None));
+    };
 
     // Valid session — build OAuth session object for frontend display
     let oauth_session = serde_json::json!({
@@ -622,7 +680,7 @@ pub async fn is_token_valid(state: tauri::State<'_, crate::app_state::AppState>,
     let row = auth_session_repo::get_token_and_expiry(state.pool()?, &account_id).await?;
     Ok(matches!(
         row,
-        Some(TokenStatus { token: Some(_), expiry_ms: Some(expiry) })
+        Some(TokenStatus { token: Some(_), expiry_ms: Some(expiry), .. })
             if expiry == 0 || expiry > chrono::Utc::now().timestamp_millis()
     ))
 }
@@ -714,6 +772,67 @@ mod tests {
     #[test]
     fn gate_target_absent_probe_is_pending() {
         assert_eq!(recovery_gate_target(None), RecoveryGateState::Pending);
+    }
+
+    // ─── Restore-token classification (audit M-1) ──────────────────
+    //
+    // The keychain-unavailable soft path must be reachable ONLY when
+    // the expiry metadata says the session is still alive and the
+    // token is missing solely because the keychain could not be read.
+
+    const NOW: i64 = 1_700_000_000_000;
+
+    fn status(token: Option<&str>, expiry_ms: Option<i64>, keychain_unavailable: bool) -> TokenStatus {
+        TokenStatus {
+            token: token.map(String::from),
+            expiry_ms,
+            keychain_unavailable,
+        }
+    }
+
+    #[test]
+    fn classify_valid_unexpired_token() {
+        let out = classify_restore_token(Some(status(Some("tok"), Some(NOW + 1), false)), NOW);
+        assert_eq!(out, RestoreTokenOutcome::Valid("tok".into()));
+        // expiry == 0 means "never expires".
+        let out = classify_restore_token(Some(status(Some("tok"), Some(0), false)), NOW);
+        assert_eq!(out, RestoreTokenOutcome::Valid("tok".into()));
+    }
+
+    // The M-1 case: token unreadable, session unexpired → soft.
+    #[test]
+    fn classify_keychain_unavailable_is_soft_when_unexpired() {
+        let out = classify_restore_token(Some(status(None, Some(NOW + 1), true)), NOW);
+        assert_eq!(out, RestoreTokenOutcome::KeychainUnavailable);
+    }
+
+    // Expiry metadata wins: an expired session is dead regardless of
+    // whether the keychain could be read — it must be cleaned up, not
+    // kept alive forever by a permanently broken keychain.
+    #[test]
+    fn classify_expired_session_is_hard_even_with_unavailable_keychain() {
+        let out = classify_restore_token(Some(status(None, Some(NOW - 1), true)), NOW);
+        assert_eq!(out, RestoreTokenOutcome::MissingOrExpired);
+    }
+
+    // A readable keychain with no token is a genuine logout — hard path.
+    #[test]
+    fn classify_genuinely_absent_token_is_hard() {
+        let out = classify_restore_token(Some(status(None, Some(NOW + 1), false)), NOW);
+        assert_eq!(out, RestoreTokenOutcome::MissingOrExpired);
+        assert_eq!(classify_restore_token(None, NOW), RestoreTokenOutcome::MissingOrExpired);
+        // A cleared row (no expiry metadata) can't take the soft path
+        // even if the keychain is unreadable — there is no session.
+        let out = classify_restore_token(Some(status(None, None, true)), NOW);
+        assert_eq!(out, RestoreTokenOutcome::MissingOrExpired);
+    }
+
+    // An expired token that IS readable stays the hard path (regression
+    // guard for the pre-existing expiry behavior).
+    #[test]
+    fn classify_expired_readable_token_is_hard() {
+        let out = classify_restore_token(Some(status(Some("tok"), Some(NOW - 1), false)), NOW);
+        assert_eq!(out, RestoreTokenOutcome::MissingOrExpired);
     }
 
     // H-2: the FE session restores only if it proves possession of the DB

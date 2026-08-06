@@ -22,6 +22,12 @@ const listenHandlers = new Map<
   (event: { payload: unknown }) => void
 >();
 
+// sonner is mocked so the auth-relogin test can assert the toast call
+// without a DOM toaster mounted.
+vi.mock("sonner", () => ({
+  toast: { error: vi.fn() },
+}));
+
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(
     (event: string, handler: (e: { payload: unknown }) => void) => {
@@ -255,5 +261,35 @@ describe("useSyncEvents — debounced sync_files_completed_changed dispatch", ()
     act(() => { transfer({ payload: {} }); });
     act(() => { vi.advanceTimersByTime(DEBOUNCE_MS); });
     expect(completedDispatchCount()).toBe(1);
+  });
+});
+
+describe("useSyncEvents — auth relogin toast (PR #102 follow-up)", () => {
+  // The engine's auth-required signal previously had NO frontend
+  // listener, so an OAuth account whose token could no longer be
+  // refreshed degraded silently. These pin that the listener exists and
+  // that repeated per-cycle emits collapse into one toast via the
+  // sonner id.
+  it("surfaces hcfs_auth_relogin_required as a deduped session-expired toast", async () => {
+    renderHookWithStore();
+    await waitFor(() => {
+      expect(listenHandlers.has("hcfs_auth_relogin_required")).toBe(true);
+    });
+
+    const { toast } = await import("sonner");
+    const errorSpy = toast.error as unknown as ReturnType<typeof vi.fn>;
+    errorSpy.mockClear();
+
+    const relogin = listenHandlers.get("hcfs_auth_relogin_required")!;
+    act(() => { relogin({ payload: { error: "401" } }); });
+    act(() => { relogin({ payload: { error: "401" } }); });
+
+    expect(errorSpy).toHaveBeenCalledTimes(2);
+    for (const call of errorSpy.mock.calls) {
+      expect(call[0]).toMatch(/sign back in/i);
+      // The stable id is what makes sonner render ONE toast for the
+      // engine's repeated per-cycle emits.
+      expect(call[1]).toMatchObject({ id: "auth-relogin-required" });
+    }
   });
 });
