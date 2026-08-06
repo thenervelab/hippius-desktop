@@ -21,6 +21,7 @@ const EXPECTED_TABLES: &[&str] = &[
     "wss_endpoint",
     "security_scoped_bookmarks",
     "auth_session",
+    "oauth_pending_states",
     "hcfs_config",
     "objectstore_auth",
     "objectstore_auth_scoped",
@@ -451,8 +452,11 @@ async fn ensure_security_scoped_bookmarks(conn: &mut SqliteConnection) -> Result
     Ok(())
 }
 
-/// `auth_session` — replaces the frontend IndexedDB "session" table +
-/// localStorage tokens; one row per `owner` (account key hash).
+/// `auth_session` + `oauth_pending_states` — the session store (replaces
+/// the frontend IndexedDB "session" table + localStorage tokens; one row
+/// per `owner` account key hash) and the restart-safe mirror of in-flight
+/// OAuth CSRF states (audit M-2), grouped here because both belong to the
+/// login/session domain.
 async fn ensure_auth_session(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
     // Auth session — replaces frontend IndexedDB "session" table + localStorage tokens
     sqlx::query(
@@ -467,6 +471,24 @@ async fn ensure_auth_session(conn: &mut SqliteConnection) -> Result<(), sqlx::Er
             logout_time_minutes INTEGER DEFAULT 1440,
             last_login_at TEXT,
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )",
+    )
+    .execute(&mut *conn)
+    .await?;
+
+    // Pending OAuth flows (CSRF `state` → provider), persisted so an app
+    // restart mid-login (auto-update on launch, crash, quit while the
+    // browser tab is open) doesn't strand the callback: the in-memory
+    // `OAuthState` map is rebuilt from these rows on the next
+    // `complete_oauth_flow` (audit M-2). Rows carry a wall-clock
+    // timestamp and expire via the same 5-minute TTL as the in-memory
+    // entries. No secrets: the `state` value is a single-use random
+    // nonce, useless without an in-flight browser session.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS oauth_pending_states (
+            state TEXT PRIMARY KEY,
+            provider TEXT NOT NULL,
+            created_at_ms INTEGER NOT NULL
         )",
     )
     .execute(&mut *conn)
@@ -864,9 +886,7 @@ async fn ensure_share_keystore(conn: &mut SqliteConnection) -> Result<(), sqlx::
         )
         .execute(&mut *conn)
         .await?;
-        sqlx::query("DROP TABLE share_keystore")
-            .execute(&mut *conn)
-            .await?;
+        sqlx::query("DROP TABLE share_keystore").execute(&mut *conn).await?;
         sqlx::query("ALTER TABLE share_keystore_rebuild RENAME TO share_keystore")
             .execute(&mut *conn)
             .await?;
@@ -1010,9 +1030,7 @@ async fn ensure_shared_link_history(conn: &mut SqliteConnection) -> Result<(), s
         )
         .execute(&mut *conn)
         .await?;
-        sqlx::query("DROP TABLE shared_link_history")
-            .execute(&mut *conn)
-            .await?;
+        sqlx::query("DROP TABLE shared_link_history").execute(&mut *conn).await?;
         sqlx::query("ALTER TABLE shared_link_history_rebuild RENAME TO shared_link_history")
             .execute(&mut *conn)
             .await?;
@@ -1031,20 +1049,13 @@ async fn ensure_shared_link_history(conn: &mut SqliteConnection) -> Result<(), s
 /// missing table or column — callers only use this to decide whether a
 /// rebuild is *needed*, and a table that does not exist yet was just created
 /// with the current shape.
-async fn column_is_not_null(
-    conn: &mut SqliteConnection,
-    table: &str,
-    column: &str,
-) -> Result<bool, sqlx::Error> {
+async fn column_is_not_null(conn: &mut SqliteConnection, table: &str, column: &str) -> Result<bool, sqlx::Error> {
     // PRAGMA does not accept bound parameters for the table name, and `table`
     // is always a hard-coded literal at every call site — never user input.
-    let rows: Vec<(String, i64)> =
-        sqlx::query_as(&format!("SELECT name, \"notnull\" FROM pragma_table_info('{table}')"))
-            .fetch_all(&mut *conn)
-            .await?;
-    Ok(rows
-        .iter()
-        .any(|(name, notnull)| name == column && *notnull != 0))
+    let rows: Vec<(String, i64)> = sqlx::query_as(&format!("SELECT name, \"notnull\" FROM pragma_table_info('{table}')"))
+        .fetch_all(&mut *conn)
+        .await?;
+    Ok(rows.iter().any(|(name, notnull)| name == column && *notnull != 0))
 }
 
 /// Migrate account keys from the legacy 8-char format to the new 16-char format.

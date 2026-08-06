@@ -42,17 +42,21 @@
 //! impersonate a session — without needing server cooperation.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
 use tauri::Emitter;
 
-/// Maximum age of a pending OAuth flow. Any `PkceState` older than this
-/// is considered expired and discarded on the next lookup. Five minutes
-/// is long enough to complete a legitimate browser-based login (user
-/// opens browser → signs in → redirected back) while short enough that
-/// a dormant entry can't be weaponized hours after the user abandoned
-/// their login attempt.
-const PKCE_STATE_TTL: Duration = Duration::from_mins(5);
+/// Maximum age of a pending OAuth flow, in wall-clock milliseconds. Any
+/// `PkceState` older than this is considered expired and discarded on
+/// the next lookup. Five minutes is long enough to complete a legitimate
+/// browser-based login (user opens browser → signs in → redirected back)
+/// while short enough that a dormant entry can't be weaponized hours
+/// after the user abandoned their login attempt.
+///
+/// Wall-clock (not `Instant`) on purpose: entries are mirrored to the
+/// `oauth_pending_states` table so a restart mid-flow doesn't strand the
+/// callback (audit M-2), and a wall clock also makes time spent asleep
+/// count against the TTL — macOS `Instant` does not tick during sleep
+/// (audit L-1).
+const PKCE_STATE_TTL_MS: i64 = 5 * 60 * 1000;
 
 /// In-flight OAuth flow states, keyed by the random `state` CSRF token.
 ///
@@ -62,7 +66,12 @@ const PKCE_STATE_TTL: Duration = Duration::from_mins(5);
 /// Each flow's callback can still be matched to the correct entry
 /// because the random token is unique per `start_oauth_flow` call.
 pub struct OAuthState {
-    pub pkce_states: Mutex<HashMap<String, PkceState>>,
+    /// Async mutex ON PURPOSE: the consume path holds this guard across
+    /// the `oauth_pending_states` mirror I/O so memory and mirror can
+    /// never be observed out of step — a load outside the lock (or a
+    /// delete after it) lets a concurrent duplicate callback resurrect
+    /// an already-consumed state and replay it (PR #105 review).
+    pub pkce_states: tokio::sync::Mutex<HashMap<String, PkceState>>,
 }
 
 impl Default for OAuthState {
@@ -74,7 +83,7 @@ impl Default for OAuthState {
 impl OAuthState {
     pub fn new() -> Self {
         Self {
-            pkce_states: Mutex::new(HashMap::new()),
+            pkce_states: tokio::sync::Mutex::new(HashMap::new()),
         }
     }
 }
@@ -87,29 +96,98 @@ use tracing::{debug, error, info, warn};
 ///
 /// Stored in `OAuthState::pkce_states` under the random CSRF `state`
 /// token that was minted by `start_oauth_flow` and embedded in the
-/// OAuth callback URL. `created_at` drives TTL expiry (see
-/// [`PKCE_STATE_TTL`]) so a deep link that surfaces long after the
+/// OAuth callback URL. `created_at_ms` drives TTL expiry (see
+/// [`PKCE_STATE_TTL_MS`]) so a deep link that surfaces long after the
 /// user abandoned the login attempt is rejected as untrusted.
 pub struct PkceState {
     /// Upstream OAuth provider (`"google" | "github" | "apple"`). Used
     /// as the `code_verifier` placeholder the Hippius server currently
     /// expects on `/api/auth/exchange/`.
     provider: String,
-    created_at: Instant,
+    /// Wall-clock creation time (ms since epoch) — drives TTL expiry
+    /// and is what `oauth_pending_states` persists across restarts.
+    created_at_ms: i64,
 }
 
-/// Drop any `PkceState` entries older than [`PKCE_STATE_TTL`] and
+/// Drop any `PkceState` entries older than [`PKCE_STATE_TTL_MS`] and
 /// return how many remain. Called before reading the map in
 /// `complete_oauth_flow` so the pending-flow check can't be satisfied
 /// by an ancient entry.
-fn purge_expired(states: &mut HashMap<String, PkceState>) -> usize {
+fn purge_expired(states: &mut HashMap<String, PkceState>, now_ms: i64) -> usize {
     let before = states.len();
-    states.retain(|_, s| s.created_at.elapsed() < PKCE_STATE_TTL);
+    states.retain(|_, s| now_ms.saturating_sub(s.created_at_ms) < PKCE_STATE_TTL_MS);
     let purged = before - states.len();
     if purged > 0 {
         debug!(purged, "Expired OAuth PKCE state entries");
     }
     states.len()
+}
+
+// ── Restart-safe pending-state persistence (audit M-2) ──────────────
+//
+// The in-memory map dies with the process, but the OAuth round-trip
+// spans an external browser session — an auto-update restart, crash, or
+// plain quit between `start_oauth_flow` and the callback left ZERO
+// pending flows, so every callback was rejected and the login had to be
+// restarted from scratch. These helpers mirror the map into the
+// `oauth_pending_states` table (no secrets: `state` is a single-use
+// random nonce). All call sites are best-effort — persistence only adds
+// robustness on top of the in-memory path, so a DB hiccup must never
+// fail a login that would otherwise work.
+
+async fn persist_pending_state(pool: &sqlx::SqlitePool, state: &str, provider: &str, created_at_ms: i64) {
+    if let Err(e) = sqlx::query("INSERT OR REPLACE INTO oauth_pending_states (state, provider, created_at_ms) VALUES (?, ?, ?)")
+        .bind(state)
+        .bind(provider)
+        .bind(created_at_ms)
+        .execute(pool)
+        .await
+    {
+        warn!(error = %e, "Failed to persist pending OAuth state — login still works unless the app restarts mid-flow");
+    }
+    // Opportunistic prune so abandoned rows don't accumulate.
+    if let Err(e) = sqlx::query("DELETE FROM oauth_pending_states WHERE created_at_ms < ?")
+        .bind(created_at_ms - PKCE_STATE_TTL_MS)
+        .execute(pool)
+        .await
+    {
+        debug!(error = %e, "Failed to prune expired pending OAuth states");
+    }
+}
+
+/// Load the non-expired persisted flows, used to rebuild the in-memory
+/// map after an app restart wiped it mid-flow.
+async fn load_pending_states(pool: &sqlx::SqlitePool, now_ms: i64) -> Vec<(String, String, i64)> {
+    match sqlx::query_as::<_, (String, String, i64)>("SELECT state, provider, created_at_ms FROM oauth_pending_states WHERE created_at_ms >= ?")
+        .bind(now_ms - PKCE_STATE_TTL_MS)
+        .fetch_all(pool)
+        .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            warn!(error = %e, "Failed to load persisted pending OAuth states");
+            Vec::new()
+        }
+    }
+}
+
+/// Remove one consumed flow from the mirror (strict `state` match path).
+async fn delete_pending_state(pool: &sqlx::SqlitePool, state: &str) {
+    if let Err(e) = sqlx::query("DELETE FROM oauth_pending_states WHERE state = ?")
+        .bind(state)
+        .execute(pool)
+        .await
+    {
+        debug!(error = %e, "Failed to delete consumed pending OAuth state");
+    }
+}
+
+/// Drain the mirror entirely (state-less fallback path, matching
+/// `consume_fallback_flow`'s in-memory drain).
+async fn clear_pending_states(pool: &sqlx::SqlitePool) {
+    if let Err(e) = sqlx::query("DELETE FROM oauth_pending_states").execute(pool).await {
+        debug!(error = %e, "Failed to clear pending OAuth states");
+    }
 }
 
 /// Consume the pending flow for a callback that arrived WITHOUT a `state`
@@ -130,7 +208,7 @@ fn purge_expired(states: &mut HashMap<String, PkceState>) -> usize {
 /// state-less deep link satisfy the pending-flow check without the user
 /// having started a new login. Returns `None` when nothing is pending.
 fn consume_fallback_flow(states: &mut HashMap<String, PkceState>) -> Option<PkceState> {
-    let newest_key = states.iter().max_by_key(|(_, s)| s.created_at).map(|(k, _)| k.clone())?;
+    let newest_key = states.iter().max_by_key(|(_, s)| s.created_at_ms).map(|(k, _)| k.clone())?;
     let entry = states.remove(&newest_key);
     states.clear();
     entry
@@ -233,20 +311,29 @@ pub async fn start_oauth_flow(state: tauri::State<'_, crate::app_state::AppState
     // of entropy from `OsRng` — more than enough for a 5-minute TTL
     // and a map that is purged on every access.
     let oauth_state = uuid::Uuid::new_v4().to_string();
+    let created_at_ms = chrono::Utc::now().timestamp_millis();
     {
-        let mut states = state.oauth.pkce_states.lock()?;
+        let mut states = state.oauth.pkce_states.lock().await;
         // Drop any stale entries from a previous abandoned attempt
         // before inserting. Keeps the map bounded and removes stale
         // flows that would otherwise satisfy the pending-flow check
         // in `complete_oauth_flow`.
-        purge_expired(&mut states);
+        purge_expired(&mut states, created_at_ms);
         states.insert(
             oauth_state.clone(),
             PkceState {
                 provider: provider.clone(),
-                created_at: Instant::now(),
+                created_at_ms,
             },
         );
+        // Mirror to the DB so an app restart mid-flow (auto-update, crash)
+        // doesn't strand the browser callback (audit M-2). Best-effort,
+        // and inside the critical section so the mirror never diverges
+        // from the map while a concurrent completion is looking.
+        match state.pool() {
+            Ok(pool) => persist_pending_state(pool, &oauth_state, &provider, created_at_ms).await,
+            Err(e) => warn!(error = %e, "pool unavailable; pending OAuth state not persisted (login breaks only if the app restarts mid-flow)"),
+        }
     }
 
     // Include the `state` CSRF token in the deep-link callback so we
@@ -441,9 +528,28 @@ pub async fn complete_oauth_flow(
     // preserves the replay protection). An attacker still has to race a
     // real login in progress. Remove this branch once console forwards
     // `state` for desktop.
+    // ONE async critical section for load → merge → consume → mirror
+    // delete. Splitting these apart (mirror load before the lock, mirror
+    // delete after it) let a concurrent duplicate callback re-read the
+    // not-yet-deleted mirror row and resurrect an already-consumed state
+    // — a replay of the consume-once guarantee (PR #105 review). Holding
+    // the tokio mutex across the awaits serializes completions; these
+    // are rare, user-paced operations. In-memory entries win the merge
+    // on key collision (they are fresher by construction).
+    let now_ms = chrono::Utc::now().timestamp_millis();
     let matched_provider = {
-        let mut states = state.oauth.pkce_states.lock()?;
-        purge_expired(&mut states);
+        let mut states = state.oauth.pkce_states.lock().await;
+        let persisted = match state.pool() {
+            Ok(pool) => load_pending_states(pool, now_ms).await,
+            Err(e) => {
+                warn!(error = %e, "pool unavailable; skipping persisted OAuth state reload");
+                Vec::new()
+            }
+        };
+        for (s, provider, created_at_ms) in persisted {
+            states.entry(s).or_insert(PkceState { provider, created_at_ms });
+        }
+        purge_expired(&mut states, now_ms);
         if let Some(received_state) = params.state.as_deref() {
             let Some(entry) = states.remove(received_state) else {
                 warn!("Rejected OAuth callback: state did not match any pending flow");
@@ -451,6 +557,10 @@ pub async fn complete_oauth_flow(
                     "Unknown or expired OAuth state. Start a new login from the sign-in screen.".into(),
                 ));
             };
+            // Mirror the consume before releasing the lock (see above).
+            if let Ok(pool) = state.pool() {
+                delete_pending_state(pool, received_state).await;
+            }
             entry.provider
         } else {
             let Some(entry) = consume_fallback_flow(&mut states) else {
@@ -459,6 +569,11 @@ pub async fn complete_oauth_flow(
                     "Missing state parameter. Start a new login from the sign-in screen.".into(),
                 ));
             };
+            // The fallback drained the whole map; drain the mirror too,
+            // before releasing the lock (see above).
+            if let Ok(pool) = state.pool() {
+                clear_pending_states(pool).await;
+            }
             warn!(
                 "OAuth callback missing state parameter; consuming the newest pending flow. \
                  This is a temporary workaround — fix console to propagate `state` for desktop \
@@ -531,89 +646,99 @@ pub async fn complete_oauth_flow(
     // instead.
     let provider_name = "oauth".to_string();
 
-    if !substrate_address.is_empty() {
-        let pool = state.pool()?;
-
-        // Route through the repo so OAuth sessions get the same
-        // COALESCE-on-NULL behavior for logout_time_minutes as mnemonic
-        // logins, preserving the user's logout-timeout preference across
-        // OAuth callbacks.
-        crate::auth::auth_session_repo::upsert(
-            pool,
-            crate::auth::auth_session_repo::UpsertSession {
-                substrate_address: &substrate_address,
-                token: &token,
-                token_expiry_ms,
-                user_id: Some(user_id),
-                username: &username,
-                provider: &provider_name,
-                logout_time_minutes: None, // preserve existing preference
-            },
-        )
-        .await?;
-
-        // Persist the API token via the existing helper so there's one
-        // writer for `objectstore_auth_scoped` (shared with the mnemonic
-        // login flow).
-        crate::auth::tokens::save_api_token(pool, &substrate_address, &token).await?;
-
-        // Populate AuthInfo so OAuth users participate in the same
-        // get_mnemonic_for_account cache path as mnemonic-login users.
-        // OAuth has no eth_address or sr25519_pair — those derive from a
-        // BIP-39 mnemonic which is generated later by ensure_sync_mnemonic.
-        state.set_active_account(&substrate_address, crate::auth::state::AuthCapabilities::OAuthOnly)?;
-
-        // Ensure the one-time welcome notification exists for this
-        // user. OAuth doesn't surface an `is_new` flag, so we rely on
-        // the user-scoped dedup inside `ensure_welcome_notification`
-        // to make repeat OAuth logins a no-op.
-        if let Err(e) = crate::notifications::crud::ensure_welcome_notification(pool, &substrate_address).await {
-            warn!(error = %e, "Failed to ensure welcome notification — will retry on next login");
-        }
-
-        // Probe recovery state before any sync init can race in.
-        //
-        // The recovery gate starts `Skipped` by default (so non-OAuth
-        // login paths never block). We need to flip it to `Pending`
-        // whenever the dialog is required so `ensure_sync_mnemonic`
-        // parks until the user has entered their recovery password or
-        // completed the signup wizard. The decision is based on the
-        // `RecoveryCheck` we get from probing the server for a sealed
-        // blob and checking local mnemonic presence.
-        //
-        // Bounded + best-effort (audit H-1): this probe hits hcfs-server
-        // AFTER the session was persisted above, and the old unbounded
-        // fatal `?` failed — or hung — the entire login at its last step
-        // even though authentication had already succeeded (the user saw
-        // "Authentication failed", then found themselves logged in on
-        // the next launch). Timeout and error both collapse to `None`,
-        // which parks the gate `Pending` — never `Skipped` — because an
-        // unknown recovery state must not let `ensure_sync_mnemonic`
-        // mint a fresh mnemonic that collides with a server blob. The
-        // FE callback page runs its own `checkRecoveryState`, and
-        // `restore_session` re-probes on the next launch.
-        let recovery_check = crate::auth::session_restore::probe_recovery_state_bounded(crate::recovery::check_recovery_state_inner(&state)).await;
-        state.set_recovery_state(crate::auth::session_restore::recovery_gate_target(recovery_check.as_ref()));
-
-        // Tell the FE which dialog to show, if any. Emit before
-        // `auth_ready` so the recovery dialog is mounted before sync
-        // init fires — though the gate also prevents the race.
-        if let Some(ref recovery_check) = recovery_check {
-            if let Err(e) = app.emit("oauth_recovery_check_needed", recovery_check) {
-                warn!(error = %e, "Failed to emit oauth_recovery_check_needed");
-            }
-        } else {
-            warn!("complete_oauth_flow: recovery probe unavailable; gate parked Pending (dialog re-fires on next launch)");
-        }
-
-        // Signal the FE that auth is ready so `tryAutoInitSync` can
-        // retry its auto-init ladder. Without this, OAuth users with
-        // existing sync drives hit the full 10s listener timeout on
-        // every login before giving up — the mnemonic-race fix in
-        // `useHcfsSync.ts` listens on `hippius_auth_ready`, which the
-        // mnemonic-login and session-restore paths already emit.
-        state.sync_bridge.emit_auth_ready();
+    // A callback that yields no substrate address is unusable: nothing
+    // below would be persisted and no AuthInfo set, yet the old code still
+    // returned Ok — the FE then marked itself authenticated with no
+    // account and stored a localStorage session that can never restore
+    // (audit M-7, the half-login). The console flow always supplies the
+    // address (the exchange response carries it), so an empty one means a
+    // malformed/truncated callback: fail loudly so the user retries.
+    if substrate_address.is_empty() {
+        error!("OAuth callback yielded no substrate_address; refusing half-login");
+        return Err(AppError::Auth("Sign-in did not return an account address. Please try again.".into()));
     }
+
+    let pool = state.pool()?;
+
+    // Route through the repo so OAuth sessions get the same
+    // COALESCE-on-NULL behavior for logout_time_minutes as mnemonic
+    // logins, preserving the user's logout-timeout preference across
+    // OAuth callbacks.
+    crate::auth::auth_session_repo::upsert(
+        pool,
+        crate::auth::auth_session_repo::UpsertSession {
+            substrate_address: &substrate_address,
+            token: &token,
+            token_expiry_ms,
+            user_id: Some(user_id),
+            username: &username,
+            provider: &provider_name,
+            logout_time_minutes: None, // preserve existing preference
+        },
+    )
+    .await?;
+
+    // Persist the API token via the existing helper so there's one
+    // writer for `objectstore_auth_scoped` (shared with the mnemonic
+    // login flow).
+    crate::auth::tokens::save_api_token(pool, &substrate_address, &token).await?;
+
+    // Populate AuthInfo so OAuth users participate in the same
+    // get_mnemonic_for_account cache path as mnemonic-login users.
+    // OAuth has no eth_address or sr25519_pair — those derive from a
+    // BIP-39 mnemonic which is generated later by ensure_sync_mnemonic.
+    state.set_active_account(&substrate_address, crate::auth::state::AuthCapabilities::OAuthOnly)?;
+
+    // Ensure the one-time welcome notification exists for this
+    // user. OAuth doesn't surface an `is_new` flag, so we rely on
+    // the user-scoped dedup inside `ensure_welcome_notification`
+    // to make repeat OAuth logins a no-op.
+    if let Err(e) = crate::notifications::crud::ensure_welcome_notification(pool, &substrate_address).await {
+        warn!(error = %e, "Failed to ensure welcome notification — will retry on next login");
+    }
+
+    // Probe recovery state before any sync init can race in.
+    //
+    // The recovery gate starts `Skipped` by default (so non-OAuth
+    // login paths never block). We need to flip it to `Pending`
+    // whenever the dialog is required so `ensure_sync_mnemonic`
+    // parks until the user has entered their recovery password or
+    // completed the signup wizard. The decision is based on the
+    // `RecoveryCheck` we get from probing the server for a sealed
+    // blob and checking local mnemonic presence.
+    //
+    // Bounded + best-effort (audit H-1): this probe hits hcfs-server
+    // AFTER the session was persisted above, and the old unbounded
+    // fatal `?` failed — or hung — the entire login at its last step
+    // even though authentication had already succeeded (the user saw
+    // "Authentication failed", then found themselves logged in on
+    // the next launch). Timeout and error both collapse to `None`,
+    // which parks the gate `Pending` — never `Skipped` — because an
+    // unknown recovery state must not let `ensure_sync_mnemonic`
+    // mint a fresh mnemonic that collides with a server blob. The
+    // FE callback page runs its own `checkRecoveryState`, and
+    // `restore_session` re-probes on the next launch.
+    let recovery_check = crate::auth::session_restore::probe_recovery_state_bounded(crate::recovery::check_recovery_state_inner(&state)).await;
+    state.set_recovery_state(crate::auth::session_restore::recovery_gate_target(recovery_check.as_ref()));
+
+    // Tell the FE which dialog to show, if any. Emit before
+    // `auth_ready` so the recovery dialog is mounted before sync
+    // init fires — though the gate also prevents the race.
+    if let Some(ref recovery_check) = recovery_check {
+        if let Err(e) = app.emit("oauth_recovery_check_needed", recovery_check) {
+            warn!(error = %e, "Failed to emit oauth_recovery_check_needed");
+        }
+    } else {
+        warn!("complete_oauth_flow: recovery probe unavailable; gate parked Pending (dialog re-fires on next launch)");
+    }
+
+    // Signal the FE that auth is ready so `tryAutoInitSync` can
+    // retry its auto-init ladder. Without this, OAuth users with
+    // existing sync drives hit the full 10s listener timeout on
+    // every login before giving up — the mnemonic-race fix in
+    // `useHcfsSync.ts` listens on `hippius_auth_ready`, which the
+    // mnemonic-login and session-restore paths already emit.
+    state.sync_bridge.emit_auth_ready();
 
     info!(
         provider = %provider_name,
@@ -636,28 +761,29 @@ pub async fn complete_oauth_flow(
 mod tests {
     use super::*;
 
-    fn make_state(age: Duration) -> PkceState {
-        make_state_with("google", age)
+    /// Fixed wall-clock "now" for the TTL tests — deterministic, no
+    /// real clock reads.
+    const NOW_MS: i64 = 1_700_000_000_000;
+
+    fn make_state(age_ms: i64) -> PkceState {
+        make_state_with("google", age_ms)
     }
 
-    fn make_state_with(provider: &str, age: Duration) -> PkceState {
+    fn make_state_with(provider: &str, age_ms: i64) -> PkceState {
         PkceState {
             provider: provider.to_string(),
-            // `checked_sub` guards against Instant wraparound on exotic
-            // clocks; in practice `age` is always small and this can't
-            // fail, but clippy prefers the explicit form.
-            created_at: Instant::now().checked_sub(age).expect("test age fits in Instant range"),
+            created_at_ms: NOW_MS - age_ms,
         }
     }
 
     #[test]
     fn purge_expired_removes_stale_entries() {
         let mut states = HashMap::new();
-        states.insert("a".to_string(), make_state(Duration::from_secs(1)));
-        states.insert("b".to_string(), make_state(PKCE_STATE_TTL + Duration::from_secs(1)));
-        states.insert("c".to_string(), make_state(Duration::from_secs(10)));
+        states.insert("a".to_string(), make_state(1_000));
+        states.insert("b".to_string(), make_state(PKCE_STATE_TTL_MS + 1_000));
+        states.insert("c".to_string(), make_state(10_000));
 
-        let remaining = purge_expired(&mut states);
+        let remaining = purge_expired(&mut states, NOW_MS);
         assert_eq!(remaining, 2, "one entry older than TTL should be dropped");
         assert!(states.contains_key("a"));
         assert!(!states.contains_key("b"));
@@ -667,25 +793,25 @@ mod tests {
     #[test]
     fn purge_expired_keeps_everything_fresh() {
         let mut states = HashMap::new();
-        states.insert("x".to_string(), make_state(Duration::from_secs(0)));
-        states.insert("y".to_string(), make_state(Duration::from_secs(30)));
-        let remaining = purge_expired(&mut states);
+        states.insert("x".to_string(), make_state(0));
+        states.insert("y".to_string(), make_state(30_000));
+        let remaining = purge_expired(&mut states, NOW_MS);
         assert_eq!(remaining, 2);
     }
 
     #[test]
     fn purge_expired_reports_zero_on_empty_map() {
         let mut states: HashMap<String, PkceState> = HashMap::new();
-        assert_eq!(purge_expired(&mut states), 0);
+        assert_eq!(purge_expired(&mut states, NOW_MS), 0);
     }
 
     #[test]
     fn purge_expired_clears_all_when_all_stale() {
         let mut states = HashMap::new();
-        let very_old = PKCE_STATE_TTL * 2;
+        let very_old = PKCE_STATE_TTL_MS * 2;
         states.insert("a".to_string(), make_state(very_old));
         states.insert("b".to_string(), make_state(very_old));
-        assert_eq!(purge_expired(&mut states), 0);
+        assert_eq!(purge_expired(&mut states, NOW_MS), 0);
         assert!(states.is_empty());
     }
 
@@ -699,7 +825,7 @@ mod tests {
     #[test]
     fn state_lookup_removes_entry_on_first_match() {
         let mut states = HashMap::new();
-        states.insert("csrf-token-1".to_string(), make_state(Duration::from_secs(1)));
+        states.insert("csrf-token-1".to_string(), make_state(1_000));
 
         // First match succeeds and removes the entry (mirrors the
         // `complete_oauth_flow` path: `states.remove(received_state)`).
@@ -715,7 +841,7 @@ mod tests {
     #[test]
     fn state_lookup_fails_for_unknown_state() {
         let mut states = HashMap::new();
-        states.insert("csrf-token-legit".to_string(), make_state(Duration::from_secs(1)));
+        states.insert("csrf-token-legit".to_string(), make_state(1_000));
 
         // An attacker delivers `hippiusapp://auth/callback?state=attacker-forged&...`
         // while a legitimate flow is in progress. The lookup must
@@ -730,13 +856,13 @@ mod tests {
     #[test]
     fn state_lookup_fails_after_ttl_purge() {
         let mut states = HashMap::new();
-        states.insert("csrf-token-old".to_string(), make_state(PKCE_STATE_TTL + Duration::from_secs(1)));
+        states.insert("csrf-token-old".to_string(), make_state(PKCE_STATE_TTL_MS + 1_000));
 
         // Mirror `complete_oauth_flow`: purge_expired runs BEFORE the
         // state lookup. A deep link that surfaces after the 5-minute
         // TTL is therefore rejected even though the state string
         // matches a once-valid entry.
-        purge_expired(&mut states);
+        purge_expired(&mut states, NOW_MS);
         assert!(states.remove("csrf-token-old").is_none(), "expired state must be purged before lookup");
     }
 
@@ -753,8 +879,8 @@ mod tests {
     #[test]
     fn fallback_consumes_newest_of_multiple_flows_and_drains_map() {
         let mut states = HashMap::new();
-        states.insert("flow-old".to_string(), make_state_with("google", Duration::from_mins(1)));
-        states.insert("flow-new".to_string(), make_state_with("github", Duration::from_secs(1)));
+        states.insert("flow-old".to_string(), make_state_with("google", 60_000));
+        states.insert("flow-new".to_string(), make_state_with("github", 1_000));
 
         let entry = consume_fallback_flow(&mut states).expect("a pending flow must be consumed");
         assert_eq!(entry.provider, "github", "the newest flow must win");
@@ -769,7 +895,7 @@ mod tests {
     #[test]
     fn fallback_consumes_single_flow() {
         let mut states = HashMap::new();
-        states.insert("only".to_string(), make_state(Duration::from_secs(1)));
+        states.insert("only".to_string(), make_state(1_000));
         let entry = consume_fallback_flow(&mut states).expect("single pending flow must be consumed");
         assert_eq!(entry.provider, "google");
         assert!(states.is_empty());
@@ -781,6 +907,66 @@ mod tests {
     fn fallback_rejects_when_nothing_pending() {
         let mut states: HashMap<String, PkceState> = HashMap::new();
         assert!(consume_fallback_flow(&mut states).is_none());
+    }
+
+    // ─── Restart-safe pending-state persistence (audit M-2) ────────
+
+    async fn pending_pool() -> sqlx::SqlitePool {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS oauth_pending_states (
+                state TEXT PRIMARY KEY, provider TEXT NOT NULL, created_at_ms INTEGER NOT NULL)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool
+    }
+
+    /// The restart scenario: rows persisted by `start_oauth_flow` survive
+    /// the process; the reload filters expired rows in the query itself
+    /// so a stale flow can never re-enter the map.
+    #[tokio::test]
+    async fn persisted_states_reload_within_ttl() {
+        let pool = pending_pool().await;
+        persist_pending_state(&pool, "fresh", "google", NOW_MS - 1_000).await;
+        persist_pending_state(&pool, "stale", "github", NOW_MS - PKCE_STATE_TTL_MS - 1_000).await;
+
+        let rows = load_pending_states(&pool, NOW_MS).await;
+        assert_eq!(rows.len(), 1, "expired persisted flows must not reload");
+        assert_eq!(rows[0].0, "fresh");
+        assert_eq!(rows[0].1, "google");
+    }
+
+    /// The mirror follows the in-memory consume: strict match deletes
+    /// one row, the state-less fallback drains everything.
+    #[tokio::test]
+    async fn consumed_and_drained_states_are_removed() {
+        let pool = pending_pool().await;
+        persist_pending_state(&pool, "s1", "google", NOW_MS).await;
+        persist_pending_state(&pool, "s2", "github", NOW_MS).await;
+
+        delete_pending_state(&pool, "s1").await;
+        let rows = load_pending_states(&pool, NOW_MS).await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, "s2");
+
+        clear_pending_states(&pool).await;
+        assert!(load_pending_states(&pool, NOW_MS).await.is_empty());
+    }
+
+    /// The reload merge must not clobber a live in-memory entry — the
+    /// in-memory map is fresher by construction (`or_insert` semantics
+    /// mirrored from `complete_oauth_flow`).
+    #[test]
+    fn persisted_reload_does_not_clobber_memory() {
+        let mut states = HashMap::new();
+        states.insert("s".to_string(), make_state_with("google", 0));
+        // Mirror the merge in `complete_oauth_flow`: a persisted row for a
+        // key the live map already holds must not replace it.
+        let (s, provider, created_at_ms) = ("s".to_string(), "github".to_string(), NOW_MS - 60_000);
+        states.entry(s).or_insert(PkceState { provider, created_at_ms });
+        assert_eq!(states.get("s").unwrap().provider, "google", "in-memory entry must win the merge");
     }
 
     // ─── Deep-link hygiene (audit S-1) ─────────────────────────────
@@ -840,8 +1026,8 @@ mod tests {
         // storage keeps both alive and lets each complete
         // independently.
         let mut states = HashMap::new();
-        states.insert("flow-1".to_string(), make_state(Duration::from_secs(1)));
-        states.insert("flow-2".to_string(), make_state(Duration::from_secs(1)));
+        states.insert("flow-1".to_string(), make_state(1_000));
+        states.insert("flow-2".to_string(), make_state(1_000));
 
         assert_eq!(states.len(), 2);
 

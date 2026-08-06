@@ -103,3 +103,31 @@ fn db_fallback_restore_checks_expiry_before_keychain_soft_path() {
         "expiry check must run BEFORE the keychain-unavailable soft path (expiry wins — audit M-1)"
     );
 }
+
+#[test]
+fn oauth_mirror_consume_stays_inside_the_state_lock() {
+    // PR #105 review finding: the `oauth_pending_states` mirror must be
+    // loaded and consumed INSIDE the `pkce_states` critical section. A
+    // load before the lock (or a delete after it) lets a concurrent
+    // duplicate callback re-read the not-yet-deleted mirror row and
+    // resurrect an already-consumed CSRF state — replaying the
+    // consume-once guarantee.
+    let src = source("src/auth/oauth.rs");
+    let body = slice_between(&src, "pub async fn complete_oauth_flow", "#[cfg(test)]");
+    let lock_at = body.find(".lock().await").expect("completion must acquire the pkce_states lock");
+    let load_at = body.find("load_pending_states(").expect("completion must reload the mirror");
+    let delete_at = body.find("delete_pending_state(").expect("strict path must delete its mirror row");
+    let clear_at = body.find("clear_pending_states(").expect("fallback path must drain the mirror");
+    let after_block = body
+        .find("let (token, user_id")
+        .expect("marker for the end of the consume block — update this pin if restructured");
+    assert!(lock_at < load_at && load_at < after_block, "mirror load must happen inside the lock");
+    assert!(
+        lock_at < delete_at && delete_at < after_block,
+        "strict-path mirror delete must happen inside the lock"
+    );
+    assert!(
+        lock_at < clear_at && clear_at < after_block,
+        "fallback mirror drain must happen inside the lock"
+    );
+}

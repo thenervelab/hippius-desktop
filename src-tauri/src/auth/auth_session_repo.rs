@@ -213,14 +213,19 @@ pub async fn clear(pool: &SqlitePool, account_id: &str) -> Result<()> {
 }
 
 /// Update only the `logout_time_minutes` preference column.
+///
+/// Deliberately does NOT bump `updated_at`: that column decides which
+/// account [`get_latest`] restores at boot, and editing a settings
+/// toggle for account X must not silently make X the account the next
+/// launch logs into (audit M-6). Only session events (login, token
+/// refresh, clear) may reorder restore priority.
 pub async fn update_logout_time(pool: &SqlitePool, account_id: &str, minutes: i64) -> Result<()> {
     let owner = account_key(account_id);
 
     sqlx::query(
         r"
         UPDATE auth_session SET
-            logout_time_minutes = ?,
-            updated_at = datetime('now')
+            logout_time_minutes = ?
         WHERE owner = ?
         ",
     )
@@ -296,6 +301,12 @@ fn split_resolution(resolution: TokenResolution) -> (Option<String>, bool) {
 
 /// Fetch the most recently updated session row across all accounts.
 /// Used by the boot path to find the last logged-in user.
+///
+/// Cleared rows are skipped (`substrate_address IS NOT NULL`): `clear`
+/// keeps a logged-out account's row alive to preserve its
+/// `logout_time_minutes` preference AND bumps `updated_at`, so without
+/// the filter a logout of account A shadowed account B's live session
+/// at the next boot — the "latest" row was A's empty husk (audit M-6).
 pub async fn get_latest(pool: &SqlitePool) -> Result<Option<AuthSessionRow>> {
     let row = sqlx::query_as::<
         _,
@@ -314,6 +325,7 @@ pub async fn get_latest(pool: &SqlitePool) -> Result<Option<AuthSessionRow>> {
         SELECT auth_token, token_expiry, user_id, username,
                provider, substrate_address, logout_time_minutes, last_login_at
         FROM auth_session
+        WHERE substrate_address IS NOT NULL
         ORDER BY updated_at DESC
         LIMIT 1
         ",
@@ -617,6 +629,89 @@ mod tests {
         assert_eq!(row.logout_time_minutes, Some(-1));
         assert_eq!(row.auth_token.as_deref(), Some("token"), "credentials must not be touched");
         assert_eq!(row.username.as_deref(), Some("bob"));
+    }
+
+    /// Pin a row's `updated_at` to a fixed timestamp so ordering tests are
+    /// deterministic (SQLite's `datetime('now')` has 1-second resolution,
+    /// so two upserts in one test land in the same tick).
+    async fn set_updated_at(pool: &SqlitePool, account: &str, ts: &str) {
+        sqlx::query("UPDATE auth_session SET updated_at = ? WHERE owner = ?")
+            .bind(ts)
+            .bind(account_key(account))
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    async fn upsert_simple(pool: &SqlitePool, account: &str, token: &str) {
+        upsert(
+            pool,
+            UpsertSession {
+                substrate_address: account,
+                token,
+                token_expiry_ms: chrono::Utc::now().timestamp_millis() + 86_400_000,
+                user_id: Some(1),
+                username: "u",
+                provider: "mnemonic",
+                logout_time_minutes: Some(1440),
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    /// M-6: logging out of one account must not shadow another account's
+    /// live session at boot. `clear` keeps the row (for the logout
+    /// preference) and bumps `updated_at`, so the cleared husk IS the
+    /// most recently updated row — `get_latest` must skip it.
+    #[tokio::test]
+    async fn get_latest_skips_cleared_rows() {
+        let pool = setup_db().await;
+        upsert_simple(&pool, ALICE, "alice-token").await;
+        upsert_simple(&pool, BOB, "bob-token").await;
+        set_updated_at(&pool, ALICE, "2020-01-01 00:00:00").await;
+        set_updated_at(&pool, BOB, "2020-01-02 00:00:00").await;
+
+        // Logout Bob — his row survives (preference) with the newest
+        // updated_at, but its identity fields are nulled.
+        clear(&pool, BOB).await.unwrap();
+
+        let row = get_latest(&pool).await.unwrap().expect("Alice's live session must be found");
+        assert_eq!(
+            row.substrate_address.as_deref(),
+            Some(ALICE),
+            "a cleared row must not shadow another account's live session"
+        );
+    }
+
+    /// M-6 companion: when every account is logged out there is no
+    /// session to restore, even though the husk rows still exist.
+    #[tokio::test]
+    async fn get_latest_returns_none_when_all_rows_cleared() {
+        let pool = setup_db().await;
+        upsert_simple(&pool, ALICE, "t").await;
+        clear(&pool, ALICE).await.unwrap();
+        assert!(get_latest(&pool).await.unwrap().is_none());
+    }
+
+    /// M-6: editing the logout-timeout preference for a background
+    /// account must not promote it to boot-restore priority.
+    #[tokio::test]
+    async fn preference_edit_does_not_reorder_boot_restore() {
+        let pool = setup_db().await;
+        upsert_simple(&pool, ALICE, "alice-token").await;
+        upsert_simple(&pool, BOB, "bob-token").await;
+        set_updated_at(&pool, ALICE, "2020-01-01 00:00:00").await;
+        set_updated_at(&pool, BOB, "2020-01-02 00:00:00").await;
+
+        update_logout_time(&pool, ALICE, -1).await.unwrap();
+
+        let row = get_latest(&pool).await.unwrap().unwrap();
+        assert_eq!(
+            row.substrate_address.as_deref(),
+            Some(BOB),
+            "a preference edit must not change which account restores at boot"
+        );
     }
 
     /// M-1: a row whose token lives ONLY in the keychain (DB column NULL

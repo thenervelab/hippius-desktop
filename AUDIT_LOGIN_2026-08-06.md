@@ -15,8 +15,14 @@
 > the silent-degradation gap the PR #102 review surfaced. Console-repo confirmation during the fix:
 > its callback page sends only `code`/`username`/`id` (never `token`) and forwards
 > `state` for mobile only — the desktop `state` forwarding (S-3) is a one-condition
-> change in `hippius-console/src/app/auth/callback/page.tsx`. Still open: M-2…M-7,
-> S-2…S-6 (S-4 deliberately deferred — interacts with the H-2 tamper binding).
+> change in `hippius-console/src/app/auth/callback/page.tsx`. **M-2, M-6, M-7 and L-1
+> are also FIXED** (third slice): pending OAuth states persist in `oauth_pending_states`
+> with a wall-clock 5-min TTL and reload on `complete_oauth_flow` (M-2, which also
+> converts the TTL off `Instant` — L-1); `get_latest` skips cleared rows and
+> `update_logout_time` no longer bumps `updated_at` (M-6); an empty `substrate_address`
+> callback is now an error instead of a half-login (M-7). Still open: M-3/M-4 (deep-link
+> listener placement + dedup TTL), M-5, S-2…S-6 (S-4 deliberately deferred — interacts
+> with the H-2 tamper binding).
 
 Top-to-bottom review of the authentication stack, prompted by two reported symptoms:
 intermittent **OAuth login failures** and intermittent **stored-account (session restore) issues**.
