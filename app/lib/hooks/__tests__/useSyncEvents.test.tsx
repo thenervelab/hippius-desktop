@@ -5,7 +5,7 @@ import { Provider, createStore } from "jotai";
 import { queryClientAtom } from "jotai-tanstack-query";
 import { QueryClient } from "@tanstack/react-query";
 import React from "react";
-import { useSyncEvents } from "../useSyncEvents";
+import { AUTH_RELOGIN_TOAST_ID, useSyncEvents } from "../useSyncEvents";
 
 // ── Tauri mocks ─────────────────────────────────────────────────────
 //
@@ -289,7 +289,7 @@ describe("useSyncEvents — auth relogin toast (PR #102 follow-up)", () => {
       expect(call[0]).toMatch(/sign back in/i);
       // The stable id is what makes sonner render ONE toast for the
       // engine's repeated per-cycle emits.
-      expect(call[1]).toMatchObject({ id: "auth-relogin-required" });
+      expect(call[1]).toMatchObject({ id: AUTH_RELOGIN_TOAST_ID });
     }
   });
 });

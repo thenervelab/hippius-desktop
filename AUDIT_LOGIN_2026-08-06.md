@@ -20,9 +20,12 @@
 > with a wall-clock 5-min TTL and reload on `complete_oauth_flow` (M-2, which also
 > converts the TTL off `Instant` — L-1); `get_latest` skips cleared rows and
 > `update_logout_time` no longer bumps `updated_at` (M-6); an empty `substrate_address`
-> callback is now an error instead of a half-login (M-7). Still open: M-3/M-4 (deep-link
-> listener placement + dedup TTL), M-5, S-2…S-6 (S-4 deliberately deferred — interacts
-> with the H-2 tamper binding).
+> callback is now an error instead of a half-login (M-7). **M-3 and M-4 are also FIXED**
+> (fourth slice): the deep-link listener is the globally mounted `DeepLinkListener`
+> (AppShell) instead of living on the login page, the dedup marker expires after
+> `DEEP_LINK_DEDUP_TTL_MS` (10 min), and every login success path dismisses the
+> session-expired toast (`AUTH_RELOGIN_TOAST_ID`). Still open: M-5, S-2…S-6 (S-4
+> deliberately deferred — interacts with the H-2 tamper binding).
 
 Top-to-bottom review of the authentication stack, prompted by two reported symptoms:
 intermittent **OAuth login failures** and intermittent **stored-account (session restore) issues**.

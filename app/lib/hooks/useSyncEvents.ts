@@ -25,6 +25,14 @@ import { queryClientAtom } from "jotai-tanstack-query";
 import { DRIVE_STORAGE_STATS_QUERY_KEY } from "./api/useDriveStorageStats";
 import { DRIVE_STORAGE_CHART_QUERY_KEY } from "./api/useDriveStorageChart";
 
+/**
+ * Sonner toast id for the persistent session-expired notice. Exported so
+ * every login success path (`wallet-auth-context`) can dismiss it — the
+ * toast is `duration: Infinity`, and surviving a successful re-login
+ * would tell the user their brand-new session is expired.
+ */
+export const AUTH_RELOGIN_TOAST_ID = "auth-relogin-required";
+
 interface SyncOutcome {
   label?: string;
   files_uploaded: number;
@@ -176,7 +184,7 @@ export function useSyncEvents() {
         // persistent toast.
         ["hcfs_auth_relogin_required", () => {
           toast.error("Your session has expired. Please sign out and sign back in.", {
-            id: "auth-relogin-required",
+            id: AUTH_RELOGIN_TOAST_ID,
             duration: Infinity,
           });
         }],

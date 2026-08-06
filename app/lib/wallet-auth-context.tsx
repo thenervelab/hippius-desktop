@@ -20,6 +20,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { invokeWithTimeout } from "./utils/invokeWithTimeout";
 import { useTrayInit, clearLoginStatusCache } from "./hooks/useTraySync";
 import { tryAutoInitSync } from "./hooks/useHcfsSync";
+import { AUTH_RELOGIN_TOAST_ID } from "./hooks/useSyncEvents";
 import { appStore } from "./store/jotaiStore";
 import { resetSyncSession } from "./store/resetSyncSession";
 import { migrationCheckAtom, DEFAULT_MIGRATION_CHECK_STATE } from "./global-atoms/migrationAtoms";
@@ -417,6 +418,10 @@ export function WalletAuthProvider({
       // the OS keychain, so any subsequent restore_session will land
       // in `AlreadyWritten` and sync will unlock normally.
       appStore.set(syncRequiresReauthAtom, false);
+      // A successful sign-in supersedes the persistent session-expired
+      // toast (it is duration: Infinity and would otherwise outlive the
+      // re-login it asked for).
+      toast.dismiss(AUTH_RELOGIN_TOAST_ID);
 
       if (logoutTimerRef.current) {
         clearTimeout(logoutTimerRef.current);
@@ -468,6 +473,10 @@ export function WalletAuthProvider({
       // next restore_session or page reload, defeating the recovery
       // flow.
       appStore.set(syncRequiresReauthAtom, false);
+      // A successful sign-in supersedes the persistent session-expired
+      // toast (it is duration: Infinity and would otherwise outlive the
+      // re-login it asked for).
+      toast.dismiss(AUTH_RELOGIN_TOAST_ID);
 
       initSync(result.substrateAddress);
 
@@ -511,6 +520,10 @@ export function WalletAuthProvider({
     // so a future refactor that changes OAuth capability mapping can't
     // leak a stale `true` from an earlier mnemonic session.
     appStore.set(syncRequiresReauthAtom, false);
+    // A successful sign-in supersedes the persistent session-expired
+    // toast (duration: Infinity — it must not outlive the re-login it
+    // asked for).
+    toast.dismiss(AUTH_RELOGIN_TOAST_ID);
 
     logger.debug("[WalletAuth] OAuth session persisted and state updated");
 
