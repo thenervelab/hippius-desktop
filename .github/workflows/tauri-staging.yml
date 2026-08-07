@@ -1,16 +1,16 @@
-name: publish-preview
+name: publish-staging
 
 on:
   workflow_dispatch:
   push:
-    branches: [redesign-preview]
+    branches: [staging]
 
 permissions:
   contents: write
   pull-requests: read
 
 concurrency:
-  group: publish-preview-${{ github.ref }}
+  group: publish-staging-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -285,10 +285,10 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
         with:
-          tagName: v__VERSION__-preview
-          releaseName: '[PREVIEW] ${{ steps.release_notes.outputs.title }}'
+          tagName: v__VERSION__-staging
+          releaseName: '[STAGING] ${{ steps.release_notes.outputs.title }}'
           releaseBody: |
-            **🎨 Redesign Preview Build - macOS Only**
+            **🎨 Staging Build - macOS Only**
 
             ${{ steps.release_notes.outputs.body }}
           releaseDraft: false
@@ -361,8 +361,8 @@ jobs:
           APP="src-tauri/target/universal-apple-darwin/release/bundle/macos/Hippius.app"
           OUT="$RUNNER_TEMP/hippius-macos-dist"
           macos/finalize-macos-release.sh "$APP" "$OUT"
-          TAG="v$(jq -r .version src-tauri/tauri.conf.json)-preview"
-          # The preview release already exists (tauri-action created it above).
+          TAG="v$(jq -r .version src-tauri/tauri.conf.json)-staging"
+          # The staging release already exists (tauri-action created it above).
           gh release upload "$TAG" \
             "$OUT"/*.dmg \
             "$OUT"/Hippius.app.tar.gz \
@@ -371,7 +371,7 @@ jobs:
 
   # Linux preview: the .deb (with the file-manager "Share with Hippius" action
   # files wired in via tauri.conf.json's bundle.linux.deb). All three platform
-  # jobs upsert the same v<version>-preview release.
+  # jobs upsert the same v<version>-staging release.
   publish-tauri-linux:
     runs-on: ubuntu-22.04
     steps:
@@ -451,10 +451,10 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
         with:
-          tagName: v__VERSION__-preview
-          releaseName: '[PREVIEW] Hippius (redesign)'
+          tagName: v__VERSION__-staging
+          releaseName: '[STAGING] Hippius'
           releaseBody: |
-            **🎨 Redesign Preview Build**
+            **🎨 Staging Build**
           releaseDraft: false
           prerelease: true
           makeLatest: false
@@ -548,10 +548,10 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
         with:
-          tagName: v__VERSION__-preview
-          releaseName: '[PREVIEW] Hippius (redesign)'
+          tagName: v__VERSION__-staging
+          releaseName: '[STAGING] Hippius'
           releaseBody: |
-            **🎨 Redesign Preview Build**
+            **🎨 Staging Build**
           releaseDraft: false
           prerelease: true
           makeLatest: false
@@ -564,7 +564,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $ver = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
-          $tag = "v$ver-preview"
+          $tag = "v$ver-staging"
           $out = "windows/HippiusShell/out"
           Copy-Item windows/HippiusShell/register-preview.ps1 "$out/"
           @"
