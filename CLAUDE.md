@@ -19,6 +19,7 @@ Hippius Desktop is a Tauri 2.0 application combining a Next.js 15 frontend with 
 When writing code on this project we ALWAYS try to put the buisness logic in the RUST side of the project in /src-tauri and interface with the frontend /app instead of writting it to the frontend.
 When making a change on the code make sure to include tests for it. Do not add dummy tests that are never going to help us identify issues we need proper testing.
 When making a change on the code make sure to add documentation on the code and also update the CLAUDE.md.
+When a change is user-visible, add a one-line entry to the `[Unreleased]` section of `CHANGELOG.md` **in the same PR**. That file is read by non-engineers (marketing writes release announcements from it), so describe the outcome, not the mechanism — "uploads are faster on slow connections", never "parallel chunk uploads with per-chunk retry". Internal refactors, dependency bumps with no user-visible effect, and test-only changes get no entry. On release, rename `[Unreleased]` to the version + date and open a fresh `[Unreleased]` above it.
 
 ## Build & Development Commands
 
