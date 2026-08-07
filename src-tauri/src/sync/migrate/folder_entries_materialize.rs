@@ -55,6 +55,7 @@ use sqlx::sqlite::SqlitePool;
 use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
+use tauri::Emitter;
 use tracing::{debug, info, warn};
 
 /// Minimum wall-clock gap between combined folder-entity-sync runs for a drive.
@@ -432,36 +433,96 @@ pub async fn run_folder_entity_sync_for_drive(state: &AppState, account_id: &str
     Ok(FolderEntitySyncOutcome::Ran { reconcile, materialize })
 }
 
-/// Spawn the combined per-cycle folder-entity sync as a detached tokio task,
-/// gated by the single per-label throttle.
+/// Why a folder-entity sync was requested — decides whether the interval
+/// throttle applies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FolderEntitySyncTrigger {
+    /// A sync cycle just completed. Routine upkeep: throttled to at most once
+    /// per [`MIN_FOLDER_ENTITY_SYNC_INTERVAL`] per drive.
+    PerCycle,
+    /// A user action already removed a directory from disk
+    /// (`crate::sync::files::delete_files`). Bypasses the interval because
+    /// deleting a folder can produce NO file work at all — hcfs-client ends that
+    /// cycle `NoChanges`, which emits no `SyncCompleted`, so the routine trigger
+    /// may never fire and the folder would stay registered on the server (and
+    /// keep appearing in the desktop listing via the cache overlay) indefinitely.
+    Forced,
+}
+
+/// Spawn the combined folder-entity sync as a detached tokio task, gated by the
+/// single per-label throttle + in-flight guard.
 ///
-/// Called from [`crate::sync::tauri_bridge::handle_sync_completed`] — the single
-/// per-cycle-per-drive completion funnel — so the sync runs at most once per
-/// completed cycle per drive, and at most once per
-/// [`MIN_FOLDER_ENTITY_SYNC_INTERVAL`]. The throttle is checked synchronously
-/// BEFORE spawning so a throttled cycle costs nothing; the walk + network run off
-/// the event thread.
-pub(crate) fn spawn_folder_entity_sync(app: tauri::AppHandle, account_id: String, label: String) {
+/// Called from [`crate::sync::tauri_bridge::handle_sync_completed`] — the
+/// per-cycle-per-drive completion funnel — and from `delete_files` when a
+/// directory was removed. `trigger` decides whether the interval throttle
+/// applies; the in-flight guard applies either way, so a forced run never
+/// overlaps a routine one. Gating happens synchronously BEFORE spawning so a
+/// skipped run costs nothing; the walk + network run off the event thread.
+pub(crate) fn spawn_folder_entity_sync(app: tauri::AppHandle, account_id: String, label: String, trigger: FolderEntitySyncTrigger) {
     use tauri::Manager;
-    {
+    let permit = {
         let state = app.state::<AppState>();
-        if !state.folder_entity_sync.should_run(&label, MIN_FOLDER_ENTITY_SYNC_INTERVAL) {
-            debug!(label = %label, "folder-entity sync: throttled; a recent cycle already ran this drive");
+        let min_interval = match trigger {
+            FolderEntitySyncTrigger::PerCycle => Some(MIN_FOLDER_ENTITY_SYNC_INTERVAL),
+            FolderEntitySyncTrigger::Forced => None,
+        };
+        let Some(permit) = std::sync::Arc::clone(&state.folder_entity_sync).try_acquire(&label, min_interval) else {
+            debug!(label = %label, ?trigger, "folder-entity sync: skipped; this drive is throttled or already running");
             return;
-        }
-    }
+        };
+        permit
+    };
     tokio::spawn(async move {
+        // The permit is held for the whole run so a second request for this
+        // label is refused (released on drop, including on panic). A FORCED
+        // request refused that way is queued rather than dropped, and this loop
+        // is what serves it: `take_pending_or_release` hands the slot straight
+        // back without ever reopening it. Each extra pass costs one more real
+        // user-initiated folder delete, and the work converges, so the loop is
+        // bounded by user actions rather than by an arbitrary retry cap — a cap
+        // would silently drop the last request, which is the bug this closes.
+        let mut permit = permit;
         let state = app.state::<AppState>();
-        match run_folder_entity_sync_for_drive(&state, &account_id, &label).await {
-            Ok(FolderEntitySyncOutcome::Ran { reconcile, materialize }) => {
-                info!(label = %label, ?reconcile, ?materialize, "folder-entity sync task finished");
+        loop {
+            match run_folder_entity_sync_for_drive(&state, &account_id, &label).await {
+                Ok(FolderEntitySyncOutcome::Ran { reconcile, materialize }) => {
+                    info!(label = %label, ?reconcile, ?materialize, "folder-entity sync task finished");
+                    // Only a run that actually moved something needs to reach
+                    // the FE, and only after the server + cache truth has
+                    // landed: the listing's cache overlay re-surfaces a deleted
+                    // folder until the unregister completes, which is long after
+                    // the delete IPC returned and the FE already refreshed.
+                    if folder_entities_changed(&reconcile, &materialize) {
+                        let _ = app.emit(crate::sync::events::FOLDER_ENTITIES_CHANGED, crate::sync::events::LabelPayload { label: label.clone() });
+                    }
+                }
+                Ok(FolderEntitySyncOutcome::NotBackfilledYet) => debug!(label = %label, "folder-entity sync: backfill not done yet; deferring"),
+                Ok(FolderEntitySyncOutcome::NotReady) => debug!(label = %label, "folder-entity sync: drive not ready; will retry next eligible cycle"),
+                Ok(FolderEntitySyncOutcome::RetryLater) => debug!(label = %label, "folder-entity sync: transient failure; will retry next eligible cycle"),
+                Err(e) => warn!(label = %label, error = ?e, "folder-entity sync: unexpected error"),
             }
-            Ok(FolderEntitySyncOutcome::NotBackfilledYet) => debug!(label = %label, "folder-entity sync: backfill not done yet; deferring"),
-            Ok(FolderEntitySyncOutcome::NotReady) => debug!(label = %label, "folder-entity sync: drive not ready; will retry next eligible cycle"),
-            Ok(FolderEntitySyncOutcome::RetryLater) => debug!(label = %label, "folder-entity sync: transient failure; will retry next eligible cycle"),
-            Err(e) => warn!(label = %label, error = ?e, "folder-entity sync: unexpected error"),
+
+            match permit.take_pending_or_release() {
+                Some(next) => {
+                    debug!(label = %label, "folder-entity sync: a forced request arrived mid-run; running again");
+                    permit = next;
+                }
+                None => break,
+            }
         }
     });
+}
+
+/// Did this run change the folder-entity set the desktop listing reads?
+///
+/// Pure so the emit condition is unit-testable. Only an applied delta counts:
+/// the `NoChanges` steady state and the deferred / transient outcomes leave the
+/// server set and the local cache exactly as the FE already saw them, so
+/// emitting on those would refetch every listing on every idle cycle.
+fn folder_entities_changed(reconcile: &ReconcileOutcome, materialize: &MaterializeOutcome) -> bool {
+    let reconciled = matches!(reconcile, ReconcileOutcome::Reconciled { registered, unregistered } if registered + unregistered > 0);
+    let materialized = matches!(materialize, MaterializeOutcome::Materialized { created, removed } if created + removed > 0);
+    reconciled || materialized
 }
 
 // =============================================================================
@@ -475,6 +536,49 @@ mod tests {
 
     fn set(items: &[&str]) -> BTreeSet<String> {
         items.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    // ---- FE change signal --------------------------------------------------
+
+    /// The event exists so a deleted folder stops being re-surfaced by the
+    /// listing's cache overlay once the server unregister lands.
+    #[test]
+    fn an_applied_unregister_signals_the_frontend() {
+        assert!(folder_entities_changed(
+            &ReconcileOutcome::Reconciled { registered: 0, unregistered: 1 },
+            &MaterializeOutcome::NoChanges,
+        ));
+    }
+
+    /// A folder another device created reaches disk via materialize, so that
+    /// half must signal too.
+    #[test]
+    fn an_applied_materialize_signals_the_frontend() {
+        assert!(folder_entities_changed(
+            &ReconcileOutcome::NoChanges,
+            &MaterializeOutcome::Materialized { created: 1, removed: 0 },
+        ));
+    }
+
+    /// The steady state is the common case — every idle cycle runs this. Firing
+    /// there would refetch every listing on a loop.
+    #[test]
+    fn a_converged_run_does_not_signal_the_frontend() {
+        assert!(!folder_entities_changed(&ReconcileOutcome::NoChanges, &MaterializeOutcome::NoChanges));
+        assert!(!folder_entities_changed(
+            &ReconcileOutcome::Reconciled { registered: 0, unregistered: 0 },
+            &MaterializeOutcome::Materialized { created: 0, removed: 0 },
+        ));
+    }
+
+    /// Deferred / transient outcomes left the server set and the cache exactly
+    /// as the FE already saw them; the next eligible run signals if it changes
+    /// anything.
+    #[test]
+    fn deferred_and_failed_runs_do_not_signal_the_frontend() {
+        assert!(!folder_entities_changed(&ReconcileOutcome::RetryLater, &MaterializeOutcome::RetryLater));
+        assert!(!folder_entities_changed(&ReconcileOutcome::NoChanges, &MaterializeOutcome::NotBackfilledYet));
+        assert!(!folder_entities_changed(&ReconcileOutcome::NoChanges, &MaterializeOutcome::NotReady));
     }
 
     // ---- Pure plan ---------------------------------------------------------

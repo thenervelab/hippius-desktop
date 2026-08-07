@@ -32,6 +32,15 @@ pub const REVIEW_MODE_TIMEOUT: &str = "hcfs_review_mode_timeout";
 pub const CONFLICTS_PENDING: &str = "hcfs_conflicts_pending";
 /// Emitted when the recent activity list changes.
 pub const ACTIVITY_UPDATED: &str = "hcfs_activity_updated";
+/// Emitted when a folder-entity sync actually changed a drive's registered
+/// directory set (registered / unregistered / materialized / removed a folder).
+///
+/// The FE listings read folder entities through `list_sync_folder_grouped`'s
+/// `folder_entries_local` overlay, and that cache is only updated after the
+/// server round-trip lands — long after the IPC that triggered the change
+/// returned. Without this event a folder the user just deleted keeps rendering
+/// as a `pending` row until some unrelated refresh. Payload: [`LabelPayload`].
+pub const FOLDER_ENTITIES_CHANGED: &str = "hcfs_folder_entities_changed";
 /// Emitted when the backend detects credentials are invalid and re-login is needed.
 pub const AUTH_RELOGIN_REQUIRED: &str = "hcfs_auth_relogin_required";
 /// Emitted when `AuthInfo` has been fully populated post-login (mnemonic

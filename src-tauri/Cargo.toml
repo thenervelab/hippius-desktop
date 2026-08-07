@@ -129,18 +129,24 @@ alloy-signer = { version = "0.8", default-features = false }
 alloy-signer-local = { version = "0.8", default-features = false, features = [
     "mnemonic",
 ] }
-# Pinned to the merged hcfs main rev (PR #265) that adds idle heartbeat
-# backoff and collapses remote folder listings to one per sync round — the
-# engine-side fix for no-op cycles re-indexing every remote path (the
-# red-flashing tray). Bumping this rev is the only way a hcfs change reaches
-# the desktop, so it stays exact and is guarded by the wire-contract pins in
+# Pinned to the merged hcfs main rev (PR #278) that teaches `stage_with_paths`
+# the display-path ladder `drive/download.rs` already used — path_index, then
+# the server's encrypted path blob decrypted with the folder key, then the
+# legacy basename. Without it a staged plan named remote-only files by a hex
+# FileId, so the "Review Changes" dialog asked users to confirm deleting
+# 64-char hashes. Carries forward PR #277's `Manifest.source = "desktop"` stamp
+# on every upload hcfs-client builds, which is what feeds hcfs-server's
+# per-source storage breakdown (`GET /get_source_summary`) — no desktop code
+# declares it, because every upload here goes through hcfs-client's own sync
+# engine. Bumping this rev is the only way a hcfs change reaches the desktop,
+# so it stays exact and is guarded by the wire-contract pins in
 # tests/hcfs_contract.rs.
-hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "59babc9b49050e9361a46d4238ab2891abdea6b4" }
+hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "2e33c2a55bd2bcf706caa646c420a24ee5ab1a65" }
 # hcfs-shared pulls in the `network` module types (RegisterRelativePathEntry,
 # MAX_REGISTER_RELATIVE_PATHS_BATCH, ...) that hcfs-client takes/returns on
 # its public API but does not re-export. Pinned to the same git rev so the
 # wire types stay in lockstep with the client.
-hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "59babc9b49050e9361a46d4238ab2891abdea6b4" }
+hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "2e33c2a55bd2bcf706caa646c420a24ee5ab1a65" }
 # NFC-normalise relative_path strings before posting them to the server's
 # register_relative_paths endpoint. macOS APFS hands filenames back in NFD
 # and the server's path_validator hard-rejects anything non-NFC — see the

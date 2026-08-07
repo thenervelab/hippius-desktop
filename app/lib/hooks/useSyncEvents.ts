@@ -14,6 +14,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useEffect } from "react";
 import { useSetAtom, useAtomValue } from "jotai";
 import { invoke } from "@tauri-apps/api/core";
+import { toast } from "sonner";
 import { errorMessage } from "../utils/errorUtils";
 import {
   syncEngineHealthAtom,
@@ -23,6 +24,14 @@ import {
 import { queryClientAtom } from "jotai-tanstack-query";
 import { DRIVE_STORAGE_STATS_QUERY_KEY } from "./api/useDriveStorageStats";
 import { DRIVE_STORAGE_CHART_QUERY_KEY } from "./api/useDriveStorageChart";
+
+/**
+ * Sonner toast id for the persistent session-expired notice. Exported so
+ * every login success path (`wallet-auth-context`) can dismiss it — the
+ * toast is `duration: Infinity`, and surviving a successful re-login
+ * would tell the user their brand-new session is expired.
+ */
+export const AUTH_RELOGIN_TOAST_ID = "auth-relogin-required";
 
 interface SyncOutcome {
   label?: string;
@@ -154,6 +163,30 @@ export function useSyncEvents() {
         // with siblings so a sync-completed burst doesn't flicker.
         ["hcfs_activity_updated", () => {
           scheduleCompletedDispatch(0);
+        }],
+        // A folder-entity sync changed a drive's registered directory set.
+        // This is the completion signal for a folder delete: the listing's
+        // `folder_entries_local` overlay still returns the deleted folder
+        // until the server unregister lands, which is long after the delete
+        // IPC returned and the FE already refreshed off `hippius:files-mutated`.
+        // Without this the row would linger as `pending` until an unrelated
+        // refresh — a folder-only delete never completes a sync cycle.
+        ["hcfs_folder_entities_changed", () => {
+          scheduleCompletedDispatch(0);
+        }],
+        // The engine could not re-authenticate this account — e.g. an
+        // OAuth session past its 30-day token, which has no client-side
+        // refresh path (the refresh guard in auth/service.rs refuses to
+        // re-auth as the sync-mnemonic identity). Without this listener
+        // the refusal was silent: sync degraded with no UI signal until
+        // the next launch's expiry logout (PR #102 review follow-up).
+        // The sonner `id` dedups the repeated per-cycle emits into one
+        // persistent toast.
+        ["hcfs_auth_relogin_required", () => {
+          toast.error("Your session has expired. Please sign out and sign back in.", {
+            id: AUTH_RELOGIN_TOAST_ID,
+            duration: Infinity,
+          });
         }],
         // Connectivity health updates
         ["hcfs_connectivity_changed", (e) => {

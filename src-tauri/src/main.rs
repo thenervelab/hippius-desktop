@@ -249,7 +249,10 @@ fn main() {
             // handler picks them up.
             for arg in &argv {
                 if arg.starts_with("hippiusapp://") {
-                    info!("Deep link URL detected: {}", arg);
+                    // Log only the scheme+path: a direct-grant OAuth callback
+                    // carries the bearer token in the query string, and the
+                    // full URL used to land in the on-disk log (audit S-1).
+                    info!("Deep link URL detected: {}", crate::auth::oauth::deep_link_public_part(arg));
                     let _ = app.emit("deep-link://new-url", vec![arg]);
                     break;
                 }

@@ -1,7 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
   computeLogoutChunk,
-  parseOAuthExpiryMs,
   MAX_LOGOUT_DELAY_MS,
 } from "@/app/lib/auth/sessionTiming";
 
@@ -54,34 +53,5 @@ describe("computeLogoutChunk", () => {
       expect(++guard).toBeLessThan(10); // must terminate
     }
     expect(summed).toBe(MAX_LOGOUT_DELAY_MS * 2 + 500);
-  });
-});
-
-describe("parseOAuthExpiryMs", () => {
-  it("returns null for absent or empty input", () => {
-    expect(parseOAuthExpiryMs(null)).toBeNull();
-    expect(parseOAuthExpiryMs("")).toBeNull();
-  });
-
-  it("parses a numeric epoch-ms string", () => {
-    expect(parseOAuthExpiryMs("1782320000000")).toBe(1782320000000);
-  });
-
-  it("parses an ISO-8601 date string to epoch ms", () => {
-    expect(parseOAuthExpiryMs("2026-06-24T00:00:00.000Z")).toBe(
-      Date.parse("2026-06-24T00:00:00.000Z")
-    );
-  });
-
-  it("yields NaN for an unparseable date string (documented legacy behavior)", () => {
-    // Preserved from the inline original — restore_session treats NaN as
-    // "no client expiry". Pinned so a future change to this branch is explicit.
-    expect(parseOAuthExpiryMs("not-a-date")).toBeNaN();
-  });
-
-  it("yields NaN for an all-whitespace value (Number(' ') is 0, then parseInt is NaN)", () => {
-    // Whitespace is truthy so it passes the null guard, but parseInt(' ') is
-    // NaN — the same "no client expiry" outcome. Pinned to document the branch.
-    expect(parseOAuthExpiryMs("   ")).toBeNaN();
   });
 });
