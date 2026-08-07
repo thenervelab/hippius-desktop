@@ -27,6 +27,10 @@ import { useRouter } from "next/navigation";
 import { isTauri } from "@tauri-apps/api/core";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { isDeepLinkAlreadyProcessed } from "@/app/lib/auth/deepLinkDedup";
+import {
+  OAUTH_SESSION_EXPIRY_KEY,
+  OAUTH_SESSION_KEY,
+} from "@/app/lib/auth/oauthSessionHint";
 
 export default function DeepLinkListener() {
   const router = useRouter();
@@ -90,10 +94,8 @@ export default function DeepLinkListener() {
         // valid persisted OAuth session means this callback is a
         // redelivery, not a login in progress — go home instead of
         // reprocessing it (mirrors /auth/callback's own guard).
-        const storedSession = localStorage.getItem("hippius_oauth_session");
-        const storedExpiry = localStorage.getItem(
-          "hippius_oauth_session_expiry",
-        );
+        const storedSession = localStorage.getItem(OAUTH_SESSION_KEY);
+        const storedExpiry = localStorage.getItem(OAUTH_SESSION_EXPIRY_KEY);
         if (storedSession && storedExpiry) {
           const expiryTime = isNaN(Number(storedExpiry))
             ? new Date(storedExpiry).getTime()

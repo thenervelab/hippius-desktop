@@ -584,6 +584,21 @@ pub async fn complete_oauth_flow(
     };
 
     let (token, user_id, username, email, substrate_address) = if let Some(ref t) = params.token {
+        // Direct grant: the deep link carried a bearer token instead of a
+        // one-time code. This is the RFC 6750 §2.3 shape we want gone —
+        // the token transits OS deep-link plumbing and is persisted with
+        // no server-side introspection (audit R-02/L-4).
+        //
+        // hippius-console sends only `code`, so this branch should be
+        // reachable ONLY via the env-gated dev injector or a hand-crafted
+        // deep link. This warning is the evidence for that: if a release
+        // goes by without it firing, the branch can be deleted outright —
+        // which closes R-02 desktop-side with no API change, and takes the
+        // empty-`substrate_address` guard below with it.
+        warn!(
+            has_substrate_address = params.substrate_address.is_some(),
+            "OAuth callback used the DIRECT-GRANT path (token in deep link) rather than a code exchange"
+        );
         (
             t.clone(),
             params.user_id.unwrap_or(0),

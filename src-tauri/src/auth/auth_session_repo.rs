@@ -237,6 +237,37 @@ pub async fn update_logout_time(pool: &SqlitePool, account_id: &str, minutes: i6
     Ok(())
 }
 
+/// Correct a session row's `provider` label in place.
+///
+/// Exists for one job: repairing rows a pre-#102 build mislabelled.
+/// `ensure_billing_auth` used to upsert `provider = "mnemonic"` keyed by
+/// an OAuth account's real login SS58 (audit H-4), and since restore now
+/// reads `provider` from the row alone, believing that label would send an
+/// OAuth account down the mnemonic restore path. See
+/// `session_restore::check_provider` for how the mislabel is detected.
+///
+/// Like [`update_logout_time`], this deliberately does NOT bump
+/// `updated_at`: repairing stored data is not a session event, and
+/// `get_latest` orders by that column to decide which account the next
+/// boot restores (audit M-6).
+pub async fn repair_provider(pool: &SqlitePool, account_id: &str, provider: &str) -> Result<()> {
+    let owner = account_key(account_id);
+
+    sqlx::query(
+        r"
+        UPDATE auth_session SET
+            provider = ?
+        WHERE owner = ?
+        ",
+    )
+    .bind(provider)
+    .bind(&owner)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
 /// Fetch the full row for a specific account, if any.
 pub async fn get_by_account(pool: &SqlitePool, account_id: &str) -> Result<Option<AuthSessionRow>> {
     let owner = account_key(account_id);
@@ -658,6 +689,45 @@ mod tests {
         )
         .await
         .unwrap();
+    }
+
+    /// Audit H-4 residue: a pre-#102 build could label an OAuth account
+    /// `provider = "mnemonic"`. The repair corrects the label without
+    /// touching credentials.
+    #[tokio::test]
+    async fn repair_provider_corrects_the_label_only() {
+        let pool = setup_db().await;
+        upsert_simple(&pool, ALICE, "alice-token").await;
+
+        repair_provider(&pool, ALICE, "oauth").await.unwrap();
+
+        let row = get_by_account(&pool, ALICE).await.unwrap().expect("row survives the repair");
+        assert_eq!(row.provider.as_deref(), Some("oauth"));
+        assert_eq!(row.auth_token.as_deref(), Some("alice-token"), "credentials must not be touched");
+        assert_eq!(row.username.as_deref(), Some("u"));
+        assert_eq!(row.substrate_address.as_deref(), Some(ALICE));
+    }
+
+    /// The repair is a data fix, not a session event, so — like
+    /// `update_logout_time` — it must not bump `updated_at` and reorder
+    /// which account the next boot restores (audit M-6).
+    #[tokio::test]
+    async fn provider_repair_does_not_reorder_boot_restore() {
+        let pool = setup_db().await;
+        upsert_simple(&pool, ALICE, "alice-token").await;
+        upsert_simple(&pool, BOB, "bob-token").await;
+        set_updated_at(&pool, ALICE, "2020-01-02 00:00:00").await;
+        set_updated_at(&pool, BOB, "2020-01-01 00:00:00").await;
+
+        // Repairing the older account's label must not promote it.
+        repair_provider(&pool, BOB, "oauth").await.unwrap();
+
+        let row = get_latest(&pool).await.unwrap().expect("a live session must be found");
+        assert_eq!(
+            row.substrate_address.as_deref(),
+            Some(ALICE),
+            "a provider repair must not change which account boots"
+        );
     }
 
     /// M-6: logging out of one account must not shadow another account's

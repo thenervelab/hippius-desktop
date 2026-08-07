@@ -27,7 +27,12 @@ import { migrationCheckAtom, DEFAULT_MIGRATION_CHECK_STATE } from "./global-atom
 import { splashCompleteAtom } from "./global-atoms/splashAtoms";
 import { syncRequiresReauthAtom } from "./global-atoms/unpinAtoms";
 import { scheduleOAuthSyncInit } from "./auth/scheduleOAuthSyncInit";
-import { computeLogoutChunk, parseOAuthExpiryMs } from "./auth/sessionTiming";
+import { computeLogoutChunk } from "./auth/sessionTiming";
+import {
+  clearOAuthSessionHint,
+  persistOAuthSessionHint,
+  scrubLegacyOAuthToken,
+} from "./auth/oauthSessionHint";
 import { buildOAuthSession, type LoginResult } from "./auth/buildOAuthSession";
 import { isMasterMnemonicUnrecoverable } from "./utils/dispatchTauriError";
 import { useAtomValue } from "jotai";
@@ -140,9 +145,8 @@ export function WalletAuthProvider({
       }
 
       // Clear browser-side OAuth session (Rust can't access localStorage)
+      clearOAuthSessionHint();
       if (typeof window !== "undefined") {
-        localStorage.removeItem("hippius_oauth_session");
-        localStorage.removeItem("hippius_oauth_session_expiry");
         localStorage.removeItem("hippius_oauth_provider");
       }
 
@@ -232,7 +236,8 @@ export function WalletAuthProvider({
     }
   }, [splashComplete]);
 
-  // Boot: restore session from Rust DB or localStorage OAuth session
+  // Boot: restore the session from the Rust `auth_session` row (the single
+  // source of truth — localStorage holds only a token-free hint)
   useEffect(() => {
     const bootOnce = { done: false };
 
@@ -245,15 +250,11 @@ export function WalletAuthProvider({
         logoutTimerRef.current = null;
       }
 
-      // Read localStorage (browser-only) and pass to Rust for validation
-      const storedSession = typeof window !== "undefined"
-        ? localStorage.getItem("hippius_oauth_session")
-        : null;
-      const storedExpiry = typeof window !== "undefined"
-        ? localStorage.getItem("hippius_oauth_session_expiry")
-        : null;
-
-      const oauthExpiryMs = parseOAuthExpiryMs(storedExpiry);
+      // Delete any bearer token a pre-S-4 build left in localStorage. Rust
+      // no longer reads the entry — the `auth_session` row is the only
+      // input to restore — so the stale secret has no purpose, and leaving
+      // it on disk is the exposure this change exists to remove.
+      scrubLegacyOAuthToken();
 
       // Single Rust call handles all validation, token checking, fallback.
       // This cap is an orphan-IPC backstop, NOT a responsiveness budget.
@@ -281,17 +282,13 @@ export function WalletAuthProvider({
         syncRequiresReauth: boolean;
       }>(
         "restore_session",
-        {
-          oauthSessionJson: storedSession ?? null,
-          oauthExpiryMs: oauthExpiryMs ?? null,
-        },
+        {},
         300_000,
       );
 
-      // Clear localStorage if Rust says so
+      // Clear the hint if Rust says so
       if (result.shouldClearOauth) {
-        localStorage.removeItem("hippius_oauth_session");
-        localStorage.removeItem("hippius_oauth_session_expiry");
+        clearOAuthSessionHint();
       }
 
       if (!result.authenticated) {
@@ -311,7 +308,22 @@ export function WalletAuthProvider({
       }
       setAuthType(result.authType === "oauth" ? "oauth" : "mnemonic");
       if (result.oauthSession) {
-        setOAuthSessionState(result.oauthSession as unknown as import("@/app/lib/types/oAuth").OAuthSession);
+        const restored = result.oauthSession as unknown as import("@/app/lib/types/oAuth").OAuthSession;
+        setOAuthSessionState(restored);
+        // Refresh the token-free hint so the synchronous boot checks in
+        // `/auth/callback` and `DeepLinkListener` keep seeing a session.
+        // The token stays in React state only.
+        //
+        // Gated on OAuth deliberately. Rust returns an `oauthSession`
+        // object for EVERY auth type (it is rebuilt from the session row),
+        // but both readers treat a live hint as proof that an inbound
+        // OAuth callback is a stale redelivery and swallow it. Writing the
+        // hint for a mnemonic account would break the invariant those
+        // guards are built on — DeepLinkListener states it outright:
+        // "mnemonic sessions never touch the OAuth localStorage keys".
+        if (result.authType === "oauth") {
+          persistOAuthSessionHint(restored);
+        }
       }
       // Write the reauth banner atom from Rust's authoritative answer.
       // True only for mnemonic users where the OS keychain didn't
@@ -504,11 +516,11 @@ export function WalletAuthProvider({
       throw new Error("Token is invalid or expired");
     }
 
-    // Persist to localStorage after validation
-    if (typeof window !== "undefined") {
-      localStorage.setItem("hippius_oauth_session", JSON.stringify(session));
-      localStorage.setItem("hippius_oauth_session_expiry", session.expiresAt);
-    }
+    // Persist the token-free hint after validation. The bearer token is
+    // deliberately NOT written: Rust restores from the `auth_session` row,
+    // so the only job left for localStorage is answering "is someone
+    // signed in?" synchronously (audit S-4).
+    persistOAuthSessionHint(session);
 
     setOAuthSessionState(session);
     setPolkadotAddress(session.substrateAddress || null);

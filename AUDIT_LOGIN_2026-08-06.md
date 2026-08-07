@@ -26,6 +26,18 @@
 > `DEEP_LINK_DEDUP_TTL_MS` (10 min), and every login success path dismisses the
 > session-expired toast (`AUTH_RELOGIN_TOAST_ID`). Still open: M-5, S-2…S-6 (S-4
 > deliberately deferred — interacts with the H-2 tamper binding).
+>
+> **SCOPE DECISION 2026-08-06 — the `api.hippius.com` backend will not be changed.**
+> That parks S-2 (PKCE), S-6 (server-returned expiry), the server half of S-1 / R-02 / L-4
+> (code-only grant), and S-5 (redirect scheme — feasible without the API via a scheme
+> rename, but low value while PKCE is parked). Residual risk and the compensating control
+> for each is recorded in §7 of
+> [`docs/plans/2026-08-06-login-remediation-open-items.md`](docs/plans/2026-08-06-login-remediation-open-items.md),
+> which is the implementation plan for everything that remains: S-4 + M-5 (one desktop PR,
+> ready now), S-3 (delete the state-less fallback once console PR #597 is deployed), and
+> the L-2 / L-3 cleanups. One open question for the API owner — whether
+> `/api/auth/exchange/` can legitimately return an empty `substrate_address`, which M-7
+> now hard-fails.
 
 Top-to-bottom review of the authentication stack, prompted by two reported symptoms:
 intermittent **OAuth login failures** and intermittent **stored-account (session restore) issues**.

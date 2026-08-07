@@ -14,6 +14,12 @@ import { useSetAtom } from "jotai";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { Loader2, AlertCircle } from "lucide-react";
 import type { OAuthSession } from "@/app/lib/types/oAuth";
+import {
+    OAUTH_SESSION_EXPIRY_KEY,
+    OAUTH_SESSION_KEY,
+    clearOAuthSessionHint,
+    persistOAuthSessionHint,
+} from "@/app/lib/auth/oauthSessionHint";
 import { activeRecoveryCheckAtom } from "@/app/lib/global-atoms/recoveryAtoms";
 import { checkRecoveryState } from "@/app/lib/utils/recovery";
 import { Button } from "@/components/ui/button";
@@ -41,8 +47,8 @@ export default function OAuthCallbackPage() {
                 hasProcessed.current = true;
                 // FIRST: Check if user is already authenticated via localStorage
                 // This check happens before processing any parameters to handle app restarts
-                const storedSession = localStorage.getItem("hippius_oauth_session");
-                const storedExpiry = localStorage.getItem("hippius_oauth_session_expiry");
+                const storedSession = localStorage.getItem(OAUTH_SESSION_KEY);
+                const storedExpiry = localStorage.getItem(OAUTH_SESSION_EXPIRY_KEY);
 
                 if (storedSession && storedExpiry) {
                     const expiryTime = isNaN(Number(storedExpiry))
@@ -53,8 +59,7 @@ export default function OAuthCallbackPage() {
                         router.replace("/");
                         return;
                     } else {
-                        localStorage.removeItem("hippius_oauth_session");
-                        localStorage.removeItem("hippius_oauth_session_expiry");
+                        clearOAuthSessionHint();
                     }
                 }
 
@@ -129,8 +134,7 @@ export default function OAuthCallbackPage() {
                 };
 
                 // Store in localStorage for session restoration on boot
-                localStorage.setItem("hippius_oauth_session", JSON.stringify(session));
-                localStorage.setItem("hippius_oauth_session_expiry", session.expiresAt);
+                persistOAuthSessionHint(session);
 
                 // Update auth context with OAuth session. The welcome
                 // notification is now created by Rust inside
