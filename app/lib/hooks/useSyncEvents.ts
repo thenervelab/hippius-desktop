@@ -24,6 +24,7 @@ import {
 import { queryClientAtom } from "jotai-tanstack-query";
 import { DRIVE_STORAGE_STATS_QUERY_KEY } from "./api/useDriveStorageStats";
 import { DRIVE_STORAGE_CHART_QUERY_KEY } from "./api/useDriveStorageChart";
+import { CREDIT_BALANCE_CHART_QUERY_KEY } from "./api/useCreditBalanceChart";
 
 /**
  * Sonner toast id for the persistent session-expired notice. Exported so
@@ -144,12 +145,18 @@ export function useSyncEvents() {
             queryClient.invalidateQueries({
               queryKey: [DRIVE_STORAGE_STATS_QUERY_KEY],
             });
-            // Also refresh the storage bar CHART (`useDriveStorageChart`) — it
+            // Also refresh the storage CHART (`useDriveStorageChart`) — it
             // has no refetchInterval, so without this it sat frozen while the
             // headline total (which polls) climbed beside it, a visible
             // divergence within the same card during/after a sync.
             queryClient.invalidateQueries({
               queryKey: [DRIVE_STORAGE_CHART_QUERY_KEY],
+            });
+            // An upload spends credits, so the home page's available-credit
+            // balance chart is stale for exactly the same reason. Same lack of
+            // a refetchInterval, same visible divergence against its headline.
+            queryClient.invalidateQueries({
+              queryKey: [CREDIT_BALANCE_CHART_QUERY_KEY],
             });
           }
         }],

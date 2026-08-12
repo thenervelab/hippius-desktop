@@ -5,13 +5,15 @@ import React, { useCallback, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { RefreshButton, Select } from "@/components/ui";
-import { useDriveStorageChart } from "@/app/lib/hooks/api/useDriveStorageChart";
+import {
+  useDriveStorageChart,
+  type StorageRange,
+} from "@/app/lib/hooks/api/useDriveStorageChart";
 import { useDriveStorageStats } from "@/app/lib/hooks/api/useDriveStorageStats";
 import { formatBytes } from "@/app/lib/utils/formatBytes";
 import { cn } from "@/app/lib/utils";
 
-import StorageBarChart from "./StorageBarChart";
-import { buildStorageDeltaBars, StorageRange } from "./storageDeltaUtils";
+import AvailableCreditsChart from "@/components/page-sections/home/available-credits/AvailableCreditsChart";
 import { nextSkeletonState } from "@/lib/utils/skeletonGate";
 
 const timeRangeOptions = [
@@ -21,28 +23,6 @@ const timeRangeOptions = [
   { value: "year", label: "1 YEAR" },
   { value: "max", label: "MAX" },
 ];
-
-/**
- * One bar per day for week/30/60-day views; for year/max we render up to ~24
- * bars (monthly aggregation may compress that further). Narrow widths fall
- * back to 7 bars to keep the pills legible.
- */
-function getBarCount(range: StorageRange, isNarrow: boolean): number {
-  if (isNarrow) return 7;
-  switch (range) {
-    case "last7days":
-      return 7;
-    case "last30days":
-      return 30;
-    case "last60days":
-      return 30;
-    case "year":
-    case "max":
-      return 24;
-    default:
-      return 15;
-  }
-}
 
 const GripIcon: React.FC<{ className?: string }> = ({ className }) => (
   <svg
@@ -64,19 +44,6 @@ const GripIcon: React.FC<{ className?: string }> = ({ className }) => (
   </svg>
 );
 
-function useIsNarrow(threshold = 640) {
-  const [isNarrow, setIsNarrow] = useState(false);
-  React.useEffect(() => {
-    if (typeof window === "undefined") return;
-    const mq = window.matchMedia(`(max-width: ${threshold}px)`);
-    const update = () => setIsNarrow(mq.matches);
-    update();
-    mq.addEventListener("change", update);
-    return () => mq.removeEventListener("change", update);
-  }, [threshold]);
-  return isNarrow;
-}
-
 const StorageUsageCard: React.FC<{ className?: string }> = ({ className }) => {
   const [timeRange, setTimeRange] = useState<StorageRange>("last7days");
   const {
@@ -91,7 +58,6 @@ const StorageUsageCard: React.FC<{ className?: string }> = ({ className }) => {
     isFetching: statsFetching,
     refetch: refetchStats,
   } = useDriveStorageStats();
-  const isNarrow = useIsNarrow();
 
   // Skeletons show ONLY until each query first settles, then never again — even
   // while a background refetch is in flight. Two independent latches, because
@@ -141,14 +107,13 @@ const StorageUsageCard: React.FC<{ className?: string }> = ({ className }) => {
     refetchStats,
   ]);
 
-  const barData = useMemo(() => {
-    if (!chartData?.length) return [];
-    return buildStorageDeltaBars(
-      chartData,
-      timeRange,
-      getBarCount(timeRange, isNarrow),
-    );
-  }, [chartData, timeRange, isNarrow]);
+  // Plotted as-is: `get_drive_storage_chart` already returns the cumulative
+  // total stored per day (latest snapshot of each day, carry-forwarded). This
+  // used to be diffed back into per-day "bytes added" bars, which is why the
+  // card contradicted its own "Total Storage Used" headline — the headline is a
+  // running total and the bars were deltas. Deleting that projection is the fix;
+  // do not reintroduce a diff here.
+  const points = useMemo(() => chartData ?? [], [chartData]);
 
   // Headline + dollar estimate: sourced from `useDriveStorageStats` (the
   // dedicated tile IPC `get_drive_storage_stats`) instead of the chart's
@@ -249,11 +214,13 @@ const StorageUsageCard: React.FC<{ className?: string }> = ({ className }) => {
         </div>
 
         <div className="relative w-full h-[220px] px-5 py-4">
-          <StorageBarChart
-            data={barData}
+          <AvailableCreditsChart
+            data={points}
+            color="#3167DD"
+            height="100%"
             isLoading={chartSkeleton}
             yTickFormat={(v) => formatBytes(v, 1)}
-            tooltipValueLabel="Storage Used"
+            tooltipValueLabel="Total stored"
             formatTooltipValue={(point) => {
               const date = new Date(point.x);
               const dayName = date.toLocaleDateString("en-US", {

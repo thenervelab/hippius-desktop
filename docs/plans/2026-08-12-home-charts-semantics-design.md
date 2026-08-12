@@ -1,7 +1,7 @@
 # Home page charts: correct semantics
 
 **Date:** 2026-08-12
-**Status:** design validated, implementing
+**Status:** implemented
 
 ## Problem
 
@@ -79,9 +79,8 @@ is a defect class this repo has already fought twice — see the module docs on
 Deliberately modelled on `drive_storage.rs`, because the problem is identical —
 a *level* series assembled from paginated indexer snapshots:
 
-- Paginated walk with a `MAX_PAGES` safety cap, and a process-wide 30s
-  `tokio::Mutex` cache acting as a single-flight gate so the home page's
-  concurrent mounts do one round-trip.
+- Paginated walk with a `MAX_PAGES` safety cap. No process-wide cache — see
+  evaluation finding E1.
 - Parse `credits` planck string → HIP; sort by **full timestamp** ascending.
   Sorting by date alone is insufficient for the same reason documented at
   `drive_storage.rs:172`: `sort_by_key` is stable, so equal-date rows would keep
@@ -128,7 +127,8 @@ nothing is orphaned by this change.
   chart is no longer drive-scoped spend.
 - **`storage-usage-bars/index.tsx`** — render `chartData` straight into the
   shared area chart. Drops `buildStorageDeltaBars`, `getBarCount` and
-  `useIsNarrow`.
+  `useIsNarrow`. The directory is renamed `storage-usage`, since after this it
+  draws no bars and the old name would misdirect the next reader.
 - **Delete** `storageDeltaUtils.ts` and `StorageBarChart.tsx` (~220 lines of
   delta/monthly-aggregation/downsampling machinery that existed only to feed
   bars). `StorageRange` moves to `useDriveStorageChart.ts`.
@@ -189,6 +189,17 @@ to the existing storage chart. No work.
 (`MintedAccountCredits`) steps it up. This satisfies the actual requirement —
 "always is the available credits" — but is worth stating so the upward step is
 not later filed as a regression.
+
+**E8 — (found during implementation) the new command needed a session guard.**
+`tests/account_authority_guard.rs` failed on first run: the command took a
+frontend-supplied `account_id` and queried the indexer with it, so a crafted IPC
+call could read another account's balance history. The sibling chart commands are
+allowlisted there on the grounds that the FE sends the header-selected
+`activeWallet` — but that rationale does not hold for this one, because
+`useCreditBalanceChart` leaves `addressSource` at its `"auth"` default and only
+ever sends the session address. So the fix was to *guard* it
+(`require_session_account`), not to extend the allowlist. Deleting `get_credits`
+also left two stale allowlist entries, now removed.
 
 ## Testing
 

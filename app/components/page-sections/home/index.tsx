@@ -7,7 +7,7 @@ import {
 import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
 import PageHeader from "./PageHeader";
 import AvailableCreditsCard from "./available-credits";
-import StorageUsageCard from "./storage-usage-bars";
+import StorageUsageCard from "./storage-usage";
 import Drive from "@/app/components/page-sections/drive/DriveContainer";
 
 const Home: React.FC = () => {

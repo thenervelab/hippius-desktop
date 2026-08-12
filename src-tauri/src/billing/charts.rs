@@ -20,7 +20,7 @@
 //! formatters are kept registered so the next release can flip the
 //! gate without touching this side.
 
-use chrono::{Datelike, NaiveDate, Utc, Weekday};
+use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, Utc, Weekday};
 use serde::{Deserialize, Serialize};
 
 /// Raw account snapshot from the indexer, used as input for all chart types.
@@ -179,6 +179,46 @@ pub(super) fn parse_timestamp_to_date(ts: &str) -> Option<NaiveDate> {
         return Some(d);
     }
     None
+}
+
+/// Parse an ISO timestamp string to a full UTC instant.
+///
+/// Sister of [`parse_timestamp_to_date`], kept beside it so both accept the
+/// same format menu. The full instant is required by any chart that collapses
+/// several same-day indexer rows to the *latest* one — that decision needs
+/// second/sub-second resolution, which `NaiveDate` discards.
+pub(super) fn parse_timestamp_to_datetime(ts: &str) -> Option<DateTime<Utc>> {
+    if let Ok(dt) = DateTime::parse_from_rfc3339(ts) {
+        return Some(dt.with_timezone(&Utc));
+    }
+    for fmt in ["%Y-%m-%dT%H:%M:%S%.fZ", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S%.f"] {
+        if let Ok(naive) = NaiveDateTime::parse_from_str(ts, fmt) {
+            return Some(naive.and_utc());
+        }
+    }
+    None
+}
+
+/// Parse a (possibly fractional) planck string into HIP units.
+///
+/// The indexer emits planck amounts as strings that may carry a decimal point
+/// (`"93189525824488.31"` — it applies a storage-percentage multiplier
+/// server-side), which makes `String → f64` the only correct parse path;
+/// `u128::from_str` rejects the dot. f64 carries ~16 mantissa digits, well
+/// above the 6-decimal floor these charts display, so the lossy conversion is
+/// bounded.
+///
+/// A malformed value is logged and treated as `0.0`: these figures feed
+/// always-render display surfaces, but coercing silently would undercount the
+/// user's usage with no trace.
+pub(super) fn planck_str_to_credits(raw: &str) -> f64 {
+    raw.parse::<f64>().map_or_else(
+        |_| {
+            tracing::warn!(value = %raw, "unparseable planck amount in credit chart; treating as 0");
+            0.0
+        },
+        |v| v / 1e18,
+    )
 }
 
 /// Convert `chrono::Weekday` (Mon=0) to JS-style weekday index (Sun=0).

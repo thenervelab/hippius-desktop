@@ -16,7 +16,8 @@
 
 use crate::api::indexer::IndexerClient;
 use crate::billing::charts::{
-    ChartPoint, date_to_iso, dd_mon_label, format_balance, get_all_dates_in_range, normalize_date, parse_timestamp_to_date, range_start, weekday_name,
+    ChartPoint, date_to_iso, dd_mon_label, format_balance, get_all_dates_in_range, normalize_date, parse_timestamp_to_date, planck_str_to_credits,
+    range_start, weekday_name,
 };
 use crate::error::AppError;
 use chrono::NaiveDate;
@@ -154,22 +155,6 @@ async fn fetch_all_drive_events(state: &crate::app_state::AppState, account_id: 
 
     tracing::warn!(account_id, max_pages = MAX_PAGES, "drive credit history exceeded page cap; truncating");
     Ok(all)
-}
-
-/// Parse a (possibly fractional) planck string into HIP credits.
-///
-/// A malformed value is logged (not silently dropped) and treated as `0.0`:
-/// the credit total is a display figure that must not fail, but coercing an
-/// unparseable amount to zero with no trace undercounts the user's usage, so
-/// the offending value is surfaced at warn level.
-fn planck_str_to_credits(raw: &str) -> f64 {
-    raw.parse::<f64>().map_or_else(
-        |_| {
-            tracing::warn!(value = %raw, "unparseable planck amount in drive-credit total; treating as 0");
-            0.0
-        },
-        |v| v / 1e18,
-    )
 }
 
 /// Filter to `CreditsConsumed` rows, parse timestamps, sort ascending.
