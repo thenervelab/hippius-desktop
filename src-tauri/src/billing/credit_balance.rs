@@ -114,11 +114,50 @@ fn row_planck(row: &FreeCreditRow) -> &str {
 
 /// Resolve a row's instant, preferring `processed_timestamp` and falling back
 /// to the numeric epoch-ms `timestamp`.
+///
+/// A non-positive `timestamp` counts as ABSENT, not as the epoch. The field is
+/// `#[serde(default)]`, so a row missing both timestamps would otherwise date
+/// itself 1970-01-01 and be silently kept — which defeats the `data_start`
+/// clamp in [`build_balance_chart`], since a 1970 first-reading makes
+/// `window_start.max(data_start)` a no-op and `max` goes back to painting the
+/// flat plateau that clamp exists to prevent. The upstream column is
+/// `BIGINT NOT NULL`, so this is a guard against a wire-shape change rather
+/// than an observed payload.
 fn row_instant(row: &FreeCreditRow) -> Option<DateTime<Utc>> {
     if let Some(parsed) = row.processed_timestamp.as_deref().and_then(parse_timestamp_to_datetime) {
         return Some(parsed);
     }
+    if row.timestamp <= 0 {
+        return None;
+    }
     DateTime::from_timestamp_millis(row.timestamp)
+}
+
+/// Coerce a wire planck value into the pure-digit string [`format_balance`]
+/// requires.
+///
+/// `format_balance` documents that ANY non-digit input — `"1.5"`, `"1e18"`,
+/// `""` — formats as `"0"`, and notes that every other caller satisfies that by
+/// building the string from a `u128`. Ours comes straight off the wire from a
+/// Postgres `NUMERIC`, so a fractional or exponent-bearing rendering would
+/// silently print `0` beside a correctly plotted line. Truncate a fractional
+/// tail (sub-planck precision is far below the 6 decimals displayed) and, if
+/// what remains still is not pure digits, rebuild from the f64 the way
+/// `drive_credits` does.
+fn planck_digits(raw: &str, hip: f64) -> String {
+    let mut parts = raw.splitn(2, '.');
+    let head = parts.next().unwrap_or_default();
+    let tail = parts.next().unwrap_or_default();
+    // The TAIL must be validated too, not just the head: `"1.5E+18"` has the
+    // perfectly-digit head `"1"`, so accepting it on the head alone would
+    // silently drop the exponent and render 1.5 HIP as 1e-18 — the very
+    // near-zero display this helper exists to prevent.
+    let plain_decimal = !head.is_empty() && head.bytes().all(|b| b.is_ascii_digit()) && tail.bytes().all(|b| b.is_ascii_digit());
+    if plain_decimal {
+        return head.to_string();
+    }
+    let clamped = hip.max(0.0).min(u128::MAX as f64 / 1e18);
+    format!("{}", (clamped * 1e18) as u128)
 }
 
 /// Parse, sort by full instant ascending, drop rows with no usable timestamp.
@@ -196,7 +235,7 @@ fn render_points(dates: &[NaiveDate], by_day: &BTreeMap<NaiveDate, (f64, &str)>,
             ChartPoint {
                 x: date_to_iso(date),
                 balance: last.0,
-                formatted_balance: format_balance(last.1, 6),
+                formatted_balance: format_balance(&planck_digits(last.1, last.0), 6),
                 timestamp: if has_data { normalize_date(date) } else { String::new() },
                 day_label,
                 band_label,
@@ -374,6 +413,26 @@ mod tests {
     }
 
     #[test]
+    fn fractional_wire_value_still_formats_non_zero() {
+        // `format_balance` maps any non-digit input to "0". A NUMERIC rendered
+        // with a fractional tail would therefore have labelled the chart 0
+        // while the line plotted correctly.
+        let rows = vec![row("1500000000000000000.00", "2026-05-01T00:00:00Z")];
+        let chart = build_balance_chart(&rows, "max");
+        assert_eq!(chart[0].formatted_balance, format_balance("1500000000000000000", 6));
+        assert_ne!(chart[0].formatted_balance, "0");
+    }
+
+    #[test]
+    fn exponent_wire_value_falls_back_to_the_f64_path() {
+        // "1.5E+18" has no usable digit head, so the display is rebuilt from
+        // the parsed f64 rather than collapsing to "0".
+        assert_eq!(planck_digits("1.5E+18", 1.5), "1500000000000000000");
+        assert_eq!(planck_digits("1500000000000000000", 1.5), "1500000000000000000");
+        assert_eq!(planck_digits("", 0.0), "0");
+    }
+
+    #[test]
     fn empty_history_yields_empty_chart() {
         assert!(build_balance_chart(&[], "last7days").is_empty());
     }
@@ -412,11 +471,29 @@ mod tests {
             },
             row("200", "2026-05-01T00:00:00Z"),
         ];
-        // `timestamp: 0` is a valid epoch (1970) so the malformed row survives
-        // via the fallback — assert the ORDER instead, which is what matters:
-        // the 1970 row must not be mistaken for the latest reading.
         let typed = rows_sorted(&rows);
-        assert_eq!(row_planck(typed[typed.len() - 1].1), "200");
+        assert_eq!(typed.len(), 1, "a row with neither timestamp must not survive");
+        assert_eq!(row_planck(typed[0].1), "200");
+    }
+
+    #[test]
+    fn undated_row_cannot_defeat_the_data_start_clamp() {
+        // Regression: `timestamp` is `#[serde(default)]`, so a row missing both
+        // timestamps used to resolve to 1970-01-01 and be kept. That made
+        // `data_start` 1970, which turns `window_start.max(data_start)` into a
+        // no-op — so `max` silently reverted to plotting from the hardcoded
+        // 2025-03-11 service-creation date, the exact plateau the clamp exists
+        // to prevent.
+        let rows = vec![
+            FreeCreditRow {
+                credits: Some(ONE_HIP.to_string()),
+                processed_timestamp: None,
+                timestamp: 0,
+            },
+            row("2000000000000000000", "2026-05-06T00:00:00Z"),
+        ];
+        let chart = build_balance_chart(&rows, "max");
+        assert_eq!(chart[0].x, "2026-05-06T00:00:00.000Z", "chart must start at the only real reading");
     }
 
     #[test]
