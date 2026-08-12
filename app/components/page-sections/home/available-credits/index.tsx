@@ -15,18 +15,18 @@ import { RefreshButton, Select } from "@/components/ui";
 import CustomTooltip2 from "@/components/ui/CustomTooltip2";
 import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
 import {
-  useDriveCreditsChart,
-  CreditsChartRange,
-} from "@/app/lib/hooks/api/useDriveCreditsChart";
+  useCreditBalanceChart,
+  CreditBalanceRange,
+} from "@/app/lib/hooks/api/useCreditBalanceChart";
 import { cn } from "@/app/lib/utils";
 
 import AvailableCreditsChart from "./AvailableCreditsChart";
 
-// Drive credit history only exists from the endpoint's first event onward, so
-// longer fixed windows (60 days, 1 year) would render mostly flat-zero before
-// the data begins. We offer just these three; MAX clamps to the first real
-// event in Rust (`build_credits_chart`) and auto-grows as the span lengthens,
-// so this set stays correct in future years without per-year special-casing.
+// Balance history only exists from the indexer's first recorded reading onward,
+// so longer fixed windows (60 days, 1 year) would render mostly flat before the
+// data begins. We offer just these three; MAX clamps to the first real reading
+// in Rust (`build_balance_chart`) and auto-grows as the span lengthens, so this
+// set stays correct in future years without per-year special-casing.
 const timeRangeOptions = [
   { value: "last7days", label: "THIS WEEK" },
   { value: "last30days", label: "LAST 30 DAYS" },
@@ -56,7 +56,7 @@ const GripIcon: React.FC<{ className?: string }> = ({ className }) => (
 const AvailableCreditsCard: React.FC<{ className?: string }> = ({
   className,
 }) => {
-  const [timeRange, setTimeRange] = useState<CreditsChartRange>("last7days");
+  const [timeRange, setTimeRange] = useState<CreditBalanceRange>("last7days");
 
   const {
     data: credits,
@@ -70,7 +70,7 @@ const AvailableCreditsCard: React.FC<{ className?: string }> = ({
     isLoading: chartLoading,
     isFetching: chartFetching,
     refetch: refetchChart,
-  } = useDriveCreditsChart(timeRange);
+  } = useCreditBalanceChart(timeRange);
 
   // Show the skeleton on every fetch (initial AND refetches), matching the
   // console dashboard. The chart/headline always reflect what the API is
@@ -162,17 +162,17 @@ const AvailableCreditsCard: React.FC<{ className?: string }> = ({
             <p className="font-mono font-medium text-[12px] leading-[18px] tracking-[-0.24px] text-primary-40 dark:text-primary-brand-dark uppercase">
               Available Credits
             </p>
-            {/* The usage chart below is DRIVE-scoped (source:
-                `/user-credits-by-storage-history?storage_type=drive`), unlike the
-                web console / the Billing page, which show wallet-wide usage. The
-                info tooltip makes that scope explicit so the per-day values don't
-                read as "wrong" against those wallet-wide views. */}
+            {/* The chart below is the BALANCE over time (source:
+                `/credits/free-credits`), so its last point is the headline
+                figure above and the line declines as credits are spent. It is
+                account-wide, not Drive-scoped — cumulative Drive *spend* lives
+                on the Billing page's "Drive Credit Usage" card. */}
             <CustomTooltip2
               side="top"
               showInfo
               iconSize={3.5}
               iconColor="text-primary-40 dark:text-primary-brand-dark"
-              tooltipContent="This chart shows credits consumed by Drive storage only. Your total credit usage across all Hippius products is shown on the web console."
+              tooltipContent="This chart shows your available credit balance over time. It falls as credits are spent and rises when you top up. Credits consumed by Drive storage are shown on the Billing page."
             />
           </div>
           <div className="flex items-center gap-2.5">
@@ -184,7 +184,7 @@ const AvailableCreditsCard: React.FC<{ className?: string }> = ({
             <Select
               options={timeRangeOptions}
               value={timeRange}
-              onValueChange={(v) => setTimeRange(v as CreditsChartRange)}
+              onValueChange={(v) => setTimeRange(v as CreditBalanceRange)}
               triggerClassName={cn(
                 "h-auto min-h-0 px-2 py-1.5 rounded-[7px]",
                 "font-mono font-medium text-[12px] leading-5 tracking-[-0.24px] uppercase",
@@ -252,7 +252,7 @@ const AvailableCreditsCard: React.FC<{ className?: string }> = ({
             color="#3167DD"
             height="100%"
             isLoading={chartSkeleton}
-            tooltipValueLabel="Drive credits used"
+            tooltipValueLabel="Available credits"
             formatTooltipValue={(point) => {
               const date = new Date(point.x);
               const dayName = date.toLocaleDateString("en-US", {

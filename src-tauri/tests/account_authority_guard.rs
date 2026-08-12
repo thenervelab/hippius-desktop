@@ -29,7 +29,6 @@ use std::path::{Path, PathBuf};
 /// already public on-chain and the FE legitimately passes the header-selected
 /// `activeWallet` rather than the session account.
 const ALLOWLIST: &[&str] = &[
-    "get_credits",
     "get_marketplace_credits",
     "get_drive_storage_stats",
     "get_system_balance",
@@ -56,7 +55,6 @@ const ALLOWLIST: &[&str] = &[
 /// - **validated one level in**: `check_action_eligibility` delegates to
 ///   `check_action_eligibility_inner`, which mints `require_session_account_typed`.
 const BROAD_ALLOWLIST: &[&str] = &[
-    "get_credits",
     "get_marketplace_credits",
     "get_drive_storage_stats",
     "get_system_balance",
