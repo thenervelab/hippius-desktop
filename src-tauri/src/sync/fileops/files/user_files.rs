@@ -581,7 +581,10 @@ pub async fn search_user_files_recursive(
 /// refetch). Owning the filter rules in a single function keeps the
 /// folder view and the files page from drifting — previously both
 /// reimplemented the logic in TypeScript.
-#[expect(clippy::too_many_lines, reason = "flat per-criterion filter cascade; splitting into helpers hurts readability")]
+#[expect(
+    clippy::too_many_lines,
+    reason = "flat per-criterion filter cascade; splitting into helpers hurts readability"
+)]
 fn apply_file_filters(files: &mut Vec<UserFileEntry>, f: &FileFilterCriteria) {
     let search_lower = f.search_term.as_ref().and_then(|s| {
         let low = s.to_lowercase();
@@ -805,20 +808,42 @@ mod tests {
         let json = serde_json::to_value(&entry).expect("serialize UserFileEntry");
         let keys: BTreeSet<String> = json.as_object().expect("object").keys().cloned().collect();
         let expected: BTreeSet<String> = [
-            "name", "actualFileName", "size", "createdAt", "arionHash", "arionCid", "fileId", "source", "minerIds",
-            "isAssigned", "lastChargedAt", "isFolder", "type", "isErasureCoded", "mainReqHash", "syncStatus", "label",
-            "fileCount", "deleted",
+            "name",
+            "actualFileName",
+            "size",
+            "createdAt",
+            "arionHash",
+            "arionCid",
+            "fileId",
+            "source",
+            "minerIds",
+            "isAssigned",
+            "lastChargedAt",
+            "isFolder",
+            "type",
+            "isErasureCoded",
+            "mainReqHash",
+            "syncStatus",
+            "label",
+            "fileCount",
+            "deleted",
         ]
         .into_iter()
         .map(String::from)
         .collect();
-        assert_eq!(keys, expected, "UserFileEntry wire keys drifted — FE FormattedUserFile reads these camelCase keys");
+        assert_eq!(
+            keys, expected,
+            "UserFileEntry wire keys drifted — FE FormattedUserFile reads these camelCase keys"
+        );
 
         // The two keys a naive rename would silently move: `file_type` serializes
         // under `type` (per-field rename beats rename_all), NOT `fileType`; and the
         // `default` field still serializes under `fileId`.
         assert_eq!(json["type"], "pdf", "file_type must serialize under key `type`");
-        assert!(json.get("fileType").is_none(), "must not emit `fileType` (rename = \"type\" overrides camelCase)");
+        assert!(
+            json.get("fileType").is_none(),
+            "must not emit `fileType` (rename = \"type\" overrides camelCase)"
+        );
         assert_eq!(json["fileId"], "0".repeat(64), "file_id must serialize under key `fileId`");
     }
 

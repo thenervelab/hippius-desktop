@@ -1,0 +1,13 @@
+# Revisions to skip when running `git blame`, so a bulk formatting change does
+# not become the "author" of every line it touched.
+#
+# Enable locally (once per clone):
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+#
+# GitHub honours this file automatically in its blame view.
+#
+# Only ever add commits that are PURELY mechanical — formatting, a rename with
+# no logic change. Anything that could alter behaviour must stay attributable.
+
+# style: apply rustfmt to the backend
+1a0982c2ac0cb5bae66657afddd6ab52b5d2b7db

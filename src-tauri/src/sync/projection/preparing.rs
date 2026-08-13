@@ -365,19 +365,14 @@ impl PreparingState {
                 // The live counter is dropped either way: the new
                 // cycle's scan restarts from zero, so carrying the old
                 // number would show a stale "N files scanned".
-                PreparingEntry::Armed {
-                    cycle_started_at,
-                    activity,
-                } => {
+                PreparingEntry::Armed { cycle_started_at, activity } => {
                     *cycle_started_at = now;
                     *activity = None;
                 }
                 // Already surfaced (startup seed / previous promotion):
                 // a new cycle beginning is an engine liveness signal.
                 PreparingEntry::Marked {
-                    last_activity_at,
-                    activity,
-                    ..
+                    last_activity_at, activity, ..
                 } => {
                     *last_activity_at = now;
                     *activity = None;
@@ -419,10 +414,7 @@ impl PreparingState {
     fn note_pre_plan_activity_at(&self, now: Instant, label: &str, allow_promote: bool, tick: PreparingActivity) -> PrePlanTick {
         match self.lock().entry(label.to_string()) {
             Entry::Occupied(mut slot) => match slot.get_mut() {
-                PreparingEntry::Armed {
-                    cycle_started_at,
-                    activity,
-                } => {
+                PreparingEntry::Armed { cycle_started_at, activity } => {
                     let past_grace = now
                         .checked_duration_since(*cycle_started_at)
                         .is_some_and(|elapsed| elapsed >= PREPARING_SURFACE_GRACE);
@@ -443,9 +435,7 @@ impl PreparingState {
                     }
                 }
                 PreparingEntry::Marked {
-                    last_activity_at,
-                    activity,
-                    ..
+                    last_activity_at, activity, ..
                 } => {
                     *last_activity_at = now;
                     *activity = Some(tick);
@@ -1078,7 +1068,11 @@ mod tests {
         assert!(state.is_any_preparing(), "cycle start must not demote a marked label");
         assert_eq!(state.pending_summary(), Some((3, 300)));
         // Idle window measured from t1, not t0.
-        assert!(state.drain_expired(t0 + PREPARING_WATCHDOG_IDLE_TIMEOUT + Duration::from_secs(5)).is_empty());
+        assert!(
+            state
+                .drain_expired(t0 + PREPARING_WATCHDOG_IDLE_TIMEOUT + Duration::from_secs(5))
+                .is_empty()
+        );
     }
 
     /// `disarm` drops Armed entries only; a visible Marked override is
@@ -1110,7 +1104,11 @@ mod tests {
         assert_eq!(state.snapshot_labels(), vec!["drive-a".to_string()]);
         assert!(state.is_armed_for_test("drive-b"));
         // And drive-a's idle window is measured from t1, not t0.
-        assert!(state.drain_expired(t0 + PREPARING_WATCHDOG_IDLE_TIMEOUT + Duration::from_secs(5)).is_empty());
+        assert!(
+            state
+                .drain_expired(t0 + PREPARING_WATCHDOG_IDLE_TIMEOUT + Duration::from_secs(5))
+                .is_empty()
+        );
     }
 
     /// Stale Armed entries are swept by the idle watchdog too — but
@@ -1194,7 +1192,11 @@ mod tests {
         let t0 = Instant::now();
         state.note_cycle_started_at(t0, "drive-a");
         state.note_pre_plan_activity_at(t0 + Duration::from_secs(1), "drive-a", true, scan(42));
-        assert_eq!(state.activity_totals(), PreparingActivityTotals::default(), "armed detail must stay hidden");
+        assert_eq!(
+            state.activity_totals(),
+            PreparingActivityTotals::default(),
+            "armed detail must stay hidden"
+        );
         assert!(state.mark_at(t0 + Duration::from_secs(2), "drive-a", 0, 0));
         assert_eq!(state.activity_totals().scanned_files, Some(42));
     }
@@ -1244,11 +1246,12 @@ mod tests {
         assert_eq!(state.pending_summary(), Some((4, 400)));
         // Idle window measured from the re-mark (t1): alive at t0+65s,
         // drained one full idle window after t1.
-        assert!(state.drain_expired(t0 + PREPARING_WATCHDOG_IDLE_TIMEOUT + Duration::from_secs(5)).is_empty());
-        assert_eq!(
-            state.drain_expired(t1 + PREPARING_WATCHDOG_IDLE_TIMEOUT),
-            vec!["drive-a".to_string()],
+        assert!(
+            state
+                .drain_expired(t0 + PREPARING_WATCHDOG_IDLE_TIMEOUT + Duration::from_secs(5))
+                .is_empty()
         );
+        assert_eq!(state.drain_expired(t1 + PREPARING_WATCHDOG_IDLE_TIMEOUT), vec!["drive-a".to_string()],);
     }
 
     /// A bare re-mark must NOT wipe a summary already attached.

@@ -175,7 +175,14 @@ pub async fn add_local_sync_folder(
     // two concurrent adds of same-basename folders can't both compute the same
     // label and have the second silently overwrite the first drive's path (F-1).
     // Returns the label actually written (e.g. `tags-2` on a basename clash).
-    let label = crate::sync::paths::set_sync_path_internal(pool, &account_id, &path, false, crate::sync::paths::LabelMode::Allocate { base: &folder_name }).await?;
+    let label = crate::sync::paths::set_sync_path_internal(
+        pool,
+        &account_id,
+        &path,
+        false,
+        crate::sync::paths::LabelMode::Allocate { base: &folder_name },
+    )
+    .await?;
 
     // Capture the Arcs we need on BOTH sides of the init `.await` before it
     // consumes `app`/`account_id`/`state` (Arc clones are cheap pointer bumps).
@@ -1076,7 +1083,10 @@ fn spawn_folder_registration(server_url: &str, bearer_token: &str, label: &str, 
 /// locked block — a pause that fully completes between their critical
 /// section and this function's entry then still supersedes the init.
 /// All other callers pass `None` and the snapshot is taken here.
-#[expect(clippy::too_many_lines, reason = "sequential drive-init steps read better inline than split across helpers")]
+#[expect(
+    clippy::too_many_lines,
+    reason = "sequential drive-init steps read better inline than split across helpers"
+)]
 pub(crate) async fn initialize_sync_inner(
     app: tauri::AppHandle,
     account_id: String,
@@ -2170,11 +2180,7 @@ async fn auto_init_sync_inner(
         let label = sp.label.clone();
         let sync_path = sp.path.clone();
         tauri::async_runtime::spawn(async move {
-            let (files, bytes) = crate::sync::files::compute_startup_pending_summary(
-                &folder_dir,
-                std::path::Path::new(&sync_path),
-            )
-            .await;
+            let (files, bytes) = crate::sync::files::compute_startup_pending_summary(&folder_dir, std::path::Path::new(&sync_path)).await;
             if files > 0 {
                 preparing.mark_preparing_with_summary(&label, files, bytes);
                 sync.emit_snapshot(true);

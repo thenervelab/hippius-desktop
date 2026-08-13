@@ -150,10 +150,7 @@ const KAT_PLAINTEXT: &[u8] = b"hippius hcfs at-rest decrypt KAT v1";
 const FROZEN_CIPHERTEXT_HEX: &str = "b76413f1c1633749ed02dfaee004b11d44a8126ee12f0ed10100000033000000cfd276eb49236f6c3a83df13c42a769f2c478a0415ae380801be09e0d30c1052eb4bf1a090bba946bc2d284f7e621ee0137eb2";
 
 fn enc_key_alpha() -> [u8; 32] {
-    hex::decode(ENC_KEY_ALPHA_HEX)
-        .expect("valid hex key")
-        .try_into()
-        .expect("32-byte key")
+    hex::decode(ENC_KEY_ALPHA_HEX).expect("valid hex key").try_into().expect("32-byte key")
 }
 
 #[test]
@@ -200,7 +197,9 @@ fn folder_share_preflight_wire_pinned() {
     let keys: BTreeSet<&str> = json.as_object().expect("object").keys().map(String::as_str).collect();
     assert_eq!(
         keys,
-        ["fileCount", "limitBytes", "limitFiles", "totalBytes", "withinLimits"].into_iter().collect::<BTreeSet<_>>(),
+        ["fileCount", "limitBytes", "limitFiles", "totalBytes", "withinLimits"]
+            .into_iter()
+            .collect::<BTreeSet<_>>(),
         "FolderSharePreflight wire keys must stay exactly these camelCase names"
     );
 }

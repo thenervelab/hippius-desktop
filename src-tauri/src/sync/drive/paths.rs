@@ -251,7 +251,14 @@ pub async fn set_sync_path(
     let path_type = if params.is_public { "public" } else { "private" };
     // The command always targets an explicit label (or the default drive), so
     // it upserts via `Exact`; only the multi-drive add path needs `Allocate`.
-    set_sync_path_internal(pool, &params.account_id, &params.path, params.is_public, LabelMode::Exact(params.label.as_deref().unwrap_or("default"))).await?;
+    set_sync_path_internal(
+        pool,
+        &params.account_id,
+        &params.path,
+        params.is_public,
+        LabelMode::Exact(params.label.as_deref().unwrap_or("default")),
+    )
+    .await?;
 
     crate::sync::files::allow_asset_directory(&app_handle, &params.path);
 
@@ -464,9 +471,15 @@ mod set_path_tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let pool = make_file_pool(dir.path()).await;
         let acct = "5roots";
-        set_sync_path_internal(&pool, acct, "/a/docs", false, LabelMode::Exact("docs")).await.expect("docs");
-        set_sync_path_internal(&pool, acct, "/a/pics", false, LabelMode::Exact("pics")).await.expect("pics");
-        set_sync_path_internal(&pool, acct, "/a/mig", false, LabelMode::Exact("migration")).await.expect("migration");
+        set_sync_path_internal(&pool, acct, "/a/docs", false, LabelMode::Exact("docs"))
+            .await
+            .expect("docs");
+        set_sync_path_internal(&pool, acct, "/a/pics", false, LabelMode::Exact("pics"))
+            .await
+            .expect("pics");
+        set_sync_path_internal(&pool, acct, "/a/mig", false, LabelMode::Exact("migration"))
+            .await
+            .expect("migration");
 
         let roots = list_drive_roots(&pool, acct).await.expect("roots");
         assert_eq!(
@@ -489,10 +502,14 @@ mod set_path_tests {
         let pool = make_file_pool(dir.path()).await;
         let acct = "5acct";
 
-        let l1 = set_sync_path_internal(&pool, acct, "/a/tags", false, LabelMode::Exact("tags")).await.expect("first add");
+        let l1 = set_sync_path_internal(&pool, acct, "/a/tags", false, LabelMode::Exact("tags"))
+            .await
+            .expect("first add");
         assert_eq!(l1, "tags");
 
-        let l2 = set_sync_path_internal(&pool, acct, "/b/tags", false, LabelMode::Allocate { base: "tags" }).await.expect("second add");
+        let l2 = set_sync_path_internal(&pool, acct, "/b/tags", false, LabelMode::Allocate { base: "tags" })
+            .await
+            .expect("second add");
         assert_eq!(l2, "tags-2", "a basename clash suffixes instead of overwriting");
 
         assert_eq!(
@@ -536,8 +553,12 @@ mod set_path_tests {
         let pool = make_file_pool(dir.path()).await;
         let acct = "5acct";
 
-        set_sync_path_internal(&pool, acct, "/a/docs", false, LabelMode::Exact("docs")).await.expect("set");
-        set_sync_path_internal(&pool, acct, "/b/docs", false, LabelMode::Exact("docs")).await.expect("re-point");
+        set_sync_path_internal(&pool, acct, "/a/docs", false, LabelMode::Exact("docs"))
+            .await
+            .expect("set");
+        set_sync_path_internal(&pool, acct, "/b/docs", false, LabelMode::Exact("docs"))
+            .await
+            .expect("re-point");
 
         assert_eq!(
             rows_for(&pool, acct).await,

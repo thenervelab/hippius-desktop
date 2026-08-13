@@ -310,6 +310,11 @@ fn macos_name_cmp(a: &str, b: &str) -> std::cmp::Ordering {
 /// Pure helper for [`list_sync_folder_grouped`], exposed for integration tests
 /// so they can drive it against a hand-assembled [`AppState`] without going
 /// through the Tauri command layer.
+// Sat just under the 100-line limit before the tree was rustfmt'd; reflowing
+// long lines pushed it to 103 without changing a single statement. Splitting it
+// is a real refactor and does not belong in a formatting-only change — tracked
+// as a follow-up rather than smuggled in here.
+#[allow(clippy::too_many_lines, reason = "formatting-only line growth; extraction tracked separately")]
 pub async fn list_sync_folder_grouped_inner(
     state: &crate::app_state::AppState,
     account_id: String,
@@ -433,7 +438,10 @@ pub async fn list_sync_folder_grouped_inner(
     if let Some(l) = &label
         && let Ok(pool) = state.pool()
     {
-        let level_dir = subfolder.as_deref().filter(|s| !s.is_empty()).map_or_else(|| PathBuf::from(&sync_path), |s| PathBuf::from(&sync_path).join(s));
+        let level_dir = subfolder
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .map_or_else(|| PathBuf::from(&sync_path), |s| PathBuf::from(&sync_path).join(s));
         for entry in cache_only_folder_candidates(pool, &owner, l, &prefix, &level_dir).await {
             // `HashSet::insert` returns false when the name is already shown
             // (from disk or a file's parent) — the dedup-by-name the task
@@ -587,13 +595,24 @@ mod tests {
             .cloned()
             .collect();
         let expected_file: BTreeSet<String> = [
-            "name", "is_folder", "size", "modified", "sync_status", "arion_hash", "arion_cid", "file_count", "uploaded_at",
+            "name",
+            "is_folder",
+            "size",
+            "modified",
+            "sync_status",
+            "arion_hash",
+            "arion_cid",
+            "file_count",
+            "uploaded_at",
             "updated_at",
         ]
         .into_iter()
         .map(String::from)
         .collect();
-        assert_eq!(expected_file, file_keys, "FileEntry must stay snake_case — FE use-nested-folder-listing reads is_folder/arion_hash/sync_status");
+        assert_eq!(
+            expected_file, file_keys,
+            "FileEntry must stay snake_case — FE use-nested-folder-listing reads is_folder/arion_hash/sync_status"
+        );
 
         let listing = GroupedListing {
             folders: vec![],
@@ -603,7 +622,10 @@ mod tests {
         let outer = serde_json::to_value(&listing).expect("serialize GroupedListing");
         let outer_keys: BTreeSet<String> = outer.as_object().expect("object").keys().cloned().collect();
         let expected_outer: BTreeSet<String> = ["folders", "files", "pendingBackfill"].into_iter().map(String::from).collect();
-        assert_eq!(expected_outer, outer_keys, "GroupedListing outer keys drifted — FE reads pendingBackfill (camelCase)");
+        assert_eq!(
+            expected_outer, outer_keys,
+            "GroupedListing outer keys drifted — FE reads pendingBackfill (camelCase)"
+        );
         // The inner FileEntry stays snake_case even nested inside the camelCase outer.
         assert_eq!(outer["files"][0]["is_folder"], false, "nested FileEntry must keep snake_case is_folder");
     }

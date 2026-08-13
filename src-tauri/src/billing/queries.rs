@@ -505,7 +505,10 @@ pub async fn get_billing_transactions(
 
             // Coerce UUID strings or integer IDs to a String.
             let id = t.id.as_ref().map_or_else(String::new, |v| {
-                v.as_str().map_or_else(|| v.as_i64().map_or_else(String::new, |n| n.to_string()), std::string::ToString::to_string)
+                v.as_str().map_or_else(
+                    || v.as_i64().map_or_else(String::new, |n| n.to_string()),
+                    std::string::ToString::to_string,
+                )
             });
             BillingTransactionObject {
                 id,

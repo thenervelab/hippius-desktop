@@ -269,7 +269,13 @@ pub enum ReconcileOutcome {
 /// NOTE: the register/unregister NETWORK round-trips are exercised by the
 /// real-backend harness (no mock). The hermetic tests cover the pure delta and
 /// the cache insert+delete application.
-pub(crate) async fn reconcile_with_on_disk(pool: &SqlitePool, account_id: &str, owner: &str, label: &str, on_disk: &BTreeSet<String>) -> Result<ReconcileOutcome> {
+pub(crate) async fn reconcile_with_on_disk(
+    pool: &SqlitePool,
+    account_id: &str,
+    owner: &str,
+    label: &str,
+    on_disk: &BTreeSet<String>,
+) -> Result<ReconcileOutcome> {
     // Read the cache and diff. An empty delta is the steady-state common case
     // and short-circuits before any HTTP client is built.
     let cached = read_cached_dir_set(pool, owner, label).await?;
@@ -619,10 +625,15 @@ mod tests {
 
         // Apply the delta to the cache exactly as the orchestrator does.
         cache_folder_entries(&pool, "owner-a", "docs", &delta.to_register).await.unwrap();
-        delete_cached_folder_entries(&pool, "owner-a", "docs", &delta.to_unregister).await.unwrap();
+        delete_cached_folder_entries(&pool, "owner-a", "docs", &delta.to_unregister)
+            .await
+            .unwrap();
 
         // owner-a's cache now equals the on-disk set.
-        assert_eq!(cached_paths(&pool, "owner-a", "docs").await, vec!["a".to_string(), "c".to_string(), "d".to_string()]);
+        assert_eq!(
+            cached_paths(&pool, "owner-a", "docs").await,
+            vec!["a".to_string(), "c".to_string(), "d".to_string()]
+        );
         // owner-b is untouched.
         assert_eq!(cached_paths(&pool, "owner-b", "docs").await, vec!["a".to_string(), "c".to_string()]);
 

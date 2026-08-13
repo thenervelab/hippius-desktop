@@ -93,34 +93,32 @@ pub async fn delete_files(
         let parent = Path::new(&sync_path);
         let target = parent.join(&relative_name);
         match ensure_within(parent, &target) {
-            Ok(target) => {
-                match remove_entry(&target).await {
-                    Ok((kind, size_bytes)) => {
-                        if kind == RemovedKind::Directory {
-                            dirs_removed_for.push(file.label.clone());
-                        }
-                        if let Some(lbl) = &file.label {
-                            state.sync.update_state(lbl, |st| {
-                                st.add_activity(SyncActivityItem {
-                                    file_name: std::sync::Arc::from(relative_name.as_str()),
-                                    action: SyncActivityAction::Deleted,
-                                    timestamp: chrono::Utc::now().timestamp(),
-                                    size_bytes,
-                                    label: std::sync::Arc::from(lbl.as_str()),
-                                });
-                            });
-                        }
-                        deleted += 1;
+            Ok(target) => match remove_entry(&target).await {
+                Ok((kind, size_bytes)) => {
+                    if kind == RemovedKind::Directory {
+                        dirs_removed_for.push(file.label.clone());
                     }
-                    Err(e) => {
-                        warn!(file = %file.name, error = %e, "Failed to delete file");
-                        failed.push(FileDeleteError {
-                            name: file.name.clone(),
-                            error: e.to_string(),
+                    if let Some(lbl) = &file.label {
+                        state.sync.update_state(lbl, |st| {
+                            st.add_activity(SyncActivityItem {
+                                file_name: std::sync::Arc::from(relative_name.as_str()),
+                                action: SyncActivityAction::Deleted,
+                                timestamp: chrono::Utc::now().timestamp(),
+                                size_bytes,
+                                label: std::sync::Arc::from(lbl.as_str()),
+                            });
                         });
                     }
+                    deleted += 1;
                 }
-            }
+                Err(e) => {
+                    warn!(file = %file.name, error = %e, "Failed to delete file");
+                    failed.push(FileDeleteError {
+                        name: file.name.clone(),
+                        error: e.to_string(),
+                    });
+                }
+            },
             Err(e) => {
                 failed.push(FileDeleteError {
                     name: file.name.clone(),
@@ -258,11 +256,7 @@ mod tests {
 
     #[test]
     fn labels_are_deduped_so_one_batch_spawns_one_reconcile_per_drive() {
-        let labels = folder_entity_sync_labels(&[
-            Some("docs".to_string()),
-            Some("docs".to_string()),
-            Some("photos".to_string()),
-        ]);
+        let labels = folder_entity_sync_labels(&[Some("docs".to_string()), Some("docs".to_string()), Some("photos".to_string())]);
         assert_eq!(labels, ["docs".to_string(), "photos".to_string()].into_iter().collect());
     }
 

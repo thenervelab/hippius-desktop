@@ -79,7 +79,9 @@ fn challenge_failure_router() -> Router {
 
 /// Bind an ephemeral port, serve `router`, and return its base URL.
 async fn start_server(router: Router) -> String {
-    let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).await.expect("bind ephemeral port");
+    let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+        .await
+        .expect("bind ephemeral port");
     let addr = listener.local_addr().expect("local addr");
     tokio::spawn(async move {
         axum::serve(listener, router).await.expect("mock auth server crashed");

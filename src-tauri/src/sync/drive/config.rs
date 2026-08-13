@@ -66,8 +66,7 @@ fn validate_server_url(server_url: &str) -> Result<()> {
     if server_url.is_empty() {
         return Ok(());
     }
-    let parsed =
-        reqwest::Url::parse(server_url).map_err(|e| crate::error::AppError::Validation(format!("Invalid HCFS server URL: {e}")))?;
+    let parsed = reqwest::Url::parse(server_url).map_err(|e| crate::error::AppError::Validation(format!("Invalid HCFS server URL: {e}")))?;
     let is_loopback = matches!(parsed.host_str(), Some("localhost" | "127.0.0.1" | "::1"));
     match parsed.scheme() {
         "https" => Ok(()),
@@ -91,11 +90,7 @@ fn validate_server_url(server_url: &str) -> Result<()> {
 /// here too rather than probing an endpoint that may no longer exist.
 pub(crate) fn health_probe_url(server_url: &str) -> Option<String> {
     let base = normalize_for_region_probe(server_url);
-    if base.is_empty() {
-        None
-    } else {
-        Some(format!("{base}/health"))
-    }
+    if base.is_empty() { None } else { Some(format!("{base}/health")) }
 }
 
 /// HCFS server configuration returned by `get_hcfs_config`.

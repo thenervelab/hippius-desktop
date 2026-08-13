@@ -40,7 +40,6 @@ pub async fn get_account_balance(
     })
 }
 
-
 /// Query staking state for the current authenticated user.
 /// Fetch staking state.
 ///
@@ -52,7 +51,10 @@ pub async fn get_account_balance(
 /// wallets in `/wallet`) pass the auth SS58 explicitly. Same data
 /// shape returned either way.
 #[tauri::command]
-#[expect(clippy::too_many_lines, reason = "snapshot-consistent staking read; sequential RPC steps read better inline")]
+#[expect(
+    clippy::too_many_lines,
+    reason = "snapshot-consistent staking read; sequential RPC steps read better inline"
+)]
 pub async fn get_staking_info(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: Option<String>,

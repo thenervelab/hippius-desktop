@@ -21,7 +21,6 @@ use hcfs_client::client::share::ShareProgress;
 
 use tauri::ipc::Channel;
 
-
 /// Mint the parked Finder share with the choices the user made. `request_id`
 /// is the handle from `finder:share-choosing`; `ttl` is one of the expiry
 /// presets and `visibility` is `"public"` or `"private"`, with an optional
@@ -116,7 +115,6 @@ pub async fn hcfs_finder_cancel_share(state: tauri::State<'_, AppState>, request
     Ok(())
 }
 
-
 #[cfg(all(test, any(unix, windows)))]
 mod tests {
     use crate::shares::commands::ShareLink;
@@ -136,8 +134,7 @@ mod tests {
         })
         .expect("serialize");
         let keys: BTreeSet<String> = json.as_object().expect("object").keys().cloned().collect();
-        let expected: BTreeSet<String> =
-            ["expiresAt", "shareToken", "shareUrl"].into_iter().map(String::from).collect();
+        let expected: BTreeSet<String> = ["expiresAt", "shareToken", "shareUrl"].into_iter().map(String::from).collect();
         assert_eq!(keys, expected, "public ShareLink wire keys drifted");
     }
 

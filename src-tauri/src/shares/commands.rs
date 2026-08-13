@@ -22,8 +22,8 @@ use crate::shares::history::{self, HistoryEntry};
 use crate::shares::origin;
 use chrono::Utc;
 use hcfs_client::client::share::{
-    ShareOptions, ShareProgress, ShareProgressFn, ShareSecret, ShareSummary as UpstreamShareSummary, ShareTtl,
-    build_share_url_for, generate_share_password, validate_share_password,
+    ShareOptions, ShareProgress, ShareProgressFn, ShareSecret, ShareSummary as UpstreamShareSummary, ShareTtl, build_share_url_for,
+    generate_share_password, validate_share_password,
 };
 use serde::Serialize;
 use sqlx::sqlite::SqlitePool;
@@ -122,8 +122,7 @@ impl ShareChoice {
             "private" => {
                 let password = match password {
                     Some(supplied) => {
-                        validate_share_password(&supplied)
-                            .map_err(|e| AppError::Validation(e.to_string()))?;
+                        validate_share_password(&supplied).map_err(|e| AppError::Validation(e.to_string()))?;
                         supplied
                     }
                     None => generate_share_password(),
@@ -163,8 +162,7 @@ impl ShareChoice {
 ///
 /// [`AppError::Validation`] for anything outside the preset set.
 pub(crate) fn parse_ttl(ttl: &str) -> Result<ShareTtl> {
-    serde_json::from_value(serde_json::Value::String(ttl.to_owned()))
-        .map_err(|_| AppError::Validation(format!("Unknown share expiry: {ttl}")))
+    serde_json::from_value(serde_json::Value::String(ttl.to_owned())).map_err(|_| AppError::Validation(format!("Unknown share expiry: {ttl}")))
 }
 
 /// One row of the owner's "My Shares" page. Mirrors
@@ -585,7 +583,14 @@ async fn share_local_file(
 /// same encrypted-share storage as a synced file; only the reshare-origin
 /// sidecar is skipped. Entry point for the macOS Finder dispatcher.
 #[cfg(any(unix, windows))]
-pub(crate) async fn share_external_file(state: &AppState, account_id: &str, abs_path: &Path, ttl: ShareTtl, choice: ShareChoice, progress: Option<ShareProgressFn>) -> Result<ShareLink> {
+pub(crate) async fn share_external_file(
+    state: &AppState,
+    account_id: &str,
+    abs_path: &Path,
+    ttl: ShareTtl,
+    choice: ShareChoice,
+    progress: Option<ShareProgressFn>,
+) -> Result<ShareLink> {
     require_shares_supported(state, account_id).await?;
     require_eligible(state, account_id, InsufficientCreditsAction::Sharing, 0).await?;
 
@@ -726,7 +731,11 @@ pub struct FolderSharePreflight {
 /// for why `dir_stats_recursive` is the wrong source.
 #[cfg(any(unix, windows))]
 #[tauri::command]
-pub async fn hcfs_folder_share_preflight(state: tauri::State<'_, AppState>, folder_label: String, relative_path: String) -> Result<FolderSharePreflight> {
+pub async fn hcfs_folder_share_preflight(
+    state: tauri::State<'_, AppState>,
+    folder_label: String,
+    relative_path: String,
+) -> Result<FolderSharePreflight> {
     let account_id = state.current_account_id()?;
 
     // Gated like the mint: this walks the user's filesystem on a blocking
@@ -876,11 +885,7 @@ pub fn hcfs_generate_share_password() -> String {
 /// Returns the new expiry, or `None` when the share now stays reachable until
 /// revoked.
 #[tauri::command]
-pub async fn hcfs_update_share_expiry(
-    state: tauri::State<'_, AppState>,
-    share_token: String,
-    ttl: String,
-) -> Result<Option<String>> {
+pub async fn hcfs_update_share_expiry(state: tauri::State<'_, AppState>, share_token: String, ttl: String) -> Result<Option<String>> {
     let account_id = state.current_account_id()?;
     let ttl = parse_ttl(&ttl)?;
 
@@ -888,21 +893,18 @@ pub async fn hcfs_update_share_expiry(
 
     let pool = state.pool()?;
     let client = build_account_client(pool, &account_id).await?;
-    let expires_at = client
-        .update_share_expiry(&share_token, ttl)
-        .await
-        .map_err(|e| {
-            warn!(share_token = %share_token, error = %e, "update_share_expiry failed");
-            // The server collapses unknown / not-yours / revoked / expired into
-            // one 404, so we cannot tell the user which it was — say what they
-            // can act on instead.
-            match e {
-                hcfs_client::client::share::ShareError::NotFound => {
-                    AppError::Validation("This link is no longer active, so its expiry cannot be changed.".into())
-                }
-                other => AppError::Hcfs(format!("update_share_expiry: {other}")),
+    let expires_at = client.update_share_expiry(&share_token, ttl).await.map_err(|e| {
+        warn!(share_token = %share_token, error = %e, "update_share_expiry failed");
+        // The server collapses unknown / not-yours / revoked / expired into
+        // one 404, so we cannot tell the user which it was — say what they
+        // can act on instead.
+        match e {
+            hcfs_client::client::share::ShareError::NotFound => {
+                AppError::Validation("This link is no longer active, so its expiry cannot be changed.".into())
             }
-        })?;
+            other => AppError::Hcfs(format!("update_share_expiry: {other}")),
+        }
+    })?;
 
     Ok(expires_at.map(|e| e.to_rfc3339()))
 }
@@ -1148,7 +1150,10 @@ mod tests {
 
         let err = resolve_inside_sync_root(root.path(), "../outside").await.expect_err("must refuse");
 
-        assert!(matches!(err, AppError::Validation(_)), "escaping the root is a Validation error, got: {err:?}");
+        assert!(
+            matches!(err, AppError::Validation(_)),
+            "escaping the root is a Validation error, got: {err:?}"
+        );
     }
 
     /// The dir check that keeps `hcfs_create_folder_share` from accepting a file

@@ -759,7 +759,11 @@ pub struct RecoveryRotationResult {
 }
 
 #[tauri::command]
-pub async fn change_recovery_password(state: tauri::State<'_, crate::app_state::AppState>, current: String, new: String) -> Result<RecoveryRotationResult> {
+pub async fn change_recovery_password(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    current: String,
+    new: String,
+) -> Result<RecoveryRotationResult> {
     // Serialize against other recovery/rotation commands (audit R-18).
     let _recovery_guard = state.recovery_lock.lock().await;
     let current = Zeroizing::new(current);
@@ -1145,7 +1149,7 @@ mod tests {
     // unopenable master.
     #[test]
     fn decide_recovery_flow_covers_decision_table() {
-        use super::{decide_recovery_flow, RecoveryFlow};
+        use super::{RecoveryFlow, decide_recovery_flow};
 
         // First-time user: nothing local, server confirms no blob.
         assert_eq!(decide_recovery_flow(false, false, Some(false)), RecoveryFlow::Signup);

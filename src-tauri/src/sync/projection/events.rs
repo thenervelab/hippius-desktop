@@ -288,6 +288,12 @@ mod tests {
     /// `rename_all = "camelCase"` choice is part of the contract and is
     /// asserted in its post-rename wire form. Change a shape ON PURPOSE → update
     /// the FE listener type in the same change, then this list.
+    // One cohesive list of wire-shape assertions: every desktop event payload
+    // pinned in one place, so a reader sees the whole contract at once.
+    // Splitting it by payload would scatter the contract across functions for
+    // no benefit, and reflowing during the rustfmt pass is what pushed it past
+    // the limit.
+    #[allow(clippy::too_many_lines, reason = "one contract, deliberately asserted in one place")]
     #[test]
     fn desktop_event_payload_key_sets_are_pinned() {
         use crate::sync::drive_status::DriveStatus;
@@ -328,14 +334,53 @@ mod tests {
             remote_delete_files: Vec::new(),
         };
 
-        assert_eq!(keyset(MetadataStalePayload { label: "d".to_string(), reason: "r".to_string() }), expect_keys(&["label", "reason"]), "MetadataStalePayload");
-        assert_eq!(keyset(LabelPayload { label: "d".to_string() }), expect_keys(&["label"]), "LabelPayload");
-        assert_eq!(keyset(AuthRequiredPayload { error: "e".to_string() }), expect_keys(&["error"]), "AuthRequiredPayload");
-        assert_eq!(keyset(FetchProgressPayload { label: "d".to_string(), fetched: 0, total: 0 }), expect_keys(&["label", "fetched", "total"]), "FetchProgressPayload");
-        assert_eq!(keyset(ScanProgressPayload { label: "d".to_string(), scanned: 0, path: None }), expect_keys(&["label", "scanned", "path"]), "ScanProgressPayload");
-        assert_eq!(keyset(SyncResetPayload { account_id: "a".to_string(), message: "m".to_string() }), expect_keys(&["account_id", "message"]), "SyncResetPayload");
         assert_eq!(
-            keyset(SyncErrorPayload { label: "d".to_string(), error: "e".to_string(), retry_in_secs: 0, consecutive_failures: 0 }),
+            keyset(MetadataStalePayload {
+                label: "d".to_string(),
+                reason: "r".to_string()
+            }),
+            expect_keys(&["label", "reason"]),
+            "MetadataStalePayload"
+        );
+        assert_eq!(keyset(LabelPayload { label: "d".to_string() }), expect_keys(&["label"]), "LabelPayload");
+        assert_eq!(
+            keyset(AuthRequiredPayload { error: "e".to_string() }),
+            expect_keys(&["error"]),
+            "AuthRequiredPayload"
+        );
+        assert_eq!(
+            keyset(FetchProgressPayload {
+                label: "d".to_string(),
+                fetched: 0,
+                total: 0
+            }),
+            expect_keys(&["label", "fetched", "total"]),
+            "FetchProgressPayload"
+        );
+        assert_eq!(
+            keyset(ScanProgressPayload {
+                label: "d".to_string(),
+                scanned: 0,
+                path: None
+            }),
+            expect_keys(&["label", "scanned", "path"]),
+            "ScanProgressPayload"
+        );
+        assert_eq!(
+            keyset(SyncResetPayload {
+                account_id: "a".to_string(),
+                message: "m".to_string()
+            }),
+            expect_keys(&["account_id", "message"]),
+            "SyncResetPayload"
+        );
+        assert_eq!(
+            keyset(SyncErrorPayload {
+                label: "d".to_string(),
+                error: "e".to_string(),
+                retry_in_secs: 0,
+                consecutive_failures: 0
+            }),
             expect_keys(&["label", "error", "retry_in_secs", "consecutive_failures"]),
             "SyncErrorPayload"
         );
@@ -364,7 +409,11 @@ mod tests {
         );
         assert_eq!(keyset(plan_ready), expect_keys(&plan_keys), "SyncPlanReadyPayload");
         assert_eq!(keyset(started), expect_keys(&plan_keys), "SyncStartedPayload (must match PlanReady)");
-        assert_eq!(keyset(FilesFailedRepeatedlyPayload { files: Vec::new() }), expect_keys(&["files"]), "FilesFailedRepeatedlyPayload");
+        assert_eq!(
+            keyset(FilesFailedRepeatedlyPayload { files: Vec::new() }),
+            expect_keys(&["files"]),
+            "FilesFailedRepeatedlyPayload"
+        );
         assert_eq!(
             keyset(FileFailedPayload {
                 label: "d".to_string(),
@@ -377,7 +426,12 @@ mod tests {
             "FileFailedPayload"
         );
         assert_eq!(
-            keyset(CreditsExhaustedPayload { label: "d".to_string(), balance_cents: 0, required_cents: 0, file_count: 0 }),
+            keyset(CreditsExhaustedPayload {
+                label: "d".to_string(),
+                balance_cents: 0,
+                required_cents: 0,
+                file_count: 0
+            }),
             expect_keys(&["label", "balanceCents", "requiredCents", "fileCount"]),
             "CreditsExhaustedPayload"
         );
@@ -400,7 +454,11 @@ mod tests {
     /// contract (the module doc comment specifies this exact shape).
     #[test]
     fn file_failure_kind_payload_pins_tagged_wire_shape() {
-        let insufficient = serde_json::to_value(FileFailureKindPayload::InsufficientBalance { balance_cents: 12, required_cents: 100 }).expect("serialize");
+        let insufficient = serde_json::to_value(FileFailureKindPayload::InsufficientBalance {
+            balance_cents: 12,
+            required_cents: 100,
+        })
+        .expect("serialize");
         assert_eq!(insufficient["kind"], "insufficientBalance");
         assert_eq!(insufficient["balanceCents"], 12);
         assert_eq!(insufficient["requiredCents"], 100);

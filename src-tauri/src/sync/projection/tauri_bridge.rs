@@ -1065,10 +1065,7 @@ fn read_preparing_wire_tail<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Pre
     let Some(state) = app.try_state::<crate::app_state::AppState>() else {
         return PreparingWireTail::default();
     };
-    let (pending_files, pending_bytes) = state
-        .preparing
-        .pending_summary()
-        .map_or((None, None), |(f, b)| (Some(f), Some(b)));
+    let (pending_files, pending_bytes) = state.preparing.pending_summary().map_or((None, None), |(f, b)| (Some(f), Some(b)));
     let totals = state.preparing.activity_totals();
     PreparingWireTail {
         pending_files,
@@ -1427,11 +1424,17 @@ mod tests {
         let mut b = fixture_snapshot();
         b.progress_bytes = 1500;
         let empty = SyncIntentOverlay::default();
-        assert_ne!(snapshot_fingerprint(&a, empty, PreparingWireTail::default()), snapshot_fingerprint(&b, empty, PreparingWireTail::default()));
+        assert_ne!(
+            snapshot_fingerprint(&a, empty, PreparingWireTail::default()),
+            snapshot_fingerprint(&b, empty, PreparingWireTail::default())
+        );
         // And while we're here, verify identical snapshots produce
         // identical fingerprints (the gate's whole reason for existing).
         a.progress_bytes = 1500;
-        assert_eq!(snapshot_fingerprint(&a, empty, PreparingWireTail::default()), snapshot_fingerprint(&b, empty, PreparingWireTail::default()));
+        assert_eq!(
+            snapshot_fingerprint(&a, empty, PreparingWireTail::default()),
+            snapshot_fingerprint(&b, empty, PreparingWireTail::default())
+        );
     }
 
     /// Regression for the `started_at` gap: a session that ends and
@@ -1443,9 +1446,15 @@ mod tests {
         let mut b = fixture_snapshot();
         b.started_at = Some(1_700_000_001_000);
         let empty = SyncIntentOverlay::default();
-        assert_ne!(snapshot_fingerprint(&a, empty, PreparingWireTail::default()), snapshot_fingerprint(&b, empty, PreparingWireTail::default()));
+        assert_ne!(
+            snapshot_fingerprint(&a, empty, PreparingWireTail::default()),
+            snapshot_fingerprint(&b, empty, PreparingWireTail::default())
+        );
         a.started_at = b.started_at;
-        assert_eq!(snapshot_fingerprint(&a, empty, PreparingWireTail::default()), snapshot_fingerprint(&b, empty, PreparingWireTail::default()));
+        assert_eq!(
+            snapshot_fingerprint(&a, empty, PreparingWireTail::default()),
+            snapshot_fingerprint(&b, empty, PreparingWireTail::default())
+        );
     }
 
     /// Regression: an overlay-only change MUST flip the
@@ -1466,9 +1475,15 @@ mod tests {
             completed_bytes: Some(500),
             active: Some(true),
         };
-        assert_ne!(snapshot_fingerprint(&a, empty, PreparingWireTail::default()), snapshot_fingerprint(&a, with_totals, PreparingWireTail::default()),);
+        assert_ne!(
+            snapshot_fingerprint(&a, empty, PreparingWireTail::default()),
+            snapshot_fingerprint(&a, with_totals, PreparingWireTail::default()),
+        );
         // Sanity: identical overlays produce identical fingerprints.
-        assert_eq!(snapshot_fingerprint(&a, with_totals, PreparingWireTail::default()), snapshot_fingerprint(&a, with_totals, PreparingWireTail::default()),);
+        assert_eq!(
+            snapshot_fingerprint(&a, with_totals, PreparingWireTail::default()),
+            snapshot_fingerprint(&a, with_totals, PreparingWireTail::default()),
+        );
     }
 
     /// Regression: preparing-tail motion alone MUST flip the fingerprint.
@@ -1488,25 +1503,16 @@ mod tests {
             scanned_files: Some(200),
             ..PreparingWireTail::default()
         };
-        assert_ne!(
-            snapshot_fingerprint(&a, empty, scanned_100),
-            snapshot_fingerprint(&a, empty, scanned_200),
-        );
+        assert_ne!(snapshot_fingerprint(&a, empty, scanned_100), snapshot_fingerprint(&a, empty, scanned_200),);
         // Phase flip (scan → fetch) also re-emits.
         let fetching = PreparingWireTail {
             fetched_entries: Some(10),
             fetch_total_entries: Some(90),
             ..PreparingWireTail::default()
         };
-        assert_ne!(
-            snapshot_fingerprint(&a, empty, scanned_200),
-            snapshot_fingerprint(&a, empty, fetching),
-        );
+        assert_ne!(snapshot_fingerprint(&a, empty, scanned_200), snapshot_fingerprint(&a, empty, fetching),);
         // Sanity: identical tails produce identical fingerprints.
-        assert_eq!(
-            snapshot_fingerprint(&a, empty, scanned_100),
-            snapshot_fingerprint(&a, empty, scanned_100),
-        );
+        assert_eq!(snapshot_fingerprint(&a, empty, scanned_100), snapshot_fingerprint(&a, empty, scanned_100),);
     }
 
     /// Wire-format contract: serializing `SyncSnapshotWire` must

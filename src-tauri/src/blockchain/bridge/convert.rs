@@ -83,9 +83,7 @@ pub fn to_rao(decimal: &str, decimals: u32) -> Result<u128, AppError> {
     }
     let decimals = decimals as usize;
     if frac_part.len() > decimals {
-        return Err(AppError::Validation(format!(
-            "Amount has more than {decimals} decimal places"
-        )));
+        return Err(AppError::Validation(format!("Amount has more than {decimals} decimal places")));
     }
     // Right-pad the fraction to exactly `decimals` digits, concatenate, parse.
     let int_part = if int_part.is_empty() { "0" } else { int_part };

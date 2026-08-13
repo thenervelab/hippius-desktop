@@ -24,8 +24,8 @@ use crate::blockchain::types::TxOutcome;
 use crate::error::{AppError, NotReadyKind};
 use crate::wallet::{crypto, repo};
 use subxt::blocks::ExtrinsicEvents;
-use subxt::tx::Payload;
 use subxt::config::DefaultExtrinsicParamsBuilder;
+use subxt::tx::Payload;
 use subxt::{OnlineClient, PolkadotConfig};
 use subxt_signer::{bip39::Mnemonic as SubxtMnemonic, sr25519::Keypair};
 
@@ -46,7 +46,10 @@ pub(crate) enum TrackedSubmission {
     /// audit flagged, R-01).
     SubmittedUnconfirmed { tx_hash: String, reason: String },
     /// Finalized and dispatched successfully; carries the block's events.
-    Finalized { tx_hash: String, events: ExtrinsicEvents<PolkadotConfig> },
+    Finalized {
+        tx_hash: String,
+        events: ExtrinsicEvents<PolkadotConfig>,
+    },
     /// Finalized but the on-chain dispatch failed (the nonce was consumed). Safe
     /// to retry as a NEW transaction.
     FinalizedFailed { tx_hash: String, reason: String },
@@ -135,16 +138,30 @@ where
     // classify this as retry-safe.
     let progress = match signed.submit_and_watch().await {
         Ok(p) => p,
-        Err(e) => return Ok(TrackedSubmission::SubmittedUnconfirmed { tx_hash, reason: e.to_string() }),
+        Err(e) => {
+            return Ok(TrackedSubmission::SubmittedUnconfirmed {
+                tx_hash,
+                reason: e.to_string(),
+            });
+        }
     };
 
     match progress.wait_for_finalized().await {
-        Err(e) => Ok(TrackedSubmission::SubmittedUnconfirmed { tx_hash, reason: e.to_string() }),
+        Err(e) => Ok(TrackedSubmission::SubmittedUnconfirmed {
+            tx_hash,
+            reason: e.to_string(),
+        }),
         Ok(in_block) => match in_block.wait_for_success().await {
             Ok(events) => Ok(TrackedSubmission::Finalized { tx_hash, events }),
             Err(e) => Ok(match classify_post_finalization(&e) {
-                PostFinalization::Failed => TrackedSubmission::FinalizedFailed { tx_hash, reason: e.to_string() },
-                PostFinalization::Unconfirmed => TrackedSubmission::SubmittedUnconfirmed { tx_hash, reason: e.to_string() },
+                PostFinalization::Failed => TrackedSubmission::FinalizedFailed {
+                    tx_hash,
+                    reason: e.to_string(),
+                },
+                PostFinalization::Unconfirmed => TrackedSubmission::SubmittedUnconfirmed {
+                    tx_hash,
+                    reason: e.to_string(),
+                },
             }),
         },
     }
@@ -388,8 +405,14 @@ mod tests {
             }
         }
         let body = &src[body_start..=body_end];
-        assert!(body.contains("create_signed("), "must sign via create_signed (pre-broadcast errors → RejectedAtSubmission)");
-        assert!(body.contains("submit_and_watch()"), "must broadcast via submit_and_watch (its errors → SubmittedUnconfirmed)");
+        assert!(
+            body.contains("create_signed("),
+            "must sign via create_signed (pre-broadcast errors → RejectedAtSubmission)"
+        );
+        assert!(
+            body.contains("submit_and_watch()"),
+            "must broadcast via submit_and_watch (its errors → SubmittedUnconfirmed)"
+        );
         assert!(
             !body.contains("sign_and_submit_then_watch"),
             "must NOT use the fused sign_and_submit_then_watch — it conflates pre- and post-broadcast errors (R-01)",

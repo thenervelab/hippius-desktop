@@ -201,15 +201,14 @@ pub fn merge_into_session(
     file_list: Option<SessionFileList>,
     label: Option<String>,
 ) -> Result<()> {
-    sync.progress
-        .merge_into_session(
-            expected_uploads,
-            expected_downloads,
-            expected_local_deletes,
-            expected_remote_deletes,
-            file_list,
-            label.as_deref(),
-        );
+    sync.progress.merge_into_session(
+        expected_uploads,
+        expected_downloads,
+        expected_local_deletes,
+        expected_remote_deletes,
+        file_list,
+        label.as_deref(),
+    );
     sync.emit_snapshot(true);
     Ok(())
 }
@@ -230,8 +229,7 @@ pub fn clear_all_data(sync: &SyncRunner) -> Result<()> {
 
 /// Mark excess pending files as failed.
 pub fn mark_pending_files_as_failed(sync: &SyncRunner, actual_uploads: u32, actual_downloads: u32, label: &str) -> Result<()> {
-    sync.progress
-        .mark_pending_files_as_failed(actual_uploads, actual_downloads, label);
+    sync.progress.mark_pending_files_as_failed(actual_uploads, actual_downloads, label);
     sync.emit_snapshot(true);
     Ok(())
 }
@@ -959,10 +957,7 @@ mod tests {
         assert_eq!(completed.len(), COMPLETED_RETAINED, "completed rows survive the cap");
         // The kept completed rows are the NEWEST ones (completed_at 70..=79),
         // not the largest or the first — recency is what survives truncation.
-        assert!(
-            completed.iter().all(|&t| t >= 70),
-            "kept the newest completions, got {completed:?}"
-        );
+        assert!(completed.iter().all(|&t| t >= 70), "kept the newest completions, got {completed:?}");
         // The in-flight rows still lead and fill the remaining budget.
         assert_eq!(snap.files.len() - completed.len(), MAX_EVENT_FILES - COMPLETED_RETAINED);
     }

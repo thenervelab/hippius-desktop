@@ -493,8 +493,7 @@ pub async fn get_sync_folders_with_stats(state: tauri::State<'_, crate::app_stat
     // entry, so the second drive matched nothing (blank size/file count) and the
     // first could even show the other folder's stats. (No data was conflated —
     // only this display join was; files are correctly separated by folder_hash.)
-    let remote_by_hash: HashMap<String, &RemoteFolderInfoResult> =
-        remote_folders.iter().map(|f| (f.folder_hash.clone(), f)).collect();
+    let remote_by_hash: HashMap<String, &RemoteFolderInfoResult> = remote_folders.iter().map(|f| (f.folder_hash.clone(), f)).collect();
 
     // Build local folders with status and remote stats
     let mut local = Vec::with_capacity(sync_paths.len());
@@ -542,8 +541,7 @@ pub async fn get_sync_folders_with_stats(state: tauri::State<'_, crate::app_stat
     // section). Match on folder_hash, not label, for the same basename-collision
     // reason above: a local "tags-2" drive registers on the server under display
     // label "tags", so a label filter would fail to suppress it here.
-    let local_hashes: std::collections::HashSet<String> =
-        sync_paths.iter().map(|sp| folder_hash(&sp.label)).collect();
+    let local_hashes: std::collections::HashSet<String> = sync_paths.iter().map(|sp| folder_hash(&sp.label)).collect();
     let mut remote_display: Vec<RemoteFolderDisplay> = remote_folders
         .iter()
         .filter(|f| !local_hashes.contains(&f.folder_hash))
@@ -603,11 +601,10 @@ mod tests {
         assert_ne!(folder_hash("tags"), folder_hash("tags-2"));
 
         let remotes = [
-            remote("tags", "tags", 988),    // haloce_mcc/tags  (label "tags")
-            remote("tags", "tags-2", 512),  // halo2_mcc/tags   (label "tags-2")
+            remote("tags", "tags", 988),   // haloce_mcc/tags  (label "tags")
+            remote("tags", "tags-2", 512), // halo2_mcc/tags   (label "tags-2")
         ];
-        let by_hash: HashMap<String, &RemoteFolderInfoResult> =
-            remotes.iter().map(|f| (f.folder_hash.clone(), f)).collect();
+        let by_hash: HashMap<String, &RemoteFolderInfoResult> = remotes.iter().map(|f| (f.folder_hash.clone(), f)).collect();
 
         // Both same-basename local drives resolve to their OWN stats.
         assert_eq!(by_hash.get(&folder_hash("tags")).map(|r| r.file_count), Some(988));
@@ -615,8 +612,7 @@ mod tests {
 
         // The old label-keyed map would collapse both into one entry, so the
         // second drive ("tags-2") would have matched nothing.
-        let by_label: HashMap<String, &RemoteFolderInfoResult> =
-            remotes.iter().map(|f| (f.label.clone(), f)).collect();
+        let by_label: HashMap<String, &RemoteFolderInfoResult> = remotes.iter().map(|f| (f.label.clone(), f)).collect();
         assert_eq!(by_label.len(), 1, "label keying collapses same-basename folders (the bug)");
     }
 

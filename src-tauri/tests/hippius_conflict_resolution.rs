@@ -59,7 +59,9 @@ fn reviewed_sync_fn_body() -> &'static str {
         .find("pub async fn sync_with_conflict_resolutions")
         .expect("sync_with_conflict_resolutions must exist in control.rs");
     let rest = &CONTROL_RS[start..];
-    let end = rest.find("pub async fn cancel_review").expect("cancel_review must follow sync_with_conflict_resolutions");
+    let end = rest
+        .find("pub async fn cancel_review")
+        .expect("cancel_review must follow sync_with_conflict_resolutions");
     &rest[..end]
 }
 

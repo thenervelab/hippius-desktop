@@ -44,14 +44,14 @@ use crate::auth::ssh_keys::{create_ssh_key, delete_ssh_key, list_ssh_keys};
 use crate::billing::charts::{
     calculate_storage_capacity, calculate_storage_cost, format_balance_chart, format_credits_chart, transform_marketplace_credits,
 };
-use crate::billing::credits::{check_sync_eligibility, get_user_credits};
 use crate::billing::credit_balance::get_credit_balance_chart;
+use crate::billing::credits::{check_sync_eligibility, get_user_credits};
 use crate::billing::drive_credits::{get_drive_credits_chart, get_drive_credits_total};
 use crate::billing::drive_storage::get_drive_storage_chart;
 use crate::billing::eligibility::check_action_eligibility;
 use crate::billing::queries::{
-    get_add_credit_events, get_balance_transfers, get_billing_transactions, get_deposit_address, get_drive_storage_stats,
-    get_marketplace_credits, get_system_balance,
+    get_add_credit_events, get_balance_transfers, get_billing_transactions, get_deposit_address, get_drive_storage_stats, get_marketplace_credits,
+    get_system_balance,
 };
 use crate::billing::subscriptions::{create_subscription, get_customer_portal_url, get_subscription_data};
 use crate::blockchain::bridge::deposit::bridge_alpha_to_halpha;

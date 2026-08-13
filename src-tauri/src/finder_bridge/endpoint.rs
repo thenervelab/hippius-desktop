@@ -51,7 +51,9 @@ pub fn resolve() -> Result<Endpoint, FinderBridgeError> {
     #[cfg(target_os = "macos")]
     {
         let home = dirs::home_dir().ok_or(FinderBridgeError::NoEndpoint)?;
-        Ok(Endpoint::Unix(home.join("Library").join("Group Containers").join(APP_GROUP).join(SOCKET_FILE)))
+        Ok(Endpoint::Unix(
+            home.join("Library").join("Group Containers").join(APP_GROUP).join(SOCKET_FILE),
+        ))
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {

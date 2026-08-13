@@ -480,7 +480,10 @@ mod tests {
         // the redaction losslessly even with spaces inside.
         let line = r#"DEBUG opening "/Users/bob/My Secret/plan.pdf" now"#;
         let out = redact_log_line(line);
-        assert!(!out.contains("bob") && !out.contains("Secret") && !out.contains("plan.pdf"), "leak: {out}");
+        assert!(
+            !out.contains("bob") && !out.contains("Secret") && !out.contains("plan.pdf"),
+            "leak: {out}"
+        );
         assert!(out.contains(r#""/Users/[REDACTED_PATH]""#), "got: {out}");
         assert!(out.contains("now"), "trailing context after the quote should survive: {out}");
     }
@@ -489,7 +492,10 @@ mod tests {
     fn redacts_windows_home_path_with_spaces() {
         let line = r"ERROR open C:\Users\Bob\My Documents\budget.xlsx failed";
         let out = redact_log_line(line);
-        assert!(!out.contains("Bob") && !out.contains("Documents") && !out.contains("budget"), "leak: {out}");
+        assert!(
+            !out.contains("Bob") && !out.contains("Documents") && !out.contains("budget"),
+            "leak: {out}"
+        );
         assert!(out.contains(r"C:\Users\[REDACTED_PATH]"), "got: {out}");
     }
 

@@ -252,7 +252,10 @@ fn zip_dir_into<W: Write + Seek>(src_dir: &Path, writer: W) -> Result<W> {
     // in between — a concurrent download by the sync engine, a user drag —
     // would otherwise be packed uncounted, and the doc's promise that the temp
     // disk cannot be filled would not hold.
-    let mut packed = DirMeasurement { total_bytes: 0, file_count: 0 };
+    let mut packed = DirMeasurement {
+        total_bytes: 0,
+        file_count: 0,
+    };
 
     let mut stack: Vec<(PathBuf, String)> = vec![(src_dir.to_path_buf(), String::new())];
     while let Some((dir, prefix)) = stack.pop() {
@@ -331,7 +334,11 @@ mod tests {
         let got = zip_then_read(dir.path());
 
         let names: Vec<&String> = got.keys().collect();
-        assert_eq!(names, vec!["a.txt", "sub/b.txt", "sub/deep/c.txt"], "entry names use '/' and cover the tree");
+        assert_eq!(
+            names,
+            vec!["a.txt", "sub/b.txt", "sub/deep/c.txt"],
+            "entry names use '/' and cover the tree"
+        );
         assert_eq!(got["sub/deep/c.txt"], b"charlie");
     }
 
@@ -416,7 +423,11 @@ mod tests {
         let archived = zip_then_read(dir.path());
 
         assert_eq!(measured.file_count, 1);
-        assert_eq!(archived.keys().collect::<Vec<_>>(), vec!["README.md"], ".git contents must not be published");
+        assert_eq!(
+            archived.keys().collect::<Vec<_>>(),
+            vec!["README.md"],
+            ".git contents must not be published"
+        );
     }
 
     /// The mirror of `symlinks_are_skipped`: what the packer leaves out must not
@@ -550,8 +561,15 @@ mod tests {
 
         let measured = measure_directory(dir.path()).expect("measure");
 
-        assert!(measured.file_count <= MAX_FOLDER_SHARE_ENTRIES + 1, "the walk must stop at the cap, counted {}", measured.file_count);
-        assert!(enforce_folder_share_limits(measured).is_err(), "the partial count must still refuse the share");
+        assert!(
+            measured.file_count <= MAX_FOLDER_SHARE_ENTRIES + 1,
+            "the walk must stop at the cap, counted {}",
+            measured.file_count
+        );
+        assert!(
+            enforce_folder_share_limits(measured).is_err(),
+            "the partial count must still refuse the share"
+        );
     }
 
     #[test]

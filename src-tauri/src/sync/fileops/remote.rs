@@ -152,12 +152,10 @@ pub async fn list_remote_folder_files_inner(state: &AppState, account_id: &str, 
         folder_hash: &fhash,
         encryption_key: &encryption_key,
     };
-    hcfs_client::drive::remote::list_remote_files(&access)
-        .await
-        .map_err(|e| {
-            error!(label = %label, "Failed to list remote files: {e}");
-            AppError::Hcfs(e.to_string())
-        })
+    hcfs_client::drive::remote::list_remote_files(&access).await.map_err(|e| {
+        error!(label = %label, "Failed to list remote files: {e}");
+        AppError::Hcfs(e.to_string())
+    })
 }
 
 #[tauri::command]
@@ -600,7 +598,10 @@ mod tests {
             .into_iter()
             .map(String::from)
             .collect();
-        assert_eq!(keys, expected, "RemoteFileInfo wire keys drifted — FE RemoteFolderBrowser reads these snake_case keys");
+        assert_eq!(
+            keys, expected,
+            "RemoteFileInfo wire keys drifted — FE RemoteFolderBrowser reads these snake_case keys"
+        );
 
         // `arion_hash` is `Option` with no `skip_serializing_if`, so the key must
         // stay present (serialized `null`) when None — the FE types it `string | null`.
@@ -632,7 +633,9 @@ mod tests {
         let dir = tempfile::TempDir::new().expect("tempdir");
         // 400×200 source → fitting 128 keeps aspect → 128×64.
         let src = dir.path().join("src.png");
-        image::RgbImage::from_pixel(400, 200, image::Rgb([10, 200, 30])).save(&src).expect("write src");
+        image::RgbImage::from_pixel(400, 200, image::Rgb([10, 200, 30]))
+            .save(&src)
+            .expect("write src");
 
         let target = dir.path().join("out_128.jpg");
         generate_thumbnail_file(&src, dir.path(), "out_128.jpg", &target, 128).expect("thumbnail");
@@ -648,7 +651,9 @@ mod tests {
         // decoder must sniff bytes, not trust the extension.
         let dir = tempfile::TempDir::new().expect("tempdir");
         let src = dir.path().join("payload.part");
-        image::RgbImage::from_pixel(64, 64, image::Rgb([0, 0, 0])).save_with_format(&src, image::ImageFormat::Png).expect("write png-as-part");
+        image::RgbImage::from_pixel(64, 64, image::Rgb([0, 0, 0]))
+            .save_with_format(&src, image::ImageFormat::Png)
+            .expect("write png-as-part");
 
         let target = dir.path().join("out_32.jpg");
         generate_thumbnail_file(&src, dir.path(), "out_32.jpg", &target, 32).expect("decodes via byte sniffing");

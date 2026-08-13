@@ -505,7 +505,9 @@ pub(crate) fn compute_default_sync_path() -> Result<PathBuf> {
             return Ok(suffixed);
         }
     }
-    Err(crate::error::AppError::Validation("Too many migration folders exist for today's date".into()))
+    Err(crate::error::AppError::Validation(
+        "Too many migration folders exist for today's date".into(),
+    ))
 }
 
 /// Return the auto-generated default migration sync path as a string.
@@ -1512,9 +1514,7 @@ mod tests {
         // The cancel response is inspected via `match` (awaited + branched on
         // status), not discarded — the `post(&cancel_url)` lives inside it.
         let cancel_at = body.find(".post(&cancel_url)").expect("cancel request present");
-        let match_at = body
-            .find("match state")
-            .expect("cancel must be matched on, not fire-and-forget");
+        let match_at = body.find("match state").expect("cancel must be matched on, not fire-and-forget");
         assert!(
             match_at < cancel_at,
             "the cancel `.post(&cancel_url)` must sit inside the `match` that inspects it"

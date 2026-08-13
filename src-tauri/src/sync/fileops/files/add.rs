@@ -404,10 +404,7 @@ const FOLDER_BYTE_WALK_MAX_DEPTH: usize = 4096;
 /// engine's first cycle reaches the FE. The rel-path key is built by joining
 /// `Component::Normal` segments with '/' to match hcfs-client's
 /// `relative_path.to_string_lossy()` index keys cross-platform.
-pub(in crate::sync) async fn compute_startup_pending_summary(
-    folder_dir: &std::path::Path,
-    sync_root: &std::path::Path,
-) -> (u64, u64) {
+pub(in crate::sync) async fn compute_startup_pending_summary(folder_dir: &std::path::Path, sync_root: &std::path::Path) -> (u64, u64) {
     use tokio::fs;
 
     // 1. Load the synced baseline (sync_state.json, .bak fallback) → key set.
@@ -417,9 +414,7 @@ pub(in crate::sync) async fn compute_startup_pending_summary(
             Err(_) => fs::read_to_string(folder_dir.join("sync_state.json.bak")).await.ok(),
         };
         match raw.and_then(|s| serde_json::from_str::<hcfs_client::sync::SyncState>(&s).ok()) {
-            Some(state) => hcfs_client::engine::types::build_synced_paths_from_state(&state)
-                .into_keys()
-                .collect(),
+            Some(state) => hcfs_client::engine::types::build_synced_paths_from_state(&state).into_keys().collect(),
             None => std::collections::HashSet::new(),
         }
     };
@@ -775,8 +770,7 @@ mod tests {
         tokio::fs::create_dir_all(&sub).await.unwrap();
         tokio::fs::write(sub.join("c.bin"), b"xyz").await.unwrap(); // 3
 
-        let (files, bytes) =
-            compute_startup_pending_summary(folder_dir.path(), root).await;
+        let (files, bytes) = compute_startup_pending_summary(folder_dir.path(), root).await;
         assert_eq!(files, 2);
         assert_eq!(bytes, 8);
     }
@@ -785,8 +779,7 @@ mod tests {
     async fn pending_summary_empty_folder_is_zero() {
         let folder_dir = tempfile::TempDir::new().unwrap();
         let sync_root = tempfile::TempDir::new().unwrap();
-        let (files, bytes) =
-            compute_startup_pending_summary(folder_dir.path(), sync_root.path()).await;
+        let (files, bytes) = compute_startup_pending_summary(folder_dir.path(), sync_root.path()).await;
         assert_eq!((files, bytes), (0, 0));
     }
 
@@ -798,13 +791,10 @@ mod tests {
     async fn pending_summary_valid_empty_baseline_still_pending() {
         let folder_dir = tempfile::TempDir::new().unwrap();
         let json = serde_json::to_string(&hcfs_client::sync::SyncState::default()).unwrap();
-        tokio::fs::write(folder_dir.path().join("sync_state.json"), json)
-            .await
-            .unwrap();
+        tokio::fs::write(folder_dir.path().join("sync_state.json"), json).await.unwrap();
         let sync_root = tempfile::TempDir::new().unwrap();
         tokio::fs::write(sync_root.path().join("a.bin"), b"data").await.unwrap(); // 4
-        let (files, bytes) =
-            compute_startup_pending_summary(folder_dir.path(), sync_root.path()).await;
+        let (files, bytes) = compute_startup_pending_summary(folder_dir.path(), sync_root.path()).await;
         assert_eq!((files, bytes), (1, 4));
     }
 
@@ -813,13 +803,10 @@ mod tests {
     #[tokio::test]
     async fn pending_summary_corrupt_baseline_degrades_gracefully() {
         let folder_dir = tempfile::TempDir::new().unwrap();
-        tokio::fs::write(folder_dir.path().join("sync_state.json"), b"{ not json")
-            .await
-            .unwrap();
+        tokio::fs::write(folder_dir.path().join("sync_state.json"), b"{ not json").await.unwrap();
         let sync_root = tempfile::TempDir::new().unwrap();
         tokio::fs::write(sync_root.path().join("a.bin"), b"data").await.unwrap();
-        let (files, _bytes) =
-            compute_startup_pending_summary(folder_dir.path(), sync_root.path()).await;
+        let (files, _bytes) = compute_startup_pending_summary(folder_dir.path(), sync_root.path()).await;
         assert_eq!(files, 1);
     }
 
@@ -870,7 +857,10 @@ mod tests {
             .await
             .expect_err("must reject sync root as source");
         // Pin the taxonomy: a self-add reject is Validation, not the old Other.
-        assert!(matches!(err, crate::error::AppError::Validation(_)), "self-add must be Validation, got {err:?}");
+        assert!(
+            matches!(err, crate::error::AppError::Validation(_)),
+            "self-add must be Validation, got {err:?}"
+        );
         let msg = err.to_string();
         assert!(msg.contains("Cannot add the sync folder"), "unexpected error message: {msg}");
 

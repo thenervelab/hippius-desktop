@@ -82,15 +82,14 @@ fn decode_secret(kind: &str, bytes: Vec<u8>) -> Result<ShareSecret, ShareError> 
             // smallest possible window and give a false sense of secrecy.
             // Treat the encrypted DB itself as the trust boundary.
             let len = bytes.len();
-            let arr: [u8; 32] = bytes.as_slice().try_into().map_err(|_| {
-                ShareError::Keystore(format!("share_keystore public row has invalid key length {len}"))
-            })?;
+            let arr: [u8; 32] = bytes
+                .as_slice()
+                .try_into()
+                .map_err(|_| ShareError::Keystore(format!("share_keystore public row has invalid key length {len}")))?;
             Ok(ShareSecret::Public(arr))
         }
         KIND_PRIVATE => Ok(ShareSecret::Private(bytes)),
-        other => Err(ShareError::Keystore(format!(
-            "share_keystore row has unknown secret_kind {other:?}"
-        ))),
+        other => Err(ShareError::Keystore(format!("share_keystore row has unknown secret_kind {other:?}"))),
     }
 }
 
@@ -128,13 +127,11 @@ impl ShareKeystore for SqliteShareKeystore {
         let pool = self.pool.clone();
         let token = token.to_owned();
         let row: Option<(String, Vec<u8>)> = run_sync(async move {
-            sqlx::query_as::<_, (String, Vec<u8>)>(
-                "SELECT secret_kind, share_key FROM share_keystore WHERE share_token = ?",
-            )
-            .bind(&token)
-            .fetch_optional(&pool)
-            .await
-            .map_err(map_db)
+            sqlx::query_as::<_, (String, Vec<u8>)>("SELECT secret_kind, share_key FROM share_keystore WHERE share_token = ?")
+                .bind(&token)
+                .fetch_optional(&pool)
+                .await
+                .map_err(map_db)
         })?;
         row.map(|(kind, bytes)| decode_secret(&kind, bytes)).transpose()
     }
@@ -296,13 +293,11 @@ mod tests {
     async fn db_check_rejects_wrong_length_key() {
         let (_dir, pool) = fresh_pool().await;
         let bad: Vec<u8> = vec![0u8; 31];
-        let res = sqlx::query(
-            "INSERT INTO share_keystore (share_token, secret_kind, share_key) VALUES (?, 'public', ?)",
-        )
-        .bind("tok")
-        .bind(&bad)
-        .execute(&pool)
-        .await;
+        let res = sqlx::query("INSERT INTO share_keystore (share_token, secret_kind, share_key) VALUES (?, 'public', ?)")
+            .bind("tok")
+            .bind(&bad)
+            .execute(&pool)
+            .await;
         assert!(res.is_err(), "DB CHECK should reject 31-byte key, got: {res:?}");
     }
 
@@ -383,11 +378,7 @@ mod tests {
         let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))
             .expect("opts")
             .create_if_missing(true);
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(opts)
-            .await
-            .expect("pool");
+        let pool = SqlitePoolOptions::new().max_connections(1).connect_with(opts).await.expect("pool");
 
         // Recreate the pre-migration table verbatim and seed a row.
         sqlx::query(
@@ -406,9 +397,7 @@ mod tests {
             .await
             .expect("seed legacy row");
 
-        crate::utils::schema::ensure_table_schema(&pool)
-            .await
-            .expect("migrate");
+        crate::utils::schema::ensure_table_schema(&pool).await.expect("migrate");
 
         let ks = SqliteShareKeystore::new(pool.clone());
         assert_eq!(

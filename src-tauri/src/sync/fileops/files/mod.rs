@@ -35,8 +35,7 @@ pub use resolve::{FilePathInfo, export_file, resolve_file_info, resolve_file_pat
 // rename guard does.
 pub(crate) use synced_state::{FolderSettlement, folder_is_settled};
 pub use user_files::{
-    DateRangeFilter, FileFilterCriteria, LabelStats, UserFileEntry, UserFilesResult, filter_file_entries, get_user_files,
-    search_user_files_recursive,
+    DateRangeFilter, FileFilterCriteria, LabelStats, UserFileEntry, UserFilesResult, filter_file_entries, get_user_files, search_user_files_recursive,
 };
 
 // Reachable from `crate::sync::lifecycle` as `crate::sync::files::X`, matching

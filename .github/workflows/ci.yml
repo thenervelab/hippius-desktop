@@ -297,6 +297,29 @@ jobs:
         working-directory: src-tauri
         run: cargo deny check advisories bans sources
 
+  rust-fmt:
+    # Formatting gate. Without it the backend silently drifts from its own
+    # rustfmt.toml (max_width = 150) — it had accumulated 66 files of drift
+    # before this job existed, which made `cargo fmt` unusable: running it on
+    # ONE file rewrote dozens of unrelated ones, because rustfmt walks the whole
+    # module tree from the crate root. Keeping the tree clean keeps `cargo fmt`
+    # safe to run on a single file.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      # Only rustfmt is needed — no crate compilation, so this deliberately
+      # skips the full rust-ci-setup (SSH keys, sqlx, caches) and stays fast.
+      - name: Install rustfmt
+        run: rustup component add rustfmt
+
+      - name: Check formatting
+        working-directory: src-tauri
+        run: cargo fmt --check
+
   actionlint:
     # Lint the workflow files themselves so a malformed/insecure workflow fails
     # CI instead of only failing at run time. actionlint also runs shellcheck on

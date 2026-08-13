@@ -102,8 +102,9 @@ fn validate_new_name(new_name: &str) -> Result<&str> {
 async fn rename_entry_inner(sync_root: &Path, old_rel: &str, new_name: &str, synced_rel_paths: Option<&[String]>) -> Result<String> {
     // ensure_within here fails when the joined path can't canonicalize — i.e.
     // the file isn't on disk locally → NotFound (keeps the helpful message).
-    let old_abs = ensure_within(sync_root, &sync_root.join(old_rel))
-        .map_err(|_| crate::error::AppError::NotFound("File is not available on this device yet — only locally synced files can be renamed".into()))?;
+    let old_abs = ensure_within(sync_root, &sync_root.join(old_rel)).map_err(|_| {
+        crate::error::AppError::NotFound("File is not available on this device yet — only locally synced files can be renamed".into())
+    })?;
 
     let old_basename = old_abs.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
     if old_rel.is_empty() || old_basename.is_empty() {
@@ -143,7 +144,9 @@ async fn rename_entry_inner(sync_root: &Path, old_rel: &str, new_name: &str, syn
         let same_entry = tokio::fs::canonicalize(&new_abs).await.is_ok_and(|c| c == old_abs);
         if !same_entry {
             // The destination name is already taken — a rejected rename target → Validation.
-            return Err(crate::error::AppError::Validation(format!("\"{new_name}\" already exists in this folder")));
+            return Err(crate::error::AppError::Validation(format!(
+                "\"{new_name}\" already exists in this folder"
+            )));
         }
     }
 
@@ -326,11 +329,20 @@ mod tests {
             valid: bool,
             note: String,
         }
-        let cases: Vec<NameCase> = serde_json::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/name_validation_cases.json")))
-            .expect("name_validation_cases.json is valid JSON");
+        let cases: Vec<NameCase> = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/name_validation_cases.json"
+        )))
+        .expect("name_validation_cases.json is valid JSON");
         assert!(!cases.is_empty(), "fixture must carry cases");
         for case in &cases {
-            assert_eq!(validate_new_name(&case.input).is_ok(), case.valid, "validate_new_name({:?}).is_ok() — {}", case.input, case.note);
+            assert_eq!(
+                validate_new_name(&case.input).is_ok(),
+                case.valid,
+                "validate_new_name({:?}).is_ok() — {}",
+                case.input,
+                case.note
+            );
         }
     }
 

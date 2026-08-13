@@ -49,7 +49,7 @@ use crate::auth::account_key::account_key;
 use crate::error::Result;
 use crate::sync::config::get_sync_path_for_label;
 use crate::sync::folder_entries_backfill::{build_one_shot_client, is_folder_entries_backfilled, read_cached_dir_set, walk_on_disk_dir_set};
-use crate::sync::folder_entries_reconcile::{reconcile_with_on_disk, ReconcileOutcome};
+use crate::sync::folder_entries_reconcile::{ReconcileOutcome, reconcile_with_on_disk};
 use crate::sync::mnemonic::folder_hash;
 use sqlx::sqlite::SqlitePool;
 use std::collections::BTreeSet;
@@ -135,11 +135,7 @@ impl MaterializePlan {
 pub fn compute_materialize_plan(server: &BTreeSet<String>, disk: &BTreeSet<String>, cache: &BTreeSet<String>) -> MaterializePlan {
     let to_create: Vec<String> = server.difference(disk).cloned().collect();
     // (cache ∩ disk) \ server — present locally, sourced from the server, now gone server-side.
-    let to_remove: Vec<String> = disk
-        .iter()
-        .filter(|d| cache.contains(*d) && !server.contains(*d))
-        .cloned()
-        .collect();
+    let to_remove: Vec<String> = disk.iter().filter(|d| cache.contains(*d) && !server.contains(*d)).cloned().collect();
     MaterializePlan { to_create, to_remove }
 }
 
@@ -327,7 +323,14 @@ async fn resolve_backfilled_sync_root(pool: &SqlitePool, owner: &str, account_id
 ///
 /// Network / client-config errors become `Ok(RetryLater)`; only DB-layer errors
 /// surface as `Err(AppError)`.
-async fn materialize_with_on_disk(pool: &SqlitePool, account_id: &str, owner: &str, label: &str, root: &Path, on_disk: &BTreeSet<String>) -> Result<MaterializeOutcome> {
+async fn materialize_with_on_disk(
+    pool: &SqlitePool,
+    account_id: &str,
+    owner: &str,
+    label: &str,
+    root: &Path,
+    on_disk: &BTreeSet<String>,
+) -> Result<MaterializeOutcome> {
     let client = match build_one_shot_client(pool, account_id, label).await {
         Ok(c) => c,
         Err(e) => {
@@ -393,7 +396,10 @@ pub enum FolderEntitySyncOutcome {
     /// The single disk walk failed transiently. Retry next cycle.
     RetryLater,
     /// Both halves ran. Carries each half's outcome for logging / assertions.
-    Ran { reconcile: ReconcileOutcome, materialize: MaterializeOutcome },
+    Ran {
+        reconcile: ReconcileOutcome,
+        materialize: MaterializeOutcome,
+    },
 }
 
 /// Run the combined per-cycle folder-entity sync for one drive: reconcile
@@ -493,12 +499,19 @@ pub(crate) fn spawn_folder_entity_sync(app: tauri::AppHandle, account_id: String
                     // folder until the unregister completes, which is long after
                     // the delete IPC returned and the FE already refreshed.
                     if folder_entities_changed(&reconcile, &materialize) {
-                        let _ = app.emit(crate::sync::events::FOLDER_ENTITIES_CHANGED, crate::sync::events::LabelPayload { label: label.clone() });
+                        let _ = app.emit(
+                            crate::sync::events::FOLDER_ENTITIES_CHANGED,
+                            crate::sync::events::LabelPayload { label: label.clone() },
+                        );
                     }
                 }
                 Ok(FolderEntitySyncOutcome::NotBackfilledYet) => debug!(label = %label, "folder-entity sync: backfill not done yet; deferring"),
-                Ok(FolderEntitySyncOutcome::NotReady) => debug!(label = %label, "folder-entity sync: drive not ready; will retry next eligible cycle"),
-                Ok(FolderEntitySyncOutcome::RetryLater) => debug!(label = %label, "folder-entity sync: transient failure; will retry next eligible cycle"),
+                Ok(FolderEntitySyncOutcome::NotReady) => {
+                    debug!(label = %label, "folder-entity sync: drive not ready; will retry next eligible cycle");
+                }
+                Ok(FolderEntitySyncOutcome::RetryLater) => {
+                    debug!(label = %label, "folder-entity sync: transient failure; will retry next eligible cycle");
+                }
                 Err(e) => warn!(label = %label, error = ?e, "folder-entity sync: unexpected error"),
             }
 
@@ -545,7 +558,10 @@ mod tests {
     #[test]
     fn an_applied_unregister_signals_the_frontend() {
         assert!(folder_entities_changed(
-            &ReconcileOutcome::Reconciled { registered: 0, unregistered: 1 },
+            &ReconcileOutcome::Reconciled {
+                registered: 0,
+                unregistered: 1
+            },
             &MaterializeOutcome::NoChanges,
         ));
     }
@@ -566,7 +582,10 @@ mod tests {
     fn a_converged_run_does_not_signal_the_frontend() {
         assert!(!folder_entities_changed(&ReconcileOutcome::NoChanges, &MaterializeOutcome::NoChanges));
         assert!(!folder_entities_changed(
-            &ReconcileOutcome::Reconciled { registered: 0, unregistered: 0 },
+            &ReconcileOutcome::Reconciled {
+                registered: 0,
+                unregistered: 0
+            },
             &MaterializeOutcome::Materialized { created: 0, removed: 0 },
         ));
     }
@@ -577,7 +596,10 @@ mod tests {
     #[test]
     fn deferred_and_failed_runs_do_not_signal_the_frontend() {
         assert!(!folder_entities_changed(&ReconcileOutcome::RetryLater, &MaterializeOutcome::RetryLater));
-        assert!(!folder_entities_changed(&ReconcileOutcome::NoChanges, &MaterializeOutcome::NotBackfilledYet));
+        assert!(!folder_entities_changed(
+            &ReconcileOutcome::NoChanges,
+            &MaterializeOutcome::NotBackfilledYet
+        ));
         assert!(!folder_entities_changed(&ReconcileOutcome::NoChanges, &MaterializeOutcome::NotReady));
     }
 
@@ -602,7 +624,11 @@ mod tests {
         let cache = set(&["keep", "gone"]);
         let plan = compute_materialize_plan(&server, &disk, &cache);
         assert!(plan.to_create.is_empty());
-        assert_eq!(plan.to_remove, vec!["gone".to_string()], "only the cache-known, server-absent dir is a removal candidate");
+        assert_eq!(
+            plan.to_remove,
+            vec!["gone".to_string()],
+            "only the cache-known, server-absent dir is a removal candidate"
+        );
     }
 
     #[test]
@@ -630,7 +656,11 @@ mod tests {
         let disk = set(&[]); // user deleted X locally
         let cache = set(&["X"]);
         let stale_plan = compute_materialize_plan(&stale_server, &disk, &cache);
-        assert_eq!(stale_plan.to_create, vec!["X".to_string()], "stale server set WOULD resurrect X — sequencing prevents this snapshot from ever being used");
+        assert_eq!(
+            stale_plan.to_create,
+            vec!["X".to_string()],
+            "stale server set WOULD resurrect X — sequencing prevents this snapshot from ever being used"
+        );
 
         // Over the post-reconcile server set (X unregistered), no resurrection.
         let fresh_server = set(&[]);
@@ -851,11 +881,15 @@ mod tests {
         let state = make_state(pool.clone());
 
         assert_eq!(
-            run_folder_entity_sync_for_drive(&state, TEST_ACCOUNT, "docs").await.expect("combined not-ready must not error"),
+            run_folder_entity_sync_for_drive(&state, TEST_ACCOUNT, "docs")
+                .await
+                .expect("combined not-ready must not error"),
             FolderEntitySyncOutcome::NotReady
         );
         assert_eq!(
-            materialize_folder_entries_for_drive(&state, TEST_ACCOUNT, "docs").await.expect("standalone not-ready must not error"),
+            materialize_folder_entries_for_drive(&state, TEST_ACCOUNT, "docs")
+                .await
+                .expect("standalone not-ready must not error"),
             MaterializeOutcome::NotReady
         );
     }

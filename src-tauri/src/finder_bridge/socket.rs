@@ -301,7 +301,12 @@ async fn read_task<R: AsyncRead + Unpin>(read_half: R, incoming_tx: mpsc::Unboun
 }
 
 /// Replay the current roots, then stream subsequent app→extension messages.
-async fn write_task<W: AsyncWrite + Unpin>(mut write_half: W, mut sub: broadcast::Receiver<ServerMessage>, initial_roots: Vec<PathBuf>, cancel: CancellationToken) {
+async fn write_task<W: AsyncWrite + Unpin>(
+    mut write_half: W,
+    mut sub: broadcast::Receiver<ServerMessage>,
+    initial_roots: Vec<PathBuf>,
+    cancel: CancellationToken,
+) {
     // Replay the known roots so a freshly-connected extension learns which
     // folders to monitor without waiting for the next change.
     for root in initial_roots {
@@ -394,7 +399,10 @@ mod unix_tests {
 
         let client = connect(&sock).await;
         let mut lines = BufReader::new(client).lines();
-        assert_eq!(read_server_msg(&mut lines).await, ServerMessage::RegisterPath(PathBuf::from("/Users/me/Hippius")));
+        assert_eq!(
+            read_server_msg(&mut lines).await,
+            ServerMessage::RegisterPath(PathBuf::from("/Users/me/Hippius"))
+        );
         bridge.shutdown();
     }
 
@@ -414,7 +422,10 @@ mod unix_tests {
         bridge.set_badge(BadgeState::Syncing, PathBuf::from("/r/a.txt"));
         assert_eq!(
             read_server_msg(&mut lines).await,
-            ServerMessage::Status { state: BadgeState::Syncing, path: PathBuf::from("/r/a.txt") }
+            ServerMessage::Status {
+                state: BadgeState::Syncing,
+                path: PathBuf::from("/r/a.txt")
+            }
         );
         bridge.shutdown();
     }
@@ -496,7 +507,10 @@ mod windows_tests {
         let client = connect(&name).await;
         let mut lines = BufReader::new(client).lines();
         let line = timeout(TIMEOUT, lines.next_line()).await.expect("timeout").expect("io").expect("eof");
-        assert_eq!(ServerMessage::parse(&line).expect("parse"), ServerMessage::RegisterPath(PathBuf::from(r"C:\Users\me\Hippius")));
+        assert_eq!(
+            ServerMessage::parse(&line).expect("parse"),
+            ServerMessage::RegisterPath(PathBuf::from(r"C:\Users\me\Hippius"))
+        );
         bridge.shutdown();
     }
 }

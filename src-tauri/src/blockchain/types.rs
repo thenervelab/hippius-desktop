@@ -147,11 +147,17 @@ mod tests {
                 serde_json::json!({"status": "finalized", "txHash": "0xabc"}),
             ),
             (
-                TxOutcome::FinalizedFailed { tx_hash: "0xabc".into(), reason: "r".into() },
+                TxOutcome::FinalizedFailed {
+                    tx_hash: "0xabc".into(),
+                    reason: "r".into(),
+                },
                 serde_json::json!({"status": "finalizedFailed", "txHash": "0xabc", "reason": "r"}),
             ),
             (
-                TxOutcome::SubmittedUnconfirmed { tx_hash: "0xabc".into(), reason: "r".into() },
+                TxOutcome::SubmittedUnconfirmed {
+                    tx_hash: "0xabc".into(),
+                    reason: "r".into(),
+                },
                 serde_json::json!({"status": "submittedUnconfirmed", "txHash": "0xabc", "reason": "r"}),
             ),
             (
