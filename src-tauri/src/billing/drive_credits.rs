@@ -311,11 +311,11 @@ mod tests {
 
     #[test]
     fn empty_or_garbage_planck_is_zero() {
-        // `assert_eq!` on f64 trips clippy::float_cmp; the parsed-zero
-        // path is exact-bitwise (no arithmetic), so the strict compare
-        // is the right test even though clippy can't tell.
-        assert!(planck_str_to_credits("").to_bits() == 0.0_f64.to_bits());
-        assert!(planck_str_to_credits("not-a-number").to_bits() == 0.0_f64.to_bits());
+        // Compare BITS, not the f64s: the parsed-zero path is exact (no
+        // arithmetic), and comparing the u64 bit patterns sidesteps
+        // clippy::float_cmp without weakening the assertion.
+        assert_eq!(planck_str_to_credits("").to_bits(), 0.0_f64.to_bits());
+        assert_eq!(planck_str_to_credits("not-a-number").to_bits(), 0.0_f64.to_bits());
     }
 
     #[test]

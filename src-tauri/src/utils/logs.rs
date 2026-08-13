@@ -31,9 +31,15 @@ use zip::write::{FileOptions, ZipWriter};
 /// Newest log files to include. Matches the appender's `max_log_files(7)` so a
 /// week of daily rotations is the natural upper bound.
 const MAX_FILES: usize = 7;
-/// Skip any single log file larger than this — a runaway file would bloat the
-/// upload without adding diagnostic value over its tail.
+/// Ship at most this much of any single log file. A file over the cap is
+/// TRUNCATED TO ITS TAIL, not dropped: the incident is at the end of the file,
+/// and the day a user files a ticket about is the most likely day to have run
+/// long. Dropping it produced the worst outcome available — a bundle that looks
+/// complete while missing exactly the day support needs.
 const MAX_BYTES_PER_FILE: u64 = 5 * 1024 * 1024;
+/// Header prepended to a truncated file so support can tell "quiet day" from
+/// "we cut 40MB off the front".
+const TRUNCATION_NOTICE: &str = "[hippius] earlier lines omitted; this file was truncated to its most recent portion\n";
 /// Stop adding files once the (pre-compression) total reaches this, so the
 /// attachment stays a reasonable size on the support backend.
 const MAX_TOTAL_BYTES: u64 = 20 * 1024 * 1024;
@@ -96,15 +102,9 @@ static LINE_REDACTORS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
             Regex::new(r"(?i)\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b").expect("email regex"),
             "[REDACTED_EMAIL]",
         ),
-        // SS58 wallet/account address: a standalone base58 run of 47-48 chars
-        // (32-byte account id + 1-byte network prefix). The length bound is the
-        // whole point — IPFS CIDv0 is exactly 46 and CIDv1-base58btc ~49, so both
-        // fall outside and survive for debugging while every real address is hit.
-        // base58 alphabet excludes 0/O/I/l, so `\b` boundaries are exact.
-        (
-            Regex::new(r"\b[1-9A-HJ-NP-Za-km-z]{47,48}\b").expect("ss58 address regex"),
-            "[REDACTED_ADDRESS]",
-        ),
+        // NOTE: SS58 wallet addresses are handled by `redact_ss58_addresses`,
+        // not by a table entry — they need a boundary check the pattern itself
+        // cannot express. See that function.
         // Home-directory paths: collapse everything after the `/Users/` or
         // `/home/` root — removing the OS username AND every user file/folder
         // name below it. The tail is non-greedy and ALLOWS internal spaces
@@ -142,6 +142,83 @@ static LINE_REDACTORS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
     ]
 });
 
+/// Read at most the last `max_bytes` of a UTF-8 text file.
+///
+/// Seeks rather than reading the whole file, so a runaway multi-hundred-MB log
+/// costs one buffer. The seek can land mid-line and mid-UTF-8-sequence, so the
+/// bytes are decoded lossily and everything up to the first newline is dropped;
+/// what remains starts on a clean line boundary. Returns `None` for a file that
+/// can't be read at all, matching the caller's skip-and-continue policy.
+fn read_tail_lossy(path: &Path, max_bytes: u64) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mut file = std::fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+
+    if len <= max_bytes {
+        let mut buf = Vec::with_capacity(usize::try_from(len).unwrap_or(0));
+        file.read_to_end(&mut buf).ok()?;
+        return Some(String::from_utf8_lossy(&buf).into_owned());
+    }
+
+    file.seek(SeekFrom::Start(len - max_bytes)).ok()?;
+    let mut buf = Vec::with_capacity(usize::try_from(max_bytes).unwrap_or(0));
+    file.read_to_end(&mut buf).ok()?;
+    let text = String::from_utf8_lossy(&buf);
+
+    // Drop the leading partial line; if the window somehow contains no newline
+    // the whole thing is one long line, so keep it rather than yielding "".
+    let body = text.find('\n').map_or(text.as_ref(), |i| &text[i + 1..]);
+    Some(format!("{TRUNCATION_NOTICE}{body}"))
+}
+
+/// A run of 47-48 base58 characters — the shape of an SS58 wallet address
+/// (32-byte account id + 1-byte network prefix). The length bound is the whole
+/// point: IPFS CIDv0 is exactly 46 and CIDv1-base58btc ~49, so both fall
+/// outside and survive for debugging while every real address is hit.
+///
+/// Carries NO boundary assertion; [`redact_ss58_addresses`] applies it.
+static SS58_CANDIDATE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[1-9A-HJ-NP-Za-km-z]{47,48}").expect("ss58 address regex"));
+
+/// Replace every SS58 wallet address in `line` with `[REDACTED_ADDRESS]`.
+///
+/// The boundary check lives HERE, against the surrounding bytes, rather than in
+/// the pattern — and that is load-bearing twice over:
+///
+/// 1. `\b` cannot be used: `_` is a word character, so `\b` never matches
+///    between an address and an underscore. The sync engine logs its drive
+///    identity as `<ss58>_<folder_hash>`, and a real support bundle shipped
+///    that composite with the address fully intact while every standalone
+///    occurrence on neighbouring lines was correctly redacted.
+/// 2. A *consuming* boundary class (`([^0-9A-Za-z]|$)`) cannot be used either.
+///    It swallows the separator, and `replace_all` resumes scanning after it —
+///    so with two addresses one character apart (`A,B`), the second has no
+///    boundary left to match against and escapes ENTIRELY. That is a total
+///    leak, not a cosmetic one, and it is how this function was first written.
+///
+/// Checking offsets against the haystack asserts both boundaries without
+/// consuming either, so adjacent addresses are independent. The length bound
+/// stays exact: in a 49-char run the greedy match's right boundary fails, the
+/// candidate is returned verbatim, and scanning resumes past it — so a CIDv1
+/// is never partially eaten.
+fn redact_ss58_addresses(line: &str) -> Cow<'_, str> {
+    if !SS58_CANDIDATE.is_match(line) {
+        return Cow::Borrowed(line);
+    }
+    let bytes = line.as_bytes();
+    SS58_CANDIDATE.replace_all(line, |caps: &regex::Captures<'_>| {
+        let m = caps.get(0).expect("group 0 is always present");
+        // base58 is ASCII, so byte indexing can never split a character here.
+        let left_free = m.start() == 0 || !bytes[m.start() - 1].is_ascii_alphanumeric();
+        let right_free = m.end() == bytes.len() || !bytes[m.end()].is_ascii_alphanumeric();
+        if left_free && right_free {
+            "[REDACTED_ADDRESS]".to_string()
+        } else {
+            m.as_str().to_string()
+        }
+    })
+}
+
 /// Resolves the log directory (`$HOME/.hippius/logs`).
 fn logs_dir() -> Result<PathBuf, AppError> {
     dirs::home_dir()
@@ -161,7 +238,15 @@ fn redact_log_line(line: &str) -> Cow<'_, str> {
             current = Cow::Owned(re.replace_all(&current, *replacement).into_owned());
         }
     }
-    current
+    // Wallet addresses last. Order is immaterial to the result — no table
+    // pattern produces a 47-48 char base58 run, and the home-path passes
+    // collapse any address inside a path before this runs (redacting an
+    // already-redacted path is a no-op) — so running it here, outside the
+    // table, costs nothing and keeps the boundary logic in one place.
+    match redact_ss58_addresses(&current) {
+        Cow::Borrowed(_) => current,
+        Cow::Owned(redacted) => Cow::Owned(redacted),
+    }
 }
 
 /// Redacts an entire log file's text: a whole-text pass for multi-line PEM
@@ -238,13 +323,16 @@ fn build_log_bundle(dir: &Path) -> Result<Option<TempZip>, AppError> {
 
     let mut total: u64 = 0;
     let mut wrote_any = false;
-    for (path, _, len) in entries.into_iter().take(MAX_FILES) {
-        if len > MAX_BYTES_PER_FILE || total.saturating_add(len) > MAX_TOTAL_BYTES {
-            continue;
+    for (path, _, _) in entries.into_iter().take(MAX_FILES) {
+        if total >= MAX_TOTAL_BYTES {
+            break;
         }
-        // Skip unreadable or non-UTF-8 files rather than aborting the whole
-        // bundle; tracing writes UTF-8, so this only trips on foreign files.
-        let Ok(raw) = std::fs::read_to_string(&path) else { continue };
+        // Take at most the per-file cap AND at most the remaining total budget,
+        // so both limits are measured in the same units as what actually goes
+        // into the zip. Skip unreadable files rather than aborting the whole
+        // bundle; tracing writes UTF-8, so that only trips on foreign files.
+        let budget = MAX_BYTES_PER_FILE.min(MAX_TOTAL_BYTES - total);
+        let Some(raw) = read_tail_lossy(&path, budget) else { continue };
         let redacted = redact_log_text(&raw);
         let name = path
             .file_name()
@@ -266,17 +354,36 @@ fn build_log_bundle(dir: &Path) -> Result<Option<TempZip>, AppError> {
 ///
 /// Best-effort by contract: returns `Ok(None)` when there are no logs to ship,
 /// and the temporary zip is always removed (RAII), including on upload failure.
-/// The frontend calls this after `create_support_ticket` returns the new
-/// ticket's first message id, wrapped in its own error handling so a log-bundle
-/// failure never fails the ticket itself.
+/// The frontend calls this after `create_support_ticket`, wrapped in its own
+/// error handling so a log-bundle failure never fails the ticket itself.
+///
+/// Every failure is logged at `warn!` before it is returned. That matters more
+/// here than in most commands: the renderer treats this call as best-effort, so
+/// without a Rust-side record a failed upload left no trace ANYWHERE — the
+/// user believed logs were sent, and the next bundle they sent by hand couldn't
+/// explain why the first never arrived.
 #[tauri::command]
 pub async fn attach_logs_to_ticket(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: crate::app_state::SessionAccount,
     ticket_id: String,
-    message_id: String,
 ) -> Result<Option<TicketAttachment>, AppError> {
-    info!(ticket_id = %ticket_id, message_id = %message_id, "Bundling logs for support ticket");
+    attach_logs_to_ticket_inner(&state, &account_id, &ticket_id).await.inspect_err(|e| {
+        tracing::warn!(ticket_id = %ticket_id, error = %e, "Failed to attach logs to support ticket");
+    })
+}
+
+async fn attach_logs_to_ticket_inner(
+    state: &tauri::State<'_, crate::app_state::AppState>,
+    account_id: &crate::app_state::SessionAccount,
+    ticket_id: &str,
+) -> Result<Option<TicketAttachment>, AppError> {
+    info!(ticket_id = %ticket_id, "Bundling logs for support ticket");
+
+    // Resolved here rather than taken from the caller: attachments hang off a
+    // message, and the create response the frontend used to read it from does
+    // not guarantee the `messages` array (see `support::first_message_id`).
+    let message_id = crate::utils::support::first_message_id(state, account_id, ticket_id).await?;
 
     let dir = logs_dir()?;
     // File enumeration, reads, redaction, and zipping are blocking; keep them
@@ -294,8 +401,15 @@ pub async fn attach_logs_to_ticket(
         .await
         .map_err(|e| AppError::Other(format!("Failed to read log bundle: {e}")))?;
 
-    let attachment =
-        crate::utils::support::upload_attachment_bytes(&state, &account_id, &ticket_id, &message_id, bytes, "hippius-logs.zip".to_string()).await?;
+    let attachment = crate::utils::support::upload_attachment_bytes(
+        state,
+        account_id,
+        ticket_id,
+        &message_id.to_string(),
+        bytes,
+        "hippius-logs.zip".to_string(),
+    )
+    .await?;
 
     // `bundle` (TempZip) drops here, removing the temp zip from disk.
     Ok(Some(attachment))
@@ -389,6 +503,59 @@ mod tests {
     }
 
     #[test]
+    fn redacts_ss58_joined_to_a_folder_hash_by_underscore() {
+        // The leak this boundary change fixes. `sync::drive::lifecycle` logs the
+        // drive identity as `<ss58>_<folder_hash>`; `_` is a word character, so
+        // the previous `\b`-anchored pattern never fired and a shipped support
+        // bundle carried the user's wallet address in full.
+        let addr = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
+        for line in [
+            format!("INFO Hippius::sync::drive::lifecycle: Drive unlocked, user_id: {addr}_6a6dd9c67ff2e846"),
+            format!("INFO Hippius::sync::drive::lifecycle: Sync initialized label=12mai user_id={addr}_6a6dd9c67ff2e846"),
+        ] {
+            let out = redact_log_line(&line);
+            assert!(!out.contains("5Grwva"), "address leaked: {out}");
+            assert!(out.contains("[REDACTED_ADDRESS]_6a6dd9c67ff2e846"), "got: {out}");
+        }
+    }
+
+    #[test]
+    fn redacts_ss58_against_every_neighbouring_delimiter() {
+        // Boundary sweep: the classes must fire at line start/end and against
+        // each delimiter the loggers actually produce around an address.
+        let addr = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
+        for line in [
+            addr.to_string(),
+            format!("account={addr}"),
+            format!("\"{addr}\""),
+            format!("{addr}_suffix"),
+            format!("prefix_{addr}"),
+            format!("[{addr}]"),
+            format!("for {addr}."),
+        ] {
+            let out = redact_log_line(&line);
+            assert!(!out.contains("5Grwva"), "address leaked from {line:?}: {out}");
+            assert!(out.contains("[REDACTED_ADDRESS]"), "no marker for {line:?}: {out}");
+        }
+    }
+
+    #[test]
+    fn redacts_both_addresses_separated_by_a_single_character() {
+        // Consume-and-restore boundaries mean `replace_all` resumes scanning
+        // AFTER the separator, so the next address has no boundary character
+        // left to match against and escapes entirely. A support bundle logging
+        // two addresses on one line would ship the second in full.
+        let a = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
+        let b = "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty";
+        for sep in [" ", ",", "_", "/"] {
+            let line = format!("transfer {a}{sep}{b} done");
+            let out = redact_log_line(&line);
+            assert!(!out.contains("5Grwva"), "first address leaked with sep {sep:?}: {out}");
+            assert!(!out.contains("5FHneW"), "second address leaked with sep {sep:?}: {out}");
+        }
+    }
+
+    #[test]
     fn preserves_ipfs_cid() {
         // CIDv0 is exactly 46 chars — outside the 47-48 address bound, so a CID
         // (no identity, useful for support) must pass through untouched.
@@ -397,6 +564,20 @@ mod tests {
         let line = format!("INFO pinned content {cid} ok");
         let out = redact_log_line(&line);
         assert_eq!(out, line, "IPFS CID must not be redacted: {out}");
+    }
+
+    #[test]
+    fn preserves_longer_base58_run_than_an_address() {
+        // The length bound must stay exact under the new boundary classes: a
+        // 49-char base58 run (CIDv1-base58btc shape) must not have 48 of its
+        // chars eaten, whether it sits at line edges or between delimiters.
+        let cid = "z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+        let long: String = std::iter::repeat_n('a', 49 - cid.len()).chain(cid.chars()).collect();
+        assert_eq!(long.len(), 49, "test fixture must be a 49-char base58 run");
+        for line in [long.clone(), format!("INFO cid {long} ok"), format!("cid={long}")] {
+            let out = redact_log_line(&line);
+            assert_eq!(out, line, "a 49-char run must pass through untouched: {out}");
+        }
     }
 
     #[test]
@@ -552,17 +733,82 @@ mod tests {
     }
 
     #[test]
-    fn oversized_file_is_skipped() {
+    fn oversized_file_is_truncated_to_its_tail_not_dropped() {
+        // The incident is at the END of a runaway log, and the day a user files
+        // a ticket about is the likeliest day to be oversized. Dropping it
+        // shipped a bundle that looked complete while missing that day.
         let dir = tempfile::tempdir().expect("tempdir");
-        // One oversized file (skipped) and one normal file (kept).
-        let big = vec![b'x'; (MAX_BYTES_PER_FILE + 1) as usize];
+        let mut big = String::from("INFO oldest line that must not survive\n");
+        while big.len() < (MAX_BYTES_PER_FILE + 1) as usize {
+            big.push_str("INFO filler line\n");
+        }
+        big.push_str("ERROR the incident we actually need\n");
         std::fs::write(dir.path().join("hippius.big.log"), &big).expect("write big");
         std::fs::write(dir.path().join("hippius.small.log"), "INFO small\n").expect("write small");
 
         let bundle = build_log_bundle(dir.path()).expect("bundle").expect("expected a bundle");
         let file = std::fs::File::open(bundle.path()).expect("open zip");
+        let mut archive = zip::ZipArchive::new(file).expect("read zip");
+        assert_eq!(archive.len(), 2, "an oversized file must still be shipped, truncated");
+
+        let mut big_entry = archive.by_name("hippius.big.log").expect("oversized file present in zip");
+        let mut contents = String::new();
+        big_entry.read_to_string(&mut contents).expect("read entry");
+        assert!(contents.contains("the incident we actually need"), "the tail is the whole point");
+        assert!(!contents.contains("oldest line that must not survive"), "the head should be cut");
+        assert!(
+            contents.contains("truncated"),
+            "truncation must be announced: {}",
+            &contents[..120.min(contents.len())]
+        );
+        assert!(
+            contents.len() as u64 <= MAX_BYTES_PER_FILE + TRUNCATION_NOTICE.len() as u64,
+            "cap must still bound the entry"
+        );
+    }
+
+    #[test]
+    fn tail_starts_on_a_clean_line_boundary() {
+        // The seek lands mid-line by construction; a partial first line would
+        // read as a corrupt log entry.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("t.log");
+        std::fs::write(&path, "AAAA-partial-line\nBBBB\nCCCC\n").expect("write");
+
+        // 12 bytes lands inside the "BBBB" region, after the first newline.
+        let tail = read_tail_lossy(&path, 12).expect("tail");
+        assert!(tail.starts_with(TRUNCATION_NOTICE), "truncation must be announced: {tail:?}");
+        let body = tail.strip_prefix(TRUNCATION_NOTICE).expect("notice prefix");
+        assert!(!body.contains("partial-line"), "partial head line leaked: {body:?}");
+        assert!(body.contains("CCCC"), "newest content must survive: {body:?}");
+        for line in body.lines() {
+            assert!(matches!(line, "BBBB" | "CCCC"), "unexpected fragment {line:?}");
+        }
+    }
+
+    #[test]
+    fn small_file_is_read_whole_without_a_truncation_notice() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("t.log");
+        std::fs::write(&path, "INFO one\nINFO two\n").expect("write");
+        let out = read_tail_lossy(&path, MAX_BYTES_PER_FILE).expect("tail");
+        assert_eq!(out, "INFO one\nINFO two\n", "an under-cap file must be untouched");
+    }
+
+    #[test]
+    fn total_budget_caps_the_bundle_across_files() {
+        // Each file may take up to the per-file cap, but never past the total.
+        // The old code compared raw sizes against a total of redacted sizes.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let chunk = "INFO x\n".repeat(1024);
+        for i in 0..9 {
+            std::fs::write(dir.path().join(format!("hippius.{i}.log")), &chunk).expect("write");
+        }
+        let bundle = build_log_bundle(dir.path()).expect("bundle").expect("expected a bundle");
+        let file = std::fs::File::open(bundle.path()).expect("open zip");
         let archive = zip::ZipArchive::new(file).expect("read zip");
-        assert_eq!(archive.len(), 1, "oversized file should be skipped, only the small one kept");
+        assert!(archive.len() <= MAX_FILES, "must never ship more than MAX_FILES entries");
+        assert!(!archive.is_empty(), "small files must all fit");
     }
 
     #[test]

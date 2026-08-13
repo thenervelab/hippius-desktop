@@ -27,6 +27,10 @@ export function failureMessage(rec: FileFailureRecord): string {
         : "Server error. Please try again.";
     case "network":
       return "Network error — couldn't reach the server. Check your connection.";
+    case "changedWhileUploading":
+      // Self-resolving: the next cycle rescans and re-uploads. Deliberately
+      // says nothing about encryption — the crypto is fine, the file moved.
+      return "File changed while uploading — will retry.";
     case "other":
     default:
       // `other` carries display text; fall back to a generic line if absent or

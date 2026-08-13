@@ -1036,6 +1036,37 @@ struct SyncSnapshotWire<'a> {
     preparing_scanned_files: Option<u64>,
     preparing_fetched_entries: Option<u64>,
     preparing_fetch_total_entries: Option<u64>,
+    /// Paths of errored rows whose failure resolves itself on the next cycle
+    /// (see `crate::sync::events::FileFailureKindPayload::is_transient`).
+    /// `None` when there are none — the FE treats absent as "nothing retrying".
+    ///
+    /// Needed because the per-file rows come from the FOREIGN `SyncSnapshot`,
+    /// which carries only a status and a reason string; there is nowhere on
+    /// `FileProgress` to hang a desktop classification, so it rides alongside
+    /// and the FE joins by path.
+    transient_error_paths: Option<Vec<String>>,
+}
+
+/// Collect the paths of errored rows that will retry themselves.
+///
+/// Derived from the snapshot being emitted, so the flags cannot disagree with
+/// the rows they describe (the file list is capped and re-sorted before emit —
+/// a separately-accumulated set would drift out of step with it).
+///
+/// `None` rather than an empty vec when nothing is retrying: the FE reads
+/// absent as "nothing retrying" like every other overlay field here.
+fn transient_error_paths(snapshot: &SyncSnapshot) -> Option<Vec<String>> {
+    use hcfs_client::engine::progress::state::FileProgressStatus;
+
+    let paths: Vec<String> = snapshot
+        .files
+        .iter()
+        .filter(|f| f.status == FileProgressStatus::Error)
+        .filter(|f| f.error.as_deref().is_some_and(crate::sync::events::is_transient_reason))
+        .map(|f| f.path.to_string())
+        .collect();
+
+    if paths.is_empty() { None } else { Some(paths) }
 }
 
 /// The desktop-side preparing tail of the snapshot wire, read from
@@ -1157,6 +1188,7 @@ fn spawn_snapshot_emit<R: tauri::Runtime>(app: tauri::AppHandle<R>, snapshot: Sy
                 preparing_scanned_files: preparing.scanned_files,
                 preparing_fetched_entries: preparing.fetched_entries,
                 preparing_fetch_total_entries: preparing.fetch_total_entries,
+                transient_error_paths: transient_error_paths(&snapshot),
             };
             let _ = app.emit(events::PROGRESS_SNAPSHOT, &wire);
         }
@@ -1384,6 +1416,25 @@ mod tests {
 
     /// Build a fixture `SyncSnapshot` with no files. Used as the baseline
     /// for differential fingerprint tests below.
+    /// Wrap a snapshot with all-`None` overlays, isolating whatever the wire
+    /// derives from the snapshot itself.
+    fn wire_for_test(inner: &SyncSnapshot) -> SyncSnapshotWire<'_> {
+        SyncSnapshotWire {
+            inner,
+            intent_total_files: None,
+            intent_total_bytes: None,
+            intent_completed_files: None,
+            intent_completed_bytes: None,
+            intent_active: None,
+            preparing_pending_files: None,
+            preparing_pending_bytes: None,
+            preparing_scanned_files: None,
+            preparing_fetched_entries: None,
+            preparing_fetch_total_entries: None,
+            transient_error_paths: transient_error_paths(inner),
+        }
+    }
+
     fn fixture_snapshot() -> SyncSnapshot {
         SyncSnapshot {
             is_active: true,
@@ -1515,6 +1566,60 @@ mod tests {
         assert_eq!(snapshot_fingerprint(&a, empty, scanned_100), snapshot_fingerprint(&a, empty, scanned_100),);
     }
 
+    /// Build a snapshot file row in the `Error` state carrying `reason`.
+    fn errored_file(path: &str, reason: &str) -> hcfs_client::engine::progress::state::FileProgress {
+        use hcfs_client::engine::progress::state::{FileProgress, FileProgressStatus};
+        FileProgress {
+            path: path.into(),
+            file_name: path.rsplit('/').next().unwrap_or(path).into(),
+            label: "drive".into(),
+            action: hcfs_client::engine::progress::state::FileAction::Upload,
+            status: FileProgressStatus::Error,
+            progress_percent: 0,
+            bytes_encrypted: 0,
+            bytes_transferred: 0,
+            total_bytes: 10,
+            resumed_from_bytes: None,
+            error: Some(reason.into()),
+            completed_at: Some(1_700_000_000_000),
+        }
+    }
+
+    /// The widget needs to tell "this retries itself" from "this needs you",
+    /// and the snapshot's per-file rows come from the foreign `SyncSnapshot`,
+    /// so the decision rides along as a desktop overlay listing the paths.
+    /// Without it a mid-upload change renders identically to a hard failure.
+    #[test]
+    fn transiently_failed_paths_are_flagged_on_the_wire() {
+        let transient = crate::sync::events::FileFailureKindPayload::ChangedWhileUploading.display_reason();
+        let hard = crate::sync::events::FileFailureKindPayload::Network.display_reason();
+
+        let mut inner = fixture_snapshot();
+        inner.files = vec![
+            errored_file("project/node_modules/a.js", &transient),
+            errored_file("docs/report.pdf", &hard),
+        ];
+
+        let json = serde_json::to_value(wire_for_test(&inner)).expect("serialize wire");
+        let flagged = json["transientErrorPaths"].as_array().expect("transientErrorPaths present");
+
+        assert_eq!(flagged.len(), 1, "only the self-resolving row may be flagged: {flagged:?}");
+        assert_eq!(flagged[0], "project/node_modules/a.js");
+    }
+
+    /// A cycle with no transient failures must not ship an empty array the FE
+    /// has to special-case — absent means "nothing retrying".
+    #[test]
+    fn no_transient_failures_means_no_overlay_field_value() {
+        let inner = fixture_snapshot();
+        let json = serde_json::to_value(wire_for_test(&inner)).expect("serialize wire");
+        assert!(
+            json["transientErrorPaths"].is_null(),
+            "expected null, got {}",
+            json["transientErrorPaths"]
+        );
+    }
+
     /// Wire-format contract: serializing `SyncSnapshotWire` must
     /// (a) inline the inner snapshot's camelCase fields at the top
     ///     level (verifies `#[serde(flatten)]` did its job),
@@ -1537,6 +1642,7 @@ mod tests {
             preparing_scanned_files: Some(1234),
             preparing_fetched_entries: Some(40),
             preparing_fetch_total_entries: Some(90),
+            transient_error_paths: None,
         };
         let json = serde_json::to_value(&wire).expect("serialize wire");
 
@@ -1578,6 +1684,7 @@ mod tests {
             preparing_scanned_files: None,
             preparing_fetched_entries: None,
             preparing_fetch_total_entries: None,
+            transient_error_paths: None,
         };
         let json = serde_json::to_value(&wire).expect("serialize wire");
         assert!(json["intentTotalFiles"].is_null());
@@ -1617,6 +1724,7 @@ mod tests {
             preparing_scanned_files: Some(1),
             preparing_fetched_entries: Some(1),
             preparing_fetch_total_entries: Some(1),
+            transient_error_paths: None,
         };
         let json = serde_json::to_value(&wire).expect("serialize wire");
         let obj = json.as_object().expect("wire serializes to a JSON object");
@@ -1624,8 +1732,9 @@ mod tests {
         let mut actual: Vec<&str> = obj.keys().map(String::as_str).collect();
         actual.sort_unstable();
 
-        // The 27 flattened `SyncSnapshot` fields (camelCase) plus the 10 desktop
-        // overlay fields `SyncSnapshotWire` appends (5 intent + 5 preparing).
+        // The 27 flattened `SyncSnapshot` fields (camelCase) plus the 11 desktop
+        // overlay fields `SyncSnapshotWire` appends (5 intent + 5 preparing +
+        // transientErrorPaths).
         // Source for the field set:
         // `fixture_snapshot()` above + `hcfs-client/src/engine/progress/snapshot.rs`
         // (`#[serde(rename_all = "camelCase")]`, no per-field rename/skip).
@@ -1667,6 +1776,7 @@ mod tests {
             "preparingScannedFiles",
             "preparingFetchedEntries",
             "preparingFetchTotalEntries",
+            "transientErrorPaths",
         ];
         expected.sort_unstable();
 

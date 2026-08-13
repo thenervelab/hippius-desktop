@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { formatBytes } from "@/lib/utils/formatBytes";
 import { middleTruncate, middleTruncatePath } from "@/lib/utils/middleTruncate";
 import {
+  Filter as FilterIcon,
   Folder,
   FolderOpen,
   FolderSearch,
@@ -30,6 +31,7 @@ interface LocalFoldersSectionProps {
   onAddFolder: () => void;
   onPauseFolder: (folder: SyncFolder) => void;
   onResumeFolder: (folder: SyncFolder) => void;
+  onManageExclusions: (folder: SyncFolder) => void;
   onRemoveFolder: (folder: SyncFolder) => void;
   onDeleteFromServer: (folderName: string, folderId: string) => void;
   onBrowseFolder: (folder: SyncFolder) => void;
@@ -146,6 +148,7 @@ export function LocalFoldersSection({
   onAddFolder,
   onPauseFolder,
   onResumeFolder,
+  onManageExclusions,
   onRemoveFolder,
   onDeleteFromServer,
   onBrowseFolder,
@@ -354,6 +357,11 @@ export function LocalFoldersSection({
                         },
                       },
                       {
+                        icon: <FilterIcon className="size-4" />,
+                        itemTitle: "Excluded from Sync",
+                        onItemClick: () => onManageExclusions(folder),
+                      },
+                      {
                         icon: <Trash2 className="size-4" />,
                         itemTitle: "Remove from Sync",
                         onItemClick: () => onRemoveFolder(folder),
@@ -421,6 +429,11 @@ export function LocalFoldersSection({
                   console.error("Failed to open in file manager:", error);
                 }
               },
+            },
+            {
+              icon: <FilterIcon className="size-4" />,
+              label: "Excluded from Sync",
+              onClick: () => onManageExclusions(cardContextMenu.folder),
             },
             {
               icon: <Trash2 className="size-4" />,
