@@ -41,13 +41,25 @@ export const serverCapabilitiesAtom = atom<ServerCapabilities | null>(null);
 export const shareFeatureEnabledAtom = atom(() => true);
 
 /**
- * Open `ShareFileModal` for this file. `null` means closed.
+ * What `ShareFileModal` is currently sharing. `null` means closed.
  *
- * Storing the file (rather than just `(label, name)`) lets the modal
- * render `<filename>` while the share is in flight without a second
- * IPC round-trip to fetch metadata.
+ * Storing the file (rather than just `(label, name)`) lets the modal render
+ * `<filename>` while the share is in flight without a second IPC round-trip to
+ * fetch metadata.
+ *
+ * `relativePath` is resolved by the surface that OPENS the modal, not derived
+ * inside it. A nested folder row's `actualFileName` holds only the basename —
+ * the containing path lives in `parentRelativePath` or in the table's
+ * `currentSubfolderPath` — so the modal has no way to work it out on its own,
+ * and guessing would mint a share for a different folder of the same name at
+ * the drive root. See `folderShareRelativePath`.
  */
-export const shareModalFileAtom = atom<FormattedUserFile | null>(null);
+export type ShareModalTarget = {
+  file: FormattedUserFile;
+  relativePath: string;
+};
+
+export const shareModalFileAtom = atom<ShareModalTarget | null>(null);
 
 /**
  * A pending "Share with Hippius" request from the macOS Finder right-click, as

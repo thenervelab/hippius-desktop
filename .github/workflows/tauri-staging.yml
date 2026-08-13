@@ -5,9 +5,12 @@ on:
   push:
     branches: [staging]
 
+# Least privilege by default; the three publishing jobs re-grant `contents:
+# write` individually, because each creates or uploads to a release. Granting
+# write workflow-wide meant every job — including the build-only steps that run
+# untrusted-ish dependency code — carried the token that can rewrite the repo.
 permissions:
-  contents: write
-  pull-requests: read
+  contents: read
 
 concurrency:
   group: publish-staging-${{ github.ref }}
@@ -19,12 +22,19 @@ env:
 jobs:
   publish-tauri-macos:
     runs-on: macos-latest
+    # Creates the staging release and uploads artifacts to it.
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0
+          # Nothing here pushes over git — the release uploads go through `gh`
+          # with an explicit GH_TOKEN — so leaving the credential in .git/config
+          # only widens what a compromised build step could reach.
+          persist-credentials: false
 
       - name: Setup SSH for private Rust git deps
         shell: bash
@@ -144,7 +154,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
@@ -178,17 +188,17 @@ jobs:
           rustup show
 
       - name: Rust cache
-        uses: swatinem/rust-cache@v2
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: './src-tauri -> target'
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 'lts/*'
 
       - name: Setup PNPM
-        uses: pnpm/action-setup@v2
+        uses: pnpm/action-setup@eae0cfeb286e66ffb5155f1a79b90583a127a68b # v2.4.1
         with:
           version: 9.12.3
           run_install: false
@@ -197,7 +207,7 @@ jobs:
         run: echo "STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_ENV"
 
       - name: PNPM cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ env.STORE_PATH }}
           key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
@@ -278,7 +288,7 @@ jobs:
           fi
 
       - name: Build & publish
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -374,11 +384,18 @@ jobs:
   # jobs upsert the same v<version>-staging release.
   publish-tauri-linux:
     runs-on: ubuntu-22.04
+    # Creates the staging release and uploads artifacts to it.
+    permissions:
+      contents: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0
+          # Nothing here pushes over git — the release uploads go through `gh`
+          # with an explicit GH_TOKEN — so leaving the credential in .git/config
+          # only widens what a compromised build step could reach.
+          persist-credentials: false
 
       - name: Setup SSH for private Rust git deps
         shell: bash
@@ -410,15 +427,15 @@ jobs:
           sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 'lts/*'
 
       - name: Setup PNPM
-        uses: pnpm/action-setup@v2
+        uses: pnpm/action-setup@eae0cfeb286e66ffb5155f1a79b90583a127a68b # v2.4.1
         with:
           version: 9.12.3
           run_install: false
@@ -444,7 +461,7 @@ jobs:
           NODE_ENV: production
 
       - name: Build & publish (deb)
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -467,11 +484,18 @@ jobs:
   # cert, so for internal preview the extension ships as a side bundle.
   publish-tauri-windows:
     runs-on: windows-latest
+    # Creates the staging release and uploads artifacts to it.
+    permissions:
+      contents: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0
+          # Nothing here pushes over git — the release uploads go through `gh`
+          # with an explicit GH_TOKEN — so leaving the credential in .git/config
+          # only widens what a compromised build step could reach.
+          persist-credentials: false
 
       - name: Setup SSH for private Rust git deps
         shell: bash
@@ -504,15 +528,15 @@ jobs:
           printf '[net]\ngit-fetch-with-cli = true\n' > ~/.cargo/config.toml
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 'lts/*'
 
       - name: Setup PNPM
-        uses: pnpm/action-setup@v2
+        uses: pnpm/action-setup@eae0cfeb286e66ffb5155f1a79b90583a127a68b # v2.4.1
         with:
           version: 9.12.3
           run_install: false
@@ -541,7 +565,7 @@ jobs:
         working-directory: windows/HippiusShell
 
       - name: Build & publish (NSIS installer)
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}

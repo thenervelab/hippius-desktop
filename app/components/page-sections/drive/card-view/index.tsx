@@ -16,6 +16,11 @@ import {
 } from "@/app/lib/global-atoms/sharesAtoms";
 import { renameModalFileAtom } from "@/app/lib/global-atoms/renameAtoms";
 import { canRenameFile, RENAME_DISABLED_TOOLTIP } from "@/app/lib/utils/renameGating";
+import {
+  canShareFolder,
+  FOLDER_SHARE_DISABLED_TOOLTIP,
+  shareTargetFor,
+} from "@/app/lib/utils/folderShareGating";
 import { cn } from "@/lib/utils";
 
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
@@ -52,6 +57,11 @@ interface CardViewProps {
   ) => void;
   hasMore: boolean;
   loadMore: () => void;
+  /**
+   * Drive-relative path of the folder currently being browsed, needed to
+   * resolve a folder row's share path — its name alone is only the basename.
+   */
+  currentSubfolderPath?: string | null;
 }
 
 const CardView: FC<CardViewProps> = ({
@@ -61,6 +71,7 @@ const CardView: FC<CardViewProps> = ({
   handleFileDownload,
   hasMore,
   loadMore,
+  currentSubfolderPath,
 }) => {
   // Sentinel ref for infinite scroll
   const sentinelRef = useRef<HTMLDivElement>(null);
@@ -333,23 +344,35 @@ const CardView: FC<CardViewProps> = ({
                               ]
                             : []),
                           // Share via link — same gating as the right-click
-                          // context menu and the table-view 3-dots menu:
-                          // hidden for folders, mid-flight files, and old
-                          // hcfs-servers without the `shares` capability.
-                          ...(!file.isFolder &&
-                          file.syncStatus === "synced" &&
+                          // context menu and the table-view 3-dots menu: a file
+                          // must be fully uploaded, a folder must be fully
+                          // present locally (it is zipped from disk) and shows
+                          // disabled with a tooltip when it isn't.
+                          ...((file.isFolder ||
+                            file.syncStatus === "synced") &&
                           shareEnabled
                             ? [
                                 {
                                   icon: <Link2 className="size-4" />,
                                   itemTitle: "Share via link",
+                                  disabled:
+                                    file.isFolder && !canShareFolder(file),
+                                  tooltip:
+                                    file.isFolder && !canShareFolder(file)
+                                      ? FOLDER_SHARE_DISABLED_TOOLTIP
+                                      : undefined,
                                   onItemClick: (e?: React.MouseEvent) => {
                                     if (e) {
                                       e.preventDefault();
                                       e.stopPropagation();
                                     }
+                                    if (file.isFolder && !canShareFolder(file)) {
+                                      return;
+                                    }
                                     setOpenMenuIndex(null);
-                                    setShareModalFile(file);
+                                    setShareModalFile(
+                                      shareTargetFor(file, currentSubfolderPath),
+                                    );
                                   },
                                 },
                               ]

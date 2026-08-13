@@ -18,3 +18,8 @@ pub mod origin;
 pub(crate) mod zip_dir;
 
 pub use keystore::SqliteShareKeystore;
+// Re-exported so the binary's startup hook can call it: `zip_dir` itself is
+// crate-private, and a fn reachable only from `main.rs` reads as dead code when
+// the lib target is compiled on its own.
+#[cfg(any(unix, windows))]
+pub use zip_dir::sweep_stale_share_archives;

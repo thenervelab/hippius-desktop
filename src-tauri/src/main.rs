@@ -345,6 +345,8 @@ fn main() {
             get_thumbnail,
             // File sharing (link-based public shares)
             crate::shares::commands::hcfs_create_share,
+            crate::shares::commands::hcfs_create_folder_share,
+            crate::shares::commands::hcfs_folder_share_preflight,
             crate::shares::commands::hcfs_list_shares,
             crate::shares::commands::hcfs_revoke_share,
             crate::shares::commands::hcfs_update_share_expiry,
@@ -755,6 +757,11 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                  /Applications."
             );
         }
+
+        // A folder share writes a plaintext zip of the folder to the temp dir and
+        // unlinks it on Drop. A crash or force-quit mid-upload skips that, leaving
+        // the archive behind — clear any from a previous run.
+        crate::shares::sweep_stale_share_archives();
 
         if let Ok(env_path) = app.path().resolve(".env", BaseDirectory::Resource) {
             let _ = dotenvy::from_filename(env_path);

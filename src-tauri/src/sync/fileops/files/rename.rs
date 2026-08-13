@@ -114,20 +114,22 @@ async fn rename_entry_inner(sync_root: &Path, old_rel: &str, new_name: &str, syn
         return Err(crate::error::AppError::Validation("New name is the same as the current name".into()));
     }
 
+    // Rename keeps its historical posture on a missing map (`Unknown` proceeds):
+    // it is a local operation the sync engine reconciles either way. Folder
+    // SHARE, which reads the same helper, refuses on `Unknown` instead, because
+    // it hands the folder's bytes to a third party.
     if old_abs.is_dir()
-        && let Some(rel_paths) = synced_rel_paths
+        && matches!(
+            super::synced_state::folder_settlement(sync_root, old_rel, synced_rel_paths),
+            super::synced_state::FolderSettlement::Pending
+        )
     {
-        let prefix = format!("{}/", old_rel.trim_end_matches('/'));
-        for rel in rel_paths {
-            if rel.starts_with(&prefix) && !sync_root.join(rel).exists() {
-                // Transient mid-sync state (no MigrationInProgress-style variant fits;
-                // NotReady would be FE-silenced) → documented Other, kept surfaced so
-                // the user sees the "wait for sync to finish" guidance.
-                return Err(crate::error::AppError::Other(
-                    "This folder has changes that are still syncing on this device. Wait for sync to finish, then try again".into(),
-                ));
-            }
-        }
+        // Transient mid-sync state (no MigrationInProgress-style variant fits;
+        // NotReady would be FE-silenced) → documented Other, kept surfaced so
+        // the user sees the "wait for sync to finish" guidance.
+        return Err(crate::error::AppError::Other(
+            "This folder has changes that are still syncing on this device. Wait for sync to finish, then try again".into(),
+        ));
     }
 
     // `parent()` is Some for any canonical path below the root we just

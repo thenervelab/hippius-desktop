@@ -160,7 +160,12 @@ async fn share_for_path(
     // `share_synced_file`, which rejects directories.
     let metadata = tokio::fs::metadata(clicked).await?;
     if metadata.is_dir() {
-        return crate::shares::commands::share_directory_as_zip(state, &account_id, clicked, ttl, choice, progress).await;
+        // The zip funnel resolves the drive itself (to run the settled-folder
+        // guard), so the `(label, relative_path)` it returns is redundant here —
+        // the Finder path records no reshare-origin sidecar.
+        return crate::shares::commands::share_directory_as_zip(state, &account_id, clicked, ttl, choice, progress)
+            .await
+            .map(|(link, _resolved)| link);
     }
 
     let roots = crate::sync::paths::list_drive_roots(state.pool()?, &account_id).await?;

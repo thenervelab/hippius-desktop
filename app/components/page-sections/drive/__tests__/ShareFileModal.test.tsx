@@ -61,11 +61,12 @@ function installClipboard(): { writeText: ReturnType<typeof vi.fn> } {
 
 function withProvider(node: ReactNode, file: { actualFileName?: string; name: string; label: string }) {
   const store = createStore();
-  // Modal reads the file from this atom — populating it is the same
-  // signal a `setShareModalFile(file)` handler from the file-row
-  // context menu would deliver in production.
+  // Modal reads the target from this atom — populating it is the same signal a
+  // `setShareModalFile(shareTargetFor(file, base))` handler from the file-row
+  // context menu delivers in production. The surface resolves `relativePath`,
+  // so the fixture supplies it rather than the modal deriving it.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  store.set(shareModalFileAtom, file as any);
+  store.set(shareModalFileAtom, { file, relativePath: file.actualFileName || file.name } as any);
   return <Provider store={store}>{node}</Provider>;
 }
 
@@ -109,9 +110,8 @@ describe("ShareFileModal", () => {
     const store = createStore();
     /* eslint-disable @typescript-eslint/no-explicit-any */
     store.set(shareModalFileAtom, {
-      name: "first.pdf",
-      actualFileName: "first.pdf",
-      label: "Drive",
+      file: { name: "first.pdf", actualFileName: "first.pdf", label: "Drive" },
+      relativePath: "first.pdf",
     } as any);
     render(
       <Provider store={store}>
@@ -129,9 +129,8 @@ describe("ShareFileModal", () => {
     });
     act(() => {
       store.set(shareModalFileAtom, {
-        name: "second.pdf",
-        actualFileName: "second.pdf",
-        label: "Drive",
+        file: { name: "second.pdf", actualFileName: "second.pdf", label: "Drive" },
+        relativePath: "second.pdf",
       } as any);
     });
     /* eslint-enable @typescript-eslint/no-explicit-any */
@@ -469,6 +468,98 @@ describe("ShareFileModal", () => {
 
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("hcfs_revoke_share", { shareToken: "tok-rev" });
+    });
+  });
+
+  describe("folder shares", () => {
+    // A folder opens the same modal, but the two mint commands are NOT
+    // interchangeable: hcfs_create_share rejects a directory outright.
+    const FOLDER = { name: "Photos", actualFileName: "Photos", label: "Drive", isFolder: true };
+
+    /** Route the single invoke mock by command name, since a folder share
+     *  makes two different calls (preflight, then mint). */
+    function routeInvoke(preflight: unknown, mint?: unknown) {
+      invokeMock.mockImplementation((command: string) => {
+        if (command === "hcfs_folder_share_preflight") return Promise.resolve(preflight);
+        return Promise.resolve(
+          mint ?? {
+            shareToken: "tok-folder",
+            shareUrl: "https://console.hippius.com/share/tok-folder#k=K",
+            expiresAt: null,
+          },
+        );
+      });
+    }
+
+    const WITHIN_LIMITS = {
+      totalBytes: 1_400_000_000,
+      fileCount: 812,
+      withinLimits: true,
+      limitBytes: 2 * 1024 * 1024 * 1024,
+      limitFiles: 10_000,
+    };
+
+    it("mints a folder through hcfs_create_folder_share, not the file command", async () => {
+      routeInvoke(WITHIN_LIMITS);
+
+      render(withProvider(<ShareFileModal />, FOLDER));
+      await screen.findByText(/812 files/);
+      confirmChooser();
+
+      await waitFor(() => {
+        expect(invokeMock).toHaveBeenCalledWith(
+          "hcfs_create_folder_share",
+          expect.objectContaining({ folderLabel: "Drive", relativePath: "Photos" }),
+        );
+      });
+      expect(invokeMock).not.toHaveBeenCalledWith("hcfs_create_share", expect.anything());
+    });
+
+    it("shows the folder's size and file count before minting", async () => {
+      routeInvoke(WITHIN_LIMITS);
+
+      render(withProvider(<ShareFileModal />, FOLDER));
+
+      expect(await screen.findByText(/812 files/)).toBeInTheDocument();
+      // SI units, matching the app-wide formatBytes and the backend cap message.
+      expect(screen.getByText(/1\.4 GB/)).toBeInTheDocument();
+    });
+
+    it("disables minting when the backend reports the folder is over its limit", async () => {
+      routeInvoke({
+        totalBytes: 31_000_000_000,
+        fileCount: 240_000,
+        withinLimits: false,
+        limitBytes: 2 * 1024 * 1024 * 1024,
+        limitFiles: 10_000,
+      });
+
+      render(withProvider(<ShareFileModal />, FOLDER));
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /create share link/i })).toBeDisabled();
+      });
+    });
+
+    it("keeps minting available while the preflight is still in flight", async () => {
+      // A slow stat must not block sharing a small folder; the Rust cap is the
+      // real gate, and it re-checks on the mint.
+      invokeMock.mockImplementation((command: string) =>
+        command === "hcfs_folder_share_preflight" ? new Promise(() => {}) : Promise.resolve({}),
+      );
+
+      render(withProvider(<ShareFileModal />, FOLDER));
+
+      expect(screen.getByRole("button", { name: /create share link/i })).toBeEnabled();
+    });
+
+    it("does not preflight a file", async () => {
+      routeInvoke(WITHIN_LIMITS);
+
+      render(withProvider(<ShareFileModal />, { name: "doc.pdf", actualFileName: "doc.pdf", label: "Drive" }));
+
+      await screen.findByText(/general access/i);
+      expect(invokeMock).not.toHaveBeenCalledWith("hcfs_folder_share_preflight", expect.anything());
     });
   });
 });

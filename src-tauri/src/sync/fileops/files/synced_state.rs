@@ -7,6 +7,7 @@ use hcfs_client::engine::manager::DriveManager;
 use hcfs_client::engine::runner::SyncRunner;
 use hcfs_client::engine::types::{SyncedFileInfo, build_synced_paths_from_state};
 use std::collections::HashMap;
+use std::path::Path;
 
 /// Build a map of relative paths → sync info for files whose
 /// `path_hash` appears in the drive's persisted `synced` tree.
@@ -102,6 +103,66 @@ pub(super) async fn synced_paths_and_excludes_for_label(sync: &SyncRunner, label
 /// one extra refetch, not a stale forever read.
 const FIRST_RECONCILE_WAIT_BUDGET: std::time::Duration = std::time::Duration::from_secs(6);
 
+/// Whether a folder's contents are all present on this device.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FolderSettlement {
+    /// Every rel-path the drive knows under this folder exists on disk.
+    Settled,
+    /// At least one known child is missing locally — the same condition that
+    /// makes `list_sync_folder_grouped` report `sync_status: "pending"`.
+    Pending,
+    /// No synced map available: the drive is paused, logged out, or still cold.
+    Unknown,
+}
+
+/// Classify `folder_rel` under `sync_root` against the drive's synced rel-paths.
+///
+/// `synced_rel_paths` is the engine's `synced` tree, the same source the file
+/// browser's pending badge reads, so a caller's verdict and the badge the user
+/// is looking at cannot disagree.
+///
+/// Callers deciding whether to hand a folder's bytes to a third party must treat
+/// [`FolderSettlement::Unknown`] as a refusal, never as permission — otherwise
+/// pausing a drive becomes a way to bypass the check. Folder rename is the
+/// deliberate exception: it is a local operation the sync engine reconciles
+/// either way, so it proceeds when the answer is unknown.
+pub(crate) fn folder_settlement(sync_root: &Path, folder_rel: &str, synced_rel_paths: Option<&[String]>) -> FolderSettlement {
+    let Some(rel_paths) = synced_rel_paths else {
+        return FolderSettlement::Unknown;
+    };
+
+    // Compare against a trailing-slash prefix so a sibling whose name merely
+    // starts with this folder's name ("trips2/x" vs "trips") is not read as a
+    // child of it.
+    //
+    // The drive root is the exception: it addresses every path in the drive, so
+    // its prefix is empty rather than "/" — which nothing starts with, and would
+    // make the loop match nothing and report Settled without checking anything.
+    let trimmed = folder_rel.trim_end_matches('/');
+    let prefix = if trimmed.is_empty() { String::new() } else { format!("{trimmed}/") };
+    for rel in rel_paths {
+        if rel.starts_with(&prefix) && !sync_root.join(rel).exists() {
+            return FolderSettlement::Pending;
+        }
+    }
+
+    FolderSettlement::Settled
+}
+
+/// Answer [`folder_settlement`] for a live drive, reading the synced tree for
+/// `label` first.
+///
+/// Exists so callers outside this module ask one question instead of composing
+/// the map read with the classification themselves — which would mean exposing
+/// both internals and letting two call sites drift on how a missing map is
+/// treated.
+pub(crate) async fn folder_is_settled(sync: &SyncRunner, label: &str, sync_root: &Path, folder_rel: &str) -> FolderSettlement {
+    let synced = synced_paths_for_label(sync, label).await;
+    let rel_paths: Option<Vec<String>> = synced.map(|map| map.into_keys().collect());
+
+    folder_settlement(sync_root, folder_rel, rel_paths.as_deref())
+}
+
 /// Outcome of locating a per-drive `DriveManager` Arc behind the outer
 /// drives map. Either we got the Arc, or the outer/inner lookup failed and
 /// the caller should fall back to the cache.
@@ -127,6 +188,77 @@ fn acquire_drive_arc(sync: &SyncRunner, label: &str) -> DriveArcOutcome {
 
 #[cfg(test)]
 mod tests {
+    use super::{FolderSettlement, folder_settlement};
+    use tempfile::TempDir;
+
+    #[test]
+    fn settled_when_every_synced_child_is_on_disk() {
+        let root = TempDir::new().expect("temp dir");
+        std::fs::create_dir_all(root.path().join("trips/2024")).expect("mkdir");
+        std::fs::write(root.path().join("trips/2024/a.jpg"), b"x").expect("write");
+
+        let synced = vec!["trips/2024/a.jpg".to_string()];
+
+        assert_eq!(folder_settlement(root.path(), "trips", Some(&synced)), FolderSettlement::Settled);
+    }
+
+    /// A path the drive knows about but disk lacks is exactly the condition
+    /// `list_sync_folder_grouped` renders as `pending`. Zipping here would hand
+    /// the recipient an archive silently missing that file.
+    #[test]
+    fn unsettled_when_a_synced_child_is_missing_on_disk() {
+        let root = TempDir::new().expect("temp dir");
+        std::fs::create_dir_all(root.path().join("trips")).expect("mkdir");
+
+        let synced = vec!["trips/2024/a.jpg".to_string()];
+
+        assert_eq!(folder_settlement(root.path(), "trips", Some(&synced)), FolderSettlement::Pending);
+    }
+
+    /// A paused or logged-out drive yields no map. Callers that hand bytes to a
+    /// third party must refuse on unknown, or pausing a drive would become a way
+    /// to bypass the check entirely.
+    #[test]
+    fn unknown_when_the_drive_has_no_synced_map() {
+        let root = TempDir::new().expect("temp dir");
+
+        assert_eq!(folder_settlement(root.path(), "trips", None), FolderSettlement::Unknown);
+    }
+
+    #[test]
+    fn a_sibling_sharing_a_name_prefix_is_not_treated_as_a_child() {
+        let root = TempDir::new().expect("temp dir");
+        std::fs::create_dir_all(root.path().join("trips")).expect("mkdir");
+
+        // "trips2/x.jpg" is a sibling, not a child of "trips".
+        let synced = vec!["trips2/x.jpg".to_string()];
+
+        assert_eq!(folder_settlement(root.path(), "trips", Some(&synced)), FolderSettlement::Settled);
+    }
+
+    /// The drive root addresses every path in the drive, so an empty
+    /// `folder_rel` must check ALL of them. A `"{folder}/"` prefix built from an
+    /// empty string is `"/"`, which no rel-path starts with — the loop would
+    /// match nothing and report `Settled` without having checked anything,
+    /// silently skipping the guard for a whole-drive share.
+    #[test]
+    fn the_drive_root_checks_every_path_rather_than_none() {
+        let root = TempDir::new().expect("temp dir");
+
+        let synced = vec!["trips/2024/a.jpg".to_string()];
+
+        assert_eq!(folder_settlement(root.path(), "", Some(&synced)), FolderSettlement::Pending);
+    }
+
+    #[test]
+    fn a_trailing_slash_on_the_folder_does_not_change_the_answer() {
+        let root = TempDir::new().expect("temp dir");
+        std::fs::create_dir_all(root.path().join("trips")).expect("mkdir");
+
+        let synced = vec!["trips/a.jpg".to_string()];
+
+        assert_eq!(folder_settlement(root.path(), "trips/", Some(&synced)), FolderSettlement::Pending);
+    }
 
     /// Regression test for the cold-start race: a `wait_for_first_reconcile`
     /// call against a registered-but-unsettled gate must block until the

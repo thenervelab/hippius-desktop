@@ -182,6 +182,29 @@ fn at_rest_decrypt_frozen_ciphertext_is_pinned() {
 // `#[cfg(test)]` module and never compile into the desktop — only a pin in THIS
 // crate guards the desktop's use of the bumped dep.
 
+/// The share modal reads these keys directly to render the size line and to
+/// disable its Create button. A serde rename would blank both silently — the
+/// modal would show no size and never refuse an oversized folder, leaving the
+/// mint as the only thing that says no.
+#[test]
+fn folder_share_preflight_wire_pinned() {
+    let preflight = tauri_project_lib::shares::commands::FolderSharePreflight {
+        total_bytes: 12,
+        file_count: 3,
+        within_limits: true,
+        limit_bytes: 2_000_000_000,
+        limit_files: 10_000,
+    };
+
+    let json = serde_json::to_value(&preflight).expect("serialize");
+    let keys: BTreeSet<&str> = json.as_object().expect("object").keys().map(String::as_str).collect();
+    assert_eq!(
+        keys,
+        ["fileCount", "limitBytes", "limitFiles", "totalBytes", "withinLimits"].into_iter().collect::<BTreeSet<_>>(),
+        "FolderSharePreflight wire keys must stay exactly these camelCase names"
+    );
+}
+
 #[test]
 fn register_folder_entries_request_wire_pinned() {
     let req = RegisterFolderEntriesRequest {

@@ -168,6 +168,60 @@ export async function createShare(
   });
 }
 
+/**
+ * Size and file count of a folder share, plus whether it is within the
+ * backend's limits.
+ *
+ * `withinLimits` is decided in Rust against the same constants the mint
+ * enforces, so the modal never disables on a rule the backend doesn't apply —
+ * or offers a folder it will refuse.
+ */
+export interface FolderSharePreflight {
+  totalBytes: number;
+  fileCount: number;
+  withinLimits: boolean;
+  limitBytes: number;
+  limitFiles: number;
+}
+
+export async function folderSharePreflight(
+  folderLabel: string,
+  relativePath: string,
+): Promise<FolderSharePreflight> {
+  return invoke<FolderSharePreflight>("hcfs_folder_share_preflight", {
+    folderLabel,
+    relativePath,
+  });
+}
+
+/**
+ * Mint a share link for a folder. The folder is packed into one `<name>.zip`
+ * and that archive is shared, so the link is a snapshot: later changes to the
+ * folder do not appear in it.
+ *
+ * Rejects when the folder is not fully synced on this device — the backend
+ * refuses rather than hand the recipient an archive missing files — and when it
+ * exceeds the size or entry cap. Same `Channel` progress mechanics as
+ * {@link createShare}.
+ */
+export async function createFolderShare(
+  folderLabel: string,
+  relativePath: string,
+  choice: ShareChoice,
+  onProgress?: (progress: ShareProgress) => void,
+): Promise<ShareLink> {
+  const onProgressChannel = new Channel<ShareProgress>();
+  if (onProgress) onProgressChannel.onmessage = onProgress;
+  return invoke<ShareLink>("hcfs_create_folder_share", {
+    folderLabel,
+    relativePath,
+    ttl: choice.ttl,
+    visibility: choice.visibility,
+    password: choice.password ?? null,
+    onProgress: onProgressChannel,
+  });
+}
+
 export async function listShares(): Promise<ShareSummary[]> {
   return invoke<ShareSummary[]>("hcfs_list_shares");
 }

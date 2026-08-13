@@ -42,7 +42,10 @@ import {
 import {
   cancelFinderShare,
   confirmFinderShare,
+  createFolderShare,
   createShare,
+  folderSharePreflight,
+  type FolderSharePreflight,
   revokeShare,
   type ShareChoice,
   type ShareLink,
@@ -52,6 +55,7 @@ import {
   generateSharePassword,
 } from "@/app/lib/tauri/shares";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
+import { formatBytes } from "@/app/lib/utils/formatBytes";
 
 type ModalState =
   // Both entry points start here: the user picks expiry and public-vs-password
@@ -69,7 +73,10 @@ type ModalState =
   | { kind: "error"; message: string };
 
 export default function ShareFileModal() {
-  const [file, setFile] = useAtom(shareModalFileAtom);
+  const [target, setTarget] = useAtom(shareModalFileAtom);
+  // The entry being shared, or `null` for a Finder-initiated share (which has
+  // no row — the backend holds the resolved path).
+  const file = target?.file ?? null;
   // A share from the macOS Finder right-click opens the in-app chooser (see
   // `FinderShareListener`): the atom carries only the `choosing` state, and this
   // modal then owns the `confirmFinderShare` → running → done/error lifecycle,
@@ -92,7 +99,13 @@ export default function ShareFileModal() {
   // The Finder flow has no `FormattedUserFile`, so fall back to the name the
   // backend sent with the choosing event for the label shown in every state.
   const finderName = finderShare?.kind === "choosing" ? finderShare.name : "";
-  const filename = file?.actualFileName || file?.name || finderName;
+  // For a FOLDER show the drive-relative path, not the basename: it is the only
+  // confirmation of WHICH entry is about to be published, and two folders with
+  // the same name in different places would otherwise look identical here.
+  const filename =
+    (target?.file.isFolder ? target.relativePath : file?.actualFileName) ||
+    file?.name ||
+    finderName;
   const folderLabel = file?.label;
 
   const close = useCallback(() => {
@@ -100,41 +113,38 @@ export default function ShareFileModal() {
     // Idempotent server-side: after a confirm mints it the id is already taken,
     // so closing from done/error is a harmless no-op.
     if (finderShare?.kind === "choosing") void cancelFinderShare(finderShare.id);
-    setFile(null);
+    setTarget(null);
     setFinderShare(null);
-  }, [finderShare, setFile, setFinderShare]);
+  }, [finderShare, setTarget, setFinderShare]);
 
   const startShare = useCallback(
     async (choice: ShareChoice) => {
-    if (!file || !folderLabel) return;
+    if (!target || !folderLabel) return;
     lastChoiceRef.current = choice;
     setState({ kind: "running" });
     autoCopiedRef.current = false;
     try {
-      // `actualFileName` is the relative path inside the sync folder
-      // (e.g. `subdir/file.txt`); see `FormattedUserFile`. The fallback
-      // to `name` mirrors `revealInFileManager` in the file row's
-      // context menu.
-      const relativePath = file.actualFileName || file.name;
-      // Apply progress only while still running: channel messages are
-      // delivered asynchronously, so a trailing `finalizing` update can
-      // land after the IPC promise resolves — it must not clobber the
-      // `done`/`error` state we transition to below.
-      const link = await createShare(
-        folderLabel,
-        relativePath,
-        choice,
-        (progress) =>
-          setState((prev) =>
-            prev.kind === "running" ? { kind: "running", progress } : prev,
-          ),
-      );
+      // The path was resolved by whichever surface opened the modal — see
+      // `ShareModalTarget`. Apply progress only while still running: channel
+      // messages are delivered asynchronously, so a trailing `finalizing`
+      // update can land after the IPC promise resolves and must not clobber
+      // the `done`/`error` state we transition to below.
+      const onProgress = (progress: ShareProgress) =>
+        setState((prev) =>
+          prev.kind === "running" ? { kind: "running", progress } : prev,
+        );
+      // A folder is packed into one zip and shared as that archive; the file
+      // command rejects a directory outright, so the two are not
+      // interchangeable.
+      const link = target.file.isFolder
+        ? await createFolderShare(folderLabel, target.relativePath, choice, onProgress)
+        : await createShare(folderLabel, target.relativePath, choice, onProgress);
       setState({ kind: "done", link });
     } catch (err) {
       setState({ kind: "error", message: errorMessage(err) });
     }
     },
-    [file, folderLabel],
+    [target, folderLabel],
   );
 
   // Confirm a Finder share once the user picks visibility in the chooser: mint
@@ -186,8 +196,8 @@ export default function ShareFileModal() {
   const sessionKey =
     finderShare?.kind === "choosing"
       ? `finder:${finderShare.id}`
-      : file
-        ? `file:${file.label}:${file.actualFileName || file.name}`
+      : target
+        ? `file:${target.file.label}:${target.relativePath}`
         : null;
 
   // Reset on every session transition, close included.
@@ -207,6 +217,31 @@ export default function ShareFileModal() {
     autoCopiedRef.current = false;
     lastChoiceRef.current = null;
   }, [sessionKey]);
+
+  // Measure a folder before the user commits to sharing it, so the chooser can
+  // show what will be packed and refuse an oversized folder up front rather
+  // than after a long walk. Files need no preflight — only a folder is zipped.
+  //
+  // A failure resolves to `null` rather than surfacing: the mint re-checks and
+  // returns the authoritative message, and a preflight that cannot stat should
+  // not block a share the backend would accept.
+  const [folderPreflight, setFolderPreflight] = useState<FolderSharePreflight | null>(null);
+
+  useEffect(() => {
+    setFolderPreflight(null);
+    if (!target?.file.isFolder || !folderLabel) return;
+
+    let cancelled = false;
+    void folderSharePreflight(folderLabel, target.relativePath)
+      .then((result) => {
+        if (!cancelled) setFolderPreflight(result);
+      })
+      .catch(() => undefined);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionKey, target, folderLabel]);
 
   // Auto-copy once we reach `done`. The URL is still rendered in a
   // selectable textbox so the user can re-copy if focus rules block
@@ -266,7 +301,13 @@ export default function ShareFileModal() {
       maxWidth="max-w-[585px]"
     >
       {state.kind === "choosing" && (
-        <ChoosingBody filename={filename} onConfirm={onConfirmChoice} onCancel={close} />
+        <ChoosingBody
+          filename={filename}
+          isFolder={target?.file.isFolder ?? false}
+          folderPreflight={folderPreflight}
+          onConfirm={onConfirmChoice}
+          onCancel={close}
+        />
       )}
 
       {state.kind === "running" && (
@@ -326,10 +367,15 @@ const PASSWORD_MIN_LEN = 8;
  */
 function ChoosingBody({
   filename,
+  isFolder,
+  folderPreflight,
   onConfirm,
   onCancel,
 }: {
   filename: string;
+  isFolder: boolean;
+  /** `null` while the measurement is in flight, or if it failed. */
+  folderPreflight: FolderSharePreflight | null;
   onConfirm: (choice: ShareChoice) => void;
   onCancel: () => void;
 }) {
@@ -356,6 +402,10 @@ function ChoosingBody({
 
   const passwordTooShort =
     visibility === "private" && password.length < PASSWORD_MIN_LEN;
+  // Only a measured over-limit folder blocks the button. While the preflight is
+  // in flight `folderPreflight` is null and sharing stays available: a slow stat
+  // must not hold up a small folder, and the backend re-checks on the mint.
+  const folderTooLarge = folderPreflight?.withinLimits === false;
 
   return (
     <div className="font-geist">
@@ -440,6 +490,8 @@ function ChoosingBody({
         >
           {filename}
         </p>
+
+        {isFolder && <FolderShareNotice preflight={folderPreflight} />}
       </div>
 
       <div className="flex flex-col gap-3">
@@ -447,7 +499,7 @@ function ChoosingBody({
           type="button"
           variant="primary"
           size="auto"
-          disabled={passwordTooShort}
+          disabled={passwordTooShort || folderTooLarge}
           onClick={() =>
             onConfirm({
               ttl,
@@ -478,6 +530,44 @@ function ChoosingBody({
         </Button>
       </div>
     </div>
+  );
+}
+
+/**
+ * What the user is agreeing to when they share a folder: the archive it becomes,
+ * its measured size, and — when it is too big — why the button is disabled.
+ *
+ * The snapshot wording is the important part. A folder link is minted from the
+ * folder's contents at this moment; later additions do not appear in it, and
+ * nothing in the recipient's view would reveal that.
+ */
+function FolderShareNotice({ preflight }: { preflight: FolderSharePreflight | null }) {
+  if (preflight?.withinLimits === false) {
+    return (
+      <div className="mt-3 rounded-md border border-error-90 bg-error-100/40 px-3 py-2 dark:border-error-30/60 dark:bg-error-30/10">
+        <p className="text-xs font-medium text-error-70">
+          This folder is too large to share as a link
+        </p>
+        <p className="mt-1 text-xs text-grey-50 dark:text-grey-dark-600">
+          {/* "More than": the backend stops measuring once the cap is passed,
+              so these totals are a lower bound, not the folder's real size. */}
+          More than {formatBytes(preflight.totalBytes)} across{" "}
+          {preflight.fileCount.toLocaleString()} files. The limit is{" "}
+          {formatBytes(preflight.limitBytes)} and{" "}
+          {preflight.limitFiles.toLocaleString()} files — share a smaller folder,
+          or share files individually.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <p className="mt-3 text-xs text-grey-50 dark:text-grey-dark-600">
+      {preflight
+        ? `Packed as one .zip — ${formatBytes(preflight.totalBytes)} across ${preflight.fileCount.toLocaleString()} files. `
+        : "Packed as one .zip. "}
+      The link is a snapshot: files added to this folder later won&apos;t appear in it.
+    </p>
   );
 }
 
