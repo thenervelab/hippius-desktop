@@ -5,7 +5,7 @@ export const URLS = {
   WHY_HIPPIUS: "https://hippius.com/why-hippius",
   DASHBOARD: "https://console.hippius.com",
   GITHUB_ORG: "https://github.com/thenervelab",
-  TWITTER: "https://x.com/hippius_subnet",
+  TWITTER: "https://x.com/Hippius_cloud",
   DISCORD: "https://discord.hippius.com",
   LEARN: "https://docs.hippius.com/learn/intro",
   API: "https://docs.hippius.com/blockchain/api",
