@@ -18,10 +18,6 @@ pub const SYNC_STOPPED: &str = "hcfs_sync_stopped";
 pub const SYNC_PLAN_READY: &str = "hcfs_sync_plan_ready";
 /// Emitted when the sync engine is fully reset.
 pub const SYNC_RESET: &str = "hcfs_sync_reset";
-/// Local filesystem scan progress.
-pub const SCAN_PROGRESS: &str = "hcfs_scan_progress";
-/// Remote file-list fetch progress.
-pub const FETCH_PROGRESS: &str = "hcfs_fetch_progress";
 /// Emitted when server connectivity status changes.
 pub const CONNECTIVITY_CHANGED: &str = "hcfs_connectivity_changed";
 /// Emitted after a remote folder is auto-recovered.
@@ -436,24 +432,6 @@ mod tests {
             "AuthRequiredPayload"
         );
         assert_eq!(
-            keyset(FetchProgressPayload {
-                label: "d".to_string(),
-                fetched: 0,
-                total: 0
-            }),
-            expect_keys(&["label", "fetched", "total"]),
-            "FetchProgressPayload"
-        );
-        assert_eq!(
-            keyset(ScanProgressPayload {
-                label: "d".to_string(),
-                scanned: 0,
-                path: None
-            }),
-            expect_keys(&["label", "scanned", "path"]),
-            "ScanProgressPayload"
-        );
-        assert_eq!(
             keyset(SyncResetPayload {
                 account_id: "a".to_string(),
                 message: "m".to_string()
@@ -678,22 +656,6 @@ pub struct SyncErrorPayload {
 pub struct ConflictsPendingPayload {
     pub label: String,
     pub staged: StagedChanges,
-}
-
-/// Local scan progress.
-#[derive(Serialize, Clone)]
-pub struct ScanProgressPayload {
-    pub label: String,
-    pub scanned: u64,
-    pub path: Option<String>,
-}
-
-/// Remote fetch progress.
-#[derive(Serialize, Clone)]
-pub struct FetchProgressPayload {
-    pub label: String,
-    pub fetched: u64,
-    pub total: u64,
 }
 
 /// Emitted when the sync engine is fully reset.

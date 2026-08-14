@@ -8,9 +8,107 @@ use hcfs_client::engine::runner::SyncRunner;
 use hcfs_client::engine::types::{SyncActivityAction, SyncActivityItem, SyncedFileInfo};
 use hcfs_client::sync::SyncProgress;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 use tracing::{debug, info, warn};
+
+/// Smallest wall-clock gap between two scan-progress log lines.
+const SCAN_LOG_INTERVAL: Duration = Duration::from_secs(2);
+
+/// Rate-limits a repeating log line to at most one emission per `interval`.
+///
+/// The scan callback fires once per file walked, and the `info!` behind it was
+/// unthrottled. On a drive holding a build tree (~80k files) that wrote ~340
+/// lines/second, which is enough to defeat the support bundle: `utils::logs`
+/// ships a 5 MB tail per file, so a 22k-line bundle covered 65 SECONDS of the
+/// day it was collected. A real bundle from 2026-08-14 carried zero WARN and
+/// zero ERROR lines while the full on-disk log for the same day held both —
+/// the incident had been truncated away by scan noise before support saw it.
+///
+/// Thinning rather than demoting to `debug!` is deliberate: a slow scan is the
+/// phase users report as "stuck", so the line has to stay in a default-level
+/// bundle. At this interval a 15-minute scan leaves ~450 lines instead of
+/// ~80,000, which still shows the rate and the current path.
+///
+/// The lock is real: these callbacks run on the rayon scan workers, so several
+/// threads reach `decide` concurrently.
+struct LogThrottle {
+    interval: Duration,
+    state: Mutex<ThrottleState>,
+}
+
+#[derive(Default)]
+struct ThrottleState {
+    last_logged: Option<Instant>,
+    /// Highest count seen in the scan currently in progress. Carried so the
+    /// FINAL count of a scan can be emitted, which periodic sampling alone
+    /// never captures.
+    highest_seen: u64,
+}
+
+/// What the caller should log for one scan tick.
+#[derive(Debug, PartialEq, Eq)]
+enum ScanLog {
+    /// Nothing — this tick fell inside the current interval.
+    Nothing,
+    /// This tick's own count, as periodic progress.
+    Progress,
+    /// A new scan started; emit the PREVIOUS scan's final count first, then
+    /// treat this tick as that scan's opening progress line.
+    FinishedPrevious(u64),
+}
+
+impl LogThrottle {
+    fn new(interval: Duration) -> Self {
+        Self {
+            interval,
+            state: Mutex::new(ThrottleState::default()),
+        }
+    }
+
+    /// Decide what to log for a tick reporting `scanned` files at `now`.
+    ///
+    /// Leading-edge sampling loses the one number the line exists for. A scan
+    /// of a small drive completes well inside one interval — 46 files in 0.9ms
+    /// was measured — so the only tick that ever wins is the first, and every
+    /// cycle logs `1 files scanned` forever while the real total is never
+    /// recorded. Counts rise monotonically within a scan and restart at the
+    /// next one, so a DROP is the scan boundary, and it is the only signal
+    /// this callback gets: there is no scan-complete callback to hook.
+    /// Reporting the previous high-water mark there gives support the final
+    /// count without adding a line per tick.
+    ///
+    /// That boundary check doubles as the cross-cycle reset. Without it the
+    /// interval spans cycle boundaries, so back-to-back cycles — a
+    /// file-watcher burst, or a retry loop, exactly the "why is it spinning?"
+    /// pattern support reads the log for — could emit nothing at all.
+    ///
+    /// A poisoned lock reads as "log it": a duplicated line costs far less
+    /// than silently dropping the only signal a stuck scan emits.
+    fn decide(&self, now: Instant, scanned: u64) -> ScanLog {
+        let mut state = match self.state.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        if scanned < state.highest_seen {
+            let finished = state.highest_seen;
+            state.highest_seen = scanned;
+            state.last_logged = Some(now);
+            return ScanLog::FinishedPrevious(finished);
+        }
+        state.highest_seen = scanned;
+
+        match state.last_logged {
+            Some(previous) if now.duration_since(previous) < self.interval => ScanLog::Nothing,
+            _ => {
+                state.last_logged = Some(now);
+                ScanLog::Progress
+            }
+        }
+    }
+}
 
 /// Direction of a file transfer for progress callbacks.
 pub(crate) enum TransferDirection {
@@ -402,9 +500,15 @@ fn build_crypto_callback(
     })
 }
 
-/// Build the `on_scan_progress` callback that logs scan progress and
-/// emits the `SCAN_PROGRESS` Tauri event.
+/// Build the `on_scan_progress` callback that feeds the preparing-state
+/// watchdogs and logs scan progress at a bounded rate.
+///
+/// The scanned counter reaches the UI through the throttled
+/// `sync_progress_snapshot` (`snapshot.preparingScannedFiles`), which
+/// `note_engine_activity` drives — not through a per-file Tauri event.
 fn build_scan_callback(sync: Arc<SyncRunner>, app: AppHandle, label: Arc<str>) -> hcfs_client::sync::ScanProgressFn {
+    let log_throttle = LogThrottle::new(SCAN_LOG_INTERVAL);
+
     Arc::new(move |n, p| {
         sync.touch_progress_time();
         note_engine_activity(
@@ -413,20 +517,26 @@ fn build_scan_callback(sync: Arc<SyncRunner>, app: AppHandle, label: Arc<str>) -
             &label,
             ActivityPhase::PrePlan(crate::sync::preparing::PreparingActivity::Scanning { scanned_files: n }),
         );
-        info!("Scan [{label}]: {n} files scanned, current: {p:?}");
-        let _ = app.emit(
-            crate::sync::events::SCAN_PROGRESS,
-            crate::sync::events::ScanProgressPayload {
-                label: label.to_string(),
-                scanned: n,
-                path: p.map(std::string::ToString::to_string),
-            },
-        );
+
+        match log_throttle.decide(Instant::now(), n) {
+            ScanLog::Nothing => {}
+            ScanLog::Progress => info!("Scan [{label}]: {n} files scanned, current: {p:?}"),
+            ScanLog::FinishedPrevious(total) => {
+                info!("Scan [{label}]: complete, {total} files scanned");
+                info!("Scan [{label}]: {n} files scanned, current: {p:?}");
+            }
+        }
     })
 }
 
-/// Build the `on_fetch_state_progress` callback that logs fetch state
-/// progress and emits the `FETCH_PROGRESS` Tauri event.
+/// Build the `on_fetch_state_progress` callback that feeds the
+/// preparing-state watchdogs and logs remote-state fetch progress.
+///
+/// Like the scan counter, the fetched/total pair reaches the UI through the
+/// throttled `sync_progress_snapshot` rather than a per-page Tauri event.
+///
+/// Unthrottled `info!` is fine here: this fires once per fetched PAGE (17
+/// times for an 80k-file account), not once per entry.
 fn build_fetch_callback(sync: Arc<SyncRunner>, app: AppHandle, label: Arc<str>) -> hcfs_client::sync::FetchProgressFn {
     Arc::new(move |f, t| {
         sync.touch_progress_time();
@@ -440,14 +550,6 @@ fn build_fetch_callback(sync: Arc<SyncRunner>, app: AppHandle, label: Arc<str>) 
             }),
         );
         info!("Fetch state [{label}]: {f}/{t} entries");
-        let _ = app.emit(
-            crate::sync::events::FETCH_PROGRESS,
-            crate::sync::events::FetchProgressPayload {
-                label: label.to_string(),
-                fetched: f,
-                total: t,
-            },
-        );
     })
 }
 
@@ -723,4 +825,103 @@ pub(crate) fn setup_progress_handlers(app: &AppHandle, manager: &mut DriveManage
         // event emit).
         on_file_failed: Some(build_file_failed_callback(sync.clone(), Arc::clone(&label))),
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LogThrottle, SCAN_LOG_INTERVAL, ScanLog};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn first_tick_always_logs() {
+        let throttle = LogThrottle::new(SCAN_LOG_INTERVAL);
+
+        assert_eq!(
+            throttle.decide(Instant::now(), 1),
+            ScanLog::Progress,
+            "a scan shorter than one interval must still leave a trace",
+        );
+    }
+
+    #[test]
+    fn suppresses_within_the_interval_and_resumes_after_it() {
+        let throttle = LogThrottle::new(Duration::from_secs(2));
+        let start = Instant::now();
+
+        assert_eq!(throttle.decide(start, 1), ScanLog::Progress);
+        assert_eq!(throttle.decide(start + Duration::from_millis(1), 2), ScanLog::Nothing);
+        assert_eq!(throttle.decide(start + Duration::from_millis(1999), 3), ScanLog::Nothing);
+        assert_eq!(throttle.decide(start + Duration::from_secs(2), 4), ScanLog::Progress);
+        assert_eq!(
+            throttle.decide(start + Duration::from_millis(2001), 5),
+            ScanLog::Nothing,
+            "the window restarts from the emission, not from the first call",
+        );
+    }
+
+    /// The property that makes this a fix rather than a reshuffle: a burst of
+    /// per-file ticks inside one interval collapses to a single line. 80k
+    /// unthrottled ticks are what truncated a support bundle down to 65
+    /// seconds of its day.
+    #[test]
+    fn a_burst_of_ticks_collapses_to_one_line_per_interval() {
+        let throttle = LogThrottle::new(Duration::from_secs(2));
+        let start = Instant::now();
+        let mut logged = 0_u32;
+
+        // 80,000 ticks spread over 10 seconds - a large drive's scan rate.
+        for tick in 0..80_000_u64 {
+            let now = start + Duration::from_micros(tick * 125);
+            if throttle.decide(now, tick + 1) != ScanLog::Nothing {
+                logged += 1;
+            }
+        }
+
+        // Lines land at t=0, 2s, 4s, 6s and 8s. The final tick is at
+        // 9.999875s, so the 10s boundary is never reached.
+        assert_eq!(logged, 5, "80,000 ticks over 10s must collapse to one line per 2s interval");
+    }
+
+    /// Leading-edge sampling alone loses the number the line exists for: a
+    /// 46-file scan completes in under a millisecond, so only tick #1 ever
+    /// wins and every cycle would log "1 files scanned" forever. The count
+    /// dropping marks the next scan, and the previous total is emitted there.
+    #[test]
+    fn a_fast_scan_still_reports_its_final_count() {
+        let throttle = LogThrottle::new(Duration::from_secs(2));
+        let start = Instant::now();
+
+        // Whole 46-file scan inside one interval: only the first tick logs.
+        for n in 1..=46_u64 {
+            let now = start + Duration::from_micros(n * 20);
+            let expected = if n == 1 { ScanLog::Progress } else { ScanLog::Nothing };
+            assert_eq!(throttle.decide(now, n), expected, "tick {n}");
+        }
+
+        // The next cycle's first tick reports the scan that just ended.
+        assert_eq!(
+            throttle.decide(start + Duration::from_millis(500), 1),
+            ScanLog::FinishedPrevious(46),
+            "the completed scan's total must survive, not be sampled away",
+        );
+    }
+
+    /// The scan-boundary check doubles as the cross-interval reset, so
+    /// back-to-back cycles cannot fall silent just because they started inside
+    /// the previous cycle's window.
+    #[test]
+    fn a_cycle_starting_inside_the_previous_window_still_logs() {
+        let throttle = LogThrottle::new(Duration::from_secs(2));
+        let start = Instant::now();
+
+        assert_eq!(throttle.decide(start, 1), ScanLog::Progress);
+        assert_eq!(throttle.decide(start + Duration::from_millis(10), 2), ScanLog::Nothing);
+
+        // A new scan 20ms later - far inside the 2s window.
+        assert_eq!(
+            throttle.decide(start + Duration::from_millis(20), 1),
+            ScanLog::FinishedPrevious(2),
+            "a new cycle must not be silenced by the previous cycle's window",
+        );
+    }
 }

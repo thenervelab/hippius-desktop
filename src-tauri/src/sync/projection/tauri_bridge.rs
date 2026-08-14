@@ -861,18 +861,20 @@ impl SyncEventHandler for TauriSyncBridge {
             SyncEvent::ConflictsPending { label, staged } => {
                 let _ = app.emit(events::CONFLICTS_PENDING, events::ConflictsPendingPayload { label, staged });
             }
-            // Per-chunk transfer progress is served via the throttled
+            // Pre-plan and per-chunk progress is served via the throttled
             // `sync_progress_snapshot` event emitted from
-            // `crate::sync::progress::update_file_progress`. Forwarding these
-            // variants to Tauri would flood the webview. See lifecycle.rs
-            // `handle_transfer_progress` for the live path.
-            SyncEvent::UploadProgress { .. } | SyncEvent::DownloadProgress { .. } => {}
-            SyncEvent::ScanProgress { label, scanned, path } => {
-                let _ = app.emit(events::SCAN_PROGRESS, events::ScanProgressPayload { label, scanned, path });
-            }
-            SyncEvent::FetchProgress { label, fetched, total } => {
-                let _ = app.emit(events::FETCH_PROGRESS, events::FetchProgressPayload { label, fetched, total });
-            }
+            // `crate::sync::progress::update_file_progress`, which carries the
+            // scan and fetch counters as `preparingScannedFiles` /
+            // `preparingFetched` (see `sync::preparing`). Forwarding these
+            // variants to Tauri would flood the webview for no consumer: no
+            // frontend code listens to `hcfs_scan_progress` or
+            // `hcfs_fetch_progress`, and `ScanProgress` alone fires once per
+            // file walked — ~80k times per cycle on a large drive. See
+            // lifecycle.rs `handle_transfer_progress` for the live path.
+            SyncEvent::UploadProgress { .. }
+            | SyncEvent::DownloadProgress { .. }
+            | SyncEvent::ScanProgress { .. }
+            | SyncEvent::FetchProgress { .. } => {}
             SyncEvent::FileTransferComplete { label } => {
                 let _ = app.emit(events::FILE_TRANSFER_COMPLETE, events::LabelPayload { label });
             }
