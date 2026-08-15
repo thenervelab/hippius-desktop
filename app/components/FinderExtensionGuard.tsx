@@ -54,10 +54,14 @@ export default function FinderExtensionGuard() {
             // `unsupported` (every non-macOS platform, or a state macOS would not
             // report) is treated exactly like `enabled`: silence beats nagging on
             // an answer we can't stand behind.
-            if (showing.current) {
-              showing.current = false;
-              toast.dismiss(NUDGE_ID);
-            }
+            //
+            // Dismiss UNCONDITIONALLY rather than only when this instance raised
+            // the notice: a re-mount hands the new instance fresh refs, so a
+            // `showing` gate would strand a notice a previous instance put up —
+            // and with `duration: Infinity` it would never leave the screen.
+            // Dismissing an id that isn't showing is a no-op.
+            showing.current = false;
+            toast.dismiss(NUDGE_ID);
             return;
           }
 

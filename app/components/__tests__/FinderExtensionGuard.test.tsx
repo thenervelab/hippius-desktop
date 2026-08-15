@@ -160,6 +160,22 @@ describe("FinderExtensionGuard", () => {
     expect(toastMock.warning).toHaveBeenCalledTimes(2);
   });
 
+  it("clears a notice left behind by a previous mount", async () => {
+    stateIs("disabled");
+    const first = render(<FinderExtensionGuard />);
+    await waitFor(() => expect(toastMock.warning).toHaveBeenCalledTimes(1));
+    const { id } = nudgeOptions();
+    first.unmount();
+
+    // The remounted instance has fresh refs, so it cannot know it was this
+    // component that raised the notice. With `duration: Infinity`, a guard that
+    // only dismisses what it personally raised leaves the toast up forever.
+    stateIs("enabled");
+    render(<FinderExtensionGuard />);
+
+    await waitFor(() => expect(toastMock.dismiss).toHaveBeenCalledWith(id));
+  });
+
   it("swallows an IPC failure instead of surfacing it", async () => {
     invokeMock.mockRejectedValue(new Error("command not found"));
     render(<FinderExtensionGuard />);
