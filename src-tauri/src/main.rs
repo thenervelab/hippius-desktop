@@ -487,6 +487,11 @@ fn main() {
             hide_tray_panel,
             get_platform_info,
             is_app_translocated,
+            // Finder extension enablement. Registered on every platform (they
+            // answer `unsupported` off macOS) so the frontend guard needs no
+            // platform branch of its own.
+            crate::finder_bridge::enablement::finder_extension_state,
+            crate::finder_bridge::enablement::open_finder_extension_settings,
             // Local DB (notifications, address book, onboarding, preferences, app state)
             add_notification,
             list_notifications,
