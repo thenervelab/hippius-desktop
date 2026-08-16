@@ -13,6 +13,7 @@
 //! native shim per platform.
 
 pub mod commands;
+pub mod enablement;
 pub mod endpoint;
 pub mod error;
 pub mod protocol;
