@@ -36,11 +36,6 @@ export default function FinderExtensionGuard() {
   // this the next focus would re-raise the toast they just dismissed. It comes
   // back on the next app launch, which is the right cadence for a nag.
   const dismissed = useRef(false);
-  // Sonner closes a toast when its action button is clicked, which reaches the
-  // same `onDismiss`. Going to System Settings is not "stop telling me", so that
-  // close must not silence the notice — otherwise a user who opens the pane and
-  // gets distracted loses the reminder for the rest of the session.
-  const openingSettings = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -75,7 +70,16 @@ export default function FinderExtensionGuard() {
             action: {
               label: "Open Settings",
               onClick: () => {
-                openingSettings.current = true;
+                // Sonner removes the toast on an action click and — unlike its
+                // close button — does NOT call `onDismiss` (2.0.7: the action
+                // handler calls `deleteToast()` directly). So clear `showing`
+                // here, or nothing ever does, and the `showing` check on the
+                // raise path above suppresses the notice for the rest of the
+                // session — after its own button, on its primary path.
+                // Deliberately NOT `dismissed`: going to System Settings is not
+                // "stop telling me", so if the user never flips the switch the
+                // next focus check raises the notice again.
+                showing.current = false;
                 void invoke("open_finder_extension_settings").catch(() => {
                   toast.error("Could not open Extensions settings", {
                     description:
@@ -84,12 +88,10 @@ export default function FinderExtensionGuard() {
                 });
               },
             },
+            // Reached by a real dismissal only — the close button, a swipe, or
+            // our own `toast.dismiss` above — never by the action button.
             onDismiss: () => {
               showing.current = false;
-              if (openingSettings.current) {
-                openingSettings.current = false;
-                return;
-              }
               dismissed.current = true;
             },
           });

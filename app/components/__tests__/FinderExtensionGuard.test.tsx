@@ -146,13 +146,16 @@ describe("FinderExtensionGuard", () => {
     render(<FinderExtensionGuard />);
     await waitFor(() => expect(toastMock.warning).toHaveBeenCalledTimes(1));
 
-    // Sonner closes the toast when its action button is clicked, through the very
-    // same `onDismiss`. Treating that as "stop telling me" would cost the
-    // reminder to anyone who opens the pane and gets distracted.
+    // Model the real library: sonner removes the toast on an action click by
+    // calling `deleteToast()` itself, and does NOT invoke `onDismiss` (verified
+    // in sonner 2.0.7 — only the close button, a swipe, and a programmatic
+    // `toast.dismiss` reach it). Calling `onDismiss` here too would assert a
+    // sequence that never happens in production, and did: it hid the notice
+    // being suppressed for the rest of the session after its own action button
+    // was used.
     await act(async () => {
       nudgeOptions().action?.onClick();
     });
-    act(() => nudgeOptions().onDismiss?.());
 
     stateIs("disabled");
     await refocus();
