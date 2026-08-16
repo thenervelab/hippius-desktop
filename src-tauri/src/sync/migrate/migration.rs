@@ -7,6 +7,12 @@
 //! The flow is: `check_migration` → `start_server_migration` → poll via
 //! `poll_migration_status` → `complete_migration_transition` (ensure sync
 //! path exists, initialize default drive, mark completed).
+//!
+//! Every HCFS migration HTTP call — `POST /migration/start`,
+//! `POST /migration/cancel`, `GET /migration/{ss58}/status`, and
+//! `GET /migration/{user_id}` — sends `Authorization: Bearer {api_token}`.
+//! Scheme is Bearer, not Token (`Token` is api.hippius.com / S3).
+//! Status, cancel, and summary are not Ed25519-signed; only start is.
 
 use crate::error::Result;
 // Single source of truth for "look up this account's HCFS server URL".
@@ -182,13 +188,36 @@ pub(crate) async fn upsert_migration_status(
 // HTTP helpers
 // ---------------------------------------------------------------------------
 
+/// Load the account API token, failing as `Other` so the FE surfaces it.
+///
+/// Kept as `Other`, NOT `Auth`/`NotReady`: the FE's
+/// `errorUtils.isExpectedNoSessionError` silences those kinds, which would
+/// swallow a migration failure instead of showing it. There is no FE-safe
+/// typed home for "not logged in", so this stays a documented last-resort
+/// `Other`.
+async fn require_api_token(pool: &SqlitePool, account_id: &str) -> Result<String> {
+    crate::auth::tokens::get_api_token(pool, account_id).await?.ok_or_else(|| {
+        tracing::error!("[Migration] No API token available");
+        crate::error::AppError::Other("No API token available — log in first".into())
+    })
+}
+
 /// Fetch the migration summary from the server.
 ///
 /// Handles both old servers (returns `files` array, no `pending_count`)
 /// and new servers (returns `pending_count`, no `files`). When the old
 /// format is detected, `pending_count` and `total_size` are derived
 /// from the file list.
-pub(crate) async fn fetch_migration_summary(client: &reqwest::Client, server_url: &str, user_id: &str) -> Result<ServerMigrationResponse> {
+///
+/// `api_token` is the HCFS session token (`get_api_token`). Sent as
+/// `Authorization: Bearer …` — not `Token`, which is the api.hippius.com
+/// scheme. A later server PR will `validate_and_authorize` this GET.
+pub(crate) async fn fetch_migration_summary(
+    client: &reqwest::Client,
+    server_url: &str,
+    user_id: &str,
+    api_token: &str,
+) -> Result<ServerMigrationResponse> {
     // `server_url` is empty when the user is in auto-detect mode (the
     // sentinel hcfs-client uses to race regional endpoints). Reqwest
     // would reject `format!("{}/migration/...", "", ...)` with
@@ -198,6 +227,7 @@ pub(crate) async fn fetch_migration_summary(client: &reqwest::Client, server_url
     let url = format!("{}/migration/{}", base.trim_end_matches('/'), user_id);
     let resp = client
         .get(&url)
+        .header("Authorization", format!("Bearer {api_token}"))
         // Old servers may take a while enumerating large buckets
         .timeout(std::time::Duration::from_mins(10))
         .send()
@@ -389,7 +419,8 @@ pub async fn check_migration(state: tauri::State<'_, crate::app_state::AppState>
 
     // ── Step 2: No active job — check for pending files that need migration ──
     info!("[Migration] Checking server at: {server_url}/migration/{account_id}");
-    let summary = match fetch_migration_summary(&state.migration.client, &server_url, &account_id).await {
+    let api_token = require_api_token(pool, &account_id).await?;
+    let summary = match fetch_migration_summary(&state.migration.client, &server_url, &account_id, &api_token).await {
         Ok(s) => {
             info!(
                 "[Migration] Server returned: pending_count={}, total_size={}",
@@ -855,13 +886,8 @@ pub async fn start_server_migration(
         e
     })?;
 
-    // Retrieve API token for authorization
-    let api_token = crate::auth::tokens::get_api_token(pool, &account_id).await?.ok_or_else(|| {
-        tracing::error!("[Migration] No API token available");
-        // Documented `Other` (not `Auth`): the FE silences `Auth`/`NotReady` via
-        // `isExpectedNoSessionError`, which would hide this migration failure.
-        crate::error::AppError::Other("No API token available — log in first".into())
-    })?;
+    // Retrieve API token for authorization (reused on cancel + start retry).
+    let api_token = require_api_token(pool, &account_id).await?;
 
     // Call server endpoint — use a longer timeout since the server
     // validates credentials and sets up the migration job.
@@ -914,6 +940,7 @@ pub async fn start_server_migration(
                 .migration
                 .client
                 .post(&cancel_url)
+                .header("Authorization", format!("Bearer {api_token}"))
                 .json(&serde_json::json!({ "ss58_address": account_id }))
                 .send()
                 .await
@@ -1017,9 +1044,16 @@ async fn poll_migration_status_internal(state: &crate::app_state::AppState, acco
     // Same auto-detect-empty-string handling as `fetch_migration_summary`.
     let server_base = crate::sync::region::resolve_base_url(&server_url);
     let url = format!("{}/migration/{}/status", server_base.trim_end_matches('/'), account_id);
+    let api_token = require_api_token(pool, account_id).await?;
 
     let result = async {
-        let resp = state.migration.client.get(&url).send().await?;
+        let resp = state
+            .migration
+            .client
+            .get(&url)
+            .header("Authorization", format!("Bearer {api_token}"))
+            .send()
+            .await?;
         if !resp.status().is_success() {
             let text = resp.text().await.unwrap_or_default();
             return Err(crate::error::AppError::Hcfs(format!("Status check failed: {text}")));
@@ -1524,6 +1558,51 @@ mod tests {
             body.contains("MAX_MIGRATION_START_RETRIES") && body.contains("migration_retry_backoff"),
             "the retry must be a bounded backoff loop"
         );
+    }
+
+    /// Regression pin: every HCFS migration HTTP call must send
+    /// `Authorization: Bearer {api_token}`. A later server PR will
+    /// `validate_and_authorize` status/cancel/summary; dropping the header
+    /// would turn a `job_exists` cancel into a 401 loop on shipped desktop.
+    /// Scheme is Bearer, not Token (Token is api.hippius.com / S3).
+    #[test]
+    fn hcfs_migration_http_sends_bearer_authorization() {
+        const SRC: &str = include_str!("migration.rs");
+        const BEARER: &str = ".header(\"Authorization\", format!(\"Bearer {api_token}\"))";
+
+        let branch_at = SRC.find("Existing job found").expect("job_exists branch present");
+        let branch = &SRC[branch_at..];
+        let body = &branch[..branch.find("Server returned error").unwrap_or(branch.len())];
+        let cancel_at = body.find(".post(&cancel_url)").expect("cancel request present");
+        let cancel_json = body[cancel_at..]
+            .find(".json(&serde_json::json!({ \"ss58_address\"")
+            .expect("cancel body present");
+        let cancel_builder = &body[cancel_at..cancel_at + cancel_json];
+        assert!(
+            cancel_builder.contains(BEARER),
+            "POST /migration/cancel must send Authorization: Bearer next to .post(&cancel_url)"
+        );
+
+        let poll = SRC
+            .split("async fn poll_migration_status_internal")
+            .nth(1)
+            .expect("poll_migration_status_internal present");
+        let poll_body = &poll[..poll.find("\n/// Terminal migration").unwrap_or(poll.len())];
+        assert!(
+            poll_body.contains(BEARER),
+            "GET /migration/{{ss58}}/status must send Authorization: Bearer"
+        );
+        assert!(
+            poll_body.contains("require_api_token"),
+            "status poll must load the token the same way start does"
+        );
+
+        let fetch = SRC
+            .split("async fn fetch_migration_summary")
+            .nth(1)
+            .expect("fetch_migration_summary present");
+        let fetch_body = &fetch[..fetch.find("async fn fetch_s3_credentials").unwrap_or(fetch.len())];
+        assert!(fetch_body.contains(BEARER), "GET /migration/{{user_id}} must send Authorization: Bearer");
     }
 
     /// Regression pin: the start-vs-stop race guard must be wired up — stop and
