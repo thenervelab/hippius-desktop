@@ -216,14 +216,16 @@ jobs:
       - name: Install deps
         run: pnpm install --frozen-lockfile
 
+      # The script fails the build when the secret carries no INDEXER_API_KEY —
+      # without it the app renders indexer-backed screens as zeros rather than
+      # errors, so a broken staging build looks healthy to testers.
       - name: Create src-tauri/.env
         shell: bash
+        env:
+          TAURI_ENV_FILE: ${{ secrets.TAURI_ENV_FILE }}
         run: |
           set -euo pipefail
-          mkdir -p src-tauri
-          cat > src-tauri/.env << 'EOF'
-          ${{ secrets.TAURI_ENV_FILE }}
-          EOF
+          printf '%s\n' "$TAURI_ENV_FILE" | bash scripts/write-tauri-env.sh
           # PREVIEW-ONLY — DO NOT PORT TO redesign/main. Point share links at the
           # staging console (dev-branch deploy) instead of the prod default, so
           # internal testers can open private "#p=" links (that recipient page
@@ -231,7 +233,6 @@ jobs:
           # this bundled .env at runtime (main.rs) and dotenvy won't override a
           # real env var, so a tester's unset shell means the staging URL wins.
           printf '\nHIPPIUS_CONSOLE_BASE_URL=https://console.hippicode.com\n' >> src-tauri/.env
-          chmod 600 src-tauri/.env
 
       - name: Build frontend
         run: pnpm build
@@ -445,15 +446,13 @@ jobs:
 
       - name: Create src-tauri/.env
         shell: bash
+        env:
+          TAURI_ENV_FILE: ${{ secrets.TAURI_ENV_FILE }}
         run: |
           set -euo pipefail
-          mkdir -p src-tauri
-          cat > src-tauri/.env << 'EOF'
-          ${{ secrets.TAURI_ENV_FILE }}
-          EOF
+          printf '%s\n' "$TAURI_ENV_FILE" | bash scripts/write-tauri-env.sh
           # PREVIEW-ONLY staging console (see the macOS job).
           printf '\nHIPPIUS_CONSOLE_BASE_URL=https://console.hippicode.com\n' >> src-tauri/.env
-          chmod 600 src-tauri/.env
 
       - name: Build frontend
         run: pnpm build
@@ -546,12 +545,11 @@ jobs:
 
       - name: Create src-tauri/.env
         shell: bash
+        env:
+          TAURI_ENV_FILE: ${{ secrets.TAURI_ENV_FILE }}
         run: |
           set -euo pipefail
-          mkdir -p src-tauri
-          cat > src-tauri/.env << 'EOF'
-          ${{ secrets.TAURI_ENV_FILE }}
-          EOF
+          printf '%s\n' "$TAURI_ENV_FILE" | bash scripts/write-tauri-env.sh
           printf '\nHIPPIUS_CONSOLE_BASE_URL=https://console.hippicode.com\n' >> src-tauri/.env
 
       - name: Build frontend

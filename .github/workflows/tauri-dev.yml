@@ -208,15 +208,14 @@ jobs:
       - name: Install deps
         run: pnpm install --frozen-lockfile
 
+      # The script fails the build when the secret carries no INDEXER_API_KEY —
+      # without it the app renders indexer-backed screens as zeros rather than
+      # errors, so a broken build looks healthy.
       - name: Create src-tauri/.env
         shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p src-tauri
-          cat > src-tauri/.env << 'EOF'
-          ${{ secrets.TAURI_ENV_FILE }}
-          EOF
-          chmod 600 src-tauri/.env
+        env:
+          TAURI_ENV_FILE: ${{ secrets.TAURI_ENV_FILE }}
+        run: printf '%s\n' "$TAURI_ENV_FILE" | bash scripts/write-tauri-env.sh
 
       - name: Build frontend
         run: pnpm build
