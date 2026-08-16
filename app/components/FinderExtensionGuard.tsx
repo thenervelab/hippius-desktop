@@ -29,12 +29,21 @@ const NUDGE_ID = "finder-extension-disabled";
  * Renders nothing. Mounted once in the main-window branch of `AppShell`.
  */
 export default function FinderExtensionGuard() {
-  // Whether our notice is currently on screen. Guards both directions: no second
-  // toast while one is up, and no `dismiss` call for a toast we never raised.
+  // Whether our notice is currently on screen, so a focus re-check does not
+  // raise a second one. Only the raise path consults it — the dismiss path
+  // deliberately does not (see below).
   const showing = useRef(false);
   // Set when the user closes the notice. The extension is still off, so without
-  // this the next focus would re-raise the toast they just dismissed. It comes
-  // back on the next app launch, which is the right cadence for a nag.
+  // this the next focus would re-raise the toast they just dismissed; it returns
+  // on the next app launch, the right cadence for a nag.
+  //
+  // Per-instance, so a re-mount forgets it. Kept that way on purpose: this
+  // component does not re-mount in the main window (AppShell's branch changes
+  // only for the tray-panel/e2e routes, which that window never navigates to,
+  // and the guard sits above the auth-gated subtree), and module-level state
+  // would leak between tests. The worst case is one extra nudge, never a
+  // suppressed one — unlike `showing`, where the stale direction stranded a
+  // permanent toast, which is why only that one is remount-proofed.
   const dismissed = useRef(false);
 
   useEffect(() => {
