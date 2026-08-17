@@ -28,6 +28,24 @@ const TelegramIcon = ({ className }: { className?: string }) => (
   </svg>
 );
 
+/**
+ * Referral share copy, in one place so the X, Telegram and Discord variants
+ * cannot drift apart the way the three inline strings had. Kept word for word
+ * in step with the web console's version of this header.
+ *
+ * "Distributed" rather than "decentralized": it is what the site and docs say,
+ * and it describes the product rather than the ideology. The three named
+ * products do more work than "compute & more" ever did, since most people have
+ * no idea what Hippius actually offers.
+ *
+ * The X post lands around 260 characters with the link counted as 23, so it
+ * fits without truncation. Keep an eye on that when editing.
+ */
+const SHARE_PRODUCTS =
+  "Encrypted Drive, S3-compatible object storage with no egress fees, and Hippius Hub for AI models.";
+const SHARE_INVITE = "Join with my referral link and we both earn credits:";
+const SHARE_TAGS = "#Hippius #Bittensor #TAO";
+
 interface ReferralLinkHeaderProps {
   referralUrl?: string | null;
   onRefresh?: () => void;
@@ -67,7 +85,7 @@ const ReferralLinkHeader: React.FC<ReferralLinkHeaderProps> = ({
   const handleShareX = useCallback(async () => {
     if (!referralUrl) return;
     const text = encodeURIComponent(
-      `🚀 I'm using @Hippius_cloud for decentralized storage, compute & more!\n\nJoin using my referral link and we both earn credits:\n${referralUrl}\n\n#Hippius #Web3 #Decentralized`,
+      `🚀 I'm using @Hippius_cloud for distributed cloud storage.\n\n${SHARE_PRODUCTS}\n\n${SHARE_INVITE}\n${referralUrl}\n\n${SHARE_TAGS}`,
     );
     try {
       await openUrl(`https://x.com/intent/tweet?text=${text}`);
@@ -80,7 +98,7 @@ const ReferralLinkHeader: React.FC<ReferralLinkHeaderProps> = ({
     if (!referralUrl) return;
     const url = encodeURIComponent(referralUrl);
     const text = encodeURIComponent(
-      "🚀 I'm using Hippius for decentralized storage, compute & more! Join using my referral link and we both earn credits:",
+      `🚀 I'm using Hippius for distributed cloud storage.\n\n${SHARE_PRODUCTS}\n\n${SHARE_INVITE}`,
     );
     try {
       await openUrl(`https://t.me/share/url?url=${url}&text=${text}`);
@@ -91,7 +109,7 @@ const ReferralLinkHeader: React.FC<ReferralLinkHeaderProps> = ({
 
   const handleShareDiscord = useCallback(async () => {
     if (!referralUrl) return;
-    const shareText = `🚀 Check out Hippius — decentralized storage, compute & more!\n\nJoin using my referral link and we both earn credits:\n${referralUrl}`;
+    const shareText = `🚀 Check out Hippius, distributed cloud storage.\n\n${SHARE_PRODUCTS}\n\n${SHARE_INVITE}\n${referralUrl}`;
     try {
       await navigator.clipboard.writeText(shareText);
       toast.success(
