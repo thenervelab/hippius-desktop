@@ -47,9 +47,7 @@ pub struct SyncPathResult {
 /// blocks every other IPC handler. Falls back to the raw `Path` if the file
 /// doesn't exist (e.g. during validation of a path the user just typed),
 /// preserving the prefix-matching semantics tested by the unit tests below.
-async fn validate_no_path_overlap(new_path: &Path, new_label: &str, existing: &[(String, String)]) -> Result<()> {
-    let canonical_new = tokio::fs::canonicalize(new_path).await.unwrap_or_else(|_| new_path.to_path_buf());
-
+async fn validate_no_path_overlap(canonical_new: &Path, new_label: &str, existing: &[(String, String)]) -> Result<()> {
     for (label, path_str) in existing {
         if label == new_label {
             continue;
@@ -64,7 +62,7 @@ async fn validate_no_path_overlap(new_path: &Path, new_label: &str, existing: &[
                 "This folder is already being synced as part of '{label}'"
             )));
         }
-        if canonical_existing.starts_with(&canonical_new) {
+        if canonical_existing.starts_with(canonical_new) {
             return Err(crate::error::AppError::Validation(format!(
                 "This folder contains '{label}' which is already being synced separately. \
                  Remove it first if you want to sync the parent folder instead."
@@ -104,6 +102,13 @@ pub(crate) async fn set_sync_path_internal(pool: &SqlitePool, account_id: &str, 
     let timestamp = Utc::now().timestamp();
     let owner = account_key(account_id);
 
+    // Canonicalize the *new* path before taking the write lock. `realpath`
+    // can take 10–100 ms on a slow volume; holding BEGIN IMMEDIATE across
+    // that stalls every other SQLite writer. Existing-drive canonicalizes
+    // stay inside the lock (there are a handful of them).
+    let new_fs_path = Path::new(path);
+    let canonical_new = tokio::fs::canonicalize(new_fs_path).await.unwrap_or_else(|_| new_fs_path.to_path_buf());
+
     // Run the overlap check, label allocation, and the writes inside ONE
     // `BEGIN IMMEDIATE` transaction so the read-then-act is serialized against
     // concurrent writers. A default `pool.begin()` is DEFERRED — it takes the
@@ -139,7 +144,7 @@ pub(crate) async fn set_sync_path_internal(pool: &SqlitePool, account_id: &str, 
             }
         };
 
-        validate_no_path_overlap(Path::new(path), &label, &existing).await?;
+        validate_no_path_overlap(&canonical_new, &label, &existing).await?;
 
         match mode {
             LabelMode::Exact(_) => {

@@ -676,7 +676,8 @@ async fn open_db_pool(db_path: &std::path::Path) -> Result<SqlitePool, sqlx::Err
         .journal_mode(SqliteJournalMode::Wal)
         .synchronous(SqliteSynchronous::Normal)
         .busy_timeout(std::time::Duration::from_secs(5))
-        .foreign_keys(true);
+        .foreign_keys(true)
+        .pragma("cache_size", "-20000");
 
     let pool = SqlitePoolOptions::new().max_connections(8).connect_with(connect_opts).await?;
 
@@ -980,6 +981,9 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
             // nothing to delete on subsequent launches.
             if let Err(e) = crate::notifications::crud::cleanup_duplicate_welcome_notifications(&pool).await {
                 warn!("Welcome notification cleanup failed (non-fatal): {}", e);
+            }
+            if let Err(e) = crate::notifications::crud::prune_deleted_notifications(&pool).await {
+                warn!("Deleted-notification prune failed (non-fatal): {}", e);
             }
 
             info!("Database initialized successfully");

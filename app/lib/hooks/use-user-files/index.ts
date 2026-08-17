@@ -102,7 +102,6 @@ export function useUserFiles() {
     queryKey,
     refetchOnWindowFocus: false,
     staleTime: Infinity,
-    notifyOnChangeProps: "all",
     queryFn: async (): Promise<UserFilesData> => {
       if (!polkadotAddress) {
         throw new Error("Wallet not connected");

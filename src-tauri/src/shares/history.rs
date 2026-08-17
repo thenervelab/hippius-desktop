@@ -190,6 +190,24 @@ type HistoryRow = (
     String,         // end_reason
 );
 
+/// Drop history rows for `account_id` whose `ended_at` is strictly
+/// before `cutoff`. Scoped by account so a multi-account install
+/// cannot evict another user's rows.
+///
+/// `ended_at` is stored as RFC3339 via [`DateTime::to_rfc3339`]; bind
+/// the same format so the TEXT comparison is chronological.
+///
+/// # Errors
+/// Returns the underlying `sqlx::Error` on connection or query failure.
+pub async fn prune_older_than(pool: &SqlitePool, account_id: &str, cutoff: DateTime<Utc>) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query("DELETE FROM shared_link_history WHERE account_id = ? AND ended_at < ?")
+        .bind(account_id)
+        .bind(cutoff.to_rfc3339())
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected())
+}
+
 /// List all history rows for an account, newest first. Ordering is
 /// `ended_at DESC` so the FE can paginate from the most recent without
 /// a re-sort.
@@ -197,6 +215,9 @@ type HistoryRow = (
 /// # Errors
 /// Returns the underlying `sqlx::Error` on connection or query failure.
 pub async fn list_for_account(pool: &SqlitePool, account_id: &str) -> Result<Vec<HistoryEntry>, sqlx::Error> {
+    let cutoff = Utc::now() - chrono::Duration::days(365);
+    prune_older_than(pool, account_id, cutoff).await?;
+
     // Pull the raw `end_reason` as String and re-validate via
     // `EndReason::from_db_str`. An unknown value (schema drift,
     // hand-edited DB) becomes a hard error rather than a silent skip
@@ -593,6 +614,52 @@ mod tests {
         remove_one(&pool, "acct-A", "tok").await.expect("remove-A");
         assert!(list_for_account(&pool, "acct-A").await.expect("list-A").is_empty());
         assert_eq!(list_for_account(&pool, "acct-B").await.expect("list-B").len(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn prune_older_than_drops_old_rows_only_for_named_account() {
+        let (_dir, pool) = fresh_pool().await;
+        let now = Utc::now();
+        let mut old_a = mk_entry("old-a", EndReason::Expired);
+        old_a.ended_at = (now - Duration::days(400)).to_rfc3339();
+        let mut new_a = mk_entry("new-a", EndReason::Expired);
+        new_a.ended_at = (now - Duration::days(10)).to_rfc3339();
+        let mut old_b = mk_entry("old-b", EndReason::Expired);
+        old_b.ended_at = (now - Duration::days(400)).to_rfc3339();
+        record_event(&pool, "acct-A", &old_a).await.expect("old-a");
+        record_event(&pool, "acct-A", &new_a).await.expect("new-a");
+        record_event(&pool, "acct-B", &old_b).await.expect("old-b");
+
+        let cutoff = now - Duration::days(365);
+        let removed = prune_older_than(&pool, "acct-A", cutoff).await.expect("prune");
+        assert_eq!(removed, 1);
+
+        let a = list_for_account(&pool, "acct-A").await.expect("list-A");
+        assert_eq!(a.len(), 1);
+        assert_eq!(a[0].share_token, "new-a");
+
+        let kept_b: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM shared_link_history WHERE account_id = ?")
+            .bind("acct-B")
+            .fetch_one(&pool)
+            .await
+            .expect("count-B");
+        assert_eq!(kept_b, 1, "prune must not touch another account");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn list_for_account_prunes_rows_older_than_one_year() {
+        let (_dir, pool) = fresh_pool().await;
+        let now = Utc::now();
+        let mut old = mk_entry("old", EndReason::Expired);
+        old.ended_at = (now - Duration::days(400)).to_rfc3339();
+        let mut recent = mk_entry("recent", EndReason::RevokedHere);
+        recent.ended_at = (now - Duration::days(30)).to_rfc3339();
+        record_event(&pool, "acct", &old).await.expect("old");
+        record_event(&pool, "acct", &recent).await.expect("recent");
+
+        let rows = list_for_account(&pool, "acct").await.expect("list");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].share_token, "recent");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

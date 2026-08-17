@@ -14,6 +14,12 @@ import { errorMessage } from "../utils/errorUtils";
 
 export const snapshotAtom = atom<SyncSnapshot>(EMPTY_SNAPSHOT);
 
+/** Headline in-progress flag — settings cards must not re-render on byte ticks. */
+export const effectiveInProgressAtom = selectAtom(
+  snapshotAtom,
+  (snapshot) => snapshot.effectiveInProgress,
+);
+
 /** A snapshot row that should influence file-listing UI (tables, cards). */
 export interface ActionableSyncFile {
   path: string;

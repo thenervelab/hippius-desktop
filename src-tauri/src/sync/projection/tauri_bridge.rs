@@ -496,6 +496,7 @@ fn handle_sync_reset(app: &AppHandle, account_id: String, message: String) {
     // Wipe every folder-entity-sync throttle stamp: a previous account's
     // last-run times must not gate the new account's first sync after a switch.
     app_state.folder_entity_sync.clear_all();
+    reset_snapshot_emit_gates();
     // Keep-awake: logout / account switch tears down every drive — release the
     // sleep assertion unless a fresh snapshot still shows transfers (it won't
     // once `clear_all_data` has run; this covers orderings where the reset
@@ -1162,8 +1163,28 @@ fn read_preparing_wire_tail<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Pre
 /// future and the `&snapshot` borrow inside is owned-by-future, so the
 /// future is `'static + Send`, satisfying `tauri::async_runtime::spawn`'s
 /// bound (identical to `tokio::spawn`'s). `seq` is `Copy`.
+fn overlay_seq_is_stale(last_emitted: u64, seq: u64) -> bool {
+    seq <= last_emitted
+}
+
+fn reset_snapshot_emit_gates() {
+    // Logout / account switch must not restart `SNAPSHOT_SEQ` or
+    // `LAST_EMITTED_SEQ` at 0. `handle_sync_reset` can `emit_snapshot`
+    // (and any in-flight ProgressSnapshot still holds a high ticket)
+    // before this runs; zeroing lets that task claim the old mark, then
+    // `overlay_seq_is_stale` drops every post-login frame until the
+    // counter catches up. The fingerprint is the inherit risk — a
+    // coincidentally identical first frame of the new account.
+    LAST_EMITTED_FINGERPRINT.store(0, Ordering::Relaxed);
+}
+
 fn spawn_snapshot_emit<R: tauri::Runtime>(app: tauri::AppHandle<R>, snapshot: SyncSnapshot, seq: u64) {
     tauri::async_runtime::spawn(async move {
+        // Peek before the SQLite overlay read so a task that already lost
+        // the race does not SUM `sync_intent` for a frame we will drop.
+        if overlay_seq_is_stale(LAST_EMITTED_SEQ.load(Ordering::Acquire), seq) {
+            return;
+        }
         let overlay = build_intent_overlay(&app).await;
         // Ordering gate first: a snapshot that lost the DB-read race to a newer
         // one must NOT emit (and must NOT touch the fingerprint cursor).
@@ -1375,6 +1396,33 @@ fn try_claim_snapshot_seq(last: &AtomicU64, seq: u64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn overlay_seq_is_stale_when_ticket_is_not_newer() {
+        assert!(overlay_seq_is_stale(5, 5));
+        assert!(overlay_seq_is_stale(5, 4));
+        assert!(!overlay_seq_is_stale(5, 6));
+        assert!(!overlay_seq_is_stale(0, 1));
+    }
+
+    #[test]
+    fn reset_snapshot_emit_gates_clears_fingerprint_only() {
+        LAST_EMITTED_FINGERPRINT.store(99, Ordering::Relaxed);
+        LAST_EMITTED_SEQ.store(9000, Ordering::Relaxed);
+        SNAPSHOT_SEQ.store(9000, Ordering::Relaxed);
+        reset_snapshot_emit_gates();
+        assert_eq!(LAST_EMITTED_FINGERPRINT.load(Ordering::Relaxed), 0);
+        assert_eq!(LAST_EMITTED_SEQ.load(Ordering::Relaxed), 9000);
+        assert_eq!(SNAPSHOT_SEQ.load(Ordering::Relaxed), 9000);
+        assert!(
+            try_claim_snapshot_seq(&LAST_EMITTED_SEQ, 9001),
+            "next ticket after a high session must still be claimable",
+        );
+        assert!(
+            overlay_seq_is_stale(LAST_EMITTED_SEQ.load(Ordering::Relaxed), 1),
+            "restarting tickets at 1 after a high session is the frozen-widget bug",
+        );
+    }
 
     #[test]
     fn first_fingerprint_always_emits() {

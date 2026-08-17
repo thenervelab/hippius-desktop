@@ -129,36 +129,23 @@ alloy-signer = { version = "0.8", default-features = false }
 alloy-signer-local = { version = "0.8", default-features = false, features = [
     "mnemonic",
 ] }
-# Pinned to the merged hcfs main rev (PR #326) that stops `get_state` paying an
-# `O(account rows)` `COUNT(*)` per page. The total now comes from
-# `user_summaries.file_count` (a primary-key lookup on the same composite the
-# endpoint filters by), and `has_more` is the page length rather than the total
-# — the ordering matters, because that counter is best-effort and drifts LOW,
-# and a low total feeding `offset + len < total` truncates a walk, which this
-# client reads as remote deletions. Measured on a support bundle: page one of an
-# 80,936-file namespace cost ~34s and a 17-page walk ~8.5 minutes, once per sync
-# cycle against a 30s heartbeat, so such an account was permanently mid-walk.
-#
-# Client-side this rev also carries `skip_total_count` on the state walk, the
-# progress-denominator clamp (`total_count` is approximate now, so
-# `fetched <= total` no longer holds by construction), KeepBoth no longer
-# orphaning a copy with no remote side (#307), a reject for trailing bytes past
-# the declared chunk count (#309), hardened conflict copies and config writes
-# (#294), and a pyo3 upgrade clearing RUSTSEC-2026-0176/0177 (#313).
-#
-# NOT yet included: the per-remote-entry `info!` in `fetch_remote_state`, which
-# is ~73% of a support bundle's tail after this repo's own scan-log throttle
-# (PR #117). That fix is on hcfs `perf/client-hot-path` and unmerged; bump again
-# once it lands to finish making bundles usable.
+# Pinned to hcfs `main` HEAD. Includes #326 (`get_state` total from
+# `user_summaries.file_count`; `has_more` is page length — a low-drifting
+# COUNT feeding `offset + len < total` truncates a walk, which this client
+# reads as remote deletions) plus later main: #329 (no per-file
+# `fetch_remote_state` info!, scan/temp-prune off the runtime, restat skip),
+# #339 (upload session by file size, never /health), #334/#335 (synced
+# baseline keeps server revision; KeepLocal rebases onto remote), #343
+# (Bearer on migration status/cancel/summary).
 #
 # Bumping this rev is the only way a hcfs change reaches the desktop, so it
 # stays exact and is guarded by the wire-contract pins in tests/hcfs_contract.rs.
-hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "680e32ad395a638f07a493dd7a7f6e4690dbec6a" }
+hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "e557b578738c620818bd07c55978661a57a441c7" }
 # hcfs-shared pulls in the `network` module types (RegisterRelativePathEntry,
 # MAX_REGISTER_RELATIVE_PATHS_BATCH, ...) that hcfs-client takes/returns on
 # its public API but does not re-export. Pinned to the same git rev so the
 # wire types stay in lockstep with the client.
-hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "680e32ad395a638f07a493dd7a7f6e4690dbec6a" }
+hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "e557b578738c620818bd07c55978661a57a441c7" }
 # NFC-normalise relative_path strings before posting them to the server's
 # register_relative_paths endpoint. macOS APFS hands filenames back in NFD
 # and the server's path_validator hard-rejects anything non-NFC — see the

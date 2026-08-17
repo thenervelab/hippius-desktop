@@ -68,17 +68,18 @@ const WELCOME_LINK: &str = "/files";
 /// non-fatal (log and continue) because a failed welcome
 /// notification must not block login.
 pub async fn ensure_welcome_notification(pool: &sqlx::SqlitePool, user_address: &str) -> Result<(), AppError> {
-    let existing = sqlx::query_as::<_, (i64,)>(
-        "SELECT COUNT(*) FROM notifications \
+    let existing: Option<(i64,)> = sqlx::query_as(
+        "SELECT 1 FROM notifications \
          WHERE user_address = ? \
            AND notification_type = 'Hippius' \
-           AND (notification_subtype = 'Welcome' OR notification_subtype LIKE 'Welcome-%')",
+           AND (notification_subtype = 'Welcome' OR notification_subtype LIKE 'Welcome-%') \
+         LIMIT 1",
     )
     .bind(user_address)
-    .fetch_one(pool)
+    .fetch_optional(pool)
     .await?;
 
-    if existing.0 > 0 {
+    if existing.is_some() {
         return Ok(());
     }
 
@@ -134,6 +135,56 @@ pub async fn cleanup_duplicate_welcome_notifications(pool: &sqlx::SqlitePool) ->
     Ok(())
 }
 
+/// Soft-deleted rows older than this are hard-deleted (except the latest
+/// `LowCreditWarning-%` per user, which the one-per-day throttle reads).
+pub const DELETED_NOTIFICATION_RETENTION_MS: i64 = 90 * 24 * 60 * 60 * 1000;
+
+/// Hard-delete old soft-deleted notification rows. Keeps live rows and the
+/// newest deleted `LowCreditWarning-%` per `user_address`.
+pub async fn prune_deleted_notifications(pool: &sqlx::SqlitePool) -> Result<u64, AppError> {
+    let cutoff = chrono::Utc::now().timestamp_millis() - DELETED_NOTIFICATION_RETENTION_MS;
+    prune_deleted_notifications_before(pool, cutoff).await
+}
+
+pub(crate) async fn prune_deleted_notifications_before(pool: &sqlx::SqlitePool, cutoff_ms: i64) -> Result<u64, AppError> {
+    let other = sqlx::query(
+        "DELETE FROM notifications
+          WHERE is_deleted = 1
+            AND deleted_at IS NOT NULL
+            AND deleted_at < ?
+            AND (notification_subtype IS NULL OR notification_subtype NOT LIKE 'LowCreditWarning-%')",
+    )
+    .bind(cutoff_ms)
+    .execute(pool)
+    .await?;
+
+    let warnings = sqlx::query(
+        "DELETE FROM notifications
+          WHERE is_deleted = 1
+            AND deleted_at IS NOT NULL
+            AND deleted_at < ?
+            AND notification_subtype LIKE 'LowCreditWarning-%'
+            AND id NOT IN (
+                SELECT id FROM (
+                    SELECT n.id FROM notifications n
+                     WHERE n.is_deleted = 1
+                       AND n.notification_subtype LIKE 'LowCreditWarning-%'
+                       AND n.deleted_at = (
+                           SELECT MAX(n2.deleted_at) FROM notifications n2
+                            WHERE n2.user_address = n.user_address
+                              AND n2.is_deleted = 1
+                              AND n2.notification_subtype LIKE 'LowCreditWarning-%'
+                       )
+                )
+            )",
+    )
+    .bind(cutoff_ms)
+    .execute(pool)
+    .await?;
+
+    Ok(other.rows_affected() + warnings.rows_affected())
+}
+
 // ── Notification Commands ───────────────────────────────────────────────
 
 /// Insert a new notification. Welcome notifications must be created
@@ -168,17 +219,18 @@ pub async fn add_notification(
         && let Some(ref subtype) = notification_subtype
         && (subtype == "Welcome" || subtype.starts_with("Welcome-"))
     {
-        let existing = sqlx::query_as::<_, (i64,)>(
-            "SELECT COUNT(*) FROM notifications \
+        let existing: Option<(i64,)> = sqlx::query_as(
+            "SELECT 1 FROM notifications \
              WHERE user_address = ? \
                AND notification_type = 'Hippius' \
-               AND (notification_subtype = 'Welcome' OR notification_subtype LIKE 'Welcome-%')",
+               AND (notification_subtype = 'Welcome' OR notification_subtype LIKE 'Welcome-%') \
+             LIMIT 1",
         )
         .bind(&user_address)
-        .fetch_one(pool)
+        .fetch_optional(pool)
         .await?;
 
-        if existing.0 > 0 {
+        if existing.is_some() {
             return Ok(0);
         }
     }
@@ -754,5 +806,60 @@ mod tests {
         assert!(!a_enabled.iter().any(|l| l == "Credits"), "A's enabled set must exclude Credits");
         let b_enabled = enabled_types_inner(&pool, "addrB").await.unwrap();
         assert!(b_enabled.iter().any(|l| l == "Credits"), "B's enabled set must include Credits");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn prune_deleted_keeps_live_and_latest_low_credit() {
+        let (_dir, pool) = fresh_pool().await;
+        let now = 1_800_000_000_000i64;
+        let cutoff = now - 1_000;
+        let old = cutoff - 50;
+
+        sqlx::query(
+            "INSERT INTO notifications (user_address, notification_type, notification_subtype, is_unread, is_deleted, deleted_at, creation_time)
+             VALUES
+               ('A', 'Files', 'FileSyncComplete-1', 0, 1, ?, 1),
+               ('A', 'Hippius', 'Welcome', 1, 0, NULL, 2),
+               ('A', 'Credits', 'LowCreditWarning-old', 0, 1, ?, 3),
+               ('A', 'Credits', 'LowCreditWarning-new', 0, 1, ?, 4),
+               ('B', 'Credits', 'LowCreditWarning-b', 0, 1, ?, 5)",
+        )
+        .bind(old)
+        .bind(old)
+        .bind(old + 10)
+        .bind(old)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let n = prune_deleted_notifications_before(&pool, cutoff).await.unwrap();
+        assert!(n >= 1);
+
+        let remaining: Vec<(String, String, i64)> =
+            sqlx::query_as("SELECT user_address, notification_subtype, is_deleted FROM notifications ORDER BY id")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        let keys: Vec<(String, String, i64)> = remaining;
+        assert!(
+            keys.iter().any(|(u, s, d)| u == "A" && s == "Welcome" && *d == 0),
+            "live welcome must remain: {keys:?}"
+        );
+        assert!(
+            keys.iter().any(|(u, s, _)| u == "A" && s == "LowCreditWarning-new"),
+            "latest A low-credit must remain: {keys:?}"
+        );
+        assert!(
+            !keys.iter().any(|(u, s, _)| u == "A" && s == "LowCreditWarning-old"),
+            "older A low-credit must go: {keys:?}"
+        );
+        assert!(
+            keys.iter().any(|(u, s, _)| u == "B" && s == "LowCreditWarning-b"),
+            "B's latest must remain: {keys:?}"
+        );
+        assert!(
+            !keys.iter().any(|(u, s, _)| u == "A" && s == "FileSyncComplete-1"),
+            "old soft-deleted Files row must go: {keys:?}"
+        );
     }
 }

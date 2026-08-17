@@ -345,6 +345,14 @@ async fn ensure_sync_intent(conn: &mut SqliteConnection) -> Result<(), sqlx::Err
     )
     .execute(&mut *conn)
     .await?;
+
+    // Covering for `totals_for_account` (4 Hz overlay SUM/COUNT).
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_sync_intent_account_bytes
+            ON sync_intent (account_id, completed_at_ms, size_bytes)",
+    )
+    .execute(&mut *conn)
+    .await?;
     Ok(())
 }
 
@@ -656,6 +664,19 @@ async fn ensure_notifications(conn: &mut SqliteConnection) -> Result<(), sqlx::E
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_notifications_type_subtype ON notifications(notification_type, notification_subtype)")
         .execute(&mut *conn)
         .await?;
+
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_notifications_user_list
+            ON notifications (user_address, is_deleted, creation_time DESC)",
+    )
+    .execute(&mut *conn)
+    .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_notifications_user_unread
+            ON notifications (user_address, is_deleted, is_unread)",
+    )
+    .execute(&mut *conn)
+    .await?;
     Ok(())
 }
 
@@ -754,6 +775,9 @@ async fn ensure_address_book(conn: &mut SqliteConnection) -> Result<(), sqlx::Er
             .execute(&mut *conn)
             .await?;
     }
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_address_book_owner_name ON address_book (owner, name)")
+        .execute(&mut *conn)
+        .await?;
     Ok(())
 }
 
@@ -1231,6 +1255,24 @@ mod tests {
             .await
             .expect("failed to count tables");
         assert_eq!(count as usize, EXPECTED_TABLES.len(), "table count changed across calls");
+    }
+
+    #[tokio::test]
+    async fn ensure_table_schema_creates_perf_indexes() {
+        let pool = temp_pool().await;
+        ensure_table_schema(&pool).await.expect("schema");
+        let names: Vec<String> = sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type = 'index'")
+            .fetch_all(&pool)
+            .await
+            .expect("index list");
+        for needed in [
+            "idx_sync_intent_account_bytes",
+            "idx_notifications_user_list",
+            "idx_notifications_user_unread",
+            "idx_address_book_owner_name",
+        ] {
+            assert!(names.iter().any(|n| n == needed), "missing index {needed} in {names:?}");
+        }
     }
 
     /// Names of the legacy Nebula tables earlier releases created in

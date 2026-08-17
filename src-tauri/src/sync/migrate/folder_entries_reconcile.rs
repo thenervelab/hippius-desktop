@@ -337,14 +337,19 @@ pub(crate) async fn reconcile_with_on_disk(
 /// as a server folder entity. Each delete is owner+label+path scoped so one
 /// account's cache can never touch another's.
 pub(crate) async fn delete_cached_folder_entries(pool: &SqlitePool, owner: &str, label: &str, paths: &[String]) -> Result<()> {
+    if paths.is_empty() {
+        return Ok(());
+    }
+    let mut tx = pool.begin().await?;
     for rel in paths {
         sqlx::query("DELETE FROM folder_entries_local WHERE owner = ? AND label = ? AND relative_path = ?")
             .bind(owner)
             .bind(label)
             .bind(rel)
-            .execute(pool)
+            .execute(&mut *tx)
             .await?;
     }
+    tx.commit().await?;
     Ok(())
 }
 

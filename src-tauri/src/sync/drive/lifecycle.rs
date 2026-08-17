@@ -425,6 +425,9 @@ async fn remove_drive_inmemory(sync: &SyncRunner, label: &str, path_hint: Option
     if let Ok(mut cache) = sync.synced_paths_cache.lock() {
         cache.remove(label);
     }
+    if let Some(path) = &removed_path {
+        crate::sync::files::invalidate_dir_stats_under(path);
+    }
     // Drop the producer-side first-reconcile gate so the next
     // `register_drive` for this label installs a fresh gate. Any
     // in-flight `wait_for_first_reconcile` from a still-running
@@ -1652,6 +1655,12 @@ pub(crate) async fn remove_drive_for_account(app: AppHandle, label: String, expl
             let repo = crate::sync::intent::IntentRepo::new(pool.clone());
             if let Err(e) = repo.clear_drive(acct, &label).await {
                 warn!("Failed to clear intent rows for drive '{}': {e}", label);
+            }
+
+            // `folder_entries_local` is keyed by account-key hash, not SS58.
+            let owner = crate::auth::account_key::account_key(acct);
+            if let Err(e) = crate::sync::folder_entries_backfill::clear_folder_entries_for_drive(pool, &owner, &label).await {
+                warn!("Failed to clear folder_entries_local for drive '{}': {e}", label);
             }
         }
 
