@@ -270,8 +270,15 @@ fn parse_indexer_u64(field: &str, raw: &str) -> u64 {
 /// `{ totalBytes: 0, fileCount: 0 }`.
 #[tauri::command]
 pub async fn get_drive_storage_stats(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<DriveStorageStats, AppError> {
+    fetch_drive_storage_stats(state.inner(), &account_id).await
+}
+
+/// Core of [`get_drive_storage_stats`], shared with
+/// [`crate::billing::storage_overview::get_storage_overview`] so the simple
+/// storage card and any legacy stats consumer read the same indexer row.
+pub(crate) async fn fetch_drive_storage_stats(state: &crate::app_state::AppState, account_id: &str) -> Result<DriveStorageStats, AppError> {
     let indexer = IndexerClient::from_env(state.api_client.clone())?;
-    let params = [("account_id", account_id.as_str()), ("storage", "drive"), ("limit", "1")];
+    let params = [("account_id", account_id), ("storage", "drive"), ("limit", "1")];
     let response: IndexerResponse<DriveStorageRow> = indexer.get("/user-extended-storage-metrics", &params).await?;
 
     let Some(row) = response.data.into_iter().next() else {
