@@ -332,9 +332,15 @@ mod tests {
     async fn invalid_target_is_rejected_even_when_connected() {
         let state = fake_state();
         state.connect(cfg()).await.expect("connect");
-        let bad = MeshTarget { address: "  ".into(), port: 22 };
+        let bad = MeshTarget {
+            address: "  ".into(),
+            port: 22,
+        };
         assert!(matches!(state.open_vm_connection(&bad).await, Err(VpnError::InvalidTarget(_))));
-        let zero = MeshTarget { address: "100.64.0.5".into(), port: 0 };
+        let zero = MeshTarget {
+            address: "100.64.0.5".into(),
+            port: 0,
+        };
         assert!(matches!(state.open_vm_connection(&zero).await, Err(VpnError::InvalidTarget(_))));
     }
 
@@ -417,7 +423,12 @@ mod tests {
         let state = VpnState::new(Arc::new(DisabledEngine));
         let err = state.connect(cfg()).await.expect_err("disabled build must refuse connect");
         assert!(matches!(err, VpnError::UnsupportedBuild));
-        assert_eq!(state.status_snapshot(), MeshStatus::Error { message: "VPN is not available in this build".into() });
+        assert_eq!(
+            state.status_snapshot(),
+            MeshStatus::Error {
+                message: "VPN is not available in this build".into()
+            }
+        );
     }
 
     #[tokio::test]
@@ -496,9 +507,6 @@ mod tests {
             matches!(result, Err(VpnError::NotConnected)),
             "an open superseded by disconnect must be discarded, got {result:?}"
         );
-        assert!(
-            state.list_connections().is_empty(),
-            "the superseded forward must not be cached"
-        );
+        assert!(state.list_connections().is_empty(), "the superseded forward must not be cached");
     }
 }

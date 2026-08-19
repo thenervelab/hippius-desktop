@@ -188,12 +188,11 @@ pub async fn get_api_token(pool: &SqlitePool, account_id: &str) -> crate::error:
     // account's bearer token on a multi-account machine. Gate on "exactly one
     // auth_session row, and it is mine".
     let owner = crate::auth::account_key::account_key(account_id);
-    let sole_session_is_mine: i64 = sqlx::query_scalar(
-        "SELECT ((SELECT COUNT(*) FROM auth_session) = 1 AND EXISTS (SELECT 1 FROM auth_session WHERE owner = ?))",
-    )
-    .bind(&owner)
-    .fetch_one(pool)
-    .await?;
+    let sole_session_is_mine: i64 =
+        sqlx::query_scalar("SELECT ((SELECT COUNT(*) FROM auth_session) = 1 AND EXISTS (SELECT 1 FROM auth_session WHERE owner = ?))")
+            .bind(&owner)
+            .fetch_one(pool)
+            .await?;
     if sole_session_is_mine != 0 {
         let legacy = sqlx::query("SELECT temp_auth_key FROM objectstore_auth WHERE id = ?")
             .bind(AUTH_ROW_ID)

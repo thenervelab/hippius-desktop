@@ -1,6 +1,6 @@
 [package]
 name = "Hippius"
-version = "0.2.1"
+version = "0.2.2"
 description = "Hippius Desktop App"
 authors = ["you"]
 edition = "2024"
@@ -129,16 +129,23 @@ alloy-signer = { version = "0.8", default-features = false }
 alloy-signer-local = { version = "0.8", default-features = false, features = [
     "mnemonic",
 ] }
-# Pinned to the merged hcfs main rev (PR #251) that adds the password-share
-# key wrap/unwrap (wrap_share_key / build_share_url_private). Bumping this rev
-# is the only way a hcfs change reaches the desktop, so it stays exact and is
-# guarded by the wire-contract pins in tests/hcfs_contract.rs.
-hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "602381e865a15eb77e3a94953c98a8c4b2e6f9db" }
+# Pinned to hcfs `main` HEAD. Includes #326 (`get_state` total from
+# `user_summaries.file_count`; `has_more` is page length — a low-drifting
+# COUNT feeding `offset + len < total` truncates a walk, which this client
+# reads as remote deletions) plus later main: #329 (no per-file
+# `fetch_remote_state` info!, scan/temp-prune off the runtime, restat skip),
+# #339 (upload session by file size, never /health), #334/#335 (synced
+# baseline keeps server revision; KeepLocal rebases onto remote), #343
+# (Bearer on migration status/cancel/summary).
+#
+# Bumping this rev is the only way a hcfs change reaches the desktop, so it
+# stays exact and is guarded by the wire-contract pins in tests/hcfs_contract.rs.
+hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "e557b578738c620818bd07c55978661a57a441c7" }
 # hcfs-shared pulls in the `network` module types (RegisterRelativePathEntry,
 # MAX_REGISTER_RELATIVE_PATHS_BATCH, ...) that hcfs-client takes/returns on
 # its public API but does not re-export. Pinned to the same git rev so the
 # wire types stay in lockstep with the client.
-hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "602381e865a15eb77e3a94953c98a8c4b2e6f9db" }
+hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "e557b578738c620818bd07c55978661a57a441c7" }
 # NFC-normalise relative_path strings before posting them to the server's
 # register_relative_paths endpoint. macOS APFS hands filenames back in NFD
 # and the server's path_validator hard-rejects anything non-NFC — see the
@@ -177,6 +184,16 @@ nix = { version = "0.31.2", features = ["fs"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.25"
 objc = "0.2"
+
+# Keep the system awake while sync transfers are active (see src/power.rs).
+# macOS backend = IOPMAssertionCreateWithName(kIOPMAssertionTypePreventUserIdleSystemSleep);
+# Windows backend = SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED).
+# Deliberately NOT a Linux dependency: keepawake's Linux backend pulls the zbus
+# D-Bus stack for a nice-to-have — power.rs no-ops there for v1. Pinned exact
+# (pre-1.0 crate; audit: pure-Rust deps + objc2-io-kit/windows bindings, no
+# build.rs downloads — covered by the CI `cargo deny check`).
+[target.'cfg(any(target_os = "macos", windows))'.dependencies]
+keepawake = "=0.6.0"
 
 [target."cfg(any(target_os = \"macos\", windows, target_os = \"linux\"))".dependencies]
 tauri-plugin-single-instance = { version = "2.0.0", features = ["deep-link"] }

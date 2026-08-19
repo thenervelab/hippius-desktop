@@ -18,10 +18,6 @@ pub const SYNC_STOPPED: &str = "hcfs_sync_stopped";
 pub const SYNC_PLAN_READY: &str = "hcfs_sync_plan_ready";
 /// Emitted when the sync engine is fully reset.
 pub const SYNC_RESET: &str = "hcfs_sync_reset";
-/// Local filesystem scan progress.
-pub const SCAN_PROGRESS: &str = "hcfs_scan_progress";
-/// Remote file-list fetch progress.
-pub const FETCH_PROGRESS: &str = "hcfs_fetch_progress";
 /// Emitted when server connectivity status changes.
 pub const CONNECTIVITY_CHANGED: &str = "hcfs_connectivity_changed";
 /// Emitted after a remote folder is auto-recovered.
@@ -32,6 +28,15 @@ pub const REVIEW_MODE_TIMEOUT: &str = "hcfs_review_mode_timeout";
 pub const CONFLICTS_PENDING: &str = "hcfs_conflicts_pending";
 /// Emitted when the recent activity list changes.
 pub const ACTIVITY_UPDATED: &str = "hcfs_activity_updated";
+/// Emitted when a folder-entity sync actually changed a drive's registered
+/// directory set (registered / unregistered / materialized / removed a folder).
+///
+/// The FE listings read folder entities through `list_sync_folder_grouped`'s
+/// `folder_entries_local` overlay, and that cache is only updated after the
+/// server round-trip lands — long after the IPC that triggered the change
+/// returned. Without this event a folder the user just deleted keeps rendering
+/// as a `pending` row until some unrelated refresh. Payload: [`LabelPayload`].
+pub const FOLDER_ENTITIES_CHANGED: &str = "hcfs_folder_entities_changed";
 /// Emitted when the backend detects credentials are invalid and re-login is needed.
 pub const AUTH_RELOGIN_REQUIRED: &str = "hcfs_auth_relogin_required";
 /// Emitted when `AuthInfo` has been fully populated post-login (mnemonic
@@ -141,6 +146,93 @@ mod tests {
     #[test]
     fn cancelled_marker_matches_upstream() {
         assert_eq!(hcfs_client::sync::SyncError::Cancelled.to_string(), CANCELLED_MARKER);
+    }
+
+    /// Same drift guard as the cancel marker: we recognise this failure by the
+    /// string upstream produces, so an upstream reword must fail here rather
+    /// than silently demote the row back to a scary red "Error".
+    #[test]
+    fn changed_while_uploading_marker_matches_upstream() {
+        let upstream = hcfs_client::sync::SyncError::Encryption("File was modified during encryption".into()).to_string();
+        assert_eq!(upstream, CHANGED_WHILE_UPLOADING_MARKER);
+    }
+
+    #[test]
+    fn mid_upload_modification_is_carved_out_of_other() {
+        use hcfs_client::engine::events::FileFailureKind as K;
+        let kind = K::Other(CHANGED_WHILE_UPLOADING_MARKER.to_string());
+        assert!(
+            matches!(FileFailureKindPayload::from(&kind), FileFailureKindPayload::ChangedWhileUploading),
+            "a file that changed mid-upload must classify as its own retryable kind"
+        );
+    }
+
+    #[test]
+    fn unrelated_other_failures_stay_other() {
+        use hcfs_client::engine::events::FileFailureKind as K;
+        let kind = K::Other("Encryption error: key derivation failed".to_string());
+        assert!(
+            matches!(FileFailureKindPayload::from(&kind), FileFailureKindPayload::Other { .. }),
+            "only the mid-upload-modification message may be carved out",
+        );
+    }
+
+    #[test]
+    fn changed_while_uploading_reads_as_transient_not_as_a_crypto_fault() {
+        let reason = FileFailureKindPayload::ChangedWhileUploading.display_reason();
+        assert!(
+            !reason.to_lowercase().contains("encryption"),
+            "the user-facing copy must not blame encryption — nothing is wrong with the crypto: {reason}"
+        );
+        assert!(
+            reason.to_lowercase().contains("retry"),
+            "the copy must tell the user it resolves itself: {reason}"
+        );
+    }
+
+    #[test]
+    fn transient_reason_round_trips_through_the_authored_string() {
+        // The snapshot carries only the authored reason string, so the emit
+        // path recognises a transient row by that string. Rust writes it and
+        // Rust reads it — but if the two ever drift the widget silently loses
+        // the amber "Retrying" tone, so pin the round trip.
+        let authored = FileFailureKindPayload::ChangedWhileUploading.display_reason();
+        assert!(is_transient_reason(&authored), "authored reason must be recognised: {authored}");
+    }
+
+    #[test]
+    fn other_failure_reasons_are_not_treated_as_transient() {
+        for kind in [
+            FileFailureKindPayload::Network,
+            FileFailureKindPayload::ServerError { status: 500 },
+            FileFailureKindPayload::Other {
+                message: "disk full".to_string(),
+            },
+        ] {
+            let reason = kind.display_reason();
+            assert!(!is_transient_reason(&reason), "{reason} must not read as transient");
+        }
+    }
+
+    #[test]
+    fn only_the_mid_upload_change_is_treated_as_self_resolving() {
+        // `is_transient` drives an amber "Retrying" badge instead of a red
+        // "Error". Marking a real failure transient would tell the user to wait
+        // for a retry that never succeeds.
+        assert!(FileFailureKindPayload::ChangedWhileUploading.is_transient());
+        for kind in [
+            FileFailureKindPayload::Network,
+            FileFailureKindPayload::ServerError { status: 500 },
+            FileFailureKindPayload::InsufficientBalance {
+                balance_cents: 0,
+                required_cents: 100,
+            },
+            FileFailureKindPayload::Other {
+                message: "disk full".to_string(),
+            },
+        ] {
+            assert!(!kind.is_transient(), "{kind:?} must not be presented as self-resolving");
+        }
     }
 
     #[test]
@@ -279,6 +371,12 @@ mod tests {
     /// `rename_all = "camelCase"` choice is part of the contract and is
     /// asserted in its post-rename wire form. Change a shape ON PURPOSE → update
     /// the FE listener type in the same change, then this list.
+    // One cohesive list of wire-shape assertions: every desktop event payload
+    // pinned in one place, so a reader sees the whole contract at once.
+    // Splitting it by payload would scatter the contract across functions for
+    // no benefit, and reflowing during the rustfmt pass is what pushed it past
+    // the limit.
+    #[allow(clippy::too_many_lines, reason = "one contract, deliberately asserted in one place")]
     #[test]
     fn desktop_event_payload_key_sets_are_pinned() {
         use crate::sync::drive_status::DriveStatus;
@@ -319,14 +417,35 @@ mod tests {
             remote_delete_files: Vec::new(),
         };
 
-        assert_eq!(keyset(MetadataStalePayload { label: "d".to_string(), reason: "r".to_string() }), expect_keys(&["label", "reason"]), "MetadataStalePayload");
-        assert_eq!(keyset(LabelPayload { label: "d".to_string() }), expect_keys(&["label"]), "LabelPayload");
-        assert_eq!(keyset(AuthRequiredPayload { error: "e".to_string() }), expect_keys(&["error"]), "AuthRequiredPayload");
-        assert_eq!(keyset(FetchProgressPayload { label: "d".to_string(), fetched: 0, total: 0 }), expect_keys(&["label", "fetched", "total"]), "FetchProgressPayload");
-        assert_eq!(keyset(ScanProgressPayload { label: "d".to_string(), scanned: 0, path: None }), expect_keys(&["label", "scanned", "path"]), "ScanProgressPayload");
-        assert_eq!(keyset(SyncResetPayload { account_id: "a".to_string(), message: "m".to_string() }), expect_keys(&["account_id", "message"]), "SyncResetPayload");
         assert_eq!(
-            keyset(SyncErrorPayload { label: "d".to_string(), error: "e".to_string(), retry_in_secs: 0, consecutive_failures: 0 }),
+            keyset(MetadataStalePayload {
+                label: "d".to_string(),
+                reason: "r".to_string()
+            }),
+            expect_keys(&["label", "reason"]),
+            "MetadataStalePayload"
+        );
+        assert_eq!(keyset(LabelPayload { label: "d".to_string() }), expect_keys(&["label"]), "LabelPayload");
+        assert_eq!(
+            keyset(AuthRequiredPayload { error: "e".to_string() }),
+            expect_keys(&["error"]),
+            "AuthRequiredPayload"
+        );
+        assert_eq!(
+            keyset(SyncResetPayload {
+                account_id: "a".to_string(),
+                message: "m".to_string()
+            }),
+            expect_keys(&["account_id", "message"]),
+            "SyncResetPayload"
+        );
+        assert_eq!(
+            keyset(SyncErrorPayload {
+                label: "d".to_string(),
+                error: "e".to_string(),
+                retry_in_secs: 0,
+                consecutive_failures: 0
+            }),
             expect_keys(&["label", "error", "retry_in_secs", "consecutive_failures"]),
             "SyncErrorPayload"
         );
@@ -355,7 +474,11 @@ mod tests {
         );
         assert_eq!(keyset(plan_ready), expect_keys(&plan_keys), "SyncPlanReadyPayload");
         assert_eq!(keyset(started), expect_keys(&plan_keys), "SyncStartedPayload (must match PlanReady)");
-        assert_eq!(keyset(FilesFailedRepeatedlyPayload { files: Vec::new() }), expect_keys(&["files"]), "FilesFailedRepeatedlyPayload");
+        assert_eq!(
+            keyset(FilesFailedRepeatedlyPayload { files: Vec::new() }),
+            expect_keys(&["files"]),
+            "FilesFailedRepeatedlyPayload"
+        );
         assert_eq!(
             keyset(FileFailedPayload {
                 label: "d".to_string(),
@@ -368,7 +491,12 @@ mod tests {
             "FileFailedPayload"
         );
         assert_eq!(
-            keyset(CreditsExhaustedPayload { label: "d".to_string(), balance_cents: 0, required_cents: 0, file_count: 0 }),
+            keyset(CreditsExhaustedPayload {
+                label: "d".to_string(),
+                balance_cents: 0,
+                required_cents: 0,
+                file_count: 0
+            }),
             expect_keys(&["label", "balanceCents", "requiredCents", "fileCount"]),
             "CreditsExhaustedPayload"
         );
@@ -391,7 +519,11 @@ mod tests {
     /// contract (the module doc comment specifies this exact shape).
     #[test]
     fn file_failure_kind_payload_pins_tagged_wire_shape() {
-        let insufficient = serde_json::to_value(FileFailureKindPayload::InsufficientBalance { balance_cents: 12, required_cents: 100 }).expect("serialize");
+        let insufficient = serde_json::to_value(FileFailureKindPayload::InsufficientBalance {
+            balance_cents: 12,
+            required_cents: 100,
+        })
+        .expect("serialize");
         assert_eq!(insufficient["kind"], "insufficientBalance");
         assert_eq!(insufficient["balanceCents"], 12);
         assert_eq!(insufficient["requiredCents"], 100);
@@ -526,22 +658,6 @@ pub struct ConflictsPendingPayload {
     pub staged: StagedChanges,
 }
 
-/// Local scan progress.
-#[derive(Serialize, Clone)]
-pub struct ScanProgressPayload {
-    pub label: String,
-    pub scanned: u64,
-    pub path: Option<String>,
-}
-
-/// Remote fetch progress.
-#[derive(Serialize, Clone)]
-pub struct FetchProgressPayload {
-    pub label: String,
-    pub fetched: u64,
-    pub total: u64,
-}
-
 /// Emitted when the sync engine is fully reset.
 #[derive(Serialize, Clone)]
 pub struct SyncResetPayload {
@@ -636,9 +752,45 @@ pub enum FileFailureKindPayload {
     /// Transport-layer failure — connection refused, DNS, TLS, timeout.
     /// No HTTP status because no response was received.
     Network,
+    /// The file's bytes changed between the scan hash and the encrypt hash, so
+    /// the engine discarded the upload rather than ship a half-old blob.
+    ///
+    /// Carved out of [`Self::Other`] because it is the one failure that is
+    /// definitionally self-resolving: the next cycle rescans, re-hashes and
+    /// re-uploads, and succeeds as soon as the writer stops touching the file.
+    /// Presenting it like a real error sent users hunting for an encryption
+    /// fault that does not exist.
+    ChangedWhileUploading,
     /// Fallback for failures we have not categorised. `message` is for
     /// display only — the FE MUST NOT parse it as a stable contract.
     Other { message: String },
+}
+
+/// The exact string `hcfs-client` produces when a file's content changes
+/// between the scan-phase hash and the encryption-phase hash
+/// (`drive/upload.rs`'s salted_hash mismatch, surfaced as
+/// `SyncError::Encryption`). Matched to carve
+/// [`FileFailureKindPayload::ChangedWhileUploading`] out of the upstream
+/// `Other(String)` catch-all — upstream's own docs invite exactly this
+/// ("Future kinds may carve specific failures out of here").
+///
+/// Pinned against upstream by `changed_while_uploading_marker_matches_upstream`
+/// so an `hcfs-client` bump that rewords it fails CI instead of silently
+/// reverting the row to a red "Error".
+pub const CHANGED_WHILE_UPLOADING_MARKER: &str = "Encryption error: File was modified during encryption";
+
+/// Whether a snapshot row's authored `error` reason describes a self-resolving
+/// failure (see [`FileFailureKindPayload::is_transient`]).
+///
+/// The live snapshot carries only the reason STRING — the typed kind reaches
+/// the frontend on the separate `hcfs_file_failed` event, which the sync widget
+/// does not consume. So the emit path recognises a transient row by the string
+/// Rust itself authored in `display_reason`. That is an internal round trip
+/// within this module (pinned by `transient_reason_round_trips_through_the_authored_string`),
+/// NOT the frontend parsing a message — the FE receives the decision already made.
+///
+pub fn is_transient_reason(reason: &str) -> bool {
+    reason == FileFailureKindPayload::ChangedWhileUploading.display_reason()
 }
 
 impl FileFailureKindPayload {
@@ -652,8 +804,21 @@ impl FileFailureKindPayload {
     /// the *persisted* `FileFailureRecord` for the Drive-table badge. The two
     /// cover different data sources (live in-memory string vs. typed DB row)
     /// but must read identically to the user — update both together.
+    /// Whether this failure resolves itself on the next sync cycle without any
+    /// user action — the signal the widget uses to show an amber "Retrying"
+    /// row instead of a red "Error".
+    ///
+    /// Only [`Self::ChangedWhileUploading`] qualifies. A network blip or a 5xx
+    /// is also *often* transient, but "often" is not the bar: this drives copy
+    /// telling the user to do nothing, so it must be reserved for the case
+    /// where the next cycle genuinely does re-derive everything and succeed.
+    pub fn is_transient(&self) -> bool {
+        matches!(self, Self::ChangedWhileUploading)
+    }
+
     pub fn display_reason(&self) -> String {
         match self {
+            Self::ChangedWhileUploading => "File changed while uploading — will retry.".to_string(),
             Self::InsufficientBalance {
                 balance_cents,
                 required_cents,
@@ -699,6 +864,11 @@ impl From<&hcfs_client::engine::events::FileFailureKind> for FileFailureKindPayl
             },
             K::ServerError { status } => Self::ServerError { status: *status },
             K::Network => Self::Network,
+            // Carve the mid-upload-modification case out of the upstream
+            // catch-all before it reaches `Other` — it is self-resolving and
+            // must not be presented as a crypto fault. See
+            // `CHANGED_WHILE_UPLOADING_MARKER` for the drift guard.
+            K::Other(msg) if msg == CHANGED_WHILE_UPLOADING_MARKER => Self::ChangedWhileUploading,
             // Upstream `Other(String)` carries display text. Clone-on-translate is
             // unavoidable (we own the wire payload); the alternative would be borrowing
             // and the bridge needs an owned struct for `app.emit`.

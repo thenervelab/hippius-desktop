@@ -124,7 +124,13 @@ pub fn encrypt_with_aad(key: &[u8; 32], plaintext: &str, aad: &[u8]) -> Result<S
     let cipher = ChaCha20Poly1305::new(key.into());
     let nonce = ChaCha20Poly1305::generate_nonce(&mut OsRng);
     let ciphertext = cipher
-        .encrypt(&nonce, chacha20poly1305::aead::Payload { msg: plaintext.as_bytes(), aad })
+        .encrypt(
+            &nonce,
+            chacha20poly1305::aead::Payload {
+                msg: plaintext.as_bytes(),
+                aad,
+            },
+        )
         .map_err(|e| crate::error::AppError::Crypto(format!("encryption failed: {e}")))?;
 
     let mut combined = Vec::with_capacity(12 + ciphertext.len());

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { findLiveFileMatch } from "../useFileLiveProgress";
+import {
+  buildLiveProgressIndex,
+  findLiveFileMatch,
+  liveProgressIndexEqual,
+  lookupLiveProgress,
+} from "../useFileLiveProgress";
 import type { FileProgress } from "@/app/lib/types/syncSnapshot";
 
 function fp(
@@ -59,5 +64,71 @@ describe("findLiveFileMatch", () => {
 
   it("returns null when nothing matches", () => {
     expect(findLiveFileMatch([fp("/a.pdf")], "/missing.pdf")).toBeNull();
+  });
+});
+
+describe("buildLiveProgressIndex / lookupLiveProgress", () => {
+  it("agrees with findLiveFileMatch on a unique relative path", () => {
+    const files = [fp("/Work/a.pdf", { progressPercent: 30 }), fp("/b.pdf")];
+    const index = buildLiveProgressIndex(files);
+    expect(lookupLiveProgress(index, "/Work/a.pdf", "a.pdf").progressPercent).toBe(
+      30,
+    );
+    expect(lookupLiveProgress(index, "/Work/a.pdf", "a.pdf").status).toBe(
+      "uploading",
+    );
+  });
+
+  it("matches across a leading-slash difference", () => {
+    const files = [fp("/Work/a.pdf", { progressPercent: 42 })];
+    const index = buildLiveProgressIndex(files);
+    expect(
+      lookupLiveProgress(index, "Work/a.pdf", "a.pdf").progressPercent,
+    ).toBe(42);
+  });
+
+  it("does not bind an ambiguous basename", () => {
+    const files = [
+      fp("/2023/report.pdf", { progressPercent: 10 }),
+      fp("/2024/report.pdf", { progressPercent: 90 }),
+    ];
+    const index = buildLiveProgressIndex(files);
+    expect(lookupLiveProgress(index, undefined, "report.pdf").status).toBeNull();
+  });
+
+  it("uses the basename fallback only when it is unambiguous", () => {
+    const files = [fp("/2024/report.pdf", { progressPercent: 55 })];
+    const index = buildLiveProgressIndex(files);
+    expect(
+      lookupLiveProgress(index, undefined, "report.pdf").progressPercent,
+    ).toBe(55);
+  });
+
+  it("scopes by label so the same path in another drive cannot collide", () => {
+    const files = [
+      fp("/a.pdf", { label: "Docs", progressPercent: 10 }),
+      fp("/a.pdf", { label: "Photos", progressPercent: 80 }),
+    ];
+    const index = buildLiveProgressIndex(files);
+    expect(
+      lookupLiveProgress(index, "/a.pdf", "a.pdf", "Photos").progressPercent,
+    ).toBe(80);
+    expect(lookupLiveProgress(index, "/a.pdf", "a.pdf").status).toBeNull();
+  });
+
+  it("buckets percent so 10.4 and 10.9 share a cell", () => {
+    const a = buildLiveProgressIndex([
+      fp("/a.pdf", { progressPercent: 10.4 }),
+    ]);
+    const b = buildLiveProgressIndex([
+      fp("/a.pdf", { progressPercent: 10.9 }),
+    ]);
+    expect(liveProgressIndexEqual(a, b)).toBe(true);
+    expect(lookupLiveProgress(a, "/a.pdf", "a.pdf").progressPercent).toBe(10);
+  });
+
+  it("returns empty when nothing matches", () => {
+    const index = buildLiveProgressIndex([fp("/a.pdf")]);
+    expect(lookupLiveProgress(index, "/missing.pdf", "missing.pdf").status).toBeNull();
   });
 });

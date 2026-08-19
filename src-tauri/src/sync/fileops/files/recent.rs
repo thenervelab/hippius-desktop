@@ -12,17 +12,17 @@ use std::collections::HashMap;
 /// Return sync metadata (arion hashes, CIDs, timestamps) for all synced
 /// files across all drives. Used internally by `get_user_files` to look
 /// up arion hashes without needing to list every subfolder from disk.
-/// Acquire each drive's synced-paths map: live per-drive lock first (cache
-/// warmed on success), falling back to the cached snapshot when a drive is
-/// mid-sync (or all drives are busy). Used by the bounded recent-files
-/// lookup (`get_recent_files`).
+/// Acquire each drive's synced-paths map. Same cache-first rule as
+/// [`super::synced_state::synced_paths_for_label`]: a warm cache is the
+/// source of truth; `load_sync_state` is miss-only. Reloading disk
+/// when the lock is free would clobber DATE UPLOADED / pending vs
+/// synced for the next Files listing.
 async fn collect_label_maps(sync: &SyncRunner) -> Vec<(String, HashMap<String, SyncedFileInfo>)> {
     let drive_arcs: Vec<(String, std::sync::Arc<tokio::sync::Mutex<DriveManager>>)> = match sync.drives.try_lock() {
         Ok(guard) => guard.iter().map(|(k, slot)| (k.clone(), slot.manager.clone())).collect(),
         Err(_) => Vec::new(),
     };
     if drive_arcs.is_empty() {
-        // All locks held by sync — use cached data.
         return match sync.synced_paths_cache.lock() {
             Ok(cache) => cache.iter().map(|(l, m)| (l.clone(), m.clone())).collect(),
             Err(_) => Vec::new(),
@@ -30,16 +30,17 @@ async fn collect_label_maps(sync: &SyncRunner) -> Vec<(String, HashMap<String, S
     }
     let mut out = Vec::new();
     for (label, arc) in &drive_arcs {
-        if let Ok(manager) = arc.try_lock() {
-            if let Ok(st) = manager.load_sync_state().await {
-                let paths = build_synced_paths_from_state(&st);
-                sync.update_synced_paths_cache(label, paths.clone());
-                out.push((label.clone(), paths));
-            }
-        } else if let Some(cached) = sync.get_cached_synced_paths(label) {
-            // Drive is syncing — fall back to cached snapshot so arion
-            // hashes remain visible while downloads are active.
+        if let Some(cached) = sync.get_cached_synced_paths(label) {
             out.push((label.clone(), cached));
+            continue;
+        }
+        let Ok(manager) = arc.try_lock() else {
+            continue;
+        };
+        if let Ok(st) = manager.load_sync_state().await {
+            let paths = build_synced_paths_from_state(&st);
+            sync.update_synced_paths_cache(label, paths.clone());
+            out.push((label.clone(), paths));
         }
     }
     out

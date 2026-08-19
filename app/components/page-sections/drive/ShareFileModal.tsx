@@ -42,32 +42,41 @@ import {
 import {
   cancelFinderShare,
   confirmFinderShare,
+  createFolderShare,
   createShare,
+  folderSharePreflight,
+  type FolderSharePreflight,
   revokeShare,
+  type ShareChoice,
   type ShareLink,
   type ShareProgress,
+  type ShareTtl,
+  type ShareVisibility,
+  generateSharePassword,
 } from "@/app/lib/tauri/shares";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
-
-// The two visibility choices the Finder chooser offers; the values are the wire
-// tokens the Rust `ShareVisibility::parse` accepts.
-type ShareVisibility = "public" | "private";
+import { formatBytes } from "@/app/lib/utils/formatBytes";
 
 type ModalState =
-  // Finder-only entry point: the user picks public vs password before anything
-  // is minted (`confirmFinder` runs the mint on their choice). The in-app flow
-  // never enters this state — it goes straight to `running`.
+  // Both entry points start here: the user picks expiry and public-vs-password
+  // before anything is minted. The Finder flow confirms via
+  // `confirmFinderShare` (the backend holds the path), the in-app flow via
+  // `createShare`.
   | { kind: "choosing" }
   // `progress` is undefined until the backend reports it; the bar stays
   // indeterminate in that case.
   | { kind: "running"; progress?: ShareProgress }
-  // `password` is set only for a password-protected share — the recipient needs
-  // it, so the done view shows it alongside the link.
-  | { kind: "done"; link: ShareLink; password?: string }
+  // The link carries its own `password` when the share is protected — the
+  // backend returns it exactly once, so the done view is the only place it can
+  // ever be shown.
+  | { kind: "done"; link: ShareLink }
   | { kind: "error"; message: string };
 
 export default function ShareFileModal() {
-  const [file, setFile] = useAtom(shareModalFileAtom);
+  const [target, setTarget] = useAtom(shareModalFileAtom);
+  // The entry being shared, or `null` for a Finder-initiated share (which has
+  // no row — the backend holds the resolved path).
+  const file = target?.file ?? null;
   // A share from the macOS Finder right-click opens the in-app chooser (see
   // `FinderShareListener`): the atom carries only the `choosing` state, and this
   // modal then owns the `confirmFinderShare` → running → done/error lifecycle,
@@ -77,9 +86,12 @@ export default function ShareFileModal() {
   // event that fires before this effect-driven component re-renders, and the
   // test harness that renders with the atom pre-seeded); otherwise the in-app
   // flow starts in `running`.
-  const [state, setState] = useState<ModalState>(() =>
-    finderShare?.kind === "choosing" ? { kind: "choosing" } : { kind: "running" },
-  );
+  // This component is mounted permanently by the pages layout, so `state`
+  // outlives any single share. See `sessionKey` below for why that matters.
+  const [state, setState] = useState<ModalState>({ kind: "choosing" });
+  // Remembered so "Try again" after a failure re-mints with the same choice
+  // instead of silently falling back to a default the user never picked.
+  const lastChoiceRef = useRef<ShareChoice | null>(null);
   // Auto-copy fires once per `done` transition. Reopening the dialog
   // without closing must not double-copy a stale URL.
   const autoCopiedRef = useRef(false);
@@ -87,7 +99,13 @@ export default function ShareFileModal() {
   // The Finder flow has no `FormattedUserFile`, so fall back to the name the
   // backend sent with the choosing event for the label shown in every state.
   const finderName = finderShare?.kind === "choosing" ? finderShare.name : "";
-  const filename = file?.actualFileName || file?.name || finderName;
+  // For a FOLDER show the drive-relative path, not the basename: it is the only
+  // confirmation of WHICH entry is about to be published, and two folders with
+  // the same name in different places would otherwise look identical here.
+  const filename =
+    (target?.file.isFolder ? target.relativePath : file?.actualFileName) ||
+    file?.name ||
+    finderName;
   const folderLabel = file?.label;
 
   const close = useCallback(() => {
@@ -95,51 +113,57 @@ export default function ShareFileModal() {
     // Idempotent server-side: after a confirm mints it the id is already taken,
     // so closing from done/error is a harmless no-op.
     if (finderShare?.kind === "choosing") void cancelFinderShare(finderShare.id);
-    setFile(null);
+    setTarget(null);
     setFinderShare(null);
-  }, [finderShare, setFile, setFinderShare]);
+  }, [finderShare, setTarget, setFinderShare]);
 
-  const startShare = useCallback(async () => {
-    if (!file || !folderLabel) return;
+  const startShare = useCallback(
+    async (choice: ShareChoice) => {
+    if (!target || !folderLabel) return;
+    lastChoiceRef.current = choice;
     setState({ kind: "running" });
     autoCopiedRef.current = false;
     try {
-      // `actualFileName` is the relative path inside the sync folder
-      // (e.g. `subdir/file.txt`); see `FormattedUserFile`. The fallback
-      // to `name` mirrors `revealInFileManager` in the file row's
-      // context menu.
-      const relativePath = file.actualFileName || file.name;
-      // Apply progress only while still running: channel messages are
-      // delivered asynchronously, so a trailing `finalizing` update can
-      // land after the IPC promise resolves — it must not clobber the
-      // `done`/`error` state we transition to below.
-      const link = await createShare(folderLabel, relativePath, (progress) =>
+      // The path was resolved by whichever surface opened the modal — see
+      // `ShareModalTarget`. Apply progress only while still running: channel
+      // messages are delivered asynchronously, so a trailing `finalizing`
+      // update can land after the IPC promise resolves and must not clobber
+      // the `done`/`error` state we transition to below.
+      const onProgress = (progress: ShareProgress) =>
         setState((prev) =>
           prev.kind === "running" ? { kind: "running", progress } : prev,
-        ),
-      );
+        );
+      // A folder is packed into one zip and shared as that archive; the file
+      // command rejects a directory outright, so the two are not
+      // interchangeable.
+      const link = target.file.isFolder
+        ? await createFolderShare(folderLabel, target.relativePath, choice, onProgress)
+        : await createShare(folderLabel, target.relativePath, choice, onProgress);
       setState({ kind: "done", link });
     } catch (err) {
       setState({ kind: "error", message: errorMessage(err) });
     }
-  }, [file, folderLabel]);
+    },
+    [target, folderLabel],
+  );
 
   // Confirm a Finder share once the user picks visibility in the chooser: mint
   // via `confirmFinderShare` (backend holds the resolved path — we send only the
   // id + choice), streaming progress into `running`, then land on `done`/`error`.
   const confirmFinder = useCallback(
-    async (visibility: ShareVisibility) => {
+    async (choice: ShareChoice) => {
       if (finderShare?.kind !== "choosing") return;
       const { id } = finderShare;
+      lastChoiceRef.current = choice;
       setState({ kind: "running" });
       autoCopiedRef.current = false;
       try {
-        const created = await confirmFinderShare(id, visibility, (progress) =>
+        const created = await confirmFinderShare(id, choice, (progress) =>
           setState((prev) =>
             prev.kind === "running" ? { kind: "running", progress } : prev,
           ),
         );
-        setState({ kind: "done", link: created, password: created.password });
+        setState({ kind: "done", link: created });
       } catch (err) {
         setState({ kind: "error", message: errorMessage(err) });
       }
@@ -147,18 +171,77 @@ export default function ShareFileModal() {
     [finderShare],
   );
 
-  // Kick off the share when the modal opens.
-  useEffect(() => {
-    if (file) startShare();
+  // One confirm handler for both entry points — the chooser does not care which
+  // opened it, and routing here keeps the two flows from drifting apart.
+  const onConfirmChoice = useCallback(
+    (choice: ShareChoice) => {
+      if (finderShare?.kind === "choosing") void confirmFinder(choice);
+      else void startShare(choice);
+    },
+    [finderShare, confirmFinder, startShare],
+  );
+
+  // Re-run the last confirmed choice after a failure. Finder requests are
+  // single-use server-side (the parked path is consumed on confirm), so only
+  // the in-app flow can retry.
+  const onRetry = useCallback(() => {
+    const choice = lastChoiceRef.current;
+    if (file && choice) void startShare(choice);
   }, [file, startShare]);
 
-  // Open the chooser for a Finder request. No mint runs here — `confirmFinder`
-  // does that on the user's choice. Fires once when the atom becomes `choosing`;
-  // it does not run again during confirm (the atom identity is unchanged), so a
-  // reached `done`/`error` state is never clobbered back to the picker.
+  // Identity of the share session currently open — `null` while closed.
+  //
+  // A STRING, not the file object: the atom may hand back a fresh object for
+  // the same file on re-render, which would restart the session mid-upload.
+  const sessionKey =
+    finderShare?.kind === "choosing"
+      ? `finder:${finderShare.id}`
+      : target
+        ? `file:${target.file.label}:${target.relativePath}`
+        : null;
+
+  // Reset on every session transition, close included.
+  //
+  // The modal never unmounts, so without this a finished share's `done` state
+  // survives into the next one and the user is shown the PREVIOUS file's link.
+  // Resetting on close (`sessionKey → null`) rather than only on open is what
+  // makes re-sharing the same file twice work — the null in between changes
+  // the key. It also covers a Finder request arriving while the modal is still
+  // open on a previous result.
+  //
+  // Deliberately not driven off `close()`: any caller that clears the atoms
+  // directly (`FinderShareListener`, a future surface) would bypass it, and
+  // the failure mode is showing someone the wrong share link.
   useEffect(() => {
-    if (finderShare?.kind === "choosing") setState({ kind: "choosing" });
-  }, [finderShare]);
+    setState({ kind: "choosing" });
+    autoCopiedRef.current = false;
+    lastChoiceRef.current = null;
+  }, [sessionKey]);
+
+  // Measure a folder before the user commits to sharing it, so the chooser can
+  // show what will be packed and refuse an oversized folder up front rather
+  // than after a long walk. Files need no preflight — only a folder is zipped.
+  //
+  // A failure resolves to `null` rather than surfacing: the mint re-checks and
+  // returns the authoritative message, and a preflight that cannot stat should
+  // not block a share the backend would accept.
+  const [folderPreflight, setFolderPreflight] = useState<FolderSharePreflight | null>(null);
+
+  useEffect(() => {
+    setFolderPreflight(null);
+    if (!target?.file.isFolder || !folderLabel) return;
+
+    let cancelled = false;
+    void folderSharePreflight(folderLabel, target.relativePath)
+      .then((result) => {
+        if (!cancelled) setFolderPreflight(result);
+      })
+      .catch(() => undefined);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionKey, target, folderLabel]);
 
   // Auto-copy once we reach `done`. The URL is still rendered in a
   // selectable textbox so the user can re-copy if focus rules block
@@ -218,7 +301,13 @@ export default function ShareFileModal() {
       maxWidth="max-w-[585px]"
     >
       {state.kind === "choosing" && (
-        <ChoosingBody filename={filename} onConfirm={confirmFinder} onCancel={close} />
+        <ChoosingBody
+          filename={filename}
+          isFolder={target?.file.isFolder ?? false}
+          folderPreflight={folderPreflight}
+          onConfirm={onConfirmChoice}
+          onCancel={close}
+        />
       )}
 
       {state.kind === "running" && (
@@ -232,7 +321,7 @@ export default function ShareFileModal() {
       {state.kind === "done" && (
         <DoneBody
           link={state.link}
-          password={state.password}
+          password={state.link.password}
           onCopy={onCopy}
           onOpen={onOpenInBrowser}
           onClose={close}
@@ -244,9 +333,9 @@ export default function ShareFileModal() {
         <ErrorBody
           message={state.message}
           filename={filename}
-          // A Finder share is minted in Rust with no re-runnable file handle
-          // here, so "Try again" only applies to the in-app (`file`) flow.
-          onRetry={file ? startShare : undefined}
+          // A Finder request is consumed by its confirm, so only the in-app
+          // flow can re-mint.
+          onRetry={file ? onRetry : undefined}
           onClose={close}
         />
       )}
@@ -254,22 +343,69 @@ export default function ShareFileModal() {
   );
 }
 
+/** Expiry choices offered in the chooser, in the order they are shown. */
+const TTL_OPTIONS: ReadonlyArray<{ label: string; value: ShareTtl }> = [
+  { label: "24 hours", value: "24h" },
+  { label: "7 days", value: "7d" },
+  { label: "30 days", value: "30d" },
+  { label: "Until I revoke it", value: "never" },
+];
+
 /**
- * The Finder-only "General access" picker, shown before anything is minted. The
- * user chooses Anyone-with-the-link (public) or Password-protected (private) and
- * confirms; the parent then runs the mint. Reuses the shared `SegmentedControl`
- * and `Button` so it reads as first-class app UI (matches the done/error bodies).
+ * Minimum password length. Mirrors `SHARE_PASSWORD_MIN_LEN` in hcfs-client —
+ * this copy only drives the inline hint and the disabled state, so a drift
+ * degrades to a worse message, never to a weak password being accepted: Rust
+ * re-validates at the IPC boundary and rejects.
+ */
+const PASSWORD_MIN_LEN = 8;
+
+/**
+ * The pre-mint picker, shared by the in-app and Finder entry points. The user
+ * chooses how long the link lives and whether it needs a password; the parent
+ * then runs the mint. Reuses the shared `SegmentedControl` and `Button` so it
+ * reads as first-class app UI (matches the done/error bodies).
  */
 function ChoosingBody({
   filename,
+  isFolder,
+  folderPreflight,
   onConfirm,
   onCancel,
 }: {
   filename: string;
-  onConfirm: (visibility: ShareVisibility) => void;
+  isFolder: boolean;
+  /** `null` while the measurement is in flight, or if it failed. */
+  folderPreflight: FolderSharePreflight | null;
+  onConfirm: (choice: ShareChoice) => void;
   onCancel: () => void;
 }) {
   const [visibility, setVisibility] = useState<ShareVisibility>("public");
+  const [ttl, setTtl] = useState<ShareTtl>("24h");
+  // Pre-filled with a generated password the first time the user switches to
+  // "Password protected", so the common path is strong-by-default and the user
+  // can still overwrite it. Empty until then, so we never generate one for a
+  // share that stays public.
+  const [password, setPassword] = useState("");
+
+  const onVisibilityChange = (next: ShareVisibility) => {
+    setVisibility(next);
+    // Fetch a generated default the first time the user opts into a password.
+    // If the backend call fails the field simply stays empty and the user
+    // types their own — or leaves it blank, in which case the mint generates
+    // one server-side anyway.
+    if (next === "private" && !password) {
+      void generateSharePassword()
+        .then(setPassword)
+        .catch(() => undefined);
+    }
+  };
+
+  const passwordTooShort =
+    visibility === "private" && password.length < PASSWORD_MIN_LEN;
+  // Only a measured over-limit folder blocks the button. While the preflight is
+  // in flight `folderPreflight` is null and sharing stays available: a slow stat
+  // must not hold up a small folder, and the backend re-checks on the mint.
+  const folderTooLarge = folderPreflight?.withinLimits === false;
 
   return (
     <div className="font-geist">
@@ -282,7 +418,7 @@ function ChoosingBody({
           fullWidth
           showActiveIndicator={false}
           value={visibility}
-          onChange={setVisibility}
+          onChange={onVisibilityChange}
           options={[
             { label: "Anyone with the link", value: "public" },
             { label: "Password protected", value: "private" },
@@ -290,15 +426,72 @@ function ChoosingBody({
         />
         <p className="text-xs text-grey-50 dark:text-grey-dark-600">
           {visibility === "public"
-            ? "Anyone with the link can view and download this file until it expires."
-            : "We'll generate a password — the link can't be opened without it. You can copy it on the next screen."}
+            ? "Anyone with the link can view and download this file."
+            : "The link can't be opened without this password. Send it separately — it can't be recovered or changed later."}
         </p>
+
+        {visibility === "private" && (
+          <div className="mt-2 flex flex-col gap-1">
+            <label
+              htmlFor="share-password"
+              className="text-xs font-medium text-grey-30 dark:text-grey-dark-700"
+            >
+              Password
+            </label>
+            <input
+              id="share-password"
+              type="text"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              spellCheck={false}
+              autoComplete="off"
+              className={cn(
+                "h-10 w-full rounded-[6px] border px-3 font-mono text-sm",
+                "border-grey-80 bg-white text-grey-10",
+                "dark:border-grey-dark-80 dark:bg-grey-dark-100 dark:text-grey-dark-10",
+              )}
+            />
+            {passwordTooShort && (
+              <p className="text-xs text-red-500">
+                Use at least {PASSWORD_MIN_LEN} characters.
+              </p>
+            )}
+          </div>
+        )}
+
+        <div className="mt-3 flex flex-col gap-1">
+          <label
+            htmlFor="share-expiry"
+            className="text-xs font-medium text-grey-30 dark:text-grey-dark-700"
+          >
+            Link expires
+          </label>
+          <select
+            id="share-expiry"
+            value={ttl}
+            onChange={(e) => setTtl(e.target.value as ShareTtl)}
+            className={cn(
+              "h-10 w-full rounded-[6px] border px-3 text-sm",
+              "border-grey-80 bg-white text-grey-10",
+              "dark:border-grey-dark-80 dark:bg-grey-dark-100 dark:text-grey-dark-10",
+            )}
+          >
+            {TTL_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
         <p
-          className="mt-1 break-all font-mono text-xs text-grey-50 dark:text-grey-dark-600"
+          className="mt-3 break-all font-mono text-xs text-grey-50 dark:text-grey-dark-600"
           title={filename}
         >
           {filename}
         </p>
+
+        {isFolder && <FolderShareNotice preflight={folderPreflight} />}
       </div>
 
       <div className="flex flex-col gap-3">
@@ -306,7 +499,17 @@ function ChoosingBody({
           type="button"
           variant="primary"
           size="auto"
-          onClick={() => onConfirm(visibility)}
+          disabled={passwordTooShort || folderTooLarge}
+          onClick={() =>
+            onConfirm({
+              ttl,
+              visibility,
+              // Only send a password on the private branch — Rust drops it on
+              // the public one anyway, but not sending it keeps the intent
+              // unambiguous at the boundary.
+              password: visibility === "private" ? password : undefined,
+            })
+          }
           className={cn(
             "h-[52px] w-full rounded-[6px] border text-base font-normal tracking-[-0.36px]",
             "border-[#3167DD] bg-[#3167DD] text-white",
@@ -327,6 +530,44 @@ function ChoosingBody({
         </Button>
       </div>
     </div>
+  );
+}
+
+/**
+ * What the user is agreeing to when they share a folder: the archive it becomes,
+ * its measured size, and — when it is too big — why the button is disabled.
+ *
+ * The snapshot wording is the important part. A folder link is minted from the
+ * folder's contents at this moment; later additions do not appear in it, and
+ * nothing in the recipient's view would reveal that.
+ */
+function FolderShareNotice({ preflight }: { preflight: FolderSharePreflight | null }) {
+  if (preflight?.withinLimits === false) {
+    return (
+      <div className="mt-3 rounded-md border border-error-90 bg-error-100/40 px-3 py-2 dark:border-error-30/60 dark:bg-error-30/10">
+        <p className="text-xs font-medium text-error-70">
+          This folder is too large to share as a link
+        </p>
+        <p className="mt-1 text-xs text-grey-50 dark:text-grey-dark-600">
+          {/* "More than": the backend stops measuring once the cap is passed,
+              so these totals are a lower bound, not the folder's real size. */}
+          More than {formatBytes(preflight.totalBytes)} across{" "}
+          {preflight.fileCount.toLocaleString()} files. The limit is{" "}
+          {formatBytes(preflight.limitBytes)} and{" "}
+          {preflight.limitFiles.toLocaleString()} files — share a smaller folder,
+          or share files individually.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <p className="mt-3 text-xs text-grey-50 dark:text-grey-dark-600">
+      {preflight
+        ? `Packed as one .zip — ${formatBytes(preflight.totalBytes)} across ${preflight.fileCount.toLocaleString()} files. `
+        : "Packed as one .zip. "}
+      The link is a snapshot: files added to this folder later won&apos;t appear in it.
+    </p>
   );
 }
 
@@ -546,11 +787,15 @@ function DoneBody({
   //       where the inline copy button isn't reachable.
   return (
     <div className="font-geist">
-      {expiresAtPretty && (
-        <p className="mb-3 text-center text-xs text-grey-50 dark:text-grey-dark-600">
-          Expires {expiresAtPretty}.
-        </p>
-      )}
+      {/* State the lifetime either way: silently omitting the line for a
+          never-expiring link reads as "we forgot to say", not as "no expiry". */}
+      <p className="mb-3 text-center text-xs text-grey-50 dark:text-grey-dark-600">
+        {link.expiresAt === null
+          ? "This link stays active until you revoke it."
+          : expiresAtPretty
+            ? `Expires ${expiresAtPretty}.`
+            : null}
+      </p>
 
       <div
         className={cn(
@@ -689,7 +934,10 @@ function DoneBody({
  * caller can omit the "Expires …" line entirely instead of showing
  * "Expires Invalid Date".
  */
-function formatExpiresAt(rfc3339: string): string | null {
+function formatExpiresAt(rfc3339: string | null): string | null {
+  // A never-expiring link has no countdown to render; the caller drops the
+  // whole "Expires …" line rather than printing a placeholder.
+  if (rfc3339 === null) return null;
   const ts = Date.parse(rfc3339);
   if (Number.isNaN(ts)) return null;
   const diffMs = ts - Date.now();

@@ -79,6 +79,31 @@ pub(crate) fn validate_resolutions(resolutions: &HashMap<String, String>) -> Res
     Ok(())
 }
 
+/// Shared failure arm for "the drive isn't registered / isn't unlocked":
+/// resume auto-sync for the label (the review flow is over for a drive that
+/// cannot sync), surface the failure through the shared bridge helper
+/// (notification + per-label defensive clears), and hand back the typed
+/// NotReady error. This runs BEFORE any reviewed-sync side effect is applied,
+/// so there is nothing else to unwind.
+fn fail_drive_unavailable(app: &AppHandle, label: &str) -> crate::error::AppError {
+    use tauri::Manager;
+    let app_state = app.state::<crate::app_state::AppState>();
+    app_state.sync.clear_drive_review(label);
+
+    crate::sync::tauri_bridge::handle_sync_error(
+        app,
+        crate::sync::events::SyncErrorPayload {
+            label: label.to_string(),
+            error: "Drive not initialized or not unlocked".to_string(),
+            retry_in_secs: 0,
+            consecutive_failures: 0,
+        },
+        // User-initiated reviewed sync: a real failure always notifies.
+        crate::sync::tauri_bridge::FailureNotify::Always,
+    );
+    crate::error::AppError::NotReady(crate::error::NotReadyKind::DriveNotUnlocked)
+}
+
 /// Sync with user-provided conflict resolutions, then resume auto-sync.
 ///
 /// The `label` parameter identifies which drive to resolve conflicts for.
@@ -97,7 +122,43 @@ pub async fn sync_with_conflict_resolutions(app: AppHandle, label: String, resol
     // Validate resolution values before proceeding (pure, unit-tested below).
     validate_resolutions(&resolutions)?;
 
-    // Mark syncing in shared state
+    // Acquire the drive manager BEFORE any side effect (is_syncing, the
+    // SYNC_STARTED emit, watcher suppression). The auto-sync loop holds this
+    // same per-drive lock for an ENTIRE cycle (`run_sync_cycle` in
+    // hcfs-client), which on a large drive can run for tens of minutes — a
+    // blocking `lock().await` here silently queued the user's "Sync Now"
+    // click behind the in-flight cycle with the button spinner as the only
+    // (misleading) feedback. `try_lock` mirrors `stage_changes`: contention
+    // surfaces immediately as NotReady(SyncInProgress) with no UI/watcher
+    // side effects (review mode is re-armed — see the Err arm below), so the
+    // FE keeps the review dialog (and the user's chosen resolutions) and
+    // tells them to retry shortly.
+    let drive_arc = {
+        let guard = sync.drives.lock().await;
+        guard.get(&label).map(|slot| slot.manager.clone())
+    };
+    let Some(drive_arc) = drive_arc else {
+        return Err(fail_drive_unavailable(&app, &label));
+    };
+    let Ok(mut m) = drive_arc.try_lock() else {
+        // Manager held by an in-flight auto-sync cycle. Re-arm review mode
+        // (best-effort — `set_drive_review` refuses during the post-review
+        // cooldown) so the loop pauses at the NEXT cycle boundary instead of
+        // immediately grabbing the lock for another long cycle: the user's
+        // retry then wins deterministically once the current cycle ends,
+        // rather than racing the 5s tick. If the user instead dismisses the
+        // dialog, cancel_review clears this; if they walk away, the engine's
+        // 5-minute review timeout does.
+        let rearmed = sync.set_drive_review(&label);
+        debug!(label, rearmed, "reviewed sync found the drive manager busy; returning SyncInProgress");
+        return Err(crate::error::AppError::NotReady(crate::error::NotReadyKind::SyncInProgress));
+    };
+    if !m.is_unlocked() {
+        return Err(fail_drive_unavailable(&app, &label));
+    }
+
+    // The reviewed sync is now committed to run — only from this point on are
+    // the UI/watcher side effects applied.
     sync.update_state(&label, |s| {
         s.is_syncing = true;
     });
@@ -124,23 +185,8 @@ pub async fn sync_with_conflict_resolutions(app: AppHandle, label: String, resol
     // Suppress file watcher during sync to prevent feedback loops
     sync.begin_sync();
 
-    let result = {
-        let drive_arc = {
-            let guard = sync.drives.lock().await;
-            guard.get(&label).map(|slot| slot.manager.clone())
-        };
-        match drive_arc {
-            Some(arc) => {
-                let mut m = arc.lock().await;
-                if m.is_unlocked() {
-                    Some(m.sync_with_resolutions(resolutions).await)
-                } else {
-                    None
-                }
-            }
-            None => None,
-        }
-    };
+    let result = m.sync_with_resolutions(resolutions).await;
+    drop(m);
 
     // Re-enable file watcher after a short delay to ignore trailing FS events.
     //
@@ -180,7 +226,7 @@ pub async fn sync_with_conflict_resolutions(app: AppHandle, label: String, resol
     });
 
     match result {
-        Some(Ok(outcome)) => {
+        Ok(outcome) => {
             info!(
                 "Reviewed sync completed: uploaded={}, downloaded={}, deleted_local={}, deleted_remote={}, conflicts_resolved={}, conflicts_skipped={}",
                 outcome.files_uploaded,
@@ -200,7 +246,7 @@ pub async fn sync_with_conflict_resolutions(app: AppHandle, label: String, resol
             crate::sync::tauri_bridge::handle_sync_completed(&app, crate::sync::events::SyncCompletedPayload::from_outcome(&label, &outcome), 0);
             Ok(())
         }
-        Some(Err(e)) => {
+        Err(e) => {
             // Route through the shared bridge helper so a cancel during a
             // reviewed sync is dropped (not surfaced as a spurious "Sync
             // Failed") and the per-label defensive clears run — same as the
@@ -218,21 +264,6 @@ pub async fn sync_with_conflict_resolutions(app: AppHandle, label: String, resol
                 crate::sync::tauri_bridge::FailureNotify::Always,
             );
             Err(crate::error::AppError::from(e))
-        }
-        None => {
-            let msg = "Drive not initialized or not unlocked";
-            crate::sync::tauri_bridge::handle_sync_error(
-                &app,
-                crate::sync::events::SyncErrorPayload {
-                    label: label.clone(),
-                    error: msg.to_string(),
-                    retry_in_secs: 0,
-                    consecutive_failures: 0,
-                },
-                // User-initiated reviewed sync: a real failure always notifies.
-                crate::sync::tauri_bridge::FailureNotify::Always,
-            );
-            Err(crate::error::AppError::NotReady(crate::error::NotReadyKind::DriveNotUnlocked))
         }
     }
 }

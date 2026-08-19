@@ -19,6 +19,7 @@ import { useFileViewShared } from "./shared/FileViewUtils";
 import FileContextMenu from "@/app/components/ui/context-menu";
 import { useSetAtom } from "jotai";
 import { shareModalFileAtom } from "@/app/lib/global-atoms/sharesAtoms";
+import { shareTargetFor } from "@/app/lib/utils/folderShareGating";
 import { renameModalFileAtom } from "@/app/lib/global-atoms/renameAtoms";
 import { downloadFile } from "@/app/lib/utils/downloadFile";
 import { CloudUploadIcon, HardDrive } from "lucide-react";
@@ -398,6 +399,7 @@ const DriveContent: FC<DriveContentProps> = ({
           sharedState={sharedState}
           hasMore={hasMore}
           loadMore={loadMore}
+          currentSubfolderPath={currentSubfolderPath}
         />
       );
     }
@@ -535,7 +537,7 @@ const DriveContent: FC<DriveContentProps> = ({
             setContextMenu(null);
           }}
           onShareFile={(file) => {
-            setShareModalFile(file);
+            setShareModalFile(shareTargetFor(file, currentSubfolderPath));
             setContextMenu(null);
           }}
           onRename={(file) => {

@@ -10,6 +10,9 @@ export type FileFailureKind =
   | "insufficientBalance"
   | "serverError"
   | "network"
+  /** The file's bytes changed between the scan hash and the encrypt hash, so
+   *  the engine discarded the upload. Retries itself on the next cycle. */
+  | "changedWhileUploading"
   | "other";
 
 export interface FileFailureRecord {

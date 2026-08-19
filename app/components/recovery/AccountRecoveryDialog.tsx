@@ -1,10 +1,13 @@
 "use client";
 
 import React, { useCallback, useEffect, useState } from "react";
-import { useAtom } from "jotai";
+import { useAtom, useSetAtom } from "jotai";
 import { toast } from "sonner";
 import { HelpCircle, WifiOff } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { useRouter } from "next/navigation";
+
+import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 
 import { FramedDialog } from "@/components/ui/FramedDialog";
 import { Button } from "@/components/ui/button";
@@ -13,6 +16,7 @@ import {
   RecoveryCheck,
   activeRecoveryCheckAtom,
 } from "@/app/lib/global-atoms/recoveryAtoms";
+import { syncRequiresReauthAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import {
   PassphraseStrength,
   checkRecoveryState,
@@ -200,6 +204,25 @@ const UnlockBranch: React.FC<{ onDone: () => void }> = ({ onDone }) => {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [showForgot, setShowForgot] = useState(false);
+  const setSyncRequiresReauth = useSetAtom(syncRequiresReauthAtom);
+  const { authType } = useWalletAuth();
+  const router = useRouter();
+
+  // Mnemonic users reach this dialog via the mount-time self-heal when
+  // their keychain is locked/empty but a server blob exists (they set an
+  // unlock password in settings). Unlike OAuth users they hold a second,
+  // fully independent recovery path — re-entering the seed phrase — so
+  // the preventClose dialog must not be a dead end for them when the
+  // unlock password is forgotten (PR #124 review).
+  const canEscapeToSeedPhrase = authType === "mnemonic";
+
+  const handleSeedPhraseEscape = useCallback(() => {
+    // `?reauth=1` keeps the login page from bouncing an authenticated
+    // user home (audit R-13). Close the dialog first so it doesn't sit
+    // over the login form.
+    onDone();
+    router.push("/login?reauth=1");
+  }, [onDone, router]);
 
   const canSubmit = !submitting && password.length > 0;
 
@@ -209,6 +232,13 @@ const UnlockBranch: React.FC<{ onDone: () => void }> = ({ onDone }) => {
     setError(null);
     try {
       await recoverMnemonic(password);
+      // A successful unlock invalidates the reauth banner's premise —
+      // the mnemonic is now cached and files decrypt again. Without
+      // this, the banner raised by a mnemonic-labelled restore (the
+      // pre-#102 mislabelled-row path) or by the OAuth banner's own
+      // CTA would linger until the next restart. Clearing when the
+      // banner isn't up is a no-op.
+      setSyncRequiresReauth(false);
       toast.success("Account unlocked.");
       onDone();
     } catch (err) {
@@ -216,7 +246,7 @@ const UnlockBranch: React.FC<{ onDone: () => void }> = ({ onDone }) => {
     } finally {
       setSubmitting(false);
     }
-  }, [canSubmit, password, onDone]);
+  }, [canSubmit, password, onDone, setSyncRequiresReauth]);
 
   return (
     <FramedDialog
@@ -251,9 +281,9 @@ const UnlockBranch: React.FC<{ onDone: () => void }> = ({ onDone }) => {
         {showForgot && (
           <div className="rounded-lg border border-primary-80 bg-primary-95 p-3 dark:border-primary-80/40 dark:bg-primary-50/10">
             <p className="text-xs text-primary-40 dark:text-grey-dark-600">
-              Your files are encrypted with this password and cannot be
-              recovered without it. The password is never sent to our servers,
-              so we cannot reset it for you.
+              {canEscapeToSeedPhrase
+                ? "The password is never sent to our servers, so we cannot reset it for you. If you still have your recovery phrase, you can sign in with it instead — that fully restores access without the unlock password."
+                : "Your files are encrypted with this password and cannot be recovered without it. The password is never sent to our servers, so we cannot reset it for you."}
             </p>
           </div>
         )}
@@ -268,6 +298,16 @@ const UnlockBranch: React.FC<{ onDone: () => void }> = ({ onDone }) => {
         >
           {submitting ? "Unlocking..." : "Unlock"}
         </Button>
+
+        {canEscapeToSeedPhrase && (
+          <button
+            type="button"
+            onClick={handleSeedPhraseEscape}
+            className="self-center text-sm font-medium text-primary-50 underline hover:no-underline dark:text-primary-brand-dark"
+          >
+            Sign in with your recovery phrase instead
+          </button>
+        )}
       </div>
     </FramedDialog>
   );
@@ -306,6 +346,14 @@ const UnknownBranch: React.FC<{ onRetry: () => Promise<void> }> = ({
     setRetrying(true);
     try {
       await onRetry();
+    } catch (err) {
+      // The common offline case resolves to flow "unknown" without
+      // throwing; a THROWN retry is an IPC-level failure and used to
+      // surface only as an unhandled rejection with no user feedback.
+      console.error("[AccountRecoveryDialog] recovery retry failed:", err);
+      toast.error(
+        "Couldn't reach the recovery service. Check your connection and try again."
+      );
     } finally {
       setRetrying(false);
     }

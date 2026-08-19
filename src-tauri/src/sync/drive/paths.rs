@@ -47,9 +47,7 @@ pub struct SyncPathResult {
 /// blocks every other IPC handler. Falls back to the raw `Path` if the file
 /// doesn't exist (e.g. during validation of a path the user just typed),
 /// preserving the prefix-matching semantics tested by the unit tests below.
-async fn validate_no_path_overlap(new_path: &Path, new_label: &str, existing: &[(String, String)]) -> Result<()> {
-    let canonical_new = tokio::fs::canonicalize(new_path).await.unwrap_or_else(|_| new_path.to_path_buf());
-
+async fn validate_no_path_overlap(canonical_new: &Path, new_label: &str, existing: &[(String, String)]) -> Result<()> {
     for (label, path_str) in existing {
         if label == new_label {
             continue;
@@ -64,7 +62,7 @@ async fn validate_no_path_overlap(new_path: &Path, new_label: &str, existing: &[
                 "This folder is already being synced as part of '{label}'"
             )));
         }
-        if canonical_existing.starts_with(&canonical_new) {
+        if canonical_existing.starts_with(canonical_new) {
             return Err(crate::error::AppError::Validation(format!(
                 "This folder contains '{label}' which is already being synced separately. \
                  Remove it first if you want to sync the parent folder instead."
@@ -104,6 +102,13 @@ pub(crate) async fn set_sync_path_internal(pool: &SqlitePool, account_id: &str, 
     let timestamp = Utc::now().timestamp();
     let owner = account_key(account_id);
 
+    // Canonicalize the *new* path before taking the write lock. `realpath`
+    // can take 10–100 ms on a slow volume; holding BEGIN IMMEDIATE across
+    // that stalls every other SQLite writer. Existing-drive canonicalizes
+    // stay inside the lock (there are a handful of them).
+    let new_fs_path = Path::new(path);
+    let canonical_new = tokio::fs::canonicalize(new_fs_path).await.unwrap_or_else(|_| new_fs_path.to_path_buf());
+
     // Run the overlap check, label allocation, and the writes inside ONE
     // `BEGIN IMMEDIATE` transaction so the read-then-act is serialized against
     // concurrent writers. A default `pool.begin()` is DEFERRED — it takes the
@@ -139,7 +144,7 @@ pub(crate) async fn set_sync_path_internal(pool: &SqlitePool, account_id: &str, 
             }
         };
 
-        validate_no_path_overlap(Path::new(path), &label, &existing).await?;
+        validate_no_path_overlap(&canonical_new, &label, &existing).await?;
 
         match mode {
             LabelMode::Exact(_) => {
@@ -251,7 +256,14 @@ pub async fn set_sync_path(
     let path_type = if params.is_public { "public" } else { "private" };
     // The command always targets an explicit label (or the default drive), so
     // it upserts via `Exact`; only the multi-drive add path needs `Allocate`.
-    set_sync_path_internal(pool, &params.account_id, &params.path, params.is_public, LabelMode::Exact(params.label.as_deref().unwrap_or("default"))).await?;
+    set_sync_path_internal(
+        pool,
+        &params.account_id,
+        &params.path,
+        params.is_public,
+        LabelMode::Exact(params.label.as_deref().unwrap_or("default")),
+    )
+    .await?;
 
     crate::sync::files::allow_asset_directory(&app_handle, &params.path);
 
@@ -387,11 +399,11 @@ mod label_tests {
 }
 
 /// All configured drive roots for an account as `(label, on-disk path)`,
-/// skipping the internal `migration` pseudo-drive. Used by the macOS Finder
+/// skipping the internal `migration` pseudo-drive. Used by the file-manager
 /// bridge to register monitored roots and to resolve a clicked path to its
-/// drive — macOS-gated because that bridge is its only caller (un-gated it is
-/// dead code on the Linux CI build).
-#[cfg(target_os = "macos")]
+/// drive — `unix`-gated because that bridge (macOS + Linux) is its only caller
+/// (un-gated it would be dead code on the Windows build).
+#[cfg(any(unix, windows))]
 pub(crate) async fn list_drive_roots(pool: &SqlitePool, account_id: &str) -> Result<Vec<(String, std::path::PathBuf)>> {
     let owner = account_key(account_id);
     let rows = sqlx::query("SELECT label, path FROM sync_paths WHERE owner = ? AND label != 'migration' ORDER BY label")
@@ -456,17 +468,23 @@ mod set_path_tests {
         rows.iter().map(|r| (r.get("label"), r.get("path"))).collect()
     }
 
-    // macOS-gated to match `list_drive_roots` itself (its sole caller is the
-    // macOS Finder bridge); on Linux the fn does not exist.
-    #[cfg(target_os = "macos")]
+    // `unix`-gated to match `list_drive_roots` itself (its callers are the
+    // macOS + Linux file-manager bridge); on Windows the fn does not exist.
+    #[cfg(any(unix, windows))]
     #[tokio::test]
     async fn list_drive_roots_skips_migration_and_returns_label_path() {
         let dir = tempfile::tempdir().expect("tempdir");
         let pool = make_file_pool(dir.path()).await;
         let acct = "5roots";
-        set_sync_path_internal(&pool, acct, "/a/docs", false, LabelMode::Exact("docs")).await.expect("docs");
-        set_sync_path_internal(&pool, acct, "/a/pics", false, LabelMode::Exact("pics")).await.expect("pics");
-        set_sync_path_internal(&pool, acct, "/a/mig", false, LabelMode::Exact("migration")).await.expect("migration");
+        set_sync_path_internal(&pool, acct, "/a/docs", false, LabelMode::Exact("docs"))
+            .await
+            .expect("docs");
+        set_sync_path_internal(&pool, acct, "/a/pics", false, LabelMode::Exact("pics"))
+            .await
+            .expect("pics");
+        set_sync_path_internal(&pool, acct, "/a/mig", false, LabelMode::Exact("migration"))
+            .await
+            .expect("migration");
 
         let roots = list_drive_roots(&pool, acct).await.expect("roots");
         assert_eq!(
@@ -489,10 +507,14 @@ mod set_path_tests {
         let pool = make_file_pool(dir.path()).await;
         let acct = "5acct";
 
-        let l1 = set_sync_path_internal(&pool, acct, "/a/tags", false, LabelMode::Exact("tags")).await.expect("first add");
+        let l1 = set_sync_path_internal(&pool, acct, "/a/tags", false, LabelMode::Exact("tags"))
+            .await
+            .expect("first add");
         assert_eq!(l1, "tags");
 
-        let l2 = set_sync_path_internal(&pool, acct, "/b/tags", false, LabelMode::Allocate { base: "tags" }).await.expect("second add");
+        let l2 = set_sync_path_internal(&pool, acct, "/b/tags", false, LabelMode::Allocate { base: "tags" })
+            .await
+            .expect("second add");
         assert_eq!(l2, "tags-2", "a basename clash suffixes instead of overwriting");
 
         assert_eq!(
@@ -536,8 +558,12 @@ mod set_path_tests {
         let pool = make_file_pool(dir.path()).await;
         let acct = "5acct";
 
-        set_sync_path_internal(&pool, acct, "/a/docs", false, LabelMode::Exact("docs")).await.expect("set");
-        set_sync_path_internal(&pool, acct, "/b/docs", false, LabelMode::Exact("docs")).await.expect("re-point");
+        set_sync_path_internal(&pool, acct, "/a/docs", false, LabelMode::Exact("docs"))
+            .await
+            .expect("set");
+        set_sync_path_internal(&pool, acct, "/b/docs", false, LabelMode::Exact("docs"))
+            .await
+            .expect("re-point");
 
         assert_eq!(
             rows_for(&pool, acct).await,

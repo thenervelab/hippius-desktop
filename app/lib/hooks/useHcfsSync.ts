@@ -189,6 +189,21 @@ export async function tryAutoInitSync(
       // via the hcfs_drive_status_changed event, which feeds
       // hasConfiguredDrivesAtom (the source of truth for "configured?").
 
+      // Rust's AutoInitGuard makes a CONCURRENT auto-init a no-op with this
+      // skipped reason (matches lifecycle.rs). Treat it as retryable, not
+      // terminal: the in-flight run may be the Rust-side post-unlock spawn
+      // (`spawn_post_unlock_sync_init`), and it can be superseded mid-run by
+      // this very chain's preceding `stop_sync` epoch bump — swallowing the
+      // skip as `false` left drives silently uninitialized until the next
+      // launch (PR #124 review). The other skip reasons (no paths, migration
+      // in progress, stale account) stay terminal.
+      if (
+        !result.anyInitialized &&
+        result.skippedReason === "Auto-init already in progress"
+      ) {
+        return "retry";
+      }
+
       return result.anyInitialized;
     } catch (err) {
       // Treat timeout the same as a retryable transient failure:

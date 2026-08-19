@@ -42,8 +42,16 @@ fn request_id_bytes(key_bytes: &[u8]) -> [u8; 32] {
 }
 
 /// Best-effort Bittensor-side deposit cross-ref. Returns `(raw_status, side)`.
-async fn deposit_cross_ref(bt: &OnlineClient<PolkadotConfig>, contract: &AccountId32, origin: &AccountId32, id: &[u8; 32]) -> Option<(String, DepositBittensorSide)> {
-    let dr: Option<contract::DepositRequest> = contract::query_contract(bt, contract, origin.clone(), config::GET_DEPOSIT_REQUEST_SELECTOR, id.encode()).await.ok()?;
+async fn deposit_cross_ref(
+    bt: &OnlineClient<PolkadotConfig>,
+    contract: &AccountId32,
+    origin: &AccountId32,
+    id: &[u8; 32],
+) -> Option<(String, DepositBittensorSide)> {
+    let dr: Option<contract::DepositRequest> =
+        contract::query_contract(bt, contract, origin.clone(), config::GET_DEPOSIT_REQUEST_SELECTOR, id.encode())
+            .await
+            .ok()?;
     let dr = dr?;
     let status = format!("{:?}", dr.status);
     let side = DepositBittensorSide {
@@ -57,8 +65,15 @@ async fn deposit_cross_ref(bt: &OnlineClient<PolkadotConfig>, contract: &Account
 
 /// Best-effort Bittensor-side withdrawal cross-ref. Returns `(raw_status,
 /// vote_count, side)`.
-async fn withdrawal_cross_ref(bt: &OnlineClient<PolkadotConfig>, contract: &AccountId32, origin: &AccountId32, id: &[u8; 32]) -> Option<(String, u64, WithdrawalBittensorSide)> {
-    let w: Option<contract::Withdrawal> = contract::query_contract(bt, contract, origin.clone(), config::GET_WITHDRAWAL_SELECTOR, id.encode()).await.ok()?;
+async fn withdrawal_cross_ref(
+    bt: &OnlineClient<PolkadotConfig>,
+    contract: &AccountId32,
+    origin: &AccountId32,
+    id: &[u8; 32],
+) -> Option<(String, u64, WithdrawalBittensorSide)> {
+    let w: Option<contract::Withdrawal> = contract::query_contract(bt, contract, origin.clone(), config::GET_WITHDRAWAL_SELECTOR, id.encode())
+        .await
+        .ok()?;
     let w = w?;
     let status = format!("{:?}", w.status);
     let vote_count = u32::try_from(w.votes.len()).unwrap_or(u32::MAX);
@@ -74,7 +89,14 @@ async fn withdrawal_cross_ref(bt: &OnlineClient<PolkadotConfig>, contract: &Acco
 
 /// Build one `DepositView` from a Hippius `Deposit` row + its map key, including
 /// the best-effort Bittensor cross-ref and the unified status.
-async fn build_deposit(d: Deposit, key_bytes: &[u8], hippius_height: u64, bt: &OnlineClient<PolkadotConfig>, contract: &AccountId32, origin: &AccountId32) -> DepositView {
+async fn build_deposit(
+    d: Deposit,
+    key_bytes: &[u8],
+    hippius_height: u64,
+    bt: &OnlineClient<PolkadotConfig>,
+    contract: &AccountId32,
+    origin: &AccountId32,
+) -> DepositView {
     let votes: Vec<String> = d.votes.iter().map(ToString::to_string).collect();
     let vote_count = u32::try_from(votes.len()).unwrap_or(u32::MAX);
     let raw_status = format!("{:?}", d.status);
@@ -83,7 +105,13 @@ async fn build_deposit(d: Deposit, key_bytes: &[u8], hippius_height: u64, bt: &O
         Some((s, side)) => (Some(s), Some(side)),
         None => (None, None),
     };
-    let unified = status::deposit_status(&raw_status, u64::from(vote_count), d.created_at_block, Some(hippius_height), bt_status.as_deref());
+    let unified = status::deposit_status(
+        &raw_status,
+        u64::from(vote_count),
+        d.created_at_block,
+        Some(hippius_height),
+        bt_status.as_deref(),
+    );
     DepositView {
         request_id: request_id_hex(key_bytes),
         recipient: d.recipient.to_string(),
@@ -100,7 +128,14 @@ async fn build_deposit(d: Deposit, key_bytes: &[u8], hippius_height: u64, bt: &O
 }
 
 /// Build one `WithdrawalView` from a Hippius `WithdrawalRequest` row + its key.
-async fn build_withdrawal(w: WithdrawalRequest, key_bytes: &[u8], hippius_height: u64, bt: &OnlineClient<PolkadotConfig>, contract: &AccountId32, origin: &AccountId32) -> WithdrawalView {
+async fn build_withdrawal(
+    w: WithdrawalRequest,
+    key_bytes: &[u8],
+    hippius_height: u64,
+    bt: &OnlineClient<PolkadotConfig>,
+    contract: &AccountId32,
+    origin: &AccountId32,
+) -> WithdrawalView {
     let raw_status = format!("{:?}", w.status);
     let id = request_id_bytes(key_bytes);
     let (bt_status, bt_votes, bittensor_side) = match withdrawal_cross_ref(bt, contract, origin, &id).await {
@@ -187,7 +222,10 @@ pub async fn bridge_fetch_onchain_data() -> Result<BridgeOnChainData> {
     }
 
     let mut withdrawals = Vec::new();
-    let mut wd_iter = hp_storage.iter(hippius_tn::storage().alpha_bridge().withdrawal_requests_iter()).await.map_err(se)?;
+    let mut wd_iter = hp_storage
+        .iter(hippius_tn::storage().alpha_bridge().withdrawal_requests_iter())
+        .await
+        .map_err(se)?;
     while let Some(item) = wd_iter.next().await {
         let kv = item.map_err(se)?;
         withdrawals.push(build_withdrawal(kv.value, &kv.key_bytes, hippius_height, &bt, &contract_addr, &read_origin).await);

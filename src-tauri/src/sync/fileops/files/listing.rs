@@ -3,13 +3,16 @@
 
 use super::dir_stats::dir_stats_recursive;
 use super::pathops::ensure_within;
-use super::synced_state::{synced_paths_and_excludes_for_label, synced_paths_for_label};
+use super::synced_state::synced_paths_and_excludes_for_label;
 use crate::auth::account_key::account_key;
 use crate::error::Result;
+use hcfs_client::engine::types::SyncedFileInfo;
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use tracing::{info, warn};
+
+type PreloadedSynced = (Option<HashMap<String, SyncedFileInfo>>, Vec<String>);
 
 #[derive(Serialize)]
 pub struct FileEntry {
@@ -55,6 +58,16 @@ async fn list_sync_folder_inner(
     subfolder: Option<String>,
     label: Option<String>,
 ) -> Result<Vec<FileEntry>> {
+    list_sync_folder_inner_with(state, sync_path, subfolder, label, None).await
+}
+
+async fn list_sync_folder_inner_with(
+    state: &crate::app_state::AppState,
+    sync_path: String,
+    subfolder: Option<String>,
+    label: Option<String>,
+    preloaded: Option<PreloadedSynced>,
+) -> Result<Vec<FileEntry>> {
     let base = PathBuf::from(&sync_path);
     let target = match subfolder {
         Some(ref sub) => base.join(sub),
@@ -62,13 +75,19 @@ async fn list_sync_folder_inner(
     };
 
     // Return empty list if directory doesn't exist yet (e.g. sync still initializing after login)
-    if !target.exists() {
+    if !tokio::fs::try_exists(&target).await.unwrap_or(false) {
         return Ok(Vec::new());
     }
 
-    // Validate subfolder stays within sync_path
+    // Validate subfolder stays within sync_path. Canonicalize is
+    // blocking — hop off the runtime so a nested listing cannot stall
+    // other IPC.
     if subfolder.is_some() {
-        ensure_within(&base, &target)?;
+        let parent = base.clone();
+        let child = target.clone();
+        tokio::task::spawn_blocking(move || ensure_within(&parent, &child))
+            .await
+            .map_err(|e| crate::error::AppError::Other(format!("ensure_within task panicked: {e}")))??;
     }
 
     // Load synced paths AND exclusion patterns in a single drives-map
@@ -76,9 +95,16 @@ async fn list_sync_folder_inner(
     // acquisitions (synced_paths_for_label, then a `.lock().await` on
     // the same outer mutex for excludes) which serialized listings
     // behind any in-flight sync that held the outer lock.
-    let (synced_set, excluded_patterns) = match label {
-        Some(ref l) => synced_paths_and_excludes_for_label(&state.sync, l).await,
-        None => (None, Vec::new()),
+    //
+    // `preloaded` lets `list_sync_folder_grouped_inner` load the map once
+    // and reuse it for the server-only overlay instead of a second
+    // `synced_paths_for_label` call.
+    let (synced_set, excluded_patterns) = match preloaded {
+        Some(pair) => pair,
+        None => match label {
+            Some(ref l) => synced_paths_and_excludes_for_label(&state.sync, l).await,
+            None => (None, Vec::new()),
+        },
     };
 
     let mut entries = Vec::new();
@@ -310,6 +336,11 @@ fn macos_name_cmp(a: &str, b: &str) -> std::cmp::Ordering {
 /// Pure helper for [`list_sync_folder_grouped`], exposed for integration tests
 /// so they can drive it against a hand-assembled [`AppState`] without going
 /// through the Tauri command layer.
+// Sat just under the 100-line limit before the tree was rustfmt'd; reflowing
+// long lines pushed it to 103 without changing a single statement. Splitting it
+// is a real refactor and does not belong in a formatting-only change — tracked
+// as a follow-up rather than smuggled in here.
+#[allow(clippy::too_many_lines, reason = "formatting-only line growth; extraction tracked separately")]
 pub async fn list_sync_folder_grouped_inner(
     state: &crate::app_state::AppState,
     account_id: String,
@@ -321,18 +352,19 @@ pub async fn list_sync_folder_grouped_inner(
     // inner helper keeps the exclude/sync-status/file-count logic in one
     // place; a missing subfolder returns `Vec::new()` from there and we
     // overlay server entries below.
-    let disk_entries = list_sync_folder_inner(state, sync_path.clone(), subfolder.clone(), label.clone()).await?;
-
-    // 2. Server-side rel-path index for the drive. `None` when no label was
-    // supplied (a root-only listing with no associated drive). When a label
-    // is provided but the drive isn't in the in-memory map,
-    // `synced_paths_for_label` already falls through to the cached snapshot
-    // from `sync.get_cached_synced_paths` — integration tests exercise that
-    // cache-only path by seeding the cache directly.
-    let synced_set = match &label {
-        Some(l) => synced_paths_for_label(&state.sync, l).await,
-        None => None,
+    // One map load for both the on-disk listing and the server-only overlay.
+    let (synced_set, excluded_patterns) = match &label {
+        Some(l) => synced_paths_and_excludes_for_label(&state.sync, l).await,
+        None => (None, Vec::new()),
     };
+    let disk_entries = list_sync_folder_inner_with(
+        state,
+        sync_path.clone(),
+        subfolder.clone(),
+        label.clone(),
+        Some((synced_set.clone(), excluded_patterns)),
+    )
+    .await?;
 
     // 3. Build the overlay. Normalise the subfolder prefix to always end in
     // `/` so `rel.starts_with(prefix)` doesn't match a sibling whose name
@@ -433,7 +465,10 @@ pub async fn list_sync_folder_grouped_inner(
     if let Some(l) = &label
         && let Ok(pool) = state.pool()
     {
-        let level_dir = subfolder.as_deref().filter(|s| !s.is_empty()).map_or_else(|| PathBuf::from(&sync_path), |s| PathBuf::from(&sync_path).join(s));
+        let level_dir = subfolder
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .map_or_else(|| PathBuf::from(&sync_path), |s| PathBuf::from(&sync_path).join(s));
         for entry in cache_only_folder_candidates(pool, &owner, l, &prefix, &level_dir).await {
             // `HashSet::insert` returns false when the name is already shown
             // (from disk or a file's parent) — the dedup-by-name the task
@@ -495,6 +530,48 @@ pub async fn list_sync_folder_grouped_inner(
 /// error: the listing still renders from disk + the rel-path index, the same
 /// "miss the overlay rather than block the listing" trade-off `pending_backfill`
 /// makes.
+fn exclusive_prefix_end(prefix: &str) -> Option<String> {
+    if prefix.is_empty() {
+        return None;
+    }
+    let mut bytes = prefix.as_bytes().to_vec();
+    for i in (0..bytes.len()).rev() {
+        if bytes[i] < 0xFF {
+            bytes[i] += 1;
+            bytes.truncate(i + 1);
+            return Some(String::from_utf8(bytes).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned()));
+        }
+    }
+    None
+}
+
+async fn folder_entries_for_level(
+    pool: &sqlx::sqlite::SqlitePool,
+    owner: &str,
+    label: &str,
+    prefix: &str,
+) -> std::result::Result<Vec<String>, sqlx::Error> {
+    if let Some(end) = exclusive_prefix_end(prefix) {
+        sqlx::query_scalar::<_, String>(
+            "SELECT relative_path FROM folder_entries_local
+              WHERE owner = ? AND label = ?
+                AND relative_path >= ? AND relative_path < ?",
+        )
+        .bind(owner)
+        .bind(label)
+        .bind(prefix)
+        .bind(end)
+        .fetch_all(pool)
+        .await
+    } else {
+        sqlx::query_scalar::<_, String>("SELECT relative_path FROM folder_entries_local WHERE owner = ? AND label = ?")
+            .bind(owner)
+            .bind(label)
+            .fetch_all(pool)
+            .await
+    }
+}
+
 async fn cache_only_folder_candidates(
     pool: &sqlx::sqlite::SqlitePool,
     owner: &str,
@@ -506,12 +583,7 @@ async fn cache_only_folder_candidates(
     // and must never block the listing — but log it: a persistent failure
     // (corrupt/locked DB) would otherwise be indistinguishable from "no empty
     // folders" with no diagnostic trail.
-    let rel_paths: Vec<String> = match sqlx::query_scalar::<_, String>("SELECT relative_path FROM folder_entries_local WHERE owner = ? AND label = ?")
-        .bind(owner)
-        .bind(label)
-        .fetch_all(pool)
-        .await
-    {
+    let rel_paths: Vec<String> = match folder_entries_for_level(pool, owner, label, prefix).await {
         Ok(rows) => rows,
         Err(e) => {
             warn!(owner = %owner, label = %label, error = %e, "folder_entries_local read failed; empty-folder overlay skipped this listing");
@@ -519,8 +591,8 @@ async fn cache_only_folder_candidates(
         }
     };
 
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut out: Vec<FileEntry> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut names: Vec<String> = Vec::new();
     for rel in rel_paths {
         if !rel.starts_with(prefix) {
             continue;
@@ -533,21 +605,36 @@ async fn cache_only_folder_candidates(
         if first_component.is_empty() || !seen.insert(first_component.to_string()) {
             continue;
         }
-        let on_disk = level_dir.join(first_component).is_dir();
-        out.push(FileEntry {
-            name: first_component.to_string(),
-            is_folder: true,
-            size: 0,
-            modified: None,
-            sync_status: if on_disk { "synced" } else { "pending" }.to_string(),
-            arion_hash: String::new(),
-            arion_cid: String::new(),
-            file_count: 0,
-            uploaded_at: 0,
-            updated_at: 0,
-        });
+        names.push(first_component.to_string());
     }
-    out
+
+    // Child count is the listing width, not the drive. One blocking
+    // pass so we do not hop to the kernel per overlay name on the
+    // runtime thread.
+    let level = level_dir.to_path_buf();
+    let names_for_stat = names.clone();
+    let on_disk: HashSet<String> = tokio::task::spawn_blocking(move || names_for_stat.into_iter().filter(|name| level.join(name).is_dir()).collect())
+        .await
+        .unwrap_or_default();
+
+    names
+        .into_iter()
+        .map(|name| {
+            let synced = on_disk.contains(&name);
+            FileEntry {
+                name,
+                is_folder: true,
+                size: 0,
+                modified: None,
+                sync_status: if synced { "synced" } else { "pending" }.to_string(),
+                arion_hash: String::new(),
+                arion_cid: String::new(),
+                file_count: 0,
+                uploaded_at: 0,
+                updated_at: 0,
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -587,13 +674,24 @@ mod tests {
             .cloned()
             .collect();
         let expected_file: BTreeSet<String> = [
-            "name", "is_folder", "size", "modified", "sync_status", "arion_hash", "arion_cid", "file_count", "uploaded_at",
+            "name",
+            "is_folder",
+            "size",
+            "modified",
+            "sync_status",
+            "arion_hash",
+            "arion_cid",
+            "file_count",
+            "uploaded_at",
             "updated_at",
         ]
         .into_iter()
         .map(String::from)
         .collect();
-        assert_eq!(expected_file, file_keys, "FileEntry must stay snake_case — FE use-nested-folder-listing reads is_folder/arion_hash/sync_status");
+        assert_eq!(
+            expected_file, file_keys,
+            "FileEntry must stay snake_case — FE use-nested-folder-listing reads is_folder/arion_hash/sync_status"
+        );
 
         let listing = GroupedListing {
             folders: vec![],
@@ -603,7 +701,10 @@ mod tests {
         let outer = serde_json::to_value(&listing).expect("serialize GroupedListing");
         let outer_keys: BTreeSet<String> = outer.as_object().expect("object").keys().cloned().collect();
         let expected_outer: BTreeSet<String> = ["folders", "files", "pendingBackfill"].into_iter().map(String::from).collect();
-        assert_eq!(expected_outer, outer_keys, "GroupedListing outer keys drifted — FE reads pendingBackfill (camelCase)");
+        assert_eq!(
+            expected_outer, outer_keys,
+            "GroupedListing outer keys drifted — FE reads pendingBackfill (camelCase)"
+        );
         // The inner FileEntry stays snake_case even nested inside the camelCase outer.
         assert_eq!(outer["files"][0]["is_folder"], false, "nested FileEntry must keep snake_case is_folder");
     }
@@ -690,6 +791,24 @@ mod tests {
         let mut names = vec![huge9.as_str(), "file2", "file1", "file10", huge8.as_str()];
         names.sort_by(|a, b| macos_name_cmp(a, b));
         assert_eq!(names, vec!["file1", "file2", "file10", huge8.as_str(), huge9.as_str()]);
+    }
+
+    #[test]
+    fn exclusive_prefix_end_bounds_children_and_not_siblings() {
+        assert!(exclusive_prefix_end("").is_none());
+        let end = exclusive_prefix_end("Photos/").expect("bound");
+        assert_eq!(end, "Photos0");
+        let cafe = exclusive_prefix_end("café/").expect("unicode bound");
+        assert_eq!(cafe, "café0");
+
+        // Same predicate the SQLite range uses (`>= prefix AND < end`).
+        let in_range = |path: &str, prefix: &str, bound: &str| path >= prefix && path < bound;
+        assert!(in_range("Photos/a", "Photos/", &end));
+        assert!(in_range("Photos/zzzz", "Photos/", &end));
+        assert!(!in_range("Photos0", "Photos/", &end));
+        assert!(!in_range("Photos2", "Photos/", &end));
+        assert!(!in_range("Photot", "Photos/", &end));
+        assert!(in_range("café/x", "café/", &cafe));
     }
 
     proptest! {

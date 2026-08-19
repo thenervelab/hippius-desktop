@@ -51,8 +51,9 @@ describe("nextChartAnimState (F-8 chart flash guard)", () => {
 // — a pure-helper test can't catch that, but this can.
 describe("chart components route animKey through nextChartAnimState (F-8 wiring)", () => {
   const appRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+  // Both home charts render through AvailableCreditsChart now — the storage
+  // card's bar chart was deleted when it stopped drawing per-day deltas.
   const charts = [
-    "components/page-sections/home/storage-usage-bars/StorageBarChart.tsx",
     "components/page-sections/home/available-credits/AvailableCreditsChart.tsx",
   ];
 

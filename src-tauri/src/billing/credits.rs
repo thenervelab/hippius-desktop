@@ -57,7 +57,10 @@ pub(crate) struct CreditBalanceResponse {
 /// decision runs against a freshly-fetched balance instead of the FE's
 /// `staleTime: Infinity` cache, which was never invalidated — a user who dropped
 /// below the threshold mid-session was never warned (audit R-08).
-pub(crate) async fn fetch_credit_balance_planck(state: &crate::app_state::AppState, account_id: &crate::app_state::SessionAccount) -> Result<String, AppError> {
+pub(crate) async fn fetch_credit_balance_planck(
+    state: &crate::app_state::AppState,
+    account_id: &crate::app_state::SessionAccount,
+) -> Result<String, AppError> {
     let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
     let resp: CreditBalanceResponse = client.get("/api/billing/credits/balance/", account_id).await?;
     let balance_str = resp.balance.as_deref().unwrap_or("0");

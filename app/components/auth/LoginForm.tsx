@@ -14,7 +14,6 @@ import { AccessKeyLoginForm } from "./AccessKeyLoginForm";
 import { RecoverAccountDialog } from "./RecoverAccountDialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getVersion } from "@tauri-apps/api/app";
-import { isTauri } from "@tauri-apps/api/core";
 import { useRouter, useSearchParams } from "next/navigation";
 import { LogoMark } from "@/components/ui/LogoMark";
 
@@ -64,10 +63,15 @@ export function LoginForm({
       const result = await invoke<{
         isCallback: boolean;
         callbackPath: string | null;
+        dedupKey: string | null;
       }>("parse_oauth_deep_link", { url: trimmed });
       if (result.isCallback && result.callbackPath) {
-        setDevOAuthStatus(`Routing to ${result.callbackPath}`);
-        localStorage.setItem("last_processed_deep_link", trimmed);
+        // Same storage rule as the live handler: persist the token-free
+        // dedupKey, never the raw URL (audit S-1).
+        setDevOAuthStatus("Routing to /auth/callback");
+        if (result.dedupKey) {
+          localStorage.setItem("last_processed_deep_link", result.dedupKey);
+        }
         localStorage.setItem(
           "last_processed_deep_link_time",
           Date.now().toString(),
@@ -116,127 +120,11 @@ export function LoginForm({
     }
   }, [showAccessKeyForm, onHideHeaderChange]);
 
-  // Clear deep link state when component unmounts (user navigates away)
-  useEffect(() => {
-    return () => {
-      // Cleanup when leaving login page
-      // setDlRaw(null);
-      // setDlLogs([]);
-      console.log("[LoginForm] Deep link state cleared on unmount");
-    };
-  }, []);
+  // The deep-link listener that used to live here moved to the globally
+  // mounted <DeepLinkListener /> (AppShell) — a callback arriving while
+  // this page was NOT mounted (the /auth/callback error screen, the
+  // splash, the home page) was silently dropped (audit M-3).
 
-  // ✅ Deep link handler - processes OAuth callbacks and redirects to /auth/callback
-  useEffect(() => {
-    if (typeof window === "undefined" || !isTauri()) return;
-
-    let unlisten: null | (() => void) = null;
-    let initialDeepLinkProcessed = false;
-
-    const handleDeepLink = async (url: string, isInitial = false) => {
-      try {
-        // Dedup: skip if this URL was already processed (persists across restarts)
-        const lastProcessedUrl = localStorage.getItem(
-          "last_processed_deep_link",
-        );
-        if (lastProcessedUrl === url) {
-          console.log("[LoginForm] Deep link already processed, skipping");
-          localStorage.setItem(
-            "last_processed_deep_link_time",
-            Date.now().toString(),
-          );
-          return;
-        }
-
-        // Skip initial deep links if user manually navigated to login
-        const manualNavigation = sessionStorage.getItem("manual_navigation");
-        if (manualNavigation === "true" && isInitial) {
-          console.log(
-            "[LoginForm] Skipping initial deep link due to manual navigation",
-          );
-          sessionStorage.removeItem("manual_navigation");
-          return;
-        }
-
-        // Skip if user already has a valid session
-        const storedSession = localStorage.getItem("hippius_oauth_session");
-        const storedExpiry = localStorage.getItem(
-          "hippius_oauth_session_expiry",
-        );
-        if (storedSession && storedExpiry) {
-          const expiryTime = isNaN(Number(storedExpiry))
-            ? new Date(storedExpiry).getTime()
-            : parseInt(storedExpiry, 10);
-          if (Date.now() < expiryTime) {
-            console.log(
-              "[LoginForm] User already has valid session, redirecting to home",
-            );
-            router.replace("/");
-            return;
-          }
-        }
-
-        // Rust handles URL parsing, malformed URL fixup, session param extraction,
-        // and callback path construction
-        const { invoke } = await import("@tauri-apps/api/core");
-        const result = await invoke<{
-          isCallback: boolean;
-          callbackPath: string | null;
-        }>("parse_oauth_deep_link", { url });
-
-        if (result.isCallback && result.callbackPath) {
-          console.log(
-            "[LoginForm] Redirecting to callback page:",
-            result.callbackPath,
-          );
-          localStorage.setItem("last_processed_deep_link", url);
-          localStorage.setItem(
-            "last_processed_deep_link_time",
-            Date.now().toString(),
-          );
-          router.push(result.callbackPath);
-        }
-      } catch (e) {
-        console.error("[LoginForm] Failed to process deep link:", e);
-      }
-    };
-
-    (async () => {
-      try {
-        const { getCurrent, onOpenUrl } =
-          await import("@tauri-apps/plugin-deep-link");
-
-        // addDlLog("Deep link listener starting...");
-
-        // 1) If app started via deep link - only process once
-        const current = await getCurrent();
-        // addDlLog(`getCurrent(): ${JSON.stringify(current)}`);
-        if (current?.length && !initialDeepLinkProcessed) {
-          initialDeepLinkProcessed = true;
-          handleDeepLink(current[current.length - 1], true);
-        }
-
-        // 2) If deep link arrives while app is open - these are NEW deep links
-        unlisten = await onOpenUrl((urls) => {
-          // addDlLog(`onOpenUrl(): ${JSON.stringify(urls)}`);
-          if (urls?.length) {
-            // Clear manual navigation flag since this is a new deep link
-            sessionStorage.removeItem("manual_navigation");
-            handleDeepLink(urls[urls.length - 1], false);
-          }
-        });
-
-        // addDlLog("Deep link listener registered ✅");
-      } catch (e: any) {
-        // addDlLog(`Deep link setup failed: ${e?.message || String(e)}`);
-        console.error("[LoginForm deep link] setup failed:", e);
-      }
-    })();
-
-    return () => {
-      if (unlisten) unlisten();
-    };
-  }, [router]);
 
   if (showAccessKeyForm) {
     return <AccessKeyLoginForm onBack={() => setShowAccessKeyForm(false)} />;

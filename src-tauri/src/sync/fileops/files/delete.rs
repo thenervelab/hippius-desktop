@@ -60,6 +60,10 @@ pub async fn delete_files(
 
     let mut deleted = 0u32;
     let mut failed = Vec::new();
+    // Drive labels whose on-disk DIRECTORY tree changed in this batch. Folder
+    // entities are a side-channel the file sync plan doesn't model, so they need
+    // their own reconcile trigger (see `folder_entity_sync_labels`).
+    let mut dirs_removed_for: Vec<Option<String>> = Vec::new();
 
     for file in &files {
         // Resolve the drive root. An explicitly-named label MUST exist — never
@@ -89,45 +93,32 @@ pub async fn delete_files(
         let parent = Path::new(&sync_path);
         let target = parent.join(&relative_name);
         match ensure_within(parent, &target) {
-            Ok(target) => {
-                let size_bytes = if target.is_dir() {
-                    0
-                } else {
-                    tokio::fs::metadata(&target).await.map_or(0, |m| m.len())
-                };
-
-                let remove_result = if target.is_dir() {
-                    tokio::fs::remove_dir_all(&target).await
-                } else if target.exists() {
-                    tokio::fs::remove_file(&target).await
-                } else {
-                    Ok(())
-                };
-
-                match remove_result {
-                    Ok(()) => {
-                        if let Some(lbl) = &file.label {
-                            state.sync.update_state(lbl, |st| {
-                                st.add_activity(SyncActivityItem {
-                                    file_name: std::sync::Arc::from(relative_name.as_str()),
-                                    action: SyncActivityAction::Deleted,
-                                    timestamp: chrono::Utc::now().timestamp(),
-                                    size_bytes,
-                                    label: std::sync::Arc::from(lbl.as_str()),
-                                });
-                            });
-                        }
-                        deleted += 1;
+            Ok(target) => match remove_entry(&target).await {
+                Ok((kind, size_bytes)) => {
+                    if kind == RemovedKind::Directory {
+                        dirs_removed_for.push(file.label.clone());
                     }
-                    Err(e) => {
-                        warn!(file = %file.name, error = %e, "Failed to delete file");
-                        failed.push(FileDeleteError {
-                            name: file.name.clone(),
-                            error: e.to_string(),
+                    if let Some(lbl) = &file.label {
+                        state.sync.update_state(lbl, |st| {
+                            st.add_activity(SyncActivityItem {
+                                file_name: std::sync::Arc::from(relative_name.as_str()),
+                                action: SyncActivityAction::Deleted,
+                                timestamp: chrono::Utc::now().timestamp(),
+                                size_bytes,
+                                label: std::sync::Arc::from(lbl.as_str()),
+                            });
                         });
                     }
+                    deleted += 1;
                 }
-            }
+                Err(e) => {
+                    warn!(file = %file.name, error = %e, "Failed to delete file");
+                    failed.push(FileDeleteError {
+                        name: file.name.clone(),
+                        error: e.to_string(),
+                    });
+                }
+            },
             Err(e) => {
                 failed.push(FileDeleteError {
                     name: file.name.clone(),
@@ -144,6 +135,154 @@ pub async fn delete_files(
         let _ = trigger_sync(&s).await;
     }
 
+    // Deleting a DIRECTORY also drops folder entities, which the file sync plan
+    // does not model: a folder with no file content to propagate ends the
+    // triggered cycle `NoChanges`, hcfs-client emits no `SyncCompleted`, and the
+    // routine per-cycle reconcile — the only thing that unregisters the folder
+    // server-side and evicts its `folder_entries_local` row — never runs. Until
+    // it does, the deleted folder keeps coming back in `list_sync_folder_grouped`
+    // via the cache overlay. Force the reconcile here instead of waiting for a
+    // cycle that may never complete. Fire-and-forget: a failed run is retried by
+    // the next eligible cycle, so it must not fail the user's delete.
+    for label in folder_entity_sync_labels(&dirs_removed_for) {
+        crate::sync::folder_entries_materialize::spawn_folder_entity_sync(
+            app.clone(),
+            account_id.clone(),
+            label,
+            crate::sync::folder_entries_materialize::FolderEntitySyncTrigger::Forced,
+        );
+    }
+
     info!(deleted, failed = failed.len(), "Batch delete completed");
     Ok(DeleteFilesResult { deleted, failed })
+}
+
+/// What a single delete actually removed.
+///
+/// The caller needs the distinction because a removed DIRECTORY additionally
+/// invalidates the drive's folder-entity set, while a removed file does not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RemovedKind {
+    Directory,
+    File,
+    /// Already gone — treated as success (delete is idempotent).
+    Missing,
+}
+
+/// Remove one resolved target, reporting what it was and, for a file, how many
+/// bytes it held (for the sync activity entry).
+///
+/// Both probes — "is this a directory?" and the file's size — happen BEFORE the
+/// removal, because afterwards the path no longer exists: `is_dir()` would
+/// answer `false` for the directory just deleted, silently dropping the
+/// folder-entity reconcile the caller owes for it, and `metadata()` would fail.
+/// Keeping the order in one function is what makes that invariant testable.
+async fn remove_entry(target: &Path) -> std::io::Result<(RemovedKind, u64)> {
+    if target.is_dir() {
+        tokio::fs::remove_dir_all(target).await?;
+        return Ok((RemovedKind::Directory, 0));
+    }
+    if target.exists() {
+        let size_bytes = tokio::fs::metadata(target).await.map_or(0, |m| m.len());
+        tokio::fs::remove_file(target).await?;
+        return Ok((RemovedKind::File, size_bytes));
+    }
+    Ok((RemovedKind::Missing, 0))
+}
+
+/// Resolve the drive labels needing a forced folder-entity reconcile from the
+/// per-request labels of the directories this batch removed.
+///
+/// A label-less request targets the `default` drive — the same fallback the
+/// delete loop's root resolution uses, so the reconcile is aimed at the drive
+/// the directory was actually removed from. Returns a deduped, ordered set so a
+/// batch deleting ten folders from one drive spawns ONE reconcile, not ten.
+fn folder_entity_sync_labels(dirs_removed_for: &[Option<String>]) -> std::collections::BTreeSet<String> {
+    dirs_removed_for
+        .iter()
+        .map(|label| label.clone().unwrap_or_else(|| DEFAULT_DRIVE_LABEL.to_string()))
+        .collect()
+}
+
+/// Label of the implicit drive a label-less request resolves to.
+const DEFAULT_DRIVE_LABEL: &str = "default";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The regression this guards: classifying the target AFTER `remove_dir_all`
+    /// reports `File`/`Missing` for a directory, so `delete_files` never queues
+    /// the folder-entity reconcile and the deleted folder lives on server-side.
+    #[tokio::test]
+    async fn removing_a_directory_reports_directory() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let target = dir.path().join("Nested");
+        std::fs::create_dir(&target).expect("create dir");
+        std::fs::write(target.join("child.txt"), b"data").expect("write child");
+
+        let (kind, size) = remove_entry(&target).await.expect("remove");
+        assert_eq!(kind, RemovedKind::Directory);
+        assert_eq!(size, 0, "directory sizes are not reported as transferred bytes");
+        assert!(!target.exists(), "a non-empty directory is removed recursively");
+    }
+
+    #[tokio::test]
+    async fn removing_a_file_reports_its_size() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let target = dir.path().join("note.txt");
+        std::fs::write(&target, b"hello").expect("write");
+
+        let (kind, size) = remove_entry(&target).await.expect("remove");
+        assert_eq!(kind, RemovedKind::File);
+        assert_eq!(size, 5, "the size is read before the file is unlinked");
+        assert!(!target.exists());
+    }
+
+    /// Delete is idempotent: an entry the sync engine already removed must not
+    /// fail the batch, and must not be mistaken for a directory.
+    #[tokio::test]
+    async fn removing_an_absent_entry_succeeds_as_missing() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let (kind, size) = remove_entry(&dir.path().join("gone.txt")).await.expect("remove");
+        assert_eq!(kind, RemovedKind::Missing);
+        assert_eq!(size, 0);
+    }
+
+    #[test]
+    fn no_directory_deletes_means_no_reconcile() {
+        assert!(folder_entity_sync_labels(&[]).is_empty());
+    }
+
+    #[test]
+    fn labels_are_deduped_so_one_batch_spawns_one_reconcile_per_drive() {
+        let labels = folder_entity_sync_labels(&[Some("docs".to_string()), Some("docs".to_string()), Some("photos".to_string())]);
+        assert_eq!(labels, ["docs".to_string(), "photos".to_string()].into_iter().collect());
+    }
+
+    #[test]
+    fn label_less_requests_reconcile_the_default_drive() {
+        // Mirrors the loop's root resolution: no label ⇒ the `default` drive.
+        // Aiming the reconcile anywhere else would leave the stale folder entity
+        // on the drive the directory actually came from.
+        let labels = folder_entity_sync_labels(&[None, Some("docs".to_string()), None]);
+        assert_eq!(labels, ["default".to_string(), "docs".to_string()].into_iter().collect());
+    }
+
+    /// Static wiring guard, mirroring the completion-funnel pin in
+    /// `folder_entries_reconcile`: the delete command must keep spawning the
+    /// forced folder-entity sync. Without it, deleting an empty folder is never
+    /// propagated to the server and the row survives in the listing overlay.
+    #[test]
+    fn delete_files_spawns_a_forced_folder_entity_sync() {
+        let src = include_str!("delete.rs");
+        assert!(
+            src.contains("spawn_folder_entity_sync"),
+            "delete_files must trigger the folder-entity reconcile after removing a directory"
+        );
+        assert!(
+            src.contains("FolderEntitySyncTrigger::Forced"),
+            "the delete-triggered reconcile must bypass the interval throttle; a routine trigger can be skipped for 30s and the deleting cycle may never complete"
+        );
+    }
 }

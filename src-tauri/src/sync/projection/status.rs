@@ -280,7 +280,10 @@ mod tests {
         .into_iter()
         .map(String::from)
         .collect();
-        assert_eq!(keys, expected, "SyncEngineHealth wire keys drifted — FE SyncEngineHealthState reads these");
+        assert_eq!(
+            keys, expected,
+            "SyncEngineHealth wire keys drifted — FE SyncEngineHealthState reads these"
+        );
     }
 
     /// The `ConnectivityStatus` variant strings are matched literally by the FE
@@ -300,7 +303,11 @@ mod tests {
         ];
         for (status, wire) in cases {
             let json = serde_json::to_value(status).expect("serialize ConnectivityStatus");
-            assert_eq!(json, serde_json::Value::String(wire.to_string()), "ConnectivityStatus wire string drifted (expected {wire})");
+            assert_eq!(
+                json,
+                serde_json::Value::String(wire.to_string()),
+                "ConnectivityStatus wire string drifted (expected {wire})"
+            );
         }
     }
 

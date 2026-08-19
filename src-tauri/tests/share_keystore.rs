@@ -17,7 +17,7 @@
 //! `tests/share_roundtrip.rs` with `#[ignore]` until the harness
 //! exists.
 
-use hcfs_client::client::share::ShareKeystore;
+use hcfs_client::client::share::{ShareKeystore, ShareSecret};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use std::str::FromStr;
 use tauri_project_lib::shares::SqliteShareKeystore;
@@ -46,10 +46,10 @@ async fn share_keystore_round_trip_via_public_api() {
     let ks = SqliteShareKeystore::new(pool);
 
     let token = "tok-integration";
-    let key = [9u8; 32];
+    let secret = ShareSecret::Public([9u8; 32]);
 
-    ks.put(token, &key).expect("put");
-    assert_eq!(ks.get(token).expect("get"), Some(key));
+    ks.put(token, &secret).expect("put");
+    assert_eq!(ks.get(token).expect("get"), Some(secret));
 
     ks.forget(token).expect("forget");
     assert_eq!(ks.get(token).expect("after-forget"), None);

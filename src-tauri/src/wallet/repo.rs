@@ -94,18 +94,16 @@ impl From<&LocalWallet> for PublicLocalWallet {
 
 fn now_ms() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or_else(
-            |e| {
-                // A pre-epoch system clock is near-impossible, but log rather than
-                // silently stamp 0 — a 0 created_at would distort the oldest-first
-                // ordering below and the auto-promote-on-delete target.
-                tracing::warn!(error = %e, "system clock is before the Unix epoch; using 0 for wallet timestamp");
-                0
-            },
-            |d| d.as_millis() as i64,
-        )
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or_else(
+        |e| {
+            // A pre-epoch system clock is near-impossible, but log rather than
+            // silently stamp 0 — a 0 created_at would distort the oldest-first
+            // ordering below and the auto-promote-on-delete target.
+            tracing::warn!(error = %e, "system clock is before the Unix epoch; using 0 for wallet timestamp");
+            0
+        },
+        |d| d.as_millis() as i64,
+    )
 }
 
 /// Insert a wallet row under `owner`. Returns the newly-created row.

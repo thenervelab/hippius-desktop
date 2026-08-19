@@ -98,8 +98,7 @@ pub async fn get_rpc_client(app_state: &crate::app_state::AppState) -> crate::er
 /// Decoded on the cold connect path (not hot), so the hex string stays the
 /// single source of truth — no risk of a hand-transcribed byte array drifting.
 fn hippius_mainnet_genesis() -> subxt::utils::H256 {
-    let bytes = hex::decode("28a6b54823f786c5dd8520ef7bdb0ee2639173815bfbb7719bcf58ef9eb5e1f9")
-        .expect("pinned Hippius Mainnet genesis hex is valid");
+    let bytes = hex::decode("28a6b54823f786c5dd8520ef7bdb0ee2639173815bfbb7719bcf58ef9eb5e1f9").expect("pinned Hippius Mainnet genesis hex is valid");
     subxt::utils::H256::from_slice(&bytes)
 }
 
@@ -446,7 +445,10 @@ mod tests {
     #[test]
     fn stored_endpoint_is_validated_on_connect() {
         // Valid stored endpoints are used as-is.
-        assert_eq!(validated_endpoint_or_default(Some("wss://rpc.hippius.network".into())), "wss://rpc.hippius.network");
+        assert_eq!(
+            validated_endpoint_or_default(Some("wss://rpc.hippius.network".into())),
+            "wss://rpc.hippius.network"
+        );
         assert_eq!(validated_endpoint_or_default(Some("ws://127.0.0.1:9944".into())), "ws://127.0.0.1:9944");
         // A cleartext remote row falls back to the default instead of connecting.
         assert_eq!(validated_endpoint_or_default(Some("ws://rpc.hippius.network:443".into())), WSS_ENDPOINT);

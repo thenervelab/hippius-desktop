@@ -82,6 +82,13 @@ fn kind_columns(kind: &FileFailureKindPayload) -> KindColumns {
             balance_cents: None,
             required_cents: None,
         },
+        FileFailureKindPayload::ChangedWhileUploading => KindColumns {
+            kind: "changedWhileUploading",
+            message: None,
+            http_status: None,
+            balance_cents: None,
+            required_cents: None,
+        },
         FileFailureKindPayload::Other { message } => KindColumns {
             kind: "other",
             message: Some(message.clone()),

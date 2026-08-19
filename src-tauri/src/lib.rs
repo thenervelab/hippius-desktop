@@ -13,13 +13,15 @@ pub mod blockchain;
 pub mod console_access;
 pub mod crypto;
 pub mod error;
-/// macOS Finder Sync extension bridge. Gated `#[cfg(unix)]` so the Linux CI
-/// `rust` job still compiles + tests the pure wire codec; the socket layer
-/// inside is macOS-only.
-#[cfg(unix)]
+/// File-manager shell-extension bridge. Compiled on macOS, Linux, and Windows
+/// so every CI `rust` job builds + tests the shared core (wire codec, transport
+/// server, endpoint resolution); the active click→share plumbing is enabled by
+/// each platform's native shim.
+#[cfg(any(unix, windows))]
 pub mod finder_bridge;
 pub mod infra;
 pub mod notifications;
+pub mod power;
 pub mod recovery;
 pub mod recovery_binding;
 pub mod shares;

@@ -12,7 +12,9 @@ import PageLoader from "@/app/components/PageLoader";
 import { NavigationLoaderProvider } from "@/app/lib/hooks/useNavigationLoader";
 import UpdateChecker from "@/components/updater/UpdateChecker";
 import TrayNavigationListener from "@/app/components/tray/TrayNavigationListener";
+import DeepLinkListener from "@/app/components/auth/DeepLinkListener";
 import TranslocationGuard from "@/app/components/TranslocationGuard";
+import FinderExtensionGuard from "@/app/components/FinderExtensionGuard";
 import ZoomController from "@/app/components/ZoomController";
 import SplashWrapper from "./splash-screen-v2";
 
@@ -99,7 +101,11 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               <NextTopLoader color="#3167DD" showSpinner={false} />
               <NavigationLoaderProvider>
                 <TrayNavigationListener />
+                {/* Global so an OAuth callback is handled on ANY route,
+                 *  not only while the login page is mounted (audit M-3). */}
+                <DeepLinkListener />
                 <TranslocationGuard />
+                <FinderExtensionGuard />
                 <ZoomController />
                 <SplashWrapper preventClose={false}>
                   <Suspense fallback={<PageLoader ringFill="once" />}>

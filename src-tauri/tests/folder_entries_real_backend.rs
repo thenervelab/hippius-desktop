@@ -62,11 +62,9 @@ use hcfs_client::client::{HcfsClient, HcfsClientConfig};
 use tauri_project_lib::app_state::AppState;
 use tauri_project_lib::auth::account_key::account_key;
 use tauri_project_lib::auth::tokens::clear_api_token;
-use tauri_project_lib::sync::folder_entries_backfill::{
-    run_folder_entries_backfill_for_drive, FolderEntriesBackfillOutcome,
-};
+use tauri_project_lib::sync::folder_entries_backfill::{FolderEntriesBackfillOutcome, run_folder_entries_backfill_for_drive};
 use tauri_project_lib::sync::folder_entries_materialize::{
-    materialize_folder_entries_for_drive, run_folder_entity_sync_for_drive, FolderEntitySyncOutcome, MaterializeOutcome,
+    FolderEntitySyncOutcome, MaterializeOutcome, materialize_folder_entries_for_drive, run_folder_entity_sync_for_drive,
 };
 use tauri_project_lib::utils::schema::ensure_table_schema;
 
@@ -184,22 +182,17 @@ fn live_client(server_url: &str, bearer: &str, ss58: &str) -> HcfsClient {
 /// Read the drive's `folder_entries_local` cache rows, sorted, for asserting
 /// the backfill mirrored the registered directories locally.
 async fn cached_dirs(pool: &SqlitePool, ss58: &str) -> Vec<String> {
-    sqlx::query_scalar::<_, String>(
-        "SELECT relative_path FROM folder_entries_local WHERE owner = ? AND label = ? ORDER BY relative_path",
-    )
-    .bind(account_key(ss58))
-    .bind(LABEL)
-    .fetch_all(pool)
-    .await
-    .expect("read folder_entries_local")
+    sqlx::query_scalar::<_, String>("SELECT relative_path FROM folder_entries_local WHERE owner = ? AND label = ? ORDER BY relative_path")
+        .bind(account_key(ss58))
+        .bind(LABEL)
+        .fetch_all(pool)
+        .await
+        .expect("read folder_entries_local")
 }
 
 /// Find a folder entry by name in a browse result, panicking with the full
 /// folder list when absent so a failure shows what the server actually returned.
-fn folder_named<'a>(
-    folders: &'a [hcfs_shared::network::BrowseFolderEntry],
-    name: &str,
-) -> &'a hcfs_shared::network::BrowseFolderEntry {
+fn folder_named<'a>(folders: &'a [hcfs_shared::network::BrowseFolderEntry], name: &str) -> &'a hcfs_shared::network::BrowseFolderEntry {
     folders
         .iter()
         .find(|f| f.name == name)
@@ -315,7 +308,11 @@ async fn empty_folder_round_trips_to_real_server() {
     // keychain (the backfill's get_api_token may have upgraded the plaintext
     // column into it), so the test leaves no residue on the dev's machine.
     let _ = client
-        .unregister_folder_entries(&ss58, &hcfs_client::drive::keys::folder_hash(LABEL), &["a/b".to_string(), "a".to_string()])
+        .unregister_folder_entries(
+            &ss58,
+            &hcfs_client::drive::keys::folder_hash(LABEL),
+            &["a/b".to_string(), "a".to_string()],
+        )
         .await;
     let _ = clear_api_token(&pool, &ss58).await;
 }
@@ -376,7 +373,11 @@ async fn empty_folder_materializes_across_two_devices() {
     let a_backfill = run_folder_entries_backfill_for_drive(&state_a, &ss58, LABEL)
         .await
         .expect("device A backfill must not hard-error");
-    assert_eq!(a_backfill, FolderEntriesBackfillOutcome::Completed { total_dirs: 1 }, "A registers its one empty dir");
+    assert_eq!(
+        a_backfill,
+        FolderEntriesBackfillOutcome::Completed { total_dirs: 1 },
+        "A registers its one empty dir"
+    );
 
     // --- Device B: empty tree, same account; backfill sets the materialize gate ---
     let tmp_b = tempfile::tempdir().expect("tempdir B");
@@ -389,14 +390,22 @@ async fn empty_folder_materializes_across_two_devices() {
     let b_backfill = run_folder_entries_backfill_for_drive(&state_b, &ss58, LABEL)
         .await
         .expect("device B backfill must not hard-error");
-    assert_eq!(b_backfill, FolderEntriesBackfillOutcome::Completed { total_dirs: 0 }, "B's empty tree completes and opens the gate");
+    assert_eq!(
+        b_backfill,
+        FolderEntriesBackfillOutcome::Completed { total_dirs: 0 },
+        "B's empty tree completes and opens the gate"
+    );
     assert!(!root_b_path.join("Shared").exists(), "precondition: B does not have Shared yet");
 
     // --- Act 1: B materializes A's empty folder onto B's disk (real fetch) ---
     let created = materialize_folder_entries_for_drive(&state_b, &ss58, LABEL)
         .await
         .expect("device B materialize must not hard-error");
-    assert_eq!(created, MaterializeOutcome::Materialized { created: 1, removed: 0 }, "B pulls down exactly Shared");
+    assert_eq!(
+        created,
+        MaterializeOutcome::Materialized { created: 1, removed: 0 },
+        "B pulls down exactly Shared"
+    );
     assert!(root_b_path.join("Shared").is_dir(), "the empty folder now EXISTS on device B's disk");
 
     // Production interleaves a reconcile here, which registers B's just-materialized
@@ -413,8 +422,15 @@ async fn empty_folder_materializes_across_two_devices() {
     let removed = materialize_folder_entries_for_drive(&state_b, &ss58, LABEL)
         .await
         .expect("device B second materialize must not hard-error");
-    assert_eq!(removed, MaterializeOutcome::Materialized { created: 0, removed: 1 }, "B removes its now-orphaned empty dir");
-    assert!(!root_b_path.join("Shared").exists(), "the orphaned EMPTY dir is gone from device B's disk");
+    assert_eq!(
+        removed,
+        MaterializeOutcome::Materialized { created: 0, removed: 1 },
+        "B removes its now-orphaned empty dir"
+    );
+    assert!(
+        !root_b_path.join("Shared").exists(),
+        "the orphaned EMPTY dir is gone from device B's disk"
+    );
 
     // --- Guard: a NON-empty dir survives a server-side deletion ---
     // Recreate Shared on B with a file inside, and re-seed its (server-sourced)
@@ -426,7 +442,11 @@ async fn empty_folder_materializes_across_two_devices() {
     let guarded = materialize_folder_entries_for_drive(&state_b, &ss58, LABEL)
         .await
         .expect("device B guard materialize must not hard-error");
-    assert_eq!(guarded, MaterializeOutcome::Materialized { created: 0, removed: 0 }, "the non-empty orphan is left alone");
+    assert_eq!(
+        guarded,
+        MaterializeOutcome::Materialized { created: 0, removed: 0 },
+        "the non-empty orphan is left alone"
+    );
     assert!(root_b_path.join("Shared").is_dir(), "the non-empty dir SURVIVES the server-side deletion");
     assert!(root_b_path.join("Shared/keep.txt").exists(), "the user's file is untouched");
 
@@ -470,12 +490,19 @@ async fn locally_deleted_empty_folder_not_resurrected() {
     let backfill = run_folder_entries_backfill_for_drive(&state, &ss58, LABEL)
         .await
         .expect("backfill must not hard-error");
-    assert_eq!(backfill, FolderEntriesBackfillOutcome::Completed { total_dirs: 1 }, "backfill registers + caches Doomed");
+    assert_eq!(
+        backfill,
+        FolderEntriesBackfillOutcome::Completed { total_dirs: 1 },
+        "backfill registers + caches Doomed"
+    );
 
     // Confirm the server lists Doomed (the `server=yes` precondition).
     let client = live_client(&server_url, &bearer, &ss58);
     let before = client.list_folder_entries(&ss58, &fhash).await.expect("list before delete");
-    assert!(before.contains(&"Doomed".to_string()), "server must list Doomed before the local delete, got {before:?}");
+    assert!(
+        before.contains(&"Doomed".to_string()),
+        "server must list Doomed before the local delete, got {before:?}"
+    );
 
     // The user deletes the empty folder LOCALLY: now disk=no, cache=yes, server=yes
     // — the precise race state. On disk it is gone before any sync runs.
@@ -485,20 +512,29 @@ async fn locally_deleted_empty_folder_not_resurrected() {
     let outcome = run_folder_entity_sync_for_drive(&state, &ss58, LABEL)
         .await
         .expect("combined sync must not hard-error");
-    assert!(matches!(outcome, FolderEntitySyncOutcome::Ran { .. }), "both halves must run, got {outcome:?}");
+    assert!(
+        matches!(outcome, FolderEntitySyncOutcome::Ran { .. }),
+        "both halves must run, got {outcome:?}"
+    );
 
     // The deletion is NOT undone on disk...
     assert!(!root.join("Doomed").exists(), "locally-deleted folder must NOT be resurrected on disk");
     // ...and it is gone from the server (reconcile pushed the delete; materialize
     // saw the post-reconcile set and had nothing to create).
     let after = client.list_folder_entries(&ss58, &fhash).await.expect("list after sync");
-    assert!(!after.contains(&"Doomed".to_string()), "server must no longer list the locally-deleted folder, got {after:?}");
+    assert!(
+        !after.contains(&"Doomed".to_string()),
+        "server must no longer list the locally-deleted folder, got {after:?}"
+    );
 
     // A second combined cycle is a stable no-op (nothing resurfaces).
     let again = run_folder_entity_sync_for_drive(&state, &ss58, LABEL)
         .await
         .expect("second combined sync must not hard-error");
-    assert!(matches!(again, FolderEntitySyncOutcome::Ran { .. }), "second cycle still ran, got {again:?}");
+    assert!(
+        matches!(again, FolderEntitySyncOutcome::Ran { .. }),
+        "second cycle still ran, got {again:?}"
+    );
     assert!(!root.join("Doomed").exists(), "Doomed stays deleted across a second cycle");
 
     let _ = clear_api_token(&pool, &ss58).await;

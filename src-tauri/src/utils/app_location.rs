@@ -71,9 +71,7 @@ mod tests {
 
     #[test]
     fn translocated_path_detected() {
-        let exe = Path::new(
-            "/private/var/folders/ab/cd1234ef/T/AppTranslocation/0F2A-UUID/d/Hippius.app/Contents/MacOS/Hippius",
-        );
+        let exe = Path::new("/private/var/folders/ab/cd1234ef/T/AppTranslocation/0F2A-UUID/d/Hippius.app/Contents/MacOS/Hippius");
         assert!(path_is_translocated(exe));
     }
 

@@ -394,7 +394,6 @@ const NameCell: FC<NameCellProps> = ({
                 <SharedLinkBadge
                   label={label}
                   actualName={actualName}
-                  isFolder={isFolder}
                   onManageShare={onManageShare}
                   className="ml-1.5"
                 />

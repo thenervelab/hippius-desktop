@@ -62,3 +62,18 @@ fn lifecycle_initialize_sync_inner_spawns_folder_entries_backfill() {
         "initialize_sync_inner must call spawn_folder_entries_backfill so every init path triggers the one-shot folder-entity backfill",
     );
 }
+
+#[test]
+fn remove_drive_clears_folder_entries_local() {
+    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/drive/lifecycle.rs")).expect("read lifecycle.rs");
+    let idx = src
+        .find("clear_folder_entries_for_drive")
+        .expect("remove_drive must delete folder_entries_local for the drive");
+    let start = idx.saturating_sub(160);
+    let end = (idx + 80).min(src.len());
+    let window = &src[start..end];
+    assert!(
+        window.contains("account_key"),
+        "clear_folder_entries_for_drive must bind account_key(acct), not raw SS58",
+    );
+}
