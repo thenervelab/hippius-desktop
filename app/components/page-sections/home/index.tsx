@@ -6,8 +6,7 @@ import {
 } from "@/app/components/sidebar/sideBarAtoms";
 import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
 import PageHeader from "./PageHeader";
-import AvailableCreditsCard from "./available-credits";
-import StorageUsageCard from "./storage-usage";
+import StorageOverviewCard from "./storage-overview";
 import Drive from "@/app/components/page-sections/drive/DriveContainer";
 
 const Home: React.FC = () => {
@@ -29,9 +28,8 @@ const Home: React.FC = () => {
         <div className="px-3">
           <PageHeader />
           <div className="mt-3">
-            <div className="mb-3 grid gap-4 grid-cols-1 @xl:grid-cols-2">
-              <AvailableCreditsCard />
-              <StorageUsageCard />
+            <div className="mb-3">
+              <StorageOverviewCard />
             </div>
 
             {/* `pb-10` mirrors the drive page's bottom gap: the recent-files
