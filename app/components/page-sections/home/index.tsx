@@ -7,6 +7,7 @@ import {
 import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
 import PageHeader from "./PageHeader";
 import StorageOverviewCard from "./storage-overview";
+import PlanOverviewCard from "./plan-overview";
 import Drive from "@/app/components/page-sections/drive/DriveContainer";
 
 const Home: React.FC = () => {
@@ -28,8 +29,12 @@ const Home: React.FC = () => {
         <div className="px-3">
           <PageHeader />
           <div className="mt-3">
-            <div className="mb-3">
+            {/* Two small cards (mobile-overview style): usage bar + the
+                plan/credits summary. Both render from the same
+                get_storage_overview fetch, so they can't disagree. */}
+            <div className="mb-3 grid gap-4 grid-cols-1 @xl:grid-cols-2 items-stretch">
               <StorageOverviewCard />
+              <PlanOverviewCard />
             </div>
 
             {/* `pb-10` mirrors the drive page's bottom gap: the recent-files

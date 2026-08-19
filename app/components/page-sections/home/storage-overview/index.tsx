@@ -11,32 +11,14 @@ import { formatBytes } from "@/app/lib/utils/formatBytes";
 import { nextSkeletonState } from "@/lib/utils/skeletonGate";
 import { cn } from "@/app/lib/utils";
 
+import GripIcon from "../GripIcon";
 import {
   formatPercentLabel,
+  getCapacitySourceLabel,
   getStorageOverviewView,
   getUsageTone,
   type UsageTone,
 } from "./storageOverviewState";
-
-const GripIcon: React.FC<{ className?: string }> = ({ className }) => (
-  <svg
-    viewBox="0 0 18 18"
-    fill="none"
-    xmlns="http://www.w3.org/2000/svg"
-    className={className}
-    aria-hidden="true"
-  >
-    <circle cx="4.5" cy="4.5" r="1" fill="currentColor" />
-    <circle cx="9" cy="4.5" r="1" fill="currentColor" />
-    <circle cx="13.5" cy="4.5" r="1" fill="currentColor" />
-    <circle cx="4.5" cy="9" r="1" fill="currentColor" />
-    <circle cx="9" cy="9" r="1" fill="currentColor" />
-    <circle cx="13.5" cy="9" r="1" fill="currentColor" />
-    <circle cx="4.5" cy="13.5" r="1" fill="currentColor" />
-    <circle cx="9" cy="13.5" r="1" fill="currentColor" />
-    <circle cx="13.5" cy="13.5" r="1" fill="currentColor" />
-  </svg>
-);
 
 /** Fill + label classes per tone; both themes on every branch. */
 const TONE_STYLES: Record<UsageTone, { bar: string; label: string }> = {
@@ -55,10 +37,11 @@ const TONE_STYLES: Record<UsageTone, { bar: string; label: string }> = {
 };
 
 /**
- * The simple storage card: bytes used against the subscription plan's
- * allowance, as a single figure + progress bar. Replaces the former
- * Storage Usage (bar chart) and Available Credits (line chart) cards —
- * capacity is plan-only by product decision, no credits-derived fallback.
+ * The simple storage card: bytes used against the effective capacity —
+ * the subscription plan's allowance, or (credits-only accounts) used +
+ * credits-buyable storage. The plan-vs-credits decision comes from Rust
+ * (`get_storage_overview.source`); the footer names the source so a
+ * credits-derived total is never mistaken for a plan allowance.
  */
 const StorageOverviewCard: React.FC<{ className?: string }> = ({
   className,
@@ -95,7 +78,7 @@ const StorageOverviewCard: React.FC<{ className?: string }> = ({
   const view = getStorageOverviewView({
     showSkeleton: gate.showSkeleton,
     isError,
-    hasPlan: overview?.hasPlan ?? false,
+    source: overview?.source,
   });
 
   const percent = overview?.percent ?? 0;
@@ -135,16 +118,16 @@ const StorageOverviewCard: React.FC<{ className?: string }> = ({
           "dark:bg-black-600 dark:border-black-300",
         )}
       >
-        <div className="flex w-full flex-col gap-3 px-4 py-4">
+        <div className="flex w-full flex-1 flex-col justify-center gap-3 px-4 py-4">
           {view === "skeleton" && (
             <>
               <div className="flex items-center justify-between">
                 <div
-                  className="h-[30px] w-[200px] rounded bg-grey-light-700 dark:bg-grey-dark-200 animate-pulse"
+                  className="h-[30px] w-[180px] rounded bg-grey-light-700 dark:bg-grey-dark-200 animate-pulse"
                   aria-label="Loading storage"
                 />
                 <div
-                  className="h-[30px] w-[60px] rounded bg-grey-light-700 dark:bg-grey-dark-200 animate-pulse"
+                  className="h-[30px] w-[56px] rounded bg-grey-light-700 dark:bg-grey-dark-200 animate-pulse"
                   aria-hidden="true"
                 />
               </div>
@@ -172,10 +155,10 @@ const StorageOverviewCard: React.FC<{ className?: string }> = ({
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex flex-col items-start gap-1">
                 <p className="font-mono font-medium text-[16px] leading-[24px] text-grey-10 dark:text-white">
-                  No active plan
+                  No storage available
                 </p>
                 <p className="text-[13px] font-medium leading-[18px] text-grey-50 dark:text-grey-dark-500">
-                  Subscribe to a plan to get Drive storage.
+                  Subscribe to a plan or top up credits to get Drive storage.
                 </p>
               </div>
               <Button
@@ -185,7 +168,7 @@ const StorageOverviewCard: React.FC<{ className?: string }> = ({
                 size="auto"
                 className="px-4 py-2 text-[14px] font-medium leading-[1.109] tracking-[-0.28px]"
               >
-                View Plans
+                Get Storage
               </Button>
             </div>
           )}
@@ -230,9 +213,7 @@ const StorageOverviewCard: React.FC<{ className?: string }> = ({
 
               <div className="flex items-center justify-between gap-3">
                 <p className="text-[12px] font-medium leading-[18px] text-grey-50 dark:text-grey-dark-500 truncate">
-                  {overview.planName
-                    ? `${overview.planName} plan`
-                    : "Active plan"}
+                  {getCapacitySourceLabel(overview.source, overview.plan?.name)}
                 </p>
                 <p className="text-[12px] font-medium leading-[18px] text-grey-50 dark:text-grey-dark-500 whitespace-nowrap">
                   {formatBytes(

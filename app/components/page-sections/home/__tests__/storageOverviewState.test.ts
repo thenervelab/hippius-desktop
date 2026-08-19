@@ -4,6 +4,9 @@ import {
   USAGE_CRITICAL_PERCENT,
   USAGE_WARN_PERCENT,
   formatPercentLabel,
+  formatPlanPrice,
+  getCapacitySourceLabel,
+  getPlanView,
   getStorageOverviewView,
   getUsageTone,
 } from "../storage-overview/storageOverviewState";
@@ -25,26 +28,99 @@ describe("getUsageTone", () => {
 describe("getStorageOverviewView", () => {
   it("skeleton wins over everything until first settle", () => {
     expect(
-      getStorageOverviewView({ showSkeleton: true, isError: true, hasPlan: true }),
+      getStorageOverviewView({
+        showSkeleton: true,
+        isError: true,
+        source: "subscription",
+      }),
     ).toBe("skeleton");
   });
 
-  it("error wins over plan state — a failed fetch must not render as data", () => {
+  it("error wins over data — a failed fetch must not render as data", () => {
     expect(
-      getStorageOverviewView({ showSkeleton: false, isError: true, hasPlan: true }),
+      getStorageOverviewView({
+        showSkeleton: false,
+        isError: true,
+        source: "subscription",
+      }),
     ).toBe("error");
     expect(
-      getStorageOverviewView({ showSkeleton: false, isError: true, hasPlan: false }),
+      getStorageOverviewView({ showSkeleton: false, isError: true, source: "none" }),
     ).toBe("error");
   });
 
-  it("no plan renders the subscribe state, plan renders usage", () => {
+  it("both plan- and credits-backed capacity render the usage bar", () => {
     expect(
-      getStorageOverviewView({ showSkeleton: false, isError: false, hasPlan: false }),
+      getStorageOverviewView({
+        showSkeleton: false,
+        isError: false,
+        source: "subscription",
+      }),
+    ).toBe("usage");
+    expect(
+      getStorageOverviewView({
+        showSkeleton: false,
+        isError: false,
+        source: "credits",
+      }),
+    ).toBe("usage");
+  });
+
+  it("no source (or missing data) renders the no-plan state", () => {
+    expect(
+      getStorageOverviewView({ showSkeleton: false, isError: false, source: "none" }),
     ).toBe("no-plan");
     expect(
-      getStorageOverviewView({ showSkeleton: false, isError: false, hasPlan: true }),
-    ).toBe("usage");
+      getStorageOverviewView({
+        showSkeleton: false,
+        isError: false,
+        source: undefined,
+      }),
+    ).toBe("no-plan");
+  });
+});
+
+describe("getPlanView (plan card + top-bar chip)", () => {
+  it("holds the skeleton until the decision settles — no heading flash", () => {
+    expect(
+      getPlanView({ showSkeleton: true, isError: false, source: undefined }),
+    ).toBe("skeleton");
+    expect(
+      getPlanView({ showSkeleton: true, isError: false, source: "subscription" }),
+    ).toBe("skeleton");
+  });
+
+  it("maps each source to its variant, plan winning over credits by construction", () => {
+    expect(
+      getPlanView({ showSkeleton: false, isError: false, source: "subscription" }),
+    ).toBe("plan");
+    expect(
+      getPlanView({ showSkeleton: false, isError: false, source: "credits" }),
+    ).toBe("credits");
+    expect(
+      getPlanView({ showSkeleton: false, isError: false, source: "none" }),
+    ).toBe("none");
+  });
+
+  it("resolves an error to none (the storage card owns the error copy)", () => {
+    expect(
+      getPlanView({ showSkeleton: false, isError: true, source: undefined }),
+    ).toBe("none");
+  });
+});
+
+describe("getCapacitySourceLabel", () => {
+  it("names the plan when subscribed", () => {
+    expect(getCapacitySourceLabel("subscription", "Pro")).toBe("Pro plan");
+    expect(getCapacitySourceLabel("subscription", null)).toBe("Active plan");
+    expect(getCapacitySourceLabel("subscription", "")).toBe("Active plan");
+  });
+
+  it("credits-derived capacity is labelled as such, never as a plan", () => {
+    expect(getCapacitySourceLabel("credits", null)).toBe(
+      "Based on your credit balance",
+    );
+    expect(getCapacitySourceLabel("none", null)).toBe("");
   });
 });
 
@@ -60,5 +136,12 @@ describe("formatPercentLabel", () => {
     expect(formatPercentLabel(0.2)).toBe("<1%");
     expect(formatPercentLabel(0.999)).toBe("<1%");
     expect(formatPercentLabel(1)).toBe("1%");
+  });
+});
+
+describe("formatPlanPrice", () => {
+  it("abbreviates month and passes other intervals through", () => {
+    expect(formatPlanPrice(12, "month")).toBe("12$/mo.");
+    expect(formatPlanPrice(99, "year")).toBe("99$/year");
   });
 });
