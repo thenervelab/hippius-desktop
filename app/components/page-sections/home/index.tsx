@@ -31,8 +31,10 @@ const Home: React.FC = () => {
           <div className="mt-3">
             {/* Two small cards (mobile-overview style): usage bar + the
                 plan/credits summary. Both render from the same
-                get_storage_overview fetch, so they can't disagree. */}
-            <div className="mb-3 grid gap-4 grid-cols-1 @xl:grid-cols-2 items-stretch">
+                get_storage_overview fetch, so they can't disagree.
+                max-w keeps them genuinely SMALL on wide viewports —
+                stretched edge-to-edge they read as two empty banners. */}
+            <div className="mb-3 grid gap-4 grid-cols-1 @xl:grid-cols-2 items-stretch max-w-[960px]">
               <StorageOverviewCard />
               <PlanOverviewCard />
             </div>
