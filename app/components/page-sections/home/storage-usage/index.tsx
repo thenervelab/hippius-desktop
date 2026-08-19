@@ -13,7 +13,8 @@ import { useDriveStorageStats } from "@/app/lib/hooks/api/useDriveStorageStats";
 import { formatBytes } from "@/app/lib/utils/formatBytes";
 import { cn } from "@/app/lib/utils";
 
-import AvailableCreditsChart from "@/components/page-sections/home/available-credits/AvailableCreditsChart";
+import StorageBarChart from "./StorageBarChart";
+import { sampleCumulativeBars, getBarCount } from "./storageBarData";
 import { nextSkeletonState } from "@/lib/utils/skeletonGate";
 
 const timeRangeOptions = [
@@ -23,6 +24,21 @@ const timeRangeOptions = [
   { value: "year", label: "1 YEAR" },
   { value: "max", label: "MAX" },
 ];
+
+function useIsNarrow(threshold = 640) {
+  const [isNarrow, setIsNarrow] = useState(false);
+  React.useEffect(() => {
+    // matchMedia is absent under jsdom; the wide-layout default is fine there.
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function")
+      return;
+    const mq = window.matchMedia(`(max-width: ${threshold}px)`);
+    const update = () => setIsNarrow(mq.matches);
+    update();
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
+  }, [threshold]);
+  return isNarrow;
+}
 
 const GripIcon: React.FC<{ className?: string }> = ({ className }) => (
   <svg
@@ -58,6 +74,7 @@ const StorageUsageCard: React.FC<{ className?: string }> = ({ className }) => {
     isFetching: statsFetching,
     refetch: refetchStats,
   } = useDriveStorageStats();
+  const isNarrow = useIsNarrow();
 
   // Skeletons show ONLY until each query first settles, then never again — even
   // while a background refetch is in flight. Two independent latches, because
@@ -107,13 +124,19 @@ const StorageUsageCard: React.FC<{ className?: string }> = ({ className }) => {
     refetchStats,
   ]);
 
-  // Plotted as-is: `get_drive_storage_chart` already returns the cumulative
-  // total stored per day (latest snapshot of each day, carry-forwarded). This
-  // used to be diffed back into per-day "bytes added" bars, which is why the
-  // card contradicted its own "Total Storage Used" headline — the headline is a
-  // running total and the bars were deltas. Deleting that projection is the fix;
-  // do not reintroduce a diff here.
-  const points = useMemo(() => chartData ?? [], [chartData]);
+  // Each bar is a raw reading from `get_drive_storage_chart`'s cumulative
+  // series (latest snapshot of each day, carry-forwarded), so the last bar
+  // equals the "Used" headline. This used to be diffed back into per-day
+  // "bytes added" bars, which is why the card contradicted its own headline —
+  // the headline is a running total and the bars were deltas. Do not
+  // reintroduce a diff here; `sampleCumulativeBars` only picks WHICH days get
+  // a bar on long ranges and never transforms values (pinned by
+  // `__tests__/storageUsageCard.test.tsx`).
+  const barData = useMemo(
+    () =>
+      sampleCumulativeBars(chartData ?? [], getBarCount(timeRange, isNarrow)),
+    [chartData, timeRange, isNarrow],
+  );
 
   // Headline + dollar estimate: sourced from `useDriveStorageStats` (the
   // dedicated tile IPC `get_drive_storage_stats`) instead of the chart's
@@ -214,10 +237,8 @@ const StorageUsageCard: React.FC<{ className?: string }> = ({ className }) => {
         </div>
 
         <div className="relative w-full h-[220px] px-5 py-4">
-          <AvailableCreditsChart
-            data={points}
-            color="#3167DD"
-            height="100%"
+          <StorageBarChart
+            data={barData}
             isLoading={chartSkeleton}
             yTickFormat={(v) => formatBytes(v, 1)}
             tooltipValueLabel="Total stored"

@@ -246,38 +246,58 @@ pub(crate) async fn check_recovery_state_inner(state: &tauri::State<'_, crate::a
 ///   settles, `None` when it failed (network/auth).
 ///
 /// Decision table:
-///   local=false, blob=Some(false)        → Signup  (first-time user; mint + seal)
-///   local=true,  decryptable, blob=false → Signup  (legacy user; seal the EXISTING
-///                                                    mnemonic — `seal_and_upload_mnemonic`
-///                                                    reads it rather than minting)
-///   local=false, blob=Some(true)         → Unlock  (returning user, fresh device)
-///   local=true,  !decryptable, blob=true → Unlock  (OAuth returning device: drive_password
-///                                                    enc_ver=1, no cached mnemonic)
-///   local=true,  otherwise               → Proceed (local is authoritative, OR it's
-///                                                    unopenable so sealing it is unsafe —
-///                                                    Signup would seal a master that
-///                                                    can't reproduce the folder keys)
-///   local=false, blob=None               → Unknown (probe failed; FE retries, never
-///                                                    overwrites server state)
+///   local=false, blob=Some(false)         → Signup  (first-time user; mint + seal)
+///   local=true,  decryptable, blob=false  → Signup  (legacy user; seal the EXISTING
+///                                                     mnemonic — `seal_and_upload_mnemonic`
+///                                                     reads it rather than minting)
+///   local=false, blob=Some(true)          → Unlock  (returning user, fresh device)
+///   local=true,  !decryptable, blob=true  → Unlock  (OAuth returning device: drive_password
+///                                                     enc_ver=1, no cached mnemonic)
+///   local=true,  decryptable, blob=true/None
+///                                         → Proceed (local is authoritative)
+///   local=true,  !decryptable, blob=Some(false)
+///                                         → Proceed (unopenable AND definitively nothing
+///                                                     to unlock — sealing it is unsafe:
+///                                                     Signup would seal a master that
+///                                                     can't reproduce the folder keys)
+///   local=true,  !decryptable, blob=None  → Unknown (probe failed on the OAuth
+///                                                     returning-device shape; the server
+///                                                     may well hold the blob, so the FE
+///                                                     must retry — Proceed here skipped
+///                                                     the Unlock dialog and dead-ended
+///                                                     `ensure_sync_mnemonic` into the
+///                                                     seed-phrase banner, report 2026-08-19)
+///   local=false, blob=None                → Unknown (probe failed; FE retries, never
+///                                                     overwrites server state)
 ///
 /// The legacy `Signup` arm is gated on `can_decrypt`: an undecryptable
 /// local file stays on `Proceed` because `seal_and_upload_mnemonic`
 /// would otherwise fall through to a freshly-minted master and either
 /// trip `validate_master_against_existing_folders` or corrupt recovery
 /// state.
+///
+/// An `Unknown` blob probe is only safe to fold into `Proceed` when the
+/// local file is decryptable: `Proceed` maps to gate `Skipped`
+/// (`recovery_gate_target`), and skipping the gate with an unopenable
+/// local file sends `ensure_sync_mnemonic` into a guaranteed dead end
+/// (`MasterMnemonicUnrecoverable` — its Stage 2 chicken-and-eggs and
+/// Stages 3/4 are categorically unavailable to OAuth accounts).
 // The two `Signup` arms are distinct decision-table rows, not an accidental
 // duplicate: `(true, true, Some(false))` seals an EXISTING legacy mnemonic
 // while `(false, _, Some(false))` mints a first-time one (see the doc table
-// above + `seal_and_upload_mnemonic`'s two paths). They are kept as separate
-// arms to mirror that table 1:1; merging them via `|` would fold two different
-// recovery scenarios into one and break the spec-to-code traceability this
-// security-sensitive function depends on.
+// above + `seal_and_upload_mnemonic`'s two paths). Same for the `Proceed`
+// and `Unknown` pairs. They are kept as separate arms to mirror that table
+// 1:1; merging them via `|` would fold different recovery scenarios into one
+// and break the spec-to-code traceability this security-sensitive function
+// depends on.
 #[allow(clippy::match_same_arms, reason = "distinct decision-table rows that share an outcome; see comment above")]
 fn decide_recovery_flow(local: bool, can_decrypt: bool, has_server_blob: Option<bool>) -> RecoveryFlow {
     match (local, can_decrypt, has_server_blob) {
         (true, false, Some(true)) | (false, _, Some(true)) => RecoveryFlow::Unlock,
         (true, true, Some(false)) => RecoveryFlow::Signup,
-        (true, _, _) => RecoveryFlow::Proceed,
+        (true, true, Some(true) | None) => RecoveryFlow::Proceed,
+        (true, false, Some(false)) => RecoveryFlow::Proceed,
+        (true, false, None) => RecoveryFlow::Unknown,
         (false, _, Some(false)) => RecoveryFlow::Signup,
         (false, _, None) => RecoveryFlow::Unknown,
     }
@@ -329,7 +349,7 @@ async fn probe_server_blob(state: &tauri::State<'_, crate::app_state::AppState>)
 /// shouldn't happen because the blob is keyed by the bearer-resolved
 /// SS58 on the server side.
 #[tauri::command]
-pub async fn recover_mnemonic(state: tauri::State<'_, crate::app_state::AppState>, password: String) -> Result<()> {
+pub async fn recover_mnemonic(app: tauri::AppHandle, state: tauri::State<'_, crate::app_state::AppState>, password: String) -> Result<()> {
     // Serialize against other recovery/rotation commands (audit R-18).
     let _recovery_guard = state.recovery_lock.lock().await;
     let password = Zeroizing::new(password);
@@ -372,12 +392,89 @@ pub async fn recover_mnemonic(state: tauri::State<'_, crate::app_state::AppState
         auth.cache_session_mnemonic(&account_id, mnemonic.to_string());
     }
 
+    // Definitive provider classification (audit H-4 residue). A pre-#102
+    // mislabelled OAuth row (`provider = "mnemonic"`) with an EMPTY
+    // keychain evades `restore_session`'s repair — which needs a keychain
+    // mnemonic for its positive-mismatch tell — so the account restores
+    // down the mnemonic path every launch. The recovered master IS that
+    // missing evidence: repair now so the next boot takes the correct
+    // OAuth path, without waiting on the best-effort keychain
+    // mirror-write above to enable the boot-time repair.
+    crate::auth::session_restore::repair_provider_from_recovered_master(pool, &account_id, &mnemonic).await;
+
     state.set_recovery_state(crate::recovery::RecoveryGateState::Resolved);
+
+    // The mnemonic just became reachable via `get_mnemonic_for_account`
+    // stage 1. A parked `ensure_sync_mnemonic` (fresh-OAuth flow) emits
+    // `hippius_auth_ready` itself when it resumes, but the restore paths
+    // fire no `ensure_sync_mnemonic` for mnemonic-labelled sessions —
+    // this emit wakes any `tryAutoInitSync` retry ladder still inside
+    // its window. Cheap (one Tauri event), harmless when nothing listens.
+    state.sync_bridge.emit_auth_ready();
+
+    // Same-session sync resume. The FE's `tryAutoInitSync` retry ladder
+    // gives up 10s after subscribing, and typing an unlock password takes
+    // longer than that — so on the restore-time unlock paths (OAuth
+    // restore, and the mnemonic-labelled pre-#102 row) nothing would
+    // re-run sync init until the next launch. Rust owns the "unlock
+    // succeeded ⇒ sync can start" transition, so kick auto-init here.
+    spawn_post_unlock_sync_init(app, account_id.clone());
+
     info!(
         account = %crate::console_access::short_ss58(&account_id),
         "recovery: unlock complete — mnemonic decrypted and installed locally (no upload performed)"
     );
     Ok(())
+}
+
+/// Kick `auto_init_sync` in the background after an unlock made the
+/// mnemonic available.
+///
+/// Only [`recover_mnemonic`] needs this: the other recovery flows are
+/// never sync-wedged (`seal_and_upload_mnemonic` runs when the local
+/// mnemonic is already decryptable, and the rotation paths hold the
+/// mnemonic throughout), and the fresh-OAuth login flow has its own
+/// resume — a parked `ensure_sync_mnemonic` whose completion drives
+/// `initSync` via `scheduleOAuthSyncInit`. When that FE-driven init
+/// races this spawn, `auto_init_sync`'s `AutoInitGuard` makes the loser
+/// a no-op — concurrent auto-init calls are its documented expected
+/// condition.
+///
+/// Skips outright when any drive is already initialized: `auto_init_sync`
+/// re-initializes every configured drive unconditionally (teardown +
+/// re-init), so running it over live drives would restart their sync
+/// cycles for nothing.
+///
+/// Spawned, not awaited: the unlock IPC must return promptly so the
+/// dialog closes while init (network-heavy, seconds) proceeds behind it.
+/// Failures are logged only — per-drive `DriveStatus::Error` events and
+/// the FE's own triggers (drive add, resume, next launch) are the
+/// recovery paths, exactly as for an FE-invoked `auto_init_sync`.
+fn spawn_post_unlock_sync_init(app: tauri::AppHandle, account_id: String) {
+    use tauri::Manager as _;
+
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<crate::app_state::AppState>();
+
+        let already_running = !state.sync.drives.lock().await.is_empty();
+        if already_running {
+            debug!("post-unlock sync init skipped — drives already initialized");
+            return;
+        }
+
+        match crate::sync::lifecycle::auto_init_sync(app.clone(), state, account_id, None).await {
+            Ok(result) => {
+                info!(
+                    any_initialized = result.any_initialized,
+                    skipped_reason = ?result.skipped_reason,
+                    "post-unlock sync init finished"
+                );
+            }
+            Err(e) => {
+                warn!(error = %e, "post-unlock sync init failed — next drive trigger or launch retries");
+            }
+        }
+    });
 }
 
 /// Run a CPU-bound key-derivation closure off the Tokio executor.
@@ -1159,10 +1256,10 @@ mod tests {
         // the existing one via the Protect Your Account flow.
         assert_eq!(decide_recovery_flow(true, true, Some(false)), RecoveryFlow::Signup);
 
-        // Legacy user we CAN'T open: stay on Proceed so we never mint/seal
-        // a master that can't reproduce the on-disk folder keys.
+        // Legacy user we CAN'T open and the server DEFINITIVELY has no
+        // blob: stay on Proceed so we never mint/seal a master that can't
+        // reproduce the on-disk folder keys.
         assert_eq!(decide_recovery_flow(true, false, Some(false)), RecoveryFlow::Proceed);
-        assert_eq!(decide_recovery_flow(true, false, None), RecoveryFlow::Proceed);
 
         // Local present and authoritative: blob already there, or probe failed.
         assert_eq!(decide_recovery_flow(true, true, Some(true)), RecoveryFlow::Proceed);
@@ -1174,9 +1271,19 @@ mod tests {
         assert_eq!(decide_recovery_flow(false, true, Some(true)), RecoveryFlow::Unlock);
         assert_eq!(decide_recovery_flow(true, false, Some(true)), RecoveryFlow::Unlock);
 
-        // Fresh device, probe failed: retry, never overwrite server state.
+        // Probe failed: retry, never overwrite server state.
         assert_eq!(decide_recovery_flow(false, false, None), RecoveryFlow::Unknown);
         assert_eq!(decide_recovery_flow(false, true, None), RecoveryFlow::Unknown);
+        // REGRESSION (banner report 2026-08-19): an OAuth returning device
+        // (local file, undecryptable without the recovery password) whose
+        // blob probe FAILED used to fall into the `(true, _, _) → Proceed`
+        // catch-all. `recovery_gate_target` maps Proceed → Skipped, so
+        // `ensure_sync_mnemonic` ran straight into its dead-end
+        // (`MasterMnemonicUnrecoverable`) and the FE showed the seed-phrase
+        // banner to a Google-login user — even though the server DID hold
+        // their sealed blob. An unknown blob with an unopenable local file
+        // must stay Unknown: gate Pending, retry dialog, no banner.
+        assert_eq!(decide_recovery_flow(true, false, None), RecoveryFlow::Unknown);
     }
 
     #[tokio::test]
@@ -1704,5 +1811,52 @@ mod tests {
                 "{func} must acquire state.recovery_lock to serialize against other recovery commands (R-18)",
             );
         }
+    }
+
+    /// Static regression guard (audit H-4 residue, banner report 2026-08-19):
+    /// a successful unlock is the ONLY moment a device with an empty keychain
+    /// holds positive evidence of a pre-#102 mislabelled OAuth row, so
+    /// `recover_mnemonic` must run the provider repair there — and must wake
+    /// any in-window `tryAutoInitSync` ladder, since the mnemonic-labelled
+    /// restore paths park no `ensure_sync_mnemonic` that would emit
+    /// `hippius_auth_ready` on resume.
+    #[test]
+    fn recover_mnemonic_repairs_provider_and_wakes_sync() {
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/recovery.rs")).expect("read recovery.rs");
+        let sig = "pub async fn recover_mnemonic(";
+        let sig_idx = src.find(sig).unwrap_or_else(|| panic!("{sig} present"));
+        let body_start = src[sig_idx..].find('{').expect("fn body opens") + sig_idx;
+        let mut depth = 0usize;
+        let mut body_end = body_start;
+        for (i, ch) in src[body_start..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        body_end = body_start + i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let body = &src[body_start..=body_end];
+        assert!(
+            body.contains("repair_provider_from_recovered_master("),
+            "recover_mnemonic must run the unlock-time provider repair — the recovered master is the \
+             only positive-mismatch evidence an empty-keychain device ever gets",
+        );
+        assert!(
+            body.contains("emit_auth_ready()"),
+            "recover_mnemonic must emit hippius_auth_ready after caching the mnemonic so a still-listening \
+             auto_init_sync retry ladder can pick it up",
+        );
+        assert!(
+            body.contains("spawn_post_unlock_sync_init("),
+            "recover_mnemonic must spawn the post-unlock auto-init — the FE retry ladder expires 10s after \
+             subscribing, long before a human finishes typing the unlock password, so without this the \
+             restore-time unlock paths stay sync-wedged until the next launch",
+        );
     }
 }

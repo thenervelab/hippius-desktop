@@ -262,6 +262,61 @@ fn check_provider(stored_provider: &str, derives_row_account: Option<bool>) -> P
     }
 }
 
+/// Repair a mislabelled `provider = "mnemonic"` row from a POSITIVELY
+/// verified master mnemonic — the evidence [`check_provider`] needs but
+/// cannot get from an empty keychain.
+///
+/// `restore_session`'s own repair is keychain-gated, so the canonical
+/// residual of audit H-4 survives it: an OAuth account whose row says
+/// `mnemonic` AND whose keychain holds no mnemonic restores down the
+/// mnemonic path every launch (seed-phrase banner from restore, a 24h
+/// idle-logout timer the user never configured, no recovery-gate block).
+/// The first moment positive evidence exists on such a device is a
+/// successful recovery-password unlock (`recovery::recover_mnemonic`),
+/// which holds the account's actual master. A master that does NOT
+/// derive the row's own SS58 is exactly the H-3 tell — decided through
+/// the same [`check_provider`] funnel so the equality lives in one place
+/// — while a master that DOES derive it proves a genuine mnemonic user
+/// who set an unlock password, and the label is kept.
+///
+/// Best-effort by design: an unlock must never fail because a label
+/// repair couldn't be persisted. The same detection re-runs on the next
+/// unlock, and the unlock's keychain mirror-write lets `restore_session`'s
+/// keychain-gated repair fire on the next boot regardless.
+pub(crate) async fn repair_provider_from_recovered_master(pool: &sqlx::SqlitePool, account_id: &str, master: &str) {
+    let derives_row_account = match crate::auth::service::derive_verified_keys(master, account_id) {
+        Ok(_) => Some(true),
+        Err(crate::auth::service::IdentityError::Mismatch { .. }) => Some(false),
+        Err(crate::auth::service::IdentityError::DeriveFailed(e)) => {
+            warn!(error = %e, "unlock: recovered master failed to derive an identity; skipping provider check");
+            None
+        }
+    };
+
+    let stored_provider = match auth_session_repo::get_provider(pool, account_id).await {
+        Ok(Some(provider)) => provider,
+        Ok(None) => return,
+        Err(e) => {
+            warn!(error = %e, "unlock: failed to read session provider; skipping provider check");
+            return;
+        }
+    };
+
+    match check_provider(&stored_provider, derives_row_account) {
+        ProviderCheck::RepairToOauth => {
+            warn!(
+                account = %crate::console_access::short_ss58(account_id),
+                "Unlocked master does not derive this session row's address — the row is a pre-#102 \
+                 mislabelled OAuth account (provider=mnemonic); repairing to oauth"
+            );
+            if let Err(e) = auth_session_repo::repair_provider(pool, account_id, "oauth").await {
+                warn!(error = %e, "failed to persist the provider repair; the next unlock or boot re-detects it");
+            }
+        }
+        ProviderCheck::Keep => {}
+    }
+}
+
 /// Default idle-logout budget, in minutes, for a session row that records
 /// no preference of its own.
 const DEFAULT_LOGOUT_MINUTES: i64 = 1440;
@@ -782,6 +837,118 @@ mod tests {
     #[test]
     fn gate_target_absent_probe_is_pending() {
         assert_eq!(recovery_gate_target(None), RecoveryGateState::Pending);
+    }
+
+    // ─── Unlock-time provider repair (audit H-4 residue) ───────────
+    //
+    // `restore_session`'s repair is keychain-gated, so a mislabelled
+    // OAuth row with an EMPTY keychain evades it. The unlock-time
+    // repair uses the recovered master itself as the positive evidence.
+
+    async fn provider_repair_pool() -> sqlx::SqlitePool {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::query(
+            "CREATE TABLE auth_session (
+                owner TEXT PRIMARY KEY,
+                auth_token TEXT,
+                token_expiry INTEGER,
+                user_id INTEGER,
+                username TEXT,
+                provider TEXT,
+                substrate_address TEXT,
+                logout_time_minutes INTEGER DEFAULT 1440,
+                last_login_at TEXT,
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool
+    }
+
+    async fn insert_session_row(pool: &sqlx::SqlitePool, addr: &str, provider: &str) {
+        let owner = crate::auth::account_key::account_key(addr);
+        sqlx::query("INSERT INTO auth_session (owner, provider, substrate_address) VALUES (?, ?, ?)")
+            .bind(&owner)
+            .bind(provider)
+            .bind(addr)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    async fn stored_provider(pool: &sqlx::SqlitePool, addr: &str) -> Option<String> {
+        crate::auth::auth_session_repo::get_provider(pool, addr).await.unwrap()
+    }
+
+    // A stable BIP-39 test vector — NOT a real secret.
+    const TEST_MASTER: &str = "abandon abandon abandon abandon abandon abandon \
+                               abandon abandon abandon abandon abandon about";
+
+    // An address the test master does NOT derive (the OAuth shape: login
+    // SS58 is server-custodied, the sync master derives someone else).
+    const FOREIGN_ADDR: &str = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
+
+    #[tokio::test]
+    async fn unlock_repair_flips_mislabeled_mnemonic_row_to_oauth() {
+        let pool = provider_repair_pool().await;
+        insert_session_row(&pool, FOREIGN_ADDR, "mnemonic").await;
+
+        repair_provider_from_recovered_master(&pool, FOREIGN_ADDR, TEST_MASTER).await;
+
+        assert_eq!(
+            stored_provider(&pool, FOREIGN_ADDR).await.as_deref(),
+            Some("oauth"),
+            "a mnemonic-labelled row whose unlocked master derives a different address is the H-4 mislabel and must be repaired"
+        );
+    }
+
+    #[tokio::test]
+    async fn unlock_repair_keeps_genuine_mnemonic_row() {
+        // A genuine mnemonic user who set an unlock password: the
+        // recovered master derives the row's OWN address, so the label
+        // must be kept — this is exactly why blob presence alone is not
+        // a safe repair tell.
+        let (_pair, own_addr, _eth_signer, _eth_address) = crate::auth::service::derive_keys(TEST_MASTER).expect("derive test keys");
+        let pool = provider_repair_pool().await;
+        insert_session_row(&pool, &own_addr, "mnemonic").await;
+
+        repair_provider_from_recovered_master(&pool, &own_addr, TEST_MASTER).await;
+
+        assert_eq!(
+            stored_provider(&pool, &own_addr).await.as_deref(),
+            Some("mnemonic"),
+            "a master that derives the row's own address proves a genuine mnemonic account"
+        );
+    }
+
+    #[tokio::test]
+    async fn unlock_repair_ignores_oauth_rows() {
+        // Correctly-labelled OAuth rows always have a mismatching master
+        // (that IS the OAuth shape) — no write must happen.
+        let pool = provider_repair_pool().await;
+        insert_session_row(&pool, FOREIGN_ADDR, "oauth").await;
+
+        repair_provider_from_recovered_master(&pool, FOREIGN_ADDR, TEST_MASTER).await;
+
+        assert_eq!(stored_provider(&pool, FOREIGN_ADDR).await.as_deref(), Some("oauth"));
+    }
+
+    #[tokio::test]
+    async fn unlock_repair_skips_underivable_master() {
+        // A master that fails key derivation concludes nothing (`None`),
+        // and `check_provider` treats unknown as "do not act".
+        let pool = provider_repair_pool().await;
+        insert_session_row(&pool, FOREIGN_ADDR, "mnemonic").await;
+
+        repair_provider_from_recovered_master(&pool, FOREIGN_ADDR, "not a bip39 mnemonic").await;
+
+        assert_eq!(
+            stored_provider(&pool, FOREIGN_ADDR).await.as_deref(),
+            Some("mnemonic"),
+            "an underivable master must never relabel a row"
+        );
     }
 
     // ─── Restore-token classification (audit M-1) ──────────────────

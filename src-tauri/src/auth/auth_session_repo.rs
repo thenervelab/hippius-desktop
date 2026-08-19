@@ -268,6 +268,27 @@ pub async fn repair_provider(pool: &SqlitePool, account_id: &str, provider: &str
     Ok(())
 }
 
+/// Fetch just the `provider` label for a specific account, if any.
+///
+/// Deliberately NOT [`get_by_account`]: that resolves the auth token
+/// through the OS keychain, which can block on a system password prompt.
+/// The provider-repair path (`session_restore::
+/// repair_provider_from_recovered_master`) needs only the label.
+///
+/// Skips cleared husk rows (`substrate_address IS NULL` — `clear` keeps
+/// one for the logout preference, matching [`get_latest`]'s filter) so a
+/// caller can never act on a logged-out row's stale label.
+pub async fn get_provider(pool: &SqlitePool, account_id: &str) -> Result<Option<String>> {
+    let owner = account_key(account_id);
+
+    let row: Option<(Option<String>,)> = sqlx::query_as("SELECT provider FROM auth_session WHERE owner = ? AND substrate_address IS NOT NULL")
+        .bind(&owner)
+        .fetch_optional(pool)
+        .await?;
+
+    Ok(row.and_then(|(provider,)| provider))
+}
+
 /// Fetch the full row for a specific account, if any.
 pub async fn get_by_account(pool: &SqlitePool, account_id: &str) -> Result<Option<AuthSessionRow>> {
     let owner = account_key(account_id);
