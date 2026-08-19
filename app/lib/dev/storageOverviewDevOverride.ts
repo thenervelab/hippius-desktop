@@ -24,15 +24,32 @@
  *   // Back to real data:
  *   delete localStorage["hippius:dev-storage-overview"];
  *
- * Then reload (⌘R) — the override merges over the real IPC response in the
- * hook's `select`. Fields you omit keep their real values; `percent` is
- * recomputed from used/total when not given explicitly. A production build
- * compiles this to a hard no-op.
+ * Then reload (⌘R) — `useStorageOverview` short-circuits to the override,
+ * merged over the last real response when one exists (or an empty base when
+ * the backend is unreachable — so the simulator works even while the Rust
+ * side is still rebuilding, or in a plain browser without Tauri). Fields
+ * you omit keep their real/base values; `percent` is recomputed from
+ * used/total when not given explicitly. A production build compiles this
+ * to a hard no-op.
+ *
+ * NOTE: set the key in the console of the window you are looking at — the
+ * Tauri webview and an ordinary Chrome tab on localhost:3000 have SEPARATE
+ * localStorage, so a value set in one is invisible to the other.
  */
 
 import type { StorageOverview } from "@/app/lib/hooks/api/useStorageOverview";
 
 export const STORAGE_OVERVIEW_DEV_KEY = "hippius:dev-storage-overview";
+
+/** Base the override merges over when no real response is available. */
+export const DEV_BASE_OVERVIEW: StorageOverview = {
+  usedBytes: 0,
+  totalBytes: 0,
+  percent: 0,
+  source: "none",
+  plan: null,
+  creditsHip: null,
+};
 
 /**
  * Merge a partial override over the real response. Pure so it's testable;

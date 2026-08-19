@@ -1,5 +1,6 @@
 import { LIVE_DATA_REFRESH_MS } from "@/lib/constants";
 import {
+  DEV_BASE_OVERVIEW,
   applyStorageOverviewDevOverride,
   readStorageOverviewDevOverride,
 } from "@/app/lib/dev/storageOverviewDevOverride";
@@ -48,18 +49,34 @@ export interface StorageOverview {
  * the bottleneck once the indexer catches up.
  */
 export function useStorageOverview() {
-  return useInvokeQuery<StorageOverview>({
+  const query = useInvokeQuery<StorageOverview>({
     command: "get_storage_overview",
     queryKey: (addr) => [STORAGE_OVERVIEW_QUERY_KEY, addr],
     options: {
       staleTime: LIVE_DATA_REFRESH_MS,
       refetchOnWindowFocus: true,
       refetchInterval: LIVE_DATA_REFRESH_MS,
-      // Dev-only state simulator (no-op in production builds) — see
-      // `app/lib/dev/storageOverviewDevOverride.ts` for the localStorage
-      // recipe to fake plan / credits / none states.
-      select: (data) =>
-        applyStorageOverviewDevOverride(data, readStorageOverviewDevOverride()),
     },
   });
+
+  // Dev-only state simulator (no-op in production builds) — see
+  // `app/lib/dev/storageOverviewDevOverride.ts` for the localStorage recipe
+  // to fake plan / credits / none states. It short-circuits loading/error
+  // too, NOT just the data: the simulator must work even when the IPC is
+  // unavailable (Rust side mid-rebuild, or a plain browser without Tauri),
+  // which a `select`-based merge could never do.
+  const override = readStorageOverviewDevOverride();
+  if (override) {
+    return {
+      ...query,
+      data: applyStorageOverviewDevOverride(
+        query.data ?? DEV_BASE_OVERVIEW,
+        override,
+      ),
+      isLoading: false,
+      isError: false,
+    } as typeof query;
+  }
+
+  return query;
 }
