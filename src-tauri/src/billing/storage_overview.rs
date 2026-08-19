@@ -77,13 +77,7 @@ pub struct StorageOverview {
 /// `credits` is the balance in HIP units; `credits_capacity_gb` is what that
 /// balance buys per month (pre-computed by the caller so this stays pure and
 /// unit-testable without the pricing binary search).
-fn build_overview(
-    used_bytes: u64,
-    plan: Option<PlanInfo>,
-    credits: f64,
-    credits_capacity_gb: u64,
-    credits_hip: Option<String>,
-) -> StorageOverview {
+fn build_overview(used_bytes: u64, plan: Option<PlanInfo>, credits: f64, credits_capacity_gb: u64, credits_hip: Option<String>) -> StorageOverview {
     if let Some(plan) = plan {
         let total_bytes = plan.storage_bytes;
         let percent = percent_of(used_bytes, total_bytes);
@@ -238,14 +232,14 @@ mod tests {
         assert_eq!(overview.source, CapacitySource::None);
         assert_eq!(overview.used_bytes, 42);
         assert_eq!(overview.total_bytes, 0);
-        assert_eq!(overview.percent, 0.0);
+        assert!(overview.percent.abs() < 1e-9);
     }
 
     #[test]
     fn over_quota_clamps_to_100() {
         // Usage above the allowance (downgrade case) must not overflow the bar.
         let overview = build_overview(2000 * BYTES_PER_GB, Some(pro_plan(1000)), 0.0, 0, None);
-        assert_eq!(overview.percent, 100.0);
+        assert!((overview.percent - 100.0).abs() < 1e-9);
         // Raw byte counts stay honest even while the percent clamps.
         assert_eq!(overview.used_bytes, 2000 * BYTES_PER_GB);
     }
@@ -257,7 +251,7 @@ mod tests {
         let overview = build_overview(500, None, 0.0001, 0, Some("0.0001".into()));
         assert_eq!(overview.source, CapacitySource::Credits);
         assert_eq!(overview.total_bytes, 500);
-        assert_eq!(overview.percent, 100.0);
+        assert!((overview.percent - 100.0).abs() < 1e-9);
     }
 
     #[test]
@@ -265,7 +259,7 @@ mod tests {
         let overview = build_overview(500, Some(pro_plan(0)), 0.0, 0, None);
         assert_eq!(overview.source, CapacitySource::Subscription);
         assert_eq!(overview.total_bytes, 0);
-        assert_eq!(overview.percent, 0.0);
+        assert!(overview.percent.abs() < 1e-9);
     }
 
     #[test]
@@ -281,7 +275,7 @@ mod tests {
         });
         let plan = plan_from_subscription(&active).expect("plan expected");
         assert_eq!(plan.name, "Pro");
-        assert_eq!(plan.amount, 12.0);
+        assert!((plan.amount - 12.0).abs() < 1e-9);
         assert_eq!(plan.interval, "month");
         // 5 credits/month buys well over 1 TB under the current pricing
         // model (~0.003 credits per GB-month); pin a loose lower bound so a
