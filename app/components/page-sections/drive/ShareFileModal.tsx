@@ -33,7 +33,9 @@ import { toast } from "sonner";
 
 import { Button, Icons } from "@/components/ui";
 import { FramedDialog } from "@/components/ui/FramedDialog";
+import { Input } from "@/components/ui/input";
 import { SegmentedControl } from "@/components/ui/SegmentedControl";
+import { Select } from "@/components/ui/select/Select";
 import { cn } from "@/lib/utils";
 import {
   finderShareAtom,
@@ -438,18 +440,14 @@ function ChoosingBody({
             >
               Password
             </label>
-            <input
+            <Input
               id="share-password"
               type="text"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               spellCheck={false}
               autoComplete="off"
-              className={cn(
-                "h-10 w-full rounded-[6px] border px-3 font-mono text-sm",
-                "border-grey-80 bg-white text-grey-10",
-                "dark:border-grey-dark-80 dark:bg-grey-dark-100 dark:text-grey-dark-10",
-              )}
+              className="font-mono text-sm"
             />
             {passwordTooShort && (
               <p className="text-xs text-red-500">
@@ -460,32 +458,21 @@ function ChoosingBody({
         )}
 
         <div className="mt-3 flex flex-col gap-1">
-          <label
-            htmlFor="share-expiry"
-            className="text-xs font-medium text-grey-30 dark:text-grey-dark-700"
-          >
+          {/* The Radix trigger is named via `ariaLabel` (no labelable element
+              to point `htmlFor` at), so this is a purely visual caption. */}
+          <span className="text-xs font-medium text-grey-30 dark:text-grey-dark-700">
             Link expires
-          </label>
-          <select
-            id="share-expiry"
+          </span>
+          <Select
+            ariaLabel="Link expires"
             value={ttl}
-            onChange={(e) => setTtl(e.target.value as ShareTtl)}
-            className={cn(
-              "h-10 w-full rounded-[6px] border px-3 text-sm",
-              "border-grey-80 bg-white text-grey-10",
-              "dark:border-grey-dark-80 dark:bg-grey-dark-100 dark:text-grey-dark-10",
-            )}
-          >
-            {TTL_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
+            onValueChange={(value) => setTtl(value as ShareTtl)}
+            options={TTL_OPTIONS.map(({ label, value }) => ({ label, value }))}
+          />
         </div>
 
         <p
-          className="mt-3 break-all font-mono text-xs text-grey-50 dark:text-grey-dark-600"
+          className="mt-3 break-all text-sm text-grey-20 dark:text-grey-dark-800"
           title={filename}
         >
           {filename}
@@ -599,7 +586,7 @@ function RunningBody({
         <ShareProgressBar pct={pct} />
 
         <p
-          className="font-mono text-xs text-grey-50 dark:text-grey-dark-600 break-all"
+          className="break-all text-sm text-grey-20 dark:text-grey-dark-800"
           title={filename}
         >
           {filename}
@@ -694,7 +681,7 @@ function ErrorBody({
           </p>
           {filename && (
             <p
-              className="mt-1 break-all font-mono text-xs text-grey-50 dark:text-grey-dark-600"
+              className="mt-1 break-all text-sm text-grey-20 dark:text-grey-dark-800"
               title={filename}
             >
               {filename}
