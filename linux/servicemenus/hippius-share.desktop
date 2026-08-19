@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Service
+# `all/all` = files and folders of any type.
+MimeType=all/all;
+Actions=hippiusShare;
+X-KDE-Priority=TopLevel
+
+[Desktop Action hippiusShare]
+Name=Share with Hippius
+Icon=hippius
+# KIO invokes the command once per selected file for %f, so multi-select mints
+# one share per file. The main binary's `--finder-share` mode forwards it to the
+# running app over the bridge socket (one binary, no separate helper).
+Exec=Hippius --finder-share %f

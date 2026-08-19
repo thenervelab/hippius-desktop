@@ -146,6 +146,55 @@ describe("SyncStatusDialog", () => {
     expect(item).not.toHaveTextContent("2.05 KB");
   });
 
+  it("labels a self-resolving failure 'Retrying', not 'Error'", () => {
+    // A file rewritten by a build tool mid-upload fails, then succeeds on the
+    // next cycle unattended. Rendering it identically to a hard failure is what
+    // made a wall of these read as "sync is broken".
+    const reason = "File changed while uploading — will retry.";
+    const files = [
+      makeFileProgress("6.pack.gz", {
+        path: "node_modules/.cache/6.pack.gz",
+        status: "error",
+        error: reason,
+      }),
+    ];
+    const snapshot = {
+      ...makeSnapshot(files),
+      transientErrorPaths: ["node_modules/.cache/6.pack.gz"],
+    };
+
+    renderWithJotai(<SyncStatusDialog snapshot={snapshot} open={true} />);
+    fireEvent.click(screen.getByTestId("sync-status-toggle"));
+
+    const item = screen.getByTestId("file-item");
+    expect(item).toHaveTextContent("Retrying");
+    expect(item).not.toHaveTextContent("Error");
+    expect(item).toHaveTextContent(reason);
+  });
+
+  it("still labels an unflagged failure 'Error'", () => {
+    // The flag is per-path: a hard failure alongside a retrying one must keep
+    // its red "Error", or the amber tone stops meaning anything.
+    const files = [
+      makeFileProgress("invoice.pdf", {
+        path: "docs/invoice.pdf",
+        status: "error",
+        error: "Network error — couldn't reach the server. Check your connection.",
+      }),
+    ];
+    const snapshot = {
+      ...makeSnapshot(files),
+      transientErrorPaths: ["some/other/file.js"],
+    };
+
+    renderWithJotai(<SyncStatusDialog snapshot={snapshot} open={true} />);
+    fireEvent.click(screen.getByTestId("sync-status-toggle"));
+
+    const item = screen.getByTestId("file-item");
+    expect(item).toHaveTextContent("Error");
+    expect(item).not.toHaveTextContent("Retrying");
+  });
+
   it("shows percentage in collapsed state", () => {
     const files = [
       makeFileProgress("data.csv", {

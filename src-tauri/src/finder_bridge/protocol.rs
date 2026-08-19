@@ -1,9 +1,12 @@
 //! Pure, sans-io line codec for the Finder-extension wire protocol.
 //!
-//! The extension and the app exchange one message per line over a Unix-domain
-//! socket. This module is the codec ONLY — no sockets, no async (axiom
-//! `rust_quality_127`: keep the protocol a synchronous core the I/O layer
-//! drives), so the Linux CI `rust` job exercises every parse/format path.
+//! The extension and the app exchange one message per line over a local
+//! transport (Unix-domain socket on macOS/Linux, named pipe on Windows). This
+//! module is the codec ONLY — no sockets, no async (axiom `rust_quality_127`:
+//! keep the protocol a synchronous core the I/O layer drives), so every CI
+//! `rust` job exercises every parse/format path. The only platform-specific
+//! part is the `OsStr` ↔ byte boundary ([`os_str_to_bytes`] /
+//! [`bytes_to_os_string`]); the percent codec itself is pure bytes.
 //!
 //! ## Why paths are percent-encoded
 //! A POSIX filename may contain any byte except `/` (0x2F) and NUL (0x00) —
@@ -16,8 +19,7 @@
 //! `client_message_round_trips`), so any real path survives the round trip
 //! exactly, including non-UTF-8 names.
 
-use std::ffi::OsString;
-use std::os::unix::ffi::{OsStrExt, OsStringExt};
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
 /// Badge a path should display in Finder. The app pushes these to the
@@ -183,9 +185,9 @@ fn split_verb(line: &str) -> Result<(&str, &str), ProtocolError> {
 /// `%` itself) becomes `%XX`. Reversible for any byte string — see
 /// [`decode_path`].
 fn encode_path(path: &Path) -> String {
-    let bytes = path.as_os_str().as_bytes();
+    let bytes = os_str_to_bytes(path.as_os_str());
     let mut out = String::with_capacity(bytes.len());
-    for &byte in bytes {
+    for &byte in &bytes {
         if (0x20..=0x7E).contains(&byte) && byte != b'%' {
             out.push(byte as char);
         } else {
@@ -218,7 +220,59 @@ fn decode_path(encoded: &str) -> Result<PathBuf, ProtocolError> {
             i += 1;
         }
     }
-    Ok(PathBuf::from(OsString::from_vec(out)))
+    Ok(PathBuf::from(bytes_to_os_string(out)?))
+}
+
+/// Lossless `OsStr` → raw wire bytes. The percent codec above is a pure byte
+/// transform, so this boundary is the ONLY platform-specific part of the
+/// protocol.
+///
+/// - **Unix:** an OS string already *is* a byte sequence — identity.
+/// - **Windows:** an OS string is a sequence of (possibly ill-formed) UTF-16
+///   code units; each is serialized little-endian, which [`bytes_to_os_string`]
+///   reverses via `OsString::from_wide`. This is lossless for any real path.
+///
+/// The Windows wire bytes for a given string differ from the Unix ones — which
+/// is irrelevant: the Finder/Explorer extension and the app are always the same
+/// OS, so only a *per-platform* round trip is required, never cross-OS wire
+/// compatibility.
+#[cfg(unix)]
+fn os_str_to_bytes(s: &OsStr) -> Vec<u8> {
+    use std::os::unix::ffi::OsStrExt;
+    s.as_bytes().to_vec()
+}
+
+#[cfg(windows)]
+fn os_str_to_bytes(s: &OsStr) -> Vec<u8> {
+    use std::os::windows::ffi::OsStrExt;
+    let mut out = Vec::new();
+    for unit in s.encode_wide() {
+        out.extend_from_slice(&unit.to_le_bytes());
+    }
+    out
+}
+
+/// Inverse of [`os_str_to_bytes`].
+///
+/// # Errors
+/// On Windows an odd-length byte run cannot be regrouped into UTF-16 code units,
+/// so it yields [`ProtocolError::BadEncoding`] — the same shape as a truncated
+/// percent-escape. On Unix any byte sequence is a valid `OsString`, so this is
+/// infallible there (the `Result` is uniform across platforms).
+#[cfg(unix)]
+fn bytes_to_os_string(bytes: Vec<u8>) -> Result<OsString, ProtocolError> {
+    use std::os::unix::ffi::OsStringExt;
+    Ok(OsString::from_vec(bytes))
+}
+
+#[cfg(windows)]
+fn bytes_to_os_string(bytes: Vec<u8>) -> Result<OsString, ProtocolError> {
+    use std::os::windows::ffi::OsStringExt;
+    if bytes.len() % 2 != 0 {
+        return Err(ProtocolError::BadEncoding);
+    }
+    let units: Vec<u16> = bytes.chunks_exact(2).map(|pair| u16::from_le_bytes([pair[0], pair[1]])).collect();
+    Ok(OsString::from_wide(&units))
 }
 
 /// Map a nibble (0..=15) to its uppercase hex digit.
@@ -243,6 +297,12 @@ fn hex_value(byte: u8) -> Option<u8> {
 mod tests {
     use super::*;
     use proptest::prelude::*;
+    // Byte-level `OsString` construction is platform-specific; each round-trip
+    // test that builds a raw non-UTF-8/UTF-16 path pulls in the matching trait.
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStringExt;
+    #[cfg(windows)]
+    use std::os::windows::ffi::OsStringExt;
 
     #[test]
     fn client_share_round_trips_with_colon_and_space() {
@@ -293,6 +353,7 @@ mod tests {
         assert_eq!(ClientMessage::parse(&wire), Ok(ClientMessage::Share(weird)));
     }
 
+    #[cfg(unix)]
     #[test]
     fn non_utf8_path_round_trips() {
         // A POSIX path need not be valid UTF-8.
@@ -300,6 +361,36 @@ mod tests {
         let wire = ServerMessage::RegisterPath(path.clone()).to_wire();
         assert!(wire.is_ascii(), "encoded wire must be pure ASCII");
         assert_eq!(ServerMessage::parse(&wire), Ok(ServerMessage::RegisterPath(path)));
+    }
+
+    /// The Windows analog: an OS string may be ill-formed UTF-16 (an unpaired
+    /// surrogate like `0xD800`). The `encode_wide` → u16-LE boundary must still
+    /// round-trip it exactly and keep the wire pure ASCII.
+    #[cfg(windows)]
+    #[test]
+    fn ill_formed_utf16_path_round_trips() {
+        let path = PathBuf::from(OsString::from_wide(&[0x0043, 0x003A, 0x005C, 0xD800, 0x0078]));
+        let wire = ServerMessage::RegisterPath(path.clone()).to_wire();
+        assert!(wire.is_ascii(), "encoded wire must be pure ASCII");
+        assert_eq!(ServerMessage::parse(&wire), Ok(ServerMessage::RegisterPath(path)));
+    }
+
+    /// A Windows backslash path with a space round-trips through the same codec
+    /// (the common real case the Explorer extension forwards).
+    #[cfg(windows)]
+    #[test]
+    fn windows_backslash_path_round_trips() {
+        let m = ClientMessage::Share(PathBuf::from(r"C:\Users\x\My Docs\a.txt"));
+        assert_eq!(ClientMessage::parse(&m.to_wire()), Ok(m));
+    }
+
+    /// An odd-length decoded byte run can't regroup into UTF-16 units on
+    /// Windows, so decoding rejects it rather than silently dropping the tail.
+    #[cfg(windows)]
+    #[test]
+    fn windows_odd_length_bytes_rejected() {
+        // Three raw bytes (one-and-a-half u16s) after the verb.
+        assert_eq!(ClientMessage::parse("SHARE:%00%01%02"), Err(ProtocolError::BadEncoding));
     }
 
     #[test]
@@ -341,7 +432,8 @@ mod tests {
     proptest! {
         // The path codec is a bijection over arbitrary byte strings (excluding
         // NUL, which no real POSIX path carries): format → parse recovers the
-        // exact path.
+        // exact path. Unix-only because it builds paths from raw bytes.
+        #[cfg(unix)]
         #[test]
         fn client_message_round_trips(bytes in proptest::collection::vec(1u8..=255, 0..64)) {
             let path = PathBuf::from(OsString::from_vec(bytes));
@@ -349,6 +441,7 @@ mod tests {
             prop_assert_eq!(ClientMessage::parse(&m.to_wire()), Ok(m));
         }
 
+        #[cfg(unix)]
         #[test]
         fn server_status_round_trips(bytes in proptest::collection::vec(1u8..=255, 0..64), which in 0u8..4) {
             let path = PathBuf::from(OsString::from_vec(bytes));
@@ -363,10 +456,32 @@ mod tests {
         }
 
         // Encoded output is always single-line printable ASCII — the framing
-        // invariant the socket layer relies on.
+        // invariant the transport layer relies on.
+        #[cfg(unix)]
         #[test]
         fn encoded_line_is_ascii_single_line(bytes in proptest::collection::vec(1u8..=255, 0..64)) {
             let wire = ClientMessage::Share(PathBuf::from(OsString::from_vec(bytes))).to_wire();
+            prop_assert!(wire.is_ascii());
+            prop_assert!(!wire.contains('\n') && !wire.contains('\r'));
+        }
+    }
+
+    // The Windows analogs of the bijection + framing proptests: the codec is a
+    // bijection over arbitrary UTF-16 code-unit strings (excluding the NUL unit,
+    // which no real path carries) via the `encode_wide` ↔ u16-LE boundary, and
+    // the wire stays single-line ASCII.
+    #[cfg(windows)]
+    proptest! {
+        #[test]
+        fn windows_message_round_trips(units in proptest::collection::vec(1u16..=u16::MAX, 0..64)) {
+            let path = PathBuf::from(OsString::from_wide(&units));
+            let m = ClientMessage::Share(path);
+            prop_assert_eq!(ClientMessage::parse(&m.to_wire()), Ok(m));
+        }
+
+        #[test]
+        fn windows_encoded_line_is_ascii_single_line(units in proptest::collection::vec(1u16..=u16::MAX, 0..64)) {
+            let wire = ClientMessage::Share(PathBuf::from(OsString::from_wide(&units))).to_wire();
             prop_assert!(wire.is_ascii());
             prop_assert!(!wire.contains('\n') && !wire.contains('\r'));
         }

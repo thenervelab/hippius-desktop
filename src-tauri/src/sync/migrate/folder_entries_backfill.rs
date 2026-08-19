@@ -280,14 +280,30 @@ pub(crate) async fn is_folder_entries_backfilled(pool: &SqlitePool, owner: &str,
 /// completed backfill never duplicates or errors. Read-then-insert only — this
 /// never deletes (the per-cycle reconcile, Task 1.13, owns removals).
 pub(crate) async fn cache_folder_entries(pool: &SqlitePool, owner: &str, label: &str, paths: &[String]) -> Result<()> {
+    if paths.is_empty() {
+        return Ok(());
+    }
+    let mut tx = pool.begin().await?;
     for rel in paths {
         sqlx::query("INSERT OR IGNORE INTO folder_entries_local (owner, label, relative_path) VALUES (?, ?, ?)")
             .bind(owner)
             .bind(label)
             .bind(rel)
-            .execute(pool)
+            .execute(&mut *tx)
             .await?;
     }
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Drop every cached directory for one drive. Owner is the account-key
+/// hash (`account_key(ss58)`), matching every other writer of this table.
+pub(crate) async fn clear_folder_entries_for_drive(pool: &SqlitePool, owner: &str, label: &str) -> Result<()> {
+    sqlx::query("DELETE FROM folder_entries_local WHERE owner = ? AND label = ?")
+        .bind(owner)
+        .bind(label)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -537,6 +553,19 @@ mod tests {
         assert_eq!(cached_paths(&pool, "owner-b", "docs").await, vec!["a".to_string()]);
         // owner-a is unchanged by owner-b's write.
         assert_eq!(cached_paths(&pool, "owner-a", "docs").await, paths);
+    }
+
+    #[tokio::test]
+    async fn clear_folder_entries_for_drive_is_owner_and_label_scoped() {
+        let pool = temp_pool().await;
+        cache_folder_entries(&pool, "owner-a", "docs", &["a".into(), "a/b".into()]).await.unwrap();
+        cache_folder_entries(&pool, "owner-a", "photos", &["p".into()]).await.unwrap();
+        cache_folder_entries(&pool, "owner-b", "docs", &["a".into()]).await.unwrap();
+
+        clear_folder_entries_for_drive(&pool, "owner-a", "docs").await.unwrap();
+        assert!(cached_paths(&pool, "owner-a", "docs").await.is_empty());
+        assert_eq!(cached_paths(&pool, "owner-a", "photos").await, vec!["p".to_string()]);
+        assert_eq!(cached_paths(&pool, "owner-b", "docs").await, vec!["a".to_string()]);
     }
 
     /// The flag gate: NULL → false, set → true, and `mark` flips it. A second

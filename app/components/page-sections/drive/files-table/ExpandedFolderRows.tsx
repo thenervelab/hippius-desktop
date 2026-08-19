@@ -563,7 +563,12 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
               )}
               onContextMenu={(event) => {
                 if (isDeleting) return;
-                onRowContextMenu?.(event, childFile, sortedChildRows);
+                // `annotatedChild`, not `childFile`: the context menu's share
+                // and delete handlers resolve a folder row's path from
+                // `parentRelativePath`, and the raw row carries only a
+                // basename — which would target a same-named folder at the
+                // drive root.
+                onRowContextMenu?.(event, annotatedChild, sortedChildRows);
               }}
               onClick={(event) => {
                 if (isDeleting) {

@@ -2,8 +2,22 @@
 
 import { useState, useCallback } from "react";
 import { errorMessage } from "@/lib/utils/errorUtils";
+import { isNotReady } from "@/lib/utils/dispatchTauriError";
 import { invoke } from "@tauri-apps/api/core";
 import type { StagedChanges, ConflictResolution } from "@/lib/types/syncTypes";
+
+/**
+ * Outcome of a reviewed sync, so callers can react instead of treating every
+ * completion as success (a failed resolve used to close the dialog silently).
+ *
+ * `syncInProgress` marks the `NotReady(SyncInProgress)` rejection: the
+ * auto-sync loop currently holds this drive's manager for an in-flight cycle
+ * and the reviewed sync never started — surface it as "retry shortly", not as
+ * a failure.
+ */
+export type SyncWithResolutionsResult =
+  | { ok: true }
+  | { ok: false; message: string; syncInProgress: boolean };
 
 /**
  * Hook for staging sync changes and resolving conflicts on a specific drive.
@@ -38,7 +52,9 @@ export function useStagedChanges(
   }, [label]);
 
   const syncWithResolutions = useCallback(
-    async (resolutions: Record<string, ConflictResolution>) => {
+    async (
+      resolutions: Record<string, ConflictResolution>
+    ): Promise<SyncWithResolutionsResult> => {
       setIsSyncing(true);
       setError(null);
       try {
@@ -47,9 +63,15 @@ export function useStagedChanges(
           resolutions,
         });
         setStagedChanges(null);
+        return { ok: true };
       } catch (e) {
         const msg = errorMessage(e);
         setError(msg);
+        return {
+          ok: false,
+          message: msg,
+          syncInProgress: isNotReady(e, "SYNC_IN_PROGRESS"),
+        };
       } finally {
         setIsSyncing(false);
       }

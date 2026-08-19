@@ -452,7 +452,14 @@ mod tests {
     /// hit's `folder_hash` is derived from `hash_label` — modeling production,
     /// where two same-basename drives share `folder_label` but have distinct
     /// `folder_hash`es derived from their unique local labels (`tags`/`tags-2`).
-    fn hit_full(folder_label: &str, hash_label: &str, relative_path: Option<&str>, file_name: Option<&str>, created_at: i64, updated_at: i64) -> SearchFileHit {
+    fn hit_full(
+        folder_label: &str,
+        hash_label: &str,
+        relative_path: Option<&str>,
+        file_name: Option<&str>,
+        created_at: i64,
+        updated_at: i64,
+    ) -> SearchFileHit {
         let mut value = json!({
             "folder_hash": folder_hash(hash_label),
             "folder_label": folder_label,
@@ -571,18 +578,11 @@ mod tests {
     /// on `folder_label` (the old bug) would always pick the first.
     #[test]
     fn same_basename_hit_resolves_by_folder_hash_not_label() {
-        let map = drive_map(&[
-            ("tags", "/Users/me/haloce_mcc/tags"),
-            ("tags-2", "/Users/me/halo2_mcc/tags"),
-        ]);
+        let map = drive_map(&[("tags", "/Users/me/haloce_mcc/tags"), ("tags-2", "/Users/me/halo2_mcc/tags")]);
         // Server display label is the basename "tags"; the hit truly belongs to
         // the tags-2 drive (folder_hash derived from "tags-2").
-        let entry = map_search_hit_to_entry(
-            &hit_full("tags", "tags-2", Some("ui/x.bitmap"), Some("x.bitmap"), 1, 1),
-            &map,
-            &on_disk,
-        )
-        .expect("same-basename hit maps");
+        let entry = map_search_hit_to_entry(&hit_full("tags", "tags-2", Some("ui/x.bitmap"), Some("x.bitmap"), 1, 1), &map, &on_disk)
+            .expect("same-basename hit maps");
 
         assert_eq!(entry.label, "tags-2", "must use the matched drive's LOCAL label");
         assert_eq!(
@@ -754,7 +754,13 @@ mod tests {
         .expect("path_normalization_cases.json is valid JSON");
         assert!(!cases.is_empty(), "fixture must carry cases");
         for case in &cases {
-            assert_eq!(normalize_rel_path(&case.input), case.expected, "normalize_rel_path({:?}) — {}", case.input, case.note);
+            assert_eq!(
+                normalize_rel_path(&case.input),
+                case.expected,
+                "normalize_rel_path({:?}) — {}",
+                case.input,
+                case.note
+            );
         }
     }
 

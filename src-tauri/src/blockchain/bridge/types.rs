@@ -34,7 +34,11 @@ impl BridgeOutcome {
     /// (rejected / submitted-unconfirmed / finalized-failed), where no confirmed
     /// `DepositRequestCreated` / `WithdrawalRequestCreated` event was observed.
     pub(crate) fn status_only(outcome: TxOutcome) -> Self {
-        Self { withdrawal_id: None, deposit_id: None, outcome }
+        Self {
+            withdrawal_id: None,
+            deposit_id: None,
+            outcome,
+        }
     }
 }
 

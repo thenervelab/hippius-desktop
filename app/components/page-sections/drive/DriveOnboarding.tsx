@@ -28,6 +28,7 @@ import {
   SyncDestinationDialog,
   DeleteServerDialog,
   RemoteFolderBrowser,
+  ExclusionsDialog,
 } from "@/components/page-sections/settings/multi-folder-sync";
 import {
   triggerSyncPathRefreshAtom,
@@ -89,6 +90,8 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
   const [isRemoving, setIsRemoving] = useState(false);
 
   // Pause sync dialog state
+  // Drive label whose exclusions are being edited, or null when closed.
+  const [exclusionsLabel, setExclusionsLabel] = useState<string | null>(null);
   const [pauseDialog, setPauseDialog] = useState<{
     open: boolean;
     folder: SyncFolder | null;
@@ -495,6 +498,7 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
           onAddFolder={() => setShowAddDialog(true)}
           onPauseFolder={(folder) => setPauseDialog({ open: true, folder })}
           onResumeFolder={handleResumeSync}
+          onManageExclusions={(folder) => setExclusionsLabel(folder.id)}
           onRemoveFolder={(folder) =>
             setRemoveDialog({
               open: true,
@@ -545,6 +549,12 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
           setRemoveDialog({ open: false, folderId: null, folderName: null })
         }
         onConfirm={handleRemoveFolder}
+      />
+
+      <ExclusionsDialog
+        open={exclusionsLabel !== null}
+        label={exclusionsLabel ?? undefined}
+        onClose={() => setExclusionsLabel(null)}
       />
 
       <PauseSyncDialog

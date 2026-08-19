@@ -1,0 +1,10 @@
+[Nemo Action]
+Name=Share with Hippius
+Comment=Create a Hippius share link for the selected file or folder
+# `sh -c ... _ %F` loops so a multi-select mints one share per path. Quote=double
+# is REQUIRED or paths with spaces break (Nemo actions gotcha).
+Exec=sh -c 'for path in "$@"; do Hippius --finder-share "$path"; done' _ %F
+Icon-Name=hippius
+Selection=any
+Extensions=any;
+Quote=double

@@ -76,32 +76,48 @@
 //! that calls a write method and then re-enters this module via
 //! `emit_snapshot` → `ProgressSnapshot` → reads.
 //!
-//! ## Watchdog (Task 4.2)
+//! ## Watchdog (Task 4.2, idle-based since the large-add fix)
 //!
 //! [`spawn_watchdog`] starts a background tokio task that periodically
-//! scans the map and clears entries whose `last_set_at` is older than
-//! [`BANNER_WATCHDOG_TIMEOUT`]. This is the time-based safety net for
+//! scans the map and clears entries whose `last_activity_at` is older
+//! than [`BANNER_WATCHDOG_IDLE_TIMEOUT`]. This is the safety net for
 //! the case where a sync cycle never starts (e.g., the drive is
 //! queued behind another drive's per-drive mutex) — without it, the
 //! banner sat forever until app restart (original Bug 1 symptom: the
 //! "2-minute stuck toast" report). The watchdog complements, never
 //! replaces, the epoch-gated `clear_if_session_advanced` and the
 //! explicit `reset` / `reset_all` paths.
+//!
+//! The timeout is IDLE-based, not wall-clock: every engine progress
+//! signal for the label (scan, fetch, encrypt, decrypt, per-chunk
+//! transfer — see [`UploadProcessingState::touch`], wired in
+//! `crate::sync::drive::lifecycle::callbacks`) refreshes
+//! `last_activity_at`. A wall-clock timeout measured from `begin`
+//! force-cleared the banner 60s into the scan/hash + per-file
+//! encryption phase of a large add (e.g. a 200 GB batch spends minutes
+//! there before the first uploaded byte), which users read as "upload
+//! never started". A genuinely stuck engine emits no progress at all,
+//! so the anti-stuck purpose survives: 60s of *silence* still clears.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard, Weak};
 use std::time::{Duration, Instant};
 
-/// How long an entry may sit without a progress signal before the
-/// background watchdog clears it.
+/// How long an entry may sit with NO engine activity (no scan / fetch /
+/// encrypt / transfer progress, no `begin`, no clear-gate event) before
+/// the background watchdog clears it.
+///
+/// **Why idle-based:** measured from the last activity signal, not from
+/// `begin`. A wall-clock timeout cleared the banner mid-scan/mid-encrypt
+/// on large adds — minutes of real work before the first uploaded byte —
+/// while the idle form still catches a stuck engine, which by definition
+/// emits nothing.
 ///
 /// **Why 60s:** Long enough to absorb normal queueing (a drive can sit
 /// behind another drive's per-drive sync mutex for tens of seconds on
 /// a slow upload), short enough that a truly stuck banner does not
-/// burn minutes of user attention. The pre-watchdog behavior was
-/// "wait for app restart" — any finite timeout is a strict
-/// improvement, and 60s is the plan's recommended value.
-pub const BANNER_WATCHDOG_TIMEOUT: Duration = Duration::from_mins(1);
+/// burn minutes of user attention.
+pub const BANNER_WATCHDOG_IDLE_TIMEOUT: Duration = Duration::from_mins(1);
 
 /// How often the watchdog scans the map.
 ///
@@ -126,16 +142,16 @@ struct UploadProcessingInner {
     /// call (whether or not it cleared — every event counts as a
     /// progress signal). Read by [`UploadProcessingState::drain_expired`]
     /// to gate the watchdog's auto-clear against the
-    /// [`BANNER_WATCHDOG_TIMEOUT`] window.
+    /// [`BANNER_WATCHDOG_IDLE_TIMEOUT`] window.
     ///
     /// Stored unconditionally (no `Option`) because every code path
     /// that creates an entry initializes this field — the type encodes
     /// that invariant rather than relying on documentation.
-    last_set_at: Instant,
+    last_activity_at: Instant,
 }
 
 impl UploadProcessingInner {
-    /// Construct a fresh entry with `last_set_at` stamped to `now`.
+    /// Construct a fresh entry with `last_activity_at` stamped to `now`.
     ///
     /// Centralises the construction so a future field addition
     /// can't introduce a half-initialised entry through
@@ -146,7 +162,7 @@ impl UploadProcessingInner {
             pending_files: 0,
             started_at: None,
             stamped_epoch: None,
-            last_set_at: now,
+            last_activity_at: now,
         }
     }
 }
@@ -231,14 +247,14 @@ impl UploadProcessingState {
             // First begin in a window stamps started_at + epoch.
             // Subsequent begins inside an already-active window must
             // not restamp those (epoch-gating depends on the first
-            // begin's epoch surviving). last_set_at IS refreshed on
+            // begin's epoch surviving). last_activity_at IS refreshed on
             // every begin so the watchdog's "no progress for 60s"
             // timer resets when the user clicks Upload again.
             if entry.started_at.is_none() {
                 entry.started_at = Some(now);
                 entry.stamped_epoch = Some(current_epoch);
             }
-            entry.last_set_at = now;
+            entry.last_activity_at = now;
             entry.pending_files
         };
         emit(app, label, true, pending);
@@ -248,7 +264,7 @@ impl UploadProcessingState {
     /// when the label has no entry or when the event is from a cycle
     /// that was already running at `begin` time. Idempotent.
     ///
-    /// Side-effect: every call refreshes `last_set_at` on the
+    /// Side-effect: every call refreshes `last_activity_at` on the
     /// surviving entry. This is what makes the call site (per upload
     /// chunk, `SyncCompleted`, `SyncError`) act as a "progress signal"
     /// from the watchdog's perspective — events from the same cycle
@@ -266,13 +282,38 @@ impl UploadProcessingState {
                 true
             } else {
                 if let Some(entry) = g.get_mut(label) {
-                    entry.last_set_at = now;
+                    entry.last_activity_at = now;
                 }
                 false
             }
         };
         if did_clear {
             emit(app, label, false, 0);
+        }
+    }
+
+    /// Refresh `last_activity_at` for `label` if (and only if) it has an
+    /// active entry. No-op for absent labels — a progress tick must never
+    /// conjure a banner that `begin` didn't raise.
+    ///
+    /// This is the idle-watchdog's liveness input: the engine progress
+    /// callbacks (scan / fetch / encrypt / decrypt / per-chunk transfer in
+    /// `crate::sync::drive::lifecycle::callbacks`) call it on every tick, so
+    /// a banner over a multi-minute scan/encrypt phase stays up while a
+    /// stuck engine (no ticks) still idles out after
+    /// [`BANNER_WATCHDOG_IDLE_TIMEOUT`]. Deliberately does NOT emit — the
+    /// visible state (`active`, `pending_files`) is unchanged.
+    pub fn touch(&self, label: &str) {
+        self.touch_for_test_at(Instant::now(), label);
+    }
+
+    /// Clock-injected body of [`Self::touch`]. Exposed `pub` +
+    /// `#[doc(hidden)]` (same shape as `begin_for_test_at`) so the
+    /// integration watchdog tests can drive known-old activity stamps.
+    #[doc(hidden)]
+    pub fn touch_for_test_at(&self, now: Instant, label: &str) {
+        if let Some(entry) = self.lock().get_mut(label) {
+            entry.last_activity_at = now;
         }
     }
 
@@ -285,8 +326,8 @@ impl UploadProcessingState {
         }
     }
 
-    /// Remove every entry whose `last_set_at` is more than
-    /// [`BANNER_WATCHDOG_TIMEOUT`] before `now`. Returns the sorted
+    /// Remove every entry whose `last_activity_at` is more than
+    /// [`BANNER_WATCHDOG_IDLE_TIMEOUT`] before `now`. Returns the sorted
     /// list of cleared labels so the caller can emit one
     /// `{ active: false, pending_files: 0 }` event per cleared banner
     /// outside the lock.
@@ -306,8 +347,8 @@ impl UploadProcessingState {
         let stale: Vec<String> = g
             .iter()
             .filter_map(|(label, entry)| {
-                now.checked_duration_since(entry.last_set_at)
-                    .filter(|elapsed| *elapsed >= BANNER_WATCHDOG_TIMEOUT)
+                now.checked_duration_since(entry.last_activity_at)
+                    .filter(|elapsed| *elapsed >= BANNER_WATCHDOG_IDLE_TIMEOUT)
                     .map(|_| label.clone())
             })
             .collect();
@@ -361,7 +402,7 @@ impl UploadProcessingState {
     }
 
     /// Test-only entry point that mirrors [`Self::begin`] but with an
-    /// injectable `Instant` for the `last_set_at` field. Exposes the
+    /// injectable `Instant` for the `last_activity_at` field. Exposes the
     /// timestamp axis to watchdog tests that must construct
     /// known-old entries.
     ///
@@ -379,12 +420,12 @@ impl UploadProcessingState {
             entry.started_at = Some(now);
             entry.stamped_epoch = Some(current_epoch);
         }
-        entry.last_set_at = now;
+        entry.last_activity_at = now;
     }
 
     /// Test-only entry point that mirrors [`Self::clear_if_session_advanced`]
     /// without emitting a Tauri event. Allows the watchdog tests to
-    /// drive the "progress signal refreshes last_set_at" path with a
+    /// drive the "progress signal refreshes last_activity_at" path with a
     /// known `Instant`.
     #[doc(hidden)]
     pub fn clear_if_session_advanced_for_test_at(&self, now: Instant, label: &str, event_epoch: u64) {
@@ -393,7 +434,7 @@ impl UploadProcessingState {
         if should_remove {
             g.remove(label);
         } else if let Some(entry) = g.get_mut(label) {
-            entry.last_set_at = now;
+            entry.last_activity_at = now;
         }
     }
 
@@ -456,7 +497,7 @@ fn emit(app: &tauri::AppHandle, label: &str, active: bool, pending_files: u64) {
 ///
 /// Called once at app setup (after `AppState` is constructed). The
 /// task wakes every [`BANNER_WATCHDOG_SCAN_INTERVAL`] and clears any
-/// entry whose `last_set_at` is older than [`BANNER_WATCHDOG_TIMEOUT`].
+/// entry whose `last_activity_at` is older than [`BANNER_WATCHDOG_IDLE_TIMEOUT`].
 ///
 /// **Ownership:** the task holds a `Weak<UploadProcessingState>` so it
 /// does NOT keep the state alive past app shutdown. If the upgrade
@@ -489,7 +530,7 @@ pub fn spawn_watchdog(state: Weak<UploadProcessingState>, app: tauri::AppHandle)
                 tracing::warn!(
                     target: "hippius_desktop::sync::upload_processing",
                     label = %label,
-                    timeout_secs = BANNER_WATCHDOG_TIMEOUT.as_secs(),
+                    timeout_secs = BANNER_WATCHDOG_IDLE_TIMEOUT.as_secs(),
                     "auto-clearing stale upload-processing banner",
                 );
                 emit(&app, &label, false, 0);
@@ -687,6 +728,47 @@ mod tests {
         // Still valid to begin afterward.
         s.begin_for_test("never-began", 1, 1);
         assert!(s.is_active_for("never-began"));
+    }
+
+    // -----------------------------------------------------------------
+    // Idle-based watchdog: engine activity keeps the banner alive.
+    // -----------------------------------------------------------------
+
+    /// A scan/fetch/encrypt/upload progress tick (`touch`) refreshes the
+    /// idle window: an entry whose last activity is recent must survive
+    /// `drain_expired` even when the ORIGINAL `begin` is far older than
+    /// the idle timeout. This is the large-add fix — a multi-minute
+    /// scan/encrypt phase emits progress the whole time, so the banner
+    /// must not be force-cleared at 60s of wall clock.
+    #[test]
+    fn touch_extends_idle_window_past_timeout_from_begin() {
+        let s = UploadProcessingState::new();
+        let t0 = Instant::now();
+        s.begin_for_test_at(t0, "drive-a", 1, 1);
+        // Engine progress ticks land well past the idle timeout measured
+        // from `begin`, each refreshing the window.
+        let tick = t0 + BANNER_WATCHDOG_IDLE_TIMEOUT + Duration::from_secs(30);
+        s.touch_for_test_at(tick, "drive-a");
+        // A sweep AFTER the tick (but within one idle window of it) must
+        // keep the entry alive.
+        let sweep = tick + Duration::from_secs(10);
+        assert!(s.drain_expired_for_test(sweep).is_empty(), "recent activity must protect the banner");
+        assert!(s.is_active_for("drive-a"));
+        // With no further activity, the entry expires one idle window
+        // after the LAST tick — the anti-stuck purpose is preserved.
+        let idle_sweep = tick + BANNER_WATCHDOG_IDLE_TIMEOUT;
+        assert_eq!(s.drain_expired_for_test(idle_sweep), vec!["drive-a".to_string()]);
+    }
+
+    /// `touch` on a label with no entry must NOT create one — a progress
+    /// tick from a cycle with no banner (e.g. a watcher-initiated sync)
+    /// must not conjure a phantom banner.
+    #[test]
+    fn touch_on_absent_label_is_noop() {
+        let s = UploadProcessingState::new();
+        s.touch_for_test_at(Instant::now(), "drive-a");
+        assert!(!s.is_active_for("drive-a"));
+        assert!(s.active_labels_for_test().is_empty());
     }
 
     /// Re-entrancy guardrail (parallels `PreparingState`).

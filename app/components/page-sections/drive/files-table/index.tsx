@@ -40,6 +40,11 @@ import {
   canRenameFile,
   RENAME_DISABLED_TOOLTIP,
 } from "@/app/lib/utils/renameGating";
+import {
+  canShareFolder,
+  FOLDER_SHARE_DISABLED_TOOLTIP,
+  shareTargetFor,
+} from "@/app/lib/utils/folderShareGating";
 import { cn } from "@/lib/utils";
 import NameCell from "./NameCell";
 import SelectionActionBar from "../SelectionActionBar";
@@ -763,19 +768,36 @@ const FilesTable: FC<FilesTableProps> = memo(
                 },
               ]
             : []),
-          // Share via link — same gating as the right-click context menu
-          // in `app/components/ui/context-menu/index.tsx`. Hidden for
-          // folders, mid-flight files, and old hcfs-servers that don't
-          // advertise `shares: true`.
-          ...(!file.isFolder && file.syncStatus === "synced" && shareEnabled
+          // Share via link — same gating as the right-click context menu in
+          // `app/components/ui/context-menu/index.tsx`. A FILE must be fully
+          // uploaded so the recipient's anonymous fetch succeeds. A FOLDER is
+          // zipped from disk, so it is shown but disabled unless every child is
+          // here (`canShareFolder`) — visible-but-disabled, like Rename, so the
+          // capability is discoverable rather than silently absent.
+          ...((file.isFolder || file.syncStatus === "synced") && shareEnabled
             ? [
                 {
                   icon: <Link2 className="size-4" />,
                   itemTitle: "Share via link",
                   onItemClick: () => {
-                    setShareModalFile(file);
+                    if (file.isFolder && !canShareFolder(file)) return;
+                    // `parentSubFolderPath` is the expanded subtree's own path;
+                    // falling back to the page's path would resolve a nested
+                    // folder against the drive root and share a DIFFERENT
+                    // folder. Same expression as the delete and retry items.
+                    setShareModalFile(
+                      shareTargetFor(
+                        file,
+                        parentSubFolderPath ?? normalizedSubfolderPath,
+                      ),
+                    );
                   },
-                  disabled: itemDeleting,
+                  disabled:
+                    itemDeleting || (file.isFolder && !canShareFolder(file)),
+                  tooltip:
+                    !itemDeleting && file.isFolder && !canShareFolder(file)
+                      ? FOLDER_SHARE_DISABLED_TOOLTIP
+                      : undefined,
                 },
               ]
             : []),

@@ -100,7 +100,10 @@ mod tests {
         let r = roots(&[("docs", "/Users/me/Hippius")]);
         assert_eq!(
             resolve_share_target(Path::new("/Users/me/Hippius/notes/a.txt"), &r),
-            ShareTarget::InDrive { label: "docs".into(), relative_path: "notes/a.txt".into() }
+            ShareTarget::InDrive {
+                label: "docs".into(),
+                relative_path: "notes/a.txt".into()
+            }
         );
     }
 
@@ -109,7 +112,10 @@ mod tests {
         let r = roots(&[("docs", "/Users/me/Hippius")]);
         assert_eq!(
             resolve_share_target(Path::new("/Users/me/Hippius"), &r),
-            ShareTarget::InDrive { label: "docs".into(), relative_path: String::new() }
+            ShareTarget::InDrive {
+                label: "docs".into(),
+                relative_path: String::new()
+            }
         );
     }
 
@@ -118,7 +124,10 @@ mod tests {
         let r = roots(&[("outer", "/a"), ("inner", "/a/b")]);
         assert_eq!(
             resolve_share_target(Path::new("/a/b/c.txt"), &r),
-            ShareTarget::InDrive { label: "inner".into(), relative_path: "c.txt".into() }
+            ShareTarget::InDrive {
+                label: "inner".into(),
+                relative_path: "c.txt".into()
+            }
         );
     }
 
@@ -145,10 +154,7 @@ mod tests {
     fn parent_dir_in_remainder_is_rejected() {
         // A non-normalized clicked path escaping via `..` must not resolve in-drive.
         let r = roots(&[("docs", "/Users/me/Hippius")]);
-        assert_eq!(
-            resolve_share_target(Path::new("/Users/me/Hippius/../secret"), &r),
-            ShareTarget::Outside
-        );
+        assert_eq!(resolve_share_target(Path::new("/Users/me/Hippius/../secret"), &r), ShareTarget::Outside);
     }
 
     #[test]
@@ -156,7 +162,10 @@ mod tests {
         let r = roots(&[("docs", "/Users/me/Hippius")]);
         assert_eq!(
             resolve_share_target(Path::new("/Users/me/Hippius/./a/./b.txt"), &r),
-            ShareTarget::InDrive { label: "docs".into(), relative_path: "a/b.txt".into() }
+            ShareTarget::InDrive {
+                label: "docs".into(),
+                relative_path: "a/b.txt".into()
+            }
         );
     }
 
@@ -166,7 +175,10 @@ mod tests {
         let r = roots(&[("docs", "/d")]);
         assert_eq!(
             resolve_share_target(Path::new("/d/foo..bar"), &r),
-            ShareTarget::InDrive { label: "docs".into(), relative_path: "foo..bar".into() }
+            ShareTarget::InDrive {
+                label: "docs".into(),
+                relative_path: "foo..bar".into()
+            }
         );
     }
 

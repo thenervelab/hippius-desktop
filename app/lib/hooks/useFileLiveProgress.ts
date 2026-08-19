@@ -22,6 +22,17 @@ export interface LiveFileProgress {
 
 const EMPTY: LiveFileProgress = { status: null, progressPercent: null };
 
+/** Composite map built once per snapshot so each row is an O(1) lookup. */
+export type LiveProgressIndex = Map<string, LiveFileProgress>;
+
+function pathKey(label: string | undefined, path: string): string {
+  return label === undefined ? `p\0${path}` : `p\0${label}\0${path}`;
+}
+
+function nameKey(label: string | undefined, name: string): string {
+  return label === undefined ? `n\0${name}` : `n\0${label}\0${name}`;
+}
+
 function deriveLiveStatus(file: FileProgress): LiveFileStatus | null {
   if (file.status === "error") return "failed";
   if (file.status === "completed") return "synced";
@@ -81,6 +92,131 @@ export function findLiveFileMatch(
   return byName.length === 1 ? byName[0] : null;
 }
 
+function toLiveProgress(file: FileProgress): LiveFileProgress {
+  const status = deriveLiveStatus(file);
+  if (!status) return EMPTY;
+  const bucketed =
+    Math.floor(file.progressPercent / PROGRESS_BUCKET) * PROGRESS_BUCKET;
+  return { status, progressPercent: bucketed };
+}
+
+function pushBucket(
+  buckets: Map<string, FileProgress[]>,
+  key: string,
+  file: FileProgress,
+): void {
+  const existing = buckets.get(key);
+  if (existing) {
+    existing.push(file);
+  } else {
+    buckets.set(key, [file]);
+  }
+}
+
+/**
+ * Scan the snapshot file list once and index every unambiguous
+ * path / basename lookup `findLiveFileMatch` would accept.
+ *
+ * Ambiguous buckets (same basename in two folders, same path in two
+ * drives when unscoped) are omitted — a blank badge is correct, another
+ * file's percent is not.
+ */
+export function buildLiveProgressIndex(
+  files: FileProgress[],
+): LiveProgressIndex {
+  const byPathAll = new Map<string, FileProgress[]>();
+  const byPathLabel = new Map<string, FileProgress[]>();
+  const byNameAll = new Map<string, FileProgress[]>();
+  const byNameLabel = new Map<string, FileProgress[]>();
+
+  for (const file of files) {
+    const path = normalizeRelPath(file.path);
+    pushBucket(byPathAll, path, file);
+    pushBucket(byPathLabel, `${file.label}\0${path}`, file);
+    pushBucket(byNameAll, file.fileName, file);
+    pushBucket(byNameLabel, `${file.label}\0${file.fileName}`, file);
+  }
+
+  const index: LiveProgressIndex = new Map();
+
+  const putIfUnique = (key: string, bucket: FileProgress[]) => {
+    if (bucket.length !== 1) return;
+    const only = bucket[0];
+    if (only === undefined) return;
+    const progress = toLiveProgress(only);
+    if (progress.status === null) return;
+    index.set(key, progress);
+  };
+
+  for (const [path, bucket] of byPathAll) {
+    putIfUnique(pathKey(undefined, path), bucket);
+  }
+  for (const [composite, bucket] of byPathLabel) {
+    const sep = composite.indexOf("\0");
+    const label = composite.slice(0, sep);
+    const path = composite.slice(sep + 1);
+    putIfUnique(pathKey(label, path), bucket);
+  }
+  for (const [name, bucket] of byNameAll) {
+    putIfUnique(nameKey(undefined, name), bucket);
+  }
+  for (const [composite, bucket] of byNameLabel) {
+    const sep = composite.indexOf("\0");
+    const label = composite.slice(0, sep);
+    const name = composite.slice(sep + 1);
+    putIfUnique(nameKey(label, name), bucket);
+  }
+
+  return index;
+}
+
+export function liveProgressIndexEqual(
+  a: LiveProgressIndex,
+  b: LiveProgressIndex,
+): boolean {
+  if (a.size !== b.size) return false;
+  for (const [key, value] of a) {
+    const other = b.get(key);
+    if (
+      other === undefined ||
+      other.status !== value.status ||
+      other.progressPercent !== value.progressPercent
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export function lookupLiveProgress(
+  index: LiveProgressIndex,
+  actualName: string | undefined,
+  fileName: string,
+  label?: string,
+): LiveFileProgress {
+  const key = actualName || fileName;
+  const path = normalizeRelPath(key);
+  if (label !== undefined) {
+    return (
+      index.get(pathKey(label, path)) ??
+      index.get(nameKey(label, key)) ??
+      EMPTY
+    );
+  }
+  return index.get(pathKey(undefined, path)) ?? index.get(nameKey(undefined, key)) ?? EMPTY;
+}
+
+/**
+ * One index per snapshot (scan the file list once), then each row
+ * selects only its own bucketed status/percent so a 4 Hz tick on
+ * another file does not re-render this row.
+ */
+export const liveProgressIndexAtom = selectAtom(
+  snapshotAtom,
+  (snapshot) => buildLiveProgressIndex(snapshot.files),
+  liveProgressIndexEqual,
+);
+
 /**
  * Subscribes to the sync snapshot and returns the live progress entry
  * matching this file, or `EMPTY` if the file is not currently in flight.
@@ -94,24 +230,17 @@ export function useFileLiveProgress(
   fileName: string,
   label?: string,
 ): LiveFileProgress {
-  const derivedAtom = useMemo(() => {
-    const key = actualName || fileName;
-    return selectAtom(
-      snapshotAtom,
-      (snapshot): LiveFileProgress => {
-        const match = findLiveFileMatch(snapshot.files, key, label);
-        if (!match) return EMPTY;
-        const status = deriveLiveStatus(match);
-        if (!status) return EMPTY;
-        const bucketed =
-          Math.floor(match.progressPercent / PROGRESS_BUCKET) *
-          PROGRESS_BUCKET;
-        return { status, progressPercent: bucketed };
-      },
-      (a, b) =>
-        a.status === b.status && a.progressPercent === b.progressPercent,
-    );
-  }, [actualName, fileName, label]);
+  const derivedAtom = useMemo(
+    () =>
+      selectAtom(
+        liveProgressIndexAtom,
+        (index): LiveFileProgress =>
+          lookupLiveProgress(index, actualName, fileName, label),
+        (a, b) =>
+          a.status === b.status && a.progressPercent === b.progressPercent,
+      ),
+    [actualName, fileName, label],
+  );
 
   return useAtomValue(derivedAtom);
 }

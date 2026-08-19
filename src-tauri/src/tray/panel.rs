@@ -80,13 +80,7 @@ impl TrayIconRect {
                 0
             }
         };
-        let dim = |v: f64| -> i32 {
-            if v.is_finite() {
-                v.round().clamp(0.0, MAX_COORD) as i32
-            } else {
-                0
-            }
-        };
+        let dim = |v: f64| -> i32 { if v.is_finite() { v.round().clamp(0.0, MAX_COORD) as i32 } else { 0 } };
         Rect {
             x: coord(self.x),
             y: coord(self.y),
@@ -349,7 +343,12 @@ mod tests {
     fn to_rect_maps_non_finite_to_zero() {
         assert_eq!(
             rect(f64::NAN, f64::INFINITY, f64::NEG_INFINITY, f64::NAN),
-            Rect { x: 0, y: 0, width: 0, height: 0 }
+            Rect {
+                x: 0,
+                y: 0,
+                width: 0,
+                height: 0
+            }
         );
     }
 
@@ -365,6 +364,14 @@ mod tests {
 
     #[test]
     fn to_rect_rounds_normal_values() {
-        assert_eq!(rect(10.4, 20.6, 30.0, 40.0), Rect { x: 10, y: 21, width: 30, height: 40 });
+        assert_eq!(
+            rect(10.4, 20.6, 30.0, 40.0),
+            Rect {
+                x: 10,
+                y: 21,
+                width: 30,
+                height: 40
+            }
+        );
     }
 }

@@ -5,6 +5,10 @@ import { Icons } from "@/components/ui";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
+import {
+  canShareFolder,
+  FOLDER_SHARE_DISABLED_TOOLTIP,
+} from "@/app/lib/utils/folderShareGating";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
 import { useAtomValue } from "jotai";
@@ -225,23 +229,38 @@ export default function FileContextMenu({
           })()}
 
           {/*
-            Share via link — appears only when:
-            - the file is not a folder (folder-shares are out of scope for v1),
-            - the sync engine has finished uploading it (`syncStatus === "synced"`)
-              so the recipient's anonymous fetch will succeed,
-            - the server advertises `shares: true` (capability gating), AND
-            - a parent wired `onShareFile`.
-            Folders, in-flight files, and old-server deployments all hide
-            the row entirely rather than showing a disabled item — fewer
-            edge cases for the user to interpret.
+            Share via link — appears when the server advertises `shares: true`,
+            a parent wired `onShareFile`, and either:
+            - a FILE the sync engine has finished uploading (`syncStatus ===
+              "synced"`), so the recipient's anonymous fetch will succeed, or
+            - a FOLDER, which is packed into one zip from disk.
+
+            An in-flight file and an old-server deployment still hide the row
+            entirely. A folder that isn't fully here shows DISABLED with a
+            tooltip instead (`canShareFolder`), matching Rename: the capability
+            stays discoverable and the reason is stated, rather than the item
+            silently differing between two folders that look alike.
           */}
-          {!file.isFolder
-            && file.syncStatus === "synced"
+          {(file.isFolder || file.syncStatus === "synced")
             && shareEnabled
             && onShareFile && (
               <button
-                className={menuItemClass}
+                // `menuItemClass` hard-codes cursor-pointer and hover styling
+                // with no disabled variant, so without this the row looks fully
+                // enabled and the first click is a dead one. Mirrors the Rename
+                // and Delete rows below.
+                className={cn(menuItemClass, {
+                  "opacity-60 cursor-not-allowed":
+                    file.isFolder && !canShareFolder(file),
+                })}
+                disabled={file.isFolder && !canShareFolder(file)}
+                title={
+                  file.isFolder && !canShareFolder(file)
+                    ? FOLDER_SHARE_DISABLED_TOOLTIP
+                    : undefined
+                }
                 onClick={() => {
+                  if (file.isFolder && !canShareFolder(file)) return;
                   onShareFile(file);
                   onClose();
                 }}

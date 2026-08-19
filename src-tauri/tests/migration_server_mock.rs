@@ -1,15 +1,21 @@
 //! Integration tests for the migration client ↔ server HTTP contract.
 //!
 //! Spins up a mock axum server that mimics the hcfs-server migration
-//! endpoints (`GET /migration/{user_id}` and `POST /migration`), then
+//! endpoints (`GET /migration/{user_id}`, `GET /migration/{user_id}/status`,
+//! `POST /migration/cancel`, and legacy `POST /migration`), then
 //! exercises the desktop client's HTTP functions against it.
+//!
+//! Summary, status, and cancel require `Authorization: Bearer …`.
+//! Missing or non-Bearer Authorization is 401 — the same check a later
+//! HCFS `validate_and_authorize` will enforce. Legacy `POST /migration`
+//! stays unauthenticated here (prod desktop does not call it).
 //!
 //! No live server, no S3, no Tauri AppHandle — just the HTTP contract.
 
 use axum::{
     Json, Router,
     extract::{Path, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{get, post},
 };
@@ -80,7 +86,27 @@ impl MockState {
 // Mock server handlers (mirrors hcfs-server migration endpoints)
 // =========================================================================
 
-async fn get_migration_status(State(state): State<MockState>, Path(user_id): Path<String>) -> impl IntoResponse {
+/// HCFS scheme is Bearer, not Token (Token is api.hippius.com / S3).
+fn require_hcfs_bearer(headers: &HeaderMap) -> Result<(), (StatusCode, &'static str)> {
+    let Some(value) = headers.get(axum::http::header::AUTHORIZATION) else {
+        return Err((StatusCode::UNAUTHORIZED, "missing Authorization"));
+    };
+    let Ok(raw) = value.to_str() else {
+        return Err((StatusCode::UNAUTHORIZED, "invalid Authorization"));
+    };
+    let Some(token) = raw.strip_prefix("Bearer ") else {
+        return Err((StatusCode::UNAUTHORIZED, "expected Bearer token"));
+    };
+    if token.is_empty() {
+        return Err((StatusCode::UNAUTHORIZED, "empty Bearer token"));
+    }
+    Ok(())
+}
+
+async fn get_migration_status(State(state): State<MockState>, Path(user_id): Path<String>, headers: HeaderMap) -> impl IntoResponse {
+    if let Err(resp) = require_hcfs_bearer(&headers) {
+        return resp.into_response();
+    }
     let guard = state.files.lock().expect("lock poisoned");
     let files = match guard.get(&user_id) {
         Some(f) => f.clone(),
@@ -146,6 +172,34 @@ async fn migration_report(State(state): State<MockState>, Json(report): Json<Mig
     StatusCode::OK.into_response()
 }
 
+async fn get_job_status(Path(_user_id): Path<String>, headers: HeaderMap) -> impl IntoResponse {
+    if let Err(resp) = require_hcfs_bearer(&headers) {
+        return resp.into_response();
+    }
+    Json(serde_json::json!({
+        "status": "in_progress",
+        "total": 0,
+        "completed": 0,
+        "failed": 0,
+    }))
+    .into_response()
+}
+
+#[derive(Deserialize)]
+struct CancelBody {
+    /// Present on the wire (`{ "ss58_address": ... }`); the mock only
+    /// checks Authorization, so the field is unread after deserialize.
+    #[expect(dead_code, reason = "documents the cancel JSON body contract")]
+    ss58_address: String,
+}
+
+async fn cancel_migration(headers: HeaderMap, Json(_body): Json<CancelBody>) -> impl IntoResponse {
+    if let Err(resp) = require_hcfs_bearer(&headers) {
+        return resp.into_response();
+    }
+    StatusCode::OK.into_response()
+}
+
 async fn internal_server_error() -> impl IntoResponse {
     (StatusCode::INTERNAL_SERVER_ERROR, "Something went wrong on the server").into_response()
 }
@@ -165,6 +219,8 @@ async fn malformed_json() -> impl IntoResponse {
 fn mock_router(state: MockState) -> Router {
     Router::new()
         .route("/migration/{user_id}", get(get_migration_status))
+        .route("/migration/{user_id}/status", get(get_job_status))
+        .route("/migration/cancel", post(cancel_migration))
         .route("/migration", post(migration_report))
         .with_state(state)
 }
@@ -221,6 +277,25 @@ fn test_client() -> reqwest::Client {
         .expect("build test HTTP client")
 }
 
+/// Mirrors the desktop `get_api_token` value sent as `Authorization: Bearer`.
+const TEST_API_TOKEN: &str = "test-api-token";
+
+fn bearer_value() -> String {
+    format!("Bearer {TEST_API_TOKEN}")
+}
+
+async fn get_summary_response(base_url: &str, user_id: &str) -> MigrationStatusResponse {
+    test_client()
+        .get(format!("{}/migration/{}", base_url.trim_end_matches('/'), user_id))
+        .header("Authorization", bearer_value())
+        .send()
+        .await
+        .expect("summary GET")
+        .json()
+        .await
+        .expect("summary JSON")
+}
+
 // =========================================================================
 // Helper: fetch migration files (mirrors desktop client logic)
 // =========================================================================
@@ -230,6 +305,7 @@ async fn fetch_migration_files(base_url: &str, user_id: &str) -> Result<Vec<Migr
     let client = test_client();
     let resp = client
         .get(&url)
+        .header("Authorization", bearer_value())
         .header("X-API-Key", "Arion")
         .send()
         .await
@@ -437,14 +513,7 @@ async fn report_all_files_completes_migration() {
         .unwrap();
 
     // Fetch raw response to check needs_migration flag
-    let resp: MigrationStatusResponse = test_client()
-        .get(format!("{url}/migration/user1"))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
+    let resp: MigrationStatusResponse = get_summary_response(&url, "user1").await;
 
     assert!(!resp.needs_migration);
     assert!(resp.files.iter().all(|f| f.status == "Migrated"));
@@ -596,14 +665,7 @@ async fn mixed_pending_and_migrated_returns_needs_migration() {
     );
     let url = start_mock_server(state).await;
 
-    let resp: MigrationStatusResponse = test_client()
-        .get(format!("{url}/migration/user1"))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
+    let resp: MigrationStatusResponse = get_summary_response(&url, "user1").await;
 
     assert!(resp.needs_migration);
     assert_eq!(resp.file_count, 2);
@@ -635,14 +697,7 @@ async fn total_size_sums_all_files() {
     );
     let url = start_mock_server(state).await;
 
-    let resp: MigrationStatusResponse = test_client()
-        .get(format!("{url}/migration/user1"))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
+    let resp: MigrationStatusResponse = get_summary_response(&url, "user1").await;
 
     assert_eq!(resp.total_size, 3072);
 }
@@ -667,14 +722,7 @@ async fn large_batch_report() {
     let keys: Vec<String> = (0..100).map(|i| format!("file_{i}.dat")).collect();
     report_migrated(&url, "user1", "files", keys).await.unwrap();
 
-    let resp: MigrationStatusResponse = test_client()
-        .get(format!("{url}/migration/user1"))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
+    let resp: MigrationStatusResponse = get_summary_response(&url, "user1").await;
 
     assert!(!resp.needs_migration);
     assert_eq!(resp.file_count, 100);
@@ -752,14 +800,7 @@ async fn full_migration_lifecycle() {
 
     // The raw response should show needs_migration = false
     // (manifest file is still Pending on server but client filters it out)
-    let resp: MigrationStatusResponse = test_client()
-        .get(format!("{url}/migration/user1"))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
+    let resp: MigrationStatusResponse = get_summary_response(&url, "user1").await;
 
     // Server still has manifest as Pending, so needs_migration is true
     // from server's perspective — but the client filters it out
@@ -1003,14 +1044,7 @@ async fn needs_migration_false_when_all_already_migrated() {
     );
     let url = start_mock_server(state).await;
 
-    let resp: MigrationStatusResponse = test_client()
-        .get(format!("{url}/migration/user1"))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
+    let resp: MigrationStatusResponse = get_summary_response(&url, "user1").await;
 
     assert!(!resp.needs_migration);
     assert_eq!(resp.file_count, 2);
@@ -1032,14 +1066,7 @@ async fn zero_byte_files_handled_correctly() {
     );
     let url = start_mock_server(state).await;
 
-    let resp: MigrationStatusResponse = test_client()
-        .get(format!("{url}/migration/user1"))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
+    let resp: MigrationStatusResponse = get_summary_response(&url, "user1").await;
 
     assert!(resp.needs_migration);
     assert_eq!(resp.total_size, 0);
@@ -1104,14 +1131,7 @@ async fn partial_batch_report_leaves_unreported_pending() {
     let keys: Vec<String> = (0..5).map(|i| format!("file_{i}.dat")).collect();
     report_migrated(&url, "user1", "files", keys).await.unwrap();
 
-    let resp: MigrationStatusResponse = test_client()
-        .get(format!("{url}/migration/user1"))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
+    let resp: MigrationStatusResponse = get_summary_response(&url, "user1").await;
 
     assert!(resp.needs_migration);
     let migrated = resp.files.iter().filter(|f| f.status == "Migrated").count();
@@ -1154,4 +1174,82 @@ async fn report_cross_bucket_key_does_not_affect_other_bucket() {
     let b = files.iter().find(|f| f.bucket_name == "bucket_b").unwrap();
     assert_eq!(a.status, "Migrated");
     assert_eq!(b.status, "Pending");
+}
+
+// =========================================================================
+// HCFS Bearer authorization (summary GET, status GET, cancel POST)
+// =========================================================================
+
+#[derive(Clone, Copy, Debug)]
+enum HcfsMigrationEndpoint {
+    Summary,
+    Status,
+    Cancel,
+}
+
+fn hcfs_migration_request(client: &reqwest::Client, base: &str, endpoint: HcfsMigrationEndpoint) -> reqwest::RequestBuilder {
+    match endpoint {
+        HcfsMigrationEndpoint::Summary => client.get(format!("{base}/migration/user1")),
+        HcfsMigrationEndpoint::Status => client.get(format!("{base}/migration/user1/status")),
+        HcfsMigrationEndpoint::Cancel => client
+            .post(format!("{base}/migration/cancel"))
+            .json(&serde_json::json!({ "ss58_address": "user1" })),
+    }
+}
+
+/// Summary, status, and cancel must 401 when Authorization is missing,
+/// uses the api.hippius.com `Token` scheme, or is an empty Bearer. A
+/// `Bearer <token>` request must succeed. This is the desktop-side
+/// contract a later HCFS `validate_and_authorize` will rely on.
+#[tokio::test]
+async fn hcfs_migration_routes_require_bearer_authorization() {
+    let url = start_mock_server(MockState::new()).await;
+    let client = test_client();
+    let endpoints = [
+        HcfsMigrationEndpoint::Summary,
+        HcfsMigrationEndpoint::Status,
+        HcfsMigrationEndpoint::Cancel,
+    ];
+
+    for endpoint in endpoints {
+        let missing = hcfs_migration_request(&client, &url, endpoint).send().await.expect("send missing-auth");
+        assert_eq!(
+            missing.status(),
+            reqwest::StatusCode::UNAUTHORIZED,
+            "{endpoint:?} must 401 without Authorization"
+        );
+
+        let token_scheme = hcfs_migration_request(&client, &url, endpoint)
+            .header("Authorization", format!("Token {TEST_API_TOKEN}"))
+            .send()
+            .await
+            .expect("send Token scheme");
+        assert_eq!(
+            token_scheme.status(),
+            reqwest::StatusCode::UNAUTHORIZED,
+            "{endpoint:?} must 401 on Token scheme (HCFS is Bearer)"
+        );
+
+        let empty_bearer = hcfs_migration_request(&client, &url, endpoint)
+            .header("Authorization", "Bearer ")
+            .send()
+            .await
+            .expect("send empty Bearer");
+        assert_eq!(
+            empty_bearer.status(),
+            reqwest::StatusCode::UNAUTHORIZED,
+            "{endpoint:?} must 401 on empty Bearer token"
+        );
+
+        let bearer = hcfs_migration_request(&client, &url, endpoint)
+            .header("Authorization", bearer_value())
+            .send()
+            .await
+            .expect("send Bearer");
+        assert!(
+            bearer.status().is_success(),
+            "{endpoint:?} must accept Authorization: Bearer, got {}",
+            bearer.status()
+        );
+    }
 }

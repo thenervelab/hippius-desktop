@@ -1,7 +1,14 @@
 "use client";
 
 import { ChevronDown, ChevronUp } from "lucide-react";
-import React, { memo, useCallback, useEffect, useRef, useState } from "react";
+import React, {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useAtomValue } from "jotai";
 
 import * as Icons from "@/components/ui/icons";
@@ -63,6 +70,10 @@ interface SyncStatusDialogProps {
 
 interface SyncFileItemProps {
   file: FileProgress;
+  /** True when Rust flagged this row's failure as self-resolving. Passed in
+   * rather than derived here: the classification is Rust's (the reason string
+   * is display copy, not a contract), and the row only joins by path. */
+  isRetrying?: boolean;
 }
 
 type SyncFileStatusBadgeVariant =
@@ -70,6 +81,9 @@ type SyncFileStatusBadgeVariant =
   | "pending"
   | "success"
   | "error"
+  // A failure the engine resolves by itself on the next cycle. Amber, not red:
+  // red tells the user to act, and there is nothing here for them to do.
+  | "retrying"
   | "active"
   | "neutral";
 
@@ -244,6 +258,8 @@ function SyncFileStatusBadge({
     icon = <SyncFileStatusDot outerColor="#D1FADF" innerColor="#04C870" />;
   } else if (variant === "error") {
     icon = <SyncFileStatusDot outerColor="#FF6D6133" innerColor="#FF6D61" />;
+  } else if (variant === "retrying") {
+    icon = <SyncFileStatusDot outerColor="#FAEED1" innerColor="#FEB101" />;
   } else if (variant === "active") {
     icon = <SyncFileStatusDot outerColor="#D3DFF8" innerColor="#3167DD" />;
   } else if (variant === "neutral") {
@@ -268,7 +284,7 @@ function SyncFileStatusBadge({
 }
 
 const SyncFileItem = memo<SyncFileItemProps>(
-  function SyncFileItem({ file }) {
+  function SyncFileItem({ file, isRetrying = false }) {
     const isCompleted = file.status === "completed";
     const isDeleted =
       isCompleted &&
@@ -297,8 +313,8 @@ const SyncFileItem = memo<SyncFileItemProps>(
       pillText = file.action === "download" ? "Downloaded" : "Synced";
       badgeVariant = "success";
     } else if (isError) {
-      pillText = "Error";
-      badgeVariant = "error";
+      pillText = isRetrying ? "Retrying" : "Error";
+      badgeVariant = isRetrying ? "retrying" : "error";
     } else if (isInProgress) {
       pillText = `${file.progressPercent}%`;
       badgeVariant = "progress";
@@ -362,7 +378,10 @@ const SyncFileItem = memo<SyncFileItemProps>(
       previousFile.action === nextFile.action &&
       previousFile.fileName === nextFile.fileName &&
       previousFile.totalBytes === nextFile.totalBytes &&
-      previousFile.error === nextFile.error
+      previousFile.error === nextFile.error &&
+      // Without this the row keeps its stale badge: the file fields are
+      // identical across the frame where Rust first flags it as retrying.
+      previous.isRetrying === next.isRetrying
     );
   },
 );
@@ -377,6 +396,13 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const engineHealth = useAtomValue(syncEngineHealthAtom);
+
+  // Rust flags the errored rows that retry themselves; the row joins by path.
+  // A Set (not `.includes`) so a large failing batch stays O(1) per row.
+  const retryingPaths = useMemo(
+    () => new Set(snapshot.transientErrorPaths ?? []),
+    [snapshot.transientErrorPaths],
+  );
 
   const isUnhealthy = engineHealth.status !== "connected";
   const connectivityLabel =
@@ -657,6 +683,18 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
         const b = snapshot.preparingPendingBytes ?? 0;
         return `${f.toLocaleString()} file${f === 1 ? "" : "s"} · ${formatCompactBytes(b)}`;
       }
+      // File-watcher cycles have no startup summary; show the LIVE
+      // indexing counters instead ("1,234 files scanned" next to the
+      // trailing "Preparing" label) so a long scan reads as active work.
+      const scanned = snapshot.preparingScannedFiles ?? 0;
+      if (scanned > 0) {
+        return `${scanned.toLocaleString()} file${scanned === 1 ? "" : "s"} scanned`;
+      }
+      const fetchTotal = snapshot.preparingFetchTotalEntries ?? 0;
+      if (fetchTotal > 0) {
+        const fetched = snapshot.preparingFetchedEntries ?? 0;
+        return `${fetched.toLocaleString()}/${fetchTotal.toLocaleString()} entries`;
+      }
       return null;
     }
     if (!showTransferBytes) return null;
@@ -843,7 +881,11 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                   list renders synchronously on first expand (no empty flash). */}
               {isExpanded &&
                 snapshot.files.map((file) => (
-                  <SyncFileItem key={file.path} file={file} />
+                  <SyncFileItem
+                    key={file.path}
+                    file={file}
+                    isRetrying={retryingPaths.has(file.path)}
+                  />
                 ))}
             </div>
           </div>

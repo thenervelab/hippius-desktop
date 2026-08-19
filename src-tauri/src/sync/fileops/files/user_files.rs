@@ -340,7 +340,7 @@ pub async fn get_user_files(
 /// (`""` for the drive root, `"sub"` for a one-level descent, etc.).
 /// Hidden files (`.`-prefixed) and failed-download / encrypted-name
 /// stubs are skipped to match `list_sync_folder_inner`'s rules.
-async fn walk_disk_files_recursive(
+fn walk_disk_files_std(
     base: &Path,
     rel_prefix: &str,
     label: &str,
@@ -355,16 +355,16 @@ async fn walk_disk_files_recursive(
         base.join(rel_prefix)
     };
 
-    let Ok(mut dir) = tokio::fs::read_dir(&dir_path).await else {
+    let Ok(dir) = std::fs::read_dir(&dir_path) else {
         return;
     };
 
-    while let Ok(Some(entry)) = dir.next_entry().await {
+    for entry in dir.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
         if name.starts_with('.') {
             continue;
         }
-        let Ok(meta) = entry.metadata().await else {
+        let Ok(meta) = entry.metadata() else {
             continue;
         };
         let rel_path = if rel_prefix.is_empty() {
@@ -374,8 +374,7 @@ async fn walk_disk_files_recursive(
         };
 
         if meta.is_dir() {
-            // Recurse — folders themselves are never emitted.
-            Box::pin(walk_disk_files_recursive(base, &rel_path, label, folder_path, synced, excluded, out)).await;
+            walk_disk_files_std(base, &rel_path, label, folder_path, synced, excluded, out);
             continue;
         }
 
@@ -510,10 +509,27 @@ pub async fn search_user_files_recursive(
     // drive isn't currently mounted; in that case we still walk the disk.
     let (synced, excluded) = synced_paths_and_excludes_for_label(&state.sync, &label).await;
 
-    let mut out: Vec<UserFileEntry> = Vec::new();
-
-    // 1. On-disk walk — collects everything physically present locally.
-    walk_disk_files_recursive(&base, &rel_prefix, &label, &sp.path, synced.as_ref(), &excluded, &mut out).await;
+    let walk_base = base.clone();
+    let walk_rel = rel_prefix.clone();
+    let walk_label = label.clone();
+    let walk_folder = sp.path.clone();
+    let walk_synced = synced.clone();
+    let walk_excluded = excluded.clone();
+    let mut out = tokio::task::spawn_blocking(move || {
+        let mut collected = Vec::new();
+        walk_disk_files_std(
+            &walk_base,
+            &walk_rel,
+            &walk_label,
+            &walk_folder,
+            walk_synced.as_ref(),
+            &walk_excluded,
+            &mut collected,
+        );
+        collected
+    })
+    .await
+    .unwrap_or_default();
 
     // 2. Server-only overlay — files known on the server that haven't
     // downloaded to this device yet. We surface them as `sync_status =
@@ -581,7 +597,10 @@ pub async fn search_user_files_recursive(
 /// refetch). Owning the filter rules in a single function keeps the
 /// folder view and the files page from drifting — previously both
 /// reimplemented the logic in TypeScript.
-#[expect(clippy::too_many_lines, reason = "flat per-criterion filter cascade; splitting into helpers hurts readability")]
+#[expect(
+    clippy::too_many_lines,
+    reason = "flat per-criterion filter cascade; splitting into helpers hurts readability"
+)]
 fn apply_file_filters(files: &mut Vec<UserFileEntry>, f: &FileFilterCriteria) {
     let search_lower = f.search_term.as_ref().and_then(|s| {
         let low = s.to_lowercase();
@@ -805,20 +824,42 @@ mod tests {
         let json = serde_json::to_value(&entry).expect("serialize UserFileEntry");
         let keys: BTreeSet<String> = json.as_object().expect("object").keys().cloned().collect();
         let expected: BTreeSet<String> = [
-            "name", "actualFileName", "size", "createdAt", "arionHash", "arionCid", "fileId", "source", "minerIds",
-            "isAssigned", "lastChargedAt", "isFolder", "type", "isErasureCoded", "mainReqHash", "syncStatus", "label",
-            "fileCount", "deleted",
+            "name",
+            "actualFileName",
+            "size",
+            "createdAt",
+            "arionHash",
+            "arionCid",
+            "fileId",
+            "source",
+            "minerIds",
+            "isAssigned",
+            "lastChargedAt",
+            "isFolder",
+            "type",
+            "isErasureCoded",
+            "mainReqHash",
+            "syncStatus",
+            "label",
+            "fileCount",
+            "deleted",
         ]
         .into_iter()
         .map(String::from)
         .collect();
-        assert_eq!(keys, expected, "UserFileEntry wire keys drifted — FE FormattedUserFile reads these camelCase keys");
+        assert_eq!(
+            keys, expected,
+            "UserFileEntry wire keys drifted — FE FormattedUserFile reads these camelCase keys"
+        );
 
         // The two keys a naive rename would silently move: `file_type` serializes
         // under `type` (per-field rename beats rename_all), NOT `fileType`; and the
         // `default` field still serializes under `fileId`.
         assert_eq!(json["type"], "pdf", "file_type must serialize under key `type`");
-        assert!(json.get("fileType").is_none(), "must not emit `fileType` (rename = \"type\" overrides camelCase)");
+        assert!(
+            json.get("fileType").is_none(),
+            "must not emit `fileType` (rename = \"type\" overrides camelCase)"
+        );
         assert_eq!(json["fileId"], "0".repeat(64), "file_id must serialize under key `fileId`");
     }
 
@@ -1036,5 +1077,52 @@ mod tests {
         }
 
         assert_eq!(inline_stats, rule_stats);
+    }
+
+    #[test]
+    fn walk_disk_files_std_skips_hidden_and_stubs_and_tags_sync_status() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("Photos/2024")).expect("mkdir");
+        std::fs::write(root.join("Photos/2024/a.jpg"), b"img").expect("write jpg");
+        std::fs::write(root.join(".hidden"), b"x").expect("hidden");
+        std::fs::write(
+            root.join("downloaded_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            b"x",
+        )
+        .expect("artifact");
+        std::fs::write(root.join("file_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"), b"").expect("stub");
+        std::fs::write(root.join("pending.bin"), b"ab").expect("pending");
+
+        let mut synced = HashMap::new();
+        synced.insert(
+            "Photos/2024/a.jpg".to_string(),
+            hcfs_client::engine::types::SyncedFileInfo {
+                path_hash: [0xAA; 32],
+                arion_cid: std::sync::Arc::from("cid-a"),
+                uploaded_at: 1_700_000_000,
+                updated_at: 1_700_000_100,
+            },
+        );
+
+        let mut out = Vec::new();
+        walk_disk_files_std(root, "", "docs", root.to_str().unwrap(), Some(&synced), &[], &mut out);
+        let names: Vec<&str> = out.iter().map(|e| e.actual_file_name.as_str()).collect();
+        assert!(names.contains(&"Photos/2024/a.jpg"));
+        assert!(names.contains(&"pending.bin"));
+        assert!(
+            !names
+                .iter()
+                .any(|n| n.contains("hidden") || n.starts_with("downloaded_") || n.starts_with("file_"))
+        );
+
+        let photo = out.iter().find(|e| e.actual_file_name == "Photos/2024/a.jpg").expect("photo");
+        assert_eq!(photo.name, "a.jpg");
+        assert_eq!(photo.sync_status, "synced");
+        assert_eq!(photo.created_at, 1_700_000_000 * 1000);
+
+        let pending = out.iter().find(|e| e.actual_file_name == "pending.bin").expect("pending");
+        assert_eq!(pending.sync_status, "pending");
+        assert_eq!(pending.size, 2);
     }
 }

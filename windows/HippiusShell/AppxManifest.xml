@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SPARSE MSIX package manifest for the Hippius shell extension.
+
+  A "sparse" package contains ONLY this manifest (no payload binaries): it grants
+  the unpackaged Tauri app *package identity* (required for the Win11 primary
+  context menu) and registers the packaged-COM server that lives in the app's
+  normal install dir (the <ExternalLocation>).
+
+  PLACEHOLDERS to fill before building (build-and-package.ps1 substitutes these):
+    {PUBLISHER}     — must EXACTLY equal the signing cert Subject, e.g.
+                      "CN=Hippius, O=Hippius, C=US". Mismatch => Explorer silently
+                      refuses to load the extension.
+    {VERSION}       — 4-part, e.g. 0.3.1.0.
+    {INSTALL_DIR}   — the app install dir (NSIS $INSTDIR); the DLL sits here.
+    {CLSID}         — MUST equal CLSID_HIPPIUS_SHARE in src/lib.rs (with braces).
+-->
+<Package
+    xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+    xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+    xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
+    xmlns:desktop4="http://schemas.microsoft.com/appx/manifest/desktop/windows10/4"
+    xmlns:desktop5="http://schemas.microsoft.com/appx/manifest/desktop/windows10/5"
+    xmlns:com="http://schemas.microsoft.com/appx/manifest/com/windows10"
+    xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+    IgnorableNamespaces="uap uap3 desktop4 desktop5 com rescap">
+
+  <Identity Name="Hippius.ShellExtension"
+            Publisher="{PUBLISHER}"
+            Version="{VERSION}"
+            ProcessorArchitecture="x64" />
+
+  <Properties>
+    <DisplayName>Hippius Shell Extension</DisplayName>
+    <PublisherDisplayName>Hippius</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+
+  <Dependencies>
+    <!-- Sparse packages + fileExplorerContextMenus require Win10 2004 (19041)+. -->
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.22621.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
+
+  <!-- A FullTrust desktop app (EntryPoint Windows.FullTrustApplication) requires
+       this restricted capability. Placed after Resources, before Applications,
+       per the manifest schema sequence. -->
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+
+  <Applications>
+    <Application Id="Hippius" Executable="Hippius.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements DisplayName="Hippius" Description="Hippius"
+          BackgroundColor="transparent" Square150x150Logo="Assets\Square150x150Logo.png"
+          Square44x44Logo="Assets\Square44x44Logo.png" AppListEntry="none" />
+
+      <Extensions>
+        <!-- Packaged-COM registration: CLSID -> the in-proc DLL in the app dir. -->
+        <com:Extension Category="windows.comServer">
+          <com:ComServer>
+            <com:SurrogateServer DisplayName="Hippius Share Command">
+              <com:Class Id="{CLSID}" Path="HippiusShell.dll" ThreadingModel="STA" />
+            </com:SurrogateServer>
+          </com:ComServer>
+        </com:Extension>
+
+        <!-- The Win11 primary context-menu verb, backed by the CLSID above. -->
+        <desktop4:Extension Category="windows.fileExplorerContextMenus">
+          <desktop4:FileExplorerContextMenus>
+            <desktop5:ItemType Type="*">
+              <desktop5:Verb Id="HippiusShare" Clsid="{CLSID}" />
+            </desktop5:ItemType>
+            <desktop5:ItemType Type="Directory">
+              <desktop5:Verb Id="HippiusShare" Clsid="{CLSID}" />
+            </desktop5:ItemType>
+          </desktop4:FileExplorerContextMenus>
+        </desktop4:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+</Package>

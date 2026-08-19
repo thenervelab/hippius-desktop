@@ -15,9 +15,7 @@ const EVENT: &str = "hippius:tray-panel-shown";
 
 /// Brace-match the body of a `fn` (by signature substring) in the given source.
 fn fn_body<'a>(src: &'a str, signature: &str) -> &'a str {
-    let sig = src
-        .find(signature)
-        .unwrap_or_else(|| panic!("{signature} present"));
+    let sig = src.find(signature).unwrap_or_else(|| panic!("{signature} present"));
     let body_start = src[sig..].find('{').expect("fn body opens") + sig;
     let mut depth = 0usize;
     let mut body_end = body_start;
@@ -39,11 +37,7 @@ fn fn_body<'a>(src: &'a str, signature: &str) -> &'a str {
 
 #[test]
 fn toggle_tray_panel_emits_shown_event_on_show() {
-    let src = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/src/tray/panel.rs"
-    ))
-    .expect("read panel.rs");
+    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/tray/panel.rs")).expect("read panel.rs");
     let body = fn_body(&src, "pub fn toggle_tray_panel(");
 
     // The literal event string appears in the body ONLY at the real emit call
@@ -61,11 +55,7 @@ fn toggle_tray_panel_emits_shown_event_on_show() {
 
 #[test]
 fn frontend_listens_for_shown_event() {
-    let ts = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../app/lib/tray/useTrayPanelData.ts"
-    ))
-    .expect("read useTrayPanelData.ts");
+    let ts = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../app/lib/tray/useTrayPanelData.ts")).expect("read useTrayPanelData.ts");
     assert!(
         ts.contains(EVENT),
         "useTrayPanelData must listen for `{EVENT}` — the Rust emit is useless \

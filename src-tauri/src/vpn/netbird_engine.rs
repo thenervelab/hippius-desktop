@@ -28,18 +28,13 @@ pub(crate) struct NetbirdEngine {
 
 impl NetbirdEngine {
     pub(crate) fn new() -> Self {
-        NetbirdEngine {
-            client: Mutex::new(None),
-        }
+        NetbirdEngine { client: Mutex::new(None) }
     }
 }
 
 impl MeshEngine for NetbirdEngine {
     fn connect(&self, cfg: MeshConfig) -> Result<(), VpnError> {
-        let mut guard = self
-            .client
-            .lock()
-            .map_err(|_| VpnError::Engine("client lock poisoned".to_string()))?;
+        let mut guard = self.client.lock().map_err(|_| VpnError::Engine("client lock poisoned".to_string()))?;
         if guard.is_some() {
             return Err(VpnError::AlreadyConnected);
         }
@@ -60,10 +55,7 @@ impl MeshEngine for NetbirdEngine {
     }
 
     fn disconnect(&self) -> Result<(), VpnError> {
-        let mut guard = self
-            .client
-            .lock()
-            .map_err(|_| VpnError::Engine("client lock poisoned".to_string()))?;
+        let mut guard = self.client.lock().map_err(|_| VpnError::Engine("client lock poisoned".to_string()))?;
         if let Some(client) = guard.take() {
             // Stop explicitly (graceful) before the value drops; `Drop` then
             // frees the Go-side handle. A stop error is non-fatal — we are
@@ -76,10 +68,7 @@ impl MeshEngine for NetbirdEngine {
     }
 
     fn open_proxy(&self, target: &MeshTarget) -> Result<LocalEndpoint, VpnError> {
-        let guard = self
-            .client
-            .lock()
-            .map_err(|_| VpnError::Engine("client lock poisoned".to_string()))?;
+        let guard = self.client.lock().map_err(|_| VpnError::Engine("client lock poisoned".to_string()))?;
         let client = guard.as_ref().ok_or(VpnError::NotConnected)?;
 
         // `start_proxy` returns the loopback port forwarding to the mesh target.

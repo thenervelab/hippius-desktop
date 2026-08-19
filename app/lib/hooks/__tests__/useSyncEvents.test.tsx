@@ -5,7 +5,7 @@ import { Provider, createStore } from "jotai";
 import { queryClientAtom } from "jotai-tanstack-query";
 import { QueryClient } from "@tanstack/react-query";
 import React from "react";
-import { useSyncEvents } from "../useSyncEvents";
+import { AUTH_RELOGIN_TOAST_ID, useSyncEvents } from "../useSyncEvents";
 
 // ── Tauri mocks ─────────────────────────────────────────────────────
 //
@@ -21,6 +21,12 @@ const listenHandlers = new Map<
   string,
   (event: { payload: unknown }) => void
 >();
+
+// sonner is mocked so the auth-relogin test can assert the toast call
+// without a DOM toaster mounted.
+vi.mock("sonner", () => ({
+  toast: { error: vi.fn() },
+}));
 
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(
@@ -180,6 +186,31 @@ describe("useSyncEvents — debounced sync_files_completed_changed dispatch", ()
     expect(completedDispatchCount()).toBe(3);
   });
 
+  // Regression: a folder delete produces no file work, so hcfs-client ends the
+  // cycle NoChanges and never emits hcfs_sync_completed. The backend's
+  // folder-entity reconcile is the only thing that knows the deleted folder is
+  // finally gone from the server + the local cache the listing overlays — and it
+  // lands well after the delete IPC returned. Without this listener the deleted
+  // folder keeps rendering as a `pending` row until an unrelated refresh.
+  it("refreshes listings when the backend reports a folder-entity change", async () => {
+    renderHookWithStore();
+    await waitFor(() => {
+      expect(listenHandlers.has("hcfs_folder_entities_changed")).toBe(true);
+    });
+
+    vi.useFakeTimers();
+
+    act(() => {
+      listenHandlers.get("hcfs_folder_entities_changed")!({
+        payload: { label: "default" },
+      });
+    });
+    expect(completedDispatchCount()).toBe(0);
+
+    act(() => { vi.advanceTimersByTime(DEBOUNCE_MS); });
+    expect(completedDispatchCount()).toBe(1);
+  });
+
   // Pins the refetch-storm fix: during a long multi-file sync, per-file
   // completion events drip in every second or so. Each used to trigger its
   // own file-list refetch (expensive list_user_files + full table
@@ -230,5 +261,35 @@ describe("useSyncEvents — debounced sync_files_completed_changed dispatch", ()
     act(() => { transfer({ payload: {} }); });
     act(() => { vi.advanceTimersByTime(DEBOUNCE_MS); });
     expect(completedDispatchCount()).toBe(1);
+  });
+});
+
+describe("useSyncEvents — auth relogin toast (PR #102 follow-up)", () => {
+  // The engine's auth-required signal previously had NO frontend
+  // listener, so an OAuth account whose token could no longer be
+  // refreshed degraded silently. These pin that the listener exists and
+  // that repeated per-cycle emits collapse into one toast via the
+  // sonner id.
+  it("surfaces hcfs_auth_relogin_required as a deduped session-expired toast", async () => {
+    renderHookWithStore();
+    await waitFor(() => {
+      expect(listenHandlers.has("hcfs_auth_relogin_required")).toBe(true);
+    });
+
+    const { toast } = await import("sonner");
+    const errorSpy = toast.error as unknown as ReturnType<typeof vi.fn>;
+    errorSpy.mockClear();
+
+    const relogin = listenHandlers.get("hcfs_auth_relogin_required")!;
+    act(() => { relogin({ payload: { error: "401" } }); });
+    act(() => { relogin({ payload: { error: "401" } }); });
+
+    expect(errorSpy).toHaveBeenCalledTimes(2);
+    for (const call of errorSpy.mock.calls) {
+      expect(call[0]).toMatch(/sign back in/i);
+      // The stable id is what makes sonner render ONE toast for the
+      // engine's repeated per-cycle emits.
+      expect(call[1]).toMatchObject({ id: AUTH_RELOGIN_TOAST_ID });
+    }
   });
 });

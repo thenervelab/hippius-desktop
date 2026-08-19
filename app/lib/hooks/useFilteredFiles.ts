@@ -54,6 +54,7 @@ export function useFilteredFiles<T extends FormattedUserFile>(
     files: T[],
     criteria: FileFilterRequest,
     debounceMs = 150,
+    enabled = true,
 ): UseFilteredFilesResult<T> {
     const [result, setResult] = useState<T[]>(files);
     // Track the latest invocation so an out-of-order late response can't
@@ -95,6 +96,9 @@ export function useFilteredFiles<T extends FormattedUserFile>(
     const [, forceRender] = useState(0);
 
     useEffect(() => {
+        if (!enabled) {
+            return;
+        }
         if (isNoopCriteria) {
             // No filters: the hook's return short-circuits to `files` directly
             // (below), so there is nothing to compute here AND — critically —
@@ -139,7 +143,7 @@ export function useFilteredFiles<T extends FormattedUserFile>(
         // `criteria`) need not be listed — and listing the array/object fields
         // directly is exactly what reintroduces the unstable-reference loop.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [files, criteriaKey, debounceMs, isNoopCriteria]);
+    }, [files, criteriaKey, debounceMs, isNoopCriteria, enabled]);
 
     // When there are no filters at all, skip the result-state roundtrip and
     // return `files` directly. The effect-driven path lags by one render
@@ -149,7 +153,7 @@ export function useFilteredFiles<T extends FormattedUserFile>(
     // but `useFilteredFiles` still returned the previous `[]` until
     // render N+1, so DriveContent briefly saw an empty list with
     // isLoading=false and rendered the empty-state UI.
-    if (isNoopCriteria) {
+    if (!enabled || isNoopCriteria) {
         return { data: files, isFiltering: false };
     }
     const isFiltering = loadedCriteriaKeyRef.current !== criteriaKey;

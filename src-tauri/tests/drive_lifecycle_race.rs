@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use sqlx::sqlite::SqlitePool;
 
-use tauri_project_lib::sync::lifecycle_guard::{apply_init_commit, CommitOutcome, DriveLifecycle};
+use tauri_project_lib::sync::lifecycle_guard::{CommitOutcome, DriveLifecycle, apply_init_commit};
 use tauri_project_lib::sync::paths::set_sync_path_paused;
 
 /// Build an in-memory pool with the minimum schema these tests touch:
@@ -116,7 +116,10 @@ async fn commit_yields_when_pause_intervened() {
     let outcome = apply_init_commit(&lifecycle, &pool, ACCOUNT, "photos", snapshot, || {}).await.unwrap();
 
     assert_eq!(outcome, CommitOutcome::Superseded);
-    assert!(is_paused(&pool, ACCOUNT, "photos").await, "stale init must never overwrite the pause's is_paused=1");
+    assert!(
+        is_paused(&pool, ACCOUNT, "photos").await,
+        "stale init must never overwrite the pause's is_paused=1"
+    );
 }
 
 /// Deterministic contention: the test plays the pause side by taking the
@@ -158,7 +161,10 @@ async fn concurrent_pause_and_commit_serialize_on_the_lock() {
 
     let outcome = commit_task.await.expect("commit task panicked").expect("commit errored");
     assert_eq!(outcome, CommitOutcome::Superseded);
-    assert!(is_paused(&pool, ACCOUNT, "photos").await, "pause must win regardless of interleaving order");
+    assert!(
+        is_paused(&pool, ACCOUNT, "photos").await,
+        "pause must win regardless of interleaving order"
+    );
 }
 
 /// Err path: when the `is_paused` UPDATE itself fails (here: the
@@ -272,7 +278,10 @@ async fn real_pause_write_supersedes_init_and_blocks_active_emit() {
     .unwrap();
 
     assert_eq!(outcome, CommitOutcome::Superseded, "init must yield to the real pause write");
-    assert!(is_paused(&pool, ACCOUNT, "photos").await, "the pause's is_paused=1 must survive the superseded init");
+    assert!(
+        is_paused(&pool, ACCOUNT, "photos").await,
+        "the pause's is_paused=1 must survive the superseded init"
+    );
     assert!(!active_emitted.load(Ordering::SeqCst), "a superseded init must emit no Active status");
 }
 
@@ -310,7 +319,9 @@ async fn resume_snapshot_superseded_by_later_pause() {
 
     // The resumed init commits against resume_snapshot → superseded; the later
     // pause wins.
-    let outcome = apply_init_commit(&lifecycle, &pool, ACCOUNT, "photos", resume_snapshot, || {}).await.unwrap();
+    let outcome = apply_init_commit(&lifecycle, &pool, ACCOUNT, "photos", resume_snapshot, || {})
+        .await
+        .unwrap();
     assert_eq!(outcome, CommitOutcome::Superseded, "the later pause must supersede the resumed init");
     assert!(is_paused(&pool, ACCOUNT, "photos").await, "the later pause's is_paused=1 must win");
 }

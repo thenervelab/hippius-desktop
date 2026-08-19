@@ -327,11 +327,12 @@ async fn registered_empty_folder_surfaces_from_cache_overlay() {
         .await
         .expect("root listing");
 
-    let empty = root
-        .folders
-        .iter()
-        .find(|f| f.name == "Empty")
-        .unwrap_or_else(|| panic!("Empty folder must surface from cache; got {:?}", root.folders.iter().map(|f| &f.name).collect::<Vec<_>>()));
+    let empty = root.folders.iter().find(|f| f.name == "Empty").unwrap_or_else(|| {
+        panic!(
+            "Empty folder must surface from cache; got {:?}",
+            root.folders.iter().map(|f| &f.name).collect::<Vec<_>>()
+        )
+    });
     assert!(empty.is_folder, "cache overlay entry must be a folder");
     assert_eq!(empty.sync_status, "pending", "a registered folder not on local disk is pending");
     assert!(root.files.is_empty(), "overlay must not touch the files list");
@@ -354,8 +355,17 @@ async fn on_disk_empty_folder_with_cache_entry_appears_once() {
         .await
         .expect("root listing");
 
-    let matches: Vec<&str> = root.folders.iter().filter(|f| f.name == "Empty").map(|f| f.sync_status.as_str()).collect();
-    assert_eq!(matches, vec!["synced"], "on-disk empty folder must appear exactly once as synced (deduped against the cache overlay)");
+    let matches: Vec<&str> = root
+        .folders
+        .iter()
+        .filter(|f| f.name == "Empty")
+        .map(|f| f.sync_status.as_str())
+        .collect();
+    assert_eq!(
+        matches,
+        vec!["synced"],
+        "on-disk empty folder must appear exactly once as synced (deduped against the cache overlay)"
+    );
 }
 
 #[tokio::test]

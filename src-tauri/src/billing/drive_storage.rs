@@ -19,16 +19,17 @@
 //! unchanged.
 
 use crate::api::indexer::IndexerClient;
+use crate::billing::account_cache::PerAccountCache;
 use crate::billing::charts::{
-    ChartPoint, date_to_iso, dd_mon_label, format_bytes, get_all_dates_in_range, normalize_date, range_start, weekday_name,
+    ChartPoint, date_to_iso, dd_mon_label, format_bytes, get_all_dates_in_range, normalize_date, parse_timestamp_to_datetime, range_start,
+    weekday_name,
 };
 use crate::error::AppError;
-use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use serde::Deserialize;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::sync::OnceLock;
-use std::time::{Duration, Instant};
-use tokio::sync::Mutex;
+use std::time::Duration;
 
 const ENDPOINT: &str = "/user-extended-storage-metrics";
 const DRIVE_STORAGE_FILTER: &str = "drive";
@@ -76,36 +77,13 @@ struct MetricsPage {
     pagination: Pagination,
 }
 
-struct CacheEntry {
-    fetched_at: Instant,
-    snapshots: Vec<DriveStorageSnapshot>,
-}
-
-/// Process-wide cache. The `tokio::sync::Mutex` is held across the
-/// indexer fetch deliberately — it acts as a single-flight gate so
-/// the home page's near-simultaneous tile + chart mounts do one
-/// round-trip instead of two.
-fn cache() -> &'static Mutex<HashMap<String, CacheEntry>> {
-    static CACHE: OnceLock<Mutex<HashMap<String, CacheEntry>>> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+fn cache() -> &'static PerAccountCache<Vec<DriveStorageSnapshot>> {
+    static CACHE: OnceLock<PerAccountCache<Vec<DriveStorageSnapshot>>> = OnceLock::new();
+    CACHE.get_or_init(|| PerAccountCache::new(CACHE_TTL))
 }
 
 async fn cached_drive_snapshots(state: &crate::app_state::AppState, account_id: &str) -> Result<Vec<DriveStorageSnapshot>, AppError> {
-    let mut guard = cache().lock().await;
-    if let Some(entry) = guard.get(account_id)
-        && entry.fetched_at.elapsed() < CACHE_TTL
-    {
-        return Ok(entry.snapshots.clone());
-    }
-    let snapshots = fetch_all_drive_snapshots(state, account_id).await?;
-    guard.insert(
-        account_id.to_string(),
-        CacheEntry {
-            fetched_at: Instant::now(),
-            snapshots: snapshots.clone(),
-        },
-    );
-    Ok(snapshots)
+    cache().get_or_fetch(account_id, || fetch_all_drive_snapshots(state, account_id)).await
 }
 
 /// Walk the indexer's pages and collect every drive-scoped snapshot
@@ -141,25 +119,6 @@ fn bytes_str_to_f64(raw: &str) -> f64 {
     raw.parse::<f64>().unwrap_or(0.0)
 }
 
-/// Parse an ISO-8601 timestamp into a UTC `DateTime` for ordering.
-///
-/// Sister of `charts::parse_timestamp_to_date`, but returns the full
-/// instant — required because the storage chart collapses several
-/// same-day snapshots to the latest one, which needs second/sub-second
-/// resolution that `NaiveDate` discards. Tries the same format menu so
-/// any timestamp the credits chart accepts is also accepted here.
-fn parse_timestamp(ts: &str) -> Option<DateTime<Utc>> {
-    if let Ok(dt) = DateTime::parse_from_rfc3339(ts) {
-        return Some(dt.with_timezone(&Utc));
-    }
-    for fmt in ["%Y-%m-%dT%H:%M:%S%.fZ", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S%.f"] {
-        if let Ok(naive) = NaiveDateTime::parse_from_str(ts, fmt) {
-            return Some(naive.and_utc());
-        }
-    }
-    None
-}
-
 /// Parse, sort by full timestamp ascending, drop malformed rows.
 ///
 /// Sorting by date alone is **not** sufficient: the indexer emits many
@@ -172,7 +131,7 @@ fn parse_timestamp(ts: &str) -> Option<DateTime<Utc>> {
 fn snapshots_sorted(snapshots: &[DriveStorageSnapshot]) -> Vec<(DateTime<Utc>, &DriveStorageSnapshot)> {
     let mut typed: Vec<(DateTime<Utc>, &DriveStorageSnapshot)> = snapshots
         .iter()
-        .filter_map(|s| parse_timestamp(&s.processed_timestamp).map(|dt| (dt, s)))
+        .filter_map(|s| parse_timestamp_to_datetime(&s.processed_timestamp).map(|dt| (dt, s)))
         .collect();
     typed.sort_by_key(|(dt, _)| *dt);
     typed
@@ -197,9 +156,23 @@ fn build_storage_chart(snapshots: &[DriveStorageSnapshot], range: &str) -> Vec<C
     }
 
     let today = chrono::Utc::now().date_naive();
-    let Some(start) = range_start(range, today) else {
+    let Some(window_start) = range_start(range, today) else {
         return Vec::new();
     };
+
+    // Clamp the window to the first day we actually have a snapshot for, the
+    // same way `drive_credits::build_credits_chart` does. Before that day the
+    // account's storage is genuinely unknown, and `max` is the worst case:
+    // `range_start("max")` is the hardcoded service-creation date (2025-03-11),
+    // typically long before this endpoint's first snapshot for an account, so
+    // an unclamped window paints a flat-zero plateau back to it. That was
+    // invisible while this series was rendered as downsampled delta bars; as a
+    // cumulative line it shows up as a long dead-flat prefix. Clamped to
+    // `today` as well, so a future-dated snapshot (clock skew) can't invert the
+    // range. We only ever clamp *up*, so the pre-window seed below still
+    // carries earlier storage into windows that open after `data_start`.
+    let data_start = typed[0].0.date_naive();
+    let start = window_start.max(data_start).min(today);
     let dates = get_all_dates_in_range(start, today);
 
     // Pre-range seed: latest snapshot strictly before the window.
@@ -358,6 +331,23 @@ mod tests {
     fn empty_snapshots_yield_empty_chart() {
         let out = build_storage_chart(&[], "last7days");
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn max_range_starts_at_first_snapshot_not_service_creation() {
+        // `range_start("max")` is the hardcoded 2025-03-11 service-creation
+        // date. Unclamped, `max` prefixes the series with a flat-zero run back
+        // to it — harmless-looking as downsampled bars, but a long dead-flat
+        // stretch once this renders as a cumulative line.
+        let snaps = vec![snap("21339640", "2026-05-06T00:00:00Z")];
+        let chart = build_storage_chart(&snaps, "max");
+        assert!(!chart.is_empty(), "max chart should not be empty");
+        assert_eq!(chart[0].x, "2026-05-06T00:00:00.000Z", "first point should be the first snapshot's day");
+        assert!(
+            (chart[0].balance - 21_339_640.0).abs() < f64::EPSILON,
+            "first point should carry the snapshot, got {}",
+            chart[0].balance
+        );
     }
 
     #[test]

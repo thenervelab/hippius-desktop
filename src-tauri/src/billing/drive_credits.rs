@@ -15,16 +15,17 @@
 //! consumer and avoids double-counting.
 
 use crate::api::indexer::IndexerClient;
+use crate::billing::account_cache::PerAccountCache;
 use crate::billing::charts::{
-    ChartPoint, date_to_iso, dd_mon_label, format_balance, get_all_dates_in_range, normalize_date, parse_timestamp_to_date, range_start, weekday_name,
+    ChartPoint, date_to_iso, dd_mon_label, format_balance, get_all_dates_in_range, normalize_date, parse_timestamp_to_date, planck_str_to_credits,
+    range_start, weekday_name,
 };
 use crate::error::AppError;
 use chrono::NaiveDate;
 use serde::Deserialize;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::sync::OnceLock;
-use std::time::{Duration, Instant};
-use tokio::sync::Mutex;
+use std::time::Duration;
 
 const ENDPOINT: &str = "/user-credits-by-storage-history";
 const DRIVE_STORAGE_TYPE: &str = "drive";
@@ -87,44 +88,15 @@ struct HistoryPage {
     pagination: Pagination,
 }
 
-/// One cache slot per account.
-struct CacheEntry {
-    fetched_at: Instant,
-    events: Vec<DriveCreditEvent>,
+fn cache() -> &'static PerAccountCache<Vec<DriveCreditEvent>> {
+    static CACHE: OnceLock<PerAccountCache<Vec<DriveCreditEvent>>> = OnceLock::new();
+    CACHE.get_or_init(|| PerAccountCache::new(CACHE_TTL))
 }
 
-/// Process-wide event cache. The mutex is `tokio::sync::Mutex` so
-/// holding it across the indexer fetch is sound; that's deliberate —
-/// the lock acts as a single-flight gate so when the home page mounts
-/// and fires `get_drive_storage_chart`, `get_drive_credits_chart`, and
-/// `get_drive_credits_total` concurrently, only the first call hits
-/// the indexer and the other two wait briefly then read the freshly
-/// cached entry. Without this they'd issue three independent fetches
-/// of the same data on every page render.
-fn cache() -> &'static Mutex<HashMap<String, CacheEntry>> {
-    static CACHE: OnceLock<Mutex<HashMap<String, CacheEntry>>> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-/// Cached wrapper around [`fetch_all_drive_events`]. Returns the cached
-/// vector on hit; on miss, fetches under the lock so concurrent callers
-/// serialize and share one round-trip.
+/// Cached wrapper around [`fetch_all_drive_events`]. Same-account
+/// callers single-flight; other accounts are not blocked on this fetch.
 async fn cached_drive_events(state: &crate::app_state::AppState, account_id: &str) -> Result<Vec<DriveCreditEvent>, AppError> {
-    let mut guard = cache().lock().await;
-    if let Some(entry) = guard.get(account_id)
-        && entry.fetched_at.elapsed() < CACHE_TTL
-    {
-        return Ok(entry.events.clone());
-    }
-    let events = fetch_all_drive_events(state, account_id).await?;
-    guard.insert(
-        account_id.to_string(),
-        CacheEntry {
-            fetched_at: Instant::now(),
-            events: events.clone(),
-        },
-    );
-    Ok(events)
+    cache().get_or_fetch(account_id, || fetch_all_drive_events(state, account_id)).await
 }
 
 /// Walk the indexer's pages and collect every drive-scoped event for
@@ -154,22 +126,6 @@ async fn fetch_all_drive_events(state: &crate::app_state::AppState, account_id: 
 
     tracing::warn!(account_id, max_pages = MAX_PAGES, "drive credit history exceeded page cap; truncating");
     Ok(all)
-}
-
-/// Parse a (possibly fractional) planck string into HIP credits.
-///
-/// A malformed value is logged (not silently dropped) and treated as `0.0`:
-/// the credit total is a display figure that must not fail, but coercing an
-/// unparseable amount to zero with no trace undercounts the user's usage, so
-/// the offending value is surfaced at warn level.
-fn planck_str_to_credits(raw: &str) -> f64 {
-    raw.parse::<f64>().map_or_else(
-        |_| {
-            tracing::warn!(value = %raw, "unparseable planck amount in drive-credit total; treating as 0");
-            0.0
-        },
-        |v| v / 1e18,
-    )
 }
 
 /// Filter to `CreditsConsumed` rows, parse timestamps, sort ascending.
@@ -326,11 +282,11 @@ mod tests {
 
     #[test]
     fn empty_or_garbage_planck_is_zero() {
-        // `assert_eq!` on f64 trips clippy::float_cmp; the parsed-zero
-        // path is exact-bitwise (no arithmetic), so the strict compare
-        // is the right test even though clippy can't tell.
-        assert!(planck_str_to_credits("").to_bits() == 0.0_f64.to_bits());
-        assert!(planck_str_to_credits("not-a-number").to_bits() == 0.0_f64.to_bits());
+        // Compare BITS, not the f64s: the parsed-zero path is exact (no
+        // arithmetic), and comparing the u64 bit patterns sidesteps
+        // clippy::float_cmp without weakening the assertion.
+        assert_eq!(planck_str_to_credits("").to_bits(), 0.0_f64.to_bits());
+        assert_eq!(planck_str_to_credits("not-a-number").to_bits(), 0.0_f64.to_bits());
     }
 
     #[test]

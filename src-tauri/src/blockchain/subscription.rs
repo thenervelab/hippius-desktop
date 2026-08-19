@@ -48,6 +48,12 @@ const RECONNECT_CEILING_ATTEMPTS: u32 = 10;
 /// Slow re-probe interval (seconds) used once past [`RECONNECT_CEILING_ATTEMPTS`].
 const OFFLINE_REPROBE_SECS: u64 = 300;
 
+/// How long a subscription must have streamed before its disconnect is treated
+/// as "the endpoint was fine, something dropped the socket" rather than a
+/// failure to reach the endpoint at all. Finalized blocks land every ~6s, so
+/// 30s is five blocks — comfortably past a socket that connects and dies.
+const MIN_HEALTHY_SESSION_SECS: u64 = 30;
+
 /// Backoff (seconds) before the next block-subscription reconnect attempt.
 ///
 /// Exponential 5/10/20/40s capped at 60s for the first
@@ -64,6 +70,27 @@ fn reconnect_delay_secs(consecutive_failures: u32, is_rate_limited: bool) -> u64
         .saturating_mul(2u64.saturating_pow(consecutive_failures.saturating_sub(1).min(4)))
         .min(60);
     if is_rate_limited { base.max(30) } else { base }
+}
+
+/// Whether a finished subscription session is proof the endpoint is usable, and
+/// so must restart the reconnect backoff from zero.
+///
+/// `consecutive_failures` is meant to count consecutive failures to obtain a
+/// working subscription — but a session that streamed real blocks for a real
+/// span demonstrably had one. Without this reset the counter only ever grows:
+/// each benign sleep/wake `graceful disconnect` (the dominant cause in the
+/// wild, and one that reconnects on the first attempt) bumps it, so after five
+/// wakes an hour apart the backoff is pinned at its 60s cap and after
+/// [`RECONNECT_CEILING_ATTEMPTS`] wakes the app drops to the 5-minute offline
+/// re-probe — leaving the block number and connectivity indicator dead for
+/// minutes after opening the laptop on a perfectly healthy network.
+///
+/// Both conditions are required. Blocks alone would let an endpoint that
+/// accepts, emits one block and drops reset forever, never reaching the
+/// ceiling; uptime alone would count a socket that stayed open silently
+/// (a stalled chain, or a proxy holding a dead connection) as healthy.
+fn session_proves_endpoint_healthy(blocks_received: u64, session_secs: u64) -> bool {
+    blocks_received > 0 && session_secs >= MIN_HEALTHY_SESSION_SECS
 }
 
 /// Start the background block subscription. Idempotent — does nothing if already running.
@@ -106,9 +133,19 @@ pub async fn start_block_subscription(app: tauri::AppHandle) -> crate::error::Re
                 }
             }
 
-            match subscribe_blocks(&app).await {
+            // Per-attempt liveness, read back after an error to decide whether
+            // this disconnect ends a healthy session (reset) or continues an
+            // outage (keep counting) — see `session_proves_endpoint_healthy`.
+            let mut blocks_received: u64 = 0;
+            let attempt_started_ms = monotonic_now_ms();
+
+            match subscribe_blocks(&app, &mut blocks_received).await {
                 Ok(()) => break,
                 Err(e) => {
+                    let session_secs = monotonic_now_ms().saturating_sub(attempt_started_ms) / 1000;
+                    if session_proves_endpoint_healthy(blocks_received, session_secs) {
+                        consecutive_failures = 0;
+                    }
                     consecutive_failures += 1;
                     // AppError now (see the taxonomy conversion); stringify for the
                     // 429 substring probe. reconnect_delay_secs carries the F4
@@ -192,7 +229,12 @@ pub async fn stop_block_subscription(app: tauri::AppHandle) -> crate::error::Res
     Ok(())
 }
 
-async fn subscribe_blocks(app: &tauri::AppHandle) -> crate::error::Result<()> {
+/// Run one finalized-block subscription until it ends.
+///
+/// `blocks_received` is an out-parameter incremented per block delivered, so the
+/// caller can tell an established-then-dropped session from a never-established
+/// one on the error path (where a return value would be lost).
+async fn subscribe_blocks(app: &tauri::AppHandle, blocks_received: &mut u64) -> crate::error::Result<()> {
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
     let client = get_substrate_client(&app_state).await?;
@@ -214,6 +256,7 @@ async fn subscribe_blocks(app: &tauri::AppHandle) -> crate::error::Result<()> {
 
         let block = result.map_err(|e| crate::error::AppError::Substrate(format!("Block error: {e}")))?;
         let number = block.number() as u64;
+        *blocks_received = blocks_received.saturating_add(1);
         app_state.block_sub.latest_block.store(number, Ordering::SeqCst);
 
         if try_claim_block_emit(&app_state.block_sub.last_emit_ms, monotonic_now_ms(), BLOCK_EMIT_THROTTLE_MS) {
@@ -393,6 +436,87 @@ mod tests {
         // both see a chain error rather than a stringly-typed `Other`.
         let err = classify_stream_exit(true).unwrap_err();
         assert!(matches!(err, crate::error::AppError::Substrate(_)), "expected Substrate, got {err:?}");
+    }
+
+    #[test]
+    fn healthy_session_requires_both_blocks_and_uptime() {
+        assert!(
+            session_proves_endpoint_healthy(1, MIN_HEALTHY_SESSION_SECS),
+            "one block over the full window is a healthy session"
+        );
+        assert!(
+            !session_proves_endpoint_healthy(0, 3600),
+            "an hour of silence is not proof the endpoint works"
+        );
+        assert!(
+            !session_proves_endpoint_healthy(500, MIN_HEALTHY_SESSION_SECS - 1),
+            "a burst that dies inside the window must not reset the backoff"
+        );
+    }
+
+    #[test]
+    fn wake_from_sleep_disconnects_do_not_escalate_the_backoff() {
+        // Replays the shape seen in a real support bundle: nine graceful
+        // disconnects over nine hours, each after hours of healthy streaming
+        // and each reconnecting on the first attempt. The counter used to only
+        // increment, so the delay climbed 5 -> 60s and the tenth wake would
+        // have crossed the ceiling into the 5-minute offline re-probe.
+        let mut consecutive_failures: u32 = 0;
+        let mut delays = Vec::new();
+        for _ in 0..9 {
+            // A long, block-carrying session, then a graceful disconnect.
+            if session_proves_endpoint_healthy(600, 3600) {
+                consecutive_failures = 0;
+            }
+            consecutive_failures += 1;
+            delays.push(reconnect_delay_secs(consecutive_failures, false));
+        }
+        assert_eq!(delays, vec![5; 9], "each healthy session must restart the backoff at 5s");
+        assert!(
+            consecutive_failures < RECONNECT_CEILING_ATTEMPTS,
+            "healthy reconnects must never reach the offline-reprobe ceiling"
+        );
+    }
+
+    #[test]
+    fn genuine_outage_still_escalates_to_the_ceiling() {
+        // The reset must not defang the backoff: an endpoint that never yields
+        // a block still escalates and still reaches the slow re-probe.
+        let mut consecutive_failures: u32 = 0;
+        let mut delays = Vec::new();
+        for _ in 0..RECONNECT_CEILING_ATTEMPTS {
+            if session_proves_endpoint_healthy(0, 2) {
+                consecutive_failures = 0;
+            }
+            consecutive_failures += 1;
+            delays.push(reconnect_delay_secs(consecutive_failures, false));
+        }
+        assert_eq!(delays[0], 5, "first failure keeps the short retry");
+        assert_eq!(delays[4], 60, "backoff caps at 60s");
+        assert_eq!(
+            delays[RECONNECT_CEILING_ATTEMPTS as usize - 1],
+            OFFLINE_REPROBE_SECS,
+            "a sustained outage must still reach the offline re-probe"
+        );
+    }
+
+    #[test]
+    fn flapping_endpoint_still_reaches_the_ceiling() {
+        // The uptime half of the predicate: an endpoint that accepts, emits a
+        // block and drops immediately must not reset the counter every cycle,
+        // which would pin the retry at 5s forever.
+        let mut consecutive_failures: u32 = 0;
+        for _ in 0..RECONNECT_CEILING_ATTEMPTS {
+            if session_proves_endpoint_healthy(1, 2) {
+                consecutive_failures = 0;
+            }
+            consecutive_failures += 1;
+        }
+        assert_eq!(
+            reconnect_delay_secs(consecutive_failures, false),
+            OFFLINE_REPROBE_SECS,
+            "a flapping endpoint must still escalate"
+        );
     }
 
     #[test]

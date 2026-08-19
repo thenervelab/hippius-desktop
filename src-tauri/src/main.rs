@@ -18,10 +18,11 @@ pub mod blockchain;
 pub mod console_access;
 pub mod crypto;
 pub mod error;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub mod finder_bridge;
 pub mod infra;
 pub mod notifications;
+pub mod power;
 pub mod recovery;
 pub mod recovery_binding;
 pub mod shares;
@@ -43,14 +44,16 @@ use crate::auth::ssh_keys::{create_ssh_key, delete_ssh_key, list_ssh_keys};
 use crate::billing::charts::{
     calculate_storage_capacity, calculate_storage_cost, format_balance_chart, format_credits_chart, transform_marketplace_credits,
 };
+use crate::billing::credit_balance::get_credit_balance_chart;
 use crate::billing::credits::{check_sync_eligibility, get_user_credits};
 use crate::billing::drive_credits::{get_drive_credits_chart, get_drive_credits_total};
 use crate::billing::drive_storage::get_drive_storage_chart;
 use crate::billing::eligibility::check_action_eligibility;
 use crate::billing::queries::{
-    get_add_credit_events, get_balance_transfers, get_billing_transactions, get_credits, get_deposit_address, get_drive_storage_stats,
-    get_marketplace_credits, get_system_balance,
+    get_add_credit_events, get_balance_transfers, get_billing_transactions, get_deposit_address, get_drive_storage_stats, get_marketplace_credits,
+    get_system_balance,
 };
+use crate::billing::storage_overview::get_storage_overview;
 use crate::billing::subscriptions::{create_subscription, get_customer_portal_url, get_subscription_data};
 use crate::blockchain::bridge::deposit::bridge_alpha_to_halpha;
 use crate::blockchain::bridge::explorer::bridge_fetch_onchain_data;
@@ -195,6 +198,24 @@ fn init_logging() -> Option<tracing_appender::non_blocking::WorkerGuard> {
 
 #[expect(clippy::too_many_lines, reason = "Tauri builder chain: handler registration must stay together")]
 fn main() {
+    // Shell-extension "Share" click, forwarded as a CLI invocation: talk to the
+    // running app over the bridge socket and exit BEFORE booting the UI. The
+    // Linux file-manager action files invoke `hippius --finder-share <abs-path>`.
+    // This is the same binary in a short-lived second mode (the one-binary
+    // requirement — no separate helper ships).
+    #[cfg(unix)]
+    {
+        let args: Vec<String> = std::env::args().collect();
+        if let Some(pos) = args.iter().position(|a| a == "--finder-share") {
+            let Some(path) = args.get(pos + 1) else {
+                use std::io::Write;
+                let _ = writeln!(std::io::stderr(), "hippius: --finder-share requires a path argument");
+                std::process::exit(2);
+            };
+            crate::finder_bridge::cli::run(path); // never returns
+        }
+    }
+
     load_env();
 
     // Initialize tracing (stdout + daily rolling file under ~/.hippius/logs/).
@@ -230,7 +251,10 @@ fn main() {
             // handler picks them up.
             for arg in &argv {
                 if arg.starts_with("hippiusapp://") {
-                    info!("Deep link URL detected: {}", arg);
+                    // Log only the scheme+path: a direct-grant OAuth callback
+                    // carries the bearer token in the query string, and the
+                    // full URL used to land in the on-disk log (audit S-1).
+                    info!("Deep link URL detected: {}", crate::auth::oauth::deep_link_public_part(arg));
                     let _ = app.emit("deep-link://new-url", vec![arg]);
                     break;
                 }
@@ -322,22 +346,23 @@ fn main() {
             get_thumbnail,
             // File sharing (link-based public shares)
             crate::shares::commands::hcfs_create_share,
+            crate::shares::commands::hcfs_create_folder_share,
+            crate::shares::commands::hcfs_folder_share_preflight,
             crate::shares::commands::hcfs_list_shares,
             crate::shares::commands::hcfs_revoke_share,
-            crate::shares::commands::hcfs_reshare,
+            crate::shares::commands::hcfs_update_share_expiry,
+            crate::shares::commands::hcfs_generate_share_password,
             crate::shares::commands::hcfs_list_share_history,
             crate::shares::commands::hcfs_remove_share_history,
             crate::shares::commands::hcfs_clear_share_history,
             crate::shares::capabilities::hcfs_get_capabilities,
-            // Finder "Share with Hippius": confirm/cancel the in-app visibility
-            // chooser. The `finder_bridge` module is `#[cfg(unix)]` (its socket
-            // layer needs Unix-domain sockets), so these registrations must be
-            // gated to match — otherwise Windows references a compiled-out module
-            // (E0433). Feature is macOS-only; on Linux the bodies are inert and
-            // the FE never invokes them, on Windows the commands are absent.
-            #[cfg(unix)]
+            // Shell "Share with Hippius": confirm/cancel the in-app visibility
+            // chooser. Registered on all desktop platforms (macOS/Linux socket +
+            // Windows named-pipe bridge); gated to `any(unix, windows)` to match
+            // the `finder_bridge` module so no other target references it.
+            #[cfg(any(unix, windows))]
             crate::finder_bridge::commands::hcfs_finder_confirm_share,
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             crate::finder_bridge::commands::hcfs_finder_cancel_share,
             // Device settings
             get_device_name,
@@ -419,7 +444,6 @@ fn main() {
             delete_ssh_key,
             // Billing & credits
             get_user_credits,
-            get_credits,
             check_sync_eligibility,
             check_action_eligibility,
             get_billing_transactions,
@@ -431,8 +455,10 @@ fn main() {
             get_balance_transfers,
             get_add_credit_events,
             get_drive_storage_stats,
+            get_storage_overview,
             get_drive_storage_chart,
             get_drive_credits_chart,
+            get_credit_balance_chart,
             get_drive_credits_total,
             get_deposit_address,
             // Notifications
@@ -463,6 +489,11 @@ fn main() {
             hide_tray_panel,
             get_platform_info,
             is_app_translocated,
+            // Finder extension enablement. Registered on every platform (they
+            // answer `unsupported` off macOS) so the frontend guard needs no
+            // platform branch of its own.
+            crate::finder_bridge::enablement::finder_extension_state,
+            crate::finder_bridge::enablement::open_finder_extension_settings,
             // Local DB (notifications, address book, onboarding, preferences, app state)
             add_notification,
             list_notifications,
@@ -647,7 +678,8 @@ async fn open_db_pool(db_path: &std::path::Path) -> Result<SqlitePool, sqlx::Err
         .journal_mode(SqliteJournalMode::Wal)
         .synchronous(SqliteSynchronous::Normal)
         .busy_timeout(std::time::Duration::from_secs(5))
-        .foreign_keys(true);
+        .foreign_keys(true)
+        .pragma("cache_size", "-20000");
 
     let pool = SqlitePoolOptions::new().max_connections(8).connect_with(connect_opts).await?;
 
@@ -734,6 +766,11 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
             );
         }
 
+        // A folder share writes a plaintext zip of the folder to the temp dir and
+        // unlinks it on Drop. A crash or force-quit mid-upload skips that, leaving
+        // the archive behind — clear any from a previous run.
+        crate::shares::sweep_stale_share_archives();
+
         if let Ok(env_path) = app.path().resolve(".env", BaseDirectory::Resource) {
             let _ = dotenvy::from_filename(env_path);
         }
@@ -774,9 +811,11 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
         crate::sync::preparing::spawn_watchdog(preparing_weak, sync_weak);
         crate::vpn::commands::spawn_status_bridge(app_handle.clone(), vpn_status_rx);
 
-        // Start the macOS Finder Sync extension bridge (boot-scoped). Best-effort:
-        // a bind failure disables Finder integration but never blocks launch.
-        #[cfg(target_os = "macos")]
+        // Start the file-manager/Explorer extension bridge (boot-scoped) on every
+        // desktop platform: the Unix-socket server on macOS/Linux, the named-pipe
+        // server on Windows. Best-effort — a bind failure disables the integration
+        // but never blocks launch.
+        #[cfg(any(unix, windows))]
         crate::finder_bridge::lifecycle::start(&app_handle);
 
         // Pre-create the (hidden) tray popover so the first tray click shows it
@@ -944,6 +983,9 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
             // nothing to delete on subsequent launches.
             if let Err(e) = crate::notifications::crud::cleanup_duplicate_welcome_notifications(&pool).await {
                 warn!("Welcome notification cleanup failed (non-fatal): {}", e);
+            }
+            if let Err(e) = crate::notifications::crud::prune_deleted_notifications(&pool).await {
+                warn!("Deleted-notification prune failed (non-fatal): {}", e);
             }
 
             info!("Database initialized successfully");

@@ -19,7 +19,10 @@ const CHART_PAD_BOTTOM = 0;
 const CHART_H = VB_H - CHART_PAD_TOP - CHART_PAD_BOTTOM;
 export const Y_AXIS_GAP = 12;
 
-export function computeYAxisWidth(values: number[]): number {
+export function computeYAxisWidth(
+  values: number[],
+  yTickFormat?: (value: number) => string,
+): number {
   if (!values.length) return 36;
   // Small floor (not 0.01) so the axis tracks the real data: credit-usage
   // values are often ~0.003, and a 0.01 floor pinned the line near the bottom.
@@ -51,10 +54,10 @@ export function computeYAxisWidth(values: number[]): number {
   let maxLen = 1;
   for (let v = 0; v <= niceMax + niceStep * 0.001; v += niceStep) {
     const t = Math.round(v * 1e6) / 1e6;
-    let s: string;
-    if (t === 0) s = "0";
-    else if (Number.isInteger(t) && prec === 0) s = t.toLocaleString();
-    else s = t.toFixed(prec);
+    // Measure the labels that will really be rendered: a custom formatter
+    // (e.g. bytes -> "53.8 GB") is wider than the bare number it replaces, and
+    // an axis sized for the number would clip it.
+    const s = yTickFormat ? yTickFormat(t) : formatYTickValue(t, prec);
     if (s.length > maxLen) maxLen = s.length;
   }
 
@@ -79,6 +82,13 @@ interface AvailableCreditsChartProps {
   className?: string;
   formatTooltipValue?: (point: ChartPoint) => string;
   tooltipValueLabel?: string;
+  /**
+   * Override the y-axis tick labels. Without this the built-in formatter
+   * abbreviates in *credit* units (`1.5K` / `2.0M`), which is wrong for any
+   * other quantity — byte values in particular would render 53 GB as
+   * `53809.1M`. Storage callers pass `formatBytes`.
+   */
+  yTickFormat?: (value: number) => string;
 }
 
 const AvailableCreditsChart: React.FC<AvailableCreditsChartProps> = ({
@@ -89,6 +99,7 @@ const AvailableCreditsChart: React.FC<AvailableCreditsChartProps> = ({
   className = "",
   formatTooltipValue,
   tooltipValueLabel = "Credits",
+  yTickFormat,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
@@ -294,7 +305,10 @@ const AvailableCreditsChart: React.FC<AvailableCreditsChartProps> = ({
   // the baseline (-translate-y-1/2) so it dips ~9px below it; 24px left them
   // touching in the bottom-left corner.
   const X_AXIS_H = 30;
-  const Y_AXIS_W = useMemo(() => computeYAxisWidth(values), [values]);
+  const Y_AXIS_W = useMemo(
+    () => computeYAxisWidth(values, yTickFormat),
+    [values, yTickFormat],
+  );
 
   const handleMouseMove = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
@@ -439,7 +453,9 @@ const AvailableCreditsChart: React.FC<AvailableCreditsChartProps> = ({
                 className="absolute right-0 -translate-y-1/2 font-medium text-[12px] leading-[18px] text-grey-10/30 dark:text-grey-dark-900 whitespace-nowrap"
                 style={{ top: `${line.pct}%` }}
               >
-                {formatYTickValue(line.label, yLabelPrecision)}
+                {yTickFormat
+                  ? yTickFormat(line.label)
+                  : formatYTickValue(line.label, yLabelPrecision)}
               </span>
             ))}
           </div>

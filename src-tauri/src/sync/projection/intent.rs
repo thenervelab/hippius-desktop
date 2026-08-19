@@ -43,6 +43,11 @@ use sqlx::sqlite::SqlitePool;
 /// from exploding into a unique entry per pending-set size.
 const DELETE_CHUNK_SIZE: usize = 500;
 
+/// Rows per multi-value INSERT. Each row binds 4 parameters (`account_id`,
+/// `drive_label`, `relative_path`, `size_bytes`); 100 × 4 = 400, well under
+/// SQLite's conservative 999-bind floor (see [`DELETE_CHUNK_SIZE`]).
+const INSERT_CHUNK_SIZE: usize = 100;
+
 /// Retention window for completed (settled) intent rows.
 ///
 /// The plan-ready path prunes settled rows older than this per drive each
@@ -226,25 +231,31 @@ impl IntentRepo {
 
         // --- Upsert half ---
         //
-        // One INSERT per row, same transaction. `excluded` is SQLite's name
-        // for the row that would have been inserted; we deliberately
-        // reference ONLY `excluded.size_bytes` so `added_at_ms` and
-        // `completed_at_ms` keep their existing values on conflict.
-        for (rel_path, size_bytes) in plan_uploads {
-            sqlx::query(
+        // Chunked multi-row INSERT. `excluded` is SQLite's name for the
+        // row that would have been inserted; we deliberately reference
+        // ONLY `excluded.size_bytes` so `added_at_ms` and `completed_at_ms`
+        // keep their existing values on conflict.
+        for chunk in plan_uploads.chunks(INSERT_CHUNK_SIZE) {
+            let mut sql = String::from(
                 "INSERT INTO sync_intent
                     (account_id, drive_label, relative_path, size_bytes, added_at_ms, completed_at_ms)
-                 VALUES (?, ?, ?, ?, CAST((julianday('now') - 2440587.5) * 86400000.0 AS INTEGER), NULL)
-                 ON CONFLICT(account_id, drive_label, relative_path)
-                 DO UPDATE SET size_bytes = excluded.size_bytes",
-            )
-            .bind(account_id)
-            .bind(drive_label)
-            .bind(rel_path)
-            // SQLite INTEGER is i64; file sizes ≪ 2^63 in practice.
-            .bind(*size_bytes as i64)
-            .execute(&mut *tx)
-            .await?;
+                 VALUES ",
+            );
+            for i in 0..chunk.len() {
+                if i > 0 {
+                    sql.push_str(", ");
+                }
+                sql.push_str("(?, ?, ?, ?, CAST((julianday('now') - 2440587.5) * 86400000.0 AS INTEGER), NULL)");
+            }
+            sql.push_str(
+                " ON CONFLICT(account_id, drive_label, relative_path)
+                  DO UPDATE SET size_bytes = excluded.size_bytes",
+            );
+            let mut q = sqlx::query(&sql);
+            for (rel_path, size_bytes) in chunk {
+                q = q.bind(account_id).bind(drive_label).bind(rel_path).bind(*size_bytes as i64);
+            }
+            q.execute(&mut *tx).await?;
         }
 
         tx.commit().await?;
@@ -632,6 +643,24 @@ mod tests {
         assert_eq!(t1a.total_bytes, 100);
         assert_eq!(t1b.total_bytes, 200);
         assert_eq!(t2a.total_bytes, 300);
+    }
+
+    #[tokio::test]
+    async fn record_plan_batches_more_than_chunk_rows() {
+        let pool = fresh_pool().await;
+        let repo = IntentRepo::new(pool);
+        let plan: Vec<(String, u64)> = (0..250).map(|i| (format!("f{i}.bin"), i as u64 + 1)).collect();
+        repo.record_plan("acct", "drive", &plan).await.unwrap();
+        let totals = repo.totals_for_drive("acct", "drive").await.unwrap();
+        assert_eq!(totals.total_files, 250);
+        assert_eq!(totals.total_bytes, (1..=250).sum::<u64>());
+
+        let grown: Vec<(String, u64)> = (0..250).map(|i| (format!("f{i}.bin"), 10)).collect();
+        repo.record_plan("acct", "drive", &grown).await.unwrap();
+        let again = repo.totals_for_drive("acct", "drive").await.unwrap();
+        assert_eq!(again.total_files, 250);
+        assert_eq!(again.total_bytes, 2500);
+        assert_eq!(again.completed_files, 0);
     }
 
     /// Compaction edge case 1: rename. The planner used to list `b.txt` but

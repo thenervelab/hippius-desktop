@@ -13,6 +13,7 @@ use hcfs_client::drive::remote::RemoteFileInfo;
 use sqlx::sqlite::SqlitePool;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, SystemTime};
 use tracing::{error, info};
 use zeroize::Zeroize;
 
@@ -152,12 +153,10 @@ pub async fn list_remote_folder_files_inner(state: &AppState, account_id: &str, 
         folder_hash: &fhash,
         encryption_key: &encryption_key,
     };
-    hcfs_client::drive::remote::list_remote_files(&access)
-        .await
-        .map_err(|e| {
-            error!(label = %label, "Failed to list remote files: {e}");
-            AppError::Hcfs(e.to_string())
-        })
+    hcfs_client::drive::remote::list_remote_files(&access).await.map_err(|e| {
+        error!(label = %label, "Failed to list remote files: {e}");
+        AppError::Hcfs(e.to_string())
+    })
 }
 
 #[tauri::command]
@@ -274,8 +273,11 @@ pub async fn cache_remote_file(
     let cache_name = if ext.is_empty() { key.clone() } else { format!("{key}.{ext}") };
     let target = cache_root.join(&cache_name);
 
-    // Cache hit: reuse the already-decrypted copy.
+    // Cache hit: reuse the already-decrypted copy. Touch mtime so an
+    // in-use preview is not the first eviction candidate.
     if matches!(tokio::fs::metadata(&target).await, Ok(meta) if meta.len() > 0) {
+        let touch = target.clone();
+        let _ = tokio::task::spawn_blocking(move || touch_mtime(&touch)).await;
         // A non-UTF-8 cache path we can't hand to the webview: no typed variant
         // fits a `to_str()` None, so it stays the documented catch-all `Other`.
         return target
@@ -324,11 +326,83 @@ pub async fn cache_remote_file(
     }
 
     info!(file_id = %file_id, "Remote file cached for preview");
+
+    let evict_root = cache_root.clone();
+    let evict_keep = target.clone();
+    let _ = tokio::task::spawn_blocking(move || evict_preview_cache_dir(&evict_root, PREVIEW_CACHE_CAP_BYTES, &evict_keep)).await;
+
     // Same non-UTF-8 path case as the cache-hit return above → documented Other.
     target
         .to_str()
         .map(str::to_string)
         .ok_or_else(|| AppError::Other("preview cache path is not valid UTF-8".into()))
+}
+
+const PREVIEW_CACHE_CAP_BYTES: u64 = 1024 * 1024 * 1024;
+const PREVIEW_CACHE_MIN_AGE: Duration = Duration::from_hours(7 * 24);
+
+fn touch_mtime(path: &Path) {
+    if let Ok(file) = std::fs::File::open(path) {
+        let _ = file.set_modified(SystemTime::now());
+    }
+}
+
+fn is_part_file(path: &Path) -> bool {
+    path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("part"))
+}
+
+/// Pure eviction planner. Returns paths to delete so tests can pin
+/// the rules without writing a 1 GiB cache.
+///
+/// Evicts only files older than `min_age` when total (non-`.part`)
+/// size exceeds `cap`. Oldest first. Never the just-written `keep`
+/// path, never an in-flight `.part`.
+fn evict_preview_cache(entries: Vec<(PathBuf, u64, SystemTime)>, cap: u64, keep: &Path, now: SystemTime, min_age: Duration) -> Vec<PathBuf> {
+    let total: u64 = entries.iter().filter(|(p, _, _)| !is_part_file(p)).map(|(_, size, _)| *size).sum();
+    if total <= cap {
+        return Vec::new();
+    }
+
+    let mut candidates: Vec<(PathBuf, u64, SystemTime)> = entries
+        .into_iter()
+        .filter(|(path, _, mtime)| path != keep && !is_part_file(path) && now.duration_since(*mtime).is_ok_and(|age| age >= min_age))
+        .collect();
+    candidates.sort_by_key(|(_, _, mtime)| *mtime);
+
+    let mut remaining = total;
+    let mut to_delete = Vec::new();
+    for (path, size, _) in candidates {
+        if remaining <= cap {
+            break;
+        }
+        to_delete.push(path);
+        remaining = remaining.saturating_sub(size);
+    }
+    to_delete
+}
+
+fn evict_preview_cache_dir(root: &Path, cap: u64, keep: &Path) -> usize {
+    let Ok(rd) = std::fs::read_dir(root) else {
+        return 0;
+    };
+    let mut entries = Vec::new();
+    for entry in rd.flatten() {
+        let path = entry.path();
+        let Ok(meta) = entry.metadata() else { continue };
+        if !meta.is_file() {
+            continue;
+        }
+        let mtime = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+        entries.push((path, meta.len(), mtime));
+    }
+    let to_delete = evict_preview_cache(entries, cap, keep, SystemTime::now(), PREVIEW_CACHE_MIN_AGE);
+    let mut n = 0;
+    for path in to_delete {
+        if std::fs::remove_file(&path).is_ok() {
+            n += 1;
+        }
+    }
+    n
 }
 
 // ─── Thumbnails ────────────────────────────────────────────────────────────
@@ -564,6 +638,44 @@ mod tests {
     }
 
     #[test]
+    fn evict_preview_cache_skips_under_cap() {
+        let keep = PathBuf::from("/cache/keep.bin");
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(10_000_000);
+        let old = now - PREVIEW_CACHE_MIN_AGE - Duration::from_secs(1);
+        let entries = vec![(PathBuf::from("/cache/a.bin"), 100, old), (keep.clone(), 50, old)];
+        assert!(evict_preview_cache(entries, 200, &keep, now, PREVIEW_CACHE_MIN_AGE).is_empty());
+    }
+
+    #[test]
+    fn evict_preview_cache_drops_oldest_over_cap_but_keeps_fresh_and_part() {
+        let keep = PathBuf::from("/cache/keep.bin");
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(10_000_000);
+        let old = now - PREVIEW_CACHE_MIN_AGE - Duration::from_mins(1);
+        let older = now - PREVIEW_CACHE_MIN_AGE - Duration::from_mins(2);
+        let fresh = now - Duration::from_mins(1);
+        let entries = vec![
+            (PathBuf::from("/cache/older.bin"), 80, older),
+            (PathBuf::from("/cache/old.bin"), 80, old),
+            (PathBuf::from("/cache/fresh.bin"), 80, fresh),
+            (PathBuf::from("/cache/dl.1.part"), 500, older),
+            (keep.clone(), 80, older),
+        ];
+        // non-part total = 80*4 = 320 > cap 150. Only aged non-keep
+        // files are candidates; oldest first until under cap.
+        let deleted = evict_preview_cache(entries, 150, &keep, now, PREVIEW_CACHE_MIN_AGE);
+        assert_eq!(deleted, vec![PathBuf::from("/cache/older.bin"), PathBuf::from("/cache/old.bin")]);
+    }
+
+    #[test]
+    fn evict_preview_cache_never_deletes_keep_or_part() {
+        let keep = PathBuf::from("/cache/keep.bin");
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(10_000_000);
+        let old = now - PREVIEW_CACHE_MIN_AGE - Duration::from_secs(1);
+        let entries = vec![(keep.clone(), 500, old), (PathBuf::from("/cache/x.2.part"), 500, old)];
+        assert!(evict_preview_cache(entries, 10, &keep, now, PREVIEW_CACHE_MIN_AGE).is_empty());
+    }
+
+    #[test]
     fn thumbnail_cache_name_is_content_and_size_addressed() {
         assert_eq!(thumbnail_cache_name("abc", 256), "abc_256.jpg");
         // Different sizes must not collide so a 128px request never serves a
@@ -600,7 +712,10 @@ mod tests {
             .into_iter()
             .map(String::from)
             .collect();
-        assert_eq!(keys, expected, "RemoteFileInfo wire keys drifted — FE RemoteFolderBrowser reads these snake_case keys");
+        assert_eq!(
+            keys, expected,
+            "RemoteFileInfo wire keys drifted — FE RemoteFolderBrowser reads these snake_case keys"
+        );
 
         // `arion_hash` is `Option` with no `skip_serializing_if`, so the key must
         // stay present (serialized `null`) when None — the FE types it `string | null`.
@@ -632,7 +747,9 @@ mod tests {
         let dir = tempfile::TempDir::new().expect("tempdir");
         // 400×200 source → fitting 128 keeps aspect → 128×64.
         let src = dir.path().join("src.png");
-        image::RgbImage::from_pixel(400, 200, image::Rgb([10, 200, 30])).save(&src).expect("write src");
+        image::RgbImage::from_pixel(400, 200, image::Rgb([10, 200, 30]))
+            .save(&src)
+            .expect("write src");
 
         let target = dir.path().join("out_128.jpg");
         generate_thumbnail_file(&src, dir.path(), "out_128.jpg", &target, 128).expect("thumbnail");
@@ -648,7 +765,9 @@ mod tests {
         // decoder must sniff bytes, not trust the extension.
         let dir = tempfile::TempDir::new().expect("tempdir");
         let src = dir.path().join("payload.part");
-        image::RgbImage::from_pixel(64, 64, image::Rgb([0, 0, 0])).save_with_format(&src, image::ImageFormat::Png).expect("write png-as-part");
+        image::RgbImage::from_pixel(64, 64, image::Rgb([0, 0, 0]))
+            .save_with_format(&src, image::ImageFormat::Png)
+            .expect("write png-as-part");
 
         let target = dir.path().join("out_32.jpg");
         generate_thumbnail_file(&src, dir.path(), "out_32.jpg", &target, 32).expect("decodes via byte sniffing");

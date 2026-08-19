@@ -475,8 +475,7 @@ mod tests {
     #[test]
     fn legacy_ciphertext_with_aad_sentinel_first_byte_still_decrypts() {
         let enc = encrypt_legacy_v1_with_first_byte(MNEMONIC, "hunter2", ADDRESS, V_ARGON2_AAD);
-        let (dec, was_legacy) = decrypt_mnemonic(&enc, "hunter2", ADDRESS)
-            .expect("legacy blob aliasing V_ARGON2_AAD must fall through and decrypt");
+        let (dec, was_legacy) = decrypt_mnemonic(&enc, "hunter2", ADDRESS).expect("legacy blob aliasing V_ARGON2_AAD must fall through and decrypt");
         assert_eq!(MNEMONIC, dec.as_str());
         assert!(was_legacy, "fall-through decrypt must still flag for migration");
     }
@@ -484,8 +483,7 @@ mod tests {
     #[test]
     fn legacy_ciphertext_with_argon2_sentinel_first_byte_still_decrypts() {
         let enc = encrypt_legacy_v1_with_first_byte(MNEMONIC, "hunter2", ADDRESS, V_ARGON2);
-        let (dec, was_legacy) = decrypt_mnemonic(&enc, "hunter2", ADDRESS)
-            .expect("legacy blob aliasing V_ARGON2 must fall through and decrypt");
+        let (dec, was_legacy) = decrypt_mnemonic(&enc, "hunter2", ADDRESS).expect("legacy blob aliasing V_ARGON2 must fall through and decrypt");
         assert_eq!(MNEMONIC, dec.as_str());
         assert!(was_legacy, "fall-through decrypt must still flag for migration");
     }

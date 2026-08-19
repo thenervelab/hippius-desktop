@@ -158,18 +158,26 @@ const Support: React.FC = () => {
             }
           }
 
-          // Best-effort log bundle. Business logic (bundling, redaction, zip,
-          // upload) lives in the `attach_logs_to_ticket` Rust command; here we
-          // only fire it and SWALLOW any failure so it can never fail ticket
-          // creation or show an error toast.
-          if (includeLogs && firstMessageId != null && polkadotAddress) {
+          // Best-effort log bundle. Business logic (resolving the target
+          // message, bundling, redaction, zip, upload) lives in the
+          // `attach_logs_to_ticket` Rust command. A failure must not fail the
+          // ticket — but it MUST be visible: the user ticked a box saying logs
+          // would be sent, and support's whole diagnostic path depends on them
+          // arriving. This used to be a bare `console.warn`, so a failed upload
+          // was invisible to the user, to support, and to the log file itself.
+          //
+          // Note this deliberately does NOT depend on `firstMessageId`. The
+          // create response does not guarantee a `messages` array, and gating
+          // on it meant the bundle was silently skipped whenever it was absent.
+          let logsFailed = false;
+          if (includeLogs && polkadotAddress) {
             try {
               await invoke("attach_logs_to_ticket", {
                 accountId: polkadotAddress,
                 ticketId: ticket.id.toString(),
-                messageId: firstMessageId.toString(),
               });
             } catch (error) {
+              logsFailed = true;
               console.warn("Failed to attach logs to support ticket", error);
             }
           }
@@ -181,6 +189,14 @@ const Support: React.FC = () => {
             toast.error(attachmentError);
           } else {
             toast.success("Ticket created successfully!");
+          }
+          // Reported after the ticket's own outcome so the primary result reads
+          // first: the ticket did succeed, only the logs did not.
+          if (logsFailed) {
+            toast.warning("Application logs could not be attached", {
+              description:
+                "Your ticket was created. You can attach the logs to a reply, or support will ask for them.",
+            });
           }
           refetch();
         },

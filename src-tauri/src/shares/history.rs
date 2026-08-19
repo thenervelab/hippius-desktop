@@ -113,7 +113,8 @@ pub struct HistoryEntry {
     pub plaintext_size: Option<i64>,
     pub mime_type: Option<String>,
     pub created_at: String,
-    pub expires_at: String,
+    /// `None` for a share that never expired (ended by revocation).
+    pub expires_at: Option<String>,
     pub ended_at: String,
     pub end_reason: EndReason,
 }
@@ -184,10 +185,28 @@ type HistoryRow = (
     Option<i64>,    // plaintext_size
     Option<String>, // mime_type
     String,         // created_at
-    String,         // expires_at
+    Option<String>, // expires_at (NULL for a never-expiring share)
     String,         // ended_at
     String,         // end_reason
 );
+
+/// Drop history rows for `account_id` whose `ended_at` is strictly
+/// before `cutoff`. Scoped by account so a multi-account install
+/// cannot evict another user's rows.
+///
+/// `ended_at` is stored as RFC3339 via [`DateTime::to_rfc3339`]; bind
+/// the same format so the TEXT comparison is chronological.
+///
+/// # Errors
+/// Returns the underlying `sqlx::Error` on connection or query failure.
+pub async fn prune_older_than(pool: &SqlitePool, account_id: &str, cutoff: DateTime<Utc>) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query("DELETE FROM shared_link_history WHERE account_id = ? AND ended_at < ?")
+        .bind(account_id)
+        .bind(cutoff.to_rfc3339())
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected())
+}
 
 /// List all history rows for an account, newest first. Ordering is
 /// `ended_at DESC` so the FE can paginate from the most recent without
@@ -196,6 +215,9 @@ type HistoryRow = (
 /// # Errors
 /// Returns the underlying `sqlx::Error` on connection or query failure.
 pub async fn list_for_account(pool: &SqlitePool, account_id: &str) -> Result<Vec<HistoryEntry>, sqlx::Error> {
+    let cutoff = Utc::now() - chrono::Duration::days(365);
+    prune_older_than(pool, account_id, cutoff).await?;
+
     // Pull the raw `end_reason` as String and re-validate via
     // `EndReason::from_db_str`. An unknown value (schema drift,
     // hand-edited DB) becomes a hard error rather than a silent skip
@@ -281,7 +303,7 @@ fn entry_from_upstream(summary: &UpstreamShareSummary, ended_at: DateTime<Utc>, 
         plaintext_size,
         mime_type: Some(summary.mime_type.clone()),
         created_at: summary.created_at.to_rfc3339(),
-        expires_at: summary.expires_at.to_rfc3339(),
+        expires_at: summary.expires_at.map(|e| e.to_rfc3339()),
         ended_at: ended_at.to_rfc3339(),
         end_reason,
     }
@@ -297,6 +319,8 @@ fn entry_from_upstream(summary: &UpstreamShareSummary, ended_at: DateTime<Utc>, 
 /// classify:
 /// - `expires_at <= now` → [`EndReason::Expired`]
 /// - `expires_at >  now` → [`EndReason::RevokedElsewhere`]
+/// - `expires_at` is `None` (never expires) → [`EndReason::RevokedElsewhere`],
+///   since the only way such a share can leave the active set is revocation.
 ///
 /// Tokens that are still in `current` produce no event. If they later
 /// expire or vanish, a future call will surface them — diffing is
@@ -314,7 +338,7 @@ pub fn diff_active_lists(previous: &[UpstreamShareSummary], current: &[UpstreamS
         if current_tokens.contains(prev.share_token.as_str()) {
             continue;
         }
-        let end_reason = if prev.expires_at <= now {
+        let end_reason = if prev.expires_at.is_some_and(|e| e <= now) {
             EndReason::Expired
         } else {
             EndReason::RevokedElsewhere
@@ -356,7 +380,7 @@ pub fn entry_for_revoke_here(share_token: String, cached: Option<&UpstreamShareS
         // and `expires_at` as `now` keeps the columns NOT NULL without
         // inventing a timestamp from a different timezone or epoch.
         created_at: now.to_rfc3339(),
-        expires_at: now.to_rfc3339(),
+        expires_at: Some(now.to_rfc3339()),
         ended_at: now.to_rfc3339(),
         end_reason: EndReason::RevokedHere,
     }
@@ -382,7 +406,7 @@ mod tests {
             ciphertext_size: 1280,
             mime_type: "application/octet-stream".to_string(),
             created_at: now,
-            expires_at: now + offset,
+            expires_at: Some(now + offset),
         }
     }
 
@@ -494,7 +518,7 @@ mod tests {
             plaintext_size: Some(42),
             mime_type: Some("text/plain".to_string()),
             created_at: now.to_rfc3339(),
-            expires_at: (now + Duration::hours(1)).to_rfc3339(),
+            expires_at: Some((now + Duration::hours(1)).to_rfc3339()),
             ended_at: now.to_rfc3339(),
             end_reason: reason,
         }
@@ -593,6 +617,52 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn prune_older_than_drops_old_rows_only_for_named_account() {
+        let (_dir, pool) = fresh_pool().await;
+        let now = Utc::now();
+        let mut old_a = mk_entry("old-a", EndReason::Expired);
+        old_a.ended_at = (now - Duration::days(400)).to_rfc3339();
+        let mut new_a = mk_entry("new-a", EndReason::Expired);
+        new_a.ended_at = (now - Duration::days(10)).to_rfc3339();
+        let mut old_b = mk_entry("old-b", EndReason::Expired);
+        old_b.ended_at = (now - Duration::days(400)).to_rfc3339();
+        record_event(&pool, "acct-A", &old_a).await.expect("old-a");
+        record_event(&pool, "acct-A", &new_a).await.expect("new-a");
+        record_event(&pool, "acct-B", &old_b).await.expect("old-b");
+
+        let cutoff = now - Duration::days(365);
+        let removed = prune_older_than(&pool, "acct-A", cutoff).await.expect("prune");
+        assert_eq!(removed, 1);
+
+        let a = list_for_account(&pool, "acct-A").await.expect("list-A");
+        assert_eq!(a.len(), 1);
+        assert_eq!(a[0].share_token, "new-a");
+
+        let kept_b: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM shared_link_history WHERE account_id = ?")
+            .bind("acct-B")
+            .fetch_one(&pool)
+            .await
+            .expect("count-B");
+        assert_eq!(kept_b, 1, "prune must not touch another account");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn list_for_account_prunes_rows_older_than_one_year() {
+        let (_dir, pool) = fresh_pool().await;
+        let now = Utc::now();
+        let mut old = mk_entry("old", EndReason::Expired);
+        old.ended_at = (now - Duration::days(400)).to_rfc3339();
+        let mut recent = mk_entry("recent", EndReason::RevokedHere);
+        recent.ended_at = (now - Duration::days(30)).to_rfc3339();
+        record_event(&pool, "acct", &old).await.expect("old");
+        record_event(&pool, "acct", &recent).await.expect("recent");
+
+        let rows = list_for_account(&pool, "acct").await.expect("list");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].share_token, "recent");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn clear_all_only_clears_named_account() {
         let (_dir, pool) = fresh_pool().await;
         record_event(&pool, "acct-A", &mk_entry("a1", EndReason::Expired)).await.expect("A1");
@@ -625,7 +695,7 @@ mod tests {
         assert_eq!(entry.filename, None);
         assert_eq!(entry.plaintext_size, None);
         assert_eq!(entry.created_at, now.to_rfc3339());
-        assert_eq!(entry.expires_at, now.to_rfc3339());
+        assert_eq!(entry.expires_at, Some(now.to_rfc3339()));
         assert_eq!(entry.end_reason, EndReason::RevokedHere);
     }
 }

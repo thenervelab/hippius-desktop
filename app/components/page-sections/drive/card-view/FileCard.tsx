@@ -314,7 +314,6 @@ const FileCard: React.FC<FileCardProps> = ({
             <SharedLinkBadge
               label={file.label}
               actualName={file.actualFileName}
-              isFolder={file.isFolder}
               onManageShare={() => router.push("/shares")}
               className="ml-1.5"
             />

@@ -1,6 +1,6 @@
-// Small "currently shared via public link" indicator for a file row.
-// Renders nothing for files that aren't shared or for folders, so the
-// caller can drop it next to the filename without a guard.
+// Small "currently shared via public link" indicator for a drive row.
+// Renders nothing for entries that aren't shared, so the caller can drop it
+// next to the filename without a guard.
 //
 // Visual design: a 14px primary-color link icon with a tooltip. The
 // icon (not text) was chosen so the badge can fit into both the table
@@ -22,7 +22,6 @@ import { buildSharedBadgeTooltip } from "./sharedBadgeTooltip";
 interface SharedLinkBadgeProps {
   label: string | null | undefined;
   actualName: string | null | undefined;
-  isFolder?: boolean;
   className?: string;
   /**
    * Navigates to share-link management (the `/shares` page) for this file.
@@ -38,16 +37,21 @@ interface SharedLinkBadgeProps {
 const SharedLinkBadge: FC<SharedLinkBadgeProps> = ({
   label,
   actualName,
-  isFolder,
   className,
   onManageShare,
 }) => {
   const { getSharesFor } = useSharedFiles();
 
-  // Folders don't go through `hcfs_create_share` (the Rust path
-  // rejects directories), so a folder can never be shared.
-  if (isFolder) return null;
-
+  // Folders CAN be shared now (`hcfs_create_folder_share` zips one and records
+  // the same `share_origin` row a file gets), so the badge is no longer
+  // suppressed for them.
+  //
+  // KNOWN LIMITATION: the lookup key is this row's `actualName`, which for a
+  // NESTED folder row is only the basename while the origin row stores the full
+  // drive-relative path — so a shared subfolder shows no badge. Files are
+  // unaffected (their `actualName` is already the full path). This is the same
+  // cosmetic-miss posture `shares/origin.rs` documents for NFD/NFC drift: the
+  // share itself is fine, only the badge is absent.
   const rows = getSharesFor(label, actualName);
   const tooltipLines = buildSharedBadgeTooltip(rows);
   // `buildSharedBadgeTooltip` returns null for unshared files, which

@@ -30,21 +30,3 @@ export function computeLogoutChunk(ms: number): LogoutChunk {
   }
   return { kind: "fire", delayMs };
 }
-
-/**
- * Parse the OAuth expiry persisted in localStorage. It is written either as a
- * numeric epoch-ms string or an ISO-8601 date string, so a numeric value is
- * `parseInt`ed and anything else is fed to `Date`. Returns `null` for an
- * absent/empty value.
- *
- * NOTE: an unparseable date string yields `NaN` here (mirrors the original
- * inline behavior). The Rust `restore_session` it feeds treats `NaN`/null as
- * "no client expiry"; this is preserved deliberately, not fixed, to keep the
- * extraction behavior-identical.
- */
-export function parseOAuthExpiryMs(storedExpiry: string | null): number | null {
-  if (!storedExpiry) return null;
-  return isNaN(Number(storedExpiry))
-    ? new Date(storedExpiry).getTime()
-    : parseInt(storedExpiry, 10);
-}

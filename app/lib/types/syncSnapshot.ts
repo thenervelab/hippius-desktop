@@ -87,6 +87,21 @@ export interface SyncSnapshot {
    * `widgetState === "preparing"`. */
   preparingPendingFiles?: number;
   preparingPendingBytes?: number;
+  /** Live indexing detail for the preparing window, summed across
+   * preparing drives: the engine's cumulative scan counter ("Preparing —
+   * 1,234 files scanned") and the remote-state fetch progress. Each is
+   * absent (undefined) when no preparing drive is in that phase. Only
+   * meaningful when `widgetState === "preparing"`. */
+  preparingScannedFiles?: number;
+  preparingFetchedEntries?: number;
+  preparingFetchTotalEntries?: number;
+  /** Paths of errored rows whose failure resolves itself on the next cycle —
+   * currently only "the file changed while we were uploading it", which the
+   * engine retries unattended. Rust decides this (see
+   * `FileFailureKindPayload::is_transient`); the FE only joins by path and
+   * must NOT re-derive it by matching on the reason text. Absent when nothing
+   * is retrying. */
+  transientErrorPaths?: string[];
 }
 
 export const EMPTY_SNAPSHOT: SyncSnapshot = {

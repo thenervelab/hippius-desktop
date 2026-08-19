@@ -30,6 +30,7 @@ import {
 } from "@/lib/utils/fileFilterUtils";
 import { useFilteredFiles } from "@/app/lib/hooks/useFilteredFiles";
 import { useRecursiveFileSearch } from "@/app/lib/hooks/useRecursiveFileSearch";
+import { shouldUseRecursiveSearch } from "@/lib/utils/filesViewMode";
 import DriveHeader from "./DriveHeader";
 import DriveContent from "./DriveContent";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
@@ -406,17 +407,6 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     [filterState.fileExtension],
   );
 
-  const { data: inMemoryFilteredData, isFiltering } = useFilteredFiles(
-    allFilteredData,
-    {
-      searchTerm,
-      fileExtensions: fileExtensionsCriteria,
-      dateRange: filterState.dateRange,
-      fileSizes: filterState.fileSizes,
-      folderTab: isRecentFiles || isNested ? null : activeSyncFolderLabel,
-    },
-  );
-
   // Recursive cross-folder search — fires only when an active filter is
   // set AND we have a real drive context (root view of a drive or a
   // nested folder under it). Matches the web console's `/search_files`
@@ -439,6 +429,24 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     Boolean(filterState.fileExtension) ||
     Boolean(filterState.dateRange?.from) ||
     filterState.fileSizes.length > 0;
+  const useRecursiveResults = shouldUseRecursiveSearch({
+    hasActiveSearchOrFilter,
+    recursiveSearchLabel,
+    isRecentFiles,
+  });
+
+  const { data: inMemoryFilteredData, isFiltering } = useFilteredFiles(
+    allFilteredData,
+    {
+      searchTerm,
+      fileExtensions: fileExtensionsCriteria,
+      dateRange: filterState.dateRange,
+      fileSizes: filterState.fileSizes,
+      folderTab: isRecentFiles || isNested ? null : activeSyncFolderLabel,
+    },
+    150,
+    !useRecursiveResults,
+  );
   // Same memoisation discipline as `fileExtensionsCriteria` — the
   // criteria object itself needs a stable identity across renders so
   // the hook's internal `useMemo` for `currentInputs` doesn't drift,
@@ -472,8 +480,6 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // applied to the current level's listing. This is the console-parity
   // behaviour the user asked for: filters reach across every nested
   // folder instead of stopping at the rows currently loaded in memory.
-  const useRecursiveResults =
-    hasActiveSearchOrFilter && Boolean(recursiveSearchLabel) && !isRecentFiles;
   const filteredData = useRecursiveResults
     ? recursiveResults
     : inMemoryFilteredData;
