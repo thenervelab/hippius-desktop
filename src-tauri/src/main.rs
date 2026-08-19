@@ -53,6 +53,7 @@ use crate::billing::queries::{
     get_add_credit_events, get_balance_transfers, get_billing_transactions, get_deposit_address, get_drive_storage_stats, get_marketplace_credits,
     get_system_balance,
 };
+use crate::billing::storage_overview::get_storage_overview;
 use crate::billing::subscriptions::{create_subscription, get_customer_portal_url, get_subscription_data};
 use crate::blockchain::bridge::deposit::bridge_alpha_to_halpha;
 use crate::blockchain::bridge::explorer::bridge_fetch_onchain_data;
@@ -454,6 +455,7 @@ fn main() {
             get_balance_transfers,
             get_add_credit_events,
             get_drive_storage_stats,
+            get_storage_overview,
             get_drive_storage_chart,
             get_drive_credits_chart,
             get_credit_balance_chart,

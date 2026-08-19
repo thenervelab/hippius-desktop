@@ -8,4 +8,5 @@ pub mod drive_credits;
 pub mod drive_storage;
 pub mod eligibility;
 pub mod queries;
+pub mod storage_overview;
 pub mod subscriptions;

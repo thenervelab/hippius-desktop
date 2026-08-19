@@ -3,9 +3,9 @@
 import React from "react";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import PlanChip from "@/components/ui/plan-chip";
 import { WalletMinimal } from "@/components/ui/icons";
 import { useStaking } from "@/app/lib/hooks/useStaking";
-import useSubscriptionData from "@/app/lib/hooks/useSubscriptionData";
 import { WALLET_FEATURE_ENABLED } from "@/app/lib/featureFlags";
 import { cn } from "@/app/lib/utils";
 
@@ -29,24 +29,7 @@ const PageHeader: React.FC<PageHeaderProps> = ({
   // on the wallet page itself, not on Overview / Drive / Billing.
   const { stakingInfo, isLoading: isStakingLoading } = useStaking("auth");
 
-  const { activeSubscription, isLoading: isSubLoading } = useSubscriptionData();
-
-  const hasActivePlan = !isSubLoading && !!activeSubscription?.has_subscription;
-
   const stakedDisplay = stakingInfo?.bondedHip ?? "—";
-
-  const storageDisplay = (() => {
-    if (isSubLoading || !activeSubscription?.has_subscription) return null;
-    const sub = activeSubscription.subscription;
-    return sub.storage_limit ?? sub.plan_name ?? "—";
-  })();
-
-  const planPrice = (() => {
-    if (isSubLoading || !activeSubscription?.has_subscription) return null;
-    const sub = activeSubscription.subscription;
-    if (sub.amount == null) return null;
-    return `$${sub.amount}/${sub.interval === "month" ? "mo." : sub.interval}`;
-  })();
 
   return (
     <div
@@ -137,33 +120,14 @@ const PageHeader: React.FC<PageHeaderProps> = ({
               is off. */}
           <div
             className={cn(
-              "flex flex-col items-start justify-center gap-0.5 py-3",
+              "flex flex-col items-start justify-center py-3",
               WALLET_FEATURE_ENABLED ? "flex-[2] pl-4 pr-5" : "px-4",
             )}
           >
-            <div className="flex items-center gap-1 mb-0.5">
-              <span className="inline-flex shrink-0 items-center justify-center rounded-full bg-primary-40/20 size-4">
-                <span className="rounded-full size-[6.15px] bg-primary-40" />
-              </span>
-              <span className="font-geist-mono text-[12px] font-medium uppercase leading-[18px] tracking-[-0.24px] text-primary-40 dark:text-primary-brand-dark">
-                Active Plan
-              </span>
-            </div>
-            {hasActivePlan && storageDisplay ? (
-              <p className="text-[12px] font-bold leading-[18px] tracking-[-0.36px] text-primary-50 dark:text-primary-brand-dark">
-                {storageDisplay}
-                {planPrice && (
-                  <span className="text-[12px] font-medium text-grey-10 dark:text-white">
-                    {" "}
-                    ({planPrice})
-                  </span>
-                )}
-              </p>
-            ) : (
-              <p className="text-[12px] font-medium leading-[18px] tracking-[-0.24px] text-grey-10 dark:text-grey-dark-700">
-                No active plan
-              </p>
-            )}
+            {/* Shared chip: plan → credits → none, decided by
+                get_storage_overview.source — identical to the home header
+                and the home cards, with a skeleton until it settles. */}
+            <PlanChip />
           </div>
         </div>
       )}
