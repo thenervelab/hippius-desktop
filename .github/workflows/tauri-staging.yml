@@ -226,13 +226,9 @@ jobs:
         run: |
           set -euo pipefail
           printf '%s\n' "$TAURI_ENV_FILE" | bash scripts/write-tauri-env.sh
-          # PREVIEW-ONLY — DO NOT PORT TO redesign/main. Point share links at the
-          # staging console (dev-branch deploy) instead of the prod default, so
-          # internal testers can open private "#p=" links (that recipient page
-          # ships only on staging, not yet on console.hippius.com). The app loads
-          # this bundled .env at runtime (main.rs) and dotenvy won't override a
-          # real env var, so a tester's unset shell means the staging URL wins.
-          printf '\nHIPPIUS_CONSOLE_BASE_URL=https://console.hippicode.com\n' >> src-tauri/.env
+          # Share links point at the staging console via the compile-time
+          # HIPPIUS_RELEASE_CHANNEL=staging on the build step below — no .env
+          # line, so nothing here can leak into a prod release's env file.
 
       - name: Build frontend
         run: pnpm build
@@ -295,6 +291,10 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+          # Compile-time channel: staging binaries mint share links at the
+          # staging console (shares/commands.rs::RELEASE_CHANNEL). Prod release
+          # workflows never set this, so they can't inherit the staging URL.
+          HIPPIUS_RELEASE_CHANNEL: staging
         with:
           tagName: v__VERSION__-staging
           releaseName: '[STAGING] ${{ steps.release_notes.outputs.title }}'
@@ -451,8 +451,7 @@ jobs:
         run: |
           set -euo pipefail
           printf '%s\n' "$TAURI_ENV_FILE" | bash scripts/write-tauri-env.sh
-          # PREVIEW-ONLY staging console (see the macOS job).
-          printf '\nHIPPIUS_CONSOLE_BASE_URL=https://console.hippicode.com\n' >> src-tauri/.env
+          # Staging console comes from the compile-time channel (macOS job note).
 
       - name: Build frontend
         run: pnpm build
@@ -466,6 +465,10 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+          # Compile-time channel: staging binaries mint share links at the
+          # staging console (shares/commands.rs::RELEASE_CHANNEL). Prod release
+          # workflows never set this, so they can't inherit the staging URL.
+          HIPPIUS_RELEASE_CHANNEL: staging
         with:
           tagName: v__VERSION__-staging
           releaseName: '[STAGING] Hippius'
@@ -550,7 +553,7 @@ jobs:
         run: |
           set -euo pipefail
           printf '%s\n' "$TAURI_ENV_FILE" | bash scripts/write-tauri-env.sh
-          printf '\nHIPPIUS_CONSOLE_BASE_URL=https://console.hippicode.com\n' >> src-tauri/.env
+          # Staging console comes from the compile-time channel (macOS job note).
 
       - name: Build frontend
         run: pnpm build
@@ -569,6 +572,10 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+          # Compile-time channel: staging binaries mint share links at the
+          # staging console (shares/commands.rs::RELEASE_CHANNEL). Prod release
+          # workflows never set this, so they can't inherit the staging URL.
+          HIPPIUS_RELEASE_CHANNEL: staging
         with:
           tagName: v__VERSION__-staging
           releaseName: '[STAGING] Hippius'

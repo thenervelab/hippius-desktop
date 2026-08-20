@@ -36,23 +36,69 @@ use tracing::{debug, info, warn};
 /// `console.hippius.com` serves the share recipient page in `hippius-console`.
 const DEFAULT_CONSOLE_BASE_URL: &str = "https://console.hippius.com";
 
-/// The console origin to embed in minted share links, honoring the
-/// `HIPPIUS_CONSOLE_BASE_URL` env override (dev/test only) over the production
-/// default. Mirrors the app's other `HIPPIUS_*_URL` overrides (see
-/// `api/client.rs`, `auth/service.rs`): a plain desktop build points at prod,
-/// while a build launched with `HIPPIUS_CONSOLE_BASE_URL=https://console.hippicode.com`
-/// mints links at a staging console — e.g. to exercise the `#p=` private-share
-/// recipient page before it ships to prod.
+/// Staging console origin, minted automatically by staging-channel builds.
+const STAGING_CONSOLE_BASE_URL: &str = "https://console.hippicode.com";
+
+/// Release channel baked in AT COMPILE TIME: the staging build workflow
+/// (`tauri-staging.yml`) exports `HIPPIUS_RELEASE_CHANNEL=staging` on its
+/// build steps, every other build (prod releases, local `cargo build`) leaves
+/// it unset. Compile-time on purpose — the channel is a property of the
+/// BINARY, so a prod release can never be repointed at the staging console by
+/// a stray line in a bundled `.env` (the old runtime-only override made every
+/// release a "remember to change the link base" hazard).
+const RELEASE_CHANNEL: Option<&str> = option_env!("HIPPIUS_RELEASE_CHANNEL");
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReleaseChannel {
+    Production,
+    Staging,
+}
+
+/// Parse the baked channel string; anything but (case-insensitive) "staging"
+/// — unset, empty, or a typo — is Production, the fail-safe direction: a
+/// mis-set channel mints prod links, never leaks staging ones.
+fn parse_release_channel(raw: Option<&str>) -> ReleaseChannel {
+    match raw.map(str::trim) {
+        Some(value) if value.eq_ignore_ascii_case("staging") => ReleaseChannel::Staging,
+        _ => ReleaseChannel::Production,
+    }
+}
+
+/// Whether this build honors the `HIPPIUS_CONSOLE_BASE_URL` runtime override.
+/// Dev builds (local testing) and staging-channel builds do; a production
+/// RELEASE binary does not — its link base is not configuration.
+fn honors_console_override(channel: ReleaseChannel, dev_build: bool) -> bool {
+    dev_build || channel == ReleaseChannel::Staging
+}
+
+/// The console origin to embed in minted share links.
+///
+/// Per-channel default (prod → `console.hippius.com`, staging →
+/// `console.hippicode.com`), with the `HIPPIUS_CONSOLE_BASE_URL` runtime
+/// override honored only where [`honors_console_override`] allows.
 fn console_base_url() -> String {
-    resolve_console_base_url(std::env::var("HIPPIUS_CONSOLE_BASE_URL").ok())
+    let channel = parse_release_channel(RELEASE_CHANNEL);
+    let dev_build = cfg!(debug_assertions);
+    let override_value = std::env::var("HIPPIUS_CONSOLE_BASE_URL").ok();
+    if override_value.is_some() && !honors_console_override(channel, dev_build) {
+        warn!("HIPPIUS_CONSOLE_BASE_URL is set but ignored: production release builds always mint links at the production console");
+    }
+    resolve_console_base_url(channel, dev_build, override_value)
 }
 
 /// Pure resolver for [`console_base_url`], split out so the env-independent
 /// logic is unit-testable without mutating process env under the parallel test
 /// runner (env writes are process-global and racy). A blank/whitespace override
-/// falls back to the default, and any trailing `/` is trimmed so callers can
-/// join `/share/<token>` without doubling the separator.
-fn resolve_console_base_url(override_value: Option<String>) -> String {
+/// falls back to the channel default, and any trailing `/` is trimmed so
+/// callers can join `/share/<token>` without doubling the separator.
+fn resolve_console_base_url(channel: ReleaseChannel, dev_build: bool, override_value: Option<String>) -> String {
+    let channel_default = match channel {
+        ReleaseChannel::Production => DEFAULT_CONSOLE_BASE_URL,
+        ReleaseChannel::Staging => STAGING_CONSOLE_BASE_URL,
+    };
+    if !honors_console_override(channel, dev_build) {
+        return channel_default.to_string();
+    }
     override_value
         // Strip leading whitespace, and any trailing run of whitespace-OR-`/`, in
         // ONE pass, so the result's last char is neither — which makes the
@@ -62,7 +108,7 @@ fn resolve_console_base_url(override_value: Option<String>) -> String {
         // trim (proptest `resolve_console_base_url_is_idempotent`).
         .map(|value| value.trim_start().trim_end_matches(|c: char| c.is_whitespace() || c == '/').to_string())
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| DEFAULT_CONSOLE_BASE_URL.to_string())
+        .unwrap_or_else(|| channel_default.to_string())
 }
 
 // ─── Wire types ────────────────────────────────────────────────────────────
@@ -1133,9 +1179,10 @@ mod tests {
         // produces from arbitrary input must be a fixed point. Guards against a
         // future edit that trims or re-defaults inconsistently on the second pass.
         #[test]
-        fn resolve_console_base_url_is_idempotent(raw in ".*") {
-            let once = resolve_console_base_url(Some(raw));
-            let twice = resolve_console_base_url(Some(once.clone()));
+        fn resolve_console_base_url_is_idempotent(raw in ".*", staging in proptest::bool::ANY) {
+            let channel = if staging { ReleaseChannel::Staging } else { ReleaseChannel::Production };
+            let once = resolve_console_base_url(channel, true, Some(raw));
+            let twice = resolve_console_base_url(channel, true, Some(once.clone()));
             prop_assert_eq!(once, twice);
         }
     }
@@ -1184,26 +1231,71 @@ mod tests {
 
     #[test]
     fn console_base_url_defaults_when_override_absent_or_blank() {
-        assert_eq!(resolve_console_base_url(None), DEFAULT_CONSOLE_BASE_URL);
+        let dev = true;
+        assert_eq!(resolve_console_base_url(ReleaseChannel::Production, dev, None), DEFAULT_CONSOLE_BASE_URL);
         // A set-but-empty / whitespace-only env value is a no-op, not a broken base.
-        assert_eq!(resolve_console_base_url(Some(String::new())), DEFAULT_CONSOLE_BASE_URL);
-        assert_eq!(resolve_console_base_url(Some("   ".into())), DEFAULT_CONSOLE_BASE_URL);
+        assert_eq!(
+            resolve_console_base_url(ReleaseChannel::Production, dev, Some(String::new())),
+            DEFAULT_CONSOLE_BASE_URL
+        );
+        assert_eq!(
+            resolve_console_base_url(ReleaseChannel::Production, dev, Some("   ".into())),
+            DEFAULT_CONSOLE_BASE_URL
+        );
         // A value that is only slashes trims to empty → still the default.
-        assert_eq!(resolve_console_base_url(Some("/".into())), DEFAULT_CONSOLE_BASE_URL);
+        assert_eq!(
+            resolve_console_base_url(ReleaseChannel::Production, dev, Some("/".into())),
+            DEFAULT_CONSOLE_BASE_URL
+        );
     }
 
     #[test]
     fn console_base_url_uses_override_and_normalizes_it() {
         assert_eq!(
-            resolve_console_base_url(Some("https://console.hippicode.com".into())),
+            resolve_console_base_url(ReleaseChannel::Production, true, Some("https://console.hippicode.com".into())),
             "https://console.hippicode.com"
         );
         // Surrounding whitespace and trailing slashes are stripped so callers can
         // append `/share/<token>` without doubling the separator.
         assert_eq!(
-            resolve_console_base_url(Some("  https://console.hippicode.com///  ".into())),
+            resolve_console_base_url(ReleaseChannel::Production, true, Some("  https://console.hippicode.com///  ".into())),
             "https://console.hippicode.com"
         );
+    }
+
+    #[test]
+    fn staging_channel_mints_staging_links_by_default() {
+        // The whole point of the channel: staging builds need NO env plumbing
+        // to mint hippicode links…
+        assert_eq!(resolve_console_base_url(ReleaseChannel::Staging, false, None), STAGING_CONSOLE_BASE_URL);
+        // …and can still be repointed for testing.
+        assert_eq!(
+            resolve_console_base_url(ReleaseChannel::Staging, false, Some("https://console.example.dev".into())),
+            "https://console.example.dev"
+        );
+    }
+
+    #[test]
+    fn production_release_build_ignores_the_override() {
+        // A prod RELEASE binary always mints prod links — a stray
+        // HIPPIUS_CONSOLE_BASE_URL in a bundled .env must not repoint it
+        // (the pre-channel design's standing release hazard).
+        assert_eq!(
+            resolve_console_base_url(ReleaseChannel::Production, false, Some("https://console.hippicode.com".into())),
+            DEFAULT_CONSOLE_BASE_URL
+        );
+    }
+
+    #[test]
+    fn release_channel_parses_fail_safe() {
+        assert_eq!(parse_release_channel(Some("staging")), ReleaseChannel::Staging);
+        assert_eq!(parse_release_channel(Some("  Staging ")), ReleaseChannel::Staging);
+        // Unset, empty, or a typo all land on Production — the direction that
+        // can never leak staging links to real users.
+        assert_eq!(parse_release_channel(None), ReleaseChannel::Production);
+        assert_eq!(parse_release_channel(Some("")), ReleaseChannel::Production);
+        assert_eq!(parse_release_channel(Some("stagging")), ReleaseChannel::Production);
+        assert_eq!(parse_release_channel(Some("production")), ReleaseChannel::Production);
     }
 
     /// Wire-contract pin for the FOREIGN `hcfs_client::client::share::ShareProgress`,
