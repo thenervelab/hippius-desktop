@@ -286,6 +286,32 @@ pub async fn resolve_own_drive(pool: &sqlx::SqlitePool, account_id: &str, label:
     Ok(identity)
 }
 
+/// The inputs [`install_member_drive`] needs (an args struct — the row
+/// allocation, seal, and repair paths all consume the same seven values).
+pub struct MemberDriveInstall<'a> {
+    /// The MEMBER's session account (the local `sync_paths` owner).
+    pub account_id: &'a str,
+    /// The drive OWNER's wire identity to persist onto the row.
+    pub member: &'a MemberDriveIdentity,
+    /// The caller-chosen local sync root (ignored when repairing an existing
+    /// row — the row's own path wins, see [`install_member_drive`]).
+    pub local_path: &'a str,
+    /// The server-side display label the local label allocates from.
+    pub display_label: &'a str,
+    /// The OWNER's folder mnemonic to seal for the sync engine.
+    pub folder_phrase: &'a Zeroizing<String>,
+    /// The MEMBER's master mnemonic (decrypts the drive password).
+    pub master_mnemonic: &'a str,
+}
+
+/// The local slot a member drive install resolved to: the drive label and
+/// the sync root the caller must asset-scope and initialize.
+#[derive(Debug)]
+pub struct InstalledMemberDrive {
+    pub label: String,
+    pub sync_path: String,
+}
+
 /// Persist a member drive locally: allocate the labeled `sync_paths` row
 /// carrying the owner's wire identity, then seal the owner's folder mnemonic
 /// into the new config dir under the member's drive password — the seal
@@ -293,39 +319,92 @@ pub async fn resolve_own_drive(pool: &sqlx::SqlitePool, account_id: &str, label:
 /// derive-from-master self-heal, so this file is the drive's only local key
 /// source).
 ///
+/// **Idempotent per wire identity.** If a row for `(owner_ss58,
+/// wire_folder_hash)` already exists, no second slot is allocated — two local
+/// roots syncing the same server folder would fight each other's baselines.
+/// A healthy existing install (seal present) at a DIFFERENT path than the
+/// caller asked for refuses as `Validation`, naming the existing label/path
+/// so the user can find it. Otherwise (seal missing — an earlier crash
+/// stranded the row — or the same path re-requested) the install REPAIRS in
+/// place: the seal is rewritten unconditionally (safe: its inputs are
+/// deterministic) at the ROW's own path, and the caller proceeds to the same
+/// init funnel. A seal failure right after a FRESH allocate deletes the
+/// just-inserted row, so the stranded row-without-seal state only survives a
+/// crash between the two writes.
+///
 /// MUST be called with `AppState::recovery_lock` held: `master_mnemonic`
 /// decrypts the drive password, and a concurrent password rotation between
 /// the read and the seal write would strand the seal under the old password.
 /// `pub` for the integration tests (`tests/shared_drive_server_mock.rs`),
 /// which drive the row+seal effects against a temp HOME with the HTTP layer
 /// mocked.
-pub async fn install_member_drive(
-    pool: &sqlx::SqlitePool,
-    account_id: &str,
-    member: &MemberDriveIdentity,
-    local_path: &str,
-    display_label: &str,
-    folder_phrase: &Zeroizing<String>,
-    master_mnemonic: &str,
-) -> Result<String> {
-    // Allocate the local drive row atomically, persisting the owner's wire
-    // identity (LabelMode::Allocate — member drives are created exactly once,
-    // never upserted; the base label is suffixed on collision).
-    let base = crate::sync::folders::sanitize_label(display_label)?;
+pub async fn install_member_drive(pool: &sqlx::SqlitePool, install: MemberDriveInstall<'_>) -> Result<InstalledMemberDrive> {
+    let existing =
+        crate::sync::identity::member_row_for_wire_identity(pool, install.account_id, &install.member.owner_ss58, &install.member.wire_folder_hash)
+            .await?;
+
+    if let Some(row) = existing {
+        let seal_path = crate::sync::mnemonic::config_dir_for_folder(install.account_id, &row.label)?.join("enc_mnemonic.json");
+        if seal_path.is_file() && row.path != install.local_path {
+            return Err(AppError::Validation(format!(
+                "This shared drive is already set up as '{}' at {}",
+                row.label, row.path
+            )));
+        }
+
+        // Repair in place: rewrite the seal into the existing label's config
+        // dir and hand back the ROW's own path — never a second slot.
+        seal_folder_mnemonic(pool, install.account_id, &row.label, install.folder_phrase, install.master_mnemonic).await?;
+        return Ok(InstalledMemberDrive {
+            label: row.label,
+            sync_path: row.path,
+        });
+    }
+
+    // Fresh install: allocate the local drive row atomically, persisting the
+    // owner's wire identity (LabelMode::Allocate — member drives are created
+    // exactly once, never upserted; the base label is suffixed on collision).
+    let base = crate::sync::folders::sanitize_label(install.display_label)?;
     let label = crate::sync::paths::set_sync_path_internal(
         pool,
-        account_id,
-        local_path,
+        install.account_id,
+        install.local_path,
         false,
         crate::sync::paths::LabelMode::Allocate {
             base: &base,
-            member: Some(member),
+            member: Some(install.member),
         },
     )
     .await?;
 
+    // Belt-and-suspenders: a failed seal right after the fresh insert deletes
+    // the row again, so a row-without-seal (which the repair path above must
+    // otherwise heal) only survives a crash between the two writes.
+    if let Err(e) = seal_folder_mnemonic(pool, install.account_id, &label, install.folder_phrase, install.master_mnemonic).await {
+        if let Err(cleanup) = crate::sync::paths::remove_sync_path_internal(pool, install.account_id, &label).await {
+            warn!(label = %label, error = %cleanup, "Failed to clean up the member drive row after a seal failure");
+        }
+        return Err(e);
+    }
+
+    Ok(InstalledMemberDrive {
+        label,
+        sync_path: install.local_path.to_string(),
+    })
+}
+
+/// Seal `folder_phrase` into `label`'s config dir under the member's drive
+/// password (decrypted via the master). The Argon2-free but disk-touching
+/// write is offloaded to `spawn_blocking` like every other seal write.
+async fn seal_folder_mnemonic(
+    pool: &sqlx::SqlitePool,
+    account_id: &str,
+    label: &str,
+    folder_phrase: &Zeroizing<String>,
+    master_mnemonic: &str,
+) -> Result<()> {
     let drive_password = crate::sync::config::get_drive_password(pool, account_id, Some(master_mnemonic)).await?;
-    let folder_dir = crate::sync::mnemonic::config_dir_for_folder(account_id, &label)?;
+    let folder_dir = crate::sync::mnemonic::config_dir_for_folder(account_id, label)?;
     std::fs::create_dir_all(&folder_dir)?;
 
     let enc_path = folder_dir.join("enc_mnemonic.json");
@@ -336,8 +415,7 @@ pub async fn install_member_drive(
     .await
     .map_err(|e| AppError::Other(format!("seal task failed to join: {e}")))?
     .map_err(AppError::Hcfs)?;
-
-    Ok(label)
+    Ok(())
 }
 
 // ─── IPC commands ──────────────────────────────────────────────────────────
@@ -552,7 +630,7 @@ pub async fn add_shared_drive(
     //    decrypt, and the seal write must not interleave with a password
     //    rotation, or the seal lands under the old password. The Argon2id
     //    open (~1.5 s) is offloaded — never run a KDF on the runtime.
-    let label = {
+    let installed = {
         let _recovery_guard = state.recovery_lock.lock().await;
         let master = crate::sync::mnemonic::get_mnemonic_for_account(&state, &ctx.account_id).await?;
 
@@ -568,15 +646,29 @@ pub async fn add_shared_drive(
             bip39::Mnemonic::from_entropy(entropy.as_ref()).map_err(|e| AppError::Crypto(format!("grant entropy is not a folder key: {e}")))?;
         let phrase = Zeroizing::new(mnemonic.to_string());
 
-        install_member_drive(pool, &ctx.account_id, &member_identity, &local_path, &display_label, &phrase, &master).await?
+        install_member_drive(
+            pool,
+            MemberDriveInstall {
+                account_id: &ctx.account_id,
+                member: &member_identity,
+                local_path: &local_path,
+                display_label: &display_label,
+                folder_phrase: &phrase,
+                master_mnemonic: &master,
+            },
+        )
+        .await?
     };
+    let label = installed.label;
 
-    // 3. Let the webview render files under the new root, then run the normal
-    //    init funnel (it resolves the member identity from the row we just
-    //    wrote and applies every member skip). Mirror add_local_sync_folder's
-    //    immediate "Preparing sync…" mark so the widget appears within a tick
-    //    of the user's action instead of after the indexing window.
-    crate::sync::files::allow_asset_directory(&app, &local_path);
+    // 3. Let the webview render files under the resolved root (the install's
+    //    repair path may hand back an EXISTING row's path rather than the
+    //    caller's pick), then run the normal init funnel (it resolves the
+    //    member identity from the row and applies every member skip). Mirror
+    //    add_local_sync_folder's immediate "Preparing sync…" mark so the
+    //    widget appears within a tick of the user's action instead of after
+    //    the indexing window.
+    crate::sync::files::allow_asset_directory(&app, &installed.sync_path);
 
     let preparing = state.preparing.clone();
     let sync = state.sync.clone();

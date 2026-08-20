@@ -27,9 +27,28 @@ use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
 
 use tauri_project_lib::error::{AppError, NotReadyKind};
-use tauri_project_lib::shared_drives::commands::{http_create_invite, http_list_memberships, http_remove_member, install_member_drive};
+use tauri_project_lib::shared_drives::commands::{
+    MemberDriveInstall, http_create_invite, http_list_memberships, http_remove_member, install_member_drive,
+};
 use tauri_project_lib::shared_drives::grant;
-use tauri_project_lib::sync::identity::{MemberDriveIdentity, resolve_drive_identity};
+use tauri_project_lib::sync::identity::{MemberDriveIdentity, member_row_for_wire_identity, resolve_drive_identity};
+
+/// One shared `$HOME` for every test in this binary that writes config dirs.
+/// `HOME` is process-global and tests run in parallel, so per-test
+/// `set_var("HOME")` calls would race each other; instead the first accessor
+/// pins ONE tempdir for the process lifetime and every HOME-touching test
+/// keeps its writes disjoint via its own account/label. The dir is leaked
+/// deliberately (OS temp cleanup reaps it) — dropping it mid-run would pull
+/// the floor out from under a concurrent test.
+static TEST_HOME: std::sync::LazyLock<std::path::PathBuf> = std::sync::LazyLock::new(|| {
+    let dir = tempfile::TempDir::new().expect("home tempdir");
+    let path = dir.path().to_path_buf();
+    std::mem::forget(dir);
+    unsafe {
+        std::env::set_var("HOME", &path);
+    }
+    path
+});
 
 // ── Fixtures (published BIP-39 vectors — never real wallets) ───────────────
 
@@ -294,15 +313,13 @@ async fn make_pool(dir: &std::path::Path) -> sqlx::SqlitePool {
 /// exercises the master-decrypt path a production account is on.
 #[tokio::test]
 async fn add_flow_installs_member_row_and_owner_seal() {
-    // Isolated $HOME so config_dir writes land in the tempdir. This is the
-    // only test in this binary that touches HOME, and none of the others
-    // read it, so no cross-test lock is needed.
-    let home = tempfile::TempDir::new().expect("home tempdir");
-    unsafe {
-        std::env::set_var("HOME", home.path());
-    }
+    // Shared process-wide $HOME (see TEST_HOME) so config_dir writes land in
+    // a tempdir; this test's account/label keep its paths disjoint from the
+    // other HOME-touching tests.
+    let home = &*TEST_HOME;
+    let dir = tempfile::TempDir::new().expect("tempdir");
 
-    let pool = make_pool(home.path()).await;
+    let pool = make_pool(dir.path()).await;
 
     // Encrypted drive-password row (encryption_version = 1), decryptable
     // only through the member's master — the production steady state after
@@ -341,24 +358,32 @@ async fn add_flow_installs_member_row_and_owner_seal() {
     let phrase = zeroize::Zeroizing::new(bip39::Mnemonic::from_entropy(opened.as_ref()).expect("entropy is a mnemonic").to_string());
 
     // 3. Install the drive (row + seal).
-    let sync_root = home.path().join("Team Docs");
+    let sync_root = dir.path().join("Team Docs");
     std::fs::create_dir_all(&sync_root).expect("sync root");
     let member = MemberDriveIdentity {
         owner_ss58: OWNER_SS58.to_string(),
         wire_folder_hash: WIRE_HASH.to_string(),
     };
-    let label = install_member_drive(
+    let installed = install_member_drive(
         &pool,
-        MEMBER_SS58,
-        &member,
-        sync_root.to_str().expect("utf8 path"),
-        &entry.display_label,
-        &phrase,
-        MEMBER_MASTER,
+        MemberDriveInstall {
+            account_id: MEMBER_SS58,
+            member: &member,
+            local_path: sync_root.to_str().expect("utf8 path"),
+            display_label: &entry.display_label,
+            folder_phrase: &phrase,
+            master_mnemonic: MEMBER_MASTER,
+        },
     )
     .await
     .expect("install member drive");
+    let label = installed.label;
     assert_eq!(label, "team-docs", "label allocates from the display label");
+    assert_eq!(
+        installed.sync_path,
+        sync_root.to_str().expect("utf8 path"),
+        "a fresh install keeps the caller's path"
+    );
 
     // 4. The row resolves to the OWNER's wire identity, never the local
     //    label derivation.
@@ -371,7 +396,6 @@ async fn add_flow_installs_member_row_and_owner_seal() {
     //    OWNER's folder mnemonic under the member's drive password — the file
     //    initialize_sync_inner unlocks with.
     let enc_path = home
-        .path()
         .join(".hippius")
         .join("drives")
         .join(tauri_project_lib::auth::account_key::account_key(MEMBER_SS58))
@@ -381,6 +405,237 @@ async fn add_flow_installs_member_row_and_owner_seal() {
 
     let recovered = hcfs_client::auth::recover_mnemonic(&enc_path, "drive-pw").expect("seal decrypts under the drive password");
     assert_eq!(recovered.to_string(), *phrase, "the seal must hold the OWNER's folder mnemonic");
+}
+
+// ── Install idempotency / repair ───────────────────────────────────────────
+
+/// Encrypted (v1) drive-password row for `account`, decryptable through
+/// `MEMBER_MASTER` — the production steady state after
+/// `crypto::store::migrate_if_needed`.
+async fn seed_encrypted_drive_password(pool: &sqlx::SqlitePool, account: &str) {
+    let key = tauri_project_lib::crypto::store::derive_key(MEMBER_MASTER, account, "hippius-drive-password-encryption").expect("key");
+    let sealed_pw = tauri_project_lib::crypto::store::encrypt(&key, "drive-pw").expect("encrypt pw");
+    sqlx::query("INSERT INTO hcfs_config (owner, drive_password, encryption_version) VALUES (?, ?, 1)")
+        .bind(tauri_project_lib::auth::account_key::account_key(account))
+        .bind(&sealed_pw)
+        .execute(pool)
+        .await
+        .expect("seed hcfs_config");
+}
+
+/// The owner's folder mnemonic phrase (what `add_shared_drive` rebuilds from
+/// the opened grant before installing).
+fn owner_folder_phrase() -> zeroize::Zeroizing<String> {
+    let entropy = owner_folder_entropy();
+    zeroize::Zeroizing::new(bip39::Mnemonic::from_entropy(&entropy).expect("entropy is a mnemonic").to_string())
+}
+
+/// The config-dir seal path `install_member_drive` writes for `(account, label)`.
+fn seal_path_for(account: &str, label: &str) -> std::path::PathBuf {
+    TEST_HOME
+        .join(".hippius")
+        .join("drives")
+        .join(tauri_project_lib::auth::account_key::account_key(account))
+        .join(hcfs_client::drive::keys::folder_hash(label))
+        .join("enc_mnemonic.json")
+}
+
+fn install_args<'a>(
+    account: &'a str,
+    member: &'a MemberDriveIdentity,
+    local_path: &'a str,
+    display_label: &'a str,
+    phrase: &'a zeroize::Zeroizing<String>,
+) -> MemberDriveInstall<'a> {
+    MemberDriveInstall {
+        account_id: account,
+        member,
+        local_path,
+        display_label,
+        folder_phrase: phrase,
+        master_mnemonic: MEMBER_MASTER,
+    }
+}
+
+async fn sync_paths_count(pool: &sqlx::SqlitePool, account: &str) -> i64 {
+    sqlx::query_scalar("SELECT COUNT(*) FROM sync_paths WHERE owner = ?")
+        .bind(tauri_project_lib::auth::account_key::account_key(account))
+        .fetch_one(pool)
+        .await
+        .expect("count")
+}
+
+// A second add for the same wire identity must reuse the existing slot —
+// never allocate a sibling label that would sync the same server folder into
+// two local roots — even when the display label has changed server-side.
+#[tokio::test]
+async fn second_add_for_same_wire_identity_reuses_the_row() {
+    let _home = &*TEST_HOME;
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let pool = make_pool(dir.path()).await;
+    let account = "5ReuseAcct";
+    seed_encrypted_drive_password(&pool, account).await;
+
+    let member = MemberDriveIdentity {
+        owner_ss58: OWNER_SS58.to_string(),
+        wire_folder_hash: WIRE_HASH.to_string(),
+    };
+    let phrase = owner_folder_phrase();
+    let root = dir.path().join("reuse-root");
+    std::fs::create_dir_all(&root).expect("root");
+    let root = root.to_str().expect("utf8");
+
+    let first = install_member_drive(&pool, install_args(account, &member, root, "reuse-docs", &phrase))
+        .await
+        .expect("first install");
+
+    // Same path, even a renamed display label: the existing slot wins.
+    let second = install_member_drive(&pool, install_args(account, &member, root, "renamed-docs", &phrase))
+        .await
+        .expect("second install");
+    assert_eq!(second.label, first.label, "the existing slot must be reused");
+    assert_eq!(second.sync_path, root, "the row's path is handed back");
+    assert_eq!(sync_paths_count(&pool, account).await, 1, "no sibling row may be allocated");
+}
+
+// A row whose seal vanished (crash between the insert and the seal write on
+// a pre-cleanup build, or a user-deleted config dir) is repaired in place:
+// the seal is rewritten and the ROW's path wins over the caller's pick.
+#[tokio::test]
+async fn missing_seal_is_rewritten_in_place() {
+    let _home = &*TEST_HOME;
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let pool = make_pool(dir.path()).await;
+    let account = "5RepairAcct";
+    seed_encrypted_drive_password(&pool, account).await;
+
+    let member = MemberDriveIdentity {
+        owner_ss58: OWNER_SS58.to_string(),
+        wire_folder_hash: WIRE_HASH.to_string(),
+    };
+    let phrase = owner_folder_phrase();
+    let original_root = dir.path().join("original-root");
+    std::fs::create_dir_all(&original_root).expect("root");
+    let original_root = original_root.to_str().expect("utf8");
+
+    let first = install_member_drive(&pool, install_args(account, &member, original_root, "repair-docs", &phrase))
+        .await
+        .expect("first install");
+
+    let seal = seal_path_for(account, &first.label);
+    std::fs::remove_file(&seal).expect("strand the row by deleting its seal");
+
+    // Re-add through a DIFFERENT caller path: the stranded row is repaired at
+    // its own path, not re-homed to the new pick.
+    let other_root = dir.path().join("other-root");
+    std::fs::create_dir_all(&other_root).expect("root");
+    let repaired = install_member_drive(
+        &pool,
+        install_args(account, &member, other_root.to_str().expect("utf8"), "repair-docs", &phrase),
+    )
+    .await
+    .expect("repair install");
+
+    assert_eq!(repaired.label, first.label);
+    assert_eq!(repaired.sync_path, original_root, "the repair must keep the ROW's own path");
+    assert_eq!(sync_paths_count(&pool, account).await, 1);
+    let recovered = hcfs_client::auth::recover_mnemonic(&seal, "drive-pw").expect("rewritten seal decrypts");
+    assert_eq!(recovered.to_string(), *phrase, "the rewritten seal holds the owner's folder mnemonic");
+}
+
+// A HEALTHY install re-requested at a different path is a user mistake, not
+// a repair: refuse as Validation naming the existing label/path so the user
+// can find the drive they already have.
+#[tokio::test]
+async fn healthy_seal_at_a_different_path_refuses_with_validation() {
+    let _home = &*TEST_HOME;
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let pool = make_pool(dir.path()).await;
+    let account = "5HealthyAcct";
+    seed_encrypted_drive_password(&pool, account).await;
+
+    let member = MemberDriveIdentity {
+        owner_ss58: OWNER_SS58.to_string(),
+        wire_folder_hash: WIRE_HASH.to_string(),
+    };
+    let phrase = owner_folder_phrase();
+    let root = dir.path().join("healthy-root");
+    std::fs::create_dir_all(&root).expect("root");
+    let root = root.to_str().expect("utf8");
+
+    let first = install_member_drive(&pool, install_args(account, &member, root, "healthy-docs", &phrase))
+        .await
+        .expect("first install");
+
+    let other = dir.path().join("elsewhere");
+    std::fs::create_dir_all(&other).expect("root");
+    let err = install_member_drive(
+        &pool,
+        install_args(account, &member, other.to_str().expect("utf8"), "healthy-docs", &phrase),
+    )
+    .await
+    .expect_err("a healthy install at another path must refuse");
+    match err {
+        AppError::Validation(msg) => {
+            assert!(msg.contains(&first.label), "names the existing label: {msg}");
+            assert!(msg.contains(root), "names the existing path: {msg}");
+        }
+        other => panic!("expected Validation, got {other:?}"),
+    }
+    assert_eq!(sync_paths_count(&pool, account).await, 1, "the refusal must not touch the row");
+}
+
+// The belt-and-suspenders cleanup: a seal failure right after the fresh
+// Allocate insert deletes the just-inserted row, so the stranded
+// row-without-seal state only survives a crash. Failure is injected by
+// blocking the config dir with a FILE (create_dir_all then fails); removing
+// the blocker proves the slot was left reusable.
+#[tokio::test]
+async fn seal_failure_cleans_up_the_fresh_row() {
+    let _home = &*TEST_HOME;
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let pool = make_pool(dir.path()).await;
+    let account = "5SealFailAcct";
+    seed_encrypted_drive_password(&pool, account).await;
+
+    let member = MemberDriveIdentity {
+        owner_ss58: OWNER_SS58.to_string(),
+        wire_folder_hash: WIRE_HASH.to_string(),
+    };
+    let phrase = owner_folder_phrase();
+    let root = dir.path().join("seal-fail-root");
+    std::fs::create_dir_all(&root).expect("root");
+    let root = root.to_str().expect("utf8");
+
+    // Block the config dir the install will try to create: `sanitize_label`
+    // passes "seal-fail-docs" through unchanged, so the allocated label — and
+    // the folder-hash dir — are known up front.
+    let blocked_dir = seal_path_for(account, "seal-fail-docs");
+    let blocked_dir = blocked_dir.parent().expect("config dir");
+    std::fs::create_dir_all(blocked_dir.parent().expect("drives dir")).expect("parents");
+    std::fs::write(blocked_dir, b"not a directory").expect("blocker file");
+
+    install_member_drive(&pool, install_args(account, &member, root, "seal-fail-docs", &phrase))
+        .await
+        .expect_err("a blocked config dir must fail the seal");
+    assert_eq!(
+        sync_paths_count(&pool, account).await,
+        0,
+        "the fresh row must be cleaned up on seal failure"
+    );
+    assert_eq!(
+        member_row_for_wire_identity(&pool, account, OWNER_SS58, WIRE_HASH).await.expect("lookup"),
+        None,
+        "the wire identity must be free for a retry"
+    );
+
+    // The retry after the obstruction clears must succeed as a FRESH install.
+    std::fs::remove_file(blocked_dir).expect("clear blocker");
+    let retried = install_member_drive(&pool, install_args(account, &member, root, "seal-fail-docs", &phrase))
+        .await
+        .expect("retry install");
+    assert_eq!(retried.label, "seal-fail-docs");
+    assert!(seal_path_for(account, &retried.label).is_file(), "the retry seals normally");
 }
 
 // ── Owner-gate refusal ─────────────────────────────────────────────────────

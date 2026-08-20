@@ -169,6 +169,44 @@ pub async fn resolve_drive_identity_or_own(pool: &SqlitePool, account_id: &str, 
     }
 }
 
+/// The local `sync_paths` row (label + sync root) already syncing a given
+/// member wire identity, if one exists.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemberDriveRow {
+    pub label: String,
+    pub path: String,
+}
+
+/// Find the local drive row (if any) that syncs the member drive identified
+/// by `(owner_ss58, wire_folder_hash)` for this account — the reverse of
+/// [`lookup_drive_identity`]: wire identity in, local slot out.
+///
+/// Backs two consumers: `add_shared_drive`'s idempotency/repair check (a
+/// second add for the same wire identity must reuse the existing slot, never
+/// allocate a sibling that would sync the same server folder into two local
+/// roots) and `list_my_drive_memberships`' `syncedLocally` projection.
+///
+/// The schema does not constrain the wire pair unique, so `ORDER BY id
+/// LIMIT 1` makes the OLDEST row the deterministic winner should a duplicate
+/// ever exist (e.g. rows written before the idempotency check landed).
+pub async fn member_row_for_wire_identity(
+    pool: &SqlitePool,
+    account_id: &str,
+    owner_ss58: &str,
+    wire_folder_hash: &str,
+) -> Result<Option<MemberDriveRow>> {
+    let owner = account_key(account_id);
+    let row: Option<(String, String)> =
+        sqlx::query_as("SELECT label, path FROM sync_paths WHERE owner = ? AND owner_ss58 = ? AND wire_folder_hash = ? ORDER BY id LIMIT 1")
+            .bind(&owner)
+            .bind(owner_ss58)
+            .bind(wire_folder_hash)
+            .fetch_optional(pool)
+            .await?;
+
+    Ok(row.map(|(label, path)| MemberDriveRow { label, path }))
+}
+
 /// A `sync_paths` row whose member-identity columns violate the "both NULL or
 /// both valid" invariant. Surfaced as `AppError::Db(sqlx::Error::Decode)` —
 /// the same shape `shares::history` uses for a row value that violates an
@@ -411,5 +449,58 @@ mod tests {
             matches!(err, AppError::Validation(_)),
             "foreign account resolves to a missing row, got {err:?}"
         );
+    }
+
+    // The reverse lookup: wire identity in, local slot out. A missing pair is
+    // None; own drives (NULL columns) never match; the row is account-scoped.
+    #[tokio::test]
+    async fn member_row_for_wire_identity_finds_only_this_accounts_member_row() {
+        let pool = make_pool().await;
+        insert_row(&pool, ACCT, "own-docs", None, None).await;
+        insert_row(&pool, ACCT, "team", Some(OWNER), Some(WIRE_HASH)).await;
+
+        let row = member_row_for_wire_identity(&pool, ACCT, OWNER, WIRE_HASH)
+            .await
+            .expect("lookup")
+            .expect("row present");
+        assert_eq!(
+            row,
+            MemberDriveRow {
+                label: "team".to_string(),
+                path: "/p".to_string()
+            }
+        );
+
+        let missing = member_row_for_wire_identity(&pool, ACCT, OWNER, "fedcba9876543210")
+            .await
+            .expect("lookup");
+        assert_eq!(missing, None, "an unknown wire pair is None, not an error");
+
+        let foreign = member_row_for_wire_identity(&pool, OWNER, OWNER, WIRE_HASH).await.expect("lookup");
+        assert_eq!(foreign, None, "another account must not see this account's row");
+    }
+
+    // Duplicate wire pairs (pre-idempotency-check residue) resolve to the
+    // OLDEST row deterministically — ORDER BY id LIMIT 1.
+    #[tokio::test]
+    async fn member_row_for_wire_identity_prefers_the_oldest_duplicate() {
+        let pool = make_pool().await;
+        insert_row(&pool, ACCT, "team", Some(OWNER), Some(WIRE_HASH)).await;
+        sqlx::query(
+            "INSERT INTO sync_paths (owner, path, type, label, timestamp, owner_ss58, wire_folder_hash)
+             VALUES (?, '/p2', 'private', 'team-2', 0, ?, ?)",
+        )
+        .bind(account_key(ACCT))
+        .bind(OWNER)
+        .bind(WIRE_HASH)
+        .execute(&pool)
+        .await
+        .expect("insert duplicate");
+
+        let row = member_row_for_wire_identity(&pool, ACCT, OWNER, WIRE_HASH)
+            .await
+            .expect("lookup")
+            .expect("row present");
+        assert_eq!(row.label, "team", "the oldest row must win deterministically");
     }
 }
