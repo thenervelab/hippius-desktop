@@ -29,6 +29,40 @@ pub struct DriveIdentity {
     pub is_member: bool,
 }
 
+/// The wire identity to persist onto a NEW member drive's `sync_paths` row.
+///
+/// Carried by `paths::LabelMode::Allocate` (member drives are only ever
+/// created through the allocate path — see the `LabelMode` docs for why
+/// `Exact` never carries one) and written into the `owner_ss58` /
+/// `wire_folder_hash` columns that [`resolve_drive_identity`] later reads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemberDriveIdentity {
+    /// The drive OWNER's ss58 address (never the member's own).
+    pub owner_ss58: String,
+    /// The OWNER's server-side folder hash (16 lowercase hex chars).
+    pub wire_folder_hash: String,
+}
+
+impl MemberDriveIdentity {
+    /// Fail closed BEFORE the row is written. Persisting an invalid identity
+    /// would create a drive that [`resolve_drive_identity`] can only ever
+    /// refuse — a bricked slot the user must remove by hand — so the write
+    /// path rejects it as `Validation` (bad caller input) instead of letting
+    /// the read path discover it later as a corrupt row.
+    pub fn validate(&self) -> Result<()> {
+        if self.owner_ss58.is_empty() {
+            return Err(AppError::Validation("member drive owner_ss58 must not be empty".into()));
+        }
+        if !is_wire_folder_hash(&self.wire_folder_hash) {
+            return Err(AppError::Validation(format!(
+                "member drive wire_folder_hash must be 16 lowercase hex chars, got '{}'",
+                self.wire_folder_hash
+            )));
+        }
+        Ok(())
+    }
+}
+
 /// Resolve the wire identity for `(account_id, label)` from its `sync_paths`
 /// row.
 ///

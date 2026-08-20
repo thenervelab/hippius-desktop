@@ -180,7 +180,10 @@ pub async fn add_local_sync_folder(
         &account_id,
         &path,
         false,
-        crate::sync::paths::LabelMode::Allocate { base: &folder_name },
+        crate::sync::paths::LabelMode::Allocate {
+            base: &folder_name,
+            member: None,
+        },
     )
     .await?;
 
