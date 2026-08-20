@@ -13,7 +13,8 @@ use crate::sync::config::{
 };
 use crate::sync::device::get_device_name_internal;
 use crate::sync::folders::{get_all_sync_paths_internal, sanitize_label};
-use crate::sync::mnemonic::{account_dir, config_dir_for_folder, derive_folder_mnemonic, ensure_derived_mnemonic, folder_hash, master_mnemonic_path};
+use crate::sync::identity::{DriveIdentity, resolve_drive_identity};
+use crate::sync::mnemonic::{account_dir, config_dir_for_folder, derive_folder_mnemonic, ensure_derived_mnemonic, master_mnemonic_path};
 use hcfs_client::engine::manager::DriveManager;
 use hcfs_client::engine::runner::{DriveSlot, SyncRunner};
 use hcfs_client::engine::types::build_synced_paths_from_state;
@@ -818,12 +819,18 @@ async fn check_deleted_sync_dir(pool: &SqlitePool, account_id: &str, label: &str
 
 /// Compute config directories, run legacy migration, and reconcile the
 /// master mnemonic with the login mnemonic (if provided).
+///
+/// `is_member` marks a shared-drive MEMBER drive (from the funnel's resolved
+/// [`DriveIdentity`]): the master-mnemonic reconcile still runs (the master
+/// is account-level and unrelated to whose drive this is), but
+/// `ensure_derived_mnemonic` must not — see the guard below.
 fn prepare_config_dir(
     account_id: &str,
     label: &str,
     sync_path: &str,
     drive_password: &str,
     existing_mnemonic: Option<&str>,
+    is_member: bool,
 ) -> Result<(PathBuf, PathBuf, PathBuf)> {
     let acct_dir = account_dir(account_id)?;
     let folder_dir = config_dir_for_folder(account_id, label)?;
@@ -854,7 +861,17 @@ fn prepare_config_dir(
         }
     }
 
-    ensure_derived_mnemonic(&folder_dir, &master_path, drive_password, label)?;
+    // LAND MINE (shared drives): `ensure_derived_mnemonic` compares the
+    // folder seal against derive(THIS account's master, label) and on
+    // mismatch REWRITES the seal, drops `.needs_rekey`, and wipes sync
+    // state. A member drive's seal legitimately holds the OWNER's folder
+    // mnemonic (installed from the grant blob), which never matches the
+    // member's derivation — running the check would destroy the only local
+    // copy of the drive key and force a full mis-keyed re-upload. It must
+    // stay inert for member drives.
+    if !is_member {
+        ensure_derived_mnemonic(&folder_dir, &master_path, drive_password, label)?;
+    }
 
     Ok((acct_dir, folder_dir, master_path))
 }
@@ -866,11 +883,32 @@ struct RecoveryContext<'a> {
     master_path: &'a Path,
     server_url: &'a str,
     bearer_token: &'a str,
-    account_id: &'a str,
-    fhash: &'a str,
+    /// The drive's WIRE identity, resolved once by the init funnel. Own
+    /// drives carry (session account, `folder_hash(label)`); member drives
+    /// carry the OWNER's pair, and [`recover_drive`] refuses them outright.
+    identity: &'a DriveIdentity,
     label: &'a str,
     drive_password: &'a str,
     existing_mnemonic: Option<&'a str>,
+}
+
+/// The error every member-drive self-heal path refuses with.
+///
+/// A member drive's folder key comes from the OWNER's invite (the grant
+/// blob sealed by `add_shared_drive`); it is NOT derivable from this
+/// account's master mnemonic, so the fresh-init and recovery paths — which
+/// both derive `derive_folder_mnemonic(master, label)` — would install a key
+/// that addresses the owner's namespace with the WRONG key material.
+/// Surfaced as `Validation`, deliberately not the FE-silenced
+/// `Auth`/`NotReady` kinds: `auto_init_sync` emits `DriveStatus::Error` for
+/// every non-`NotReady` init failure, which is the visible per-drive channel
+/// the FE renders a retry/remove affordance from.
+fn member_drive_unrepairable(label: &str) -> crate::error::AppError {
+    crate::error::AppError::Validation(format!(
+        "Shared drive '{label}' is missing usable key material on this device and cannot be \
+         repaired locally — its folder key comes from the owner's invite. Remove the drive \
+         and re-add it from your shared drives."
+    ))
 }
 
 /// Recover a drive after unlock failure: clean up corrupted config files,
@@ -883,6 +921,16 @@ struct RecoveryContext<'a> {
 /// mnemonic) are wrapped in [`zeroize::Zeroizing`] so their heap memory is
 /// scrubbed when the values are dropped.
 async fn recover_drive(manager: DriveManager, ctx: &RecoveryContext<'_>) -> Result<(DriveManager, String, Option<zeroize::Zeroizing<String>>)> {
+    // Member drives must be refused BEFORE the cleanup below: the recovery
+    // path deletes `enc_mnemonic.json` and re-derives it from THIS account's
+    // master, but a member drive's seal is the OWNER's folder mnemonic from
+    // the invite grant — not re-derivable here. Running recovery would
+    // destroy the only local copy of the drive key and then install a wrong
+    // one that addresses the owner's namespace with mismatched key material.
+    if ctx.identity.is_member {
+        return Err(member_drive_unrepairable(ctx.label));
+    }
+
     // Remove corrupted enc_mnemonic.json
     let enc_path = ctx.folder_dir.join("enc_mnemonic.json");
     if enc_path.exists() {
@@ -901,7 +949,7 @@ async fn recover_drive(manager: DriveManager, ctx: &RecoveryContext<'_>) -> Resu
 
     drop(manager);
     let mut new_manager = DriveManager::new(PathBuf::from(ctx.sync_path), ctx.folder_dir.to_path_buf());
-    new_manager.set_config(build_hcfs_config(ctx.server_url, ctx.bearer_token, ctx.account_id, ctx.fhash))?;
+    new_manager.set_config(build_hcfs_config(ctx.server_url, ctx.bearer_token, ctx.identity))?;
 
     debug!("Creating fresh drive after recovery...");
 
@@ -952,6 +1000,15 @@ async fn init_or_unlock_drive(
             }
         }
     } else {
+        // Fresh init derives the folder mnemonic from THIS account's master
+        // (`init_new_drive`), which is wrong key material for a member drive
+        // — its seal is written from the owner's grant blob by
+        // `add_shared_drive` and cannot be reconstructed here. An
+        // uninitialized member config dir therefore has no self-heal path:
+        // refuse with the same visible error as the recovery guard.
+        if recovery_ctx.identity.is_member {
+            return Err(member_drive_unrepairable(label));
+        }
         let (uid, mnem, is_new) = init_new_drive(&mut manager, label, master_path, drive_password, existing_mnemonic).await?;
         Ok((manager, uid, mnem.map(zeroize::Zeroizing::new), is_new))
     }
@@ -1047,8 +1104,12 @@ async fn check_init_server_health(client: &reqwest::Client, server_url: &str) {
 
 /// Spawn a background task to register the folder with the server for
 /// cross-device discovery.
-fn spawn_folder_registration(server_url: &str, bearer_token: &str, label: &str, account_id: &str, fhash: &str, pool: &SqlitePool, sync_path: &str) {
-    let config = build_hcfs_config(server_url, bearer_token, account_id, fhash);
+///
+/// Own drives only: the init funnel gates this call on `!identity.is_member`
+/// (the server rejects a member registering the owner's folder), so the
+/// identity received here is always an own-drive one.
+fn spawn_folder_registration(server_url: &str, bearer_token: &str, label: &str, identity: &DriveIdentity, pool: &SqlitePool, sync_path: &str) {
+    let config = build_hcfs_config(server_url, bearer_token, identity);
     // Use the folder's directory name as the display label for the server
     // registry instead of the internal label (e.g. "default").
     let reg_label = std::path::Path::new(sync_path)
@@ -1056,8 +1117,8 @@ fn spawn_folder_registration(server_url: &str, bearer_token: &str, label: &str, 
         .and_then(|n| n.to_str())
         .unwrap_or(label)
         .to_string();
-    let reg_ss58 = account_id.to_string();
-    let reg_fhash = fhash.to_string();
+    let reg_ss58 = identity.wire_ss58.clone();
+    let reg_fhash = identity.wire_folder_hash.clone();
     let reg_pool = pool.clone();
     tokio::spawn(async move {
         match hcfs_client::client::HcfsClient::new(config) {
@@ -1131,10 +1192,32 @@ pub(crate) async fn initialize_sync_inner(
     let pool = &pool_owned;
     info!("initialize_sync called for account: {}, label: '{}'", account_id, label);
 
+    // Resolve the drive's WIRE identity exactly ONCE for the whole funnel and
+    // thread the value down — the resolver's own docs forbid re-resolving mid
+    // operation (two reads can observe different rows across a concurrent
+    // remove/re-add and split the init across two wire identities). Own
+    // drives resolve to (account_id, folder_hash(label)) byte-identically to
+    // the old inline derivation. The resolver reports a missing row as
+    // `Validation`; this funnel historically surfaced that case as
+    // `NotReady(SyncSetup)` (from `get_sync_path_for_label`, a few steps
+    // below), and the FE retry ladder keys on that kind — so map it back
+    // rather than introduce a new failure kind on the own-drive path.
+    let identity = resolve_drive_identity(pool, &account_id, &label).await.map_err(|e| match e {
+        crate::error::AppError::Validation(_) => crate::error::AppError::NotReady(crate::error::NotReadyKind::SyncSetup),
+        other => other,
+    })?;
+
     // Validate user has credits/balance before allowing sync.
     // This is skipped when the caller has already performed the check (e.g.
     // `auto_init_sync` checks once before iterating all drives).
-    if !skip_credits_check && let Ok(account) = app_state.current_session_account() {
+    //
+    // Member drives skip it outright: storage on a shared drive bills the
+    // OWNER, so the member's own balance is irrelevant here, and the server's
+    // per-request 402 stays the authoritative backstop either way.
+    if !skip_credits_check
+        && !identity.is_member
+        && let Ok(account) = app_state.current_session_account()
+    {
         let client = crate::api::client::ApiClient::new(app_state.api_client.clone(), pool_owned.clone());
         match client
             .get::<crate::billing::credits::CreditBalanceResponse>("/api/billing/credits/balance/", &account)
@@ -1184,8 +1267,14 @@ pub(crate) async fn initialize_sync_inner(
     check_deleted_sync_dir(pool, &account_id, &label, &cfg.sync_path).await?;
     create_dir_all_async(PathBuf::from(&cfg.sync_path)).await?;
 
-    let (_acct_dir, folder_dir, master_path) =
-        prepare_config_dir(&account_id, &label, &cfg.sync_path, &cfg.drive_password, Some(&mnemonic_for_config))?;
+    let (_acct_dir, folder_dir, master_path) = prepare_config_dir(
+        &account_id,
+        &label,
+        &cfg.sync_path,
+        &cfg.drive_password,
+        Some(&mnemonic_for_config),
+        identity.is_member,
+    )?;
 
     // Create drive and set HCFS config
     let mut manager = DriveManager::new(PathBuf::from(&cfg.sync_path), folder_dir.clone());
@@ -1206,8 +1295,7 @@ pub(crate) async fn initialize_sync_inner(
     let bearer_token = get_api_token(pool, &account_id)
         .await?
         .ok_or_else(|| crate::error::AppError::Other("No authentication token found. Please log in again.".into()))?;
-    let fhash = folder_hash(&label);
-    manager.set_config(build_hcfs_config(&cfg.server_url, &bearer_token, &account_id, &fhash))?;
+    manager.set_config(build_hcfs_config(&cfg.server_url, &bearer_token, &identity))?;
 
     // Init or unlock
     let recovery_ctx = RecoveryContext {
@@ -1216,8 +1304,7 @@ pub(crate) async fn initialize_sync_inner(
         master_path: &master_path,
         server_url: &cfg.server_url,
         bearer_token: &bearer_token,
-        account_id: &account_id,
-        fhash: &fhash,
+        identity: &identity,
         label: &label,
         // `cfg.drive_password` is `Zeroizing<String>`; the context borrows it as
         // `&str` (it is never moved/owned here, so no second secret copy).
@@ -1235,8 +1322,12 @@ pub(crate) async fn initialize_sync_inner(
     .await?;
     let mut manager = manager;
 
-    // Validate user_id
-    let expected_user_id = format!("{account_id}_{fhash}");
+    // Validate user_id. `unlock` composes it from the client config's
+    // ss58 + folder hash, so the expectation is the WIRE identity: for an
+    // own drive that is `{account_id}_{folder_hash(label)}` exactly as
+    // before; for a member drive it is the OWNER's composite — asserting
+    // the member's own pair here would fail every member init.
+    let expected_user_id = format!("{}_{}", identity.wire_ss58, identity.wire_folder_hash);
     if user_id != expected_user_id {
         return Err(crate::error::AppError::Validation(format!(
             "Drive user_id mismatch: got '{user_id}', expected '{expected_user_id}'. \
@@ -1288,7 +1379,13 @@ pub(crate) async fn initialize_sync_inner(
         "Sync initialized successfully for '{}'. User ID: {}, New setup: {}",
         label, user_id, is_new_setup
     );
-    spawn_folder_registration(&cfg.server_url, &bearer_token, &label, &account_id, &fhash, pool, &cfg.sync_path);
+    // Member drives never self-register: the folder is already registered by
+    // its OWNER, and the server rejects a member registering someone else's
+    // folder (the engine's own post-upload registration is member-guarded
+    // upstream at the pinned rev for the same reason).
+    if !identity.is_member {
+        spawn_folder_registration(&cfg.server_url, &bearer_token, &label, &identity, pool, &cfg.sync_path);
+    }
 
     // Commit: clear the persisted paused flag now that the drive is
     // running. Every resume surface funnels through this function, but
@@ -1367,7 +1464,10 @@ pub(crate) async fn initialize_sync_inner(
     // One-shot `relative_path` backfill for this drive. The task itself
     // re-checks the `relative_paths_backfilled_at` flag as its first
     // step and returns `AlreadyDone` without any work if set — so the
-    // call site stays dumb even under re-init storms.
+    // call site stays dumb even under re-init storms. The spawn stays
+    // unconditional for member drives too: the run's own member gate
+    // stamps the flag and skips (see `BackfillOutcome::SkippedMemberDrive`),
+    // which is what keeps the FE's pre-backfill banner from waiting forever.
     crate::sync::relative_path_backfill::spawn_backfill(app.clone(), account_id.clone(), label.clone());
 
     // One-shot folder-entity backfill for this drive: registers every on-disk
@@ -1375,14 +1475,22 @@ pub(crate) async fn initialize_sync_inner(
     // as a server folder entity so pre-existing empty folders become visible.
     // Like the relative-path backfill above, the task re-checks its own
     // `folder_entries_backfilled_at` flag first, so this call site stays dumb
-    // under re-init storms.
+    // under re-init storms — and its member gate stamps-and-skips for member
+    // drives (`FolderEntriesBackfillOutcome::SkippedMemberDrive`).
     crate::sync::folder_entries_backfill::spawn_folder_entries_backfill(app.clone(), account_id.clone(), label.clone());
 
     // Recovery is default-on: ensure this account's mnemonic is registered as a
     // read-only recovery principal, with no user action. Best-effort and guarded
     // to one success per account per session, so the per-drive funnel is a safe
     // call site even under re-init storms.
-    crate::recovery_binding::spawn_default_recovery_binding(app.clone());
+    //
+    // Member drives don't trigger it: the binding covers this account's OWN
+    // namespace (owner-scoped recovery of the account's uploads); a member
+    // drive's data lives under the OWNER's namespace, which the owner's own
+    // devices bind. An account's own drives keep triggering it as before.
+    if !identity.is_member {
+        crate::recovery_binding::spawn_default_recovery_binding(app.clone());
+    }
 
     Ok(InitSyncResult {
         user_id,
@@ -2937,5 +3045,172 @@ mod tests {
             sync.get_cached_synced_paths(&label).is_none(),
             "empty rel_path must not create a cache entry"
         );
+    }
+
+    // ── Shared-drive member guards (land mine 1: no self-heal on member key
+    //    material — see member_drive_unrepairable) ────────────────────────
+
+    const MEMBER_OWNER_SS58: &str = "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty";
+    const MEMBER_WIRE_HASH: &str = "0123456789abcdef";
+
+    fn member_identity() -> DriveIdentity {
+        DriveIdentity {
+            wire_ss58: MEMBER_OWNER_SS58.to_string(),
+            wire_folder_hash: MEMBER_WIRE_HASH.to_string(),
+            is_member: true,
+        }
+    }
+
+    /// `recover_drive` must refuse a member drive BEFORE its cleanup step:
+    /// the first thing recovery does is delete `enc_mnemonic.json`, and for a
+    /// member drive that file is the only local copy of the OWNER's folder
+    /// key (not re-derivable from this account's master). A guard placed
+    /// after the cleanup would "refuse" having already destroyed the seal.
+    #[tokio::test]
+    async fn recover_drive_refuses_member_drives_before_touching_the_seal() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let folder_dir = tmp.path().join("cfg");
+        std::fs::create_dir_all(&folder_dir).expect("mk cfg dir");
+        let enc = folder_dir.join("enc_mnemonic.json");
+        std::fs::write(&enc, b"owner-sealed-key-material").expect("write seal");
+        let sync_path = tmp.path().join("sync");
+        std::fs::create_dir_all(&sync_path).expect("mk sync dir");
+        let master_path = tmp.path().join("master_enc_mnemonic.json");
+
+        let identity = member_identity();
+        let ctx = RecoveryContext {
+            sync_path: sync_path.to_str().expect("utf8 path"),
+            folder_dir: &folder_dir,
+            master_path: &master_path,
+            server_url: "",
+            bearer_token: "member-token",
+            identity: &identity,
+            label: "team",
+            drive_password: "pw",
+            existing_mnemonic: None,
+        };
+        let manager = DriveManager::new(sync_path.clone(), folder_dir.clone());
+
+        // `expect_err` needs the Ok type to be Debug, which DriveManager isn't.
+        let Err(err) = recover_drive(manager, &ctx).await else {
+            panic!("member recovery must refuse");
+        };
+        assert!(
+            matches!(err, crate::error::AppError::Validation(_)),
+            "refusal must be the surfaced Validation kind (auto_init emits DriveStatus::Error for it), got {err:?}"
+        );
+        assert_eq!(
+            std::fs::read(&enc).expect("seal still readable"),
+            b"owner-sealed-key-material",
+            "the guard must fire BEFORE the cleanup deletes/rewrites the seal"
+        );
+        assert!(!master_path.exists(), "member recovery must not mint a master file");
+    }
+
+    /// An UNINITIALIZED member config dir has no self-heal path: fresh init
+    /// derives the folder mnemonic from this account's master, which is the
+    /// wrong key material for the owner's drive. `init_or_unlock_drive` must
+    /// refuse instead of calling `init_new_drive`, and must create no seal.
+    #[tokio::test]
+    async fn init_or_unlock_refuses_fresh_init_for_member_drives() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let folder_dir = tmp.path().join("cfg");
+        std::fs::create_dir_all(&folder_dir).expect("mk cfg dir");
+        let sync_path = tmp.path().join("sync");
+        std::fs::create_dir_all(&sync_path).expect("mk sync dir");
+        let master_path = tmp.path().join("master_enc_mnemonic.json");
+
+        let identity = member_identity();
+        let ctx = RecoveryContext {
+            sync_path: sync_path.to_str().expect("utf8 path"),
+            folder_dir: &folder_dir,
+            master_path: &master_path,
+            server_url: "",
+            bearer_token: "member-token",
+            identity: &identity,
+            label: "team",
+            drive_password: "pw",
+            existing_mnemonic: None,
+        };
+        let manager = DriveManager::new(sync_path.clone(), folder_dir.clone());
+        assert!(!manager.is_initialized(), "pre-condition: no seal on disk");
+
+        // `expect_err` needs the Ok type to be Debug, which DriveManager isn't.
+        let Err(err) = init_or_unlock_drive(manager, "team", &master_path, "pw", None, &ctx).await else {
+            panic!("fresh member init must refuse");
+        };
+        assert!(
+            matches!(err, crate::error::AppError::Validation(_)),
+            "refusal must be the surfaced Validation kind, got {err:?}"
+        );
+        assert!(
+            !folder_dir.join("enc_mnemonic.json").exists(),
+            "the refusal must not have minted a (mis-keyed) seal"
+        );
+    }
+
+    /// LAND MINE 1: `prepare_config_dir` for a MEMBER drive must leave an
+    /// owner-sealed folder mnemonic byte-identical — no `.needs_rekey`, no
+    /// sync-state wipe — because the seal legitimately holds the OWNER's
+    /// folder mnemonic, which never matches derive(member master, label).
+    /// The own-drive contrast in the same test pins that the guard is the
+    /// ONLY difference: with `is_member = false` the exact same on-disk
+    /// state IS re-derived (the legacy repair this check exists for).
+    #[test]
+    fn prepare_config_dir_member_gate_preserves_the_owner_seal() {
+        let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        unsafe {
+            std::env::set_var("HOME", tmp.path());
+        }
+
+        const ACCOUNT: &str = "5PrepareCfgMemberGateTestAccount";
+        const LABEL: &str = "team";
+        const PW: &str = "pw";
+        // A stable BIP-39 test vector — NOT a real secret.
+        let master = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+        let acct = account_dir(ACCOUNT).expect("account dir");
+        std::fs::create_dir_all(&acct).expect("mk account dir");
+        let master_path = master_mnemonic_path(ACCOUNT).expect("master path");
+        hcfs_client::auth::save_encrypted_mnemonic(&master_path, master, PW).expect("seal master");
+
+        // Simulate the owner's folder mnemonic: a valid mnemonic that does
+        // NOT equal derive(master, LABEL) — the exact shape ensure_derived
+        // treats as "wrong" and rewrites.
+        let owner_folder = derive_folder_mnemonic(master, "owners-own-label").expect("derive stand-in owner key");
+        let folder_dir = config_dir_for_folder(ACCOUNT, LABEL).expect("folder dir");
+        std::fs::create_dir_all(&folder_dir).expect("mk folder dir");
+        let enc = folder_dir.join("enc_mnemonic.json");
+        hcfs_client::auth::save_encrypted_mnemonic(&enc, &owner_folder, PW).expect("seal folder key");
+        let state_path = folder_dir.join("sync_state.json");
+        std::fs::write(&state_path, b"{}").expect("write sync state");
+        let seal_before = std::fs::read(&enc).expect("read seal");
+
+        let sync_root = tmp.path().join("sync");
+        std::fs::create_dir_all(&sync_root).expect("mk sync root");
+
+        // Member drive: everything survives byte-identical.
+        prepare_config_dir(ACCOUNT, LABEL, sync_root.to_str().expect("utf8"), PW, Some(master), true).expect("member prepare succeeds");
+        assert_eq!(
+            std::fs::read(&enc).expect("re-read seal"),
+            seal_before,
+            "member prepare must leave the owner seal byte-identical"
+        );
+        assert!(!folder_dir.join(".needs_rekey").exists(), "member prepare must not drop a rekey marker");
+        assert!(state_path.exists(), "member prepare must not wipe sync state");
+
+        // Own-drive contrast: the same state IS repaired (seal re-derived,
+        // rekey marker dropped, sync state wiped) — pinning that the member
+        // flag is the only thing standing between the seal and the rewrite.
+        prepare_config_dir(ACCOUNT, LABEL, sync_root.to_str().expect("utf8"), PW, Some(master), false).expect("own prepare succeeds");
+        let repaired = hcfs_client::auth::recover_mnemonic(&enc, PW).expect("recover repaired seal");
+        assert_eq!(
+            repaired.to_string(),
+            derive_folder_mnemonic(master, LABEL).expect("expected derivation"),
+            "own-drive prepare must re-derive the seal from the master"
+        );
+        assert!(folder_dir.join(".needs_rekey").exists(), "own-drive repair drops the rekey marker");
+        assert!(!state_path.exists(), "own-drive repair wipes sync state");
     }
 }

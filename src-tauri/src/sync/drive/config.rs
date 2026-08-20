@@ -257,21 +257,29 @@ pub(crate) async fn get_sync_path_for_label(pool: &SqlitePool, account_id: &str,
 }
 
 /// Construct an `HcfsClientConfig` from the common connection parameters.
-pub(crate) fn build_hcfs_config(server_url: &str, bearer_token: &str, account_id: &str, folder_hash: &str) -> HcfsClientConfig {
+///
+/// `identity` is the drive's WIRE identity: for an own drive it carries the
+/// session account + `folder_hash(label)` (today's values), for a member
+/// drive the OWNER's ss58 + the owner's folder hash plus the
+/// `shared_drive_member` flag hcfs-client uses to sign/route member requests.
+/// Per-label callers must obtain it from
+/// [`crate::sync::identity::resolve_drive_identity`] (resolved ONCE per
+/// operation); structurally own-drive callers construct it via
+/// [`DriveIdentity::own`] with a comment saying why the resolver is not
+/// needed there.
+pub(crate) fn build_hcfs_config(server_url: &str, bearer_token: &str, identity: &crate::sync::identity::DriveIdentity) -> HcfsClientConfig {
     HcfsClientConfig {
         base_url: server_url.to_string(),
         bearer_token: bearer_token.to_string(),
         accept_invalid_certs: ACCEPT_INVALID_CERTS,
         billing_bypass_token: None,
-        ss58_address: account_id.to_string(),
-        folder_hash: folder_hash.to_string(),
+        ss58_address: identity.wire_ss58.clone(),
+        folder_hash: identity.wire_folder_hash.clone(),
         // `None` selects hcfs-client's `DEFAULT_READ_TIMEOUT_SECS` (60s).
         // The desktop has no reason to override yet — set explicitly only
         // if a deployment profile needs a different per-read deadline.
         read_timeout_ms: None,
-        // Task 3 threads the resolved `DriveIdentity` through this helper;
-        // until then every caller builds an own-drive client.
-        shared_drive_member: false,
+        shared_drive_member: identity.is_member,
     }
 }
 
@@ -381,18 +389,43 @@ mod tests {
 
     #[test]
     fn build_hcfs_config_sets_all_fields() {
-        let cfg = build_hcfs_config("https://example.com", "tok123", "5GrwvaEF", "abcd1234");
+        let cfg = build_hcfs_config(
+            "https://example.com",
+            "tok123",
+            &crate::sync::identity::DriveIdentity::own("5GrwvaEF", "abcd1234"),
+        );
         assert_eq!(cfg.base_url, "https://example.com");
         assert_eq!(cfg.bearer_token, "tok123");
         assert_eq!(cfg.ss58_address, "5GrwvaEF");
         assert_eq!(cfg.folder_hash, "abcd1234");
         assert_eq!(cfg.accept_invalid_certs, ACCEPT_INVALID_CERTS);
         assert!(cfg.billing_bypass_token.is_none());
+        assert!(!cfg.shared_drive_member, "an own-drive identity must not set the member flag");
+    }
+
+    /// A member identity carries the OWNER's wire pair verbatim and flips
+    /// `shared_drive_member` — the field hcfs-client keys member request
+    /// signing/routing on. This is the one place the flag is set; every
+    /// construction site now flows through this helper.
+    #[test]
+    fn build_hcfs_config_threads_member_identity() {
+        let identity = crate::sync::identity::DriveIdentity {
+            wire_ss58: "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty".to_string(),
+            wire_folder_hash: "0123456789abcdef".to_string(),
+            is_member: true,
+        };
+        let cfg = build_hcfs_config("https://example.com", "member-token", &identity);
+        assert_eq!(cfg.ss58_address, identity.wire_ss58, "member config must carry the OWNER's ss58");
+        assert_eq!(
+            cfg.folder_hash, identity.wire_folder_hash,
+            "member config must carry the OWNER's folder hash"
+        );
+        assert!(cfg.shared_drive_member, "member identity must set the member flag");
     }
 
     #[test]
     fn build_hcfs_config_preserves_empty_strings() {
-        let cfg = build_hcfs_config("", "", "", "");
+        let cfg = build_hcfs_config("", "", &crate::sync::identity::DriveIdentity::own("", ""));
         assert_eq!(cfg.base_url, "");
         assert_eq!(cfg.bearer_token, "");
         assert_eq!(cfg.ss58_address, "");

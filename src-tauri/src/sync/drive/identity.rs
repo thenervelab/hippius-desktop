@@ -29,6 +29,26 @@ pub struct DriveIdentity {
     pub is_member: bool,
 }
 
+impl DriveIdentity {
+    /// Build an OWN-drive identity from values the caller already holds.
+    ///
+    /// For STRUCTURALLY own-drive call sites only: account-scoped clients
+    /// (`folder_hash = ""` — share endpoints, remote-folder listings), the
+    /// caller's own remote-folder delete, the migration pseudo-drive, and
+    /// jobs that are gated off for member drives (backfills, folder-entity
+    /// sync). Any per-label operation that COULD name a member drive must
+    /// resolve through [`resolve_drive_identity`] instead — this constructor
+    /// cannot know about the `sync_paths` member columns and always answers
+    /// "own".
+    pub fn own(wire_ss58: &str, wire_folder_hash: &str) -> Self {
+        Self {
+            wire_ss58: wire_ss58.to_string(),
+            wire_folder_hash: wire_folder_hash.to_string(),
+            is_member: false,
+        }
+    }
+}
+
 /// The wire identity to persist onto a NEW member drive's `sync_paths` row.
 ///
 /// Carried by `paths::LabelMode::Allocate` (member drives are only ever
@@ -117,6 +137,27 @@ pub async fn resolve_drive_identity(pool: &SqlitePool, account_id: &str, label: 
         }
         (Some(_), None) => Err(corrupt_member_row(label, "owner_ss58 set without wire_folder_hash")),
         (None, Some(_)) => Err(corrupt_member_row(label, "wire_folder_hash set without owner_ss58")),
+    }
+}
+
+/// [`resolve_drive_identity`], but a MISSING row falls back to the own-drive
+/// derivation `(account_id, folder_hash(label), false)` instead of erroring.
+///
+/// For the remote-browse IPCs (`sync::remote`) only: their `label` may
+/// legitimately name a server-only folder that has NO local `sync_paths` row
+/// (the "sync from other devices" browser, a search hit under an
+/// unconfigured drive), and those paths have always derived the wire pair
+/// from the label. A row that EXISTS still resolves normally — member rows
+/// get the owner identity, and a corrupt row still fails closed as
+/// [`AppError::Db`]. Funnel-style operations that require the row (init,
+/// backfills) must use [`resolve_drive_identity`] instead.
+pub async fn resolve_drive_identity_or_own(pool: &SqlitePool, account_id: &str, label: &str) -> Result<DriveIdentity> {
+    match resolve_drive_identity(pool, account_id, label).await {
+        Ok(identity) => Ok(identity),
+        // The resolver reports exactly the missing row as `Validation`
+        // (corrupt rows are `Db`), so this arm is the no-local-row case.
+        Err(AppError::Validation(_)) => Ok(DriveIdentity::own(account_id, &crate::sync::mnemonic::folder_hash(label))),
+        Err(other) => Err(other),
     }
 }
 
@@ -307,6 +348,34 @@ mod tests {
             AppError::Validation(msg) => assert!(msg.contains("nope"), "message names the label: {msg}"),
             other => panic!("expected Validation, got {other:?}"),
         }
+    }
+
+    // The lenient resolver: a missing row degrades to the own-drive
+    // derivation (the remote-browse contract for server-only folders), but
+    // an EXISTING member row still resolves to the owner identity and a
+    // corrupt row still fails closed.
+    #[tokio::test]
+    async fn lenient_resolver_defaults_missing_row_to_own_derivation() {
+        let pool = make_pool().await;
+
+        let id = resolve_drive_identity_or_own(&pool, ACCT, "server-only").await.expect("must not error");
+        assert_eq!(id, DriveIdentity::own(ACCT, &crate::sync::mnemonic::folder_hash("server-only")));
+    }
+
+    #[tokio::test]
+    async fn lenient_resolver_still_honors_member_rows_and_fails_closed_on_corrupt_ones() {
+        let pool = make_pool().await;
+        insert_row(&pool, ACCT, "team", Some(OWNER), Some(WIRE_HASH)).await;
+        insert_row(&pool, ACCT, "half", Some(OWNER), None).await;
+
+        let id = resolve_drive_identity_or_own(&pool, ACCT, "team").await.expect("member row resolves");
+        assert!(id.is_member, "existing member row must not be masked by the own-drive fallback");
+        assert_eq!(id.wire_ss58, OWNER);
+
+        let err = resolve_drive_identity_or_own(&pool, ACCT, "half")
+            .await
+            .expect_err("corrupt row must still fail");
+        assert_corrupt_row(err, "lenient resolver on a corrupt row");
     }
 
     // Rows are scoped by account_key(account_id): another account's member

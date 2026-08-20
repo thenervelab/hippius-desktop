@@ -10,11 +10,10 @@ use tracing::{error, info, warn};
 use crate::auth::account_key::account_key;
 use crate::auth::tokens::get_api_token;
 use crate::error::Result;
-use crate::sync::config::{ACCEPT_INVALID_CERTS, get_hcfs_config_internal, normalize_for_region_probe};
+use crate::sync::config::{get_hcfs_config_internal, normalize_for_region_probe};
 use crate::sync::lifecycle::start_sync_loop;
 use crate::sync::lifecycle::{initialize_sync_inner, remove_drive_for_account};
 use crate::sync::mnemonic::{config_dir_for_folder, folder_hash};
-use hcfs_client::client::HcfsClientConfig;
 use sqlx::sqlite::SqlitePool;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -149,19 +148,11 @@ pub(crate) async fn list_remote_folders_internal(pool: &SqlitePool, account_id: 
         .await?
         .ok_or_else(|| crate::error::AppError::Other("No authentication token found".into()))?;
 
-    let client_config = HcfsClientConfig {
-        base_url: server_url,
-        bearer_token,
-        accept_invalid_certs: ACCEPT_INVALID_CERTS,
-        billing_bypass_token: None,
-        ss58_address: account_id.to_string(),
-        folder_hash: String::new(),
-        read_timeout_ms: None,
-        // Account-scoped listing under the caller's own identity — never a
-        // member-drive client (Task 3 threads member identity through
-        // `build_hcfs_config`, not here).
-        shared_drive_member: false,
-    };
+    // Account-scoped listing under the caller's own identity (empty folder
+    // hash — the endpoint keys off the bearer token alone), so the identity
+    // is structurally own-drive and no resolver lookup applies.
+    let client_config =
+        crate::sync::config::build_hcfs_config(&server_url, &bearer_token, &crate::sync::identity::DriveIdentity::own(account_id, ""));
 
     let client = hcfs_client::client::HcfsClient::new(client_config).map_err(|e| crate::error::AppError::Hcfs(e.to_string()))?;
     let folders = client
@@ -201,17 +192,10 @@ pub async fn list_remote_folders(state: tauri::State<'_, crate::app_state::AppSt
         .await?
         .ok_or_else(|| crate::error::AppError::Other("No authentication token found. Please log in again.".into()))?;
 
-    let client_config = HcfsClientConfig {
-        base_url: server_url,
-        bearer_token,
-        accept_invalid_certs: ACCEPT_INVALID_CERTS,
-        billing_bypass_token: None,
-        ss58_address: account_id.clone(),
-        folder_hash: String::new(),
-        read_timeout_ms: None,
-        // Account-scoped listing under the caller's own identity.
-        shared_drive_member: false,
-    };
+    // Account-scoped listing under the caller's own identity — see
+    // list_remote_folders_internal.
+    let client_config =
+        crate::sync::config::build_hcfs_config(&server_url, &bearer_token, &crate::sync::identity::DriveIdentity::own(&account_id, ""));
 
     let client = hcfs_client::client::HcfsClient::new(client_config).map_err(|e| crate::error::AppError::Hcfs(e.to_string()))?;
 
@@ -417,18 +401,14 @@ pub async fn delete_remote_folder(
         remove_drive_for_account(app, label.clone(), Some(account_id.clone())).await?;
     }
 
-    let client_config = HcfsClientConfig {
-        base_url: server_url,
-        bearer_token,
-        accept_invalid_certs: ACCEPT_INVALID_CERTS,
-        billing_bypass_token: None,
-        ss58_address: account_id.clone(),
-        folder_hash: fhash.clone(),
-        read_timeout_ms: None,
-        // Deleting the caller's OWN remote folder — a member cannot
-        // unregister the owner's drive through this path.
-        shared_drive_member: false,
-    };
+    // Deleting the caller's OWN remote folder — a member cannot unregister
+    // the owner's drive through this path, so the identity is structurally
+    // own-drive (label → hash derivation) rather than resolver-supplied.
+    let client_config = crate::sync::config::build_hcfs_config(
+        &server_url,
+        &bearer_token,
+        &crate::sync::identity::DriveIdentity::own(&account_id, &fhash),
+    );
 
     let client = hcfs_client::client::HcfsClient::new(client_config).map_err(|e| crate::error::AppError::Hcfs(e.to_string()))?;
 
