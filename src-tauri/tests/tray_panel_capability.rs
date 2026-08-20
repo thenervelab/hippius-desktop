@@ -17,11 +17,9 @@ use serde_json::Value;
 
 #[test]
 fn tauri_conf_registers_tray_panel_capability() {
-    let conf: Value = serde_json::from_str(
-        &std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tauri.conf.json"))
-            .expect("read tauri.conf.json"),
-    )
-    .expect("tauri.conf.json is valid JSON");
+    let conf: Value =
+        serde_json::from_str(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tauri.conf.json")).expect("read tauri.conf.json"))
+            .expect("tauri.conf.json is valid JSON");
 
     let caps = conf["app"]["security"]["capabilities"]
         .as_array()
@@ -46,11 +44,7 @@ fn tray_panel_capability_grants_event_listen() {
     // The capability file itself must still carry the event-listen grant the
     // popover depends on (a refactor could strip it even while it stays listed).
     let cap: Value = serde_json::from_str(
-        &std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/capabilities/tray-panel.json"
-        ))
-        .expect("read capabilities/tray-panel.json"),
+        &std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/capabilities/tray-panel.json")).expect("read capabilities/tray-panel.json"),
     )
     .expect("tray-panel.json is valid JSON");
 

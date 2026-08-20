@@ -7,32 +7,35 @@ use hcfs_client::engine::manager::DriveManager;
 use hcfs_client::engine::runner::SyncRunner;
 use hcfs_client::engine::types::{SyncedFileInfo, build_synced_paths_from_state};
 use std::collections::HashMap;
+use std::path::Path;
 
 /// Build a map of relative paths → sync info for files whose
 /// `path_hash` appears in the drive's persisted `synced` tree.
 /// Returns `None` when the drive isn't available (e.g. logged out)
 /// so the caller can fall back to "unknown".
 ///
-/// Tries the live drive lock first (non-blocking). On success the cache
-/// is also refreshed. When the lock is unavailable (sync in progress),
-/// falls back to the last cached snapshot so the file browser still
-/// shows accurate sync status instead of "unknown".
-///
-/// Waits up to [`FIRST_RECONCILE_WAIT_BUDGET`] for the per-drive
-/// reconcile readiness gate so the cache contains authoritative
-/// timestamps on cold start. See
-/// [`synced_paths_and_excludes_for_label`] for the full rationale.
+/// Waits up to [`FIRST_RECONCILE_WAIT_BUDGET`] for first reconcile
+/// (DATE UPLOADED on cold start), then returns the warm cache if
+/// present. `load_sync_state` is the miss path only — reloading
+/// `sync_state.json` when the drive lock is free is slower and can be
+/// staler mid-cycle than the incrementally-updated cache. See
+/// [`synced_paths_and_excludes_for_label`] for the exclude rationale.
 pub(super) async fn synced_paths_for_label(sync: &SyncRunner, label: &str) -> Option<HashMap<String, SyncedFileInfo>> {
     let _ = sync.wait_for_first_reconcile(label, FIRST_RECONCILE_WAIT_BUDGET).await;
+    // The cache is the live listing source of truth (register, reconcile,
+    // per-file upsert, post_sync_cleanup). Reloading `sync_state.json` when
+    // the drive lock is free is slower and can be staler mid-cycle than the
+    // incrementally-updated cache. Disk load is the miss path only.
+    if let Some(cached) = sync.get_cached_synced_paths(label) {
+        return Some(cached);
+    }
     let arc = match acquire_drive_arc(sync, label) {
         DriveArcOutcome::Acquired(arc) => arc,
-        DriveArcOutcome::CacheFallback => return sync.get_cached_synced_paths(label),
+        DriveArcOutcome::CacheFallback => return None,
     };
     // `try_lock` (not `lock().await`) is essential here: the per-drive
     // mutex is held by the sync loop for the duration of a sync cycle,
     // and the file browser must remain responsive during that window.
-    // Falling back to the cache on contention is a deliberate tradeoff:
-    // slightly stale on-screen sync status > a 30-second listing freeze.
     match arc.try_lock() {
         Ok(manager) => match manager.load_sync_state().await {
             Ok(state) => {
@@ -42,7 +45,7 @@ pub(super) async fn synced_paths_for_label(sync: &SyncRunner, label: &str) -> Op
             }
             Err(_) => None,
         },
-        Err(_) => sync.get_cached_synced_paths(label),
+        Err(_) => None,
     }
 }
 
@@ -70,9 +73,22 @@ pub(super) async fn synced_paths_and_excludes_for_label(sync: &SyncRunner, label
     // contract.
     let _ = sync.wait_for_first_reconcile(label, FIRST_RECONCILE_WAIT_BUDGET).await;
 
+    if let Some(cached) = sync.get_cached_synced_paths(label) {
+        // Excludes are in-memory on the manager — cheap, no JSON. Still
+        // `try_lock` so a mid-sync listing does not wait on the cycle.
+        let excludes = match acquire_drive_arc(sync, label) {
+            DriveArcOutcome::Acquired(arc) => match arc.try_lock() {
+                Ok(manager) => manager.list_exclude_patterns(),
+                Err(_) => Vec::new(),
+            },
+            DriveArcOutcome::CacheFallback => Vec::new(),
+        };
+        return (Some(cached), excludes);
+    }
+
     let arc = match acquire_drive_arc(sync, label) {
         DriveArcOutcome::Acquired(arc) => arc,
-        DriveArcOutcome::CacheFallback => return (sync.get_cached_synced_paths(label), Vec::new()),
+        DriveArcOutcome::CacheFallback => return (None, Vec::new()),
     };
     // `try_lock` (not `lock().await`) is essential — see synced_paths_for_label.
     match arc.try_lock() {
@@ -88,7 +104,7 @@ pub(super) async fn synced_paths_and_excludes_for_label(sync: &SyncRunner, label
             let excludes = manager.list_exclude_patterns();
             (synced, excludes)
         }
-        Err(_) => (sync.get_cached_synced_paths(label), Vec::new()),
+        Err(_) => (None, Vec::new()),
     }
 }
 
@@ -101,6 +117,75 @@ pub(super) async fn synced_paths_and_excludes_for_label(sync: &SyncRunner, label
 /// `ACTIVITY_UPDATED` event refresh the FE — the worst case is
 /// one extra refetch, not a stale forever read.
 const FIRST_RECONCILE_WAIT_BUDGET: std::time::Duration = std::time::Duration::from_secs(6);
+
+/// Whether a folder's contents are all present on this device.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FolderSettlement {
+    /// Every rel-path the drive knows under this folder exists on disk.
+    Settled,
+    /// At least one known child is missing locally — the same condition that
+    /// makes `list_sync_folder_grouped` report `sync_status: "pending"`.
+    Pending,
+    /// No synced map available: the drive is paused, logged out, or still cold.
+    Unknown,
+}
+
+/// Classify `folder_rel` under `sync_root` against the drive's synced rel-paths.
+///
+/// `synced_rel_paths` is the engine's `synced` tree, the same source the file
+/// browser's pending badge reads, so a caller's verdict and the badge the user
+/// is looking at cannot disagree.
+///
+/// Callers deciding whether to hand a folder's bytes to a third party must treat
+/// [`FolderSettlement::Unknown`] as a refusal, never as permission — otherwise
+/// pausing a drive becomes a way to bypass the check. Folder rename is the
+/// deliberate exception: it is a local operation the sync engine reconciles
+/// either way, so it proceeds when the answer is unknown.
+pub(crate) fn folder_settlement(sync_root: &Path, folder_rel: &str, synced_rel_paths: Option<&[String]>) -> FolderSettlement {
+    let Some(rel_paths) = synced_rel_paths else {
+        return FolderSettlement::Unknown;
+    };
+
+    // Compare against a trailing-slash prefix so a sibling whose name merely
+    // starts with this folder's name ("trips2/x" vs "trips") is not read as a
+    // child of it.
+    //
+    // The drive root is the exception: it addresses every path in the drive, so
+    // its prefix is empty rather than "/" — which nothing starts with, and would
+    // make the loop match nothing and report Settled without checking anything.
+    let trimmed = folder_rel.trim_end_matches('/');
+    let prefix = if trimmed.is_empty() { String::new() } else { format!("{trimmed}/") };
+    for rel in rel_paths {
+        if rel.starts_with(&prefix) && !sync_root.join(rel).exists() {
+            return FolderSettlement::Pending;
+        }
+    }
+
+    FolderSettlement::Settled
+}
+
+/// Answer [`folder_settlement`] for a live drive, reading the synced tree for
+/// `label` first.
+///
+/// Exists so callers outside this module ask one question instead of composing
+/// the map read with the classification themselves — which would mean exposing
+/// both internals and letting two call sites drift on how a missing map is
+/// treated.
+pub(crate) async fn folder_is_settled(sync: &SyncRunner, label: &str, sync_root: &Path, folder_rel: &str) -> FolderSettlement {
+    let Some(synced) = synced_paths_for_label(sync, label).await else {
+        return FolderSettlement::Unknown;
+    };
+    let rel_paths: Vec<String> = synced.into_keys().collect();
+    let root = sync_root.to_path_buf();
+    let folder = folder_rel.to_string();
+
+    // `exists()` per child is blocking. A large folder share/rename
+    // must not stall the runtime; a join failure is Unknown (share
+    // refuses, rename still proceeds).
+    tokio::task::spawn_blocking(move || folder_settlement(&root, &folder, Some(&rel_paths)))
+        .await
+        .unwrap_or(FolderSettlement::Unknown)
+}
 
 /// Outcome of locating a per-drive `DriveManager` Arc behind the outer
 /// drives map. Either we got the Arc, or the outer/inner lookup failed and
@@ -127,6 +212,77 @@ fn acquire_drive_arc(sync: &SyncRunner, label: &str) -> DriveArcOutcome {
 
 #[cfg(test)]
 mod tests {
+    use super::{FolderSettlement, folder_settlement};
+    use tempfile::TempDir;
+
+    #[test]
+    fn settled_when_every_synced_child_is_on_disk() {
+        let root = TempDir::new().expect("temp dir");
+        std::fs::create_dir_all(root.path().join("trips/2024")).expect("mkdir");
+        std::fs::write(root.path().join("trips/2024/a.jpg"), b"x").expect("write");
+
+        let synced = vec!["trips/2024/a.jpg".to_string()];
+
+        assert_eq!(folder_settlement(root.path(), "trips", Some(&synced)), FolderSettlement::Settled);
+    }
+
+    /// A path the drive knows about but disk lacks is exactly the condition
+    /// `list_sync_folder_grouped` renders as `pending`. Zipping here would hand
+    /// the recipient an archive silently missing that file.
+    #[test]
+    fn unsettled_when_a_synced_child_is_missing_on_disk() {
+        let root = TempDir::new().expect("temp dir");
+        std::fs::create_dir_all(root.path().join("trips")).expect("mkdir");
+
+        let synced = vec!["trips/2024/a.jpg".to_string()];
+
+        assert_eq!(folder_settlement(root.path(), "trips", Some(&synced)), FolderSettlement::Pending);
+    }
+
+    /// A paused or logged-out drive yields no map. Callers that hand bytes to a
+    /// third party must refuse on unknown, or pausing a drive would become a way
+    /// to bypass the check entirely.
+    #[test]
+    fn unknown_when_the_drive_has_no_synced_map() {
+        let root = TempDir::new().expect("temp dir");
+
+        assert_eq!(folder_settlement(root.path(), "trips", None), FolderSettlement::Unknown);
+    }
+
+    #[test]
+    fn a_sibling_sharing_a_name_prefix_is_not_treated_as_a_child() {
+        let root = TempDir::new().expect("temp dir");
+        std::fs::create_dir_all(root.path().join("trips")).expect("mkdir");
+
+        // "trips2/x.jpg" is a sibling, not a child of "trips".
+        let synced = vec!["trips2/x.jpg".to_string()];
+
+        assert_eq!(folder_settlement(root.path(), "trips", Some(&synced)), FolderSettlement::Settled);
+    }
+
+    /// The drive root addresses every path in the drive, so an empty
+    /// `folder_rel` must check ALL of them. A `"{folder}/"` prefix built from an
+    /// empty string is `"/"`, which no rel-path starts with — the loop would
+    /// match nothing and report `Settled` without having checked anything,
+    /// silently skipping the guard for a whole-drive share.
+    #[test]
+    fn the_drive_root_checks_every_path_rather_than_none() {
+        let root = TempDir::new().expect("temp dir");
+
+        let synced = vec!["trips/2024/a.jpg".to_string()];
+
+        assert_eq!(folder_settlement(root.path(), "", Some(&synced)), FolderSettlement::Pending);
+    }
+
+    #[test]
+    fn a_trailing_slash_on_the_folder_does_not_change_the_answer() {
+        let root = TempDir::new().expect("temp dir");
+        std::fs::create_dir_all(root.path().join("trips")).expect("mkdir");
+
+        let synced = vec!["trips/a.jpg".to_string()];
+
+        assert_eq!(folder_settlement(root.path(), "trips/", Some(&synced)), FolderSettlement::Pending);
+    }
 
     /// Regression test for the cold-start race: a `wait_for_first_reconcile`
     /// call against a registered-but-unsettled gate must block until the
@@ -221,5 +377,87 @@ mod tests {
             "NotRegistered must return immediately, took {}ms",
             elapsed.as_millis(),
         );
+    }
+
+    /// A registered drive whose on-disk `sync_state.json` is empty must not
+    /// clobber a warm cache. The cache is updated incrementally (file-synced,
+    /// reconcile, post_sync_cleanup); the disk file can lag mid-cycle.
+    #[tokio::test]
+    async fn warm_cache_wins_over_empty_on_disk_state() {
+        use hcfs_client::engine::events::{NoopCallbacks, NoopEventHandler};
+        use hcfs_client::engine::manager::DriveManager;
+        use hcfs_client::engine::runner::{DriveSlot, SyncRunner};
+        use hcfs_client::engine::types::SyncedFileInfo;
+        use std::collections::HashMap;
+        use std::sync::Arc;
+        use tokio::sync::Mutex as TokioMutex;
+        use tokio_util::sync::CancellationToken;
+
+        let tmp = TempDir::new().expect("tempdir");
+        let sync_path = tmp.path().join("sync");
+        let config_dir = tmp.path().join("config");
+        std::fs::create_dir_all(&sync_path).expect("sync dir");
+        std::fs::create_dir_all(&config_dir).expect("config dir");
+        std::fs::write(config_dir.join("sync_state.json"), br#"{"local":{},"remote":{},"synced":{}}"#).expect("empty state");
+
+        let sync = Arc::new(SyncRunner::new(
+            Arc::new(NoopEventHandler),
+            Arc::new(NoopCallbacks),
+            reqwest::Client::new(),
+        ));
+        let label = "warm-cache-drive";
+        {
+            let manager = DriveManager::new(sync_path.clone(), config_dir);
+            let mut guard = sync.drives.lock().await;
+            guard.insert(
+                label.to_string(),
+                DriveSlot {
+                    manager: Arc::new(TokioMutex::new(manager)),
+                    cancel_token: CancellationToken::new(),
+                    sync_path,
+                },
+            );
+        }
+
+        let mut cache = HashMap::new();
+        cache.insert(
+            "cache.txt".to_string(),
+            SyncedFileInfo {
+                path_hash: [0x11; 32],
+                arion_cid: Arc::from("cid-cache"),
+                uploaded_at: 1,
+                updated_at: 2,
+            },
+        );
+        sync.update_synced_paths_cache(label, cache);
+
+        let got = super::synced_paths_for_label(&sync, label).await.expect("cache hit");
+        assert!(
+            got.contains_key("cache.txt"),
+            "warm cache must win over empty disk state, keys={:?}",
+            got.keys().collect::<Vec<_>>(),
+        );
+        assert_eq!(got.len(), 1, "disk load must not replace the cache with an empty map");
+
+        let (got_ex, excludes) = super::synced_paths_and_excludes_for_label(&sync, label).await;
+        assert!(got_ex.expect("cache hit").contains_key("cache.txt"));
+        assert!(excludes.is_empty(), "empty exclude file is fine");
+    }
+
+    #[tokio::test]
+    async fn cache_miss_and_no_drive_returns_none() {
+        use hcfs_client::engine::events::{NoopCallbacks, NoopEventHandler};
+        use hcfs_client::engine::runner::SyncRunner;
+        use std::sync::Arc;
+
+        let sync = Arc::new(SyncRunner::new(
+            Arc::new(NoopEventHandler),
+            Arc::new(NoopCallbacks),
+            reqwest::Client::new(),
+        ));
+        assert!(super::synced_paths_for_label(&sync, "missing").await.is_none());
+        let (paths, excludes) = super::synced_paths_and_excludes_for_label(&sync, "missing").await;
+        assert!(paths.is_none());
+        assert!(excludes.is_empty());
     }
 }

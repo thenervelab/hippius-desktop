@@ -939,8 +939,7 @@ mod tests {
     #[test]
     fn candidate_is_account_master_accepts_master_rejects_folder() {
         let master = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-        let (_pair, master_ss58, _eth_signer, _eth_address) =
-            crate::auth::service::derive_keys(master).expect("derive master keys");
+        let (_pair, master_ss58, _eth_signer, _eth_address) = crate::auth::service::derive_keys(master).expect("derive master keys");
 
         // The genuine master reproduces its own account_id.
         assert!(candidate_is_account_master(master, &master_ss58));

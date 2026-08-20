@@ -21,6 +21,7 @@ const EXPECTED_TABLES: &[&str] = &[
     "wss_endpoint",
     "security_scoped_bookmarks",
     "auth_session",
+    "oauth_pending_states",
     "hcfs_config",
     "objectstore_auth",
     "objectstore_auth_scoped",
@@ -344,6 +345,14 @@ async fn ensure_sync_intent(conn: &mut SqliteConnection) -> Result<(), sqlx::Err
     )
     .execute(&mut *conn)
     .await?;
+
+    // Covering for `totals_for_account` (4 Hz overlay SUM/COUNT).
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_sync_intent_account_bytes
+            ON sync_intent (account_id, completed_at_ms, size_bytes)",
+    )
+    .execute(&mut *conn)
+    .await?;
     Ok(())
 }
 
@@ -451,8 +460,11 @@ async fn ensure_security_scoped_bookmarks(conn: &mut SqliteConnection) -> Result
     Ok(())
 }
 
-/// `auth_session` — replaces the frontend IndexedDB "session" table +
-/// localStorage tokens; one row per `owner` (account key hash).
+/// `auth_session` + `oauth_pending_states` — the session store (replaces
+/// the frontend IndexedDB "session" table + localStorage tokens; one row
+/// per `owner` account key hash) and the restart-safe mirror of in-flight
+/// OAuth CSRF states (audit M-2), grouped here because both belong to the
+/// login/session domain.
 async fn ensure_auth_session(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
     // Auth session — replaces frontend IndexedDB "session" table + localStorage tokens
     sqlx::query(
@@ -467,6 +479,24 @@ async fn ensure_auth_session(conn: &mut SqliteConnection) -> Result<(), sqlx::Er
             logout_time_minutes INTEGER DEFAULT 1440,
             last_login_at TEXT,
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )",
+    )
+    .execute(&mut *conn)
+    .await?;
+
+    // Pending OAuth flows (CSRF `state` → provider), persisted so an app
+    // restart mid-login (auto-update on launch, crash, quit while the
+    // browser tab is open) doesn't strand the callback: the in-memory
+    // `OAuthState` map is rebuilt from these rows on the next
+    // `complete_oauth_flow` (audit M-2). Rows carry a wall-clock
+    // timestamp and expire via the same 5-minute TTL as the in-memory
+    // entries. No secrets: the `state` value is a single-use random
+    // nonce, useless without an in-flight browser session.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS oauth_pending_states (
+            state TEXT PRIMARY KEY,
+            provider TEXT NOT NULL,
+            created_at_ms INTEGER NOT NULL
         )",
     )
     .execute(&mut *conn)
@@ -634,6 +664,19 @@ async fn ensure_notifications(conn: &mut SqliteConnection) -> Result<(), sqlx::E
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_notifications_type_subtype ON notifications(notification_type, notification_subtype)")
         .execute(&mut *conn)
         .await?;
+
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_notifications_user_list
+            ON notifications (user_address, is_deleted, creation_time DESC)",
+    )
+    .execute(&mut *conn)
+    .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_notifications_user_unread
+            ON notifications (user_address, is_deleted, is_unread)",
+    )
+    .execute(&mut *conn)
+    .await?;
     Ok(())
 }
 
@@ -732,6 +775,9 @@ async fn ensure_address_book(conn: &mut SqliteConnection) -> Result<(), sqlx::Er
             .execute(&mut *conn)
             .await?;
     }
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_address_book_owner_name ON address_book (owner, name)")
+        .execute(&mut *conn)
+        .await?;
     Ok(())
 }
 
@@ -811,12 +857,65 @@ async fn ensure_share_keystore(conn: &mut SqliteConnection) -> Result<(), sqlx::
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS share_keystore (
             share_token TEXT PRIMARY KEY,
-            share_key BLOB NOT NULL CHECK (length(share_key) = 32),
-            created_at INTEGER NOT NULL DEFAULT (unixepoch())
+            secret_kind TEXT NOT NULL DEFAULT 'public'
+                        CHECK (secret_kind IN ('public', 'private')),
+            share_key BLOB NOT NULL,
+            created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+            -- A public row holds a raw 32-byte share key; a private row holds
+            -- the password-wrapped blob, which is strictly longer. Checking
+            -- `> 32` rather than the exact 89-byte framing keeps the constraint
+            -- from breaking if hcfs-client ever versions the wrap format.
+            CHECK (
+                (secret_kind = 'public'  AND length(share_key) = 32)
+             OR (secret_kind = 'private' AND length(share_key) > 32)
+            )
         )",
     )
     .execute(&mut *conn)
     .await?;
+
+    // Pre-`secret_kind` installs have `share_key BLOB CHECK (length = 32)`,
+    // which cannot hold a wrapped blob and whose CHECK SQLite cannot drop in
+    // place. Rebuild-and-copy is the only way to change it.
+    //
+    // Every surviving row is copied as 'public'. Shares that were made private
+    // under the old Finder flow are indistinguishable here — nothing recorded
+    // which ones they were, because that flow stored the raw key either way
+    // (the defect this feature fixes). Those rows therefore keep offering a
+    // password-free link until they age out. That is bounded and short: every
+    // share minted before this release had a fixed 24-hour TTL, so the
+    // exposure self-heals within a day of upgrading. Dropping the rows instead
+    // would break Copy for legitimately public shares, which is the larger
+    // harm for the same window.
+    let columns = table_columns(&mut *conn, "share_keystore").await?;
+    if !columns.iter().any(|c| c == "secret_kind") {
+        sqlx::query(
+            "CREATE TABLE share_keystore_rebuild (
+                share_token TEXT PRIMARY KEY,
+                secret_kind TEXT NOT NULL DEFAULT 'public'
+                            CHECK (secret_kind IN ('public', 'private')),
+                share_key BLOB NOT NULL,
+                created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                CHECK (
+                    (secret_kind = 'public'  AND length(share_key) = 32)
+                 OR (secret_kind = 'private' AND length(share_key) > 32)
+                )
+            )",
+        )
+        .execute(&mut *conn)
+        .await?;
+        sqlx::query(
+            "INSERT INTO share_keystore_rebuild (share_token, secret_kind, share_key, created_at) \
+             SELECT share_token, 'public', share_key, created_at FROM share_keystore",
+        )
+        .execute(&mut *conn)
+        .await?;
+        sqlx::query("DROP TABLE share_keystore").execute(&mut *conn).await?;
+        sqlx::query("ALTER TABLE share_keystore_rebuild RENAME TO share_keystore")
+            .execute(&mut *conn)
+            .await?;
+    }
+
     Ok(())
 }
 
@@ -913,7 +1012,8 @@ async fn ensure_shared_link_history(conn: &mut SqliteConnection) -> Result<(), s
             plaintext_size INTEGER,
             mime_type      TEXT,
             created_at     TEXT NOT NULL,
-            expires_at     TEXT NOT NULL,
+            -- NULL when the share never expired and was ended by revocation.
+            expires_at     TEXT,
             ended_at       TEXT NOT NULL,
             end_reason     TEXT NOT NULL,
             PRIMARY KEY (account_id, share_token)
@@ -921,10 +1021,65 @@ async fn ensure_shared_link_history(conn: &mut SqliteConnection) -> Result<(), s
     )
     .execute(&mut *conn)
     .await?;
+
+    // Installs predating expiry presets declared `expires_at TEXT NOT NULL`,
+    // which cannot record a never-expiring share. SQLite has no ALTER TABLE
+    // for dropping NOT NULL, so relax it by rebuild-and-copy. Existing rows
+    // all carry a real timestamp (every share had a fixed 24-hour TTL back
+    // then), so the copy is lossless.
+    if column_is_not_null(&mut *conn, "shared_link_history", "expires_at").await? {
+        sqlx::query(
+            "CREATE TABLE shared_link_history_rebuild (
+                account_id     TEXT NOT NULL,
+                share_token    TEXT NOT NULL,
+                filename       TEXT,
+                folder_label   TEXT,
+                relative_path  TEXT,
+                plaintext_size INTEGER,
+                mime_type      TEXT,
+                created_at     TEXT NOT NULL,
+                expires_at     TEXT,
+                ended_at       TEXT NOT NULL,
+                end_reason     TEXT NOT NULL,
+                PRIMARY KEY (account_id, share_token)
+            )",
+        )
+        .execute(&mut *conn)
+        .await?;
+        sqlx::query(
+            "INSERT INTO shared_link_history_rebuild \
+             SELECT account_id, share_token, filename, folder_label, relative_path, \
+                    plaintext_size, mime_type, created_at, expires_at, ended_at, end_reason \
+             FROM shared_link_history",
+        )
+        .execute(&mut *conn)
+        .await?;
+        sqlx::query("DROP TABLE shared_link_history").execute(&mut *conn).await?;
+        sqlx::query("ALTER TABLE shared_link_history_rebuild RENAME TO shared_link_history")
+            .execute(&mut *conn)
+            .await?;
+    }
+
     sqlx::query("CREATE INDEX IF NOT EXISTS shared_link_history_account_ended_idx ON shared_link_history (account_id, ended_at DESC)")
         .execute(&mut *conn)
         .await?;
     Ok(())
+}
+
+/// Whether `table.column` is declared `NOT NULL`.
+///
+/// Used to detect pre-migration table shapes that need a rebuild, since
+/// SQLite cannot relax a NOT NULL constraint in place. Returns `false` for a
+/// missing table or column — callers only use this to decide whether a
+/// rebuild is *needed*, and a table that does not exist yet was just created
+/// with the current shape.
+async fn column_is_not_null(conn: &mut SqliteConnection, table: &str, column: &str) -> Result<bool, sqlx::Error> {
+    // PRAGMA does not accept bound parameters for the table name, and `table`
+    // is always a hard-coded literal at every call site — never user input.
+    let rows: Vec<(String, i64)> = sqlx::query_as(&format!("SELECT name, \"notnull\" FROM pragma_table_info('{table}')"))
+        .fetch_all(&mut *conn)
+        .await?;
+    Ok(rows.iter().any(|(name, notnull)| name == column && *notnull != 0))
 }
 
 /// Migrate account keys from the legacy 8-char format to the new 16-char format.
@@ -1100,6 +1255,24 @@ mod tests {
             .await
             .expect("failed to count tables");
         assert_eq!(count as usize, EXPECTED_TABLES.len(), "table count changed across calls");
+    }
+
+    #[tokio::test]
+    async fn ensure_table_schema_creates_perf_indexes() {
+        let pool = temp_pool().await;
+        ensure_table_schema(&pool).await.expect("schema");
+        let names: Vec<String> = sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type = 'index'")
+            .fetch_all(&pool)
+            .await
+            .expect("index list");
+        for needed in [
+            "idx_sync_intent_account_bytes",
+            "idx_notifications_user_list",
+            "idx_notifications_user_unread",
+            "idx_address_book_owner_name",
+        ] {
+            assert!(names.iter().any(|n| n == needed), "missing index {needed} in {names:?}");
+        }
     }
 
     /// Names of the legacy Nebula tables earlier releases created in

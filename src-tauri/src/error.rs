@@ -520,7 +520,9 @@ mod tests {
             NotReadyKind::InsufficientCredits,
             NotReadyKind::SupersededByPause,
             NotReadyKind::DatabaseNotReady,
-            NotReadyKind::RateLimited { message: "Try again in 5 minutes.".into() },
+            NotReadyKind::RateLimited {
+                message: "Try again in 5 minutes.".into(),
+            },
             NotReadyKind::VpnNotConnected,
         ] {
             let expected = expected_wire_name(&kind);
@@ -689,10 +691,7 @@ mod tests {
                 NotReadyKind::DatabaseNotReady,
                 "The application is still starting up. Please try again in a moment.",
             ),
-            (
-                NotReadyKind::VpnNotConnected,
-                "Connect to the VPN before opening a VM connection.",
-            ),
+            (NotReadyKind::VpnNotConnected, "Connect to the VPN before opening a VM connection."),
         ];
         for (kind, expected) in cases {
             assert_eq!(kind.to_string(), expected);

@@ -102,11 +102,7 @@ fn map_open_error(e: VpnError) -> AppError {
 /// Open (or reuse) a localhost forward to a VM service over the mesh.
 /// Returns the loopback endpoint the app should connect to.
 #[tauri::command]
-pub async fn vpn_open_vm_connection(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    target: MeshTarget,
-) -> Result<LocalEndpoint, AppError> {
+pub async fn vpn_open_vm_connection(app: AppHandle, state: State<'_, AppState>, target: MeshTarget) -> Result<LocalEndpoint, AppError> {
     match state.vpn.open_vm_connection(&target).await {
         Ok(endpoint) => {
             let _ = app.emit(

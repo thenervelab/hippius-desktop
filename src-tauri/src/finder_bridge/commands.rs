@@ -18,84 +18,13 @@
 use crate::app_state::AppState;
 use crate::error::{AppError, Result};
 use hcfs_client::client::share::ShareProgress;
-use serde::Serialize;
+
 use tauri::ipc::Channel;
 
-/// Result of a confirmed Finder share, returned to the modal. A superset of
-/// `ShareLink`: a password-protected ("private") share also carries the randomly
-/// generated `password` the recipient needs. `password` is omitted from the JSON
-/// for a public link (the FE distinguishes the two by its presence).
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FinderShareCreated {
-    share_token: String,
-    share_url: String,
-    expires_at: String,
-    /// `Some` only for a `#p=` (password-protected) share. Omitted from the JSON
-    /// for a public `#k=` share.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    password: Option<String>,
-}
-
-impl FinderShareCreated {
-    /// A public (`#k=`) share carries no password. macOS-only: its sole caller is
-    /// the Finder mint path.
-    #[cfg(target_os = "macos")]
-    pub(crate) fn public(link: crate::shares::commands::ShareLink) -> Self {
-        Self {
-            share_token: link.share_token,
-            share_url: link.share_url,
-            expires_at: link.expires_at,
-            password: None,
-        }
-    }
-
-    /// A private (`#p=`) share carries the generated password the recipient needs
-    /// out-of-band. macOS-only.
-    #[cfg(target_os = "macos")]
-    pub(crate) fn private(private: crate::shares::commands::PrivateShare) -> Self {
-        Self {
-            share_token: private.link.share_token,
-            share_url: private.link.share_url,
-            expires_at: private.link.expires_at,
-            password: Some(private.password),
-        }
-    }
-}
-
-/// The access the user chose in the app's share chooser. A closed enum (not a
-/// bool or raw string) so the mint path matches exhaustively and an unknown wire
-/// value is rejected once, at the boundary, rather than re-checked downstream
-/// (axiom `rust_api_axiom_25_validate_boundary`). macOS-only — the only consumer
-/// is the Finder confirm command's macOS body.
-#[cfg(target_os = "macos")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ShareVisibility {
-    /// "Anyone with the link" — a public `#k=` share.
-    Public,
-    /// "Password protected" — a `#p=` share wrapped under a generated password.
-    Private,
-}
-
-#[cfg(target_os = "macos")]
-impl ShareVisibility {
-    /// Parse the untrusted `visibility` IPC argument into the typed choice,
-    /// rejecting anything else with [`AppError::Validation`]. The two accepted
-    /// tokens mirror the FE `SegmentedControl` option values (`"public"` /
-    /// `"private"`).
-    pub(crate) fn parse(raw: &str) -> Result<Self> {
-        match raw {
-            "public" => Ok(Self::Public),
-            "private" => Ok(Self::Private),
-            other => Err(AppError::Validation(format!("Unknown share visibility: {other}"))),
-        }
-    }
-}
-
-/// Mint the parked Finder share with the visibility the user chose. `request_id`
-/// is the handle from `finder:share-choosing`; `visibility` is `"public"` or
-/// `"private"`; `on_progress` streams the encrypt/upload bar. Returns the link
-/// (and, for a private share, the password).
+/// Mint the parked Finder share with the choices the user made. `request_id`
+/// is the handle from `finder:share-choosing`; `ttl` is one of the expiry
+/// presets and `visibility` is `"public"` or `"private"`, with an optional
+/// caller-supplied `password`. `on_progress` streams the encrypt/upload bar.
 ///
 /// A missing `request_id` (the app restarted, or the confirm arrived twice)
 /// surfaces as [`AppError::NotFound`] so the modal can tell the user to
@@ -104,15 +33,21 @@ impl ShareVisibility {
 pub async fn hcfs_finder_confirm_share(
     state: tauri::State<'_, AppState>,
     request_id: String,
+    ttl: String,
     visibility: String,
+    password: Option<String>,
     on_progress: Channel<ShareProgress>,
-) -> Result<FinderShareCreated> {
-    #[cfg(target_os = "macos")]
+) -> Result<crate::shares::commands::ShareLink> {
+    #[cfg(any(unix, windows))]
     {
-        // Validate the untrusted visibility at the boundary, then take the parked
+        // Validate the untrusted arguments at the boundary, then take the parked
         // request (single-use). `take_finder_share` returns the owned value, so
         // no lock is held across the mint `.await` below (axiom 74).
-        let visibility = ShareVisibility::parse(&visibility)?;
+        //
+        // Both parsers are shared with `hcfs_create_share`, so the in-app and
+        // Finder entry points cannot diverge on what they accept.
+        let ttl = crate::shares::commands::parse_ttl(&ttl)?;
+        let choice = crate::shares::commands::ShareChoice::parse(&visibility, password)?;
         let pending = state
             .take_finder_share(&request_id)
             .ok_or_else(|| AppError::NotFound("This share request has expired. Right-click the file and choose Share with Hippius again.".into()))?;
@@ -131,12 +66,12 @@ pub async fn hcfs_finder_confirm_share(
         tokio::select! {
             biased;
             () = cancel.cancelled() => Err(AppError::Validation("Share cancelled.".into())),
-            minted = crate::finder_bridge::dispatch::mint_confirmed(&state, &pending.path, visibility, Some(progress)) => minted,
+            minted = crate::finder_bridge::dispatch::mint_confirmed(&state, &pending.path, ttl, choice, Some(progress)) => minted,
         }
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(unix, windows)))]
     {
-        let _ = (&state, request_id, visibility, on_progress);
+        let _ = (&state, request_id, ttl, visibility, password, on_progress);
         // Unreachable from the UI (the FE only invokes this on macOS); a typed
         // Validation rather than the catch-all Other keeps it consistent with the
         // error-taxonomy migration (illu review L4).
@@ -150,13 +85,13 @@ pub async fn hcfs_finder_confirm_share(
 /// (window closed mid-upload). Paired begin/end teardown via `Drop` is the
 /// cancellation-safe way to run cleanup on every exit path (RfR ch. 8
 /// §Cancellation; axiom `rust_quality_71_drop_order`).
-#[cfg(target_os = "macos")]
+#[cfg(any(unix, windows))]
 struct FinderMintGuard<'a> {
     state: &'a AppState,
     request_id: &'a str,
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(unix, windows))]
 impl Drop for FinderMintGuard<'_> {
     fn drop(&mut self) {
         self.state.finish_finder_mint(self.request_id);
@@ -169,73 +104,68 @@ impl Drop for FinderMintGuard<'_> {
 /// Idempotent: an already-finished or unknown `request_id` is a no-op.
 #[tauri::command]
 pub async fn hcfs_finder_cancel_share(state: tauri::State<'_, AppState>, request_id: String) -> Result<()> {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(unix, windows))]
     {
         state.cancel_finder_share(&request_id);
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (&state, request_id);
     }
     Ok(())
 }
 
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(all(test, any(unix, windows)))]
 mod tests {
-    use super::*;
+    use crate::shares::commands::ShareLink;
+    use std::collections::BTreeSet;
 
+    /// Wire-shape pin for what `hcfs_finder_confirm_share` returns and the FE
+    /// `shares.ts` reads. A public share must carry NO `password` key — the FE
+    /// keys off its presence to show or hide the password box, so a stray
+    /// `password: null` would render an empty password field on a public link.
     #[test]
-    fn visibility_parses_known_tokens() {
-        assert_eq!(ShareVisibility::parse("public").expect("public"), ShareVisibility::Public);
-        assert_eq!(ShareVisibility::parse("private").expect("private"), ShareVisibility::Private);
-    }
-
-    #[test]
-    fn visibility_rejects_unknown_token_as_validation() {
-        // Anything the FE didn't send must be a typed Validation error, not a
-        // silent default to public (which would leak a private-intent share).
-        for bad in ["", "Public", "PRIVATE", "anyone", "protected", " public "] {
-            let err = ShareVisibility::parse(bad).expect_err("must reject");
-            assert!(matches!(err, AppError::Validation(_)), "{bad:?} → {err:?}");
-        }
-    }
-
-    fn sample_link() -> crate::shares::commands::ShareLink {
-        crate::shares::commands::ShareLink {
+    fn public_share_link_wire_shape_omits_password() {
+        let json = serde_json::to_value(ShareLink {
             share_token: "tok".into(),
             share_url: "https://console.hippius.com/share/tok#k=K".into(),
-            expires_at: "2026-01-01T00:00:00Z".into(),
-        }
-    }
-
-    /// Wire-shape pin for the command return the FE `shares.ts` reads as
-    /// `FinderShareCreated`. A public share carries exactly the `ShareLink` keys
-    /// (camelCase) and NO `password` (the `skip_serializing_if` must hold — the
-    /// FE keys off `password`'s presence to show/hide the password box).
-    #[test]
-    fn finder_share_created_public_wire_shape() {
-        use std::collections::BTreeSet;
-        let json = serde_json::to_value(FinderShareCreated::public(sample_link())).expect("serialize");
+            expires_at: Some("2026-01-01T00:00:00Z".into()),
+            password: None,
+        })
+        .expect("serialize");
         let keys: BTreeSet<String> = json.as_object().expect("object").keys().cloned().collect();
         let expected: BTreeSet<String> = ["expiresAt", "shareToken", "shareUrl"].into_iter().map(String::from).collect();
-        assert_eq!(
-            keys, expected,
-            "public FinderShareCreated wire keys drifted (FE shares.ts reads shareToken/shareUrl/expiresAt, no password)"
-        );
+        assert_eq!(keys, expected, "public ShareLink wire keys drifted");
     }
 
-    /// A private share adds `password` (camelCase, present).
+    /// A private share adds `password` (camelCase, present). This is the only
+    /// moment the password is ever available — it is never persisted.
     #[test]
-    fn finder_share_created_private_wire_shape_includes_password() {
-        let created = FinderShareCreated::private(crate::shares::commands::PrivateShare {
-            link: sample_link(),
-            password: "pw-123".into(),
-        });
-        let json = serde_json::to_value(created).expect("serialize");
+    fn private_share_link_wire_shape_includes_password() {
+        let json = serde_json::to_value(ShareLink {
+            share_token: "tok".into(),
+            share_url: "https://console.hippius.com/share/tok#p=B".into(),
+            expires_at: Some("2026-01-01T00:00:00Z".into()),
+            password: Some("pw-123".into()),
+        })
+        .expect("serialize");
         assert_eq!(json["shareToken"], "tok");
-        assert_eq!(
-            json["password"], "pw-123",
-            "private FinderShareCreated must carry the password key the FE renders"
-        );
+        assert_eq!(json["password"], "pw-123");
+    }
+
+    /// A never-expiring share serializes `expiresAt` as JSON null rather than
+    /// omitting the key, so the FE can distinguish "no expiry" from a missing
+    /// field.
+    #[test]
+    fn never_expiring_share_link_serializes_null_expiry() {
+        let json = serde_json::to_value(ShareLink {
+            share_token: "tok".into(),
+            share_url: "https://console.hippius.com/share/tok#k=K".into(),
+            expires_at: None,
+            password: None,
+        })
+        .expect("serialize");
+        assert!(json.as_object().expect("object").contains_key("expiresAt"));
+        assert!(json["expiresAt"].is_null());
     }
 }

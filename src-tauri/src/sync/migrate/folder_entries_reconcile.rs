@@ -32,8 +32,8 @@ use crate::sync::folder_entries_backfill::{build_one_shot_client, cache_folder_e
 use crate::sync::mnemonic::folder_hash;
 use hcfs_shared::network::MAX_REGISTER_RELATIVE_PATHS_BATCH;
 use sqlx::sqlite::SqlitePool;
-use std::collections::{BTreeSet, HashMap};
-use std::sync::Mutex;
+use std::collections::{BTreeSet, HashMap, HashSet};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tracing::{info, warn};
 
@@ -78,19 +78,75 @@ pub(crate) fn compute_dir_delta(on_disk: &BTreeSet<String>, cached: &BTreeSet<St
     }
 }
 
-/// Per-label min-interval throttle.
+/// Per-label min-interval throttle **and** mutual-exclusion guard.
 ///
-/// `label -> last run Instant`. A `Mutex<HashMap>` (not atomics) because the
-/// value is a compound `Instant` keyed by an owned `String`; contention is
-/// negligible (one lock per completed sync cycle) and every method is fully
-/// synchronous, so the no-lock-across-await axiom (`rust_quality_74`) can never
-/// be tripped. Held behind an `Arc` on [`crate::app_state::AppState`] as the
-/// single `folder_entity_sync` throttle that gates the combined per-cycle
-/// folder-entity sync (both the reconcile and the materialize halves run under
-/// it, so the two can never race over the shared cache + server set).
+/// `label -> last run Instant`, plus the set of labels whose sync is currently
+/// running. A `Mutex<HashMap>` (not atomics) because the value is a compound
+/// `Instant` keyed by an owned `String`; contention is negligible (one lock per
+/// completed sync cycle) and every method is fully synchronous, so the
+/// no-lock-across-await axiom (`rust_quality_74`) can never be tripped. Held
+/// behind an `Arc` on [`crate::app_state::AppState`] as the single
+/// `folder_entity_sync` gate for the combined folder-entity sync (both the
+/// reconcile and the materialize halves run under it, so the two can never race
+/// over the shared cache + server set).
+///
+/// The in-flight set exists because the interval throttle alone stopped being a
+/// sufficient serializer once a *forced* run (a user deleting a folder — see
+/// [`crate::sync::folder_entries_materialize::FolderEntitySyncTrigger`]) could
+/// bypass the interval. Two overlapping runs can resurrect a just-deleted
+/// folder: run B's materialize can hold a server list fetched before run A's
+/// unregister landed, see the directory missing from disk, and re-create it.
+/// Serializing per label is what keeps the documented reconcile-then-materialize
+/// ordering meaningful.
 #[derive(Debug, Default)]
 pub struct PerLabelThrottle {
     last_run: Mutex<HashMap<String, Instant>>,
+    in_flight: Mutex<HashSet<String>>,
+    pending_forced: Mutex<HashSet<String>>,
+}
+
+/// RAII permit proving the holder owns this label's folder-entity sync slot.
+///
+/// The label leaves the in-flight set on drop, so an early return, an `Err`, or
+/// a panic inside the spawned task can never strand a drive as permanently
+/// "already running" — a manual release call could.
+#[derive(Debug)]
+pub struct RunPermit {
+    throttle: Arc<PerLabelThrottle>,
+    label: String,
+}
+
+impl RunPermit {
+    /// Finish this run: either keep the slot for one more pass, or release it.
+    ///
+    /// Returns `Some(self)` — the slot still held, never reopened — when a
+    /// forced request arrived while this run owned the label, and `None` after
+    /// releasing otherwise.
+    ///
+    /// The check and the release happen under the SAME `in_flight` lock that
+    /// [`PerLabelThrottle::try_acquire`] holds when it records a pending forced
+    /// request. That is what makes the handoff airtight: a requester either sees
+    /// the slot occupied and leaves a flag this run is guaranteed to observe, or
+    /// finds the slot already free and acquires it itself. Checking the flag and
+    /// releasing as two separate critical sections would drop a request landing
+    /// between them — and a dropped FORCED request has no fallback, since the
+    /// delete that triggered it may never produce another completed cycle.
+    pub fn take_pending_or_release(self) -> Option<Self> {
+        let re_run = {
+            let _in_flight = self.throttle.in_flight.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut pending = self.throttle.pending_forced.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            pending.remove(&self.label)
+        };
+        // Dropping `self` on the `None` path is what releases the slot.
+        if re_run { Some(self) } else { None }
+    }
+}
+
+impl Drop for RunPermit {
+    fn drop(&mut self) {
+        let mut guard = self.throttle.in_flight.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.remove(&self.label);
+    }
 }
 
 impl PerLabelThrottle {
@@ -99,33 +155,71 @@ impl PerLabelThrottle {
         Self::default()
     }
 
-    /// Return `true` and record `now` as this label's last-run time when at
-    /// least `min_interval` has elapsed since the previous run (or the label has
-    /// never run); return `false` without mutating otherwise.
+    /// Try to claim this label's folder-entity sync slot.
     ///
-    /// The check-and-record is a single critical section so two cycles
-    /// completing back-to-back can't both pass. A poisoned lock (a panic while
-    /// held — impossible here, the body has no panic site) is recovered with
-    /// `into_inner` so a throttle hiccup never propagates as a hard error into
-    /// the completion handler.
-    pub fn should_run(&self, label: &str, min_interval: Duration) -> bool {
-        let now = Instant::now();
-        let mut guard = self.last_run.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        match guard.get(label) {
-            Some(&prev) if now.duration_since(prev) < min_interval => false,
-            _ => {
-                guard.insert(label.to_owned(), now);
-                true
+    /// `min_interval` is `Some(d)` for the routine per-cycle run (skip when the
+    /// label ran less than `d` ago) and `None` for a forced run, which skips the
+    /// interval check but is still refused while a run is in flight. Returns the
+    /// [`RunPermit`] the caller must hold for the duration of the run, or `None`
+    /// when the run should be skipped.
+    ///
+    /// The in-flight check comes FIRST and short-circuits without recording a
+    /// last-run stamp: a rejected caller did no work, so it must not push the
+    /// next eligible cycle out by a full interval. A FORCED request refused this
+    /// way is remembered instead of dropped — the in-flight run picks it up via
+    /// [`RunPermit::take_pending_or_release`]. The two triggers differ in what a
+    /// skip costs: a skipped `PerCycle` is picked up by the next completed
+    /// cycle, whereas the delete behind a forced request may never produce
+    /// another one, so dropping it would leave the folder entity stale forever.
+    ///
+    /// A poisoned lock (a panic while held — impossible here, no body has a
+    /// panic site) is recovered with `into_inner` so a gate hiccup never
+    /// propagates as a hard error into the completion handler.
+    pub fn try_acquire(self: &Arc<Self>, label: &str, min_interval: Option<Duration>) -> Option<RunPermit> {
+        let mut in_flight = self.in_flight.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if in_flight.contains(label) {
+            if min_interval.is_none() {
+                let mut pending = self.pending_forced.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                pending.insert(label.to_owned());
             }
+            return None;
         }
+
+        {
+            // Lock order is always in_flight → last_run; both are leaves and
+            // neither is held across an await, so this can't deadlock.
+            let now = Instant::now();
+            let mut last_run = self.last_run.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let (Some(min_interval), Some(&prev)) = (min_interval, last_run.get(label))
+                && now.duration_since(prev) < min_interval
+            {
+                return None;
+            }
+            last_run.insert(label.to_owned(), now);
+        }
+
+        in_flight.insert(label.to_owned());
+        Some(RunPermit {
+            throttle: Arc::clone(self),
+            label: label.to_owned(),
+        })
     }
 
     /// Drop a label's throttle record so its next cycle syncs immediately.
     /// Called from `handle_sync_stopped` (pause / remove / logout teardown) so a
     /// resume or re-add isn't gated by the prior episode's last-run stamp.
+    ///
+    /// Also drops any queued forced request for the label: the drive is being
+    /// paused, removed, or logged out, so a follow-up reconcile for it is moot.
+    ///
+    /// Deliberately does NOT touch the in-flight set: a teardown does not stop
+    /// an already-running task, and force-clearing its slot would let a second
+    /// run overlap it.
     pub fn clear(&self, label: &str) {
         let mut guard = self.last_run.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         guard.remove(label);
+        let mut pending = self.pending_forced.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        pending.remove(label);
     }
 
     /// Wipe every label's throttle record. Called from `handle_sync_reset`
@@ -135,6 +229,8 @@ impl PerLabelThrottle {
     pub fn clear_all(&self) {
         let mut guard = self.last_run.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         guard.clear();
+        let mut pending = self.pending_forced.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        pending.clear();
     }
 }
 
@@ -173,7 +269,13 @@ pub enum ReconcileOutcome {
 /// NOTE: the register/unregister NETWORK round-trips are exercised by the
 /// real-backend harness (no mock). The hermetic tests cover the pure delta and
 /// the cache insert+delete application.
-pub(crate) async fn reconcile_with_on_disk(pool: &SqlitePool, account_id: &str, owner: &str, label: &str, on_disk: &BTreeSet<String>) -> Result<ReconcileOutcome> {
+pub(crate) async fn reconcile_with_on_disk(
+    pool: &SqlitePool,
+    account_id: &str,
+    owner: &str,
+    label: &str,
+    on_disk: &BTreeSet<String>,
+) -> Result<ReconcileOutcome> {
     // Read the cache and diff. An empty delta is the steady-state common case
     // and short-circuits before any HTTP client is built.
     let cached = read_cached_dir_set(pool, owner, label).await?;
@@ -235,14 +337,19 @@ pub(crate) async fn reconcile_with_on_disk(pool: &SqlitePool, account_id: &str, 
 /// as a server folder entity. Each delete is owner+label+path scoped so one
 /// account's cache can never touch another's.
 pub(crate) async fn delete_cached_folder_entries(pool: &SqlitePool, owner: &str, label: &str, paths: &[String]) -> Result<()> {
+    if paths.is_empty() {
+        return Ok(());
+    }
+    let mut tx = pool.begin().await?;
     for rel in paths {
         sqlx::query("DELETE FROM folder_entries_local WHERE owner = ? AND label = ? AND relative_path = ?")
             .bind(owner)
             .bind(label)
             .bind(rel)
-            .execute(pool)
+            .execute(&mut *tx)
             .await?;
     }
+    tx.commit().await?;
     Ok(())
 }
 
@@ -303,34 +410,164 @@ mod tests {
         assert_eq!(delta.to_unregister, vec!["a".to_string(), "b".to_string()]);
     }
 
+    /// Acquire and immediately release, i.e. "would a run start right now?".
+    fn ran(throttle: &Arc<PerLabelThrottle>, label: &str, min_interval: Option<Duration>) -> bool {
+        throttle.try_acquire(label, min_interval).is_some()
+    }
+
     #[test]
     fn throttle_gates_within_interval_and_clears() {
-        let throttle = PerLabelThrottle::new();
+        let throttle = Arc::new(PerLabelThrottle::new());
         // First call for a label always runs.
-        assert!(throttle.should_run("docs", THROTTLE_INTERVAL));
+        assert!(ran(&throttle, "docs", Some(THROTTLE_INTERVAL)));
         // Immediate second call is gated.
-        assert!(!throttle.should_run("docs", THROTTLE_INTERVAL));
+        assert!(!ran(&throttle, "docs", Some(THROTTLE_INTERVAL)));
         // A different label is independent.
-        assert!(throttle.should_run("photos", THROTTLE_INTERVAL));
+        assert!(ran(&throttle, "photos", Some(THROTTLE_INTERVAL)));
         // A zero interval always lets the same label through.
-        assert!(throttle.should_run("docs", Duration::from_secs(0)));
+        assert!(ran(&throttle, "docs", Some(Duration::from_secs(0))));
         // Clearing a label resets it so the next call runs again.
         throttle.clear("docs");
-        assert!(throttle.should_run("docs", THROTTLE_INTERVAL));
+        assert!(ran(&throttle, "docs", Some(THROTTLE_INTERVAL)));
     }
 
     #[test]
     fn throttle_clear_all_resets_every_label() {
-        let throttle = PerLabelThrottle::new();
-        assert!(throttle.should_run("docs", THROTTLE_INTERVAL));
-        assert!(throttle.should_run("photos", THROTTLE_INTERVAL));
+        let throttle = Arc::new(PerLabelThrottle::new());
+        assert!(ran(&throttle, "docs", Some(THROTTLE_INTERVAL)));
+        assert!(ran(&throttle, "photos", Some(THROTTLE_INTERVAL)));
         // Both are now gated within the interval.
-        assert!(!throttle.should_run("docs", THROTTLE_INTERVAL));
-        assert!(!throttle.should_run("photos", THROTTLE_INTERVAL));
+        assert!(!ran(&throttle, "docs", Some(THROTTLE_INTERVAL)));
+        assert!(!ran(&throttle, "photos", Some(THROTTLE_INTERVAL)));
         // clear_all wipes every label (account switch / reset) so both run again.
         throttle.clear_all();
-        assert!(throttle.should_run("docs", THROTTLE_INTERVAL));
-        assert!(throttle.should_run("photos", THROTTLE_INTERVAL));
+        assert!(ran(&throttle, "docs", Some(THROTTLE_INTERVAL)));
+        assert!(ran(&throttle, "photos", Some(THROTTLE_INTERVAL)));
+    }
+
+    /// A forced run (folder delete) must not wait for the interval — the change
+    /// that needs reconciling may produce no file work at all, so the next
+    /// completed cycle it would otherwise wait for might never arrive.
+    #[test]
+    fn forced_run_bypasses_the_interval() {
+        let throttle = Arc::new(PerLabelThrottle::new());
+        assert!(ran(&throttle, "docs", Some(THROTTLE_INTERVAL)));
+        assert!(!ran(&throttle, "docs", Some(THROTTLE_INTERVAL)));
+        assert!(ran(&throttle, "docs", None));
+    }
+
+    /// The in-flight half: a forced run may skip the interval but must never
+    /// overlap a run already in progress, or its materialize could re-create the
+    /// directory the in-flight reconcile is unregistering.
+    #[test]
+    fn in_flight_label_refuses_both_routine_and_forced_runs() {
+        let throttle = Arc::new(PerLabelThrottle::new());
+        let permit = throttle.try_acquire("docs", Some(THROTTLE_INTERVAL)).expect("first acquire");
+
+        assert!(!ran(&throttle, "docs", Some(THROTTLE_INTERVAL)));
+        assert!(!ran(&throttle, "docs", None));
+        // A different label is unaffected.
+        assert!(ran(&throttle, "photos", None));
+
+        // Releasing the permit frees the slot again.
+        drop(permit);
+        assert!(ran(&throttle, "docs", None));
+    }
+
+    /// A rejected caller did no work, so it must not push the next eligible
+    /// cycle out by a full interval: the in-flight refusal leaves the last-run
+    /// stamp untouched.
+    #[test]
+    fn in_flight_refusal_does_not_record_a_last_run_stamp() {
+        let throttle = Arc::new(PerLabelThrottle::new());
+        let permit = throttle.try_acquire("docs", Some(THROTTLE_INTERVAL)).expect("first acquire");
+        assert!(!ran(&throttle, "docs", Some(THROTTLE_INTERVAL)));
+        drop(permit);
+
+        // The refused attempt did NOT re-stamp `docs`; clearing the original
+        // stamp is all it takes for a routine run to be eligible again.
+        throttle.clear("docs");
+        assert!(ran(&throttle, "docs", Some(THROTTLE_INTERVAL)));
+    }
+
+    /// The recovery half of the in-flight guard. A refused FORCED request has no
+    /// fallback trigger — the delete behind it may never complete another sync
+    /// cycle — so it must be queued and served by the in-flight run rather than
+    /// dropped like a throttled routine one.
+    #[test]
+    fn forced_request_refused_mid_run_is_served_by_the_running_pass() {
+        let throttle = Arc::new(PerLabelThrottle::new());
+        let permit = throttle.try_acquire("docs", None).expect("first acquire");
+
+        // A folder delete lands while the run owns the label.
+        assert!(!ran(&throttle, "docs", None));
+
+        // Finishing the run hands the slot straight back instead of releasing it.
+        let permit = permit.take_pending_or_release().expect("queued forced request must re-run");
+        // The slot never reopened, so nothing else could have raced in. Probed
+        // with a zero-interval ROUTINE request: it defeats the time gate without
+        // queuing a request of its own, which a forced probe would do.
+        assert!(!ran(&throttle, "docs", Some(Duration::from_secs(0))));
+
+        // Second pass finds nothing queued and releases.
+        assert!(permit.take_pending_or_release().is_none());
+        assert!(ran(&throttle, "docs", None));
+    }
+
+    /// A refused ROUTINE request must NOT queue a re-run: it is upkeep the next
+    /// completed cycle repeats anyway, and queuing it would spin an extra walk +
+    /// server round-trip after every busy cycle.
+    #[test]
+    fn refused_routine_request_does_not_queue_a_re_run() {
+        let throttle = Arc::new(PerLabelThrottle::new());
+        let permit = throttle.try_acquire("docs", Some(THROTTLE_INTERVAL)).expect("first acquire");
+
+        assert!(!ran(&throttle, "docs", Some(THROTTLE_INTERVAL)));
+
+        assert!(permit.take_pending_or_release().is_none());
+    }
+
+    /// A drive being paused / removed / logged out drops its queued request:
+    /// reconciling a drive the user just tore down is pointless work.
+    #[test]
+    fn clear_drops_a_queued_forced_request() {
+        let throttle = Arc::new(PerLabelThrottle::new());
+        let permit = throttle.try_acquire("docs", None).expect("first acquire");
+        assert!(!ran(&throttle, "docs", None));
+
+        throttle.clear("docs");
+
+        assert!(permit.take_pending_or_release().is_none());
+    }
+
+    #[test]
+    fn clear_all_drops_every_queued_forced_request() {
+        let throttle = Arc::new(PerLabelThrottle::new());
+        let docs = throttle.try_acquire("docs", None).expect("acquire docs");
+        let photos = throttle.try_acquire("photos", None).expect("acquire photos");
+        assert!(!ran(&throttle, "docs", None));
+        assert!(!ran(&throttle, "photos", None));
+
+        throttle.clear_all();
+
+        assert!(docs.take_pending_or_release().is_none());
+        assert!(photos.take_pending_or_release().is_none());
+    }
+
+    /// The permit is RAII: a panicking run must not strand the drive as
+    /// permanently "already syncing".
+    #[test]
+    fn permit_is_released_when_the_run_panics() {
+        let throttle = Arc::new(PerLabelThrottle::new());
+        let panicked = std::panic::catch_unwind({
+            let throttle = Arc::clone(&throttle);
+            move || {
+                let _permit = throttle.try_acquire("docs", None).expect("acquire");
+                panic!("run blew up");
+            }
+        });
+        assert!(panicked.is_err());
+        assert!(ran(&throttle, "docs", None));
     }
 
     /// Static wiring guard: the completion funnel must reference the single
@@ -393,10 +630,15 @@ mod tests {
 
         // Apply the delta to the cache exactly as the orchestrator does.
         cache_folder_entries(&pool, "owner-a", "docs", &delta.to_register).await.unwrap();
-        delete_cached_folder_entries(&pool, "owner-a", "docs", &delta.to_unregister).await.unwrap();
+        delete_cached_folder_entries(&pool, "owner-a", "docs", &delta.to_unregister)
+            .await
+            .unwrap();
 
         // owner-a's cache now equals the on-disk set.
-        assert_eq!(cached_paths(&pool, "owner-a", "docs").await, vec!["a".to_string(), "c".to_string(), "d".to_string()]);
+        assert_eq!(
+            cached_paths(&pool, "owner-a", "docs").await,
+            vec!["a".to_string(), "c".to_string(), "d".to_string()]
+        );
         // owner-b is untouched.
         assert_eq!(cached_paths(&pool, "owner-b", "docs").await, vec!["a".to_string(), "c".to_string()]);
 

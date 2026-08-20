@@ -82,14 +82,7 @@ fn verify_backup_address_binding(encrypted_mnemonic: &str, password: &str, addre
 /// (`local_wallet_get_decrypted_mnemonic`, `local_wallet_sign`) from drifting
 /// — both must migrate identically, and a divergence in a security-sensitive
 /// re-encrypt would be easy to miss across two copies.
-async fn maybe_migrate_secrets(
-    pool: &SqlitePool,
-    owner: &str,
-    wallet: &LocalWallet,
-    password: &str,
-    plain: &str,
-    ciphertext_was_legacy: bool,
-) {
+async fn maybe_migrate_secrets(pool: &SqlitePool, owner: &str, wallet: &LocalWallet, password: &str, plain: &str, ciphertext_was_legacy: bool) {
     if !(ciphertext_was_legacy || crypto::password_hash_is_legacy(&wallet.password_hash)) {
         return;
     }
@@ -148,10 +141,7 @@ fn validate_new_password(password: &str) -> Result<(), AppError> {
         missing.push("a special character");
     }
     if !missing.is_empty() {
-        return Err(AppError::Validation(format!(
-            "Password must contain {}",
-            missing.join(", ")
-        )));
+        return Err(AppError::Validation(format!("Password must contain {}", missing.join(", "))));
     }
     Ok(())
 }
@@ -547,9 +537,7 @@ pub async fn local_wallet_import_encrypted_backup_from_zip(
         return Err(AppError::Validation("Backup entry is unexpectedly large".into()));
     }
     let mut json_bytes = Vec::new();
-    (&mut entry)
-        .take(MAX_BACKUP_JSON_BYTES + 1)
-        .read_to_end(&mut json_bytes)?;
+    (&mut entry).take(MAX_BACKUP_JSON_BYTES + 1).read_to_end(&mut json_bytes)?;
     drop(entry);
     if json_bytes.len() as u64 > MAX_BACKUP_JSON_BYTES {
         return Err(AppError::Validation("Backup entry is unexpectedly large".into()));
@@ -651,10 +639,7 @@ mod tests {
             ("Abcdefg1", "a special character"),
         ] {
             match validate_new_password(pw) {
-                Err(AppError::Validation(m)) => assert!(
-                    m.contains(want),
-                    "password {pw:?} should report missing {want:?}, got {m:?}"
-                ),
+                Err(AppError::Validation(m)) => assert!(m.contains(want), "password {pw:?} should report missing {want:?}, got {m:?}"),
                 other => panic!("expected Validation error for {pw:?}, got {other:?}"),
             }
         }

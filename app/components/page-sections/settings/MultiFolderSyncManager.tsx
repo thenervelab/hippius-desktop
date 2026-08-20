@@ -37,6 +37,7 @@ import {
   SyncDestinationDialog,
   DeleteServerDialog,
   RemoteFolderBrowser,
+  ExclusionsDialog,
 } from "./multi-folder-sync";
 
 export default function MultiFolderSyncManager() {
@@ -80,6 +81,8 @@ export default function MultiFolderSyncManager() {
   const [isRemoving, setIsRemoving] = useState(false);
 
   // Pause sync dialog state
+  // Drive label whose exclusions are being edited, or null when closed.
+  const [exclusionsLabel, setExclusionsLabel] = useState<string | null>(null);
   const [pauseDialog, setPauseDialog] = useState<{
     open: boolean;
     folder: SyncFolder | null;
@@ -497,6 +500,7 @@ export default function MultiFolderSyncManager() {
           onAddFolder={() => setShowAddDialog(true)}
           onPauseFolder={(folder) => setPauseDialog({ open: true, folder })}
           onResumeFolder={handleResumeSync}
+          onManageExclusions={(folder) => setExclusionsLabel(folder.id)}
           onRemoveFolder={(folder) =>
             setRemoveDialog({
               open: true,
@@ -544,6 +548,12 @@ export default function MultiFolderSyncManager() {
           setRemoveDialog({ open: false, folderId: null, folderName: null })
         }
         onConfirm={handleRemoveFolder}
+      />
+
+      <ExclusionsDialog
+        open={exclusionsLabel !== null}
+        label={exclusionsLabel ?? undefined}
+        onClose={() => setExclusionsLabel(null)}
       />
 
       <PauseSyncDialog

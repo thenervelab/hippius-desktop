@@ -22,11 +22,10 @@ use subxt::{OnlineClient, PolkadotConfig};
 
 use super::runtime::bittensor;
 use super::runtime::bittensor::runtime_types::{
-    pallet_contracts::primitives::StorageDeposit, sp_weights::weight_v2::Weight,
-    subtensor_runtime_common::ProxyType,
+    pallet_contracts::primitives::StorageDeposit, sp_weights::weight_v2::Weight, subtensor_runtime_common::ProxyType,
 };
 use super::{client, config, contract, convert, types::BridgeOutcome};
-use crate::blockchain::helpers::{get_signer_and_address, submit_tracked, TrackedSubmission};
+use crate::blockchain::helpers::{TrackedSubmission, get_signer_and_address, submit_tracked};
 use crate::blockchain::types::TxOutcome;
 use crate::error::{AppError, Result};
 
@@ -71,10 +70,7 @@ pub async fn bridge_alpha_to_halpha(
     hotkey: Option<String>,
     password: String,
 ) -> Result<BridgeOutcome> {
-    let amount: u128 = amount
-        .trim()
-        .parse()
-        .map_err(|e| AppError::Validation(format!("Invalid amount: {e}")))?;
+    let amount: u128 = amount.trim().parse().map_err(|e| AppError::Validation(format!("Invalid amount: {e}")))?;
     if amount < convert::MIN_TRANSFER_ALPHA_RAO {
         return Err(AppError::Validation("Amount is below the minimum bridge transfer".into()));
     }
@@ -146,13 +142,9 @@ pub async fn bridge_alpha_to_halpha(
     // rather than a generic error the user could resubmit into a double deposit
     // (audit R-01/R-12). Steps 1/4 (add/remove proxy) are idempotent /
     // best-effort and stay on the simple path.
-    let call = bittensor::tx().contracts().call(
-        MultiAddress::Id(contract_addr.clone()),
-        0,
-        gas_limit,
-        storage_deposit_limit,
-        input,
-    );
+    let call = bittensor::tx()
+        .contracts()
+        .call(MultiAddress::Id(contract_addr.clone()), 0, gas_limit, storage_deposit_limit, input);
     let outcome = match submit_tracked(&client, &call, &signer).await? {
         TrackedSubmission::Finalized { tx_hash, events } => {
             // Step 4: best-effort revoke the proxy grant (deposit confirmed).
@@ -168,8 +160,16 @@ pub async fn bridge_alpha_to_halpha(
 
             // Record locally for the history view (best-effort) — only a
             // confirmed (finalized) deposit is recorded.
-            super::history::record_submitted(&state, "alpha-to-halpha", amount, &origin_ss58, Some(&origin_ss58), &tx_hash, deposit_id.as_deref())
-                .await;
+            super::history::record_submitted(
+                &state,
+                "alpha-to-halpha",
+                amount,
+                &origin_ss58,
+                Some(&origin_ss58),
+                &tx_hash,
+                deposit_id.as_deref(),
+            )
+            .await;
             BridgeOutcome {
                 withdrawal_id: None,
                 deposit_id,

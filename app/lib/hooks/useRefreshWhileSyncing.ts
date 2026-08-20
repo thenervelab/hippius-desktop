@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
-import { useSyncSnapshot } from "./useSyncSnapshot";
+import { useAtomValue } from "jotai";
+import { effectiveInProgressAtom } from "./useSyncSnapshot";
 
 /**
  * Invoke `refresh` on a modest interval WHILE a sync is actively in progress,
@@ -30,8 +31,7 @@ export function useRefreshWhileSyncing(
   enabled: boolean,
   intervalMs = 6000,
 ): void {
-  const snapshot = useSyncSnapshot();
-  const active = snapshot.effectiveInProgress;
+  const active = useAtomValue(effectiveInProgressAtom);
 
   const refreshRef = useRef(refresh);
   refreshRef.current = refresh;

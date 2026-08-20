@@ -43,6 +43,16 @@ describe("failureMessage", () => {
     );
   });
 
+  it("phrases a mid-upload change as self-resolving, not as a crypto fault", () => {
+    // Must read identically to Rust's
+    // `FileFailureKindPayload::ChangedWhileUploading::display_reason()` — the
+    // drive-table badge and the sync widget describe the same failure from two
+    // different data sources (persisted row vs live snapshot string).
+    const msg = failureMessage({ ...base, kind: "changedWhileUploading" });
+    expect(msg).toBe("File changed while uploading — will retry.");
+    expect(msg.toLowerCase()).not.toContain("encryption");
+  });
+
   it("degrades an unknown future kind to the generic line", () => {
     expect(failureMessage({ ...base, kind: "somethingNew" })).toBe(
       "Sync failed. Please try again."

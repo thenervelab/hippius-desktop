@@ -67,7 +67,7 @@ const ReferralLinkHeader: React.FC<ReferralLinkHeaderProps> = ({
   const handleShareX = useCallback(async () => {
     if (!referralUrl) return;
     const text = encodeURIComponent(
-      `🚀 I'm using @hippius_subnet for decentralized storage, compute & more!\n\nJoin using my referral link and we both earn credits:\n${referralUrl}\n\n#Hippius #Web3 #Decentralized`,
+      `🚀 I'm using @Hippius_cloud for decentralized storage, compute & more!\n\nJoin using my referral link and we both earn credits:\n${referralUrl}\n\n#Hippius #Web3 #Decentralized`,
     );
     try {
       await openUrl(`https://x.com/intent/tweet?text=${text}`);

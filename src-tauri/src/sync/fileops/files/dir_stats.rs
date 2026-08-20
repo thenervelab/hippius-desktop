@@ -40,11 +40,10 @@ fn dir_stats_cache() -> &'static DirStatsMap {
 /// Hidden files (starting with '.') are excluded.
 ///
 /// Memoised by `(path, mtime)`. On a hit the cached `(size, count)` is
-/// returned without descending the tree. Cache misses fall through to the
-/// recursive walk and write the result back to the cache before returning.
+/// returned without descending the tree. A miss walks the tree once on a
+/// blocking thread and inserts a cache entry for **every** subdirectory
+/// so a later listing of a child does not re-walk.
 pub(super) async fn dir_stats_recursive(path: &Path) -> (u64, u64) {
-    // Cache lookup. Stat the directory once to learn its mtime; on match
-    // skip the walk entirely.
     let mtime = match tokio::fs::metadata(path).await {
         Ok(meta) => meta.modified().ok(),
         Err(_) => None,
@@ -57,46 +56,69 @@ pub(super) async fn dir_stats_recursive(path: &Path) -> (u64, u64) {
         return (*size, *count);
     }
 
-    // Cache miss — walk the tree.
-    let (size, count) = dir_stats_walk(path).await;
-
-    // Store under the original mtime (if we got one). If mtime is None
-    // we skip caching so the next call retries the walk.
-    if let Some(mtime) = mtime
-        && let Ok(mut cache) = dir_stats_cache().lock()
-    {
-        cache.insert(path.to_path_buf(), (mtime, size, count));
-    }
-    (size, count)
-}
-
-/// The pure recursive walk underpinning [`dir_stats_recursive`]. Split out so
-/// the cache lookup wraps it without recursing through the cache lookup
-/// itself (recursive calls always re-walk subdirectories — the cache would
-/// add lock contention without reducing total work since the parent mtime
-/// already validated the whole subtree).
-async fn dir_stats_walk(path: &Path) -> (u64, u64) {
-    let mut size: u64 = 0;
-    let mut count: u64 = 0;
-    let Ok(mut dir) = tokio::fs::read_dir(path).await else {
+    let walk_root = path.to_path_buf();
+    let Ok(filled) = tokio::task::spawn_blocking(move || dir_stats_walk_std(&walk_root)).await else {
         return (0, 0);
     };
-    while let Ok(Some(entry)) = dir.next_entry().await {
+
+    let root_stats = filled
+        .iter()
+        .find(|(p, _, _, _)| p == path)
+        .map_or((0, 0), |(_, _, size, count)| (*size, *count));
+
+    if let Ok(mut cache) = dir_stats_cache().lock() {
+        for (p, dir_mtime, size, count) in filled {
+            cache.insert(p, (dir_mtime, size, count));
+        }
+    }
+    root_stats
+}
+
+/// Drop every cached entry whose path is `root` or a descendant. Called
+/// from `remove_drive` so a re-add of the same path cannot reuse stale
+/// stats from the previous drive.
+pub(crate) fn invalidate_dir_stats_under(root: &Path) {
+    let Ok(mut cache) = dir_stats_cache().lock() else {
+        return;
+    };
+    cache.retain(|path, _| path != root && !path.starts_with(root));
+}
+
+/// Iterative `std::fs` walk. Returns one `(path, mtime, size, count)`
+/// per directory visited (including `root`). Hidden names are skipped.
+/// A directory with no readable mtime is omitted from the fill list
+/// (same "don't cache" rule as the old miss path).
+fn dir_stats_walk_std(root: &Path) -> Vec<(std::path::PathBuf, std::time::SystemTime, u64, u64)> {
+    let mut filled = Vec::new();
+    walk_dir_std(root, &mut filled);
+    filled
+}
+
+fn walk_dir_std(path: &Path, filled: &mut Vec<(std::path::PathBuf, std::time::SystemTime, u64, u64)>) -> (u64, u64) {
+    let mut size: u64 = 0;
+    let mut count: u64 = 0;
+    let Ok(dir) = std::fs::read_dir(path) else {
+        return (0, 0);
+    };
+    for entry in dir.flatten() {
         let name = entry.file_name();
         if name.to_string_lossy().starts_with('.') {
             continue;
         }
-        let Ok(meta) = entry.metadata().await else {
+        let Ok(meta) = entry.metadata() else {
             continue;
         };
         if meta.is_dir() {
-            let (sub_size, sub_count) = Box::pin(dir_stats_walk(&entry.path())).await;
+            let (sub_size, sub_count) = walk_dir_std(&entry.path(), filled);
             size += sub_size;
             count += sub_count;
         } else {
             size += meta.len();
             count += 1;
         }
+    }
+    if let Ok(mtime) = std::fs::metadata(path).and_then(|m| m.modified()) {
+        filled.push((path.to_path_buf(), mtime, size, count));
     }
     (size, count)
 }
@@ -157,5 +179,77 @@ mod tests {
         assert_eq!(count, 2, "fresh walk must count files");
 
         dir_stats_cache().lock().expect("lock").remove(dir);
+    }
+
+    #[tokio::test]
+    async fn dir_stats_walk_caches_child_directories() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+        let sub = root.join("sub");
+        std::fs::create_dir(&sub).expect("mkdir sub");
+        std::fs::write(sub.join("a.txt"), b"xyz").expect("write");
+
+        let (size, count) = dir_stats_recursive(root).await;
+        assert_eq!(size, 3);
+        assert_eq!(count, 1);
+
+        let sub_mtime = std::fs::metadata(&sub).expect("meta").modified().expect("mtime");
+        {
+            let cache = dir_stats_cache().lock().expect("lock");
+            let (cached_mtime, cached_size, cached_count) = cache.get(&sub).expect("child must be cached by the parent walk");
+            assert_eq!(*cached_mtime, sub_mtime);
+            assert_eq!(*cached_size, 3);
+            assert_eq!(*cached_count, 1);
+        }
+
+        // Prove the child entry is consulted: plant a bogus value under the
+        // real mtime and re-query the child — must not re-walk.
+        {
+            let mut cache = dir_stats_cache().lock().expect("lock");
+            cache.insert(sub.clone(), (sub_mtime, 42, 7));
+        }
+        let (size, count) = dir_stats_recursive(&sub).await;
+        assert_eq!(size, 42);
+        assert_eq!(count, 7);
+
+        dir_stats_cache().lock().expect("lock").remove(root);
+        dir_stats_cache().lock().expect("lock").remove(&sub);
+    }
+
+    #[tokio::test]
+    async fn dir_stats_skips_dotfiles_and_dot_dirs() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+        std::fs::write(root.join("visible.txt"), b"ab").expect("write");
+        std::fs::write(root.join(".hidden"), b"xxxx").expect("write hidden");
+        std::fs::create_dir(root.join(".git")).expect("mkdir .git");
+        std::fs::write(root.join(".git").join("x"), b"yyyy").expect("write git");
+
+        let (size, count) = dir_stats_recursive(root).await;
+        assert_eq!(size, 2, "dotfiles and .git must not count");
+        assert_eq!(count, 1);
+
+        dir_stats_cache().lock().expect("lock").remove(root);
+    }
+
+    #[test]
+    fn invalidate_dir_stats_under_drops_only_that_tree() {
+        let keep = std::path::PathBuf::from("/b/other");
+        let root = std::path::PathBuf::from("/a/drive");
+        let child = root.join("sub");
+        let now = std::time::SystemTime::now();
+        {
+            let mut cache = dir_stats_cache().lock().expect("lock");
+            cache.insert(root.clone(), (now, 1, 1));
+            cache.insert(child.clone(), (now, 2, 2));
+            cache.insert(keep.clone(), (now, 3, 3));
+        }
+        invalidate_dir_stats_under(&root);
+        let cache = dir_stats_cache().lock().expect("lock");
+        assert!(!cache.contains_key(&root));
+        assert!(!cache.contains_key(&child));
+        assert!(cache.contains_key(&keep));
+        drop(cache);
+        dir_stats_cache().lock().expect("lock").remove(&keep);
     }
 }

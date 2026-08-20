@@ -65,10 +65,9 @@ const CONTRACT_ERROR_VARIANTS: [&str; 24] = [
 /// the index is surfaced alongside the name to stay debuggable if the label is
 /// stale. Regenerate this table from the DEPLOYED contract's ABI when known.
 fn variant_name(idx: u8) -> String {
-    CONTRACT_ERROR_VARIANTS.get(idx as usize).map_or_else(
-        || format!("contract error #{idx}"),
-        |name| format!("{name} (contract error #{idx})"),
-    )
+    CONTRACT_ERROR_VARIANTS
+        .get(idx as usize)
+        .map_or_else(|| format!("contract error #{idx}"), |name| format!("{name} (contract error #{idx})"))
 }
 
 /// Decode the SCALE return bytes of a reverted `deposit` ink! call into a

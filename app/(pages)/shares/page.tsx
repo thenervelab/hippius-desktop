@@ -41,7 +41,8 @@ import TableActionMenu, {
 import { FramedDialog } from "@/components/ui/FramedDialog";
 import {
   listShares,
-  reshare,
+  updateShareExpiry,
+  type ShareTtl,
   revokeShare,
   type ShareSummary,
 } from "@/app/lib/tauri/shares";
@@ -76,7 +77,7 @@ export default function MySharesPage() {
   const router = useRouter();
   const [tokenPendingRevoke, setTokenPendingRevoke] = React.useState<string | null>(null);
   const [revokeBusy, setRevokeBusy] = React.useState(false);
-  const [resharingToken, setResharingToken] = React.useState<string | null>(null);
+  const [busyToken, setBusyToken] = React.useState<string | null>(null);
   const [clearAllOpen, setClearAllOpen] = React.useState(false);
 
   const { data, isLoading, error } = useQuery({
@@ -124,21 +125,22 @@ export default function MySharesPage() {
     }
   };
 
-  const onReshare = async (token: string) => {
-    setResharingToken(token);
+  // Change a link's expiry in place. Unlike the reshare this replaces, the URL
+  // the user already handed out keeps working — only the row's expiry moves.
+  const onChangeExpiry = async (token: string, ttl: ShareTtl) => {
+    setBusyToken(token);
     try {
-      const link = await reshare(token);
-      try {
-        await navigator.clipboard.writeText(link.shareUrl);
-        toast.success("New link copied to clipboard");
-      } catch {
-        toast.success("Link reshared with a fresh expiry");
-      }
+      const expiresAt = await updateShareExpiry(token, ttl);
+      toast.success(
+        expiresAt === null
+          ? "Link will stay active until you revoke it"
+          : "Link expiry updated",
+      );
       queryClient.invalidateQueries({ queryKey: [SHARES_QUERY_KEY, polkadotAddress] });
     } catch (err) {
-      toast.error(`Could not reshare: ${errorMessage(err)}`);
+      toast.error(`Could not update expiry: ${errorMessage(err)}`);
     } finally {
-      setResharingToken(null);
+      setBusyToken(null);
     }
   };
 
@@ -201,8 +203,8 @@ export default function MySharesPage() {
                   rows={data}
                   onCopy={onCopy}
                   onRevoke={queueRevoke}
-                  onReshare={onReshare}
-                  resharingToken={resharingToken}
+                  onChangeExpiry={onChangeExpiry}
+                  busyToken={busyToken}
                 />
               )}
             </SectionCard>
@@ -383,11 +385,11 @@ interface ActiveSharesTableProps {
   rows: ShareSummary[];
   onCopy: (url: string | null) => void;
   onRevoke: (token: string) => void;
-  onReshare: (token: string) => void;
-  resharingToken: string | null;
+  onChangeExpiry: (token: string, ttl: ShareTtl) => void;
+  busyToken: string | null;
 }
 
-function ActiveSharesTable({ rows, onCopy, onRevoke, onReshare, resharingToken }: ActiveSharesTableProps) {
+function ActiveSharesTable({ rows, onCopy, onRevoke, onChangeExpiry, busyToken }: ActiveSharesTableProps) {
   const [sorting, setSorting] = React.useState<SortingState>([]);
 
   const columns = React.useMemo(
@@ -424,21 +426,34 @@ function ActiveSharesTable({ rows, onCopy, onRevoke, onReshare, resharingToken }
           </span>
         ),
       }),
-      activeColumnHelper.accessor((row) => Date.parse(row.expiresAt), {
-        id: "endsAt",
-        header: "Expires",
-        enableSorting: true,
-        cell: (info) => {
-          const original = info.row.original.expiresAt;
-          const ms = Date.parse(original);
-          const expired = !Number.isNaN(ms) && ms <= Date.now();
-          return (
-            <span className={cn("font-medium", expired ? "text-error-50" : "text-grey-20 dark:text-grey-dark-200")}>
-              {expired ? "Expired" : formatRelative(original)}
-            </span>
-          );
+      // A never-expiring link sorts after every dated one rather than
+      // collapsing to NaN, which would scatter such rows arbitrarily.
+      activeColumnHelper.accessor(
+        (row) =>
+          row.expiresAt === null ? Number.POSITIVE_INFINITY : Date.parse(row.expiresAt),
+        {
+          id: "endsAt",
+          header: "Expires",
+          enableSorting: true,
+          cell: (info) => {
+            const original = info.row.original.expiresAt;
+            if (original === null) {
+              return (
+                <span className="font-medium text-grey-20 dark:text-grey-dark-200">
+                  Never
+                </span>
+              );
+            }
+            const ms = Date.parse(original);
+            const expired = !Number.isNaN(ms) && ms <= Date.now();
+            return (
+              <span className={cn("font-medium", expired ? "text-error-50" : "text-grey-20 dark:text-grey-dark-200")}>
+                {expired ? "Expired" : formatRelative(original)}
+              </span>
+            );
+          },
         },
-      }),
+      ),
       activeColumnHelper.display({
         id: "actions",
         header: "",
@@ -448,13 +463,13 @@ function ActiveSharesTable({ rows, onCopy, onRevoke, onReshare, resharingToken }
             row={row.original}
             onCopy={onCopy}
             onRevoke={onRevoke}
-            onReshare={onReshare}
-            isResharing={row.original.shareToken === resharingToken}
+            onChangeExpiry={onChangeExpiry}
+            isBusy={row.original.shareToken === busyToken}
           />
         ),
       }),
     ],
-    [onCopy, onRevoke, onReshare, resharingToken],
+    [onCopy, onRevoke, onChangeExpiry, busyToken],
   );
 
   const table = useReactTable({
@@ -510,8 +525,9 @@ function ActiveSharesTable({ rows, onCopy, onRevoke, onReshare, resharingToken }
 }
 
 function ActiveNameCell({ row }: { row: ShareSummary }) {
-  const expiresMs = Date.parse(row.expiresAt);
-  const expired = !Number.isNaN(expiresMs) && expiresMs <= Date.now();
+  const expiresMs = row.expiresAt === null ? null : Date.parse(row.expiresAt);
+  const expired =
+    expiresMs !== null && !Number.isNaN(expiresMs) && expiresMs <= Date.now();
 
   return (
     <div className="flex items-center gap-2 min-w-0 max-w-[260px]">
@@ -531,20 +547,33 @@ function ActiveNameCell({ row }: { row: ShareSummary }) {
   );
 }
 
+/**
+ * Expiry presets offered in a live link's row menu, matching the create-time
+ * chooser. Rendered as separate menu items rather than a nested submenu — the
+ * `RowActionMenu` is a flat list, and four extra entries read better than a
+ * bespoke nested control for a rarely-used action.
+ */
+const EXPIRY_ACTIONS: ReadonlyArray<{ label: string; ttl: ShareTtl }> = [
+  { label: "Expire in 24 hours", ttl: "24h" },
+  { label: "Expire in 7 days", ttl: "7d" },
+  { label: "Expire in 30 days", ttl: "30d" },
+  { label: "Never expire", ttl: "never" },
+];
+
 function ActiveActionsCell({
   row,
   onCopy,
   onRevoke,
-  onReshare,
-  isResharing,
+  onChangeExpiry,
+  isBusy,
 }: {
   row: ShareSummary;
   onCopy: (url: string | null) => void;
   onRevoke: (token: string) => void;
-  onReshare: (token: string) => void;
-  isResharing: boolean;
+  onChangeExpiry: (token: string, ttl: ShareTtl) => void;
+  isBusy: boolean;
 }) {
-  if (isResharing) {
+  if (isBusy) {
     return (
       <div className="flex justify-center items-center h-8">
         <Loader2 className="size-4 animate-spin text-grey-40 dark:text-grey-dark-600" />
@@ -552,24 +581,27 @@ function ActiveActionsCell({
     );
   }
 
-  const canReshare = Boolean(row.folderLabel && row.relativePath);
   const items: ActionItem[] = [
     {
       icon: <CopyIcon className="size-4" />,
       itemTitle: "Copy link",
       onItemClick: () => onCopy(row.shareUrl),
       disabled: !row.shareUrl,
-      tooltip: row.shareUrl ? undefined : "The link can only be copied from the device that created it.",
+      tooltip: row.shareUrl
+        ? row.isPrivate
+          ? "This link needs the password you set when you created it."
+          : undefined
+        : "The link can only be copied from the device that created it.",
     },
-    {
+    // Expiry is the only mutable property of a live link. There is
+    // deliberately no "change password" action: the server holds no key
+    // material and this device does not keep a private share's raw key, so a
+    // different password means revoking and re-sharing.
+    ...EXPIRY_ACTIONS.map(({ label, ttl }) => ({
       icon: <RefreshCcw className="size-4" />,
-      itemTitle: "Reshare",
-      onItemClick: () => onReshare(row.shareToken),
-      disabled: !canReshare,
-      tooltip: canReshare
-        ? "Revoke this link and mint a new one with a fresh expiry"
-        : "Reshare requires the device that created this link.",
-    },
+      itemTitle: label,
+      onItemClick: () => onChangeExpiry(row.shareToken, ttl),
+    })),
     {
       icon: <Trash2 className="size-4" />,
       itemTitle: "Revoke",

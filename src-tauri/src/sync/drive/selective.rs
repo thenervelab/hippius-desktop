@@ -38,7 +38,27 @@ fn validate_pattern(pattern: &str) -> Result<String> {
             "Pattern cannot contain '..' path components (path traversal)".into(),
         ));
     }
+    if matches_everything(&trimmed) {
+        return Err(AppError::Validation(
+            "Pattern would exclude the entire folder — nothing would sync. Use a more specific pattern.".into(),
+        ));
+    }
     Ok(trimmed)
+}
+
+/// Whether a pattern matches every path in the drive.
+///
+/// Such a pattern silently stops the whole drive from syncing: files simply
+/// never upload again, with no error raised and nothing in the UI to explain
+/// it. That was unreachable while exclusions were only set by the folder
+/// browser, but the per-drive editor lets a user type `*`, so refuse it here —
+/// in Rust, next to the rest of the pattern rules, rather than in the dialog.
+///
+/// Deliberately conservative: only patterns made ENTIRELY of `*` and `/`
+/// separators qualify. Anything carrying a literal character (`a*b`,
+/// `build/*.log`) constrains the match and is the user's call.
+fn matches_everything(pattern: &str) -> bool {
+    !pattern.is_empty() && pattern.chars().all(|c| matches!(c, '*' | '/' | '\\'))
 }
 
 /// List all active exclusion patterns for a drive.
@@ -212,7 +232,7 @@ pub async fn apply_sync_selection(
 
 #[cfg(test)]
 mod tests {
-    use super::validate_pattern;
+    use super::{matches_everything, validate_pattern};
     use proptest::prelude::*;
 
     #[test]
@@ -259,6 +279,27 @@ mod tests {
         assert_eq!(validate_pattern("foo..bar").unwrap(), "foo..bar");
     }
 
+    /// A pattern that matches everything silently stops the whole drive from
+    /// syncing — the user's files simply never upload again, with no error and
+    /// nothing in the UI to explain it. Now that exclusions are user-editable
+    /// this is reachable by typing one character, so refuse it outright.
+    #[test]
+    fn catch_all_patterns_are_rejected() {
+        for pattern in ["*", "**", "/", "**/*", "*/", "  **  ", "**/**"] {
+            assert!(
+                validate_pattern(pattern).is_err(),
+                "{pattern:?} matches the entire drive and must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn ordinary_patterns_are_still_accepted() {
+        for pattern in ["node_modules/", "*.tmp", "dist/", "target/", "*.pack.gz", "build/*.log", "a*b"] {
+            assert!(validate_pattern(pattern).is_ok(), "{pattern:?} must remain valid");
+        }
+    }
+
     #[test]
     fn test_validate_trims_whitespace() {
         assert_eq!(validate_pattern("  *.tmp  ").unwrap(), "*.tmp");
@@ -267,14 +308,20 @@ mod tests {
     proptest! {
         /// Full contract, both directions: an accepted pattern equals the
         /// trimmed input and carries neither a newline nor a `..` component, and
-        /// any rejection is justified by emptiness, a newline, or a `..`
-        /// component. `(?s)` makes `.` match newlines so the shrinker can reach
-        /// the multi-line case the default `.*` (newline-excluding) strategy
-        /// never generates. The `invalid` oracle mirrors `validate_pattern`'s
-        /// three rejection conditions exactly.
+        /// any rejection is justified by emptiness, a newline, a `..`
+        /// component, or matching the entire drive. `(?s)` makes `.` match
+        /// newlines so the shrinker can reach the multi-line case the default
+        /// `.*` (newline-excluding) strategy never generates. The `invalid`
+        /// oracle mirrors `validate_pattern`'s rejection conditions exactly —
+        /// extend BOTH together.
         #[test]
         fn validated_pattern_is_single_line_trimmed_without_dotdot(s in "(?s).*") {
-            let invalid = |t: &str| t.is_empty() || t.contains(['\n', '\r']) || t.split(['/', '\\']).any(|p| p == "..");
+            let invalid = |t: &str| {
+                t.is_empty()
+                    || t.contains(['\n', '\r'])
+                    || t.split(['/', '\\']).any(|p| p == "..")
+                    || matches_everything(t)
+            };
             if let Ok(out) = validate_pattern(&s) {
                 prop_assert_eq!(out.as_str(), s.trim());
                 prop_assert!(!invalid(&out));

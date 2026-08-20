@@ -10,7 +10,7 @@ import {
   inputFieldControlClassName,
   inputFieldShellClassName,
 } from "@/components/ui/input";
-import { Ticket as TicketIcon, ImageUp } from "@/components/ui/icons";
+import { Ticket as TicketIcon, DocumentUpload } from "@/components/ui/icons";
 import { SelectOptions, type SelectOption } from "@/components/ui/select/SelectOptions";
 import { cn } from "@/lib/utils";
 import { getFilePartsFromFileName } from "@/app/lib/utils/getFilePartsFromFileName";
@@ -129,7 +129,12 @@ const CreateTicketModal = forwardRef<CreateTicketModalRef, Props>(
 
     const handlePickAttachment = async () => {
       if (isLoading) return;
-      const selected = await selectFilePath(true);
+      // Unfiltered, matching the reply dialog (`TicketMessagesDialog`) and what
+      // the backend accepts (it uploads any bytes as application/octet-stream).
+      // An images-only filter here made a user's own log/diagnostic zip
+      // unselectable — the picker greys it out, so the attempt reads as "I sent
+      // it and it never arrived" rather than as a rejection.
+      const selected = await selectFilePath(false);
       if (selected) setAttachment(selected);
     };
 
@@ -226,7 +231,7 @@ const CreateTicketModal = forwardRef<CreateTicketModalRef, Props>(
 
           <div>
             {/* Tauri-native file picker. Button-as-row matches the Figma
-                attachment pill (gray bg, image icon on the right, trash
+                attachment pill (gray bg, upload icon on the right, trash
                 icon swap when a file is attached). */}
             <button
               type="button"
@@ -241,7 +246,7 @@ const CreateTicketModal = forwardRef<CreateTicketModalRef, Props>(
                 <span className="block truncate text-[14px] font-medium leading-[16.8px] text-grey-10 dark:text-white">
                   {attachment
                     ? truncateFilename(attachment.name)
-                    : "Attach an Image"}
+                    : "Attach a File"}
                 </span>
               </div>
 
@@ -263,7 +268,7 @@ const CreateTicketModal = forwardRef<CreateTicketModalRef, Props>(
                   <Trash2 className="size-6" strokeWidth={1.75} />
                 </span>
               ) : (
-                <ImageUp className="ml-4 size-6 shrink-0 text-grey-10/60 dark:text-white/60" />
+                <DocumentUpload className="ml-4 size-6 shrink-0 text-grey-10/60 dark:text-white/60" />
               )}
             </button>
           </div>

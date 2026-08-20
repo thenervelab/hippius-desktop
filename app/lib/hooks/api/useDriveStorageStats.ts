@@ -32,11 +32,12 @@ export function useDriveStorageStats() {
       // The indexer ingests new shards asynchronously and can run hours
       // behind the chain when load spikes (observed 26h on 2026-05-06).
       // We can't fix the lag, but the tile must never be the bottleneck
-      // once the indexer catches up: staleTime 0 so every trigger
-      // refetches, focus refetch for the desktop-resume case, and a
-      // block-cadence poll (LIVE_DATA_REFRESH_MS) so an idle home page
-      // shows new totals within one block of the indexer catching up.
-      staleTime: 0,
+      // once the indexer catches up: staleTime matches the poll so a
+      // remount inside the interval does not refetch, focus refetch
+      // for the desktop-resume case, and a block-cadence poll so an
+      // idle home page shows new totals within one interval of the
+      // indexer catching up.
+      staleTime: LIVE_DATA_REFRESH_MS,
       refetchOnWindowFocus: true,
       refetchInterval: LIVE_DATA_REFRESH_MS,
     },

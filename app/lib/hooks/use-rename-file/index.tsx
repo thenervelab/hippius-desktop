@@ -1,11 +1,10 @@
-import { GET_USER_IPFS_FILES_QUERY_KEY } from "@/app/lib/hooks/use-user-files";
 import { useMutation } from "@tanstack/react-query";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { queryClientAtom } from "jotai-tanstack-query";
 import { useAtomValue } from "jotai";
 import { invoke } from "@tauri-apps/api/core";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
-import { dispatchFilesMutated } from "@/app/lib/utils/fileMutationEvents";
+import { notifyFilesMutated } from "@/app/lib/utils/fileMutationEvents";
 import { toast } from "sonner";
 
 export interface RenameFileArgs {
@@ -49,19 +48,9 @@ export const useRenameFile = () => {
             const oldName = file.actualFileName || file.name;
             toast.success(`Renamed "${oldName.split("/").pop()}" to "${newName}"`);
 
-            // Nested-folder listings (DriveContainer subfolder view,
-            // ExpandedFolderRows) are not TanStack-cached — this event is
-            // their refresh signal.
-            dispatchFilesMutated();
-
-            await Promise.all([
-                queryClient.refetchQueries({
-                    queryKey: [GET_USER_IPFS_FILES_QUERY_KEY, polkadotAddress],
-                }),
-                queryClient.refetchQueries({
-                    queryKey: ["recent-files"],
-                }),
-            ]);
+            // Wakes the TanStack lists AND the non-cached nested-folder
+            // listings (DriveContainer subfolder view, ExpandedFolderRows).
+            await notifyFilesMutated(queryClient, polkadotAddress);
         },
         onError: (error: Error, { file }) => {
             const name = (file.actualFileName || file.name).split("/").pop();

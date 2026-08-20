@@ -1,7 +1,7 @@
 import { useInvokeQuery } from "./useInvokeQuery";
 
 /**
- * Raw shape returned by Rust `get_credits`. `planck` is the 18-decimal
+ * Raw shape returned by Rust `get_user_credits`. `planck` is the 18-decimal
  * integer string (source of truth for math); `hip` is the pre-formatted
  * display string from `planck_to_hip`.
  */

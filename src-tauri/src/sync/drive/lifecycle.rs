@@ -175,7 +175,14 @@ pub async fn add_local_sync_folder(
     // two concurrent adds of same-basename folders can't both compute the same
     // label and have the second silently overwrite the first drive's path (F-1).
     // Returns the label actually written (e.g. `tags-2` on a basename clash).
-    let label = crate::sync::paths::set_sync_path_internal(pool, &account_id, &path, false, crate::sync::paths::LabelMode::Allocate { base: &folder_name }).await?;
+    let label = crate::sync::paths::set_sync_path_internal(
+        pool,
+        &account_id,
+        &path,
+        false,
+        crate::sync::paths::LabelMode::Allocate { base: &folder_name },
+    )
+    .await?;
 
     // Capture the Arcs we need on BOTH sides of the init `.await` before it
     // consumes `app`/`account_id`/`state` (Arc clones are cheap pointer bumps).
@@ -417,6 +424,9 @@ async fn remove_drive_inmemory(sync: &SyncRunner, label: &str, path_hint: Option
     // upload dates in the UI until the first reconcile refreshes).
     if let Ok(mut cache) = sync.synced_paths_cache.lock() {
         cache.remove(label);
+    }
+    if let Some(path) = &removed_path {
+        crate::sync::files::invalidate_dir_stats_under(path);
     }
     // Drop the producer-side first-reconcile gate so the next
     // `register_drive` for this label installs a fresh gate. Any
@@ -1076,7 +1086,10 @@ fn spawn_folder_registration(server_url: &str, bearer_token: &str, label: &str, 
 /// locked block — a pause that fully completes between their critical
 /// section and this function's entry then still supersedes the init.
 /// All other callers pass `None` and the snapshot is taken here.
-#[expect(clippy::too_many_lines, reason = "sequential drive-init steps read better inline than split across helpers")]
+#[expect(
+    clippy::too_many_lines,
+    reason = "sequential drive-init steps read better inline than split across helpers"
+)]
 pub(crate) async fn initialize_sync_inner(
     app: tauri::AppHandle,
     account_id: String,
@@ -1643,6 +1656,12 @@ pub(crate) async fn remove_drive_for_account(app: AppHandle, label: String, expl
             if let Err(e) = repo.clear_drive(acct, &label).await {
                 warn!("Failed to clear intent rows for drive '{}': {e}", label);
             }
+
+            // `folder_entries_local` is keyed by account-key hash, not SS58.
+            let owner = crate::auth::account_key::account_key(acct);
+            if let Err(e) = crate::sync::folder_entries_backfill::clear_folder_entries_for_drive(pool, &owner, &label).await {
+                warn!("Failed to clear folder_entries_local for drive '{}': {e}", label);
+            }
         }
 
         // Tell the FE to drop this drive's entry from its per-drive
@@ -2170,11 +2189,7 @@ async fn auto_init_sync_inner(
         let label = sp.label.clone();
         let sync_path = sp.path.clone();
         tauri::async_runtime::spawn(async move {
-            let (files, bytes) = crate::sync::files::compute_startup_pending_summary(
-                &folder_dir,
-                std::path::Path::new(&sync_path),
-            )
-            .await;
+            let (files, bytes) = crate::sync::files::compute_startup_pending_summary(&folder_dir, std::path::Path::new(&sync_path)).await;
             if files > 0 {
                 preparing.mark_preparing_with_summary(&label, files, bytes);
                 sync.emit_snapshot(true);

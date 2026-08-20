@@ -380,10 +380,7 @@ fn initialize_sync_inner_spawns_loop_hot_add_when_running() {
         "initialize_sync_inner must SPAWN start_sync_loop when a loop is already running — \
          awaiting hot_add_drives blocks on a peer drive's manager lock (the freeze bug)",
     );
-    assert!(
-        gate_idx < spawn_idx,
-        "the spawn must live inside the `loop_already_running` branch",
-    );
+    assert!(gate_idx < spawn_idx, "the spawn must live inside the `loop_already_running` branch");
 }
 
 /// Static pin on the commit step itself: `apply_init_commit` is where the

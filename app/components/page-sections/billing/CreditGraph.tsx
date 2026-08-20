@@ -29,11 +29,11 @@ interface CreditGraphProps {
 
 const CreditGraph: FC<CreditGraphProps> = ({ className }) => {
   const [timeRange, setTimeRange] = useState<CreditsChartRange>("last7days");
-  // Drive-scoped usage, identical source to the home page's Available Credits
-  // chart (`/user-credits-by-storage-history?storage_type=drive`). Previously
-  // this page used the wallet-wide marketplace feed, which showed a LARGER
-  // per-day value than home and confused users — both desktop charts now show
-  // the same "credits used by Drive storage" figure. Wallet-wide / all-product
+  // Drive-scoped cumulative usage (`/user-credits-by-storage-history?
+  // storage_type=drive`) — "how much have I spent on Drive". This is the right
+  // series for a card titled "Drive Credit Usage", and is deliberately NOT what
+  // the home page shows: that card is headlined with the live balance, so it
+  // plots the remaining balance over time instead. Wallet-wide / all-product
   // usage lives on the web console; see the title's info tooltip.
   const {
     data: chartData,
@@ -90,7 +90,7 @@ const CreditGraph: FC<CreditGraphProps> = ({ className }) => {
             showInfo
             iconSize={3.5}
             iconColor="text-primary-40 dark:text-primary-brand-dark"
-            tooltipContent="This chart shows credits consumed by Drive storage only, the same figure as the home page. Your total credit usage across all Hippius products is shown on the web console."
+            tooltipContent="This chart shows credits consumed by Drive storage only. The home page shows your remaining credit balance instead. Your total credit usage across all Hippius products is shown on the web console."
           />
         </div>
         <div className="flex items-center gap-2.5">

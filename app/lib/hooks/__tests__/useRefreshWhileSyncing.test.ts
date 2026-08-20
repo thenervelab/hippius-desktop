@@ -2,12 +2,16 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook } from "@testing-library/react";
 import { useRefreshWhileSyncing } from "../useRefreshWhileSyncing";
 
-// The hook reads `effectiveInProgress` off the live sync snapshot; drive it
-// through a module mock so the tests don't need the jotai atom / Tauri events.
+// The hook reads `effectiveInProgressAtom`; drive the value through jotai
+// so tests don't need the snapshot listener / Tauri events.
 let mockActive = false;
-vi.mock("../useSyncSnapshot", () => ({
-  useSyncSnapshot: () => ({ effectiveInProgress: mockActive }),
-}));
+vi.mock("jotai", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("jotai")>();
+  return {
+    ...actual,
+    useAtomValue: () => mockActive,
+  };
+});
 
 describe("useRefreshWhileSyncing", () => {
   beforeEach(() => {

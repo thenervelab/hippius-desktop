@@ -298,8 +298,15 @@ async fn add_folder_with_app_inner(sync_path: &str, folder_path: &str, subfolder
 /// are not followed, per-subdir I/O errors are skipped, the stack is capped at
 /// [`FOLDER_BYTE_WALK_MAX_DEPTH`], and both accumulators use `saturating_add`.
 async fn walk_regular_files_stats(root: &std::path::Path) -> (u64, u64) {
-    use tokio::fs;
+    let root = root.to_path_buf();
+    tokio::task::spawn_blocking(move || walk_regular_files_stats_std(&root))
+        .await
+        .unwrap_or((0, 0))
+}
 
+/// One `DirEntry::metadata` per entry (lstat-shaped, does not follow
+/// symlinks) so we do not pay `file_type` + `metadata` on every file.
+fn walk_regular_files_stats_std(root: &std::path::Path) -> (u64, u64) {
     let mut bytes: u64 = 0;
     let mut count: u64 = 0;
     let mut stack: Vec<std::path::PathBuf> = vec![root.to_path_buf()];
@@ -307,16 +314,14 @@ async fn walk_regular_files_stats(root: &std::path::Path) -> (u64, u64) {
         if stack.len() > FOLDER_BYTE_WALK_MAX_DEPTH {
             break;
         }
-        let Ok(mut entries) = fs::read_dir(&dir).await else { continue };
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            let Ok(ft) = entry.file_type().await else { continue };
-            if ft.is_dir() {
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        for entry in entries.flatten() {
+            let Ok(meta) = entry.metadata() else { continue };
+            if meta.is_dir() {
                 stack.push(entry.path());
-            } else if ft.is_file() {
+            } else if meta.is_file() {
                 count = count.saturating_add(1);
-                if let Ok(meta) = entry.metadata().await {
-                    bytes = bytes.saturating_add(meta.len());
-                }
+                bytes = bytes.saturating_add(meta.len());
             }
         }
     }
@@ -350,34 +355,7 @@ async fn walk_regular_files_stats(root: &std::path::Path) -> (u64, u64) {
 ///   `saturating_add` so a malicious sparse file or `u64::MAX` length
 ///   can't panic.
 pub(in crate::sync) async fn sum_regular_file_bytes(root: &std::path::Path) -> u64 {
-    use tokio::fs;
-
-    let mut bytes: u64 = 0;
-    let mut stack: Vec<std::path::PathBuf> = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        // Defense in depth: a symlink cycle could push entries forever
-        // even though we don't follow symlinks at the entry level — a
-        // legitimate `mount --bind` cycle, hardlinked directories on
-        // non-POSIX filesystems, or an attacker pre-seeding the
-        // directory tree could push the stack arbitrarily. The cap
-        // matches the recursion depth used elsewhere in this module
-        // (`copy_dir_recursive`).
-        if stack.len() > FOLDER_BYTE_WALK_MAX_DEPTH {
-            break;
-        }
-        let Ok(mut entries) = fs::read_dir(&dir).await else { continue };
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            let Ok(ft) = entry.file_type().await else { continue };
-            if ft.is_dir() {
-                stack.push(entry.path());
-            } else if ft.is_file()
-                && let Ok(meta) = entry.metadata().await
-            {
-                bytes = bytes.saturating_add(meta.len());
-            }
-        }
-    }
-    bytes
+    walk_regular_files_stats(root).await.0
 }
 
 /// Stack-depth cap for [`sum_regular_file_bytes`]. Sized to match the
@@ -404,22 +382,22 @@ const FOLDER_BYTE_WALK_MAX_DEPTH: usize = 4096;
 /// engine's first cycle reaches the FE. The rel-path key is built by joining
 /// `Component::Normal` segments with '/' to match hcfs-client's
 /// `relative_path.to_string_lossy()` index keys cross-platform.
-pub(in crate::sync) async fn compute_startup_pending_summary(
-    folder_dir: &std::path::Path,
-    sync_root: &std::path::Path,
-) -> (u64, u64) {
-    use tokio::fs;
+pub(in crate::sync) async fn compute_startup_pending_summary(folder_dir: &std::path::Path, sync_root: &std::path::Path) -> (u64, u64) {
+    let folder_dir = folder_dir.to_path_buf();
+    let sync_root = sync_root.to_path_buf();
+    tokio::task::spawn_blocking(move || compute_startup_pending_summary_std(&folder_dir, &sync_root))
+        .await
+        .unwrap_or((0, 0))
+}
 
+fn compute_startup_pending_summary_std(folder_dir: &std::path::Path, sync_root: &std::path::Path) -> (u64, u64) {
     // 1. Load the synced baseline (sync_state.json, .bak fallback) → key set.
     let synced: std::collections::HashSet<String> = {
-        let raw = match fs::read_to_string(folder_dir.join("sync_state.json")).await {
-            Ok(s) => Some(s),
-            Err(_) => fs::read_to_string(folder_dir.join("sync_state.json.bak")).await.ok(),
-        };
+        let raw = std::fs::read_to_string(folder_dir.join("sync_state.json"))
+            .ok()
+            .or_else(|| std::fs::read_to_string(folder_dir.join("sync_state.json.bak")).ok());
         match raw.and_then(|s| serde_json::from_str::<hcfs_client::sync::SyncState>(&s).ok()) {
-            Some(state) => hcfs_client::engine::types::build_synced_paths_from_state(&state)
-                .into_keys()
-                .collect(),
+            Some(state) => hcfs_client::engine::types::build_synced_paths_from_state(&state).into_keys().collect(),
             None => std::collections::HashSet::new(),
         }
     };
@@ -432,8 +410,8 @@ pub(in crate::sync) async fn compute_startup_pending_summary(
         if stack.len() > FOLDER_BYTE_WALK_MAX_DEPTH {
             break;
         }
-        let Ok(mut entries) = fs::read_dir(&dir).await else { continue };
-        while let Ok(Some(entry)) = entries.next_entry().await {
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        for entry in entries.flatten() {
             // Mirror hcfs-client's `drive::exclude::should_skip_path` — the rule
             // its real `Drive::collect_files` scan applies: skip the `.hippius`
             // config dir and every hidden entry (name starting with '.'). Those
@@ -449,11 +427,11 @@ pub(in crate::sync) async fn compute_startup_pending_summary(
             if entry.file_name().to_str().is_some_and(|name| name.starts_with('.')) {
                 continue;
             }
-            let Ok(ft) = entry.file_type().await else { continue };
+            let Ok(meta) = entry.metadata() else { continue };
             let path = entry.path();
-            if ft.is_dir() {
+            if meta.is_dir() {
                 stack.push(path);
-            } else if ft.is_file() {
+            } else if meta.is_file() {
                 let Ok(rel_path) = path.strip_prefix(sync_root) else { continue };
                 let rel: String = rel_path
                     .components()
@@ -466,10 +444,8 @@ pub(in crate::sync) async fn compute_startup_pending_summary(
                 if rel.is_empty() || synced.contains(&rel) {
                     continue;
                 }
-                if let Ok(meta) = entry.metadata().await {
-                    files = files.saturating_add(1);
-                    bytes = bytes.saturating_add(meta.len());
-                }
+                files = files.saturating_add(1);
+                bytes = bytes.saturating_add(meta.len());
             }
         }
     }
@@ -485,18 +461,27 @@ pub(in crate::sync) async fn compute_startup_pending_summary(
 /// a missing/unreadable entry doesn't reject the rest of the batch — the copy
 /// loop surfaces the real I/O error.
 async fn sum_and_count_batch(paths: &[String]) -> (u64, u64) {
+    let paths = paths.to_vec();
+    tokio::task::spawn_blocking(move || sum_and_count_batch_std(&paths))
+        .await
+        .unwrap_or((0, 0))
+}
+
+fn sum_and_count_batch_std(paths: &[String]) -> (u64, u64) {
     let mut bytes: u64 = 0;
     let mut count: u64 = 0;
     for fp in paths {
         let p = std::path::Path::new(fp);
+        // `is_dir()` follows, matching the previous top-level classification
+        // so a symlink-to-folder in the batch is still walked.
         if p.is_dir() {
-            let (b, c) = walk_regular_files_stats(p).await;
+            let (b, c) = walk_regular_files_stats_std(p);
             bytes = bytes.saturating_add(b);
             // Floor a directory's count at 1 so an unwalkable subdir still
             // raises the banner (mirrors the prior `count_regular_files().max(1)`).
             count = count.saturating_add(c.max(1));
         } else {
-            bytes = bytes.saturating_add(tokio::fs::metadata(p).await.map_or(0, |m| m.len()));
+            bytes = bytes.saturating_add(std::fs::metadata(p).map_or(0, |m| m.len()));
             count = count.saturating_add(1);
         }
     }
@@ -762,6 +747,19 @@ mod tests {
         assert_eq!(bytes, 10, "byte total summed across the nested dir (5+2+3)");
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn walk_regular_files_stats_skips_symlinks() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        tokio::fs::write(root.join("real.txt"), b"abc").await.unwrap();
+        std::os::unix::fs::symlink(root.join("real.txt"), root.join("link.txt")).unwrap();
+
+        let (bytes, count) = walk_regular_files_stats(root).await;
+        assert_eq!(count, 1, "symlink must not be counted as a regular file");
+        assert_eq!(bytes, 3);
+    }
+
     /// No baseline on disk → empty synced set → ALL on-disk files are pending.
     /// Also pins the nested-walk byte/count totals and the graceful missing-file
     /// behavior (a never-synced or freshly-added drive reports everything).
@@ -775,8 +773,7 @@ mod tests {
         tokio::fs::create_dir_all(&sub).await.unwrap();
         tokio::fs::write(sub.join("c.bin"), b"xyz").await.unwrap(); // 3
 
-        let (files, bytes) =
-            compute_startup_pending_summary(folder_dir.path(), root).await;
+        let (files, bytes) = compute_startup_pending_summary(folder_dir.path(), root).await;
         assert_eq!(files, 2);
         assert_eq!(bytes, 8);
     }
@@ -785,8 +782,7 @@ mod tests {
     async fn pending_summary_empty_folder_is_zero() {
         let folder_dir = tempfile::TempDir::new().unwrap();
         let sync_root = tempfile::TempDir::new().unwrap();
-        let (files, bytes) =
-            compute_startup_pending_summary(folder_dir.path(), sync_root.path()).await;
+        let (files, bytes) = compute_startup_pending_summary(folder_dir.path(), sync_root.path()).await;
         assert_eq!((files, bytes), (0, 0));
     }
 
@@ -798,13 +794,10 @@ mod tests {
     async fn pending_summary_valid_empty_baseline_still_pending() {
         let folder_dir = tempfile::TempDir::new().unwrap();
         let json = serde_json::to_string(&hcfs_client::sync::SyncState::default()).unwrap();
-        tokio::fs::write(folder_dir.path().join("sync_state.json"), json)
-            .await
-            .unwrap();
+        tokio::fs::write(folder_dir.path().join("sync_state.json"), json).await.unwrap();
         let sync_root = tempfile::TempDir::new().unwrap();
         tokio::fs::write(sync_root.path().join("a.bin"), b"data").await.unwrap(); // 4
-        let (files, bytes) =
-            compute_startup_pending_summary(folder_dir.path(), sync_root.path()).await;
+        let (files, bytes) = compute_startup_pending_summary(folder_dir.path(), sync_root.path()).await;
         assert_eq!((files, bytes), (1, 4));
     }
 
@@ -813,13 +806,10 @@ mod tests {
     #[tokio::test]
     async fn pending_summary_corrupt_baseline_degrades_gracefully() {
         let folder_dir = tempfile::TempDir::new().unwrap();
-        tokio::fs::write(folder_dir.path().join("sync_state.json"), b"{ not json")
-            .await
-            .unwrap();
+        tokio::fs::write(folder_dir.path().join("sync_state.json"), b"{ not json").await.unwrap();
         let sync_root = tempfile::TempDir::new().unwrap();
         tokio::fs::write(sync_root.path().join("a.bin"), b"data").await.unwrap();
-        let (files, _bytes) =
-            compute_startup_pending_summary(folder_dir.path(), sync_root.path()).await;
+        let (files, _bytes) = compute_startup_pending_summary(folder_dir.path(), sync_root.path()).await;
         assert_eq!(files, 1);
     }
 
@@ -870,7 +860,10 @@ mod tests {
             .await
             .expect_err("must reject sync root as source");
         // Pin the taxonomy: a self-add reject is Validation, not the old Other.
-        assert!(matches!(err, crate::error::AppError::Validation(_)), "self-add must be Validation, got {err:?}");
+        assert!(
+            matches!(err, crate::error::AppError::Validation(_)),
+            "self-add must be Validation, got {err:?}"
+        );
         let msg = err.to_string();
         assert!(msg.contains("Cannot add the sync folder"), "unexpected error message: {msg}");
 

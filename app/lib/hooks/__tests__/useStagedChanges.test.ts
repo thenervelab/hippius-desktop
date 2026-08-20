@@ -58,10 +58,12 @@ describe("useStagedChanges", () => {
     });
     expect(result.current.stagedChanges).toEqual(changes);
 
+    let outcome: Awaited<ReturnType<typeof result.current.syncWithResolutions>> | null = null;
     await act(async () => {
-      await result.current.syncWithResolutions({ "a.txt": "keep_local" as never });
+      outcome = await result.current.syncWithResolutions({ "a.txt": "keep_local" as never });
     });
 
+    expect(outcome).toEqual({ ok: true });
     expect(result.current.stagedChanges).toBeNull();
     expect(result.current.isSyncing).toBe(false);
     expect(result.current.error).toBeNull();
@@ -71,7 +73,7 @@ describe("useStagedChanges", () => {
     });
   });
 
-  it("sync surfaces an error and keeps stagedChanges", async () => {
+  it("sync surfaces an error result and keeps stagedChanges", async () => {
     tauri.onInvoke("stage_changes", () => changes);
     tauri.onInvoke("sync_with_conflict_resolutions", () => {
       throw new Error("sync failed");
@@ -81,11 +83,47 @@ describe("useStagedChanges", () => {
     await act(async () => {
       await result.current.fetchStagedChanges();
     });
+    let outcome: Awaited<ReturnType<typeof result.current.syncWithResolutions>> | null = null;
     await act(async () => {
-      await result.current.syncWithResolutions({});
+      outcome = await result.current.syncWithResolutions({});
     });
 
+    // The caller must be able to tell failure from success — a failed resolve
+    // used to look identical to a successful one and closed the dialog silently.
+    expect(outcome).toEqual({ ok: false, message: "sync failed", syncInProgress: false });
     expect(result.current.error).toBe("sync failed");
+    expect(result.current.stagedChanges).toEqual(changes);
+  });
+
+  it("sync classifies NotReady(SyncInProgress) so callers can say 'retry shortly'", async () => {
+    tauri.onInvoke("stage_changes", () => changes);
+    // The exact wire shape Rust serializes for AppError::NotReady(SyncInProgress)
+    // (see src-tauri/src/error.rs::AppError::serialize) — invoke() rejects with
+    // this plain object, NOT an Error instance.
+    tauri.onInvoke("sync_with_conflict_resolutions", () => {
+      throw {
+        kind: "NotReady",
+        subkind: "SYNC_IN_PROGRESS",
+        message: "Sync is in progress, please wait",
+      };
+    });
+    const { result } = renderHook(() => useStagedChanges());
+
+    await act(async () => {
+      await result.current.fetchStagedChanges();
+    });
+    let outcome: Awaited<ReturnType<typeof result.current.syncWithResolutions>> | null = null;
+    await act(async () => {
+      outcome = await result.current.syncWithResolutions({});
+    });
+
+    expect(outcome).toEqual({
+      ok: false,
+      message: "Sync is in progress, please wait",
+      syncInProgress: true,
+    });
+    // The staged changes (and thus the dialog's conflict list) must survive
+    // so the user's chosen resolutions are still there on retry.
     expect(result.current.stagedChanges).toEqual(changes);
   });
 

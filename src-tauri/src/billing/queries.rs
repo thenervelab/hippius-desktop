@@ -30,18 +30,6 @@ struct IndexerResponse<T> {
     data: Vec<T>,
 }
 
-/// Row from the credits endpoint (`/credits/free-credits`).
-#[derive(Deserialize, Default)]
-struct CreditRow {
-    id: Option<String>,
-    block_number: Option<i64>,
-    credits: Option<String>,
-    account_id: Option<String>,
-    processed_timestamp: Option<String>,
-    #[serde(default)]
-    timestamp: i64,
-}
-
 /// Row from the system balance endpoint (`/system-account-balance`).
 #[derive(Deserialize, Default)]
 struct BalanceRow {
@@ -282,8 +270,15 @@ fn parse_indexer_u64(field: &str, raw: &str) -> u64 {
 /// `{ totalBytes: 0, fileCount: 0 }`.
 #[tauri::command]
 pub async fn get_drive_storage_stats(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<DriveStorageStats, AppError> {
+    fetch_drive_storage_stats(state.inner(), &account_id).await
+}
+
+/// Core of [`get_drive_storage_stats`], shared with
+/// [`crate::billing::storage_overview::get_storage_overview`] so the simple
+/// storage card and any legacy stats consumer read the same indexer row.
+pub(crate) async fn fetch_drive_storage_stats(state: &crate::app_state::AppState, account_id: &str) -> Result<DriveStorageStats, AppError> {
     let indexer = IndexerClient::from_env(state.api_client.clone())?;
-    let params = [("account_id", account_id.as_str()), ("storage", "drive"), ("limit", "1")];
+    let params = [("account_id", account_id), ("storage", "drive"), ("limit", "1")];
     let response: IndexerResponse<DriveStorageRow> = indexer.get("/user-extended-storage-metrics", &params).await?;
 
     let Some(row) = response.data.into_iter().next() else {
@@ -328,72 +323,6 @@ fn day_date(ms: i64) -> NaiveDate {
 
 // ── Credits (deduplicated, day-bucketed) ────────────────────────────────
 
-/// UI-ready credit data point, deduplicated to latest per day.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CreditObject {
-    pub id: String,
-    pub block: i64,
-    pub amount: String,
-    pub account_id: String,
-    pub date: String,
-}
-
-/// Fetch credits from the indexer, deduplicate to latest-per-day, and return
-/// UI-ready objects. Replaces the `select` callback in `useCredits.ts`.
-#[tauri::command]
-pub async fn get_credits(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
-    page: Option<i64>,
-    limit: Option<i64>,
-) -> Result<Vec<CreditObject>, AppError> {
-    let indexer = IndexerClient::from_env(state.api_client.clone())?;
-    let page_str = page.unwrap_or(1).to_string();
-    // The chart pipeline downstream deduplicates to latest-per-day, so we
-    // only ever need enough rows to cover the longest range the FE asks
-    // for. A year is 365 days, two years 730; INDEXER_MAX_LIMIT covers any
-    // practical chart range with margin and avoids pulling MBs of JSON
-    // the dedup loop will throw away.
-    //
-    // Server-side cap: per CLAUDE.md "Business logic MUST live in the
-    // Rust backend." Even when the frontend passes an explicit
-    // `Some(100_000)` (today's `useCredits.ts` default), we clamp here
-    // so the over-fetch can't bypass the cap from the IPC boundary.
-    let limit_str = limit.unwrap_or(INDEXER_MAX_LIMIT).min(INDEXER_MAX_LIMIT).to_string();
-    let params = vec![
-        ("account_id", account_id.as_str()),
-        ("page", page_str.as_str()),
-        ("limit", limit_str.as_str()),
-    ];
-
-    let resp: IndexerResponse<CreditRow> = indexer.get("/credits/free-credits", &params).await?;
-
-    // Deduplicate: keep latest entry per day
-    let mut by_day: HashMap<NaiveDate, (i64, &CreditRow)> = HashMap::new();
-    for row in &resp.data {
-        let ts = best_timestamp(row.processed_timestamp.as_deref(), row.timestamp);
-        let key = day_date(ts);
-        let entry = by_day.entry(key).or_insert((ts, row));
-        if ts > entry.0 {
-            *entry = (ts, row);
-        }
-    }
-
-    let mut results: Vec<CreditObject> = by_day
-        .into_iter()
-        .map(|(date, (ts, row))| CreditObject {
-            id: row.id.clone().unwrap_or_default(),
-            block: row.block_number.unwrap_or(0),
-            amount: row.credits.clone().unwrap_or_else(|| "0".into()),
-            account_id: row.account_id.clone().unwrap_or_default(),
-            date: chrono::DateTime::from_timestamp_millis(ts).map_or_else(|| date.format("%Y-%m-%d").to_string(), |d| d.to_rfc3339()),
-        })
-        .collect();
-    results.sort_by_key(|b| std::cmp::Reverse(b.block));
-    Ok(results)
-}
-
 // ── System balance (deduplicated, day-bucketed) ─────────────────────────
 
 /// UI-ready balance data point, deduplicated to latest per day.
@@ -418,7 +347,7 @@ pub async fn get_system_balance(
 ) -> Result<Vec<BalanceObject>, AppError> {
     let indexer = IndexerClient::from_env(state.api_client.clone())?;
     let page_str = page.unwrap_or(1).to_string();
-    // Same reasoning + same server-side cap as `get_credits` above. The
+    // Server-side cap, mirroring the other indexer readers. The
     // FE's `useSystemBalance.ts` default of 20_000 is silently clamped
     // to INDEXER_MAX_LIMIT here.
     let limit_str = limit.unwrap_or(INDEXER_MAX_LIMIT).min(INDEXER_MAX_LIMIT).to_string();
@@ -583,7 +512,10 @@ pub async fn get_billing_transactions(
 
             // Coerce UUID strings or integer IDs to a String.
             let id = t.id.as_ref().map_or_else(String::new, |v| {
-                v.as_str().map_or_else(|| v.as_i64().map_or_else(String::new, |n| n.to_string()), std::string::ToString::to_string)
+                v.as_str().map_or_else(
+                    || v.as_i64().map_or_else(String::new, |n| n.to_string()),
+                    std::string::ToString::to_string,
+                )
             });
             BillingTransactionObject {
                 id,

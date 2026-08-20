@@ -27,6 +27,7 @@ import {
   shareFeatureEnabledAtom,
   shareModalFileAtom,
 } from "@/app/lib/global-atoms/sharesAtoms";
+import { shareTargetFor } from "@/app/lib/utils/folderShareGating";
 import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 
 import FileViewerThumbnailStrip from "./FileViewerThumbnailStrip";
@@ -165,7 +166,9 @@ const FileViewerLayout: React.FC<FileViewerLayoutProps> = ({
   // atom, so setting it after onClose() opens it cleanly.
   const handleShare = useCallback(() => {
     onClose();
-    setShareModalFile(file);
+    // The viewer only ever opens previewable FILES, whose actualFileName is
+    // already the full drive-relative path, so there is no base to resolve.
+    setShareModalFile(shareTargetFor(file, ""));
   }, [onClose, setShareModalFile, file]);
 
   const handleDelete = useCallback(() => {

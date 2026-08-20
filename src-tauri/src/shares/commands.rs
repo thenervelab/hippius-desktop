@@ -21,11 +21,10 @@ use crate::shares::client::build_account_client;
 use crate::shares::history::{self, HistoryEntry};
 use crate::shares::origin;
 use chrono::Utc;
-use hcfs_client::client::share::{ShareProgress, ShareProgressFn, ShareSummary as UpstreamShareSummary};
-// The keystore trait's `get` is only used by the macOS private-share path
-// (`make_private`), so gate the import to avoid an unused-import warning on Linux.
-#[cfg(target_os = "macos")]
-use hcfs_client::client::share::ShareKeystore;
+use hcfs_client::client::share::{
+    ShareOptions, ShareProgress, ShareProgressFn, ShareSecret, ShareSummary as UpstreamShareSummary, ShareTtl, build_share_url_for,
+    generate_share_password, validate_share_password,
+};
 use serde::Serialize;
 use sqlx::sqlite::SqlitePool;
 use std::path::{Component, Path, PathBuf};
@@ -79,7 +78,91 @@ fn resolve_console_base_url(override_value: Option<String>) -> String {
 pub struct ShareLink {
     pub share_token: String,
     pub share_url: String,
-    pub expires_at: String,
+    /// `None` (JSON `null`) when the link stays reachable until revoked.
+    pub expires_at: Option<String>,
+    /// Present only for a password-protected share, and only on the response
+    /// that created it. The password is never persisted, so this is the one
+    /// and only time the app can show it — the Shares page cannot recover it
+    /// later, by design.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
+}
+
+/// What the user chose about a share's visibility, after the untrusted IPC
+/// strings have been validated at the boundary.
+///
+/// Modelled as an enum rather than a `(String, Option<String>)` pair so the
+/// contradictory combinations — private with no password, public with one —
+/// are unrepresentable everywhere downstream of [`ShareChoice::parse`].
+#[derive(Debug, Clone)]
+pub enum ShareChoice {
+    /// Anyone holding the link can open it.
+    Public,
+    /// The link carries a password-wrapped key and is useless without the
+    /// password.
+    Private { password: String },
+}
+
+impl ShareChoice {
+    /// Validate the `(visibility, password)` pair coming off the IPC
+    /// boundary.
+    ///
+    /// A `None` password on the private branch means "generate one for me",
+    /// which is what the modal sends when the user does not type their own.
+    /// A caller-supplied password is checked here, in Rust — the frontend
+    /// never decides whether a password is acceptable.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::Validation`] for an unknown visibility token or a
+    /// password below hcfs-client's minimum length.
+    pub fn parse(visibility: &str, password: Option<String>) -> Result<Self> {
+        match visibility {
+            "public" => Ok(Self::Public),
+            "private" => {
+                let password = match password {
+                    Some(supplied) => {
+                        validate_share_password(&supplied).map_err(|e| AppError::Validation(e.to_string()))?;
+                        supplied
+                    }
+                    None => generate_share_password(),
+                };
+                Ok(Self::Private { password })
+            }
+            other => Err(AppError::Validation(format!("Unknown share visibility: {other}"))),
+        }
+    }
+
+    /// The password to wrap the share key under, if any.
+    fn password(&self) -> Option<&str> {
+        match self {
+            Self::Public => None,
+            Self::Private { password } => Some(password),
+        }
+    }
+
+    /// The password to surface to the user, cloned onto the response. Only
+    /// a private share has one.
+    fn into_password(self) -> Option<String> {
+        match self {
+            Self::Public => None,
+            Self::Private { password } => Some(password),
+        }
+    }
+}
+
+/// Parse an untrusted `ttl` string from the IPC boundary into a
+/// [`ShareTtl`].
+///
+/// Goes through serde so the accepted vocabulary is literally the one
+/// hcfs-server validates against, rather than a hand-written match that
+/// could drift from it.
+///
+/// # Errors
+///
+/// [`AppError::Validation`] for anything outside the preset set.
+pub(crate) fn parse_ttl(ttl: &str) -> Result<ShareTtl> {
+    serde_json::from_value(serde_json::Value::String(ttl.to_owned())).map_err(|_| AppError::Validation(format!("Unknown share expiry: {ttl}")))
 }
 
 /// One row of the owner's "My Shares" page. Mirrors
@@ -106,8 +189,15 @@ pub struct ShareSummary {
     pub ciphertext_size: u64,
     pub mime_type: String,
     pub created_at: String,
-    pub expires_at: String,
+    /// `None` (JSON `null`) when the link stays reachable until revoked.
+    pub expires_at: Option<String>,
     pub share_url: Option<String>,
+    /// Whether this link is password-protected. Drives the lock badge and
+    /// tells the UI that Copy hands out a link the recipient still needs a
+    /// password for. `false` when this device has no key material for the
+    /// row (a share minted elsewhere), which is also when `share_url` is
+    /// `None` — the UI shows neither a lock nor a Copy button then.
+    pub is_private: bool,
     /// `(folder_label, relative_path)` of the source file, if this
     /// device knows it. `None` for legacy shares created before the
     /// `share_origin` sidecar table existed, or for shares minted on
@@ -202,8 +292,7 @@ async fn require_shares_supported(state: &AppState, account_id: &str) -> Result<
 
 // ─── Commands ──────────────────────────────────────────────────────────────
 
-/// Inner share-creation pipeline shared by [`hcfs_create_share`] and
-/// [`hcfs_reshare`].
+/// Inner share-creation pipeline for a file inside a synced folder.
 ///
 /// Caller responsibilities (everything outside the pipeline):
 /// - extract `account_id`,
@@ -212,19 +301,18 @@ async fn require_shares_supported(state: &AppState, account_id: &str) -> Result<
 ///
 /// We do everything else: resolve the plaintext path, run the
 /// streaming share via hcfs-client, persist the origin sidecar, and
-/// return the wire `ShareLink`. Reshare reuses this verbatim so a
-/// reshared link is indistinguishable from a freshly-minted one
-/// (same TTL, same keystore lifecycle, same sidecar invariants).
+/// return the wire `ShareLink`.
 ///
 /// `progress`, when `Some`, is hcfs-client's per-phase
-/// encrypting→uploading→finalizing callback. `hcfs_create_share`
-/// supplies a channel-forwarding closure so the share modal can render
-/// a live bar; `hcfs_reshare` passes `None` (its modal has no bar).
+/// encrypting→uploading→finalizing callback, so the share modal can render
+/// a live bar.
 async fn create_share_inner(
     state: &AppState,
     account_id: &str,
     folder_label: &str,
     relative_path: &str,
+    ttl: ShareTtl,
+    choice: ShareChoice,
     progress: Option<ShareProgressFn>,
 ) -> Result<ShareLink> {
     let pool = state.pool()?;
@@ -271,7 +359,19 @@ async fn create_share_inner(
     let keystore = SqliteShareKeystore::new(pool.clone());
     let console_base = console_base_url();
     let result = client
-        .create_share(&mut reader, plaintext_size, &filename, &mime_type, &keystore, &console_base, progress)
+        .create_share(
+            &mut reader,
+            plaintext_size,
+            &ShareOptions {
+                filename: &filename,
+                mime_type: &mime_type,
+                ttl,
+                password: choice.password(),
+                console_base_url: &console_base,
+            },
+            &keystore,
+            progress,
+        )
         .await
         .map_err(|e| {
             warn!(error = %e, "create_share failed");
@@ -297,7 +397,8 @@ async fn create_share_inner(
     Ok(ShareLink {
         share_token: result.share_token,
         share_url: result.share_url,
-        expires_at: result.expires_at.to_rfc3339(),
+        expires_at: result.expires_at.map(|e| e.to_rfc3339()),
+        password: choice.into_password(),
     })
 }
 
@@ -323,13 +424,19 @@ pub(crate) fn share_progress_forwarder(channel: Channel<ShareProgress>) -> Share
     })
 }
 
-/// Mint a public share link for a file already inside a synced folder.
+/// Mint a share link for a file already inside a synced folder.
 ///
 /// Resolves the on-disk plaintext path from `(folder_label, relative_path)`,
 /// streams it through `hcfs_client::HcfsClient::create_share` (single-shot
-/// for ≤ 8 MiB, chunked above), persists the per-share key in our
+/// for ≤ 8 MiB, chunked above), persists the per-share secret in our
 /// `share_keystore`, and returns a `ShareLink` whose `share_url` already
-/// contains the `#k=<key>` URL fragment.
+/// contains the key fragment — `#k=` for a public share, `#p=` for a
+/// password-protected one.
+///
+/// `ttl` is one of `24h` / `7d` / `30d` / `never`; `visibility` is `public`
+/// or `private`. On the private branch, `password` may be omitted to have one
+/// generated — the generated value comes back on the response, and that is
+/// the only time it is ever available, since it is never persisted.
 ///
 /// `on_progress` is a webview channel the FE opens with `new Channel()`;
 /// progress updates flow through it while the share runs so the modal
@@ -339,9 +446,17 @@ pub async fn hcfs_create_share(
     state: tauri::State<'_, AppState>,
     folder_label: String,
     relative_path: String,
+    ttl: String,
+    visibility: String,
+    password: Option<String>,
     on_progress: Channel<ShareProgress>,
 ) -> Result<ShareLink> {
     let account_id = state.current_account_id()?;
+
+    // Validate the untrusted arguments before any network or disk work, so a
+    // bad preset or a too-short password costs nothing.
+    let ttl = parse_ttl(&ttl)?;
+    let choice = ShareChoice::parse(&visibility, password)?;
 
     // Capability + eligibility gates. The capability call is a single
     // anonymous HTTP request; we accept the round-trip so that an old
@@ -358,28 +473,29 @@ pub async fn hcfs_create_share(
     require_eligible(&state, &account_id, InsufficientCreditsAction::Sharing, 0).await?;
 
     let progress = share_progress_forwarder(on_progress);
-    create_share_inner(&state, &account_id, &folder_label, &relative_path, Some(progress)).await
+    create_share_inner(&state, &account_id, &folder_label, &relative_path, ttl, choice, Some(progress)).await
 }
 
-/// Mint a public share for a synced file with the same capability + eligibility
+/// Mint a share for a synced file with the same capability + eligibility
 /// guards as [`hcfs_create_share`]. Entry point for the macOS Finder bridge
 /// dispatcher. `progress` streams the encrypt/upload bar to the confirm modal
-/// (`Some`) — the Finder confirm flow now opens a webview `Channel`, unlike the
-/// old fire-and-forget right-click.
+/// (`Some`) — the Finder confirm flow opens a webview `Channel`.
 ///
 /// macOS-only: the Finder dispatcher is its sole caller, so leaving it un-gated
 /// would be dead code on the Linux CI job.
-#[cfg(target_os = "macos")]
+#[cfg(any(unix, windows))]
 pub(crate) async fn share_synced_file(
     state: &AppState,
     account_id: &str,
     folder_label: &str,
     relative_path: &str,
+    ttl: ShareTtl,
+    choice: ShareChoice,
     progress: Option<ShareProgressFn>,
 ) -> Result<ShareLink> {
     require_shares_supported(state, account_id).await?;
     require_eligible(state, account_id, InsufficientCreditsAction::Sharing, 0).await?;
-    create_share_inner(state, account_id, folder_label, relative_path, progress).await
+    create_share_inner(state, account_id, folder_label, relative_path, ttl, choice, progress).await
 }
 
 /// Stream an already-resolved local plaintext file through the share engine.
@@ -389,15 +505,38 @@ pub(crate) async fn share_synced_file(
 /// recorded (there is no `(folder_label, relative_path)` to reshare from). The
 /// caller has already run the capability + eligibility gates. `progress` streams
 /// the encrypt/upload bar to the confirm modal when `Some`.
-#[cfg(target_os = "macos")]
+///
+/// The `(path, name, type, ttl, choice)` tuple travels together through both
+/// callers, so it is bundled rather than spread across the signature — the
+/// zip path in particular derives its `filename` from the directory name, not
+/// from `local_path` (which points at a temp archive), so the two must be
+/// passed as one coherent description of what is being shared.
+#[cfg(any(unix, windows))]
+struct LocalShareRequest<'a> {
+    /// Bytes to upload. For the zip path this is a temp archive, not the
+    /// thing the user clicked.
+    local_path: &'a Path,
+    /// Name the recipient sees — `<dir>.zip` for the zip path.
+    filename: &'a str,
+    mime_type: &'a str,
+    ttl: ShareTtl,
+    choice: ShareChoice,
+}
+
+#[cfg(any(unix, windows))]
 async fn share_local_file(
     state: &AppState,
     account_id: &str,
-    local_path: &Path,
-    filename: &str,
-    mime_type: &str,
+    request: LocalShareRequest<'_>,
     progress: Option<ShareProgressFn>,
 ) -> Result<ShareLink> {
+    let LocalShareRequest {
+        local_path,
+        filename,
+        mime_type,
+        ttl,
+        choice,
+    } = request;
     let pool = state.pool()?;
     let metadata = tokio::fs::metadata(local_path).await?;
     if !metadata.is_file() {
@@ -412,7 +551,19 @@ async fn share_local_file(
     let keystore = SqliteShareKeystore::new(pool.clone());
     let console_base = console_base_url();
     let result = client
-        .create_share(&mut reader, plaintext_size, filename, mime_type, &keystore, &console_base, progress)
+        .create_share(
+            &mut reader,
+            plaintext_size,
+            &ShareOptions {
+                filename,
+                mime_type,
+                ttl,
+                password: choice.password(),
+                console_base_url: &console_base,
+            },
+            &keystore,
+            progress,
+        )
         .await
         .map_err(|e| {
             warn!(error = %e, "create_share failed");
@@ -422,7 +573,8 @@ async fn share_local_file(
     Ok(ShareLink {
         share_token: result.share_token,
         share_url: result.share_url,
-        expires_at: result.expires_at.to_rfc3339(),
+        expires_at: result.expires_at.map(|e| e.to_rfc3339()),
+        password: choice.into_password(),
     })
 }
 
@@ -430,8 +582,15 @@ async fn share_local_file(
 /// its bytes directly ("upload & share"). The byte stream is uploaded to the
 /// same encrypted-share storage as a synced file; only the reshare-origin
 /// sidecar is skipped. Entry point for the macOS Finder dispatcher.
-#[cfg(target_os = "macos")]
-pub(crate) async fn share_external_file(state: &AppState, account_id: &str, abs_path: &Path, progress: Option<ShareProgressFn>) -> Result<ShareLink> {
+#[cfg(any(unix, windows))]
+pub(crate) async fn share_external_file(
+    state: &AppState,
+    account_id: &str,
+    abs_path: &Path,
+    ttl: ShareTtl,
+    choice: ShareChoice,
+    progress: Option<ShareProgressFn>,
+) -> Result<ShareLink> {
     require_shares_supported(state, account_id).await?;
     require_eligible(state, account_id, InsufficientCreditsAction::Sharing, 0).await?;
 
@@ -441,7 +600,19 @@ pub(crate) async fn share_external_file(state: &AppState, account_id: &str, abs_
         .ok_or_else(|| AppError::Validation("File has no usable name".into()))?;
     let mime_type = mime_guess::from_path(abs_path).first_or_octet_stream().essence_str().to_owned();
 
-    share_local_file(state, account_id, abs_path, filename, &mime_type, progress).await
+    share_local_file(
+        state,
+        account_id,
+        LocalShareRequest {
+            local_path: abs_path,
+            filename,
+            mime_type: &mime_type,
+            ttl,
+            choice,
+        },
+        progress,
+    )
+    .await
 }
 
 /// Mint a public share for a folder by packing it into one `application/zip`
@@ -450,19 +621,53 @@ pub(crate) async fn share_external_file(state: &AppState, account_id: &str, abs_
 /// Used for both in-drive and outside folders. Entry point for the macOS Finder
 /// dispatcher.
 ///
-/// KNOWN LIMITATION: there is no size/entry/time cap on the zip — a click on a
-/// very large tree fills the temp disk and starts an unbounded upload. A
-/// follow-up should bound it (max bytes/entries) before the walk. The
-/// eligibility gate is a positive-balance floor, not a byte budget.
-#[cfg(target_os = "macos")]
+/// Bounded by `zip_dir::MAX_FOLDER_SHARE_BYTES` / `MAX_FOLDER_SHARE_ENTRIES`,
+/// measured and enforced before the archive is packed. EVERY folder-share entry
+/// point funnels through here — the in-app menu and the file-manager
+/// right-click — so the cap and the settled-folder guard below cover both.
+///
+/// The settled check lives here rather than in the IPC command precisely so the
+/// right-click path cannot skip it: that path resolves a directory and calls
+/// this function directly, and a guard sitting one level up would have left it
+/// zipping half-downloaded folders while the in-app path refused them.
+///
+/// Returns the resolved `(label, relative_path)` alongside the link when the
+/// folder is inside a drive, so the caller can record the reshare-origin sidecar
+/// against the SAME canonical path this function guarded and packed — never the
+/// caller's raw argument, which may be a different spelling of the same
+/// directory.
+#[cfg(any(unix, windows))]
 pub(crate) async fn share_directory_as_zip(
     state: &AppState,
     account_id: &str,
     dir_path: &Path,
+    ttl: ShareTtl,
+    choice: ShareChoice,
     progress: Option<ShareProgressFn>,
-) -> Result<ShareLink> {
+) -> Result<(ShareLink, Option<(String, String)>)> {
     require_shares_supported(state, account_id).await?;
     require_eligible(state, account_id, InsufficientCreditsAction::Sharing, 0).await?;
+
+    // Which drive is this folder in? Derived from the RESOLVED path, so a
+    // caller that passed a non-canonical spelling ("a//b", a case variant on a
+    // case-insensitive filesystem, or a symlink) is guarded on the directory
+    // that will actually be packed. A folder outside every drive has no synced
+    // state to be missing, so there is nothing to check.
+    let roots = crate::sync::paths::list_drive_roots(state.pool()?, account_id).await?;
+    let in_drive = match crate::finder_bridge::resolve::resolve_share_target(dir_path, &roots) {
+        crate::finder_bridge::resolve::ShareTarget::InDrive { label, relative_path } => Some((label, relative_path)),
+        crate::finder_bridge::resolve::ShareTarget::Outside => None,
+    };
+
+    if let Some((label, relative_path)) = &in_drive {
+        let sync_root = sync_root_for_label(state.pool()?, account_id, label).await?;
+        let settlement = crate::sync::files::folder_is_settled(&state.sync, label, &sync_root, relative_path).await;
+        if folder_settlement_blocks_share(settlement) {
+            return Err(AppError::Validation(
+                "This folder isn't fully synced on this device yet. Wait for sync to finish, then share.".into(),
+            ));
+        }
+    }
 
     let dir_name = dir_path
         .file_name()
@@ -474,166 +679,234 @@ pub(crate) async fn share_directory_as_zip(
     // and a large folder would otherwise stall the async runtime. The temp file
     // is moved back out and lives in this frame across the upload await below;
     // its `Drop` unlinks the archive only after `create_share` has streamed it.
+    // Measure and enforce the cap on the same blocking thread as the pack, so
+    // the walk that decides "too large" and the walk that builds the archive
+    // apply identical rules to the same tree.
     let src = dir_path.to_path_buf();
-    let temp = tokio::task::spawn_blocking(move || crate::shares::zip_dir::zip_directory_to_temp(&src))
+    let temp = tokio::task::spawn_blocking(move || {
+        let measured = crate::shares::zip_dir::measure_directory(&src)?;
+        crate::shares::zip_dir::enforce_folder_share_limits(measured)?;
+
+        crate::shares::zip_dir::zip_directory_to_temp(&src)
+    })
+    .await
+    .map_err(|e| AppError::Io(std::io::Error::other(e)))??;
+
+    let link = share_local_file(
+        state,
+        account_id,
+        LocalShareRequest {
+            local_path: temp.path(),
+            filename: &zip_filename,
+            mime_type: "application/zip",
+            ttl,
+            choice,
+        },
+        progress,
+    )
+    .await?;
+
+    Ok((link, in_drive))
+}
+
+/// What the share modal shows before the user commits to a folder share.
+///
+/// `within_limits` is decided here, against the same constants the mint
+/// enforces, so the modal's disabled state cannot drift from what the backend
+/// will actually accept.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderSharePreflight {
+    pub total_bytes: u64,
+    pub file_count: u64,
+    pub within_limits: bool,
+    pub limit_bytes: u64,
+    pub limit_files: u64,
+}
+
+/// Measure a folder so the share modal can show its size and refuse an
+/// oversized folder before the user waits through a walk that will be rejected.
+///
+/// Measured by the packer's own walk rules — see `zip_dir::measure_directory`
+/// for why `dir_stats_recursive` is the wrong source.
+#[cfg(any(unix, windows))]
+#[tauri::command]
+pub async fn hcfs_folder_share_preflight(
+    state: tauri::State<'_, AppState>,
+    folder_label: String,
+    relative_path: String,
+) -> Result<FolderSharePreflight> {
+    let account_id = state.current_account_id()?;
+
+    // Gated like the mint: this walks the user's filesystem on a blocking
+    // thread, so it must not be a free primitive for anything running in the
+    // renderer on a server that doesn't even offer sharing.
+    require_shares_supported(&state, &account_id).await?;
+
+    let pool = state.pool()?;
+    let sync_root = sync_root_for_label(pool, &account_id, &folder_label).await?;
+    let dir_path = resolve_inside_sync_root(&sync_root, &relative_path).await?;
+    // Same refusal the mint gives, rather than letting `read_dir` fail on a
+    // regular file and surfacing an opaque OS error.
+    if !tokio::fs::metadata(&dir_path).await?.is_dir() {
+        return Err(AppError::Validation("This entry is not a folder".into()));
+    }
+
+    // Walking a large tree is synchronous filesystem work; keep it off the async
+    // runtime like the pack itself.
+    let measured = tokio::task::spawn_blocking(move || crate::shares::zip_dir::measure_directory(&dir_path))
         .await
         .map_err(|e| AppError::Io(std::io::Error::other(e)))??;
 
-    share_local_file(state, account_id, temp.path(), &zip_filename, "application/zip", progress).await
-}
-
-/// A freshly-minted share turned into a password-protected (`#p=`) link, plus
-/// the password the recipient needs. Returned by [`make_private`] so the Finder
-/// dispatcher can show both to the user.
-#[cfg(target_os = "macos")]
-pub(crate) struct PrivateShare {
-    /// The share link, with its URL rewritten to the `#p=` (wrapped-key) form.
-    pub link: ShareLink,
-    /// The generated password. The recipient cannot open the link without it.
-    pub password: String,
-}
-
-/// Wrap an already-minted public share into a password-protected one: generate a
-/// random password, read the share's key back from the keystore (where
-/// `create_share` just stored it), wrap it under the password, and replace the
-/// `#k=` URL with a `#p=` one. The raw key never appears in the returned URL.
-///
-/// There is no password-entry UI yet, so a fresh random password is generated
-/// every time (see [`generate_share_password`]); the caller surfaces it to the
-/// user to convey out-of-band.
-// No `account_id`: the keystore is keyed by the globally-unique share token,
-// which we just minted for this account, so the key lookup needs no account scope.
-#[cfg(target_os = "macos")]
-pub(crate) async fn make_private(state: &AppState, public: ShareLink) -> Result<PrivateShare> {
-    let pool = state.pool()?;
-    let keystore = SqliteShareKeystore::new(pool.clone());
-    let key = keystore
-        .get(&public.share_token)
-        .map_err(|e| AppError::Crypto(format!("share keystore lookup: {e}")))?
-        // The key was written by create_share moments ago on this same device,
-        // so a miss here means the keystore write failed silently — surface it
-        // rather than emit an unopenable link.
-        .ok_or_else(|| AppError::Crypto("share key missing from keystore right after minting".into()))?;
-
-    let password = generate_share_password();
-    let blob = hcfs_client::client::share::wrap_share_key(&password, &key).map_err(|e| AppError::Crypto(format!("wrap share key: {e}")))?;
-    let share_url = hcfs_client::client::share::build_share_url_private(&console_base_url(), &public.share_token, &blob);
-
-    Ok(PrivateShare {
-        link: ShareLink { share_url, ..public },
-        password,
+    Ok(FolderSharePreflight {
+        total_bytes: measured.total_bytes,
+        file_count: measured.file_count,
+        within_limits: crate::shares::zip_dir::enforce_folder_share_limits(measured).is_ok(),
+        limit_bytes: crate::shares::zip_dir::MAX_FOLDER_SHARE_BYTES,
+        limit_files: crate::shares::zip_dir::MAX_FOLDER_SHARE_ENTRIES,
     })
 }
 
-/// Best-effort revoke of a just-minted public share, WITHOUT the history
-/// bookkeeping the user-facing `hcfs_revoke_share` does. `make_private` upgrades
-/// a public share into a private one by minting the public share first; if the
-/// wrap then fails, a private-share click would otherwise strand an unintended
-/// public `#k=` link to the file on the server. This undoes that. macOS-only —
-/// its sole caller is the Finder private-share path.
-#[cfg(target_os = "macos")]
-pub(crate) async fn revoke_public_share(state: &AppState, share_token: &str) -> Result<()> {
-    let account_id = state.current_account_id()?;
-    let pool = state.pool()?;
-    let client = build_account_client(pool, &account_id).await?;
-    let keystore = SqliteShareKeystore::new(pool.clone());
-    client
-        .revoke_share(share_token, &keystore)
-        .await
-        .map_err(|e| AppError::Hcfs(format!("revoke_share (private-wrap cleanup): {e}")))
+/// Whether a folder in this settlement state must be refused a share link.
+///
+/// Split out as a named predicate because the two refusing states arrive here
+/// for different reasons — `Pending` means a child is genuinely missing,
+/// `Unknown` means we could not tell (paused drive, cold start) — and the
+/// safe answer for both is the same. Folder RENAME deliberately differs: it
+/// proceeds on `Unknown` because it is a local operation the engine reconciles,
+/// while this hands the folder's bytes to a third party.
+#[cfg(any(unix, windows))]
+fn folder_settlement_blocks_share(settlement: crate::sync::files::FolderSettlement) -> bool {
+    !matches!(settlement, crate::sync::files::FolderSettlement::Settled)
 }
 
-/// Generate a random share password: 20 alphanumeric characters (~119 bits of
-/// entropy) drawn from the OS CSPRNG via `rand`. Combined with the recipient's
-/// Argon2id work factor this is strong against brute force.
+/// Mint a share link for a FOLDER inside a synced drive.
 ///
-/// TEMPORARY: there is no password-entry UI yet, so every private share gets a
-/// fresh random password the user conveys to the recipient out-of-band.
-#[cfg(target_os = "macos")]
-fn generate_share_password() -> String {
-    use rand::Rng;
-    use rand::distributions::Alphanumeric;
-    rand::thread_rng().sample_iter(&Alphanumeric).take(20).map(char::from).collect()
-}
-
-/// Revoke an existing share and immediately mint a new one for the
-/// same source file. Effectively a TTL extension built out of the
-/// primitives we already have, since hcfs-server doesn't expose an
-/// "extend share" endpoint.
+/// The share engine shares one byte stream, so the folder is packed into a
+/// single `<name>.zip` and that archive is shared — a snapshot, not a live view:
+/// later changes to the folder do not appear in the link. This is the same call
+/// the macOS Finder right-click makes, deliberately, so the two entry points can
+/// never produce different artifacts.
 ///
-/// Looks up `(folder_label, relative_path)` from the local
-/// `share_origin` sidecar — which means reshare is only available on
-/// the device that originally minted the share. A token whose origin
-/// row was lost (legacy share, different device, wiped DB) returns a
-/// `Validation` error so the FE can disable the button rather than
-/// silently fail.
+/// Refuses a folder that is not fully settled on this device: a recipient must
+/// never receive an archive quietly missing files.
 ///
-/// The new link gets a fresh expiry from the server (same TTL policy
-/// as `hcfs_create_share`). The new share is minted FIRST; only after
-/// it succeeds do we best-effort revoke + forget the old token. That
-/// ordering means a create failure (network, billing, server 5xx)
-/// leaves the old token and its origin sidecar fully intact, so the
-/// user keeps a working link instead of being stranded with a revoked
-/// token and no replacement. If the revoke later fails (e.g. the token
-/// already expired server-side), we still return the new link — the
-/// FE's reshare intent is "give me a working link from this file", not
-/// "I require the old token to be gone".
+/// KNOWN GAP — the guard checks the engine's local `synced` baseline, so it
+/// catches a child this device synced before and no longer has on disk, but NOT
+/// a child that exists only on the server and was never downloaded here (a file
+/// another device uploaded, or a selective-sync excluded subtree). Those are
+/// absent from both the baseline and the disk, so the folder reads as settled
+/// and the archive silently omits them. `rename.rs` documents the same
+/// limitation for the same reason: closing it needs an engine-side accessor
+/// over hcfs-client's `state.remote`.
+///
+/// Size is bounded by the cap in `zip_dir`, applied inside
+/// [`share_directory_as_zip`] before the walk.
 #[tauri::command]
-pub async fn hcfs_reshare(state: tauri::State<'_, AppState>, share_token: String) -> Result<ShareLink> {
+pub async fn hcfs_create_folder_share(
+    state: tauri::State<'_, AppState>,
+    folder_label: String,
+    relative_path: String,
+    ttl: String,
+    visibility: String,
+    password: Option<String>,
+    on_progress: Channel<ShareProgress>,
+) -> Result<ShareLink> {
     let account_id = state.current_account_id()?;
+
+    // Validate the untrusted arguments before any disk or network work, mirroring
+    // `hcfs_create_share`.
+    let ttl = parse_ttl(&ttl)?;
+    let choice = ShareChoice::parse(&visibility, password)?;
+
+    let pool = state.pool()?;
+    let sync_root = sync_root_for_label(pool, &account_id, &folder_label).await?;
+    let dir_path = resolve_inside_sync_root(&sync_root, &relative_path).await?;
+    if !tokio::fs::metadata(&dir_path).await?.is_dir() {
+        return Err(AppError::Validation("This entry is not a folder".into()));
+    }
+
+    info!(label = %folder_label, relative_path = %relative_path, "Creating folder share");
+
+    // The settled-folder guard and the size cap both live inside
+    // `share_directory_as_zip`, so the file-manager right-click gets them too.
+    // It hands back the canonical `(label, relative_path)` it resolved.
+    let progress = share_progress_forwarder(on_progress);
+    let (link, resolved) = share_directory_as_zip(&state, &account_id, &dir_path, ttl, choice, Some(progress)).await?;
+
+    // Origin sidecar so the folder row shows the same "Shared" badge a file
+    // does. Best-effort exactly like the file path: the link is already live,
+    // and a failed write costs only the badge.
+    //
+    // Keyed on the path the funnel RESOLVED, not the caller's argument: a
+    // non-canonical spelling of the same directory would otherwise write a
+    // sidecar row no listing can ever match.
+    let owner = account_key(&account_id);
+    let (origin_label, origin_rel) = resolved.unwrap_or((folder_label, relative_path));
+    if let Err(e) = origin::record(pool, &link.share_token, &owner, &origin_label, &origin_rel).await {
+        warn!(
+            share_token = %link.share_token,
+            error = %e,
+            "Failed to record share_origin for a folder share (the share itself succeeded)"
+        );
+    }
+
+    Ok(link)
+}
+
+/// Generate a share password for the modal to pre-fill.
+///
+/// Exists so the password the user sees is produced by the same CSPRNG and the
+/// same alphabet as the one the backend would pick for them — rather than the
+/// frontend rolling its own, which would put key-adjacent crypto in
+/// TypeScript and let the two drift.
+///
+/// Purely a UI convenience: the user can overwrite it, and leaving the
+/// password unset entirely still makes the backend generate one during the
+/// mint. Nothing here is persisted.
+#[tauri::command]
+pub fn hcfs_generate_share_password() -> String {
+    generate_share_password()
+}
+
+/// Change an existing share's expiry.
+///
+/// Replaces the former `hcfs_reshare`, which "extended" a link by revoking it
+/// and re-uploading the whole file under a brand-new URL — the only option
+/// before hcfs-server exposed `PATCH /v1/shares/{token}`. This changes one
+/// row and leaves the link the user already handed out working.
+///
+/// The share's password, if it has one, is untouched and cannot be changed:
+/// the server holds no key material and this device does not persist a
+/// private share's raw key. Handing out a different password means revoking
+/// and re-sharing, which is also the only thing that cuts off whoever already
+/// has the old link.
+///
+/// Returns the new expiry, or `None` when the share now stays reachable until
+/// revoked.
+#[tauri::command]
+pub async fn hcfs_update_share_expiry(state: tauri::State<'_, AppState>, share_token: String, ttl: String) -> Result<Option<String>> {
+    let account_id = state.current_account_id()?;
+    let ttl = parse_ttl(&ttl)?;
 
     require_shares_supported(&state, &account_id).await?;
-    // Sharing's bytes-priced layer is `0` — same rationale as
-    // `hcfs_create_share`: the file already exists in paid storage; a
-    // reshare mints a new token over the same ciphertext.
-    require_eligible(&state, &account_id, InsufficientCreditsAction::Sharing, 0).await?;
 
     let pool = state.pool()?;
-
-    // Look up the source file. A miss here is a hard "this device
-    // can't reshare this token" — caller must use Copy/Revoke
-    // instead.
-    let owner = account_key(&account_id);
-    let mut origins = origin::fetch_for_tokens(pool, &owner, &[share_token.as_str()]).await?;
-    let Some(origin) = origins.remove(&share_token) else {
-        return Err(AppError::Validation("Reshare is unavailable for this link on this device.".into()));
-    };
-
-    // Build the revoke client + keystore BEFORE minting. They are fallible
-    // (config / token lookup) but read-only, so a build failure here aborts
-    // before any server mutation. Building them AFTER the mint (the first cut)
-    // meant a build failure left the freshly-minted token live on the server
-    // while the IPC returned Err — a dangling token the user could never reach.
-    // Building first also avoids a second fallible lookup on the retire path.
     let client = build_account_client(pool, &account_id).await?;
-    let keystore = SqliteShareKeystore::new(pool.clone());
+    let expires_at = client.update_share_expiry(&share_token, ttl).await.map_err(|e| {
+        warn!(share_token = %share_token, error = %e, "update_share_expiry failed");
+        // The server collapses unknown / not-yours / revoked / expired into
+        // one 404, so we cannot tell the user which it was — say what they
+        // can act on instead.
+        match e {
+            hcfs_client::client::share::ShareError::NotFound => {
+                AppError::Validation("This link is no longer active, so its expiry cannot be changed.".into())
+            }
+            other => AppError::Hcfs(format!("update_share_expiry: {other}")),
+        }
+    })?;
 
-    // Mint the new share. If THIS fails, the old token and its origin sidecar
-    // are left fully intact (revoke/forget below haven't run), so the user
-    // keeps a working link — the property the create-before-retire order keeps.
-    // Reshare has no progress modal — pass `None`. The byte-ramp UI is
-    // only wired into the freshly-minted `hcfs_create_share` flow.
-    let new_link = create_share_inner(&state, &account_id, &origin.folder_label, &origin.relative_path, None).await?;
-
-    // New link is live. Best-effort retire of the old token: revoke it
-    // server-side (idempotent — already-missing tokens succeed) and drop its
-    // local origin sidecar. Failures here are non-fatal.
-    if let Err(e) = client.revoke_share(&share_token, &keystore).await {
-        warn!(
-            share_token = %share_token,
-            error = %e,
-            "Reshare: revoke of old token failed; new link is already live"
-        );
-    }
-    if let Err(e) = origin::forget(pool, &owner, &share_token).await {
-        warn!(
-            share_token = %share_token,
-            error = %e,
-            "Reshare: forget of old origin failed (non-fatal)"
-        );
-    }
-
-    Ok(new_link)
+    Ok(expires_at.map(|e| e.to_rfc3339()))
 }
 
 /// List all of this caller's currently-active shares, newest first.
@@ -645,8 +918,6 @@ pub async fn hcfs_reshare(state: tauri::State<'_, AppState>, share_token: String
 /// offering Revoke.
 #[tauri::command]
 pub async fn hcfs_list_shares(state: tauri::State<'_, AppState>) -> Result<Vec<ShareSummary>> {
-    use hcfs_client::client::share::build_share_url;
-
     let account_id = state.current_account_id()?;
     let pool = state.pool()?;
     let client = build_account_client(pool, &account_id).await?;
@@ -725,7 +996,13 @@ pub async fn hcfs_list_shares(state: tauri::State<'_, AppState>) -> Result<Vec<S
     let wire = summaries
         .into_iter()
         .map(|s| {
-            let share_url = key_map.get(&s.share_token).map(|k| build_share_url(&console_base, &s.share_token, k));
+            // Dispatch on the stored variant. This is the fix for the defect
+            // where every row was rendered as a `#k=` link from a raw key:
+            // a password-protected share persists only its wrapped blob, so
+            // the only URL derivable from it is the `#p=` one.
+            let secret = key_map.get(&s.share_token);
+            let share_url = secret.map(|secret| build_share_url_for(&console_base, &s.share_token, secret));
+            let is_private = secret.is_some_and(ShareSecret::is_private);
             let (folder_label, relative_path) = origin_map
                 .get(&s.share_token)
                 .map_or((None, None), |o| (Some(o.folder_label.clone()), Some(o.relative_path.clone())));
@@ -736,8 +1013,9 @@ pub async fn hcfs_list_shares(state: tauri::State<'_, AppState>) -> Result<Vec<S
                 ciphertext_size: s.ciphertext_size,
                 mime_type: s.mime_type,
                 created_at: s.created_at.to_rfc3339(),
-                expires_at: s.expires_at.to_rfc3339(),
+                expires_at: s.expires_at.map(|e| e.to_rfc3339()),
                 share_url,
+                is_private,
                 folder_label,
                 relative_path,
             }
@@ -862,6 +1140,48 @@ mod tests {
         }
     }
 
+    /// A folder share resolves its path through the same guard the file share
+    /// uses, so a `..` segment cannot walk out of the drive and zip an
+    /// arbitrary directory.
+    #[tokio::test]
+    async fn folder_share_path_resolution_rejects_escaping_the_drive() {
+        let root = TempDir::new().expect("temp dir");
+        std::fs::create_dir_all(root.path().join("inside")).expect("mkdir");
+
+        let err = resolve_inside_sync_root(root.path(), "../outside").await.expect_err("must refuse");
+
+        assert!(
+            matches!(err, AppError::Validation(_)),
+            "escaping the root is a Validation error, got: {err:?}"
+        );
+    }
+
+    /// The dir check that keeps `hcfs_create_folder_share` from accepting a file
+    /// — the mirror of `create_share_inner`'s "Cannot share a directory".
+    #[tokio::test]
+    async fn folder_share_path_resolution_tells_a_file_from_a_folder() {
+        let root = TempDir::new().expect("temp dir");
+        std::fs::write(root.path().join("a.txt"), b"x").expect("write");
+        std::fs::create_dir(root.path().join("photos")).expect("mkdir");
+
+        let file = resolve_inside_sync_root(root.path(), "a.txt").await.expect("resolve file");
+        let folder = resolve_inside_sync_root(root.path(), "photos").await.expect("resolve folder");
+
+        assert!(!tokio::fs::metadata(&file).await.expect("stat file").is_dir());
+        assert!(tokio::fs::metadata(&folder).await.expect("stat folder").is_dir());
+    }
+
+    /// Folder share refuses an unsettled folder, unlike rename which proceeds on
+    /// `Unknown`. Both non-`Settled` states must map to the same refusal here.
+    #[test]
+    fn only_a_settled_folder_may_be_shared() {
+        use crate::sync::files::FolderSettlement;
+
+        assert!(folder_settlement_blocks_share(FolderSettlement::Pending));
+        assert!(folder_settlement_blocks_share(FolderSettlement::Unknown));
+        assert!(!folder_settlement_blocks_share(FolderSettlement::Settled));
+    }
+
     #[test]
     fn console_base_url_defaults_when_override_absent_or_blank() {
         assert_eq!(resolve_console_base_url(None), DEFAULT_CONSOLE_BASE_URL);
@@ -959,19 +1279,35 @@ mod tests {
         &src[body_start..=body_end]
     }
 
-    // hcfs_reshare MUST mint the new share before retiring the old token. If
-    // create_share_inner ran after revoke/forget, a create failure would leave
-    // the user with a dead (revoked) link and a forgotten origin row — stranded
-    // with no working link and no way to reshare from this device. Pin the order.
+    /// `hcfs_list_shares` must build every row's URL through
+    /// `build_share_url_for`, which dispatches on the stored `ShareSecret`
+    /// variant — never through the raw `build_share_url`, which takes a key
+    /// and can only ever produce a password-free `#k=` link.
+    ///
+    /// This is a source-text pin because the failure it guards is invisible
+    /// to a type check: `build_share_url` still exists and still compiles
+    /// here, it just silently hands out a public link for a
+    /// password-protected share. That was the original defect — the Shares
+    /// page offered a Copy button that bypassed the password — and a
+    /// well-meaning "simplification" back to the direct call would
+    /// reintroduce it with no test failing.
     #[test]
-    fn reshare_creates_new_share_before_retiring_old_token() {
+    fn list_shares_never_builds_a_url_from_a_raw_key() {
         let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/shares/commands.rs")).expect("read commands.rs");
-        let body = fn_body(&src, "pub async fn hcfs_reshare(");
-        let create_idx = body.find("create_share_inner(").expect("hcfs_reshare must call create_share_inner");
-        let revoke_idx = body.find(".revoke_share(").expect("hcfs_reshare must revoke the old token");
-        let forget_idx = body.find("origin::forget(").expect("hcfs_reshare must forget the old origin");
-        assert!(create_idx < revoke_idx, "new share must be minted before the old token is revoked");
-        assert!(create_idx < forget_idx, "new share must be minted before the old origin is forgotten");
+        let body = fn_body(&src, "pub async fn hcfs_list_shares(");
+        assert!(
+            body.contains("build_share_url_for("),
+            "hcfs_list_shares must rebuild URLs via build_share_url_for so a private \
+             share can only ever yield its #p= link",
+        );
+        // `build_share_url_for(` contains `build_share_url` as a prefix, so
+        // strip the correct calls before looking for a bare one.
+        let without_correct_calls = body.replace("build_share_url_for(", "");
+        assert!(
+            !without_correct_calls.contains("build_share_url("),
+            "hcfs_list_shares must NOT call build_share_url directly — that takes a raw \
+             key and would emit a password-free #k= link for a password-protected share",
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1009,12 +1345,79 @@ mod tests {
         assert!(matches!(err, AppError::Validation(_)));
     }
 
-    #[cfg(target_os = "macos")]
+    // ─── Boundary parsing ──────────────────────────────────────────────────
+
     #[test]
-    fn generated_password_is_20_alphanumeric_and_random() {
-        let a = generate_share_password();
-        assert_eq!(a.len(), 20, "password length is fixed at 20");
-        assert!(a.chars().all(|c| c.is_ascii_alphanumeric()), "alphanumeric only: {a}");
-        assert_ne!(a, generate_share_password(), "two draws must differ with overwhelming probability");
+    fn parse_ttl_accepts_exactly_the_server_presets() {
+        use hcfs_client::client::share::ShareTtl;
+        assert_eq!(parse_ttl("24h").expect("24h"), ShareTtl::Hours24);
+        assert_eq!(parse_ttl("7d").expect("7d"), ShareTtl::Days7);
+        assert_eq!(parse_ttl("30d").expect("30d"), ShareTtl::Days30);
+        assert_eq!(parse_ttl("never").expect("never"), ShareTtl::Never);
+    }
+
+    /// A typo must be a typed rejection, never a silent default. Falling back
+    /// to `never` would leave a permanent link the user never asked for;
+    /// falling back to `24h` would silently shorten one they did.
+    #[test]
+    fn parse_ttl_rejects_anything_else() {
+        for bad in ["", "48h", "1d", "forever", "NEVER", " 24h ", "0"] {
+            let err = parse_ttl(bad).expect_err("must reject");
+            assert!(matches!(err, AppError::Validation(_)), "{bad:?} → {err:?}");
+        }
+    }
+
+    #[test]
+    fn share_choice_parses_public_without_a_password() {
+        let choice = ShareChoice::parse("public", None).expect("public");
+        assert!(matches!(choice, ShareChoice::Public));
+        assert_eq!(choice.password(), None);
+    }
+
+    /// A password sent alongside "public" is dropped rather than honoured:
+    /// the user chose a public link, and silently protecting it would produce
+    /// a link nobody can open.
+    #[test]
+    fn share_choice_ignores_a_password_on_the_public_branch() {
+        let choice = ShareChoice::parse("public", Some("correct horse battery".into())).expect("public");
+        assert_eq!(choice.password(), None);
+        assert_eq!(choice.into_password(), None);
+    }
+
+    #[test]
+    fn share_choice_generates_a_password_when_none_is_supplied() {
+        let choice = ShareChoice::parse("private", None).expect("private");
+        let password = choice.password().expect("private must carry a password").to_owned();
+        assert!(
+            validate_share_password(&password).is_ok(),
+            "a generated password must satisfy our own rule, got {password:?}",
+        );
+        // Two draws must differ, or every private share would share one password.
+        let other = ShareChoice::parse("private", None).expect("private");
+        assert_ne!(Some(password.as_str()), other.password());
+    }
+
+    #[test]
+    fn share_choice_keeps_a_caller_supplied_password() {
+        let choice = ShareChoice::parse("private", Some("correct horse battery".into())).expect("private");
+        assert_eq!(choice.password(), Some("correct horse battery"));
+    }
+
+    /// Password strength is decided in Rust, not by the frontend — an IPC
+    /// caller that skips the UI must hit the same floor.
+    #[test]
+    fn share_choice_rejects_a_weak_supplied_password() {
+        for weak in ["", "a", "short", "1234567"] {
+            let err = ShareChoice::parse("private", Some(weak.into())).expect_err("must reject");
+            assert!(matches!(err, AppError::Validation(_)), "{weak:?} → {err:?}");
+        }
+    }
+
+    #[test]
+    fn share_choice_rejects_an_unknown_visibility() {
+        for bad in ["", "Public", "PRIVATE", "anyone", "protected", " public "] {
+            let err = ShareChoice::parse(bad, None).expect_err("must reject");
+            assert!(matches!(err, AppError::Validation(_)), "{bad:?} → {err:?}");
+        }
     }
 }

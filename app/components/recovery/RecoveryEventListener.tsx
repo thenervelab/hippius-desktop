@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useAtom } from "jotai";
 
@@ -9,6 +9,8 @@ import {
   activeRecoveryCheckAtom,
 } from "@/app/lib/global-atoms/recoveryAtoms";
 import { checkRecoveryState, hasPendingRotation } from "@/app/lib/utils/recovery";
+import { isExpectedNoSessionError } from "@/app/lib/utils/errorUtils";
+import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import FinishRotationDialog from "./FinishRotationDialog";
 
 /**
@@ -34,6 +36,12 @@ import FinishRotationDialog from "./FinishRotationDialog";
 const RecoveryEventListener: React.FC = () => {
   const [current, setCheck] = useAtom(activeRecoveryCheckAtom);
   const [finishRotationOpen, setFinishRotationOpen] = useState(false);
+  const { authType } = useWalletAuth();
+
+  // Latest authType for the once-per-mount probe below, without widening
+  // that effect's deps (its once-only semantics are deliberate).
+  const authTypeRef = useRef(authType);
+  authTypeRef.current = authType;
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -65,21 +73,54 @@ const RecoveryEventListener: React.FC = () => {
   // failed during the pre-mount window leaves the user with no UI and a
   // wedged recovery gate (the fresh-OAuth-device bug). Skip when the
   // atom is already populated to avoid racing the live listener above.
+  //
+  // `unknown` is adopted for OAUTH sessions only. A mnemonic user with an
+  // undecryptable local master (locked/empty keychain) booting OFFLINE
+  // also produces `unknown` now that `decide_recovery_flow` keeps that
+  // shape Unknown — but their recovery is re-entering the seed phrase
+  // (the reauth banner restore already raised), which needs no network;
+  // trapping them behind the non-dismissable connection-retry modal
+  // blocked the whole app for nothing (PR #124 review). `unlock`/`signup`
+  // stay auth-type-blind: both are genuinely actionable for mnemonic
+  // users too (an unlock password set in settings).
   useEffect(() => {
     if (current !== null) return;
     let cancelled = false;
     void (async () => {
-      try {
-        const check = await checkRecoveryState();
-        if (cancelled) return;
-        if (check.recommendedFlow !== "proceed") {
-          setCheck(check);
+      // One delayed second try for UNEXPECTED probe errors: the silent
+      // catch assumed "no active account during early boot", but an IPC
+      // failure for any other reason left zero recovery UI with the gate
+      // parked Pending — the app looked healthy with sync silently off.
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const check = await checkRecoveryState();
+          if (cancelled) return;
+          const adopt =
+            check.recommendedFlow === "unlock" ||
+            check.recommendedFlow === "signup" ||
+            (check.recommendedFlow === "unknown" &&
+              authTypeRef.current === "oauth");
+          if (adopt) {
+            // Functional write so a dialog opened AFTER mount but before
+            // this probe resolved (the banner CTA, the live listener) is
+            // never clobbered by the stale result — the effect-time
+            // `current === null` check can't see those writes.
+            setCheck((prev) => prev ?? check);
+          }
+          return;
+        } catch (err) {
+          if (isExpectedNoSessionError(err) || attempt === 1) {
+            // Pre-auth boot gap (expected) or retry exhausted — leave the
+            // wake to the live event listener.
+            console.debug(
+              "[RecoveryEventListener] mount-time recovery probe skipped:",
+              err,
+            );
+            return;
+          }
+          await new Promise((r) => setTimeout(r, 5_000));
+          if (cancelled) return;
         }
-      } catch (err) {
-        // Pre-auth invocations of the backend command error with
-        // "no active account" — expected during early boot. Silent
-        // skip so the live event listener still handles the wake.
-        console.debug("[RecoveryEventListener] mount-time recovery probe skipped:", err);
       }
     })();
     return () => {

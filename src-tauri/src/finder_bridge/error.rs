@@ -8,19 +8,20 @@
 
 use crate::finder_bridge::protocol::ProtocolError;
 
-/// Failures from the Finder bridge socket server.
+/// Failures from the Finder bridge transport server.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum FinderBridgeError {
-    /// Binding the socket or creating its parent directory failed.
-    #[error("finder bridge socket I/O error: {0}")]
+    /// Binding the socket/pipe or creating its parent directory failed.
+    #[error("finder bridge transport I/O error: {0}")]
     Io(#[from] std::io::Error),
 
     /// A wire line from the extension failed to parse.
     #[error("finder bridge protocol error: {0}")]
     Protocol(#[from] ProtocolError),
 
-    /// The macOS App Group container path could not be resolved (no home dir).
-    #[error("could not resolve the App Group container path")]
-    NoContainer,
+    /// The platform bridge endpoint could not be resolved — on Unix the base
+    /// directory (home / `$XDG_RUNTIME_DIR`) was unavailable.
+    #[error("could not resolve the bridge endpoint")]
+    NoEndpoint,
 }

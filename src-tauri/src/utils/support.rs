@@ -36,6 +36,40 @@ pub async fn list_support_tickets(
         .await?)
 }
 
+/// Pull the id of a ticket's first (oldest) message out of a messages-endpoint
+/// response, tolerating both the paginated `{results: [...]}` envelope and a
+/// bare array.
+///
+/// Pure so the envelope handling is testable without a live API. Returns `None`
+/// when the payload carries no usable numeric id — the caller decides whether
+/// that is fatal.
+fn first_message_id_from_payload(payload: &serde_json::Value) -> Option<i64> {
+    let items = payload.get("results").unwrap_or(payload).as_array()?;
+    items.first()?.get("id")?.as_i64()
+}
+
+/// Resolve the id of a ticket's first message.
+///
+/// Attachments hang off a MESSAGE, not a ticket, so anything uploading to a
+/// freshly created ticket needs this id. The frontend used to read it from the
+/// create response (`ticket.messages[0].id`), but that field is optional in the
+/// API contract — when absent the upload was skipped in silence. Asking the
+/// messages endpoint is authoritative and keeps the decision in Rust.
+pub(crate) async fn first_message_id(
+    state: &tauri::State<'_, crate::app_state::AppState>,
+    account_id: &crate::app_state::SessionAccount,
+    ticket_id: &str,
+) -> Result<i64, AppError> {
+    let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
+    let path = format!("/api/support/tickets/{ticket_id}/messages/");
+    // `ordering=created_at` pins the oldest message to index 0 rather than
+    // relying on the endpoint's default sort.
+    let params = [("page", "1"), ("limit", "1"), ("ordering", "created_at")];
+    let payload = client.get_with_params::<serde_json::Value>(&path, &params, account_id).await?;
+
+    first_message_id_from_payload(&payload).ok_or_else(|| AppError::NotFound(format!("Support ticket {ticket_id} has no messages to attach to")))
+}
+
 /// Fetch the message thread for a specific support ticket.
 #[tauri::command]
 pub async fn get_support_ticket_messages(
@@ -95,13 +129,15 @@ pub async fn create_support_ticket(
     // Only include resource_type/resource_id if they are non-empty;
     // the API rejects null values for these fields.
     if let Some(ref rt) = params.resource_type
-        && !rt.is_empty() {
-            body["resource_type"] = serde_json::json!(rt);
-        }
+        && !rt.is_empty()
+    {
+        body["resource_type"] = serde_json::json!(rt);
+    }
     if let Some(ref ri) = params.resource_id
-        && !ri.is_empty() {
-            body["resource_id"] = serde_json::json!(ri);
-        }
+        && !ri.is_empty()
+    {
+        body["resource_id"] = serde_json::json!(ri);
+    }
     Ok(client.post::<serde_json::Value, _>("/api/support/tickets/", &body, &account_id).await?)
 }
 
@@ -248,4 +284,42 @@ pub async fn update_support_ticket(
     let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
     let path = format!("/api/support/tickets/{ticket_id}/");
     Ok(client.patch::<serde_json::Value, _>(&path, &updates, &account_id).await?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn reads_first_message_id_from_paginated_envelope() {
+        let payload = json!({
+            "count": 2,
+            "next": null,
+            "results": [{ "id": 41, "body": "first" }, { "id": 42, "body": "second" }],
+        });
+        assert_eq!(first_message_id_from_payload(&payload), Some(41));
+    }
+
+    #[test]
+    fn reads_first_message_id_from_bare_array() {
+        // Not every deployment paginates this endpoint; a bare list must work
+        // rather than silently reporting "no messages" on a ticket that has one.
+        let payload = json!([{ "id": 7 }]);
+        assert_eq!(first_message_id_from_payload(&payload), Some(7));
+    }
+
+    #[test]
+    fn missing_or_unusable_ids_yield_none() {
+        for payload in [
+            json!({ "results": [] }),
+            json!({ "count": 0 }),
+            json!([]),
+            json!({ "results": [{ "body": "no id field" }] }),
+            json!({ "results": [{ "id": null }] }),
+            json!("unexpected"),
+        ] {
+            assert_eq!(first_message_id_from_payload(&payload), None, "payload: {payload}");
+        }
+    }
 }

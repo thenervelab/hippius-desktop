@@ -143,6 +143,41 @@ describe("getTraySyncSummary", () => {
     expect(out?.detail).toContain("pending");
   });
 
+  it("shows the live scan counter in the preparing detail", () => {
+    const out = getTraySyncSummary(
+      snap({
+        widgetState: "preparing",
+        preparingScannedFiles: 1234,
+      }),
+    );
+    expect(out).toMatchObject({ tone: "preparing", statusLabel: "Preparing" });
+    expect(out?.detail).toBe("1,234 files scanned");
+  });
+
+  it("shows the live fetch progress when scanning is done", () => {
+    const out = getTraySyncSummary(
+      snap({
+        widgetState: "preparing",
+        preparingFetchedEntries: 40,
+        preparingFetchTotalEntries: 90,
+      }),
+    );
+    expect(out?.detail).toBe("40 of 90 entries checked");
+  });
+
+  it("prefers the startup pending summary over the live counters", () => {
+    const out = getTraySyncSummary(
+      snap({
+        widgetState: "preparing",
+        preparingPendingFiles: 1240,
+        preparingPendingBytes: 8_300_000_000,
+        preparingScannedFiles: 55,
+      }),
+    );
+    expect(out?.detail).toContain("pending");
+    expect(out?.detail).not.toContain("scanned");
+  });
+
   it("clamps a stray out-of-range percent", () => {
     const out = getTraySyncSummary(
       snap({ totalFiles: 1, actualTotal: 1, overallPercent: 140, effectiveInProgress: true }),
