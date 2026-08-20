@@ -25,6 +25,7 @@ pub mod notifications;
 pub mod power;
 pub mod recovery;
 pub mod recovery_binding;
+pub mod shared_drives;
 pub mod shares;
 pub mod splash;
 pub mod sync;
