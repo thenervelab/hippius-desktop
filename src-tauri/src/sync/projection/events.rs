@@ -138,6 +138,19 @@ pub struct MetadataStalePayload {
 /// "Sync Failed" rows again.
 pub const CANCELLED_MARKER: &str = "Operation cancelled by user";
 
+/// Marker hcfs-client puts on a `SyncError` when a MEMBER drive's folder is
+/// missing from a successfully-fetched remote listing — the drive was removed
+/// or the member's access was revoked. A listing FETCH failure keeps its
+/// original error, so a server outage can never read as a revocation.
+///
+/// Re-exported (never re-typed) beside [`CANCELLED_MARKER`] because the
+/// desktop will match it in `handle_sync_error` to route revocation into a
+/// dedicated teardown/notification path (shared-drives Task 5); this task
+/// lands only the import so the pin bump and the drift guard travel together.
+/// `shared_drive_revoked_marker_is_pinned` freezes the exact wording an
+/// upstream reword would silently break matching on.
+pub use hcfs_client::engine::SHARED_DRIVE_REVOKED_MARKER;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -146,6 +159,18 @@ mod tests {
     #[test]
     fn cancelled_marker_matches_upstream() {
         assert_eq!(hcfs_client::sync::SyncError::Cancelled.to_string(), CANCELLED_MARKER);
+    }
+
+    /// The revoked marker is a re-export, so it can't drift from upstream —
+    /// but the DESKTOP's matching logic is written against this exact
+    /// wording. Freeze it so an upstream reword fails this build loudly
+    /// instead of silently un-matching the revocation path.
+    #[test]
+    fn shared_drive_revoked_marker_is_pinned() {
+        assert_eq!(
+            SHARED_DRIVE_REVOKED_MARKER, "Shared drive is no longer accessible (removed or access revoked)",
+            "upstream reworded SHARED_DRIVE_REVOKED_MARKER — update every desktop match site"
+        );
     }
 
     /// Same drift guard as the cancel marker: we recognise this failure by the
