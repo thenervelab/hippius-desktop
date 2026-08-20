@@ -39,7 +39,7 @@ use hcfs_shared::network::{CreateDriveInviteRequest, CreateDriveInviteResponse, 
 use serde::Serialize;
 use tauri::Manager;
 use tracing::{info, warn};
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroizing;
 
 /// Bound on every shared-drive HTTP call (the `recent_uploads` precedent —
 /// these back interactive dialogs, not bulk transfers).
@@ -77,6 +77,12 @@ pub struct DriveMembershipInfo {
     pub display_label: String,
     pub role: String,
     pub created_at: String,
+    /// True when a local `sync_paths` member row already syncs this wire
+    /// identity on this device — the FE routes such a row to "open the
+    /// drive" instead of offering "Sync locally" a second time.
+    pub synced_locally: bool,
+    /// The local drive label of that row (`None` when not synced here).
+    pub local_label: Option<String>,
 }
 
 /// Result of [`add_shared_drive`]: the local drive label actually allocated
@@ -438,34 +444,20 @@ pub async fn create_drive_invite(
 
     // The folder-key entropy the link's fragment carries. The master read is
     // serialized against password rotation (`recovery_lock`), the sanctioned
-    // accessor discipline for every master-mnemonic consumer.
-    let mut entropy = [0u8; 32];
-    {
+    // accessor discipline for every master-mnemonic consumer. `Zeroizing`
+    // means every return path — including the HTTP error below — scrubs the
+    // entropy by drop, with no manual zeroize choreography to miss.
+    let entropy: Zeroizing<[u8; 32]> = {
         let _recovery_guard = state.recovery_lock.lock().await;
         let master = crate::sync::mnemonic::get_mnemonic_for_account(&state, &ctx.account_id).await?;
         let phrase = Zeroizing::new(crate::sync::mnemonic::derive_folder_mnemonic(&master, &label)?);
-        let mnemonic = bip39::Mnemonic::parse_normalized(&phrase).map_err(|e| AppError::Crypto(format!("derived folder mnemonic invalid: {e}")))?;
-        let mut entropy_vec = mnemonic.to_entropy();
-        if entropy_vec.len() != 32 {
-            let got = entropy_vec.len();
-            entropy_vec.zeroize();
-            return Err(AppError::Crypto(format!("derived folder-key entropy must be 32 bytes, got {got}")));
-        }
-        entropy.copy_from_slice(&entropy_vec);
-        entropy_vec.zeroize();
-    }
-
-    let http = state.api_client.clone();
-    let token = match http_create_invite(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash, expires_in_secs, max_uses).await {
-        Ok(token) => token,
-        Err(e) => {
-            entropy.zeroize();
-            return Err(e);
-        }
+        grant::entropy_from_phrase(&phrase)?
     };
 
+    let http = state.api_client.clone();
+    let token = http_create_invite(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash, expires_in_secs, max_uses).await?;
+
     let invite_url = build_invite_url(&crate::shares::commands::console_base_url(), &token, &entropy);
-    entropy.zeroize();
 
     info!(label = %label, folder_hash = %identity.wire_folder_hash, "Drive invite minted");
     Ok(DriveInviteLink { invite_url })
@@ -515,25 +507,32 @@ pub async fn remove_drive_member(app: tauri::AppHandle, label: String, member_ss
     Ok(())
 }
 
-/// List the drives shared WITH this account. Grant blobs stay in the backend
-/// — they open only inside [`add_shared_drive`].
+/// List the drives shared WITH this account, each joined against the local
+/// `sync_paths` member rows (`syncedLocally` / `localLabel`) so the FE can
+/// route an already-synced row to the drive instead of a second "Sync
+/// locally". Grant blobs stay in the backend — they open only inside
+/// [`add_shared_drive`].
 #[tauri::command]
 pub async fn list_my_drive_memberships(app: tauri::AppHandle) -> Result<Vec<DriveMembershipInfo>> {
     let state = app.state::<AppState>();
     let ctx = api_ctx(&state).await?;
+    let pool = state.pool()?;
 
     let resp = http_list_memberships(&state.api_client.clone(), &ctx.base_url, &ctx.bearer).await?;
-    Ok(resp
-        .memberships
-        .into_iter()
-        .map(|m| DriveMembershipInfo {
+    let mut memberships = Vec::with_capacity(resp.memberships.len());
+    for m in resp.memberships {
+        let local = crate::sync::identity::member_row_for_wire_identity(pool, &ctx.account_id, &m.owner_ss58, &m.folder_hash).await?;
+        memberships.push(DriveMembershipInfo {
             owner_ss58: m.owner_ss58,
             folder_hash: m.folder_hash,
             display_label: m.display_label,
             role: m.role,
             created_at: m.created_at,
-        })
-        .collect())
+            synced_locally: local.is_some(),
+            local_label: local.map(|row| row.label),
+        });
+    }
+    Ok(memberships)
 }
 
 /// Leave a shared drive: delete THIS account's membership server-side, then
@@ -545,7 +544,11 @@ pub async fn list_my_drive_memberships(app: tauri::AppHandle) -> Result<Vec<Driv
 /// still proceeds to local removal — the goal state "this device no longer
 /// syncs the drive" is already half-reached, and refusing would strand a
 /// dead drive the UI can't clean up (the `delete_remote_folder` idempotency
-/// precedent).
+/// precedent). A `SharedDrivesUnavailable` refusal (feature-off server), by
+/// contrast, fails the command whole: the escape hatch for cleaning up the
+/// local drive is the plain `remove_drive` path — Task 5's revoked-state
+/// "Remove" affordance and Task 6 wire it deliberately rather than this
+/// command guessing that the membership no longer matters.
 #[tauri::command]
 pub async fn leave_shared_drive(app: tauri::AppHandle, label: String) -> Result<()> {
     let state = app.state::<AppState>();
@@ -740,5 +743,45 @@ mod tests {
 
         let server = classify_error_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR, "");
         assert!(matches!(server, AppError::Hcfs(_)), "500 must map to Hcfs, got {server:?}");
+    }
+
+    // FE wire pin: the "Shared with me" row's camelCase keys, including the
+    // local-sync join (`syncedLocally`/`localLabel`) Task 6 routes on. A
+    // dropped or renamed key ships as a silently-undefined FE field, so the
+    // key set is asserted exactly. `localLabel` stays present (null) when the
+    // drive is not synced here — a stable shape, not a conditional key.
+    #[test]
+    fn drive_membership_info_wire_keys_are_pinned() {
+        let info = DriveMembershipInfo {
+            owner_ss58: "5Owner".to_string(),
+            folder_hash: "0123456789abcdef".to_string(),
+            display_label: "team-docs".to_string(),
+            role: "writer".to_string(),
+            created_at: "2026-08-20T00:00:00Z".to_string(),
+            synced_locally: false,
+            local_label: None,
+        };
+        let json = serde_json::to_value(&info).expect("serialize");
+        let keys: std::collections::BTreeSet<&str> = json.as_object().expect("object").keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            [
+                "createdAt",
+                "displayLabel",
+                "folderHash",
+                "localLabel",
+                "ownerSs58",
+                "role",
+                "syncedLocally"
+            ]
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>(),
+            "DriveMembershipInfo wire keys must stay exactly these camelCase names"
+        );
+        assert_eq!(
+            json["localLabel"],
+            serde_json::Value::Null,
+            "an unsynced row serializes localLabel as null"
+        );
     }
 }

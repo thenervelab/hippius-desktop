@@ -79,19 +79,23 @@ fn phrase_from_entropy(entropy: &[u8; 32]) -> Result<Zeroizing<String>> {
     Ok(Zeroizing::new(mnemonic.to_string()))
 }
 
-/// BIP-39 phrase → the exact 32-byte entropy it encodes.
+/// BIP-39 phrase → the exact 32-byte entropy it encodes, `Zeroizing` so
+/// every return path scrubs by drop.
 ///
 /// Refuses any other entropy width: the grant contract fixes the payload at
 /// 32 bytes (a 24-word folder mnemonic), and downstream key derivation
-/// (`derive_folder_mnemonic` output parity) assumes it.
-fn entropy_from_phrase(phrase: &str) -> Result<Zeroizing<[u8; 32]>> {
-    let mnemonic = bip39::Mnemonic::parse_normalized(phrase).map_err(|e| AppError::Crypto(format!("grant payload is not a BIP-39 mnemonic: {e}")))?;
+/// (`derive_folder_mnemonic` output parity) assumes it. `pub` because it is
+/// also the OWNER-side half of the contract: `create_drive_invite` runs a
+/// derived folder phrase through it to mint the `#k=` fragment entropy, so
+/// mint and open share one width check.
+pub fn entropy_from_phrase(phrase: &str) -> Result<Zeroizing<[u8; 32]>> {
+    let mnemonic = bip39::Mnemonic::parse_normalized(phrase).map_err(|e| AppError::Crypto(format!("not a BIP-39 mnemonic phrase: {e}")))?;
     let mut entropy_vec = mnemonic.to_entropy();
 
     if entropy_vec.len() != 32 {
         let got = entropy_vec.len();
         entropy_vec.zeroize();
-        return Err(AppError::Crypto(format!("grant payload entropy must be 32 bytes, got {got}")));
+        return Err(AppError::Crypto(format!("folder-key entropy must be 32 bytes, got {got}")));
     }
 
     let mut entropy = Zeroizing::new([0u8; 32]);

@@ -220,6 +220,70 @@ fn add_shared_drive_has_no_member_side_credit_gate() {
     );
 }
 
+/// Every complete `macro_name(...)` invocation in `src`, paren-matched so a
+/// multi-line tracing call is captured whole (a line-based scan would miss a
+/// secret binding on the call's second line).
+fn macro_calls(src: &str, macro_name: &str) -> Vec<String> {
+    let mut calls = Vec::new();
+    let mut search_from = 0;
+    while let Some(rel) = src[search_from..].find(macro_name) {
+        let start = search_from + rel;
+        let args_start = start + macro_name.len();
+        let mut depth = 0usize;
+        let mut end = args_start;
+        for (i, ch) in src[args_start..].char_indices() {
+            match ch {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = args_start + i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        calls.push(src[start..=end].to_string());
+        search_from = end + 1;
+    }
+    calls
+}
+
+/// Secret hygiene pin: the invite token, the folder-key entropy, the
+/// assembled invite URL, and every mnemonic/passphrase binding are
+/// drive-access capabilities — no tracing call in the shared_drives module
+/// may reference one. The module docs state the rule ("log labels and folder
+/// hashes only"); this makes a violating `info!(token = %token, ...)` a CI
+/// failure instead of a review catch.
+#[test]
+fn shared_drives_tracing_calls_never_name_secret_bindings() {
+    let grant_src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/shared_drives/grant.rs")).expect("read grant.rs");
+    let forbidden = [
+        "token",
+        "entropy",
+        "invite_url",
+        "phrase",
+        "passphrase",
+        "grant_blob",
+        "master",
+        "mnemonic",
+    ];
+
+    for (file, src) in [("commands.rs", shared_drive_commands_src()), ("grant.rs", grant_src)] {
+        for macro_name in ["trace!", "debug!", "info!", "warn!", "error!"] {
+            for call in macro_calls(&src, macro_name) {
+                for secret in forbidden {
+                    assert!(
+                        !call.contains(secret),
+                        "{file}: a {macro_name} call references '{secret}' — shared-drive logs may carry labels and folder hashes only:\n{call}"
+                    );
+                }
+            }
+        }
+    }
+}
+
 /// The per-cycle folder-entity sync must carry its OWN member gate: the
 /// member backfill stamps `folder_entries_backfilled_at`, so the
 /// `NotBackfilledYet` gate above it does NOT defend member drives.

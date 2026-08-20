@@ -215,14 +215,21 @@ new `SharedWithMeSection` in both `MultiFolderSyncManager` and `DriveOnboarding`
 **Steps:**
 1. "Share drive…" menu item (own drives only — hidden for member rows) → singleton
    atom → `ShareDriveModal`: mirrors `ShareFileModal`'s `choosing | running | done |
-   error` machine (`ShareFileModal.tsx:64-75`) with an added **Members** tab (list +
-   remove + active invites + revoke; SharesPageClient-style table). Done state
+   error` machine (`ShareFileModal.tsx:64-75`) with an added **Members** tab
+   (members list + remove; SharesPageClient-style table). There is NO invite
+   listing/revoke surface in v1: the server stores only blake3 token hashes and
+   exposes no list-invites endpoint, and the desktop never persists minted tokens,
+   so after the mint dialog closes there is nothing to select for revocation —
+   owners revoke access by removing members, and unclaimed links die by
+   expiry/max-uses (see the `shared_drives/commands.rs` module docs). Done state
    auto-copies the invite URL (`:248-262` pattern).
 2. Member surface: "Shared with me" list fed by `list_my_drive_memberships`
    (feature-flag + `SharedDrivesUnavailable`-tolerant), each row: owner badge
    (truncated ss58 + identicon, the `boring-avatars` pattern), display label, "Sync
    locally" → folder picker (last-browse-dir helpers, `userPreferencesDb.ts`) →
-   `add_shared_drive`; synced member rows appear in the normal drive lists with the
+   `add_shared_drive`; each membership row carries `syncedLocally` + `localLabel`
+   (joined in Rust against the local `sync_paths` member rows), so the UI renders
+   "open the drive" for an already-synced row instead of a second "Sync locally"; synced member rows appear in the normal drive lists with the
    owner badge and WITHOUT owner-only menu items (Share drive, Delete from Server,
    Exclusions); "Leave" replaces "Remove from Sync" wording (calls
    `leave_shared_drive`).
