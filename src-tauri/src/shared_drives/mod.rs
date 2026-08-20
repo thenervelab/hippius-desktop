@@ -8,4 +8,5 @@
 //! module never touches the engine directly beyond calling its public
 //! add/remove/init entry points.
 
+pub mod commands;
 pub mod grant;
