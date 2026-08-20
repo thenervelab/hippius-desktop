@@ -719,6 +719,34 @@ mod set_path_tests {
         assert!(rows_for(&pool, acct).await.is_empty(), "no row may survive a refused member add");
     }
 
+    // The other half of `MemberDriveIdentity::validate` at the write path: an
+    // empty owner_ss58 is refused just like a malformed hash, and no row lands.
+    #[tokio::test]
+    async fn allocate_with_empty_owner_ss58_writes_nothing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pool = make_file_pool(dir.path()).await;
+        let acct = "5bad";
+        let member = crate::sync::identity::MemberDriveIdentity {
+            owner_ss58: String::new(),
+            wire_folder_hash: "0123456789abcdef".to_string(),
+        };
+
+        let err = set_sync_path_internal(
+            &pool,
+            acct,
+            "/m/shared",
+            false,
+            LabelMode::Allocate {
+                base: "shared",
+                member: Some(&member),
+            },
+        )
+        .await
+        .expect_err("empty owner_ss58 must be refused");
+        assert!(matches!(err, crate::error::AppError::Validation(_)), "got {err:?}");
+        assert!(rows_for(&pool, acct).await.is_empty(), "no row may survive a refused member add");
+    }
+
     // An Exact re-point of a member drive's path must PRESERVE its wire
     // identity: the upsert's DO UPDATE list touches path/type/timestamp only.
     #[tokio::test]

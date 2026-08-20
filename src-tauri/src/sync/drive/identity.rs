@@ -76,6 +76,13 @@ impl MemberDriveIdentity {
 /// row mirrors `shares::commands::sync_root_for_label`'s
 /// "Unknown sync folder label" `Validation` error — deliberately NOT the
 /// FE-silenced `Auth`/`NotReady` kinds.
+///
+/// Call discipline: resolve ONCE at the top of an operation's funnel and
+/// thread the `Clone`-able [`DriveIdentity`] down to every consumer. Never
+/// re-resolve at individual call sites — each resolve is an independent DB
+/// read, so two resolves inside one operation can observe DIFFERENT rows
+/// (a concurrent remove/re-add of the label) and split the operation across
+/// two wire identities.
 pub async fn resolve_drive_identity(pool: &SqlitePool, account_id: &str, label: &str) -> Result<DriveIdentity> {
     let owner = account_key(account_id);
     let row: Option<(Option<String>, Option<String>)> =
@@ -275,6 +282,18 @@ mod tests {
             .await
             .expect_err("empty owner must fail");
         assert_corrupt_row(err, "empty owner_ss58");
+    }
+
+    // Cross-pin the validator to the producer: every own-drive wire hash the
+    // desktop mints comes from `folder_hash`, so the member-row shape check
+    // must accept exactly that shape. An hcfs bump that changes the hash
+    // format fails HERE, not later as "every member row is corrupt".
+    #[test]
+    fn wire_hash_validator_accepts_the_producers_shape() {
+        assert!(
+            is_wire_folder_hash(&crate::sync::mnemonic::folder_hash("any-label")),
+            "is_wire_folder_hash must accept what folder_hash produces"
+        );
     }
 
     // Missing row mirrors sync_root_for_label: a surfaced Validation error,
