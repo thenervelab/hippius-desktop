@@ -402,6 +402,49 @@ async fn run_backfill_returns_not_ready_when_drive_not_registered() {
     );
 }
 
+/// Invariant: a MEMBER drive (shared-drives phase 2 — `owner_ss58` +
+/// `wire_folder_hash` set on the row) is skipped without touching the wire,
+/// and the flag is STAMPED: the decision is final (a member drive postdates
+/// the `relative_path` column and its server rows are the OWNER's), so the
+/// FE's pre-backfill "Indexing folders…" banner must clear rather than wait
+/// forever, and later launches short-circuit as `AlreadyDone`.
+#[tokio::test]
+async fn run_backfill_skips_member_drives_and_stamps_the_flag() {
+    let pool = temp_pool().await;
+    seed_sync_path(&pool, TEST_ACCOUNT, "team", None).await;
+    sqlx::query("UPDATE sync_paths SET owner_ss58 = ?, wire_folder_hash = ? WHERE owner = ? AND label = 'team'")
+        .bind("5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty")
+        .bind("0123456789abcdef")
+        .bind(account_key(TEST_ACCOUNT))
+        .execute(&pool)
+        .await
+        .expect("paint member columns");
+
+    let recorder = MockRecorder::new();
+    let _base_url = start_ok_server(recorder.clone()).await;
+
+    let state = make_state_with_pool(pool.clone());
+    let outcome = run_backfill_for_drive(&state, TEST_ACCOUNT, "team")
+        .await
+        .expect("member skip must not error");
+
+    assert_eq!(outcome, BackfillOutcome::SkippedMemberDrive, "member drives skip the backfill outright");
+    assert!(
+        recorder.snapshot().is_empty(),
+        "a member skip MUST NOT touch the wire; saw {} requests",
+        recorder.snapshot().len()
+    );
+    assert!(
+        is_backfilled(&pool, &account_key(TEST_ACCOUNT), "team").await.unwrap(),
+        "the member skip must stamp the flag"
+    );
+
+    let again = run_backfill_for_drive(&state, TEST_ACCOUNT, "team")
+        .await
+        .expect("second run must not error");
+    assert_eq!(again, BackfillOutcome::AlreadyDone, "stamped flag short-circuits later launches");
+}
+
 /// Wire-contract regression: a call through `HcfsClient::register_relative_paths`
 /// (the exact method the production `submit_batches` invokes) produces
 /// the JSON envelope the server expects.
