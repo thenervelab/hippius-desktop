@@ -1,3 +1,9 @@
+// NOTE: this directory holds TWO unrelated selects. This file default-exports
+// the COMPACT chart-style select (homepage/billing range pickers). The
+// dialog-style, input-shell select used in modals is the NAMED export in
+// `./Select.tsx` — `import { Select } from "@/components/ui/select/Select"`.
+// Importing `{ Select }` from this barrel resolves to undefined and renders
+// "Element type is invalid" at runtime.
 import React from "react";
 import * as RadixSelect from "@radix-ui/react-select";
 import { Icons } from "@/components/ui";
