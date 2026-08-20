@@ -58,7 +58,7 @@ fn initialize_sync_inner_resolves_identity_once_and_gates_the_member_skips() {
     let body = fn_body(&src, "async fn initialize_sync_inner(");
 
     assert_eq!(
-        body.matches("resolve_drive_identity(").count(),
+        body.matches("lookup_drive_identity(").count(),
         1,
         "initialize_sync_inner must resolve the drive identity exactly ONCE at the funnel top \
          (re-resolving mid-operation can split the init across two wire identities)"
@@ -177,8 +177,10 @@ fn folder_entity_sync_gates_member_drives() {
         std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/migrate/folder_entries_materialize.rs")).expect("read materialize");
     let body = fn_body(&src, "pub async fn run_folder_entity_sync_for_drive(");
     assert!(body.contains("is_member"), "run_folder_entity_sync_for_drive must check drive membership");
+    // Match the CODE token, not the bare enum name — `SkippedMemberDrive`
+    // alone is satisfiable by a comment mentioning the variant.
     assert!(
-        body.contains("SkippedMemberDrive"),
+        body.contains("return Ok(FolderEntitySyncOutcome::SkippedMemberDrive)"),
         "run_folder_entity_sync_for_drive must short-circuit member drives with the dedicated outcome"
     );
 }

@@ -83,8 +83,11 @@ impl MemberDriveIdentity {
     }
 }
 
-/// Resolve the wire identity for `(account_id, label)` from its `sync_paths`
-/// row.
+/// Look up the wire identity for `(account_id, label)` from its `sync_paths`
+/// row. `Ok(None)` means NO row exists — an explicit shape, so callers with
+/// their own missing-row policy (init's `NotReady(SyncSetup)`, the backfills'
+/// transient `NotReady` outcomes, the remote-browse own-drive fallback) match
+/// on `None` instead of sniffing an error kind off the strict wrapper.
 ///
 /// Both member columns NULL is the own-drive shape and resolves to
 /// `(account_id, folder_hash(label), false)` — byte-identical to the values
@@ -92,10 +95,7 @@ impl MemberDriveIdentity {
 /// resolves to the persisted pair. Exactly one set is a corrupt row and fails
 /// closed as [`AppError::Db`] (`sqlx::Error::Decode`, the corrupt-row
 /// convention from `shares::history`): syncing under a half-resolved identity
-/// could upload into the wrong namespace, so no fallback is safe. A missing
-/// row mirrors `shares::commands::sync_root_for_label`'s
-/// "Unknown sync folder label" `Validation` error — deliberately NOT the
-/// FE-silenced `Auth`/`NotReady` kinds.
+/// could upload into the wrong namespace, so no fallback is safe.
 ///
 /// Call discipline: resolve ONCE at the top of an operation's funnel and
 /// thread the `Clone`-able [`DriveIdentity`] down to every consumer. Never
@@ -103,7 +103,7 @@ impl MemberDriveIdentity {
 /// read, so two resolves inside one operation can observe DIFFERENT rows
 /// (a concurrent remove/re-add of the label) and split the operation across
 /// two wire identities.
-pub async fn resolve_drive_identity(pool: &SqlitePool, account_id: &str, label: &str) -> Result<DriveIdentity> {
+pub async fn lookup_drive_identity(pool: &SqlitePool, account_id: &str, label: &str) -> Result<Option<DriveIdentity>> {
     let owner = account_key(account_id);
     let row: Option<(Option<String>, Option<String>)> =
         sqlx::query_as("SELECT owner_ss58, wire_folder_hash FROM sync_paths WHERE owner = ? AND label = ?")
@@ -113,15 +113,15 @@ pub async fn resolve_drive_identity(pool: &SqlitePool, account_id: &str, label: 
             .await?;
 
     let Some((owner_ss58, wire_folder_hash)) = row else {
-        return Err(AppError::Validation(format!("Unknown sync folder label: {label}")));
+        return Ok(None);
     };
 
     match (owner_ss58, wire_folder_hash) {
-        (None, None) => Ok(DriveIdentity {
+        (None, None) => Ok(Some(DriveIdentity {
             wire_ss58: account_id.to_string(),
             wire_folder_hash: crate::sync::mnemonic::folder_hash(label),
             is_member: false,
-        }),
+        })),
         (Some(ss58), Some(hash)) => {
             if ss58.is_empty() {
                 return Err(corrupt_member_row(label, "owner_ss58 is empty"));
@@ -129,18 +129,29 @@ pub async fn resolve_drive_identity(pool: &SqlitePool, account_id: &str, label: 
             if !is_wire_folder_hash(&hash) {
                 return Err(corrupt_member_row(label, "wire_folder_hash is not 16 lowercase hex chars"));
             }
-            Ok(DriveIdentity {
+            Ok(Some(DriveIdentity {
                 wire_ss58: ss58,
                 wire_folder_hash: hash,
                 is_member: true,
-            })
+            }))
         }
         (Some(_), None) => Err(corrupt_member_row(label, "owner_ss58 set without wire_folder_hash")),
         (None, Some(_)) => Err(corrupt_member_row(label, "wire_folder_hash set without owner_ss58")),
     }
 }
 
-/// [`resolve_drive_identity`], but a MISSING row falls back to the own-drive
+/// [`lookup_drive_identity`], but a MISSING row is an error: mirrors
+/// `shares::commands::sync_root_for_label`'s "Unknown sync folder label"
+/// `Validation` — deliberately NOT the FE-silenced `Auth`/`NotReady` kinds.
+/// The strict wrapper for call sites where the row is a precondition and a
+/// missing one should surface to the user as-is.
+pub async fn resolve_drive_identity(pool: &SqlitePool, account_id: &str, label: &str) -> Result<DriveIdentity> {
+    lookup_drive_identity(pool, account_id, label)
+        .await?
+        .ok_or_else(|| AppError::Validation(format!("Unknown sync folder label: {label}")))
+}
+
+/// [`lookup_drive_identity`], but a MISSING row falls back to the own-drive
 /// derivation `(account_id, folder_hash(label), false)` instead of erroring.
 ///
 /// For the remote-browse IPCs (`sync::remote`) only: their `label` may
@@ -152,12 +163,9 @@ pub async fn resolve_drive_identity(pool: &SqlitePool, account_id: &str, label: 
 /// [`AppError::Db`]. Funnel-style operations that require the row (init,
 /// backfills) must use [`resolve_drive_identity`] instead.
 pub async fn resolve_drive_identity_or_own(pool: &SqlitePool, account_id: &str, label: &str) -> Result<DriveIdentity> {
-    match resolve_drive_identity(pool, account_id, label).await {
-        Ok(identity) => Ok(identity),
-        // The resolver reports exactly the missing row as `Validation`
-        // (corrupt rows are `Db`), so this arm is the no-local-row case.
-        Err(AppError::Validation(_)) => Ok(DriveIdentity::own(account_id, &crate::sync::mnemonic::folder_hash(label))),
-        Err(other) => Err(other),
+    match lookup_drive_identity(pool, account_id, label).await? {
+        Some(identity) => Ok(identity),
+        None => Ok(DriveIdentity::own(account_id, &crate::sync::mnemonic::folder_hash(label))),
     }
 }
 
@@ -337,8 +345,19 @@ mod tests {
         );
     }
 
-    // Missing row mirrors sync_root_for_label: a surfaced Validation error,
-    // never the FE-silenced Auth/NotReady kinds.
+    // The core lookup reports a missing row as the explicit `Ok(None)` shape
+    // — never an error — so per-caller missing-row policies match on `None`
+    // instead of sniffing an error kind.
+    #[tokio::test]
+    async fn lookup_reports_missing_row_as_none() {
+        let pool = make_pool().await;
+
+        let looked_up = lookup_drive_identity(&pool, ACCT, "nope").await.expect("lookup must not error");
+        assert_eq!(looked_up, None, "missing row must be Ok(None)");
+    }
+
+    // Missing row through the strict wrapper mirrors sync_root_for_label: a
+    // surfaced Validation error, never the FE-silenced Auth/NotReady kinds.
     #[tokio::test]
     async fn missing_row_is_validation_error() {
         let pool = make_pool().await;

@@ -439,13 +439,12 @@ pub async fn run_folder_entity_sync_for_drive(state: &AppState, account_id: &str
     // member drive is the OWNER's — a v1 scope cut, so neither may run. See
     // `FolderEntitySyncOutcome::SkippedMemberDrive` for why the backfill
     // flag cannot stand in for this check.
-    match crate::sync::identity::resolve_drive_identity(&pool, account_id, label).await {
-        Ok(identity) if identity.is_member => return Ok(FolderEntitySyncOutcome::SkippedMemberDrive),
-        Ok(_) => {}
+    match crate::sync::identity::lookup_drive_identity(&pool, account_id, label).await? {
+        Some(identity) if identity.is_member => return Ok(FolderEntitySyncOutcome::SkippedMemberDrive),
+        Some(_) => {}
         // The row vanished between the root resolve and here (remove_drive /
         // logout race) — the same transient NotReady the root resolve reports.
-        Err(crate::error::AppError::Validation(_)) => return Ok(FolderEntitySyncOutcome::NotReady),
-        Err(other) => return Err(other),
+        None => return Ok(FolderEntitySyncOutcome::NotReady),
     }
 
     // The single per-cycle walk, shared by both halves.

@@ -93,6 +93,27 @@ fn derive_encryption_key_is_pinned() {
     );
 }
 
+/// Composition pin: `derive_encryption_key(master, label)` IS the first 32
+/// bytes of `to_seed("")` of `derive_folder_mnemonic(master, label)`. The
+/// member remote-preview/download path relies on exactly this equality — it
+/// holds only the sealed folder MNEMONIC (from the grant blob) and re-derives
+/// the content key from its seed tail, so if an hcfs bump ever decoupled the
+/// two derivations, member downloads would silently decrypt with the wrong
+/// key. The per-function KATs above cannot see that relationship.
+#[test]
+fn derive_encryption_key_is_the_folder_mnemonic_seed_tail() {
+    let phrase = derive_folder_mnemonic(TEST_MNEMONIC, "alpha").expect("derive folder mnemonic");
+    let parsed: bip39::Mnemonic = phrase.parse().expect("folder mnemonic parses");
+    let seed = parsed.to_seed("");
+
+    let key = derive_encryption_key(TEST_MNEMONIC, "alpha").expect("derive encryption key");
+    assert_eq!(
+        &seed[..32],
+        key.as_slice(),
+        "derive_encryption_key must equal the folder mnemonic's seed tail (member key path)"
+    );
+}
+
 proptest! {
     /// Format invariant across the whole label input space: `folder_hash` is
     /// always 16 lowercase-hex chars and deterministic. Hand-picked KATs above

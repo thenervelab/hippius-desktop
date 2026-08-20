@@ -113,13 +113,11 @@ pub async fn run_folder_entries_backfill_for_drive(state: &AppState, account_id:
     //      this decision is made once, not re-walked every launch; the
     //      per-cycle folder-entity sync carries its own member gate, so the
     //      stamped flag cannot accidentally enable it.
-    let identity = match crate::sync::identity::resolve_drive_identity(&pool, account_id, label).await {
-        Ok(identity) => identity,
-        // The row vanished between the flag check and here (a remove_drive /
-        // logout race) — the same transient state the later root lookup
-        // reported as NotReady before this gate existed.
-        Err(AppError::Validation(_)) => return Ok(FolderEntriesBackfillOutcome::NotReady),
-        Err(other) => return Err(other),
+    // A vanished row (`None`) means a remove_drive / logout race between the
+    // flag check and here — the same transient state the later root lookup
+    // reported as NotReady before this gate existed.
+    let Some(identity) = crate::sync::identity::lookup_drive_identity(&pool, account_id, label).await? else {
+        return Ok(FolderEntriesBackfillOutcome::NotReady);
     };
     if identity.is_member {
         info!(label = %label, "folder-entries backfill: member drive; folder entities are owner-side — marking done");

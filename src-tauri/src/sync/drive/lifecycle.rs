@@ -13,7 +13,7 @@ use crate::sync::config::{
 };
 use crate::sync::device::get_device_name_internal;
 use crate::sync::folders::{get_all_sync_paths_internal, sanitize_label};
-use crate::sync::identity::{DriveIdentity, resolve_drive_identity};
+use crate::sync::identity::{DriveIdentity, lookup_drive_identity};
 use crate::sync::mnemonic::{account_dir, config_dir_for_folder, derive_folder_mnemonic, ensure_derived_mnemonic, master_mnemonic_path};
 use hcfs_client::engine::manager::DriveManager;
 use hcfs_client::engine::runner::{DriveSlot, SyncRunner};
@@ -1197,15 +1197,13 @@ pub(crate) async fn initialize_sync_inner(
     // operation (two reads can observe different rows across a concurrent
     // remove/re-add and split the init across two wire identities). Own
     // drives resolve to (account_id, folder_hash(label)) byte-identically to
-    // the old inline derivation. The resolver reports a missing row as
-    // `Validation`; this funnel historically surfaced that case as
-    // `NotReady(SyncSetup)` (from `get_sync_path_for_label`, a few steps
-    // below), and the FE retry ladder keys on that kind — so map it back
-    // rather than introduce a new failure kind on the own-drive path.
-    let identity = resolve_drive_identity(pool, &account_id, &label).await.map_err(|e| match e {
-        crate::error::AppError::Validation(_) => crate::error::AppError::NotReady(crate::error::NotReadyKind::SyncSetup),
-        other => other,
-    })?;
+    // the old inline derivation. A missing row (`None`) surfaces as
+    // `NotReady(SyncSetup)` — the kind this funnel historically reported for
+    // that case (from `get_sync_path_for_label`, a few steps below) and the
+    // one the FE retry ladder keys on.
+    let identity = lookup_drive_identity(pool, &account_id, &label)
+        .await?
+        .ok_or(crate::error::AppError::NotReady(crate::error::NotReadyKind::SyncSetup))?;
 
     // Validate user has credits/balance before allowing sync.
     // This is skipped when the caller has already performed the check (e.g.

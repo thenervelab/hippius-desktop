@@ -100,13 +100,11 @@ pub async fn run_backfill_for_drive(state: &AppState, account_id: &str, label: &
     //      final, not transient) so pre-backfill consumers — the FE's
     //      "Indexing folders…" banner — don't wait forever on a state that
     //      never changes.
-    let identity = match crate::sync::identity::resolve_drive_identity(&pool, account_id, label).await {
-        Ok(identity) => identity,
-        // The row vanished between the flag check and here (a remove_drive /
-        // logout race) — the same transient state the later drive lookup
-        // reported as NotReady before this gate existed.
-        Err(AppError::Validation(_)) => return Ok(BackfillOutcome::NotReady),
-        Err(other) => return Err(other),
+    // A vanished row (`None`) means a remove_drive / logout race between the
+    // flag check and here — the same transient state the later drive lookup
+    // reported as NotReady before this gate existed.
+    let Some(identity) = crate::sync::identity::lookup_drive_identity(&pool, account_id, label).await? else {
+        return Ok(BackfillOutcome::NotReady);
     };
     if identity.is_member {
         info!(label = %label, "backfill: member drive; nothing to backfill — marking done");
