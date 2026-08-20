@@ -409,7 +409,15 @@ describe("ShareFileModal", () => {
 
     render(withFinderState(<ShareFileModal />, CHOOSING));
 
-    fireEvent.change(screen.getByLabelText(/link expires/i), { target: { value: "never" } });
+    // The expiry picker is the shared Radix `Select`: drive it entirely by
+    // keyboard (open the trigger, Enter on the option) — jsdom has no real
+    // pointer events, and Radix items select on Enter/Space.
+    const trigger = screen.getByLabelText(/link expires/i);
+    fireEvent.keyDown(trigger, { key: "Enter" });
+    fireEvent.keyDown(
+      await screen.findByRole("option", { name: /until i revoke it/i }),
+      { key: "Enter" },
+    );
     confirmChooser();
 
     await screen.findByDisplayValue(/share\/never-tok#k=K/);
