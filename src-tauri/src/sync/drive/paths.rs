@@ -448,6 +448,8 @@ mod set_path_tests {
                 label TEXT NOT NULL DEFAULT 'default',
                 timestamp INTEGER NOT NULL,
                 is_paused INTEGER NOT NULL DEFAULT 0,
+                owner_ss58 TEXT,
+                wire_folder_hash TEXT,
                 UNIQUE(owner, label)
             )",
         )
@@ -680,7 +682,9 @@ mod tests {
                 type TEXT NOT NULL,
                 label TEXT NOT NULL DEFAULT 'default',
                 is_paused INTEGER NOT NULL DEFAULT 0,
-                timestamp INTEGER NOT NULL DEFAULT 0
+                timestamp INTEGER NOT NULL DEFAULT 0,
+                owner_ss58 TEXT,
+                wire_folder_hash TEXT
             )",
         )
         .execute(&pool)
