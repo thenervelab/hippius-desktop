@@ -272,14 +272,72 @@ async fn api_ctx(state: &AppState) -> Result<ApiCtx> {
 /// refused as `Validation` (surfaced, never FE-silenced): only the owner can
 /// mint invites or manage members, and the server would reject the calls
 /// anyway — refusing locally names the actual rule instead of a 403.
-async fn resolve_own_drive(state: &AppState, account_id: &str, label: &str) -> Result<crate::sync::identity::DriveIdentity> {
-    let identity = crate::sync::identity::resolve_drive_identity(state.pool()?, account_id, label).await?;
+///
+/// `pub` for the integration tests: this is the single owner-gate every
+/// owner-side command (`create_drive_invite`, `list_drive_members`,
+/// `remove_drive_member`) resolves through.
+pub async fn resolve_own_drive(pool: &sqlx::SqlitePool, account_id: &str, label: &str) -> Result<crate::sync::identity::DriveIdentity> {
+    let identity = crate::sync::identity::resolve_drive_identity(pool, account_id, label).await?;
     if identity.is_member {
         return Err(AppError::Validation(format!(
             "'{label}' is a drive shared with you — only its owner can manage invites and members"
         )));
     }
     Ok(identity)
+}
+
+/// Persist a member drive locally: allocate the labeled `sync_paths` row
+/// carrying the owner's wire identity, then seal the owner's folder mnemonic
+/// into the new config dir under the member's drive password — the seal
+/// `initialize_sync_inner` later unlocks with (a member config dir has no
+/// derive-from-master self-heal, so this file is the drive's only local key
+/// source).
+///
+/// MUST be called with `AppState::recovery_lock` held: `master_mnemonic`
+/// decrypts the drive password, and a concurrent password rotation between
+/// the read and the seal write would strand the seal under the old password.
+/// `pub` for the integration tests (`tests/shared_drive_server_mock.rs`),
+/// which drive the row+seal effects against a temp HOME with the HTTP layer
+/// mocked.
+pub async fn install_member_drive(
+    pool: &sqlx::SqlitePool,
+    account_id: &str,
+    member: &MemberDriveIdentity,
+    local_path: &str,
+    display_label: &str,
+    folder_phrase: &Zeroizing<String>,
+    master_mnemonic: &str,
+) -> Result<String> {
+    // Allocate the local drive row atomically, persisting the owner's wire
+    // identity (LabelMode::Allocate — member drives are created exactly once,
+    // never upserted; the base label is suffixed on collision).
+    let base = crate::sync::folders::sanitize_label(display_label)?;
+    let label = crate::sync::paths::set_sync_path_internal(
+        pool,
+        account_id,
+        local_path,
+        false,
+        crate::sync::paths::LabelMode::Allocate {
+            base: &base,
+            member: Some(member),
+        },
+    )
+    .await?;
+
+    let drive_password = crate::sync::config::get_drive_password(pool, account_id, Some(master_mnemonic)).await?;
+    let folder_dir = crate::sync::mnemonic::config_dir_for_folder(account_id, &label)?;
+    std::fs::create_dir_all(&folder_dir)?;
+
+    let enc_path = folder_dir.join("enc_mnemonic.json");
+    let phrase_owned = Zeroizing::new(folder_phrase.to_string());
+    tokio::task::spawn_blocking(move || {
+        hcfs_client::auth::save_encrypted_mnemonic(&enc_path, &phrase_owned, &drive_password).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("seal task failed to join: {e}")))?
+    .map_err(AppError::Hcfs)?;
+
+    Ok(label)
 }
 
 // ─── IPC commands ──────────────────────────────────────────────────────────
@@ -298,7 +356,7 @@ pub async fn create_drive_invite(
 ) -> Result<DriveInviteLink> {
     let state = app.state::<AppState>();
     let ctx = api_ctx(&state).await?;
-    let identity = resolve_own_drive(&state, &ctx.account_id, &label).await?;
+    let identity = resolve_own_drive(state.pool()?, &ctx.account_id, &label).await?;
 
     // The folder-key entropy the link's fragment carries. The master read is
     // serialized against password rotation (`recovery_lock`), the sanctioned
@@ -340,7 +398,7 @@ pub async fn create_drive_invite(
 pub async fn list_drive_members(app: tauri::AppHandle, label: String) -> Result<Vec<DriveMemberInfo>> {
     let state = app.state::<AppState>();
     let ctx = api_ctx(&state).await?;
-    let identity = resolve_own_drive(&state, &ctx.account_id, &label).await?;
+    let identity = resolve_own_drive(state.pool()?, &ctx.account_id, &label).await?;
 
     let resp = http_list_members(&state.api_client.clone(), &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash).await?;
     Ok(resp
@@ -361,7 +419,7 @@ pub async fn list_drive_members(app: tauri::AppHandle, label: String) -> Result<
 pub async fn remove_drive_member(app: tauri::AppHandle, label: String, member_ss58: String) -> Result<()> {
     let state = app.state::<AppState>();
     let ctx = api_ctx(&state).await?;
-    let identity = resolve_own_drive(&state, &ctx.account_id, &label).await?;
+    let identity = resolve_own_drive(state.pool()?, &ctx.account_id, &label).await?;
 
     // Owner path: the server keys the delete by the caller's own identity;
     // no `?owner=` (that param exists for the self-leave branch).
@@ -489,11 +547,12 @@ pub async fn add_shared_drive(
         .decode(&entry.grant_blob)
         .map_err(|e| AppError::Crypto(format!("stored grant blob is not valid base64: {e}")))?;
 
-    // 2. Open the grant and install the owner's folder key. Everything that
-    //    reads the master or writes a password-derived seal runs under
-    //    `recovery_lock`, serialized against password rotation. The Argon2id
+    // 2. Open the grant and install the drive (row + sealed folder key), all
+    //    under ONE `recovery_lock` scope: the master read, the drive-password
+    //    decrypt, and the seal write must not interleave with a password
+    //    rotation, or the seal lands under the old password. The Argon2id
     //    open (~1.5 s) is offloaded — never run a KDF on the runtime.
-    let phrase: Zeroizing<String> = {
+    let label = {
         let _recovery_guard = state.recovery_lock.lock().await;
         let master = crate::sync::mnemonic::get_mnemonic_for_account(&state, &ctx.account_id).await?;
 
@@ -507,46 +566,12 @@ pub async fn add_shared_drive(
         // with — this is also the "entropy derives a valid mnemonic" check.
         let mnemonic =
             bip39::Mnemonic::from_entropy(entropy.as_ref()).map_err(|e| AppError::Crypto(format!("grant entropy is not a folder key: {e}")))?;
-        Zeroizing::new(mnemonic.to_string())
+        let phrase = Zeroizing::new(mnemonic.to_string());
+
+        install_member_drive(pool, &ctx.account_id, &member_identity, &local_path, &display_label, &phrase, &master).await?
     };
 
-    // 3. Allocate the local drive row atomically, persisting the owner's wire
-    //    identity (LabelMode::Allocate — member drives are created exactly
-    //    once, never upserted).
-    let base = crate::sync::folders::sanitize_label(&display_label)?;
-    let label = crate::sync::paths::set_sync_path_internal(
-        pool,
-        &ctx.account_id,
-        &local_path,
-        false,
-        crate::sync::paths::LabelMode::Allocate {
-            base: &base,
-            member: Some(&member_identity),
-        },
-    )
-    .await?;
-
-    // 4. Seal the owner's folder mnemonic into the new config dir under the
-    //    member's drive password — the seal `initialize_sync_inner` unlocks
-    //    with (a member config dir has no derive-from-master self-heal, so
-    //    this file is the drive's only local key source).
-    {
-        let _recovery_guard = state.recovery_lock.lock().await;
-        let drive_password = crate::sync::config::get_drive_password(pool, &ctx.account_id, None).await?;
-        let folder_dir = crate::sync::mnemonic::config_dir_for_folder(&ctx.account_id, &label)?;
-        std::fs::create_dir_all(&folder_dir)?;
-
-        let enc_path = folder_dir.join("enc_mnemonic.json");
-        let phrase_owned = Zeroizing::new(phrase.to_string());
-        tokio::task::spawn_blocking(move || {
-            hcfs_client::auth::save_encrypted_mnemonic(&enc_path, &phrase_owned, &drive_password).map_err(|e| e.to_string())
-        })
-        .await
-        .map_err(|e| AppError::Other(format!("seal task failed to join: {e}")))?
-        .map_err(AppError::Hcfs)?;
-    }
-
-    // 5. Let the webview render files under the new root, then run the normal
+    // 3. Let the webview render files under the new root, then run the normal
     //    init funnel (it resolves the member identity from the row we just
     //    wrote and applies every member skip). Mirror add_local_sync_folder's
     //    immediate "Preparing sync…" mark so the widget appears within a tick

@@ -168,6 +168,58 @@ fn folder_entries_backfill_gates_member_drives() {
     );
 }
 
+fn shared_drive_commands_src() -> String {
+    std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/shared_drives/commands.rs")).expect("read shared_drives/commands.rs")
+}
+
+/// Self-leave must ALWAYS name the drive owner: the server's bare fallback
+/// (`?owner=` absent) deletes EVERY same-hash membership of the caller in one
+/// statement, and folder hashes are label-derived so two owners' "Documents"
+/// drives collide as a matter of course. The behavioral pass-through is
+/// covered in `tests/shared_drive_server_mock.rs`; this pins the COMMAND to
+/// the resolved owner value so a refactor can't quietly drop the param.
+#[test]
+fn leave_shared_drive_always_passes_the_owner_param() {
+    let src = shared_drive_commands_src();
+    let body = fn_body(&src, "pub async fn leave_shared_drive(");
+    assert!(
+        body.contains("Some(&identity.wire_ss58)"),
+        "leave_shared_drive must pass the resolved owner as the ?owner= param"
+    );
+}
+
+/// Every owner-side command resolves its label through the single
+/// `resolve_own_drive` gate (which refuses member labels). Counting the call
+/// sites means dropping the gate from ONE command still fails here.
+#[test]
+fn owner_side_commands_route_through_the_own_drive_gate() {
+    let src = shared_drive_commands_src();
+    for command in [
+        "pub async fn create_drive_invite(",
+        "pub async fn list_drive_members(",
+        "pub async fn remove_drive_member(",
+    ] {
+        let body = fn_body(&src, command);
+        assert!(
+            body.contains("resolve_own_drive("),
+            "{command} must resolve its label through resolve_own_drive"
+        );
+    }
+}
+
+/// Storage on a shared drive bills the OWNER: `add_shared_drive` must not
+/// grow a `require_eligible` gate on the member's own balance (the init
+/// funnel's member skip and the server 402 are the authorities).
+#[test]
+fn add_shared_drive_has_no_member_side_credit_gate() {
+    let src = shared_drive_commands_src();
+    let body = fn_body(&src, "pub async fn add_shared_drive(");
+    assert!(
+        !body.contains("require_eligible"),
+        "add_shared_drive must not gate on the MEMBER's credit balance — the owner pays"
+    );
+}
+
 /// The per-cycle folder-entity sync must carry its OWN member gate: the
 /// member backfill stamps `folder_entries_backfilled_at`, so the
 /// `NotBackfilledYet` gate above it does NOT defend member drives.
