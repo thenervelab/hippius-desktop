@@ -510,6 +510,12 @@ pub async fn get_sync_folders_with_stats(state: tauri::State<'_, crate::app_stat
         // the post-login paused-drive reports.
         let status = if sp.is_paused { "paused" } else { "syncing" }.to_string();
 
+        // KNOWN GAP (shared drives v1): this join derives the hash from the
+        // LOCAL label, so a MEMBER drive (whose wire hash is the owner's)
+        // matches no remote row and shows blank stats — cosmetic only, and
+        // the remote listing is own-account-scoped at the pinned rev anyway.
+        // Making it member-aware needs the identity columns on the sync-path
+        // listing (Task 6 surface work).
         let remote = remote_by_hash.get(&folder_hash(&sp.label));
 
         local.push(SyncFolderInfo {

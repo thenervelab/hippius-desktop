@@ -366,7 +366,10 @@ async fn fetch_search_files(state: &AppState, account_id: &str, query: &[(&'stat
     // Key by the UNIQUE folder_hash, not the local label, so server hits join to
     // the right drive even when two drives share a basename (see
     // map_search_hit_to_entry). Value carries the local label (for the FE
-    // download path) + the on-disk root.
+    // download path) + the on-disk root. Deriving from the LOCAL label is fine
+    // here even with shared drives: `/search_files` is scoped to THIS
+    // account's own uploads at the pinned rev, so no hit ever carries a
+    // member drive's (owner-namespace) folder hash — nothing to mis-join.
     let hash_to_drive: HashMap<String, (String, String)> = sync_paths
         .iter()
         .filter(|sp| !sp.path.is_empty() && !sp.label.is_empty())

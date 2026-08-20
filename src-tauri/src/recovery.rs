@@ -1452,7 +1452,7 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        sqlx::query("CREATE TABLE sync_paths (owner TEXT NOT NULL, path TEXT NOT NULL, label TEXT NOT NULL, is_paused INTEGER NOT NULL DEFAULT 0)")
+        sqlx::query("CREATE TABLE sync_paths (owner TEXT NOT NULL, path TEXT NOT NULL, label TEXT NOT NULL, is_paused INTEGER NOT NULL DEFAULT 0, owner_ss58 TEXT, wire_folder_hash TEXT)")
             .execute(&pool)
             .await
             .unwrap();
@@ -1503,7 +1503,7 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        sqlx::query("CREATE TABLE sync_paths (owner TEXT NOT NULL, path TEXT NOT NULL, label TEXT NOT NULL, is_paused INTEGER NOT NULL DEFAULT 0)")
+        sqlx::query("CREATE TABLE sync_paths (owner TEXT NOT NULL, path TEXT NOT NULL, label TEXT NOT NULL, is_paused INTEGER NOT NULL DEFAULT 0, owner_ss58 TEXT, wire_folder_hash TEXT)")
             .execute(&pool)
             .await
             .unwrap();
@@ -1599,7 +1599,7 @@ mod tests {
         .execute(&pool)
         .await
         .expect("create hcfs_config");
-        sqlx::query("CREATE TABLE sync_paths (owner TEXT NOT NULL, path TEXT NOT NULL, label TEXT NOT NULL, is_paused INTEGER NOT NULL DEFAULT 0)")
+        sqlx::query("CREATE TABLE sync_paths (owner TEXT NOT NULL, path TEXT NOT NULL, label TEXT NOT NULL, is_paused INTEGER NOT NULL DEFAULT 0, owner_ss58 TEXT, wire_folder_hash TEXT)")
             .execute(&pool)
             .await
             .expect("create sync_paths");

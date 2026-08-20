@@ -454,6 +454,19 @@ pub async fn create_encrypted_backup(mnemonic: String, password: String, output_
 /// — rotation brings every folder that has a `sync_paths` row up to date,
 /// whether or not it had been realised on disk before.
 ///
+/// MEMBER drives (shared-drives phase 2) are excluded at the query: their
+/// seal holds the OWNER's folder mnemonic (installed from the invite grant),
+/// which is NOT derivable from this account's master — re-deriving here would
+/// overwrite the only local copy of the drive key with material that
+/// addresses the owner's namespace under the wrong key (the same land mine
+/// `prepare_config_dir`'s member gate guards in the init funnel). The member
+/// seal therefore stays under the OLD password after a rotation; the drive's
+/// next init fails to unlock and surfaces the member-unrepairable error,
+/// whose remedy (re-add from the grant) restores the seal under the current
+/// password. KNOWN GAP, tracked for Task 4+: rotating the member seal in
+/// place needs either the old password (not available to this flow by
+/// design) or a grant-blob re-open.
+///
 /// Each folder is rewritten independently and a per-folder failure is
 /// warn-logged with its `label`, but — unlike the original best-effort
 /// version — the function returns `Err` listing every folder that could not
@@ -472,7 +485,11 @@ pub(crate) async fn reencrypt_all_folder_mnemonics(
     use crate::auth::account_key::account_key;
 
     let owner = account_key(account_id);
-    let labels: Vec<String> = sqlx::query_scalar("SELECT label FROM sync_paths WHERE owner = ?")
+    // Own drives only — both member columns NULL (the `resolve_drive_identity`
+    // own-drive shape). A half-set row is corrupt and conservatively skipped
+    // too: writing a derived seal into a slot whose identity is undecidable
+    // could still clobber member key material.
+    let labels: Vec<String> = sqlx::query_scalar("SELECT label FROM sync_paths WHERE owner = ? AND owner_ss58 IS NULL AND wire_folder_hash IS NULL")
         .bind(&owner)
         .fetch_all(pool)
         .await?;
@@ -803,7 +820,7 @@ mod tests {
         }
 
         let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
-        sqlx::query("CREATE TABLE sync_paths (owner TEXT NOT NULL, path TEXT NOT NULL, label TEXT NOT NULL, is_paused INTEGER NOT NULL DEFAULT 0)")
+        sqlx::query("CREATE TABLE sync_paths (owner TEXT NOT NULL, path TEXT NOT NULL, label TEXT NOT NULL, is_paused INTEGER NOT NULL DEFAULT 0, owner_ss58 TEXT, wire_folder_hash TEXT)")
             .execute(&pool)
             .await
             .unwrap();
@@ -819,6 +836,19 @@ mod tests {
                 .await
                 .unwrap();
         }
+        // A MEMBER drive row (shared drives phase 2): its seal holds the
+        // OWNER's folder mnemonic and must survive the rotation untouched —
+        // re-deriving it from this account's master would destroy the only
+        // local copy of the drive key.
+        sqlx::query("INSERT INTO sync_paths (owner, path, label, owner_ss58, wire_folder_hash) VALUES (?, ?, ?, ?, ?)")
+            .bind(&owner)
+            .bind("/tmp/team")
+            .bind("team")
+            .bind("5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty")
+            .bind("0123456789abcdef")
+            .execute(&pool)
+            .await
+            .unwrap();
 
         // A stable BIP39 test mnemonic — NOT a real secret. Common test vector.
         let master = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
@@ -832,7 +862,23 @@ mod tests {
         let alpha_folder_mnemonic = hcfs_client::drive::keys::derive_folder_mnemonic(master, "alpha").unwrap();
         hcfs_client::auth::save_encrypted_mnemonic(&alpha_enc, &alpha_folder_mnemonic, "old password").unwrap();
 
+        // Seed the member drive's owner seal (any valid mnemonic that is NOT
+        // derive(master, "team") — here the master itself as a stand-in).
+        let team_dir = config_dir_for_folder(account, "team").unwrap();
+        tokio::fs::create_dir_all(&team_dir).await.unwrap();
+        let team_enc = team_dir.join("enc_mnemonic.json");
+        hcfs_client::auth::save_encrypted_mnemonic(&team_enc, master, "old password").unwrap();
+        let team_seal_before = tokio::fs::read(&team_enc).await.unwrap();
+
         reencrypt_all_folder_mnemonics(&pool, account, master, new_password).await.unwrap();
+
+        // team (member drive): the owner seal must be byte-identical — not
+        // re-derived, not re-encrypted under the new password.
+        assert_eq!(
+            tokio::fs::read(&team_enc).await.unwrap(),
+            team_seal_before,
+            "a member drive's owner seal must survive rotation untouched"
+        );
 
         // alpha: must decrypt under NEW password and equal the deterministic derivation.
         let recovered = hcfs_client::auth::recover_mnemonic(&alpha_enc, new_password).unwrap();
@@ -868,7 +914,7 @@ mod tests {
         }
 
         let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
-        sqlx::query("CREATE TABLE sync_paths (owner TEXT NOT NULL, path TEXT NOT NULL, label TEXT NOT NULL, is_paused INTEGER NOT NULL DEFAULT 0)")
+        sqlx::query("CREATE TABLE sync_paths (owner TEXT NOT NULL, path TEXT NOT NULL, label TEXT NOT NULL, is_paused INTEGER NOT NULL DEFAULT 0, owner_ss58 TEXT, wire_folder_hash TEXT)")
             .execute(&pool)
             .await
             .unwrap();
@@ -892,7 +938,7 @@ mod tests {
         }
 
         let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
-        sqlx::query("CREATE TABLE sync_paths (owner TEXT NOT NULL, path TEXT NOT NULL, label TEXT NOT NULL, is_paused INTEGER NOT NULL DEFAULT 0)")
+        sqlx::query("CREATE TABLE sync_paths (owner TEXT NOT NULL, path TEXT NOT NULL, label TEXT NOT NULL, is_paused INTEGER NOT NULL DEFAULT 0, owner_ss58 TEXT, wire_folder_hash TEXT)")
             .execute(&pool)
             .await
             .unwrap();
