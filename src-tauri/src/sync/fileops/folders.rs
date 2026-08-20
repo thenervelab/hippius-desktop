@@ -157,6 +157,10 @@ pub(crate) async fn list_remote_folders_internal(pool: &SqlitePool, account_id: 
         ss58_address: account_id.to_string(),
         folder_hash: String::new(),
         read_timeout_ms: None,
+        // Account-scoped listing under the caller's own identity — never a
+        // member-drive client (Task 3 threads member identity through
+        // `build_hcfs_config`, not here).
+        shared_drive_member: false,
     };
 
     let client = hcfs_client::client::HcfsClient::new(client_config).map_err(|e| crate::error::AppError::Hcfs(e.to_string()))?;
@@ -205,6 +209,8 @@ pub async fn list_remote_folders(state: tauri::State<'_, crate::app_state::AppSt
         ss58_address: account_id.clone(),
         folder_hash: String::new(),
         read_timeout_ms: None,
+        // Account-scoped listing under the caller's own identity.
+        shared_drive_member: false,
     };
 
     let client = hcfs_client::client::HcfsClient::new(client_config).map_err(|e| crate::error::AppError::Hcfs(e.to_string()))?;
@@ -419,6 +425,9 @@ pub async fn delete_remote_folder(
         ss58_address: account_id.clone(),
         folder_hash: fhash.clone(),
         read_timeout_ms: None,
+        // Deleting the caller's OWN remote folder — a member cannot
+        // unregister the owner's drive through this path.
+        shared_drive_member: false,
     };
 
     let client = hcfs_client::client::HcfsClient::new(client_config).map_err(|e| crate::error::AppError::Hcfs(e.to_string()))?;

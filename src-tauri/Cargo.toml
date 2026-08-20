@@ -136,16 +136,18 @@ alloy-signer-local = { version = "0.8", default-features = false, features = [
 # `fetch_remote_state` info!, scan/temp-prune off the runtime, restat skip),
 # #339 (upload session by file size, never /health), #334/#335 (synced
 # baseline keeps server revision; KeepLocal rebases onto remote), #343
-# (Bearer on migration status/cancel/summary).
+# (Bearer on migration status/cancel/summary), #348 (shared drives phase 1:
+# for_shared_drive, SHARED_DRIVE_REVOKED_MARKER, invite/membership DTOs,
+# drive_members auth).
 #
 # Bumping this rev is the only way a hcfs change reaches the desktop, so it
 # stays exact and is guarded by the wire-contract pins in tests/hcfs_contract.rs.
-hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "e557b578738c620818bd07c55978661a57a441c7" }
+hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "3ff8e9f20141e19a73a3290678b06b6e35dcf7f6" }
 # hcfs-shared pulls in the `network` module types (RegisterRelativePathEntry,
 # MAX_REGISTER_RELATIVE_PATHS_BATCH, ...) that hcfs-client takes/returns on
 # its public API but does not re-export. Pinned to the same git rev so the
 # wire types stay in lockstep with the client.
-hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "e557b578738c620818bd07c55978661a57a441c7" }
+hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "3ff8e9f20141e19a73a3290678b06b6e35dcf7f6" }
 # NFC-normalise relative_path strings before posting them to the server's
 # register_relative_paths endpoint. macOS APFS hands filenames back in NFD
 # and the server's path_validator hard-rejects anything non-NFC — see the

@@ -269,6 +269,9 @@ pub(crate) fn build_hcfs_config(server_url: &str, bearer_token: &str, account_id
         // The desktop has no reason to override yet — set explicitly only
         // if a deployment profile needs a different per-read deadline.
         read_timeout_ms: None,
+        // Task 3 threads the resolved `DriveIdentity` through this helper;
+        // until then every caller builds an own-drive client.
+        shared_drive_member: false,
     }
 }
 

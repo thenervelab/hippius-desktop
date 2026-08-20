@@ -175,6 +175,8 @@ fn live_client(server_url: &str, bearer: &str, ss58: &str) -> HcfsClient {
         ss58_address: ss58.to_string(),
         folder_hash,
         read_timeout_ms: None,
+        // Mirrors `build_hcfs_config`: an own-drive client, never a member.
+        shared_drive_member: false,
     };
     HcfsClient::new(config).expect("construct HcfsClient for the live server")
 }
