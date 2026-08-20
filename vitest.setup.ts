@@ -10,3 +10,29 @@ import { cleanup } from "@testing-library/react";
 afterEach(() => {
   cleanup();
 });
+
+// jsdom is missing the layout/pointer APIs Radix popover-style components
+// (e.g. the shared `Select`) touch when they open: floating-ui observes the
+// trigger with ResizeObserver, and the focused item is scrolled into view /
+// pointer-captured. Stub them once here so any test can open those components
+// without each spec re-declaring the same boilerplate. Guarded on `window`
+// because a few pure-logic suites opt into the node environment.
+if (typeof window !== "undefined") {
+  if (!("ResizeObserver" in window)) {
+    class ResizeObserverStub {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    Object.assign(window, { ResizeObserver: ResizeObserverStub });
+  }
+  if (!window.HTMLElement.prototype.scrollIntoView) {
+    window.HTMLElement.prototype.scrollIntoView = () => {};
+  }
+  if (!window.HTMLElement.prototype.hasPointerCapture) {
+    window.HTMLElement.prototype.hasPointerCapture = () => false;
+  }
+  if (!window.HTMLElement.prototype.releasePointerCapture) {
+    window.HTMLElement.prototype.releasePointerCapture = () => {};
+  }
+}

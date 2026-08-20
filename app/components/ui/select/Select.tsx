@@ -1,5 +1,8 @@
 "use client";
 
+// The dialog-style, input-shell select (named export) used by modals — VM
+// creation, support tickets, the share modal. Not to be confused with the
+// sibling `./index.tsx`, which DEFAULT-exports a compact chart-style select.
 import * as React from "react";
 import * as SelectPrimitive from "@radix-ui/react-select";
 import { ChevronDown, Loader } from "lucide-react";
