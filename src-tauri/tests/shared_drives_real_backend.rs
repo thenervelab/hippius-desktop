@@ -36,31 +36,36 @@
 //!
 //! # The two revocation shapes (VERIFIED against the pinned rev)
 //!
+//! Both live shapes now surface [`SHARED_DRIVE_REVOKED_MARKER`] — hcfs PR
+//! #349's **two-stage revocation arbiter** (`check_and_recover_remote_folder`)
+//! closed the gap this e2e originally found (raw 403 / suspicious-empty
+//! leaking through as generic sync failures):
+//!
 //! 1. **The owner removes the MEMBER** (the `remove_drive_member` owner
-//!    path): the member's `fetch_remote_state` is answered **403 Forbidden**
-//!    ("Not authorized to access this user's data").
+//!    path): the member's `fetch_remote_state` is answered **403 Forbidden**.
+//!    With a single membership under that owner, the owner-scoped
+//!    `/list_folders/{owner}` gate itself answers the same uniform 403
+//!    (stage 1 is forbidden-shaped, so it cannot arbitrate), and **stage 2**
+//!    consults `GET /v1/drive-memberships` with the member's own bearer —
+//!    a 200 without the `(owner_ss58, folder_hash)` row confirms revocation
+//!    and the marker is substituted into the `SyncError` event. A row still
+//!    present, or any memberships fetch failure, stays transient with the
+//!    ORIGINAL error (fail-closed: a 403 alone never confirms — a
+//!    membership-DB outage produces the same 403).
 //! 2. **The drive disappears** (owner unregisters/deletes the drive while
 //!    the membership row survives): the member's `get_state` succeeds with
-//!    ZERO files, and the engine's **mass-deletion guard** aborts the cycle
-//!    ("Suspicious empty remote response ... Refusing to prevent mass local
-//!    deletion") — the member's local files are protected.
+//!    ZERO files and the engine's mass-deletion guard aborts the cycle
+//!    ("Suspicious empty remote response ..."); that shape is a revocation
+//!    candidate, and **stage 1** — the owner-scoped listing, which the
+//!    dangling membership row still authorizes — 200s WITHOUT the folder,
+//!    confirming the marker. Either way the member's local files are never
+//!    touched.
 //!
-//! KNOWN GAP (upstream, found BY this e2e): NEITHER live shape produces
-//! [`SHARED_DRIVE_REVOKED_MARKER`]. The marker substitution is gated on
-//! `is_remote_folder_removed_error` (404/"folder not found" shapes), which
-//! matches neither the 403 nor the suspicious-empty refusal; hcfs-client's
-//! own `member_revocation_backs_off_with_the_marker` unit test injects the
-//! literal string "folder not found" by hand, so upstream never verified a
-//! live producer. Until hcfs-client routes a member drive's 403 /
-//! suspicious-empty errors through its listing-availability check (the
-//! check itself already concludes `MemberRevoked` correctly — its pre-sync
-//! variant logs exactly that during these tests), revocation surfaces on
-//! the desktop as a generic gated sync failure and the dedicated
-//! classify → `handle_shared_drive_revoked` → `DriveStatus::Error` surface
-//! stays dormant. The desktop side is still correct against its contract —
-//! pinned hermetically — and the two assertions below are the tripwires: a
-//! pin bump that starts emitting the marker fails them, which is the signal
-//! to flip them to the marker and delete this paragraph.
+//! The two assertions below are the flipped tripwires: they require the
+//! surfaced error to EQUAL the marker, so a future pin bump that regresses
+//! either arbiter stage fails them. (Live re-run history: 2026-08-20 at pin
+//! `3ff8e9f` — both shapes leaked the raw errors, gap filed; 2026-08-21 at
+//! pin `ab4b5cd` — both shapes surface the marker.)
 //!
 //! # What it does NOT drive (and why that's honest)
 //!
@@ -535,9 +540,10 @@ async fn member_accept_and_install(env: &LiveEnv, http: &reqwest::Client, owner:
 
 /// Owner mints → member accepts + installs → files round-trip BOTH
 /// directions → the owner removes the member (`remove_drive_member`'s owner
-/// path, no `?owner=`) → the member's next cycle fails with the 403 shape
-/// (revocation shape 1; see the module docs' KNOWN GAP — not the marker at
-/// this pin) → the member's local files are intact.
+/// path, no `?owner=`) → the member's next cycle surfaces
+/// [`SHARED_DRIVE_REVOKED_MARKER`] via the stage-2 memberships consult
+/// (single-membership topology — the module docs' revocation shape 1) →
+/// the member's local files are intact.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "live-lane: needs HCFS_DESKTOP_E2E_SERVER_URL + per-account bearers/ss58s and a running hcfs-server with HCFS_FEATURE_SHARED_DRIVES=1"]
 async fn files_round_trip_and_member_removal_denies_the_member() {
@@ -571,7 +577,7 @@ async fn files_round_trip_and_member_removal_denies_the_member() {
         "no member sync error may occur before the revocation"
     );
 
-    // Revocation, shape 2: owner removes the member (owner path — no ?owner=).
+    // Revocation, shape 1: owner removes the member (owner path — no ?owner=).
     http_remove_member(
         &http,
         &env.server_url,
@@ -583,20 +589,17 @@ async fn files_round_trip_and_member_removal_denies_the_member() {
     .await
     .expect("owner removes member");
 
-    // VERIFIED pinned-rev behavior: the member's fetch is denied with a 403,
-    // and hcfs-client's folder-removed gate does not translate it into the
-    // marker (module docs, KNOWN GAP). If a pin bump starts producing the
-    // marker here, THIS assert fails — flip it to the marker and drop the
-    // gap note.
-    let denial_seen = || {
-        member.side.handler.sync_errors().iter().any(|e| e.contains("403"))
-            || member.side.handler.sync_errors().iter().any(|e| e == SHARED_DRIVE_REVOKED_MARKER)
-    };
-    sync_until(&member.side, "removal denial surfaces on the member", denial_seen).await;
+    // The two-stage arbiter (module docs, shape 1): the member's fetch is
+    // denied with a 403, the owner-scoped listing is forbidden-shaped too
+    // (single membership — this is exactly the topology stage 2 exists
+    // for), and the memberships consult confirms the revocation, so the
+    // surfaced error IS the marker — never the raw 403.
+    let marker_seen = || member.side.handler.sync_errors().iter().any(|e| e == SHARED_DRIVE_REVOKED_MARKER);
+    sync_until(&member.side, "revocation marker surfaces on the member", marker_seen).await;
     let errors = member.side.handler.sync_errors();
     assert!(
-        errors.iter().all(|e| e.contains("403") && !e.eq(SHARED_DRIVE_REVOKED_MARKER)),
-        "at the pinned rev a removed member surfaces the raw 403, never the marker — got {errors:?}"
+        errors.iter().all(|e| e == SHARED_DRIVE_REVOKED_MARKER),
+        "a removed member must surface SHARED_DRIVE_REVOKED_MARKER, nothing else — got {errors:?}"
     );
 
     // Revocation is server-side only: the member's local files stay intact.
@@ -624,11 +627,12 @@ async fn files_round_trip_and_member_removal_denies_the_member() {
 
 /// Owner mints → member accepts + installs + syncs one file → the owner
 /// unregisters the DRIVE (membership row survives) → the member's next
-/// cycle is aborted by the engine's mass-deletion guard (revocation shape
-/// 2; see the module docs' KNOWN GAP — the marker does not fire at this
-/// pin) and the member's local files are intact. The intact-files assert is
-/// the load-bearing one: a guard regression here means a revoked drive
-/// wipes the member's local copy.
+/// cycle surfaces [`SHARED_DRIVE_REVOKED_MARKER`]: the mass-deletion guard
+/// trips, and the stage-1 listing (still authorized by the dangling
+/// membership row) 200s without the folder, confirming the revocation
+/// (module docs' shape 2). The intact-files assert stays the load-bearing
+/// one: a guard regression here means a revoked drive wipes the member's
+/// local copy.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "live-lane: needs HCFS_DESKTOP_E2E_SERVER_URL + per-account bearers/ss58s and a running hcfs-server with HCFS_FEATURE_SHARED_DRIVES=1"]
 async fn drive_deletion_trips_the_mass_deletion_guard_on_the_member() {
@@ -648,31 +652,21 @@ async fn drive_deletion_trips_the_mass_deletion_guard_on_the_member() {
 
     // The owner deletes the drive server-side (the desktop's
     // delete_remote_folder call). The membership row survives, so the
-    // member's next `get_state` still succeeds — with ZERO files — and the
-    // engine's suspicious-empty guard refuses the implied mass deletion.
-    // (A pin bump that emits SHARED_DRIVE_REVOKED_MARKER here instead fails
-    // the all-errors assert below — flip these to the marker then.)
+    // member's next `get_state` still succeeds — with ZERO files — the
+    // suspicious-empty guard refuses the implied mass deletion, and the
+    // arbiter's stage-1 listing confirms the folder is gone: the marker.
     owner
         .client
         .unregister_folder(&env.owner_ss58, &owner.identity.wire_folder_hash)
         .await
         .expect("owner unregisters the drive");
 
-    let guard_seen = || {
-        member
-            .side
-            .handler
-            .sync_errors()
-            .iter()
-            .any(|e| e.contains("Suspicious empty remote response") || e == SHARED_DRIVE_REVOKED_MARKER)
-    };
-    sync_until(&member.side, "deletion refusal surfaces on the member", guard_seen).await;
+    let marker_seen = || member.side.handler.sync_errors().iter().any(|e| e == SHARED_DRIVE_REVOKED_MARKER);
+    sync_until(&member.side, "revocation marker surfaces on the member", marker_seen).await;
     let errors = member.side.handler.sync_errors();
     assert!(
-        errors
-            .iter()
-            .all(|e| e.contains("Suspicious empty remote response") && e != SHARED_DRIVE_REVOKED_MARKER),
-        "at the pinned rev a deleted drive trips the member's mass-deletion guard, never the marker — got {errors:?}"
+        errors.iter().all(|e| e == SHARED_DRIVE_REVOKED_MARKER),
+        "a deleted shared drive must surface SHARED_DRIVE_REVOKED_MARKER on the member, nothing else — got {errors:?}"
     );
 
     // Terminal for the member, but strictly server-side: local files intact.
