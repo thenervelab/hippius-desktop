@@ -207,6 +207,27 @@ pub async fn member_row_for_wire_identity(
     Ok(row.map(|(label, path)| MemberDriveRow { label, path }))
 }
 
+/// Map every MEMBER drive label of this account to its drive owner's ss58 —
+/// one query, for listing surfaces that annotate rows in bulk.
+///
+/// Backs `get_sync_folders_with_stats`' `ownerSs58` projection (the FE's only
+/// way to tell a member row from an own row — Task 6's owner badge and menu
+/// gating key off it). Deliberately a light label→ss58 map rather than a
+/// per-label [`resolve_drive_identity`] fan-out: the listing is called on
+/// every settings/files-page mount and on the during-sync poll, and it needs
+/// no hash and no corrupt-row policy — a half-set row simply does not appear
+/// here (its `owner_ss58` may be NULL), and the strict resolver still fails
+/// it closed on every operation that acts on the drive.
+pub async fn member_owner_by_label(pool: &SqlitePool, account_id: &str) -> Result<std::collections::HashMap<String, String>> {
+    let owner = account_key(account_id);
+    let rows: Vec<(String, String)> = sqlx::query_as("SELECT label, owner_ss58 FROM sync_paths WHERE owner = ? AND owner_ss58 IS NOT NULL")
+        .bind(&owner)
+        .fetch_all(pool)
+        .await?;
+
+    Ok(rows.into_iter().collect())
+}
+
 /// A `sync_paths` row whose member-identity columns violate the "both NULL or
 /// both valid" invariant. Surfaced as `AppError::Db(sqlx::Error::Decode)` —
 /// the same shape `shares::history` uses for a row value that violates an
@@ -502,5 +523,20 @@ mod tests {
             .expect("lookup")
             .expect("row present");
         assert_eq!(row.label, "team", "the oldest row must win deterministically");
+    }
+
+    // The bulk listing annotation: only member rows appear, keyed by label,
+    // and only for the requested account — an own drive must never gain an
+    // owner ss58 and another account's member rows must not leak in.
+    #[tokio::test]
+    async fn member_owner_by_label_maps_member_rows_only_for_the_account() {
+        let pool = make_pool().await;
+        insert_row(&pool, ACCT, "docs", None, None).await;
+        insert_row(&pool, ACCT, "shared-docs", Some(OWNER), Some(WIRE_HASH)).await;
+        insert_row(&pool, OWNER, "their-shared", Some(ACCT), Some(WIRE_HASH)).await;
+
+        let map = member_owner_by_label(&pool, ACCT).await.expect("map");
+        assert_eq!(map.len(), 1, "own rows and other accounts' rows must be absent");
+        assert_eq!(map.get("shared-docs").map(String::as_str), Some(OWNER));
     }
 }

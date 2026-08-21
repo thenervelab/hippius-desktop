@@ -29,6 +29,13 @@ pub struct SyncFolderInfo {
     pub file_count: Option<u64>,
     pub total_bytes: Option<u64>,
     pub last_modified: Option<i64>,
+    /// The drive OWNER's ss58 when this row is a MEMBER drive (shared with
+    /// this account), `None` for the account's own drives. The FE keys the
+    /// owner badge and the member-vs-own menu gating off this field — it is
+    /// the listing's only member/own discriminant, threaded in Rust because
+    /// the wire identity lives on the `sync_paths` row and must never be
+    /// inferred in TypeScript.
+    pub owner_ss58: Option<String>,
 }
 
 /// A remote-only folder (not synced locally) for the browser UI.
@@ -484,6 +491,12 @@ pub async fn get_sync_folders_with_stats(state: tauri::State<'_, crate::app_stat
     // only this display join was; files are correctly separated by folder_hash.)
     let remote_by_hash: HashMap<String, &RemoteFolderInfoResult> = remote_folders.iter().map(|f| (f.folder_hash.clone(), f)).collect();
 
+    // Member drives (shared with this account) annotate their rows with the
+    // drive owner's ss58 — see `SyncFolderInfo::owner_ss58`. Degrades to an
+    // empty map on a DB error so a transient read failure downgrades member
+    // rows to plain rows rather than failing the whole listing.
+    let member_owners = crate::sync::identity::member_owner_by_label(pool, &account_id).await.unwrap_or_default();
+
     // Build local folders with status and remote stats
     let mut local = Vec::with_capacity(sync_paths.len());
     for sp in &sync_paths {
@@ -513,9 +526,8 @@ pub async fn get_sync_folders_with_stats(state: tauri::State<'_, crate::app_stat
         // KNOWN GAP (shared drives v1): this join derives the hash from the
         // LOCAL label, so a MEMBER drive (whose wire hash is the owner's)
         // matches no remote row and shows blank stats — cosmetic only, and
-        // the remote listing is own-account-scoped at the pinned rev anyway.
-        // Making it member-aware needs the identity columns on the sync-path
-        // listing (Task 6 surface work).
+        // the remote listing is own-account-scoped at the pinned rev anyway,
+        // so a member-aware join has no server data to hit yet.
         let remote = remote_by_hash.get(&folder_hash(&sp.label));
 
         local.push(SyncFolderInfo {
@@ -529,6 +541,7 @@ pub async fn get_sync_folders_with_stats(state: tauri::State<'_, crate::app_stat
                 let ts = if r.updated_at != 0 { r.updated_at } else { r.created_at };
                 ts * 1000 // seconds → milliseconds
             }),
+            owner_ss58: member_owners.get(&sp.label).cloned(),
         });
     }
 
@@ -609,6 +622,45 @@ mod tests {
         // second drive ("tags-2") would have matched nothing.
         let by_label: HashMap<String, &RemoteFolderInfoResult> = remotes.iter().map(|f| (f.label.clone(), f)).collect();
         assert_eq!(by_label.len(), 1, "label keying collapses same-basename folders (the bug)");
+    }
+
+    /// FE wire pin: `SyncFolderInfo`'s camelCase keys, including `ownerSs58`
+    /// (the listing's only member/own discriminant — the owner badge and the
+    /// member-row menu gating in Task 6 key off it). A dropped or renamed key
+    /// ships as a silently-undefined FE field, so the key set is asserted
+    /// exactly; an own drive keeps `ownerSs58` present-but-null (a stable
+    /// shape, not a conditional key).
+    #[test]
+    fn sync_folder_info_wire_keys_are_pinned() {
+        let info = SyncFolderInfo {
+            id: "team-docs".to_string(),
+            folder_name: "team-docs".to_string(),
+            local_path: "/Users/me/team-docs".to_string(),
+            status: "syncing".to_string(),
+            file_count: None,
+            total_bytes: None,
+            last_modified: None,
+            owner_ss58: None,
+        };
+        let json = serde_json::to_value(&info).expect("serialize");
+        let keys: std::collections::BTreeSet<&str> = json.as_object().expect("object").keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            [
+                "id",
+                "folderName",
+                "localPath",
+                "status",
+                "fileCount",
+                "totalBytes",
+                "lastModified",
+                "ownerSs58"
+            ]
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>(),
+            "SyncFolderInfo wire keys must stay exactly these camelCase names"
+        );
+        assert_eq!(json["ownerSs58"], serde_json::Value::Null, "an own drive serializes ownerSs58 as null");
     }
 
     // ── sanitize_label ──────────────────────────────────────────────

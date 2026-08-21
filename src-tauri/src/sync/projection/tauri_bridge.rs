@@ -493,7 +493,17 @@ fn handle_shared_drive_revoked(app: &AppHandle, payload: events::SyncErrorPayloa
     if app_state.revoked_notify.record_failure(&payload.label, REVOKED_NOTIFY_THRESHOLD) {
         tracing::warn!(label = %payload.label, "Shared drive access revoked — tearing down and notifying once");
         tauri::async_runtime::spawn(crate::sync::lifecycle::teardown_revoked_drive(app.clone(), payload.label.clone()));
-        let _ = app.emit(events::SYNC_FAILED_NOTIFY, payload.clone());
+
+        // The persisted notification carries the SAME user copy the drive row
+        // settles on (`SHARED_DRIVE_REVOKED_MESSAGE`), not the engine's
+        // internal marker string — `useFilesNotification` renders
+        // `payload.error` verbatim, and showing two different sentences for
+        // one event reads as two problems. The rewrite is local to this emit:
+        // the classifier already ran on the raw marker above, and the
+        // `SYNC_ERROR` emit below keeps it for the live consumers' contract.
+        let mut notify_payload = payload.clone();
+        notify_payload.error = crate::sync::drive_status::SHARED_DRIVE_REVOKED_MESSAGE.to_string();
+        let _ = app.emit(events::SYNC_FAILED_NOTIFY, notify_payload);
     }
 
     let _ = app.emit(events::SYNC_ERROR, payload);

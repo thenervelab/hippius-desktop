@@ -373,6 +373,24 @@ fn revoked_handler_notifies_once_and_never_feeds_the_flaky_counter() {
         !body.contains("error_notify"),
         "a revocation must never touch the flaky-endpoint counter (error_notify)"
     );
+
+    // Copy unification (Task 6 ride-along): the persisted notification must
+    // carry the user copy the drive row settles on, not the engine's internal
+    // marker — and the rewrite must be local to the notify emit, with
+    // `SYNC_ERROR` still forwarding the raw payload for the live-consumer
+    // contract (classify_sync_error matches the marker by exact equality).
+    assert!(
+        body.contains("notify_payload.error = crate::sync::drive_status::SHARED_DRIVE_REVOKED_MESSAGE"),
+        "the notify payload's error must be rewritten to SHARED_DRIVE_REVOKED_MESSAGE"
+    );
+    assert!(
+        body.contains("app.emit(events::SYNC_FAILED_NOTIFY, notify_payload)"),
+        "the SYNC_FAILED_NOTIFY emit must carry the rewritten payload"
+    );
+    assert!(
+        body.contains("app.emit(events::SYNC_ERROR, payload)"),
+        "SYNC_ERROR must keep the RAW marker payload — never the rewritten copy"
+    );
 }
 
 /// The revocation latch re-arms on the SAME edges as the flaky counter, so a
