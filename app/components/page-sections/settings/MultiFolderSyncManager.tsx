@@ -28,6 +28,7 @@ import {
   driveStatusesAtom,
 } from "@/app/lib/global-atoms/unpinAtoms";
 import { appStore } from "@/lib/store/jotaiStore";
+import { applyDriveStatusToRow } from "@/app/lib/utils/driveRowStatus";
 import { useAtomValue } from "jotai";
 import {
   LocalFoldersSection,
@@ -55,17 +56,12 @@ export default function MultiFolderSyncManager() {
   // the user pauses from another surface.
   useEffect(() => {
     setSyncFolders((prev) =>
-      prev.map((f) => {
-        const entry = driveStatuses.get(f.id);
-        if (!entry) return f;
-        // Widen to `active` vs non-active so the new `error` variant
-        // (emitted by auto_init_sync on per-drive init failure) renders
-        // as non-syncing. The FE retry ladder in `tryAutoInitSync`
-        // flips errored drives back to Active on success.
-        const newStatus =
-          entry.status.kind === "active" ? "syncing" : "paused";
-        return f.status === newStatus ? f : { ...f, status: newStatus };
-      })
+      // Three-state mapping (syncing / paused / error) lives in the shared
+      // `applyDriveStatusToRow` resolver — DriveOnboarding uses the same
+      // one, so the two surfaces cannot diverge. An errored drive (init
+      // failure, revoked shared drive) renders the error treatment in
+      // LocalFoldersSection instead of being collapsed into "paused".
+      prev.map((f) => applyDriveStatusToRow(driveStatuses.get(f.id), f))
     );
   }, [driveStatuses]);
   const [remoteFolders, setRemoteFolders] = useState<RemoteFolder[]>([]);

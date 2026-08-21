@@ -318,6 +318,31 @@ export function LocalFoldersSection({
                     )}
                   </div>
                   <PathTooltip path={folder.localPath} />
+                  {folder.status === "error" && (
+                    <div className="mt-2 ml-6 flex items-center gap-2">
+                      {/* DriveStatus.Error message from Rust (init failure,
+                          revoked shared drive). The Remove button routes to
+                          the EXISTING remove-drive flow (same confirm dialog
+                          as the menu's "Remove from Sync"), which is the
+                          escape hatch for a revoked drive — remove_drive
+                          fully cleans the row, member identity included. */}
+                      <span className="text-xs font-medium text-error-50">
+                        {folder.errorMessage ?? "Sync error"}
+                      </span>
+                      <Button
+                        variant="ghost"
+                        size="auto"
+                        onClick={(e) => {
+                          // Don't let the row's onSelectFolder click fire too.
+                          e.stopPropagation();
+                          onRemoveFolder(folder);
+                        }}
+                        className="h-6 flex-shrink-0 rounded-md border border-error-50/40 px-2 text-xs font-medium text-error-50 hover:bg-error-50/10"
+                      >
+                        Remove
+                      </Button>
+                    </div>
+                  )}
                 </div>
 
                 <TableActionMenu

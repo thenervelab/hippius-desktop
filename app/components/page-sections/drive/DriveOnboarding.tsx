@@ -34,6 +34,7 @@ import {
   triggerSyncPathRefreshAtom,
   driveStatusesAtom,
 } from "@/app/lib/global-atoms/unpinAtoms";
+import { applyDriveStatusToRow } from "@/app/lib/utils/driveRowStatus";
 import { useAtomValue } from "jotai";
 
 interface DriveOnboardingProps {
@@ -64,16 +65,12 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
   // user paused from another surface.
   useEffect(() => {
     setSyncFolders((prev) =>
-      prev.map((f) => {
-        const entry = driveStatuses.get(f.id);
-        if (!entry) return f;
-        // Widen to `active` vs non-active so the new `error` variant
-        // renders as non-syncing. See MultiFolderSyncManager for the
-        // matching change and the retry-on-hippius_auth_ready flow.
-        const newStatus =
-          entry.status.kind === "active" ? "syncing" : "paused";
-        return f.status === newStatus ? f : { ...f, status: newStatus };
-      })
+      // Three-state mapping (syncing / paused / error) lives in the shared
+      // `applyDriveStatusToRow` resolver — MultiFolderSyncManager uses the
+      // same one, so the two surfaces cannot diverge. An errored drive
+      // (init failure, revoked shared drive) renders the error treatment
+      // in LocalFoldersSection instead of being collapsed into "paused".
+      prev.map((f) => applyDriveStatusToRow(driveStatuses.get(f.id), f))
     );
   }, [driveStatuses]);
   const [remoteFolders, setRemoteFolders] = useState<RemoteFolder[]>([]);
