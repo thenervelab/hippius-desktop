@@ -21,7 +21,8 @@ export type NotReadyKind =
   | "SUPERSEDED_BY_PAUSE"
   | "DATABASE_NOT_READY"
   | "RATE_LIMITED"
-  | "VPN_NOT_CONNECTED";
+  | "VPN_NOT_CONNECTED"
+  | "SHARED_DRIVES_UNAVAILABLE";
 
 /**
  * Shape of an `AppError` returned by Tauri commands. The `kind` field

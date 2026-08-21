@@ -76,6 +76,30 @@ export const VM_FEATURE_ENABLED = false;
 export const VM_VPN_ENABLED = false;
 
 /**
+ * Shared drives (cross-account team drives). When `false`, every shared-drive
+ * UI surface is hidden:
+ *   - the "Share drive…" item in both LocalFoldersSection menus (the row's
+ *     3-dot `TableActionMenu` and the right-click `FolderCardContextMenu`),
+ *   - `ShareDriveModal` (mounted in `app/(pages)/layout.tsx` beside
+ *     `ShareFileModal` — renders nothing while the flag is off),
+ *   - the "Shared with me" section in `MultiFolderSyncManager` (settings)
+ *     and `DriveOnboarding` (files page),
+ *   - the member-row treatments in the normal drive lists: the owner badge,
+ *     the owner-only menu-item hiding, and the "Leave shared drive" wording
+ *     (member rows fall back to the plain own-drive menu while off).
+ *
+ * The Rust IPCs (`create_drive_invite`, `list_drive_members`,
+ * `remove_drive_member`, `list_my_drive_memberships`, `leave_shared_drive`,
+ * `add_shared_drive`) stay registered regardless, so flipping this needs no
+ * other code change. Flip to `true` once the hcfs-server fleet runs with
+ * `HCFS_FEATURE_SHARED_DRIVES=1` — against a feature-off server every
+ * surface degrades silently anyway (the backend maps the unmounted routes
+ * to `NotReady(SHARED_DRIVES_UNAVAILABLE)`, which the FE matches explicitly
+ * and hides), but there is no reason to show dead controls before rollout.
+ */
+export const SHARED_DRIVES_ENABLED = false;
+
+/**
  * Referrals page. When `false`, referrals is fully invisible: the sidebar
  * entry is filtered out (`filterNavSections` in NavData.tsx) and a direct
  * `/referrals` navigation redirects to the overview (`FeatureDisabledRedirect`
