@@ -38,6 +38,7 @@ import { useAtomValue } from "jotai";
 import {
   LocalFoldersSection,
   RemoteFoldersSection,
+  SharedWithMeSection,
   RemoveFolderDialog,
   PauseSyncDialog,
   SyncDestinationDialog,
@@ -562,6 +563,11 @@ export default function MultiFolderSyncManager() {
           }
           onBrowseFolder={handleBrowseFolder}
         />
+
+        {/* Flag-gated; renders nothing unless drives are shared with this
+            account (see sharedWithMeState). A newly synced drive lands in
+            the Local list above via the refresh. */}
+        <SharedWithMeSection onDriveAdded={() => refreshFoldersAndStats()} />
       </div>
 
       {/* Dialogs */}

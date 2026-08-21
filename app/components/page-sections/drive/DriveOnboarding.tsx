@@ -28,6 +28,7 @@ import { HcfsSetupDialog } from "@/components/page-sections/settings/HcfsSetupDi
 import {
   LocalFoldersSection,
   RemoteFoldersSection,
+  SharedWithMeSection,
   RemoveFolderDialog,
   PauseSyncDialog,
   SyncDestinationDialog,
@@ -565,6 +566,16 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
             openDeleteServerDialog(folderName)
           }
           onBrowseFolder={handleBrowseFolder}
+        />
+
+        {/* Flag-gated; renders nothing unless drives are shared with this
+            account. onDriveAdded routes the new label to the breadcrumb
+            exactly like a freshly added local folder. */}
+        <SharedWithMeSection
+          onDriveAdded={(label) => {
+            loadFolders();
+            onSyncStarted(label);
+          }}
         />
 
       </div>
