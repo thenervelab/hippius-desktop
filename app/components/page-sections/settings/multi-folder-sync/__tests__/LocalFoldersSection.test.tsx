@@ -3,6 +3,7 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom";
 
 import { LocalFoldersSection } from "../LocalFoldersSection";
+import { LEAVE_UNAVAILABLE_TOOLTIP } from "../folderMenuGating";
 import type { SyncFolder } from "@/app/lib/types/sync-folder";
 
 // jsdom has no IntersectionObserver; render the section as in-view so the
@@ -57,7 +58,8 @@ const REVOKED_MESSAGE = "Access to this shared drive was removed";
 function renderSection(
   syncFolders: SyncFolder[],
   onRemoveFolder = vi.fn(),
-  onLeaveDrive = vi.fn()
+  // Pass `null` to render a surface that did NOT wire onLeaveDrive.
+  onLeaveDrive: ReturnType<typeof vi.fn> | null = vi.fn()
 ) {
   render(
     <LocalFoldersSection
@@ -70,7 +72,7 @@ function renderSection(
       onRemoveFolder={onRemoveFolder}
       onDeleteFromServer={vi.fn()}
       onBrowseFolder={vi.fn()}
-      onLeaveDrive={onLeaveDrive}
+      {...(onLeaveDrive ? { onLeaveDrive } : {})}
     />
   );
   return { onRemoveFolder, onLeaveDrive };
@@ -192,7 +194,33 @@ describe("LocalFoldersSection shared-drive rows", () => {
 
     fireEvent.click(screen.getByText("Leave shared drive"));
     expect(onLeaveDrive).toHaveBeenCalledTimes(1);
-    expect(onLeaveDrive.mock.calls[0][0].id).toBe("team");
+    expect(onLeaveDrive!.mock.calls[0][0].id).toBe("team");
+    expect(onRemoveFolder).not.toHaveBeenCalled();
+  });
+
+  it("member drive without onLeaveDrive: Leave renders DISABLED with a tooltip and never falls back to plain remove", () => {
+    // A surface that hasn't wired onLeaveDrive must not silently downgrade
+    // "Leave shared drive" to onRemoveFolder — a plain remove tears down
+    // only this device's sync and strands the live server-side membership.
+    const { onRemoveFolder } = renderSection(
+      [folder({ id: "team", folderName: "Team", ownerSs58: OWNER })],
+      vi.fn(),
+      null
+    );
+
+    openContextMenu("Team");
+
+    const leaveItem = screen
+      .getByText("Leave shared drive")
+      .closest("button");
+    expect(leaveItem).not.toBeNull();
+    expect(leaveItem).toBeDisabled();
+    expect(leaveItem).toHaveAttribute("title", LEAVE_UNAVAILABLE_TOOLTIP);
+    // Member gating still withholds the own-drive items.
+    expect(screen.queryByText("Remove from Sync")).not.toBeInTheDocument();
+    expect(screen.queryByText("Delete from Server")).not.toBeInTheDocument();
+
+    fireEvent.click(leaveItem!);
     expect(onRemoveFolder).not.toHaveBeenCalled();
   });
 });

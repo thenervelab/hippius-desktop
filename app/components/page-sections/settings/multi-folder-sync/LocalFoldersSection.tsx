@@ -30,7 +30,10 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import FolderCardContextMenu from "@/app/components/ui/context-menu/FolderCardContextMenu";
 import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
 import { shareDriveModalAtom } from "@/app/lib/global-atoms/sharesAtoms";
-import { resolveFolderMenuPlan } from "./folderMenuGating";
+import {
+  LEAVE_UNAVAILABLE_TOOLTIP,
+  resolveFolderMenuPlan,
+} from "./folderMenuGating";
 
 const OwnerAvatar = dynamic(() => import("boring-avatars"), { ssr: false });
 
@@ -67,6 +70,9 @@ interface FolderAction {
   title: string;
   variant?: "destructive";
   onClick: () => void;
+  /** Rendered non-interactive (dimmed, `tooltip` states why) in both menus. */
+  disabled?: boolean;
+  tooltip?: string;
 }
 
 /**
@@ -276,18 +282,30 @@ export function LocalFoldersSection({
           onClick: () => onManageExclusions(folder),
         });
       }
-      actions.push({
-        icon: plan.removeIsLeave ? (
-          <LogOut className="size-4" />
-        ) : (
-          <Trash2 className="size-4" />
-        ),
-        title: plan.removeItemTitle,
-        onClick: () =>
-          plan.removeIsLeave && onLeaveDrive
-            ? onLeaveDrive(folder)
-            : onRemoveFolder(folder),
-      });
+      if (plan.removeIsLeave) {
+        // A member row's remove item NEVER falls back to onRemoveFolder:
+        // plain remove tears down only this device's sync and strands the
+        // live server-side membership. On a surface that hasn't wired
+        // onLeaveDrive the item renders disabled with the reason instead
+        // (both parent surfaces wire it today, so this is defensive).
+        actions.push({
+          icon: <LogOut className="size-4" />,
+          title: plan.removeItemTitle,
+          ...(onLeaveDrive
+            ? { onClick: () => onLeaveDrive(folder) }
+            : {
+                onClick: () => {},
+                disabled: true,
+                tooltip: LEAVE_UNAVAILABLE_TOOLTIP,
+              }),
+        });
+      } else {
+        actions.push({
+          icon: <Trash2 className="size-4" />,
+          title: plan.removeItemTitle,
+          onClick: () => onRemoveFolder(folder),
+        });
+      }
       if (plan.showDeleteFromServer) {
         actions.push({
           icon: <ServerCrash className="size-4" />,
@@ -501,6 +519,8 @@ export function LocalFoldersSection({
                       icon: action.icon,
                       itemTitle: action.title,
                       ...(action.variant ? { variant: action.variant } : {}),
+                      ...(action.disabled ? { disabled: true } : {}),
+                      ...(action.tooltip ? { tooltip: action.tooltip } : {}),
                       onItemClick: action.onClick,
                     })) satisfies ActionItem[]
                   }
@@ -530,6 +550,8 @@ export function LocalFoldersSection({
             icon: action.icon,
             label: action.title,
             ...(action.variant ? { variant: action.variant } : {}),
+            ...(action.disabled ? { disabled: true } : {}),
+            ...(action.tooltip ? { tooltip: action.tooltip } : {}),
             onClick: action.onClick,
           }))}
         />

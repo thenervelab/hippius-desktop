@@ -492,14 +492,14 @@ pub async fn get_sync_folders_with_stats(state: tauri::State<'_, crate::app_stat
     let remote_by_hash: HashMap<String, &RemoteFolderInfoResult> = remote_folders.iter().map(|f| (f.folder_hash.clone(), f)).collect();
 
     // Member drives (shared with this account) annotate their rows with the
-    // drive owner's ss58 — see `SyncFolderInfo::owner_ss58`. Degrades to an
-    // empty map on a DB error so a transient read failure downgrades member
-    // rows to plain rows rather than failing the whole listing — but never
-    // silently: the FE keys its member-row protections on this annotation.
-    let member_owners = crate::sync::identity::member_owner_by_label(pool, &account_id).await.unwrap_or_else(|e| {
-        warn!(error = %e, "member_owner_by_label failed; rendering member drives as plain rows this pass");
-        HashMap::default()
-    });
+    // drive owner's ss58 — see `SyncFolderInfo::owner_ss58`. A failure here
+    // FAILS the whole listing: a transient DB error must never disarm the
+    // member-row protections. Degrading to an empty map renders a member row
+    // as an OWN row, re-arming "Delete from Server"/plain Remove — the exact
+    // controls the data-keyed menu gating exists to withhold. A failed
+    // listing is strictly safer than a wrong one, and the FE's polled
+    // listing self-heals on the next tick.
+    let member_owners = crate::sync::identity::member_owner_by_label(pool, &account_id).await?;
 
     // Build local folders with status and remote stats
     let mut local = Vec::with_capacity(sync_paths.len());
@@ -821,5 +821,55 @@ mod tests {
             "delete_remote_folder must call remote_folder_absent after an unregister error so a durable-but-timed-out delete is reported as success, not a false failure",
         );
         assert!(unregister_idx < recheck_idx, "the idempotency re-check must follow the unregister call");
+    }
+
+    // ── member-owner join failure fails the listing ─────────────────
+    //
+    // `get_sync_folders_with_stats` takes `tauri::State`, so the DB failure
+    // cannot be driven hermetically from a test (no way to construct the
+    // command's state without a Tauri app). The propagation itself is
+    // enforced at the type level by `?`; this pin exists to keep a refactor
+    // from quietly reinstating the old `unwrap_or_else(|_| HashMap::default())`
+    // degrade, which rendered member rows as OWN rows on a transient DB
+    // error — re-arming "Delete from Server"/plain Remove, the exact
+    // controls the FE's data-keyed member gating withholds.
+    #[test]
+    fn member_owner_join_failure_propagates_instead_of_degrading() {
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/fileops/folders.rs")).expect("read folders.rs");
+        let sig_idx = src
+            .find("pub async fn get_sync_folders_with_stats(")
+            .expect("get_sync_folders_with_stats declaration present");
+        let body_start = src[sig_idx..].find('{').expect("fn body opens") + sig_idx;
+        let mut depth = 0usize;
+        let mut body_end = body_start;
+        for (i, ch) in src[body_start..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        body_end = body_start + i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let body = &src[body_start..=body_end];
+
+        let call_idx = body
+            .find("member_owner_by_label(")
+            .expect("get_sync_folders_with_stats must join member owners via member_owner_by_label");
+        let stmt_end = body[call_idx..].find(';').expect("the join call is a statement") + call_idx;
+        let stmt = &body[call_idx..stmt_end];
+
+        assert!(
+            stmt.trim_end().ends_with(".await?"),
+            "the member-owner join must propagate its error with `?` — a failed listing is strictly safer than one that shows member rows as own rows; got statement: {stmt}"
+        );
+        assert!(
+            !stmt.contains("unwrap_or") && !stmt.contains("ok()"),
+            "the member-owner join must not degrade a DB error to an empty map: {stmt}"
+        );
     }
 }

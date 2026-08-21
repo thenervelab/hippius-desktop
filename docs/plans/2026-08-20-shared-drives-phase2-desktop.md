@@ -288,3 +288,14 @@ memberships consult; drive-deletion via the stage-1 listing). Remaining tracked 
   skips member rows, so a recovery-password rotation strands the member seal under the
   old drive password (remove + re-add is the current recovery). Re-seal in place from
   the membership grant (`open_grant` → re-seal under the new password) instead.
+- **desktop (hygiene)**: member-seal residue on remove — removing a member drive
+  deletes the `sync_paths` row and in-memory state but leaves the drive's
+  `enc_mnemonic.json` seal (and config dir) behind. Harmless (the seal is
+  password-protected and orphaned), but `remove_drive` should sweep the member
+  drive's config dir so a departed membership leaves no key material on disk.
+- **desktop (UX)**: revoked → re-granted in-session — after a revocation tears the
+  drive down (`DriveStatus::Error`), a fresh grant accepted in the SAME session has
+  no affordance to re-initialize the suspended drive; a relaunch heals it (init runs
+  from the new seal). Consider an in-session re-init affordance on the error row
+  (or having `add_shared_drive`'s idempotent re-install path clear the error state
+  and re-init) so the user isn't told to restart.

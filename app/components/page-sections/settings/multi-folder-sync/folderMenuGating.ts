@@ -37,6 +37,16 @@ export interface FolderMenuPlan {
   removeIsLeave: boolean;
 }
 
+/**
+ * Tooltip for a member row's "Leave shared drive" item on a surface that
+ * did not wire `onLeaveDrive`. The item renders DISABLED rather than
+ * falling back to the plain remove handler — a plain Remove tears down
+ * only this device's sync and strands the live server-side membership,
+ * which is exactly what the member gating exists to prevent.
+ */
+export const LEAVE_UNAVAILABLE_TOOLTIP =
+  "Leaving a shared drive isn't available from this view. Use Settings → Sync & Storage.";
+
 /** A row is a member drive iff Rust threaded an owner onto it. */
 export function isMemberDrive(folder: Pick<SyncFolder, "ownerSs58">): boolean {
   return typeof folder.ownerSs58 === "string" && folder.ownerSs58.length > 0;
