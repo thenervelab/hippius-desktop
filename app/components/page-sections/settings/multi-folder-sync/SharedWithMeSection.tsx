@@ -147,6 +147,11 @@ export function SharedWithMeSection({ onDriveAdded }: SharedWithMeSectionProps) 
                 </div>
               </div>
 
+              {/* Deliberate deviation from the phase-2 plan (which sketched
+                  per-row actions here): a synced row gets a status chip and
+                  NOTHING else — the adjacent Local Sync Folders list is the
+                  single management surface (pause/leave/browse), and a
+                  second set of controls here would duplicate its gating. */}
               {action.kind === "synced" ? (
                 <span className="shrink-0 text-xs font-medium text-[#04c870]">
                   Synced as &quot;{action.localLabel}&quot;

@@ -68,6 +68,9 @@ struct Recorded {
     /// The raw query string of every DELETE members call, in arrival order
     /// (`None` when a call carried no query at all).
     remove_queries: Arc<Mutex<Vec<Option<String>>>>,
+    /// The JSON body of every invite mint, in arrival order — the seam that
+    /// pins the resolved invite policy actually landing on the wire.
+    invite_bodies: Arc<Mutex<Vec<serde_json::Value>>>,
 }
 
 /// `Some(401)` when the bearer is missing/wrong, `None` when it checks out.
@@ -103,6 +106,7 @@ fn feature_on_router(grant_blob_b64: String, recorded: Recorded) -> Router {
         }]
     });
 
+    let invite_recorder = recorded.clone();
     Router::new()
         .route(
             "/v1/drive-invites",
@@ -110,6 +114,7 @@ fn feature_on_router(grant_blob_b64: String, recorded: Recorded) -> Router {
                 if let Some(resp) = bearer_rejection(&headers) {
                     return resp;
                 }
+                invite_recorder.invite_bodies.lock().unwrap().push(body.clone());
                 // The mint requires a registered drive; mirror the check on
                 // the folder hash so a wrong-hash client bug fails the test.
                 if body.get("folder_hash").and_then(|v| v.as_str()) != Some(WIRE_HASH) {
@@ -174,22 +179,28 @@ fn owner_folder_entropy() -> [u8; 32] {
 // ── HTTP-layer tests ───────────────────────────────────────────────────────
 
 #[tokio::test]
-async fn create_invite_sends_bearer_and_returns_the_token() {
+async fn create_invite_sends_bearer_policy_fields_and_returns_the_token() {
     let blob = grant::seal_grant(MEMBER_MASTER, MEMBER_SS58, &owner_folder_entropy()).expect("seal");
+    let recorded = Recorded::default();
     let base = serve(feature_on_router(
         base64::engine::general_purpose::STANDARD.encode(&blob),
-        Recorded::default(),
+        recorded.clone(),
     ))
     .await;
     let http = reqwest::Client::new();
 
-    let token = http_create_invite(&http, &base, BEARER, WIRE_HASH, Some(3600), Some(5))
-        .await
-        .expect("mint");
+    let token = http_create_invite(&http, &base, BEARER, WIRE_HASH, 3600, 5).await.expect("mint");
     assert_eq!(token, "tok_mock_1");
 
+    // The resolved policy values land on the wire as concrete fields — the
+    // desktop never sends an omitted lifetime/cap, so the server's own
+    // defaults can never silently apply to a desktop mint.
+    let body = recorded.invite_bodies.lock().unwrap().last().cloned().expect("a mint landed");
+    assert_eq!(body["expires_in_secs"], serde_json::json!(3600));
+    assert_eq!(body["max_uses"], serde_json::json!(5));
+
     // A missing bearer is refused by the server and surfaces as Auth.
-    let err = http_create_invite(&http, &base, "wrong-bearer", WIRE_HASH, None, None)
+    let err = http_create_invite(&http, &base, "wrong-bearer", WIRE_HASH, 3600, 5)
         .await
         .expect_err("bad bearer must fail");
     assert!(matches!(err, AppError::Auth(_)), "got {err:?}");

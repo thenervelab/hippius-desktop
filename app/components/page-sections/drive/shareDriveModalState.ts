@@ -55,14 +55,22 @@ export function getMembersView(state: MembersState): MembersView {
 /**
  * Invite lifetimes offered by the expiry row. No "never" — an unclaimed
  * invite link is a standing drive-access capability, so every preset
- * expires; the default matches the backend wrapper's
- * `DEFAULT_INVITE_TTL_SECS` (7 days).
+ * expires.
  */
 export const INVITE_TTL_OPTIONS: ReadonlyArray<{ label: string; secs: number }> = [
   { label: "24 hours", secs: 24 * 60 * 60 },
   { label: "7 days", secs: 7 * 24 * 60 * 60 },
   { label: "30 days", secs: 30 * 24 * 60 * 60 },
 ];
+
+/**
+ * The preset selected when the dialog opens — 7 days, mirroring the Rust
+ * policy default (`shared_drives/commands.rs::resolve_invite_policy`).
+ * Purely a DISPLAY concern: the modal always sends its selection
+ * explicitly, and an IPC caller that omits the param gets the Rust
+ * default regardless of this value.
+ */
+export const DEFAULT_INVITE_TTL_SECS = 7 * 24 * 60 * 60;
 
 /**
  * "Joined Aug 20, 2026" — fixed en-US like the folder rows' date column,

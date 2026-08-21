@@ -2,8 +2,8 @@
 
 import { describe, it, expect } from "vitest";
 
-import { DEFAULT_INVITE_TTL_SECS } from "@/app/lib/tauri/sharedDrives";
 import {
+  DEFAULT_INVITE_TTL_SECS,
   formatJoinedDate,
   getMembersView,
   INVITE_TTL_OPTIONS,
@@ -32,7 +32,7 @@ describe("getMembersView", () => {
 });
 
 describe("INVITE_TTL_OPTIONS", () => {
-  it("offers no never-expiring invite and defaults to the wrapper's 7 days", () => {
+  it("offers no never-expiring invite and includes the display default (7 days)", () => {
     expect(INVITE_TTL_OPTIONS.every((o) => o.secs > 0)).toBe(true);
     expect(INVITE_TTL_OPTIONS.some((o) => o.secs === DEFAULT_INVITE_TTL_SECS)).toBe(true);
   });

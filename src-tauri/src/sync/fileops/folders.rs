@@ -494,8 +494,12 @@ pub async fn get_sync_folders_with_stats(state: tauri::State<'_, crate::app_stat
     // Member drives (shared with this account) annotate their rows with the
     // drive owner's ss58 — see `SyncFolderInfo::owner_ss58`. Degrades to an
     // empty map on a DB error so a transient read failure downgrades member
-    // rows to plain rows rather than failing the whole listing.
-    let member_owners = crate::sync::identity::member_owner_by_label(pool, &account_id).await.unwrap_or_default();
+    // rows to plain rows rather than failing the whole listing — but never
+    // silently: the FE keys its member-row protections on this annotation.
+    let member_owners = crate::sync::identity::member_owner_by_label(pool, &account_id).await.unwrap_or_else(|e| {
+        warn!(error = %e, "member_owner_by_label failed; rendering member drives as plain rows this pass");
+        HashMap::default()
+    });
 
     // Build local folders with status and remote stats
     let mut local = Vec::with_capacity(sync_paths.len());

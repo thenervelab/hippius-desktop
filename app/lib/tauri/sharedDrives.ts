@@ -64,18 +64,15 @@ export interface AddSharedDriveResult {
 }
 
 /**
- * Default invite lifetime (7 days) and claim cap (50 uses) — v1 mints with
- * these unless the modal's expiry preset picks another lifetime. The cap is
- * a blast-radius bound on a leaked link, not a UI concept, so it is not
- * user-configurable.
- */
-export const DEFAULT_INVITE_TTL_SECS = 7 * 24 * 60 * 60;
-export const DEFAULT_INVITE_MAX_USES = 50;
-
-/**
  * Mint an invite link for an OWN drive. `label` is the local drive label;
  * the backend refuses a member drive's label as `Validation` (only the
  * owner can mint).
+ *
+ * Omitted options fall through to the RUST policy defaults (7 days / 50
+ * uses — `shared_drives/commands.rs::resolve_invite_policy`), so the
+ * invite policy holds for every IPC caller, not just this wrapper. The
+ * modal's expiry preset row is a display concern only
+ * (`shareDriveModalState.ts::DEFAULT_INVITE_TTL_SECS`).
  */
 export async function createDriveInvite(
   label: string,
@@ -83,8 +80,8 @@ export async function createDriveInvite(
 ): Promise<DriveInviteLink> {
   return invoke<DriveInviteLink>("create_drive_invite", {
     label,
-    expiresInSecs: opts?.expiresInSecs ?? DEFAULT_INVITE_TTL_SECS,
-    maxUses: opts?.maxUses ?? DEFAULT_INVITE_MAX_USES,
+    expiresInSecs: opts?.expiresInSecs,
+    maxUses: opts?.maxUses,
   });
 }
 

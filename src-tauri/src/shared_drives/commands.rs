@@ -45,6 +45,29 @@ use zeroize::Zeroizing;
 /// these back interactive dialogs, not bulk transfers).
 const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// Desktop invite policy applied when the IPC caller omits a parameter:
+/// a minted link dies after 7 days or 50 claims, whichever comes first.
+/// Both are blast-radius bounds on a leaked link — an unclaimed invite URL
+/// is a standing drive-access capability (token + folder-key entropy), so
+/// every mint gets a finite lifetime and claim cap. The policy lives HERE,
+/// in Rust, so it holds for every IPC caller instead of depending on each
+/// FE wrapper filling the fields; the server keeps its own defaults/caps
+/// as the backstop, but the desktop never leans on them.
+const DEFAULT_INVITE_EXPIRES_IN_SECS: u64 = 7 * 24 * 60 * 60;
+const DEFAULT_INVITE_MAX_USES: u32 = 50;
+
+/// Resolve the caller's optional invite parameters against the desktop
+/// policy defaults. Extracted (rather than inline `unwrap_or`s) so the
+/// policy is unit-testable; [`create_drive_invite`] routes through it and
+/// [`http_create_invite`] takes the resolved values, so no call path can
+/// send an omitted field.
+fn resolve_invite_policy(expires_in_secs: Option<u64>, max_uses: Option<u32>) -> (u64, u32) {
+    (
+        expires_in_secs.unwrap_or(DEFAULT_INVITE_EXPIRES_IN_SECS),
+        max_uses.unwrap_or(DEFAULT_INVITE_MAX_USES),
+    )
+}
+
 // ─── FE-facing wire types (camelCase, desktop-owned) ───────────────────────
 
 /// Result of a successful invite mint. The URL embeds the invite token (path)
@@ -135,18 +158,22 @@ fn classify_error_status(status: reqwest::StatusCode, body: &str) -> AppError {
 
 /// `POST /v1/drive-invites` — mint an invite, returning the plaintext token.
 /// The token is a capability: callers must not log or persist it.
+///
+/// Takes RESOLVED policy values, not `Option`s: the desktop always sends a
+/// concrete lifetime and claim cap (see [`resolve_invite_policy`]), so the
+/// server's own defaults never silently apply to a desktop mint.
 pub async fn http_create_invite(
     http: &reqwest::Client,
     base_url: &str,
     bearer: &str,
     folder_hash: &str,
-    expires_in_secs: Option<u64>,
-    max_uses: Option<u32>,
+    expires_in_secs: u64,
+    max_uses: u32,
 ) -> Result<String> {
     let req = CreateDriveInviteRequest {
         folder_hash: folder_hash.to_string(),
-        expires_in_secs,
-        max_uses,
+        expires_in_secs: Some(expires_in_secs),
+        max_uses: Some(max_uses),
     };
     let resp = http
         .post(format!("{}/v1/drive-invites", base_url.trim_end_matches('/')))
@@ -454,6 +481,10 @@ pub async fn create_drive_invite(
         grant::entropy_from_phrase(&phrase)?
     };
 
+    // Omitted parameters resolve to the desktop policy here, not on the
+    // server and not in the FE wrapper — see `resolve_invite_policy`.
+    let (expires_in_secs, max_uses) = resolve_invite_policy(expires_in_secs, max_uses);
+
     let http = state.api_client.clone();
     let token = http_create_invite(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash, expires_in_secs, max_uses).await?;
 
@@ -743,6 +774,22 @@ mod tests {
 
         let server = classify_error_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR, "");
         assert!(matches!(server, AppError::Hcfs(_)), "500 must map to Hcfs, got {server:?}");
+    }
+
+    // The desktop invite policy: omitted parameters resolve to the named
+    // constants (7 days / 50 uses), explicit values pass through untouched.
+    // `http_create_invite` takes the resolved values (no Options), so this
+    // resolver is the only place an omission can be interpreted.
+    #[test]
+    fn resolve_invite_policy_applies_desktop_defaults() {
+        assert_eq!(
+            resolve_invite_policy(None, None),
+            (DEFAULT_INVITE_EXPIRES_IN_SECS, DEFAULT_INVITE_MAX_USES)
+        );
+        assert_eq!(resolve_invite_policy(None, None), (7 * 24 * 60 * 60, 50));
+        assert_eq!(resolve_invite_policy(Some(3600), Some(5)), (3600, 5));
+        assert_eq!(resolve_invite_policy(Some(3600), None), (3600, DEFAULT_INVITE_MAX_USES));
+        assert_eq!(resolve_invite_policy(None, Some(5)), (DEFAULT_INVITE_EXPIRES_IN_SECS, 5));
     }
 
     // FE wire pin: the "Shared with me" row's camelCase keys, including the

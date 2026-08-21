@@ -46,6 +46,7 @@ import {
 import { errorMessage } from "@/app/lib/utils/errorUtils";
 import { middleTruncate } from "@/lib/utils/middleTruncate";
 import {
+  DEFAULT_INVITE_TTL_SECS,
   formatJoinedDate,
   getMembersView,
   INVITE_TTL_OPTIONS,
@@ -62,12 +63,18 @@ export default function ShareDriveModal() {
 
   const [tab, setTab] = useState<Tab>("invite");
   const [invite, setInvite] = useState<InviteState>({ kind: "choosing" });
-  const [ttlSecs, setTtlSecs] = useState<number>(INVITE_TTL_OPTIONS[1].secs);
+  const [ttlSecs, setTtlSecs] = useState<number>(DEFAULT_INVITE_TTL_SECS);
   const [members, setMembers] = useState<MembersState>({ kind: "idle" });
   // Auto-copy fires once per `done` transition (the ShareFileModal rule).
   const autoCopiedRef = useRef(false);
 
   const label = target?.label ?? null;
+  // Stale-async guard: the modal never unmounts and `label` changes on
+  // close/reopen, so a response still in flight for a previous drive must
+  // not land on the current session's state (the reset effect below runs
+  // before the late response resolves, then the response would clobber it).
+  const currentLabelRef = useRef<string | null>(null);
+  currentLabelRef.current = label;
 
   // Reset on every session transition, close included — the modal never
   // unmounts, so without this a previous drive's invite link or member
@@ -75,7 +82,7 @@ export default function ShareDriveModal() {
   useEffect(() => {
     setTab("invite");
     setInvite({ kind: "choosing" });
-    setTtlSecs(INVITE_TTL_OPTIONS[1].secs);
+    setTtlSecs(DEFAULT_INVITE_TTL_SECS);
     setMembers({ kind: "idle" });
     autoCopiedRef.current = false;
   }, [label]);
@@ -84,8 +91,10 @@ export default function ShareDriveModal() {
     setMembers({ kind: "loading" });
     try {
       const rows = await listDriveMembers(driveLabel);
+      if (driveLabel !== currentLabelRef.current) return;
       setMembers({ kind: "ready", members: rows });
     } catch (err) {
+      if (driveLabel !== currentLabelRef.current) return;
       if (isSharedDrivesUnavailable(err)) {
         // Feature-off server: quiet degrade, never a toast.
         setMembers({ kind: "unavailable" });
@@ -105,12 +114,15 @@ export default function ShareDriveModal() {
 
   const mintInvite = useCallback(async () => {
     if (!label) return;
+    const labelAtCall = label;
     setInvite({ kind: "running" });
     autoCopiedRef.current = false;
     try {
-      const link = await createDriveInvite(label, { expiresInSecs: ttlSecs });
+      const link = await createDriveInvite(labelAtCall, { expiresInSecs: ttlSecs });
+      if (labelAtCall !== currentLabelRef.current) return;
       setInvite({ kind: "done", inviteUrl: link.inviteUrl });
     } catch (err) {
+      if (labelAtCall !== currentLabelRef.current) return;
       if (isSharedDrivesUnavailable(err)) {
         setInvite({ kind: "unavailable" });
       } else {
@@ -135,11 +147,13 @@ export default function ShareDriveModal() {
   const removeMember = useCallback(
     async (memberSs58: string) => {
       if (!label) return;
+      const labelAtCall = label;
       try {
-        await removeDriveMember(label, memberSs58);
+        await removeDriveMember(labelAtCall, memberSs58);
         toast.success("Member removed");
-        await loadMembers(label);
+        await loadMembers(labelAtCall);
       } catch (err) {
+        if (labelAtCall !== currentLabelRef.current) return;
         if (isSharedDrivesUnavailable(err)) {
           setMembers({ kind: "unavailable" });
         } else {
