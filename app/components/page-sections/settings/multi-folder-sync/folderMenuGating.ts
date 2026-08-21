@@ -45,16 +45,25 @@ export function isMemberDrive(folder: Pick<SyncFolder, "ownerSs58">): boolean {
 /**
  * Resolve the gated menu items for one folder row.
  *
- * Flag OFF is the full fallback: every row — member rows included, should
- * one exist from an earlier flag-on build — gets the plain own-drive menu,
- * so no shared-drive surface (item, wording, or routing) is reachable
- * while the feature is dark.
+ * Member-ness is DATA on the row (`ownerSs58`, threaded from Rust), not
+ * feature state, so everything that exists to protect a member row keys on
+ * `isMemberDrive(folder)` ALONE — deliberately independent of the flag.
+ * With the flag rolled back post-release, an existing member row must
+ * never regain "Delete from Server" (the backend would key the delete by
+ * the wrong identity) or a plain "Remove from Sync" that strands a live
+ * server-side membership; `leave_shared_drive` works regardless of the UI
+ * flag and both parent surfaces wire `onLeaveDrive` unconditionally.
+ *
+ * The flag gates only the OPT-IN surface: "Share drive…" (and, in
+ * LocalFoldersSection, the cosmetic owner badge) stays hidden until the
+ * feature ships, since minting invites against a feature-off server is a
+ * dead control.
  */
 export function resolveFolderMenuPlan(
   folder: Pick<SyncFolder, "ownerSs58">,
   flags: FolderMenuFlags,
 ): FolderMenuPlan {
-  const member = flags.sharedDrivesEnabled && isMemberDrive(folder);
+  const member = isMemberDrive(folder);
 
   return {
     showShareDrive: flags.sharedDrivesEnabled && !member,

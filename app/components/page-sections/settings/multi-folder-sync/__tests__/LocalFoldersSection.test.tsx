@@ -149,16 +149,21 @@ describe("LocalFoldersSection shared-drive rows", () => {
     flagState.sharedDrivesEnabled = false;
   });
 
-  it("flag off: no Share drive item, no owner badge, member rows keep the plain menu", () => {
+  it("flag off: no Share drive item or owner badge, but member rows KEEP the member gating", () => {
+    // The flag hides only the opt-in surfaces (Share drive item, badge).
+    // The protective member gating keys on the row's ownerSs58 data alone,
+    // so a flag rollback can't hand a member row Delete from Server or a
+    // plain Remove that strands the live membership.
     renderSection([folder({ id: "m", folderName: "Team", ownerSs58: OWNER })]);
 
     expect(screen.queryByTestId("avatar")).not.toBeInTheDocument();
 
     openContextMenu("Team");
     expect(screen.queryByText("Share drive…")).not.toBeInTheDocument();
-    expect(screen.getByText("Remove from Sync")).toBeInTheDocument();
-    expect(screen.getByText("Excluded from Sync")).toBeInTheDocument();
-    expect(screen.getByText("Delete from Server")).toBeInTheDocument();
+    expect(screen.getByText("Leave shared drive")).toBeInTheDocument();
+    expect(screen.queryByText("Remove from Sync")).not.toBeInTheDocument();
+    expect(screen.queryByText("Excluded from Sync")).not.toBeInTheDocument();
+    expect(screen.queryByText("Delete from Server")).not.toBeInTheDocument();
   });
 
   it("flag on, own drive: Share drive item shows, wording stays Remove from Sync", () => {

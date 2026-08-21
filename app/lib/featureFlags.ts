@@ -84,9 +84,14 @@ export const VM_VPN_ENABLED = false;
  *     `ShareFileModal` — renders nothing while the flag is off),
  *   - the "Shared with me" section in `MultiFolderSyncManager` (settings)
  *     and `DriveOnboarding` (files page),
- *   - the member-row treatments in the normal drive lists: the owner badge,
- *     the owner-only menu-item hiding, and the "Leave shared drive" wording
- *     (member rows fall back to the plain own-drive menu while off).
+ *   - the cosmetic owner badge on member rows in `LocalFoldersSection`.
+ *
+ * Deliberately NOT flag-gated: the member-row menu protections
+ * (`folderMenuGating.ts` — owner-only item hiding and the "Leave shared
+ * drive" wording/routing) key on the row's `ownerSs58` data alone, so
+ * rolling this flag back after release cannot hand an existing member row
+ * "Delete from Server" (the backend would key the delete by the wrong
+ * identity) or a plain Remove that strands a live server-side membership.
  *
  * The Rust IPCs (`create_drive_invite`, `list_drive_members`,
  * `remove_drive_member`, `list_my_drive_memberships`, `leave_shared_drive`,

@@ -46,16 +46,31 @@ describe("resolveFolderMenuPlan", () => {
     });
   });
 
-  it("flag off: every row gets the plain own-drive menu — no shared-drive surface", () => {
-    for (const folder of [{}, { ownerSs58: OWNER }]) {
-      const plan = resolveFolderMenuPlan(folder, { sharedDrivesEnabled: false });
-      expect(plan).toEqual({
-        showShareDrive: false,
-        showExclusions: true,
-        showDeleteFromServer: true,
-        removeItemTitle: "Remove from Sync",
-        removeIsLeave: false,
-      });
-    }
+  it("flag off, own drive: plain own-drive menu, only Share drive is withheld", () => {
+    const plan = resolveFolderMenuPlan({}, { sharedDrivesEnabled: false });
+    expect(plan).toEqual({
+      showShareDrive: false,
+      showExclusions: true,
+      showDeleteFromServer: true,
+      removeItemTitle: "Remove from Sync",
+      removeIsLeave: false,
+    });
+  });
+
+  it("flag off, member drive: the protective gating survives a flag rollback", () => {
+    // Member-ness is data on the row, not feature state: a member row from
+    // an earlier flag-on build must never regain Delete from Server (wrong
+    // identity server-side) or a plain Remove that strands the membership.
+    const plan = resolveFolderMenuPlan(
+      { ownerSs58: OWNER },
+      { sharedDrivesEnabled: false },
+    );
+    expect(plan).toEqual({
+      showShareDrive: false,
+      showExclusions: false,
+      showDeleteFromServer: false,
+      removeItemTitle: "Leave shared drive",
+      removeIsLeave: true,
+    });
   });
 });
