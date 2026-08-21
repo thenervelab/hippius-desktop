@@ -22,6 +22,25 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
   revealItemInDir: vi.fn(),
 }));
 
+// Flip the shared-drives flag per test — the section reads it at render
+// time for the owner badge and the member-vs-own menu gating.
+const flagState = vi.hoisted(() => ({ sharedDrivesEnabled: false }));
+vi.mock("@/app/lib/featureFlags", () => ({
+  get SHARED_DRIVES_ENABLED() {
+    return flagState.sharedDrivesEnabled;
+  },
+}));
+
+// `next/dynamic` wraps the boring-avatars identicon in the owner badge; a
+// plain stub avoids lazy-loading timing in jsdom.
+vi.mock("next/dynamic", () => ({
+  default: () => {
+    const Stub = ({ name }: { name?: string }) => <span data-testid="avatar" data-name={name} />;
+    Stub.displayName = "AvatarStub";
+    return Stub;
+  },
+}));
+
 function folder(overrides: Partial<SyncFolder>): SyncFolder {
   return {
     id: "drive",
@@ -37,7 +56,8 @@ const REVOKED_MESSAGE = "Access to this shared drive was removed";
 
 function renderSection(
   syncFolders: SyncFolder[],
-  onRemoveFolder = vi.fn()
+  onRemoveFolder = vi.fn(),
+  onLeaveDrive = vi.fn()
 ) {
   render(
     <LocalFoldersSection
@@ -50,14 +70,23 @@ function renderSection(
       onRemoveFolder={onRemoveFolder}
       onDeleteFromServer={vi.fn()}
       onBrowseFolder={vi.fn()}
+      onLeaveDrive={onLeaveDrive}
     />
   );
-  return { onRemoveFolder };
+  return { onRemoveFolder, onLeaveDrive };
+}
+
+/** Open the right-click context menu on the row containing `folderName`.
+ * Both menus render from the SAME `buildFolderActions` list, so asserting
+ * the plain-portal context menu covers the Radix 3-dot menu's items too. */
+function openContextMenu(folderName: string) {
+  fireEvent.contextMenu(screen.getByText(folderName));
 }
 
 describe("LocalFoldersSection three-state rows", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    flagState.sharedDrivesEnabled = false;
   });
 
   it("renders the badge for each of the three states", () => {
@@ -109,5 +138,56 @@ describe("LocalFoldersSection three-state rows", () => {
     expect(
       screen.queryByRole("button", { name: "Remove" })
     ).not.toBeInTheDocument();
+  });
+});
+
+const OWNER = "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty";
+
+describe("LocalFoldersSection shared-drive rows", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    flagState.sharedDrivesEnabled = false;
+  });
+
+  it("flag off: no Share drive item, no owner badge, member rows keep the plain menu", () => {
+    renderSection([folder({ id: "m", folderName: "Team", ownerSs58: OWNER })]);
+
+    expect(screen.queryByTestId("avatar")).not.toBeInTheDocument();
+
+    openContextMenu("Team");
+    expect(screen.queryByText("Share drive…")).not.toBeInTheDocument();
+    expect(screen.getByText("Remove from Sync")).toBeInTheDocument();
+    expect(screen.getByText("Excluded from Sync")).toBeInTheDocument();
+    expect(screen.getByText("Delete from Server")).toBeInTheDocument();
+  });
+
+  it("flag on, own drive: Share drive item shows, wording stays Remove from Sync", () => {
+    flagState.sharedDrivesEnabled = true;
+    renderSection([folder({ id: "own", folderName: "Docs" })]);
+
+    openContextMenu("Docs");
+    expect(screen.getByText("Share drive…")).toBeInTheDocument();
+    expect(screen.getByText("Remove from Sync")).toBeInTheDocument();
+    expect(screen.queryByText("Leave shared drive")).not.toBeInTheDocument();
+  });
+
+  it("flag on, member drive: owner badge, no owner-only items, Leave routes to onLeaveDrive", () => {
+    flagState.sharedDrivesEnabled = true;
+    const { onRemoveFolder, onLeaveDrive } = renderSection([
+      folder({ id: "team", folderName: "Team", ownerSs58: OWNER }),
+    ]);
+
+    // Owner badge: identicon keyed by the owner's ss58.
+    expect(screen.getByTestId("avatar")).toHaveAttribute("data-name", OWNER);
+
+    openContextMenu("Team");
+    expect(screen.queryByText("Share drive…")).not.toBeInTheDocument();
+    expect(screen.queryByText("Excluded from Sync")).not.toBeInTheDocument();
+    expect(screen.queryByText("Delete from Server")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("Leave shared drive"));
+    expect(onLeaveDrive).toHaveBeenCalledTimes(1);
+    expect(onLeaveDrive.mock.calls[0][0].id).toBe("team");
+    expect(onRemoveFolder).not.toHaveBeenCalled();
   });
 });

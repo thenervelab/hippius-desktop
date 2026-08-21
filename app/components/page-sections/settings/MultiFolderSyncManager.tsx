@@ -9,6 +9,11 @@ import type { SyncFolder, RemoteFolder } from "@/app/lib/types/sync-folder";
 import { AddLocalFolderDialog } from "./AddLocalFolderDialog";
 import { removeSyncPath } from "@/app/lib/utils/syncPathUtils";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
+import {
+  isSharedDrivesUnavailable,
+  leaveSharedDrive,
+} from "@/app/lib/tauri/sharedDrives";
+import type { RemoveFolderMode } from "./multi-folder-sync/RemoveFolderDialog";
 import { deleteFolderErrorToast } from "@/app/lib/utils/deleteFolderError";
 import {
   deleteRemoteFolder,
@@ -68,12 +73,15 @@ export default function MultiFolderSyncManager() {
   const [isLoading, setIsLoading] = useState(true);
   const [showAddDialog, setShowAddDialog] = useState(false);
 
-  // Remove folder dialog state
+  // Remove folder dialog state. `mode: "leave"` is the member-drive
+  // variant (shared drives): the confirm routes through
+  // `leave_shared_drive` instead of the plain local remove.
   const [removeDialog, setRemoveDialog] = useState<{
     open: boolean;
     folderId: string | null;
     folderName: string | null;
-  }>({ open: false, folderId: null, folderName: null });
+    mode: RemoveFolderMode;
+  }>({ open: false, folderId: null, folderName: null, mode: "remove" });
   const [isRemoving, setIsRemoving] = useState(false);
 
   // Pause sync dialog state
@@ -152,6 +160,7 @@ export default function MultiFolderSyncManager() {
           fileCount: number | null;
           totalBytes: number | null;
           lastModified: number | null;
+          ownerSs58: string | null;
         }>;
         remote: Array<{
           folderName: string;
@@ -171,6 +180,7 @@ export default function MultiFolderSyncManager() {
         fileCount: f.fileCount ?? undefined,
         totalBytes: f.totalBytes ?? undefined,
         lastModified: f.lastModified ?? undefined,
+        ownerSs58: f.ownerSs58 ?? undefined,
       }));
 
       const remoteFoldersData: RemoteFolder[] = result.remote.map((f) => ({
@@ -225,22 +235,42 @@ export default function MultiFolderSyncManager() {
   // ── Local folder actions ──────────────────────────────────────────────
 
   const handleRemoveFolder = async () => {
-    const { folderId } = removeDialog;
+    const { folderId, mode } = removeDialog;
     if (!folderId || !polkadotAddress) return;
 
     setIsRemoving(true);
     try {
-      await removeSyncPath(polkadotAddress, folderId);
-      toast.success("Folder removed from sync");
+      if (mode === "leave") {
+        // Member drive: leaving ends the account's membership server-side
+        // AND removes the local drive (leave_shared_drive does both). On a
+        // feature-off server the command refuses whole with
+        // SHARED_DRIVES_UNAVAILABLE — the documented escape hatch is the
+        // plain local remove, so the drive doesn't strand un-removable.
+        try {
+          await leaveSharedDrive(folderId);
+          toast.success("Left shared drive");
+        } catch (error) {
+          if (!isSharedDrivesUnavailable(error)) throw error;
+          await removeSyncPath(polkadotAddress, folderId);
+          toast.success("Folder removed from sync on this device");
+        }
+      } else {
+        await removeSyncPath(polkadotAddress, folderId);
+        toast.success("Folder removed from sync");
+      }
       refreshFoldersAndStats();
 
       checkAndResetIfNoFolders();
     } catch (error) {
       console.error("Failed to remove folder:", error);
-      toast.error("Failed to remove folder");
+      toast.error(
+        mode === "leave"
+          ? `Failed to leave shared drive: ${errorMessage(error)}`
+          : "Failed to remove folder",
+      );
     } finally {
       setIsRemoving(false);
-      setRemoveDialog({ open: false, folderId: null, folderName: null });
+      setRemoveDialog({ open: false, folderId: null, folderName: null, mode: "remove" });
     }
   };
 
@@ -502,6 +532,15 @@ export default function MultiFolderSyncManager() {
               open: true,
               folderId: folder.id,
               folderName: folder.folderName,
+              mode: "remove",
+            })
+          }
+          onLeaveDrive={(folder) =>
+            setRemoveDialog({
+              open: true,
+              folderId: folder.id,
+              folderName: folder.folderName,
+              mode: "leave",
             })
           }
           onDeleteFromServer={openDeleteServerDialog}
@@ -540,8 +579,9 @@ export default function MultiFolderSyncManager() {
         open={removeDialog.open}
         folderName={removeDialog.folderName}
         isRemoving={isRemoving}
+        mode={removeDialog.mode}
         onClose={() =>
-          setRemoveDialog({ open: false, folderId: null, folderName: null })
+          setRemoveDialog({ open: false, folderId: null, folderName: null, mode: "remove" })
         }
         onConfirm={handleRemoveFolder}
       />

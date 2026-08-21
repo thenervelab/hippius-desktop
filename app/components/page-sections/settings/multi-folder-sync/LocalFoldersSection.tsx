@@ -1,7 +1,9 @@
 "use client";
 
 import React, { useState, useCallback } from "react";
+import dynamic from "next/dynamic";
 import { InView } from "react-intersection-observer";
+import { useSetAtom } from "jotai";
 import { Icons } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { formatBytes } from "@/lib/utils/formatBytes";
@@ -11,10 +13,12 @@ import {
   Folder,
   FolderOpen,
   FolderSearch,
+  LogOut,
   Trash2,
   PauseCircle,
   PlayCircle,
   ServerCrash,
+  UserPlus,
 } from "lucide-react";
 import TableActionMenu, { ActionItem } from "@/components/ui/alt-table/TableActionMenu";
 import { Button } from "@/components/ui/button";
@@ -24,6 +28,11 @@ import * as Tooltip from "@radix-ui/react-tooltip";
 import type { SyncFolder } from "@/app/lib/types/sync-folder";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import FolderCardContextMenu from "@/app/components/ui/context-menu/FolderCardContextMenu";
+import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
+import { shareDriveModalAtom } from "@/app/lib/global-atoms/sharesAtoms";
+import { resolveFolderMenuPlan } from "./folderMenuGating";
+
+const OwnerAvatar = dynamic(() => import("boring-avatars"), { ssr: false });
 
 interface LocalFoldersSectionProps {
   syncFolders: SyncFolder[];
@@ -39,6 +48,47 @@ interface LocalFoldersSectionProps {
   // "Local" view (see SyncFolderBreadcrumb) to switch the active folder.
   // The action menu and its children continue to handle their own clicks.
   onSelectFolder?: (folder: SyncFolder) => void;
+  // Member-drive rows route their remove item ("Leave shared drive")
+  // here instead of onRemoveFolder — leaving ends the account's server
+  // membership, not just this device's sync, and the parent owns the
+  // leave IPC and its feature-off fallback. Falls back to onRemoveFolder
+  // when absent (a surface not yet wired for shared drives).
+  onLeaveDrive?: (folder: SyncFolder) => void;
+}
+
+/**
+ * One row action shared by both menus (the 3-dot `TableActionMenu` and the
+ * right-click `FolderCardContextMenu`). Built once per folder by
+ * `buildFolderActions` so the two menus cannot drift — historically each
+ * duplicated its own item list.
+ */
+interface FolderAction {
+  icon: React.ReactNode;
+  title: string;
+  variant?: "destructive";
+  onClick: () => void;
+}
+
+/**
+ * Small "shared by" pill on member-drive rows: the drive owner's identicon
+ * plus a truncated ss58. Flag-gated with the rest of the shared-drive
+ * surfaces; `ownerSs58` is threaded from Rust and is the row's only
+ * member/own discriminant.
+ */
+function OwnerBadge({ ownerSs58 }: { ownerSs58: string }) {
+  return (
+    <span
+      className="inline-flex items-center gap-1 px-2 py-[3px] rounded-full bg-primary-50/10 flex-shrink-0"
+      title={`Shared by ${ownerSs58}`}
+    >
+      <span className="size-3 overflow-hidden rounded-full flex-shrink-0">
+        <OwnerAvatar name={ownerSs58} size={12} variant="pixel" />
+      </span>
+      <span className="font-mono text-[10px] font-semibold leading-none text-primary-50">
+        {middleTruncate(ownerSs58, 12)}
+      </span>
+    </span>
+  );
 }
 
 /**
@@ -153,18 +203,113 @@ export function LocalFoldersSection({
   onDeleteFromServer,
   onBrowseFolder,
   onSelectFolder,
+  onLeaveDrive,
 }: LocalFoldersSectionProps) {
   const [cardContextMenu, setCardContextMenu] = useState<{
     x: number;
     y: number;
     folder: SyncFolder;
   } | null>(null);
+  const setShareDriveTarget = useSetAtom(shareDriveModalAtom);
 
   const getFileManagerLabel = useCallback(() => {
     if (typeof navigator !== "undefined" && /win/i.test(navigator.platform))
       return "Explorer";
     return "Finder";
   }, []);
+
+  // One action list per folder feeds BOTH menus (3-dot + right-click), with
+  // the own-vs-member gating resolved by the pure `resolveFolderMenuPlan`.
+  const buildFolderActions = useCallback(
+    (folder: SyncFolder): FolderAction[] => {
+      const plan = resolveFolderMenuPlan(folder, {
+        sharedDrivesEnabled: SHARED_DRIVES_ENABLED,
+      });
+
+      const actions: FolderAction[] = [
+        {
+          icon: <FolderSearch className="size-4" />,
+          title: "Browse Contents",
+          onClick: () => onBrowseFolder(folder),
+        },
+        {
+          icon:
+            folder.status === "syncing" ? (
+              <PauseCircle className="size-4" />
+            ) : (
+              <PlayCircle className="size-4" />
+            ),
+          title: folder.status === "syncing" ? "Pause Sync" : "Resume Sync",
+          onClick: () =>
+            folder.status === "syncing"
+              ? onPauseFolder(folder)
+              : onResumeFolder(folder),
+        },
+        {
+          icon: <FolderOpen className="size-4" />,
+          title: `Open in ${getFileManagerLabel()}`,
+          onClick: async () => {
+            try {
+              await revealItemInDir(folder.localPath);
+            } catch (error) {
+              console.error("Failed to open in file manager:", error);
+            }
+          },
+        },
+      ];
+
+      if (plan.showShareDrive) {
+        actions.push({
+          icon: <UserPlus className="size-4" />,
+          title: "Share drive…",
+          onClick: () =>
+            setShareDriveTarget({
+              label: folder.id,
+              folderName: folder.folderName,
+            }),
+        });
+      }
+      if (plan.showExclusions) {
+        actions.push({
+          icon: <FilterIcon className="size-4" />,
+          title: "Excluded from Sync",
+          onClick: () => onManageExclusions(folder),
+        });
+      }
+      actions.push({
+        icon: plan.removeIsLeave ? (
+          <LogOut className="size-4" />
+        ) : (
+          <Trash2 className="size-4" />
+        ),
+        title: plan.removeItemTitle,
+        onClick: () =>
+          plan.removeIsLeave && onLeaveDrive
+            ? onLeaveDrive(folder)
+            : onRemoveFolder(folder),
+      });
+      if (plan.showDeleteFromServer) {
+        actions.push({
+          icon: <ServerCrash className="size-4" />,
+          title: "Delete from Server",
+          variant: "destructive" as const,
+          onClick: () => onDeleteFromServer(folder.folderName, folder.id),
+        });
+      }
+      return actions;
+    },
+    [
+      onBrowseFolder,
+      onPauseFolder,
+      onResumeFolder,
+      onManageExclusions,
+      onRemoveFolder,
+      onDeleteFromServer,
+      onLeaveDrive,
+      setShareDriveTarget,
+      getFileManagerLabel,
+    ],
+  );
 
   return (
     <InView triggerOnce>
@@ -282,6 +427,10 @@ export function LocalFoldersSection({
 
                     <StatusBadge status={folder.status} />
 
+                    {SHARED_DRIVES_ENABLED && folder.ownerSs58 && (
+                      <OwnerBadge ownerSs58={folder.ownerSs58} />
+                    )}
+
                     {(folder.totalBytes || folder.fileCount || folder.lastModified) ? (
                       <span className="h-4 w-px bg-grey-80 dark:bg-[#3a3a3a] flex-shrink-0" />
                     ) : null}
@@ -348,57 +497,12 @@ export function LocalFoldersSection({
                 <TableActionMenu
                   dropdownTitle=""
                   items={
-                    [
-                      {
-                        icon: <FolderSearch className="size-4" />,
-                        itemTitle: "Browse Contents",
-                        onItemClick: () => onBrowseFolder(folder),
-                      },
-                      {
-                        icon:
-                          folder.status === "syncing" ? (
-                            <PauseCircle className="size-4" />
-                          ) : (
-                            <PlayCircle className="size-4" />
-                          ),
-                        itemTitle:
-                          folder.status === "syncing"
-                            ? "Pause Sync"
-                            : "Resume Sync",
-                        onItemClick: () =>
-                          folder.status === "syncing"
-                            ? onPauseFolder(folder)
-                            : onResumeFolder(folder),
-                      },
-                      {
-                        icon: <FolderOpen className="size-4" />,
-                        itemTitle: `Open in ${getFileManagerLabel()}`,
-                        onItemClick: async () => {
-                          try {
-                            await revealItemInDir(folder.localPath);
-                          } catch (error) {
-                            console.error("Failed to open in file manager:", error);
-                          }
-                        },
-                      },
-                      {
-                        icon: <FilterIcon className="size-4" />,
-                        itemTitle: "Excluded from Sync",
-                        onItemClick: () => onManageExclusions(folder),
-                      },
-                      {
-                        icon: <Trash2 className="size-4" />,
-                        itemTitle: "Remove from Sync",
-                        onItemClick: () => onRemoveFolder(folder),
-                      },
-                      {
-                        icon: <ServerCrash className="size-4" />,
-                        itemTitle: "Delete from Server",
-                        variant: "destructive" as const,
-                        onItemClick: () =>
-                          onDeleteFromServer(folder.folderName, folder.id),
-                      },
-                    ] satisfies ActionItem[]
+                    buildFolderActions(folder).map((action) => ({
+                      icon: action.icon,
+                      itemTitle: action.title,
+                      ...(action.variant ? { variant: action.variant } : {}),
+                      onItemClick: action.onClick,
+                    })) satisfies ActionItem[]
                   }
                 >
                   <Button
@@ -422,60 +526,12 @@ export function LocalFoldersSection({
           x={cardContextMenu.x}
           y={cardContextMenu.y}
           onClose={() => setCardContextMenu(null)}
-          items={[
-            {
-              icon: <FolderSearch className="size-4" />,
-              label: "Browse Contents",
-              onClick: () => onBrowseFolder(cardContextMenu.folder),
-            },
-            {
-              icon:
-                cardContextMenu.folder.status === "syncing" ? (
-                  <PauseCircle className="size-4" />
-                ) : (
-                  <PlayCircle className="size-4" />
-                ),
-              label:
-                cardContextMenu.folder.status === "syncing"
-                  ? "Pause Sync"
-                  : "Resume Sync",
-              onClick: () =>
-                cardContextMenu.folder.status === "syncing"
-                  ? onPauseFolder(cardContextMenu.folder)
-                  : onResumeFolder(cardContextMenu.folder),
-            },
-            {
-              icon: <FolderOpen className="size-4" />,
-              label: `Open in ${getFileManagerLabel()}`,
-              onClick: async () => {
-                try {
-                  await revealItemInDir(cardContextMenu.folder.localPath);
-                } catch (error) {
-                  console.error("Failed to open in file manager:", error);
-                }
-              },
-            },
-            {
-              icon: <FilterIcon className="size-4" />,
-              label: "Excluded from Sync",
-              onClick: () => onManageExclusions(cardContextMenu.folder),
-            },
-            {
-              icon: <Trash2 className="size-4" />,
-              label: "Remove from Sync",
-              onClick: () => onRemoveFolder(cardContextMenu.folder),
-            },
-            {
-              icon: <ServerCrash className="size-4" />,
-              label: "Delete from Server",
-              variant: "destructive" as const,
-              onClick: () =>
-                onDeleteFromServer(
-                  cardContextMenu.folder.folderName,
-                  cardContextMenu.folder.id
-                ),
-            },
-          ]}
+          items={buildFolderActions(cardContextMenu.folder).map((action) => ({
+            icon: action.icon,
+            label: action.title,
+            ...(action.variant ? { variant: action.variant } : {}),
+            onClick: action.onClick,
+          }))}
         />
       )}
         </>

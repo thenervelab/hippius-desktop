@@ -8,6 +8,11 @@ import type { SyncFolder, RemoteFolder } from "@/app/lib/types/sync-folder";
 import { AddLocalFolderDialog } from "@/components/page-sections/settings/AddLocalFolderDialog";
 import { removeSyncPath } from "@/app/lib/utils/syncPathUtils";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
+import {
+  isSharedDrivesUnavailable,
+  leaveSharedDrive,
+} from "@/app/lib/tauri/sharedDrives";
+import type { RemoveFolderMode } from "@/components/page-sections/settings/multi-folder-sync/RemoveFolderDialog";
 import { deleteFolderErrorToast } from "@/app/lib/utils/deleteFolderError";
 import {
   restoreRemoteFolders,
@@ -78,12 +83,15 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [showHcfsSetup, setShowHcfsSetup] = useState(false);
 
-  // Remove folder dialog state
+  // Remove folder dialog state. `mode: "leave"` is the member-drive
+  // variant (shared drives): the confirm routes through
+  // `leave_shared_drive` instead of the plain local remove.
   const [removeDialog, setRemoveDialog] = useState<{
     open: boolean;
     folderId: string | null;
     folderName: string | null;
-  }>({ open: false, folderId: null, folderName: null });
+    mode: RemoveFolderMode;
+  }>({ open: false, folderId: null, folderName: null, mode: "remove" });
   const [isRemoving, setIsRemoving] = useState(false);
 
   // Pause sync dialog state
@@ -142,6 +150,7 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
           fileCount: number | null;
           totalBytes: number | null;
           lastModified: number | null;
+          ownerSs58: string | null;
         }>;
         remote: Array<{
           folderName: string;
@@ -168,6 +177,7 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
         fileCount: f.fileCount ?? undefined,
         totalBytes: f.totalBytes ?? undefined,
         lastModified: f.lastModified ?? undefined,
+        ownerSs58: f.ownerSs58 ?? undefined,
       }));
 
       const remoteFoldersData: RemoteFolder[] = result.remote.map((f) => ({
@@ -222,20 +232,39 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
   // ── Local folder actions ──────────────────────────────────────────────
 
   const handleRemoveFolder = async () => {
-    const { folderId } = removeDialog;
+    const { folderId, mode } = removeDialog;
     if (!folderId || !polkadotAddress) return;
 
     setIsRemoving(true);
     try {
-      await removeSyncPath(polkadotAddress, folderId);
-      toast.success("Folder removed from sync");
+      if (mode === "leave") {
+        // Member drive: leave_shared_drive ends the server membership and
+        // removes the local drive. Feature-off server → the documented
+        // escape hatch: the plain local remove, so the drive doesn't
+        // strand un-removable.
+        try {
+          await leaveSharedDrive(folderId);
+          toast.success("Left shared drive");
+        } catch (error) {
+          if (!isSharedDrivesUnavailable(error)) throw error;
+          await removeSyncPath(polkadotAddress, folderId);
+          toast.success("Folder removed from sync on this device");
+        }
+      } else {
+        await removeSyncPath(polkadotAddress, folderId);
+        toast.success("Folder removed from sync");
+      }
       loadFolders();
     } catch (error) {
       console.error("Failed to remove folder:", error);
-      toast.error("Failed to remove folder");
+      toast.error(
+        mode === "leave"
+          ? `Failed to leave shared drive: ${errorMessage(error)}`
+          : "Failed to remove folder",
+      );
     } finally {
       setIsRemoving(false);
-      setRemoveDialog({ open: false, folderId: null, folderName: null });
+      setRemoveDialog({ open: false, folderId: null, folderName: null, mode: "remove" });
     }
   };
 
@@ -501,6 +530,15 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
               open: true,
               folderId: folder.id,
               folderName: folder.folderName,
+              mode: "remove",
+            })
+          }
+          onLeaveDrive={(folder) =>
+            setRemoveDialog({
+              open: true,
+              folderId: folder.id,
+              folderName: folder.folderName,
+              mode: "leave",
             })
           }
           onDeleteFromServer={openDeleteServerDialog}
@@ -542,8 +580,9 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
         open={removeDialog.open}
         folderName={removeDialog.folderName}
         isRemoving={isRemoving}
+        mode={removeDialog.mode}
         onClose={() =>
-          setRemoveDialog({ open: false, folderId: null, folderName: null })
+          setRemoveDialog({ open: false, folderId: null, folderName: null, mode: "remove" })
         }
         onConfirm={handleRemoveFolder}
       />
