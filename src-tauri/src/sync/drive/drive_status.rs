@@ -36,6 +36,15 @@
 
 use serde::{Deserialize, Serialize};
 
+/// User-facing message carried on the `DriveStatus::Error` a revoked shared
+/// drive settles into (shared-drives Task 5, `sync::lifecycle::teardown_revoked_drive`).
+///
+/// One constant so the status emit, the persisted notification copy, and the
+/// FE tests cannot drift apart. Deliberately terminal wording: the drive is
+/// not "paused" or "failing", access is gone (the owner removed this member
+/// or deleted the drive) and the only affordance left is Remove.
+pub const SHARED_DRIVE_REVOKED_MESSAGE: &str = "Access to this shared drive was removed";
+
 /// Per-drive status. Wire format is camelCase to match TypeScript.
 ///
 /// `serde(tag = "kind")` produces `{"kind": "active"}`, `{"kind": "paused"}`,

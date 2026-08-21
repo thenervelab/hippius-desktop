@@ -244,6 +244,11 @@ pub(crate) fn handle_sync_completed(app: &AppHandle, mut payload: events::SyncCo
     // drive that goes down again later notifies anew. Mirrors hcfs-client
     // resetting `consecutive_failures` to 0 on success.
     app_state.error_notify.clear(&payload.label);
+    // Same edge for the revocation latch: a completing drive is provably not
+    // revoked (a revoked one never reaches SyncCompleted — the marker cycle
+    // tears it down), so re-arm it for a genuine later revocation (e.g. the
+    // member was re-invited, re-synced, then revoked again).
+    app_state.revoked_notify.clear(&payload.label);
 
     // Update per-file failure counters from the finalized session.
     update_failure_counts(app, &payload.label);
@@ -307,6 +312,47 @@ pub(crate) enum FailureNotify {
     Always,
 }
 
+/// Threshold handed to the `revoked_notify` latch. `1` deliberately turns
+/// [`crate::sync::error_notify::ErrorNotifyState`] into a once-per-label edge
+/// latch: the FIRST marker-carrying cycle notifies + tears the drive down,
+/// and every later one (the engine retries with backoff until the teardown
+/// removes the drive from the runner) is suppressed. No 3-strike gate like
+/// [`ERROR_NOTIFY_THRESHOLD`]: the engine attaches the marker only when a
+/// SUCCESSFULLY fetched remote listing is missing the folder — a transient
+/// outage keeps its original error — so a single marker is already
+/// definitive, not flaky.
+const REVOKED_NOTIFY_THRESHOLD: u32 = 1;
+
+/// How [`handle_sync_error`] must route a `SyncError` payload, decided from
+/// the error string alone. Extracted as a pure function so the routing —
+/// exact-equality marker matching, cancel first — is unit-testable without a
+/// Tauri runtime (the bridge handlers themselves are `AppHandle<Wry>`-bound).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SyncErrorDisposition {
+    /// User-initiated cancel / stall-watchdog self-cancel: silence entirely.
+    SilencedCancel,
+    /// Member drive's access revoked (or owner deleted the drive): terminal
+    /// teardown + one notification, never the flaky-endpoint counter.
+    SharedDriveRevoked,
+    /// Everything else: the generic gated error path.
+    RealError,
+}
+
+/// Classify a `SyncError`'s error string. Both markers are matched by exact
+/// equality (never substring): the upstream stringifications are constants
+/// pinned in `sync::events`, and a suffix-carrying variant must fall through
+/// to [`SyncErrorDisposition::RealError`] so a reworded upstream error is
+/// surfaced rather than silently swallowed or mis-torn-down.
+pub(crate) fn classify_sync_error(error: &str) -> SyncErrorDisposition {
+    if error == events::CANCELLED_MARKER {
+        SyncErrorDisposition::SilencedCancel
+    } else if error == events::SHARED_DRIVE_REVOKED_MARKER {
+        SyncErrorDisposition::SharedDriveRevoked
+    } else {
+        SyncErrorDisposition::RealError
+    }
+}
+
 /// Single source of truth for the sync-ERROR transition, shared by the auto-sync
 /// bridge ([`SyncEventHandler::on_event`]'s `SyncError` arm) and the
 /// reviewed-conflict command ([`crate::sync::control::sync_with_conflict_resolutions`]).
@@ -333,16 +379,29 @@ pub(crate) fn handle_sync_error(app: &AppHandle, payload: events::SyncErrorPaylo
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
 
-    // 1. Cancels are never user-actionable — silence them, but still clear the
-    //    preparing widget (a paused/removed drive would otherwise leak a stuck
-    //    "Preparing sync…" badge). Banner clear is skipped for cancels (handled
-    //    by stop_sync).
-    if payload.error == events::CANCELLED_MARKER {
-        if app_state.preparing.clear(&payload.label) {
-            app_state.sync.emit_snapshot(true);
+    match classify_sync_error(&payload.error) {
+        // 1. Cancels are never user-actionable — silence them, but still clear
+        //    the preparing widget (a paused/removed drive would otherwise leak
+        //    a stuck "Preparing sync…" badge). Banner clear is skipped for
+        //    cancels (handled by stop_sync).
+        SyncErrorDisposition::SilencedCancel => {
+            if app_state.preparing.clear(&payload.label) {
+                app_state.sync.emit_snapshot(true);
+            }
+            tracing::debug!(label = %payload.label, "Silenced sync cancel (not emitted as error)");
+            return;
         }
-        tracing::debug!(label = %payload.label, "Silenced sync cancel (not emitted as error)");
-        return;
+        // 1b. Shared-drive revocation is TERMINAL, not flaky: route it into
+        //     its dedicated teardown + one-shot notification BEFORE the
+        //     `error_notify` counting below, so a revocation never increments
+        //     the flaky-endpoint counter and never waits out the 3-strike
+        //     gate. Early return mirrors the cancel arm — the generic path
+        //     must not also fire for the same event.
+        SyncErrorDisposition::SharedDriveRevoked => {
+            handle_shared_drive_revoked(app, payload);
+            return;
+        }
+        SyncErrorDisposition::RealError => {}
     }
 
     // 2. Real error: epoch-gated, label-scoped defensive clears so an abort
@@ -383,6 +442,60 @@ pub(crate) fn handle_sync_error(app: &AppHandle, payload: events::SyncErrorPaylo
     if should_notify {
         let _ = app.emit(events::SYNC_FAILED_NOTIFY, payload.clone());
     }
+    let _ = app.emit(events::SYNC_ERROR, payload);
+}
+
+/// Handle a `SyncError` carrying [`events::SHARED_DRIVE_REVOKED_MARKER`]:
+/// the server-side listing no longer contains this member drive's folder
+/// (the owner revoked this member or deleted the drive), which is a
+/// TERMINAL state — retrying cannot fix it, and the auto-retry loop would
+/// otherwise keep hammering a folder that is gone.
+///
+/// What this does, and deliberately nothing more:
+/// 1. The SAME epoch-gated, label-scoped defensive clears + keep-awake
+///    re-evaluation as the generic error arm — an abort mid-cycle must not
+///    leak a stuck banner/preparing badge/402 counter here either.
+/// 2. Once per label (the `revoked_notify` latch — the engine re-emits the
+///    marker each backoff retry until the teardown lands, and a re-init
+///    race could re-surface it): spawn the pause-shaped terminal teardown
+///    (`teardown_revoked_drive` — in-memory removal + epoch bump under the
+///    label's commit lock, NO `is_paused` write, settles the drive on
+///    `DriveStatus::Error`) and emit ONE `SYNC_FAILED_NOTIFY` so exactly one
+///    "Sync Failed" notification row lands (`useFilesNotification.ts`
+///    persists one row per event on this channel). The teardown is spawned
+///    because `on_event` is synchronous and the funnel awaits the commit
+///    lock.
+/// 3. Emit `SYNC_ERROR` unchanged — its live consumers (e.g.
+///    `ConflictEventListener` dropping the drive's pending conflicts) must
+///    see this failed cycle exactly like any other real error; no state
+///    beyond what the generic arm touches is cleared here.
+///
+/// It never touches `error_notify`: a revocation is definitive, not a
+/// flaky-endpoint episode, so it must neither increment that counter nor
+/// consume its notification edge.
+fn handle_shared_drive_revoked(app: &AppHandle, payload: events::SyncErrorPayload) {
+    use tauri::Manager;
+    let app_state = app.state::<crate::app_state::AppState>();
+
+    // Same label-scoped defensive clears as the generic arm (see
+    // `handle_sync_error` step 2 for the rationale).
+    {
+        let epoch = app_state.sync_session_epoch.load(std::sync::atomic::Ordering::SeqCst);
+        app_state.upload_processing.clear_if_session_advanced(app, &payload.label, epoch);
+        app_state.preparing.clear(&payload.label);
+        app_state.credits_exhausted.clear(&payload.label);
+    }
+    reevaluate_keep_awake(&app_state, "shared drive revoked");
+
+    // Edge latch: only the FIRST marker for this label since the last clear
+    // spawns the teardown and the notification. Suppressed repeats still ran
+    // the clears above (idempotent) and still emit `SYNC_ERROR` below.
+    if app_state.revoked_notify.record_failure(&payload.label, REVOKED_NOTIFY_THRESHOLD) {
+        tracing::warn!(label = %payload.label, "Shared drive access revoked — tearing down and notifying once");
+        tauri::async_runtime::spawn(crate::sync::lifecycle::teardown_revoked_drive(app.clone(), payload.label.clone()));
+        let _ = app.emit(events::SYNC_FAILED_NOTIFY, payload.clone());
+    }
+
     let _ = app.emit(events::SYNC_ERROR, payload);
 }
 
@@ -451,6 +564,12 @@ fn handle_sync_stopped(app: &AppHandle, label: String) {
     // Re-arm the "Sync Failed" latch: a paused/removed drive that
     // is later resumed and goes down should notify again.
     app_state.error_notify.clear(&label);
+    // Re-arm the revocation latch on the same edge. SyncStopped is the tail
+    // of the revocation teardown itself, and after removal the engine can't
+    // emit the marker again for this label — the next marker requires a
+    // re-init (resume / next launch), which is a fresh episode that must
+    // notify again rather than being suppressed by a spent latch.
+    app_state.revoked_notify.clear(&label);
     // Drop this drive's folder-entity-sync throttle stamp so a resume / re-add
     // syncs immediately instead of being gated by the prior episode's last-run
     // time.
@@ -493,6 +612,9 @@ fn handle_sync_reset(app: &AppHandle, account_id: String, message: String) {
     // account's down-episode must not suppress the first
     // notification for a different account.
     app_state.error_notify.clear_all();
+    // And for the revocation latch — a previous account's revoked drive
+    // must not swallow a different account's first revocation edge.
+    app_state.revoked_notify.clear_all();
     // Wipe every folder-entity-sync throttle stamp: a previous account's
     // last-run times must not gate the new account's first sync after a switch.
     app_state.folder_entity_sync.clear_all();
@@ -1874,5 +1996,52 @@ mod tests {
              spawn must use tauri::async_runtime::spawn (Tauri-owned \
              runtime), not bare tokio::spawn (requires Handle::current())."
         );
+    }
+
+    // ── SyncError routing (cancel / revoked / real) ────────────────────
+
+    /// The revoked marker routes to its terminal path; the cancel marker
+    /// stays silenced; anything else is a real error. These are the three
+    /// arms `handle_sync_error` dispatches on, extracted pure precisely so
+    /// this decision is testable without a Wry `AppHandle`.
+    #[test]
+    fn classify_sync_error_routes_each_marker() {
+        assert_eq!(classify_sync_error(events::CANCELLED_MARKER), SyncErrorDisposition::SilencedCancel);
+        assert_eq!(
+            classify_sync_error(events::SHARED_DRIVE_REVOKED_MARKER),
+            SyncErrorDisposition::SharedDriveRevoked
+        );
+        assert_eq!(classify_sync_error("Rate limited, retry after 30s"), SyncErrorDisposition::RealError);
+    }
+
+    /// Marker matching is exact equality, never substring: a wrapped or
+    /// suffixed variant must fall through to the generic error path (be
+    /// surfaced), not be mis-torn-down as a revocation or silenced as a
+    /// cancel. This is what makes an upstream reword fail LOUDLY (via the
+    /// pinned-marker tests in `sync::events`) instead of changing behavior.
+    #[test]
+    fn classify_sync_error_never_matches_by_substring() {
+        let wrapped_revoked = format!("Sync failed: {}", events::SHARED_DRIVE_REVOKED_MARKER);
+        let suffixed_cancel = format!("{} (stall watchdog)", events::CANCELLED_MARKER);
+        assert_eq!(classify_sync_error(&wrapped_revoked), SyncErrorDisposition::RealError);
+        assert_eq!(classify_sync_error(&suffixed_cancel), SyncErrorDisposition::RealError);
+    }
+
+    /// `REVOKED_NOTIFY_THRESHOLD = 1` turns the shared `ErrorNotifyState`
+    /// into a once-per-label edge latch: the first marker fires the
+    /// teardown + notification, every backoff re-emit is suppressed, and a
+    /// `clear` (SyncStopped — the teardown's own tail) re-arms it for a
+    /// genuinely fresh episode (re-invite → revoke again).
+    #[test]
+    fn revoked_latch_fires_once_per_episode() {
+        let latch = crate::sync::error_notify::ErrorNotifyState::new();
+        assert!(latch.record_failure("team-drive", REVOKED_NOTIFY_THRESHOLD));
+        assert!(!latch.record_failure("team-drive", REVOKED_NOTIFY_THRESHOLD));
+        assert!(!latch.record_failure("team-drive", REVOKED_NOTIFY_THRESHOLD));
+        // A different label is an independent edge.
+        assert!(latch.record_failure("other-drive", REVOKED_NOTIFY_THRESHOLD));
+        // Teardown tail (SyncStopped) re-arms the label.
+        assert!(latch.clear("team-drive"));
+        assert!(latch.record_failure("team-drive", REVOKED_NOTIFY_THRESHOLD));
     }
 }

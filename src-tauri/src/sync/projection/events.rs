@@ -143,10 +143,12 @@ pub const CANCELLED_MARKER: &str = "Operation cancelled by user";
 /// or the member's access was revoked. A listing FETCH failure keeps its
 /// original error, so a server outage can never read as a revocation.
 ///
-/// Re-exported (never re-typed) beside [`CANCELLED_MARKER`] because the
-/// desktop will match it in `handle_sync_error` to route revocation into a
-/// dedicated teardown/notification path (shared-drives Task 5); this task
-/// lands only the import so the pin bump and the drift guard travel together.
+/// Re-exported (never re-typed) beside [`CANCELLED_MARKER`]. The desktop
+/// matches it by exact equality in `tauri_bridge::classify_sync_error`,
+/// routing revocation into its dedicated terminal path
+/// (`handle_shared_drive_revoked`: pause-shaped teardown without
+/// `is_paused`, `DriveStatus::Error`, one gated notification) instead of
+/// the flaky-endpoint counter (shared-drives Task 5).
 /// `shared_drive_revoked_marker_is_pinned` freezes the exact wording an
 /// upstream reword would silently break matching on.
 pub use hcfs_client::engine::SHARED_DRIVE_REVOKED_MARKER;

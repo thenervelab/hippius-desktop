@@ -300,3 +300,103 @@ fn folder_entity_sync_gates_member_drives() {
         "run_folder_entity_sync_for_drive must short-circuit member drives with the dedicated outcome"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// Task 5: revocation surfacing (SHARED_DRIVE_REVOKED_MARKER routing)
+// ─────────────────────────────────────────────────────────────────────
+
+fn tauri_bridge_src() -> String {
+    std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/projection/tauri_bridge.rs")).expect("read tauri_bridge.rs")
+}
+
+/// The revoked branch must exist in `handle_sync_error` AND be ordered
+/// BEFORE the flaky-endpoint counting: a revocation that reaches
+/// `error_notify.record_failure` would (a) pollute the 3-strike counter and
+/// (b) wait out the gate before notifying — both wrong for a definitive
+/// server-side state. The `SharedDriveRevoked` match arm needle binds to the
+/// dispatch, and the `record_failure` needle to the gating it must precede.
+#[test]
+fn handle_sync_error_routes_revocation_before_error_notify_counting() {
+    let src = tauri_bridge_src();
+    let body = fn_body(&src, "pub(crate) fn handle_sync_error(");
+
+    let revoked_idx = body
+        .find("SyncErrorDisposition::SharedDriveRevoked =>")
+        .expect("handle_sync_error must dispatch the revoked marker to its own arm");
+    assert!(
+        body[revoked_idx..].contains("handle_shared_drive_revoked("),
+        "the revoked arm must delegate to handle_shared_drive_revoked"
+    );
+    let gate_idx = body
+        .find("record_failure(")
+        .expect("handle_sync_error must still gate generic errors via error_notify.record_failure");
+    assert!(
+        revoked_idx < gate_idx,
+        "the revoked dispatch must come BEFORE error_notify counting (revoked {revoked_idx} / gate {gate_idx})"
+    );
+}
+
+/// The revoked handler's contract, pinned structurally:
+/// - exactly ONE `SYNC_FAILED_NOTIFY` emit, gated behind the
+///   `revoked_notify` edge latch (the engine re-emits the marker every
+///   backoff retry until the teardown lands — each must not add a row);
+/// - the terminal teardown spawn (`teardown_revoked_drive`);
+/// - a `SYNC_ERROR` emit for the live consumers;
+/// - NO use of the flaky-endpoint counter.
+#[test]
+fn revoked_handler_notifies_once_and_never_feeds_the_flaky_counter() {
+    let src = tauri_bridge_src();
+    let body = fn_body(&src, "fn handle_shared_drive_revoked(");
+
+    assert_eq!(
+        body.matches("SYNC_FAILED_NOTIFY").count(),
+        1,
+        "handle_shared_drive_revoked must emit SYNC_FAILED_NOTIFY exactly once (latch-gated)"
+    );
+    let latch_idx = body
+        .find("revoked_notify.record_failure(")
+        .expect("the notify + teardown must be gated on the revoked_notify latch");
+    let notify_idx = body.find("SYNC_FAILED_NOTIFY").expect("notify emit present");
+    let teardown_idx = body
+        .find("teardown_revoked_drive(")
+        .expect("handle_shared_drive_revoked must spawn the terminal teardown");
+    assert!(
+        latch_idx < teardown_idx && latch_idx < notify_idx,
+        "latch must gate both the teardown spawn and the notify emit \
+         (latch {latch_idx} / teardown {teardown_idx} / notify {notify_idx})"
+    );
+    assert!(
+        body.contains("SYNC_ERROR"),
+        "live consumers (ConflictEventListener) must still see the failed cycle via SYNC_ERROR"
+    );
+    assert!(
+        !body.contains("error_notify"),
+        "a revocation must never touch the flaky-endpoint counter (error_notify)"
+    );
+}
+
+/// The revocation latch re-arms on the SAME edges as the flaky counter, so a
+/// fresh episode (resume / re-add / account switch) notifies again while a
+/// spent latch keeps suppressing backoff re-emits within one episode.
+#[test]
+fn revoked_latch_clears_ride_the_existing_teardown_edges() {
+    let src = tauri_bridge_src();
+
+    let stopped = fn_body(&src, "fn handle_sync_stopped(");
+    assert!(
+        stopped.contains("revoked_notify.clear("),
+        "handle_sync_stopped must re-arm the revocation latch (the teardown's own tail)"
+    );
+
+    let completed = fn_body(&src, "pub(crate) fn handle_sync_completed(");
+    assert!(
+        completed.contains("revoked_notify.clear("),
+        "handle_sync_completed must re-arm the revocation latch on the recovery edge"
+    );
+
+    let reset = fn_body(&src, "fn handle_sync_reset(");
+    assert!(
+        reset.contains("revoked_notify.clear_all()"),
+        "handle_sync_reset must wipe the revocation latch across accounts"
+    );
+}

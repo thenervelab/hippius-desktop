@@ -1863,78 +1863,165 @@ fn clear_persisted_sync_state(account_id: &str, label: &str) {
     }
 }
 
-/// Pause a sync folder: stop the drive in-memory and mark it as paused in the DB.
-/// Unlike `stop_drive`, the DB row is preserved so the folder reappears on restart
-/// (but won't auto-sync until resumed).
-#[tauri::command]
-pub async fn pause_drive(app: AppHandle, label: String) -> Result<()> {
+/// How a pause-shaped drive teardown is reflected in persisted state and in
+/// the emitted per-drive status. Modeled as an enum (not a bool) so the two
+/// intents read at the call site and a new teardown flavor forces every
+/// match below to be revisited.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DriveSuspendKind {
+    /// User pause: a reversible intent. Persists `is_paused = true` so the
+    /// drive survives restarts as Paused, and emits `DriveStatus::Paused`.
+    Pause,
+    /// Shared-drive revocation (the owner removed this member or deleted the
+    /// drive server-side): terminal. Deliberately does NOT touch `is_paused`
+    /// — the drive is not paused (a reversible user intent the three resume
+    /// surfaces act on), it is dead; the only affordance left is Remove.
+    /// Emits `DriveStatus::Error` carrying
+    /// [`crate::sync::drive_status::SHARED_DRIVE_REVOKED_MESSAGE`].
+    Revoked,
+}
+
+impl DriveSuspendKind {
+    /// Whether this teardown persists `is_paused = true`. Only [`Self::Pause`]
+    /// does — writing the flag for a revoked drive would relabel a terminal
+    /// server-side state as a reversible local one.
+    fn persists_pause(self) -> bool {
+        match self {
+            DriveSuspendKind::Pause => true,
+            DriveSuspendKind::Revoked => false,
+        }
+    }
+
+    /// The per-drive status this teardown settles the drive into.
+    fn status(self) -> crate::sync::drive_status::DriveStatus {
+        match self {
+            DriveSuspendKind::Pause => crate::sync::drive_status::DriveStatus::Paused,
+            DriveSuspendKind::Revoked => crate::sync::drive_status::DriveStatus::Error {
+                message: crate::sync::drive_status::SHARED_DRIVE_REVOKED_MESSAGE.to_string(),
+            },
+        }
+    }
+}
+
+/// Shared pause-shaped teardown funnel: remove the drive from the in-memory
+/// map under the label's commit lock (bumping the pause epoch so an in-flight
+/// init yields at its commit step), optionally persist `is_paused`, and emit
+/// the settled per-drive status — all inside the locked region. Returns the
+/// number of drives remaining so callers can run `teardown_last_drive`.
+///
+/// Extracted from `pause_drive` for the shared-drive revocation path
+/// (Task 5), which needs the SAME single-writer teardown discipline WITHOUT
+/// the `is_paused` write — see [`DriveSuspendKind`]. Generic over the Tauri
+/// runtime so the funnel is drivable from the in-module `MockRuntime` tests.
+async fn suspend_drive_inmemory<R: tauri::Runtime>(app: &tauri::AppHandle<R>, label: &str, kind: DriveSuspendKind) -> usize {
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
     let sync = &app_state.sync;
 
-    // Capture pool/account up front: used both to mark the row paused AND to
-    // resolve the sync path passed as a hint to remove_drive_inmemory, so the
-    // watcher is unwatched even when the per-drive lock is held by an in-flight
-    // reconcile (try_lock would otherwise return None and leak the watch).
+    // Capture pool/account up front: used both for the optional is_paused
+    // write AND to resolve the sync path passed as a hint to
+    // remove_drive_inmemory, so the watcher is unwatched even when the
+    // per-drive lock is held by an in-flight reconcile (try_lock would
+    // otherwise return None and leak the watch).
     let pool_and_acct = match (app_state.pool(), app_state.current_account_id()) {
         (Ok(pool), Ok(acct)) => Some((pool, acct)),
         _ => None,
     };
     let path_hint = match &pool_and_acct {
-        Some((_, acct)) => sync_path_for_label(&app_state, acct, &label).await,
+        Some((_, acct)) => sync_path_for_label(&app_state, acct, label).await,
         None => None,
     };
 
     // Lifecycle serialization (see sync::lifecycle_guard): bump the pause
-    // epoch and perform BOTH superseding mutations — the in-memory removal
-    // and the `is_paused=true` write — under the label's commit lock. An
-    // in-flight init that snapshotted an older epoch then observes the bump
-    // at its commit step and yields instead of resurrecting this drive.
-    // Lock ordering: the commit lock is acquired BEFORE anything in this
-    // function touches `sync.drives` (hierarchy: commit_lock(label) →
-    // sync.drives → progress std mutexes — never the reverse).
-    let remaining = {
-        let commit_lock = app_state.drive_lifecycle.commit_lock(&label);
-        let _guard = commit_lock.lock().await;
-        app_state.drive_lifecycle.bump(&label);
+    // epoch and perform the superseding mutations — the in-memory removal
+    // and (for a pause) the `is_paused=true` write — under the label's
+    // commit lock. An in-flight init that snapshotted an older epoch then
+    // observes the bump at its commit step and yields instead of
+    // resurrecting this drive. Lock ordering: the commit lock is acquired
+    // BEFORE anything in this function touches `sync.drives` (hierarchy:
+    // commit_lock(label) → sync.drives → progress std mutexes — never the
+    // reverse).
+    let commit_lock = app_state.drive_lifecycle.commit_lock(label);
+    let _guard = commit_lock.lock().await;
+    app_state.drive_lifecycle.bump(label);
 
-        let (remaining, removed_path) = remove_drive_inmemory(sync, &label, path_hint).await;
+    let (remaining, removed_path) = remove_drive_inmemory(sync, label, path_hint).await;
 
-        // Mark as paused in DB (keep the row, unlike stop_drive which deletes it).
-        if let Some((pool, acct)) = &pool_and_acct
-            && let Err(e) = crate::sync::paths::set_sync_path_paused(pool, acct, &label, true).await
-        {
-            warn!("Failed to mark '{}' as paused in DB: {e}", label);
-        }
+    // Pause only: mark as paused in DB (keep the row, unlike remove_drive
+    // which deletes it). A revoked teardown leaves the row untouched — see
+    // `DriveSuspendKind::persists_pause`.
+    if kind.persists_pause()
+        && let Some((pool, acct)) = &pool_and_acct
+        && let Err(e) = crate::sync::paths::set_sync_path_paused(pool, acct, label, true).await
+    {
+        warn!("Failed to mark '{}' as paused in DB: {e}", label);
+    }
 
-        // The per-drive status payload carries the on-disk path (the FE relies on it
-        // to keep its drive entry hydrated — see `useDriveStatuses`). `removed_path`
-        // is reliable thanks to the DB hint resolved above.
-        let drive_path = removed_path.map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+    // The per-drive status payload carries the on-disk path (the FE relies on it
+    // to keep its drive entry hydrated — see `useDriveStatuses`). `removed_path`
+    // is reliable thanks to the DB hint resolved above.
+    let drive_path = removed_path.map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
 
-        // Emit the per-drive Paused status INSIDE the locked region so
-        // emission order matches serialization order: an in-flight
-        // init's Active emit runs under this same lock (the commit's
-        // `on_committed` hook), so this Paused emit can never be
-        // overtaken by a stale Active one once the pause has won.
-        // `emit_drive_status` is sync and only takes the status-cache
-        // std mutex — a permitted leaf under the commit lock (see the
-        // hierarchy in sync::lifecycle_guard).
-        crate::sync::status::emit_drive_status(&app, &label, &drive_path, crate::sync::drive_status::DriveStatus::Paused);
+    // Emit the settled per-drive status INSIDE the locked region so
+    // emission order matches serialization order: an in-flight
+    // init's Active emit runs under this same lock (the commit's
+    // `on_committed` hook), so this emit can never be overtaken by a
+    // stale Active one once the teardown has won.
+    // `emit_drive_status` is sync and only takes the status-cache
+    // std mutex — a permitted leaf under the commit lock (see the
+    // hierarchy in sync::lifecycle_guard).
+    crate::sync::status::emit_drive_status(app, label, &drive_path, kind.status());
 
-        remaining
-        // Guard drops here: the locked region is exactly the superseding
-        // state writes plus their status emit. `teardown_last_drive`
-        // below waits a bounded grace window for the sync loop and must
-        // not stall other lifecycle ops.
-    };
+    remaining
+    // Guard drops here: the locked region is exactly the superseding
+    // state writes plus their status emit. `teardown_last_drive` in the
+    // callers waits a bounded grace window for the sync loop and must
+    // not stall other lifecycle ops.
+}
+
+/// Pause a sync folder: stop the drive in-memory and mark it as paused in the DB.
+/// Unlike `remove_drive`, the DB row is preserved so the folder reappears on restart
+/// (but won't auto-sync until resumed).
+#[tauri::command]
+pub async fn pause_drive(app: AppHandle, label: String) -> Result<()> {
+    use tauri::Manager;
+    let remaining = suspend_drive_inmemory(&app, &label, DriveSuspendKind::Pause).await;
 
     if remaining == 0 {
-        teardown_last_drive(sync, &app).await;
+        let app_state = app.state::<crate::app_state::AppState>();
+        teardown_last_drive(&app_state.sync, &app).await;
     }
 
     info!("Paused drive '{}', {} drives remaining", label, remaining);
     Ok(())
+}
+
+/// Terminal teardown for a member drive whose access the server revoked —
+/// the engine attached `SHARED_DRIVE_REVOKED_MARKER` to a `SyncError` after
+/// a SUCCESSFULLY fetched remote listing was missing the folder (transient
+/// listing failures keep their original error, so this is never reached for
+/// an outage). Pause-equivalent in-memory teardown WITHOUT the `is_paused`
+/// write, settling the drive on `DriveStatus::Error` so the FE renders the
+/// terminal state with a Remove affordance (`remove_drive` is the escape
+/// hatch — it also fully cleans a member row's identity columns).
+///
+/// Spawned from the sync bridge (`handle_shared_drive_revoked`) because
+/// `SyncEventHandler::on_event` is synchronous and this awaits the label's
+/// commit lock. The `sync_paths` row is deliberately left present and
+/// un-paused: on the next launch `auto_init_sync` re-inits the drive and —
+/// if access is still revoked — the first cycle re-runs this teardown, so
+/// the terminal state re-surfaces (one notification per launch) until the
+/// user removes the drive.
+pub(crate) async fn teardown_revoked_drive(app: AppHandle, label: String) {
+    use tauri::Manager;
+    let remaining = suspend_drive_inmemory(&app, &label, DriveSuspendKind::Revoked).await;
+
+    if remaining == 0 {
+        let app_state = app.state::<crate::app_state::AppState>();
+        teardown_last_drive(&app_state.sync, &app).await;
+    }
+
+    info!("Tore down revoked shared drive '{}', {} drives remaining", label, remaining);
 }
 
 /// Resume a paused sync folder: clear `is_paused`, re-initialize the
@@ -2772,6 +2859,160 @@ mod tests {
 
         assert_eq!(remaining, 0, "empty map has zero remaining");
         assert!(removed_path.is_none(), "nonexistent label should yield None path");
+    }
+
+    // ── suspend_drive_inmemory (pause / revoked teardown funnel) ───────
+
+    /// Exhaustive-decision pin: the enum match makes a NEW teardown flavor a
+    /// compile-time event, and this test freezes what the two existing ones
+    /// decide — Pause is the ONLY kind that persists `is_paused`, and each
+    /// kind settles on its own status (Revoked carrying the shared message
+    /// constant the FE copy is written against).
+    #[test]
+    fn suspend_kind_decides_persistence_and_status() {
+        assert!(DriveSuspendKind::Pause.persists_pause());
+        assert!(
+            !DriveSuspendKind::Revoked.persists_pause(),
+            "a revoked drive is dead, not paused — writing is_paused would relabel a terminal \
+             server-side state as a reversible local one"
+        );
+        assert_eq!(DriveSuspendKind::Pause.status(), crate::sync::drive_status::DriveStatus::Paused);
+        assert_eq!(
+            DriveSuspendKind::Revoked.status(),
+            crate::sync::drive_status::DriveStatus::Error {
+                message: crate::sync::drive_status::SHARED_DRIVE_REVOKED_MESSAGE.to_string(),
+            }
+        );
+    }
+
+    /// Build a `MockRuntime` app with a managed `AppState`, an in-memory
+    /// `sync_paths` row for `label` (un-paused), a logged-in account, and a
+    /// registered drive slot — the full precondition set for driving the
+    /// REAL `suspend_drive_inmemory` funnel end-to-end.
+    async fn suspend_harness(label: &str, sync_path: &std::path::Path) -> (tauri::App<tauri::test::MockRuntime>, sqlx::SqlitePool) {
+        use tauri::Manager;
+
+        const ACCOUNT: &str = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
+
+        let app = tauri::test::mock_app();
+        app.manage(crate::app_state::AppState::new());
+        let state = app.state::<crate::app_state::AppState>();
+
+        // In-memory DB with the columns the funnel touches
+        // (`get_all_sync_paths_internal` read + `set_sync_path_paused` write).
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.expect("in-memory sqlite");
+        sqlx::query(
+            "CREATE TABLE sync_paths (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner TEXT NOT NULL,
+                path TEXT NOT NULL,
+                type TEXT NOT NULL,
+                label TEXT NOT NULL,
+                is_paused INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(owner, label)
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create sync_paths");
+        sqlx::query("INSERT INTO sync_paths (owner, path, type, label, is_paused) VALUES (?, ?, 'private', ?, 0)")
+            .bind(crate::auth::account_key::account_key(ACCOUNT))
+            .bind(sync_path.to_string_lossy().into_owned())
+            .bind(label)
+            .execute(&pool)
+            .await
+            .expect("seed sync_paths row");
+        state.set_pool(pool.clone());
+        state.auth.lock().expect("auth lock").substrate_address = Some(ACCOUNT.to_string());
+
+        // Register a real drive slot so the funnel has something to remove.
+        {
+            let config_dir = sync_path.parent().expect("parent").join("config");
+            std::fs::create_dir_all(&config_dir).expect("create config dir");
+            let manager = DriveManager::new(sync_path.to_path_buf(), config_dir);
+            let mut guard = state.sync.drives.lock().await;
+            guard.insert(
+                label.to_string(),
+                DriveSlot {
+                    manager: Arc::new(TokioMutex::new(manager)),
+                    cancel_token: CancellationToken::new(),
+                    sync_path: sync_path.to_path_buf(),
+                },
+            );
+        }
+
+        (app, pool)
+    }
+
+    async fn is_paused_in_db(pool: &sqlx::SqlitePool, label: &str) -> bool {
+        let v: i64 = sqlx::query_scalar("SELECT is_paused FROM sync_paths WHERE label = ?")
+            .bind(label)
+            .fetch_one(pool)
+            .await
+            .expect("row exists");
+        v != 0
+    }
+
+    /// The Task 5 behavioral contract: a REVOKED suspend removes the drive
+    /// from the runner and caches `DriveStatus::Error` (what the FE's next
+    /// `get_all_drive_statuses` bootstrap reads), while `sync_paths.is_paused`
+    /// stays 0 — the drive is dead, not paused.
+    #[tokio::test]
+    async fn suspend_revoked_removes_drive_and_caches_error_without_pausing() {
+        use tauri::Manager;
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let sync_path = tmp.path().join("sync");
+        std::fs::create_dir_all(&sync_path).expect("create sync dir");
+        let (app, pool) = suspend_harness("team-drive", &sync_path).await;
+        let handle = app.handle().clone();
+        let state = app.state::<crate::app_state::AppState>();
+
+        let remaining = suspend_drive_inmemory(&handle, "team-drive", DriveSuspendKind::Revoked).await;
+
+        assert_eq!(remaining, 0);
+        assert!(
+            !state.sync.drives.lock().await.contains_key("team-drive"),
+            "revoked drive must be removed from the runner"
+        );
+        let cached = state.drive_status_cache.lock().expect("cache lock").get("team-drive").cloned();
+        assert_eq!(
+            cached,
+            Some(crate::sync::drive_status::DriveStatus::Error {
+                message: crate::sync::drive_status::SHARED_DRIVE_REVOKED_MESSAGE.to_string(),
+            }),
+            "status cache must settle on the revoked Error so a later FE bootstrap sees it"
+        );
+        assert!(
+            !is_paused_in_db(&pool, "team-drive").await,
+            "a revoked teardown must NOT write is_paused — the drive is dead, not paused"
+        );
+    }
+
+    /// Extraction guard: routing `pause_drive` through the shared funnel must
+    /// preserve its whole contract — drive removed, `Paused` cached, and the
+    /// `is_paused` flag persisted.
+    #[tokio::test]
+    async fn suspend_pause_removes_drive_and_persists_the_flag() {
+        use tauri::Manager;
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let sync_path = tmp.path().join("sync");
+        std::fs::create_dir_all(&sync_path).expect("create sync dir");
+        let (app, pool) = suspend_harness("pause-drive", &sync_path).await;
+        let handle = app.handle().clone();
+        let state = app.state::<crate::app_state::AppState>();
+
+        let remaining = suspend_drive_inmemory(&handle, "pause-drive", DriveSuspendKind::Pause).await;
+
+        assert_eq!(remaining, 0);
+        assert!(!state.sync.drives.lock().await.contains_key("pause-drive"));
+        let cached = state.drive_status_cache.lock().expect("cache lock").get("pause-drive").cloned();
+        assert_eq!(cached, Some(crate::sync::drive_status::DriveStatus::Paused));
+        assert!(
+            is_paused_in_db(&pool, "pause-drive").await,
+            "a pause must persist is_paused = 1 (the reversible user intent the resume surfaces read)"
+        );
     }
 
     // ── clear_persisted_sync_state: data-loss regression ──────────────
