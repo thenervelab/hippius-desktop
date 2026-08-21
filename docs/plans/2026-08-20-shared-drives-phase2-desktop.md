@@ -267,3 +267,24 @@ per-account bearers); CLAUDE.md.
    materialization on member drives, no member migration/shares), the grant-blob
    contract Phase 3 must mirror, self-leave always sends `?owner=`.
 4. Adversarial review pass before requesting merge (house rule).
+
+## FOLLOWUPS (post pin-bump `ab4b5cd`, 2026-08-21)
+
+The revocation-signal loop is CLOSED: hcfs PR #349 (two-stage arbiter) is merged and
+pinned, the desktop e2e tripwires are flipped to require marker equality, and the live
+two-account re-run (2026-08-21, local `ab4b5cd` server stack) surfaced
+`SHARED_DRIVE_REVOKED_MARKER` on BOTH shapes (owner-removes-member via the stage-2
+memberships consult; drive-deletion via the stage-1 listing). Remaining tracked items:
+
+- **hcfs**: own-drive stage-2 exclusion pin test — a wiremock case asserting that an
+  OWN drive hitting a forbidden listing never consults `/v1/drive-memberships`
+  (`.expect(0)` on the memberships mock), mirroring the existing member-gated widening
+  pin. Review suggestion from the PR #349 round; the behavior exists, the pin does not.
+- **desktop**: move `recent_uploads.rs`'s `hash_to_drive` map from label-derived
+  hashes to the `sync_paths` identity columns before member drives ever reach the
+  search/recent-uploads surfaces — the v1 exclusion is the only thing making the
+  current keying safe (the Task-6 caution in CLAUDE.md).
+- **desktop**: rotation-via-grant for member seals — `reencrypt_all_folder_mnemonics`
+  skips member rows, so a recovery-password rotation strands the member seal under the
+  old drive password (remove + re-add is the current recovery). Re-seal in place from
+  the membership grant (`open_grant` → re-seal under the new password) instead.
