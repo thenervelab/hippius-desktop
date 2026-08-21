@@ -69,6 +69,12 @@ pub enum FolderEntriesBackfillOutcome {
     /// The sync root isn't on disk yet (drive not finished initializing).
     /// Harmless — the next launch or `initialize_sync_inner` retries.
     NotReady,
+    /// The label names a MEMBER drive (shared-drives phase 2). Folder
+    /// entities are a v1 scope cut for member drives — the server entities
+    /// belong to the OWNER's namespace and must not be registered from a
+    /// member device. The flag is stamped (this is final, not transient) so
+    /// the drive doesn't re-walk on every launch.
+    SkippedMemberDrive,
     /// A transient failure (walk I/O error, network error, missing client
     /// config). Flag stays NULL so the next launch retries.
     RetryLater,
@@ -100,6 +106,23 @@ pub async fn run_folder_entries_backfill_for_drive(state: &AppState, account_id:
     //    task collapses into a no-op when an older invocation already won.
     if is_folder_entries_backfilled(&pool, &owner, label).await? {
         return Ok(FolderEntriesBackfillOutcome::AlreadyDone);
+    }
+
+    // 1.5. Member drives never run the folder-entity jobs (v1 scope cut —
+    //      the entities live under the OWNER's namespace). Stamp the flag so
+    //      this decision is made once, not re-walked every launch; the
+    //      per-cycle folder-entity sync carries its own member gate, so the
+    //      stamped flag cannot accidentally enable it.
+    // A vanished row (`None`) means a remove_drive / logout race between the
+    // flag check and here — the same transient state the later root lookup
+    // reported as NotReady before this gate existed.
+    let Some(identity) = crate::sync::identity::lookup_drive_identity(&pool, account_id, label).await? else {
+        return Ok(FolderEntriesBackfillOutcome::NotReady);
+    };
+    if identity.is_member {
+        info!(label = %label, "folder-entries backfill: member drive; folder entities are owner-side — marking done");
+        mark_folder_entries_backfilled(&pool, &owner, label).await?;
+        return Ok(FolderEntriesBackfillOutcome::SkippedMemberDrive);
     }
 
     // 2. Resolve the on-disk sync root. Unlike the relative-path backfill we
@@ -375,7 +398,15 @@ pub(crate) async fn build_one_shot_client(pool: &SqlitePool, account_id: &str, l
     let bearer_token = get_api_token(pool, account_id)
         .await?
         .ok_or_else(|| AppError::Auth("No authentication token found. Please log in again.".into()))?;
-    let config = build_hcfs_config(&server_url, &bearer_token, account_id, &folder_hash(label));
+    // Structurally own-drive: every caller (this backfill, the per-cycle
+    // reconcile/materialize) skips member drives before building a client —
+    // the folder-entity jobs are a v1 scope cut for member drives — so the
+    // label-derived hash is correct here.
+    let config = build_hcfs_config(
+        &server_url,
+        &bearer_token,
+        &crate::sync::identity::DriveIdentity::own(account_id, &folder_hash(label)),
+    );
     HcfsClient::new(config).map_err(|e| AppError::Hcfs(format!("Failed to create HCFS client for folder-entries backfill: {e}")))
 }
 
@@ -401,6 +432,9 @@ pub(crate) fn spawn_folder_entries_backfill(app: tauri::AppHandle, account_id: S
             }
             Ok(FolderEntriesBackfillOutcome::NotReady) => {
                 debug!(label = %label, "folder-entries backfill: drive not ready; will retry next launch");
+            }
+            Ok(FolderEntriesBackfillOutcome::SkippedMemberDrive) => {
+                debug!(label = %label, "folder-entries backfill: member drive; folder entities stay owner-side");
             }
             Ok(FolderEntriesBackfillOutcome::RetryLater) => {
                 debug!(label = %label, "folder-entries backfill: transient failure; will retry next launch");
@@ -628,6 +662,49 @@ mod tests {
             is_folder_entries_backfilled(&pool, &owner, "docs").await.unwrap(),
             "empty-tree completion must set the flag so the drive isn't re-walked"
         );
+    }
+
+    /// Member gate: a member row (owner_ss58 + wire_folder_hash set) skips
+    /// the walk and the wire entirely and STAMPS the flag — the decision is
+    /// final, not transient, so the drive must not re-walk every launch and
+    /// the FE's pre-backfill banner must clear. A broken gate would fall
+    /// through to the walk and (here) return `RetryLater` on the missing
+    /// client config, so the assertions distinguish the two.
+    #[tokio::test]
+    async fn run_skips_member_drives_and_stamps_the_flag() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        // A subdir that WOULD be registered if the gate failed open.
+        std::fs::create_dir(tmp.path().join("owner-made")).expect("mk subdir");
+        let pool = temp_pool().await;
+        insert_sync_path_for_account(&pool, TEST_ACCOUNT, "team", tmp.path().to_str().unwrap()).await;
+        sqlx::query("UPDATE sync_paths SET owner_ss58 = ?, wire_folder_hash = ? WHERE owner = ? AND label = 'team'")
+            .bind("5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty")
+            .bind("0123456789abcdef")
+            .bind(account_key(TEST_ACCOUNT))
+            .execute(&pool)
+            .await
+            .expect("paint member columns");
+        let owner = account_key(TEST_ACCOUNT);
+        let state = make_state(pool.clone());
+
+        let outcome = run_folder_entries_backfill_for_drive(&state, TEST_ACCOUNT, "team")
+            .await
+            .expect("member skip must not error");
+        assert_eq!(outcome, FolderEntriesBackfillOutcome::SkippedMemberDrive);
+        assert!(
+            is_folder_entries_backfilled(&pool, &owner, "team").await.unwrap(),
+            "the member skip must stamp the flag"
+        );
+        assert!(
+            cached_paths(&pool, &owner, "team").await.is_empty(),
+            "no directory may be cached for a member drive"
+        );
+
+        // A second run short-circuits on the stamped flag.
+        let again = run_folder_entries_backfill_for_drive(&state, TEST_ACCOUNT, "team")
+            .await
+            .expect("second run must not error");
+        assert_eq!(again, FolderEntriesBackfillOutcome::AlreadyDone);
     }
 
     /// Orchestration invariant: with no `sync_paths` row, the run is `NotReady`

@@ -63,7 +63,7 @@ mod tests {
     #[test]
     fn regional_fallback_urls_match_hcfs_client_known_set() {
         // Snapshot of `hcfs_client::client::region::REGIONAL_BASE_URLS`
-        // at rev 1b141d1. Update both sides (and bump the rev comment)
+        // at rev 3ff8e9f. Update both sides (and bump the rev comment)
         // when the upstream list changes.
         let upstream = ["https://eu-central-1-arion.hippius.com", "https://us-east-1-arion.hippius.com"];
         assert_eq!(REGIONAL_FALLBACK_URLS, &upstream, "regional URL drift between desktop and hcfs-client");

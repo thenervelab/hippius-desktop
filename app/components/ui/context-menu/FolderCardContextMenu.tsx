@@ -7,6 +7,9 @@ export interface FolderCardMenuItem {
   label: string;
   onClick: () => void;
   variant?: "default" | "destructive";
+  /** Renders dimmed and inert; `tooltip` (native `title`) states why. */
+  disabled?: boolean;
+  tooltip?: string;
 }
 
 interface FolderCardContextMenuProps {
@@ -68,13 +71,29 @@ export default function FolderCardContextMenu({
             return (
               <button
                 key={i}
+                // Disabled items keep the variant's text color, dimmed, and
+                // lose only the interactive affordances. Deliberately no
+                // `pointer-events-none`: it would stop the element from ever
+                // being a hover target, making the `title` tooltip
+                // unreachable (the FileContextMenu Rename-row pattern).
                 className={cn(
-                  "flex items-center gap-2.5 px-1.5 py-1.5 rounded-md cursor-pointer text-left w-full",
+                  "flex items-center gap-2.5 px-1.5 py-1.5 rounded-md text-left w-full",
                   isDestructive
-                    ? "!text-error-60 hover:!text-error-70 hover:bg-error-100/40 dark:!text-error-70 dark:hover:!text-error-60 dark:hover:bg-error-70/10"
-                    : "!text-[#52525C] hover:!text-grey-10 hover:bg-grey-90 dark:!text-grey-dark-200 dark:hover:!text-grey-light-100 dark:hover:bg-white/5"
+                    ? "!text-error-60 dark:!text-error-70"
+                    : "!text-[#52525C] dark:!text-grey-dark-200",
+                  item.disabled
+                    ? "opacity-50 cursor-not-allowed"
+                    : cn(
+                        "cursor-pointer",
+                        isDestructive
+                          ? "hover:!text-error-70 hover:bg-error-100/40 dark:hover:!text-error-60 dark:hover:bg-error-70/10"
+                          : "hover:!text-grey-10 hover:bg-grey-90 dark:hover:!text-grey-light-100 dark:hover:bg-white/5"
+                      )
                 )}
+                disabled={item.disabled}
+                title={item.tooltip}
                 onClick={() => {
+                  if (item.disabled) return;
                   item.onClick();
                   onClose();
                 }}

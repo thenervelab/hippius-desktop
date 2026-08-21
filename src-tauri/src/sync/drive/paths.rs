@@ -88,11 +88,25 @@ pub(crate) enum LabelMode<'a> {
     /// Use this exact label, upserting the path if an `(owner, label)` row
     /// already exists — the set/update path (default drive, migration restore,
     /// explicit folder re-point).
+    ///
+    /// `Exact` deliberately carries NO member identity: it is an UPSERT, so
+    /// threading the member columns through it could silently flip an existing
+    /// own drive into a member drive (or rewrite a member drive's wire
+    /// identity) on a label collision. Member drives are created exactly once,
+    /// via `Allocate` (the shared-drives `add_shared_drive` path); `Exact`
+    /// leaves `owner_ss58`/`wire_folder_hash` untouched — NULL on fresh rows,
+    /// preserved as-is when re-pointing an existing row's path.
     Exact(&'a str),
     /// Allocate a fresh, collision-free label by suffixing `base` against the
     /// labels read in THIS transaction, then plain-`INSERT`. The
     /// add-a-new-drive path — it never rewrites an existing drive's path.
-    Allocate { base: &'a str },
+    /// `member` is `Some` only when the new drive is a shared-drive MEMBER
+    /// slot, persisting the owner's wire identity onto the row (validated
+    /// before the INSERT — see `MemberDriveIdentity::validate`).
+    Allocate {
+        base: &'a str,
+        member: Option<&'a crate::sync::identity::MemberDriveIdentity>,
+    },
 }
 
 /// Core DB upsert + macOS bookmark logic. Returns the label actually written
@@ -138,7 +152,7 @@ pub(crate) async fn set_sync_path_internal(pool: &SqlitePool, account_id: &str, 
         // so it observes this row and picks the next suffix instead of colliding.
         let label: String = match mode {
             LabelMode::Exact(l) => l.to_string(),
-            LabelMode::Allocate { base } => {
+            LabelMode::Allocate { base, .. } => {
                 let taken: std::collections::HashSet<String> = existing.iter().map(|(l, _)| l.clone()).collect();
                 generate_unique_label_internal(&taken, base)
             }
@@ -146,56 +160,16 @@ pub(crate) async fn set_sync_path_internal(pool: &SqlitePool, account_id: &str, 
 
         validate_no_path_overlap(&canonical_new, &label, &existing).await?;
 
+        let row = DriveRow {
+            owner: &owner,
+            path,
+            path_type,
+            label: &label,
+            timestamp,
+        };
         match mode {
-            LabelMode::Exact(_) => {
-                // Adopt a pre-multi-drive ownerless row of this type so the
-                // legacy default drive keeps its id across the migration.
-                if let Ok(Some(legacy_id)) = sqlx::query_scalar::<_, i64>("SELECT id FROM sync_paths WHERE owner = '' AND type = ? LIMIT 1")
-                    .bind(path_type)
-                    .fetch_optional(&mut *conn)
-                    .await
-                    && let Err(e) = sqlx::query("REPLACE INTO sync_paths (id, owner, path, type, label, timestamp) VALUES (?, ?, ?, ?, ?, ?)")
-                        .bind(legacy_id)
-                        .bind(&owner)
-                        .bind(path)
-                        .bind(path_type)
-                        .bind(&label)
-                        .bind(timestamp)
-                        .execute(&mut *conn)
-                        .await
-                {
-                    warn!("Failed to replace legacy sync_paths row: {e}");
-                }
-
-                sqlx::query(
-                    "INSERT INTO sync_paths (owner, path, type, label, timestamp) VALUES (?, ?, ?, ?, ?)
-                     ON CONFLICT(owner, label) DO UPDATE SET path=excluded.path, type=excluded.type, timestamp=excluded.timestamp",
-                )
-                .bind(&owner)
-                .bind(path)
-                .bind(path_type)
-                .bind(&label)
-                .bind(timestamp)
-                .execute(&mut *conn)
-                .await
-                .map_err(crate::error::AppError::Db)?;
-            }
-            LabelMode::Allocate { .. } => {
-                // Fresh drive: a plain INSERT. The label was just suffixed unique
-                // against this transaction's own read, so it cannot conflict; the
-                // UNIQUE(owner, label) constraint is the backstop that turns any
-                // future regression into a hard error rather than a silent path
-                // overwrite.
-                sqlx::query("INSERT INTO sync_paths (owner, path, type, label, timestamp) VALUES (?, ?, ?, ?, ?)")
-                    .bind(&owner)
-                    .bind(path)
-                    .bind(path_type)
-                    .bind(&label)
-                    .bind(timestamp)
-                    .execute(&mut *conn)
-                    .await
-                    .map_err(crate::error::AppError::Db)?;
-            }
+            LabelMode::Exact(_) => upsert_exact_row(&mut conn, &row).await?,
+            LabelMode::Allocate { member, .. } => insert_allocated_row(&mut conn, &row, member).await?,
         }
         Ok(label)
     }
@@ -234,6 +208,93 @@ pub(crate) async fn set_sync_path_internal(pool: &SqlitePool, account_id: &str, 
     }
 
     Ok(label)
+}
+
+/// The column values one `sync_paths` write shares between the `Exact` and
+/// `Allocate` arms of [`set_sync_path_internal`]. Groups them so the write
+/// helpers stay within the positional-parameter budget.
+struct DriveRow<'a> {
+    owner: &'a str,
+    path: &'a str,
+    path_type: &'a str,
+    label: &'a str,
+    timestamp: i64,
+}
+
+/// The `LabelMode::Exact` write: adopt a pre-multi-drive legacy row, then
+/// upsert. The `DO UPDATE` list deliberately touches only path/type/timestamp
+/// — never the member-identity columns — so re-pointing a member drive's path
+/// preserves its wire identity (see the `LabelMode::Exact` docs).
+async fn upsert_exact_row(conn: &mut sqlx::sqlite::SqliteConnection, row: &DriveRow<'_>) -> Result<()> {
+    // Adopt a pre-multi-drive ownerless row of this type so the
+    // legacy default drive keeps its id across the migration.
+    if let Ok(Some(legacy_id)) = sqlx::query_scalar::<_, i64>("SELECT id FROM sync_paths WHERE owner = '' AND type = ? LIMIT 1")
+        .bind(row.path_type)
+        .fetch_optional(&mut *conn)
+        .await
+        && let Err(e) = sqlx::query("REPLACE INTO sync_paths (id, owner, path, type, label, timestamp) VALUES (?, ?, ?, ?, ?, ?)")
+            .bind(legacy_id)
+            .bind(row.owner)
+            .bind(row.path)
+            .bind(row.path_type)
+            .bind(row.label)
+            .bind(row.timestamp)
+            .execute(&mut *conn)
+            .await
+    {
+        warn!("Failed to replace legacy sync_paths row: {e}");
+    }
+
+    sqlx::query(
+        "INSERT INTO sync_paths (owner, path, type, label, timestamp) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(owner, label) DO UPDATE SET path=excluded.path, type=excluded.type, timestamp=excluded.timestamp",
+    )
+    .bind(row.owner)
+    .bind(row.path)
+    .bind(row.path_type)
+    .bind(row.label)
+    .bind(row.timestamp)
+    .execute(&mut *conn)
+    .await
+    .map_err(crate::error::AppError::Db)?;
+    Ok(())
+}
+
+/// The `LabelMode::Allocate` write: validate any member identity, then
+/// plain-`INSERT` the fresh drive row.
+async fn insert_allocated_row(
+    conn: &mut sqlx::sqlite::SqliteConnection,
+    row: &DriveRow<'_>,
+    member: Option<&crate::sync::identity::MemberDriveIdentity>,
+) -> Result<()> {
+    // Reject an invalid member identity BEFORE the row exists — persisting it
+    // would brick the slot at resolve time (the resolver fails closed on
+    // corrupt identity columns).
+    if let Some(m) = member {
+        m.validate()?;
+    }
+
+    // Fresh drive: a plain INSERT. The label was just suffixed unique against
+    // this transaction's own read, so it cannot conflict; the
+    // UNIQUE(owner, label) constraint is the backstop that turns any future
+    // regression into a hard error rather than a silent path overwrite.
+    // `owner_ss58`/`wire_folder_hash` bind NULL for own drives
+    // (`member: None`), keeping today's row shape exactly.
+    sqlx::query(
+        "INSERT INTO sync_paths (owner, path, type, label, timestamp, owner_ss58, wire_folder_hash)
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(row.owner)
+    .bind(row.path)
+    .bind(row.path_type)
+    .bind(row.label)
+    .bind(row.timestamp)
+    .bind(member.map(|m| m.owner_ss58.as_str()))
+    .bind(member.map(|m| m.wire_folder_hash.as_str()))
+    .execute(&mut *conn)
+    .await
+    .map_err(crate::error::AppError::Db)?;
+    Ok(())
 }
 
 /// Set or update a sync path for an account, expanding the asset protocol scope.
@@ -448,6 +509,8 @@ mod set_path_tests {
                 label TEXT NOT NULL DEFAULT 'default',
                 timestamp INTEGER NOT NULL,
                 is_paused INTEGER NOT NULL DEFAULT 0,
+                owner_ss58 TEXT,
+                wire_folder_hash TEXT,
                 UNIQUE(owner, label)
             )",
         )
@@ -512,7 +575,7 @@ mod set_path_tests {
             .expect("first add");
         assert_eq!(l1, "tags");
 
-        let l2 = set_sync_path_internal(&pool, acct, "/b/tags", false, LabelMode::Allocate { base: "tags" })
+        let l2 = set_sync_path_internal(&pool, acct, "/b/tags", false, LabelMode::Allocate { base: "tags", member: None })
             .await
             .expect("second add");
         assert_eq!(l2, "tags-2", "a basename clash suffixes instead of overwriting");
@@ -534,8 +597,14 @@ mod set_path_tests {
         let pool = make_file_pool(dir.path()).await;
 
         let (p1, p2) = (pool.clone(), pool.clone());
-        let t1 = tokio::spawn(async move { set_sync_path_internal(&p1, "5acct", "/a/tags", false, LabelMode::Allocate { base: "tags" }).await });
-        let t2 = tokio::spawn(async move { set_sync_path_internal(&p2, "5acct", "/b/tags", false, LabelMode::Allocate { base: "tags" }).await });
+        let t1 =
+            tokio::spawn(
+                async move { set_sync_path_internal(&p1, "5acct", "/a/tags", false, LabelMode::Allocate { base: "tags", member: None }).await },
+            );
+        let t2 =
+            tokio::spawn(
+                async move { set_sync_path_internal(&p2, "5acct", "/b/tags", false, LabelMode::Allocate { base: "tags", member: None }).await },
+            );
         let l1 = t1.await.expect("join 1").expect("add 1");
         let l2 = t2.await.expect("join 2").expect("add 2");
 
@@ -548,6 +617,174 @@ mod set_path_tests {
         assert_eq!(rows.len(), 2, "exactly two drives survive the race");
         let paths: std::collections::HashSet<&str> = rows.iter().map(|(_, p)| p.as_str()).collect();
         assert_eq!(paths.len(), 2, "two distinct paths survive — neither overwrote the other");
+    }
+
+    /// `(owner_ss58, wire_folder_hash)` for one `(account, label)` row.
+    async fn wire_columns_for(pool: &SqlitePool, account_id: &str, label: &str) -> (Option<String>, Option<String>) {
+        sqlx::query_as("SELECT owner_ss58, wire_folder_hash FROM sync_paths WHERE owner = ? AND label = ?")
+            .bind(account_key(account_id))
+            .bind(label)
+            .fetch_one(pool)
+            .await
+            .expect("row present")
+    }
+
+    // A member allocate persists the owner's wire identity, and the resolver
+    // reads the SAME row back as a member drive — pinning the write and read
+    // halves of the decoupling point against each other.
+    #[tokio::test]
+    async fn allocate_with_member_identity_persists_wire_columns() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pool = make_file_pool(dir.path()).await;
+        let acct = "5member";
+        let member = crate::sync::identity::MemberDriveIdentity {
+            owner_ss58: "5DriveOwner".to_string(),
+            wire_folder_hash: "0123456789abcdef".to_string(),
+        };
+
+        let label = set_sync_path_internal(
+            &pool,
+            acct,
+            "/m/shared",
+            false,
+            LabelMode::Allocate {
+                base: "shared",
+                member: Some(&member),
+            },
+        )
+        .await
+        .expect("member add");
+
+        assert_eq!(
+            wire_columns_for(&pool, acct, &label).await,
+            (Some("5DriveOwner".to_string()), Some("0123456789abcdef".to_string())),
+        );
+        let id = crate::sync::identity::resolve_drive_identity(&pool, acct, &label)
+            .await
+            .expect("resolve member drive");
+        assert_eq!(
+            id,
+            crate::sync::identity::DriveIdentity {
+                wire_ss58: "5DriveOwner".to_string(),
+                wire_folder_hash: "0123456789abcdef".to_string(),
+                is_member: true,
+            }
+        );
+    }
+
+    // Own-drive allocates and Exact writes both leave the member columns NULL
+    // — zero behavior change for every existing caller.
+    #[tokio::test]
+    async fn own_drive_writes_leave_wire_columns_null() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pool = make_file_pool(dir.path()).await;
+        let acct = "5own";
+
+        set_sync_path_internal(&pool, acct, "/a/docs", false, LabelMode::Exact("docs"))
+            .await
+            .expect("exact add");
+        set_sync_path_internal(&pool, acct, "/a/pics", false, LabelMode::Allocate { base: "pics", member: None })
+            .await
+            .expect("allocate add");
+
+        assert_eq!(wire_columns_for(&pool, acct, "docs").await, (None, None));
+        assert_eq!(wire_columns_for(&pool, acct, "pics").await, (None, None));
+    }
+
+    // An invalid member identity is refused BEFORE the row exists: persisting
+    // it would brick the slot at resolve time. Nothing is inserted.
+    #[tokio::test]
+    async fn allocate_with_invalid_member_identity_writes_nothing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pool = make_file_pool(dir.path()).await;
+        let acct = "5bad";
+        let member = crate::sync::identity::MemberDriveIdentity {
+            owner_ss58: "5DriveOwner".to_string(),
+            wire_folder_hash: "NOT-A-HEX-HASH".to_string(),
+        };
+
+        let err = set_sync_path_internal(
+            &pool,
+            acct,
+            "/m/shared",
+            false,
+            LabelMode::Allocate {
+                base: "shared",
+                member: Some(&member),
+            },
+        )
+        .await
+        .expect_err("invalid member identity must be refused");
+        assert!(matches!(err, crate::error::AppError::Validation(_)), "got {err:?}");
+        assert!(rows_for(&pool, acct).await.is_empty(), "no row may survive a refused member add");
+    }
+
+    // The other half of `MemberDriveIdentity::validate` at the write path: an
+    // empty owner_ss58 is refused just like a malformed hash, and no row lands.
+    #[tokio::test]
+    async fn allocate_with_empty_owner_ss58_writes_nothing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pool = make_file_pool(dir.path()).await;
+        let acct = "5bad";
+        let member = crate::sync::identity::MemberDriveIdentity {
+            owner_ss58: String::new(),
+            wire_folder_hash: "0123456789abcdef".to_string(),
+        };
+
+        let err = set_sync_path_internal(
+            &pool,
+            acct,
+            "/m/shared",
+            false,
+            LabelMode::Allocate {
+                base: "shared",
+                member: Some(&member),
+            },
+        )
+        .await
+        .expect_err("empty owner_ss58 must be refused");
+        assert!(matches!(err, crate::error::AppError::Validation(_)), "got {err:?}");
+        assert!(rows_for(&pool, acct).await.is_empty(), "no row may survive a refused member add");
+    }
+
+    // An Exact re-point of a member drive's path must PRESERVE its wire
+    // identity: the upsert's DO UPDATE list touches path/type/timestamp only.
+    #[tokio::test]
+    async fn exact_repoint_preserves_member_identity() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pool = make_file_pool(dir.path()).await;
+        let acct = "5repoint";
+        let member = crate::sync::identity::MemberDriveIdentity {
+            owner_ss58: "5DriveOwner".to_string(),
+            wire_folder_hash: "0123456789abcdef".to_string(),
+        };
+        let label = set_sync_path_internal(
+            &pool,
+            acct,
+            "/m/shared",
+            false,
+            LabelMode::Allocate {
+                base: "shared",
+                member: Some(&member),
+            },
+        )
+        .await
+        .expect("member add");
+
+        set_sync_path_internal(&pool, acct, "/m/shared-moved", false, LabelMode::Exact(&label))
+            .await
+            .expect("re-point");
+
+        assert_eq!(
+            rows_for(&pool, acct).await,
+            vec![(label.clone(), "/m/shared-moved".to_string())],
+            "re-point updates the path in place"
+        );
+        assert_eq!(
+            wire_columns_for(&pool, acct, &label).await,
+            (Some("5DriveOwner".to_string()), Some("0123456789abcdef".to_string())),
+            "the wire identity survives an Exact re-point"
+        );
     }
 
     // `Exact` must keep its upsert: re-pointing an existing label updates that
@@ -680,7 +917,9 @@ mod tests {
                 type TEXT NOT NULL,
                 label TEXT NOT NULL DEFAULT 'default',
                 is_paused INTEGER NOT NULL DEFAULT 0,
-                timestamp INTEGER NOT NULL DEFAULT 0
+                timestamp INTEGER NOT NULL DEFAULT 0,
+                owner_ss58 TEXT,
+                wire_folder_hash TEXT
             )",
         )
         .execute(&pool)

@@ -76,7 +76,7 @@ fn honors_console_override(channel: ReleaseChannel, dev_build: bool) -> bool {
 /// Per-channel default (prod → `console.hippius.com`, staging →
 /// `console.hippicode.com`), with the `HIPPIUS_CONSOLE_BASE_URL` runtime
 /// override honored only where [`honors_console_override`] allows.
-fn console_base_url() -> String {
+pub(crate) fn console_base_url() -> String {
     let channel = parse_release_channel(RELEASE_CHANNEL);
     let dev_build = cfg!(debug_assertions);
     let override_value = std::env::var("HIPPIUS_CONSOLE_BASE_URL").ok();

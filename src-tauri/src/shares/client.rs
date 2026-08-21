@@ -24,6 +24,9 @@ pub(crate) async fn build_account_client(pool: &SqlitePool, account_id: &str) ->
     let bearer_token = get_api_token(pool, account_id)
         .await?
         .ok_or_else(|| AppError::Auth("No authentication token found. Please log in again.".into()))?;
-    let config = crate::sync::config::build_hcfs_config(&server_url, &bearer_token, account_id, "");
+    // Structurally own/account-scoped (empty folder hash — the share
+    // endpoints identify the caller from the bearer token alone), so the
+    // identity is constructed directly rather than resolver-supplied.
+    let config = crate::sync::config::build_hcfs_config(&server_url, &bearer_token, &crate::sync::identity::DriveIdentity::own(account_id, ""));
     hcfs_client::client::HcfsClient::new(config).map_err(|e| AppError::Hcfs(format!("Failed to create HCFS client: {e}")))
 }

@@ -10,9 +10,24 @@ export interface SyncFolder {
   deviceName?: string;
   lastSynced?: number;
   status: "syncing" | "paused" | "error";
+  /**
+   * User-facing reason carried by a backend `DriveStatus.Error` (init
+   * failure, revoked shared drive). Set only while `status === "error"`;
+   * `applyDriveStatusToRow` clears it when the drive recovers.
+   */
+  errorMessage?: string;
   fileCount?: number;
   totalBytes?: number;
   lastModified?: number;
+  /**
+   * The drive OWNER's ss58 when this row is a MEMBER drive (a shared drive
+   * synced from another account), absent for the account's own drives.
+   * Threaded from Rust (`get_sync_folders_with_stats` → `ownerSs58`) — the
+   * FE never infers member-ness; this field is the only discriminant, and
+   * it drives the owner badge plus the member-vs-own menu gating
+   * (`folderMenuGating.ts`).
+   */
+  ownerSs58?: string;
 }
 
 export interface RemoteFolder {

@@ -7,6 +7,7 @@ pub mod config;
 pub mod control;
 pub mod device;
 pub mod drive_status;
+pub mod identity;
 pub mod lifecycle;
 pub mod lifecycle_guard;
 pub mod paths;

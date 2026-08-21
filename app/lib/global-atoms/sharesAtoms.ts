@@ -78,3 +78,21 @@ export const shareModalFileAtom = atom<ShareModalTarget | null>(null);
 export type FinderShareState = { kind: "choosing"; id: string; name: string };
 
 export const finderShareAtom = atom<FinderShareState | null>(null);
+
+/**
+ * What `ShareDriveModal` (invite + members management for an OWN shared
+ * drive) is currently open on. `null` means closed. Same singleton-atom
+ * pattern as {@link shareModalFileAtom}: the modal is mounted once in the
+ * pages layout and any surface opens it by setting this atom.
+ *
+ * `label` is the local drive label (the IPC key); `folderName` is the
+ * user-facing basename shown in the modal header. Only own drives may be
+ * set here — the "Share drive…" menu item is hidden for member rows
+ * (`folderMenuGating.ts`), and the backend refuses a member label anyway.
+ */
+export type ShareDriveModalTarget = {
+  label: string;
+  folderName: string;
+};
+
+export const shareDriveModalAtom = atom<ShareDriveModalTarget | null>(null);

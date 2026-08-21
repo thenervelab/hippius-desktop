@@ -25,6 +25,7 @@ pub mod notifications;
 pub mod power;
 pub mod recovery;
 pub mod recovery_binding;
+pub mod shared_drives;
 pub mod shares;
 pub mod splash;
 pub mod sync;
@@ -356,6 +357,14 @@ fn main() {
             crate::shares::commands::hcfs_remove_share_history,
             crate::shares::commands::hcfs_clear_share_history,
             crate::shares::capabilities::hcfs_get_capabilities,
+            // Shared drives (owner invites/members + member add/leave). No
+            // revoke-invite IPC in v1 — see shared_drives::commands docs.
+            crate::shared_drives::commands::create_drive_invite,
+            crate::shared_drives::commands::list_drive_members,
+            crate::shared_drives::commands::remove_drive_member,
+            crate::shared_drives::commands::list_my_drive_memberships,
+            crate::shared_drives::commands::leave_shared_drive,
+            crate::shared_drives::commands::add_shared_drive,
             // Shell "Share with Hippius": confirm/cancel the in-app visibility
             // chooser. Registered on all desktop platforms (macOS/Linux socket +
             // Windows named-pipe bridge); gated to `any(unix, windows)` to match
