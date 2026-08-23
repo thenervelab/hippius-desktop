@@ -96,13 +96,15 @@ export const VM_VPN_ENABLED = false;
  * The Rust IPCs (`create_drive_invite`, `list_drive_members`,
  * `remove_drive_member`, `list_my_drive_memberships`, `leave_shared_drive`,
  * `add_shared_drive`) stay registered regardless, so flipping this needs no
- * other code change. Flip to `true` once the hcfs-server fleet runs with
- * `HCFS_FEATURE_SHARED_DRIVES=1` — against a feature-off server every
- * surface degrades silently anyway (the backend maps the unmounted routes
- * to `NotReady(SHARED_DRIVES_UNAVAILABLE)`, which the FE matches explicitly
- * and hides), but there is no reason to show dead controls before rollout.
+ * other code change. `true` since the 2026-08 rollout: the hcfs-server
+ * fleet runs with `HCFS_FEATURE_SHARED_DRIVES=1` and the console enables
+ * its `/invite/{token}` accept page in a parallel release (desktop invite
+ * links mint at the console, so both must be live). Against a feature-off
+ * server every surface degrades silently anyway (the backend maps the
+ * unmounted routes to `NotReady(SHARED_DRIVES_UNAVAILABLE)`, which the FE
+ * matches explicitly and hides).
  */
-export const SHARED_DRIVES_ENABLED = false;
+export const SHARED_DRIVES_ENABLED = true;
 
 /**
  * Referrals page. When `false`, referrals is fully invisible: the sidebar
