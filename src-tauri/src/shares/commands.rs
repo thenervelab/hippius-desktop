@@ -544,56 +544,42 @@ pub(crate) async fn share_synced_file(
     create_share_inner(state, account_id, folder_label, relative_path, ttl, choice, progress).await
 }
 
-/// Stream an already-resolved local plaintext file through the share engine.
-///
-/// Shared by the two Finder paths that have no synced-folder identity — an
-/// outside file and a folder zipped to a temp archive. No reshare-origin row is
-/// recorded (there is no `(folder_label, relative_path)` to reshare from). The
-/// caller has already run the capability + eligibility gates. `progress` streams
-/// the encrypt/upload bar to the confirm modal when `Some`.
-///
-/// The `(path, name, type, ttl, choice)` tuple travels together through both
-/// callers, so it is bundled rather than spread across the signature — the
-/// zip path in particular derives its `filename` from the directory name, not
-/// from `local_path` (which points at a temp archive), so the two must be
-/// passed as one coherent description of what is being shared.
+/// Mint a public share for a file that is NOT inside a synced folder by reading
+/// its bytes directly ("upload & share"). The byte stream is uploaded to the
+/// same encrypted-share storage as a synced file; only the reshare-origin
+/// sidecar is skipped (there is no `(folder_label, relative_path)` to reshare
+/// from). Entry point for the macOS Finder dispatcher, and the last Finder
+/// path that uploads bytes now that a folder mints a browsable link instead
+/// of a zip.
 #[cfg(any(unix, windows))]
-struct LocalShareRequest<'a> {
-    /// Bytes to upload. For the zip path this is a temp archive, not the
-    /// thing the user clicked.
-    local_path: &'a Path,
-    /// Name the recipient sees — `<dir>.zip` for the zip path.
-    filename: &'a str,
-    mime_type: &'a str,
-    ttl: ShareTtl,
-    choice: ShareChoice,
-}
-
-#[cfg(any(unix, windows))]
-async fn share_local_file(
+pub(crate) async fn share_external_file(
     state: &AppState,
     account_id: &str,
-    request: LocalShareRequest<'_>,
+    abs_path: &Path,
+    ttl: ShareTtl,
+    choice: ShareChoice,
     progress: Option<ShareProgressFn>,
 ) -> Result<ShareLink> {
-    let LocalShareRequest {
-        local_path,
-        filename,
-        mime_type,
-        ttl,
-        choice,
-    } = request;
+    require_shares_supported(state, account_id).await?;
+    require_eligible(state, account_id, InsufficientCreditsAction::Sharing, 0).await?;
+
     let pool = state.pool()?;
-    let metadata = tokio::fs::metadata(local_path).await?;
+    let metadata = tokio::fs::metadata(abs_path).await?;
     if !metadata.is_file() {
         return Err(AppError::Validation("Cannot share a directory".into()));
     }
     let plaintext_size = metadata.len();
 
-    info!(filename, plaintext_size, mime_type, "Creating share from local file");
+    let filename = abs_path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| AppError::Validation("File has no usable name".into()))?;
+    let mime_type = mime_guess::from_path(abs_path).first_or_octet_stream().essence_str().to_owned();
+
+    info!(filename, plaintext_size, mime_type = %mime_type, "Creating share from local file");
 
     let client = build_account_client(pool, account_id).await?;
-    let mut reader = tokio::fs::File::open(local_path).await?;
+    let mut reader = tokio::fs::File::open(abs_path).await?;
     let keystore = SqliteShareKeystore::new(pool.clone());
     let console_base = console_base_url();
     let result = client
@@ -602,7 +588,7 @@ async fn share_local_file(
             plaintext_size,
             &ShareOptions {
                 filename,
-                mime_type,
+                mime_type: &mime_type,
                 ttl,
                 password: choice.password(),
                 console_base_url: &console_base,
@@ -622,208 +608,6 @@ async fn share_local_file(
         expires_at: result.expires_at.map(|e| e.to_rfc3339()),
         password: choice.into_password(),
     })
-}
-
-/// Mint a public share for a file that is NOT inside a synced folder by reading
-/// its bytes directly ("upload & share"). The byte stream is uploaded to the
-/// same encrypted-share storage as a synced file; only the reshare-origin
-/// sidecar is skipped. Entry point for the macOS Finder dispatcher.
-#[cfg(any(unix, windows))]
-pub(crate) async fn share_external_file(
-    state: &AppState,
-    account_id: &str,
-    abs_path: &Path,
-    ttl: ShareTtl,
-    choice: ShareChoice,
-    progress: Option<ShareProgressFn>,
-) -> Result<ShareLink> {
-    require_shares_supported(state, account_id).await?;
-    require_eligible(state, account_id, InsufficientCreditsAction::Sharing, 0).await?;
-
-    let filename = abs_path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .ok_or_else(|| AppError::Validation("File has no usable name".into()))?;
-    let mime_type = mime_guess::from_path(abs_path).first_or_octet_stream().essence_str().to_owned();
-
-    share_local_file(
-        state,
-        account_id,
-        LocalShareRequest {
-            local_path: abs_path,
-            filename,
-            mime_type: &mime_type,
-            ttl,
-            choice,
-        },
-        progress,
-    )
-    .await
-}
-
-/// Mint a public share for a folder by packing it into one `application/zip`
-/// blob and sharing that. The share engine shares one byte stream, so a folder
-/// has no first-class representation — the recipient downloads `<name>.zip`.
-/// Used for both in-drive and outside folders. Entry point for the macOS Finder
-/// dispatcher.
-///
-/// Bounded by `zip_dir::MAX_FOLDER_SHARE_BYTES` / `MAX_FOLDER_SHARE_ENTRIES`,
-/// measured and enforced before the archive is packed. EVERY folder-share entry
-/// point funnels through here — the in-app menu and the file-manager
-/// right-click — so the cap and the settled-folder guard below cover both.
-///
-/// The settled check lives here rather than in the IPC command precisely so the
-/// right-click path cannot skip it: that path resolves a directory and calls
-/// this function directly, and a guard sitting one level up would have left it
-/// zipping half-downloaded folders while the in-app path refused them.
-///
-/// Returns the resolved `(label, relative_path)` alongside the link when the
-/// folder is inside a drive, so the caller can record the reshare-origin sidecar
-/// against the SAME canonical path this function guarded and packed — never the
-/// caller's raw argument, which may be a different spelling of the same
-/// directory.
-#[cfg(any(unix, windows))]
-pub(crate) async fn share_directory_as_zip(
-    state: &AppState,
-    account_id: &str,
-    dir_path: &Path,
-    ttl: ShareTtl,
-    choice: ShareChoice,
-    progress: Option<ShareProgressFn>,
-) -> Result<(ShareLink, Option<(String, String)>)> {
-    require_shares_supported(state, account_id).await?;
-    require_eligible(state, account_id, InsufficientCreditsAction::Sharing, 0).await?;
-
-    // Which drive is this folder in? Derived from the RESOLVED path, so a
-    // caller that passed a non-canonical spelling ("a//b", a case variant on a
-    // case-insensitive filesystem, or a symlink) is guarded on the directory
-    // that will actually be packed. A folder outside every drive has no synced
-    // state to be missing, so there is nothing to check.
-    let roots = crate::sync::paths::list_drive_roots(state.pool()?, account_id).await?;
-    let in_drive = match crate::finder_bridge::resolve::resolve_share_target(dir_path, &roots) {
-        crate::finder_bridge::resolve::ShareTarget::InDrive { label, relative_path } => Some((label, relative_path)),
-        crate::finder_bridge::resolve::ShareTarget::Outside => None,
-    };
-
-    if let Some((label, relative_path)) = &in_drive {
-        let sync_root = sync_root_for_label(state.pool()?, account_id, label).await?;
-        let settlement = crate::sync::files::folder_is_settled(&state.sync, label, &sync_root, relative_path).await;
-        if folder_settlement_blocks_share(settlement) {
-            return Err(AppError::Validation(
-                "This folder isn't fully synced on this device yet. Wait for sync to finish, then share.".into(),
-            ));
-        }
-    }
-
-    let dir_name = dir_path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .ok_or_else(|| AppError::Validation("Folder has no usable name".into()))?;
-    let zip_filename = format!("{dir_name}.zip");
-
-    // Pack on a blocking thread: the zip crate and `std::fs` are synchronous,
-    // and a large folder would otherwise stall the async runtime. The temp file
-    // is moved back out and lives in this frame across the upload await below;
-    // its `Drop` unlinks the archive only after `create_share` has streamed it.
-    // Measure and enforce the cap on the same blocking thread as the pack, so
-    // the walk that decides "too large" and the walk that builds the archive
-    // apply identical rules to the same tree.
-    let src = dir_path.to_path_buf();
-    let temp = tokio::task::spawn_blocking(move || {
-        let measured = crate::shares::zip_dir::measure_directory(&src)?;
-        crate::shares::zip_dir::enforce_folder_share_limits(measured)?;
-
-        crate::shares::zip_dir::zip_directory_to_temp(&src)
-    })
-    .await
-    .map_err(|e| AppError::Io(std::io::Error::other(e)))??;
-
-    let link = share_local_file(
-        state,
-        account_id,
-        LocalShareRequest {
-            local_path: temp.path(),
-            filename: &zip_filename,
-            mime_type: "application/zip",
-            ttl,
-            choice,
-        },
-        progress,
-    )
-    .await?;
-
-    Ok((link, in_drive))
-}
-
-/// What the share modal shows before the user commits to a folder share.
-///
-/// `within_limits` is decided here, against the same constants the mint
-/// enforces, so the modal's disabled state cannot drift from what the backend
-/// will actually accept.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FolderSharePreflight {
-    pub total_bytes: u64,
-    pub file_count: u64,
-    pub within_limits: bool,
-    pub limit_bytes: u64,
-    pub limit_files: u64,
-}
-
-/// Measure a folder so the share modal can show its size and refuse an
-/// oversized folder before the user waits through a walk that will be rejected.
-///
-/// Measured by the packer's own walk rules — see `zip_dir::measure_directory`
-/// for why `dir_stats_recursive` is the wrong source.
-#[cfg(any(unix, windows))]
-#[tauri::command]
-pub async fn hcfs_folder_share_preflight(
-    state: tauri::State<'_, AppState>,
-    folder_label: String,
-    relative_path: String,
-) -> Result<FolderSharePreflight> {
-    let account_id = state.current_account_id()?;
-
-    // Gated like the mint: this walks the user's filesystem on a blocking
-    // thread, so it must not be a free primitive for anything running in the
-    // renderer on a server that doesn't even offer sharing.
-    require_shares_supported(&state, &account_id).await?;
-
-    let pool = state.pool()?;
-    let sync_root = sync_root_for_label(pool, &account_id, &folder_label).await?;
-    let dir_path = resolve_inside_sync_root(&sync_root, &relative_path).await?;
-    // Same refusal the mint gives, rather than letting `read_dir` fail on a
-    // regular file and surfacing an opaque OS error.
-    if !tokio::fs::metadata(&dir_path).await?.is_dir() {
-        return Err(AppError::Validation("This entry is not a folder".into()));
-    }
-
-    // Walking a large tree is synchronous filesystem work; keep it off the async
-    // runtime like the pack itself.
-    let measured = tokio::task::spawn_blocking(move || crate::shares::zip_dir::measure_directory(&dir_path))
-        .await
-        .map_err(|e| AppError::Io(std::io::Error::other(e)))??;
-
-    Ok(FolderSharePreflight {
-        total_bytes: measured.total_bytes,
-        file_count: measured.file_count,
-        within_limits: crate::shares::zip_dir::enforce_folder_share_limits(measured).is_ok(),
-        limit_bytes: crate::shares::zip_dir::MAX_FOLDER_SHARE_BYTES,
-        limit_files: crate::shares::zip_dir::MAX_FOLDER_SHARE_ENTRIES,
-    })
-}
-
-/// Whether a folder in this settlement state must be refused a share link.
-///
-/// Split out as a named predicate because the two refusing states arrive here
-/// for different reasons — `Pending` means a child is genuinely missing,
-/// `Unknown` means we could not tell (paused drive, cold start) — and the
-/// safe answer for both is the same. Folder RENAME deliberately differs: it
-/// proceeds on `Unknown` because it is a local operation the engine reconciles,
-/// while this hands the folder's bytes to a third party.
-#[cfg(any(unix, windows))]
-fn folder_settlement_blocks_share(settlement: crate::sync::files::FolderSettlement) -> bool {
-    !matches!(settlement, crate::sync::files::FolderSettlement::Settled)
 }
 
 // ─── Folder shares (browsable live links) ──────────────────────────────────
@@ -1283,48 +1067,6 @@ mod tests {
             let twice = resolve_console_base_url(channel, true, Some(once.clone()));
             prop_assert_eq!(once, twice);
         }
-    }
-
-    /// A folder share resolves its path through the same guard the file share
-    /// uses, so a `..` segment cannot walk out of the drive and zip an
-    /// arbitrary directory.
-    #[tokio::test]
-    async fn folder_share_path_resolution_rejects_escaping_the_drive() {
-        let root = TempDir::new().expect("temp dir");
-        std::fs::create_dir_all(root.path().join("inside")).expect("mkdir");
-
-        let err = resolve_inside_sync_root(root.path(), "../outside").await.expect_err("must refuse");
-
-        assert!(
-            matches!(err, AppError::Validation(_)),
-            "escaping the root is a Validation error, got: {err:?}"
-        );
-    }
-
-    /// The dir check that keeps `hcfs_create_folder_share` from accepting a file
-    /// — the mirror of `create_share_inner`'s "Cannot share a directory".
-    #[tokio::test]
-    async fn folder_share_path_resolution_tells_a_file_from_a_folder() {
-        let root = TempDir::new().expect("temp dir");
-        std::fs::write(root.path().join("a.txt"), b"x").expect("write");
-        std::fs::create_dir(root.path().join("photos")).expect("mkdir");
-
-        let file = resolve_inside_sync_root(root.path(), "a.txt").await.expect("resolve file");
-        let folder = resolve_inside_sync_root(root.path(), "photos").await.expect("resolve folder");
-
-        assert!(!tokio::fs::metadata(&file).await.expect("stat file").is_dir());
-        assert!(tokio::fs::metadata(&folder).await.expect("stat folder").is_dir());
-    }
-
-    /// Folder share refuses an unsettled folder, unlike rename which proceeds on
-    /// `Unknown`. Both non-`Settled` states must map to the same refusal here.
-    #[test]
-    fn only_a_settled_folder_may_be_shared() {
-        use crate::sync::files::FolderSettlement;
-
-        assert!(folder_settlement_blocks_share(FolderSettlement::Pending));
-        assert!(folder_settlement_blocks_share(FolderSettlement::Unknown));
-        assert!(!folder_settlement_blocks_share(FolderSettlement::Settled));
     }
 
     #[test]

@@ -191,6 +191,10 @@ const KNOWN_UNREGISTERED_COMMANDS = new Set<string>([
   "get_nebula_stats",
   "get_autoconnect_status",
   "toggle_autoconnect_status",
+  // Deleted with the zip folder-share pipeline (the browsable mint has no
+  // size limits to preflight); the wrapper stays until Task 4 rewrites the
+  // modal's folder flow, its rejection is already handled as "no preflight".
+  "hcfs_folder_share_preflight",
 ]);
 
 // Commands the FE dispatches through a NON-literal (a `Record<Action, string>`

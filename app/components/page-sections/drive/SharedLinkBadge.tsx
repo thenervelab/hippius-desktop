@@ -42,9 +42,13 @@ const SharedLinkBadge: FC<SharedLinkBadgeProps> = ({
 }) => {
   const { getSharesFor } = useSharedFiles();
 
-  // Folders CAN be shared now (`hcfs_create_folder_share` zips one and records
-  // the same `share_origin` row a file gets), so the badge is no longer
-  // suppressed for them.
+  // Folder rows currently show NO badge for new folder shares: the browsable
+  // mint (`hcfs_create_folder_share`) records no `share_origin` row — folder
+  // shares live server-side keyed by `(folder_hash, path_prefix)`, and a
+  // token row here would be evicted by the file-share prune. Task 4 wires
+  // folder badges from the folder-share listing by that identity, mirroring
+  // the console's `folderShareTarget`. Legacy zip-era folder shares (which
+  // were file shares of an archive) still resolve through this lookup.
   //
   // KNOWN LIMITATION: the lookup key is this row's `actualName`, which for a
   // NESTED folder row is only the basename while the origin row stores the full

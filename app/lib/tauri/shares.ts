@@ -175,12 +175,13 @@ export async function createShare(
 }
 
 /**
- * Size and file count of a folder share, plus whether it is within the
- * backend's limits.
- *
- * `withinLimits` is decided in Rust against the same constants the mint
- * enforces, so the modal never disables on a rule the backend doesn't apply —
- * or offers a folder it will refuse.
+ * DEAD — the zip pipeline this measured is gone. The backend command was
+ * deleted with it, so this invoke now always rejects; `ShareFileModal`
+ * already treats a failed preflight as "no preflight" and keeps minting
+ * enabled (the browsable mint has no size or entry limits to gate on).
+ * Kept only so the modal's zip-era folder flow keeps compiling until
+ * Task 4 rewrites it and deletes this wrapper, its call site, and the
+ * tests that exercise it.
  */
 export interface FolderSharePreflight {
   totalBytes: number;
