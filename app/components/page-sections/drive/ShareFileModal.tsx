@@ -135,8 +135,8 @@ export default function ShareFileModal() {
         setState((prev) =>
           prev.kind === "running" ? { kind: "running", progress } : prev,
         );
-      // A folder is packed into one zip and shared as that archive; the file
-      // command rejects a directory outright, so the two are not
+      // A folder mints a live browsable link (one metadata POST, no upload);
+      // the file command rejects a directory outright, so the two are not
       // interchangeable.
       const link = target.file.isFolder
         ? await createFolderShare(folderLabel, target.relativePath, choice, onProgress)
@@ -220,13 +220,10 @@ export default function ShareFileModal() {
     lastChoiceRef.current = null;
   }, [sessionKey]);
 
-  // Measure a folder before the user commits to sharing it, so the chooser can
-  // show what will be packed and refuse an oversized folder up front rather
-  // than after a long walk. Files need no preflight — only a folder is zipped.
-  //
-  // A failure resolves to `null` rather than surfacing: the mint re-checks and
-  // returns the authoritative message, and a preflight that cannot stat should
-  // not block a share the backend would accept.
+  // Zip-era leftover: the backend preflight command was deleted with the zip
+  // pipeline, so this invoke now always rejects and resolves to `null` — no
+  // size line, minting stays enabled. The browsable mint has no limits to
+  // gate on. Task 4 removes this effect with the rest of the preflight flow.
   const [folderPreflight, setFolderPreflight] = useState<FolderSharePreflight | null>(null);
 
   useEffect(() => {
@@ -521,12 +518,15 @@ function ChoosingBody({
 }
 
 /**
- * What the user is agreeing to when they share a folder: the archive it becomes,
- * its measured size, and — when it is too big — why the button is disabled.
+ * What the user is agreeing to when they share a folder: a LIVE link. The
+ * wording is the important part — recipients browse the folder's current
+ * contents, so files added later ARE visible through the link (mirrors the
+ * console's notice; the sender must not believe the link is frozen).
  *
- * The snapshot wording is the important part. A folder link is minted from the
- * folder's contents at this moment; later additions do not appear in it, and
- * nothing in the recipient's view would reveal that.
+ * The over-limit branch and the size line are zip-era leftovers: the deleted
+ * preflight always rejects now, so `preflight` is `null` in production and
+ * only the live-link sentence renders. Task 4 deletes them with the rest of
+ * the preflight flow.
  */
 function FolderShareNotice({ preflight }: { preflight: FolderSharePreflight | null }) {
   if (preflight?.withinLimits === false) {
@@ -551,9 +551,10 @@ function FolderShareNotice({ preflight }: { preflight: FolderSharePreflight | nu
   return (
     <p className="mt-3 text-xs text-grey-50 dark:text-grey-dark-600">
       {preflight
-        ? `Packed as one .zip — ${formatBytes(preflight.totalBytes)} across ${preflight.fileCount.toLocaleString()} files. `
-        : "Packed as one .zip. "}
-      The link is a snapshot: files added to this folder later won&apos;t appear in it.
+        ? `${formatBytes(preflight.totalBytes)} across ${preflight.fileCount.toLocaleString()} files. `
+        : ""}
+      Recipients can browse the folder and download files; the link always
+      shows the current contents.
     </p>
   );
 }
