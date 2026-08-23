@@ -826,9 +826,11 @@ pub struct FolderShareSummary {
     /// Recipient URL rebuilt from the stored secret, `None` when the row
     /// is not resolvable on this device.
     pub share_url: Option<String>,
-    /// Whether the link is password-protected. `false` for a foreign row
-    /// (no secret to inspect), which is also when `share_url` is `None`.
-    pub is_private: bool,
+    /// Whether the link is password-protected. `None` for a foreign row:
+    /// there is no secret to inspect, so protection is UNKNOWN on this
+    /// device — reporting `false` would label a password-protected share
+    /// "public". `None` coincides with `share_url` being `None`.
+    pub is_private: Option<bool>,
 }
 
 /// Index the keystore's stored tokens by their blake3 hex — the join key
@@ -860,7 +862,7 @@ fn resolve_folder_share_rows(
                 resolvable: resolved.is_some(),
                 share_token: resolved.map(|(token, _)| token.clone()),
                 share_url: resolved.map(|(token, secret)| build_folder_share_url_for(console_base, token, secret)),
-                is_private: resolved.is_some_and(|(_, secret)| secret.is_private()),
+                is_private: resolved.map(|(_, secret)| secret.is_private()),
                 token_hash: row.token_hash,
                 folder_hash: row.folder_hash,
                 path_prefix: row.path_prefix,
@@ -913,8 +915,11 @@ pub async fn hcfs_list_folder_shares(state: tauri::State<'_, AppState>) -> Resul
 /// tokens into one bodiless 404. That maps to `Ok(())` here, mirroring
 /// the file-share revoke's "I just tapped Revoke twice" idempotency, and
 /// the local secret is forgotten too so a token revoked from another
-/// device stops resolving on this one. The token itself never reaches a
-/// log line — it is the capability.
+/// device stops resolving on this one — but only after a capability
+/// probe confirms the 404 came from a folder-shares-capable server (a
+/// rolled-back server 404s the route itself, and its 404 says nothing
+/// about the token). The token itself never reaches a log line — it is
+/// the capability.
 #[tauri::command]
 pub async fn hcfs_revoke_folder_share(state: tauri::State<'_, AppState>, share_token: String) -> Result<()> {
     let account_id = state.current_account_id()?;
@@ -924,6 +929,14 @@ pub async fn hcfs_revoke_folder_share(state: tauri::State<'_, AppState>, share_t
     match client.revoke_folder_share(&share_token, &keystore).await {
         Ok(()) => Ok(()),
         Err(FolderShareError::NotFound) => {
+            // A 404 normally means already-revoked / never-existed, which
+            // makes forgetting the local secret safe. But a server ROLLBACK
+            // to a build without /v1/folder-shares answers every route with
+            // the same bare 404, and forgetting on that would delete the
+            // ONLY plaintext copy of a token that still guards a live share
+            // once the server rolls forward. Probe the capability first:
+            // only a folder-shares-capable server's 404 is authoritative.
+            require_folder_shares_supported(&state, &account_id).await?;
             if let Err(e) = keystore.forget(&share_token) {
                 warn!(error = %e, "folder-share keystore forget failed after 404 revoke (non-fatal)");
             }
@@ -1596,7 +1609,7 @@ mod tests {
     }
 
     /// Wire pin for the listing row the FE consumes: exactly the server
-    /// fields camelCased plus the three resolution fields. Task 4's shares
+    /// fields camelCased plus the three resolution fields. The shares
     /// page and the (folderHash, pathPrefix) badge identity read these keys.
     #[test]
     fn folder_share_summary_pins_wire_shape() {
@@ -1613,7 +1626,7 @@ mod tests {
             resolvable: true,
             share_token: Some("tok".to_string()),
             share_url: Some("https://x.io/share/folder/tok#k=AA".to_string()),
-            is_private: false,
+            is_private: Some(false),
         };
         let json = serde_json::to_value(&summary).expect("serialize FolderShareSummary");
         let keys: BTreeSet<String> = json.as_object().expect("object").keys().cloned().collect();
@@ -1673,12 +1686,12 @@ mod tests {
             public.share_url.as_deref(),
             Some(build_folder_share_url("https://console.example.com", "tok-pub", &public_key).as_str()),
         );
-        assert!(!public.is_private);
+        assert_eq!(public.is_private, Some(false));
         assert_eq!(public.path_prefix, "photos");
 
         let private = &out[1];
         assert!(private.resolvable);
-        assert!(private.is_private);
+        assert_eq!(private.is_private, Some(true));
         let url = private.share_url.as_deref().expect("private row rebuilds a URL");
         assert!(url.contains("#p="), "private secret must yield its #p= link: {url}");
         assert!(!url.contains("#k="), "private secret must never yield a #k= link: {url}");
@@ -1687,7 +1700,9 @@ mod tests {
         assert!(!foreign.resolvable, "a hash with no stored token is view-only");
         assert_eq!(foreign.share_token, None);
         assert_eq!(foreign.share_url, None);
-        assert!(!foreign.is_private);
+        // Protection is unknown without the secret — `None`, never a
+        // fabricated `false` that would label a protected share "public".
+        assert_eq!(foreign.is_private, None);
         assert_eq!(foreign.folder_hash, "abcdef0123456789", "identity fields survive for the badge");
         assert_eq!(foreign.path_prefix, "docs");
     }

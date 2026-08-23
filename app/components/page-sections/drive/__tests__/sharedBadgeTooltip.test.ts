@@ -50,4 +50,14 @@ describe("buildSharedBadgeTooltip", () => {
       "Shared via 2 links · soonest expires in 3h",
     ]);
   });
+
+  it("drops the public/private wording when protection is unknown", () => {
+    // A folder share minted on another device has no local secret to
+    // inspect (`isPrivate: null`) — the tooltip must not guess "public"
+    // for a link that may well be password-protected.
+    const lines = buildSharedBadgeTooltip([
+      { expiresAt: "2026-05-04T12:00:00Z", isPrivate: null },
+    ]);
+    expect(lines?.[0]).toBe("Shared via link · expires in 4d");
+  });
 });

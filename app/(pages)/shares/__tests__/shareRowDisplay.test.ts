@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { FolderShareSummary, ShareSummary } from "@/app/lib/tauri/shares";
 import {
   activeShareRowId,
+  EXPIRED_FOLDER_EXPIRY_TOOLTIP,
   FOREIGN_FOLDER_EXPIRY_TOOLTIP,
   FOREIGN_FOLDER_REVOKE_TOOLTIP,
   folderSharePathLabel,
@@ -116,14 +117,15 @@ describe("folderSharePathLabel", () => {
 });
 
 describe("folderShareRowPlan", () => {
-  it("live resolvable row: copy and manage both available", () => {
+  it("live resolvable row: copy, revoke, and change-expiry all available", () => {
     const plan = folderShareRowPlan(folderRow(), NOW);
 
     expect(plan.state).toBe("live");
     expect(plan.canCopy).toBe(true);
     expect(plan.copyTooltip).toBeUndefined();
-    expect(plan.canManage).toBe(true);
+    expect(plan.canRevoke).toBe(true);
     expect(plan.revokeTooltip).toBeUndefined();
+    expect(plan.canChangeExpiry).toBe(true);
     expect(plan.expiryTooltip).toBeUndefined();
   });
 
@@ -132,15 +134,16 @@ describe("folderShareRowPlan", () => {
     // minting device's keystore holds — so both are disabled, with copy the
     // console uses, rather than silently hidden.
     const plan = folderShareRowPlan(
-      folderRow({ resolvable: false, shareToken: null, shareUrl: null }),
+      folderRow({ resolvable: false, shareToken: null, shareUrl: null, isPrivate: null }),
       NOW,
     );
 
     expect(plan.state).toBe("live");
     expect(plan.canCopy).toBe(false);
     expect(plan.copyTooltip).toMatch(/device that created it/i);
-    expect(plan.canManage).toBe(false);
+    expect(plan.canRevoke).toBe(false);
     expect(plan.revokeTooltip).toBe(FOREIGN_FOLDER_REVOKE_TOOLTIP);
+    expect(plan.canChangeExpiry).toBe(false);
     expect(plan.expiryTooltip).toBe(FOREIGN_FOLDER_EXPIRY_TOOLTIP);
   });
 
@@ -153,15 +156,18 @@ describe("folderShareRowPlan", () => {
     expect(plan.state).toBe("revoked");
     expect(plan.canCopy).toBe(false);
     expect(plan.copyTooltip).toMatch(/revoked/i);
-    expect(plan.canManage).toBe(false);
+    expect(plan.canRevoke).toBe(false);
     expect(plan.revokeTooltip).toBeUndefined();
+    expect(plan.canChangeExpiry).toBe(false);
     expect(plan.expiryTooltip).toBeUndefined();
   });
 
-  it("expired resolvable row: copy suppressed, manage still available", () => {
+  it("expired resolvable row: copy and expiry suppressed, revoke still available", () => {
     // Copy must not hand out a dead link even though this device can still
-    // rebuild the URL; extending the expiry (or revoking) stays offered —
-    // the backend answers authoritatively if the row is beyond saving.
+    // rebuild the URL, and the expiry presets are withheld too: the server's
+    // PATCH 404s an expired row, so offering them could only end in an error
+    // toast. Revoke stays — the backend collapses a beyond-saving row into
+    // the idempotent 404 path.
     const plan = folderShareRowPlan(
       folderRow({ expiresAt: "2026-08-23T10:00:00Z" }),
       NOW,
@@ -170,7 +176,10 @@ describe("folderShareRowPlan", () => {
     expect(plan.state).toBe("expired");
     expect(plan.canCopy).toBe(false);
     expect(plan.copyTooltip).toMatch(/expired/i);
-    expect(plan.canManage).toBe(true);
+    expect(plan.canRevoke).toBe(true);
+    expect(plan.revokeTooltip).toBeUndefined();
+    expect(plan.canChangeExpiry).toBe(false);
+    expect(plan.expiryTooltip).toBe(EXPIRED_FOLDER_EXPIRY_TOOLTIP);
   });
 
   it("revocation wins over expiry", () => {

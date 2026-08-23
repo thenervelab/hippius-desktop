@@ -19,7 +19,9 @@ import { formatRelative } from "@/app/lib/utils/timeRelative";
  */
 export interface SharedBadgeRow {
   expiresAt: string | null;
-  isPrivate: boolean;
+  /** `null` = protection unknown on this device (a folder share minted
+   *  elsewhere — no local secret to inspect). */
+  isPrivate: boolean | null;
 }
 
 /** Sort key for expiry: a never-expiring link sorts after every dated one. */
@@ -29,8 +31,11 @@ function expiryRank(row: SharedBadgeRow): number {
     : Date.parse(row.expiresAt);
 }
 
-/** "public" or "password-protected", for the tooltip's first line. */
+/** "public" or "password-protected" for the tooltip's first line — or the
+ *  bare "link" when protection is unknown on this device, rather than a
+ *  guessed "public" for a share that may well be password-protected. */
 function accessLabel(row: SharedBadgeRow): string {
+  if (row.isPrivate === null) return "link";
   return row.isPrivate ? "password-protected link" : "public link";
 }
 

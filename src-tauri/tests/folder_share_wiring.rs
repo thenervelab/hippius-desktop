@@ -68,6 +68,26 @@ fn the_mint_funnel_builds_a_drive_scoped_client() {
     );
 }
 
+/// The revoke's forget-on-404 must be gated on the capability probe: a server
+/// ROLLBACK to a build without /v1/folder-shares answers the revoke route with
+/// the same bare 404 as "already revoked", and forgetting on that would delete
+/// the ONLY plaintext copy of a token that still guards a live share once the
+/// server rolls forward.
+#[test]
+fn the_revoke_gates_its_forget_on_the_capability_probe() {
+    let source = include_str!("../src/shares/commands.rs");
+    let body = fn_body(source, "pub async fn hcfs_revoke_folder_share");
+    let probe_at = body.find("require_folder_shares_supported");
+    let forget_at = body.find("keystore.forget");
+    match (probe_at, forget_at) {
+        (Some(probe), Some(forget)) => assert!(
+            probe < forget,
+            "hcfs_revoke_folder_share must probe the capability BEFORE forgetting the local token"
+        ),
+        _ => panic!("hcfs_revoke_folder_share must contain both the capability probe and the forget"),
+    }
+}
+
 /// The Finder right-click's directory branch must route into the SAME funnel
 /// as the in-app IPC, so the two entry points cannot drift on gates or key
 /// handling — the invariant the zip funnel enforced for its era.

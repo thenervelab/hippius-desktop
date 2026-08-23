@@ -794,8 +794,9 @@ function ActiveActionsCell({
  * Actions for a folder-share row, mirroring the file row's flat menu
  * (Copy, the expiry presets, Revoke) with the folder listing's extra
  * states: Copy is suppressed on dead rows even when the URL is locally
- * resolvable, and revoke/expiry are disabled — with the console's honest
- * tooltips — on rows minted on another device.
+ * resolvable, the expiry presets are disabled on expired rows (the server
+ * PATCH 404s them), and revoke/expiry are disabled — with the console's
+ * honest tooltips — on rows minted on another device.
  */
 function FolderActionsCell({
   row,
@@ -838,18 +839,18 @@ function FolderActionsCell({
       icon: <RefreshCcw className="size-4" />,
       itemTitle: label,
       onItemClick: () => {
-        if (plan.canManage && row.shareToken) onChangeExpiry(row.shareToken, ttl);
+        if (plan.canChangeExpiry && row.shareToken) onChangeExpiry(row.shareToken, ttl);
       },
-      disabled: !plan.canManage,
+      disabled: !plan.canChangeExpiry,
       tooltip: plan.expiryTooltip,
     })),
     {
       icon: <Trash2 className="size-4" />,
       itemTitle: "Revoke",
       onItemClick: () => {
-        if (plan.canManage && row.shareToken) onRevoke(row.shareToken);
+        if (plan.canRevoke && row.shareToken) onRevoke(row.shareToken);
       },
-      disabled: !plan.canManage,
+      disabled: !plan.canRevoke,
       tooltip: plan.revokeTooltip,
       variant: "destructive",
     },

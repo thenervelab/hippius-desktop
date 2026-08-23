@@ -238,10 +238,12 @@ export interface FolderShareSummary {
    */
   shareUrl: string | null;
   /**
-   * Whether the link is password-protected. `false` for a foreign row (there
-   * is no secret to inspect), which is also when `shareUrl` is `null`.
+   * Whether the link is password-protected. `null` for a foreign row: there
+   * is no secret to inspect, so protection is UNKNOWN on this device —
+   * `false` would label a password-protected share "public". `null`
+   * coincides with `shareUrl` being `null`.
    */
-  isPrivate: boolean;
+  isPrivate: boolean | null;
 }
 
 /**

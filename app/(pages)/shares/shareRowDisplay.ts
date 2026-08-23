@@ -109,10 +109,15 @@ export interface FolderShareRowPlan {
    *  even when this device could still rebuild its URL. */
   canCopy: boolean;
   copyTooltip?: string;
-  /** Revoke + change-expiry: need the plaintext token, and a revoked link
-   *  has nothing left to manage. */
-  canManage: boolean;
+  /** Revoke needs the plaintext token; a revoked link has nothing left to
+   *  revoke. An EXPIRED row stays revocable — the server's revoke collapses
+   *  a beyond-saving row into the idempotent 404 path. */
+  canRevoke: boolean;
   revokeTooltip?: string;
+  /** Change-expiry is LIVE rows only: the server's PATCH 404s an expired
+   *  row (the bodiless 404 covers revoked and expired alike), so offering
+   *  the presets there could only ever end in an error toast. */
+  canChangeExpiry: boolean;
   expiryTooltip?: string;
 }
 
@@ -127,12 +132,18 @@ export const FOREIGN_FOLDER_REVOKE_TOOLTIP =
 export const FOREIGN_FOLDER_EXPIRY_TOOLTIP =
   "Created on another device — change its expiry from the device where it was created";
 
+// Mirrors the backend's refusal wording: the server's PATCH 404s an expired
+// row, so the presets could only end in an error toast.
+export const EXPIRED_FOLDER_EXPIRY_TOOLTIP =
+  "This link has expired, so its expiry can no longer be changed";
+
 export function folderShareRowPlan(
   row: FolderShareSummary,
   now: number = Date.now(),
 ): FolderShareRowPlan {
   const state = folderShareRowState(row, now);
-  const canManage = row.shareToken !== null && state !== "revoked";
+  const canRevoke = row.shareToken !== null && state !== "revoked";
+  const canChangeExpiry = row.shareToken !== null && state === "live";
 
   const copyTooltip =
     state === "revoked"
@@ -147,10 +158,16 @@ export function folderShareRowPlan(
     state,
     canCopy: state === "live" && row.shareUrl !== null,
     copyTooltip,
-    canManage,
+    canRevoke,
     revokeTooltip:
-      canManage || state === "revoked" ? undefined : FOREIGN_FOLDER_REVOKE_TOOLTIP,
-    expiryTooltip:
-      canManage || state === "revoked" ? undefined : FOREIGN_FOLDER_EXPIRY_TOOLTIP,
+      canRevoke || state === "revoked" ? undefined : FOREIGN_FOLDER_REVOKE_TOOLTIP,
+    canChangeExpiry,
+    expiryTooltip: canChangeExpiry
+      ? undefined
+      : state === "expired"
+        ? EXPIRED_FOLDER_EXPIRY_TOOLTIP
+        : state === "revoked"
+          ? undefined
+          : FOREIGN_FOLDER_EXPIRY_TOOLTIP,
   };
 }
