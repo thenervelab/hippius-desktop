@@ -230,6 +230,83 @@ export async function listShares(): Promise<ShareSummary[]> {
   return invoke<ShareSummary[]>("hcfs_list_shares");
 }
 
+/**
+ * One row of the owner's folder-share listing.
+ *
+ * The server returns `tokenHash` (blake3 hex of the plaintext token) only —
+ * folder-share tokens are never echoed after create. A row minted on THIS
+ * machine resolves against the persistent keystore: `resolvable` is `true`,
+ * `shareToken` carries the plaintext token (the handle
+ * {@link revokeFolderShare} and {@link updateFolderShareExpiry} take), and
+ * `shareUrl` is the rebuilt recipient link. A row minted on another device is
+ * view-only: `resolvable` is `false` and both are `null`.
+ *
+ * Unlike {@link ShareSummary}, revoked and expired rows ARE present (with
+ * `revokedAt` set / `expiresAt` in the past) until the server's reaper sweeps
+ * them — render their dead state from the row. `folderHash` + `pathPrefix`
+ * are the share's stable identity; the per-folder "Shared" badge keys on that
+ * pair, never on the file-share origin sidecar.
+ */
+export interface FolderShareSummary {
+  tokenHash: string;
+  folderHash: string;
+  /** `""` means the share covers the whole drive. */
+  pathPrefix: string;
+  displayName: string;
+  /** RFC 3339 timestamp. */
+  createdAt: string;
+  /** RFC 3339 timestamp, or `null` when the link never expires. */
+  expiresAt: string | null;
+  /** RFC 3339 timestamp, set once the owner has revoked the share. */
+  revokedAt: string | null;
+  /** Whether this device's keystore holds the plaintext token. */
+  resolvable: boolean;
+  /** Plaintext token, present only for resolvable rows. */
+  shareToken: string | null;
+  /**
+   * Recipient URL, or `null` for a foreign row. Carries `#k=` for a public
+   * share and `#p=` for a password-protected one — the backend derives it
+   * from the stored secret's kind, so this can never be a password-free link
+   * to a protected share.
+   */
+  shareUrl: string | null;
+  /**
+   * Whether the link is password-protected. `false` for a foreign row (there
+   * is no secret to inspect), which is also when `shareUrl` is `null`.
+   */
+  isPrivate: boolean;
+}
+
+/**
+ * List every folder share this account has minted, newest first — including
+ * revoked and not-yet-reaped expired rows in their dead state.
+ */
+export async function listFolderShares(): Promise<FolderShareSummary[]> {
+  return invoke<FolderShareSummary[]>("hcfs_list_folder_shares");
+}
+
+/**
+ * Revoke a folder share by its plaintext token (from a resolvable listing
+ * row). Idempotent: an already-revoked or unknown token resolves rather than
+ * rejecting, so a double-tapped Revoke needs no special-casing.
+ */
+export async function revokeFolderShare(shareToken: string): Promise<void> {
+  await invoke<void>("hcfs_revoke_folder_share", { shareToken });
+}
+
+/**
+ * Change an existing folder share's expiry, returning the new one (`null`
+ * when the link now never expires). Only the expiry is mutable — same
+ * contract as {@link updateShareExpiry}. Rejects with a `Validation` error
+ * when the link is no longer active.
+ */
+export async function updateFolderShareExpiry(
+  shareToken: string,
+  ttl: ShareTtl,
+): Promise<string | null> {
+  return invoke<string | null>("hcfs_update_folder_share_expiry", { shareToken, ttl });
+}
+
 export async function revokeShare(shareToken: string): Promise<void> {
   await invoke<void>("hcfs_revoke_share", { shareToken });
 }

@@ -21,12 +21,14 @@ use crate::shares::client::build_account_client;
 use crate::shares::history::{self, HistoryEntry};
 use crate::shares::origin;
 use chrono::Utc;
+use hcfs_client::client::folder_share::{FolderShareError, FolderShareListItem, build_folder_share_url_for, folder_share_token_hash};
 use hcfs_client::client::share::{
-    ShareOptions, ShareProgress, ShareProgressFn, ShareSecret, ShareSummary as UpstreamShareSummary, ShareTtl, build_share_url_for,
+    ShareKeystore, ShareOptions, ShareProgress, ShareProgressFn, ShareSecret, ShareSummary as UpstreamShareSummary, ShareTtl, build_share_url_for,
     generate_share_password, validate_share_password,
 };
 use serde::Serialize;
 use sqlx::sqlite::SqlitePool;
+use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use tauri::ipc::Channel;
@@ -782,6 +784,181 @@ pub async fn hcfs_create_folder_share(
     create_folder_share_inner(&state, &account_id, &folder_label, &relative_path, ttl, choice).await
 }
 
+// ─── Folder-share owner ops (list / revoke / expiry) ───────────────────────
+
+/// One row of the owner's folder-share listing, resolved against this
+/// device's keystore. Mirrors the server's listing fields (camelCased,
+/// timestamps as RFC 3339 strings) plus the local resolution.
+///
+/// The server returns `token_hash` (blake3 hex) only — a folder-share
+/// token is never echoed after create. A row minted on THIS machine
+/// matches a token in the persistent SQLite keystore
+/// (`folder_share_token_hash(stored) == token_hash`), so it comes back
+/// with the plaintext token — the handle `hcfs_revoke_folder_share` and
+/// `hcfs_update_folder_share_expiry` take — and the rebuilt recipient
+/// URL. A row minted elsewhere is view-only: `resolvable: false`, token
+/// and URL `null`.
+///
+/// Unlike the file-share listing, revoked and expired rows ARE present
+/// (with `revoked_at` set / `expires_at` in the past) until the server's
+/// reaper sweeps them; the FE renders their dead state from the row.
+/// `folder_hash` + `path_prefix` are the share's stable identity — the
+/// per-folder "Shared" badge keys on that pair (console
+/// `folderShareTarget` parity), never on `share_origin` rows.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderShareSummary {
+    pub token_hash: String,
+    pub folder_hash: String,
+    /// `""` means the share covers the whole drive.
+    pub path_prefix: String,
+    pub display_name: String,
+    /// RFC 3339 timestamp.
+    pub created_at: String,
+    /// `None` (JSON `null`) when the link stays reachable until revoked.
+    pub expires_at: Option<String>,
+    /// `Some` once the owner has revoked the share.
+    pub revoked_at: Option<String>,
+    /// Whether this device's keystore holds the plaintext token.
+    pub resolvable: bool,
+    /// Plaintext token, present only for resolvable rows.
+    pub share_token: Option<String>,
+    /// Recipient URL rebuilt from the stored secret, `None` when the row
+    /// is not resolvable on this device.
+    pub share_url: Option<String>,
+    /// Whether the link is password-protected. `false` for a foreign row
+    /// (no secret to inspect), which is also when `share_url` is `None`.
+    pub is_private: bool,
+}
+
+/// Index the keystore's stored tokens by their blake3 hex — the join key
+/// the folder-share listing speaks. File-share tokens share the table and
+/// get hashed too; their hashes simply never appear in the folder listing.
+fn folder_share_secrets_by_hash(keystore: &SqliteShareKeystore) -> Result<HashMap<String, (String, ShareSecret)>> {
+    let entries = keystore.all_entries().map_err(|e| AppError::Hcfs(format!("keystore scan: {e}")))?;
+    Ok(entries
+        .into_iter()
+        .map(|(token, secret)| (folder_share_token_hash(&token), (token, secret)))
+        .collect())
+}
+
+/// Join the server's listing rows to the locally stored tokens. Pure —
+/// the IPC does the I/O — so the resolution rules are unit-testable.
+///
+/// URL rebuilding goes through `build_folder_share_url_for`, which
+/// dispatches on the stored [`ShareSecret`] variant: a password share can
+/// only ever yield its `#p=` link, same invariant as the file-share list.
+fn resolve_folder_share_rows(
+    rows: Vec<FolderShareListItem>,
+    secrets_by_hash: &HashMap<String, (String, ShareSecret)>,
+    console_base: &str,
+) -> Vec<FolderShareSummary> {
+    rows.into_iter()
+        .map(|row| {
+            let resolved = secrets_by_hash.get(&row.token_hash);
+            FolderShareSummary {
+                resolvable: resolved.is_some(),
+                share_token: resolved.map(|(token, _)| token.clone()),
+                share_url: resolved.map(|(token, secret)| build_folder_share_url_for(console_base, token, secret)),
+                is_private: resolved.is_some_and(|(_, secret)| secret.is_private()),
+                token_hash: row.token_hash,
+                folder_hash: row.folder_hash,
+                path_prefix: row.path_prefix,
+                display_name: row.display_name,
+                created_at: row.created_at.to_rfc3339(),
+                expires_at: row.expires_at.map(|e| e.to_rfc3339()),
+                revoked_at: row.revoked_at.map(|e| e.to_rfc3339()),
+            }
+        })
+        .collect()
+}
+
+/// List every folder share this account has minted, newest first —
+/// including revoked and not-yet-reaped expired rows in their dead state.
+/// Rows minted on this machine resolve against the persistent keystore
+/// (token + rebuilt URL); rows minted elsewhere come back view-only.
+///
+/// Deliberately NO `shared_link_history` integration here:
+/// `history::diff_active_lists` detects death by DISAPPEARANCE between
+/// consecutive active lists, and this listing retains dead rows until the
+/// server reaper sweeps them — a row would only "disappear" at reap time,
+/// recording a bogus end moment. The dead state is already ON the row
+/// (`revoked_at` / past `expires_at`), so the FE renders it directly,
+/// same as the console's owner page.
+///
+/// Also deliberately NO `share_origin` involvement: folder-share badge
+/// identity is `(folder_hash, path_prefix)` from these rows, and a
+/// sidecar row keyed by a folder token would be evicted by
+/// `hcfs_list_shares`' file-share prune anyway.
+#[tauri::command]
+pub async fn hcfs_list_folder_shares(state: tauri::State<'_, AppState>) -> Result<Vec<FolderShareSummary>> {
+    let account_id = state.current_account_id()?;
+    let pool = state.pool()?;
+    let client = build_account_client(pool, &account_id).await?;
+    let rows = client
+        .list_folder_shares()
+        .await
+        .map_err(|e| AppError::Hcfs(format!("list_folder_shares: {e}")))?;
+
+    let keystore = SqliteShareKeystore::new(pool.clone());
+    let secrets_by_hash = folder_share_secrets_by_hash(&keystore)?;
+    Ok(resolve_folder_share_rows(rows, &secrets_by_hash, &console_base_url()))
+}
+
+/// Revoke a folder share by its plaintext token (from a resolvable
+/// listing row). hcfs-client forgets the keystore secret on the wire
+/// success — there is no further use for it.
+///
+/// The server collapses unknown / someone else's / already-revoked
+/// tokens into one bodiless 404. That maps to `Ok(())` here, mirroring
+/// the file-share revoke's "I just tapped Revoke twice" idempotency, and
+/// the local secret is forgotten too so a token revoked from another
+/// device stops resolving on this one. The token itself never reaches a
+/// log line — it is the capability.
+#[tauri::command]
+pub async fn hcfs_revoke_folder_share(state: tauri::State<'_, AppState>, share_token: String) -> Result<()> {
+    let account_id = state.current_account_id()?;
+    let pool = state.pool()?;
+    let client = build_account_client(pool, &account_id).await?;
+    let keystore = SqliteShareKeystore::new(pool.clone());
+    match client.revoke_folder_share(&share_token, &keystore).await {
+        Ok(()) => Ok(()),
+        Err(FolderShareError::NotFound) => {
+            if let Err(e) = keystore.forget(&share_token) {
+                warn!(error = %e, "folder-share keystore forget failed after 404 revoke (non-fatal)");
+            }
+            Ok(())
+        }
+        Err(e) => Err(AppError::Hcfs(format!("revoke_folder_share: {e}"))),
+    }
+}
+
+/// Change an existing folder share's expiry, returning the new one
+/// (`None` when the link now stays reachable until revoked). Only the
+/// expiry is mutable — same contract as `hcfs_update_share_expiry`; the
+/// PATCH response deliberately carries no token echo.
+#[tauri::command]
+pub async fn hcfs_update_folder_share_expiry(state: tauri::State<'_, AppState>, share_token: String, ttl: String) -> Result<Option<String>> {
+    let account_id = state.current_account_id()?;
+    let ttl = parse_ttl(&ttl)?;
+
+    require_folder_shares_supported(&state, &account_id).await?;
+
+    let pool = state.pool()?;
+    let client = build_account_client(pool, &account_id).await?;
+    let expires_at = client.update_folder_share_expiry(&share_token, ttl).await.map_err(|e| {
+        warn!(error = %e, "update_folder_share_expiry failed");
+        // The server's bodiless 404 covers unknown / not-yours / revoked /
+        // already-expired alike — say what the user can act on instead.
+        match e {
+            FolderShareError::NotFound => AppError::Validation("This link is no longer active, so its expiry cannot be changed.".into()),
+            other => AppError::Hcfs(format!("update_folder_share_expiry: {other}")),
+        }
+    })?;
+
+    Ok(expires_at.map(|e| e.to_rfc3339()))
+}
+
 /// Generate a share password for the modal to pre-fill.
 ///
 /// Exists so the password the user sees is produced by the same CSPRNG and the
@@ -1402,5 +1579,177 @@ mod tests {
 
         let err = map_folder_share_error(FolderShareError::MissingFolderHash);
         assert!(matches!(err, AppError::Hcfs(_)), "got {err:?}");
+    }
+
+    // ─── Folder-share listing resolution ───────────────────────────────────
+
+    fn mk_folder_row(token_hash: &str, path_prefix: &str) -> FolderShareListItem {
+        FolderShareListItem {
+            token_hash: token_hash.to_string(),
+            folder_hash: "abcdef0123456789".to_string(),
+            path_prefix: path_prefix.to_string(),
+            display_name: "Photos".to_string(),
+            created_at: Utc::now(),
+            expires_at: None,
+            revoked_at: None,
+        }
+    }
+
+    /// Wire pin for the listing row the FE consumes: exactly the server
+    /// fields camelCased plus the three resolution fields. Task 4's shares
+    /// page and the (folderHash, pathPrefix) badge identity read these keys.
+    #[test]
+    fn folder_share_summary_pins_wire_shape() {
+        use std::collections::BTreeSet;
+
+        let summary = FolderShareSummary {
+            token_hash: "ab".repeat(32),
+            folder_hash: "abcdef0123456789".to_string(),
+            path_prefix: "photos".to_string(),
+            display_name: "Photos".to_string(),
+            created_at: Utc::now().to_rfc3339(),
+            expires_at: None,
+            revoked_at: None,
+            resolvable: true,
+            share_token: Some("tok".to_string()),
+            share_url: Some("https://x.io/share/folder/tok#k=AA".to_string()),
+            is_private: false,
+        };
+        let json = serde_json::to_value(&summary).expect("serialize FolderShareSummary");
+        let keys: BTreeSet<String> = json.as_object().expect("object").keys().cloned().collect();
+        let expected: BTreeSet<String> = [
+            "tokenHash",
+            "folderHash",
+            "pathPrefix",
+            "displayName",
+            "createdAt",
+            "expiresAt",
+            "revokedAt",
+            "resolvable",
+            "shareToken",
+            "shareUrl",
+            "isPrivate",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        assert_eq!(keys, expected, "FolderShareSummary wire keys drifted — FE shares.ts reads these");
+    }
+
+    /// The resolution rules in one place: a hash with a stored token
+    /// resolves (token + URL + privateness from the secret), a foreign
+    /// hash comes back view-only, and a private secret can only ever
+    /// rebuild its `#p=` link.
+    #[test]
+    fn resolve_folder_share_rows_joins_rows_to_stored_tokens() {
+        use hcfs_client::client::folder_share::build_folder_share_url;
+
+        let public_key = [7u8; 32];
+        let secrets: HashMap<String, (String, ShareSecret)> = [
+            (
+                folder_share_token_hash("tok-pub"),
+                ("tok-pub".to_string(), ShareSecret::Public(public_key)),
+            ),
+            (
+                folder_share_token_hash("tok-priv"),
+                ("tok-priv".to_string(), ShareSecret::Private(vec![2u8; 89])),
+            ),
+        ]
+        .into_iter()
+        .collect();
+
+        let rows = vec![
+            mk_folder_row(&folder_share_token_hash("tok-pub"), "photos"),
+            mk_folder_row(&folder_share_token_hash("tok-priv"), ""),
+            mk_folder_row(&folder_share_token_hash("minted-on-another-device"), "docs"),
+        ];
+        let out = resolve_folder_share_rows(rows, &secrets, "https://console.example.com");
+        assert_eq!(out.len(), 3);
+
+        let public = &out[0];
+        assert!(public.resolvable);
+        assert_eq!(public.share_token.as_deref(), Some("tok-pub"));
+        assert_eq!(
+            public.share_url.as_deref(),
+            Some(build_folder_share_url("https://console.example.com", "tok-pub", &public_key).as_str()),
+        );
+        assert!(!public.is_private);
+        assert_eq!(public.path_prefix, "photos");
+
+        let private = &out[1];
+        assert!(private.resolvable);
+        assert!(private.is_private);
+        let url = private.share_url.as_deref().expect("private row rebuilds a URL");
+        assert!(url.contains("#p="), "private secret must yield its #p= link: {url}");
+        assert!(!url.contains("#k="), "private secret must never yield a #k= link: {url}");
+
+        let foreign = &out[2];
+        assert!(!foreign.resolvable, "a hash with no stored token is view-only");
+        assert_eq!(foreign.share_token, None);
+        assert_eq!(foreign.share_url, None);
+        assert!(!foreign.is_private);
+        assert_eq!(foreign.folder_hash, "abcdef0123456789", "identity fields survive for the badge");
+        assert_eq!(foreign.path_prefix, "docs");
+    }
+
+    /// Dead rows pass through with their timestamps intact — the listing
+    /// retains revoked/expired rows until the server reaper sweeps them,
+    /// and the FE renders the dead state from `revokedAt`/`expiresAt`.
+    #[test]
+    fn resolve_folder_share_rows_keeps_dead_state_timestamps() {
+        let now = Utc::now();
+        let mut row = mk_folder_row(&folder_share_token_hash("tok"), "photos");
+        row.expires_at = Some(now);
+        row.revoked_at = Some(now);
+        let out = resolve_folder_share_rows(vec![row], &HashMap::new(), "https://x.io");
+        assert_eq!(out[0].expires_at.as_deref(), Some(now.to_rfc3339().as_str()));
+        assert_eq!(out[0].revoked_at.as_deref(), Some(now.to_rfc3339().as_str()));
+    }
+
+    /// End-to-end over the real keystore: a token minted into a temp
+    /// `SqliteShareKeystore` must come back keyed by exactly the blake3
+    /// hex the server's listing would carry for it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn folder_share_secrets_by_hash_resolves_a_minted_token() {
+        use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+        use std::str::FromStr;
+
+        let dir = TempDir::new().expect("tempdir");
+        let db_path = dir.path().join("test.db");
+        let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))
+            .expect("opts")
+            .create_if_missing(true);
+        let pool = SqlitePoolOptions::new().max_connections(1).connect_with(opts).await.expect("pool");
+        crate::utils::schema::ensure_table_schema(&pool).await.expect("schema");
+
+        let keystore = SqliteShareKeystore::new(pool);
+        let secret = ShareSecret::Public([9u8; 32]);
+        keystore.put("minted-token", &secret).expect("put");
+
+        let by_hash = folder_share_secrets_by_hash(&keystore).expect("scan");
+        let (token, stored) = by_hash.get(&folder_share_token_hash("minted-token")).expect("hash must match");
+        assert_eq!(token, "minted-token");
+        assert_eq!(stored, &secret);
+    }
+
+    /// Same source-text pin as `list_shares_never_builds_a_url_from_a_raw_key`,
+    /// for the folder listing's URL rebuild: `resolve_folder_share_rows` must
+    /// go through `build_folder_share_url_for` (variant dispatch), never the
+    /// raw-key `build_folder_share_url`, which can only emit a `#k=` link.
+    #[test]
+    fn folder_listing_never_builds_a_url_from_a_raw_key() {
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/shares/commands.rs")).expect("read commands.rs");
+        let body = fn_body(&src, "fn resolve_folder_share_rows(");
+        assert!(
+            body.contains("build_folder_share_url_for("),
+            "resolve_folder_share_rows must rebuild URLs via build_folder_share_url_for so a \
+             password-protected folder share can only ever yield its #p= link",
+        );
+        let without_correct_calls = body.replace("build_folder_share_url_for(", "");
+        assert!(
+            !without_correct_calls.contains("build_folder_share_url("),
+            "resolve_folder_share_rows must NOT call build_folder_share_url directly — that takes \
+             a raw key and would emit a password-free #k= link for a password-protected share",
+        );
     }
 }
