@@ -1,10 +1,9 @@
-// Typed wrappers around the Rust file-sharing IPC commands.
+// Typed wrappers around the Rust sharing IPC commands (file shares,
+// browsable folder shares, and the capability probe).
 //
-// The Rust source of truth lives at `src-tauri/src/shares/`.
-// `hcfs_create_share`, `hcfs_list_shares`, `hcfs_revoke_share`, and
-// `hcfs_get_capabilities` are the four commands; this file is the only
-// place in the FE that talks to them, so swapping the wire shape is a
-// one-file change.
+// The Rust source of truth lives at `src-tauri/src/shares/`. This file is
+// the only place in the FE that talks to those commands, so swapping the
+// wire shape is a one-file change.
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 
@@ -175,47 +174,15 @@ export async function createShare(
 }
 
 /**
- * DEAD — the zip pipeline this measured is gone. The backend command was
- * deleted with it, so this invoke now always rejects; `ShareFileModal`
- * already treats a failed preflight as "no preflight" and keeps minting
- * enabled (the browsable mint has no size or entry limits to gate on).
- * Kept only so the modal's zip-era folder flow keeps compiling until
- * Task 4 rewrites it and deletes this wrapper, its call site, and the
- * tests that exercise it.
- */
-export interface FolderSharePreflight {
-  totalBytes: number;
-  fileCount: number;
-  withinLimits: boolean;
-  limitBytes: number;
-  limitFiles: number;
-}
-
-export async function folderSharePreflight(
-  folderLabel: string,
-  relativePath: string,
-): Promise<FolderSharePreflight> {
-  return invoke<FolderSharePreflight>("hcfs_folder_share_preflight", {
-    folderLabel,
-    relativePath,
-  });
-}
-
-/**
  * Mint a live, browsable share link for a folder. One metadata POST — nothing
  * is packed or uploaded, so the call is instant regardless of folder size and
  * carries no progress channel. The link is live: later changes to the folder
  * appear in it.
- *
- * `_onProgress` is accepted-and-ignored so existing call sites keep compiling
- * until Task 4 reworks the modal's folder flow; the backend command has no
- * progress parameter anymore.
  */
 export async function createFolderShare(
   folderLabel: string,
   relativePath: string,
   choice: ShareChoice,
-  _onProgress?: (progress: ShareProgress) => void,
 ): Promise<ShareLink> {
   return invoke<ShareLink>("hcfs_create_folder_share", {
     folderLabel,

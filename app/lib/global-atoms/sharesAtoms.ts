@@ -41,6 +41,18 @@ export const serverCapabilitiesAtom = atom<ServerCapabilities | null>(null);
 export const shareFeatureEnabledAtom = atom(() => true);
 
 /**
+ * Derived: does the connected server support browsable folder shares
+ * (`/v1/folder-shares`)? Unlike file shares this is NOT hard-coded on: the
+ * endpoint only exists on new servers, so the folder "Share via link" items
+ * disable (with a tooltip) until the capability is confirmed. `null`
+ * capabilities (not yet fetched) collapse to `false` — disabled until known.
+ */
+export const folderShareFeatureEnabledAtom = atom((get) => {
+  const caps = get(serverCapabilitiesAtom);
+  return caps?.folder_shares === true;
+});
+
+/**
  * What `ShareFileModal` is currently sharing. `null` means closed.
  *
  * Storing the file (rather than just `(label, name)`) lets the modal render

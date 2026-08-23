@@ -20,6 +20,7 @@ import {
   useRetryFailure,
 } from "@/app/lib/hooks/useFileFailure";
 import { failureMessage } from "@/app/lib/utils/failureMessage";
+import { folderShareRelativePath } from "@/app/lib/utils/folderShareGating";
 import type { FileFailureRecord } from "@/app/lib/types/fileFailure";
 
 // Mirrors `FormattedUserFile.syncStatus`. `failed` is the FE-facing label for a
@@ -370,6 +371,22 @@ const NameCell: FC<NameCellProps> = ({
               name={rawName}
               className="text-grey-20 dark:text-grey-light-100 transition"
               textClassName="hover:text-primary-40 hover:underline"
+              suffix={
+                <SharedLinkBadge
+                  label={label}
+                  actualName={actualName}
+                  isFolder
+                  // `subFolderPath` already folds `parentSubFolderPath` in
+                  // (see above), so this resolves the same drive-relative
+                  // path the share menu item mints with.
+                  folderRelativePath={folderShareRelativePath(
+                    { name: rawName, actualFileName: actualName },
+                    subFolderPath,
+                  )}
+                  onManageShare={onManageShare}
+                  className="ml-1.5"
+                />
+              }
             />
           </div>
         </Link>
