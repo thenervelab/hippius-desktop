@@ -158,3 +158,23 @@ target `staging`). Worktree: `hippius-desktop-internal-wt-folder-shares`.
 - A REAL end-to-end check (mint on desktop → open link in browser) needs
   prod server (deployed) + prod console; the desktop test story is contract
   pins + mocked-transport tests, same as file shares.
+
+## Known limitations (as shipped)
+
+- Folder "Shared" badges appear within the listing's poll interval — the
+  mint does not invalidate the folder-share query, matching file-badge
+  behavior.
+- Member drives cannot mint folder shares (server v1 is owner-mint-only);
+  the IPC refuses with a message the modal shows.
+- Rows minted on another device are view-only: revoke and change-expiry
+  need the plaintext token, which only the minting device's keystore holds.
+- Folder shares never enter the local `shared_link_history`: the listing
+  retains dead rows until the server reaper sweeps them, which breaks the
+  disappearance-diff history relies on; the dead state renders on the
+  listing row instead.
+- Finder can no longer share a folder OUTSIDE a synced drive — the zip
+  archive was that case's only representation, and it is gone. The
+  right-click now refuses with an in-drive-only message.
+- Recipient links resolve on the production console's `/share/folder` page
+  (console PR #697; deployed to dev, prod pending its normal promotion).
+  Until then a freshly minted prod link 404s in the browser.

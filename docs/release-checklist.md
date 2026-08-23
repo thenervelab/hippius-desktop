@@ -154,7 +154,8 @@ My Shares page (`/shares`):
 - [ ] Password-protected rows show the lock badge, and Copy hands out a `#p=` link (never a password-free `#k=` link to a protected share).
 - [ ] Change expiry in place (URL unchanged, new expiry live); Revoke kills the link (opening it now fails).
 - [ ] Rows minted on another device show filename + Revoke but no Copy (no local key).
-- [ ] **Share history**: expired/revoked links are listed in the history view; removing one row and clearing all history both work; history never shows a live link as historical.
+- [ ] Folder-share rows appear in the same list ("Folder" in the size column) with copy/revoke/change-expiry on rows minted here; rows minted on another device are view-only with the honest tooltips; revoked/expired folder rows stay listed in their dead state with Copy suppressed.
+- [ ] **Share history**: expired/revoked FILE links are listed in the history view; removing one row and clearing all history both work; history never shows a live link as historical. Folder links never enter history — their dead state stays on the listing row above.
 
 Finder extension **[mac]**:
 
@@ -162,7 +163,7 @@ Finder extension **[mac]**:
 - [ ] With the extension enabled, no notice appears on launch.
 - [ ] Right-click a synced file in Finder → "Share with Hippius": app comes forward with the chooser; both public and password variants mint working links.
 - [ ] Cancelling the chooser aborts (nothing uploaded, no orphan link).
-- [ ] Folder share from Finder produces a working zip share.
+- [ ] Folder share from Finder: a folder inside a synced drive mints a live browsable link (opens on the console's `/share/folder` page); a folder outside every drive is refused with the in-drive-only message.
 
 ## 12. Tray
 
