@@ -27,13 +27,17 @@ use crate::sync::region::regional_fallback_urls;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
-/// Server feature flags. Currently only `shares` is exposed; future
-/// flags can be added without a wire-format change because the FE
-/// reads the struct field-by-field.
+/// Server feature flags. Struct-level `#[serde(default)]` makes every
+/// missing field `false`, which is how an older deployment (predating a
+/// given flag) reads as "feature unavailable" instead of a parse error.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ServerCapabilities {
     pub shares: bool,
+    /// Browsable folder shares (`/v1/folder-shares`). Mirrors
+    /// `hcfs-server::shares::types::Capabilities::folder_shares`; servers
+    /// that predate the routes omit the field entirely.
+    pub folder_shares: bool,
 }
 
 /// Hit `<base>/v1/capabilities` once. 404 collapses to a
@@ -103,4 +107,33 @@ pub(crate) async fn fetch_capabilities(state: &crate::app_state::AppState, accou
 pub async fn hcfs_get_capabilities(state: tauri::State<'_, crate::app_state::AppState>, account_id: String) -> Result<ServerCapabilities> {
     let account_id = state.require_session_account(&account_id)?;
     fetch_capabilities(&state, &account_id).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A pre-folder-shares server advertises `{"shares":true}` only; the
+    /// missing field must read as "folder shares unavailable", not a parse
+    /// error — that is the whole deployment-skew story for the flag.
+    #[test]
+    fn missing_folder_shares_field_defaults_to_false() {
+        let caps: ServerCapabilities = serde_json::from_str(r#"{"shares":true}"#).expect("parse old-server shape");
+        assert!(caps.shares);
+        assert!(!caps.folder_shares);
+    }
+
+    #[test]
+    fn full_capabilities_shape_round_trips() {
+        let caps: ServerCapabilities = serde_json::from_str(r#"{"shares":true,"folder_shares":true}"#).expect("parse");
+        assert!(caps.shares);
+        assert!(caps.folder_shares);
+
+        // The IPC serializes this struct straight to the FE, which reads the
+        // snake_case keys — pin them so a stray rename_all cannot drift the
+        // wire silently.
+        let json = serde_json::to_value(&caps).expect("serialize");
+        let keys: std::collections::BTreeSet<&str> = json.as_object().expect("object").keys().map(String::as_str).collect();
+        assert_eq!(keys, ["folder_shares", "shares"].into_iter().collect(), "capabilities wire keys drifted");
+    }
 }

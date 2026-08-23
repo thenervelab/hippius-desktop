@@ -16,6 +16,12 @@ import { Channel, invoke } from "@tauri-apps/api/core";
  */
 export interface ServerCapabilities {
   shares: boolean;
+  /**
+   * Browsable folder shares (`/v1/folder-shares`). Snake_case because the
+   * Rust struct serializes its fields verbatim. Missing on old servers,
+   * which the Rust layer collapses to `false`.
+   */
+  folder_shares: boolean;
 }
 
 /**
@@ -195,30 +201,27 @@ export async function folderSharePreflight(
 }
 
 /**
- * Mint a share link for a folder. The folder is packed into one `<name>.zip`
- * and that archive is shared, so the link is a snapshot: later changes to the
- * folder do not appear in it.
+ * Mint a live, browsable share link for a folder. One metadata POST — nothing
+ * is packed or uploaded, so the call is instant regardless of folder size and
+ * carries no progress channel. The link is live: later changes to the folder
+ * appear in it.
  *
- * Rejects when the folder is not fully synced on this device — the backend
- * refuses rather than hand the recipient an archive missing files — and when it
- * exceeds the size or entry cap. Same `Channel` progress mechanics as
- * {@link createShare}.
+ * `_onProgress` is accepted-and-ignored so existing call sites keep compiling
+ * until Task 4 reworks the modal's folder flow; the backend command has no
+ * progress parameter anymore.
  */
 export async function createFolderShare(
   folderLabel: string,
   relativePath: string,
   choice: ShareChoice,
-  onProgress?: (progress: ShareProgress) => void,
+  _onProgress?: (progress: ShareProgress) => void,
 ): Promise<ShareLink> {
-  const onProgressChannel = new Channel<ShareProgress>();
-  if (onProgress) onProgressChannel.onmessage = onProgress;
   return invoke<ShareLink>("hcfs_create_folder_share", {
     folderLabel,
     relativePath,
     ttl: choice.ttl,
     visibility: choice.visibility,
     password: choice.password ?? null,
-    onProgress: onProgressChannel,
   });
 }
 

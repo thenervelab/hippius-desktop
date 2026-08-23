@@ -826,28 +826,159 @@ fn folder_settlement_blocks_share(settlement: crate::sync::files::FolderSettleme
     !matches!(settlement, crate::sync::files::FolderSettlement::Settled)
 }
 
-/// Mint a share link for a FOLDER inside a synced drive.
+// ─── Folder shares (browsable live links) ──────────────────────────────────
+
+/// Capability gate for the folder-share mint. Same posture as
+/// [`require_shares_supported`]: the FE atom hides the menu item for UX, but
+/// this check is the IPC's authority — an old server (or a mid-session
+/// toggle) must be refused here, with a message the modal can show verbatim.
+async fn require_folder_shares_supported(state: &AppState, account_id: &str) -> Result<()> {
+    let caps = fetch_capabilities(state, account_id).await?;
+    if !caps.folder_shares {
+        return Err(AppError::Validation("Folder sharing is not enabled on this server.".into()));
+    }
+    Ok(())
+}
+
+/// Normalize and validate an untrusted drive-relative folder path into the
+/// `path_prefix` the server scopes the share to.
 ///
-/// The share engine shares one byte stream, so the folder is packed into a
-/// single `<name>.zip` and that archive is shared — a snapshot, not a live view:
-/// later changes to the folder do not appear in the link. This is the same call
-/// the macOS Finder right-click makes, deliberately, so the two entry points can
-/// never produce different artifacts.
+/// Surrounding `/` runs are trimmed — the FE and the Finder resolver both
+/// produce clean paths, but a stray separator must not change WHICH folder is
+/// shared — and the result may be empty: that is the whole-drive share. The
+/// component check mirrors [`resolve_inside_sync_root`]'s rules without
+/// touching the disk, because the mint is metadata-only: the folder does not
+/// need to exist locally (a cloud-only folder is shareable), but a `..` or a
+/// prefix/root component must still never reach the wire.
+fn folder_share_path_prefix(relative_path: &str) -> Result<&str> {
+    let prefix = relative_path.trim_matches('/');
+    for component in Path::new(prefix).components() {
+        match component {
+            Component::Normal(_) => {}
+            _ => return Err(AppError::Validation("relative_path contains an illegal component".into())),
+        }
+    }
+    Ok(prefix)
+}
+
+/// The plaintext name the recipient page titles itself with: the shared
+/// folder's last path segment, or the drive label for a whole-drive share —
+/// the same choice the console's mint makes for its rows.
+fn folder_share_display_name<'a>(folder_label: &'a str, path_prefix: &'a str) -> &'a str {
+    path_prefix
+        .rsplit('/')
+        .next()
+        .filter(|segment| !segment.is_empty())
+        .unwrap_or(folder_label)
+}
+
+/// Map hcfs-client's folder-share failures onto the app error taxonomy. The
+/// one case a user can act on — the server does not know this drive — stays a
+/// `Validation` message the share modal shows verbatim; everything else is a
+/// transport-shaped `Hcfs` error.
+fn map_folder_share_error(e: hcfs_client::client::folder_share::FolderShareError) -> AppError {
+    match e {
+        hcfs_client::client::folder_share::FolderShareError::FolderNotRegistered => {
+            AppError::Validation("This drive isn't registered on the server yet. Let it finish a sync, then share again.".into())
+        }
+        other => AppError::Hcfs(format!("create_folder_share: {other}")),
+    }
+}
+
+/// Inner folder-share mint shared by the in-app IPC and the Finder
+/// right-click. EVERY gate lives here rather than in the commands — the same
+/// lesson the zip pipeline learned: the Finder path calls this directly, and
+/// a guard sitting one level up would silently not cover it.
 ///
-/// Refuses a folder that is not fully settled on this device: a recipient must
-/// never receive an archive quietly missing files.
+/// The mint is one metadata POST, so two zip-era guards are deliberately
+/// absent: no settlement check (the recipient browses the SERVER's state, not
+/// this disk, so a half-downloaded local copy cannot corrupt the share) and
+/// no billing eligibility gate (nothing is uploaded — the shared bytes were
+/// already paid for when they were stored).
+pub(crate) async fn create_folder_share_inner(
+    state: &AppState,
+    account_id: &str,
+    folder_label: &str,
+    relative_path: &str,
+    ttl: ShareTtl,
+    choice: ShareChoice,
+) -> Result<ShareLink> {
+    let pool = state.pool()?;
+    let path_prefix = folder_share_path_prefix(relative_path)?;
+
+    require_folder_shares_supported(state, account_id).await?;
+
+    // Resolve the drive's wire identity ONCE and thread it down (resolver
+    // call discipline). The strict resolver: minting against a label with no
+    // local row is a caller bug, and its "Unknown sync folder label"
+    // Validation matches the file share's `sync_root_for_label` refusal.
+    let identity = crate::sync::identity::resolve_drive_identity(pool, account_id, folder_label).await?;
+
+    // Folder shares are owner-mint-only (server v1), and a member's derived
+    // key would be wrong anyway — the drive's file key belongs to the OWNER's
+    // derivation chain. Refuse with a message the modal can show, instead of
+    // letting the server's folder_not_found 404 misreport it.
+    if identity.is_member {
+        return Err(AppError::Validation(
+            "Only the owner of a shared drive can share its folders as a link.".into(),
+        ));
+    }
+
+    info!(label = %folder_label, path_prefix = %path_prefix, "Creating folder share");
+
+    // The DERIVED drive file key, from the same chain the sync engine and the
+    // remote preview use (`encryption_key_for_label`) — the link fragment
+    // carries this key, never folder-mnemonic entropy. Wiped on drop.
+    let mnemonic = crate::sync::remote::session_mnemonic(state)?;
+    let file_key =
+        zeroize::Zeroizing::new(crate::sync::remote::encryption_key_for_label(pool, account_id, folder_label, &mnemonic, &identity).await?);
+
+    // Drive-scoped client: `create_folder_share` sends the folder_hash from
+    // the client CONFIG, so `build_account_client`'s label-less client would
+    // be refused (`MissingFolderHash`) before any request went out.
+    let client = crate::sync::remote::build_client(pool, account_id, &identity).await?;
+    let keystore = SqliteShareKeystore::new(pool.clone());
+    let console_base = console_base_url();
+    let result = client
+        .create_folder_share(
+            &file_key,
+            &hcfs_client::client::folder_share::FolderShareOptions {
+                path_prefix,
+                display_name: folder_share_display_name(folder_label, path_prefix),
+                ttl,
+                password: choice.password(),
+                console_base_url: &console_base,
+            },
+            &keystore,
+        )
+        .await
+        .map_err(|e| {
+            warn!(error = %e, "create_folder_share failed");
+            map_folder_share_error(e)
+        })?;
+
+    Ok(ShareLink {
+        share_token: result.share_token,
+        share_url: result.share_url,
+        expires_at: result.expires_at.map(|e| e.to_rfc3339()),
+        password: choice.into_password(),
+    })
+}
+
+/// Mint a live, browsable share link for a folder inside a synced drive.
 ///
-/// KNOWN GAP — the guard checks the engine's local `synced` baseline, so it
-/// catches a child this device synced before and no longer has on disk, but NOT
-/// a child that exists only on the server and was never downloaded here (a file
-/// another device uploaded, or a selective-sync excluded subtree). Those are
-/// absent from both the baseline and the disk, so the folder reads as settled
-/// and the archive silently omits them. `rename.rs` documents the same
-/// limitation for the same reason: closing it needs an engine-side accessor
-/// over hcfs-client's `state.remote`.
+/// One metadata POST against `/v1/folder-shares`: the recipient browses and
+/// downloads the drive's EXISTING ciphertext through the console's share
+/// page, so the link is live (later changes appear in it) and creation is
+/// instant regardless of folder size — nothing is packed or uploaded, which
+/// is why this command has no progress channel. `relative_path` may be empty
+/// to share the whole drive.
 ///
-/// Size is bounded by the cap in `zip_dir`, applied inside
-/// [`share_directory_as_zip`] before the walk.
+/// Deliberately records NO `share_origin` row: folder shares live server-side
+/// keyed by `(folder_hash, path_prefix)`, and the owner listing resolves them
+/// back to local rows by that identity — a `share_origin` row keyed by a
+/// folder-share token would be evicted by `hcfs_list_shares`' file-share
+/// prune on the next refresh anyway.
 #[tauri::command]
 pub async fn hcfs_create_folder_share(
     state: tauri::State<'_, AppState>,
@@ -856,48 +987,15 @@ pub async fn hcfs_create_folder_share(
     ttl: String,
     visibility: String,
     password: Option<String>,
-    on_progress: Channel<ShareProgress>,
 ) -> Result<ShareLink> {
     let account_id = state.current_account_id()?;
 
-    // Validate the untrusted arguments before any disk or network work, mirroring
+    // Validate the untrusted arguments before any network work, mirroring
     // `hcfs_create_share`.
     let ttl = parse_ttl(&ttl)?;
     let choice = ShareChoice::parse(&visibility, password)?;
 
-    let pool = state.pool()?;
-    let sync_root = sync_root_for_label(pool, &account_id, &folder_label).await?;
-    let dir_path = resolve_inside_sync_root(&sync_root, &relative_path).await?;
-    if !tokio::fs::metadata(&dir_path).await?.is_dir() {
-        return Err(AppError::Validation("This entry is not a folder".into()));
-    }
-
-    info!(label = %folder_label, relative_path = %relative_path, "Creating folder share");
-
-    // The settled-folder guard and the size cap both live inside
-    // `share_directory_as_zip`, so the file-manager right-click gets them too.
-    // It hands back the canonical `(label, relative_path)` it resolved.
-    let progress = share_progress_forwarder(on_progress);
-    let (link, resolved) = share_directory_as_zip(&state, &account_id, &dir_path, ttl, choice, Some(progress)).await?;
-
-    // Origin sidecar so the folder row shows the same "Shared" badge a file
-    // does. Best-effort exactly like the file path: the link is already live,
-    // and a failed write costs only the badge.
-    //
-    // Keyed on the path the funnel RESOLVED, not the caller's argument: a
-    // non-canonical spelling of the same directory would otherwise write a
-    // sidecar row no listing can ever match.
-    let owner = account_key(&account_id);
-    let (origin_label, origin_rel) = resolved.unwrap_or((folder_label, relative_path));
-    if let Err(e) = origin::record(pool, &link.share_token, &owner, &origin_label, &origin_rel).await {
-        warn!(
-            share_token = %link.share_token,
-            error = %e,
-            "Failed to record share_origin for a folder share (the share itself succeeded)"
-        );
-    }
-
-    Ok(link)
+    create_folder_share_inner(&state, &account_id, &folder_label, &relative_path, ttl, choice).await
 }
 
 /// Generate a share password for the modal to pre-fill.
@@ -1511,5 +1609,56 @@ mod tests {
             let err = ShareChoice::parse(bad, None).expect_err("must reject");
             assert!(matches!(err, AppError::Validation(_)), "{bad:?} → {err:?}");
         }
+    }
+
+    // ─── Folder-share mint helpers ─────────────────────────────────────────
+
+    #[test]
+    fn folder_share_path_prefix_trims_and_accepts_drive_relative_paths() {
+        assert_eq!(folder_share_path_prefix("").expect("root"), "");
+        assert_eq!(folder_share_path_prefix("photos").expect("flat"), "photos");
+        assert_eq!(folder_share_path_prefix("trips/photos").expect("nested"), "trips/photos");
+        // A stray separator must not change WHICH folder is shared, and "/"
+        // alone collapses to the whole-drive prefix rather than being refused
+        // as an absolute path.
+        assert_eq!(folder_share_path_prefix("/photos/").expect("trimmed"), "photos");
+        assert_eq!(folder_share_path_prefix("/").expect("bare slash"), "");
+    }
+
+    /// The wire must never see a path that could name anything outside the
+    /// drive — same refusal set as `resolve_inside_sync_root`, minus the disk.
+    #[test]
+    fn folder_share_path_prefix_rejects_escaping_components() {
+        for bad in ["..", "../outside", "a/../b", "./a"] {
+            let err = folder_share_path_prefix(bad).expect_err("must reject");
+            assert!(matches!(err, AppError::Validation(_)), "{bad:?} → {err:?}");
+        }
+    }
+
+    /// Last path segment for a nested folder, the drive label at root — the
+    /// console mint's `displayName` rule, mirrored so the recipient page
+    /// titles itself the same regardless of which client minted the link.
+    #[test]
+    fn folder_share_display_name_mirrors_the_console_choice() {
+        assert_eq!(folder_share_display_name("Drive", ""), "Drive");
+        assert_eq!(folder_share_display_name("Drive", "photos"), "photos");
+        assert_eq!(folder_share_display_name("Drive", "trips/photos"), "photos");
+    }
+
+    /// `folder_not_found` is the one create failure the user can fix (sync
+    /// the drive first), so it must surface as showable Validation text; the
+    /// indistinct transport failures stay `Hcfs`.
+    #[test]
+    fn folder_share_errors_map_onto_the_app_taxonomy() {
+        use hcfs_client::client::folder_share::FolderShareError;
+
+        let err = map_folder_share_error(FolderShareError::FolderNotRegistered);
+        assert!(matches!(err, AppError::Validation(_)), "got {err:?}");
+
+        let err = map_folder_share_error(FolderShareError::NotFound);
+        assert!(matches!(err, AppError::Hcfs(_)), "got {err:?}");
+
+        let err = map_folder_share_error(FolderShareError::MissingFolderHash);
+        assert!(matches!(err, AppError::Hcfs(_)), "got {err:?}");
     }
 }
