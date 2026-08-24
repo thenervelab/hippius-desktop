@@ -25,6 +25,79 @@ use tauri::AppHandle;
 
 use crate::error::{AppError, Result};
 
+/// Where an app bundle keeps its app extensions.
+const PLUGINS_SUBDIR: &str = "Contents/PlugIns";
+/// Filename extension of a macOS app-extension bundle.
+const APPEX_EXTENSION: &str = "appex";
+
+/// Whether this build can host a Finder extension at all — the precondition
+/// that makes [`macos::is_extension_enabled`]'s answer mean anything.
+///
+/// `+[FIFinderSyncController isExtensionEnabled]` reports on *the calling app's
+/// own* extension. A process that embeds none — `pnpm tauri:dev`'s raw binary,
+/// `cargo test`'s test binary, any bundle built without the Finder embed step —
+/// therefore gets `false` unconditionally, and that `false` means "there is no
+/// extension here", NOT "the user switched it off". Reading it as the latter is
+/// what made the nudge fire forever on dev builds while the INSTALLED app's
+/// extension was enabled and `pluginkit` showed `+` (report of 2026-08-24).
+/// The file's own `is_extension_enabled_is_callable` test always documented
+/// this ("the test binary is not an app bundle … always gets `false`"); only
+/// the runtime path never accounted for it.
+///
+/// Split from the I/O so the path rule is unit-testable on every platform
+/// (`path_is_translocated`'s convention), and compiled everywhere for the same
+/// reason — only the macOS branch of [`finder_extension_state`] calls it.
+#[cfg_attr(
+    not(target_os = "macos"),
+    allow(dead_code, reason = "only the macOS branch consults it; kept compiled so its tests run in every CI lane")
+)]
+mod hosting {
+    use super::{APPEX_EXTENSION, PLUGINS_SUBDIR};
+    use std::ffi::OsStr;
+    use std::path::{Path, PathBuf};
+
+    /// The `.app` bundle containing `exe`, if it is inside one.
+    ///
+    /// Returns the OUTERMOST match: an app extension is itself a bundle, so an
+    /// executable inside `Hippius.app/Contents/PlugIns/HippiusFinder.appex` has
+    /// two bundle ancestors, and the host app is the one that owns the
+    /// extension list. Pure path logic — nothing is read from disk.
+    pub fn app_bundle_root(exe: &Path) -> Option<&Path> {
+        let app = OsStr::new("app");
+        // `Ancestors` walks inside-out and is not double-ended, so the LAST
+        // match is the outermost bundle.
+        exe.ancestors().filter(|dir| dir.extension() == Some(app)).last()
+    }
+
+    /// Whether `bundle_root` embeds at least one app extension.
+    ///
+    /// Any `.appex` counts rather than specifically a FinderSync one: the app
+    /// ships exactly one extension, and parsing each candidate's Info.plist for
+    /// `NSExtensionPointIdentifier` would buy nothing here. A missing or
+    /// unreadable `PlugIns` directory is simply "no extension".
+    pub fn bundle_embeds_app_extension(bundle_root: &Path) -> bool {
+        let plugins: PathBuf = bundle_root.join(PLUGINS_SUBDIR);
+        let appex = OsStr::new(APPEX_EXTENSION);
+        let Ok(entries) = std::fs::read_dir(plugins) else {
+            return false;
+        };
+        entries.flatten().any(|entry| entry.path().extension() == Some(appex))
+    }
+
+    /// Resolve the running executable and apply both rules.
+    ///
+    /// An unresolvable executable path answers `false`, which routes the caller
+    /// to `Unsupported` — staying silent on unverifiable state is this module's
+    /// standing rule.
+    pub fn current_build_hosts_finder_extension() -> bool {
+        let Ok(exe) = std::env::current_exe() else {
+            tracing::warn!("could not resolve current executable path; treating the Finder extension state as unknown");
+            return false;
+        };
+        app_bundle_root(&exe).is_some_and(bundle_embeds_app_extension)
+    }
+}
+
 /// Whether the user has enabled the Finder extension.
 ///
 /// Wire format is the tagged shape (`{"kind": "enabled"}`), matching
@@ -51,6 +124,14 @@ pub enum FinderExtensionState {
 pub async fn finder_extension_state(app: AppHandle) -> FinderExtensionState {
     #[cfg(target_os = "macos")]
     {
+        // Ask only when the answer can carry meaning. Without this, every build
+        // that embeds no extension reports `Disabled` and nags about a switch
+        // that would not help — see `hosting`.
+        if !hosting::current_build_hosts_finder_extension() {
+            tracing::debug!("this build embeds no Finder extension; reporting the enablement state as unsupported");
+            return FinderExtensionState::Unsupported;
+        }
+
         let state = match on_main_thread(&app, macos::is_extension_enabled).await {
             Some(true) => FinderExtensionState::Enabled,
             Some(false) => FinderExtensionState::Disabled,
@@ -183,6 +264,83 @@ mod macos_tests {
     #[test]
     fn is_extension_enabled_is_callable() {
         let _ = super::macos::is_extension_enabled();
+    }
+}
+
+#[cfg(test)]
+mod hosting_tests {
+    use super::hosting::{app_bundle_root, bundle_embeds_app_extension};
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn finds_the_bundle_of_an_installed_app() {
+        let exe = Path::new("/Applications/Hippius.app/Contents/MacOS/Hippius");
+        assert_eq!(app_bundle_root(exe), Some(Path::new("/Applications/Hippius.app")));
+    }
+
+    /// The case behind the permanent nudge: `pnpm tauri:dev` runs the raw
+    /// target binary, which is in no bundle at all.
+    #[test]
+    fn a_dev_binary_is_in_no_bundle() {
+        let exe = Path::new("/Users/me/hippius-desktop/src-tauri/target/debug/hippius-desktop");
+        assert_eq!(app_bundle_root(exe), None);
+    }
+
+    /// An extension is itself a bundle, so the HOST app must win — it is the
+    /// one whose extension list the enablement question is about.
+    #[test]
+    fn the_host_app_wins_over_a_nested_extension_bundle() {
+        let exe = Path::new("/Applications/Hippius.app/Contents/PlugIns/HippiusFinder.appex/Contents/MacOS/HippiusFinder");
+        assert_eq!(app_bundle_root(exe), Some(Path::new("/Applications/Hippius.app")));
+    }
+
+    #[test]
+    fn a_bare_path_is_in_no_bundle() {
+        assert_eq!(app_bundle_root(Path::new("")), None);
+        assert_eq!(app_bundle_root(Path::new("/")), None);
+    }
+
+    fn bundle_with(plugins: &[&str]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root: PathBuf = dir.path().join("Hippius.app");
+        if !plugins.is_empty() {
+            let plugin_dir = root.join("Contents/PlugIns");
+            std::fs::create_dir_all(&plugin_dir).expect("create PlugIns");
+            for name in plugins {
+                std::fs::create_dir_all(plugin_dir.join(name)).expect("create appex");
+            }
+        }
+        dir
+    }
+
+    #[test]
+    fn an_embedded_extension_is_detected() {
+        let dir = bundle_with(&["HippiusFinder.appex"]);
+        assert!(bundle_embeds_app_extension(&dir.path().join("Hippius.app")));
+    }
+
+    /// A release built without the Finder embed step: the enablement question
+    /// is unanswerable, so the caller must stay silent rather than tell the
+    /// user to switch on something this build does not contain.
+    #[test]
+    fn a_bundle_without_plugins_embeds_nothing() {
+        let dir = bundle_with(&[]);
+        assert!(!bundle_embeds_app_extension(&dir.path().join("Hippius.app")));
+    }
+
+    #[test]
+    fn an_empty_plugins_directory_embeds_nothing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("Hippius.app");
+        std::fs::create_dir_all(root.join("Contents/PlugIns")).expect("create PlugIns");
+        assert!(!bundle_embeds_app_extension(&root));
+    }
+
+    /// Only `.appex` counts — a stray file in PlugIns is not an extension.
+    #[test]
+    fn a_non_appex_entry_does_not_count() {
+        let dir = bundle_with(&["notes.txt"]);
+        assert!(!bundle_embeds_app_extension(&dir.path().join("Hippius.app")));
     }
 }
 
