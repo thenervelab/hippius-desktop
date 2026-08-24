@@ -65,10 +65,10 @@ async fn validate_preview_source(state: &crate::app_state::AppState, source: &Pa
         .ok_or_else(|| AppError::Other("could not determine home directory".into()))?
         .join(".hippius")
         .join("preview-cache");
-    if let Ok(canonical_preview_root) = tokio::fs::canonicalize(&preview_root).await {
-        if canonical_source.starts_with(canonical_preview_root) {
-            return Ok(canonical_source);
-        }
+    if let Ok(canonical_preview_root) = tokio::fs::canonicalize(&preview_root).await
+        && canonical_source.starts_with(canonical_preview_root)
+    {
+        return Ok(canonical_source);
     }
 
     let account_id = state.current_account_id()?;
@@ -77,10 +77,10 @@ async fn validate_preview_source(state: &crate::app_state::AppState, source: &Pa
         if sync_path.path.is_empty() {
             continue;
         }
-        if let Ok(canonical_root) = tokio::fs::canonicalize(&sync_path.path).await {
-            if canonical_source.starts_with(canonical_root) {
-                return Ok(canonical_source);
-            }
+        if let Ok(canonical_root) = tokio::fs::canonicalize(&sync_path.path).await
+            && canonical_source.starts_with(canonical_root)
+        {
+            return Ok(canonical_source);
         }
     }
 
@@ -106,8 +106,7 @@ fn prepare_motion_photo_file(source: &Path, cache_root: &Path) -> Result<MotionP
         .extension()
         .and_then(|extension| extension.to_str())
         .filter(|extension| !extension.is_empty() && extension.chars().all(|character| character.is_ascii_alphanumeric()))
-        .map(str::to_ascii_lowercase)
-        .unwrap_or_else(|| "jpg".to_string());
+        .map_or_else(|| "jpg".to_string(), str::to_ascii_lowercase);
     let still_path = cache_root.join(format!("{cache_key}.{still_extension}"));
     let video_path = cache_root.join(format!("{cache_key}.mov"));
 
