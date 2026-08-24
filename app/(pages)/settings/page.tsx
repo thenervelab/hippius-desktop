@@ -10,7 +10,7 @@ import WalletSettings from "@/components/page-sections/settings/WalletSettings";
 import ApiTokenSection from "@/components/page-sections/settings/ApiTokenSection";
 import VPNSettings from "@/components/page-sections/settings/VPNSettings";
 import CustomizeRPC from "@/components/page-sections/settings/CustomizeRPC";
-import InfoTooltip from "@/components/page-sections/settings/InfoTooltip";
+import InfoTooltip from "@/components/ui/info-tooltip";
 import NotificationSection from "@/components/page-sections/settings/NotificationSection";
 import {
   VPN_FEATURE_ENABLED,

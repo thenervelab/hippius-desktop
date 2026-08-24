@@ -17,6 +17,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
+- **Live Photos and HEIC images now preview throughout Drive**, including HEIC
+  thumbnails, reliable repeated Live motion playback on supported systems, and
+  an immediately disabled LIVE badge with an explanatory tooltip on Linux.
+- Drive, Billing, and Support information tooltips now link directly to their relevant
+  documentation.
 - **Share links can now expire.** Choose 24 hours, 7 days, 30 days, or until you revoke
   it — both in the app and when right-clicking a file in Finder on Mac.
 - **Password-protect a share link with your own password**, from either place.
@@ -36,6 +41,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   syncing.
 - Uploads made from the desktop app are now labelled as such in your account's usage
   breakdown, instead of being counted as "other".
+- The information tooltip on the Files page now explains what the page actually holds:
+  the folders you sync from this computer, and why your unlock password is needed to
+  open them.
 
 ### Fixed
 

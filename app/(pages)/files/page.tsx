@@ -5,11 +5,10 @@ import { FC, useEffect } from "react";
 import PageHeader from "@/components/ui/page-header";
 import { useSetAtom } from "jotai";
 
-import { openUrl } from "@tauri-apps/plugin-opener";
-import { InfoCircle } from "@/app/components/ui/icons";
+import InfoTooltip from "@/components/ui/info-tooltip";
 import { fileDetailsPanelAtom } from "@/app/lib/global-atoms/fileDetailsAtoms";
 
-const DRIVE_DOCS_URL = "https://docs.hippius.com/use/desktop/file-system";
+const DRIVE_DOCS_URL = "https://docs.hippius.com/use/desktop/drive";
 
 const FilesPage: FC = () => {
   // The inline FileDetailsPanel is mounted at the layout level
@@ -26,14 +25,16 @@ const FilesPage: FC = () => {
       <PageHeader
         hideStats={true}
         infoTooltip={
-          <button
-            onClick={() => openUrl(DRIVE_DOCS_URL)}
-            aria-label="Drive documentation"
-            title="Drive documentation"
-            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-grey-dark-100 bg-grey-light-700 text-black transition-colors hover:bg-grey-90 hover:text-primary-50 dark:border-black-300 dark:bg-black-primary-bg dark:text-grey-dark-400 dark:hover:border-black-100 dark:hover:bg-black-300 dark:hover:text-primary-50"
+          <InfoTooltip
+            ariaLabel="Drive information"
+            align="start"
+            contentClassName="max-w-[280px]"
+            learnMoreUrl={DRIVE_DOCS_URL}
           >
-            <InfoCircle className="size-4" />
-          </button>
+            Every folder you sync from this computer shows up here. Files are
+            encrypted on your device before they upload, so only your unlock
+            password can open them.
+          </InfoTooltip>
         }
         title="Your Files"
         className="!shadow-none"
