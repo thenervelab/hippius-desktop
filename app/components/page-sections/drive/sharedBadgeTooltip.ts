@@ -10,22 +10,36 @@
 // sorting below has to treat as "later than every real timestamp" rather than
 // letting `Date.parse(null)` produce NaN and poison the comparison.
 
-import type { ShareSummary } from "@/app/lib/tauri/shares";
 import { formatRelative } from "@/app/lib/utils/timeRelative";
 
+/**
+ * The slice of a share row the tooltip needs. Both `ShareSummary` (file
+ * shares) and `FolderShareSummary` (live folder shares) satisfy it, so the
+ * badge builds the same copy for either kind.
+ */
+export interface SharedBadgeRow {
+  expiresAt: string | null;
+  /** `null` = protection unknown on this device (a folder share minted
+   *  elsewhere — no local secret to inspect). */
+  isPrivate: boolean | null;
+}
+
 /** Sort key for expiry: a never-expiring link sorts after every dated one. */
-function expiryRank(row: ShareSummary): number {
+function expiryRank(row: SharedBadgeRow): number {
   return row.expiresAt === null
     ? Number.POSITIVE_INFINITY
     : Date.parse(row.expiresAt);
 }
 
-/** "public" or "password-protected", for the tooltip's first line. */
-function accessLabel(row: ShareSummary): string {
+/** "public" or "password-protected" for the tooltip's first line — or the
+ *  bare "link" when protection is unknown on this device, rather than a
+ *  guessed "public" for a share that may well be password-protected. */
+function accessLabel(row: SharedBadgeRow): string {
+  if (row.isPrivate === null) return "link";
   return row.isPrivate ? "password-protected link" : "public link";
 }
 
-export function buildSharedBadgeTooltip(rows: ShareSummary[]): string[] | null {
+export function buildSharedBadgeTooltip(rows: SharedBadgeRow[]): string[] | null {
   if (rows.length === 0) return null;
 
   if (rows.length === 1) {

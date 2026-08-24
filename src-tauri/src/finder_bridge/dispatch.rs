@@ -11,9 +11,10 @@
 //!
 //! Minting reuses the existing engine ([`super::resolve`] +
 //! `crate::shares::commands`): an in-drive file shares by `(label,
-//! relative_path)`, an outside file by raw bytes, and a folder by zipping it
-//! into one blob. A password-protected choice additionally wraps the key under a
-//! random password (`#p=`).
+//! relative_path)`, an outside file by raw bytes, and an in-drive folder mints
+//! a live browsable link (one metadata POST — an outside folder has no drive
+//! to browse and is refused). A password-protected choice additionally wraps
+//! the key under a random password (`#p=`).
 //!
 //! ## Security: socket peer trust (accepted risk)
 //! The App Group socket ([`super::socket`]) is reachable by any local process
@@ -31,7 +32,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tracing::{info, warn};
 
 use crate::app_state::AppState;
-use crate::error::Result;
+use crate::error::{AppError, Result};
 
 use crate::finder_bridge::protocol::ClientMessage;
 use crate::finder_bridge::resolve::{ShareTarget, resolve_share_target};
@@ -154,21 +155,29 @@ async fn share_for_path(
 ) -> Result<ShareLink> {
     let account_id = state.current_account_id()?;
 
-    // A directory (in-drive or outside) is shared as one zip blob — the share
-    // engine has no folder concept. Resolve file-vs-dir BEFORE the in-drive
-    // check so an in-drive folder takes the zip path rather than
-    // `share_synced_file`, which rejects directories.
+    // Resolve file-vs-dir BEFORE the in-drive check so an in-drive folder
+    // takes the mint path rather than `share_synced_file`, which rejects
+    // directories.
     let metadata = tokio::fs::metadata(clicked).await?;
+    let roots = crate::sync::paths::list_drive_roots(state.pool()?, &account_id).await?;
     if metadata.is_dir() {
-        // The zip funnel resolves the drive itself (to run the settled-folder
-        // guard), so the `(label, relative_path)` it returns is redundant here —
-        // the Finder path records no reshare-origin sidecar.
-        return crate::shares::commands::share_directory_as_zip(state, &account_id, clicked, ttl, choice, progress)
-            .await
-            .map(|(link, _resolved)| link);
+        // An in-drive folder mints a live browsable link — one metadata POST,
+        // so the mint ignores `progress` (there is nothing to stream) and the
+        // gates all live inside `create_folder_share_inner`. Resolving against
+        // `clicked` (canonical, from Finder) keeps a non-canonical spelling
+        // from ever reaching the mint. An OUTSIDE folder has no drive whose
+        // server state a recipient could browse; the zip fallback that used to
+        // cover it is gone, so refuse with a message the modal can show.
+        return match resolve_share_target(clicked, &roots) {
+            ShareTarget::InDrive { label, relative_path } => {
+                crate::shares::commands::create_folder_share_inner(state, &account_id, &label, &relative_path, ttl, choice).await
+            }
+            ShareTarget::Outside => Err(AppError::Validation(
+                "Only folders inside a synced Hippius drive can be shared as a link.".into(),
+            )),
+        };
     }
 
-    let roots = crate::sync::paths::list_drive_roots(state.pool()?, &account_id).await?;
     match resolve_share_target(clicked, &roots) {
         // In-drive file: mint by (label, relative_path) and record a reshare origin.
         ShareTarget::InDrive { label, relative_path } => {

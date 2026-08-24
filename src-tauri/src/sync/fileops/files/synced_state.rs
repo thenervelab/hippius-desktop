@@ -136,9 +136,10 @@ pub(crate) enum FolderSettlement {
 /// browser's pending badge reads, so a caller's verdict and the badge the user
 /// is looking at cannot disagree.
 ///
-/// Callers deciding whether to hand a folder's bytes to a third party must treat
-/// [`FolderSettlement::Unknown`] as a refusal, never as permission — otherwise
-/// pausing a drive becomes a way to bypass the check. Folder rename is the
+/// A future caller deciding whether to hand a folder's bytes to a third party
+/// must treat [`FolderSettlement::Unknown`] as a refusal, never as permission —
+/// otherwise pausing a drive becomes a way to bypass the check (the zip-era
+/// folder share held that line). Folder rename — today's only caller — is the
 /// deliberate exception: it is a local operation the sync engine reconciles
 /// either way, so it proceeds when the answer is unknown.
 pub(crate) fn folder_settlement(sync_root: &Path, folder_rel: &str, synced_rel_paths: Option<&[String]>) -> FolderSettlement {
@@ -162,29 +163,6 @@ pub(crate) fn folder_settlement(sync_root: &Path, folder_rel: &str, synced_rel_p
     }
 
     FolderSettlement::Settled
-}
-
-/// Answer [`folder_settlement`] for a live drive, reading the synced tree for
-/// `label` first.
-///
-/// Exists so callers outside this module ask one question instead of composing
-/// the map read with the classification themselves — which would mean exposing
-/// both internals and letting two call sites drift on how a missing map is
-/// treated.
-pub(crate) async fn folder_is_settled(sync: &SyncRunner, label: &str, sync_root: &Path, folder_rel: &str) -> FolderSettlement {
-    let Some(synced) = synced_paths_for_label(sync, label).await else {
-        return FolderSettlement::Unknown;
-    };
-    let rel_paths: Vec<String> = synced.into_keys().collect();
-    let root = sync_root.to_path_buf();
-    let folder = folder_rel.to_string();
-
-    // `exists()` per child is blocking. A large folder share/rename
-    // must not stall the runtime; a join failure is Unknown (share
-    // refuses, rename still proceeds).
-    tokio::task::spawn_blocking(move || folder_settlement(&root, &folder, Some(&rel_paths)))
-        .await
-        .unwrap_or(FolderSettlement::Unknown)
 }
 
 /// Outcome of locating a per-drive `DriveManager` Arc behind the outer

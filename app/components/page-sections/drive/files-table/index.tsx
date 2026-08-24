@@ -32,6 +32,7 @@ import {
 } from "lucide-react";
 import { useAtomValue, useSetAtom } from "jotai";
 import {
+  folderShareFeatureEnabledAtom,
   shareFeatureEnabledAtom,
   shareModalFileAtom,
 } from "@/app/lib/global-atoms/sharesAtoms";
@@ -289,6 +290,7 @@ const FilesTable: FC<FilesTableProps> = memo(
     // hcfs-server advertises `shares: true`. The atom is populated once
     // per session by `useServerCapabilities` (mounted in SyncEventLogger).
     const shareEnabled = useAtomValue(shareFeatureEnabledAtom);
+    const folderSharesEnabled = useAtomValue(folderShareFeatureEnabledAtom);
     const setShareModalFile = useSetAtom(shareModalFileAtom);
     const setRenameModalFile = useSetAtom(renameModalFileAtom);
     const enableFolderExpander = !isRecentFiles;
@@ -770,9 +772,10 @@ const FilesTable: FC<FilesTableProps> = memo(
             : []),
           // Share via link — same gating as the right-click context menu in
           // `app/components/ui/context-menu/index.tsx`. A FILE must be fully
-          // uploaded so the recipient's anonymous fetch succeeds. A FOLDER is
-          // zipped from disk, so it is shown but disabled unless every child is
-          // here (`canShareFolder`) — visible-but-disabled, like Rename, so the
+          // uploaded so the recipient's anonymous fetch succeeds. A FOLDER
+          // mints a live browsable link server-side, so it is shown but
+          // disabled until the server confirms the `folder_shares` capability
+          // (`canShareFolder`) — visible-but-disabled, like Rename, so the
           // capability is discoverable rather than silently absent.
           ...((file.isFolder || file.syncStatus === "synced") && shareEnabled
             ? [
@@ -780,7 +783,9 @@ const FilesTable: FC<FilesTableProps> = memo(
                   icon: <Link2 className="size-4" />,
                   itemTitle: "Share via link",
                   onItemClick: () => {
-                    if (file.isFolder && !canShareFolder(file)) return;
+                    if (file.isFolder && !canShareFolder(file, folderSharesEnabled)) {
+                      return;
+                    }
                     // `parentSubFolderPath` is the expanded subtree's own path;
                     // falling back to the page's path would resolve a nested
                     // folder against the drive root and share a DIFFERENT
@@ -793,9 +798,12 @@ const FilesTable: FC<FilesTableProps> = memo(
                     );
                   },
                   disabled:
-                    itemDeleting || (file.isFolder && !canShareFolder(file)),
+                    itemDeleting ||
+                    (file.isFolder && !canShareFolder(file, folderSharesEnabled)),
                   tooltip:
-                    !itemDeleting && file.isFolder && !canShareFolder(file)
+                    !itemDeleting &&
+                    file.isFolder &&
+                    !canShareFolder(file, folderSharesEnabled)
                       ? FOLDER_SHARE_DISABLED_TOOLTIP
                       : undefined,
                 },
@@ -850,6 +858,7 @@ const FilesTable: FC<FilesTableProps> = memo(
         router,
         polkadotAddress,
         shareEnabled,
+        folderSharesEnabled,
         setShareModalFile,
         setRenameModalFile,
         isItemDeleting,

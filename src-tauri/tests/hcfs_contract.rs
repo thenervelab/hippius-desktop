@@ -18,6 +18,11 @@
 //! goldens deliberately and document the migration.
 
 use base64::Engine;
+use hcfs_client::client::folder_share::{
+    CreatedFolderShare, FolderShareListItem, FolderShareOptions, ShareTtl, build_folder_share_url, build_folder_share_url_for,
+    build_folder_share_url_private, folder_share_token_hash,
+};
+use hcfs_client::client::share::{ShareSecret, wrap_share_key};
 use hcfs_client::crypto::{decrypt_small, encrypt_small};
 use hcfs_client::drive::keys::{derive_folder_mnemonic, folder_hash};
 use hcfs_client::drive::remote::derive_encryption_key;
@@ -205,31 +210,6 @@ fn at_rest_decrypt_frozen_ciphertext_is_pinned() {
 // The hcfs-shared crate has its own copies of these tests, but they live in its
 // `#[cfg(test)]` module and never compile into the desktop — only a pin in THIS
 // crate guards the desktop's use of the bumped dep.
-
-/// The share modal reads these keys directly to render the size line and to
-/// disable its Create button. A serde rename would blank both silently — the
-/// modal would show no size and never refuse an oversized folder, leaving the
-/// mint as the only thing that says no.
-#[test]
-fn folder_share_preflight_wire_pinned() {
-    let preflight = tauri_project_lib::shares::commands::FolderSharePreflight {
-        total_bytes: 12,
-        file_count: 3,
-        within_limits: true,
-        limit_bytes: 2_000_000_000,
-        limit_files: 10_000,
-    };
-
-    let json = serde_json::to_value(&preflight).expect("serialize");
-    let keys: BTreeSet<&str> = json.as_object().expect("object").keys().map(String::as_str).collect();
-    assert_eq!(
-        keys,
-        ["fileCount", "limitBytes", "limitFiles", "totalBytes", "withinLimits"]
-            .into_iter()
-            .collect::<BTreeSet<_>>(),
-        "FolderSharePreflight wire keys must stay exactly these camelCase names"
-    );
-}
 
 #[test]
 fn register_folder_entries_request_wire_pinned() {
@@ -586,4 +566,122 @@ fn mnemonic_blob_seal_open_round_trips_with_ss58_binding() {
 
     let err = open_mnemonic(&blob, "correct horse battery staple", OTHER_SS58).expect_err("a different ss58 must fail the AEAD tag check");
     assert!(matches!(err, MnemonicBlobError::AeadTag), "got {err:?}");
+}
+
+// ── Folder-share client-surface pins (hcfs 27a48bd, desktop phase 3) ───────
+//
+// The browsable folder-share surface (`hcfs_client::client::folder_share`)
+// the mint/list/revoke/expiry IPCs build on. Its wire types are private to
+// hcfs-client (serialization happens inside `create_folder_share` et al. and
+// hcfs pins the JSON in its own unit tests), so the desktop-visible contract
+// is the URL builders, the token-hash digest, and the public structs —
+// pinned here so a reshaping bump fails in the pin-bump PR, not at runtime
+// in the feature branch that consumes them.
+
+/// Exact recipient-URL vectors, copied from hcfs-client's own unit tests:
+/// 32 zero bytes encode as 43 'A's in base64url-no-pad, and a trailing slash
+/// on the console base must be trimmed. The console recipient page parses
+/// exactly this `/share/folder/{token}#k=|#p=` shape, so the whole string is
+/// pinned — a drifted path segment or fragment key breaks every minted link.
+#[test]
+fn folder_share_url_builders_are_pinned() {
+    let public = build_folder_share_url("https://x.io/", "tok", &[0u8; 32]);
+    assert_eq!(
+        public,
+        format!("https://x.io/share/folder/tok#k={}", "A".repeat(43)),
+        "public folder-share URL drifted"
+    );
+    assert_eq!(
+        public,
+        build_folder_share_url("https://x.io", "tok", &[0u8; 32]),
+        "a trailing slash on the console base must be trimmed"
+    );
+
+    let private = build_folder_share_url_private("https://x.io/", "tok", &[1, 2, 3]);
+    assert_eq!(private, "https://x.io/share/folder/tok#p=AQID", "password folder-share URL drifted");
+}
+
+/// The owner listing carries `token_hash` (blake3 hex of the plaintext
+/// token) ONLY; the desktop matches rows back to the tokens in its SQLite
+/// keystore with this digest. Pin it to blake3 via the empty-string known
+/// answer (the same vector hcfs pins against its server's `hash_token`) so
+/// a digest swap can never silently orphan every stored share.
+#[test]
+fn folder_share_token_hash_is_pinned() {
+    assert_eq!(
+        folder_share_token_hash(""),
+        "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262",
+        "folder_share_token_hash must stay blake3 of the token bytes"
+    );
+
+    let hash = folder_share_token_hash("some-token");
+    assert_eq!(hash.len(), 64, "token hash must be a 32-byte digest in hex");
+    assert!(
+        hash.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()),
+        "token hash must be lowercase hex: {hash}"
+    );
+    assert_eq!(folder_share_token_hash("some-token"), hash, "token hash must be deterministic");
+    assert_ne!(folder_share_token_hash("other-token"), hash, "distinct tokens must hash distinctly");
+}
+
+/// The structural invariant the keystore round-trip relies on: a
+/// password-protected share's stored secret can only ever rebuild its `#p=`
+/// link — never a password-free `#k=` one, which would strip the password
+/// gate from a link the owner re-copies off the shares page.
+#[test]
+fn a_private_folder_share_secret_can_never_produce_a_key_url() {
+    let blob = wrap_share_key("correct horse battery staple", &[7u8; 32]).expect("wrap share key");
+    let url = build_folder_share_url_for("https://console.example.com", "tok", &ShareSecret::Private(blob));
+    assert!(url.contains("#p="), "private secret must yield a #p= URL: {url}");
+    assert!(!url.contains("#k="), "private secret must never yield a password-free #k= URL: {url}");
+
+    let url = build_folder_share_url_for("https://console.example.com", "tok", &ShareSecret::Public([7u8; 32]));
+    assert_eq!(
+        url,
+        build_folder_share_url("https://console.example.com", "tok", &[7u8; 32]),
+        "public secret must yield the plain #k= URL"
+    );
+}
+
+/// Compile-time pin of the folder-share structs and owner operations the
+/// mint/list/revoke/expiry IPCs consume, mirroring
+/// `shared_drive_client_surface_is_reachable`: the exhaustive struct
+/// literals make a field rename, drop, or addition fail here, in the
+/// pin-bump PR.
+#[test]
+fn folder_share_client_surface_is_reachable() {
+    let options = FolderShareOptions {
+        path_prefix: "photos/2026",
+        display_name: "2026",
+        ttl: ShareTtl::Days7,
+        password: Some("correct horse battery staple"),
+        console_base_url: "https://console.example.com",
+    };
+    assert_eq!(options.path_prefix, "photos/2026");
+
+    let created_at = "2026-08-23T00:00:00Z".parse::<chrono::DateTime<chrono::Utc>>().expect("timestamp parses");
+    let item = FolderShareListItem {
+        token_hash: folder_share_token_hash("tok"),
+        folder_hash: "0123456789abcdef".to_string(),
+        path_prefix: String::new(),
+        display_name: "My Drive".to_string(),
+        created_at,
+        expires_at: None,
+        revoked_at: Some(created_at),
+    };
+    assert_eq!(item.path_prefix, "", "whole-drive share is the empty prefix");
+
+    let created = CreatedFolderShare {
+        share_token: "tok".to_string(),
+        share_url: build_folder_share_url("https://console.example.com", "tok", &[0u8; 32]),
+        expires_at: None,
+    };
+    assert!(created.share_url.contains("/share/folder/"));
+
+    // The four owner operations the IPCs wire up. Taking the fn items is a
+    // pure compile-time reference.
+    let _ = hcfs_client::client::HcfsClient::create_folder_share;
+    let _ = hcfs_client::client::HcfsClient::list_folder_shares;
+    let _ = hcfs_client::client::HcfsClient::revoke_folder_share;
+    let _ = hcfs_client::client::HcfsClient::update_folder_share_expiry;
 }

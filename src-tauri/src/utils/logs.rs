@@ -70,9 +70,18 @@ static LINE_REDACTORS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
         // intact. The optional quote on either side of the delimiter also covers
         // JSON / `Debug`-formatted forms like {"password":"..."} that a bare
         // `\s*[:=]` missed (audit M-8). `${1}` preserves the original key/case.
+        //
+        // `share[_-]?token` needs its own alternative: `_` is a word character,
+        // so `\btoken\b` can never fire inside `share_token` — and the share
+        // commands log exactly that tracing field, so support bundles shipped
+        // link capabilities in full. The same boundary rule is what keeps
+        // `token_hash` / `token_hash_prefix` loggable, deliberately: the hash
+        // is the server's own correlation handle, not the capability.
         (
-            Regex::new(r#"(?i)\b(authorization|bearer|token|api[_-]?key|secret|password|passphrase|seed|mnemonic|private[_-]?key)\b["']?\s*[:=]\s*["']?\S.*"#)
-                .expect("labeled-secret regex"),
+            Regex::new(
+                r#"(?i)\b(authorization|bearer|share[_-]?token|token|api[_-]?key|secret|password|passphrase|seed|mnemonic|private[_-]?key)\b["']?\s*[:=]\s*["']?\S.*"#,
+            )
+            .expect("labeled-secret regex"),
             "${1}=[REDACTED]",
         ),
         // Bare `Bearer <token>` / `Token <token>` header values (no separator).
@@ -470,6 +479,38 @@ mod tests {
             assert!(!out.contains("sk_live_abc123def456"), "json apiKey leaked: {out}");
             assert!(!out.contains("abc123def456ghi"), "quoted token leaked: {out}");
             assert!(out.contains("[REDACTED]"), "expected redaction in: {out}");
+        }
+    }
+
+    #[test]
+    fn redacts_share_token_field() {
+        // `\btoken\b` cannot fire inside `share_token` (`_` is a word char), so
+        // tracing lines like `warn!(share_token = %share_token, ...)` shipped
+        // the link capability in full until the dedicated alternative landed.
+        for line in [
+            "WARN revoke_share failed share_token=AbCd12-efGh34_ijKl56 status=404",
+            r#"{"shareToken":"AbCd12efGh34ijKl56"}"#,
+            "DEBUG minted share-token: AbCd12efGh34ijKl56",
+        ] {
+            let out = redact_log_line(line);
+            assert!(!out.contains("AbCd12"), "share token leaked: {out}");
+            assert!(out.contains("[REDACTED]"), "expected redaction marker: {out}");
+        }
+    }
+
+    #[test]
+    fn preserves_token_hash_fields() {
+        // The token HASH is deliberately loggable — it is the server's own
+        // correlation handle (request logs carry the same prefix), never the
+        // capability. The `\b` boundary that misses `share_token` is the same
+        // one that keeps these intact; pin that so a broadened alternation
+        // doesn't start eating the one identifier support can join on.
+        for line in [
+            "WARN compensating folder-share revoke failed token_hash_prefix=af1349b9f5f9a1a6",
+            "INFO listing row token_hash=af1349b9f5f9a1a6a0404dea36dcc949 resolvable=false",
+        ] {
+            let out = redact_log_line(line);
+            assert_eq!(out, line, "token_hash must survive redaction: {out}");
         }
     }
 

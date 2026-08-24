@@ -21,12 +21,14 @@ use crate::shares::client::build_account_client;
 use crate::shares::history::{self, HistoryEntry};
 use crate::shares::origin;
 use chrono::Utc;
+use hcfs_client::client::folder_share::{FolderShareError, FolderShareListItem, build_folder_share_url_for, folder_share_token_hash};
 use hcfs_client::client::share::{
-    ShareOptions, ShareProgress, ShareProgressFn, ShareSecret, ShareSummary as UpstreamShareSummary, ShareTtl, build_share_url_for,
+    ShareKeystore, ShareOptions, ShareProgress, ShareProgressFn, ShareSecret, ShareSummary as UpstreamShareSummary, ShareTtl, build_share_url_for,
     generate_share_password, validate_share_password,
 };
 use serde::Serialize;
 use sqlx::sqlite::SqlitePool;
+use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use tauri::ipc::Channel;
@@ -544,56 +546,42 @@ pub(crate) async fn share_synced_file(
     create_share_inner(state, account_id, folder_label, relative_path, ttl, choice, progress).await
 }
 
-/// Stream an already-resolved local plaintext file through the share engine.
-///
-/// Shared by the two Finder paths that have no synced-folder identity — an
-/// outside file and a folder zipped to a temp archive. No reshare-origin row is
-/// recorded (there is no `(folder_label, relative_path)` to reshare from). The
-/// caller has already run the capability + eligibility gates. `progress` streams
-/// the encrypt/upload bar to the confirm modal when `Some`.
-///
-/// The `(path, name, type, ttl, choice)` tuple travels together through both
-/// callers, so it is bundled rather than spread across the signature — the
-/// zip path in particular derives its `filename` from the directory name, not
-/// from `local_path` (which points at a temp archive), so the two must be
-/// passed as one coherent description of what is being shared.
+/// Mint a public share for a file that is NOT inside a synced folder by reading
+/// its bytes directly ("upload & share"). The byte stream is uploaded to the
+/// same encrypted-share storage as a synced file; only the reshare-origin
+/// sidecar is skipped (there is no `(folder_label, relative_path)` to reshare
+/// from). Entry point for the macOS Finder dispatcher, and the last Finder
+/// path that uploads bytes now that a folder mints a browsable link instead
+/// of a zip.
 #[cfg(any(unix, windows))]
-struct LocalShareRequest<'a> {
-    /// Bytes to upload. For the zip path this is a temp archive, not the
-    /// thing the user clicked.
-    local_path: &'a Path,
-    /// Name the recipient sees — `<dir>.zip` for the zip path.
-    filename: &'a str,
-    mime_type: &'a str,
-    ttl: ShareTtl,
-    choice: ShareChoice,
-}
-
-#[cfg(any(unix, windows))]
-async fn share_local_file(
+pub(crate) async fn share_external_file(
     state: &AppState,
     account_id: &str,
-    request: LocalShareRequest<'_>,
+    abs_path: &Path,
+    ttl: ShareTtl,
+    choice: ShareChoice,
     progress: Option<ShareProgressFn>,
 ) -> Result<ShareLink> {
-    let LocalShareRequest {
-        local_path,
-        filename,
-        mime_type,
-        ttl,
-        choice,
-    } = request;
+    require_shares_supported(state, account_id).await?;
+    require_eligible(state, account_id, InsufficientCreditsAction::Sharing, 0).await?;
+
     let pool = state.pool()?;
-    let metadata = tokio::fs::metadata(local_path).await?;
+    let metadata = tokio::fs::metadata(abs_path).await?;
     if !metadata.is_file() {
         return Err(AppError::Validation("Cannot share a directory".into()));
     }
     let plaintext_size = metadata.len();
 
-    info!(filename, plaintext_size, mime_type, "Creating share from local file");
+    let filename = abs_path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| AppError::Validation("File has no usable name".into()))?;
+    let mime_type = mime_guess::from_path(abs_path).first_or_octet_stream().essence_str().to_owned();
+
+    info!(filename, plaintext_size, mime_type = %mime_type, "Creating share from local file");
 
     let client = build_account_client(pool, account_id).await?;
-    let mut reader = tokio::fs::File::open(local_path).await?;
+    let mut reader = tokio::fs::File::open(abs_path).await?;
     let keystore = SqliteShareKeystore::new(pool.clone());
     let console_base = console_base_url();
     let result = client
@@ -602,7 +590,7 @@ async fn share_local_file(
             plaintext_size,
             &ShareOptions {
                 filename,
-                mime_type,
+                mime_type: &mime_type,
                 ttl,
                 password: choice.password(),
                 console_base_url: &console_base,
@@ -624,230 +612,159 @@ async fn share_local_file(
     })
 }
 
-/// Mint a public share for a file that is NOT inside a synced folder by reading
-/// its bytes directly ("upload & share"). The byte stream is uploaded to the
-/// same encrypted-share storage as a synced file; only the reshare-origin
-/// sidecar is skipped. Entry point for the macOS Finder dispatcher.
-#[cfg(any(unix, windows))]
-pub(crate) async fn share_external_file(
-    state: &AppState,
-    account_id: &str,
-    abs_path: &Path,
-    ttl: ShareTtl,
-    choice: ShareChoice,
-    progress: Option<ShareProgressFn>,
-) -> Result<ShareLink> {
-    require_shares_supported(state, account_id).await?;
-    require_eligible(state, account_id, InsufficientCreditsAction::Sharing, 0).await?;
+// ─── Folder shares (browsable live links) ──────────────────────────────────
 
-    let filename = abs_path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .ok_or_else(|| AppError::Validation("File has no usable name".into()))?;
-    let mime_type = mime_guess::from_path(abs_path).first_or_octet_stream().essence_str().to_owned();
-
-    share_local_file(
-        state,
-        account_id,
-        LocalShareRequest {
-            local_path: abs_path,
-            filename,
-            mime_type: &mime_type,
-            ttl,
-            choice,
-        },
-        progress,
-    )
-    .await
+/// Capability gate for the folder-share mint. Same posture as
+/// [`require_shares_supported`]: the FE atom hides the menu item for UX, but
+/// this check is the IPC's authority — an old server (or a mid-session
+/// toggle) must be refused here, with a message the modal can show verbatim.
+async fn require_folder_shares_supported(state: &AppState, account_id: &str) -> Result<()> {
+    let caps = fetch_capabilities(state, account_id).await?;
+    if !caps.folder_shares {
+        return Err(AppError::Validation("Folder sharing is not enabled on this server.".into()));
+    }
+    Ok(())
 }
 
-/// Mint a public share for a folder by packing it into one `application/zip`
-/// blob and sharing that. The share engine shares one byte stream, so a folder
-/// has no first-class representation — the recipient downloads `<name>.zip`.
-/// Used for both in-drive and outside folders. Entry point for the macOS Finder
-/// dispatcher.
+/// Normalize and validate an untrusted drive-relative folder path into the
+/// `path_prefix` the server scopes the share to.
 ///
-/// Bounded by `zip_dir::MAX_FOLDER_SHARE_BYTES` / `MAX_FOLDER_SHARE_ENTRIES`,
-/// measured and enforced before the archive is packed. EVERY folder-share entry
-/// point funnels through here — the in-app menu and the file-manager
-/// right-click — so the cap and the settled-folder guard below cover both.
-///
-/// The settled check lives here rather than in the IPC command precisely so the
-/// right-click path cannot skip it: that path resolves a directory and calls
-/// this function directly, and a guard sitting one level up would have left it
-/// zipping half-downloaded folders while the in-app path refused them.
-///
-/// Returns the resolved `(label, relative_path)` alongside the link when the
-/// folder is inside a drive, so the caller can record the reshare-origin sidecar
-/// against the SAME canonical path this function guarded and packed — never the
-/// caller's raw argument, which may be a different spelling of the same
-/// directory.
-#[cfg(any(unix, windows))]
-pub(crate) async fn share_directory_as_zip(
-    state: &AppState,
-    account_id: &str,
-    dir_path: &Path,
-    ttl: ShareTtl,
-    choice: ShareChoice,
-    progress: Option<ShareProgressFn>,
-) -> Result<(ShareLink, Option<(String, String)>)> {
-    require_shares_supported(state, account_id).await?;
-    require_eligible(state, account_id, InsufficientCreditsAction::Sharing, 0).await?;
-
-    // Which drive is this folder in? Derived from the RESOLVED path, so a
-    // caller that passed a non-canonical spelling ("a//b", a case variant on a
-    // case-insensitive filesystem, or a symlink) is guarded on the directory
-    // that will actually be packed. A folder outside every drive has no synced
-    // state to be missing, so there is nothing to check.
-    let roots = crate::sync::paths::list_drive_roots(state.pool()?, account_id).await?;
-    let in_drive = match crate::finder_bridge::resolve::resolve_share_target(dir_path, &roots) {
-        crate::finder_bridge::resolve::ShareTarget::InDrive { label, relative_path } => Some((label, relative_path)),
-        crate::finder_bridge::resolve::ShareTarget::Outside => None,
-    };
-
-    if let Some((label, relative_path)) = &in_drive {
-        let sync_root = sync_root_for_label(state.pool()?, account_id, label).await?;
-        let settlement = crate::sync::files::folder_is_settled(&state.sync, label, &sync_root, relative_path).await;
-        if folder_settlement_blocks_share(settlement) {
-            return Err(AppError::Validation(
-                "This folder isn't fully synced on this device yet. Wait for sync to finish, then share.".into(),
-            ));
+/// Surrounding `/` runs are trimmed — the FE and the Finder resolver both
+/// produce clean paths, but a stray separator must not change WHICH folder is
+/// shared — and the result may be empty: that is the whole-drive share. The
+/// component check mirrors [`resolve_inside_sync_root`]'s rules without
+/// touching the disk, because the mint is metadata-only: the folder does not
+/// need to exist locally (a cloud-only folder is shareable), but a `..` or a
+/// prefix/root component must still never reach the wire.
+fn folder_share_path_prefix(relative_path: &str) -> Result<&str> {
+    let prefix = relative_path.trim_matches('/');
+    for component in Path::new(prefix).components() {
+        match component {
+            Component::Normal(_) => {}
+            _ => return Err(AppError::Validation("relative_path contains an illegal component".into())),
         }
     }
-
-    let dir_name = dir_path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .ok_or_else(|| AppError::Validation("Folder has no usable name".into()))?;
-    let zip_filename = format!("{dir_name}.zip");
-
-    // Pack on a blocking thread: the zip crate and `std::fs` are synchronous,
-    // and a large folder would otherwise stall the async runtime. The temp file
-    // is moved back out and lives in this frame across the upload await below;
-    // its `Drop` unlinks the archive only after `create_share` has streamed it.
-    // Measure and enforce the cap on the same blocking thread as the pack, so
-    // the walk that decides "too large" and the walk that builds the archive
-    // apply identical rules to the same tree.
-    let src = dir_path.to_path_buf();
-    let temp = tokio::task::spawn_blocking(move || {
-        let measured = crate::shares::zip_dir::measure_directory(&src)?;
-        crate::shares::zip_dir::enforce_folder_share_limits(measured)?;
-
-        crate::shares::zip_dir::zip_directory_to_temp(&src)
-    })
-    .await
-    .map_err(|e| AppError::Io(std::io::Error::other(e)))??;
-
-    let link = share_local_file(
-        state,
-        account_id,
-        LocalShareRequest {
-            local_path: temp.path(),
-            filename: &zip_filename,
-            mime_type: "application/zip",
-            ttl,
-            choice,
-        },
-        progress,
-    )
-    .await?;
-
-    Ok((link, in_drive))
+    Ok(prefix)
 }
 
-/// What the share modal shows before the user commits to a folder share.
-///
-/// `within_limits` is decided here, against the same constants the mint
-/// enforces, so the modal's disabled state cannot drift from what the backend
-/// will actually accept.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FolderSharePreflight {
-    pub total_bytes: u64,
-    pub file_count: u64,
-    pub within_limits: bool,
-    pub limit_bytes: u64,
-    pub limit_files: u64,
+/// The plaintext name the recipient page titles itself with: the shared
+/// folder's last path segment, or the drive label for a whole-drive share —
+/// the same choice the console's mint makes for its rows.
+fn folder_share_display_name<'a>(folder_label: &'a str, path_prefix: &'a str) -> &'a str {
+    path_prefix
+        .rsplit('/')
+        .next()
+        .filter(|segment| !segment.is_empty())
+        .unwrap_or(folder_label)
 }
 
-/// Measure a folder so the share modal can show its size and refuse an
-/// oversized folder before the user waits through a walk that will be rejected.
+/// Map hcfs-client's folder-share failures onto the app error taxonomy. The
+/// one case a user can act on — the server does not know this drive — stays a
+/// `Validation` message the share modal shows verbatim; everything else is a
+/// transport-shaped `Hcfs` error.
+fn map_folder_share_error(e: hcfs_client::client::folder_share::FolderShareError) -> AppError {
+    match e {
+        hcfs_client::client::folder_share::FolderShareError::FolderNotRegistered => {
+            AppError::Validation("This drive isn't registered on the server yet. Let it finish a sync, then share again.".into())
+        }
+        other => AppError::Hcfs(format!("create_folder_share: {other}")),
+    }
+}
+
+/// Inner folder-share mint shared by the in-app IPC and the Finder
+/// right-click. EVERY gate lives here rather than in the commands — the same
+/// lesson the zip pipeline learned: the Finder path calls this directly, and
+/// a guard sitting one level up would silently not cover it.
 ///
-/// Measured by the packer's own walk rules — see `zip_dir::measure_directory`
-/// for why `dir_stats_recursive` is the wrong source.
-#[cfg(any(unix, windows))]
-#[tauri::command]
-pub async fn hcfs_folder_share_preflight(
-    state: tauri::State<'_, AppState>,
-    folder_label: String,
-    relative_path: String,
-) -> Result<FolderSharePreflight> {
-    let account_id = state.current_account_id()?;
-
-    // Gated like the mint: this walks the user's filesystem on a blocking
-    // thread, so it must not be a free primitive for anything running in the
-    // renderer on a server that doesn't even offer sharing.
-    require_shares_supported(&state, &account_id).await?;
-
+/// The mint is one metadata POST, so two zip-era guards are deliberately
+/// absent: no settlement check (the recipient browses the SERVER's state, not
+/// this disk, so a half-downloaded local copy cannot corrupt the share) and
+/// no billing eligibility gate (nothing is uploaded — the shared bytes were
+/// already paid for when they were stored).
+pub(crate) async fn create_folder_share_inner(
+    state: &AppState,
+    account_id: &str,
+    folder_label: &str,
+    relative_path: &str,
+    ttl: ShareTtl,
+    choice: ShareChoice,
+) -> Result<ShareLink> {
     let pool = state.pool()?;
-    let sync_root = sync_root_for_label(pool, &account_id, &folder_label).await?;
-    let dir_path = resolve_inside_sync_root(&sync_root, &relative_path).await?;
-    // Same refusal the mint gives, rather than letting `read_dir` fail on a
-    // regular file and surfacing an opaque OS error.
-    if !tokio::fs::metadata(&dir_path).await?.is_dir() {
-        return Err(AppError::Validation("This entry is not a folder".into()));
+    let path_prefix = folder_share_path_prefix(relative_path)?;
+
+    require_folder_shares_supported(state, account_id).await?;
+
+    // Resolve the drive's wire identity ONCE and thread it down (resolver
+    // call discipline). The strict resolver: minting against a label with no
+    // local row is a caller bug, and its "Unknown sync folder label"
+    // Validation matches the file share's `sync_root_for_label` refusal.
+    let identity = crate::sync::identity::resolve_drive_identity(pool, account_id, folder_label).await?;
+
+    // Folder shares are owner-mint-only (server v1), and a member's derived
+    // key would be wrong anyway — the drive's file key belongs to the OWNER's
+    // derivation chain. Refuse with a message the modal can show, instead of
+    // letting the server's folder_not_found 404 misreport it.
+    if identity.is_member {
+        return Err(AppError::Validation(
+            "Only the owner of a shared drive can share its folders as a link.".into(),
+        ));
     }
 
-    // Walking a large tree is synchronous filesystem work; keep it off the async
-    // runtime like the pack itself.
-    let measured = tokio::task::spawn_blocking(move || crate::shares::zip_dir::measure_directory(&dir_path))
-        .await
-        .map_err(|e| AppError::Io(std::io::Error::other(e)))??;
+    info!(label = %folder_label, path_prefix = %path_prefix, "Creating folder share");
 
-    Ok(FolderSharePreflight {
-        total_bytes: measured.total_bytes,
-        file_count: measured.file_count,
-        within_limits: crate::shares::zip_dir::enforce_folder_share_limits(measured).is_ok(),
-        limit_bytes: crate::shares::zip_dir::MAX_FOLDER_SHARE_BYTES,
-        limit_files: crate::shares::zip_dir::MAX_FOLDER_SHARE_ENTRIES,
+    // The DERIVED drive file key, from the same chain the sync engine and the
+    // remote preview use (`encryption_key_for_label`) — the link fragment
+    // carries this key, never folder-mnemonic entropy. Wiped on drop.
+    let mnemonic = crate::sync::remote::session_mnemonic(state)?;
+    let file_key =
+        zeroize::Zeroizing::new(crate::sync::remote::encryption_key_for_label(pool, account_id, folder_label, &mnemonic, &identity).await?);
+
+    // Drive-scoped client: `create_folder_share` sends the folder_hash from
+    // the client CONFIG, so `build_account_client`'s label-less client would
+    // be refused (`MissingFolderHash`) before any request went out.
+    let client = crate::sync::remote::build_client(pool, account_id, &identity).await?;
+    let keystore = SqliteShareKeystore::new(pool.clone());
+    let console_base = console_base_url();
+    let result = client
+        .create_folder_share(
+            &file_key,
+            &hcfs_client::client::folder_share::FolderShareOptions {
+                path_prefix,
+                display_name: folder_share_display_name(folder_label, path_prefix),
+                ttl,
+                password: choice.password(),
+                console_base_url: &console_base,
+            },
+            &keystore,
+        )
+        .await
+        .map_err(|e| {
+            warn!(error = %e, "create_folder_share failed");
+            map_folder_share_error(e)
+        })?;
+
+    Ok(ShareLink {
+        share_token: result.share_token,
+        share_url: result.share_url,
+        expires_at: result.expires_at.map(|e| e.to_rfc3339()),
+        password: choice.into_password(),
     })
 }
 
-/// Whether a folder in this settlement state must be refused a share link.
+/// Mint a live, browsable share link for a folder inside a synced drive.
 ///
-/// Split out as a named predicate because the two refusing states arrive here
-/// for different reasons — `Pending` means a child is genuinely missing,
-/// `Unknown` means we could not tell (paused drive, cold start) — and the
-/// safe answer for both is the same. Folder RENAME deliberately differs: it
-/// proceeds on `Unknown` because it is a local operation the engine reconciles,
-/// while this hands the folder's bytes to a third party.
-#[cfg(any(unix, windows))]
-fn folder_settlement_blocks_share(settlement: crate::sync::files::FolderSettlement) -> bool {
-    !matches!(settlement, crate::sync::files::FolderSettlement::Settled)
-}
-
-/// Mint a share link for a FOLDER inside a synced drive.
+/// One metadata POST against `/v1/folder-shares`: the recipient browses and
+/// downloads the drive's EXISTING ciphertext through the console's share
+/// page, so the link is live (later changes appear in it) and creation is
+/// instant regardless of folder size — nothing is packed or uploaded, which
+/// is why this command has no progress channel. `relative_path` may be empty
+/// to share the whole drive.
 ///
-/// The share engine shares one byte stream, so the folder is packed into a
-/// single `<name>.zip` and that archive is shared — a snapshot, not a live view:
-/// later changes to the folder do not appear in the link. This is the same call
-/// the macOS Finder right-click makes, deliberately, so the two entry points can
-/// never produce different artifacts.
-///
-/// Refuses a folder that is not fully settled on this device: a recipient must
-/// never receive an archive quietly missing files.
-///
-/// KNOWN GAP — the guard checks the engine's local `synced` baseline, so it
-/// catches a child this device synced before and no longer has on disk, but NOT
-/// a child that exists only on the server and was never downloaded here (a file
-/// another device uploaded, or a selective-sync excluded subtree). Those are
-/// absent from both the baseline and the disk, so the folder reads as settled
-/// and the archive silently omits them. `rename.rs` documents the same
-/// limitation for the same reason: closing it needs an engine-side accessor
-/// over hcfs-client's `state.remote`.
-///
-/// Size is bounded by the cap in `zip_dir`, applied inside
-/// [`share_directory_as_zip`] before the walk.
+/// Deliberately records NO `share_origin` row: folder shares live server-side
+/// keyed by `(folder_hash, path_prefix)`, and the owner listing resolves them
+/// back to local rows by that identity — a `share_origin` row keyed by a
+/// folder-share token would be evicted by `hcfs_list_shares`' file-share
+/// prune on the next refresh anyway.
 #[tauri::command]
 pub async fn hcfs_create_folder_share(
     state: tauri::State<'_, AppState>,
@@ -856,48 +773,203 @@ pub async fn hcfs_create_folder_share(
     ttl: String,
     visibility: String,
     password: Option<String>,
-    on_progress: Channel<ShareProgress>,
 ) -> Result<ShareLink> {
     let account_id = state.current_account_id()?;
 
-    // Validate the untrusted arguments before any disk or network work, mirroring
+    // Validate the untrusted arguments before any network work, mirroring
     // `hcfs_create_share`.
     let ttl = parse_ttl(&ttl)?;
     let choice = ShareChoice::parse(&visibility, password)?;
 
+    create_folder_share_inner(&state, &account_id, &folder_label, &relative_path, ttl, choice).await
+}
+
+// ─── Folder-share owner ops (list / revoke / expiry) ───────────────────────
+
+/// One row of the owner's folder-share listing, resolved against this
+/// device's keystore. Mirrors the server's listing fields (camelCased,
+/// timestamps as RFC 3339 strings) plus the local resolution.
+///
+/// The server returns `token_hash` (blake3 hex) only — a folder-share
+/// token is never echoed after create. A row minted on THIS machine
+/// matches a token in the persistent SQLite keystore
+/// (`folder_share_token_hash(stored) == token_hash`), so it comes back
+/// with the plaintext token — the handle `hcfs_revoke_folder_share` and
+/// `hcfs_update_folder_share_expiry` take — and the rebuilt recipient
+/// URL. A row minted elsewhere is view-only: `resolvable: false`, token
+/// and URL `null`.
+///
+/// Unlike the file-share listing, revoked and expired rows ARE present
+/// (with `revoked_at` set / `expires_at` in the past) until the server's
+/// reaper sweeps them; the FE renders their dead state from the row.
+/// `folder_hash` + `path_prefix` are the share's stable identity — the
+/// per-folder "Shared" badge keys on that pair (console
+/// `folderShareTarget` parity), never on `share_origin` rows.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderShareSummary {
+    pub token_hash: String,
+    pub folder_hash: String,
+    /// `""` means the share covers the whole drive.
+    pub path_prefix: String,
+    pub display_name: String,
+    /// RFC 3339 timestamp.
+    pub created_at: String,
+    /// `None` (JSON `null`) when the link stays reachable until revoked.
+    pub expires_at: Option<String>,
+    /// `Some` once the owner has revoked the share.
+    pub revoked_at: Option<String>,
+    /// Whether this device's keystore holds the plaintext token.
+    pub resolvable: bool,
+    /// Plaintext token, present only for resolvable rows.
+    pub share_token: Option<String>,
+    /// Recipient URL rebuilt from the stored secret, `None` when the row
+    /// is not resolvable on this device.
+    pub share_url: Option<String>,
+    /// Whether the link is password-protected. `None` for a foreign row:
+    /// there is no secret to inspect, so protection is UNKNOWN on this
+    /// device — reporting `false` would label a password-protected share
+    /// "public". `None` coincides with `share_url` being `None`.
+    pub is_private: Option<bool>,
+}
+
+/// Index the keystore's stored tokens by their blake3 hex — the join key
+/// the folder-share listing speaks. File-share tokens share the table and
+/// get hashed too; their hashes simply never appear in the folder listing.
+fn folder_share_secrets_by_hash(keystore: &SqliteShareKeystore) -> Result<HashMap<String, (String, ShareSecret)>> {
+    let entries = keystore.all_entries().map_err(|e| AppError::Hcfs(format!("keystore scan: {e}")))?;
+    Ok(entries
+        .into_iter()
+        .map(|(token, secret)| (folder_share_token_hash(&token), (token, secret)))
+        .collect())
+}
+
+/// Join the server's listing rows to the locally stored tokens. Pure —
+/// the IPC does the I/O — so the resolution rules are unit-testable.
+///
+/// URL rebuilding goes through `build_folder_share_url_for`, which
+/// dispatches on the stored [`ShareSecret`] variant: a password share can
+/// only ever yield its `#p=` link, same invariant as the file-share list.
+fn resolve_folder_share_rows(
+    rows: Vec<FolderShareListItem>,
+    secrets_by_hash: &HashMap<String, (String, ShareSecret)>,
+    console_base: &str,
+) -> Vec<FolderShareSummary> {
+    rows.into_iter()
+        .map(|row| {
+            let resolved = secrets_by_hash.get(&row.token_hash);
+            FolderShareSummary {
+                resolvable: resolved.is_some(),
+                share_token: resolved.map(|(token, _)| token.clone()),
+                share_url: resolved.map(|(token, secret)| build_folder_share_url_for(console_base, token, secret)),
+                is_private: resolved.map(|(_, secret)| secret.is_private()),
+                token_hash: row.token_hash,
+                folder_hash: row.folder_hash,
+                path_prefix: row.path_prefix,
+                display_name: row.display_name,
+                created_at: row.created_at.to_rfc3339(),
+                expires_at: row.expires_at.map(|e| e.to_rfc3339()),
+                revoked_at: row.revoked_at.map(|e| e.to_rfc3339()),
+            }
+        })
+        .collect()
+}
+
+/// List every folder share this account has minted, newest first —
+/// including revoked and not-yet-reaped expired rows in their dead state.
+/// Rows minted on this machine resolve against the persistent keystore
+/// (token + rebuilt URL); rows minted elsewhere come back view-only.
+///
+/// Deliberately NO `shared_link_history` integration here:
+/// `history::diff_active_lists` detects death by DISAPPEARANCE between
+/// consecutive active lists, and this listing retains dead rows until the
+/// server reaper sweeps them — a row would only "disappear" at reap time,
+/// recording a bogus end moment. The dead state is already ON the row
+/// (`revoked_at` / past `expires_at`), so the FE renders it directly,
+/// same as the console's owner page.
+///
+/// Also deliberately NO `share_origin` involvement: folder-share badge
+/// identity is `(folder_hash, path_prefix)` from these rows, and a
+/// sidecar row keyed by a folder token would be evicted by
+/// `hcfs_list_shares`' file-share prune anyway.
+#[tauri::command]
+pub async fn hcfs_list_folder_shares(state: tauri::State<'_, AppState>) -> Result<Vec<FolderShareSummary>> {
+    let account_id = state.current_account_id()?;
     let pool = state.pool()?;
-    let sync_root = sync_root_for_label(pool, &account_id, &folder_label).await?;
-    let dir_path = resolve_inside_sync_root(&sync_root, &relative_path).await?;
-    if !tokio::fs::metadata(&dir_path).await?.is_dir() {
-        return Err(AppError::Validation("This entry is not a folder".into()));
+    let client = build_account_client(pool, &account_id).await?;
+    let rows = client
+        .list_folder_shares()
+        .await
+        .map_err(|e| AppError::Hcfs(format!("list_folder_shares: {e}")))?;
+
+    let keystore = SqliteShareKeystore::new(pool.clone());
+    let secrets_by_hash = folder_share_secrets_by_hash(&keystore)?;
+    Ok(resolve_folder_share_rows(rows, &secrets_by_hash, &console_base_url()))
+}
+
+/// Revoke a folder share by its plaintext token (from a resolvable
+/// listing row). hcfs-client forgets the keystore secret on the wire
+/// success — there is no further use for it.
+///
+/// The server collapses unknown / someone else's / already-revoked
+/// tokens into one bodiless 404. That maps to `Ok(())` here, mirroring
+/// the file-share revoke's "I just tapped Revoke twice" idempotency, and
+/// the local secret is forgotten too so a token revoked from another
+/// device stops resolving on this one — but only after a capability
+/// probe confirms the 404 came from a folder-shares-capable server (a
+/// rolled-back server 404s the route itself, and its 404 says nothing
+/// about the token). The token itself never reaches a log line — it is
+/// the capability.
+#[tauri::command]
+pub async fn hcfs_revoke_folder_share(state: tauri::State<'_, AppState>, share_token: String) -> Result<()> {
+    let account_id = state.current_account_id()?;
+    let pool = state.pool()?;
+    let client = build_account_client(pool, &account_id).await?;
+    let keystore = SqliteShareKeystore::new(pool.clone());
+    match client.revoke_folder_share(&share_token, &keystore).await {
+        Ok(()) => Ok(()),
+        Err(FolderShareError::NotFound) => {
+            // A 404 normally means already-revoked / never-existed, which
+            // makes forgetting the local secret safe. But a server ROLLBACK
+            // to a build without /v1/folder-shares answers every route with
+            // the same bare 404, and forgetting on that would delete the
+            // ONLY plaintext copy of a token that still guards a live share
+            // once the server rolls forward. Probe the capability first:
+            // only a folder-shares-capable server's 404 is authoritative.
+            require_folder_shares_supported(&state, &account_id).await?;
+            if let Err(e) = keystore.forget(&share_token) {
+                warn!(error = %e, "folder-share keystore forget failed after 404 revoke (non-fatal)");
+            }
+            Ok(())
+        }
+        Err(e) => Err(AppError::Hcfs(format!("revoke_folder_share: {e}"))),
     }
+}
 
-    info!(label = %folder_label, relative_path = %relative_path, "Creating folder share");
+/// Change an existing folder share's expiry, returning the new one
+/// (`None` when the link now stays reachable until revoked). Only the
+/// expiry is mutable — same contract as `hcfs_update_share_expiry`; the
+/// PATCH response deliberately carries no token echo.
+#[tauri::command]
+pub async fn hcfs_update_folder_share_expiry(state: tauri::State<'_, AppState>, share_token: String, ttl: String) -> Result<Option<String>> {
+    let account_id = state.current_account_id()?;
+    let ttl = parse_ttl(&ttl)?;
 
-    // The settled-folder guard and the size cap both live inside
-    // `share_directory_as_zip`, so the file-manager right-click gets them too.
-    // It hands back the canonical `(label, relative_path)` it resolved.
-    let progress = share_progress_forwarder(on_progress);
-    let (link, resolved) = share_directory_as_zip(&state, &account_id, &dir_path, ttl, choice, Some(progress)).await?;
+    require_folder_shares_supported(&state, &account_id).await?;
 
-    // Origin sidecar so the folder row shows the same "Shared" badge a file
-    // does. Best-effort exactly like the file path: the link is already live,
-    // and a failed write costs only the badge.
-    //
-    // Keyed on the path the funnel RESOLVED, not the caller's argument: a
-    // non-canonical spelling of the same directory would otherwise write a
-    // sidecar row no listing can ever match.
-    let owner = account_key(&account_id);
-    let (origin_label, origin_rel) = resolved.unwrap_or((folder_label, relative_path));
-    if let Err(e) = origin::record(pool, &link.share_token, &owner, &origin_label, &origin_rel).await {
-        warn!(
-            share_token = %link.share_token,
-            error = %e,
-            "Failed to record share_origin for a folder share (the share itself succeeded)"
-        );
-    }
+    let pool = state.pool()?;
+    let client = build_account_client(pool, &account_id).await?;
+    let expires_at = client.update_folder_share_expiry(&share_token, ttl).await.map_err(|e| {
+        warn!(error = %e, "update_folder_share_expiry failed");
+        // The server's bodiless 404 covers unknown / not-yours / revoked /
+        // already-expired alike — say what the user can act on instead.
+        match e {
+            FolderShareError::NotFound => AppError::Validation("This link is no longer active, so its expiry cannot be changed.".into()),
+            other => AppError::Hcfs(format!("update_folder_share_expiry: {other}")),
+        }
+    })?;
 
-    Ok(link)
+    Ok(expires_at.map(|e| e.to_rfc3339()))
 }
 
 /// Generate a share password for the modal to pre-fill.
@@ -1187,48 +1259,6 @@ mod tests {
         }
     }
 
-    /// A folder share resolves its path through the same guard the file share
-    /// uses, so a `..` segment cannot walk out of the drive and zip an
-    /// arbitrary directory.
-    #[tokio::test]
-    async fn folder_share_path_resolution_rejects_escaping_the_drive() {
-        let root = TempDir::new().expect("temp dir");
-        std::fs::create_dir_all(root.path().join("inside")).expect("mkdir");
-
-        let err = resolve_inside_sync_root(root.path(), "../outside").await.expect_err("must refuse");
-
-        assert!(
-            matches!(err, AppError::Validation(_)),
-            "escaping the root is a Validation error, got: {err:?}"
-        );
-    }
-
-    /// The dir check that keeps `hcfs_create_folder_share` from accepting a file
-    /// — the mirror of `create_share_inner`'s "Cannot share a directory".
-    #[tokio::test]
-    async fn folder_share_path_resolution_tells_a_file_from_a_folder() {
-        let root = TempDir::new().expect("temp dir");
-        std::fs::write(root.path().join("a.txt"), b"x").expect("write");
-        std::fs::create_dir(root.path().join("photos")).expect("mkdir");
-
-        let file = resolve_inside_sync_root(root.path(), "a.txt").await.expect("resolve file");
-        let folder = resolve_inside_sync_root(root.path(), "photos").await.expect("resolve folder");
-
-        assert!(!tokio::fs::metadata(&file).await.expect("stat file").is_dir());
-        assert!(tokio::fs::metadata(&folder).await.expect("stat folder").is_dir());
-    }
-
-    /// Folder share refuses an unsettled folder, unlike rename which proceeds on
-    /// `Unknown`. Both non-`Settled` states must map to the same refusal here.
-    #[test]
-    fn only_a_settled_folder_may_be_shared() {
-        use crate::sync::files::FolderSettlement;
-
-        assert!(folder_settlement_blocks_share(FolderSettlement::Pending));
-        assert!(folder_settlement_blocks_share(FolderSettlement::Unknown));
-        assert!(!folder_settlement_blocks_share(FolderSettlement::Settled));
-    }
-
     #[test]
     fn console_base_url_defaults_when_override_absent_or_blank() {
         let dev = true;
@@ -1511,5 +1541,230 @@ mod tests {
             let err = ShareChoice::parse(bad, None).expect_err("must reject");
             assert!(matches!(err, AppError::Validation(_)), "{bad:?} → {err:?}");
         }
+    }
+
+    // ─── Folder-share mint helpers ─────────────────────────────────────────
+
+    #[test]
+    fn folder_share_path_prefix_trims_and_accepts_drive_relative_paths() {
+        assert_eq!(folder_share_path_prefix("").expect("root"), "");
+        assert_eq!(folder_share_path_prefix("photos").expect("flat"), "photos");
+        assert_eq!(folder_share_path_prefix("trips/photos").expect("nested"), "trips/photos");
+        // A stray separator must not change WHICH folder is shared, and "/"
+        // alone collapses to the whole-drive prefix rather than being refused
+        // as an absolute path.
+        assert_eq!(folder_share_path_prefix("/photos/").expect("trimmed"), "photos");
+        assert_eq!(folder_share_path_prefix("/").expect("bare slash"), "");
+    }
+
+    /// The wire must never see a path that could name anything outside the
+    /// drive — same refusal set as `resolve_inside_sync_root`, minus the disk.
+    #[test]
+    fn folder_share_path_prefix_rejects_escaping_components() {
+        for bad in ["..", "../outside", "a/../b", "./a"] {
+            let err = folder_share_path_prefix(bad).expect_err("must reject");
+            assert!(matches!(err, AppError::Validation(_)), "{bad:?} → {err:?}");
+        }
+    }
+
+    /// Last path segment for a nested folder, the drive label at root — the
+    /// console mint's `displayName` rule, mirrored so the recipient page
+    /// titles itself the same regardless of which client minted the link.
+    #[test]
+    fn folder_share_display_name_mirrors_the_console_choice() {
+        assert_eq!(folder_share_display_name("Drive", ""), "Drive");
+        assert_eq!(folder_share_display_name("Drive", "photos"), "photos");
+        assert_eq!(folder_share_display_name("Drive", "trips/photos"), "photos");
+    }
+
+    /// `folder_not_found` is the one create failure the user can fix (sync
+    /// the drive first), so it must surface as showable Validation text; the
+    /// indistinct transport failures stay `Hcfs`.
+    #[test]
+    fn folder_share_errors_map_onto_the_app_taxonomy() {
+        use hcfs_client::client::folder_share::FolderShareError;
+
+        let err = map_folder_share_error(FolderShareError::FolderNotRegistered);
+        assert!(matches!(err, AppError::Validation(_)), "got {err:?}");
+
+        let err = map_folder_share_error(FolderShareError::NotFound);
+        assert!(matches!(err, AppError::Hcfs(_)), "got {err:?}");
+
+        let err = map_folder_share_error(FolderShareError::MissingFolderHash);
+        assert!(matches!(err, AppError::Hcfs(_)), "got {err:?}");
+    }
+
+    // ─── Folder-share listing resolution ───────────────────────────────────
+
+    fn mk_folder_row(token_hash: &str, path_prefix: &str) -> FolderShareListItem {
+        FolderShareListItem {
+            token_hash: token_hash.to_string(),
+            folder_hash: "abcdef0123456789".to_string(),
+            path_prefix: path_prefix.to_string(),
+            display_name: "Photos".to_string(),
+            created_at: Utc::now(),
+            expires_at: None,
+            revoked_at: None,
+        }
+    }
+
+    /// Wire pin for the listing row the FE consumes: exactly the server
+    /// fields camelCased plus the three resolution fields. The shares
+    /// page and the (folderHash, pathPrefix) badge identity read these keys.
+    #[test]
+    fn folder_share_summary_pins_wire_shape() {
+        use std::collections::BTreeSet;
+
+        let summary = FolderShareSummary {
+            token_hash: "ab".repeat(32),
+            folder_hash: "abcdef0123456789".to_string(),
+            path_prefix: "photos".to_string(),
+            display_name: "Photos".to_string(),
+            created_at: Utc::now().to_rfc3339(),
+            expires_at: None,
+            revoked_at: None,
+            resolvable: true,
+            share_token: Some("tok".to_string()),
+            share_url: Some("https://x.io/share/folder/tok#k=AA".to_string()),
+            is_private: Some(false),
+        };
+        let json = serde_json::to_value(&summary).expect("serialize FolderShareSummary");
+        let keys: BTreeSet<String> = json.as_object().expect("object").keys().cloned().collect();
+        let expected: BTreeSet<String> = [
+            "tokenHash",
+            "folderHash",
+            "pathPrefix",
+            "displayName",
+            "createdAt",
+            "expiresAt",
+            "revokedAt",
+            "resolvable",
+            "shareToken",
+            "shareUrl",
+            "isPrivate",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        assert_eq!(keys, expected, "FolderShareSummary wire keys drifted — FE shares.ts reads these");
+    }
+
+    /// The resolution rules in one place: a hash with a stored token
+    /// resolves (token + URL + privateness from the secret), a foreign
+    /// hash comes back view-only, and a private secret can only ever
+    /// rebuild its `#p=` link.
+    #[test]
+    fn resolve_folder_share_rows_joins_rows_to_stored_tokens() {
+        use hcfs_client::client::folder_share::build_folder_share_url;
+
+        let public_key = [7u8; 32];
+        let secrets: HashMap<String, (String, ShareSecret)> = [
+            (
+                folder_share_token_hash("tok-pub"),
+                ("tok-pub".to_string(), ShareSecret::Public(public_key)),
+            ),
+            (
+                folder_share_token_hash("tok-priv"),
+                ("tok-priv".to_string(), ShareSecret::Private(vec![2u8; 89])),
+            ),
+        ]
+        .into_iter()
+        .collect();
+
+        let rows = vec![
+            mk_folder_row(&folder_share_token_hash("tok-pub"), "photos"),
+            mk_folder_row(&folder_share_token_hash("tok-priv"), ""),
+            mk_folder_row(&folder_share_token_hash("minted-on-another-device"), "docs"),
+        ];
+        let out = resolve_folder_share_rows(rows, &secrets, "https://console.example.com");
+        assert_eq!(out.len(), 3);
+
+        let public = &out[0];
+        assert!(public.resolvable);
+        assert_eq!(public.share_token.as_deref(), Some("tok-pub"));
+        assert_eq!(
+            public.share_url.as_deref(),
+            Some(build_folder_share_url("https://console.example.com", "tok-pub", &public_key).as_str()),
+        );
+        assert_eq!(public.is_private, Some(false));
+        assert_eq!(public.path_prefix, "photos");
+
+        let private = &out[1];
+        assert!(private.resolvable);
+        assert_eq!(private.is_private, Some(true));
+        let url = private.share_url.as_deref().expect("private row rebuilds a URL");
+        assert!(url.contains("#p="), "private secret must yield its #p= link: {url}");
+        assert!(!url.contains("#k="), "private secret must never yield a #k= link: {url}");
+
+        let foreign = &out[2];
+        assert!(!foreign.resolvable, "a hash with no stored token is view-only");
+        assert_eq!(foreign.share_token, None);
+        assert_eq!(foreign.share_url, None);
+        // Protection is unknown without the secret — `None`, never a
+        // fabricated `false` that would label a protected share "public".
+        assert_eq!(foreign.is_private, None);
+        assert_eq!(foreign.folder_hash, "abcdef0123456789", "identity fields survive for the badge");
+        assert_eq!(foreign.path_prefix, "docs");
+    }
+
+    /// Dead rows pass through with their timestamps intact — the listing
+    /// retains revoked/expired rows until the server reaper sweeps them,
+    /// and the FE renders the dead state from `revokedAt`/`expiresAt`.
+    #[test]
+    fn resolve_folder_share_rows_keeps_dead_state_timestamps() {
+        let now = Utc::now();
+        let mut row = mk_folder_row(&folder_share_token_hash("tok"), "photos");
+        row.expires_at = Some(now);
+        row.revoked_at = Some(now);
+        let out = resolve_folder_share_rows(vec![row], &HashMap::new(), "https://x.io");
+        assert_eq!(out[0].expires_at.as_deref(), Some(now.to_rfc3339().as_str()));
+        assert_eq!(out[0].revoked_at.as_deref(), Some(now.to_rfc3339().as_str()));
+    }
+
+    /// End-to-end over the real keystore: a token minted into a temp
+    /// `SqliteShareKeystore` must come back keyed by exactly the blake3
+    /// hex the server's listing would carry for it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn folder_share_secrets_by_hash_resolves_a_minted_token() {
+        use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+        use std::str::FromStr;
+
+        let dir = TempDir::new().expect("tempdir");
+        let db_path = dir.path().join("test.db");
+        let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))
+            .expect("opts")
+            .create_if_missing(true);
+        let pool = SqlitePoolOptions::new().max_connections(1).connect_with(opts).await.expect("pool");
+        crate::utils::schema::ensure_table_schema(&pool).await.expect("schema");
+
+        let keystore = SqliteShareKeystore::new(pool);
+        let secret = ShareSecret::Public([9u8; 32]);
+        keystore.put("minted-token", &secret).expect("put");
+
+        let by_hash = folder_share_secrets_by_hash(&keystore).expect("scan");
+        let (token, stored) = by_hash.get(&folder_share_token_hash("minted-token")).expect("hash must match");
+        assert_eq!(token, "minted-token");
+        assert_eq!(stored, &secret);
+    }
+
+    /// Same source-text pin as `list_shares_never_builds_a_url_from_a_raw_key`,
+    /// for the folder listing's URL rebuild: `resolve_folder_share_rows` must
+    /// go through `build_folder_share_url_for` (variant dispatch), never the
+    /// raw-key `build_folder_share_url`, which can only emit a `#k=` link.
+    #[test]
+    fn folder_listing_never_builds_a_url_from_a_raw_key() {
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/shares/commands.rs")).expect("read commands.rs");
+        let body = fn_body(&src, "fn resolve_folder_share_rows(");
+        assert!(
+            body.contains("build_folder_share_url_for("),
+            "resolve_folder_share_rows must rebuild URLs via build_folder_share_url_for so a \
+             password-protected folder share can only ever yield its #p= link",
+        );
+        let without_correct_calls = body.replace("build_folder_share_url_for(", "");
+        assert!(
+            !without_correct_calls.contains("build_folder_share_url("),
+            "resolve_folder_share_rows must NOT call build_folder_share_url directly — that takes \
+             a raw key and would emit a password-free #k= link for a password-protected share",
+        );
     }
 }

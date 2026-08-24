@@ -30,10 +30,6 @@ pub use listing::{FileEntry, GroupedListing, list_sync_folder, list_sync_folder_
 pub use recent::{RecentFile, get_recent_files};
 pub use rename::{FileRenameRequest, RenameEntryResult, rename_entry};
 pub use resolve::{FilePathInfo, export_file, resolve_file_info, resolve_file_path};
-// Reached from `crate::shares` as `crate::sync::files::folder_is_settled` — the
-// folder-share mint asks the same "is this folder settled?" question the folder
-// rename guard does.
-pub(crate) use synced_state::{FolderSettlement, folder_is_settled};
 pub use user_files::{
     DateRangeFilter, FileFilterCriteria, LabelStats, UserFileEntry, UserFilesResult, filter_file_entries, get_user_files, search_user_files_recursive,
 };

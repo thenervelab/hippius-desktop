@@ -63,7 +63,13 @@ pub(crate) async fn get_server_url(pool: &SqlitePool, account_id: &str) -> Resul
 /// "Decryption failed - wrong password?" and surfaces as "Failed to load
 /// remote files" in the browse-folder dialog (and the matching failure in
 /// `download_remote_file`).
-async fn encryption_key_for_label(pool: &SqlitePool, account_id: &str, label: &str, mnemonic: &str, identity: &DriveIdentity) -> Result<[u8; 32]> {
+pub(crate) async fn encryption_key_for_label(
+    pool: &SqlitePool,
+    account_id: &str,
+    label: &str,
+    mnemonic: &str,
+    identity: &DriveIdentity,
+) -> Result<[u8; 32]> {
     let password = crate::sync::config::get_drive_password(pool, account_id, Some(mnemonic)).await?;
 
     // A member drive's folder key comes from the OWNER's invite, sealed into
@@ -109,7 +115,7 @@ async fn encryption_key_for_label(pool: &SqlitePool, account_id: &str, label: &s
 /// previous bare `String` left a plaintext master-mnemonic copy in freed heap
 /// after every preview/download (audit R-20). Callers pass `&mnemonic` to
 /// `&str` params, which deref-coerces unchanged.
-fn session_mnemonic(state: &AppState) -> Result<zeroize::Zeroizing<String>> {
+pub(crate) fn session_mnemonic(state: &AppState) -> Result<zeroize::Zeroizing<String>> {
     // A poisoned mutex flows through `?` to `AppError::Lock` via the blanket
     // `From<PoisonError>` impl (matching every other `state.auth.lock()?` call
     // site), instead of a hand-rolled `Other`. The guard never crosses an await
@@ -121,7 +127,7 @@ fn session_mnemonic(state: &AppState) -> Result<zeroize::Zeroizing<String>> {
         .ok_or(AppError::NotReady(crate::error::NotReadyKind::NoEncryptionKey))
 }
 
-async fn build_client(pool: &SqlitePool, account_id: &str, identity: &DriveIdentity) -> Result<hcfs_client::client::HcfsClient> {
+pub(crate) async fn build_client(pool: &SqlitePool, account_id: &str, identity: &DriveIdentity) -> Result<hcfs_client::client::HcfsClient> {
     let server_url = get_server_url(pool, account_id).await?;
     let bearer_token = get_api_token(pool, account_id)
         .await?

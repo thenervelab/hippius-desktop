@@ -14,6 +14,7 @@ import { useAtomValue } from "jotai";
 import {
   Check,
   Copy as CopyIcon,
+  Folder as FolderIcon,
   Loader2,
   MoreVertical,
   RefreshCcw,
@@ -40,12 +41,17 @@ import TableActionMenu, {
 } from "@/app/components/ui/alt-table/TableActionMenu";
 import { FramedDialog } from "@/components/ui/FramedDialog";
 import {
+  listFolderShares,
   listShares,
-  updateShareExpiry,
-  type ShareTtl,
+  revokeFolderShare,
   revokeShare,
+  updateFolderShareExpiry,
+  updateShareExpiry,
+  type FolderShareSummary,
   type ShareSummary,
+  type ShareTtl,
 } from "@/app/lib/tauri/shares";
+import { FOLDER_SHARES_QUERY_KEY } from "@/app/lib/hooks/useFolderShares";
 import {
   clearShareHistory,
   listShareHistory,
@@ -53,14 +59,24 @@ import {
   type HistoryEndReason,
   type ShareHistoryEntry,
 } from "@/app/lib/tauri/shareHistory";
-import { shareFeatureEnabledAtom } from "@/app/lib/global-atoms/sharesAtoms";
+import {
+  folderShareFeatureEnabledAtom,
+  shareFeatureEnabledAtom,
+} from "@/app/lib/global-atoms/sharesAtoms";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
 import { formatBytes } from "@/lib/utils/formatBytes";
 import { formatRelative } from "@/app/lib/utils/timeRelative";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { cn } from "@/lib/utils";
 import { LIVE_DATA_REFRESH_MS } from "@/lib/constants";
-import { pickHistoryRowDisplay } from "./shareRowDisplay";
+import {
+  activeShareRowId,
+  folderSharePathLabel,
+  folderShareRowPlan,
+  mergeActiveShareRows,
+  pickHistoryRowDisplay,
+  type ActiveShareRow,
+} from "./shareRowDisplay";
 
 const SHARES_QUERY_KEY = "shares-list";
 const HISTORY_QUERY_KEY = "shares-history-list";
@@ -70,12 +86,17 @@ const HISTORY_QUERY_KEY = "shares-history-list";
 // destructive (red frame border + red icon badge).
 const DESTRUCTIVE_BG = "bg-[#fc7d73]";
 
+/** What the revoke-confirmation dialog is about to revoke: the two share
+ *  kinds go through different IPCs but share the confirm idiom. */
+type PendingRevoke = { kind: "file" | "folder"; token: string };
+
 export default function MySharesPage() {
   const { polkadotAddress } = useWalletAuth();
   const shareEnabled = useAtomValue(shareFeatureEnabledAtom);
+  const folderSharesEnabled = useAtomValue(folderShareFeatureEnabledAtom);
   const queryClient = useQueryClient();
   const router = useRouter();
-  const [tokenPendingRevoke, setTokenPendingRevoke] = React.useState<string | null>(null);
+  const [pendingRevoke, setPendingRevoke] = React.useState<PendingRevoke | null>(null);
   const [revokeBusy, setRevokeBusy] = React.useState(false);
   const [busyToken, setBusyToken] = React.useState<string | null>(null);
   const [clearAllOpen, setClearAllOpen] = React.useState(false);
@@ -84,6 +105,18 @@ export default function MySharesPage() {
     queryKey: [SHARES_QUERY_KEY, polkadotAddress],
     queryFn: () => listShares(),
     enabled: Boolean(polkadotAddress) && shareEnabled,
+    staleTime: 0,
+    refetchOnWindowFocus: true,
+    refetchInterval: LIVE_DATA_REFRESH_MS,
+  });
+
+  // Gated on the `folder_shares` capability, not just the share flag: the
+  // endpoint only exists on new servers, so an old deployment sees no
+  // request and the page simply shows no folder rows.
+  const { data: folderData } = useQuery({
+    queryKey: [FOLDER_SHARES_QUERY_KEY, polkadotAddress],
+    queryFn: () => listFolderShares(),
+    enabled: Boolean(polkadotAddress) && shareEnabled && folderSharesEnabled,
     staleTime: 0,
     refetchOnWindowFocus: true,
     refetchInterval: LIVE_DATA_REFRESH_MS,
@@ -98,21 +131,29 @@ export default function MySharesPage() {
     refetchInterval: LIVE_DATA_REFRESH_MS,
   });
 
-  const queueRevoke = (token: string) => setTokenPendingRevoke(token);
+  const mergedRows = React.useMemo(
+    () => mergeActiveShareRows(data, folderData),
+    [data, folderData],
+  );
 
   const confirmRevoke = async () => {
-    if (!tokenPendingRevoke) return;
+    if (!pendingRevoke) return;
     setRevokeBusy(true);
     try {
-      await revokeShare(tokenPendingRevoke);
+      if (pendingRevoke.kind === "folder") {
+        await revokeFolderShare(pendingRevoke.token);
+        queryClient.invalidateQueries({ queryKey: [FOLDER_SHARES_QUERY_KEY, polkadotAddress] });
+      } else {
+        await revokeShare(pendingRevoke.token);
+        queryClient.invalidateQueries({ queryKey: [SHARES_QUERY_KEY, polkadotAddress] });
+        queryClient.invalidateQueries({ queryKey: [HISTORY_QUERY_KEY, polkadotAddress] });
+      }
       toast.success("Share link revoked");
-      queryClient.invalidateQueries({ queryKey: [SHARES_QUERY_KEY, polkadotAddress] });
-      queryClient.invalidateQueries({ queryKey: [HISTORY_QUERY_KEY, polkadotAddress] });
     } catch (err) {
       toast.error(`Could not revoke share link: ${errorMessage(err)}`);
     } finally {
       setRevokeBusy(false);
-      setTokenPendingRevoke(null);
+      setPendingRevoke(null);
     }
   };
 
@@ -137,6 +178,25 @@ export default function MySharesPage() {
           : "Link expiry updated",
       );
       queryClient.invalidateQueries({ queryKey: [SHARES_QUERY_KEY, polkadotAddress] });
+    } catch (err) {
+      toast.error(`Could not update expiry: ${errorMessage(err)}`);
+    } finally {
+      setBusyToken(null);
+    }
+  };
+
+  // Folder twin of `onChangeExpiry` — same flat expiry presets, different IPC
+  // and cache key.
+  const onChangeFolderExpiry = async (token: string, ttl: ShareTtl) => {
+    setBusyToken(token);
+    try {
+      const expiresAt = await updateFolderShareExpiry(token, ttl);
+      toast.success(
+        expiresAt === null
+          ? "Link will stay active until you revoke it"
+          : "Link expiry updated",
+      );
+      queryClient.invalidateQueries({ queryKey: [FOLDER_SHARES_QUERY_KEY, polkadotAddress] });
     } catch (err) {
       toast.error(`Could not update expiry: ${errorMessage(err)}`);
     } finally {
@@ -175,9 +235,9 @@ export default function MySharesPage() {
             {/* Active Shares card */}
             <SectionCard
               title="Active Shares"
-              count={data?.length ?? 0}
-              countLabel="active link"
-              countLabelPlural="active links"
+              count={mergedRows.length}
+              countLabel="link"
+              countLabelPlural="links"
             >
               {isLoading && (
                 <div className="flex items-center gap-2 text-sm text-grey-40 dark:text-grey-dark-600 px-4 py-6">
@@ -190,20 +250,21 @@ export default function MySharesPage() {
                   Couldn&apos;t load shares: {errorMessage(error)}
                 </p>
               )}
-              {!isLoading && !error && data && data.length === 0 && (
+              {!isLoading && !error && mergedRows.length === 0 && (
                 <NoEntriesFound
                   title="No shared links yet"
-                  description='Right-click any synced file and choose "Share via link" to mint a public link. Active links appear here with options to copy, refresh the expiry, or revoke.'
+                  description='Right-click any synced file or folder and choose "Share via link" to mint a public link. Active links appear here with options to copy, refresh the expiry, or revoke.'
                   cardView={false}
                   className="!bg-white dark:!bg-black-600 p-4 sm:p-8"
                 />
               )}
-              {!isLoading && data && data.length > 0 && (
+              {!isLoading && mergedRows.length > 0 && (
                 <ActiveSharesTable
-                  rows={data}
+                  rows={mergedRows}
                   onCopy={onCopy}
-                  onRevoke={queueRevoke}
+                  onRevoke={(kind, token) => setPendingRevoke({ kind, token })}
                   onChangeExpiry={onChangeExpiry}
+                  onChangeFolderExpiry={onChangeFolderExpiry}
                   busyToken={busyToken}
                 />
               )}
@@ -242,6 +303,13 @@ export default function MySharesPage() {
                   </button>
                 }
               >
+                {/* Folder shares are deliberately absent here: their dead
+                    state lives ON the listing row above until the server
+                    reaper sweeps it, so history only tracks file links. */}
+                <p className="px-4 pt-3 text-xs text-grey-50 dark:text-grey-dark-600">
+                  File links that expired or were revoked. Folder links keep
+                  their revoked or expired state in the list above instead.
+                </p>
                 <HistoryTable rows={historyData} onRemove={onRemoveHistory} />
               </SectionCard>
             )}
@@ -250,8 +318,8 @@ export default function MySharesPage() {
 
         {/* Revoke confirmation */}
         <FramedDialog
-          open={tokenPendingRevoke !== null}
-          onClose={() => { if (!revokeBusy) setTokenPendingRevoke(null); }}
+          open={pendingRevoke !== null}
+          onClose={() => { if (!revokeBusy) setPendingRevoke(null); }}
           title="Revoke this link?"
           icon={<Trash2 className="size-[18px] text-white" strokeWidth={2.5} />}
           borderClassName={DESTRUCTIVE_BG}
@@ -276,7 +344,7 @@ export default function MySharesPage() {
           <Button
             variant="defaultStable"
             size="auto"
-            onClick={() => setTokenPendingRevoke(null)}
+            onClick={() => setPendingRevoke(null)}
             disabled={revokeBusy}
             className={cn(
               "mt-3 h-[52px] w-full rounded-[6px] border bg-transparent text-base font-normal tracking-[-0.36px]",
@@ -379,64 +447,132 @@ function SectionCard({ title, count, countLabel, countLabelPlural, action, child
 /*  Active shares table                                                       */
 /* -------------------------------------------------------------------------- */
 
-const activeColumnHelper = createColumnHelper<ShareSummary>();
+const activeColumnHelper = createColumnHelper<ActiveShareRow>();
 
 interface ActiveSharesTableProps {
-  rows: ShareSummary[];
+  rows: ActiveShareRow[];
   onCopy: (url: string | null) => void;
-  onRevoke: (token: string) => void;
+  onRevoke: (kind: "file" | "folder", token: string) => void;
   onChangeExpiry: (token: string, ttl: ShareTtl) => void;
+  onChangeFolderExpiry: (token: string, ttl: ShareTtl) => void;
   busyToken: string | null;
 }
 
-function ActiveSharesTable({ rows, onCopy, onRevoke, onChangeExpiry, busyToken }: ActiveSharesTableProps) {
+/** Expiry sort rank shared by both kinds: never-expiring links sort after
+ *  every dated one rather than collapsing to NaN. */
+function expiryRank(expiresAt: string | null): number {
+  return expiresAt === null ? Number.POSITIVE_INFINITY : Date.parse(expiresAt);
+}
+
+function ActiveSharesTable({
+  rows,
+  onCopy,
+  onRevoke,
+  onChangeExpiry,
+  onChangeFolderExpiry,
+  busyToken,
+}: ActiveSharesTableProps) {
   const [sorting, setSorting] = React.useState<SortingState>([]);
 
   const columns = React.useMemo(
     () => [
-      activeColumnHelper.accessor("filename", {
-        id: "name",
-        header: "Name",
-        enableSorting: true,
-        cell: (info) => <ActiveNameCell row={info.row.original} />,
-      }),
+      activeColumnHelper.accessor(
+        (row) => (row.kind === "file" ? row.file.filename : row.folder.displayName),
+        {
+          id: "name",
+          header: "Name",
+          enableSorting: true,
+          cell: (info) => {
+            const row = info.row.original;
+            return row.kind === "file" ? (
+              <ActiveNameCell row={row.file} />
+            ) : (
+              <FolderNameCell row={row.folder} />
+            );
+          },
+        },
+      ),
       activeColumnHelper.display({
         id: "link",
         header: "Link",
         enableSorting: false,
-        cell: ({ row }) => <LinkCell shareUrl={row.original.shareUrl} />,
+        cell: ({ row }) => {
+          const original = row.original;
+          if (original.kind === "file") {
+            return <LinkCell shareUrl={original.file.shareUrl} />;
+          }
+          // A dead folder link must not be handed out even when this device
+          // could still rebuild its URL, so the cell collapses to a dash.
+          const plan = folderShareRowPlan(original.folder);
+          if (plan.state !== "live") {
+            return (
+              <span className="text-xs text-grey-50 dark:text-grey-dark-600">—</span>
+            );
+          }
+          return <LinkCell shareUrl={original.folder.shareUrl} />;
+        },
       }),
-      activeColumnHelper.accessor("plaintextSize", {
-        id: "size",
-        header: "Size",
-        enableSorting: true,
-        cell: (info) => (
-          <span className="font-medium text-grey-20 dark:text-grey-dark-200">
-            {formatBytes(info.getValue())}
-          </span>
-        ),
-      }),
-      activeColumnHelper.accessor((row) => Date.parse(row.createdAt), {
-        id: "created",
-        header: "Created",
-        enableSorting: true,
-        cell: (info) => (
-          <span className="font-medium text-grey-20 dark:text-grey-dark-200">
-            {formatRelative(info.row.original.createdAt)}
-          </span>
-        ),
-      }),
-      // A never-expiring link sorts after every dated one rather than
-      // collapsing to NaN, which would scatter such rows arbitrarily.
       activeColumnHelper.accessor(
-        (row) =>
-          row.expiresAt === null ? Number.POSITIVE_INFINITY : Date.parse(row.expiresAt),
+        (row) => (row.kind === "file" ? row.file.plaintextSize : -1),
+        {
+          id: "size",
+          header: "Size",
+          enableSorting: true,
+          cell: (info) => {
+            const row = info.row.original;
+            return (
+              <span className="font-medium text-grey-20 dark:text-grey-dark-200">
+                {/* A live folder share has no fixed size — it exposes the
+                    folder's CURRENT contents — so the cell doubles as the
+                    kind marker (console parity). */}
+                {row.kind === "file" ? formatBytes(row.file.plaintextSize) : "Folder"}
+              </span>
+            );
+          },
+        },
+      ),
+      activeColumnHelper.accessor(
+        (row) => Date.parse(row.kind === "file" ? row.file.createdAt : row.folder.createdAt),
+        {
+          id: "created",
+          header: "Created",
+          enableSorting: true,
+          cell: (info) => {
+            const row = info.row.original;
+            const createdAt = row.kind === "file" ? row.file.createdAt : row.folder.createdAt;
+            return (
+              <span className="font-medium text-grey-20 dark:text-grey-dark-200">
+                {formatRelative(createdAt)}
+              </span>
+            );
+          },
+        },
+      ),
+      activeColumnHelper.accessor(
+        (row) => expiryRank(row.kind === "file" ? row.file.expiresAt : row.folder.expiresAt),
         {
           id: "endsAt",
           header: "Expires",
           enableSorting: true,
           cell: (info) => {
-            const original = info.row.original.expiresAt;
+            const row = info.row.original;
+            if (row.kind === "folder") {
+              const plan = folderShareRowPlan(row.folder);
+              if (plan.state === "revoked") {
+                return <Badge tone="error">Revoked</Badge>;
+              }
+              if (plan.state === "expired") {
+                return <span className="font-medium text-error-50">Expired</span>;
+              }
+              return (
+                <span className="font-medium text-grey-20 dark:text-grey-dark-200">
+                  {row.folder.expiresAt === null
+                    ? "Never"
+                    : formatRelative(row.folder.expiresAt)}
+                </span>
+              );
+            }
+            const original = row.file.expiresAt;
             if (original === null) {
               return (
                 <span className="font-medium text-grey-20 dark:text-grey-dark-200">
@@ -458,18 +594,32 @@ function ActiveSharesTable({ rows, onCopy, onRevoke, onChangeExpiry, busyToken }
         id: "actions",
         header: "",
         enableSorting: false,
-        cell: ({ row }) => (
-          <ActiveActionsCell
-            row={row.original}
-            onCopy={onCopy}
-            onRevoke={onRevoke}
-            onChangeExpiry={onChangeExpiry}
-            isBusy={row.original.shareToken === busyToken}
-          />
-        ),
+        cell: ({ row }) => {
+          const original = row.original;
+          if (original.kind === "file") {
+            return (
+              <ActiveActionsCell
+                row={original.file}
+                onCopy={onCopy}
+                onRevoke={(token) => onRevoke("file", token)}
+                onChangeExpiry={onChangeExpiry}
+                isBusy={original.file.shareToken === busyToken}
+              />
+            );
+          }
+          return (
+            <FolderActionsCell
+              row={original.folder}
+              onCopy={onCopy}
+              onRevoke={(token) => onRevoke("folder", token)}
+              onChangeExpiry={onChangeFolderExpiry}
+              isBusy={original.folder.shareToken !== null && original.folder.shareToken === busyToken}
+            />
+          );
+        },
       }),
     ],
-    [onCopy, onRevoke, onChangeExpiry, busyToken],
+    [onCopy, onRevoke, onChangeExpiry, onChangeFolderExpiry, busyToken],
   );
 
   const table = useReactTable({
@@ -479,7 +629,7 @@ function ActiveSharesTable({ rows, onCopy, onRevoke, onChangeExpiry, busyToken }
     onSortingChange: setSorting,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
-    getRowId: (row) => row.shareToken,
+    getRowId: activeShareRowId,
   });
 
   return (
@@ -548,6 +698,34 @@ function ActiveNameCell({ row }: { row: ShareSummary }) {
 }
 
 /**
+ * Name cell for a folder-share row: display name on top, the shared subtree
+ * underneath — `""` is the whole drive and renders the console's idiom for
+ * it. Dead rows keep their name readable; the dead state itself lives in the
+ * Expires column.
+ */
+function FolderNameCell({ row }: { row: FolderShareSummary }) {
+  const pathLabel = folderSharePathLabel(row.pathPrefix);
+
+  return (
+    <div className="flex items-center gap-2 min-w-0 max-w-[260px]">
+      <FolderIcon className="size-3.5 shrink-0 text-primary-50" />
+      <div className="flex min-w-0 flex-col">
+        <MiddleTruncatedName
+          name={row.displayName}
+          textClassName="text-xs font-medium text-grey-20 dark:text-grey-dark-200"
+        />
+        <span
+          className="truncate text-[11px] text-grey-50 dark:text-grey-dark-600"
+          title={pathLabel}
+        >
+          {pathLabel}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/**
  * Expiry presets offered in a live link's row menu, matching the create-time
  * chooser. Rendered as separate menu items rather than a nested submenu — the
  * `RowActionMenu` is a flat list, and four extra entries read better than a
@@ -606,6 +784,74 @@ function ActiveActionsCell({
       icon: <Trash2 className="size-4" />,
       itemTitle: "Revoke",
       onItemClick: () => onRevoke(row.shareToken),
+      variant: "destructive",
+    },
+  ];
+  return <RowActionMenu items={items} />;
+}
+
+/**
+ * Actions for a folder-share row, mirroring the file row's flat menu
+ * (Copy, the expiry presets, Revoke) with the folder listing's extra
+ * states: Copy is suppressed on dead rows even when the URL is locally
+ * resolvable, the expiry presets are disabled on expired rows (the server
+ * PATCH 404s them), and revoke/expiry are disabled — with the console's
+ * honest tooltips — on rows minted on another device.
+ */
+function FolderActionsCell({
+  row,
+  onCopy,
+  onRevoke,
+  onChangeExpiry,
+  isBusy,
+}: {
+  row: FolderShareSummary;
+  onCopy: (url: string | null) => void;
+  onRevoke: (token: string) => void;
+  onChangeExpiry: (token: string, ttl: ShareTtl) => void;
+  isBusy: boolean;
+}) {
+  if (isBusy) {
+    return (
+      <div className="flex justify-center items-center h-8">
+        <Loader2 className="size-4 animate-spin text-grey-40 dark:text-grey-dark-600" />
+      </div>
+    );
+  }
+
+  const plan = folderShareRowPlan(row);
+
+  const items: ActionItem[] = [
+    {
+      icon: <CopyIcon className="size-4" />,
+      itemTitle: "Copy link",
+      onItemClick: () => {
+        if (plan.canCopy) onCopy(row.shareUrl);
+      },
+      disabled: !plan.canCopy,
+      tooltip: plan.canCopy
+        ? row.isPrivate
+          ? "This link needs the password you set when you created it."
+          : undefined
+        : plan.copyTooltip,
+    },
+    ...EXPIRY_ACTIONS.map(({ label, ttl }) => ({
+      icon: <RefreshCcw className="size-4" />,
+      itemTitle: label,
+      onItemClick: () => {
+        if (plan.canChangeExpiry && row.shareToken) onChangeExpiry(row.shareToken, ttl);
+      },
+      disabled: !plan.canChangeExpiry,
+      tooltip: plan.expiryTooltip,
+    })),
+    {
+      icon: <Trash2 className="size-4" />,
+      itemTitle: "Revoke",
+      onItemClick: () => {
+        if (plan.canRevoke && row.shareToken) onRevoke(row.shareToken);
+      },
+      disabled: !plan.canRevoke,
+      tooltip: plan.revokeTooltip,
       variant: "destructive",
     },
   ];

@@ -2,15 +2,16 @@ import { describe, expect, it } from "vitest";
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import {
   canShareFolder,
+  driveFolderHash,
   folderShareRelativePath,
   shareTargetFor,
 } from "@/app/lib/utils/folderShareGating";
 
-// A folder share zips the folder off local disk, so the gate must only enable
-// rows that really exist on THIS device and are at rest — a cloud-only row from
-// another machine has nothing to pack. The path resolver exists because a
-// nested folder row's name is only its basename: handing that to the IPC would
-// silently share a root-level folder of the same name.
+// A folder share is a live browsable link minted from server state, so local
+// settlement no longer gates it — the only FE gate is the `folder_shares`
+// server capability. The path resolver exists because a nested folder row's
+// name is only its basename: handing that to the IPC would silently share a
+// root-level folder of the same name.
 
 const folder = (over: Partial<FormattedUserFile> = {}): FormattedUserFile =>
   ({
@@ -29,28 +30,45 @@ const folder = (over: Partial<FormattedUserFile> = {}): FormattedUserFile =>
   }) as FormattedUserFile;
 
 describe("canShareFolder", () => {
-  it("allows a settled local folder", () => {
-    expect(canShareFolder(folder())).toBe(true);
+  it("allows any folder once the server capability is confirmed", () => {
+    expect(canShareFolder(folder(), true)).toBe(true);
   });
 
-  it("refuses a folder still being uploaded", () => {
-    expect(canShareFolder(folder({ isAssigned: false }))).toBe(false);
+  it("allows an unsettled or cloud-only folder — the mint is server-side", () => {
+    // The zip era gated on local settlement (nothing on disk meant nothing to
+    // pack); the browsable mint is one metadata POST against the server's own
+    // state, so these rows are just as mintable.
+    expect(canShareFolder(folder({ isAssigned: false }), true)).toBe(true);
+    expect(canShareFolder(folder({ fileId: "abc", source: undefined }), true)).toBe(true);
+    expect(canShareFolder(folder({ syncStatus: "pending" }), true)).toBe(true);
   });
 
-  it("refuses a cloud-only folder with nothing on disk", () => {
-    // A search / other-device hit: carries a server fileId but no local path,
-    // so there is nothing to zip.
-    expect(canShareFolder(folder({ fileId: "abc", source: undefined }))).toBe(
-      false,
-    );
-  });
-
-  it("refuses a folder whose contents are still pending", () => {
-    expect(canShareFolder(folder({ syncStatus: "pending" }))).toBe(false);
+  it("refuses every folder while the capability is absent", () => {
+    expect(canShareFolder(folder(), false)).toBe(false);
   });
 
   it("refuses a file", () => {
-    expect(canShareFolder(folder({ isFolder: false }))).toBe(false);
+    expect(canShareFolder(folder({ isFolder: false }), true)).toBe(false);
+  });
+});
+
+describe("driveFolderHash", () => {
+  it("matches the Rust folder_hash derivation byte-for-byte", async () => {
+    // Pinned against `hcfs_client::drive::keys::folder_hash` (the first 16
+    // hex chars of SHA-256 over the label) — the value the mint's drive-scoped
+    // client sends as the share's `folderHash`. If this drifts, folder badges
+    // silently stop matching listing rows.
+    await expect(driveFolderHash("default")).resolves.toBe("37a8eec1ce19687d");
+    await expect(driveFolderHash("Drive")).resolves.toBe("6312b4b9baf12770");
+  });
+
+  it("is deterministic and label-distinct", async () => {
+    await expect(driveFolderHash("photos")).resolves.toBe(
+      await driveFolderHash("photos"),
+    );
+    expect(await driveFolderHash("photos")).not.toBe(
+      await driveFolderHash("documents"),
+    );
   });
 });
 

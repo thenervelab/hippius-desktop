@@ -199,6 +199,34 @@ impl SqliteShareKeystore {
             Ok(map)
         })
     }
+
+    /// Every decodable stored secret, keyed by its plaintext token.
+    ///
+    /// Exists for the folder-share listing: the server returns only
+    /// `token_hash` (blake3 hex) per row and never echoes a folder-share
+    /// token after create, so matching listing rows to locally held tokens
+    /// means hashing every stored token — there is no reverse lookup to
+    /// batch on. The table holds one row per share this device minted, so
+    /// the full scan is a page-sized read. File-share and folder-share
+    /// tokens share this table; a file token's hash simply never appears
+    /// in the folder listing, so scanning both kinds is harmless.
+    ///
+    /// Undecodable rows are skipped with the same safe-direction rationale
+    /// as [`Self::get_many`]: a dropped row renders as "minted elsewhere",
+    /// never as a public link to a private share.
+    pub fn all_entries(&self) -> Result<Vec<(String, ShareSecret)>, ShareError> {
+        let pool = self.pool.clone();
+        run_sync(async move {
+            let rows = sqlx::query_as::<_, (String, String, Vec<u8>)>("SELECT share_token, secret_kind, share_key FROM share_keystore")
+                .fetch_all(&pool)
+                .await
+                .map_err(map_db)?;
+            Ok(rows
+                .into_iter()
+                .filter_map(|(token, kind, bytes)| decode_secret(&kind, bytes).ok().map(|secret| (token, secret)))
+                .collect())
+        })
+    }
 }
 
 #[cfg(test)]
@@ -274,6 +302,27 @@ mod tests {
         assert_eq!(map.get("tok-1"), Some(&k1));
         assert_eq!(map.get("tok-3"), Some(&k3));
         assert!(!map.contains_key("tok-2"), "missing tokens must not appear in the map");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn all_entries_returns_every_row_with_its_kind() {
+        let (_dir, pool) = fresh_pool().await;
+        let ks = SqliteShareKeystore::new(pool);
+        let public = ShareSecret::Public([1u8; 32]);
+        let private = ShareSecret::Private(vec![2u8; 89]);
+        ks.put("tok-pub", &public).expect("put public");
+        ks.put("tok-priv", &private).expect("put private");
+
+        let mut entries = ks.all_entries().expect("all_entries");
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(entries, vec![("tok-priv".to_string(), private), ("tok-pub".to_string(), public)]);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn all_entries_on_an_empty_table_is_empty() {
+        let (_dir, pool) = fresh_pool().await;
+        let ks = SqliteShareKeystore::new(pool);
+        assert!(ks.all_entries().expect("all_entries").is_empty());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
