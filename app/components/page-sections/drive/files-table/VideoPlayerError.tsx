@@ -41,68 +41,64 @@ const VideoPlayerError: React.FC<VideoPlayerErrorProps> = ({
   const isLocalFile =
     localPath && (localPath.includes("/") || localPath.includes("\\"));
 
-  // The viewer's own frosted-glass layer underneath this overlay is
-  // `bg-white/70` in light mode, which used to wash this overlay's
-  // `bg-black/70` down to near-white — so the white error heading
-  // became invisible. The overlay now picks a theme-appropriate
-  // backdrop (white-ish in light, near-black in dark) and the
-  // foreground text follows the same scheme.
   return (
     <div
       className={cn(
-        "absolute inset-0 flex flex-col items-center justify-center p-4",
-        "bg-white/85 text-grey-10",
-        "dark:bg-black/70 dark:text-white",
+        "absolute inset-0 z-10 flex items-center justify-center p-6",
+        "bg-grey-light-300 text-grey-10",
+        "dark:bg-black-primary-bg dark:text-grey-light-100",
       )}
     >
-      <div className="mb-6 text-center">
-        <AlertCircle className="size-12 mx-auto mb-3 text-error-50 dark:text-red-400" />
-        <p className="text-lg font-medium text-grey-10 dark:text-white">
-          {message}
-        </p>
-        {isLocalFile && (
-          <p className="mt-2 text-sm text-grey-50 dark:text-grey-dark-600">
-            This file is on your computer. Open it with your system player
-            instead.
+      <div className="flex max-w-xl flex-col items-center rounded-[14px] border border-grey-dark-100 bg-white/80 px-8 py-7 text-center shadow-[0_18px_45px_rgba(0,0,0,0.08)] dark:border-black-300 dark:bg-black-500 dark:shadow-[0_18px_45px_rgba(0,0,0,0.35)]">
+        <div className="mb-6 text-center">
+          <AlertCircle className="size-12 mx-auto mb-3 text-error-50 dark:text-red-400" />
+          <p className="text-lg font-medium text-grey-10 dark:text-grey-light-100">
+            {message}
           </p>
-        )}
-      </div>
+          {isLocalFile && (
+            <p className="mt-2 text-sm text-grey-50 dark:text-white/60">
+              This file is on your computer. Open it with your system player
+              instead.
+            </p>
+          )}
+        </div>
 
-      <div className="flex flex-col gap-3 sm:flex-row sm:gap-4">
-        {/* Open in system player — most useful action for local unsupported formats */}
-        {isLocalFile && (
-          <button
-            onClick={() => openInSystemPlayer(localPath)}
-            className="flex items-center gap-x-2 bg-primary-50 hover:bg-primary-70 transition-colors px-4 py-2 rounded-md font-medium text-white"
-          >
-            <ExternalLink className="size-5" />
-            <span>Open with System Player</span>
-          </button>
-        )}
+        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:justify-center sm:gap-4">
+          {/* Open in system player — most useful action for local unsupported formats */}
+          {isLocalFile && (
+            <button
+              onClick={() => openInSystemPlayer(localPath)}
+              className="flex items-center justify-center gap-x-2 bg-primary-50 hover:bg-primary-70 transition-colors px-4 py-2 rounded-md font-medium text-white"
+            >
+              <ExternalLink className="size-5" />
+              <span>Open with System Player</span>
+            </button>
+          )}
 
-        {onReload && (
-          <button
-            onClick={onReload}
-            className="flex items-center gap-x-2 bg-success-40 hover:bg-success-60 transition-colors px-4 py-2 rounded-md font-medium text-white"
-          >
-            <RefreshCw className="size-5" />
-            <span>Try Loading Again</span>
-          </button>
-        )}
+          {onReload && (
+            <button
+              onClick={onReload}
+              className="flex items-center justify-center gap-x-2 bg-success-40 hover:bg-success-60 transition-colors px-4 py-2 rounded-md font-medium text-white"
+            >
+              <RefreshCw className="size-5" />
+              <span>Try Loading Again</span>
+            </button>
+          )}
 
-        {file && (
-          <button
-            onClick={() => handleFileDownload(file, polkadotAddress ?? "")}
-            className={cn(
-              "flex items-center gap-x-2 rounded-md px-4 py-2 font-medium transition-colors",
-              "bg-grey-10 text-white hover:bg-grey-20",
-              "dark:bg-grey-20 dark:hover:bg-grey-30",
-            )}
-          >
-            <Icons.DocumentDownload className="size-5" />
-            <span>Download File</span>
-          </button>
-        )}
+          {file && (
+            <button
+              onClick={() => handleFileDownload(file, polkadotAddress ?? "")}
+              className={cn(
+                "flex items-center justify-center gap-x-2 rounded-md px-4 py-2 font-medium transition-colors",
+                "bg-grey-10 text-white hover:bg-grey-20",
+                "dark:bg-black-300 dark:hover:bg-black-200",
+              )}
+            >
+              <Icons.DocumentDownload className="size-5" />
+              <span>Download File</span>
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
