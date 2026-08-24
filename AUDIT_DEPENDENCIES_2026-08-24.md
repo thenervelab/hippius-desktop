@@ -80,9 +80,14 @@ that looked like `nix::` in a `rg` sweep was actually `std::os::unix::*`
 socket, terminal APIs...) pulled in for exactly one syscall wrapper around
 `libc::statvfs`.
 
-**Replacement:** a direct `libc::statvfs` FFI call. `libc` is already a
-transitive dependency of several other crates in the tree (`hostname`,
-`keyring`, etc.), so this adds no new dependency:
+**Replacement:** a direct `libc::statvfs` FFI call. Note this DOES require
+adding `libc` to `Cargo.toml` — a transitive dependency is not nameable as
+`libc::` from our own code, so "already in the tree" is not the same as
+"already usable". Declare it under `[target.'cfg(unix)'.dependencies]`,
+matching how `nix` was gated. What does not change is the dependency
+*tree*: `libc` is already built as a transitive dep of `hostname`,
+`keyring`, and others, so this trades the whole `nix` crate for a
+declaration line on a crate that was compiling anyway:
 
 ```rust
 fn statvfs_free_bytes(path: &std::path::Path) -> std::io::Result<u64> {
