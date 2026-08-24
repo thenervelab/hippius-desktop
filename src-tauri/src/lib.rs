@@ -20,6 +20,7 @@ pub mod error;
 #[cfg(any(unix, windows))]
 pub mod finder_bridge;
 pub mod infra;
+pub mod media_preview;
 pub mod notifications;
 pub mod power;
 pub mod recovery;

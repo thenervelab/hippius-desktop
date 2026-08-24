@@ -21,6 +21,7 @@ pub mod error;
 #[cfg(any(unix, windows))]
 pub mod finder_bridge;
 pub mod infra;
+pub mod media_preview;
 pub mod notifications;
 pub mod power;
 pub mod recovery;
@@ -85,6 +86,7 @@ use crate::notifications::crud::{
     list_notifications, low_credit_subtype_exists, mark_all_notifications_read, mark_notification_read, mark_notification_unread,
     update_local_notification_preferences,
 };
+use crate::media_preview::prepare_motion_photo_preview;
 use crate::notifications::settings::{get_notification_settings, update_notification_settings};
 use crate::recovery::{
     change_recovery_password, check_recovery_state, has_pending_rotation, mark_recovery_skipped, recover_mnemonic, resume_recovery_password_rotation,
@@ -346,6 +348,7 @@ fn main() {
             download_remote_file,
             cache_remote_file,
             get_thumbnail,
+            prepare_motion_photo_preview,
             // File sharing (link-based public shares)
             crate::shares::commands::hcfs_create_share,
             crate::shares::commands::hcfs_create_folder_share,
