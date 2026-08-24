@@ -330,12 +330,30 @@ fn check_disk_space(path: &std::path::Path, required_bytes: u64) -> Result<()> {
     // size). On filesystems where the two differ (common: bsize 64 KiB–1 MiB
     // vs frsize 4 KiB) multiplying by f_bsize overstated free space by the
     // bsize/frsize ratio, letting a too-small disk pass the gate and then run
-    // out mid-download — the exact failure this check prevents.
-    let available = stat.f_frsize as u64 * stat.f_bavail as u64;
-    if available < required_bytes {
+    // out mid-download — the exact failure this check prevents. The field
+    // choice is pinned by `tests/disk_space_units.rs`.
+    if !has_enough_space(stat.f_frsize as u64, stat.f_bavail as u64, required_bytes) {
         return Err(crate::error::AppError::NotReady(crate::error::NotReadyKind::NotEnoughDiskSpace));
     }
     Ok(())
+}
+
+/// Does a filesystem reporting these `statvfs` figures hold `required_bytes`?
+///
+/// Split out from the syscall so the boundary and the overflow behaviour are
+/// testable at all: the live call can only be asked about whatever the test
+/// runner's own disk happens to hold, which is why the two end-to-end cases
+/// (1 byte fits, `u64::MAX` does not) pass under either block-size field.
+///
+/// `fragment_size` MUST come from `f_frsize`, never `f_bsize` — see the call
+/// site above for the failure that causes.
+///
+/// Saturating rather than plain multiply: an overflow would panic in debug
+/// and wrap to a small number in release, and a wrapped "available" reads as
+/// a full disk — blocking a migration that should have proceeded.
+#[cfg(unix)]
+fn has_enough_space(fragment_size: u64, blocks_available: u64, required_bytes: u64) -> bool {
+    fragment_size.saturating_mul(blocks_available) >= required_bytes
 }
 
 #[cfg(windows)]
@@ -1332,6 +1350,51 @@ mod tests {
     fn disk_space_check_fails_for_huge_requirement() {
         let dir = tempfile::tempdir().expect("create temp dir");
         assert!(check_disk_space(dir.path(), u64::MAX).is_err());
+    }
+
+    /// The `statvfs` failure branch — the only path that reads
+    /// `last_os_error()`. A failed probe must surface as an error, never
+    /// fall through and let a migration start against an unknown disk.
+    #[cfg(unix)]
+    #[test]
+    fn disk_space_check_errors_on_a_nonexistent_path() {
+        let missing = std::path::Path::new("/nonexistent-hippius-disk-space-probe-a8f3/x");
+        assert!(check_disk_space(missing, 1).is_err());
+    }
+
+    /// Free space is fragments times fragment size. The two live tests above
+    /// hold under any block-size field, so this is where the arithmetic
+    /// itself is actually pinned.
+    #[cfg(unix)]
+    #[test]
+    fn has_enough_space_multiplies_fragments_by_fragment_size() {
+        assert!(has_enough_space(4096, 100, 409_600));
+        assert!(!has_enough_space(4096, 100, 409_601));
+    }
+
+    /// A disk that fits the requirement EXACTLY must pass; a strict `>`
+    /// would refuse a migration the disk can hold.
+    #[cfg(unix)]
+    #[test]
+    fn has_enough_space_boundary_is_inclusive() {
+        assert!(has_enough_space(1024, 10, 10_240));
+        assert!(!has_enough_space(1024, 10, 10_241));
+    }
+
+    /// A wrapping multiply would report a tiny "available" and refuse a
+    /// migration outright (and panic in a debug build).
+    #[cfg(unix)]
+    #[test]
+    fn has_enough_space_saturates_instead_of_wrapping() {
+        assert!(has_enough_space(u64::MAX, u64::MAX, u64::MAX));
+    }
+
+    /// Zero blocks available is a full disk, not a pass.
+    #[cfg(unix)]
+    #[test]
+    fn has_enough_space_rejects_a_full_disk() {
+        assert!(!has_enough_space(4096, 0, 1));
+        assert!(has_enough_space(4096, 0, 0));
     }
 
     // -----------------------------------------------------------------------
