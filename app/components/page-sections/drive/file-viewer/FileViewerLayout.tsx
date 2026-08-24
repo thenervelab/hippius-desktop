@@ -32,6 +32,17 @@ import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 import FileViewerThumbnailStrip from "./FileViewerThumbnailStrip";
 import FileViewerTitle from "./FileViewerTitle";
 
+/**
+ * Stacking order of the full-screen file viewer overlay.
+ *
+ * Exported (rather than left as a bare `z-[999]` class) because anything that
+ * must render ABOVE the viewer — e.g. the Live Photo badge's tooltip, which is
+ * portalled to `document.body` and therefore escapes the dialog's own stacking
+ * context — has to know this number. Hard-coding a guess there is exactly how
+ * that tooltip ended up invisible behind the viewer.
+ */
+export const FILE_VIEWER_OVERLAY_Z_INDEX = 999;
+
 interface FileViewerLayoutProps {
   file: FormattedUserFile;
   allFiles: FormattedUserFile[];
@@ -228,8 +239,9 @@ const FileViewerLayout: React.FC<FileViewerLayoutProps> = ({
     >
       <Dialog.Portal>
         <Dialog.Overlay
+          style={{ zIndex: FILE_VIEWER_OVERLAY_Z_INDEX }}
           className={cn(
-            "fixed inset-0 z-[999]",
+            "fixed inset-0",
             "data-[state=open]:animate-fade-in-0.3",
           )}
         >
