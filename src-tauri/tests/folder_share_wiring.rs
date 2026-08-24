@@ -21,7 +21,7 @@ fn fn_body(source: &str, signature: &str) -> String {
 
 fn mint_funnel_body() -> String {
     let source = include_str!("../src/shares/commands.rs");
-    fn_body(source, "pub(crate) async fn create_folder_share_inner")
+    fn_body(source, "pub async fn create_folder_share_inner")
 }
 
 #[test]
@@ -76,7 +76,7 @@ fn the_mint_funnel_builds_a_drive_scoped_client() {
 #[test]
 fn the_revoke_gates_its_forget_on_the_capability_probe() {
     let source = include_str!("../src/shares/commands.rs");
-    let body = fn_body(source, "pub async fn hcfs_revoke_folder_share");
+    let body = fn_body(source, "pub async fn revoke_folder_share_inner");
     let probe_at = body.find("require_folder_shares_supported");
     let forget_at = body.find("keystore.forget");
     match (probe_at, forget_at) {

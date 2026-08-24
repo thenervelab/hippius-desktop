@@ -681,7 +681,11 @@ fn map_folder_share_error(e: hcfs_client::client::folder_share::FolderShareError
 /// this disk, so a half-downloaded local copy cannot corrupt the share) and
 /// no billing eligibility gate (nothing is uploaded — the shared bytes were
 /// already paid for when they were stored).
-pub(crate) async fn create_folder_share_inner(
+///
+/// `pub` (not `pub(crate)`) so the mock-server integration suite can drive it
+/// without a `tauri::State` — the same seam `list_remote_folder_files_inner`
+/// and the shared-drives helpers expose.
+pub async fn create_folder_share_inner(
     state: &AppState,
     account_id: &str,
     folder_label: &str,
@@ -895,8 +899,15 @@ fn resolve_folder_share_rows(
 #[tauri::command]
 pub async fn hcfs_list_folder_shares(state: tauri::State<'_, AppState>) -> Result<Vec<FolderShareSummary>> {
     let account_id = state.current_account_id()?;
+    list_folder_shares_inner(&state, &account_id).await
+}
+
+/// Inner of [`hcfs_list_folder_shares`], taking `&AppState` so the mock-server
+/// integration suite can drive it without a `tauri::State` (the `*_inner`
+/// split `list_remote_folder_files` uses).
+pub async fn list_folder_shares_inner(state: &AppState, account_id: &str) -> Result<Vec<FolderShareSummary>> {
     let pool = state.pool()?;
-    let client = build_account_client(pool, &account_id).await?;
+    let client = build_account_client(pool, account_id).await?;
     let rows = client
         .list_folder_shares()
         .await
@@ -923,10 +934,16 @@ pub async fn hcfs_list_folder_shares(state: tauri::State<'_, AppState>) -> Resul
 #[tauri::command]
 pub async fn hcfs_revoke_folder_share(state: tauri::State<'_, AppState>, share_token: String) -> Result<()> {
     let account_id = state.current_account_id()?;
+    revoke_folder_share_inner(&state, &account_id, &share_token).await
+}
+
+/// Inner of [`hcfs_revoke_folder_share`], taking `&AppState` so the
+/// mock-server integration suite can drive it without a `tauri::State`.
+pub async fn revoke_folder_share_inner(state: &AppState, account_id: &str, share_token: &str) -> Result<()> {
     let pool = state.pool()?;
-    let client = build_account_client(pool, &account_id).await?;
+    let client = build_account_client(pool, account_id).await?;
     let keystore = SqliteShareKeystore::new(pool.clone());
-    match client.revoke_folder_share(&share_token, &keystore).await {
+    match client.revoke_folder_share(share_token, &keystore).await {
         Ok(()) => Ok(()),
         Err(FolderShareError::NotFound) => {
             // A 404 normally means already-revoked / never-existed, which
@@ -936,8 +953,8 @@ pub async fn hcfs_revoke_folder_share(state: tauri::State<'_, AppState>, share_t
             // ONLY plaintext copy of a token that still guards a live share
             // once the server rolls forward. Probe the capability first:
             // only a folder-shares-capable server's 404 is authoritative.
-            require_folder_shares_supported(&state, &account_id).await?;
-            if let Err(e) = keystore.forget(&share_token) {
+            require_folder_shares_supported(state, account_id).await?;
+            if let Err(e) = keystore.forget(share_token) {
                 warn!(error = %e, "folder-share keystore forget failed after 404 revoke (non-fatal)");
             }
             Ok(())
@@ -954,12 +971,18 @@ pub async fn hcfs_revoke_folder_share(state: tauri::State<'_, AppState>, share_t
 pub async fn hcfs_update_folder_share_expiry(state: tauri::State<'_, AppState>, share_token: String, ttl: String) -> Result<Option<String>> {
     let account_id = state.current_account_id()?;
     let ttl = parse_ttl(&ttl)?;
+    update_folder_share_expiry_inner(&state, &account_id, &share_token, ttl).await
+}
 
-    require_folder_shares_supported(&state, &account_id).await?;
+/// Inner of [`hcfs_update_folder_share_expiry`], taking `&AppState` (and an
+/// already-parsed [`ShareTtl`]) so the mock-server integration suite can
+/// drive it without a `tauri::State`.
+pub async fn update_folder_share_expiry_inner(state: &AppState, account_id: &str, share_token: &str, ttl: ShareTtl) -> Result<Option<String>> {
+    require_folder_shares_supported(state, account_id).await?;
 
     let pool = state.pool()?;
-    let client = build_account_client(pool, &account_id).await?;
-    let expires_at = client.update_folder_share_expiry(&share_token, ttl).await.map_err(|e| {
+    let client = build_account_client(pool, account_id).await?;
+    let expires_at = client.update_folder_share_expiry(share_token, ttl).await.map_err(|e| {
         warn!(error = %e, "update_folder_share_expiry failed");
         // The server's bodiless 404 covers unknown / not-yours / revoked /
         // already-expired alike — say what the user can act on instead.

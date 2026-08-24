@@ -139,5 +139,13 @@ jobs:
             wire-contract guards) on this PR — **review its result before merging**.
             A breaking bump fails CI here instead of shipping.
 
+            `ci` is hermetic, so it catches wire-shape and format drift but NOT a
+            behavioral change against a real server. Also run the live lane on this
+            branch before merging:
+
+            ```
+            gh workflow run e2e-live.yml --ref automated/hcfs-bump -f suite=both
+            ```
+
             > If CI did not start on this PR, add a `HCFS_BUMP_TOKEN` PAT secret:
             > PRs opened with the default `GITHUB_TOKEN` do not trigger other workflows.

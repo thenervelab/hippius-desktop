@@ -120,7 +120,10 @@
 //!
 //! All five vars are required; with any unset the tests print a skip note
 //! and return Ok, so a default `cargo test` (and `--ignored` without the
-//! env) stays hermetic and green. The two ss58s MUST be the addresses the
+//! env) stays hermetic and green. Set `HCFS_DESKTOP_E2E_REQUIRE=1` to turn
+//! that skip into a panic — the `e2e-live` workflow sets it so a mistyped
+//! or unprovisioned secret fails the lane instead of passing it with
+//! nothing executed. The two ss58s MUST be the addresses the
 //! auth stub returns for the two bearers — the server derives every
 //! identity from the bearer, and a mismatch surfaces as grants sealed for
 //! the wrong AAD. Every drive label is per-run unique, so the tests are
@@ -154,6 +157,9 @@ const BEARER_OWNER_ENV: &str = "HCFS_DESKTOP_E2E_BEARER_OWNER";
 const BEARER_MEMBER_ENV: &str = "HCFS_DESKTOP_E2E_BEARER_MEMBER";
 const OWNER_SS58_ENV: &str = "HCFS_DESKTOP_E2E_OWNER_SS58";
 const MEMBER_SS58_ENV: &str = "HCFS_DESKTOP_E2E_MEMBER_SS58";
+/// `=1` turns the quiet env-skip into a panic, so a live CI lane cannot
+/// go green by silently not running these tests.
+const REQUIRE_ENV: &str = "HCFS_DESKTOP_E2E_REQUIRE";
 
 /// The two accounts' resolved live-lane parameters.
 struct LiveEnv {
@@ -165,9 +171,10 @@ struct LiveEnv {
 }
 
 /// `Some(env)` when all five vars are set and non-empty, else `None` after a
-/// skip note. Empty counts as unset (a CI step forwarding an unconfigured
-/// secret materializes it as `""`, and an empty bearer would 401 instead of
-/// skipping) — the `folder_entries_real_backend::live_env` convention.
+/// skip note — or a panic when [`REQUIRE_ENV`] is `1`. Empty counts as unset
+/// (a CI step forwarding an unconfigured secret materializes it as `""`, and
+/// an empty bearer would 401 instead of skipping) — the
+/// `folder_entries_real_backend::live_env` convention.
 fn live_env() -> Option<LiveEnv> {
     let nonempty = |name: &str| std::env::var(name).ok().filter(|v| !v.trim().is_empty());
     let vars = (
@@ -178,6 +185,11 @@ fn live_env() -> Option<LiveEnv> {
         nonempty(MEMBER_SS58_ENV),
     );
     let (Some(server_url), Some(owner_bearer), Some(member_bearer), Some(owner_ss58), Some(member_ss58)) = vars else {
+        assert!(
+            nonempty(REQUIRE_ENV).as_deref() != Some("1"),
+            "{REQUIRE_ENV}=1 but {SERVER_URL_ENV}/{BEARER_OWNER_ENV}/{BEARER_MEMBER_ENV}/{OWNER_SS58_ENV}/{MEMBER_SS58_ENV} \
+             are not all set — the live lane must not skip"
+        );
         // `tracing::warn!` (not println) — the workspace denies stdout
         // prints; the `#[ignore]` attribute already documents the lane.
         tracing::warn!(

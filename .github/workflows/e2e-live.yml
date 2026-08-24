@@ -1,0 +1,228 @@
+name: e2e-live
+
+# MANUAL lane for the `#[ignore]`d real-backend end-to-end suites — the tests
+# that drive the production desktop code against a REAL, RUNNING `hcfs-server`
+# with real accounts. Nothing here is mocked; the only test doubles are the
+# inputs (tempdir trees, seeded DB rows).
+#
+# Why it exists: these are the highest-value tests in the repo (the shared-drives
+# suite caught a live revocation-marker regression that every hermetic test
+# passed), and until this lane they ran ONLY when a human remembered to export
+# five environment variables by hand. They had already gone stale across an hcfs
+# pin bump once.
+#
+# What it needs (repository secrets — the lane cannot work without them):
+#   shared_drives: HCFS_DESKTOP_E2E_SERVER_URL, HCFS_DESKTOP_E2E_BEARER_OWNER,
+#                  HCFS_DESKTOP_E2E_BEARER_MEMBER, HCFS_DESKTOP_E2E_OWNER_SS58,
+#                  HCFS_DESKTOP_E2E_MEMBER_SS58
+#   folder_shares: HCFS_DESKTOP_E2E_SERVER_URL, HCFS_DESKTOP_E2E_BEARER,
+#                  HCFS_DESKTOP_E2E_SS58
+# HCFS_DESKTOP_E2E_SERVER_URL is a secret rather than a repository variable
+# purely so it travels with the account credentials it pairs with; expect it
+# to render as *** in the logs, which is masking, not a failure. STORE IT
+# WITHOUT A TRAILING SLASH: the shared-drives suite trims one, and the trimmed
+# string is a DIFFERENT string that GitHub's masking does not cover, so a
+# stored "https://host/" can surface unmasked as "https://host" in log output.
+# The two ss58s MUST be the addresses the auth service returns for their
+# bearers — the server derives identity solely from the bearer, and a mismatch
+# surfaces as grants sealed for the wrong AAD. The shared-drives suite also
+# needs the target server started with HCFS_FEATURE_SHARED_DRIVES=1; the
+# folder-shares suite needs a USER bearer, not the admin-bypass token (admin
+# maps to a literal "admin" owner and the share mint 404s).
+#
+# A third live suite, folder_entries_real_backend.rs, is not wired in here. It
+# reads HCFS_DESKTOP_E2E_ADMIN_BEARER — hcfs's committed admin-bypass token,
+# the OPPOSITE kind of credential from the folder-shares bearer, which is why
+# the two no longer share a variable name. It already honours REQUIRE, so
+# adding it is now just: provision that secret and add a step mirroring the
+# two below.
+#
+# What it costs: a cold Rust compile of the whole subxt/alloy/tauri/hcfs graph
+# (~20-30 min; warm runs are minutes) plus real writes against the target
+# server — drives, invites, uploads and shares. Every drive label and share is
+# per-run unique, so runs do not collide and the suites are re-runnable against
+# a persistent database.
+#
+# What a red run means: a REAL regression against the live server — either the
+# desktop code or the server/hcfs-client contract it depends on moved. This
+# lane is NOT a flaky-network canary; treat a failure as a bug, not a retry.
+#
+# NON-BLOCKING BY DEFAULT: `workflow_dispatch` only. It gates no merge and must
+# never be a required status check — it depends on a live external service and
+# on account secrets, so a red run can mean "prod is down", which must not block
+# unrelated PRs. There is deliberately NO `schedule:` even though `hcfs-bump.yml`
+# uses cron: this lane mutates a live server with real accounts, and the moment
+# that actually matters is a dependency bump, not a calendar day. The standing
+# rule is in `.github/hcfs-bump-gate-activation.md` and in the bump PR body:
+# RUN THIS LANE ON EVERY `hcfs` PIN BUMP before merging it —
+#
+#   gh workflow run e2e-live.yml --ref automated/hcfs-bump -f suite=both
+#
+# — noting that `workflow_dispatch` resolves this file BY PATH ON THE DEFAULT
+# BRANCH. `--ref` picks which code runs, but until this workflow itself is
+# merged to main the dispatch fails with "workflow does not exist".
+#
+# HCFS_DESKTOP_E2E_REQUIRE=1 is the load-bearing part. Both suites skip QUIETLY
+# when their env is unset (so a plain `cargo test` stays hermetic), which means
+# a single typo'd or unprovisioned secret would otherwise produce a green job
+# that asserted nothing. With REQUIRE=1 the suites panic instead. The suites
+# match the value EXACTLY against "1" — REQUIRE=true or =yes silently disables
+# the guard. The preflight step below catches the same mistake in seconds rather
+# than after the compile; REQUIRE stays set regardless, because the preflight's
+# list of variable names can drift from the tests' and the tests are the
+# authority. Neither can catch "no test body ran at all" — that is what the
+# non-zero executed-count guard on each suite step is for.
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Which live suite(s) to run
+        type: choice
+        default: both
+        options:
+          - both
+          - shared_drives
+          - folder_shares
+
+# Least privilege: this workflow only reads the checkout.
+permissions:
+  contents: read
+
+# Never cancel a run in flight: these tests mint invites, install member drives
+# and upload files against a live server, and a half-executed run leaves
+# server-side residue behind.
+concurrency:
+  group: e2e-live
+  cancel-in-progress: false
+
+env:
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    # Cold compile of this dependency graph is ~20-30 min on a 2-core runner;
+    # the live suites themselves are minutes. 60 leaves headroom for a cold
+    # cache without letting a hung network call burn a full 6 hours.
+    timeout-minutes: 60
+    steps:
+      # Fail in seconds — not after a 25-minute compile — when a secret this
+      # run needs is missing or empty. Values are never echoed, only names.
+      - name: Preflight (required secrets are provisioned)
+        shell: bash
+        env:
+          SUITE: ${{ inputs.suite }}
+          HCFS_DESKTOP_E2E_SERVER_URL: ${{ secrets.HCFS_DESKTOP_E2E_SERVER_URL }}
+          HCFS_DESKTOP_E2E_BEARER_OWNER: ${{ secrets.HCFS_DESKTOP_E2E_BEARER_OWNER }}
+          HCFS_DESKTOP_E2E_BEARER_MEMBER: ${{ secrets.HCFS_DESKTOP_E2E_BEARER_MEMBER }}
+          HCFS_DESKTOP_E2E_OWNER_SS58: ${{ secrets.HCFS_DESKTOP_E2E_OWNER_SS58 }}
+          HCFS_DESKTOP_E2E_MEMBER_SS58: ${{ secrets.HCFS_DESKTOP_E2E_MEMBER_SS58 }}
+          HCFS_DESKTOP_E2E_BEARER: ${{ secrets.HCFS_DESKTOP_E2E_BEARER }}
+          HCFS_DESKTOP_E2E_SS58: ${{ secrets.HCFS_DESKTOP_E2E_SS58 }}
+        run: |
+          set -euo pipefail
+          want=(HCFS_DESKTOP_E2E_SERVER_URL)
+          if [ "$SUITE" = shared_drives ] || [ "$SUITE" = both ]; then
+            want+=(HCFS_DESKTOP_E2E_BEARER_OWNER HCFS_DESKTOP_E2E_BEARER_MEMBER)
+            want+=(HCFS_DESKTOP_E2E_OWNER_SS58 HCFS_DESKTOP_E2E_MEMBER_SS58)
+          fi
+          if [ "$SUITE" = folder_shares ] || [ "$SUITE" = both ]; then
+            want+=(HCFS_DESKTOP_E2E_BEARER HCFS_DESKTOP_E2E_SS58)
+          fi
+          # Whitespace-only counts as missing, matching the suites' `live_env()`
+          # (`.trim().is_empty()`) — otherwise a secret set to " " would clear
+          # the preflight and then panic 25 minutes later under REQUIRE=1.
+          missing=()
+          for name in "${want[@]}"; do
+            [ -n "$(printf '%s' "${!name:-}" | tr -d '[:space:]')" ] || missing+=("$name")
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "suite '$SUITE' needs these repository secrets, which are unset or empty:" >&2
+            printf '  - %s\n' "${missing[@]}" >&2
+            echo "Add them with: gh secret set <NAME>  (see this workflow's header)" >&2
+            exit 1
+          fi
+          echo "suite '$SUITE': all ${#want[@]} required secrets are present"
+
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # No step pushes or reuses the GITHUB_TOKEN; the private hcfs dep is
+          # fetched over a separate SSH key. Don't leave the token in .git/config.
+          persist-credentials: false
+
+      - name: Rust CI setup
+        id: setup
+        uses: ./.github/actions/rust-ci-setup
+        with:
+          deploy-key: ${{ secrets.HCFS_DEPLOY_KEY_B64 }}
+          tauri-env: ${{ secrets.TAURI_ENV_FILE }}
+          linux-deps: "true"
+
+      # `-- --ignored` runs ONLY the ignored tests, which is exactly the live
+      # set: invite mint -> sealed-grant accept -> member install -> file
+      # round-trips both ways -> both revocation shapes with local files intact.
+      #
+      # The `passed` guard below closes the last vacuous-green path. REQUIRE=1
+      # panics from INSIDE a test body, so it cannot catch "no test body ran":
+      # drop `-- --ignored` and cargo prints "0 passed; 2 ignored" and exits 0 —
+      # a green job that asserted nothing, the exact failure this lane exists to
+      # prevent. Asserting a non-zero executed count catches that directly.
+      #
+      # Expected counts as of this commit: shared_drives 2, folder_shares 3.
+      # The guard is `>= 1`, not equality, so it would still pass if someone
+      # dropped `#[ignore]` from one test of three and the rest stopped running
+      # under `--ignored`. Pinning exact counts would fail every time a test is
+      # legitimately added, so the counts live here as the thing to eyeball in
+      # the step's "N live tests executed" line rather than as an assertion.
+      - name: Shared drives (two-account live e2e)
+        if: inputs.suite == 'shared_drives' || inputs.suite == 'both'
+        working-directory: src-tauri
+        shell: bash
+        env:
+          SQLX_OFFLINE: "true"
+          HCFS_DESKTOP_E2E_REQUIRE: "1"
+          HCFS_DESKTOP_E2E_SERVER_URL: ${{ secrets.HCFS_DESKTOP_E2E_SERVER_URL }}
+          HCFS_DESKTOP_E2E_BEARER_OWNER: ${{ secrets.HCFS_DESKTOP_E2E_BEARER_OWNER }}
+          HCFS_DESKTOP_E2E_BEARER_MEMBER: ${{ secrets.HCFS_DESKTOP_E2E_BEARER_MEMBER }}
+          HCFS_DESKTOP_E2E_OWNER_SS58: ${{ secrets.HCFS_DESKTOP_E2E_OWNER_SS58 }}
+          HCFS_DESKTOP_E2E_MEMBER_SS58: ${{ secrets.HCFS_DESKTOP_E2E_MEMBER_SS58 }}
+        run: |
+          set -euo pipefail
+          out=$(mktemp)
+          cargo test --test shared_drives_real_backend -- --ignored | tee "$out"
+          passed=$(sed -n 's/^test result: ok\. \([0-9][0-9]*\) passed.*/\1/p' "$out" | tail -1)
+          if [ "${passed:-0}" -lt 1 ]; then
+            echo "shared_drives: no live test executed — refusing to report success" >&2
+            exit 1
+          fi
+          echo "shared_drives: $passed live tests executed"
+
+      # Runs even when the shared-drives step failed: the two suites cover
+      # unrelated features, and one red suite should not hide the other's state.
+      # It does NOT run when the setup steps failed — without `steps.setup`,
+      # `!cancelled()` would drop the implicit success() and start a long,
+      # confusing compile on a tree that never got its toolchain or .env.
+      - name: Folder shares (single-bearer live e2e)
+        if: >-
+          !cancelled() && steps.setup.conclusion == 'success' &&
+          (inputs.suite == 'folder_shares' || inputs.suite == 'both')
+        working-directory: src-tauri
+        shell: bash
+        env:
+          SQLX_OFFLINE: "true"
+          HCFS_DESKTOP_E2E_REQUIRE: "1"
+          HCFS_DESKTOP_E2E_SERVER_URL: ${{ secrets.HCFS_DESKTOP_E2E_SERVER_URL }}
+          HCFS_DESKTOP_E2E_BEARER: ${{ secrets.HCFS_DESKTOP_E2E_BEARER }}
+          HCFS_DESKTOP_E2E_SS58: ${{ secrets.HCFS_DESKTOP_E2E_SS58 }}
+        # Same non-zero-count guard as the shared-drives step above.
+        run: |
+          set -euo pipefail
+          out=$(mktemp)
+          cargo test --test folder_shares_real_backend -- --ignored | tee "$out"
+          passed=$(sed -n 's/^test result: ok\. \([0-9][0-9]*\) passed.*/\1/p' "$out" | tail -1)
+          if [ "${passed:-0}" -lt 1 ]; then
+            echo "folder_shares: no live test executed — refusing to report success" >&2
+            exit 1
+          fi
+          echo "folder_shares: $passed live tests executed"
