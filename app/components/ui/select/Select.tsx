@@ -121,7 +121,13 @@ const Select = React.forwardRef<
               position="popper"
               sideOffset={4}
               className={cn(
-                "z-[60] overflow-hidden rounded-[8px] border border-grey-80 bg-white",
+                // Must outrank FramedDialog's full-screen `Dialog.Content`
+                // (z-[61]): this content is portalled to <body>, so at the
+                // old z-[60] it painted BEHIND the dialog's opaque card and
+                // the dropdown was invisible even though Radix had opened it
+                // (the trigger chevron still flipped). Matches the sibling
+                // compact select's z-[100].
+                "z-[100] overflow-hidden rounded-[8px] border border-grey-80 bg-white",
                 "shadow-[0px_20px_50px_-20px_rgba(10,10,10,0.45)]",
                 "dark:border-[#494949] dark:bg-[#1f1f1f]",
                 "data-[state=open]:animate-in data-[state=closed]:animate-out",

@@ -53,14 +53,22 @@ export function getMembersView(state: MembersState): MembersView {
 }
 
 /**
- * Invite lifetimes offered by the expiry row. No "never" — an unclaimed
- * invite link is a standing drive-access capability, so every preset
- * expires.
+ * "Never expires", expressed as the hcfs server's 100-year lifetime cap —
+ * the server keeps `expires_at` a plain timestamp, and clients that want a
+ * non-expiring invite send exactly the cap value
+ * (`hcfs-server/handlers/drive_invites.rs::MAX_EXPIRES_SECS`). Teams asked
+ * for standing invite links (2026-08-24), superseding the v1 "every preset
+ * expires" stance; access is still revocable per member from the Members
+ * tab.
  */
+export const NEVER_EXPIRES_SECS = 100 * 365 * 24 * 60 * 60;
+
+/** Invite lifetimes offered by the expiry row. */
 export const INVITE_TTL_OPTIONS: ReadonlyArray<{ label: string; secs: number }> = [
   { label: "24 hours", secs: 24 * 60 * 60 },
   { label: "7 days", secs: 7 * 24 * 60 * 60 },
   { label: "30 days", secs: 30 * 24 * 60 * 60 },
+  { label: "Never expires", secs: NEVER_EXPIRES_SECS },
 ];
 
 /**

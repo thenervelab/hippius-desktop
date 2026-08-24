@@ -50,6 +50,7 @@ import {
   formatJoinedDate,
   getMembersView,
   INVITE_TTL_OPTIONS,
+  NEVER_EXPIRES_SECS,
   type InviteState,
   type MembersState,
 } from "./shareDriveModalState";
@@ -220,8 +221,10 @@ function InviteTab({
   onRetry: () => void;
   onClose: () => void;
 }) {
+  const neverExpires = ttlSecs === NEVER_EXPIRES_SECS;
+
   if (state.kind === "done") {
-    return <InviteDone inviteUrl={state.inviteUrl} onClose={onClose} />;
+    return <InviteDone inviteUrl={state.inviteUrl} neverExpires={neverExpires} onClose={onClose} />;
   }
 
   if (state.kind === "unavailable") {
@@ -265,8 +268,9 @@ function InviteTab({
           }))}
         />
         <p className="mt-1 text-xs text-grey-50 dark:text-grey-dark-600">
-          Anyone with the link can join this drive — and read and change its files — until the link
-          expires. Share it only with people you trust.
+          {neverExpires
+            ? "Anyone with the link can join this drive — and read and change its files — for as long as the link exists. Share it only with people you trust."
+            : "Anyone with the link can join this drive — and read and change its files — until the link expires. Share it only with people you trust."}
         </p>
       </div>
 
@@ -289,7 +293,15 @@ function InviteTab({
   );
 }
 
-function InviteDone({ inviteUrl, onClose }: { inviteUrl: string; onClose: () => void }) {
+function InviteDone({
+  inviteUrl,
+  neverExpires,
+  onClose,
+}: {
+  inviteUrl: string;
+  neverExpires: boolean;
+  onClose: () => void;
+}) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
@@ -343,8 +355,9 @@ function InviteDone({ inviteUrl, onClose }: { inviteUrl: string; onClose: () => 
       </div>
 
       <p className="mb-6 text-xs text-grey-50 dark:text-grey-dark-600">
-        Anyone with this link can join the drive until it expires. To revoke someone&apos;s access
-        after they joined, remove them from the Members tab.
+        {neverExpires
+          ? "This link never expires — anyone who has it can join the drive. To revoke someone's access after they joined, remove them from the Members tab."
+          : "Anyone with this link can join the drive until it expires. To revoke someone's access after they joined, remove them from the Members tab."}
       </p>
 
       <Button type="button" variant="defaultStable" size="auto" onClick={onClose} className={secondaryButtonClass}>

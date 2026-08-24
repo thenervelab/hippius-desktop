@@ -7,6 +7,7 @@ import {
   formatJoinedDate,
   getMembersView,
   INVITE_TTL_OPTIONS,
+  NEVER_EXPIRES_SECS,
 } from "../shareDriveModalState";
 
 describe("getMembersView", () => {
@@ -32,9 +33,17 @@ describe("getMembersView", () => {
 });
 
 describe("INVITE_TTL_OPTIONS", () => {
-  it("offers no never-expiring invite and includes the display default (7 days)", () => {
+  it("includes the display default (7 days) and only positive lifetimes", () => {
     expect(INVITE_TTL_OPTIONS.every((o) => o.secs > 0)).toBe(true);
     expect(INVITE_TTL_OPTIONS.some((o) => o.secs === DEFAULT_INVITE_TTL_SECS)).toBe(true);
+  });
+
+  it("offers a never-expiring invite pinned to the server's 100-year cap", () => {
+    // The server accepts up to exactly 100 years (MAX_EXPIRES_SECS) and
+    // "never" is represented as that cap value — drifting from it turns the
+    // preset into a 400 at mint time.
+    expect(NEVER_EXPIRES_SECS).toBe(100 * 365 * 24 * 60 * 60);
+    expect(INVITE_TTL_OPTIONS.some((o) => o.secs === NEVER_EXPIRES_SECS)).toBe(true);
   });
 });
 

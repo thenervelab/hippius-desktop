@@ -49,8 +49,11 @@ const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 /// a minted link dies after 7 days or 50 claims, whichever comes first.
 /// Both are blast-radius bounds on a leaked link — an unclaimed invite URL
 /// is a standing drive-access capability (token + folder-key entropy), so
-/// every mint gets a finite lifetime and claim cap. The policy lives HERE,
-/// in Rust, so it holds for every IPC caller instead of depending on each
+/// an OMITTED lifetime always resolves finite. An explicit caller value
+/// passes through untouched — the FE's "Never expires" preset sends the
+/// server's 100-year cap (`NEVER_EXPIRES_SECS` in `shareDriveModalState.ts`),
+/// a deliberate product choice, not a default. The policy lives HERE, in
+/// Rust, so it holds for every IPC caller instead of depending on each
 /// FE wrapper filling the fields; the server keeps its own defaults/caps
 /// as the backstop, but the desktop never leans on them.
 const DEFAULT_INVITE_EXPIRES_IN_SECS: u64 = 7 * 24 * 60 * 60;
