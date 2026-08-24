@@ -6,11 +6,15 @@
 //! the UUID v4 shape is kept so the value stays familiar to read/log and no
 //! consumer is surprised by a differently-shaped string.
 
-/// Returns a random 128-bit identifier formatted as a UUID v4 string, e.g.
+/// Returns a random identifier formatted as a UUID v4 string, e.g.
 /// `"3fa85f64-5717-4562-b3fc-2c963f66afa6"`.
 ///
-/// Backed by `rand`'s thread-local CSPRNG (reseeded from the OS), the same
-/// entropy source the `uuid` crate's own `v4` feature used.
+/// Carries 122 bits of entropy: 128 random bits less the 6 pinned to the
+/// RFC 4122 version/variant nibbles below — the same accounting a real
+/// UUID v4 gets. Drawn from `rand`'s thread-local CSPRNG, seeded and
+/// periodically reseeded from the OS; the `uuid` crate's `v4` feature read
+/// the OS through `getrandom` on every call instead. Both are CSPRNGs, so
+/// the swap weakens neither caller.
 pub fn random_id() -> String {
     let mut bytes: [u8; 16] = rand::random();
 

@@ -66,7 +66,7 @@ ignore = ["RUSTSEC-2026-0194", "RUSTSEC-2026-0195"]
 # Kept at "warn" so duplication is visible and can be deduped incrementally.
 multiple-versions = "warn"
 # Several first-party deps use a bare-major requirement (`regex = "1"`,
-# `anyhow = "1.0"`); "deny" here would fail the existing manifest, so "warn".
+# `thiserror = "2"`); "deny" here would fail the existing manifest, so "warn".
 wildcards = "warn"
 allow = []
 deny = []

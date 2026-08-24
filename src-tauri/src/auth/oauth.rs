@@ -307,9 +307,9 @@ pub async fn start_oauth_flow(state: tauri::State<'_, crate::app_state::AppState
         _ => return Err(AppError::Validation(format!("Unsupported OAuth provider: {provider}"))),
     };
 
-    // Cryptographically random CSRF token. 128 bits from `rand`'s
-    // thread-local CSPRNG — more than enough for a 5-minute TTL and a
-    // map that is purged on every access.
+    // Cryptographically random CSRF token. 122 bits of entropy from
+    // `rand`'s thread-local CSPRNG — more than enough for a 5-minute TTL
+    // and a map that is purged on every access.
     let oauth_state = crate::utils::random_id::random_id();
     let created_at_ms = chrono::Utc::now().timestamp_millis();
     {
