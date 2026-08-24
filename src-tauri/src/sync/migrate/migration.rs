@@ -306,19 +306,32 @@ async fn fetch_s3_credentials(client: &reqwest::Client, pool: &SqlitePool, accou
 
 #[cfg(unix)]
 fn check_disk_space(path: &std::path::Path, required_bytes: u64) -> Result<()> {
-    // Documented last-resort `Other`: a `statvfs(2)` failure is a rare nix
-    // syscall error (`nix::Errno`) with no upstream `AppError` `#[from]` and no
-    // user-actionable category — it is not the "disk full" case (that is the
-    // explicit `NotReadyKind::NotEnoughDiskSpace` check below).
-    let stat = nix::sys::statvfs::statvfs(path).map_err(|e| crate::error::AppError::Other(e.to_string()))?;
-    // POSIX counts f_bavail (`blocks_available`) in units of f_frsize
-    // (`fragment_size`), NOT f_bsize (`block_size`, the preferred I/O transfer
-    // size). nix documents this on `blocks()`: "Units are in units of
-    // fragment_size()". On filesystems where the two differ (common: bsize
-    // 64 KiB–1 MiB vs frsize 4 KiB) multiplying by block_size overstated free
-    // space by the bsize/frsize ratio, letting a too-small disk pass the gate
-    // and then run out mid-download — the exact failure this check prevents.
-    let available = stat.fragment_size() as u64 * stat.blocks_available() as u64;
+    use std::os::unix::ffi::OsStrExt;
+
+    let c_path = std::ffi::CString::new(path.as_os_str().as_bytes()).map_err(|e| crate::error::AppError::Other(e.to_string()))?;
+
+    // Documented last-resort `Other`: a `statvfs(2)` failure is a rare libc
+    // errno with no upstream `AppError` `#[from]` and no user-actionable
+    // category — it is not the "disk full" case (that is the explicit
+    // `NotReadyKind::NotEnoughDiskSpace` check below).
+    //
+    // SAFETY: `c_path` is a valid NUL-terminated C string that outlives the
+    // call, and `stat` is a plain-old-data struct the syscall fully
+    // initializes on success (the only path `stat.assume_init()` is reached).
+    let stat = unsafe {
+        let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+        if libc::statvfs(c_path.as_ptr(), stat.as_mut_ptr()) != 0 {
+            return Err(crate::error::AppError::Other(std::io::Error::last_os_error().to_string()));
+        }
+        stat.assume_init()
+    };
+    // POSIX counts f_bavail (blocks available to unprivileged processes) in
+    // units of f_frsize (fragment size), NOT f_bsize (preferred I/O transfer
+    // size). On filesystems where the two differ (common: bsize 64 KiB–1 MiB
+    // vs frsize 4 KiB) multiplying by f_bsize overstated free space by the
+    // bsize/frsize ratio, letting a too-small disk pass the gate and then run
+    // out mid-download — the exact failure this check prevents.
+    let available = stat.f_frsize as u64 * stat.f_bavail as u64;
     if available < required_bytes {
         return Err(crate::error::AppError::NotReady(crate::error::NotReadyKind::NotEnoughDiskSpace));
     }

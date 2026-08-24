@@ -320,10 +320,10 @@ fn build_log_bundle(dir: &Path) -> Result<Option<TempZip>, AppError> {
     }
     entries.sort_by_key(|e| std::cmp::Reverse(e.1));
 
-    // Unique name per bundle (UUID, not PID) so two overlapping bundles — a
-    // double-submit, or parallel tests in one process — never share a path
-    // where one's `TempZip` drop would delete the other's file mid-read.
-    let zip_path = std::env::temp_dir().join(format!("hippius-logs-{}.zip", uuid::Uuid::new_v4()));
+    // Unique name per bundle (random id, not PID) so two overlapping bundles
+    // — a double-submit, or parallel tests in one process — never share a
+    // path where one's `TempZip` drop would delete the other's file mid-read.
+    let zip_path = std::env::temp_dir().join(format!("hippius-logs-{}.zip", super::random_id::random_id()));
     let temp = TempZip(zip_path.clone());
 
     let file = std::fs::File::create(&zip_path)?;

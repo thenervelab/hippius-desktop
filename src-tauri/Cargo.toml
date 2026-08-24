@@ -57,7 +57,6 @@ tauri = { version = "2", features = [
 ] }
 tauri-plugin-opener = "2"
 tauri-plugin-deep-link = "2.0.0"
-tauri-plugin-shell = "2"
 # Optional, dev/E2E-only: embeds an in-process W3C WebDriver server so
 # WebdriverIO/Selenium can drive a REAL macOS WKWebView build (the official
 # `tauri-driver` can't — Apple ships no WKWebView driver). Pinned exact because
@@ -70,7 +69,6 @@ tauri-plugin-webdriver = { version = "=0.2.1", optional = true }
 netbird-embed = { version = "0.3", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-serde_yaml = "0.9"
 tokio = { version = "1.49.0", features = [
     "rt-multi-thread",
     "macros",
@@ -84,8 +82,6 @@ tokio = { version = "1.49.0", features = [
 futures-util = { version = "0.3", default-features = false, features = ["std", "alloc"] }
 tokio-util = "0.7"
 dirs = "6.0.0"
-flate2 = "1.1.2"
-tar = { version = "0.4.44", default-features = false }
 reqwest = { version = "0.13.1", default-features = false, features = [
     "multipart",
     "json",
@@ -100,18 +96,15 @@ bs58 = "0.5"
 sha2 = "0.10"
 subxt = "0.38"
 subxt-signer = { version = "0.38", default-features = false, features = ["sr25519", "subxt", "std"] }
-uuid = { version = "1", features = ["v4"] }
 tempfile = "3"
 sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio"] }
 hex = "0.4"
 tauri-plugin-fs = "2"
-sysinfo = "0.32"
 notify = "6.1"
 tauri-plugin-dialog = "2.6.0"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
 rand = "0.8"
 tauri-plugin-process = "2"
-which = "4.4"
 hostname = "0.4"
 zeroize = "1"
 chacha20poly1305 = "0.10"
@@ -188,7 +181,9 @@ tracing-appender = "0.2"
 regex = "1"
 
 [target.'cfg(unix)'.dependencies]
-nix = { version = "0.31.2", features = ["fs"] }
+# Used only for the single `statvfs(2)` FFI call in
+# sync/migrate/migration.rs's disk-space check.
+libc = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.25"
@@ -211,8 +206,6 @@ tauri-plugin-single-instance = { version = "2.0.0", features = ["deep-link"] }
 tauri-plugin-updater = { version = "2", default-features = false, features = [
     "rustls-tls",
 ] }
-# Ergonomic Error Handling
-anyhow = "1.0"
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }
@@ -270,17 +263,12 @@ tokio = { version = "1", features = [
     "process",
     "test-util",
 ] }
-anyhow = "1"
-aes = "0.8"
-cbc = "0.1"
-md5 = "0.7"
 reqwest = { version = "0.13.1", default-features = false, features = [
     "json",
     "rustls",
 ] }
 tempfile = "3"
 proptest = "1"
-uuid = { version = "1", features = ["v4"] }
 axum = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
