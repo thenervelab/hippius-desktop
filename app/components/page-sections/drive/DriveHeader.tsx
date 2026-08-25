@@ -220,7 +220,8 @@ const DriveHeader: FC<DriveHeaderProps> = ({
 
       {/* Download Folder — only when browsing inside a nested folder.
           Same secondary pill style as "+ New Folder" so it doesn't compete
-          with the primary "+ New File" CTA. */}
+          with the primary "+ New File" CTA. Saves a store-only .zip
+          (export_folder_zip), not a copied directory tree. */}
       {isNested && onDownloadFolder && (
         <Button
           variant="defaultStable"

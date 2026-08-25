@@ -10,7 +10,6 @@ import React, {
 } from "react";
 import { errorMessage } from "@/lib/utils/errorUtils";
 import { useRouter } from "next/navigation";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import useUserFiles, {
   FormattedUserFile,
 } from "@/app/lib/hooks/use-user-files";
@@ -989,46 +988,25 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     handleNavigateToBreadcrumbSegment,
   ]);
 
-  // Download Folder — only relevant inside a nested folder. Mirrors the
-  // old FolderView's `initiateDownloadFolder` flow: pick an output dir,
-  // then hand off to `downloadFolder` with the nested rel-path as
-  // `actualFileName` (the util resolves the sync path via the label).
+  // Download Folder — only relevant inside a nested folder. The util
+  // owns the `.zip` save dialog and the `export_folder_zip` IPC; this
+  // handler only supplies the nested rel-path as `actualFileName`.
   const [isDownloadingFolder, setIsDownloadingFolder] = useState(false);
   const handleDownloadNestedFolder = useCallback(async () => {
     if (!isNested || !polkadotAddress) return;
+    const folderName = urlFolderName || urlMainFolderActualName || "Folder";
+    const actualFolderPath = urlSubFolderPath || folderName;
+    setIsDownloadingFolder(true);
     try {
-      const { downloadDir } = await import("@tauri-apps/api/path");
-      let defaultPath: string | undefined;
-      try {
-        defaultPath = await downloadDir();
-      } catch {
-        // Fall back to no directory hint
-      }
-      const outputDir = (await openDialog({
-        directory: true,
-        multiple: false,
-        defaultPath,
-      })) as string | null;
-      if (!outputDir) return;
-
-      const folderName = urlFolderName || urlMainFolderActualName || "Folder";
-      const actualFolderPath = urlSubFolderPath || folderName;
-      setIsDownloadingFolder(true);
-      const result = await downloadFolder({
+      await downloadFolder({
         folderName,
         polkadotAddress,
-        outputDir,
         file: {
           actualFileName: actualFolderPath,
           label: nestedDrive?.label,
           source: urlFolderSource || undefined,
         } as FormattedUserFile,
       });
-      if (result && !result.success) {
-        toast.error(
-          `Failed to download folder: ${result.message || "Unknown error"}`,
-        );
-      }
     } catch (err) {
       console.error("Error downloading folder:", err);
       toast.error(

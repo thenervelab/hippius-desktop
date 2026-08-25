@@ -1,9 +1,8 @@
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
-import { errorMessage } from "@/lib/utils/errorUtils";
 import { toast } from "sonner";
 import { invoke } from "@tauri-apps/api/core";
-import { save, open } from "@tauri-apps/plugin-dialog";
-import { join } from "@tauri-apps/api/path";
+import { save } from "@tauri-apps/plugin-dialog";
+import { downloadFolder } from "@/app/lib/utils/downloadFolder";
 
 interface FilePathInfo {
   sync_path: string;
@@ -31,7 +30,11 @@ export const downloadFile = async (
   polkadotAddress: string,
 ) => {
   if (file.isFolder) {
-    return downloadFolderExport(file, polkadotAddress);
+    return downloadFolder({
+      folderName: file.name,
+      polkadotAddress,
+      file,
+    });
   }
   return downloadFileExport(file, polkadotAddress);
 };
@@ -105,58 +108,5 @@ const downloadFileExport = async (
           : ((err as { message?: string })?.message ?? String(err));
     toast.error(`Download failed: ${message}`, { id: toastId });
     return { success: false, error: "DOWNLOAD_FAILED", message };
-  }
-};
-
-const downloadFolderExport = async (
-  file: FormattedUserFile,
-  polkadotAddress: string
-) => {
-  const { name } = file;
-  const toastId = toast.loading(`Preparing folder download: ${name}`);
-
-  try {
-    const { downloadDir } = await import("@tauri-apps/api/path");
-    let defaultPath: string | undefined;
-    try {
-      defaultPath = await downloadDir();
-    } catch {
-      // Fall back to no directory hint
-    }
-    const selectedDir = await open({
-      directory: true,
-      multiple: false,
-      defaultPath,
-    }) as string | null;
-
-    if (!selectedDir) {
-      toast.dismiss(toastId);
-      return { success: false, error: "Download cancelled" };
-    }
-
-    const info = await invoke<FilePathInfo>("resolve_file_info", {
-      accountId: polkadotAddress,
-      label: file.label ?? null,
-      source: file.source ?? null,
-      fileName: file.actualFileName || file.name,
-    });
-
-    toast.loading(`Exporting folder: ${name}`, { id: toastId });
-
-    await invoke("export_file", {
-      syncPath: info.sync_path,
-      fileName: info.relative_name,
-      outputPath: await join(selectedDir, name),
-    });
-
-    toast.success(`Folder downloaded: ${name}`, { id: toastId });
-    return { success: true };
-  } catch (err) {
-    toast.dismiss(toastId);
-    console.error("Folder download failed:", err);
-    toast.error(
-      `Download failed: ${errorMessage(err)}`
-    );
-    return { success: false, error: "DOWNLOAD_FAILED", message: String(err) };
   }
 };
