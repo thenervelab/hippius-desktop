@@ -1,5 +1,7 @@
 //! Path resolution and export: `export_file`, `resolve_file_path`,
-//! `resolve_file_info`. Shared path helpers live in `pathops`.
+//! `resolve_file_info`. Shared path helpers live in `pathops`. Folder-as-zip
+//! export lives in `export_zip` so the file-copy path stays a single-file
+//! copy.
 
 use super::pathops::{copy_dir_recursive, derive_relative_name, ensure_within};
 use crate::auth::account_key::account_key;
@@ -7,29 +9,17 @@ use crate::error::Result;
 use serde::Serialize;
 use std::path::Path;
 
-/// Export file or folder from sync folder to arbitrary location.
+/// Reject `sync_path` values that are not a `sync_paths` row for `owner`.
 ///
-/// Rejects `sync_path` values that are not registered in the `sync_paths`
-/// table for the active account. Without this check, a caller (e.g. a
-/// compromised frontend) could set `sync_path` to `/` and `file_name` to
-/// `etc/passwd` and the inner `ensure_within` guard would trivially allow
-/// it because `/etc/passwd` is contained in `/`.
-#[tauri::command]
-pub async fn export_file(
-    state: tauri::State<'_, crate::app_state::AppState>,
-    sync_path: String,
-    file_name: String,
-    output_path: String,
-) -> Result<()> {
-    // Gate 1: sync_path must be a registered sync folder for the active
-    // user. This prevents the broad `ensure_within` guard from being
-    // bypassed via an attacker-controlled parent directory.
-    let account_id = state.current_account_id()?;
-    let owner = account_key(&account_id);
+/// Without this, `ensure_within` is bypassed by pointing `sync_path` at `/`
+/// (or any ancestor of the target) so `/etc/passwd` looks contained. Shared
+/// by [`export_file`] and [`super::export_zip::export_folder_zip`] so the
+/// two export IPCs cannot drift.
+pub(super) async fn require_registered_sync_path(pool: &sqlx::SqlitePool, owner: &str, sync_path: &str) -> Result<()> {
     let registered: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM sync_paths WHERE owner = ? AND path = ? LIMIT 1")
-        .bind(&owner)
-        .bind(&sync_path)
-        .fetch_optional(state.pool()?)
+        .bind(owner)
+        .bind(sync_path)
+        .fetch_optional(pool)
         .await?;
     if registered.is_none() {
         // An unregistered sync_path is rejected caller input (the security gate) → Validation.
@@ -37,6 +27,27 @@ pub async fn export_file(
             "sync_path is not a registered sync folder for this account".into(),
         ));
     }
+    Ok(())
+}
+
+/// Export a single file (or copy a directory tree) from a sync folder to an
+/// arbitrary location.
+///
+/// Folder downloads from the Files UI go through
+/// [`super::export_zip::export_folder_zip`] instead — this path remains a
+/// copy so a single-file save is still a byte-for-byte file, not a zip of
+/// one entry. The registered-`sync_path` gate is shared with the zip
+/// command (see [`require_registered_sync_path`]).
+#[tauri::command]
+pub async fn export_file(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    sync_path: String,
+    file_name: String,
+    output_path: String,
+) -> Result<()> {
+    let account_id = state.current_account_id()?;
+    let owner = account_key(&account_id);
+    require_registered_sync_path(state.pool()?, &owner, &sync_path).await?;
 
     let parent = Path::new(&sync_path);
     let source = parent.join(&file_name);
