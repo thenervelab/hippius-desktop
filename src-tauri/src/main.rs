@@ -75,6 +75,7 @@ use crate::console_access::validate_recovery_password;
 use crate::infra::vm::{
     create_vm, get_vm_instance, list_vm_applications, list_vm_flavors, list_vm_images, list_vm_instances, reboot_vm, start_vm, stop_vm, terminate_vm,
 };
+use crate::media_preview::prepare_motion_photo_preview;
 use crate::notifications::credits::{
     check_low_credit_notification, check_low_credit_notification_live, create_credit_notifications, create_sync_notification,
     get_is_above_half_credit, is_first_time, mark_first_time_seen, process_credit_events, update_is_above_half_credit,
@@ -86,7 +87,6 @@ use crate::notifications::crud::{
     list_notifications, low_credit_subtype_exists, mark_all_notifications_read, mark_notification_read, mark_notification_unread,
     update_local_notification_preferences,
 };
-use crate::media_preview::prepare_motion_photo_preview;
 use crate::notifications::settings::{get_notification_settings, update_notification_settings};
 use crate::recovery::{
     change_recovery_password, check_recovery_state, has_pending_rotation, mark_recovery_skipped, recover_mnemonic, resume_recovery_password_rotation,
