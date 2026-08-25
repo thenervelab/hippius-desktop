@@ -26,11 +26,11 @@ export interface DownloadFolderOptions {
   file?: FormattedUserFile;
 }
 
-export const downloadFolder = async ({
-  folderName,
-  polkadotAddress,
-  file,
-}: DownloadFolderOptions) => {
+/** OS save dialog only. `null` means the user cancelled — callers must
+ *  not start a spinner or pack IPC until this returns a path. */
+export async function pickFolderZipSavePath(
+  folderName: string,
+): Promise<string | null> {
   const { downloadDir } = await import("@tauri-apps/api/path");
   let downloadDirPath: string | undefined;
   try {
@@ -48,10 +48,16 @@ export const downloadFolder = async ({
     filters: FOLDER_ZIP_DIALOG_FILTERS,
     defaultPath,
   });
-  if (!outputZipPath) {
-    return { success: false, error: "Download cancelled" };
-  }
+  return outputZipPath ?? null;
+}
 
+/** Pack IPC + toasts. Assumes a dest path is already chosen. */
+export async function exportFolderZipToPath({
+  folderName,
+  polkadotAddress,
+  file,
+  outputZipPath,
+}: DownloadFolderOptions & { outputZipPath: string }) {
   const toastId = toast.info("Downloading folder...", { duration: Infinity });
 
   try {
@@ -82,4 +88,21 @@ export const downloadFolder = async ({
       message,
     };
   }
+}
+
+export const downloadFolder = async ({
+  folderName,
+  polkadotAddress,
+  file,
+}: DownloadFolderOptions) => {
+  const outputZipPath = await pickFolderZipSavePath(folderName);
+  if (!outputZipPath) {
+    return { success: false, error: "Download cancelled" };
+  }
+  return exportFolderZipToPath({
+    folderName,
+    polkadotAddress,
+    file,
+    outputZipPath,
+  });
 };

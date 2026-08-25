@@ -34,7 +34,10 @@ import DriveHeader from "./DriveHeader";
 import DriveContent from "./DriveContent";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 import { useNestedFolderListing } from "@/app/lib/hooks/use-nested-folder-listing";
-import { downloadFolder } from "@/app/lib/utils/downloadFolder";
+import {
+  exportFolderZipToPath,
+  pickFolderZipSavePath,
+} from "@/app/lib/utils/downloadFolder";
 import { BreadcrumbSegment } from "./SyncFolderBreadcrumb";
 import { useAtomValue, useSetAtom } from "jotai";
 import {
@@ -988,19 +991,24 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     handleNavigateToBreadcrumbSegment,
   ]);
 
-  // Download Folder — only relevant inside a nested folder. The util
-  // owns the `.zip` save dialog and the `export_folder_zip` IPC; this
-  // handler only supplies the nested rel-path as `actualFileName`.
+  // Download Folder — only relevant inside a nested folder. The save
+  // dialog runs first; spinner + pack IPC start only after a path is
+  // chosen. This handler supplies the nested rel-path as `actualFileName`.
   const [isDownloadingFolder, setIsDownloadingFolder] = useState(false);
   const handleDownloadNestedFolder = useCallback(async () => {
     if (!isNested || !polkadotAddress) return;
     const folderName = urlFolderName || urlMainFolderActualName || "Folder";
     const actualFolderPath = urlSubFolderPath || folderName;
+    // Save dialog first — the button spinner must not run while the OS
+    // picker is open (cancel would flash a loader for no pack work).
+    const outputZipPath = await pickFolderZipSavePath(folderName);
+    if (!outputZipPath) return;
     setIsDownloadingFolder(true);
     try {
-      await downloadFolder({
+      await exportFolderZipToPath({
         folderName,
         polkadotAddress,
+        outputZipPath,
         file: {
           actualFileName: actualFolderPath,
           label: nestedDrive?.label,
