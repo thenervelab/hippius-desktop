@@ -10,7 +10,6 @@ import React, {
 } from "react";
 import { errorMessage } from "@/lib/utils/errorUtils";
 import { useRouter } from "next/navigation";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import useUserFiles, {
   FormattedUserFile,
 } from "@/app/lib/hooks/use-user-files";
@@ -35,7 +34,10 @@ import DriveHeader from "./DriveHeader";
 import DriveContent from "./DriveContent";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 import { useNestedFolderListing } from "@/app/lib/hooks/use-nested-folder-listing";
-import { downloadFolder } from "@/app/lib/utils/downloadFolder";
+import {
+  exportFolderZipToPath,
+  pickFolderZipSavePath,
+} from "@/app/lib/utils/downloadFolder";
 import { BreadcrumbSegment } from "./SyncFolderBreadcrumb";
 import { useAtomValue, useSetAtom } from "jotai";
 import {
@@ -989,46 +991,30 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     handleNavigateToBreadcrumbSegment,
   ]);
 
-  // Download Folder — only relevant inside a nested folder. Mirrors the
-  // old FolderView's `initiateDownloadFolder` flow: pick an output dir,
-  // then hand off to `downloadFolder` with the nested rel-path as
-  // `actualFileName` (the util resolves the sync path via the label).
+  // Download Folder — only relevant inside a nested folder. The save
+  // dialog runs first; spinner + pack IPC start only after a path is
+  // chosen. This handler supplies the nested rel-path as `actualFileName`.
   const [isDownloadingFolder, setIsDownloadingFolder] = useState(false);
   const handleDownloadNestedFolder = useCallback(async () => {
     if (!isNested || !polkadotAddress) return;
+    const folderName = urlFolderName || urlMainFolderActualName || "Folder";
+    const actualFolderPath = urlSubFolderPath || folderName;
+    // Save dialog first — the button spinner must not run while the OS
+    // picker is open (cancel would flash a loader for no pack work).
+    const outputZipPath = await pickFolderZipSavePath(folderName);
+    if (!outputZipPath) return;
+    setIsDownloadingFolder(true);
     try {
-      const { downloadDir } = await import("@tauri-apps/api/path");
-      let defaultPath: string | undefined;
-      try {
-        defaultPath = await downloadDir();
-      } catch {
-        // Fall back to no directory hint
-      }
-      const outputDir = (await openDialog({
-        directory: true,
-        multiple: false,
-        defaultPath,
-      })) as string | null;
-      if (!outputDir) return;
-
-      const folderName = urlFolderName || urlMainFolderActualName || "Folder";
-      const actualFolderPath = urlSubFolderPath || folderName;
-      setIsDownloadingFolder(true);
-      const result = await downloadFolder({
+      await exportFolderZipToPath({
         folderName,
         polkadotAddress,
-        outputDir,
+        outputZipPath,
         file: {
           actualFileName: actualFolderPath,
           label: nestedDrive?.label,
           source: urlFolderSource || undefined,
         } as FormattedUserFile,
       });
-      if (result && !result.success) {
-        toast.error(
-          `Failed to download folder: ${result.message || "Unknown error"}`,
-        );
-      }
     } catch (err) {
       console.error("Error downloading folder:", err);
       toast.error(
