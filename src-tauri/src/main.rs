@@ -21,6 +21,7 @@ pub mod error;
 #[cfg(any(unix, windows))]
 pub mod finder_bridge;
 pub mod infra;
+pub mod media_preview;
 pub mod notifications;
 pub mod power;
 pub mod recovery;
@@ -74,6 +75,7 @@ use crate::console_access::validate_recovery_password;
 use crate::infra::vm::{
     create_vm, get_vm_instance, list_vm_applications, list_vm_flavors, list_vm_images, list_vm_instances, reboot_vm, start_vm, stop_vm, terminate_vm,
 };
+use crate::media_preview::prepare_motion_photo_preview;
 use crate::notifications::credits::{
     check_low_credit_notification, check_low_credit_notification_live, create_credit_notifications, create_sync_notification,
     get_is_above_half_credit, is_first_time, mark_first_time_seen, process_credit_events, update_is_above_half_credit,
@@ -346,6 +348,7 @@ fn main() {
             download_remote_file,
             cache_remote_file,
             get_thumbnail,
+            prepare_motion_photo_preview,
             // File sharing (link-based public shares)
             crate::shares::commands::hcfs_create_share,
             crate::shares::commands::hcfs_create_folder_share,

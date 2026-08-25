@@ -23,24 +23,13 @@ import VideoPlayerError from "./VideoPlayerError";
 // which is available regardless of the `withGlobalTauri` setting)
 const isTauri = isTauriRuntime();
 
-// Synchronous Linux detection — must be available on the FIRST render so
-// the short-circuit below can render the system-player fallback without
-// flashing a hanging vidstack player. UA-sniffing is unreliable in
-// general but reliable enough here: WebKitGTK on Linux always emits an
-// "X11; Linux" or "Wayland; Linux" UA, while WKWebView (macOS) and
-// WebView2 (Windows) never do.
-const _isLinuxFromUA =
-  typeof navigator !== "undefined" && /linux/i.test(navigator.userAgent);
-
-// Platform info loaded from Rust (replaces deprecated navigator.platform).
-// `_isLinux` is initialised from the UA above and then refined by the
-// authoritative Rust answer once it arrives; in practice both agree.
-let _isLinux = isTauri && _isLinuxFromUA;
+// Platform info loaded from Rust. Linux must not be rejected as a platform:
+// WebKitGTK delegates media playback to GStreamer, so supported files should
+// reach the media element and only fall back after a real decoder error.
 let _unsupportedEngine = false;
 if (isTauri) {
   import("@tauri-apps/api/core").then(({ invoke }) =>
     invoke<{ os: string; supportsMkv: boolean }>("get_platform_info").then((info) => {
-      _isLinux = info.os === "linux";
       _unsupportedEngine = !info.supportsMkv;
     }).catch(() => {})
   );
@@ -114,11 +103,10 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const stallTimerRef = useRef<number | null>(null);
   const stallStartedAtRef = useRef<number | null>(null);
 
-  // 120s everywhere, including Linux: a shorter ceiling trips on
+  // 120s everywhere: a shorter ceiling trips on
   // perfectly healthy videos that simply take a moment to load from
-  // disk or the asset:// protocol. Linux installations without H.264
-  // codecs surface an `onError` from the underlying media element
-  // instead, so they don't need a fast-fail timeout.
+  // disk or the asset:// protocol. Missing system codecs surface an
+  // `onError` from the underlying media element instead.
   const LOAD_TIMEOUT = 120_000;
 
   const clearLoadTimer = () => {
@@ -293,16 +281,11 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
     timeoutRef.current = window.setTimeout(() => {
       setError("Video is taking too long to load");
     }, LOAD_TIMEOUT);
-    // `stopStallWatch` is stable (useCallback([])) so it's intentionally
-    // excluded from the dep list — adding it would change the dep-array
-    // length under HMR and trip React's "deps array size changed"
-    // assertion.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     return () => {
       clearLoadTimer();
       stopStallWatch();
     };
-  }, [videoUrl, fileFormat, reloadKey]);
+  }, [videoUrl, fileFormat, reloadKey, stopStallWatch]);
 
   // Don't render MediaPlayer if no URL is available
   if (!videoUrl || videoUrl.trim() === "") {
@@ -331,36 +314,12 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
       }
     : videoUrl;
 
-  // Linux short-circuit: skip the in-app vidstack player and surface the
-  // "Open with System Player" fallback immediately. WebKitGTK relies on
-  // GStreamer for media decoding and most desktops ship without the
-  // codecs the bundled player needs (notably H.264 / HEVC for MP4 +
-  // MOV), so the built-in player otherwise hangs on a black frame until
-  // the load timeout fires. Falling back early gives the user the
-  // system-player + download buttons without the wait. macOS / Windows
-  // (Chromium / WebView2 / WKWebView) continue through the normal
-  // player path below. See `VideoPlayerError` for the fallback UI.
-  if (isTauri && _isLinux) {
-    return (
-      <div
-        ref={playerContainerRef}
-        className="relative h-full w-full bg-black"
-      >
-        <VideoPlayerError
-          message="Video playback isn't supported in the built-in player on Linux."
-          file={file}
-          handleFileDownload={handleFileDownload}
-        />
-      </div>
-    );
-  }
-
   return (
     <div
       ref={playerContainerRef}
       className={
         isFullscreen && isTauri
-          ? "fixed inset-0 z-[99999] bg-black flex items-center justify-center"
+          ? "fixed inset-0 z-[99999] bg-[#0A0A0A] flex items-center justify-center"
           : "relative w-full h-full"
       }
     >
@@ -368,7 +327,7 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
       {isFullscreen && isTauri && (
         <button
           onClick={exitFullscreen}
-          className="absolute top-4 right-4 z-[100000] p-2 bg-black/60 hover:bg-black/80 rounded-full transition-all duration-200"
+          className="absolute top-4 right-4 z-[100000] p-2 bg-[#0A0A0A]/60 hover:bg-[#0A0A0A]/80 rounded-full transition-all duration-200"
           aria-label="Exit fullscreen"
         >
           <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">

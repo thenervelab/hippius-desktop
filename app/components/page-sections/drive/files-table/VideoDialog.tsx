@@ -69,6 +69,7 @@ const VideoDialog: React.FC<{
       <div
         className={cn(
           "relative w-full h-full min-h-0 min-w-0 flex flex-col rounded-[8px] overflow-hidden",
+          "bg-grey-light-300 dark:bg-black-primary-bg",
           "shadow-[0_14px_31px_rgba(0,0,0,0.06),0_56px_56px_rgba(0,0,0,0.05)]",
           "animate-scale-in-95-0.4",
         )}
