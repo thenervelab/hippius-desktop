@@ -32,6 +32,21 @@ describe("failureMessage", () => {
     );
   });
 
+  it("phrases a session-limit 429 as self-resolving, not as too many devices", () => {
+    const msg = failureMessage({ ...base, kind: "serverError", httpStatus: 429 });
+    expect(msg).toBe("Too many uploads in progress — will retry.");
+    expect(msg.toLowerCase()).not.toContain("device");
+  });
+
+  it("rewrites a persisted bare session-limit Other row to the retry copy", () => {
+    const msg = failureMessage({
+      ...base,
+      kind: "other",
+      message: "Too many active upload sessions",
+    });
+    expect(msg).toBe("Too many uploads in progress — will retry.");
+  });
+
   it("phrases a network failure as self-resolving, not as the user's connection", () => {
     // Must read identically to Rust's
     // `FileFailureKindPayload::Network::display_reason()`.

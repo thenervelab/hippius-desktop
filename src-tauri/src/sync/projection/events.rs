@@ -247,7 +247,11 @@ mod tests {
         // path recognises a transient row by that string. Rust writes it and
         // Rust reads it — but if the two ever drift the widget silently loses
         // the amber "Retrying" tone, so pin the round trip.
-        for kind in [FileFailureKindPayload::ChangedWhileUploading, FileFailureKindPayload::Network] {
+        for kind in [
+            FileFailureKindPayload::ChangedWhileUploading,
+            FileFailureKindPayload::Network,
+            FileFailureKindPayload::ServerError { status: 429 },
+        ] {
             let authored = kind.display_reason();
             assert!(is_transient_reason(&authored), "authored reason must be recognised: {authored}");
         }
@@ -277,6 +281,10 @@ mod tests {
         // chunks — a 5xx or a credits failure still needs the user.
         assert!(FileFailureKindPayload::ChangedWhileUploading.is_transient());
         assert!(FileFailureKindPayload::Network.is_transient());
+        assert!(
+            FileFailureKindPayload::ServerError { status: 429 }.is_transient(),
+            "session-limit 429 is retried next cycle"
+        );
         for kind in [
             FileFailureKindPayload::ServerError { status: 500 },
             FileFailureKindPayload::InsufficientBalance {
@@ -305,6 +313,43 @@ mod tests {
     fn display_reason_server_error_includes_status() {
         let kind = FileFailureKindPayload::ServerError { status: 500 };
         assert_eq!(kind.display_reason(), "Server error (500). Please try again.");
+    }
+
+    #[test]
+    fn session_limit_429_is_amber_retry_copy() {
+        let kind = FileFailureKindPayload::ServerError { status: 429 };
+        assert_eq!(kind.display_reason(), SESSION_LIMIT_DISPLAY_REASON);
+        assert!(kind.is_transient());
+        assert!(is_transient_reason(&kind.display_reason()));
+        assert!(
+            !kind.display_reason().to_lowercase().contains("device"),
+            "desktop-only can trip the cap; do not blame other devices"
+        );
+    }
+
+    #[test]
+    fn bare_session_limit_other_is_rewritten_as_retry_copy() {
+        // Today's hcfs-client pin stringifies 429 as this bare sentence,
+        // classified Other. Keep the rewrite so a pin bump is not required
+        // for the widget to stop showing the raw server sentence.
+        use hcfs_client::engine::events::FileFailureKind as K;
+        let payload = FileFailureKindPayload::from(&K::Other(SESSION_LIMIT_MARKER.to_string()));
+        assert!(
+            matches!(payload, FileFailureKindPayload::Other { .. }),
+            "no new IPC variant — rewrite at display time"
+        );
+        assert_eq!(payload.display_reason(), SESSION_LIMIT_DISPLAY_REASON);
+        assert!(payload.is_transient());
+    }
+
+    #[test]
+    fn prefixed_session_limit_other_is_rewritten_as_retry_copy() {
+        use hcfs_client::engine::events::FileFailureKind as K;
+        let msg = "Upload failed: Server returned 429 Too Many Requests: \
+                   Too many active upload sessions";
+        let payload = FileFailureKindPayload::from(&K::Other(msg.to_string()));
+        assert_eq!(payload.display_reason(), SESSION_LIMIT_DISPLAY_REASON);
+        assert!(payload.is_transient());
     }
 
     #[test]
@@ -874,6 +919,18 @@ pub const CHANGED_WHILE_UPLOADING_MARKER: &str = "Encryption error: File was mod
 /// stringify identically to "no wifi" in reqwest (report 2026-08-26).
 const NETWORK_DISPLAY_REASON: &str = "Couldn't reach the server — will retry.";
 
+/// Substring hcfs-client used to emit for a session-create 429
+/// (`create_upload_session` mapped TOO_MANY_REQUESTS to this bare sentence
+/// with no `"Server returned 429:"` prefix). Also matches the canonical
+/// `"Server returned 429 …: Too many active upload sessions"` shape after
+/// the client fix. Do not say "devices" — desktop-only can trip the cap.
+pub const SESSION_LIMIT_MARKER: &str = "Too many active upload sessions";
+
+/// User-facing copy for a session-cap 429. Next cycle retries; in-flight
+/// sessions keep making progress. Authored here so the snapshot string and
+/// the persisted-row `failureMessage()` stay word-aligned.
+const SESSION_LIMIT_DISPLAY_REASON: &str = "Too many uploads in progress — will retry.";
+
 /// Whether a snapshot row's authored `error` reason describes a self-resolving
 /// failure (see [`FileFailureKindPayload::is_transient`]).
 ///
@@ -885,7 +942,17 @@ const NETWORK_DISPLAY_REASON: &str = "Couldn't reach the server — will retry."
 /// NOT the frontend parsing a message — the FE receives the decision already made.
 ///
 pub fn is_transient_reason(reason: &str) -> bool {
-    reason == FileFailureKindPayload::ChangedWhileUploading.display_reason() || reason == FileFailureKindPayload::Network.display_reason()
+    reason == FileFailureKindPayload::ChangedWhileUploading.display_reason()
+        || reason == FileFailureKindPayload::Network.display_reason()
+        || reason == SESSION_LIMIT_DISPLAY_REASON
+}
+
+/// hcfs-server session cap (`error=session_limit`, HTTP 429). The current
+/// desktop pin stringifies it as the bare [`SESSION_LIMIT_MARKER`]; after
+/// the hcfs-client fix it rides `"Server returned 429: …"` and classifies
+/// as `ServerError { 429 }`. Both must present the same retry copy.
+fn is_session_limit_shaped(message: &str) -> bool {
+    message.contains(SESSION_LIMIT_MARKER)
 }
 
 /// Upstream often collapses a transport failure into `Other`/`UploadFailed`
@@ -940,10 +1007,16 @@ impl FileFailureKindPayload {
     /// [`Self::ChangedWhileUploading`] re-derives and re-uploads on the next
     /// cycle. [`Self::Network`] is the same shape for the user: chunk PUTs
     /// already retried in-cycle, cached ciphertext is kept, and the next
-    /// cycle resumes. A 5xx or a credits failure is *often* retried too, but
-    /// those still need the user (or a billing top-up), so they stay red.
+    /// cycle resumes. A session-limit 429 is the same: the next cycle
+    /// resumes live sessions (server-side) or retries the file. A 5xx or a
+    /// credits failure is *often* retried too, but those still need the
+    /// user (or a billing top-up), so they stay red.
     pub fn is_transient(&self) -> bool {
-        matches!(self, Self::ChangedWhileUploading | Self::Network)
+        match self {
+            Self::ChangedWhileUploading | Self::Network | Self::ServerError { status: 429 } => true,
+            Self::Other { message } if is_session_limit_shaped(message) => true,
+            _ => false,
+        }
     }
 
     pub fn display_reason(&self) -> String {
@@ -957,6 +1030,7 @@ impl FileFailureKindPayload {
                 dollars(*required_cents),
                 dollars(*balance_cents),
             ),
+            Self::ServerError { status: 429 } => SESSION_LIMIT_DISPLAY_REASON.to_string(),
             Self::ServerError { status } => format!("Server error ({status}). Please try again."),
             Self::Network => NETWORK_DISPLAY_REASON.to_string(),
             // `Other` already carries upstream display text; fall back to a
@@ -970,6 +1044,8 @@ impl FileFailureKindPayload {
                     "Sync failed. Please try again.".to_string()
                 } else if is_network_shaped(trimmed) {
                     NETWORK_DISPLAY_REASON.to_string()
+                } else if is_session_limit_shaped(trimmed) {
+                    SESSION_LIMIT_DISPLAY_REASON.to_string()
                 } else {
                     strip_request_url(trimmed).to_string()
                 }
