@@ -279,9 +279,22 @@ jobs:
               echo "api_key=$APPLE_API_KEY_ID"
               echo "api_issuer=$APPLE_API_ISSUER_ID"
             } >> "$GITHUB_OUTPUT"
+            echo "finder_embed=yes" >> "$GITHUB_OUTPUT"
             echo "Notarization enabled (finalize step)."
           else
-            echo "App Store Connect API key not set — skipping notarization + Finder embed."
+            echo "finder_embed=no" >> "$GITHUB_OUTPUT"
+            # An annotation, not an echo: without the App Store Connect key this
+            # job still publishes a DMG, and that DMG contains NO Finder
+            # extension. A build like that looks complete and is not — testers
+            # spent days in August 2026 concluding "Share with Hippius is
+            # broken" from one, because the only trace of the difference was a
+            # log line nobody opens. Same rule as write-tauri-env.sh's missing
+            # INDEXER_API_KEY: a silent degradation that reads as a product bug
+            # has to announce itself. Deliberately NOT a hard failure — staging
+            # is also used to test everything unrelated to Finder, so losing the
+            # whole build to a lapsed secret costs more than it saves. Swap this
+            # for `exit 1` if that trade ever changes.
+            echo "::error title=No Finder extension in this build::App Store Connect API key not set - skipping notarization and the Finder extension embed. The published DMG will be unsigned and 'Share with Hippius' will not exist in it. Do not use this build to test Finder integration."
           fi
 
       - name: Build & publish
@@ -297,10 +310,15 @@ jobs:
           HIPPIUS_RELEASE_CHANNEL: staging
         with:
           tagName: v__VERSION__-staging
-          releaseName: '[STAGING] ${{ steps.release_notes.outputs.title }}'
+          # The suffix rides on the release NAME because that list is where a
+          # tester picks a build from; a caveat buried in the body is read after
+          # the download, if at all.
+          releaseName: "[STAGING] ${{ steps.release_notes.outputs.title }}${{ steps.apple.outputs.finder_embed == 'no' && ' - NO FINDER EXTENSION' || '' }}"
           releaseBody: |
             **🎨 Staging Build - macOS Only**
-
+            ${{ steps.apple.outputs.finder_embed == 'no' && '
+            > **This build has NO Finder extension and is unsigned.** It was built without the App Store Connect key, so `HippiusFinder.appex` is not embedded and "Share with Hippius" will not appear on right-click. Use a production build to test Finder integration.
+            ' || '' }}
             ${{ steps.release_notes.outputs.body }}
           releaseDraft: false
           prerelease: true
