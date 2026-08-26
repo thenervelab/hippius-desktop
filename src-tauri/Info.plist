@@ -16,10 +16,16 @@
     <string>Hippius</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
-    <key>CFBundleShortVersionString</key>
-    <string>0.0.1</string>
-    <key>CFBundleVersion</key>
-    <string>1</string>
+    <!-- CFBundleShortVersionString / CFBundleVersion are deliberately ABSENT.
+         Tauri merges this file OVER its generated Info.plist, so a version key
+         here wins against `version` in tauri.conf.json. That is how every
+         shipped build reported `0.0.1` while the project was on 0.3.4: the
+         value was pinned here in the pre-1.0 era and never touched again.
+         The damage is diagnostic, not functional — with no build reporting its
+         real version, "which build are you on?" is unanswerable, which is what
+         made a missing Finder extension take four rounds to pin down. Let Tauri
+         generate both keys from tauri.conf.json; that file is the one source of
+         truth for the version. Pinned by tests/bundle_metadata_pin.rs. -->
     <key>LSMinimumSystemVersion</key>
     <string>10.13.0</string>
     <key>NSHighResolutionCapable</key>
