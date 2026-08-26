@@ -1178,6 +1178,14 @@ pub(crate) async fn initialize_sync_inner(
     // instead of resurrecting the drive (see sync::lifecycle_guard).
     let lifecycle_snapshot = lifecycle_snapshot.unwrap_or_else(|| app_state.drive_lifecycle.snapshot(&label));
 
+    // Reclaim upload-chunk staging directories abandoned by earlier runs before
+    // this drive — or any other — starts uploading. `OnceCell` makes this the
+    // first init only; later inits await nothing. Placed here because this is
+    // the single funnel every init path goes through, and because the ordering
+    // is load-bearing: reclaiming while an upload is in flight could delete the
+    // very chunks it is streaming. See `crate::sync::chunk_reclaim`.
+    app_state.chunk_reclaim.get_or_init(crate::sync::chunk_reclaim::reclaim_startup).await;
+
     // Block non-migration sync init while a migration is running. This is a
     // transient internal coordination block (no MigrationInProgress variant
     // exists; NotReady would be FE-silenced) → documented Other, surfaced.
@@ -1821,6 +1829,13 @@ pub(crate) async fn remove_drive_for_account(app: AppHandle, label: String, expl
     }
     if let Some(acct) = acct.as_deref() {
         clear_persisted_sync_state(acct, &label);
+        // The drive is gone, so every encrypted chunk staged under it is
+        // unreachable by definition — no future cycle will ever resume it.
+        // Freeing it here rather than leaving it to the startup pass means a
+        // user who removes a drive to recover disk actually recovers it now.
+        if let Ok(folder_dir) = config_dir_for_folder(acct, &label) {
+            crate::sync::chunk_reclaim::clear_staged_upload_chunks(&folder_dir.join("temp"));
+        }
     }
 
     if remaining == 0 {

@@ -25,4 +25,4 @@ pub use migrate::{
     user_stopped_migration, user_stopped_reversal,
 };
 pub use projection::{events, intent, logic, preparing, progress, status, tauri_bridge, upload_processing};
-pub use shared::{mnemonic, region};
+pub use shared::{chunk_reclaim, mnemonic, region};
