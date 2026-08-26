@@ -47,6 +47,12 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Reclaimed disk space lost to interrupted uploads.** While preparing an upload,
+  Hippius writes a temporary encrypted copy of the file. Copies left behind by uploads
+  that were interrupted — by a dropped connection, a pause, or quitting the app — could
+  pile up until the drive ran out of space. Hippius now clears out the leftovers every
+  time it starts, and when you remove a synced folder. Existing users get the space back
+  automatically on the next launch; there is nothing to run or delete by hand.
 - **Sharing a second file** showed the first file's link instead of starting fresh.
 - **Progress indicators no longer give up** part-way through preparing a large folder.
   They used to reset while the app was still working.
