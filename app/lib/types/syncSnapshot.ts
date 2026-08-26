@@ -95,12 +95,11 @@ export interface SyncSnapshot {
   preparingScannedFiles?: number;
   preparingFetchedEntries?: number;
   preparingFetchTotalEntries?: number;
-  /** Paths of errored rows whose failure resolves itself on the next cycle —
-   * currently only "the file changed while we were uploading it", which the
-   * engine retries unattended. Rust decides this (see
-   * `FileFailureKindPayload::is_transient`); the FE only joins by path and
-   * must NOT re-derive it by matching on the reason text. Absent when nothing
-   * is retrying. */
+  /** Paths of errored rows whose failure resolves itself on the next cycle
+   * (file changed mid-upload, or a transport blip the next cycle resumes).
+   * Rust decides this (see `FileFailureKindPayload::is_transient`); the FE
+   * only joins by path and must NOT re-derive it by matching on the reason
+   * text. Absent when nothing is retrying. */
   transientErrorPaths?: string[];
 }
 

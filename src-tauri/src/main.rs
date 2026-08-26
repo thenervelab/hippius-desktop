@@ -25,6 +25,7 @@ pub mod notifications;
 pub mod power;
 pub mod recovery;
 pub mod recovery_binding;
+mod recovery_proof;
 pub mod shared_drives;
 pub mod shares;
 pub mod splash;
@@ -87,8 +88,8 @@ use crate::notifications::crud::{
 };
 use crate::notifications::settings::{get_notification_settings, update_notification_settings};
 use crate::recovery::{
-    change_recovery_password, check_recovery_state, has_pending_rotation, mark_recovery_skipped, recover_mnemonic, resume_recovery_password_rotation,
-    seal_and_upload_mnemonic,
+    change_recovery_password, check_recovery_state, has_pending_rotation, mark_recovery_skipped, recover_mnemonic, reset_unlock_password,
+    restore_with_mnemonic, resume_recovery_password_rotation, seal_and_upload_mnemonic,
 };
 use crate::recovery_binding::{cancel_account_recovery, list_recoverable_accounts, recover_account_files};
 use crate::sync::control::{reveal_drive_in_finder, trigger_sync_now};
@@ -423,6 +424,8 @@ fn main() {
             seal_and_upload_mnemonic,
             mark_recovery_skipped,
             change_recovery_password,
+            restore_with_mnemonic,
+            reset_unlock_password,
             resume_recovery_password_rotation,
             has_pending_rotation,
             list_recoverable_accounts,

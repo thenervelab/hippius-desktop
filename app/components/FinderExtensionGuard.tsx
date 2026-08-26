@@ -11,6 +11,18 @@ import { toast } from "sonner";
 const NUDGE_ID = "finder-extension-disabled";
 
 /**
+ * Sequoia 15.2+ / Tahoe list Finder Sync under **File Providers**, not Finder.
+ * The Finder category is Apple's Quick Actions (Rotate Left, Markup, …), so
+ * telling the user "enable Hippius under Finder" sends them to a list that
+ * can never contain us (report 2026-08-26, Tahoe 26.3).
+ */
+const NUDGE_DESCRIPTION =
+  "macOS installs it switched off, so “Share with Hippius” is missing when you right-click a file. Enable Hippius under File Providers (not Finder) in Extensions settings.";
+
+const SETTINGS_FALLBACK_DESCRIPTION =
+  "Open System Settings › General › Login Items & Extensions › File Providers, then enable Hippius.";
+
+/**
  * Surfaces the backend's Finder-extension enablement check.
  *
  * macOS installs a third-party Finder extension switched OFF: `HippiusFinder.appex`
@@ -72,8 +84,7 @@ export default function FinderExtensionGuard() {
           if (dismissed.current || showing.current) return;
           showing.current = true;
           toast.warning("Turn on the Hippius Finder extension", {
-            description:
-              "macOS installs it switched off, so “Share with Hippius” is missing when you right-click a file. Enable Hippius under Finder in Extensions settings.",
+            description: NUDGE_DESCRIPTION,
             duration: Infinity,
             id: NUDGE_ID,
             action: {
@@ -91,8 +102,7 @@ export default function FinderExtensionGuard() {
                 showing.current = false;
                 void invoke("open_finder_extension_settings").catch(() => {
                   toast.error("Could not open Extensions settings", {
-                    description:
-                      "Open System Settings › General › Login Items & Extensions, then enable Hippius under Finder.",
+                    description: SETTINGS_FALLBACK_DESCRIPTION,
                   });
                 });
               },

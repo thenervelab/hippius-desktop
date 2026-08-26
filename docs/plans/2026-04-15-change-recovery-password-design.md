@@ -27,6 +27,10 @@ blob on hcfs-server, without changing the underlying mnemonic itself.
 
 - No "forgot current password" reset path. The blob is unrecoverable without
   the password by construction; a user who forgot it must reset the account.
+  **Superseded 2026-08-26:** if the user still has the master mnemonic, files
+  are recoverable and the wrap can be resealed — see
+  `docs/plans/2026-08-26-restore-unlock-with-mnemonic-design.md`. The blob
+  remains unopenable without the password; the files are not.
 - No audit log / rotation history in UI.
 - No cross-device "your password changed" notification.
 - No custom rate-limit UI beyond surfacing the server's 429 message.

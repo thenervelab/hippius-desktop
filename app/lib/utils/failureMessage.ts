@@ -26,7 +26,11 @@ export function failureMessage(rec: FileFailureRecord): string {
         ? `Server error (${rec.httpStatus}). Please try again.`
         : "Server error. Please try again.";
     case "network":
-      return "Network error — couldn't reach the server. Check your connection.";
+      // Must read identically to Rust's
+      // `FileFailureKindPayload::Network::display_reason()`. Origin/edge
+      // resets stringify like "no wifi" in reqwest — do not send the user
+      // to their router (report 2026-08-26).
+      return "Couldn't reach the server — will retry.";
     case "changedWhileUploading":
       // Self-resolving: the next cycle rescans and re-uploads. Deliberately
       // says nothing about encryption — the crypto is fine, the file moved.
