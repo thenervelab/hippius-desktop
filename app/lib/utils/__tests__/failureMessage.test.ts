@@ -32,8 +32,13 @@ describe("failureMessage", () => {
     );
   });
 
-  it("has a fixed line for network failures", () => {
-    expect(failureMessage({ ...base, kind: "network" })).toMatch(/network error/i);
+  it("phrases a network failure as self-resolving, not as the user's connection", () => {
+    // Must read identically to Rust's
+    // `FileFailureKindPayload::Network::display_reason()`.
+    const msg = failureMessage({ ...base, kind: "network" });
+    expect(msg).toBe("Couldn't reach the server — will retry.");
+    expect(msg.toLowerCase()).not.toContain("connection");
+    expect(msg.toLowerCase()).not.toContain("http");
   });
 
   it("uses the message for `other`, with a generic fallback", () => {

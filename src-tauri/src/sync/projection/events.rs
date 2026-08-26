@@ -200,8 +200,32 @@ mod tests {
         let kind = K::Other("Encryption error: key derivation failed".to_string());
         assert!(
             matches!(FileFailureKindPayload::from(&kind), FileFailureKindPayload::Other { .. }),
-            "only the mid-upload-modification message may be carved out",
+            "only the mid-upload-modification and network-shaped messages may be carved out",
         );
+    }
+
+    /// The screenshot that motivated this: a reqwest send failure Display,
+    /// nested under `SyncError::Network`'s `"Network error: …"` prefix, was
+    /// reaching the widget as `Other` and rendering the origin URL.
+    #[test]
+    fn reqwest_send_failure_is_carved_out_of_other() {
+        use hcfs_client::engine::events::FileFailureKind as K;
+        let msg = "Network error: error sending request for url \
+                   (https://eu-central-1-arion.hippius.com/upload/session/abc/chunk/0)";
+        assert!(
+            matches!(FileFailureKindPayload::from(&K::Other(msg.to_string())), FileFailureKindPayload::Network),
+            "reqwest's send-failure Display must classify as Network, not Other"
+        );
+    }
+
+    #[test]
+    fn bare_reqwest_url_display_is_carved_out_of_other() {
+        use hcfs_client::engine::events::FileFailureKind as K;
+        let msg = "error sending request for url (https://eu-central-1-arion.hippius.com/health)";
+        assert!(matches!(
+            FileFailureKindPayload::from(&K::Other(msg.to_string())),
+            FileFailureKindPayload::Network
+        ));
     }
 
     #[test]
@@ -223,15 +247,20 @@ mod tests {
         // path recognises a transient row by that string. Rust writes it and
         // Rust reads it — but if the two ever drift the widget silently loses
         // the amber "Retrying" tone, so pin the round trip.
-        let authored = FileFailureKindPayload::ChangedWhileUploading.display_reason();
-        assert!(is_transient_reason(&authored), "authored reason must be recognised: {authored}");
+        for kind in [FileFailureKindPayload::ChangedWhileUploading, FileFailureKindPayload::Network] {
+            let authored = kind.display_reason();
+            assert!(is_transient_reason(&authored), "authored reason must be recognised: {authored}");
+        }
     }
 
     #[test]
     fn other_failure_reasons_are_not_treated_as_transient() {
         for kind in [
-            FileFailureKindPayload::Network,
             FileFailureKindPayload::ServerError { status: 500 },
+            FileFailureKindPayload::InsufficientBalance {
+                balance_cents: 0,
+                required_cents: 100,
+            },
             FileFailureKindPayload::Other {
                 message: "disk full".to_string(),
             },
@@ -242,13 +271,13 @@ mod tests {
     }
 
     #[test]
-    fn only_the_mid_upload_change_is_treated_as_self_resolving() {
+    fn mid_upload_change_and_network_are_treated_as_self_resolving() {
         // `is_transient` drives an amber "Retrying" badge instead of a red
-        // "Error". Marking a real failure transient would tell the user to wait
-        // for a retry that never succeeds.
+        // "Error". Network is in because the next cycle resumes from cached
+        // chunks — a 5xx or a credits failure still needs the user.
         assert!(FileFailureKindPayload::ChangedWhileUploading.is_transient());
+        assert!(FileFailureKindPayload::Network.is_transient());
         for kind in [
-            FileFailureKindPayload::Network,
             FileFailureKindPayload::ServerError { status: 500 },
             FileFailureKindPayload::InsufficientBalance {
                 balance_cents: 0,
@@ -279,11 +308,44 @@ mod tests {
     }
 
     #[test]
-    fn display_reason_network_is_generic_connectivity_copy() {
-        assert_eq!(
-            FileFailureKindPayload::Network.display_reason(),
-            "Network error — couldn't reach the server. Check your connection."
+    fn authored_network_copy_is_not_itself_network_shaped() {
+        // If the user-facing line ever starts with `Network error:`, the
+        // classifier would treat our own copy as an upstream raw error.
+        assert!(
+            !is_network_shaped(NETWORK_DISPLAY_REASON),
+            "authored copy collided with the upstream-shape detector: {NETWORK_DISPLAY_REASON}"
         );
+    }
+
+    #[test]
+    fn display_reason_network_does_not_blame_the_users_connection() {
+        let reason = FileFailureKindPayload::Network.display_reason();
+        assert_eq!(reason, NETWORK_DISPLAY_REASON);
+        assert!(
+            reason.to_lowercase().contains("retry"),
+            "the copy must tell the user it resolves itself: {reason}"
+        );
+        assert!(
+            !reason.to_lowercase().contains("connection"),
+            "origin/edge resets look like 'no wifi' in reqwest — do not send the user hunting their router: {reason}"
+        );
+        assert!(!reason.contains("http"), "must never render the origin URL: {reason}");
+    }
+
+    #[test]
+    fn other_display_reason_rewrites_a_raw_reqwest_url() {
+        // Belt-and-suspenders: even if `From` is skipped and `Other` is
+        // constructed with the raw Display, the widget string must not
+        // contain the URL.
+        let kind = FileFailureKindPayload::Other {
+            message: "Network error: error sending request for url \
+                      (https://eu-central-1-arion.hippius.com/upload/session/abc/chunk/0)"
+                .to_string(),
+        };
+        let reason = kind.display_reason();
+        assert_eq!(reason, NETWORK_DISPLAY_REASON);
+        assert!(!reason.contains("eu-central-1"), "leaked origin host: {reason}");
+        assert!(!reason.contains("http"), "leaked URL: {reason}");
     }
 
     #[test]
@@ -777,16 +839,17 @@ pub enum FileFailureKindPayload {
     /// `status` is the wire status the FE may dispatch on.
     ServerError { status: u16 },
     /// Transport-layer failure — connection refused, DNS, TLS, timeout.
-    /// No HTTP status because no response was received.
+    /// No HTTP status because no response was received. Presented as
+    /// self-resolving: the next cycle resumes from cached chunks. Do not
+    /// render reqwest's Display (it embeds the origin URL).
     Network,
     /// The file's bytes changed between the scan hash and the encrypt hash, so
     /// the engine discarded the upload rather than ship a half-old blob.
     ///
-    /// Carved out of [`Self::Other`] because it is the one failure that is
-    /// definitionally self-resolving: the next cycle rescans, re-hashes and
-    /// re-uploads, and succeeds as soon as the writer stops touching the file.
-    /// Presenting it like a real error sent users hunting for an encryption
-    /// fault that does not exist.
+    /// Carved out of [`Self::Other`] because it is self-resolving: the next
+    /// cycle rescans, re-hashes and re-uploads, and succeeds as soon as the
+    /// writer stops touching the file. Presenting it like a real error sent
+    /// users hunting for an encryption fault that does not exist.
     ChangedWhileUploading,
     /// Fallback for failures we have not categorised. `message` is for
     /// display only — the FE MUST NOT parse it as a stable contract.
@@ -806,6 +869,11 @@ pub enum FileFailureKindPayload {
 /// reverting the row to a red "Error".
 pub const CHANGED_WHILE_UPLOADING_MARKER: &str = "Encryption error: File was modified during encryption";
 
+/// User-facing copy for a transport failure. The next cycle retries from
+/// cached chunks — do not blame the user's connection. Origin/edge resets
+/// stringify identically to "no wifi" in reqwest (report 2026-08-26).
+const NETWORK_DISPLAY_REASON: &str = "Couldn't reach the server — will retry.";
+
 /// Whether a snapshot row's authored `error` reason describes a self-resolving
 /// failure (see [`FileFailureKindPayload::is_transient`]).
 ///
@@ -817,7 +885,41 @@ pub const CHANGED_WHILE_UPLOADING_MARKER: &str = "Encryption error: File was mod
 /// NOT the frontend parsing a message — the FE receives the decision already made.
 ///
 pub fn is_transient_reason(reason: &str) -> bool {
-    reason == FileFailureKindPayload::ChangedWhileUploading.display_reason()
+    reason == FileFailureKindPayload::ChangedWhileUploading.display_reason() || reason == FileFailureKindPayload::Network.display_reason()
+}
+
+/// Upstream often collapses a transport failure into `Other`/`UploadFailed`
+/// carrying reqwest's Display (`"error sending request for url (https://…)"`)
+/// or `SyncError::Network`'s Display (`"Network error: …"`). Those must
+/// classify as [`FileFailureKindPayload::Network`] so the widget never
+/// renders the origin URL (report 2026-08-26).
+///
+/// The user-facing copy is [`NETWORK_DISPLAY_REASON`] ("Couldn't reach…"),
+/// so matching the upstream `"Network error:"` prefix cannot collide with it.
+fn is_network_shaped(message: &str) -> bool {
+    let message = message.trim();
+    if message.is_empty() {
+        return false;
+    }
+    if message.starts_with("Network error:") {
+        return true;
+    }
+    let lower = message.to_ascii_lowercase();
+    lower.contains("error sending request for url")
+        || lower.contains("error trying to connect")
+        || lower.contains("connection reset")
+        || lower.contains("connection refused")
+        || lower.contains("dns error")
+}
+
+/// reqwest 0.13 Display appends ` for url (https://host/path)`. Drop that
+/// tail so an `Other` message that is not remapped to Network still cannot
+/// leak an origin URL into the widget.
+fn strip_request_url(message: &str) -> &str {
+    match message.find(" for url (") {
+        Some(index) => message[..index].trim_end(),
+        None => message,
+    }
 }
 
 impl FileFailureKindPayload {
@@ -835,12 +937,13 @@ impl FileFailureKindPayload {
     /// user action — the signal the widget uses to show an amber "Retrying"
     /// row instead of a red "Error".
     ///
-    /// Only [`Self::ChangedWhileUploading`] qualifies. A network blip or a 5xx
-    /// is also *often* transient, but "often" is not the bar: this drives copy
-    /// telling the user to do nothing, so it must be reserved for the case
-    /// where the next cycle genuinely does re-derive everything and succeed.
+    /// [`Self::ChangedWhileUploading`] re-derives and re-uploads on the next
+    /// cycle. [`Self::Network`] is the same shape for the user: chunk PUTs
+    /// already retried in-cycle, cached ciphertext is kept, and the next
+    /// cycle resumes. A 5xx or a credits failure is *often* retried too, but
+    /// those still need the user (or a billing top-up), so they stay red.
     pub fn is_transient(&self) -> bool {
-        matches!(self, Self::ChangedWhileUploading)
+        matches!(self, Self::ChangedWhileUploading | Self::Network)
     }
 
     pub fn display_reason(&self) -> String {
@@ -855,16 +958,20 @@ impl FileFailureKindPayload {
                 dollars(*balance_cents),
             ),
             Self::ServerError { status } => format!("Server error ({status}). Please try again."),
-            Self::Network => "Network error — couldn't reach the server. Check your connection.".to_string(),
+            Self::Network => NETWORK_DISPLAY_REASON.to_string(),
             // `Other` already carries upstream display text; fall back to a
             // generic line when it's empty/whitespace so the row never shows a
-            // blank reason.
+            // blank reason. Network-shaped leftovers (reqwest Display, nested
+            // `SyncError::Network`) are rewritten here too, in case a caller
+            // constructed `Other` without going through [`From`].
             Self::Other { message } => {
                 let trimmed = message.trim();
                 if trimmed.is_empty() {
                     "Sync failed. Please try again.".to_string()
+                } else if is_network_shaped(trimmed) {
+                    NETWORK_DISPLAY_REASON.to_string()
                 } else {
-                    trimmed.to_string()
+                    strip_request_url(trimmed).to_string()
                 }
             }
         }
@@ -896,10 +1003,18 @@ impl From<&hcfs_client::engine::events::FileFailureKind> for FileFailureKindPayl
             // must not be presented as a crypto fault. See
             // `CHANGED_WHILE_UPLOADING_MARKER` for the drift guard.
             K::Other(msg) if msg == CHANGED_WHILE_UPLOADING_MARKER => Self::ChangedWhileUploading,
+            // Same carve-out for transport failures that upstream collapsed
+            // into `UploadFailed`/`Other` with reqwest's Display (the
+            // `eu-central-1-…` URL in the widget). See `is_network_shaped`.
+            K::Other(msg) if is_network_shaped(msg) => Self::Network,
             // Upstream `Other(String)` carries display text. Clone-on-translate is
             // unavoidable (we own the wire payload); the alternative would be borrowing
-            // and the bridge needs an owned struct for `app.emit`.
-            K::Other(msg) => Self::Other { message: msg.clone() },
+            // and the bridge needs an owned struct for `app.emit`. Strip a
+            // trailing reqwest URL even when the message is not network-shaped,
+            // so no origin URL can leak into the widget.
+            K::Other(msg) => Self::Other {
+                message: strip_request_url(msg).to_string(),
+            },
             // `#[non_exhaustive]` upstream: future variants render as `Other` with
             // their debug form. The translation map should be extended when a new
             // upstream variant ships — until then, the FE's `other` branch

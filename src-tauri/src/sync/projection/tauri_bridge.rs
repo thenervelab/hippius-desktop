@@ -1774,7 +1774,7 @@ mod tests {
     #[test]
     fn transiently_failed_paths_are_flagged_on_the_wire() {
         let transient = crate::sync::events::FileFailureKindPayload::ChangedWhileUploading.display_reason();
-        let hard = crate::sync::events::FileFailureKindPayload::Network.display_reason();
+        let hard = crate::sync::events::FileFailureKindPayload::ServerError { status: 500 }.display_reason();
 
         let mut inner = fixture_snapshot();
         inner.files = vec![

@@ -100,7 +100,7 @@ export const SyncReauthRequiredAlert: React.FC<SyncReauthRequiredAlertProps> = (
     ? "Sync needs your unlock password"
     : "Sync needs your seed phrase";
   const body = isOAuth
-    ? "Your session is still active, but this device can't unlock your files. Enter your unlock password to continue."
+    ? "Your session is still active, but this device can't unlock your files. Enter your unlock password, or your mnemonic seed if you forgot the password."
     : "Your session is still active, but your seed phrase isn't cached on this device, so sync can't unlock your files. Re-enter it to continue.";
   const cta = isOAuth ? "Enter unlock password" : "Re-enter seed phrase";
   const compactText = isOAuth

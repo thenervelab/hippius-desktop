@@ -116,7 +116,7 @@ describe("getTraySyncSummary", () => {
         effectiveCompleted: true,
         widgetVisible: true,
         files: [
-          errorFile("a.txt", "Network error — couldn't reach the server. Check your connection."),
+          errorFile("a.txt", "Couldn't reach the server — will retry."),
           errorFile("b.txt", "Server error (500). Please try again."),
         ],
       }),

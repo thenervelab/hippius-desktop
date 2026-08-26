@@ -18,8 +18,12 @@ use tracing::{debug, info, warn};
 use zeroize::Zeroizing;
 
 use crate::auth::account_key::account_key;
+use crate::auth::service::IdentityError;
 use crate::console_access::{HcfsServerCtx, HttpOutcome, crypto_to_err, get_json, post_json_discard};
 use crate::error::{AppError, Result};
+use crate::recovery_proof::{
+    MasterProof, Probe, ProofMethod, ProofProbes, RemoteAttempt, RemoteProbeOutcome, classify_remote_attempts, decide_master_proof,
+};
 
 /// Outcome of the OAuth recovery dialog, broadcast through a `watch` channel
 /// so `ensure_sync_mnemonic` can await resolution before touching the local
@@ -430,12 +434,13 @@ pub async fn recover_mnemonic(app: tauri::AppHandle, state: tauri::State<'_, cra
 /// Kick `auto_init_sync` in the background after an unlock made the
 /// mnemonic available.
 ///
-/// Only [`recover_mnemonic`] needs this: the other recovery flows are
-/// never sync-wedged (`seal_and_upload_mnemonic` runs when the local
-/// mnemonic is already decryptable, and the rotation paths hold the
-/// mnemonic throughout), and the fresh-OAuth login flow has its own
-/// resume — a parked `ensure_sync_mnemonic` whose completion drives
-/// `initSync` via `scheduleOAuthSyncInit`. When that FE-driven init
+/// [`recover_mnemonic`], [`restore_with_mnemonic`], and
+/// [`reset_unlock_password`] need this: they are the lockout-exit paths.
+/// The other recovery flows are never sync-wedged (`seal_and_upload_mnemonic`
+/// runs when the local mnemonic is already decryptable, and current-password
+/// rotation holds the mnemonic throughout), and the fresh-OAuth login flow
+/// has its own resume — a parked `ensure_sync_mnemonic` whose completion
+/// drives `initSync` via `scheduleOAuthSyncInit`. When that FE-driven init
 /// races this spawn, `auto_init_sync`'s `AutoInitGuard` makes the loser
 /// a no-op — concurrent auto-init calls are its documented expected
 /// condition.
@@ -606,12 +611,23 @@ async fn clear_rotation_sidecar(account_id: &str) {
 /// Vacuously succeeds when there are no folders (fresh signup) or when
 /// the drive password isn't yet set (folder mnemonics aren't recoverable
 /// to compare; we have to trust the caller).
+/// Own-drive `sync_paths` rows only. Member drives store the *owner's*
+/// folder mnemonic under a local label — comparing them to
+/// `derive_folder_mnemonic(this_master, local_label)` is a false mismatch
+/// (land mine 1). Same filter as `reencrypt_all_folder_mnemonics`.
+async fn own_drive_folder_rows(pool: &SqlitePool, account_id: &str) -> Result<Vec<(String, String)>> {
+    let owner = account_key(account_id);
+    Ok(
+        sqlx::query_as("SELECT path, label FROM sync_paths WHERE owner = ? AND owner_ss58 IS NULL AND wire_folder_hash IS NULL")
+            .bind(&owner)
+            .fetch_all(pool)
+            .await?,
+    )
+}
+
 async fn validate_master_against_existing_folders(pool: &SqlitePool, account_id: &str, candidate_master: &str) -> Result<()> {
     let owner = account_key(account_id);
-    let folders: Vec<(String, String)> = sqlx::query_as("SELECT path, label FROM sync_paths WHERE owner = ?")
-        .bind(&owner)
-        .fetch_all(pool)
-        .await?;
+    let folders = own_drive_folder_rows(pool, account_id).await?;
     if folders.is_empty() {
         return Ok(());
     }
@@ -901,91 +917,7 @@ pub async fn change_recovery_password(
     //    reproduce existing folder mnemonics.
     validate_master_against_existing_folders(pool, &account_id, &mnemonic).await?;
 
-    // 4. Reseal under `new`. Argon2id off the executor (see run_kdf); clone a
-    //    zeroizing copy of the mnemonic for the closure.
-    let mnemonic_k = Zeroizing::new(mnemonic.to_string());
-    let new_k = new.clone();
-    let ss58_seal_k = ctx.ss58.clone();
-    let new_blob = run_kdf(move || seal_mnemonic(&mnemonic_k, &new_k, &ss58_seal_k).map_err(crypto_to_err)).await?;
-
-    // 5. Commit point: POST upsert.
-    post_json_discard(&ctx, "/v1/mnemonic-blob", &new_blob).await?;
-
-    info!(
-        account = %crate::console_access::short_ss58(&account_id),
-        "recovery: sealed blob upserted under new password (server is now authoritative)"
-    );
-
-    // 6. Re-encrypt local file. On failure, write the sidecar so boot-time
-    //    retry finishes the rotation, and still report success to the user.
-    match install_recovered_mnemonic(&account_id, &mnemonic, &new).await {
-        Ok(()) => {
-            // align_drive_password failures are soft — the server rotation
-            // succeeded and the master file is already under `new`, so the
-            // sync layer's `recover_drive` self-heal handles any partial
-            // folder-rewrite state. Keep the sidecar so the next boot can
-            // finish the align step idempotently.
-            if let Err(align_err) = align_drive_password(pool, &account_id, &ctx.base_url, &mnemonic, &new).await {
-                warn!(
-                    error = %align_err,
-                    account = %crate::console_access::short_ss58(&account_id),
-                    "recovery: server rotated and master file rewritten, but drive_password alignment failed — leaving sidecar for boot-time retry"
-                );
-                if let Err(sidecar_err) = write_rotation_sidecar(&account_id).await {
-                    warn!(
-                        error = %sidecar_err,
-                        account = %crate::console_access::short_ss58(&account_id),
-                        "recovery: sidecar write also failed; boot-time retry unavailable. Rotation is still durable on the server; next login or rotation will re-align."
-                    );
-                }
-                // Intentionally skip cache_session_mnemonic on this branch
-                // so the next call that reads it picks up a fresh value.
-                return Ok(RecoveryRotationResult { align_pending: true });
-            }
-            clear_rotation_sidecar(&account_id).await;
-            state.auth.lock()?.cache_session_mnemonic(&account_id, (*mnemonic).clone());
-            info!(
-                account = %crate::console_access::short_ss58(&account_id),
-                "recovery: password rotation complete"
-            );
-            Ok(RecoveryRotationResult { align_pending: false })
-        }
-        Err(e) => {
-            warn!(
-                error = %e,
-                account = %crate::console_access::short_ss58(&account_id),
-                "recovery: server rotated but local rewrite failed — writing sidecar for boot-time retry"
-            );
-            // mnemonic is unchanged; AuthInfo cache still holds a valid value,
-            // so we intentionally skip cache_session_mnemonic on this branch.
-            //
-            // The local master_enc_mnemonic.json is still sealed under the OLD
-            // password while the server blob is under the NEW one. The sidecar
-            // is the ONLY signal that lets the boot-time resume self-heal this
-            // gap (has_pending_rotation reads it). If even the sidecar write
-            // fails there is no automatic recovery path left, so the failure
-            // MUST surface — returning Ok here left a stale local file that
-            // silently broke decryption on the next launch with no marker for
-            // the resume path to act on.
-            if let Err(sidecar_err) = write_rotation_sidecar(&account_id).await {
-                warn!(
-                    error = %sidecar_err,
-                    account = %crate::console_access::short_ss58(&account_id),
-                    "recovery: sidecar write also failed; boot-time retry unavailable. Rotation is durable on the server — surfacing the error so the user can re-run the change."
-                );
-                return Err(AppError::Other(format!(
-                    "Recovery password was changed on the server, but this device's key file could \
-                     not be updated and no retry marker could be saved ({e}; sidecar: {sidecar_err}). \
-                     Please run the password change again to finish updating this device."
-                )));
-            }
-            // Sidecar written → has_pending_rotation is now true and the
-            // boot-time resume will finish the local rewrite; report success
-            // but flag the pending alignment so the FE warns rather than
-            // claiming a clean rotation (audit R-19).
-            Ok(RecoveryRotationResult { align_pending: true })
-        }
-    }
+    commit_new_unlock_password(state.inner(), pool, &ctx, &account_id, &mnemonic, &new, None).await
 }
 
 /// Boot-time finish for [`change_recovery_password`] partial failures.
@@ -1091,6 +1023,359 @@ pub async fn mark_recovery_skipped(state: tauri::State<'_, crate::app_state::App
     info!("recovery: gate marked Skipped — local mnemonic is authoritative, no server upload or download");
     state.set_recovery_state(crate::recovery::RecoveryGateState::Skipped);
     Ok(())
+}
+
+/// Restore files and wrap a new unlock password from a typed mnemonic.
+///
+/// The phrase is proven against this account BEFORE any POST. A wrong
+/// phrase must never upsert `/v1/mnemonic-blob` — that would overwrite
+/// the real sealed backup. Never mints a master (`seal_and_upload_mnemonic`
+/// does; this command must not call it).
+const PHRASE_MISMATCH: &str = "This recovery phrase does not match this account's files. Check the words and try again.";
+const PHRASE_UNPROVEN: &str = "We couldn't verify this recovery phrase against this account yet (no files on this device or in the cloud to check). The unlock password is the only way to open the backup until a file has been synced.";
+const SESSION_MNEMONIC_MISSING: &str = "This device doesn't have your mnemonic seed unlocked. Enter the seed to restore.";
+
+#[tauri::command]
+pub async fn restore_with_mnemonic(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, crate::app_state::AppState>,
+    mnemonic: String,
+    new_password: String,
+) -> Result<RecoveryRotationResult> {
+    let _recovery_guard = state.recovery_lock.lock().await;
+    let mnemonic = Zeroizing::new(mnemonic);
+    let new_password = Zeroizing::new(new_password);
+    reject_if_weak(&new_password)?;
+
+    bip39::Mnemonic::parse_normalized(mnemonic.trim()).map_err(|e| AppError::Validation(format!("Invalid recovery phrase: {e}")))?;
+
+    let account_id = state.current_account_id()?;
+    let pool = state.pool()?;
+    seed_hcfs_server_url_if_missing(pool, &account_id).await?;
+
+    let method = prove_master_for_account(pool, &account_id, mnemonic.trim()).await?;
+    info!(
+        account = %crate::console_access::short_ss58(&account_id),
+        ?method,
+        "recovery: typed mnemonic proven; resealing unlock password"
+    );
+
+    validate_master_against_existing_folders(pool, &account_id, mnemonic.trim()).await?;
+    let ctx = HcfsServerCtx::resolve(&state).await?;
+    commit_new_unlock_password(state.inner(), pool, &ctx, &account_id, mnemonic.trim(), &new_password, Some(&app)).await
+}
+
+/// Rotate the unlock wrap when this process already holds the master.
+///
+/// Settings "forgot current password" on a device whose session can
+/// already open the mnemonic. No proof walk — holding the master is
+/// the proof. If the session cannot open it, the FE switches to
+/// [`restore_with_mnemonic`].
+#[tauri::command]
+pub async fn reset_unlock_password(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, crate::app_state::AppState>,
+    new_password: String,
+) -> Result<RecoveryRotationResult> {
+    let _recovery_guard = state.recovery_lock.lock().await;
+    let new_password = Zeroizing::new(new_password);
+    reject_if_weak(&new_password)?;
+
+    let account_id = state.current_account_id()?;
+    let pool = state.pool()?;
+    seed_hcfs_server_url_if_missing(pool, &account_id).await?;
+
+    let mnemonic = crate::sync::mnemonic::get_mnemonic_for_account(state.inner(), &account_id)
+        .await
+        .map_err(|_| AppError::Validation(SESSION_MNEMONIC_MISSING.into()))?;
+    if mnemonic.is_empty() {
+        return Err(AppError::Validation(SESSION_MNEMONIC_MISSING.into()));
+    }
+
+    validate_master_against_existing_folders(pool, &account_id, &mnemonic).await?;
+    let ctx = HcfsServerCtx::resolve(&state).await?;
+    commit_new_unlock_password(state.inner(), pool, &ctx, &account_id, &mnemonic, &new_password, Some(&app)).await
+}
+
+fn proof_to_result(proof: MasterProof) -> Result<ProofMethod> {
+    match proof {
+        MasterProof::Confirmed { method } => Ok(method),
+        MasterProof::Mismatch => Err(AppError::Validation(PHRASE_MISMATCH.into())),
+        MasterProof::Unproven => Err(AppError::Validation(PHRASE_UNPROVEN.into())),
+    }
+}
+
+fn finished_proof(probes: ProofProbes) -> Option<Result<ProofMethod>> {
+    match decide_master_proof(probes) {
+        MasterProof::Unproven => None,
+        other => Some(proof_to_result(other)),
+    }
+}
+
+/// Prove `candidate` is this account's master. Fail closed: Unproven and
+/// Mismatch both refuse to reseal.
+///
+/// Recovery-binding is not probed live. `challenge_response` as the
+/// phrase's derived identity would mint a phantom server account for a
+/// *wrong but valid* BIP-39 (audit H-3). Binding stays in the pure table
+/// for tests; this gatherer leaves it [`Probe::Absent`].
+async fn prove_master_for_account(pool: &SqlitePool, account_id: &str, candidate: &str) -> Result<ProofMethod> {
+    let mut probes = ProofProbes::none();
+    match crate::auth::service::derive_verified_keys(candidate, account_id) {
+        Ok(_) => probes.identity_match = true,
+        Err(IdentityError::Mismatch { .. }) => {}
+        Err(IdentityError::DeriveFailed(e)) => {
+            return Err(AppError::Validation(format!("Invalid recovery phrase: {e}")));
+        }
+    }
+    if let Some(done) = finished_proof(probes) {
+        return done;
+    }
+
+    probes.drive = probe_drive_password_row(pool, account_id, candidate).await?;
+    if let Some(done) = finished_proof(probes) {
+        return done;
+    }
+
+    probes.folders = probe_local_folder_seals(pool, account_id, candidate).await?;
+    if let Some(done) = finished_proof(probes) {
+        return done;
+    }
+
+    probes.remote = probe_remote_decrypt(pool, account_id, candidate).await?;
+    proof_to_result(decide_master_proof(probes))
+}
+
+async fn probe_drive_password_row(pool: &SqlitePool, account_id: &str, candidate: &str) -> Result<Probe> {
+    let owner = account_key(account_id);
+    let row: Option<(String, i32)> = sqlx::query_as("SELECT drive_password, COALESCE(encryption_version, 0) FROM hcfs_config WHERE owner = ?")
+        .bind(&owner)
+        .fetch_optional(pool)
+        .await?;
+    match row {
+        Some((pw, _)) if pw.is_empty() => Ok(Probe::Absent),
+        // No row, or a plaintext password: neither is keyed by this master.
+        None | Some((_, 0)) => Ok(Probe::Absent),
+        Some((_, 1 | 2)) => match crate::sync::config::get_drive_password(pool, account_id, Some(candidate)).await {
+            Ok(_) => Ok(Probe::Confirmed),
+            Err(AppError::Crypto(_)) => Ok(Probe::Mismatch),
+            Err(other) => Err(other),
+        },
+        Some((_, v)) => Err(AppError::Other(format!("unknown drive password encryption_version: {v}"))),
+    }
+}
+
+async fn probe_local_folder_seals(pool: &SqlitePool, account_id: &str, candidate: &str) -> Result<Probe> {
+    let folders = own_drive_folder_rows(pool, account_id).await?;
+    let mut compared = 0u32;
+    for (_path, label) in &folders {
+        let folder_enc = crate::sync::mnemonic::config_dir_for_folder(account_id, label)?.join("enc_mnemonic.json");
+        if !folder_enc.exists() {
+            continue;
+        }
+        let drive_password = match crate::sync::config::get_drive_password(pool, account_id, Some(candidate)).await {
+            Ok(pw) if !pw.is_empty() => pw,
+            Ok(_) | Err(AppError::Crypto(_)) => return Ok(Probe::Mismatch),
+            Err(other) => return Err(other),
+        };
+        let folder_enc_k = folder_enc.clone();
+        let recovered = run_kdf(move || {
+            hcfs_client::auth::recover_mnemonic(&folder_enc_k, &drive_password).map_err(|e| AppError::Other(format!("recover folder mnemonic: {e}")))
+        })
+        .await;
+        let stored = match recovered {
+            Ok(m) => Zeroizing::new(m.to_string()),
+            Err(e) => {
+                warn!(label = %label, error = %e, "restore proof: skipping unreadable folder seal");
+                continue;
+            }
+        };
+        let expected = Zeroizing::new(
+            hcfs_client::drive::keys::derive_folder_mnemonic(candidate, label)
+                .map_err(|e| AppError::Other(format!("derive_folder_mnemonic failed: {e}")))?,
+        );
+        if *stored != *expected {
+            return Ok(Probe::Mismatch);
+        }
+        compared += 1;
+    }
+    if compared == 0 { Ok(Probe::Absent) } else { Ok(Probe::Confirmed) }
+}
+
+async fn probe_remote_decrypt(pool: &SqlitePool, account_id: &str, candidate: &str) -> Result<Probe> {
+    let folders = crate::sync::folders::list_remote_folders_internal(pool, account_id).await?;
+    let mut attempts = Vec::new();
+    for folder in folders.iter().filter(|f| f.file_count > 0).take(3) {
+        attempts.push(try_decrypt_one_remote_file(pool, account_id, candidate, folder).await);
+    }
+    match classify_remote_attempts(&attempts) {
+        RemoteProbeOutcome::Confirmed => Ok(Probe::Confirmed),
+        RemoteProbeOutcome::Mismatch => Ok(Probe::Mismatch),
+        RemoteProbeOutcome::Unproven => Ok(Probe::Absent),
+        RemoteProbeOutcome::Transport => Err(AppError::Hcfs(
+            "Couldn't reach the server to verify this recovery phrase. Try again.".into(),
+        )),
+    }
+}
+
+/// hcfs-client's `SyncError` module is private; classify on the public Display.
+/// Decrypt/integrity failures are a wrong key; everything else is transport.
+fn remote_attempt_from_err_display(err: &impl std::fmt::Display) -> RemoteAttempt {
+    let msg = err.to_string().to_ascii_lowercase();
+    if msg.contains("decrypt") || msg.contains("hash mismatch") {
+        RemoteAttempt::DecryptMiss
+    } else {
+        RemoteAttempt::Transport
+    }
+}
+
+async fn try_decrypt_one_remote_file(
+    pool: &SqlitePool,
+    account_id: &str,
+    candidate: &str,
+    folder: &crate::sync::folders::RemoteFolderInfoResult,
+) -> RemoteAttempt {
+    let Ok(key) = hcfs_client::drive::remote::derive_encryption_key(candidate, &folder.label) else {
+        return RemoteAttempt::DecryptMiss;
+    };
+    let identity = crate::sync::identity::DriveIdentity::own(account_id, &folder.folder_hash);
+    let Ok(client) = crate::sync::remote::build_client(pool, account_id, &identity).await else {
+        return RemoteAttempt::Transport;
+    };
+    let access = hcfs_client::drive::remote::RemoteFileAccess {
+        client: &client,
+        ss58_address: account_id,
+        folder_hash: &folder.folder_hash,
+        encryption_key: &key,
+    };
+    let files = match hcfs_client::drive::remote::list_remote_files(&access).await {
+        Ok(files) => files,
+        Err(e) => return remote_attempt_from_err_display(&e),
+    };
+    let Some(file) = files.first() else {
+        return RemoteAttempt::EmptyFolder;
+    };
+    let Ok(tmp) = tempfile::NamedTempFile::new() else {
+        return RemoteAttempt::Transport;
+    };
+    match hcfs_client::drive::remote::download_remote_file(&access, &file.file_id, tmp.path(), Some(|_: u64, _: u64| {})).await {
+        Ok(_) => RemoteAttempt::Opened,
+        Err(e) => remote_attempt_from_err_display(&e),
+    }
+}
+
+/// Seal the master under `new_password`, POST the upsert, rewrite local
+/// wraps. `wake` is set for restore/reset so a lockout session starts
+/// sync; rotation passes `None` (session already has the mnemonic).
+async fn commit_new_unlock_password(
+    state: &crate::app_state::AppState,
+    pool: &SqlitePool,
+    ctx: &HcfsServerCtx,
+    account_id: &str,
+    mnemonic: &str,
+    new_password: &str,
+    wake: Option<&tauri::AppHandle>,
+) -> Result<RecoveryRotationResult> {
+    let mnemonic_k = Zeroizing::new(mnemonic.to_string());
+    let new_k = Zeroizing::new(new_password.to_string());
+    let ss58_k = ctx.ss58.clone();
+    let new_blob = run_kdf(move || seal_mnemonic(&mnemonic_k, &new_k, &ss58_k).map_err(crypto_to_err)).await?;
+    post_json_discard(ctx, "/v1/mnemonic-blob", &new_blob).await?;
+    info!(
+        account = %crate::console_access::short_ss58(account_id),
+        "recovery: sealed blob upserted under new password (server is now authoritative)"
+    );
+    apply_local_unlock_wrap(state, pool, ctx, account_id, mnemonic, new_password, wake).await
+}
+
+async fn apply_local_unlock_wrap(
+    state: &crate::app_state::AppState,
+    pool: &SqlitePool,
+    ctx: &HcfsServerCtx,
+    account_id: &str,
+    mnemonic: &str,
+    new_password: &str,
+    wake: Option<&tauri::AppHandle>,
+) -> Result<RecoveryRotationResult> {
+    match install_recovered_mnemonic(account_id, mnemonic, new_password).await {
+        Ok(()) => {
+            let align_pending = if let Err(align_err) = align_drive_password(pool, account_id, &ctx.base_url, mnemonic, new_password).await {
+                warn!(
+                    error = %align_err,
+                    account = %crate::console_access::short_ss58(account_id),
+                    "recovery: server rotated and master file rewritten, but drive_password alignment failed — leaving sidecar for boot-time retry"
+                );
+                if let Err(sidecar_err) = write_rotation_sidecar(account_id).await {
+                    warn!(
+                        error = %sidecar_err,
+                        account = %crate::console_access::short_ss58(account_id),
+                        "recovery: sidecar write also failed; boot-time retry unavailable. Rotation is still durable on the server; next login or rotation will re-align."
+                    );
+                }
+                true
+            } else {
+                clear_rotation_sidecar(account_id).await;
+                false
+            };
+            state.auth.lock()?.cache_session_mnemonic(account_id, mnemonic.to_string());
+            wake_after_restore(state, pool, account_id, mnemonic, wake).await;
+            info!(
+                account = %crate::console_access::short_ss58(account_id),
+                align_pending,
+                "recovery: password rotation complete"
+            );
+            Ok(RecoveryRotationResult { align_pending })
+        }
+        Err(e) => local_rewrite_failed(state, pool, account_id, mnemonic, wake, e).await,
+    }
+}
+
+async fn wake_after_restore(
+    state: &crate::app_state::AppState,
+    pool: &SqlitePool,
+    account_id: &str,
+    mnemonic: &str,
+    wake: Option<&tauri::AppHandle>,
+) {
+    let Some(app) = wake else {
+        return;
+    };
+    crate::auth::session_restore::repair_provider_from_recovered_master(pool, account_id, mnemonic).await;
+    state.set_recovery_state(RecoveryGateState::Resolved);
+    state.sync_bridge.emit_auth_ready();
+    spawn_post_unlock_sync_init(app.clone(), account_id.to_string());
+}
+
+async fn local_rewrite_failed(
+    state: &crate::app_state::AppState,
+    pool: &SqlitePool,
+    account_id: &str,
+    mnemonic: &str,
+    wake: Option<&tauri::AppHandle>,
+    error: AppError,
+) -> Result<RecoveryRotationResult> {
+    warn!(
+        error = %error,
+        account = %crate::console_access::short_ss58(account_id),
+        "recovery: server rotated but local rewrite failed — writing sidecar for boot-time retry"
+    );
+    if let Err(sidecar_err) = write_rotation_sidecar(account_id).await {
+        warn!(
+            error = %sidecar_err,
+            account = %crate::console_access::short_ss58(account_id),
+            "recovery: sidecar write also failed; boot-time retry unavailable. Rotation is durable on the server — surfacing the error so the user can re-run the change."
+        );
+        return Err(AppError::Other(format!(
+            "Recovery password was changed on the server, but this device's key file could \
+             not be updated and no retry marker could be saved ({error}; sidecar: {sidecar_err}). \
+             Please run the password change again to finish updating this device."
+        )));
+    }
+    if wake.is_some() {
+        state.auth.lock()?.cache_session_mnemonic(account_id, mnemonic.to_string());
+        wake_after_restore(state, pool, account_id, mnemonic, wake).await;
+    }
+    Ok(RecoveryRotationResult { align_pending: true })
 }
 
 /// Pure input validation for [`change_recovery_password`]. Separated so
@@ -1661,6 +1946,199 @@ mod tests {
             .expect("validation allows pre-config");
     }
 
+    const WRONG_MASTER: &str = "legal winner thank year wave sausage worth useful legal winner thank yellow";
+    const DRIVE_PW: &str = "drive pw";
+
+    async fn insert_own_path(pool: &sqlx::SqlitePool, owner: &str, path: &str, label: &str) {
+        sqlx::query("INSERT INTO sync_paths (owner, path, label) VALUES (?, ?, ?)")
+            .bind(owner)
+            .bind(path)
+            .bind(label)
+            .execute(pool)
+            .await
+            .expect("own sync_paths row");
+    }
+
+    async fn insert_member_path(pool: &sqlx::SqlitePool, owner: &str, path: &str, label: &str) {
+        sqlx::query("INSERT INTO sync_paths (owner, path, label, owner_ss58, wire_folder_hash) VALUES (?, ?, ?, ?, ?)")
+            .bind(owner)
+            .bind(path)
+            .bind(label)
+            .bind("5OwnerSs58NotThisAccount")
+            .bind("0123456789abcdef")
+            .execute(pool)
+            .await
+            .expect("member sync_paths row");
+    }
+
+    async fn plant_folder_seal(account: &str, label: &str, master: &str, drive_pw: &str) {
+        let dir = crate::sync::mnemonic::config_dir_for_folder(account, label).expect("config dir");
+        tokio::fs::create_dir_all(&dir).await.expect("mkdir folder config");
+        let phrase = hcfs_client::drive::keys::derive_folder_mnemonic(master, label).expect("derive");
+        hcfs_client::auth::save_encrypted_mnemonic(&dir.join("enc_mnemonic.json"), &phrase, drive_pw).expect("seal");
+    }
+
+    async fn seed_plaintext_drive_pw(pool: &sqlx::SqlitePool, owner: &str) {
+        sqlx::query("INSERT INTO hcfs_config (owner, server_url, drive_password, encryption_version) VALUES (?, '', ?, 0)")
+            .bind(owner)
+            .bind(DRIVE_PW)
+            .execute(pool)
+            .await
+            .expect("plaintext drive_password");
+    }
+
+    /// A member drive's seal is the owner's folder mnemonic. Comparing it to
+    /// `derive(this_master, local_label)` is a false mismatch — restore must
+    /// skip those rows the same way rotation already does.
+    #[tokio::test]
+    async fn validate_master_ignores_member_drive_seals() {
+        let _home = crate::test_helpers::HOME_LOCK.lock().expect("HOME_LOCK");
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        unsafe {
+            std::env::set_var("HOME", tmp.path());
+        }
+        let account = "5TestValidateMemberSkip";
+        let pool = setup_validation_pool().await;
+        let owner = crate::auth::account_key::account_key(account);
+        insert_own_path(&pool, &owner, "/tmp/docs", "docs").await;
+        insert_member_path(&pool, &owner, "/tmp/shared", "shared").await;
+        seed_plaintext_drive_pw(&pool, &owner).await;
+        plant_folder_seal(account, "docs", VALIDATION_MASTER, DRIVE_PW).await;
+        plant_folder_seal(account, "shared", WRONG_MASTER, DRIVE_PW).await;
+
+        super::validate_master_against_existing_folders(&pool, account, VALIDATION_MASTER)
+            .await
+            .expect("member seal must not fail a matching own-drive master");
+    }
+
+    #[tokio::test]
+    async fn validate_master_still_refuses_a_wrong_own_folder_seal() {
+        let _home = crate::test_helpers::HOME_LOCK.lock().expect("HOME_LOCK");
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        unsafe {
+            std::env::set_var("HOME", tmp.path());
+        }
+        let account = "5TestValidateOwnMismatch";
+        let pool = setup_validation_pool().await;
+        let owner = crate::auth::account_key::account_key(account);
+        insert_own_path(&pool, &owner, "/tmp/docs", "docs").await;
+        seed_plaintext_drive_pw(&pool, &owner).await;
+        plant_folder_seal(account, "docs", WRONG_MASTER, DRIVE_PW).await;
+
+        let err = super::validate_master_against_existing_folders(&pool, account, VALIDATION_MASTER)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("does not derive folder"),
+            "own-drive mismatch must still refuse, got {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn probe_folder_seals_confirms_own_and_skips_member() {
+        let _home = crate::test_helpers::HOME_LOCK.lock().expect("HOME_LOCK");
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        unsafe {
+            std::env::set_var("HOME", tmp.path());
+        }
+        let account = "5TestProbeMemberSkip";
+        let pool = setup_validation_pool().await;
+        let owner = crate::auth::account_key::account_key(account);
+        insert_own_path(&pool, &owner, "/tmp/docs", "docs").await;
+        insert_member_path(&pool, &owner, "/tmp/shared", "shared").await;
+        seed_plaintext_drive_pw(&pool, &owner).await;
+        plant_folder_seal(account, "docs", VALIDATION_MASTER, DRIVE_PW).await;
+        plant_folder_seal(account, "shared", WRONG_MASTER, DRIVE_PW).await;
+
+        assert_eq!(
+            super::probe_local_folder_seals(&pool, account, VALIDATION_MASTER).await.expect("probe"),
+            crate::recovery_proof::Probe::Confirmed
+        );
+    }
+
+    #[tokio::test]
+    async fn probe_folder_seals_mismatch_on_wrong_own_seal() {
+        let _home = crate::test_helpers::HOME_LOCK.lock().expect("HOME_LOCK");
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        unsafe {
+            std::env::set_var("HOME", tmp.path());
+        }
+        let account = "5TestProbeOwnMismatch";
+        let pool = setup_validation_pool().await;
+        let owner = crate::auth::account_key::account_key(account);
+        insert_own_path(&pool, &owner, "/tmp/docs", "docs").await;
+        seed_plaintext_drive_pw(&pool, &owner).await;
+        plant_folder_seal(account, "docs", WRONG_MASTER, DRIVE_PW).await;
+
+        assert_eq!(
+            super::probe_local_folder_seals(&pool, account, VALIDATION_MASTER).await.expect("probe"),
+            crate::recovery_proof::Probe::Mismatch
+        );
+    }
+
+    #[tokio::test]
+    async fn probe_drive_password_confirms_matching_master_and_refuses_wrong() {
+        let account = "5TestProbeDrivePw";
+        let pool = setup_validation_pool().await;
+        crate::sync::config::save_hcfs_config_internal(&pool, account, "", DRIVE_PW, Some(VALIDATION_MASTER))
+            .await
+            .expect("encrypt drive_password");
+
+        assert_eq!(
+            super::probe_drive_password_row(&pool, account, VALIDATION_MASTER).await.expect("probe"),
+            crate::recovery_proof::Probe::Confirmed
+        );
+        assert_eq!(
+            super::probe_drive_password_row(&pool, account, WRONG_MASTER).await.expect("probe"),
+            crate::recovery_proof::Probe::Mismatch
+        );
+    }
+
+    #[tokio::test]
+    async fn prove_master_identity_match_does_not_need_local_state() {
+        let pool = setup_validation_pool().await;
+        let (_, ss58, _, _) = crate::auth::service::derive_keys(VALIDATION_MASTER).expect("derive");
+        let method = super::prove_master_for_account(&pool, &ss58, VALIDATION_MASTER)
+            .await
+            .expect("identity match is Confirmed");
+        assert_eq!(method, crate::recovery_proof::ProofMethod::MnemonicIdentity);
+    }
+
+    #[tokio::test]
+    async fn prove_master_rejects_garbage_phrase() {
+        let pool = setup_validation_pool().await;
+        let err = super::prove_master_for_account(&pool, "5Whatever", "not a bip39 phrase")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, AppError::Validation(ref msg) if msg.contains("Invalid recovery phrase")),
+            "got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn prove_master_oauth_own_seal_skips_member_and_confirms() {
+        let _home = crate::test_helpers::HOME_LOCK.lock().expect("HOME_LOCK");
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        unsafe {
+            std::env::set_var("HOME", tmp.path());
+        }
+        // Login SS58 that VALIDATION_MASTER does not derive (OAuth split).
+        let account = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
+        let pool = setup_validation_pool().await;
+        let owner = crate::auth::account_key::account_key(account);
+        insert_own_path(&pool, &owner, "/tmp/docs", "docs").await;
+        insert_member_path(&pool, &owner, "/tmp/shared", "shared").await;
+        seed_plaintext_drive_pw(&pool, &owner).await;
+        plant_folder_seal(account, "docs", VALIDATION_MASTER, DRIVE_PW).await;
+        plant_folder_seal(account, "shared", WRONG_MASTER, DRIVE_PW).await;
+
+        let method = super::prove_master_for_account(&pool, account, VALIDATION_MASTER)
+            .await
+            .expect("own seal must confirm an OAuth account; member must not veto");
+        assert_eq!(method, crate::recovery_proof::ProofMethod::LocalFolderSeals);
+    }
+
     #[tokio::test]
     async fn rotation_sidecar_roundtrip() {
         // Use a tempdir as the `HOME` so master_mnemonic_path points into it.
@@ -1787,6 +2265,8 @@ mod tests {
             "pub async fn recover_mnemonic(",
             "pub async fn seal_and_upload_mnemonic(",
             "pub async fn resume_recovery_password_rotation(",
+            "pub async fn restore_with_mnemonic(",
+            "pub async fn reset_unlock_password(",
         ] {
             let sig_idx = src.find(func).unwrap_or_else(|| panic!("{func} present"));
             let body_start = src[sig_idx..].find('{').expect("fn body opens") + sig_idx;
@@ -1857,6 +2337,151 @@ mod tests {
             "recover_mnemonic must spawn the post-unlock auto-init — the FE retry ladder expires 10s after \
              subscribing, long before a human finishes typing the unlock password, so without this the \
              restore-time unlock paths stay sync-wedged until the next launch",
+        );
+    }
+
+    /// A wrong phrase must never mint a new master or upsert a blob
+    /// without proof. `seal_and_upload_mnemonic` mints on a miss;
+    /// restore/reset must not call it.
+    #[test]
+    fn restore_commands_never_mint_a_master() {
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/recovery.rs")).expect("read recovery.rs");
+        for func in ["pub async fn restore_with_mnemonic(", "pub async fn reset_unlock_password("] {
+            let sig_idx = src.find(func).unwrap_or_else(|| panic!("{func} present"));
+            let body_start = src[sig_idx..].find('{').expect("fn body opens") + sig_idx;
+            let mut depth = 0usize;
+            let mut body_end = body_start;
+            for (i, ch) in src[body_start..].char_indices() {
+                match ch {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            body_end = body_start + i;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let body = &src[body_start..=body_end];
+            assert!(!body.contains("generate_mnemonic_internal"), "{func} must never mint a master");
+            assert!(!body.contains("seal_and_upload_mnemonic"), "{func} must not call the minting signup path");
+            assert!(
+                body.contains("commit_new_unlock_password"),
+                "{func} must reseal through the shared commit helper"
+            );
+        }
+        let sig = "pub async fn restore_with_mnemonic(";
+        let sig_idx = src.find(sig).expect("restore_with_mnemonic present");
+        let body_start = src[sig_idx..].find('{').expect("fn body opens") + sig_idx;
+        let mut depth = 0usize;
+        let mut body_end = body_start;
+        for (i, ch) in src[body_start..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        body_end = body_start + i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let body = &src[body_start..=body_end];
+        let prove_idx = body
+            .find("prove_master_for_account")
+            .expect("restore_with_mnemonic must prove the phrase before POST");
+        let commit_idx = body
+            .find("commit_new_unlock_password")
+            .expect("restore_with_mnemonic must commit after proof");
+        assert!(prove_idx < commit_idx, "proof must run before the blob upsert");
+    }
+
+    #[test]
+    fn prove_master_must_not_challenge_response_as_the_typed_phrase() {
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/recovery.rs")).expect("read recovery.rs");
+        let sig = "async fn prove_master_for_account(";
+        let sig_idx = src.find(sig).expect("prove_master_for_account present");
+        let body_start = src[sig_idx..].find('{').expect("fn body opens") + sig_idx;
+        let mut depth = 0usize;
+        let mut body_end = body_start;
+        for (i, ch) in src[body_start..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        body_end = body_start + i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let body = &src[body_start..=body_end];
+        assert!(
+            !body.contains("challenge_response"),
+            "proving a typed phrase must not authenticate as its derived SS58 (audit H-3)"
+        );
+        assert!(!body.contains("generate_mnemonic_internal"), "prove must never mint");
+    }
+
+    #[test]
+    fn folder_proof_queries_own_drives_only() {
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/recovery.rs")).expect("read recovery.rs");
+        let helper = src
+            .split("async fn own_drive_folder_rows(")
+            .nth(1)
+            .expect("own_drive_folder_rows present");
+        let helper_body = &helper[..helper.find("async fn ").expect("next fn after helper")];
+        assert!(
+            helper_body.contains("owner_ss58 IS NULL") && helper_body.contains("wire_folder_hash IS NULL"),
+            "own-drive filter must match reencrypt_all_folder_mnemonics"
+        );
+        for func in ["async fn validate_master_against_existing_folders(", "async fn probe_local_folder_seals("] {
+            let sig_idx = src.find(func).unwrap_or_else(|| panic!("{func} present"));
+            let body_start = src[sig_idx..].find('{').expect("fn body opens") + sig_idx;
+            let mut depth = 0usize;
+            let mut body_end = body_start;
+            for (i, ch) in src[body_start..].char_indices() {
+                match ch {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            body_end = body_start + i;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let body = &src[body_start..=body_end];
+            assert!(body.contains("own_drive_folder_rows"), "{func} must skip member-drive seals");
+        }
+    }
+
+    #[test]
+    fn download_decryption_is_a_wrong_phrase_transport_is_not() {
+        use crate::recovery_proof::RemoteAttempt;
+        assert_eq!(
+            super::remote_attempt_from_err_display(&"Decryption error: tag"),
+            RemoteAttempt::DecryptMiss
+        );
+        assert_eq!(
+            super::remote_attempt_from_err_display(&"Hash mismatch for downloaded file"),
+            RemoteAttempt::DecryptMiss
+        );
+        assert_eq!(
+            super::remote_attempt_from_err_display(&"Download failed: timeout"),
+            RemoteAttempt::Transport
+        );
+        assert_eq!(
+            super::remote_attempt_from_err_display(&"Failed to fetch remote files: dns"),
+            RemoteAttempt::Transport
         );
     }
 }

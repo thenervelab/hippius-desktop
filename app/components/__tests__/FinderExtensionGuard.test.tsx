@@ -34,6 +34,7 @@ vi.mock("sonner", () => ({
 type ToastOptions = {
   id?: string;
   duration?: number;
+  description?: string;
   action?: { label: string; onClick: () => void };
   onDismiss?: () => void;
 };
@@ -79,6 +80,19 @@ describe("FinderExtensionGuard", () => {
     expect(options.action?.label).toBeTruthy();
   });
 
+  // Sequoia 15.2+ / Tahoe put Finder Sync under File Providers. The Finder
+  // category is Apple's Quick Actions, so "enable under Finder" sends the user
+  // to a list that can never contain Hippius (report 2026-08-26, Tahoe 26.3).
+  it("points at File Providers, not the Finder Quick Actions list", async () => {
+    stateIs("disabled");
+    render(<FinderExtensionGuard />);
+    await waitFor(() => expect(toastMock.warning).toHaveBeenCalledTimes(1));
+
+    const description = nudgeOptions().description ?? "";
+    expect(description).toMatch(/File Providers/);
+    expect(description).not.toMatch(/under Finder in/);
+  });
+
   it.each(["enabled", "unsupported"] as const)("stays silent when the state is %s", async (kind) => {
     stateIs(kind);
     render(<FinderExtensionGuard />);
@@ -112,6 +126,9 @@ describe("FinderExtensionGuard", () => {
     });
 
     expect(toastMock.error).toHaveBeenCalledTimes(1);
+    const fallback = toastMock.error.mock.calls[0][1] as { description?: string };
+    expect(fallback.description).toMatch(/File Providers/);
+    expect(fallback.description).not.toMatch(/under Finder/);
   });
 
   it("dismisses the nudge once the user has enabled the extension", async () => {

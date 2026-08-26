@@ -159,7 +159,7 @@ My Shares page (`/shares`):
 
 Finder extension **[mac]**:
 
-- [ ] **On a Mac that has never run `pnpm finder:dev`** (`pluginkit -mAvvv -p com.apple.FinderSync | grep -A6 hippius` shows no leading `+`): first launch raises the "Turn on the Hippius Finder extension" notice, its **Open Settings** button opens the Extensions pane, and the notice clears by itself on returning to the app once the switch is on. A dev Mac cannot verify this — its enable election is keyed by bundle id and outlives reinstalls, which is exactly how the missing right-click menu shipped in v0.2.1.
+- [ ] **On a Mac that has never run `pnpm finder:dev`** (`pluginkit -mAvvv -p com.apple.FinderSync | grep -A6 hippius` shows no leading `+`): first launch raises the "Turn on the Hippius Finder extension" notice naming **File Providers** (not Finder — on Sequoia 15.2+ / Tahoe that category is Apple's Quick Actions), its **Open Settings** button opens the Extensions pane, and the notice clears by itself on returning to the app once the switch is on. A dev Mac cannot verify this — its enable election is keyed by bundle id and outlives reinstalls, which is exactly how the missing right-click menu shipped in v0.2.1. The toggle itself lives under System Settings › General › Login Items & Extensions › File Providers.
 - [ ] With the extension enabled, no notice appears on launch.
 - [ ] Right-click a synced file in Finder → "Share with Hippius": app comes forward with the chooser; both public and password variants mint working links.
 - [ ] Cancelling the chooser aborts (nothing uploaded, no orphan link).

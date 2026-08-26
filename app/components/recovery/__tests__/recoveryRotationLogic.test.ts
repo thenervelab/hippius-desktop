@@ -3,6 +3,8 @@ import {
   isPasswordMismatch,
   isSameAsCurrent,
   canSubmitRecoveryRotation,
+  canSubmitNewPasswordOnly,
+  canSubmitPhraseRestore,
   classifyRotationError,
 } from "@/components/recovery/recoveryRotationLogic";
 
@@ -80,8 +82,51 @@ describe("classifyRotationError", () => {
     expect(classifyRotationError("Validation: WRONG PASSPHRASE")).toBe("wrong_password");
   });
 
+  it("maps a session-missing-mnemonic message to mnemonic_missing", () => {
+    expect(
+      classifyRotationError(
+        "This device doesn't have your mnemonic seed unlocked. Enter the seed to restore."
+      )
+    ).toBe("mnemonic_missing");
+  });
+
   it("maps anything else to generic", () => {
     expect(classifyRotationError("Network timeout")).toBe("generic");
     expect(classifyRotationError("")).toBe("generic");
+  });
+});
+
+describe("canSubmitNewPasswordOnly", () => {
+  const form = {
+    submitting: false,
+    next: "new-strong-pass",
+    confirm: "new-strong-pass",
+    strength: ok,
+  };
+
+  it("accepts a matching strong pair", () => {
+    expect(canSubmitNewPasswordOnly(form)).toBe(true);
+  });
+
+  it("rejects an empty confirm", () => {
+    expect(canSubmitNewPasswordOnly({ ...form, confirm: "" })).toBe(false);
+  });
+});
+
+describe("canSubmitPhraseRestore", () => {
+  const form = {
+    submitting: false,
+    mnemonic: "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+    next: "new-strong-pass",
+    confirm: "new-strong-pass",
+    strength: ok,
+  };
+
+  it("accepts a phrase plus matching strong password", () => {
+    expect(canSubmitPhraseRestore(form)).toBe(true);
+  });
+
+  it("rejects a blank phrase", () => {
+    expect(canSubmitPhraseRestore({ ...form, mnemonic: "   " })).toBe(false);
   });
 });
