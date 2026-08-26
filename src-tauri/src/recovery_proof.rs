@@ -119,6 +119,39 @@ pub(crate) fn decide_master_proof(p: ProofProbes) -> MasterProof {
     MasterProof::Unproven
 }
 
+/// One remote file/folder probe. Pure so transport vs decrypt-miss
+/// cannot be collapsed into "wrong phrase" without a test noticing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RemoteAttempt {
+    Opened,
+    DecryptMiss,
+    Transport,
+    EmptyFolder,
+}
+
+/// Fold of remote attempts. Transport never becomes [`Probe::Mismatch`]:
+/// a timeout is not a wrong seed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RemoteProbeOutcome {
+    Confirmed,
+    Mismatch,
+    Unproven,
+    Transport,
+}
+
+pub(crate) fn classify_remote_attempts(attempts: &[RemoteAttempt]) -> RemoteProbeOutcome {
+    if attempts.iter().any(|a| matches!(a, RemoteAttempt::Opened)) {
+        return RemoteProbeOutcome::Confirmed;
+    }
+    if attempts.iter().any(|a| matches!(a, RemoteAttempt::Transport)) {
+        return RemoteProbeOutcome::Transport;
+    }
+    if attempts.iter().any(|a| matches!(a, RemoteAttempt::DecryptMiss)) {
+        return RemoteProbeOutcome::Mismatch;
+    }
+    RemoteProbeOutcome::Unproven
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -218,5 +251,36 @@ mod tests {
     #[test]
     fn empty_account_with_nothing_to_check_is_unproven() {
         assert_eq!(decide_master_proof(ProofProbes::none()), MasterProof::Unproven);
+    }
+
+    #[test]
+    fn remote_opened_confirms_even_if_later_attempts_fail() {
+        assert_eq!(
+            classify_remote_attempts(&[RemoteAttempt::DecryptMiss, RemoteAttempt::Opened, RemoteAttempt::Transport]),
+            RemoteProbeOutcome::Confirmed
+        );
+    }
+
+    #[test]
+    fn remote_decrypt_miss_only_is_mismatch() {
+        assert_eq!(
+            classify_remote_attempts(&[RemoteAttempt::EmptyFolder, RemoteAttempt::DecryptMiss]),
+            RemoteProbeOutcome::Mismatch
+        );
+    }
+
+    #[test]
+    fn remote_transport_is_not_a_wrong_phrase() {
+        assert_eq!(classify_remote_attempts(&[RemoteAttempt::Transport]), RemoteProbeOutcome::Transport);
+        assert_eq!(
+            classify_remote_attempts(&[RemoteAttempt::DecryptMiss, RemoteAttempt::Transport]),
+            RemoteProbeOutcome::Transport
+        );
+    }
+
+    #[test]
+    fn remote_empty_folders_are_unproven() {
+        assert_eq!(classify_remote_attempts(&[]), RemoteProbeOutcome::Unproven);
+        assert_eq!(classify_remote_attempts(&[RemoteAttempt::EmptyFolder]), RemoteProbeOutcome::Unproven);
     }
 }

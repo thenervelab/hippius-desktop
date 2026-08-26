@@ -360,9 +360,15 @@ const PhraseRestoreForm: React.FC<{
     setSubmitting(true);
     setPhraseError(null);
     try {
-      await restoreWithMnemonic(mnemonic.trim(), next);
+      const { alignPending } = await restoreWithMnemonic(mnemonic.trim(), next);
       setSyncRequiresReauth(false);
-      toast.success("Account unlocked. Unlock password updated.");
+      if (alignPending) {
+        toast.warning(
+          "Account unlocked. Finishing applying the new password to your synced folders — this completes automatically the next time you open the app."
+        );
+      } else {
+        toast.success("Account unlocked. Unlock password updated.");
+      }
       onDone();
     } catch (err) {
       setPhraseError(errMessage(err));

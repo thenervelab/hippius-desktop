@@ -21,7 +21,9 @@ use crate::auth::account_key::account_key;
 use crate::auth::service::IdentityError;
 use crate::console_access::{HcfsServerCtx, HttpOutcome, crypto_to_err, get_json, post_json_discard};
 use crate::error::{AppError, Result};
-use crate::recovery_proof::{MasterProof, Probe, ProofMethod, ProofProbes, decide_master_proof};
+use crate::recovery_proof::{
+    MasterProof, Probe, ProofMethod, ProofProbes, RemoteAttempt, RemoteProbeOutcome, classify_remote_attempts, decide_master_proof,
+};
 
 /// Outcome of the OAuth recovery dialog, broadcast through a `watch` channel
 /// so `ensure_sync_mnemonic` can await resolution before touching the local
@@ -609,12 +611,23 @@ async fn clear_rotation_sidecar(account_id: &str) {
 /// Vacuously succeeds when there are no folders (fresh signup) or when
 /// the drive password isn't yet set (folder mnemonics aren't recoverable
 /// to compare; we have to trust the caller).
+/// Own-drive `sync_paths` rows only. Member drives store the *owner's*
+/// folder mnemonic under a local label — comparing them to
+/// `derive_folder_mnemonic(this_master, local_label)` is a false mismatch
+/// (land mine 1). Same filter as `reencrypt_all_folder_mnemonics`.
+async fn own_drive_folder_rows(pool: &SqlitePool, account_id: &str) -> Result<Vec<(String, String)>> {
+    let owner = account_key(account_id);
+    Ok(
+        sqlx::query_as("SELECT path, label FROM sync_paths WHERE owner = ? AND owner_ss58 IS NULL AND wire_folder_hash IS NULL")
+            .bind(&owner)
+            .fetch_all(pool)
+            .await?,
+    )
+}
+
 async fn validate_master_against_existing_folders(pool: &SqlitePool, account_id: &str, candidate_master: &str) -> Result<()> {
     let owner = account_key(account_id);
-    let folders: Vec<(String, String)> = sqlx::query_as("SELECT path, label FROM sync_paths WHERE owner = ?")
-        .bind(&owner)
-        .fetch_all(pool)
-        .await?;
+    let folders = own_drive_folder_rows(pool, account_id).await?;
     if folders.is_empty() {
         return Ok(());
     }
@@ -1153,11 +1166,7 @@ async fn probe_drive_password_row(pool: &SqlitePool, account_id: &str, candidate
 }
 
 async fn probe_local_folder_seals(pool: &SqlitePool, account_id: &str, candidate: &str) -> Result<Probe> {
-    let owner = account_key(account_id);
-    let folders: Vec<(String, String)> = sqlx::query_as("SELECT path, label FROM sync_paths WHERE owner = ?")
-        .bind(&owner)
-        .fetch_all(pool)
-        .await?;
+    let folders = own_drive_folder_rows(pool, account_id).await?;
     let mut compared = 0u32;
     for (_path, label) in &folders {
         let folder_enc = crate::sync::mnemonic::config_dir_for_folder(account_id, label)?.join("enc_mnemonic.json");
@@ -1195,18 +1204,29 @@ async fn probe_local_folder_seals(pool: &SqlitePool, account_id: &str, candidate
 
 async fn probe_remote_decrypt(pool: &SqlitePool, account_id: &str, candidate: &str) -> Result<Probe> {
     let folders = crate::sync::folders::list_remote_folders_internal(pool, account_id).await?;
-    let mut attempted = false;
+    let mut attempts = Vec::new();
     for folder in folders.iter().filter(|f| f.file_count > 0).take(3) {
-        match try_decrypt_one_remote_file(pool, account_id, candidate, folder).await {
-            Ok(true) => return Ok(Probe::Confirmed),
-            Ok(false) => attempted = true,
-            Err(e) => {
-                warn!(label = %folder.label, error = %e, "restore proof: remote decrypt probe failed");
-                attempted = true;
-            }
-        }
+        attempts.push(try_decrypt_one_remote_file(pool, account_id, candidate, folder).await);
     }
-    if attempted { Ok(Probe::Mismatch) } else { Ok(Probe::Absent) }
+    match classify_remote_attempts(&attempts) {
+        RemoteProbeOutcome::Confirmed => Ok(Probe::Confirmed),
+        RemoteProbeOutcome::Mismatch => Ok(Probe::Mismatch),
+        RemoteProbeOutcome::Unproven => Ok(Probe::Absent),
+        RemoteProbeOutcome::Transport => Err(AppError::Hcfs(
+            "Couldn't reach the server to verify this recovery phrase. Try again.".into(),
+        )),
+    }
+}
+
+/// hcfs-client's `SyncError` module is private; classify on the public Display.
+/// Decrypt/integrity failures are a wrong key; everything else is transport.
+fn remote_attempt_from_err_display(err: &impl std::fmt::Display) -> RemoteAttempt {
+    let msg = err.to_string().to_ascii_lowercase();
+    if msg.contains("decrypt") || msg.contains("hash mismatch") {
+        RemoteAttempt::DecryptMiss
+    } else {
+        RemoteAttempt::Transport
+    }
 }
 
 async fn try_decrypt_one_remote_file(
@@ -1214,26 +1234,33 @@ async fn try_decrypt_one_remote_file(
     account_id: &str,
     candidate: &str,
     folder: &crate::sync::folders::RemoteFolderInfoResult,
-) -> Result<bool> {
-    let key = hcfs_client::drive::remote::derive_encryption_key(candidate, &folder.label).map_err(|e| AppError::Crypto(e.to_string()))?;
+) -> RemoteAttempt {
+    let Ok(key) = hcfs_client::drive::remote::derive_encryption_key(candidate, &folder.label) else {
+        return RemoteAttempt::DecryptMiss;
+    };
     let identity = crate::sync::identity::DriveIdentity::own(account_id, &folder.folder_hash);
-    let client = crate::sync::remote::build_client(pool, account_id, &identity).await?;
+    let Ok(client) = crate::sync::remote::build_client(pool, account_id, &identity).await else {
+        return RemoteAttempt::Transport;
+    };
     let access = hcfs_client::drive::remote::RemoteFileAccess {
         client: &client,
         ss58_address: account_id,
         folder_hash: &folder.folder_hash,
         encryption_key: &key,
     };
-    let files = hcfs_client::drive::remote::list_remote_files(&access)
-        .await
-        .map_err(|e| AppError::Hcfs(e.to_string()))?;
-    let Some(file) = files.first() else {
-        return Ok(false);
+    let files = match hcfs_client::drive::remote::list_remote_files(&access).await {
+        Ok(files) => files,
+        Err(e) => return remote_attempt_from_err_display(&e),
     };
-    let tmp = tempfile::NamedTempFile::new()?;
+    let Some(file) = files.first() else {
+        return RemoteAttempt::EmptyFolder;
+    };
+    let Ok(tmp) = tempfile::NamedTempFile::new() else {
+        return RemoteAttempt::Transport;
+    };
     match hcfs_client::drive::remote::download_remote_file(&access, &file.file_id, tmp.path(), Some(|_: u64, _: u64| {})).await {
-        Ok(_) => Ok(true),
-        Err(_) => Ok(false),
+        Ok(_) => RemoteAttempt::Opened,
+        Err(e) => remote_attempt_from_err_display(&e),
     }
 }
 
@@ -1919,6 +1946,199 @@ mod tests {
             .expect("validation allows pre-config");
     }
 
+    const WRONG_MASTER: &str = "legal winner thank year wave sausage worth useful legal winner thank yellow";
+    const DRIVE_PW: &str = "drive pw";
+
+    async fn insert_own_path(pool: &sqlx::SqlitePool, owner: &str, path: &str, label: &str) {
+        sqlx::query("INSERT INTO sync_paths (owner, path, label) VALUES (?, ?, ?)")
+            .bind(owner)
+            .bind(path)
+            .bind(label)
+            .execute(pool)
+            .await
+            .expect("own sync_paths row");
+    }
+
+    async fn insert_member_path(pool: &sqlx::SqlitePool, owner: &str, path: &str, label: &str) {
+        sqlx::query("INSERT INTO sync_paths (owner, path, label, owner_ss58, wire_folder_hash) VALUES (?, ?, ?, ?, ?)")
+            .bind(owner)
+            .bind(path)
+            .bind(label)
+            .bind("5OwnerSs58NotThisAccount")
+            .bind("0123456789abcdef")
+            .execute(pool)
+            .await
+            .expect("member sync_paths row");
+    }
+
+    async fn plant_folder_seal(account: &str, label: &str, master: &str, drive_pw: &str) {
+        let dir = crate::sync::mnemonic::config_dir_for_folder(account, label).expect("config dir");
+        tokio::fs::create_dir_all(&dir).await.expect("mkdir folder config");
+        let phrase = hcfs_client::drive::keys::derive_folder_mnemonic(master, label).expect("derive");
+        hcfs_client::auth::save_encrypted_mnemonic(&dir.join("enc_mnemonic.json"), &phrase, drive_pw).expect("seal");
+    }
+
+    async fn seed_plaintext_drive_pw(pool: &sqlx::SqlitePool, owner: &str) {
+        sqlx::query("INSERT INTO hcfs_config (owner, server_url, drive_password, encryption_version) VALUES (?, '', ?, 0)")
+            .bind(owner)
+            .bind(DRIVE_PW)
+            .execute(pool)
+            .await
+            .expect("plaintext drive_password");
+    }
+
+    /// A member drive's seal is the owner's folder mnemonic. Comparing it to
+    /// `derive(this_master, local_label)` is a false mismatch — restore must
+    /// skip those rows the same way rotation already does.
+    #[tokio::test]
+    async fn validate_master_ignores_member_drive_seals() {
+        let _home = crate::test_helpers::HOME_LOCK.lock().expect("HOME_LOCK");
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        unsafe {
+            std::env::set_var("HOME", tmp.path());
+        }
+        let account = "5TestValidateMemberSkip";
+        let pool = setup_validation_pool().await;
+        let owner = crate::auth::account_key::account_key(account);
+        insert_own_path(&pool, &owner, "/tmp/docs", "docs").await;
+        insert_member_path(&pool, &owner, "/tmp/shared", "shared").await;
+        seed_plaintext_drive_pw(&pool, &owner).await;
+        plant_folder_seal(account, "docs", VALIDATION_MASTER, DRIVE_PW).await;
+        plant_folder_seal(account, "shared", WRONG_MASTER, DRIVE_PW).await;
+
+        super::validate_master_against_existing_folders(&pool, account, VALIDATION_MASTER)
+            .await
+            .expect("member seal must not fail a matching own-drive master");
+    }
+
+    #[tokio::test]
+    async fn validate_master_still_refuses_a_wrong_own_folder_seal() {
+        let _home = crate::test_helpers::HOME_LOCK.lock().expect("HOME_LOCK");
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        unsafe {
+            std::env::set_var("HOME", tmp.path());
+        }
+        let account = "5TestValidateOwnMismatch";
+        let pool = setup_validation_pool().await;
+        let owner = crate::auth::account_key::account_key(account);
+        insert_own_path(&pool, &owner, "/tmp/docs", "docs").await;
+        seed_plaintext_drive_pw(&pool, &owner).await;
+        plant_folder_seal(account, "docs", WRONG_MASTER, DRIVE_PW).await;
+
+        let err = super::validate_master_against_existing_folders(&pool, account, VALIDATION_MASTER)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("does not derive folder"),
+            "own-drive mismatch must still refuse, got {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn probe_folder_seals_confirms_own_and_skips_member() {
+        let _home = crate::test_helpers::HOME_LOCK.lock().expect("HOME_LOCK");
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        unsafe {
+            std::env::set_var("HOME", tmp.path());
+        }
+        let account = "5TestProbeMemberSkip";
+        let pool = setup_validation_pool().await;
+        let owner = crate::auth::account_key::account_key(account);
+        insert_own_path(&pool, &owner, "/tmp/docs", "docs").await;
+        insert_member_path(&pool, &owner, "/tmp/shared", "shared").await;
+        seed_plaintext_drive_pw(&pool, &owner).await;
+        plant_folder_seal(account, "docs", VALIDATION_MASTER, DRIVE_PW).await;
+        plant_folder_seal(account, "shared", WRONG_MASTER, DRIVE_PW).await;
+
+        assert_eq!(
+            super::probe_local_folder_seals(&pool, account, VALIDATION_MASTER).await.expect("probe"),
+            crate::recovery_proof::Probe::Confirmed
+        );
+    }
+
+    #[tokio::test]
+    async fn probe_folder_seals_mismatch_on_wrong_own_seal() {
+        let _home = crate::test_helpers::HOME_LOCK.lock().expect("HOME_LOCK");
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        unsafe {
+            std::env::set_var("HOME", tmp.path());
+        }
+        let account = "5TestProbeOwnMismatch";
+        let pool = setup_validation_pool().await;
+        let owner = crate::auth::account_key::account_key(account);
+        insert_own_path(&pool, &owner, "/tmp/docs", "docs").await;
+        seed_plaintext_drive_pw(&pool, &owner).await;
+        plant_folder_seal(account, "docs", WRONG_MASTER, DRIVE_PW).await;
+
+        assert_eq!(
+            super::probe_local_folder_seals(&pool, account, VALIDATION_MASTER).await.expect("probe"),
+            crate::recovery_proof::Probe::Mismatch
+        );
+    }
+
+    #[tokio::test]
+    async fn probe_drive_password_confirms_matching_master_and_refuses_wrong() {
+        let account = "5TestProbeDrivePw";
+        let pool = setup_validation_pool().await;
+        crate::sync::config::save_hcfs_config_internal(&pool, account, "", DRIVE_PW, Some(VALIDATION_MASTER))
+            .await
+            .expect("encrypt drive_password");
+
+        assert_eq!(
+            super::probe_drive_password_row(&pool, account, VALIDATION_MASTER).await.expect("probe"),
+            crate::recovery_proof::Probe::Confirmed
+        );
+        assert_eq!(
+            super::probe_drive_password_row(&pool, account, WRONG_MASTER).await.expect("probe"),
+            crate::recovery_proof::Probe::Mismatch
+        );
+    }
+
+    #[tokio::test]
+    async fn prove_master_identity_match_does_not_need_local_state() {
+        let pool = setup_validation_pool().await;
+        let (_, ss58, _, _) = crate::auth::service::derive_keys(VALIDATION_MASTER).expect("derive");
+        let method = super::prove_master_for_account(&pool, &ss58, VALIDATION_MASTER)
+            .await
+            .expect("identity match is Confirmed");
+        assert_eq!(method, crate::recovery_proof::ProofMethod::MnemonicIdentity);
+    }
+
+    #[tokio::test]
+    async fn prove_master_rejects_garbage_phrase() {
+        let pool = setup_validation_pool().await;
+        let err = super::prove_master_for_account(&pool, "5Whatever", "not a bip39 phrase")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, AppError::Validation(ref msg) if msg.contains("Invalid recovery phrase")),
+            "got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn prove_master_oauth_own_seal_skips_member_and_confirms() {
+        let _home = crate::test_helpers::HOME_LOCK.lock().expect("HOME_LOCK");
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        unsafe {
+            std::env::set_var("HOME", tmp.path());
+        }
+        // Login SS58 that VALIDATION_MASTER does not derive (OAuth split).
+        let account = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
+        let pool = setup_validation_pool().await;
+        let owner = crate::auth::account_key::account_key(account);
+        insert_own_path(&pool, &owner, "/tmp/docs", "docs").await;
+        insert_member_path(&pool, &owner, "/tmp/shared", "shared").await;
+        seed_plaintext_drive_pw(&pool, &owner).await;
+        plant_folder_seal(account, "docs", VALIDATION_MASTER, DRIVE_PW).await;
+        plant_folder_seal(account, "shared", WRONG_MASTER, DRIVE_PW).await;
+
+        let method = super::prove_master_for_account(&pool, account, VALIDATION_MASTER)
+            .await
+            .expect("own seal must confirm an OAuth account; member must not veto");
+        assert_eq!(method, crate::recovery_proof::ProofMethod::LocalFolderSeals);
+    }
+
     #[tokio::test]
     async fn rotation_sidecar_roundtrip() {
         // Use a tempdir as the `HOME` so master_mnemonic_path points into it.
@@ -2178,5 +2398,90 @@ mod tests {
             .find("commit_new_unlock_password")
             .expect("restore_with_mnemonic must commit after proof");
         assert!(prove_idx < commit_idx, "proof must run before the blob upsert");
+    }
+
+    #[test]
+    fn prove_master_must_not_challenge_response_as_the_typed_phrase() {
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/recovery.rs")).expect("read recovery.rs");
+        let sig = "async fn prove_master_for_account(";
+        let sig_idx = src.find(sig).expect("prove_master_for_account present");
+        let body_start = src[sig_idx..].find('{').expect("fn body opens") + sig_idx;
+        let mut depth = 0usize;
+        let mut body_end = body_start;
+        for (i, ch) in src[body_start..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        body_end = body_start + i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let body = &src[body_start..=body_end];
+        assert!(
+            !body.contains("challenge_response"),
+            "proving a typed phrase must not authenticate as its derived SS58 (audit H-3)"
+        );
+        assert!(!body.contains("generate_mnemonic_internal"), "prove must never mint");
+    }
+
+    #[test]
+    fn folder_proof_queries_own_drives_only() {
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/recovery.rs")).expect("read recovery.rs");
+        let helper = src
+            .split("async fn own_drive_folder_rows(")
+            .nth(1)
+            .expect("own_drive_folder_rows present");
+        let helper_body = &helper[..helper.find("async fn ").expect("next fn after helper")];
+        assert!(
+            helper_body.contains("owner_ss58 IS NULL") && helper_body.contains("wire_folder_hash IS NULL"),
+            "own-drive filter must match reencrypt_all_folder_mnemonics"
+        );
+        for func in ["async fn validate_master_against_existing_folders(", "async fn probe_local_folder_seals("] {
+            let sig_idx = src.find(func).unwrap_or_else(|| panic!("{func} present"));
+            let body_start = src[sig_idx..].find('{').expect("fn body opens") + sig_idx;
+            let mut depth = 0usize;
+            let mut body_end = body_start;
+            for (i, ch) in src[body_start..].char_indices() {
+                match ch {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            body_end = body_start + i;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let body = &src[body_start..=body_end];
+            assert!(body.contains("own_drive_folder_rows"), "{func} must skip member-drive seals");
+        }
+    }
+
+    #[test]
+    fn download_decryption_is_a_wrong_phrase_transport_is_not() {
+        use crate::recovery_proof::RemoteAttempt;
+        assert_eq!(
+            super::remote_attempt_from_err_display(&"Decryption error: tag"),
+            RemoteAttempt::DecryptMiss
+        );
+        assert_eq!(
+            super::remote_attempt_from_err_display(&"Hash mismatch for downloaded file"),
+            RemoteAttempt::DecryptMiss
+        );
+        assert_eq!(
+            super::remote_attempt_from_err_display(&"Download failed: timeout"),
+            RemoteAttempt::Transport
+        );
+        assert_eq!(
+            super::remote_attempt_from_err_display(&"Failed to fetch remote files: dns"),
+            RemoteAttempt::Transport
+        );
     }
 }
