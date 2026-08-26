@@ -15,6 +15,7 @@ import {
 } from "@/app/lib/utils/recovery";
 import {
   PasswordField,
+  MnemonicField,
   StrengthMeter,
   errMessage,
   useLiveStrength,
@@ -187,27 +188,17 @@ const ChangeRecoveryPasswordDialog: React.FC<Props> = ({
         )}
 
         {mode === "phrase" && (
-          <label className="flex flex-col gap-1">
-            <span className="text-xs text-grey-40 dark:text-grey-dark-600">
-              Mnemonic seed
-            </span>
-            <textarea
-              value={mnemonic}
-              onChange={(e) => {
-                setMnemonic(e.target.value);
-                setPhraseError(null);
-              }}
-              placeholder="Enter or paste your 12-word seed phrase"
-              rows={3}
-              autoComplete="off"
-              autoCapitalize="off"
-              spellCheck={false}
-              className="w-full rounded-md border border-grey-80 bg-white p-3 font-mono text-sm text-grey-10 dark:border-[#3a3a3a] dark:bg-[#1a1a1a] dark:text-white"
-            />
-            {phraseError && (
-              <p className="text-xs text-error-50">{phraseError}</p>
-            )}
-          </label>
+          <MnemonicField
+            label="Mnemonic seed"
+            value={mnemonic}
+            onChange={(v) => {
+              setMnemonic(v);
+              setPhraseError(null);
+            }}
+            errorMessage={phraseError ?? undefined}
+            placeholder="Enter or paste your 12-word seed phrase"
+            disabled={submitting}
+          />
         )}
 
         <PasswordField

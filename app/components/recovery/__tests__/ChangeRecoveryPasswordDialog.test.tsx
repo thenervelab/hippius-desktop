@@ -97,6 +97,9 @@ describe("ChangeRecoveryPasswordDialog — forgot current password", () => {
         screen.getByPlaceholderText(/12-word seed phrase/i)
       ).toBeInTheDocument()
     );
+    const seedField = screen.getByPlaceholderText(/12-word seed phrase/i);
+    expect(seedField.parentElement?.className).toContain("rounded-[8px]");
+    expect(seedField.parentElement?.className).toContain("dark:border-[#494949]");
     expect(recoveryMocks.restoreWithMnemonic).not.toHaveBeenCalled();
   });
 

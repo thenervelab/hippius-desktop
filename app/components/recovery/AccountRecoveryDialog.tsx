@@ -27,6 +27,7 @@ import {
 } from "@/app/lib/utils/recovery";
 import {
   PasswordField,
+  MnemonicField,
   StrengthMeter,
   errMessage,
   useLiveStrength,
@@ -256,8 +257,14 @@ const UnlockBranch: React.FC<{ onDone: () => void }> = ({ onDone }) => {
       open
       onClose={() => {}}
       preventClose
-      title="Unlock Your Account"
-      icon={<Icons.LockClosed className="size-5 text-white" />}
+      title={showPhraseRestore ? "Restore Access" : "Unlock Your Account"}
+      icon={
+        showPhraseRestore ? (
+          <Icons.Key className="size-5 text-white" />
+        ) : (
+          <Icons.LockClosed className="size-5 text-white" />
+        )
+      }
       maxWidth="max-w-[680px]"
     >
       {showPhraseRestore ? (
@@ -298,7 +305,7 @@ const UnlockBranch: React.FC<{ onDone: () => void }> = ({ onDone }) => {
                 </p>
                 <button
                   type="button"
-                  className="mt-2 text-xs font-medium text-primary-50 underline hover:no-underline dark:text-primary-brand-dark"
+                  className="mt-2 flex items-center gap-1.5 text-xs text-primary-50 hover:text-primary-40 transition-colors"
                   onClick={() => setShowPhraseRestore(true)}
                 >
                   Use your mnemonic seed
@@ -384,41 +391,31 @@ const PhraseRestoreForm: React.FC<{
         are encrypted with the seed, not the password.
       </p>
       <div className="flex flex-col gap-4">
-        <label className="flex flex-col gap-1">
-          <span className="text-xs text-grey-40 dark:text-grey-dark-600">
-            Mnemonic seed
-          </span>
-          <textarea
-            value={mnemonic}
-            onChange={(e) => {
-              setMnemonic(e.target.value);
-              setPhraseError(null);
-            }}
-            placeholder="Enter or paste your 12-word seed phrase"
-            rows={3}
-            autoComplete="off"
-            autoCapitalize="off"
-            spellCheck={false}
-            className="w-full rounded-md border border-grey-80 bg-white p-3 font-mono text-sm text-grey-10 dark:border-[#3a3a3a] dark:bg-[#1a1a1a] dark:text-white"
-          />
-          {phraseError && (
-            <p className="text-xs text-error-50">{phraseError}</p>
-          )}
-        </label>
+        <MnemonicField
+          label="Mnemonic Seed"
+          value={mnemonic}
+          onChange={(v) => {
+            setMnemonic(v);
+            setPhraseError(null);
+          }}
+          errorMessage={phraseError ?? undefined}
+          placeholder="Enter or paste your 12-word seed phrase"
+          disabled={submitting}
+        />
         <PasswordField
-          label="New unlock password"
+          label="New Unlock Password"
           value={next}
           onChange={setNext}
-          placeholder="Enter a strong password"
+          placeholder="Enter a Strong Password"
         />
         <StrengthMeter strength={strength} />
         <PasswordField
-          label="Confirm new password"
+          label="Confirm Password"
           value={confirm}
           onChange={setConfirm}
           errorMessage={mismatch ? "Passwords do not match." : undefined}
           onSubmit={handleSubmit}
-          placeholder="Confirm your password"
+          placeholder="Confirm Your Password"
         />
         <Button
           variant="primary"
@@ -428,7 +425,7 @@ const PhraseRestoreForm: React.FC<{
           loading={submitting}
           className={PRIMARY_BUTTON_CLASS}
         >
-          {submitting ? "Restoring..." : "Restore and set password"}
+          {submitting ? "Restoring..." : "Restore and Set Password"}
         </Button>
         <button
           type="button"

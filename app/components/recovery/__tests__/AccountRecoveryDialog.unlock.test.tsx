@@ -152,9 +152,12 @@ describe("AccountRecoveryDialog — Unlock branch", () => {
     fireEvent.click(screen.getByRole("button", { name: /forgot your password/i }));
     fireEvent.click(screen.getByRole("button", { name: /use your mnemonic seed/i }));
 
-    expect(
-      screen.getByPlaceholderText(/12-word seed phrase/i)
-    ).toBeInTheDocument();
+    expect(screen.getByText("Restore Access")).toBeInTheDocument();
+    const seedField = screen.getByPlaceholderText(/12-word seed phrase/i);
+    expect(seedField).toBeInTheDocument();
+    expect(seedField.tagName).toBe("TEXTAREA");
+    expect(seedField.parentElement?.className).toContain("rounded-[8px]");
+    expect(seedField.parentElement?.className).toContain("dark:border-[#494949]");
     expect(
       screen.queryByRole("button", { name: /recovery phrase instead/i })
     ).not.toBeInTheDocument();
@@ -162,10 +165,10 @@ describe("AccountRecoveryDialog — Unlock branch", () => {
     fireEvent.change(screen.getByPlaceholderText(/12-word seed phrase/i), {
       target: { value: "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about" },
     });
-    fireEvent.change(screen.getByPlaceholderText("Enter a strong password"), {
+    fireEvent.change(screen.getByPlaceholderText("Enter a Strong Password"), {
       target: { value: "correct horse battery staple extra" },
     });
-    fireEvent.change(screen.getByPlaceholderText("Confirm your password"), {
+    fireEvent.change(screen.getByPlaceholderText("Confirm Your Password"), {
       target: { value: "correct horse battery staple extra" },
     });
 
@@ -207,10 +210,10 @@ describe("AccountRecoveryDialog — Unlock branch", () => {
     fireEvent.change(screen.getByPlaceholderText(/12-word seed phrase/i), {
       target: { value: "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about" },
     });
-    fireEvent.change(screen.getByPlaceholderText("Enter a strong password"), {
+    fireEvent.change(screen.getByPlaceholderText("Enter a Strong Password"), {
       target: { value: "correct horse battery staple extra" },
     });
-    fireEvent.change(screen.getByPlaceholderText("Confirm your password"), {
+    fireEvent.change(screen.getByPlaceholderText("Confirm Your Password"), {
       target: { value: "correct horse battery staple extra" },
     });
     await waitFor(() =>
@@ -246,10 +249,10 @@ describe("AccountRecoveryDialog — Unlock branch", () => {
     fireEvent.change(screen.getByPlaceholderText(/12-word seed phrase/i), {
       target: { value: "legal winner thank year wave sausage worth useful legal winner thank yellow" },
     });
-    fireEvent.change(screen.getByPlaceholderText("Enter a strong password"), {
+    fireEvent.change(screen.getByPlaceholderText("Enter a Strong Password"), {
       target: { value: "correct horse battery staple extra" },
     });
-    fireEvent.change(screen.getByPlaceholderText("Confirm your password"), {
+    fireEvent.change(screen.getByPlaceholderText("Confirm Your Password"), {
       target: { value: "correct horse battery staple extra" },
     });
     await waitFor(() =>
