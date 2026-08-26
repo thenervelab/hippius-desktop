@@ -294,7 +294,12 @@ jobs:
             # is also used to test everything unrelated to Finder, so losing the
             # whole build to a lapsed secret costs more than it saves. Swap this
             # for `exit 1` if that trade ever changes.
-            echo "::error title=No Finder extension in this build::App Store Connect API key not set - skipping notarization and the Finder extension embed. The published DMG will be unsigned and 'Share with Hippius' will not exist in it. Do not use this build to test Finder integration."
+            # Says nothing about SIGNING: that is decided by the separate
+            # APPLE_CERTIFICATE / APPLE_SIGNING_IDENTITY branch above, so with
+            # the cert present and only the notary key lapsed the build IS
+            # signed. Claiming otherwise here would be a warning testers learn
+            # to distrust.
+            echo "::error title=No Finder extension in this build::App Store Connect API key not set - skipping notarization and the Finder extension embed. 'Share with Hippius' will not exist in the published DMG. Do not use this build to test Finder integration."
           fi
 
       - name: Build & publish
@@ -313,6 +318,14 @@ jobs:
           # The suffix rides on the release NAME because that list is where a
           # tester picks a build from; a caveat buried in the body is read after
           # the download, if at all.
+          #
+          # BEST-EFFORT, not guaranteed: publish-tauri-linux and
+          # publish-tauri-windows have no `needs:` on this job and publish to
+          # this same tag with `overwrite: true` and a hardcoded
+          # `[STAGING] Hippius` name, so whichever job creates the release first
+          # wins the name. The RELIABLE signal is the ::error:: annotation
+          # above, which is per-run and cannot be raced. Do not weaken that one
+          # on the assumption this suffix will be visible.
           releaseName: "[STAGING] ${{ steps.release_notes.outputs.title }}${{ steps.apple.outputs.finder_embed == 'no' && ' - NO FINDER EXTENSION' || '' }}"
           releaseBody: |
             **🎨 Staging Build - macOS Only**

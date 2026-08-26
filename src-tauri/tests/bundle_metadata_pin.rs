@@ -16,8 +16,15 @@
 //! A unit test cannot catch this (the plist is build input, not code) and CI
 //! does not install the artifact, so pin the file itself.
 
-/// The keys Tauri must be left to generate from `tauri.conf.json`.
-const GENERATED_VERSION_KEYS: [&str; 2] = ["CFBundleShortVersionString", "CFBundleVersion"];
+/// The key Tauri must be left to generate from `tauri.conf.json`.
+///
+/// `CFBundleVersion` is deliberately NOT in this list. Tauri would generate it
+/// from the same `version` string (`0.3.4`), and macOS orders CFBundleVersion
+/// component-wise, so that sorts BELOW the `1` every shipped build carries —
+/// an in-place upgrade would lower the bundle version, which Apple requires to
+/// increase monotonically and which LaunchServices/pkd consult when arbitrating
+/// duplicate registrations of one bundle id. See the comment in Info.plist.
+const GENERATED_VERSION_KEYS: [&str; 1] = ["CFBundleShortVersionString"];
 
 fn info_plist() -> String {
     std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Info.plist")).expect("read src-tauri/Info.plist")
@@ -55,4 +62,17 @@ fn tauri_config_carries_the_version() {
 
     assert!(version.split('.').count() >= 2, "`version` should look like a release version, got {version:?}");
     assert_ne!(version, "0.0.1", "`version` is still the pre-1.0 placeholder that caused this pin to exist");
+}
+
+/// The counterpart guard: `CFBundleVersion` must KEEP its explicit value, so a
+/// later cleanup does not "finish the job" by deleting it and silently move
+/// every install's bundle version from `1` down to `0.3.4`.
+#[test]
+fn info_plist_still_pins_cf_bundle_version() {
+    assert!(
+        declares_key(&info_plist(), "CFBundleVersion"),
+        "src-tauri/Info.plist must keep an explicit <key>CFBundleVersion</key>: letting Tauri \
+         generate it from tauri.conf.json's `version` would sort BELOW the `1` every shipped \
+         build carries, lowering the bundle version on upgrade. See the comment in that file."
+    );
 }

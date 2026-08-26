@@ -265,6 +265,23 @@ pub async fn open_finder_extension_settings(app: AppHandle) -> Result<()> {
 pub async fn enable_finder_extension(app: AppHandle) -> Result<FinderExtensionState> {
     #[cfg(target_os = "macos")]
     {
+        // A translocated app runs from a randomized, read-only
+        // `…/AppTranslocation/<UUID>/d/` path that is gone by the next launch.
+        // Registering THAT path would be actively harmful: `-e use` elects by
+        // bundle identifier, and `isExtensionEnabled` reports on the elected
+        // instance (see the module's "two registered copies" note), so electing
+        // an ephemeral copy can leave the real `/Applications` one reporting
+        // `Disabled` indefinitely — making the reported bug worse, for exactly
+        // the fresh-from-DMG users the nudge exists to help. `TranslocationGuard`
+        // already tells them to move the app; there is nothing useful to do here
+        // until they have.
+        if crate::utils::app_location::is_app_translocated() {
+            tracing::warn!("refusing to register the Finder extension from a translocated app bundle");
+            return Err(AppError::Validation(
+                "Move Hippius to your Applications folder first, then try again — macOS is running it from a temporary location.".into(),
+            ));
+        }
+
         // Same gate as `finder_extension_state`: a build with no embedded
         // extension has nothing to register, and saying so is more useful than
         // running a command that cannot succeed.
@@ -299,7 +316,12 @@ pub async fn enable_finder_extension(app: AppHandle) -> Result<FinderExtensionSt
 /// notice spinning forever.
 #[cfg(target_os = "macos")]
 async fn run_pluginkit(args: &[&OsStr]) -> bool {
-    let output = tokio::process::Command::new(PLUGINKIT_BIN).args(args).output();
+    // `kill_on_drop` matters on the timeout branch: `timeout` only drops the
+    // future, and tokio's default would leave the child running unsupervised
+    // while the caller immediately starts a SECOND pluginkit invocation — two
+    // concurrent writers to one pluginkit database, the opposite of what the
+    // timeout is for.
+    let output = tokio::process::Command::new(PLUGINKIT_BIN).args(args).kill_on_drop(true).output();
 
     match tokio::time::timeout(PLUGINKIT_TIMEOUT, output).await {
         Ok(Ok(out)) if out.status.success() => true,
@@ -520,6 +542,29 @@ mod tests {
         assert_eq!(json(FinderExtensionState::Enabled), serde_json::json!({"kind": "enabled"}));
         assert_eq!(json(FinderExtensionState::Disabled), serde_json::json!({"kind": "disabled"}));
         assert_eq!(json(FinderExtensionState::Unsupported), serde_json::json!({"kind": "unsupported"}));
+    }
+
+    /// Wiring pin: the enable path must refuse to run from a translocated
+    /// bundle.
+    ///
+    /// Registering the randomized `…/AppTranslocation/<UUID>/d/` path elects an
+    /// ephemeral copy by bundle identifier, which can leave the real
+    /// `/Applications` install reporting `Disabled` for good — the button would
+    /// make the very bug it exists to fix worse, for the fresh-from-DMG users it
+    /// targets. Runtime translocation cannot be simulated in a unit test, so pin
+    /// the call site (the repo's `tests/*_wiring.rs` idiom).
+    #[test]
+    fn the_enable_path_refuses_a_translocated_bundle() {
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/finder_bridge/enablement.rs")).expect("read enablement.rs");
+        let start = src.find("pub async fn enable_finder_extension").expect("enable_finder_extension is declared");
+        let body = &src[start..];
+        let end = body.find("\n/// Run `pluginkit`").unwrap_or(body.len());
+
+        assert!(
+            body[..end].contains("is_app_translocated"),
+            "enable_finder_extension must refuse to register from a translocated bundle; \
+             electing an ephemeral copy can strand the real install as Disabled"
+        );
     }
 
     /// Drift pin: `pluginkit -e use -i` is keyed by bundle identifier, so if the

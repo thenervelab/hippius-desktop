@@ -16,16 +16,31 @@
     <string>Hippius</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
-    <!-- CFBundleShortVersionString / CFBundleVersion are deliberately ABSENT.
-         Tauri merges this file OVER its generated Info.plist, so a version key
-         here wins against `version` in tauri.conf.json. That is how every
-         shipped build reported `0.0.1` while the project was on 0.3.4: the
-         value was pinned here in the pre-1.0 era and never touched again.
-         The damage is diagnostic, not functional — with no build reporting its
-         real version, "which build are you on?" is unanswerable, which is what
-         made a missing Finder extension take four rounds to pin down. Let Tauri
-         generate both keys from tauri.conf.json; that file is the one source of
-         truth for the version. Pinned by tests/bundle_metadata_pin.rs. -->
+    <!-- CFBundleShortVersionString is deliberately ABSENT. Tauri merges this
+         file OVER its generated Info.plist, so a version key here wins against
+         `version` in tauri.conf.json. That is how every shipped build reported
+         `0.0.1` while the project was on 0.3.4: the value was pinned here in the
+         pre-1.0 era and never touched again. The damage is diagnostic, not
+         functional — with no build reporting its real version, "which build are
+         you on?" is unanswerable, which is what made a missing Finder extension
+         take four rounds to pin down. Let Tauri generate it from
+         tauri.conf.json, the one source of truth. Pinned by
+         tests/bundle_metadata_pin.rs.
+
+         CFBundleVersion deliberately STAYS pinned here, and is NOT handed to
+         Tauri with it. Tauri would generate it from the same `version` string,
+         i.e. `0.3.4` — and macOS orders CFBundleVersion component-wise, so
+         `0.3.4` sorts BELOW the `1` every previously shipped build carries.
+         That would make an in-place upgrade lower the bundle version, against
+         Apple's monotonic-increase rule, and LaunchServices/pkd consult it when
+         arbitrating between duplicate registrations of one bundle id — the
+         exact stale-registration class of bug this file's sibling change is
+         chasing. Fixing the diagnostic problem needs only the string above;
+         moving this key too would trade it for a worse one. Raising it properly
+         needs a real monotonic build number (CI run number), which this repo
+         does not have yet. -->
+    <key>CFBundleVersion</key>
+    <string>1</string>
     <key>LSMinimumSystemVersion</key>
     <string>10.13.0</string>
     <key>NSHighResolutionCapable</key>

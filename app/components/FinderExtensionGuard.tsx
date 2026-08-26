@@ -22,7 +22,15 @@ const NUDGE_DESCRIPTION =
 const SETTINGS_FALLBACK_DESCRIPTION =
   "Open System Settings › General › Login Items & Extensions › File Providers, then enable Hippius.";
 
-const ENABLED_DESCRIPTION = "Right-click a file in your Hippius folder to share it.";
+/**
+ * Deliberately does not promise the menu item is there *now*. Finder loads a
+ * newly elected extension on its own schedule — `macos/dev-finder.sh` follows
+ * the same two pluginkit verbs with `killall Finder` to force it. We do not do
+ * that to a user: relaunching Finder closes every open window and tab, which is
+ * a real cost to spare them a short wait. So the copy sets the expectation
+ * instead of claiming an immediacy we cannot guarantee.
+ */
+const ENABLED_DESCRIPTION = "Right-click a file in your Hippius folder to share it. It can take a moment to appear.";
 
 /**
  * Surfaces the backend's Finder-extension enablement check.
