@@ -58,10 +58,19 @@ fn tauri_config_carries_the_version() {
         serde_json::from_str(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tauri.conf.json")).expect("read tauri.conf.json"))
             .expect("tauri.conf.json parses");
 
-    let version = config.get("version").and_then(|v| v.as_str()).expect("tauri.conf.json has a top-level string `version`");
+    let version = config
+        .get("version")
+        .and_then(|v| v.as_str())
+        .expect("tauri.conf.json has a top-level string `version`");
 
-    assert!(version.split('.').count() >= 2, "`version` should look like a release version, got {version:?}");
-    assert_ne!(version, "0.0.1", "`version` is still the pre-1.0 placeholder that caused this pin to exist");
+    assert!(
+        version.split('.').count() >= 2,
+        "`version` should look like a release version, got {version:?}"
+    );
+    assert_ne!(
+        version, "0.0.1",
+        "`version` is still the pre-1.0 placeholder that caused this pin to exist"
+    );
 }
 
 /// The counterpart guard: `CFBundleVersion` must KEEP its explicit value, so a

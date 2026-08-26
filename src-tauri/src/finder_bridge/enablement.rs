@@ -286,12 +286,19 @@ pub async fn enable_finder_extension(app: AppHandle) -> Result<FinderExtensionSt
         // extension has nothing to register, and saying so is more useful than
         // running a command that cannot succeed.
         let Some(appex) = hosting::current_build_appex_path() else {
-            return Err(AppError::Validation("This build of Hippius does not include the Finder extension.".into()));
+            return Err(AppError::Validation(
+                "This build of Hippius does not include the Finder extension.".into(),
+            ));
         };
 
         let registered = run_pluginkit(&[OsStr::new("-a"), appex.as_os_str()]).await;
-        let elected =
-            run_pluginkit(&[OsStr::new("-e"), OsStr::new("use"), OsStr::new("-i"), OsStr::new(FINDER_EXTENSION_BUNDLE_ID)]).await;
+        let elected = run_pluginkit(&[
+            OsStr::new("-e"),
+            OsStr::new("use"),
+            OsStr::new("-i"),
+            OsStr::new(FINDER_EXTENSION_BUNDLE_ID),
+        ])
+        .await;
 
         // Ask the system, rather than trusting either exit status: `-e use` can
         // report success while the elected instance is a different copy of the
@@ -556,7 +563,9 @@ mod tests {
     #[test]
     fn the_enable_path_refuses_a_translocated_bundle() {
         let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/finder_bridge/enablement.rs")).expect("read enablement.rs");
-        let start = src.find("pub async fn enable_finder_extension").expect("enable_finder_extension is declared");
+        let start = src
+            .find("pub async fn enable_finder_extension")
+            .expect("enable_finder_extension is declared");
         let body = &src[start..];
         let end = body.find("\n/// Run `pluginkit`").unwrap_or(body.len());
 
