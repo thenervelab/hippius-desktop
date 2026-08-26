@@ -1834,7 +1834,7 @@ pub(crate) async fn remove_drive_for_account(app: AppHandle, label: String, expl
         // Freeing it here rather than leaving it to the startup pass means a
         // user who removes a drive to recover disk actually recovers it now.
         if let Ok(folder_dir) = config_dir_for_folder(acct, &label) {
-            crate::sync::chunk_reclaim::clear_staged_upload_chunks(&folder_dir.join("temp"));
+            crate::sync::chunk_reclaim::clear_staged_upload_chunks(folder_dir.join("temp")).await;
         }
     }
 

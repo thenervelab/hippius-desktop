@@ -784,6 +784,24 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
             );
         }
 
+        // Reclaim upload-chunk staging directories abandoned by earlier runs.
+        //
+        // This is the launch trigger, and it must live here rather than only in
+        // the sync-init funnel: `auto_init_sync` skips paused drives, so a user
+        // whose disk filled and who reacted by pausing everything — or who
+        // removed the drives outright — would otherwise reclaim nothing on the
+        // very launch they need it. `initialize_sync_inner` keeps its own
+        // `get_or_init` on the same `OnceCell`, which is what orders the pass
+        // BEFORE any upload starts; whichever fires first runs it exactly once
+        // and the other awaits that result. See `crate::sync::chunk_reclaim`.
+        {
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let state = handle.state::<crate::app_state::AppState>();
+                state.chunk_reclaim.get_or_init(crate::sync::chunk_reclaim::reclaim_startup).await;
+            });
+        }
+
         if let Ok(env_path) = app.path().resolve(".env", BaseDirectory::Resource) {
             let _ = dotenvy::from_filename(env_path);
         }

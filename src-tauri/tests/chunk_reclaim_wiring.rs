@@ -78,15 +78,35 @@ fn the_reclaim_runs_before_the_drive_is_registered() {
     let body = fn_body(&src, "pub(crate) async fn initialize_sync_inner(");
 
     let reclaim_at = body.find("reclaim_startup").expect("reclaim call present");
-    let register_at = body.find("drives.lock()").or_else(|| body.find("hot_add_drives"));
+    // `.expect` rather than `if let`: an optional anchor makes the whole
+    // assertion vacuous the moment the marker is renamed, which is exactly when
+    // an ordering regression would slip through.
+    let register_at = body.find("register_drive(").expect("initialize_sync_inner registers the drive");
 
-    if let Some(register_at) = register_at {
-        assert!(
-            reclaim_at < register_at,
-            "the reclaim must complete BEFORE the drive is registered with the runner, \
-             otherwise it can race an upload that has already started",
-        );
-    }
+    assert!(
+        reclaim_at < register_at,
+        "the reclaim must complete BEFORE the drive is registered with the runner, \
+         otherwise it can race an upload that has already started",
+    );
+}
+
+/// The init funnel skips paused drives (`auto_init_sync` filters on
+/// `is_paused`), so it cannot be the only trigger: a user who reacted to a full
+/// disk by pausing every drive would reclaim nothing on the launch that matters
+/// most. `setup()` runs unconditionally and covers that.
+#[test]
+fn launch_runs_the_reclaim_even_with_no_active_drives() {
+    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/main.rs")).expect("read main.rs");
+    let body = fn_body(&src, "builder.setup(");
+
+    assert!(
+        body.contains("chunk_reclaim") && body.contains("reclaim_startup"),
+        "setup() must trigger the reclaim, or paused/removed-drive users never reclaim anything",
+    );
+    assert!(
+        body.contains("get_or_init"),
+        "the setup trigger must share the OnceCell with the init funnel so the pass runs once",
+    );
 }
 
 /// A removed drive's staged chunks are unreachable by every other code path —

@@ -42,16 +42,27 @@ const UPLOAD_DIR_PREFIX: &str = "upload_";
 /// presence is what distinguishes "encryption finished" from "died partway".
 const MANIFEST_NAME: &str = "manifest.json";
 
-/// Beyond this age a staging directory cannot resume anything, so deleting it
-/// costs nothing.
+/// Age past which a staging directory is treated as abandoned rather than
+/// mid-flight.
 ///
-/// hcfs-server expires an upload session after 24h
-/// (`UPLOAD_SESSION_TTL_HOURS`, `hcfs-server/src/handlers/session.rs`). Once the
-/// session is gone the client must create a new one and re-upload every chunk
-/// regardless of what is staged locally — the chunks are dead weight. The
-/// client's own gate is 48h, so the second day of every directory's life is
-/// pure waste; matching the server here is the half of this fix with no
-/// trade-off at all.
+/// Set to hcfs-server's upload-session TTL (`UPLOAD_SESSION_TTL_HOURS` = 24h,
+/// `hcfs-server/src/handlers/session.rs`) because that is where the expensive
+/// half of the cache stops paying: the session is gone, so a resume must create
+/// a new one and re-upload every chunk no matter what is staged locally.
+///
+/// **Deleting is not free, and it is worth being exact about why.** This is an
+/// ENCRYPTION cache, not a session cache. `UploadChunkManifest::validate_cache`
+/// checks only the plaintext salted hash and the chunk file sizes — nothing
+/// about the server session — so even a stale directory still lets
+/// `upload_file_standalone` take its "skipping re-encryption" branch against a
+/// brand-new session. What expiry forfeits is exactly that: the file is
+/// encrypted and written out in full again.
+///
+/// The trade is deliberate. A directory that has not completed in 24h is
+/// overwhelmingly abandoned rather than in flight, the re-upload was already
+/// unavoidable by then, and one re-encryption is a far smaller cost than an
+/// unbounded staging area. hcfs-client's own gate is 48h; the extra day buys a
+/// re-encryption saving on a file that is almost certainly never coming back.
 pub(crate) const RESUMABLE_MAX_AGE_SECS: u64 = 24 * 60 * 60;
 
 /// Aggregate ceiling for staged chunks across ALL drives.
@@ -81,7 +92,9 @@ pub(crate) struct StagedUpload {
 pub(crate) enum ReclaimReason {
     /// No readable manifest: encryption died partway, nothing can resume.
     Incomplete,
-    /// Older than the server's session TTL, so a resume would fail anyway.
+    /// Past the server's session TTL, so its re-upload was already unavoidable
+    /// and only the re-encryption saving is forfeited. See
+    /// [`RESUMABLE_MAX_AGE_SECS`].
     Expired,
     /// Still resumable, but the cache is over budget and this was the oldest.
     OverBudget,
@@ -205,7 +218,19 @@ fn all_temp_dirs(drives_root: &Path) -> Vec<PathBuf> {
 
     let mut dirs = Vec::new();
     for account in accounts.flatten() {
-        let Ok(folders) = std::fs::read_dir(account.path()) else {
+        let account_path = account.path();
+
+        // Pre-migration builds staged chunks one level up, at `<account>/temp`.
+        // `run_migration`'s Legacy-B branch COPIES that tree into the per-folder
+        // config dir and never deletes the source, so those bytes sit there
+        // duplicated with no row, no pruner and no other code path pointing at
+        // them — the most stranded category there is.
+        let account_temp = account_path.join("temp");
+        if account_temp.is_dir() {
+            dirs.push(account_temp);
+        }
+
+        let Ok(folders) = std::fs::read_dir(&account_path) else {
             continue;
         };
         for folder in folders.flatten() {
@@ -287,13 +312,9 @@ pub(crate) async fn reclaim_startup() -> ReclaimSummary {
     summary
 }
 
-/// Drop a removed drive's entire staging area.
-///
-/// Called beside `clear_persisted_sync_state` on `remove_drive`: the drive is
-/// gone, so every staged chunk under it is unreachable by definition and the
-/// age and budget rules would only delay freeing it. Best-effort, like the
-/// baseline wipe next to it — the startup pass is the backstop.
-pub(crate) fn clear_staged_upload_chunks(temp_dir: &Path) {
+/// Drop a removed drive's entire staging area. Blocking core of
+/// [`clear_staged_upload_chunks`]; call that from async code.
+fn remove_staging_tree(temp_dir: &Path) {
     match std::fs::remove_dir_all(temp_dir) {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -302,6 +323,24 @@ pub(crate) fn clear_staged_upload_chunks(temp_dir: &Path) {
             error = %e,
             "Failed to clear staged upload chunks on remove_drive",
         ),
+    }
+}
+
+/// Drop a removed drive's entire staging area.
+///
+/// Called beside `clear_persisted_sync_state` on `remove_drive`: the drive is
+/// gone, so every staged chunk under it is unreachable by definition and the
+/// age and budget rules would only delay freeing it. Best-effort, like the
+/// baseline wipe next to it — the startup pass is the backstop.
+///
+/// Runs on the blocking pool. On the failure shape this whole module exists for
+/// the tree holds tens of GB across thousands of 8 MiB files, and unlinking that
+/// many inline would stall a Tokio worker — and the IPC response the user is
+/// waiting on — for seconds. `clear_persisted_sync_state` next to it is two
+/// `unlink`s, so it is not a precedent for staying inline.
+pub(crate) async fn clear_staged_upload_chunks(temp_dir: PathBuf) {
+    if let Err(e) = tokio::task::spawn_blocking(move || remove_staging_tree(&temp_dir)).await {
+        warn!(error = %e, "Staged-chunk clear task failed");
     }
 }
 
@@ -485,10 +524,30 @@ mod tests {
         write_staged_dir(root, "folder-a", "live", Some(NOW), 64);
         let temp = root.join("drives/acct/folder-a/temp");
 
-        clear_staged_upload_chunks(&temp);
+        remove_staging_tree(&temp);
 
         assert!(!temp.exists(), "remove_drive must not leave chunks behind");
         // Idempotent: the startup pass may already have taken it.
-        clear_staged_upload_chunks(&temp);
+        remove_staging_tree(&temp);
+    }
+
+    /// Pre-migration builds staged chunks at `<account>/temp`, and Legacy-B
+    /// migration COPIES that tree down into the per-folder config dir without
+    /// deleting the source. Those duplicated bytes have no `sync_paths` row and
+    /// no engine-side pruner pointing at them, so if this scan misses them
+    /// nothing on the machine will ever free them.
+    #[test]
+    fn reclaim_reaches_the_legacy_account_level_staging_area() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+
+        let legacy = root.join("drives/acct/temp/upload_legacy");
+        std::fs::create_dir_all(&legacy).expect("create legacy staging dir");
+        std::fs::write(legacy.join("chunk_0"), vec![0u8; 64]).expect("write chunk");
+
+        let summary = reclaim_under(&root.join("drives"), NOW);
+
+        assert_eq!(summary.removed_dirs, 1, "the account-level temp/ must be scanned too");
+        assert!(!legacy.exists());
     }
 }
