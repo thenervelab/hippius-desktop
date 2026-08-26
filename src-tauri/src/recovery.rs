@@ -1975,7 +1975,7 @@ mod tests {
         let dir = crate::sync::mnemonic::config_dir_for_folder(account, label).expect("config dir");
         tokio::fs::create_dir_all(&dir).await.expect("mkdir folder config");
         let phrase = hcfs_client::drive::keys::derive_folder_mnemonic(master, label).expect("derive");
-        hcfs_client::auth::save_encrypted_mnemonic(&dir.join("enc_mnemonic.json"), &phrase, drive_pw).expect("seal");
+        hcfs_client::auth::save_encrypted_mnemonic(dir.join("enc_mnemonic.json"), &phrase, drive_pw).expect("seal");
     }
 
     async fn seed_plaintext_drive_pw(pool: &sqlx::SqlitePool, owner: &str) {
