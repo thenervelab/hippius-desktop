@@ -26,7 +26,7 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: invokeMock,
 }));
 
-const toastMock = vi.hoisted(() => ({ warning: vi.fn(), error: vi.fn(), dismiss: vi.fn() }));
+const toastMock = vi.hoisted(() => ({ warning: vi.fn(), error: vi.fn(), success: vi.fn(), dismiss: vi.fn() }));
 vi.mock("sonner", () => ({
   toast: toastMock,
 }));
@@ -45,9 +45,31 @@ function nudgeOptions(): ToastOptions {
   return toastMock.warning.mock.calls[0][1] as ToastOptions;
 }
 
-/** Resolve the next `finder_extension_state` call with `kind`. */
-function stateIs(kind: "enabled" | "disabled" | "unsupported") {
-  invokeMock.mockResolvedValue({ kind });
+type Kind = "enabled" | "disabled" | "unsupported";
+
+/**
+ * What the backend currently reports, and what its two action commands do.
+ *
+ * Routed by command name rather than by call order: the action button now runs
+ * `enable_finder_extension` FIRST and only falls back to
+ * `open_finder_extension_settings`, so a positional mock would silently feed
+ * one command's answer to the other.
+ */
+let state: Kind;
+let enableExtension: () => unknown;
+let openSettings: () => unknown;
+
+/** Set what `finder_extension_state` reports from here on. */
+function stateIs(kind: Kind) {
+  state = kind;
+}
+
+/** Make the enable command succeed, as a real registration + election would. */
+function enableSucceeds() {
+  enableExtension = () => {
+    state = "enabled";
+    return { kind: "enabled" };
+  };
 }
 
 /** Fire the window focus the guard re-checks on, and let its promise settle. */
@@ -62,7 +84,27 @@ describe("FinderExtensionGuard", () => {
     invokeMock.mockReset();
     toastMock.warning.mockReset();
     toastMock.error.mockReset();
+    toastMock.success.mockReset();
     toastMock.dismiss.mockReset();
+
+    state = "disabled";
+    // Default: the enable attempt runs but does not take (the extension stays
+    // off), which is the path that must fall back to the settings pane.
+    enableExtension = () => ({ kind: state });
+    openSettings = () => undefined;
+
+    invokeMock.mockImplementation(async (command: string) => {
+      switch (command) {
+        case "finder_extension_state":
+          return { kind: state };
+        case "enable_finder_extension":
+          return enableExtension();
+        case "open_finder_extension_settings":
+          return openSettings();
+        default:
+          return undefined;
+      }
+    });
   });
 
   it("nudges when the backend reports the extension is off", async () => {
@@ -101,29 +143,66 @@ describe("FinderExtensionGuard", () => {
     expect(toastMock.warning).not.toHaveBeenCalled();
   });
 
-  it("opens the system settings pane from the action button", async () => {
-    stateIs("disabled");
+  /** Raise the nudge, then press its action button. */
+  async function pressAction() {
     render(<FinderExtensionGuard />);
     await waitFor(() => expect(toastMock.warning).toHaveBeenCalledTimes(1));
-
     await act(async () => {
       nudgeOptions().action?.onClick();
     });
+  }
 
+  // The heart of the fix (report 2026-08-26): an extension macOS never
+  // registered appears in NO settings pane, so the old "open the pane" button
+  // could not work no matter how the notice was worded. Rust registers and
+  // elects it directly; Settings is only the fallback.
+  it("enables the extension directly from the action button", async () => {
+    enableSucceeds();
+    await pressAction();
+
+    expect(invokeMock).toHaveBeenCalledWith("enable_finder_extension");
+    expect(toastMock.success).toHaveBeenCalledTimes(1);
+    // Sending the user to Settings after it already worked would undo the point.
+    expect(invokeMock).not.toHaveBeenCalledWith("open_finder_extension_settings");
+  });
+
+  it("falls back to the settings pane when the enable does not take", async () => {
+    await pressAction();
+
+    expect(invokeMock).toHaveBeenCalledWith("enable_finder_extension");
+    expect(invokeMock).toHaveBeenCalledWith("open_finder_extension_settings");
+    expect(toastMock.success).not.toHaveBeenCalled();
+  });
+
+  // An older backend has no such command, and a build embedding no extension
+  // refuses it. Neither may strand the user on a dead button.
+  it("falls back to the settings pane when the enable command fails", async () => {
+    enableExtension = () => {
+      throw new Error("command not found");
+    };
+    await pressAction();
+
+    expect(invokeMock).toHaveBeenCalledWith("open_finder_extension_settings");
+    expect(toastMock.success).not.toHaveBeenCalled();
+  });
+
+  // `unsupported` means the backend could not verify the outcome. Claiming
+  // success on an unverified answer is worse than an extra trip to Settings.
+  it("does not claim success when the result cannot be verified", async () => {
+    enableExtension = () => ({ kind: "unsupported" });
+    await pressAction();
+
+    expect(toastMock.success).not.toHaveBeenCalled();
     expect(invokeMock).toHaveBeenCalledWith("open_finder_extension_settings");
   });
 
   it("says so when the settings pane will not open", async () => {
-    stateIs("disabled");
-    render(<FinderExtensionGuard />);
-    await waitFor(() => expect(toastMock.warning).toHaveBeenCalledTimes(1));
-
     // A button that silently does nothing reads as a broken app; the fallback
     // has to name the pane so the user can still get there by hand.
-    invokeMock.mockRejectedValueOnce(new Error("no main thread"));
-    await act(async () => {
-      nudgeOptions().action?.onClick();
-    });
+    openSettings = () => {
+      throw new Error("no main thread");
+    };
+    await pressAction();
 
     expect(toastMock.error).toHaveBeenCalledTimes(1);
     const fallback = toastMock.error.mock.calls[0][1] as { description?: string };

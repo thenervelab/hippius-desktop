@@ -512,6 +512,7 @@ fn main() {
             // platform branch of its own.
             crate::finder_bridge::enablement::finder_extension_state,
             crate::finder_bridge::enablement::open_finder_extension_settings,
+            crate::finder_bridge::enablement::enable_finder_extension,
             // Local DB (notifications, address book, onboarding, preferences, app state)
             add_notification,
             list_notifications,
