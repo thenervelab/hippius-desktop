@@ -47,6 +47,14 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **"Share with Hippius" now turns itself on.** On Mac, the right-click share menu was
+  missing on new installs, and the notice about it sent you to a Settings list that
+  often did not contain Hippius at all. The notice now has an **Enable** button that
+  switches the feature on for you, and only falls back to opening Settings if that does
+  not work.
+- **Every build now reports its real version number.** Installed copies all claimed to
+  be version `0.0.1`, so there was no way to tell which build you were running when
+  reporting a problem.
 - **Reclaimed disk space lost to interrupted uploads.** While preparing an upload,
   Hippius writes a temporary encrypted copy of the file. Copies left behind by uploads
   that were interrupted — by a dropped connection, a pause, or quitting the app — could
