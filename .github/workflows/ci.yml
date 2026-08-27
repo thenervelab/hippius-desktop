@@ -7,20 +7,22 @@ name: ci
 #     cross-platform code. macOS-only `#[cfg(target_os = "macos")]` code is
 #     compiled out here.
 #   - `rust-macos` (macOS): the SLOW lane (~15-20 min), gated to release-bound
-#     merges (PRs into staging/main + pushes to them). Covers the macOS-only code
-#     (security-scoped bookmarks, App Translocation, apple-native keychain).
+#     merges (PRs into staging/beta/main + pushes to them). Covers the macOS-only
+#     code (security-scoped bookmarks, App Translocation, apple-native keychain).
 #   - `rust-windows` (windows): a `cargo check` compile lane, gated to
-#     staging/main like rust-macos. It exists because ONLY the release (publish)
+#     staging/beta/main like rust-macos. It exists because ONLY the release (publish)
 #     workflow ever built on Windows, so Windows-specific breakage (e.g. a
 #     `#[cfg(unix)]` module referenced unconditionally in `generate_handler!`)
 #     surfaced at release time instead of at PR time. This lane catches that
 #     class before a release.
 #
-# The two long-lived branches are `staging` (preview builds, tauri-staging.yml)
-# and `main` (production, tauri-build.yml). Because `staging` is now the branch
-# every release is cut from, the macOS and Windows lanes gate it too — under the
-# old `redesign`/`dev` layout they did not, which is how a Windows-only compile
-# break reached a release.
+# All THREE long-lived branches cut releases — `staging` (tauri-staging.yml),
+# `beta` (tauri-beta.yml) and `main` (tauri-build.yml) — so the macOS and Windows
+# lanes gate all three. Under the old `redesign`/`dev` layout they gated neither,
+# which is how a Windows-only compile break reached a release. `beta` was missed
+# when that lane was created: it publishes to real users, yet a PR into it ran
+# neither lane — and neither could be made a required check without hanging
+# every such PR on a job that never starts.
 #
 # Branch protection requires `rust-linux` + `rust-macos` + `frontend` on
 # staging/main. `rust-windows` is a NON-required lane; make it required once it
@@ -77,8 +79,8 @@ jobs:
     # It exists to cover the macOS-only code the Linux lane compiles out;
     # `rust-linux` is the everywhere gate.
     if: >-
-      (github.event_name == 'pull_request' && (github.base_ref == 'staging' || github.base_ref == 'main')) ||
-      (github.event_name == 'push' && (github.ref_name == 'staging' || github.ref_name == 'main'))
+      (github.event_name == 'pull_request' && (github.base_ref == 'staging' || github.base_ref == 'beta' || github.base_ref == 'main')) ||
+      (github.event_name == 'push' && (github.ref_name == 'staging' || github.ref_name == 'beta' || github.ref_name == 'main'))
     runs-on: macos-latest
     steps:
       - name: Checkout
@@ -115,8 +117,8 @@ jobs:
     # Windows setup from tauri-build.yml: an ~/.ssh/config IdentityFile (no
     # ssh-agent) + git-CLI fetch for the private hcfs dep.
     if: >-
-      (github.event_name == 'pull_request' && (github.base_ref == 'staging' || github.base_ref == 'main')) ||
-      (github.event_name == 'push' && (github.ref_name == 'staging' || github.ref_name == 'main'))
+      (github.event_name == 'pull_request' && (github.base_ref == 'staging' || github.base_ref == 'beta' || github.base_ref == 'main')) ||
+      (github.event_name == 'push' && (github.ref_name == 'staging' || github.ref_name == 'beta' || github.ref_name == 'main'))
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -207,8 +209,8 @@ jobs:
     # src-tauri (not this separate crate). No private deps, so no SSH key needed.
     # Same gating as rust-windows.
     if: >-
-      (github.event_name == 'pull_request' && (github.base_ref == 'staging' || github.base_ref == 'main')) ||
-      (github.event_name == 'push' && (github.ref_name == 'staging' || github.ref_name == 'main'))
+      (github.event_name == 'pull_request' && (github.base_ref == 'staging' || github.base_ref == 'beta' || github.base_ref == 'main')) ||
+      (github.event_name == 'push' && (github.ref_name == 'staging' || github.ref_name == 'beta' || github.ref_name == 'main'))
     runs-on: windows-latest
     steps:
       - name: Checkout

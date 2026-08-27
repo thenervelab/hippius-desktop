@@ -1,0 +1,113 @@
+name: promotion-order
+
+# Code reaches users in one direction: staging -> beta -> main. This job makes
+# that an enforced property rather than a convention someone has to remember.
+#
+# What it catches, and why nothing else would:
+#
+#   1. SKIPPING A LANE. A branch merged straight into `main` ships to every user
+#      without ever having been a beta build, and to production users first.
+#      Nothing about that PR looks unusual.
+#   2. PROMOTING A SUBSET. A promotion opened from a topic branch rather than
+#      from the previous lane carries only that branch's work, silently leaving
+#      the rest of the lane behind. The release still builds and publishes.
+#   3. SQUASHING A PROMOTION. `staging -> beta` must be a MERGE. A squash makes a
+#      new commit that is not a descendant of staging's history, so the merge
+#      base never advances and every later promotion replays the same commits as
+#      conflicts, growing each time. This job fails the NEXT promotion loudly
+#      instead of leaving someone to fight the conflicts.
+#
+# `main` additionally requires linear history, so `beta -> main` is a squash —
+# that is fine and expected. The asymmetry is deliberate: only the last hop is
+# squashed, and nothing is promoted past it.
+
+on:
+  pull_request:
+    branches: [beta, main]
+
+permissions:
+  contents: read
+
+jobs:
+  check-promotion-order:
+    runs-on: ubuntu-latest
+    # The label exception is handled INSIDE the step, deliberately, rather than
+    # with a job-level `if:`. This is meant to be a REQUIRED check, and a job
+    # skipped by `if:` reports a "skipped" conclusion — which required-check
+    # evaluation treats inconsistently and which is indistinguishable, in the
+    # checks UI, from a job that never ran. Always running and exiting 0 makes
+    # the bypass an explicit, visible pass.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # Full history: ancestry cannot be computed from a shallow clone.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: The head must already contain the previous lane
+        shell: bash
+        env:
+          # Via env rather than inline `${{ }}`: branch and label names are
+          # attacker-controlled text on a fork PR, and interpolating either into
+          # a shell command is the injection this repo's zizmor audit exists to
+          # prevent.
+          BASE: ${{ github.base_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, '\n') }}
+        run: |
+          set -euo pipefail
+
+          # Deliberate exception: a hotfix that must reach `main` without
+          # transiting beta. The label is the audit trail, which a bypassed
+          # branch rule would not be. Matched as a whole line so a label merely
+          # CONTAINING the name does not bypass the check.
+          if printf '%s\n' "$LABELS" | grep -qxF 'skip-promotion-order'; then
+            echo "Bypassed by the skip-promotion-order label."
+            exit 0
+          fi
+
+          case "$BASE" in
+            beta) previous="staging" ;;
+            main) previous="beta" ;;
+            *)
+              echo "Nothing to check for base '$BASE'."
+              exit 0
+              ;;
+          esac
+
+          # No --depth: the checkout above is already unshallow, and this only
+          # needs the ref present locally (a PR checkout fetches base + head).
+          git fetch origin "$previous" --quiet
+
+          if git merge-base --is-ancestor "origin/$previous" "$HEAD_SHA"; then
+            echo "This branch already contains all of origin/$previous. Promotion order holds."
+            exit 0
+          fi
+
+          missing="$(git rev-list --count "$HEAD_SHA..origin/$previous")"
+
+          {
+            echo "### Promotion order"
+            echo
+            echo "This PR targets \`$BASE\`, but its head does not contain \`$previous\`."
+            echo "**$missing commit(s)** on \`$previous\` would be skipped."
+            echo
+            echo "Code reaches users in one direction: \`staging\` → \`beta\` → \`main\`."
+            echo "Merging this would ship work that never passed through \`$previous\`,"
+            echo "or leave part of \`$previous\` behind while the release still builds"
+            echo "and publishes."
+            echo
+            echo "**To promote:** open the PR from \`$previous\` itself, or merge"
+            echo "\`$previous\` into this branch first."
+            echo
+            echo "**\`staging\` → \`beta\` must be a MERGE, not a squash.** A squash is"
+            echo "not a descendant of \`staging\`, so the merge base never advances and"
+            echo "every later promotion replays the same commits as conflicts."
+            echo
+            echo "**Deliberate exception:** add the \`skip-promotion-order\` label and"
+            echo "say why in the description."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "::error title=Promotion order::This PR targets $BASE but does not contain $previous ($missing commit(s) would be skipped). Promote from $previous, or label skip-promotion-order for a deliberate hotfix."
+          exit 1

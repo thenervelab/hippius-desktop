@@ -63,9 +63,49 @@ its `CFBundleVersion` stays pinned at `1` because macOS orders that key
 component-wise and `0.4.0` would sort *below* the `1` every shipped build
 carries. `tests/bundle_metadata_pin.rs` enforces both halves.
 
+## Promotion order is enforced
+
+Code reaches users in one direction, and `promotion-order.yml` fails any PR into
+`beta` or `main` whose head does not already contain the previous lane:
+
+```
+staging (internal) -> beta (public opt-in) -> main (production)
+```
+
+It catches three things nothing else would, because all three produce a PR that
+looks ordinary and a release that builds and publishes:
+
+1. **Skipping a lane** — a branch merged straight into `main` reaches every user
+   without ever having been a beta build.
+2. **Promoting a subset** — a promotion opened from a topic branch instead of
+   from the previous lane carries only that branch's work and silently leaves
+   the rest of the lane behind.
+3. **Squashing a `staging` → `beta` promotion** — see below.
+
+A deliberate hotfix straight to `main` is possible: label the PR
+`skip-promotion-order` and say why in its description. The label is the audit
+trail, which a bypassed branch rule would not be.
+
+### `staging` → `beta` is a MERGE. `beta` → `main` is a SQUASH.
+
+The asymmetry is load-bearing, not an inconsistency.
+
+`main` requires linear history, so the last hop has to be squashed — and nothing
+is promoted past `main`, so the squash costs nothing.
+
+`beta` must NOT be squashed into. A squash commit is not a descendant of
+`staging`'s history, so the merge base between the two branches never advances.
+Every later promotion then replays the same commits as conflicts, and the set
+grows with each one. Merge `staging` into `beta` instead and the merge base
+tracks along as it should.
+
+Expect **one conflict on every promotion**: the three version files. That is
+working as intended — it is where you choose the new `-beta.N`, rather than
+letting `staging`'s `-dev.N` flow into a lane that publishes to users.
+
 ## Cutting a beta build
 
-1. Open `staging` → `beta` as a PR and **squash-merge** it.
+1. Open `staging` → `beta` as a PR and **merge** it (not squash — see above).
 2. Bump the version to the next `-beta.N` in the same three files. Reusing a
    version means the jobs upload into the previous release instead of creating
    a new one, and beta users are never offered the build.
@@ -82,8 +122,14 @@ macOS signature, which would offer beta users an update they cannot verify.
 
 ## Cutting a production build
 
-Open `staging` → `main` as a PR and **squash-merge** it. The `main` ruleset
+Open **`beta`** → `main` as a PR and **squash-merge** it. The `main` ruleset
 requires linear history, so a merge commit is rejected.
+
+It is `beta` → `main`, not `staging` → `main`: production is the lane after
+beta, and `promotion-order.yml` fails a PR into `main` that does not contain
+`beta`. Bump the version out of its `-beta.N` prerelease to the plain release
+number in the same PR — `0.5.0-beta.4` becomes `0.5.0`, which semver already
+orders above every beta that preceded it.
 
 The push to `main` then:
 
