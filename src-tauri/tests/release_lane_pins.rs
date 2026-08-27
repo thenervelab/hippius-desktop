@@ -78,6 +78,49 @@ fn the_beta_workflow_publishes_to_the_tag_rust_checks() {
     );
 }
 
+/// The beta workflow must be able to read `STATE_EPOCH` out of the source.
+///
+/// It greps for `const STATE_EPOCH: u32 = <n>` and writes the value into
+/// `latest.json`. Rename the constant or change its type and the grep finds
+/// nothing — the workflow now fails loudly rather than omitting the key, but
+/// only because the declaration shape is what it matches on. This pins that
+/// shape from the other side, so the break is caught in CI on the PR that
+/// causes it rather than on the next beta release.
+///
+/// An omitted key is not a loud failure downstream: every build reads a missing
+/// epoch as "unknown" and PERMITS the switch, which silently disables the
+/// downgrade guard.
+#[test]
+fn the_state_epoch_declaration_stays_greppable() {
+    let source = repo_file("src/updates.rs");
+    let declaration = source
+        .lines()
+        .find(|line| line.trim_start().starts_with("const STATE_EPOCH: u32 = "))
+        .expect("updates.rs declares `const STATE_EPOCH: u32 = <n>;` — tauri-beta.yml greps for exactly this shape");
+
+    let value = declaration
+        .trim()
+        .trim_start_matches("const STATE_EPOCH: u32 = ")
+        .trim_end_matches(';')
+        .trim();
+    assert!(
+        value.chars().all(|c| c.is_ascii_digit()) && !value.is_empty(),
+        "STATE_EPOCH must be a bare integer literal; tauri-beta.yml greps the digits out of this line, \
+         and an expression would make the manifest claim an epoch the code does not have"
+    );
+
+    let workflow = repo_file("../.github/workflows/tauri-beta.yml");
+    assert!(
+        workflow.contains("const STATE_EPOCH: u32 = "),
+        "tauri-beta.yml must still parse STATE_EPOCH out of updates.rs to write it into latest.json"
+    );
+    assert!(
+        workflow.contains(".stateEpoch = $epoch"),
+        "tauri-beta.yml must write the epoch into latest.json; without it every build reads the beta \
+         lane's epoch as unknown and permits the switch"
+    );
+}
+
 /// Staging publishes no manifest, so it must not be handed a separate updater
 /// key either.
 ///

@@ -17,6 +17,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
+- **Try new features early with the beta channel.** Choose **Explore Beta** from
+  the account menu to move onto builds that get new features first, before they
+  are fully stabilized. Hippius downloads the build and restarts. You can go back
+  to the stable version at any time from Settings.
 - **Live Photos and HEIC images now preview throughout Drive**, including HEIC
   thumbnails, reliable repeated Live motion playback on supported systems, and
   an immediately disabled LIVE badge with an explanatory tooltip on Linux.
