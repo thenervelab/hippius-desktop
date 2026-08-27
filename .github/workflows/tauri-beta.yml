@@ -758,6 +758,22 @@ jobs:
           fi
           mv latest.json.new latest.json
 
+          # Publish the build's STATE_EPOCH beside the version. Tauri ignores
+          # unknown manifest keys and hands the whole document back on
+          # Update::raw_json, which is how the OTHER channel reads it: a build
+          # refuses to switch to a lane whose epoch is behind its own, because
+          # that build cannot read the state this one has already written.
+          # Parsed from the Rust constant so the manifest cannot claim an epoch
+          # the code does not have.
+          EPOCH="$(grep -oE 'const STATE_EPOCH: u32 = [0-9]+' "$GITHUB_WORKSPACE/src-tauri/src/updates.rs" | grep -oE '[0-9]+$')"
+          if [[ -z "$EPOCH" ]]; then
+            echo "::error title=Could not read STATE_EPOCH::src-tauri/src/updates.rs no longer declares 'const STATE_EPOCH: u32 = <n>'. The manifest would omit it, which every build reads as 'unknown' and permits — silently disabling the downgrade guard."
+            exit 1
+          fi
+          jq --argjson epoch "$EPOCH" '.stateEpoch = $epoch' latest.json > latest.json.new
+          mv latest.json.new latest.json
+          echo "Manifest declares stateEpoch=$EPOCH"
+
           gh release upload "$TAG" --repo "$REPO" latest.json --clobber
 
           # The rolling pointer. Created on first run, reused forever after; it

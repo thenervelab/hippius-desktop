@@ -26,6 +26,40 @@ Conventions:
 - [ ] With an older version installed: the in-app updater offers the new version, downloads, and relaunches into it. (Known gap: verify `latest.json` was actually regenerated for this release — see CLAUDE.md "Finder extension in releases".)
 - [ ] Second launch while the app is running focuses the existing window instead of opening a second instance.
 
+### 1a. Release channels — the cross-channel install
+
+**No automated test covers any of this.** Signature verification against a real
+cross-channel manifest and the relaunch cannot be exercised in CI; a unit test can
+only pin which URL is chosen, never that the build behind it installs. Run this
+whenever a lane's signing, endpoint, or manifest changes — and at least once per
+production release.
+
+Run from a **real installed build**, not `pnpm tauri:dev`: a dev binary is in no
+`.app` bundle, reports itself as production, and cannot install anything.
+
+- [ ] On a **stable** build, the account menu shows **Explore Beta**. Choosing it
+      opens a dialog that says the features are **not fully stabilized** and names
+      the exact version it will install.
+- [ ] Cancelling the dialog downloads nothing. (Watch the network, or simply confirm
+      the app is still on the same version afterwards.)
+- [ ] Confirming downloads, installs, and relaunches — and the app comes back **on
+      the beta version**, not the stable one. This is the step that catches a
+      signing-key or endpoint mistake; nothing else does.
+- [ ] Settings → **Updates** now shows Beta as the current channel.
+- [ ] The account menu item now reads **Leave Beta**, not Explore Beta.
+- [ ] Leaving beta installs the **stable** build and relaunches into it, even though
+      stable's version number is *lower* than beta's. A failure here means the
+      cross-channel comparator regressed and the return path has become one-way.
+- [ ] **[internal]** On a **staging** build, the Explore Beta item is absent
+      entirely, and the app never offers an update. A staging build offering one
+      means it is checking another lane's manifest — the wrong-lane install bug.
+- [ ] With the machine offline: the Updates section still renders and says the
+      channel could not be reached, rather than showing a broken or empty section.
+- [ ] Check the published beta `latest.json` carries a `stateEpoch` field. It is
+      absent → every build treats the epoch as unknown and permits any switch,
+      which silently disables the downgrade guard:
+      `curl -sL https://github.com/thenervelab/hippius-desktop/releases/download/beta-channel/latest.json | jq .stateEpoch`
+
 ## 2. Onboarding & authentication
 
 - [ ] First-run onboarding carousel renders (video panel crops correctly when the window is resized).
