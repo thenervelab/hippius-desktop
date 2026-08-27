@@ -31,6 +31,7 @@ pub mod shared_drives;
 pub mod shares;
 pub mod sync;
 pub mod tray;
+pub mod updates;
 pub mod utils;
 pub mod vpn;
 pub mod wallet;

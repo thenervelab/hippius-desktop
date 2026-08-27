@@ -1,25 +1,31 @@
-name: publish-staging
+name: publish-beta
 
-# Updater: staging deliberately has NO auto-update story. Every lane signs with
-# the one TAURI_SIGNING_PRIVATE_KEY and tauri.conf.json carries the matching
-# pubkey on every branch, so there is no build-time key patch and no
-# branch-specific pubkey to carry across a merge.
+# The public opt-in lane, between staging and main. Users reach it from
+# "Explore Beta" in the app, which installs this lane's build and restarts.
 #
-# Staging is installed by hand. It used to be given a separate updater pubkey
-# while keeping the production ENDPOINT (releases/latest/..., which GitHub
-# resolves only to a non-prerelease), so every check fetched the production
-# manifest and failed signature verification — surfacing as "no update
-# available" rather than as a misconfiguration. `ReleaseChannel::Staging`
-# publishes no manifest URL at all now, which is why this lane needs no
-# latest.json fix job: nothing consumes one.
+# Versions carry a prerelease suffix (0.5.0-beta.N) so semver orders the lanes
+# without help: 0.4.0 < 0.5.0-beta.1 < 0.5.0. A beta build is therefore an
+# upgrade from production, and promoting beta as 0.5.0 supersedes every
+# 0.5.0-beta.N in the fleet. The tag needs no suffix of its own — the version
+# already carries one.
+#
+# Updater: every lane signs with the one TAURI_SIGNING_PRIVATE_KEY, and
+# tauri.conf.json carries the matching pubkey on every branch, so there is no
+# build-time key patch and no branch-specific pubkey to carry across a merge.
+#
+# Unlike staging, this lane MUST publish a working manifest: `publish-manifest`
+# below merges the macOS entry into latest.json and republishes it to the fixed
+# `beta` tag. That fixed tag is the whole reason the job exists — every beta
+# release carries its own version tag, and GitHub's `releases/latest` resolves
+# only to a NON-prerelease, so neither gives the updater a stable URL to check.
 
 on:
   workflow_dispatch:
   push:
-    branches: [staging]
+    branches: [beta]
     # Keep in sync with tauri-build.yml — see the rationale there. Denylist on
     # purpose: an unrecognized path still builds, so forgetting an entry costs
-    # one wasted build rather than a staging DMG that silently never ships.
+    # one wasted build rather than a beta DMG that silently never ships.
     # `workflow_dispatch` ignores path filters and stays the manual escape hatch.
     paths-ignore:
       - "**.md"
@@ -37,7 +43,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: publish-staging-${{ github.ref }}
+  group: publish-beta-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -46,9 +52,13 @@ env:
 jobs:
   publish-tauri-macos:
     runs-on: macos-latest
-    # Creates the staging release and uploads artifacts to it.
+    # Creates the beta release and uploads artifacts to it. `pull-requests:
+    # read` is for the release-notes step, which queries the PR API — without it
+    # the title resolves empty and, on a push with no `#N` in the subject, `jq`
+    # exits non-zero and fails the step under `set -euo pipefail`.
     permissions:
       contents: write
+      pull-requests: read
 
     steps:
       - name: Checkout
@@ -242,7 +252,7 @@ jobs:
 
       # The script fails the build when the secret carries no INDEXER_API_KEY —
       # without it the app renders indexer-backed screens as zeros rather than
-      # errors, so a broken staging build looks healthy to testers.
+      # errors, so a broken beta build looks healthy to users.
       - name: Create src-tauri/.env
         shell: bash
         env:
@@ -300,27 +310,21 @@ jobs:
               echo "api_key=$APPLE_API_KEY_ID"
               echo "api_issuer=$APPLE_API_ISSUER_ID"
             } >> "$GITHUB_OUTPUT"
-            echo "finder_embed=yes" >> "$GITHUB_OUTPUT"
             echo "Notarization enabled (finalize step)."
           else
-            echo "finder_embed=no" >> "$GITHUB_OUTPUT"
-            # An annotation, not an echo: without the App Store Connect key this
-            # job still publishes a DMG, and that DMG contains NO Finder
-            # extension. A build like that looks complete and is not — testers
-            # spent days in August 2026 concluding "Share with Hippius is
-            # broken" from one, because the only trace of the difference was a
-            # log line nobody opens. Same rule as write-tauri-env.sh's missing
-            # INDEXER_API_KEY: a silent degradation that reads as a product bug
-            # has to announce itself. Deliberately NOT a hard failure — staging
-            # is also used to test everything unrelated to Finder, so losing the
-            # whole build to a lapsed secret costs more than it saves. Swap this
-            # for `exit 1` if that trade ever changes.
-            # Says nothing about SIGNING: that is decided by the separate
-            # APPLE_CERTIFICATE / APPLE_SIGNING_IDENTITY branch above, so with
-            # the cert present and only the notary key lapsed the build IS
-            # signed. Claiming otherwise here would be a warning testers learn
-            # to distrust.
-            echo "::error title=No Finder extension in this build::App Store Connect API key not set - skipping notarization and the Finder extension embed. 'Share with Hippius' will not exist in the published DMG. Do not use this build to test Finder integration."
+            # HARD FAILURE, unlike tauri-staging.yml. Without the App Store
+            # Connect key the build would publish a DMG that is unsigned and
+            # embeds no Finder extension — complete-looking and not complete.
+            # Staging tolerates that because it is also used to test everything
+            # unrelated to Finder, so losing the whole build to a lapsed secret
+            # costs more than it saves, and its testers are people who can be
+            # told. Beta ships to the public: they cannot be told, they would
+            # hit an unsigned build at Gatekeeper and a missing "Share with
+            # Hippius", and they would report both as product bugs. This is the
+            # "swap the annotation for exit 1 if the trade ever changes" case
+            # that staging's comment anticipates.
+            echo "::error title=Refusing to publish a beta without notarization::App Store Connect API key not set. A beta DMG would be unsigned and would embed no Finder extension. Set APPLE_API_KEY_CONTENT / APPLE_API_KEY_ID / APPLE_API_ISSUER_ID, or publish this build through the staging lane instead."
+            exit 1
           fi
 
       - name: Build & publish
@@ -330,12 +334,12 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-          # Compile-time channel (release_channel.rs). Staging reports itself
-          # as staging, which is what disables its update checks — it has no
-          # manifest — and what lets it honour a console override.
-          HIPPIUS_RELEASE_CHANNEL: staging
+          # Compile-time channel (release_channel.rs). Beta binaries report
+          # themselves as beta, which is what points their update checks at
+          # the beta manifest and what the in-app channel switch reads back.
+          HIPPIUS_RELEASE_CHANNEL: beta
         with:
-          tagName: v__VERSION__-staging
+          tagName: v__VERSION__
           # The suffix rides on the release NAME because that list is where a
           # tester picks a build from; a caveat buried in the body is read after
           # the download, if at all.
@@ -343,28 +347,32 @@ jobs:
           # BEST-EFFORT, not guaranteed: publish-tauri-linux and
           # publish-tauri-windows have no `needs:` on this job and publish to
           # this same tag with `overwrite: true` and a hardcoded
-          # `[STAGING] Hippius` name, so whichever job creates the release first
-          # wins the name. The RELIABLE signal is the ::error:: annotation
-          # above, which is per-run and cannot be raced. Do not weaken that one
-          # on the assumption this suffix will be visible.
-          releaseName: "[STAGING] ${{ steps.release_notes.outputs.title }}${{ steps.apple.outputs.finder_embed == 'no' && ' - NO FINDER EXTENSION' || '' }}"
+          # `[BETA] Hippius` name, so whichever job creates the release first
+          # wins the name.
+          releaseName: "[BETA] ${{ steps.release_notes.outputs.title }}"
           releaseBody: |
-            **🎨 Staging Build - macOS Only**
-            ${{ steps.apple.outputs.finder_embed == 'no' && '
-            > **This build has NO Finder extension and is unsigned.** It was built without the App Store Connect key, so `HippiusFinder.appex` is not embedded and "Share with Hippius" will not appear on right-click. Use a production build to test Finder integration.
-            ' || '' }}
+            **Beta Build - macOS Only**
+
+            > This is a prerelease. It follows the development work, so it has
+            > the newest features first and those features are not fully
+            > stabilized. Switch back from Settings at any time.
+
             ${{ steps.release_notes.outputs.body }}
-          releaseDraft: false
+          # Draft until publish-manifest has corrected latest.json, mirroring
+          # tauri-build.yml. macOS is built --bundles app, so between here and
+          # the finalize step the release carries no DMG at all; published,
+          # that is indistinguishable from a good build to anyone browsing the
+          # release list.
+          releaseDraft: true
           prerelease: true
           makeLatest: false
           overwrite: true
-          # When notarization creds are present, build app-only — the finalize
-          # step (re)builds the DMG + updater tarball AFTER embedding the Finder
-          # extension (embedding re-signs the app and would invalidate a
-          # Tauri-built DMG/notarization). Without those creds, finalize is
-          # skipped, so fall back to Tauri's full build so a DMG is still produced
-          # (unsigned, no extension) rather than nothing.
-          args: ${{ steps.apple.outputs.api_key != '' && '--target universal-apple-darwin --bundles app' || '--target universal-apple-darwin' }}
+          # Always app-only: the finalize step (re)builds the DMG + updater
+          # tarball AFTER embedding the Finder extension, because embedding
+          # re-signs the app and would invalidate a Tauri-built DMG and its
+          # notarization. Staging has a no-creds fallback here; this lane does
+          # not need one, since the apple step above exits 1 without them.
+          args: '--target universal-apple-darwin --bundles app'
 
       # Embed the universal Finder extension into the app (Tauri built app-only),
       # inside-out re-sign, notarize + staple, then build the DMG + regenerate the
@@ -372,8 +380,7 @@ jobs:
       # release. Runs only when notarization creds are present (else the preview
       # stays app-only, as before). See
       # docs/plans/2026-07-01-finder-release-packaging.md.
-      - name: Finalize macOS preview (embed Finder extension)
-        if: steps.apple.outputs.api_key != ''
+      - name: Finalize macOS release (embed Finder extension)
         shell: bash
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -424,8 +431,8 @@ jobs:
           APP="src-tauri/target/universal-apple-darwin/release/bundle/macos/Hippius.app"
           OUT="$RUNNER_TEMP/hippius-macos-dist"
           macos/finalize-macos-release.sh "$APP" "$OUT"
-          TAG="v$(jq -r .version src-tauri/tauri.conf.json)-staging"
-          # The staging release already exists (tauri-action created it above).
+          TAG="v$(jq -r .version src-tauri/tauri.conf.json)"
+          # The beta release already exists (tauri-action created it above).
           gh release upload "$TAG" \
             "$OUT"/*.dmg \
             "$OUT"/Hippius.app.tar.gz \
@@ -434,12 +441,16 @@ jobs:
 
   # Linux preview: the .deb (with the file-manager "Share with Hippius" action
   # files wired in via tauri.conf.json's bundle.linux.deb). All three platform
-  # jobs upsert the same v<version>-staging release.
+  # jobs upsert the same v<version> release.
   publish-tauri-linux:
     runs-on: ubuntu-22.04
-    # Creates the staging release and uploads artifacts to it.
+    # Creates the beta release and uploads artifacts to it. `pull-requests:
+    # read` is for the release-notes step, which queries the PR API — without it
+    # the title resolves empty and, on a push with no `#N` in the subject, `jq`
+    # exits non-zero and fails the step under `set -euo pipefail`.
     permissions:
       contents: write
+      pull-requests: read
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -518,15 +529,15 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-          # Compile-time channel (release_channel.rs). Staging reports itself
-          # as staging, which is what disables its update checks — it has no
-          # manifest — and what lets it honour a console override.
-          HIPPIUS_RELEASE_CHANNEL: staging
+          # Compile-time channel (release_channel.rs). Beta binaries report
+          # themselves as beta, which is what points their update checks at
+          # the beta manifest and what the in-app channel switch reads back.
+          HIPPIUS_RELEASE_CHANNEL: beta
         with:
-          tagName: v__VERSION__-staging
-          releaseName: '[STAGING] Hippius'
+          tagName: v__VERSION__
+          releaseName: '[BETA] Hippius'
           releaseBody: |
-            **🎨 Staging Build**
+            **Beta Build**
           releaseDraft: false
           prerelease: true
           makeLatest: false
@@ -539,9 +550,13 @@ jobs:
   # cert, so for internal preview the extension ships as a side bundle.
   publish-tauri-windows:
     runs-on: windows-latest
-    # Creates the staging release and uploads artifacts to it.
+    # Creates the beta release and uploads artifacts to it. `pull-requests:
+    # read` is for the release-notes step, which queries the PR API — without it
+    # the title resolves empty and, on a push with no `#N` in the subject, `jq`
+    # exits non-zero and fails the step under `set -euo pipefail`.
     permissions:
       contents: write
+      pull-requests: read
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -626,15 +641,15 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-          # Compile-time channel (release_channel.rs). Staging reports itself
-          # as staging, which is what disables its update checks — it has no
-          # manifest — and what lets it honour a console override.
-          HIPPIUS_RELEASE_CHANNEL: staging
+          # Compile-time channel (release_channel.rs). Beta binaries report
+          # themselves as beta, which is what points their update checks at
+          # the beta manifest and what the in-app channel switch reads back.
+          HIPPIUS_RELEASE_CHANNEL: beta
         with:
-          tagName: v__VERSION__-staging
-          releaseName: '[STAGING] Hippius'
+          tagName: v__VERSION__
+          releaseName: '[BETA] Hippius'
           releaseBody: |
-            **🎨 Staging Build**
+            **Beta Build**
           releaseDraft: false
           prerelease: true
           makeLatest: false
@@ -647,7 +662,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $ver = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
-          $tag = "v$ver-staging"
+          $tag = "v$ver"
           $out = "windows/HippiusShell/out"
           Copy-Item windows/HippiusShell/register-preview.ps1 "$out/"
           @"
@@ -662,3 +677,108 @@ jobs:
           "@ | Set-Content "$out/README-INSTALL.txt"
           Compress-Archive -Path "$out/HippiusShell.dll","$out/HippiusShellSparse.msix","$out/HippiusPreviewCert.cer","$out/register-preview.ps1","$out/README-INSTALL.txt" -DestinationPath "HippiusShellExtension-preview.zip" -Force
           gh release upload $tag HippiusShellExtension-preview.zip --clobber
+
+  # ---------------------------------------------------------------------------
+  # Final job: correct latest.json for macOS, then republish it to the fixed
+  # `beta` tag so the updater has a stable URL to check.
+  #
+  # Runs ONCE, after all three platform jobs have uploaded to the versioned
+  # release. Two things those jobs structurally cannot do:
+  #
+  #   1. Correct latest.json — macOS is built app-only (--bundles app) so the
+  #      Finder extension can be embedded afterwards. tauri-action therefore
+  #      never builds a macOS updater tarball and its manifest has NO darwin
+  #      entry; the real universal tarball and its minisign signature are
+  #      produced later by the finalize step. This merges the two darwin-*
+  #      entries in, leaving the windows entry tauri-action wrote untouched.
+  #      Same correction tauri-build.yml makes for production.
+  #
+  #   2. Serve a stable URL — every beta release carries its own version tag
+  #      (v0.5.0-beta.3) and GitHub's `releases/latest` resolves only to a
+  #      NON-prerelease, so neither addresses "the newest beta". The fixed
+  #      `beta` release below holds one asset, latest.json, overwritten every
+  #      build; that is the URL ReleaseChannel::Beta::manifest_url() points at.
+  #      Its own `url` fields still address the real versioned assets.
+  publish-manifest:
+    needs: [publish-tauri-macos, publish-tauri-linux, publish-tauri-windows]
+    permissions:
+      contents: write # upload latest.json to the versioned tag and to `beta`
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (read version -> tag)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Correct latest.json and republish it to the rolling beta tag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          cd "$work"
+
+          # The version already carries its -beta.N suffix, so the tag needs none.
+          TAG="v$(jq -r .version "$GITHUB_WORKSPACE/src-tauri/tauri.conf.json")"
+          echo "Finalizing beta release $TAG"
+
+          # tauri-action's manifest: correct windows entry, no darwin entry.
+          gh release download "$TAG" --repo "$REPO" --pattern 'latest.json' --dir . || true
+
+          # The macOS updater signature the finalize step attached. Unlike
+          # staging this is not optional: the apple step exits 1 without
+          # notarization creds, so a missing signature here means the finalize
+          # step failed silently and the manifest must NOT be published — a beta
+          # user would be offered an update that cannot verify.
+          if ! gh release download "$TAG" --repo "$REPO" \
+                 --pattern 'Hippius.app.tar.gz.sig' --dir . \
+               || [[ ! -s Hippius.app.tar.gz.sig ]]; then
+            echo "::error title=No macOS updater signature::$TAG has no Hippius.app.tar.gz.sig, so latest.json would offer macOS an update it cannot verify. Refusing to republish the beta manifest."
+            exit 1
+          fi
+          MAC_SIG="$(cat Hippius.app.tar.gz.sig)"
+
+          # The universal tarball serves BOTH Apple slices, so both darwin keys
+          # point at the same asset (mirrors tauri-action's universal handling).
+          URL="https://github.com/${REPO}/releases/download/${TAG}/Hippius.app.tar.gz"
+          if [[ -f latest.json ]]; then
+            jq --arg url "$URL" --arg sig "$MAC_SIG" '
+              .platforms["darwin-aarch64"] = {signature: $sig, url: $url}
+              | .platforms["darwin-x86_64"] = {signature: $sig, url: $url}
+            ' latest.json > latest.json.new
+          else
+            jq -n --arg v "${TAG#v}" --arg url "$URL" --arg sig "$MAC_SIG" '
+              {version: $v, notes: "", pub_date: (now | todate),
+               platforms: {
+                 "darwin-aarch64": {signature: $sig, url: $url},
+                 "darwin-x86_64":  {signature: $sig, url: $url}}}
+            ' > latest.json.new
+          fi
+          mv latest.json.new latest.json
+
+          gh release upload "$TAG" --repo "$REPO" latest.json --clobber
+
+          # The rolling pointer. Created on first run, reused forever after; it
+          # is a prerelease so it can never become `releases/latest` and be
+          # served to production users. It deliberately holds NO build assets —
+          # only the manifest, whose url fields address the versioned release.
+          # Tag name deliberately NOT `beta`: that is the branch name, and a tag
+          # sharing it makes every `git push origin beta` fail with "src refspec
+          # beta matches more than one" and every `git checkout beta` ambiguous —
+          # breaking the promotion flow this lane exists for.
+          if ! gh release view beta-channel --repo "$REPO" >/dev/null 2>&1; then
+            gh release create beta-channel --repo "$REPO" \
+              --title "Beta channel manifest" \
+              --notes "Update manifest for the beta channel. Not a build — see the versioned beta releases for downloads. This tag exists so the updater has a stable URL, since GitHub's /releases/latest never resolves to a prerelease." \
+              --prerelease \
+              --target "$GITHUB_SHA"
+          fi
+          gh release upload beta-channel --repo "$REPO" latest.json --clobber
+
+          # Only now is the versioned release complete: assets uploaded, macOS
+          # entry merged, rolling pointer moved. Publishing earlier would expose
+          # a DMG-less prerelease that reads as a finished build.
+          gh release edit "$TAG" --repo "$REPO" --draft=false --prerelease
+          echo "Beta $TAG published and the rolling manifest republished."
