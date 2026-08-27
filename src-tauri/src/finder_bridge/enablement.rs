@@ -71,9 +71,15 @@ const FINDER_EXTENSION_BUNDLE_ID: &str = "hippius.com.FinderSync";
 #[cfg(target_os = "macos")]
 const PLUGINKIT_BIN: &str = "/usr/bin/pluginkit";
 
-/// How long either `pluginkit` invocation may run before it is abandoned.
+/// Absolute path to `lsregister`, which is NOT on `PATH` at all — it lives
+/// inside the LaunchServices framework and has for every macOS release that
+/// matters here.
 #[cfg(target_os = "macos")]
-const PLUGINKIT_TIMEOUT: Duration = Duration::from_secs(10);
+const LSREGISTER_BIN: &str = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
+
+/// How long any one registration helper may run before it is abandoned.
+#[cfg(target_os = "macos")]
+const TOOL_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Whether this build can host a Finder extension at all — the precondition
 /// that makes [`macos::is_extension_enabled`]'s answer mean anything.
@@ -132,22 +138,27 @@ mod hosting {
         entries.flatten().map(|entry| entry.path()).find(|path| path.extension() == Some(appex))
     }
 
-    /// The embedded extension of the RUNNING build, if this build has one.
+    /// The running build's `.app` bundle and the extension inside it.
     ///
-    /// An unresolvable executable path answers `None`, which routes callers to
-    /// `Unsupported` — staying silent on unverifiable state is this module's
-    /// standing rule.
-    pub fn current_build_appex_path() -> Option<PathBuf> {
+    /// Both or neither: registration needs the bundle (for LaunchServices) and
+    /// the appex (for PlugInKit), and there is no useful state where one is
+    /// known without the other. An unresolvable executable path answers `None`,
+    /// which routes callers to `Unsupported` — staying silent on unverifiable
+    /// state is this module's standing rule.
+    pub fn current_build_bundle_and_appex() -> Option<(PathBuf, PathBuf)> {
         let Ok(exe) = std::env::current_exe() else {
             tracing::warn!("could not resolve current executable path; treating the Finder extension state as unknown");
             return None;
         };
-        app_bundle_root(&exe).and_then(embedded_appex)
+        let root = app_bundle_root(&exe)?.to_path_buf();
+        let appex = embedded_appex(&root)?;
+
+        Some((root, appex))
     }
 
     /// Resolve the running executable and apply both rules.
     pub fn current_build_hosts_finder_extension() -> bool {
-        current_build_appex_path().is_some()
+        current_build_bundle_and_appex().is_some()
     }
 }
 
@@ -301,13 +312,19 @@ pub async fn enable_finder_extension(app: AppHandle) -> Result<FinderExtensionSt
         // Same gate as `finder_extension_state`: a build with no embedded
         // extension has nothing to register, and saying so is more useful than
         // running a command that cannot succeed.
-        let Some(appex) = hosting::current_build_appex_path() else {
+        let Some((bundle, appex)) = hosting::current_build_bundle_and_appex() else {
             return Err(AppError::Validation(
                 "This build of Hippius does not include the Finder extension.".into(),
             ));
         };
 
-        let registered = run_pluginkit(&[OsStr::new("-a"), appex.as_os_str()]).await;
+        let registered = register_with_the_system(&bundle, &appex).await;
+
+        // ELECTION is separate from registration, and only happens here — behind
+        // the user's own button. Registration makes the extension appear in the
+        // pane; election switches it ON, which is the user's decision. The
+        // launch-time path deliberately performs only the first half, or a user
+        // who turned the extension off would find it back on every launch.
         let elected = run_pluginkit(&[
             OsStr::new("-e"),
             OsStr::new("use"),
@@ -330,6 +347,80 @@ pub async fn enable_finder_extension(app: AppHandle) -> Result<FinderExtensionSt
     }
 }
 
+/// Make the system aware the extension exists, without switching it on.
+///
+/// **Two stages, and the first was missing.** macOS discovers app extensions in
+/// order: `lsd` builds a LaunchServices bundle record for the containing app,
+/// and THAT record seeds PlugInKit, which then finds the `.appex` inside. Both
+/// `pluginkit` verbs act on the appex database, which is downstream of the seed
+/// — so when the seed never happened they have nothing to work from.
+///
+/// That is not hypothetical. A colleague's Mac ran a correctly-installed
+/// `/Applications/Hippius.app` for six days with the appex on disk and
+/// `pluginkit -mAvvv -p com.apple.FinderSync` answering `(no matches)` — a
+/// system-wide query, so nothing was registered at all, which is upstream of any
+/// System Settings behaviour. It began working 69 seconds after a macOS upgrade,
+/// whose unified log shows `lsd` building the bundle record and `pkd` discovering
+/// the plugin immediately after. The app bundle was never modified. Any macOS
+/// version can land in this state; the LaunchServices layer has been reported
+/// unreliable since 2017, and nothing user-facing can force re-discovery.
+///
+/// `lsregister -f` forces that first stage on demand. Note the flag is `-f`
+/// alone: `-R` means "recurse into packages", which for a single `.app` descends
+/// INTO the bundle rather than registering it.
+///
+/// **That `lsregister` re-seeds PlugInKit is inferred, not proven.** The evidence
+/// shows an OS-driven bundle-record rebuild being followed by discovery, not that
+/// a manual invocation produces the same. It is cheap, idempotent and contained,
+/// so it is worth running first — but every caller must still handle it not
+/// working, which is why this reports a bool nobody is required to act on.
+///
+/// Contained exactly as `run_pluginkit` is: output never parsed, failure never
+/// fatal.
+#[cfg(target_os = "macos")]
+async fn register_with_the_system(bundle: &std::path::Path, appex: &std::path::Path) -> bool {
+    let seeded = run_tool(LSREGISTER_BIN, &[OsStr::new("-f"), bundle.as_os_str()]).await;
+    let discovered = run_pluginkit(&[OsStr::new("-a"), appex.as_os_str()]).await;
+
+    tracing::debug!(seeded, discovered, "registered the Finder extension with the system");
+    seeded || discovered
+}
+
+/// Register the extension at launch, without electing it.
+///
+/// Registration is meant to happen when the containing app first launches. On the
+/// machine described in [`register_with_the_system`] it did not, and nothing
+/// retried for six days — the nudge's button was the only retry, and it only
+/// appears once the user has already noticed something missing.
+///
+/// Runs only when the state is `Disabled`, which covers both "switched off" and
+/// "never registered" — the two are indistinguishable through Apple's API, and
+/// re-registering something already registered is a no-op. `Enabled` and
+/// `Unsupported` do nothing at all.
+///
+/// Deliberately does NOT elect. See the comment in [`enable_finder_extension`].
+#[cfg(target_os = "macos")]
+pub async fn register_finder_extension_at_launch(app: AppHandle) {
+    // Same refusal as the enable path: registering a randomized
+    // `…/AppTranslocation/<UUID>/d/` path writes a soon-to-vanish bundle into
+    // the LaunchServices database, which is worse than doing nothing.
+    if crate::utils::app_location::is_app_translocated() {
+        tracing::debug!("skipping Finder extension registration: the app is translocated");
+        return;
+    }
+
+    if finder_extension_state(app).await != FinderExtensionState::Disabled {
+        return;
+    }
+
+    let Some((bundle, appex)) = hosting::current_build_bundle_and_appex() else {
+        return;
+    };
+
+    let registered = register_with_the_system(&bundle, &appex).await;
+    tracing::info!(registered, "registered the Finder extension at launch; it still needs enabling");
+}
+
 /// Run `pluginkit` with `args`, reporting only whether it succeeded.
 ///
 /// Never fatal and never parsed: every failure mode — missing binary, non-zero
@@ -339,29 +430,40 @@ pub async fn enable_finder_extension(app: AppHandle) -> Result<FinderExtensionSt
 /// notice spinning forever.
 #[cfg(target_os = "macos")]
 async fn run_pluginkit(args: &[&OsStr]) -> bool {
+    run_tool(PLUGINKIT_BIN, args).await
+}
+
+/// Run one of the undocumented LaunchServices/PlugInKit helpers.
+///
+/// Shared by `pluginkit` and `lsregister`, which need identical containment:
+/// both are debugging tools Apple's DTS says not to architect around, so output
+/// is never parsed, failure is never fatal, and the caller falls back to asking
+/// the system what actually happened.
+#[cfg(target_os = "macos")]
+async fn run_tool(bin: &str, args: &[&OsStr]) -> bool {
     // `kill_on_drop` matters on the timeout branch: `timeout` only drops the
     // future, and tokio's default would leave the child running unsupervised
-    // while the caller immediately starts a SECOND pluginkit invocation — two
-    // concurrent writers to one pluginkit database, the opposite of what the
-    // timeout is for.
-    let output = tokio::process::Command::new(PLUGINKIT_BIN).args(args).kill_on_drop(true).output();
+    // while the caller immediately starts the NEXT invocation — two concurrent
+    // writers to one system database, the opposite of what the timeout is for.
+    let output = tokio::process::Command::new(bin).args(args).kill_on_drop(true).output();
 
-    match tokio::time::timeout(PLUGINKIT_TIMEOUT, output).await {
+    match tokio::time::timeout(TOOL_TIMEOUT, output).await {
         Ok(Ok(out)) if out.status.success() => true,
         Ok(Ok(out)) => {
             tracing::warn!(
+                tool = bin,
                 status = ?out.status.code(),
                 stderr = %String::from_utf8_lossy(&out.stderr).trim(),
-                "pluginkit exited non-zero while enabling the Finder extension"
+                "exited non-zero while registering the Finder extension"
             );
             false
         }
         Ok(Err(err)) => {
-            tracing::warn!(%err, "could not run pluginkit to enable the Finder extension");
+            tracing::warn!(tool = bin, %err, "could not run the tool to register the Finder extension");
             false
         }
         Err(_elapsed) => {
-            tracing::warn!(timeout = ?PLUGINKIT_TIMEOUT, "pluginkit timed out while enabling the Finder extension");
+            tracing::warn!(tool = bin, timeout = ?TOOL_TIMEOUT, "timed out while registering the Finder extension");
             false
         }
     }
@@ -416,8 +518,14 @@ mod macos {
     }
 
     /// `+[FIFinderSyncController isExtensionEnabled]` — has the user switched
-    /// *this app's* Finder extension on? Available since macOS 10.14; the app's
-    /// minimum is well above that, so no availability check is needed.
+    /// *this app's* Finder extension on?
+    ///
+    /// Available since macOS 10.14, and this send is deliberately unguarded: the
+    /// app's `LSMinimumSystemVersion` is 11.0, so the selector always exists.
+    /// That was NOT true until 2026-08-27 — the floor was Tauri's default
+    /// 10.13.0 while this comment claimed otherwise, which made a 10.13 launch
+    /// abort on an unrecognized selector. `tests/release_lane_pins.rs` now pins
+    /// the floor so the claim cannot go stale again.
     pub fn is_extension_enabled() -> bool {
         // SAFETY: `FI_FINDER_SYNC_CONTROLLER` is the class object exported by the
         // linked FinderSync.framework, so the reference is valid for the life of
@@ -553,7 +661,7 @@ mod hosting_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::FinderExtensionState;
+    use super::{FINDER_EXTENSION_BUNDLE_ID, FinderExtensionState};
 
     /// Wire-shape pin: the frontend switches on `kind`, so these three strings are
     /// the contract. A `rename_all` or variant rename would silently turn the
@@ -617,6 +725,75 @@ mod tests {
             command_body("finder_extension_state").contains(TRANSLOCATION_GATE),
             "finder_extension_state must report Unsupported while translocated; otherwise the nudge \
              nags on every focus with an Enable button that cannot succeed"
+        );
+    }
+
+    /// Wiring pin: launch-time registration must NEVER elect the extension.
+    ///
+    /// Registration makes the extension appear in the settings pane; election
+    /// switches it ON. Doing the second at launch would turn the extension back
+    /// on for a user who deliberately switched it off — every single launch,
+    /// with no way to make it stop. Election belongs behind the user's own
+    /// button and nowhere else.
+    ///
+    /// Asserts on the ELECT verb rather than on the whole helper, because the
+    /// registration half legitimately shells out too.
+    #[test]
+    fn the_launch_registration_never_elects() {
+        let body = command_body("register_finder_extension_at_launch");
+
+        assert!(
+            !body.contains(FINDER_EXTENSION_BUNDLE_ID) && !body.contains("\"use\""),
+            "register_finder_extension_at_launch must not run pluginkit's elect verb; switching the \
+             extension on is the user's decision, and doing it at launch overrides them every time"
+        );
+        assert!(
+            body.contains("register_with_the_system"),
+            "register_finder_extension_at_launch must actually register — that is its whole purpose"
+        );
+    }
+
+    /// Wiring pin: launch-time registration must refuse a translocated bundle.
+    ///
+    /// `lsregister -f` on a `…/AppTranslocation/<UUID>/d/` path writes a
+    /// bundle record for a directory that is gone by the next launch — worse
+    /// than the election hazard the enable path already guards, because it
+    /// pollutes the LaunchServices database rather than just the appex one.
+    #[test]
+    fn the_launch_registration_ignores_a_translocated_bundle() {
+        assert!(
+            command_body("register_finder_extension_at_launch").contains(TRANSLOCATION_GATE),
+            "register_finder_extension_at_launch must skip a translocated bundle; registering an \
+             ephemeral path writes a soon-to-vanish record into the LaunchServices database"
+        );
+    }
+
+    /// Wiring pin: registration must seed LaunchServices BEFORE PlugInKit.
+    ///
+    /// macOS discovers extensions in that order — `lsd` builds the app's bundle
+    /// record, and that record seeds `pkd`, which then finds the appex. Both
+    /// `pluginkit` verbs act downstream of the seed, so running them alone
+    /// cannot help an app LaunchServices has never recorded. Reversing the order
+    /// here would look fine and fix nothing.
+    #[test]
+    fn registration_seeds_launch_services_before_pluginkit() {
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/finder_bridge/enablement.rs")).expect("read enablement.rs");
+        let start = src
+            .find("async fn register_with_the_system")
+            .expect("register_with_the_system is declared");
+        let body = &src[start..];
+        let end = body.find("\n}").expect("register_with_the_system has a closing brace in column zero");
+        let body = &body[..end];
+
+        let seed = body
+            .find("LSREGISTER_BIN")
+            .expect("registration must run lsregister to seed LaunchServices");
+        let discover = body.find("run_pluginkit").expect("registration must run pluginkit to register the appex");
+
+        assert!(
+            seed < discover,
+            "lsregister must run BEFORE pluginkit: PlugInKit discovers the appex from the \
+             LaunchServices bundle record, so seeding second cannot help an app that has none"
         );
     }
 

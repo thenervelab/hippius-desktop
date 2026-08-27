@@ -147,6 +147,60 @@ fn no_lane_patches_a_channel_specific_updater_key() {
     }
 }
 
+/// The app's macOS floor must not drop below the Finder extension's.
+///
+/// Three files declare it and nothing connected them. The floor was Tauri's
+/// default `10.13.0` while the appex targeted `11.0` and
+/// `enablement.rs::is_extension_enabled` sent `isExtensionEnabled` — a 10.14+
+/// selector — with no availability check, on the strength of a comment claiming
+/// the minimum was "well above that". On 10.13 that is an unrecognized selector
+/// and the process aborts.
+///
+/// Raising the floor is what makes the unguarded send correct, so this pins the
+/// premise rather than the conclusion: lower the app's floor again and this
+/// fails, instead of a crash reaching a user on an old Mac.
+#[test]
+fn the_app_floor_is_at_least_the_extension_floor() {
+    fn parts(version: &str) -> Vec<u32> {
+        version.split('.').map(|part| part.parse().unwrap_or(0)).collect()
+    }
+
+    let project = repo_file("../macos/HippiusFinder/project.yml");
+    let appex_floor = project
+        .lines()
+        .skip_while(|line| !line.contains("deploymentTarget:"))
+        .find_map(|line| line.trim().strip_prefix("macOS:"))
+        .map(|value| value.trim().trim_matches('"').to_string())
+        .expect("project.yml declares deploymentTarget.macOS");
+
+    let plist = repo_file("Info.plist");
+    let plist_floor = plist
+        .lines()
+        .skip_while(|line| !line.contains("LSMinimumSystemVersion"))
+        .find_map(|line| line.trim().strip_prefix("<string>"))
+        .map(|value| value.trim_end_matches("</string>").to_string())
+        .expect("Info.plist declares LSMinimumSystemVersion");
+
+    let conf: serde_json::Value = serde_json::from_str(&repo_file("tauri.conf.json")).expect("tauri.conf.json is valid JSON");
+    let conf_floor = conf
+        .pointer("/bundle/macOS/minimumSystemVersion")
+        .and_then(|value| value.as_str())
+        .expect("tauri.conf.json declares bundle.macOS.minimumSystemVersion");
+
+    assert_eq!(
+        plist_floor, conf_floor,
+        "Info.plist says {plist_floor} but tauri.conf.json says {conf_floor}; Info.plist is merged \
+         OVER Tauri's generated plist, so the two disagreeing means the shipped value is whichever \
+         file happens to win"
+    );
+    assert!(
+        parts(&plist_floor) >= parts(&appex_floor),
+        "the app's macOS floor ({plist_floor}) is below the Finder extension's ({appex_floor}); \
+         below the extension's floor it cannot load, and below 10.14 the unguarded \
+         `isExtensionEnabled` send in enablement.rs aborts on an unrecognized selector"
+    );
+}
+
 /// A version bump must touch all three files together.
 ///
 /// Every workflow derives its tag with `jq -r .version src-tauri/tauri.conf.json`,

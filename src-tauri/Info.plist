@@ -42,8 +42,16 @@
          does not have yet. -->
     <key>CFBundleVersion</key>
     <string>1</string>
+    <!-- Must match `deploymentTarget.macOS` in macos/HippiusFinder/project.yml
+         and `bundle.macOS.minimumSystemVersion` in tauri.conf.json. The appex
+         requires 11.0 (SF Symbol badges), so below that the Finder extension
+         cannot load at all — and `+[FIFinderSyncController isExtensionEnabled]`,
+         which enablement.rs calls unguarded, is 10.14+, so a 10.13 launch would
+         abort on an unrecognized selector rather than degrade. The old 10.13.0
+         was Tauri's default, never a deliberate choice. Pinned by
+         tests/release_lane_pins.rs. -->
     <key>LSMinimumSystemVersion</key>
-    <string>10.13.0</string>
+    <string>11.0</string>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>LSUIElement</key>
