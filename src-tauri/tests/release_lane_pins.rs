@@ -121,6 +121,54 @@ fn the_state_epoch_declaration_stays_greppable() {
     );
 }
 
+/// Every beta platform job must publish a DRAFT, and something must un-draft it.
+///
+/// The three jobs have no `needs:` on each other and each upserts the same tag
+/// with `overwrite: true`, so the release's properties are whatever the job that
+/// arrived FIRST asked for. One job setting `releaseDraft: true` while the others
+/// say `false` therefore does nothing — which is exactly what shipped: the
+/// `v0.5.0-beta.3` run published a release carrying macOS and Linux assets and no
+/// Windows installer, because the Linux job finished first.
+///
+/// `tauri-build.yml` cannot hit this because it builds the three platforms as a
+/// MATRIX, so there is one setting rather than three. This lane inherited
+/// staging's three-independent-jobs shape, where every release property is
+/// raceable — the same class the `releaseName` comment there already warns about.
+///
+/// Asserts on the count as well as the values: a fourth job added without the
+/// setting would otherwise pass while reintroducing the race.
+#[test]
+fn every_beta_job_publishes_a_draft() {
+    let workflow = repo_file("../.github/workflows/tauri-beta.yml");
+
+    let settings: Vec<&str> = workflow
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("releaseDraft:"))
+        .map(str::trim)
+        .collect();
+
+    assert_eq!(
+        settings.len(),
+        3,
+        "expected one releaseDraft per platform job in tauri-beta.yml, found {}: {settings:?}",
+        settings.len()
+    );
+    assert!(
+        settings.iter().all(|value| *value == "true"),
+        "every beta platform job must publish a draft, found {settings:?}; the jobs race to create \
+         the release and the first one's setting wins, so a single `false` publishes a half-built \
+         release with whatever assets happen to exist at that moment"
+    );
+
+    // A draft nothing un-drafts is worse than no draft at all — the release
+    // would never become visible.
+    assert!(
+        workflow.contains("--draft=false"),
+        "publish-manifest must flip the release out of draft once the manifest is correct; \
+         without it every beta release stays invisible"
+    );
+}
+
 /// Staging publishes no manifest, so it must not be handed a separate updater
 /// key either.
 ///
