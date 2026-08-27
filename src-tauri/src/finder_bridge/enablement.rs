@@ -567,19 +567,42 @@ mod tests {
         assert_eq!(json(FinderExtensionState::Unsupported), serde_json::json!({"kind": "unsupported"}));
     }
 
-    /// Read the body of the named `pub async fn` up to the next doc comment.
+    /// The source text of the named `pub async fn`, from its signature to its
+    /// closing brace.
     ///
     /// Runtime translocation cannot be simulated in a unit test, so the two
     /// gates below are pinned at their call sites — the repo's
     /// `tests/*_wiring.rs` idiom.
+    ///
+    /// The end bound is the closing brace in COLUMN ZERO, and a missing one is
+    /// a panic rather than "take the rest of the file". Both details are what
+    /// keep these pins from passing vacuously: this reads the very file the
+    /// assertions live in, and those assertions contain the literal they search
+    /// for. A slice that overran its function would find the needle in the test
+    /// source and keep reporting success with the gate deleted — the exact
+    /// regression the pins exist to catch. An earlier version bounded on the
+    /// next `\n///` and fell back to the file end, which would have overrun the
+    /// moment a command became the last one with no doc comment after it.
     fn command_body(name: &str) -> String {
         let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/finder_bridge/enablement.rs")).expect("read enablement.rs");
         let start = src.find(&format!("pub async fn {name}")).unwrap_or_else(|| panic!("{name} is declared"));
         let body = &src[start..];
-        let end = body.find("\n///").unwrap_or(body.len());
+        // Every brace nested inside the function is indented, so the first
+        // `\n}` is the function's own close.
+        let end = body.find("\n}").unwrap_or_else(|| panic!("{name} has a closing brace in column zero"));
 
         body[..end].to_string()
     }
+
+    /// The translocation gate, as both call sites spell it.
+    ///
+    /// Matched with the `if` and without a `!` so an INVERTED gate fails the
+    /// pin — a bare `is_app_translocated` needle is blind to polarity, and
+    /// `if !…` would sail through while doing the opposite of the intent. The
+    /// cost is that importing the function would fail these pins; that is the
+    /// right direction to fail in, since the fix is one line and the alternative
+    /// is a guard that silently stops guarding.
+    const TRANSLOCATION_GATE: &str = "if crate::utils::app_location::is_app_translocated() {";
 
     /// Wiring pin: the state check must stay silent on a translocated bundle.
     ///
@@ -591,7 +614,7 @@ mod tests {
     #[test]
     fn the_state_check_ignores_a_translocated_bundle() {
         assert!(
-            command_body("finder_extension_state").contains("is_app_translocated"),
+            command_body("finder_extension_state").contains(TRANSLOCATION_GATE),
             "finder_extension_state must report Unsupported while translocated; otherwise the nudge \
              nags on every focus with an Enable button that cannot succeed"
         );
@@ -608,7 +631,7 @@ mod tests {
     #[test]
     fn the_enable_path_refuses_a_translocated_bundle() {
         assert!(
-            command_body("enable_finder_extension").contains("is_app_translocated"),
+            command_body("enable_finder_extension").contains(TRANSLOCATION_GATE),
             "enable_finder_extension must refuse to register from a translocated bundle; \
              electing an ephemeral copy can strand the real install as Disabled"
         );
