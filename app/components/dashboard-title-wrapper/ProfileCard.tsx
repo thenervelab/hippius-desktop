@@ -17,6 +17,7 @@ import {
   TrendUp,
   Copy,
   Check,
+  Star,
 } from "@/components/ui/icons";
 import {
   DropdownMenu,
@@ -28,6 +29,8 @@ import {
   updateDialogOpenAtom,
   updateStore,
 } from "@/app/components/updater/updateStore";
+import { openChannelDialog } from "@/app/components/updater/releaseChannelStore";
+import { currentReleaseChannel, type ReleaseChannel } from "@/lib/tauri/updates";
 
 const Avatar = dynamic(() => import("boring-avatars"), { ssr: false });
 
@@ -44,6 +47,10 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
   centered = false,
 }) => {
   const { oauthSession, polkadotAddress, logout } = useWalletAuth();
+  // The lane this build came from, read once. It is compiled into the binary,
+  // so it cannot change while the app runs — a switch installs a different
+  // build and restarts.
+  const [channel, setChannel] = useState<ReleaseChannel | null>(null);
   const { blockNumber, isConnected } = usePolkadotApi();
   const router = useRouter();
 
@@ -52,6 +59,20 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
   // still-open menu — the address itself is no longer displayed in the menu.
   const [copied, setCopied] = useState(false);
   const copyResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    currentReleaseChannel()
+      .then((value) => {
+        if (!cancelled) setChannel(value);
+      })
+      // An older backend without the command. The item stays hidden rather
+      // than guessing a lane and offering the wrong action.
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Clear a pending reset if the card unmounts mid-animation.
   useEffect(
@@ -130,6 +151,10 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
 
   const handleOpenUpdate = () => {
     updateStore.set(updateDialogOpenAtom, true);
+  };
+
+  const handleExploreBeta = () => {
+    openChannelDialog();
   };
 
   const handleOpenSettings = () => {
@@ -312,6 +337,20 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
           <TrendUp className="size-4 shrink-0" />
           <span>Update App</span>
         </DropdownMenuItem>
+
+        {/* Hidden on the internal lane, which cannot switch: it publishes no
+            manifest, so there is nothing to install in either direction. */}
+        {channel !== null && channel !== "staging" && (
+          <DropdownMenuItem
+            onSelect={handleExploreBeta}
+            className={menuItemClass}
+          >
+            <Star className="size-4 shrink-0" />
+            {/* Label names what the item DOES, so it never claims to join a
+                channel the user is already on. */}
+            <span>{channel === "beta" ? "Leave Beta" : "Explore Beta"}</span>
+          </DropdownMenuItem>
+        )}
 
         <DropdownMenuItem onSelect={handleOpenSettings} className={menuItemClass}>
           <Setting className="size-4 shrink-0" />

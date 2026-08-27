@@ -66,3 +66,47 @@ export async function installUpdate(
 export async function currentReleaseChannel(): Promise<ReleaseChannel> {
   return invoke<ReleaseChannel>("current_release_channel");
 }
+
+/**
+ * The running channel, the channel it can switch to, and what that channel is
+ * currently publishing. Mirrors Rust's `ChannelStatus`.
+ *
+ * `target` is null on a lane that cannot switch (staging, installed by hand).
+ * `targetVersion` is null when the target's manifest could not be read — an
+ * offline machine, or a lane that has published nothing yet. Offer the switch
+ * without naming a version rather than hiding it: "we could not reach the beta
+ * channel" is a different message from "there is no beta".
+ *
+ * `blockedReason`, when set, is a user-facing sentence explaining why the
+ * switch is refused — the target build cannot read state this one has written.
+ */
+export type ChannelStatus = {
+  current: ReleaseChannel;
+  target: ReleaseChannel | null;
+  targetVersion: string | null;
+  blockedReason: string | null;
+};
+
+/** Read the switch surface's state. Never throws on a network problem. */
+export async function releaseChannelStatus(): Promise<ChannelStatus> {
+  return invoke<ChannelStatus>("release_channel_status");
+}
+
+/**
+ * Install the other channel's build.
+ *
+ * Does not relaunch — the caller does, after telling the user what happened.
+ * Rust re-validates the target against its own switch rule rather than trusting
+ * this argument, and re-checks the downgrade guard immediately before writing.
+ */
+export async function switchReleaseChannel(
+  target: ReleaseChannel,
+  onProgress?: (progress: DownloadProgress) => void,
+): Promise<void> {
+  const onProgressChannel = new Channel<DownloadProgress>();
+  if (onProgress) onProgressChannel.onmessage = onProgress;
+  return invoke<void>("switch_release_channel", {
+    target,
+    onProgress: onProgressChannel,
+  });
+}
