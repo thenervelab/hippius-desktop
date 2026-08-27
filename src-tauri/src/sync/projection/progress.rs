@@ -418,7 +418,14 @@ pub fn mark_file_failed(sync: &SyncRunner, path: &str, error: &str) -> Result<()
 /// detailed arrays are truncated.  This prevents massive JSON payloads from
 /// flooding `webview.eval` and freezing the macOS main thread when a migration
 /// produces thousands of files.
-pub(crate) const MAX_EVENT_FILES: usize = 50;
+///
+/// 10 is also the PRODUCT cap (2026-08-27): the sync widget is ~four rows
+/// tall, so anything past the first handful was already behind a scroll, and
+/// during a bad sync a 50-row payload rendered as a wall of failures. Every
+/// per-file surface (widget, tray feed, Recent Files) shows at most 10 rows.
+/// Lowering this further is always safe; RAISING it re-grows the per-tick
+/// payload the freeze guard exists for — don't.
+pub(crate) const MAX_EVENT_FILES: usize = 10;
 
 /// Maximum number of per-file entries carried in a
 /// [`crate::sync::events::SyncCompletedPayload`]. Separate from
@@ -438,8 +445,9 @@ pub(crate) const MAX_NOTIFICATION_FILES: usize = 200;
 /// appears in the widget at all (the audit's "completed files don't show up").
 /// Reserving a small slice keeps recent completions visible while still letting
 /// the in-flight/error rows — the ones the user is actively watching —
-/// dominate the list. Small relative to [`MAX_EVENT_FILES`] by design.
-const COMPLETED_RETAINED: usize = 10;
+/// dominate the list. Small relative to [`MAX_EVENT_FILES`] by design
+/// (10-row cap → ~7 active + 3 recently-done when saturated).
+const COMPLETED_RETAINED: usize = 3;
 
 /// Truncate `snapshot.files` to at most [`MAX_EVENT_FILES`] entries while
 /// preserving the priority order already established by `build_snapshot`

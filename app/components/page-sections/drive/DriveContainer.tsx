@@ -87,12 +87,13 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // Recent files: account-wide "last uploads" (same source as the search
   // palette) overlaid with this device's live sync progress, so files that
   // are currently uploading or failed appear alongside completed uploads.
-  // Capped at 50; ordered uploading → failed → completed by `mergeUploadFeed`.
+  // Capped at 10 (product decision 2026-08-27 — same cap as the sync widget
+  // and tray feed); ordered uploading → failed → completed by `mergeUploadFeed`.
   const {
     data: recentFilesData,
     isLoading: isRecentFilesLoading,
     refetch: refetchRecentFiles,
-  } = useUploadFeed(50);
+  } = useUploadFeed(10);
 
   // Loading + fetching flags are computed AFTER nested-mode resolution
   // below (so they can branch on `isNested`). See `isLoading` / `isFetching`
