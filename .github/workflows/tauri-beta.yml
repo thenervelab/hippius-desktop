@@ -363,6 +363,14 @@ jobs:
           # the finalize step the release carries no DMG at all; published,
           # that is indistinguishable from a good build to anyone browsing the
           # release list.
+          #
+          # ALL THREE JOBS must set this. They have no `needs:` on each other and
+          # each upserts the same tag with `overwrite: true`, so the release's
+          # properties are whatever the job that got there FIRST asked for. With
+          # this true here and false in the other two, the v0.5.0-beta.3 run
+          # published a release carrying macOS and Linux assets and no Windows
+          # installer, because the Linux job finished first. Pinned by
+          # `every_beta_job_publishes_a_draft`.
           releaseDraft: true
           prerelease: true
           makeLatest: false
@@ -538,7 +546,9 @@ jobs:
           releaseName: '[BETA] Hippius'
           releaseBody: |
             **Beta Build**
-          releaseDraft: false
+          # Must match the macOS job — see the note there. Whichever job reaches
+          # the release first decides, so a `false` here republishes a draft.
+          releaseDraft: true
           prerelease: true
           makeLatest: false
           overwrite: true
@@ -650,7 +660,9 @@ jobs:
           releaseName: '[BETA] Hippius'
           releaseBody: |
             **Beta Build**
-          releaseDraft: false
+          # Must match the macOS job — see the note there. Whichever job reaches
+          # the release first decides, so a `false` here republishes a draft.
+          releaseDraft: true
           prerelease: true
           makeLatest: false
           overwrite: true
