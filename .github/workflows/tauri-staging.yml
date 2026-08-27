@@ -4,6 +4,17 @@ on:
   workflow_dispatch:
   push:
     branches: [staging]
+    # Keep in sync with tauri-build.yml — see the rationale there. Denylist on
+    # purpose: an unrecognized path still builds, so forgetting an entry costs
+    # one wasted build rather than a staging DMG that silently never ships.
+    # `workflow_dispatch` ignores path filters and stays the manual escape hatch.
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - ".claude/**"
+      - ".vscode/**"
+      - ".gitignore"
+      - ".git-blame-ignore-revs"
 
 # Least privilege by default; the three publishing jobs re-grant `contents:
 # write` individually, because each creates or uploads to a release. Granting
