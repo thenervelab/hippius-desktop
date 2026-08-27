@@ -41,6 +41,43 @@ fn the_beta_workflow_exports_the_channel_the_parser_recognizes() {
     );
 }
 
+/// The tag Rust checks and the tag the workflow writes must be the same one.
+///
+/// They are declared in two files with nothing connecting them. If they drift,
+/// `publish-manifest` keeps succeeding, the release list looks healthy, and beta
+/// builds check a URL nobody publishes to — so the lane silently stops updating.
+/// Derived from the Rust constant rather than hardcoded, so the pin cannot be
+/// satisfied by editing both sides to the same wrong value.
+#[test]
+fn the_beta_workflow_publishes_to_the_tag_rust_checks() {
+    let manifest = tauri_project_lib::release_channel::ReleaseChannel::Beta
+        .manifest_url()
+        .expect("beta publishes a manifest");
+
+    // ".../releases/download/<tag>/latest.json"
+    let tag = manifest
+        .rsplit_once("/latest.json")
+        .and_then(|(head, _)| head.rsplit_once('/'))
+        .map(|(_, tag)| tag)
+        .expect("beta manifest URL ends in /<tag>/latest.json");
+
+    // A tag equal to the branch name makes `git push origin beta` fail with
+    // "src refspec beta matches more than one" for everyone, and `git checkout
+    // beta` ambiguous — breaking the promotion flow the lane exists for.
+    assert_ne!(tag, "beta", "the beta manifest tag must not collide with the `beta` branch name");
+
+    let workflow = repo_file("../.github/workflows/tauri-beta.yml");
+    assert!(
+        workflow.contains(&format!("gh release upload {tag} --repo")),
+        "tauri-beta.yml must upload latest.json to the `{tag}` release; Rust checks that tag and \
+         nothing else connects the two"
+    );
+    assert!(
+        workflow.contains(&format!("gh release create {tag} --repo")),
+        "tauri-beta.yml must create the `{tag}` release on first run"
+    );
+}
+
 /// Staging publishes no manifest, so it must not be handed a separate updater
 /// key either.
 ///

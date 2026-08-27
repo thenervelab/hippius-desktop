@@ -38,7 +38,12 @@ const PRODUCTION_MANIFEST_URL: &str = "https://github.com/thenervelab/hippius-de
 /// neither gives a stable URL to check. `tauri-beta.yml` overwrites this one
 /// asset on every build; the manifest's own `url` fields address the real
 /// versioned release assets.
-const BETA_MANIFEST_URL: &str = "https://github.com/thenervelab/hippius-desktop/releases/download/beta/latest.json";
+///
+/// The tag is `beta-channel`, NOT `beta`: a tag sharing the branch name makes
+/// `git push origin beta` fail with "src refspec beta matches more than one"
+/// and every `git checkout beta` ambiguous, breaking the promotion flow this
+/// lane exists for.
+const BETA_MANIFEST_URL: &str = "https://github.com/thenervelab/hippius-desktop/releases/download/beta-channel/latest.json";
 
 /// The release lane a build came from.
 ///

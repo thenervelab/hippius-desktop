@@ -3,7 +3,11 @@
 import React, { useEffect, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useAtomValue } from "jotai";
-import { check, type Update } from "@tauri-apps/plugin-updater";
+import {
+  checkForUpdate,
+  installUpdate,
+  type AvailableUpdate,
+} from "@/lib/tauri/updates";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { getVersion as getAppVersion } from "@tauri-apps/api/app";
 import { toast } from "sonner";
@@ -56,8 +60,8 @@ We've made a couple of improvements to the Drive experience that have been buggi
  *   checking → available → downloading → installing → complete
  *   no-update / error  (terminal branches)
  *
- * The dialog is self-contained: re-runs tauri-updater check() on open,
- * handles downloadAndInstall lifecycle internally, calls relaunch() on
+ * The dialog is self-contained: re-runs the Rust check_for_update on open,
+ * drives install_update internally, calls relaunch() on
  * the user's Restart App click. The store atom (updateDialogOpenAtom)
  * is the only external trigger — auto-mount via UpdateChecker →
  * checkForUpdates → store, manual mount via TopBarLogoMenu setting the
@@ -79,7 +83,7 @@ function formatBytes(bytes: number): string {
 /* Eases a numeric value from its previous setting to a new target over
  * `durationMs` using a cubic ease-out curve. Drives the progress bar +
  * percentage display so users see continuous motion between the
- * coarse byte-chunk events emitted by tauri's plugin-updater (chunks
+ * coarse byte progress emitted by Rust's install_update (chunks
  * arrive at network cadence, often hundreds of ms apart and large
  * enough that a naive bind to `downloadProgress` makes the bar tick in
  * visible jumps). The hook holds the in-flight value in a ref so that
@@ -238,14 +242,14 @@ export default function UpdateDialog() {
   }, []);
 
   const [status, setStatus] = useState<Status>("checking");
-  const [update, setUpdate] = useState<Update | null>(null);
+  const [update, setUpdate] = useState<AvailableUpdate | null>(null);
   const [currentVersion, setCurrentVersion] = useState<string>("");
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [installProgress, setInstallProgress] = useState(0);
   const [downloadedBytes, setDownloadedBytes] = useState(0);
   const [totalBytes, setTotalBytes] = useState(0);
 
-  // Refs mirror the byte counters so the downloadAndInstall callback
+  // Refs mirror the byte counters so the install progress callback
   // doesn't capture stale closures across rerenders.
   const downloadedBytesRef = useRef(0);
   const totalBytesRef = useRef(0);
@@ -267,9 +271,9 @@ export default function UpdateDialog() {
   const devForced = IS_DEV ? forcedStatus : null;
 
   const effectiveStatus: Status = devForced ?? status;
-  const effectiveUpdate: Update | null =
+  const effectiveUpdate: AvailableUpdate | null =
     devForced === "available" || devForced === "downloading"
-      ? ({ version: MOCK_VERSION, body: MOCK_BODY } as unknown as Update)
+      ? ({ version: MOCK_VERSION, notes: MOCK_BODY } as unknown as AvailableUpdate)
       : update;
   const effectiveDownloadProgress =
     devForced === "downloading" ? forcedProgress : downloadProgress;
@@ -321,7 +325,7 @@ export default function UpdateDialog() {
 
       try {
         const [u, ver] = await Promise.all([
-          check(),
+          checkForUpdate(),
           getAppVersion().catch(() => ""),
         ]);
         if (cancelled) return;
@@ -349,9 +353,9 @@ export default function UpdateDialog() {
     confirmUpdate(false);
   };
 
-  // Tauri's plugin-updater hands us "Started → Progress → Finished" for
-  // the download, but the install step has no events. We fake a 5-phase
-  // progress so the user sees forward motion before the relaunch.
+  // The install step reports no progress of its own — Rust's `install_update`
+  // streams download bytes and then blocks through the install. We fake a
+  // 5-phase progress so the user sees forward motion before the relaunch.
   const simulateInstallation = async () => {
     const phases = [20, 40, 60, 80, 100];
     for (const phase of phases) {
@@ -373,35 +377,27 @@ export default function UpdateDialog() {
       downloadedBytesRef.current = 0;
       totalBytesRef.current = 0;
 
-      await update.downloadAndInstall((ev) => {
-        switch (ev.event) {
-          case "Started": {
-            const total = ev.data.contentLength ?? 0;
-            totalBytesRef.current = total;
-            setTotalBytes(total);
-            downloadedBytesRef.current = 0;
-            setDownloadedBytes(0);
-            setDownloadProgress(0);
-            break;
-          }
-          case "Progress": {
-            downloadedBytesRef.current += ev.data.chunkLength;
-            setDownloadedBytes(downloadedBytesRef.current);
-            const pct =
-              totalBytesRef.current > 0
-                ? (downloadedBytesRef.current / totalBytesRef.current) * 100
-                : 0;
-            setDownloadProgress(Math.min(Math.round(pct), 100));
-            break;
-          }
-          case "Finished": {
-            setDownloadProgress(100);
-            setStatus("installing");
-            simulateInstallation();
-            break;
-          }
+      // Rust reports CUMULATIVE bytes, not per-chunk deltas, so this assigns
+      // rather than accumulating. There is no "Started"/"Finished" pair
+      // either: the first message starts the bar and the awaited promise
+      // resolving is what ends it.
+      await installUpdate(({ bytesDone, bytesTotal }) => {
+        if (bytesTotal != null && bytesTotal !== totalBytesRef.current) {
+          totalBytesRef.current = bytesTotal;
+          setTotalBytes(bytesTotal);
         }
+        downloadedBytesRef.current = bytesDone;
+        setDownloadedBytes(bytesDone);
+        const pct =
+          totalBytesRef.current > 0
+            ? (bytesDone / totalBytesRef.current) * 100
+            : 0;
+        setDownloadProgress(Math.min(Math.round(pct), 100));
       });
+
+      setDownloadProgress(100);
+      setStatus("installing");
+      await simulateInstallation();
     } catch (err) {
       console.error("Update failed:", err);
       setStatus("error");
@@ -425,7 +421,7 @@ export default function UpdateDialog() {
     setUpdate(null);
     try {
       const [u, ver] = await Promise.all([
-        check(),
+        checkForUpdate(),
         getAppVersion().catch(() => ""),
       ]);
       setCurrentVersion(ver || "");
@@ -674,7 +670,7 @@ export default function UpdateDialog() {
                     )}
 
                     {effectiveStatus === "available" &&
-                      effectiveUpdate?.body && (
+                      effectiveUpdate?.notes && (
                         <motion.div
                           key="release-notes"
                           initial={{ opacity: 0, y: 6 }}
@@ -690,7 +686,7 @@ export default function UpdateDialog() {
                             </span>
                           </div>
                           <div className="max-h-[200px] overflow-y-auto pr-1 text-[14px] leading-[20px] tracking-[-0.28px] text-grey-50 dark:text-grey-dark-500">
-                            <BasicMarkdown text={effectiveUpdate.body} />
+                            <BasicMarkdown text={effectiveUpdate.notes} />
                           </div>
                         </motion.div>
                       )}

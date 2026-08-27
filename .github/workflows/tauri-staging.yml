@@ -330,9 +330,9 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-          # Compile-time channel: staging binaries mint share links at the
-          # staging console (shares/commands.rs::RELEASE_CHANNEL). Prod release
-          # workflows never set this, so they can't inherit the staging URL.
+          # Compile-time channel (release_channel.rs). Staging reports itself
+          # as staging, which is what disables its update checks — it has no
+          # manifest — and what lets it honour a console override.
           HIPPIUS_RELEASE_CHANNEL: staging
         with:
           tagName: v__VERSION__-staging
@@ -503,7 +503,7 @@ jobs:
         run: |
           set -euo pipefail
           printf '%s\n' "$TAURI_ENV_FILE" | bash scripts/write-tauri-env.sh
-          # Staging console comes from the compile-time channel (macOS job note).
+          # Console origin is the same on every lane (see release_channel.rs).
 
 
       - name: Build frontend
@@ -518,9 +518,9 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-          # Compile-time channel: staging binaries mint share links at the
-          # staging console (shares/commands.rs::RELEASE_CHANNEL). Prod release
-          # workflows never set this, so they can't inherit the staging URL.
+          # Compile-time channel (release_channel.rs). Staging reports itself
+          # as staging, which is what disables its update checks — it has no
+          # manifest — and what lets it honour a console override.
           HIPPIUS_RELEASE_CHANNEL: staging
         with:
           tagName: v__VERSION__-staging
@@ -606,7 +606,7 @@ jobs:
         run: |
           set -euo pipefail
           printf '%s\n' "$TAURI_ENV_FILE" | bash scripts/write-tauri-env.sh
-          # Staging console comes from the compile-time channel (macOS job note).
+          # Console origin is the same on every lane (see release_channel.rs).
 
 
       - name: Build frontend
@@ -626,9 +626,9 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-          # Compile-time channel: staging binaries mint share links at the
-          # staging console (shares/commands.rs::RELEASE_CHANNEL). Prod release
-          # workflows never set this, so they can't inherit the staging URL.
+          # Compile-time channel (release_channel.rs). Staging reports itself
+          # as staging, which is what disables its update checks — it has no
+          # manifest — and what lets it honour a console override.
           HIPPIUS_RELEASE_CHANNEL: staging
         with:
           tagName: v__VERSION__-staging
