@@ -38,6 +38,16 @@ The ~32 submodules are organized into six private sub-domain group directories, 
 
 **`sync_status` semantics**: a hit is `pending` ONLY when its drive label is configured on this device AND the file is not yet on disk — a genuine "queued for local download" state, probed via an injected `path_exists` predicate so the mapper stays pure/unit-testable. Files whose drive label isn't configured here (uploaded from another device, or under a removed-or-renamed label) and files already on disk are `synced`. The earlier rule — `pending` whenever the label wasn't configured locally — perpetually mislabeled stable server-only files as "Waiting in the sync queue".
 
+## Member drives: the local label is NOT the wire identity
+
+A drive in `sync_paths` may be a **member drive** — one that lives in another account's server namespace. Full rules in `shares-and-shared-drives.md`; the part that binds every drive-scoped site in `sync/`:
+
+- **Never derive the wire hash from the local label.** `folder_hash(local_label)` is correct only for own drives. Resolve once at the top of the operation's funnel with `sync::identity::resolve_drive_identity(pool, account_id, label)` and thread the `DriveIdentity` down — two resolves in one operation can straddle a concurrent remove/re-add. Every engine config goes through `build_hcfs_config(server_url, bearer, &DriveIdentity)`.
+- **Never re-derive or rewrite a member's folder seal.** A member's `enc_mnemonic.json` holds the OWNER's folder mnemonic, so `ensure_derived_mnemonic` and password rotation must skip member rows — re-deriving from the local master installs wrong key material and loses access to the data.
+- A structurally-own site may build `DriveIdentity::own` directly, with a comment saying why the resolver is not needed.
+
+Guard sites are counted by `tests/shared_drive_wiring.rs`, but a new call site it does not know about is not covered — resolve, do not derive.
+
 ## hcfs-client dependency
 
 The sync engine delegates to `hcfs-client` (from the `hcfs` repo, pinned to a git rev in Cargo.toml). Drive API: `new()`, `init()`, `unlock()`, `sync_async(SyncMode)`, `stage()`, `set_config()`, `set_progress_handlers()`. All file encryption is handled by hcfs-client via BIP-39 mnemonic.
@@ -46,7 +56,7 @@ The sync engine delegates to `hcfs-client` (from the `hcfs` repo, pinned to a gi
 
 ## Multi-drive sync
 
-Drives are keyed by label string. The sync loop iterates all drives sequentially (round-robin). `SyncActivityItem` includes a `label` field; all Tauri events include `"label"` in the JSON payload. DB constraint: `UNIQUE(owner, label)` in the sync_paths table.
+Drives are keyed by label string. `trigger_sync` fans all drives out concurrently via `tokio::spawn`, each holding its own per-drive lock. `SyncActivityItem` includes a `label` field; all Tauri events include `"label"` in the JSON payload. DB constraint: `UNIQUE(owner, label)` in the sync_paths table.
 
 **Label allocation is atomic** (`sync/paths.rs`): `set_sync_path_internal` takes a `LabelMode` (`Exact` upsert vs `Allocate { base }`) and, for the add-a-folder path, suffixes the unique label (`tags` → `tags-2`) INSIDE its own `BEGIN IMMEDIATE` transaction — not in the caller. This closes a TOCTOU where two concurrent same-basename adds computed the same label and the second's `ON CONFLICT DO UPDATE` silently overwrote the first drive's path (one drive survived, file sets merged on restart — a data-loss bug). `Allocate` plain-`INSERT`s so the `UNIQUE(owner, label)` constraint is the hard-error backstop; `Exact` keeps the upsert the set/update callers rely on.
 
@@ -171,7 +181,7 @@ Note the `skip` resolution verb **defers** a conflict (the engine re-detects it 
 
 ## Migration
 
-**Folder picker**: `MigrationPromptDialog` includes a folder picker pre-populated with the default migration path (`~/Documents/Hippius-Migration-YYYY-MM-DD`). The chosen path is stored in `migrationCheckAtom.syncPath` and passed to `complete_migration_transition` as `custom_sync_path`, falling back to the auto-generated default.
+**Folder picker**: `MigrationPromptDialog` includes a folder picker pre-populated with the default migration path from `get_default_migration_path` — `compute_default_sync_path`, which is `dirs::home_dir().join("Hippius-Migration-<date>")`. That is the **home root, not `~/Documents`**, and the placement is load-bearing: it sits outside every TCC-protected folder, so a new install triggers no macOS access prompt (see `macos-packaging.md`). The chosen path is stored in `migrationCheckAtom.syncPath` and passed to `complete_migration_transition` as `custom_sync_path`, falling back to the auto-generated default.
 
 **HTTP auth**: every desktop call to hcfs-server migration endpoints — `POST /migration/start`, `POST /migration/cancel` (the `job_exists` retry), `GET /migration/{ss58}/status`, and `GET /migration/{user_id}` — sends `Authorization: Bearer {api_token}`. Scheme is Bearer, not Token (`Token` is api.hippius.com / S3 master-tokens). A missing token fails as `AppError::Other("No API token available — log in first")` so the FE does not silence it via `isExpectedNoSessionError`. Status/cancel/summary are not Ed25519-signed (`authorize_start_migration` is start-only). Mock coverage in `tests/migration_server_mock.rs` rejects missing or non-Bearer Authorization.
 

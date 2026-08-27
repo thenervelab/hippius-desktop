@@ -3,6 +3,16 @@ paths:
   - "src-tauri/src/shares/**"
   - "src-tauri/src/shared_drives/**"
   - "src-tauri/src/sync/drive/identity.rs"
+  # The four land mines live in sync/, not shares/ — these files must carry
+  # the member-drive rules with them.
+  - "src-tauri/src/sync/shared/mnemonic.rs"
+  - "src-tauri/src/sync/drive/lifecycle.rs"
+  - "src-tauri/src/sync/drive/config.rs"
+  - "src-tauri/src/sync/fileops/remote.rs"
+  - "src-tauri/src/sync/fileops/folders.rs"
+  - "src-tauri/src/sync/fileops/recent_uploads.rs"
+  - "src-tauri/src/sync/migrate/**"
+  - "src-tauri/src/sync/projection/tauri_bridge.rs"
   - "app/lib/tauri/sharedDrives.ts"
   - "app/components/**/*hare*"
 ---

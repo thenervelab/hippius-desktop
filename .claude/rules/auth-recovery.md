@@ -88,4 +88,4 @@ The private `align_drive_password` helper in `src-tauri/src/recovery.rs` runs af
 
 `recovery_binding.rs` binds the OAuth login account to the encryption mnemonic via the sealed recovery blob (login SS58 + SS58-as-AEAD-AAD), solving cross-device recovery without a separate association. Proof table: `recovery_proof.rs`.
 
-Tests that touch `$HOME` must acquire `crate::test_helpers::HOME_LOCK` to avoid cross-module races under cargo's parallel runner.
+(The crate-wide `HOME_LOCK` rule for `$HOME`-touching tests lives in the root CLAUDE.md invariants — it applies well beyond this subsystem.)

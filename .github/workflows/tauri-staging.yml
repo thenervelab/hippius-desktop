@@ -9,7 +9,7 @@ on:
     # one wasted build rather than a staging DMG that silently never ships.
     # `workflow_dispatch` ignores path filters and stays the manual escape hatch.
     paths-ignore:
-      - "**/*.md"
+      - "**.md"
       - "docs/**"
       - ".claude/**"
       - ".vscode/**"

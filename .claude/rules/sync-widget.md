@@ -7,6 +7,10 @@ paths:
   - "app/lib/upload-feed/**"
   - "app/lib/store/syncAtoms.ts"
   - "app/components/page-sections/drive/stagedChangesLogic.ts"
+  # This file is the only home of the Rust halves of these invariants
+  # (PlanReady gating, fixup_stalled_completion, completed-row ordering,
+  # display_reason), so it must load for the backend that implements them.
+  - "src-tauri/src/sync/projection/**"
 ---
 
 # Sync widget and upload feed (frontend)

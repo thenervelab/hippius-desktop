@@ -27,7 +27,7 @@ on:
     # `workflow_dispatch` ignores path filters, so a manual run is always the
     # escape hatch when a docs-only commit does need a release cut.
     paths-ignore:
-      - "**/*.md"
+      - "**.md"
       - "docs/**"
       - ".claude/**"
       - ".vscode/**"
