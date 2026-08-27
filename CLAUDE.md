@@ -33,6 +33,20 @@ Write it to the narrowest scope that holds it. This file is loaded into **every*
 
 Do not paste incident narratives, dates, report attributions, or debugging chronology into any of them — record the rule and, in one clause, why it exists. If a test pins the rule, say so in one clause and stop.
 
+**A rule whose `paths:` glob matches nothing fails silently** — it simply never loads, and nothing reports it. After adding or editing a rule, confirm it actually fires:
+
+```bash
+cat > /tmp/probe.json <<'JSON'
+{"hooks":{"InstructionsLoaded":[{"hooks":[{"type":"command","command":"cat >> /tmp/instructions.log"}]}]}}
+JSON
+rm -f /tmp/instructions.log
+claude -p "Read <a file the rule should cover> and reply DONE" \
+  --settings /tmp/probe.json --allowedTools Read < /dev/null
+grep -o '"file_path":"[^"]*"\|"load_reason":"[^"]*"' /tmp/instructions.log
+```
+
+The rule should appear with `"load_reason":"path_glob_match"`. Note rules added mid-session are not picked up until a new session starts, so always probe with a fresh `claude -p`.
+
 ## Build & Development Commands
 
 ```bash
