@@ -251,7 +251,18 @@ Current expected state (`app/lib/featureFlags.ts`) — update this section when 
 - [ ] **VM** (`VM_FEATURE_ENABLED = false`): sidebar sub-item disabled with "Coming Soon" tag; `/vm`, `/vm/create`, `/vm/instance-details` redirect; no VM item in the tray menu.
 - [ ] **VPN** (`VPN_FEATURE_ENABLED = false`, `VM_VPN_ENABLED = false`): no VPN menu in the top bar, no VPN settings entry/section, no per-VM connect surface.
 - [ ] **Referrals** (`REFERRALS_FEATURE_ENABLED = false`): no sidebar entry, `/referrals` redirects.
+- [ ] **Shared drives** (`SHARED_DRIVES_ENABLED` — `false` on `main`, `true` on `beta`): no "Share drive…" in either folder menu, no "Shared with me" section in settings or `DriveOnboarding`, no owner badge on folder rows.
 - [ ] Direct navigation to every gated route lands on the overview (static export = client-side redirect; make sure no blank page).
+
+**`SHARED_DRIVES_ENABLED` is the one flag whose value differs by lane**, so every
+`beta` → `main` promotion shows it as a diff. Re-assert `false` on the promotion
+rather than taking beta's value. It cannot be pinned by `release_lane_pins.rs`,
+which runs on all three lanes and would then fail on `beta`.
+
+Also confirm the promotion did not drop `main`-only release controls that `beta`
+has never carried — `.github/CODEOWNERS` and the `approve-release` job in
+`tauri-build.yml`. `check-promotion-order` only verifies the head contains the
+previous lane; nothing checks that `main`-only files survive the squash.
 
 ## 18. Window & shell basics
 
