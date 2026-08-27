@@ -51,7 +51,31 @@ env:
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
 
 jobs:
+  # Human approval gate for the whole production lane.
+  #
+  # Branch protection alone cannot cover this workflow: it also triggers on
+  # `workflow_dispatch`, so anyone with write access could cut a production
+  # release straight from the Actions tab without a commit ever reaching `main`.
+  # The `production` GitHub Environment carries a required-reviewer rule, so
+  # EVERY run — pushed or dispatched — pauses here until a named reviewer
+  # approves it, and the environment's branch policy restricts deployments to
+  # protected branches.
+  #
+  # It does no work; it exists purely so the environment's protection rule is
+  # evaluated ONCE before anything builds, signs or publishes. Putting
+  # `environment:` on the matrix job instead would raise one approval prompt per
+  # platform leg.
+  approve-release:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Approved
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: echo "Production release approved for $REF_NAME."
+
   publish-tauri:
+    needs: approve-release
     permissions:
       contents: write # create the draft release + upload platform assets
       pull-requests: read # release-notes step reads the linked PR via the API
