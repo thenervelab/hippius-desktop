@@ -26,6 +26,7 @@ pub mod power;
 pub mod recovery;
 pub mod recovery_binding;
 pub mod recovery_proof;
+pub mod release_channel;
 pub mod shared_drives;
 pub mod shares;
 pub mod sync;
