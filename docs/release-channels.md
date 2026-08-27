@@ -62,7 +62,15 @@ The two lanes sign updates with **different minisign keys**:
 | Channel | Private key secret | Public key |
 | --- | --- | --- |
 | Production | `TAURI_SIGNING_PRIVATE_KEY` | `E411FB37072F234F` — committed in `tauri.conf.json` |
-| Staging | `TAURI_SIGNING_PRIVATE_KEY_STAGING` | `2FCA9B90D579C26E` — `TAURI_UPDATER_PUBKEY_STAGING` secret |
+| Staging | `TAURI_SIGNING_PRIVATE_KEY_STAGING` | `764AD1FE0D96ABE7` — `TAURI_UPDATER_PUBKEY_STAGING` secret |
+
+The staging keypair was regenerated on 2026-08-27 during the move to this
+repository. The previous staging key (`2FCA9B90D579C26E`) lived only inside the
+old private repo's `TAURI_SIGNING_PRIVATE_KEY` secret, and GitHub does not let a
+secret be read back, so it could not be carried across. The consequence is
+limited to the staging channel: a tester still running a build signed with the
+old key cannot auto-update and installs the next DMG once. Production was never
+involved.
 
 While the lanes lived in separate repositories, the staging branch simply
 carried the staging pubkey in `tauri.conf.json`. In one repository that would be
