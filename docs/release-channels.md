@@ -12,6 +12,17 @@ Both lanes publish on **push**. There is no "build without releasing" mode: a
 push to `main` cuts a production release, which is why `staging` is the
 validation gate and `main` is only ever merged into deliberately.
 
+The one exception is a push that cannot change the artifact. Both workflows
+carry a `paths-ignore` denylist — markdown anywhere, `docs/`, `.claude/`,
+`.vscode/`, `.gitignore`, `.git-blame-ignore-revs` — so a docs-only commit cuts
+no release. Everything else builds, `.github/**` included, so a workflow edit is
+always exercised on the branch it ships from. It is a **denylist on purpose**: a
+path nobody thought to list still ships, because the cost of a missing entry
+should be one wasted build rather than a release that silently never happens.
+
+`workflow_dispatch` ignores path filters, so running either workflow by hand is
+the escape hatch when a skipped push does need a release cut.
+
 This replaces `STAGING_BUILD.md`, which existed while preview builds were cut
 from a separate private repository (`hippius-desktop-internal`) and listed the
 divergences that had to be reverted by hand before every sync. Those divergences
