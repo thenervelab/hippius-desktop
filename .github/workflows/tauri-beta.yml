@@ -52,9 +52,13 @@ env:
 jobs:
   publish-tauri-macos:
     runs-on: macos-latest
-    # Creates the beta release and uploads artifacts to it.
+    # Creates the beta release and uploads artifacts to it. `pull-requests:
+    # read` is for the release-notes step, which queries the PR API — without it
+    # the title resolves empty and, on a push with no `#N` in the subject, `jq`
+    # exits non-zero and fails the step under `set -euo pipefail`.
     permissions:
       contents: write
+      pull-requests: read
 
     steps:
       - name: Checkout
@@ -354,7 +358,12 @@ jobs:
             > stabilized. Switch back from Settings at any time.
 
             ${{ steps.release_notes.outputs.body }}
-          releaseDraft: false
+          # Draft until publish-manifest has corrected latest.json, mirroring
+          # tauri-build.yml. macOS is built --bundles app, so between here and
+          # the finalize step the release carries no DMG at all; published,
+          # that is indistinguishable from a good build to anyone browsing the
+          # release list.
+          releaseDraft: true
           prerelease: true
           makeLatest: false
           overwrite: true
@@ -435,9 +444,13 @@ jobs:
   # jobs upsert the same v<version> release.
   publish-tauri-linux:
     runs-on: ubuntu-22.04
-    # Creates the beta release and uploads artifacts to it.
+    # Creates the beta release and uploads artifacts to it. `pull-requests:
+    # read` is for the release-notes step, which queries the PR API — without it
+    # the title resolves empty and, on a push with no `#N` in the subject, `jq`
+    # exits non-zero and fails the step under `set -euo pipefail`.
     permissions:
       contents: write
+      pull-requests: read
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -537,9 +550,13 @@ jobs:
   # cert, so for internal preview the extension ships as a side bundle.
   publish-tauri-windows:
     runs-on: windows-latest
-    # Creates the beta release and uploads artifacts to it.
+    # Creates the beta release and uploads artifacts to it. `pull-requests:
+    # read` is for the release-notes step, which queries the PR API — without it
+    # the title resolves empty and, on a push with no `#N` in the subject, `jq`
+    # exits non-zero and fails the step under `set -euo pipefail`.
     permissions:
       contents: write
+      pull-requests: read
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -747,12 +764,21 @@ jobs:
           # is a prerelease so it can never become `releases/latest` and be
           # served to production users. It deliberately holds NO build assets —
           # only the manifest, whose url fields address the versioned release.
-          if ! gh release view beta --repo "$REPO" >/dev/null 2>&1; then
-            gh release create beta --repo "$REPO" \
+          # Tag name deliberately NOT `beta`: that is the branch name, and a tag
+          # sharing it makes every `git push origin beta` fail with "src refspec
+          # beta matches more than one" and every `git checkout beta` ambiguous —
+          # breaking the promotion flow this lane exists for.
+          if ! gh release view beta-channel --repo "$REPO" >/dev/null 2>&1; then
+            gh release create beta-channel --repo "$REPO" \
               --title "Beta channel manifest" \
               --notes "Update manifest for the beta channel. Not a build — see the versioned beta releases for downloads. This tag exists so the updater has a stable URL, since GitHub's /releases/latest never resolves to a prerelease." \
               --prerelease \
               --target "$GITHUB_SHA"
           fi
-          gh release upload beta --repo "$REPO" latest.json --clobber
-          echo "Beta manifest republished for $TAG."
+          gh release upload beta-channel --repo "$REPO" latest.json --clobber
+
+          # Only now is the versioned release complete: assets uploaded, macOS
+          # entry merged, rolling pointer moved. Publishing earlier would expose
+          # a DMG-less prerelease that reads as a finished build.
+          gh release edit "$TAG" --repo "$REPO" --draft=false --prerelease
+          echo "Beta $TAG published and the rolling manifest republished."

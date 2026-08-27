@@ -70,12 +70,15 @@ carries. `tests/bundle_metadata_pin.rs` enforces both halves.
    version means the jobs upload into the previous release instead of creating
    a new one, and beta users are never offered the build.
 3. Push. `publish-beta` runs the three platform jobs, then `publish-manifest`
-   corrects `latest.json` for macOS and republishes it to the fixed `beta` tag.
+   corrects `latest.json` for macOS, republishes it to the fixed `beta-channel`
+   tag, and only then flips the versioned release out of draft.
 
-Nothing reaches a beta user until `publish-manifest` succeeds — that job is what
-moves the rolling pointer. It fails the run rather than publishing a manifest
-with no macOS signature, which would offer beta users an update they cannot
-verify.
+Nothing reaches a beta user until `publish-manifest` succeeds. The versioned
+release stays a **draft** until that job finishes, mirroring the production
+lane: macOS is built `--bundles app`, so until the finalize step runs the
+release carries no DMG at all and a published one would be indistinguishable
+from a good build. The job also fails rather than publish a manifest with no
+macOS signature, which would offer beta users an update they cannot verify.
 
 ## Cutting a production build
 
@@ -127,15 +130,30 @@ single source of these URLs.
 | Channel | Manifest |
 | --- | --- |
 | Production | `releases/latest/download/latest.json` |
-| Beta | `releases/download/beta/latest.json` |
+| Beta | `releases/download/beta-channel/latest.json` |
 | Staging | none — `manifest_url()` returns `None` |
 
 The beta manifest needs a **fixed** tag because every beta release carries its
 own version tag and GitHub's `releases/latest` resolves only to a
 non-prerelease, so neither addresses "the newest beta". `tauri-beta.yml`'s
 `publish-manifest` job overwrites one asset — `latest.json` — on a permanent
-prerelease tagged `beta`, which holds no build assets of its own; the manifest's
-`url` fields address the real versioned release.
+prerelease tagged **`beta-channel`**, which holds no build assets of its own;
+the manifest's `url` fields address the real versioned release.
+
+The tag is `beta-channel` and **not** `beta`: a tag sharing the branch name
+makes `git push origin beta` fail with `src refspec beta matches more than one`
+for every developer and `git checkout beta` ambiguous — breaking the very
+promotion flow the lane exists for. `tests/release_lane_pins.rs` derives the tag
+from `manifest_url()` and asserts the workflow writes to that same tag, because
+a drift there leaves `publish-manifest` succeeding while beta builds check a URL
+nobody publishes to.
+
+The check itself runs in **Rust** (`src-tauri/src/updates.rs`), not through
+`@tauri-apps/plugin-updater`'s JS `check()`. That one reads the single
+`plugins.updater.endpoints` list compiled into `tauri.conf.json`, and
+`CheckOptions` cannot override it — so a beta build would ask the production
+lane. With one shared signing key that manifest verifies and installs, which is
+a silent wrong-lane install rather than a missing feature.
 
 Staging returns `None` deliberately, and that closes a live bug rather than
 merely declining a feature. Staging used to be handed its own updater pubkey
