@@ -10,6 +10,29 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
+    # Skip the release when a push changes nothing that can reach the artifact.
+    # This is a DENYLIST on purpose: an unrecognized path still builds, so the
+    # failure mode of forgetting an entry is one wasted build, not a release
+    # that silently never ships. Nothing listed here is an input to the build —
+    # no markdown is `include_str!`d, imported by the frontend, bundled in
+    # `bundle.resources` (icons + `.env` only), or read by this workflow; the
+    # release body comes from PR/commit metadata, not CHANGELOG.md.
+    #
+    # Deliberately NOT ignored: `.github/**` (a workflow edit must be testable
+    # on the branch it ships from), `public/**` and `app/**` (the Next build),
+    # `.gitmodules`, and every lockfile/config at the root — including the three
+    # files a version bump touches (tauri.conf.json, Cargo.toml, package.json),
+    # since a bump with no other change still has to cut a release.
+    #
+    # `workflow_dispatch` ignores path filters, so a manual run is always the
+    # escape hatch when a docs-only commit does need a release cut.
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+      - ".claude/**"
+      - ".vscode/**"
+      - ".gitignore"
+      - ".git-blame-ignore-revs"
 
 # Least privilege at the workflow level. The two jobs that create and publish
 # the GitHub release request `contents: write` per-job below — a workflow-level
