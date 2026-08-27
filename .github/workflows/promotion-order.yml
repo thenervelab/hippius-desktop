@@ -31,10 +31,12 @@ permissions:
 jobs:
   check-promotion-order:
     runs-on: ubuntu-latest
-    # Deliberate exception: a hotfix that must reach `main` without transiting
-    # beta. Label the PR and say why in its description — the label is the audit
-    # trail, which a bypassed branch rule would not be.
-    if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-promotion-order') }}
+    # The label exception is handled INSIDE the step, deliberately, rather than
+    # with a job-level `if:`. This is meant to be a REQUIRED check, and a job
+    # skipped by `if:` reports a "skipped" conclusion — which required-check
+    # evaluation treats inconsistently and which is indistinguishable, in the
+    # checks UI, from a job that never ran. Always running and exiting 0 makes
+    # the bypass an explicit, visible pass.
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -46,13 +48,24 @@ jobs:
       - name: The head must already contain the previous lane
         shell: bash
         env:
-          # Via env rather than inline `${{ }}`: a branch name is attacker-
-          # controlled text on a fork PR, and interpolating it into a shell
-          # command is the injection this repo's zizmor audit exists to prevent.
+          # Via env rather than inline `${{ }}`: branch and label names are
+          # attacker-controlled text on a fork PR, and interpolating either into
+          # a shell command is the injection this repo's zizmor audit exists to
+          # prevent.
           BASE: ${{ github.base_ref }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, '\n') }}
         run: |
           set -euo pipefail
+
+          # Deliberate exception: a hotfix that must reach `main` without
+          # transiting beta. The label is the audit trail, which a bypassed
+          # branch rule would not be. Matched as a whole line so a label merely
+          # CONTAINING the name does not bypass the check.
+          if printf '%s\n' "$LABELS" | grep -qxF 'skip-promotion-order'; then
+            echo "Bypassed by the skip-promotion-order label."
+            exit 0
+          fi
 
           case "$BASE" in
             beta) previous="staging" ;;
