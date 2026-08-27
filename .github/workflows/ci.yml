@@ -3,25 +3,32 @@ name: ci
 # Test + lint gate for every PR and for pushes to the long-lived branches.
 #
 # Rust runs in three lanes:
-#   - `rust-linux` (ubuntu): the FAST lane, runs on every branch incl. redesign.
-#     Covers all cross-platform code. macOS-only `#[cfg(target_os = "macos")]`
-#     code is compiled out here.
+#   - `rust-linux` (ubuntu): the FAST lane, runs on every branch. Covers all
+#     cross-platform code. macOS-only `#[cfg(target_os = "macos")]` code is
+#     compiled out here.
 #   - `rust-macos` (macOS): the SLOW lane (~15-20 min), gated to release-bound
-#     merges (PRs into dev/main + pushes to them). Covers the macOS-only code
+#     merges (PRs into staging/main + pushes to them). Covers the macOS-only code
 #     (security-scoped bookmarks, App Translocation, apple-native keychain).
-#   - `rust-windows` (windows): a `cargo check` compile lane, gated to dev/main
-#     like rust-macos. It exists because ONLY the release (publish) workflow ever
-#     built on Windows, so Windows-specific breakage (e.g. a `#[cfg(unix)]` module
-#     referenced unconditionally in `generate_handler!`) surfaced at release time
-#     instead of at PR time. This lane catches that class before a release.
-# Branch protection requires `rust-linux` + `frontend` on redesign, and
-# `rust-linux` + `rust-macos` + `frontend` on dev/main. `rust-windows` is added
-# as a NON-required lane first; make it required once it has run green on a
-# dev/main PR (branch-protection is an admin change).
+#   - `rust-windows` (windows): a `cargo check` compile lane, gated to
+#     staging/main like rust-macos. It exists because ONLY the release (publish)
+#     workflow ever built on Windows, so Windows-specific breakage (e.g. a
+#     `#[cfg(unix)]` module referenced unconditionally in `generate_handler!`)
+#     surfaced at release time instead of at PR time. This lane catches that
+#     class before a release.
+#
+# The two long-lived branches are `staging` (preview builds, tauri-staging.yml)
+# and `main` (production, tauri-build.yml). Because `staging` is now the branch
+# every release is cut from, the macOS and Windows lanes gate it too — under the
+# old `redesign`/`dev` layout they did not, which is how a Windows-only compile
+# break reached a release.
+#
+# Branch protection requires `rust-linux` + `rust-macos` + `frontend` on
+# staging/main. `rust-windows` is a NON-required lane; make it required once it
+# has run green on a staging PR (branch-protection is an admin change).
 on:
   pull_request:
   push:
-    branches: [main, dev, redesign]
+    branches: [main, staging]
 
 # Least privilege: this workflow only reads the checkout.
 permissions:
@@ -66,12 +73,12 @@ jobs:
 
   rust-macos:
     # The macOS lane is the slow one (~15-20 min cold), so run it only where it
-    # gates a release-bound merge — PRs into dev/main and pushes to them — and
-    # skip it on redesign. It exists to cover the macOS-only code the Linux lane
-    # compiles out; `rust-linux` is the everywhere gate.
+    # gates a release-bound merge — PRs into staging/main and pushes to them.
+    # It exists to cover the macOS-only code the Linux lane compiles out;
+    # `rust-linux` is the everywhere gate.
     if: >-
-      (github.event_name == 'pull_request' && (github.base_ref == 'dev' || github.base_ref == 'main')) ||
-      (github.event_name == 'push' && (github.ref_name == 'dev' || github.ref_name == 'main'))
+      (github.event_name == 'pull_request' && (github.base_ref == 'staging' || github.base_ref == 'main')) ||
+      (github.event_name == 'push' && (github.ref_name == 'staging' || github.ref_name == 'main'))
     runs-on: macos-latest
     steps:
       - name: Checkout
@@ -102,17 +109,14 @@ jobs:
     # so a Windows-only compile break (a `#[cfg(unix)]` module referenced
     # unconditionally in `generate_handler!`) failed at release time, not PR time.
     # A fast `cargo check` (lib + bins — what actually ships, no test crates) here
-    # catches it. Normally gated to release-bound merges like rust-macos so
-    # redesign PRs stay quick; `redesign` is included here TEMPORARILY while the
-    # cross-platform shell-share PR (#88) lands the Windows COM DLL and needs the
-    # Windows compile lane on its redesign PR — revert to dev/main-only after it
-    # merges. The shared rust-ci-setup composite is Linux/macOS-oriented
-    # (ssh-agent, apt), so this job mirrors the PROVEN Windows setup from
-    # tauri-build.yml: an ~/.ssh/config IdentityFile (no ssh-agent) + git-CLI
-    # fetch for the private hcfs dep.
+    # catches it. Gated to release-bound merges like rust-macos so ordinary
+    # feature PRs stay quick. The shared rust-ci-setup composite is
+    # Linux/macOS-oriented (ssh-agent, apt), so this job mirrors the PROVEN
+    # Windows setup from tauri-build.yml: an ~/.ssh/config IdentityFile (no
+    # ssh-agent) + git-CLI fetch for the private hcfs dep.
     if: >-
-      (github.event_name == 'pull_request' && (github.base_ref == 'dev' || github.base_ref == 'main' || github.base_ref == 'redesign')) ||
-      (github.event_name == 'push' && (github.ref_name == 'dev' || github.ref_name == 'main'))
+      (github.event_name == 'pull_request' && (github.base_ref == 'staging' || github.base_ref == 'main')) ||
+      (github.event_name == 'push' && (github.ref_name == 'staging' || github.ref_name == 'main'))
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -201,10 +205,10 @@ jobs:
     # (windows/HippiusShell) on Windows. It can't build on the author's macOS
     # host (windows-crate COM), and the app's rust-windows lane only checks
     # src-tauri (not this separate crate). No private deps, so no SSH key needed.
-    # Same redesign-PR gating as rust-windows; TEMPORARY on redesign for PR #88.
+    # Same gating as rust-windows.
     if: >-
-      (github.event_name == 'pull_request' && (github.base_ref == 'dev' || github.base_ref == 'main' || github.base_ref == 'redesign')) ||
-      (github.event_name == 'push' && (github.ref_name == 'dev' || github.ref_name == 'main'))
+      (github.event_name == 'pull_request' && (github.base_ref == 'staging' || github.base_ref == 'main')) ||
+      (github.event_name == 'push' && (github.ref_name == 'staging' || github.ref_name == 'main'))
     runs-on: windows-latest
     steps:
       - name: Checkout

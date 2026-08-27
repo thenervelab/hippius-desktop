@@ -19,8 +19,9 @@
 /// The key Tauri must be left to generate from `tauri.conf.json`.
 ///
 /// `CFBundleVersion` is deliberately NOT in this list. Tauri would generate it
-/// from the same `version` string (`0.3.4`), and macOS orders CFBundleVersion
-/// component-wise, so that sorts BELOW the `1` every shipped build carries —
+/// from the same `version` string (a dotted release version), and macOS orders
+/// CFBundleVersion component-wise, so any `0.x` sorts BELOW the `1` every
+/// shipped build carries —
 /// an in-place upgrade would lower the bundle version, which Apple requires to
 /// increase monotonically and which LaunchServices/pkd consult when arbitrating
 /// duplicate registrations of one bundle id. See the comment in Info.plist.
@@ -75,7 +76,7 @@ fn tauri_config_carries_the_version() {
 
 /// The counterpart guard: `CFBundleVersion` must KEEP its explicit value, so a
 /// later cleanup does not "finish the job" by deleting it and silently move
-/// every install's bundle version from `1` down to `0.3.4`.
+/// every install's bundle version from `1` down to the dotted release version.
 #[test]
 fn info_plist_still_pins_cf_bundle_version() {
     assert!(

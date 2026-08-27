@@ -119,7 +119,12 @@ jobs:
         with:
           token: ${{ secrets.HCFS_BUMP_TOKEN || github.token }}
           branch: automated/hcfs-bump
-          base: ${{ github.event.repository.default_branch }}
+          # Target `staging`, not the default branch (`main`). A dependency bump
+          # must be proven by a staging build and the e2e-live lane before it can
+          # reach production — and a push to `main` publishes a release outright,
+          # so basing a bump PR there would put an unvalidated engine pin one
+          # merge away from users.
+          base: staging
           add-paths: |
             src-tauri/Cargo.toml
             src-tauri/Cargo.lock
