@@ -17,10 +17,20 @@ const NUDGE_ID = "finder-extension-disabled";
  * can never contain us (report 2026-08-26, Tahoe 26.3).
  */
 const NUDGE_DESCRIPTION =
-  "macOS installs it switched off, so “Share with Hippius” is missing when you right-click a file. Enable Hippius under File Providers (not Finder) in Extensions settings.";
+  "macOS leaves it switched off, so “Share with Hippius” is missing when you right-click a file. Choose Enable, or turn Hippius on under File Providers (not Finder) in Extensions settings.";
 
 const SETTINGS_FALLBACK_DESCRIPTION =
   "Open System Settings › General › Login Items & Extensions › File Providers, then enable Hippius.";
+
+/**
+ * Deliberately does not promise the menu item is there *now*. Finder loads a
+ * newly elected extension on its own schedule — `macos/dev-finder.sh` follows
+ * the same two pluginkit verbs with `killall Finder` to force it. We do not do
+ * that to a user: relaunching Finder closes every open window and tab, which is
+ * a real cost to spare them a short wait. So the copy sets the expectation
+ * instead of claiming an immediacy we cannot guarantee.
+ */
+const ENABLED_DESCRIPTION = "Right-click a file in your Hippius folder to share it. It can take a moment to appear.";
 
 /**
  * Surfaces the backend's Finder-extension enablement check.
@@ -61,6 +71,42 @@ export default function FinderExtensionGuard() {
   useEffect(() => {
     let cancelled = false;
 
+    /**
+     * Turn the extension on, falling back to the system pane.
+     *
+     * Rust registers it with the system and elects it (`pluginkit -a` then
+     * `-e use`). That covers the case sending the user to Settings never
+     * could: an extension macOS never registered is in no pane at all, so the
+     * list the old button opened could not contain Hippius no matter which
+     * category the user looked under (report 2026-08-26).
+     *
+     * Only an explicit `enabled` counts as success. `unsupported` means the
+     * backend could not verify the result — the pluginkit calls may well have
+     * worked, but claiming success on an unverified answer is the one outcome
+     * worse than an extra trip to Settings.
+     */
+    const enableThenFallback = async () => {
+      try {
+        const state = await invoke<{ kind: string }>("enable_finder_extension");
+        if (state.kind === "enabled") {
+          toast.dismiss(NUDGE_ID);
+          toast.success("Finder extension enabled", { description: ENABLED_DESCRIPTION });
+          return;
+        }
+      } catch {
+        // An older backend without the command, or a build with no extension
+        // to register. Either way the pane is still worth offering.
+      }
+
+      try {
+        await invoke("open_finder_extension_settings");
+      } catch {
+        toast.error("Could not open Extensions settings", {
+          description: SETTINGS_FALLBACK_DESCRIPTION,
+        });
+      }
+    };
+
     const check = () => {
       invoke<{ kind: string }>("finder_extension_state")
         .then((state) => {
@@ -88,7 +134,7 @@ export default function FinderExtensionGuard() {
             duration: Infinity,
             id: NUDGE_ID,
             action: {
-              label: "Open Settings",
+              label: "Enable",
               onClick: () => {
                 // Sonner removes the toast on an action click and — unlike its
                 // close button — does NOT call `onDismiss` (2.0.7: the action
@@ -96,15 +142,11 @@ export default function FinderExtensionGuard() {
                 // here, or nothing ever does, and the `showing` check on the
                 // raise path above suppresses the notice for the rest of the
                 // session — after its own button, on its primary path.
-                // Deliberately NOT `dismissed`: going to System Settings is not
-                // "stop telling me", so if the user never flips the switch the
+                // Deliberately NOT `dismissed`: an enable attempt that fails is
+                // not "stop telling me", so if the extension is still off the
                 // next focus check raises the notice again.
                 showing.current = false;
-                void invoke("open_finder_extension_settings").catch(() => {
-                  toast.error("Could not open Extensions settings", {
-                    description: SETTINGS_FALLBACK_DESCRIPTION,
-                  });
-                });
+                void enableThenFallback();
               },
             },
             // Reached by a real dismissal only — the close button, a swipe, or
