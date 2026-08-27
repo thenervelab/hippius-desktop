@@ -51,6 +51,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **"Share with Hippius" now registers itself on Mac.** On some Macs the right-click
+  menu never appeared no matter what you did in Settings, because macOS had never
+  registered the feature at all — so it was not in any list to switch on. Hippius now
+  registers it at startup, and the notice explains what to do when it is missing
+  entirely rather than assuming it is only switched off.
 - **"Share with Hippius" now turns itself on.** On Mac, the right-click share menu was
   missing on new installs, and the notice about it sent you to a Settings list that
   often did not contain Hippius at all. The notice now has an **Enable** button that

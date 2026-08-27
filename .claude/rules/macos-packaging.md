@@ -38,6 +38,43 @@ The App Group `V28B5X732P.com.hippius.shared` is granted only to code signed by 
 
 `finder_bridge/enablement.rs` owns the decision — `finder_extension_state` (returns the tagged `{"kind": "enabled" | "disabled" | "unsupported"}`), `open_finder_extension_settings`, and `enable_finder_extension`.
 
+**Registration is a TWO-STAGE process and the first stage is the one that fails.**
+macOS discovers app extensions in order: `lsd` builds a LaunchServices bundle
+record for the containing app, and THAT record seeds PlugInKit, which then finds
+the `.appex` inside. Both `pluginkit` verbs act on the appex database, which is
+downstream of the seed — so when the seed never happened they have nothing to
+work from. A correctly-installed `/Applications/Hippius.app` ran for six days
+with `pluginkit -mAvvv -p com.apple.FinderSync` answering `(no matches)` (a
+system-wide query, so nothing at all was registered), and began working 69
+seconds after a macOS upgrade rebuilt bundle records. The app was never
+modified. Any macOS version can land here; the layer has been reported
+unreliable since 2017 and nothing user-facing forces re-discovery.
+
+So `register_with_the_system` runs `lsregister -f <app>` BEFORE the pluginkit
+verbs, pinned by `registration_seeds_launch_services_before_pluginkit` — seeding
+second cannot help an app LaunchServices has never recorded. The flag is `-f`
+alone: `-R` means "recurse into packages", which for a single `.app` descends
+into the bundle instead of registering it. That `lsregister` re-seeds PlugInKit
+is INFERRED from the upgrade evidence, not proven, so it reports a bool nobody
+must act on and the nudge still works when it does not help.
+
+**Registration and ELECTION are separate, and only election is the user's
+choice.** `register_finder_extension_at_launch` (spawned from `main.rs`'s setup)
+runs the registration half only. Adding `pluginkit -e use` there would switch the
+extension back on at every launch for a user who deliberately turned it off;
+`the_launch_registration_never_elects` pins that. It also skips a translocated
+bundle — `lsregister -f` on a `…/AppTranslocation/<UUID>/d/` path writes a
+soon-to-vanish record into the LaunchServices database, which is worse than the
+appex-database hazard the enable path already guards.
+
+**The app's `LSMinimumSystemVersion` is 11.0**, matching the appex's deployment
+target, and `the_app_floor_is_at_least_the_extension_floor` pins it across
+`Info.plist`, `tauri.conf.json` and `project.yml`. It was Tauri's default
+`10.13.0` while `is_extension_enabled` sent the 10.14+ `isExtensionEnabled`
+selector unguarded on the strength of a comment claiming the floor was higher —
+a 10.13 launch would have aborted on an unrecognized selector. Raising the floor
+is what makes that send correct; the pin guards the premise.
+
 **There are THREE reasons the extension can be unusable, and triage must tell them apart.** `pluginkit -mAvvv -p com.apple.FinderSync | grep -A6 hippius` is the one-line triage:
 
 | Output | State |

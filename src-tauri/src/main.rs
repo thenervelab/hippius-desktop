@@ -793,6 +793,23 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
             );
         }
 
+        // Register the Finder extension with the system, without switching it
+        // on. macOS is supposed to do this when the containing app first
+        // launches; on at least one Mac it never did, and nothing retried for
+        // six days — the extension sat on disk registered nowhere, so it was in
+        // no settings pane and the nudge's advice could not be followed. See
+        // `finder_bridge::enablement::register_with_the_system`.
+        //
+        // Spawned, not awaited: it shells out to two system helpers and must not
+        // sit in front of the window appearing.
+        #[cfg(target_os = "macos")]
+        {
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                crate::finder_bridge::enablement::register_finder_extension_at_launch(handle).await;
+            });
+        }
+
         // Reclaim upload-chunk staging directories abandoned by earlier runs.
         //
         // This is the launch trigger, and it must live here rather than only in
