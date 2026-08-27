@@ -19,8 +19,17 @@ const NUDGE_ID = "finder-extension-disabled";
 const NUDGE_DESCRIPTION =
   "macOS leaves it switched off, so “Share with Hippius” is missing when you right-click a file. Choose Enable, or turn Hippius on under File Providers (not Finder) in Extensions settings.";
 
+/**
+ * Must cover the case where Hippius is in the pane at ALL, because it often is
+ * not: macOS registers an extension only after LaunchServices has built a bundle
+ * record for the containing app, and when that never happens the extension is in
+ * no list, no pane and no `pluginkit` query. Telling that user to "enable
+ * Hippius in Settings" is advice they cannot follow, and it reads as the app
+ * blaming them for a step that does not exist — which is how it was reported:
+ * "the button takes me to the wrong place and I don't see it in the list".
+ */
 const SETTINGS_FALLBACK_DESCRIPTION =
-  "Open System Settings › General › Login Items & Extensions › File Providers, then enable Hippius.";
+  "Open System Settings › General › Login Items & Extensions › File Providers, then turn on Hippius. If Hippius is not listed there at all, restart your Mac — macOS sometimes fails to register the extension, and a restart makes it re-scan.";
 
 /**
  * Deliberately does not promise the menu item is there *now*. Finder loads a
