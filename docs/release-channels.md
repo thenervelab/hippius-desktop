@@ -99,22 +99,37 @@ build that accepts unverifiable updates.
 **Do not reintroduce a branch-specific pubkey.** If a third channel is ever
 needed, give it its own key and its own build-time patch step.
 
-## Why staging share links point at the staging console
+## Every channel mints share links at the production console
 
-`tauri-staging.yml` sets `HIPPIUS_RELEASE_CHANNEL: staging` on the build step.
-That is a **compile-time** `option_env!` read by `src-tauri/src/shares/commands.rs`,
-which routes share and invite links to `https://console.hippicode.com`.
+`console.hippius.com`, on every lane. Staging used to default to
+`console.hippicode.com`, and that made the console the ONLY behaviour differing
+between lanes — every backend the app talks to is identical on all of them
+(`api.hippius.com` in `api/client.rs`, `auth/service.rs` and `auth/oauth.rs`;
+the HCFS server const). The staging console was therefore a different front end
+onto the same data, and the split bought nothing except a link a recipient could
+not open from a production session.
 
-Nothing is written into `src-tauri/.env` for this, deliberately: an `.env` line
-is a file that can be copied between lanes, whereas a build-step env var cannot
-leave the workflow that sets it. A production release binary additionally
-*ignores* a runtime `HIPPIUS_CONSOLE_BASE_URL` override, so a stray line in a
-bundled `.env` can never repoint production links.
+`tauri-staging.yml` still sets `HIPPIUS_RELEASE_CHANNEL: staging` on the build
+step. That **compile-time** `option_env!` now lives in
+`src-tauri/src/release_channel.rs` — it moved out of `shares/commands.rs` once it
+had consumers beyond the console — and it decides one thing here: whether the
+build honors a runtime `HIPPIUS_CONSOLE_BASE_URL` override.
 
-Note the corollary for local work: a plain `pnpm tauri:dev` build is neither
-channel, so it mints **production** console links unless you put
-`HIPPIUS_CONSOLE_BASE_URL=https://console.hippicode.com` in your own
-`src-tauri/.env`.
+| Build | Honors the override |
+|---|---|
+| local dev (`pnpm tauri:dev`) | yes |
+| staging | yes |
+| beta | no |
+| production | no |
+
+Beta sits with production rather than with staging on purpose: it is a public
+lane shipped to real users, so a link it mints has to go where the user expects.
+
+Compile-time is deliberate: an `.env` line is a file that can be copied between
+lanes, whereas a build-step env var cannot leave the workflow that sets it.
+
+Corollary for local work: point a dev build at another console by putting
+`HIPPIUS_CONSOLE_BASE_URL=…` in your own `src-tauri/.env`.
 
 ## Secrets each lane needs
 

@@ -15,6 +15,7 @@ use crate::app_state::AppState;
 use crate::auth::account_key::account_key;
 use crate::billing::eligibility::{InsufficientCreditsAction, require_eligible};
 use crate::error::{AppError, Result};
+use crate::release_channel::ReleaseChannel;
 use crate::shares::SqliteShareKeystore;
 use crate::shares::capabilities::fetch_capabilities;
 use crate::shares::client::build_account_client;
@@ -34,56 +35,39 @@ use std::sync::Arc;
 use tauri::ipc::Channel;
 use tracing::{debug, info, warn};
 
-/// Default (production) console origin used to build the recipient URL.
+/// Console origin used to build the recipient URL, for EVERY channel.
 /// `console.hippius.com` serves the share recipient page in `hippius-console`.
+///
+/// There is deliberately no per-channel origin. Staging builds used to mint at
+/// `console.hippicode.com`, which made the console the one behaviour that
+/// differed between lanes — while every backend the app talks to (`api.hippius.com`
+/// in `api/client.rs`, `auth/service.rs` and `auth/oauth.rs`, and the HCFS server
+/// const) is the same on all of them. The staging console was therefore a
+/// different front end onto the same data, and the split bought nothing but a
+/// link that a recipient could not open from a production session.
 const DEFAULT_CONSOLE_BASE_URL: &str = "https://console.hippius.com";
 
-/// Staging console origin, minted automatically by staging-channel builds.
-const STAGING_CONSOLE_BASE_URL: &str = "https://console.hippicode.com";
-
-/// Release channel baked in AT COMPILE TIME: the staging build workflow
-/// (`tauri-staging.yml`) exports `HIPPIUS_RELEASE_CHANNEL=staging` on its
-/// build steps, every other build (prod releases, local `cargo build`) leaves
-/// it unset. Compile-time on purpose — the channel is a property of the
-/// BINARY, so a prod release can never be repointed at the staging console by
-/// a stray line in a bundled `.env` (the old runtime-only override made every
-/// release a "remember to change the link base" hazard).
-const RELEASE_CHANNEL: Option<&str> = option_env!("HIPPIUS_RELEASE_CHANNEL");
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ReleaseChannel {
-    Production,
-    Staging,
-}
-
-/// Parse the baked channel string; anything but (case-insensitive) "staging"
-/// — unset, empty, or a typo — is Production, the fail-safe direction: a
-/// mis-set channel mints prod links, never leaks staging ones.
-fn parse_release_channel(raw: Option<&str>) -> ReleaseChannel {
-    match raw.map(str::trim) {
-        Some(value) if value.eq_ignore_ascii_case("staging") => ReleaseChannel::Staging,
-        _ => ReleaseChannel::Production,
-    }
-}
-
 /// Whether this build honors the `HIPPIUS_CONSOLE_BASE_URL` runtime override.
-/// Dev builds (local testing) and staging-channel builds do; a production
-/// RELEASE binary does not — its link base is not configuration.
+///
+/// Dev builds and STAGING builds do; production and beta release binaries do
+/// not — their link base is not configuration, so a stray line in a bundled
+/// `.env` can never repoint them. Beta sits with production rather than with
+/// staging deliberately: it is a public lane shipped to real users, and it
+/// carries the same "a link must go where the user expects" obligation.
 fn honors_console_override(channel: ReleaseChannel, dev_build: bool) -> bool {
     dev_build || channel == ReleaseChannel::Staging
 }
 
 /// The console origin to embed in minted share links.
 ///
-/// Per-channel default (prod → `console.hippius.com`, staging →
-/// `console.hippicode.com`), with the `HIPPIUS_CONSOLE_BASE_URL` runtime
+/// One origin for every channel, with the `HIPPIUS_CONSOLE_BASE_URL` runtime
 /// override honored only where [`honors_console_override`] allows.
 pub(crate) fn console_base_url() -> String {
-    let channel = parse_release_channel(RELEASE_CHANNEL);
+    let channel = crate::release_channel::current();
     let dev_build = cfg!(debug_assertions);
     let override_value = std::env::var("HIPPIUS_CONSOLE_BASE_URL").ok();
     if override_value.is_some() && !honors_console_override(channel, dev_build) {
-        warn!("HIPPIUS_CONSOLE_BASE_URL is set but ignored: production release builds always mint links at the production console");
+        warn!("HIPPIUS_CONSOLE_BASE_URL is set but ignored: release builds always mint links at the production console");
     }
     resolve_console_base_url(channel, dev_build, override_value)
 }
@@ -91,13 +75,10 @@ pub(crate) fn console_base_url() -> String {
 /// Pure resolver for [`console_base_url`], split out so the env-independent
 /// logic is unit-testable without mutating process env under the parallel test
 /// runner (env writes are process-global and racy). A blank/whitespace override
-/// falls back to the channel default, and any trailing `/` is trimmed so
-/// callers can join `/share/<token>` without doubling the separator.
+/// falls back to the default, and any trailing `/` is trimmed so callers can
+/// join `/share/<token>` without doubling the separator.
 fn resolve_console_base_url(channel: ReleaseChannel, dev_build: bool, override_value: Option<String>) -> String {
-    let channel_default = match channel {
-        ReleaseChannel::Production => DEFAULT_CONSOLE_BASE_URL,
-        ReleaseChannel::Staging => STAGING_CONSOLE_BASE_URL,
-    };
+    let channel_default = DEFAULT_CONSOLE_BASE_URL;
     if !honors_console_override(channel, dev_build) {
         return channel_default.to_string();
     }
@@ -1316,12 +1297,28 @@ mod tests {
         );
     }
 
+    /// Regression guard for the console unification.
+    ///
+    /// Staging used to default to `console.hippicode.com`. Deleting a branch is
+    /// exactly the kind of change that comes back — a later reader sees a
+    /// `channel` parameter that no longer selects anything and "restores" the
+    /// arm. Every channel now mints at the production console by default.
     #[test]
-    fn staging_channel_mints_staging_links_by_default() {
-        // The whole point of the channel: staging builds need NO env plumbing
-        // to mint hippicode links…
-        assert_eq!(resolve_console_base_url(ReleaseChannel::Staging, false, None), STAGING_CONSOLE_BASE_URL);
-        // …and can still be repointed for testing.
+    fn every_channel_mints_production_links_by_default() {
+        for channel in [ReleaseChannel::Production, ReleaseChannel::Beta, ReleaseChannel::Staging] {
+            assert_eq!(
+                resolve_console_base_url(channel, false, None),
+                DEFAULT_CONSOLE_BASE_URL,
+                "{channel:?} must mint at the production console"
+            );
+        }
+    }
+
+    /// Staging keeps the override so an internal build can still be pointed at
+    /// a staging or local console deliberately — the capability survives, only
+    /// the automatic default is gone.
+    #[test]
+    fn a_staging_build_can_still_be_repointed() {
         assert_eq!(
             resolve_console_base_url(ReleaseChannel::Staging, false, Some("https://console.example.dev".into())),
             "https://console.example.dev"
@@ -1329,26 +1326,19 @@ mod tests {
     }
 
     #[test]
-    fn production_release_build_ignores_the_override() {
-        // A prod RELEASE binary always mints prod links — a stray
-        // HIPPIUS_CONSOLE_BASE_URL in a bundled .env must not repoint it
-        // (the pre-channel design's standing release hazard).
-        assert_eq!(
-            resolve_console_base_url(ReleaseChannel::Production, false, Some("https://console.hippicode.com".into())),
-            DEFAULT_CONSOLE_BASE_URL
-        );
-    }
-
-    #[test]
-    fn release_channel_parses_fail_safe() {
-        assert_eq!(parse_release_channel(Some("staging")), ReleaseChannel::Staging);
-        assert_eq!(parse_release_channel(Some("  Staging ")), ReleaseChannel::Staging);
-        // Unset, empty, or a typo all land on Production — the direction that
-        // can never leak staging links to real users.
-        assert_eq!(parse_release_channel(None), ReleaseChannel::Production);
-        assert_eq!(parse_release_channel(Some("")), ReleaseChannel::Production);
-        assert_eq!(parse_release_channel(Some("stagging")), ReleaseChannel::Production);
-        assert_eq!(parse_release_channel(Some("production")), ReleaseChannel::Production);
+    fn release_builds_ignore_the_override() {
+        // A RELEASE binary on a public lane always mints prod links — a stray
+        // HIPPIUS_CONSOLE_BASE_URL in a bundled .env must not repoint it (the
+        // pre-channel design's standing release hazard). Beta is a public lane
+        // shipped to real users, so it is bound by this too, not by staging's
+        // looser rule.
+        for channel in [ReleaseChannel::Production, ReleaseChannel::Beta] {
+            assert_eq!(
+                resolve_console_base_url(channel, false, Some("https://console.hippicode.com".into())),
+                DEFAULT_CONSOLE_BASE_URL,
+                "{channel:?} is a release lane and must ignore the override"
+            );
+        }
     }
 
     /// Wire-contract pin for the FOREIGN `hcfs_client::client::share::ShareProgress`,

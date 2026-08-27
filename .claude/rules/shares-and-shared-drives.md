@@ -21,7 +21,9 @@ paths:
 
 `shares/commands.rs` (share/unshare, link generation) emits `ShareProgress`/`SharePhase` to the FE (both pinned in `tests/hcfs_contract.rs`).
 
-**Share-link console origin is chosen by a COMPILE-TIME release channel** (`RELEASE_CHANNEL` = `option_env!("HIPPIUS_RELEASE_CHANNEL")`): unset → production `console.hippius.com`; `staging` (exported by `tauri-staging.yml`'s build steps) → `console.hippicode.com`. The `HIPPIUS_CONSOLE_BASE_URL` runtime override is honored only in dev builds and staging-channel builds — a production RELEASE binary always mints prod links, so a stray line in a bundled `.env` can never repoint it. Channel parsing fails safe: any value other than `staging` is Production.
+**Every channel mints share links at `console.hippius.com`.** There is no per-channel origin: staging used to default to `console.hippicode.com`, which made the console the ONLY behaviour differing between lanes while every backend the app talks to (`api.hippius.com` in `api/client.rs`, `auth/service.rs`, `auth/oauth.rs`; the HCFS server const) is identical on all of them — so the staging console was a different front end onto the same data, and the split bought only a link a recipient could not open from a production session. Pinned by `every_channel_mints_production_links_by_default`, which exists because deleting a branch is the kind of change a later reader "restores" on seeing a `channel` parameter that no longer selects anything.
+
+The `HIPPIUS_CONSOLE_BASE_URL` runtime override is honored in dev builds and **staging** builds only — production and beta RELEASE binaries always mint prod links, so a stray line in a bundled `.env` can never repoint them. Beta sits with production, not staging: it is a public lane shipped to real users. The compile-time channel itself now lives in `src-tauri/src/release_channel.rs` (`crate::release_channel::current()`), not in this module — it gained consumers beyond the console.
 
 ## Shared drives (cross-account member drives)
 
