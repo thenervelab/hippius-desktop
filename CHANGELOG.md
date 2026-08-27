@@ -15,6 +15,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-27
+
 ### Added
 
 - **Try new features early with the beta channel.** Choose **Explore Beta** from
@@ -26,14 +28,15 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   an immediately disabled LIVE badge with an explanatory tooltip on Linux.
 - Drive, Billing, and Support information tooltips now link directly to their relevant
   documentation.
-- **Share links can now expire.** Choose 24 hours, 7 days, 30 days, or until you revoke
-  it — both in the app and when right-clicking a file in Finder on Mac.
-- **Password-protect a share link with your own password**, from either place.
-- **Your computer stays awake while files are transferring.** Long uploads no longer die
-  when the machine goes idle. The screen can still switch off, and closing the lid still
-  puts the machine to sleep as normal.
+- **Forgot your unlock password?** You can now set a new one using your seed phrase,
+  instead of being locked out of your own files.
 
 ### Changed
+
+- **A shared folder link now shows what is in the folder right now.** Previously the
+  link handed over a zip of the folder as it stood the moment you shared it, so
+  anything you added later was missing and creating the link meant waiting for the
+  whole folder to be packed. Links are now created instantly and stay up to date.
 
 - **Uploads are substantially faster**, especially on slower or long-distance
   connections — parts of a file now transfer at the same time instead of one after
@@ -100,6 +103,26 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   usable credential.
 - **Sign-in links are no longer written to log files**, so a support log can never carry
   a working credential.
+
+---
+
+## [0.2.3] - 2026-08-20
+
+Already in users' hands before this file was first published. These notes were written
+alongside the work but never appeared in a release, and they are recorded here so the
+`0.5.0` notes do not announce them a second time. `0.2.2` and `0.2.3` shipped other work
+as well — the Finder and Linux "Share with Hippius" menu, empty folders, the home
+storage and plan cards, and the offline banner — which was never written up and is not
+reconstructed here.
+
+### Added
+
+- **Share links can now expire.** Choose 24 hours, 7 days, 30 days, or until you revoke
+  it — both in the app and when right-clicking a file in Finder on Mac.
+- **Password-protect a share link with your own password**, from either place.
+- **Your computer stays awake while files are transferring.** Long uploads no longer die
+  when the machine goes idle. The screen can still switch off, and closing the lid still
+  puts the machine to sleep as normal.
 
 ---
 
