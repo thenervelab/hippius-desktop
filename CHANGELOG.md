@@ -51,7 +51,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   missing on new installs, and the notice about it sent you to a Settings list that
   often did not contain Hippius at all. The notice now has an **Enable** button that
   switches the feature on for you, and only falls back to opening Settings if that does
-  not work.
+  not work. Opening Hippius straight from the downloaded disk image no longer shows that
+  notice at all — nothing there can turn the feature on, so it now just asks you to move
+  Hippius to your Applications folder first.
 - **Every build now reports its real version number.** Installed copies all claimed to
   be version `0.0.1`, so there was no way to tell which build you were running when
   reporting a problem.
