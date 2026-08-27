@@ -230,6 +230,12 @@ jobs:
           # HIPPIUS_RELEASE_CHANNEL=staging on the build step below — no .env
           # line, so nothing here can leak into a prod release's env file.
 
+      - name: Point the updater at the staging signing key
+        shell: bash
+        env:
+          STAGING_PUBKEY: ${{ secrets.TAURI_UPDATER_PUBKEY_STAGING }}
+        run: bash scripts/use-staging-updater-key.sh
+
       - name: Build frontend
         run: pnpm build
         env:
@@ -247,9 +253,10 @@ jobs:
       # goes to GITHUB_ENV so tauri-action signs the app; notarization is
       # withheld from tauri-action (the extension is embedded + the app re-signed
       # afterwards, which invalidates any earlier notarization) and surfaced as
-      # step OUTPUTS consumed by the finalize step. The preview UPDATER key
-      # (TAURI_SIGNING_PRIVATE_KEY / preview pubkey) is unchanged — only the
-      # Apple code-signing cert is added here.
+      # step OUTPUTS consumed by the finalize step. Apple code signing is a
+      # separate concern from the UPDATER key: this lane signs updates with
+      # TAURI_SIGNING_PRIVATE_KEY_STAGING and patches the matching pubkey into
+      # tauri.conf.json above, so nothing here touches the production keypair.
       - name: Set up Apple signing
         id: apple
         shell: bash
@@ -306,8 +313,8 @@ jobs:
         uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_STAGING }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_STAGING_PASSWORD }}
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
           # Compile-time channel: staging binaries mint share links at the
           # staging console (shares/commands.rs::RELEASE_CHANNEL). Prod release
@@ -361,8 +368,8 @@ jobs:
           APPLE_API_KEY_PATH: ${{ steps.apple.outputs.api_key_path }}
           APPLE_API_KEY: ${{ steps.apple.outputs.api_key }}
           APPLE_API_ISSUER: ${{ steps.apple.outputs.api_issuer }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_STAGING }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_STAGING_PASSWORD }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
@@ -484,6 +491,12 @@ jobs:
           printf '%s\n' "$TAURI_ENV_FILE" | bash scripts/write-tauri-env.sh
           # Staging console comes from the compile-time channel (macOS job note).
 
+      - name: Point the updater at the staging signing key
+        shell: bash
+        env:
+          STAGING_PUBKEY: ${{ secrets.TAURI_UPDATER_PUBKEY_STAGING }}
+        run: bash scripts/use-staging-updater-key.sh
+
       - name: Build frontend
         run: pnpm build
         env:
@@ -493,8 +506,8 @@ jobs:
         uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_STAGING }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_STAGING_PASSWORD }}
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
           # Compile-time channel: staging binaries mint share links at the
           # staging console (shares/commands.rs::RELEASE_CHANNEL). Prod release
@@ -586,6 +599,12 @@ jobs:
           printf '%s\n' "$TAURI_ENV_FILE" | bash scripts/write-tauri-env.sh
           # Staging console comes from the compile-time channel (macOS job note).
 
+      - name: Point the updater at the staging signing key
+        shell: bash
+        env:
+          STAGING_PUBKEY: ${{ secrets.TAURI_UPDATER_PUBKEY_STAGING }}
+        run: bash scripts/use-staging-updater-key.sh
+
       - name: Build frontend
         run: pnpm build
         env:
@@ -600,8 +619,8 @@ jobs:
         uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_STAGING }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_STAGING_PASSWORD }}
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
           # Compile-time channel: staging binaries mint share links at the
           # staging console (shares/commands.rs::RELEASE_CHANNEL). Prod release

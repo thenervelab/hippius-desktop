@@ -28,9 +28,10 @@
          tests/bundle_metadata_pin.rs.
 
          CFBundleVersion deliberately STAYS pinned here, and is NOT handed to
-         Tauri with it. Tauri would generate it from the same `version` string,
-         i.e. `0.3.4` — and macOS orders CFBundleVersion component-wise, so
-         `0.3.4` sorts BELOW the `1` every previously shipped build carries.
+         Tauri with it. Tauri would generate it from the same `version` string
+         (a dotted release version like `0.4.0`) — and macOS orders
+         CFBundleVersion component-wise, so any `0.x` string sorts BELOW the
+         `1` every previously shipped build carries.
          That would make an in-place upgrade lower the bundle version, against
          Apple's monotonic-increase rule, and LaunchServices/pkd consult it when
          arbitrating between duplicate registrations of one bundle id — the
