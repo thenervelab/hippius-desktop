@@ -1,10 +1,15 @@
-//! Preview preparation for Hippius Live photos.
+//! Preview preparation for the in-app file viewer.
 //!
-//! Mobile stores a Live Photo as one plaintext file containing a valid still
-//! image, the paired MOV, and a fixed 24-byte trailer. This module owns the
-//! desktop-side format parsing and materialises the two renderable parts under
-//! the existing plaintext preview cache. Ordinary images are rejected cheaply
-//! after reading only their final 24 bytes.
+//! Two commands, one shared gate. `prepare_motion_photo_preview` splits a
+//! Hippius Live image (a still, the paired MOV, and a fixed 24-byte trailer
+//! written by mobile) into the plaintext preview cache; ordinary images are
+//! rejected cheaply after reading only their final 24 bytes.
+//! `read_preview_bytes` hands the renderer the plaintext bytes of a document
+//! (DOCX/XLSX/PPTX/CSV/JSON/text/HTML/Markdown/SVG) under a byte cap.
+//!
+//! Both take a caller-supplied path and both run it through
+//! [`validate_preview_source`] first, so neither can be used as an arbitrary
+//! filesystem reader by a compromised renderer.
 
 use std::fs::{self, File};
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -56,9 +61,74 @@ pub async fn prepare_motion_photo_preview(state: tauri::State<'_, crate::app_sta
     .map_err(|error| AppError::Other(format!("Live Photo preview task failed: {error}")))?
 }
 
+/// Hard ceiling on a single preview read, whatever the renderer asks for.
+///
+/// The frontend passes a per-format cap (see `app/lib/utils/filePreviewType.ts`)
+/// but that number arrives from the renderer, so it is treated as a *request*
+/// rather than a limit: the effective cap is the smaller of the two. Sized
+/// above the largest per-format cap (40 MiB, presentations) so a legitimate
+/// request is never clipped by it.
+const MAX_PREVIEW_READ_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Resolve the effective read limit and reject files that exceed it.
+///
+/// Pure so the cap policy is unit-testable without touching the filesystem.
+/// Rejecting up front (on the file's real length) rather than truncating is
+/// deliberate: half a DOCX is a corrupt DOCX, and every renderer would fail
+/// with a parse error instead of the honest "too large to preview" state that
+/// carries the download fallback.
+fn preview_read_limit(requested_max_bytes: u64, file_length: u64) -> Result<u64> {
+    let effective = requested_max_bytes.clamp(1, MAX_PREVIEW_READ_BYTES);
+    if file_length > effective {
+        return Err(AppError::Validation(PREVIEW_TOO_LARGE.into()));
+    }
+    Ok(effective)
+}
+
+/// User-facing copy for an over-cap preview. Owned here, not in the renderer,
+/// so every surface that hits the cap says the same thing.
+pub const PREVIEW_TOO_LARGE: &str = "This file is too large to preview. Download it to open it.";
+
+/// Read a previewable file's plaintext bytes for the in-app viewer.
+///
+/// `source_path` is the already-resolved local path: the file's own location
+/// inside a sync folder, or the decrypted copy `cache_remote_file` wrote for a
+/// cloud-only file. This command therefore adds no download, decryption or
+/// caching of its own — it is the read step those flows stop short of.
+///
+/// Returns raw bytes via [`tauri::ipc::Response`] rather than a serialised
+/// `Vec<u8>`; the JSON path would encode a 25 MiB document as ~75 MiB of
+/// decimal digits.
+#[tauri::command]
+pub async fn read_preview_bytes(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    source_path: String,
+    max_bytes: u64,
+) -> Result<tauri::ipc::Response> {
+    let source = validate_preview_source(&state, Path::new(&source_path)).await?;
+    let metadata = tokio::fs::metadata(&source).await?;
+    if !metadata.is_file() {
+        return Err(AppError::Validation("preview source is not a file".into()));
+    }
+    let limit = preview_read_limit(max_bytes, metadata.len())?;
+
+    let bytes = tokio::fs::read(&source).await?;
+    // The file can grow between the metadata probe and the read (an upload
+    // still landing), so the cap is enforced a second time on what we actually
+    // hold rather than on what we expected to hold.
+    if bytes.len() as u64 > limit {
+        return Err(AppError::Validation(PREVIEW_TOO_LARGE.into()));
+    }
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
 /// Restrict the caller-provided source path to this account's registered sync
 /// roots or the dedicated remote-preview cache. Without this gate a compromised
-/// renderer could use the extraction command as an arbitrary filesystem reader.
+/// renderer could use either preview command as an arbitrary filesystem reader.
+///
+/// Both roots are canonicalised before the prefix test, so a `..` segment or a
+/// symlink pointing out of a sync folder resolves to its real location and
+/// fails the check rather than escaping it.
 async fn validate_preview_source(state: &crate::app_state::AppState, source: &Path) -> Result<PathBuf> {
     let canonical_source = tokio::fs::canonicalize(source).await?;
     let preview_root = dirs::home_dir()
@@ -235,6 +305,42 @@ mod tests {
         plain[0..8].copy_from_slice(&100_u64.to_le_bytes());
         plain[12..23].copy_from_slice(MAGIC);
         assert_eq!(parse_motion_photo_trailer(&plain, 100), None);
+    }
+
+    #[test]
+    fn preview_read_limit_clamps_a_renderer_request_to_the_hard_ceiling() {
+        // A renderer asking for more than the ceiling gets the ceiling, and a
+        // file that fits under the ceiling still reads even though the request
+        // was absurd — the request is a hint, never an authority.
+        assert_eq!(preview_read_limit(u64::MAX, 1_024).expect("under ceiling"), MAX_PREVIEW_READ_BYTES);
+        // ...but a file over the ceiling is refused no matter what was asked.
+        assert!(preview_read_limit(u64::MAX, MAX_PREVIEW_READ_BYTES + 1).is_err());
+    }
+
+    #[test]
+    fn preview_read_limit_honours_the_tighter_per_format_cap() {
+        // 1 MiB Markdown cap: a 2 MiB file is refused even though the hard
+        // ceiling would have allowed it. This is the guard that keeps a
+        // renderer from being handed more than its parser is sized for.
+        let markdown_cap = 1024 * 1024;
+        assert!(preview_read_limit(markdown_cap, markdown_cap + 1).is_err());
+        assert_eq!(preview_read_limit(markdown_cap, markdown_cap).expect("at cap"), markdown_cap);
+    }
+
+    #[test]
+    fn preview_read_limit_rejects_a_zero_request_rather_than_reading_everything() {
+        // `clamp(1, ..)` must not turn a 0 request into "no limit"; a 0-byte
+        // budget can only ever satisfy an empty file.
+        assert!(preview_read_limit(0, 1).is_err());
+        assert_eq!(preview_read_limit(0, 0).expect("empty file"), 1);
+    }
+
+    #[test]
+    fn preview_read_limit_reports_the_shared_too_large_copy() {
+        // The FE renders this string verbatim, so the copy is pinned here
+        // rather than duplicated in TypeScript.
+        let error = preview_read_limit(10, 11).expect_err("over cap");
+        assert_eq!(error.to_string(), PREVIEW_TOO_LARGE);
     }
 
     #[test]
