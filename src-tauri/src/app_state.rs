@@ -113,6 +113,14 @@ pub struct AppState {
     /// mirroring the other per-label state objects above. See
     /// `crate::sync::folder_entries_materialize`.
     pub folder_entity_sync: std::sync::Arc<crate::sync::folder_entries_reconcile::PerLabelThrottle>,
+    /// Bounds concurrent full-file cloud download+decrypt pipelines
+    /// (`sync::remote::download_cloud_file_to`: thumbnails, HEIC preview
+    /// caching, remote-share staging). Backend-side so EVERY caller is
+    /// covered — a remote camera roll otherwise fires 30-50 multi-MB
+    /// downloads per screen of rows, saturating network/CPU (the FE keeps
+    /// its own smaller gate purely to skip scrolled-past rows before the
+    /// IPC is even issued).
+    pub remote_media_semaphore: std::sync::Arc<tokio::sync::Semaphore>,
     /// Monotonically increasing counter, incremented on every
     /// `SyncStarted` event. The `UploadProcessingState` clear gate
     /// reads this to distinguish events from a cycle that began
@@ -289,6 +297,7 @@ impl AppState {
             keep_awake: std::sync::Arc::new(crate::power::SyncKeepAwake::new_native()),
             chunk_reclaim: tokio::sync::OnceCell::new(),
             folder_entity_sync: std::sync::Arc::new(crate::sync::folder_entries_reconcile::PerLabelThrottle::new()),
+            remote_media_semaphore: std::sync::Arc::new(tokio::sync::Semaphore::new(3)),
             sync_session_epoch: AtomicU64::new(0),
             tray_panel_hidden_at: AtomicU64::new(0),
             recovery_cancel: std::sync::atomic::AtomicBool::new(false),
