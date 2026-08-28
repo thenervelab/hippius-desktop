@@ -55,6 +55,8 @@ The sync engine delegates to `hcfs-client` (from the `hcfs` repo, pinned to a gi
 
 `Cargo.toml` pins `hcfs-client` / `hcfs-shared` to the same merged hcfs `main` rev. The weekly `hcfs-bump` workflow advances it; CI's wire-contract guards gate the result. **Run the live e2e lane on every pin bump** (see `testing.md`).
 
+**`main.rs` must call `hcfs_client::cpu_pool::configure(CpuPolicy::Background)` before the Tauri builder.** hcfs hashes and encrypts on a rayon pool it owns, and that pool takes every core at default OS priority unless the host opts out — deliberately, since a library must not deprioritise its embedder's work uninvited, and the CLI/e2e/benches want `Full`. Without the call a large add pins every core and the window stops painting; nothing anywhere reports it, because the sync is otherwise correct. Ordering is half the contract: the policy is read when the pool is first built and the first build wins, so a call placed after any scan/hash/encrypt is indistinguishable at runtime from no call at all. `configure` returns the policy already in force rather than no-op'ing, and `main.rs` warns on that. Pinned by `tests/cpu_policy_pin.rs`, which checks the argument, the ordering against `Builder::default()`, and that hcfs still reports a late call.
+
 ## Multi-drive sync
 
 Drives are keyed by label string. `trigger_sync` fans all drives out concurrently via `tokio::spawn`, each holding its own per-drive lock. `SyncActivityItem` includes a `label` field; all Tauri events include `"label"` in the JSON payload. DB constraint: `UNIQUE(owner, label)` in the sync_paths table.
