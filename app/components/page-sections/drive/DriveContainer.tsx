@@ -1488,6 +1488,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 isLoadingMore={remoteIsLoadingMore}
                 isSyncPathEmpty={effectiveSyncPathEmpty}
                 hasNoCredits={hasNoCredits}
+                isRemoteView={isRemoteView}
                 onSyncPathConfigured={
                   isRecentFiles ? handleNavigateToSettings : handleStartSyncing
                 }
