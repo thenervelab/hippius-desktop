@@ -70,7 +70,14 @@ const SAFE_EMBEDDED_SCHEME = /^data:(?!text\/html|image\/svg\+xml)/i;
 const SUBRESOURCE_TAGS = new Set(["img", "image", "use", "input", "td", "th", "body", "table"]);
 
 function stripDangerousAttributes(element: Element): void {
-  for (const attribute of Array.from(element.attributes)) {
+  const attributes = element.attributes;
+  // Indexed, reverse, and skipping elements that carry no attributes at all:
+  // this loop runs once per element in the document, and materialising an
+  // array per element measured about twice as slow on a multi-megabyte file.
+  // Reverse because removing an attribute reindexes the live collection.
+  for (let index = attributes.length - 1; index >= 0; index -= 1) {
+    const attribute = attributes[index];
+    if (!attribute) continue;
     const name = attribute.name.toLowerCase();
 
     // Every inline event handler, whatever the element.
