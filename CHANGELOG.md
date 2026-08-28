@@ -61,6 +61,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 - **Adding a large folder no longer freezes the app.** Dropping a multi-gigabyte
   folder in used to lock the window until the copy and encryption finished.
+- **Replacing an already-synced file can no longer upload a half-copied version.**
+  Adding a file over one you already had could, if the copy was slow, be picked up
+  while it was still being written and back up an incomplete copy.
 - **Filters and search now work while browsing inside a folder.** Applying a file-type,
   date, size, or search filter inside a synced folder — including folders synced from
   your other devices — quietly kept showing the full unfiltered list with the filter
