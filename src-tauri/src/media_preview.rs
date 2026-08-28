@@ -358,7 +358,7 @@ mod tests {
             assert!(
                 MAX_PREVIEW_READ_BYTES >= LARGEST_FORMAT_CAP,
                 "read ceiling must clear the largest per-format cap"
-            )
+            );
         };
         // A file at that cap reads rather than being rejected by the ceiling.
         assert!(preview_read_limit(LARGEST_FORMAT_CAP, LARGEST_FORMAT_CAP).is_ok());
