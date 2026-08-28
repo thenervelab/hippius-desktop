@@ -3,6 +3,7 @@
 import { Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import AppearanceSettings from "@/components/page-sections/settings/AppearanceSettings";
+import ReleaseChannelSettings from "@/components/page-sections/settings/ReleaseChannelSettings";
 import MultiFolderSyncManager from "@/components/page-sections/settings/MultiFolderSyncManager";
 import DeviceNameSetting from "@/components/page-sections/settings/DeviceNameSetting";
 import RecoveryPhraseSettings from "@/components/page-sections/settings/RecoveryPhraseSettings";
@@ -10,7 +11,7 @@ import WalletSettings from "@/components/page-sections/settings/WalletSettings";
 import ApiTokenSection from "@/components/page-sections/settings/ApiTokenSection";
 import VPNSettings from "@/components/page-sections/settings/VPNSettings";
 import CustomizeRPC from "@/components/page-sections/settings/CustomizeRPC";
-import InfoTooltip from "@/components/page-sections/settings/InfoTooltip";
+import InfoTooltip from "@/components/ui/info-tooltip";
 import NotificationSection from "@/components/page-sections/settings/NotificationSection";
 import {
   VPN_FEATURE_ENABLED,
@@ -133,6 +134,8 @@ function SettingsContent() {
         {section === "notifications" && <NotificationSection />}
 
         {section === "api-key" && <ApiTokenSection />}
+
+        {section === "updates" && <ReleaseChannelSettings />}
 
         {/* VPN is hidden behind a feature flag (code kept). See featureFlags.ts. */}
         {VPN_FEATURE_ENABLED && section === "vpn" && <VPNSettings />}

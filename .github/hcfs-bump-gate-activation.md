@@ -34,6 +34,32 @@ boundary to the frontend, plus the at-rest crypto format:
 | `folder_hash_is_pinned`, `derive_folder_mnemonic_is_pinned`, `derive_encryption_key_is_pinned` (+ format/determinism proptests) | `tests/hcfs_contract.rs` | key/identity derivation drift |
 | `at_rest_decrypt_frozen_ciphertext_is_pinned`, `at_rest_round_trips_any_plaintext` | `tests/hcfs_contract.rs` | XChaCha20-Poly1305 at-rest format change → existing user files undecryptable |
 
+## What the guards do NOT cover — run the live lane on every bump
+
+The table above is all hermetic: it pins wire shapes and known-answer derivations, so it
+catches a *type* or *format* change. It cannot catch a **behavioral** change in
+`hcfs-client` against a real server — a status code that moved, an error string the desktop
+classifies on, an arbiter that stopped confirming. That class is only caught by the
+`*_real_backend.rs` suites, and exactly that happened once already: the shared-drives
+revocation marker had no live producer at pin `3ff8e9f` (every hermetic test green), and
+the pin bump to `ab4b5cd` that fixed it was verified only by re-running the live suite.
+
+So: **on every `hcfs` pin bump PR, run `.github/workflows/e2e-live.yml` against the bumped
+branch before merging.**
+
+```bash
+gh workflow run e2e-live.yml --ref automated/hcfs-bump -f suite=both
+```
+
+It is a manual workflow (no cron, not a required check) and it needs the live-account
+secrets listed in its header. It sets `HCFS_DESKTOP_E2E_REQUIRE=1`, so a missing secret
+fails the run instead of skipping the tests green.
+
+Same default-branch prerequisite as step 1 below: `workflow_dispatch` resolves
+`e2e-live.yml` **by path on the default branch**, so `--ref automated/hcfs-bump` runs the
+bump branch's *code* but only once the workflow file itself exists on `main`. Until then
+the dispatch fails with "workflow does not exist".
+
 ## Activation steps (run when ready — none done yet)
 
 1. **Push the gate to `main`.** `ci.yml` must exist on `main` because `hcfs-bump.yml` opens its

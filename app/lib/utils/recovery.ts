@@ -98,6 +98,35 @@ export async function changeRecoveryPassword(
   });
 }
 
+/**
+ * Prove a typed mnemonic belongs to this account, then reseal the
+ * unlock wrap under `newPassword`. Used when the user forgot the
+ * unlock password but still has the seed. Rust refuses to POST unless
+ * the phrase is confirmed — a wrong phrase cannot overwrite the blob.
+ */
+export async function restoreWithMnemonic(
+  mnemonic: string,
+  newPassword: string,
+): Promise<{ alignPending: boolean }> {
+  return await invoke<{ alignPending: boolean }>("restore_with_mnemonic", {
+    mnemonic,
+    newPassword,
+  });
+}
+
+/**
+ * Reseal the unlock wrap under `newPassword` using the session's
+ * already-held master. Fails with Validation when this device cannot
+ * open the mnemonic — the FE then switches to {@link restoreWithMnemonic}.
+ */
+export async function resetUnlockPassword(
+  newPassword: string,
+): Promise<{ alignPending: boolean }> {
+  return await invoke<{ alignPending: boolean }>("reset_unlock_password", {
+    newPassword,
+  });
+}
+
 /** Finish a rotation whose local-rewrite step failed on a previous run. */
 export async function resumeRecoveryPasswordRotation(password: string): Promise<void> {
   await invoke("resume_recovery_password_rotation", { password });

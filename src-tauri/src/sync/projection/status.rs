@@ -124,7 +124,11 @@ use crate::sync::events::{DRIVE_REMOVED, DRIVE_STATUS_CHANGED, DriveStatusChange
 /// is shutting down, in which case the FE will rebuild from
 /// `get_all_drive_statuses` on next mount anyway — which now reads
 /// the cache.
-pub fn emit_drive_status(app: &AppHandle<Wry>, label: &str, path: &str, status: DriveStatus) {
+///
+/// Generic over the Tauri runtime (like the lifecycle callbacks) so the
+/// `suspend_drive_inmemory` teardown funnel can be driven end-to-end from
+/// the in-module `MockRuntime` tests; production callers pass `Wry`.
+pub fn emit_drive_status<R: tauri::Runtime>(app: &AppHandle<R>, label: &str, path: &str, status: DriveStatus) {
     use tauri::Manager;
 
     // Write the last-emitted status to the per-drive cache BEFORE

@@ -76,6 +76,46 @@ export const VM_FEATURE_ENABLED = false;
 export const VM_VPN_ENABLED = false;
 
 /**
+ * Shared drives (cross-account team drives). When `false`, every shared-drive
+ * UI surface is hidden:
+ *   - the "Share drive…" item in both LocalFoldersSection menus (the row's
+ *     3-dot `TableActionMenu` and the right-click `FolderCardContextMenu`),
+ *   - `ShareDriveModal` (mounted in `app/(pages)/layout.tsx` beside
+ *     `ShareFileModal` — renders nothing while the flag is off),
+ *   - the "Shared with me" section in `MultiFolderSyncManager` (settings)
+ *     and `DriveOnboarding` (files page),
+ *   - the cosmetic owner badge on member rows in `LocalFoldersSection`.
+ *
+ * Deliberately NOT flag-gated: the member-row menu protections
+ * (`folderMenuGating.ts` — owner-only item hiding and the "Leave shared
+ * drive" wording/routing) key on the row's `ownerSs58` data alone, so
+ * rolling this flag back after release cannot hand an existing member row
+ * "Delete from Server" (the backend would key the delete by the wrong
+ * identity) or a plain Remove that strands a live server-side membership.
+ *
+ * The Rust IPCs (`create_drive_invite`, `list_drive_members`,
+ * `remove_drive_member`, `list_my_drive_memberships`, `leave_shared_drive`,
+ * `add_shared_drive`) stay registered regardless, so flipping this needs no
+ * other code change. Against a feature-off server every surface degrades
+ * silently anyway (the backend maps the unmounted routes to
+ * `NotReady(SHARED_DRIVES_UNAVAILABLE)`, which the FE matches explicitly
+ * and hides).
+ *
+ * **The value differs by lane, and that is deliberate.** `beta` carries
+ * `true` so the feature keeps getting exercised against the live fleet
+ * (which runs `HCFS_FEATURE_SHARED_DRIVES=1`) and the console's
+ * `/invite/{token}` accept page. Production carries `false`: desktop
+ * invite links mint at the console, so shipping the surface before the
+ * console flag is on for everyone would offer a flow that dead-ends.
+ *
+ * Because the lanes disagree, every `beta` -> `main` promotion shows this
+ * line as a diff. Re-assert `false` on the promotion rather than taking
+ * beta's value — see `docs/release-checklist.md`. It cannot be pinned by
+ * `release_lane_pins.rs`, which runs on all three lanes.
+ */
+export const SHARED_DRIVES_ENABLED = false;
+
+/**
  * Referrals page. When `false`, referrals is fully invisible: the sidebar
  * entry is filtered out (`filterNavSections` in NavData.tsx) and a direct
  * `/referrals` navigation redirects to the overview (`FeatureDisabledRedirect`

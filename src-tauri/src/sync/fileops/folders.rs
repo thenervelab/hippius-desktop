@@ -10,11 +10,10 @@ use tracing::{error, info, warn};
 use crate::auth::account_key::account_key;
 use crate::auth::tokens::get_api_token;
 use crate::error::Result;
-use crate::sync::config::{ACCEPT_INVALID_CERTS, get_hcfs_config_internal, normalize_for_region_probe};
+use crate::sync::config::{get_hcfs_config_internal, normalize_for_region_probe};
 use crate::sync::lifecycle::start_sync_loop;
 use crate::sync::lifecycle::{initialize_sync_inner, remove_drive_for_account};
 use crate::sync::mnemonic::{config_dir_for_folder, folder_hash};
-use hcfs_client::client::HcfsClientConfig;
 use sqlx::sqlite::SqlitePool;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -30,6 +29,13 @@ pub struct SyncFolderInfo {
     pub file_count: Option<u64>,
     pub total_bytes: Option<u64>,
     pub last_modified: Option<i64>,
+    /// The drive OWNER's ss58 when this row is a MEMBER drive (shared with
+    /// this account), `None` for the account's own drives. The FE keys the
+    /// owner badge and the member-vs-own menu gating off this field — it is
+    /// the listing's only member/own discriminant, threaded in Rust because
+    /// the wire identity lives on the `sync_paths` row and must never be
+    /// inferred in TypeScript.
+    pub owner_ss58: Option<String>,
 }
 
 /// A remote-only folder (not synced locally) for the browser UI.
@@ -149,15 +155,11 @@ pub(crate) async fn list_remote_folders_internal(pool: &SqlitePool, account_id: 
         .await?
         .ok_or_else(|| crate::error::AppError::Other("No authentication token found".into()))?;
 
-    let client_config = HcfsClientConfig {
-        base_url: server_url,
-        bearer_token,
-        accept_invalid_certs: ACCEPT_INVALID_CERTS,
-        billing_bypass_token: None,
-        ss58_address: account_id.to_string(),
-        folder_hash: String::new(),
-        read_timeout_ms: None,
-    };
+    // Account-scoped listing under the caller's own identity (empty folder
+    // hash — the endpoint keys off the bearer token alone), so the identity
+    // is structurally own-drive and no resolver lookup applies.
+    let client_config =
+        crate::sync::config::build_hcfs_config(&server_url, &bearer_token, &crate::sync::identity::DriveIdentity::own(account_id, ""));
 
     let client = hcfs_client::client::HcfsClient::new(client_config).map_err(|e| crate::error::AppError::Hcfs(e.to_string()))?;
     let folders = client
@@ -197,15 +199,10 @@ pub async fn list_remote_folders(state: tauri::State<'_, crate::app_state::AppSt
         .await?
         .ok_or_else(|| crate::error::AppError::Other("No authentication token found. Please log in again.".into()))?;
 
-    let client_config = HcfsClientConfig {
-        base_url: server_url,
-        bearer_token,
-        accept_invalid_certs: ACCEPT_INVALID_CERTS,
-        billing_bypass_token: None,
-        ss58_address: account_id.clone(),
-        folder_hash: String::new(),
-        read_timeout_ms: None,
-    };
+    // Account-scoped listing under the caller's own identity — see
+    // list_remote_folders_internal.
+    let client_config =
+        crate::sync::config::build_hcfs_config(&server_url, &bearer_token, &crate::sync::identity::DriveIdentity::own(&account_id, ""));
 
     let client = hcfs_client::client::HcfsClient::new(client_config).map_err(|e| crate::error::AppError::Hcfs(e.to_string()))?;
 
@@ -411,15 +408,14 @@ pub async fn delete_remote_folder(
         remove_drive_for_account(app, label.clone(), Some(account_id.clone())).await?;
     }
 
-    let client_config = HcfsClientConfig {
-        base_url: server_url,
-        bearer_token,
-        accept_invalid_certs: ACCEPT_INVALID_CERTS,
-        billing_bypass_token: None,
-        ss58_address: account_id.clone(),
-        folder_hash: fhash.clone(),
-        read_timeout_ms: None,
-    };
+    // Deleting the caller's OWN remote folder — a member cannot unregister
+    // the owner's drive through this path, so the identity is structurally
+    // own-drive (label → hash derivation) rather than resolver-supplied.
+    let client_config = crate::sync::config::build_hcfs_config(
+        &server_url,
+        &bearer_token,
+        &crate::sync::identity::DriveIdentity::own(&account_id, &fhash),
+    );
 
     let client = hcfs_client::client::HcfsClient::new(client_config).map_err(|e| crate::error::AppError::Hcfs(e.to_string()))?;
 
@@ -495,6 +491,16 @@ pub async fn get_sync_folders_with_stats(state: tauri::State<'_, crate::app_stat
     // only this display join was; files are correctly separated by folder_hash.)
     let remote_by_hash: HashMap<String, &RemoteFolderInfoResult> = remote_folders.iter().map(|f| (f.folder_hash.clone(), f)).collect();
 
+    // Member drives (shared with this account) annotate their rows with the
+    // drive owner's ss58 — see `SyncFolderInfo::owner_ss58`. A failure here
+    // FAILS the whole listing: a transient DB error must never disarm the
+    // member-row protections. Degrading to an empty map renders a member row
+    // as an OWN row, re-arming "Delete from Server"/plain Remove — the exact
+    // controls the data-keyed menu gating exists to withhold. A failed
+    // listing is strictly safer than a wrong one, and the FE's polled
+    // listing self-heals on the next tick.
+    let member_owners = crate::sync::identity::member_owner_by_label(pool, &account_id).await?;
+
     // Build local folders with status and remote stats
     let mut local = Vec::with_capacity(sync_paths.len());
     for sp in &sync_paths {
@@ -521,6 +527,11 @@ pub async fn get_sync_folders_with_stats(state: tauri::State<'_, crate::app_stat
         // the post-login paused-drive reports.
         let status = if sp.is_paused { "paused" } else { "syncing" }.to_string();
 
+        // KNOWN GAP (shared drives v1): this join derives the hash from the
+        // LOCAL label, so a MEMBER drive (whose wire hash is the owner's)
+        // matches no remote row and shows blank stats — cosmetic only, and
+        // the remote listing is own-account-scoped at the pinned rev anyway,
+        // so a member-aware join has no server data to hit yet.
         let remote = remote_by_hash.get(&folder_hash(&sp.label));
 
         local.push(SyncFolderInfo {
@@ -534,6 +545,7 @@ pub async fn get_sync_folders_with_stats(state: tauri::State<'_, crate::app_stat
                 let ts = if r.updated_at != 0 { r.updated_at } else { r.created_at };
                 ts * 1000 // seconds → milliseconds
             }),
+            owner_ss58: member_owners.get(&sp.label).cloned(),
         });
     }
 
@@ -614,6 +626,45 @@ mod tests {
         // second drive ("tags-2") would have matched nothing.
         let by_label: HashMap<String, &RemoteFolderInfoResult> = remotes.iter().map(|f| (f.label.clone(), f)).collect();
         assert_eq!(by_label.len(), 1, "label keying collapses same-basename folders (the bug)");
+    }
+
+    /// FE wire pin: `SyncFolderInfo`'s camelCase keys, including `ownerSs58`
+    /// (the listing's only member/own discriminant — the owner badge and the
+    /// member-row menu gating in Task 6 key off it). A dropped or renamed key
+    /// ships as a silently-undefined FE field, so the key set is asserted
+    /// exactly; an own drive keeps `ownerSs58` present-but-null (a stable
+    /// shape, not a conditional key).
+    #[test]
+    fn sync_folder_info_wire_keys_are_pinned() {
+        let info = SyncFolderInfo {
+            id: "team-docs".to_string(),
+            folder_name: "team-docs".to_string(),
+            local_path: "/Users/me/team-docs".to_string(),
+            status: "syncing".to_string(),
+            file_count: None,
+            total_bytes: None,
+            last_modified: None,
+            owner_ss58: None,
+        };
+        let json = serde_json::to_value(&info).expect("serialize");
+        let keys: std::collections::BTreeSet<&str> = json.as_object().expect("object").keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            [
+                "id",
+                "folderName",
+                "localPath",
+                "status",
+                "fileCount",
+                "totalBytes",
+                "lastModified",
+                "ownerSs58"
+            ]
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>(),
+            "SyncFolderInfo wire keys must stay exactly these camelCase names"
+        );
+        assert_eq!(json["ownerSs58"], serde_json::Value::Null, "an own drive serializes ownerSs58 as null");
     }
 
     // ── sanitize_label ──────────────────────────────────────────────
@@ -770,5 +821,55 @@ mod tests {
             "delete_remote_folder must call remote_folder_absent after an unregister error so a durable-but-timed-out delete is reported as success, not a false failure",
         );
         assert!(unregister_idx < recheck_idx, "the idempotency re-check must follow the unregister call");
+    }
+
+    // ── member-owner join failure fails the listing ─────────────────
+    //
+    // `get_sync_folders_with_stats` takes `tauri::State`, so the DB failure
+    // cannot be driven hermetically from a test (no way to construct the
+    // command's state without a Tauri app). The propagation itself is
+    // enforced at the type level by `?`; this pin exists to keep a refactor
+    // from quietly reinstating the old `unwrap_or_else(|_| HashMap::default())`
+    // degrade, which rendered member rows as OWN rows on a transient DB
+    // error — re-arming "Delete from Server"/plain Remove, the exact
+    // controls the FE's data-keyed member gating withholds.
+    #[test]
+    fn member_owner_join_failure_propagates_instead_of_degrading() {
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/fileops/folders.rs")).expect("read folders.rs");
+        let sig_idx = src
+            .find("pub async fn get_sync_folders_with_stats(")
+            .expect("get_sync_folders_with_stats declaration present");
+        let body_start = src[sig_idx..].find('{').expect("fn body opens") + sig_idx;
+        let mut depth = 0usize;
+        let mut body_end = body_start;
+        for (i, ch) in src[body_start..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        body_end = body_start + i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let body = &src[body_start..=body_end];
+
+        let call_idx = body
+            .find("member_owner_by_label(")
+            .expect("get_sync_folders_with_stats must join member owners via member_owner_by_label");
+        let stmt_end = body[call_idx..].find(';').expect("the join call is a statement") + call_idx;
+        let stmt = &body[call_idx..stmt_end];
+
+        assert!(
+            stmt.trim_end().ends_with(".await?"),
+            "the member-owner join must propagate its error with `?` — a failed listing is strictly safer than one that shows member rows as own rows; got statement: {stmt}"
+        );
+        assert!(
+            !stmt.contains("unwrap_or") && !stmt.contains("ok()"),
+            "the member-owner join must not degrade a DB error to an empty map: {stmt}"
+        );
     }
 }

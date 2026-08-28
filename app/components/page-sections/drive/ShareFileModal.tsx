@@ -1,10 +1,12 @@
-// Modal that creates a public share link for a synced file.
+// Modal that creates a public share link for a synced file or folder.
 //
 // Lifecycle:
 //
-//   `running`  — `hcfs_create_share` IPC in flight. Progress bar +
-//                filename. The bar is indeterminate (a sweeping
-//                placeholder) until real progress is available.
+//   `running`  — mint IPC in flight. For a FILE: progress bar + filename
+//                (indeterminate sweep until real progress arrives). For a
+//                FOLDER: a plain spinner — the mint is one metadata POST
+//                with no encrypt/upload phases, so a bar would imply work
+//                that isn't happening.
 //   `done`     — link is ready. Read-only URL with an inline copy
 //                button, auto-copied to clipboard, Open / Close /
 //                Revoke actions.
@@ -16,6 +18,7 @@
 // update arrives. Before that — and for the single-shot path that reports
 // phase edges only — `progress` is undefined and the bar falls back to
 // the honest indeterminate sweep; we never fake a percentage.
+// `createFolderShare` has no progress channel at all.
 
 "use client";
 
@@ -27,7 +30,7 @@ import React, {
   useState,
 } from "react";
 import { useAtom } from "jotai";
-import { AlertCircle, Check } from "lucide-react";
+import { AlertCircle, Check, Loader2 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { toast } from "sonner";
 
@@ -46,8 +49,6 @@ import {
   confirmFinderShare,
   createFolderShare,
   createShare,
-  folderSharePreflight,
-  type FolderSharePreflight,
   revokeShare,
   type ShareChoice,
   type ShareLink,
@@ -57,7 +58,6 @@ import {
   generateSharePassword,
 } from "@/app/lib/tauri/shares";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
-import { formatBytes } from "@/app/lib/utils/formatBytes";
 
 type ModalState =
   // Both entry points start here: the user picks expiry and public-vs-password
@@ -135,11 +135,11 @@ export default function ShareFileModal() {
         setState((prev) =>
           prev.kind === "running" ? { kind: "running", progress } : prev,
         );
-      // A folder is packed into one zip and shared as that archive; the file
-      // command rejects a directory outright, so the two are not
-      // interchangeable.
+      // A folder mints a live browsable link (one metadata POST, no upload,
+      // no progress channel); the file command rejects a directory outright,
+      // so the two are not interchangeable.
       const link = target.file.isFolder
-        ? await createFolderShare(folderLabel, target.relativePath, choice, onProgress)
+        ? await createFolderShare(folderLabel, target.relativePath, choice)
         : await createShare(folderLabel, target.relativePath, choice, onProgress);
       setState({ kind: "done", link });
     } catch (err) {
@@ -220,31 +220,6 @@ export default function ShareFileModal() {
     lastChoiceRef.current = null;
   }, [sessionKey]);
 
-  // Measure a folder before the user commits to sharing it, so the chooser can
-  // show what will be packed and refuse an oversized folder up front rather
-  // than after a long walk. Files need no preflight — only a folder is zipped.
-  //
-  // A failure resolves to `null` rather than surfacing: the mint re-checks and
-  // returns the authoritative message, and a preflight that cannot stat should
-  // not block a share the backend would accept.
-  const [folderPreflight, setFolderPreflight] = useState<FolderSharePreflight | null>(null);
-
-  useEffect(() => {
-    setFolderPreflight(null);
-    if (!target?.file.isFolder || !folderLabel) return;
-
-    let cancelled = false;
-    void folderSharePreflight(folderLabel, target.relativePath)
-      .then((result) => {
-        if (!cancelled) setFolderPreflight(result);
-      })
-      .catch(() => undefined);
-
-    return () => {
-      cancelled = true;
-    };
-  }, [sessionKey, target, folderLabel]);
-
   // Auto-copy once we reach `done`. The URL is still rendered in a
   // selectable textbox so the user can re-copy if focus rules block
   // the auto-copy (Safari) or if they just want to verify the value.
@@ -306,19 +281,21 @@ export default function ShareFileModal() {
         <ChoosingBody
           filename={filename}
           isFolder={target?.file.isFolder ?? false}
-          folderPreflight={folderPreflight}
           onConfirm={onConfirmChoice}
           onCancel={close}
         />
       )}
 
-      {state.kind === "running" && (
-        <RunningBody
-          filename={filename}
-          progress={state.progress}
-          onCancel={close}
-        />
-      )}
+      {state.kind === "running" &&
+        (target?.file.isFolder ? (
+          <MintingBody filename={filename} onCancel={close} />
+        ) : (
+          <RunningBody
+            filename={filename}
+            progress={state.progress}
+            onCancel={close}
+          />
+        ))}
 
       {state.kind === "done" && (
         <DoneBody
@@ -370,14 +347,11 @@ const PASSWORD_MIN_LEN = 8;
 function ChoosingBody({
   filename,
   isFolder,
-  folderPreflight,
   onConfirm,
   onCancel,
 }: {
   filename: string;
   isFolder: boolean;
-  /** `null` while the measurement is in flight, or if it failed. */
-  folderPreflight: FolderSharePreflight | null;
   onConfirm: (choice: ShareChoice) => void;
   onCancel: () => void;
 }) {
@@ -404,10 +378,6 @@ function ChoosingBody({
 
   const passwordTooShort =
     visibility === "private" && password.length < PASSWORD_MIN_LEN;
-  // Only a measured over-limit folder blocks the button. While the preflight is
-  // in flight `folderPreflight` is null and sharing stays available: a slow stat
-  // must not hold up a small folder, and the backend re-checks on the mint.
-  const folderTooLarge = folderPreflight?.withinLimits === false;
 
   return (
     <div className="font-geist">
@@ -478,7 +448,7 @@ function ChoosingBody({
           {filename}
         </p>
 
-        {isFolder && <FolderShareNotice preflight={folderPreflight} />}
+        {isFolder && <FolderShareNotice />}
       </div>
 
       <div className="flex flex-col gap-3">
@@ -486,7 +456,7 @@ function ChoosingBody({
           type="button"
           variant="primary"
           size="auto"
-          disabled={passwordTooShort || folderTooLarge}
+          disabled={passwordTooShort}
           onClick={() =>
             onConfirm({
               ttl,
@@ -521,40 +491,57 @@ function ChoosingBody({
 }
 
 /**
- * What the user is agreeing to when they share a folder: the archive it becomes,
- * its measured size, and — when it is too big — why the button is disabled.
- *
- * The snapshot wording is the important part. A folder link is minted from the
- * folder's contents at this moment; later additions do not appear in it, and
- * nothing in the recipient's view would reveal that.
+ * What the user is agreeing to when they share a folder: a LIVE link. The
+ * wording is the important part — recipients browse the folder's current
+ * contents, so files added later ARE visible through the link (mirrors the
+ * console's notice; the sender must not believe the link is frozen).
  */
-function FolderShareNotice({ preflight }: { preflight: FolderSharePreflight | null }) {
-  if (preflight?.withinLimits === false) {
-    return (
-      <div className="mt-3 rounded-md border border-error-90 bg-error-100/40 px-3 py-2 dark:border-error-30/60 dark:bg-error-30/10">
-        <p className="text-xs font-medium text-error-70">
-          This folder is too large to share as a link
-        </p>
-        <p className="mt-1 text-xs text-grey-50 dark:text-grey-dark-600">
-          {/* "More than": the backend stops measuring once the cap is passed,
-              so these totals are a lower bound, not the folder's real size. */}
-          More than {formatBytes(preflight.totalBytes)} across{" "}
-          {preflight.fileCount.toLocaleString()} files. The limit is{" "}
-          {formatBytes(preflight.limitBytes)} and{" "}
-          {preflight.limitFiles.toLocaleString()} files — share a smaller folder,
-          or share files individually.
-        </p>
-      </div>
-    );
-  }
-
+function FolderShareNotice() {
   return (
     <p className="mt-3 text-xs text-grey-50 dark:text-grey-dark-600">
-      {preflight
-        ? `Packed as one .zip — ${formatBytes(preflight.totalBytes)} across ${preflight.fileCount.toLocaleString()} files. `
-        : "Packed as one .zip. "}
-      The link is a snapshot: files added to this folder later won&apos;t appear in it.
+      Recipients can browse the folder and download files; the link always
+      shows the current contents.
     </p>
+  );
+}
+
+/**
+ * Wait state for a folder mint: one metadata POST with no encrypt/upload
+ * phases (console `MintingBody` parity), so a plain spinner — a progress
+ * bar here would imply work that isn't happening.
+ */
+function MintingBody({
+  filename,
+  onCancel,
+}: {
+  filename: string;
+  onCancel: () => void;
+}) {
+  return (
+    <div className="font-geist">
+      <div className="mb-6 flex flex-col gap-3">
+        <div className="flex items-center gap-2 text-sm font-medium text-grey-20 dark:text-grey-dark-800">
+          <Loader2 className="size-4 animate-spin" />
+          <span>Creating share link…</span>
+        </div>
+        <p
+          className="break-all text-sm text-grey-20 dark:text-grey-dark-800"
+          title={filename}
+        >
+          {filename}
+        </p>
+      </div>
+
+      <Button
+        type="button"
+        variant="defaultStable"
+        size="auto"
+        onClick={onCancel}
+        className="h-[52px] w-full rounded-[6px] text-base font-normal tracking-[-0.36px]"
+      >
+        Cancel
+      </Button>
+    </div>
   );
 }
 

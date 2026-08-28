@@ -326,7 +326,14 @@ fn safe_join(root: &Path, parts: &[&str]) -> Option<PathBuf> {
 /// `list_remote_folders` keys off the base address, so this value is never read.
 fn build_recovery_client(state: &AppState, base_url: &str, bearer: &str, owner: &str) -> Result<hcfs_client::client::HcfsClient> {
     let _ = state; // reserved for a future shared-client cache; keeps the call-site shape stable
-    let config = build_hcfs_config(base_url, bearer, owner, &folder_hash("recovery-placeholder"));
+    // Structurally own-drive: the recovery principal reads the OWNER's own
+    // namespace under the owner's ss58; shared-drive membership never routes
+    // through this client, so no resolver lookup applies.
+    let config = build_hcfs_config(
+        base_url,
+        bearer,
+        &crate::sync::identity::DriveIdentity::own(owner, &folder_hash("recovery-placeholder")),
+    );
     hcfs_client::client::HcfsClient::new(config).map_err(|e| AppError::Hcfs(format!("Failed to create recovery HCFS client: {e}")))
 }
 

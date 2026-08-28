@@ -370,7 +370,9 @@ async fn materialize_with_on_disk(
 ///
 /// `pub` so the real-backend harness can drive the materialize mechanics
 /// (create + empty-only-remove + guard) in isolation. Production uses the
-/// combined [`run_folder_entity_sync_for_drive`] instead, which reconciles first.
+/// combined [`run_folder_entity_sync_for_drive`] instead, which reconciles
+/// first AND carries the member-drive gate — this standalone harness entry
+/// is deliberately not member-gated (its only caller drives own drives).
 pub async fn materialize_folder_entries_for_drive(state: &AppState, account_id: &str, label: &str) -> Result<MaterializeOutcome> {
     let pool = state.pool()?.clone();
     let owner = account_key(account_id);
@@ -395,6 +397,14 @@ pub enum FolderEntitySyncOutcome {
     NotReady,
     /// The single disk walk failed transiently. Retry next cycle.
     RetryLater,
+    /// The label names a MEMBER drive (shared-drives phase 2). Folder
+    /// entities are a v1 scope cut for member drives: the entities live
+    /// under the OWNER's namespace, so neither half runs. This gate is
+    /// load-bearing — the member backfill stamps
+    /// `folder_entries_backfilled_at` (see
+    /// `FolderEntriesBackfillOutcome::SkippedMemberDrive`), so the
+    /// `NotBackfilledYet` gate above it does NOT defend member drives.
+    SkippedMemberDrive,
     /// Both halves ran. Carries each half's outcome for logging / assertions.
     Ran {
         reconcile: ReconcileOutcome,
@@ -422,6 +432,20 @@ pub async fn run_folder_entity_sync_for_drive(state: &AppState, account_id: &str
         DriveRoot::NotReady => return Ok(FolderEntitySyncOutcome::NotReady),
         DriveRoot::Ready(r) => r,
     };
+
+    // Member gate (after the root resolve so a vanished row still reads as
+    // NotReady, matching the pre-shared-drives behavior). Both halves build
+    // own-identity clients and write the folder-entity namespace, which for a
+    // member drive is the OWNER's — a v1 scope cut, so neither may run. See
+    // `FolderEntitySyncOutcome::SkippedMemberDrive` for why the backfill
+    // flag cannot stand in for this check.
+    match crate::sync::identity::lookup_drive_identity(&pool, account_id, label).await? {
+        Some(identity) if identity.is_member => return Ok(FolderEntitySyncOutcome::SkippedMemberDrive),
+        Some(_) => {}
+        // The row vanished between the root resolve and here (remove_drive /
+        // logout race) — the same transient NotReady the root resolve reports.
+        None => return Ok(FolderEntitySyncOutcome::NotReady),
+    }
 
     // The single per-cycle walk, shared by both halves.
     let Some(on_disk) = walk_on_disk_dir_set(root.clone(), label).await else {
@@ -506,6 +530,9 @@ pub(crate) fn spawn_folder_entity_sync(app: tauri::AppHandle, account_id: String
                     }
                 }
                 Ok(FolderEntitySyncOutcome::NotBackfilledYet) => debug!(label = %label, "folder-entity sync: backfill not done yet; deferring"),
+                Ok(FolderEntitySyncOutcome::SkippedMemberDrive) => {
+                    debug!(label = %label, "folder-entity sync: member drive; folder entities stay owner-side");
+                }
                 Ok(FolderEntitySyncOutcome::NotReady) => {
                     debug!(label = %label, "folder-entity sync: drive not ready; will retry next eligible cycle");
                 }
@@ -892,6 +919,33 @@ mod tests {
                 .expect("standalone not-ready must not error"),
             MaterializeOutcome::NotReady
         );
+    }
+
+    /// Member gate: a member row skips BOTH halves even though its backfill
+    /// flag is stamped (the member backfill stamps it — see
+    /// `FolderEntriesBackfillOutcome::SkippedMemberDrive`), which is exactly
+    /// why `NotBackfilledYet` cannot stand in for this check. Hermetic: the
+    /// gate fires before the walk and before any client build.
+    #[tokio::test]
+    async fn combined_sync_skips_member_drives() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        // A subdir that WOULD feed the reconcile delta if the gate failed open.
+        std::fs::create_dir(tmp.path().join("owner-made")).expect("mk subdir");
+        let pool = temp_pool().await;
+        insert_sync_path_for_account(&pool, TEST_ACCOUNT, "team", tmp.path().to_str().unwrap(), Some(1)).await;
+        sqlx::query("UPDATE sync_paths SET owner_ss58 = ?, wire_folder_hash = ? WHERE owner = ? AND label = 'team'")
+            .bind("5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty")
+            .bind("0123456789abcdef")
+            .bind(account_key(TEST_ACCOUNT))
+            .execute(&pool)
+            .await
+            .expect("paint member columns");
+        let state = make_state(pool.clone());
+
+        let outcome = run_folder_entity_sync_for_drive(&state, TEST_ACCOUNT, "team")
+            .await
+            .expect("member gate must not error");
+        assert_eq!(outcome, FolderEntitySyncOutcome::SkippedMemberDrive);
     }
 
     /// Standalone wrapper gate parity: NULL flag → `NotBackfilledYet`.

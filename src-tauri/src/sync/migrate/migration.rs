@@ -796,6 +796,9 @@ pub async fn start_server_migration(
     // success paths call `.commit()` to keep it set.
     let in_progress_guard = MigrationInProgressGuard::engage(&state.migration.in_progress);
 
+    // Label-derived by construction: the migration target is always an OWN
+    // drive minted by this flow (`derive_migration_label`); member drives are
+    // never migration targets, so no identity resolve applies here.
     let folder_hash = hcfs_client::drive::keys::folder_hash(&label);
     let pool = state.pool()?;
 

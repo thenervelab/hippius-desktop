@@ -6,28 +6,27 @@ import type { ShareModalTarget } from "@/app/lib/global-atoms/sharesAtoms";
  * Shared by the files-table menu, card view, and the right-click context menu
  * so the three surfaces can't drift. Mirrors `canRenameFile`.
  *
- * A folder share zips the folder from disk, so it needs the entry to actually
- * be on this device and at rest:
+ * A folder share is a live browsable link minted from the SERVER's state (one
+ * metadata POST — nothing is packed from disk), so local settlement no longer
+ * matters: a cloud-only or still-syncing folder is just as mintable. The only
+ * FE gate left is the server capability — `/v1/folder-shares` exists only on
+ * new servers, so the item disables (with {@link FOLDER_SHARE_DISABLED_TOOLTIP})
+ * until `capabilities.folder_shares` is confirmed.
  *
- * - `!isAssigned`: still mid-upload, no settled server identity.
- * - `fileId && !source`: a cloud-only row (search / recent-uploads hit with no
- *   local path) — nothing on disk to pack.
- * - explicit non-"synced" status: pending download or upload. `undefined`
- *   status (plain local listings that never set one) stays shareable.
- *
- * Rust re-checks all of this and additionally verifies every child is present;
- * this gate is for the menu's disabled state, not for security.
+ * Member drives stay owner-mint-only (server v1); the drive listing rows never
+ * reach these file surfaces with an owner marker, so that refusal lives in
+ * Rust (`hcfs_create_folder_share` rejects with a message the modal shows).
  */
-export function canShareFolder(file: FormattedUserFile): boolean {
+export function canShareFolder(
+  file: FormattedUserFile,
+  folderSharesEnabled: boolean,
+): boolean {
   if (!file.isFolder) return false;
-  if (!file.isAssigned) return false;
-  if (file.fileId && !file.source) return false;
-  if (file.syncStatus !== undefined && file.syncStatus !== "synced") return false;
-  return true;
+  return folderSharesEnabled;
 }
 
 export const FOLDER_SHARE_DISABLED_TOOLTIP =
-  "Only folders fully synced on this device can be shared as a link. Wait for sync to finish and try again.";
+  "The connected server doesn't support folder links yet. Update the server to share folders as a link.";
 
 /**
  * Resolve a folder row's drive-relative path for the share IPC.
@@ -42,7 +41,7 @@ export const FOLDER_SHARE_DISABLED_TOOLTIP =
  * value for folder keys.
  */
 export function folderShareRelativePath(
-  file: FormattedUserFile,
+  file: Pick<FormattedUserFile, "name" | "actualFileName" | "parentRelativePath">,
   basePath: string | null | undefined,
 ): string {
   const trim = (value: string) => value.replace(/^\/+|\/+$/g, "");
@@ -83,4 +82,37 @@ export function shareTargetFor(
       ? folderShareRelativePath(file, basePath)
       : file.actualFileName || file.name,
   };
+}
+
+// Label → server folder hash, memoized: the value is a pure function of the
+// label and every folder row in a listing asks for the same drive's hash.
+const folderHashCache = new Map<string, string>();
+
+/**
+ * The server-side folder hash of an OWN drive: the first 16 hex chars of
+ * SHA-256 over the label — pinned byte-for-byte to
+ * `hcfs_client::drive::keys::folder_hash`, which the Rust mint path uses.
+ *
+ * This is the drive half of a folder share's `(folderHash, pathPrefix)`
+ * identity: the mint sends the hash the drive-scoped client computed from the
+ * same label, so a badge that derives it here finds exactly the rows that
+ * mint created. Member drives carry the OWNER's hash instead, but they can
+ * never mint a folder share (owner-mint-only v1), so a member label hashing
+ * to a different value simply never matches a listing row — which is correct.
+ */
+export async function driveFolderHash(label: string): Promise<string> {
+  const cached = folderHashCache.get(label);
+  if (cached !== undefined) return cached;
+
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(label),
+  );
+  const hex = Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+  const hash = hex.slice(0, 16);
+
+  folderHashCache.set(label, hash);
+  return hash;
 }

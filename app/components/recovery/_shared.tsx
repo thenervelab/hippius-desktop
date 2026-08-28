@@ -4,6 +4,10 @@ import React, { useEffect, useState } from "react";
 
 import { Input, Icons } from "@/components/ui";
 import {
+  inputFieldControlClassName,
+  inputFieldShellClassName,
+} from "@/components/ui/input";
+import {
   PassphraseStrength,
   validateRecoveryPassword,
 } from "@/app/lib/utils/recovery";
@@ -15,9 +19,10 @@ export const UNLOCK_PASSWORD_DOCS_URL =
 
 /**
  * Shared recovery-dialog UI primitives. Used across the
- * `AccountRecoveryDialog.tsx` branches (signup / unlock) so every
- * recovery form stays visually and behaviourally identical — same
- * password fields, strength meters, and debounce.
+ * `AccountRecoveryDialog.tsx` branches (signup / unlock) and
+ * `ChangeRecoveryPasswordDialog` so every recovery form stays visually
+ * and behaviourally identical — same password fields, mnemonic field,
+ * strength meters, and debounce.
  */
 
 export const PasswordField: React.FC<{
@@ -40,6 +45,7 @@ export const PasswordField: React.FC<{
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder={placeholder}
+          aria-invalid={Boolean(errorMessage)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && onSubmit) {
               e.preventDefault();
@@ -68,6 +74,58 @@ export const PasswordField: React.FC<{
         </button>
       </div>
       {errorMessage && <span className="text-xs text-error-60">{errorMessage}</span>}
+    </label>
+  );
+};
+
+/**
+ * Multi-line mnemonic entry using the same Input shell as PasswordField
+ * and the rest of the app's dialog fields (`rounded-[8px]`, dark
+ * `#494949` / `#1f1f1f`, focus ring). Keep the 4px halo — recovery
+ * dialogs sit PasswordField next to this, so stripping it here would
+ * make the seed box look like a different control.
+ */
+export const MnemonicField: React.FC<{
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  errorMessage?: string;
+  placeholder?: string;
+  disabled?: boolean;
+}> = ({ label, value, onChange, errorMessage, placeholder, disabled }) => {
+  const isInvalid = Boolean(errorMessage);
+
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-xs text-grey-40 dark:text-grey-dark-600">{label}</span>
+      <div
+        className={cn(
+          inputFieldShellClassName,
+          "min-h-[91px] items-start",
+          disabled && "cursor-not-allowed opacity-60",
+          isInvalid &&
+            "border-error-70 shadow-[0px_0px_0px_4px_rgba(235,87,87,0.12)]",
+        )}
+      >
+        <textarea
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+          rows={3}
+          disabled={disabled}
+          aria-invalid={isInvalid}
+          autoComplete="off"
+          autoCapitalize="off"
+          spellCheck={false}
+          className={cn(
+            inputFieldControlClassName,
+            "min-h-[59px] resize-none",
+          )}
+        />
+      </div>
+      {errorMessage && (
+        <span className="text-xs text-error-60">{errorMessage}</span>
+      )}
     </label>
   );
 };

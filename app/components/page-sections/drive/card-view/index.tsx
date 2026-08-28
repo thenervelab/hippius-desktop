@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { MoreVertical, Download, FolderOpen, Link2, Pencil } from "lucide-react";
 import { useAtomValue } from "jotai";
 import {
+  folderShareFeatureEnabledAtom,
   shareFeatureEnabledAtom,
   shareModalFileAtom,
 } from "@/app/lib/global-atoms/sharesAtoms";
@@ -100,6 +101,7 @@ const CardView: FC<CardViewProps> = ({
   // advertises `shares: true`. Atom populated once per session by
   // `useServerCapabilities` (mounted in SyncEventLogger).
   const shareEnabled = useAtomValue(shareFeatureEnabledAtom);
+  const folderSharesEnabled = useAtomValue(folderShareFeatureEnabledAtom);
   const setShareModalFile = useSetAtom(shareModalFileAtom);
   const setRenameModalFile = useSetAtom(renameModalFileAtom);
   const { getParam } = useUrlParams();
@@ -345,9 +347,9 @@ const CardView: FC<CardViewProps> = ({
                             : []),
                           // Share via link — same gating as the right-click
                           // context menu and the table-view 3-dots menu: a file
-                          // must be fully uploaded, a folder must be fully
-                          // present locally (it is zipped from disk) and shows
-                          // disabled with a tooltip when it isn't.
+                          // must be fully uploaded, a folder mints a live
+                          // browsable link and shows disabled with a tooltip
+                          // until the `folder_shares` capability is confirmed.
                           ...((file.isFolder ||
                             file.syncStatus === "synced") &&
                           shareEnabled
@@ -356,9 +358,11 @@ const CardView: FC<CardViewProps> = ({
                                   icon: <Link2 className="size-4" />,
                                   itemTitle: "Share via link",
                                   disabled:
-                                    file.isFolder && !canShareFolder(file),
+                                    file.isFolder &&
+                                    !canShareFolder(file, folderSharesEnabled),
                                   tooltip:
-                                    file.isFolder && !canShareFolder(file)
+                                    file.isFolder &&
+                                    !canShareFolder(file, folderSharesEnabled)
                                       ? FOLDER_SHARE_DISABLED_TOOLTIP
                                       : undefined,
                                   onItemClick: (e?: React.MouseEvent) => {
@@ -366,7 +370,10 @@ const CardView: FC<CardViewProps> = ({
                                       e.preventDefault();
                                       e.stopPropagation();
                                     }
-                                    if (file.isFolder && !canShareFolder(file)) {
+                                    if (
+                                      file.isFolder &&
+                                      !canShareFolder(file, folderSharesEnabled)
+                                    ) {
                                       return;
                                     }
                                     setOpenMenuIndex(null);

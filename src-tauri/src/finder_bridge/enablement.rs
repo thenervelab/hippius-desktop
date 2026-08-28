@@ -1,29 +1,166 @@
 //! Whether the macOS Finder Sync extension is switched on — and the UI to switch it on.
 //!
-//! macOS ships every third-party Finder extension **registered but off**:
-//! installing Hippius puts `HippiusFinder.appex` in the system's extension list,
-//! but until the user enables it Finder never loads the extension, so the
-//! "Share with Hippius" right-click item does not exist *at all* — not even the
-//! "Open Hippius to share" fallback [`super::super`]'s Swift `menu(for:)` always
-//! returns. Developer machines hide this: `macos/dev-finder.sh` runs
-//! `pluginkit -e use`, an election keyed by BUNDLE IDENTIFIER that survives
-//! replacing the app with a released build, so every dev Mac has had it on since
-//! the first `pnpm finder:dev`. That is why the gap only ever surfaced on a
-//! fresh install (report of 2026-08-15).
+//! A third-party Finder extension is not usable on a fresh install, and there
+//! are TWO distinct reasons — the second was missed for months because the first
+//! is the documented one:
 //!
-//! Both operations go through Apple's own host-app API on `FIFinderSyncController`
-//! (`isExtensionEnabled` / `showExtensionManagementInterface`, macOS 10.14+,
-//! present and undeprecated in the macOS 26 SDK). Deliberately NOT by shelling
-//! out to `pluginkit(8)` — a documented *debugging* tool whose line format we
-//! would have to parse — and not by opening a hardcoded
-//! `x-apple.systempreferences:` pane URL, which has moved between macOS releases
-//! (Extensions → Privacy & Security → Login Items & Extensions). Apple's method
-//! opens whatever the running OS calls that pane.
+//! 1. **Registered but off.** macOS lists `HippiusFinder.appex` in the system's
+//!    extension list and leaves the switch off. Until the user flips it, Finder
+//!    never loads the extension, so the "Share with Hippius" right-click item
+//!    does not exist *at all* — not even the "Open Hippius to share" fallback
+//!    [`super::super`]'s Swift `menu(for:)` always returns (report of
+//!    2026-08-15).
+//! 2. **Never registered.** The system does not always pick the extension up
+//!    from `Contents/PlugIns` in the first place. On a colleague's Mac in
+//!    August 2026 the appex was present in `/Applications/Hippius.app` while
+//!    `pluginkit -mAvvv -p com.apple.FinderSync` answered `(no matches)`. In
+//!    that state the extension is in NO pane, so "go to Settings and enable it"
+//!    is advice that cannot be followed — which is exactly how it was reported:
+//!    "the button takes me to the wrong place and I don't see it in the list".
+//!
+//! Developer machines hide both: `macos/dev-finder.sh` runs `pluginkit -a`
+//! (register) and `pluginkit -e use` (elect), and the election is keyed by
+//! BUNDLE IDENTIFIER, so it survives replacing the app with a released build.
+//! Every dev Mac has had this working since its first `pnpm finder:dev`.
+//!
+//! **Reading state** goes through Apple's own host-app API on
+//! `FIFinderSyncController` (`isExtensionEnabled` /
+//! `showExtensionManagementInterface`, macOS 10.14+, present and undeprecated in
+//! the macOS 26 SDK) — never by parsing `pluginkit(8)`'s line format, and never
+//! by opening a hardcoded `x-apple.systempreferences:` pane URL, which has moved
+//! between macOS releases (Extensions → Privacy & Security → Login Items &
+//! Extensions). Apple's method opens whatever the running OS calls that pane.
+//!
+//! **Changing state** has no such API — `FIFinderSyncController` can show the
+//! pane but not flip the switch — so [`enable_finder_extension`] shells out to
+//! `pluginkit`, the only thing that works, and the only thing that addresses
+//! case 2 at all. That call is contained deliberately: its output is never
+//! parsed, its failure is never fatal, and the caller falls back to opening the
+//! pane. See that function's docs for why the trade is acceptable.
+
+#[cfg(target_os = "macos")]
+use std::ffi::OsStr;
+#[cfg(target_os = "macos")]
+use std::time::Duration;
 
 use serde::Serialize;
 use tauri::AppHandle;
 
 use crate::error::{AppError, Result};
+
+/// Where an app bundle keeps its app extensions.
+const PLUGINS_SUBDIR: &str = "Contents/PlugIns";
+/// Filename extension of a macOS app-extension bundle.
+const APPEX_EXTENSION: &str = "appex";
+
+/// Bundle identifier of the embedded Finder Sync extension.
+///
+/// `pluginkit`'s enable verb is keyed by identifier, not by path. Must stay
+/// equal to `PRODUCT_BUNDLE_IDENTIFIER` in `macos/HippiusFinder/project.yml`;
+/// pinned by `bundle_id_matches_the_extension_project`, which is compiled on
+/// every platform so the drift guard runs in every CI lane.
+#[cfg_attr(
+    not(target_os = "macos"),
+    allow(dead_code, reason = "only the macOS enable path uses it; kept compiled so its drift pin runs everywhere")
+)]
+const FINDER_EXTENSION_BUNDLE_ID: &str = "hippius.com.FinderSync";
+
+/// Absolute path to `pluginkit`, rather than a bare name resolved through
+/// `PATH` — this is a fixed OS utility and the lookup should not be
+/// environment-dependent.
+#[cfg(target_os = "macos")]
+const PLUGINKIT_BIN: &str = "/usr/bin/pluginkit";
+
+/// Absolute path to `lsregister`, which is NOT on `PATH` at all — it lives
+/// inside the LaunchServices framework and has for every macOS release that
+/// matters here.
+#[cfg(target_os = "macos")]
+const LSREGISTER_BIN: &str = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
+
+/// How long any one registration helper may run before it is abandoned.
+#[cfg(target_os = "macos")]
+const TOOL_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Whether this build can host a Finder extension at all — the precondition
+/// that makes [`macos::is_extension_enabled`]'s answer mean anything.
+///
+/// `+[FIFinderSyncController isExtensionEnabled]` reports on *the calling app's
+/// own* extension. A process that embeds none — `pnpm tauri:dev`'s raw binary,
+/// `cargo test`'s test binary, any bundle built without the Finder embed step —
+/// therefore gets `false` unconditionally, and that `false` means "there is no
+/// extension here", NOT "the user switched it off". Reading it as the latter is
+/// what made the nudge fire forever on dev builds while the INSTALLED app's
+/// extension was enabled and `pluginkit` showed `+` (report of 2026-08-24).
+/// The file's own `is_extension_enabled_is_callable` test always documented
+/// this ("the test binary is not an app bundle … always gets `false`"); only
+/// the runtime path never accounted for it.
+///
+/// Split from the I/O so the path rule is unit-testable on every platform
+/// (`path_is_translocated`'s convention), and compiled everywhere for the same
+/// reason — only the macOS branch of [`finder_extension_state`] calls it.
+#[cfg_attr(
+    not(target_os = "macos"),
+    allow(dead_code, reason = "only the macOS branch consults it; kept compiled so its tests run in every CI lane")
+)]
+mod hosting {
+    use super::{APPEX_EXTENSION, PLUGINS_SUBDIR};
+    use std::ffi::OsStr;
+    use std::path::{Path, PathBuf};
+
+    /// The `.app` bundle containing `exe`, if it is inside one.
+    ///
+    /// Returns the OUTERMOST match: an app extension is itself a bundle, so an
+    /// executable inside `Hippius.app/Contents/PlugIns/HippiusFinder.appex` has
+    /// two bundle ancestors, and the host app is the one that owns the
+    /// extension list. Pure path logic — nothing is read from disk.
+    pub fn app_bundle_root(exe: &Path) -> Option<&Path> {
+        let app = OsStr::new("app");
+        // `Ancestors` walks inside-out and is not double-ended, so the LAST
+        // match is the outermost bundle.
+        exe.ancestors().filter(|dir| dir.extension() == Some(app)).last()
+    }
+
+    /// The app extension embedded in `bundle_root`, if any.
+    ///
+    /// Any `.appex` counts rather than specifically a FinderSync one: the app
+    /// ships exactly one extension, and parsing each candidate's Info.plist for
+    /// `NSExtensionPointIdentifier` would buy nothing here. A missing or
+    /// unreadable `PlugIns` directory is simply "no extension".
+    ///
+    /// `read_dir` order is unspecified, so with several extensions this picks an
+    /// arbitrary one. That is fine while the app ships exactly one, and the
+    /// registration path below names the bundle identifier explicitly rather
+    /// than trusting whichever bundle came back.
+    pub fn embedded_appex(bundle_root: &Path) -> Option<PathBuf> {
+        let plugins: PathBuf = bundle_root.join(PLUGINS_SUBDIR);
+        let appex = OsStr::new(APPEX_EXTENSION);
+        let entries = std::fs::read_dir(plugins).ok()?;
+        entries.flatten().map(|entry| entry.path()).find(|path| path.extension() == Some(appex))
+    }
+
+    /// The running build's `.app` bundle and the extension inside it.
+    ///
+    /// Both or neither: registration needs the bundle (for LaunchServices) and
+    /// the appex (for PlugInKit), and there is no useful state where one is
+    /// known without the other. An unresolvable executable path answers `None`,
+    /// which routes callers to `Unsupported` — staying silent on unverifiable
+    /// state is this module's standing rule.
+    pub fn current_build_bundle_and_appex() -> Option<(PathBuf, PathBuf)> {
+        let Ok(exe) = std::env::current_exe() else {
+            tracing::warn!("could not resolve current executable path; treating the Finder extension state as unknown");
+            return None;
+        };
+        let root = app_bundle_root(&exe)?.to_path_buf();
+        let appex = embedded_appex(&root)?;
+
+        Some((root, appex))
+    }
+
+    /// Resolve the running executable and apply both rules.
+    pub fn current_build_hosts_finder_extension() -> bool {
+        current_build_bundle_and_appex().is_some()
+    }
+}
 
 /// Whether the user has enabled the Finder extension.
 ///
@@ -51,6 +188,30 @@ pub enum FinderExtensionState {
 pub async fn finder_extension_state(app: AppHandle) -> FinderExtensionState {
     #[cfg(target_os = "macos")]
     {
+        // A translocated launch — Hippius opened straight from the mounted DMG,
+        // which is what a first-time user does — is the one case where
+        // `Disabled` is both accurate and useless. macOS never registers an
+        // extension from the randomized read-only `…/AppTranslocation/<UUID>/d/`
+        // path, so it is in NO pane, and [`enable_finder_extension`] refuses to
+        // register it (electing an ephemeral copy by bundle id can strand the
+        // real install as `Disabled` for good). Without this gate the nudge fires
+        // on every window focus, its Enable button cannot succeed, and the
+        // Settings pane it falls back to cannot list us — on top of the
+        // permanent notice `TranslocationGuard` is already showing. Moving the
+        // app is the only thing that helps, and that guard owns saying so.
+        if crate::utils::app_location::is_app_translocated() {
+            tracing::debug!("app is translocated, so its Finder extension is unregistrable; reporting the state as unsupported");
+            return FinderExtensionState::Unsupported;
+        }
+
+        // Ask only when the answer can carry meaning. Without this, every build
+        // that embeds no extension reports `Disabled` and nags about a switch
+        // that would not help — see `hosting`.
+        if !hosting::current_build_hosts_finder_extension() {
+            tracing::debug!("this build embeds no Finder extension; reporting the enablement state as unsupported");
+            return FinderExtensionState::Unsupported;
+        }
+
         let state = match on_main_thread(&app, macos::is_extension_enabled).await {
             Some(true) => FinderExtensionState::Enabled,
             Some(false) => FinderExtensionState::Disabled,
@@ -92,6 +253,219 @@ pub async fn open_finder_extension_settings(app: AppHandle) -> Result<()> {
         // Matches `hcfs_finder_confirm_share`'s platform refusal: a typed
         // Validation rather than the catch-all Other.
         Err(AppError::Validation("Finder extensions are only available on macOS.".into()))
+    }
+}
+
+/// Register the embedded extension with the system, switch it on, and report
+/// what the system says afterwards.
+///
+/// Backs the nudge's primary button. The nudge previously only opened the
+/// Extensions pane, which assumes the extension is already IN that pane —
+/// macOS's documented behaviour is that installing an app registers its
+/// extension switched off. On a fresh install that assumption can fail
+/// outright: a colleague's Mac in August 2026 had `HippiusFinder.appex` present
+/// in `/Applications/Hippius.app/Contents/PlugIns/` and
+/// `pluginkit -mAvvv -p com.apple.FinderSync` reporting `(no matches)` — the
+/// system had never registered it, so no pane on that machine could ever list
+/// Hippius and no amount of better wording would have helped.
+///
+/// So this runs the two verbs `macos/dev-finder.sh` has always run, which is
+/// precisely why developer Macs never saw the bug:
+///
+/// 1. `pluginkit -a <appex>` — REGISTER. The load-bearing half. Without a
+///    registration there is nothing to enable and nothing to display.
+/// 2. `pluginkit -e use -i <bundle id>` — ELECT. Keyed by bundle identifier,
+///    which is why a developer's election survives replacing the app.
+///
+/// `pluginkit(8)` is a *debugging* tool and Apple's DTS position is that it
+/// should not be architected around, so two rules keep the dependency honest:
+/// its OUTPUT is never parsed (the answer still comes from Apple's
+/// `FIFinderSyncController`, as [`finder_extension_state`]), and a failure here
+/// is not fatal — the caller falls back to
+/// [`open_finder_extension_settings`], i.e. exactly today's behaviour. When
+/// Apple removes the verb, the feature degrades rather than breaks.
+///
+/// Shelling out is only viable because the app is NOT sandboxed
+/// (`entitlements.plist` sets `com.apple.security.app-sandbox` to false);
+/// DTS notes the call does not work from inside a sandbox.
+#[tauri::command]
+pub async fn enable_finder_extension(app: AppHandle) -> Result<FinderExtensionState> {
+    #[cfg(target_os = "macos")]
+    {
+        // A translocated app runs from a randomized, read-only
+        // `…/AppTranslocation/<UUID>/d/` path that is gone by the next launch.
+        // Registering THAT path would be actively harmful: `-e use` elects by
+        // bundle identifier, and `isExtensionEnabled` reports on the elected
+        // instance (see the module's "two registered copies" note), so electing
+        // an ephemeral copy can leave the real `/Applications` one reporting
+        // `Disabled` indefinitely — making the reported bug worse, for exactly
+        // the fresh-from-DMG users the nudge exists to help. `TranslocationGuard`
+        // already tells them to move the app; there is nothing useful to do here
+        // until they have.
+        if crate::utils::app_location::is_app_translocated() {
+            tracing::warn!("refusing to register the Finder extension from a translocated app bundle");
+            return Err(AppError::Validation(
+                "Move Hippius to your Applications folder first, then try again — macOS is running it from a temporary location.".into(),
+            ));
+        }
+
+        // Same gate as `finder_extension_state`: a build with no embedded
+        // extension has nothing to register, and saying so is more useful than
+        // running a command that cannot succeed.
+        let Some((bundle, appex)) = hosting::current_build_bundle_and_appex() else {
+            return Err(AppError::Validation(
+                "This build of Hippius does not include the Finder extension.".into(),
+            ));
+        };
+
+        let registered = register_with_the_system(&bundle, &appex).await;
+
+        // ELECTION is separate from registration, and only happens here — behind
+        // the user's own button. Registration makes the extension appear in the
+        // pane; election switches it ON, which is the user's decision. The
+        // launch-time path deliberately performs only the first half, or a user
+        // who turned the extension off would find it back on every launch.
+        let elected = run_pluginkit(&[
+            OsStr::new("-e"),
+            OsStr::new("use"),
+            OsStr::new("-i"),
+            OsStr::new(FINDER_EXTENSION_BUNDLE_ID),
+        ])
+        .await;
+
+        // Ask the system, rather than trusting either exit status: `-e use` can
+        // report success while the elected instance is a different copy of the
+        // app (see the module docs on system election).
+        let state = finder_extension_state(app).await;
+        tracing::info!(registered, elected, ?state, "attempted to enable the Finder extension");
+        Ok(state)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        Err(AppError::Validation("Finder extensions are only available on macOS.".into()))
+    }
+}
+
+/// Make the system aware the extension exists, without switching it on.
+///
+/// **Two stages, and the first was missing.** macOS discovers app extensions in
+/// order: `lsd` builds a LaunchServices bundle record for the containing app,
+/// and THAT record seeds PlugInKit, which then finds the `.appex` inside. Both
+/// `pluginkit` verbs act on the appex database, which is downstream of the seed
+/// — so when the seed never happened they have nothing to work from.
+///
+/// That is not hypothetical. A colleague's Mac ran a correctly-installed
+/// `/Applications/Hippius.app` for six days with the appex on disk and
+/// `pluginkit -mAvvv -p com.apple.FinderSync` answering `(no matches)` — a
+/// system-wide query, so nothing was registered at all, which is upstream of any
+/// System Settings behaviour. It began working 69 seconds after a macOS upgrade,
+/// whose unified log shows `lsd` building the bundle record and `pkd` discovering
+/// the plugin immediately after. The app bundle was never modified. Any macOS
+/// version can land in this state; the LaunchServices layer has been reported
+/// unreliable since 2017, and nothing user-facing can force re-discovery.
+///
+/// `lsregister -f` forces that first stage on demand. Note the flag is `-f`
+/// alone: `-R` means "recurse into packages", which for a single `.app` descends
+/// INTO the bundle rather than registering it.
+///
+/// **That `lsregister` re-seeds PlugInKit is inferred, not proven.** The evidence
+/// shows an OS-driven bundle-record rebuild being followed by discovery, not that
+/// a manual invocation produces the same. It is cheap, idempotent and contained,
+/// so it is worth running first — but every caller must still handle it not
+/// working, which is why this reports a bool nobody is required to act on.
+///
+/// Contained exactly as `run_pluginkit` is: output never parsed, failure never
+/// fatal.
+#[cfg(target_os = "macos")]
+async fn register_with_the_system(bundle: &std::path::Path, appex: &std::path::Path) -> bool {
+    let seeded = run_tool(LSREGISTER_BIN, &[OsStr::new("-f"), bundle.as_os_str()]).await;
+    let discovered = run_pluginkit(&[OsStr::new("-a"), appex.as_os_str()]).await;
+
+    tracing::debug!(seeded, discovered, "registered the Finder extension with the system");
+    seeded || discovered
+}
+
+/// Register the extension at launch, without electing it.
+///
+/// Registration is meant to happen when the containing app first launches. On the
+/// machine described in [`register_with_the_system`] it did not, and nothing
+/// retried for six days — the nudge's button was the only retry, and it only
+/// appears once the user has already noticed something missing.
+///
+/// Runs only when the state is `Disabled`, which covers both "switched off" and
+/// "never registered" — the two are indistinguishable through Apple's API, and
+/// re-registering something already registered is a no-op. `Enabled` and
+/// `Unsupported` do nothing at all.
+///
+/// Deliberately does NOT elect. See the comment in [`enable_finder_extension`].
+#[cfg(target_os = "macos")]
+pub async fn register_finder_extension_at_launch(app: AppHandle) {
+    // Same refusal as the enable path: registering a randomized
+    // `…/AppTranslocation/<UUID>/d/` path writes a soon-to-vanish bundle into
+    // the LaunchServices database, which is worse than doing nothing.
+    if crate::utils::app_location::is_app_translocated() {
+        tracing::debug!("skipping Finder extension registration: the app is translocated");
+        return;
+    }
+
+    if finder_extension_state(app).await != FinderExtensionState::Disabled {
+        return;
+    }
+
+    let Some((bundle, appex)) = hosting::current_build_bundle_and_appex() else {
+        return;
+    };
+
+    let registered = register_with_the_system(&bundle, &appex).await;
+    tracing::info!(registered, "registered the Finder extension at launch; it still needs enabling");
+}
+
+/// Run `pluginkit` with `args`, reporting only whether it succeeded.
+///
+/// Never fatal and never parsed: every failure mode — missing binary, non-zero
+/// exit, a hang — is logged and answered `false`, leaving the caller's
+/// after-the-fact state check to decide what actually happened. The timeout
+/// exists because this sits behind a button; a wedged helper must not leave the
+/// notice spinning forever.
+#[cfg(target_os = "macos")]
+async fn run_pluginkit(args: &[&OsStr]) -> bool {
+    run_tool(PLUGINKIT_BIN, args).await
+}
+
+/// Run one of the undocumented LaunchServices/PlugInKit helpers.
+///
+/// Shared by `pluginkit` and `lsregister`, which need identical containment:
+/// both are debugging tools Apple's DTS says not to architect around, so output
+/// is never parsed, failure is never fatal, and the caller falls back to asking
+/// the system what actually happened.
+#[cfg(target_os = "macos")]
+async fn run_tool(bin: &str, args: &[&OsStr]) -> bool {
+    // `kill_on_drop` matters on the timeout branch: `timeout` only drops the
+    // future, and tokio's default would leave the child running unsupervised
+    // while the caller immediately starts the NEXT invocation — two concurrent
+    // writers to one system database, the opposite of what the timeout is for.
+    let output = tokio::process::Command::new(bin).args(args).kill_on_drop(true).output();
+
+    match tokio::time::timeout(TOOL_TIMEOUT, output).await {
+        Ok(Ok(out)) if out.status.success() => true,
+        Ok(Ok(out)) => {
+            tracing::warn!(
+                tool = bin,
+                status = ?out.status.code(),
+                stderr = %String::from_utf8_lossy(&out.stderr).trim(),
+                "exited non-zero while registering the Finder extension"
+            );
+            false
+        }
+        Ok(Err(err)) => {
+            tracing::warn!(tool = bin, %err, "could not run the tool to register the Finder extension");
+            false
+        }
+        Err(_elapsed) => {
+            tracing::warn!(tool = bin, timeout = ?TOOL_TIMEOUT, "timed out while registering the Finder extension");
+            false
+        }
     }
 }
 
@@ -144,8 +518,14 @@ mod macos {
     }
 
     /// `+[FIFinderSyncController isExtensionEnabled]` — has the user switched
-    /// *this app's* Finder extension on? Available since macOS 10.14; the app's
-    /// minimum is well above that, so no availability check is needed.
+    /// *this app's* Finder extension on?
+    ///
+    /// Available since macOS 10.14, and this send is deliberately unguarded: the
+    /// app's `LSMinimumSystemVersion` is 11.0, so the selector always exists.
+    /// That was NOT true until 2026-08-27 — the floor was Tauri's default
+    /// 10.13.0 while this comment claimed otherwise, which made a 10.13 launch
+    /// abort on an unrecognized selector. `tests/release_lane_pins.rs` now pins
+    /// the floor so the claim cannot go stale again.
     pub fn is_extension_enabled() -> bool {
         // SAFETY: `FI_FINDER_SYNC_CONTROLLER` is the class object exported by the
         // linked FinderSync.framework, so the reference is valid for the life of
@@ -187,8 +567,101 @@ mod macos_tests {
 }
 
 #[cfg(test)]
+mod hosting_tests {
+    use super::hosting::{app_bundle_root, embedded_appex};
+    use std::path::{Path, PathBuf};
+
+    /// The nudge gate's question — "can this build host an extension at all?" —
+    /// expressed over the one resolver, so the two can never disagree.
+    fn bundle_embeds_app_extension(bundle_root: &Path) -> bool {
+        embedded_appex(bundle_root).is_some()
+    }
+
+    #[test]
+    fn finds_the_bundle_of_an_installed_app() {
+        let exe = Path::new("/Applications/Hippius.app/Contents/MacOS/Hippius");
+        assert_eq!(app_bundle_root(exe), Some(Path::new("/Applications/Hippius.app")));
+    }
+
+    /// The case behind the permanent nudge: `pnpm tauri:dev` runs the raw
+    /// target binary, which is in no bundle at all.
+    #[test]
+    fn a_dev_binary_is_in_no_bundle() {
+        let exe = Path::new("/Users/me/hippius-desktop/src-tauri/target/debug/hippius-desktop");
+        assert_eq!(app_bundle_root(exe), None);
+    }
+
+    /// An extension is itself a bundle, so the HOST app must win — it is the
+    /// one whose extension list the enablement question is about.
+    #[test]
+    fn the_host_app_wins_over_a_nested_extension_bundle() {
+        let exe = Path::new("/Applications/Hippius.app/Contents/PlugIns/HippiusFinder.appex/Contents/MacOS/HippiusFinder");
+        assert_eq!(app_bundle_root(exe), Some(Path::new("/Applications/Hippius.app")));
+    }
+
+    #[test]
+    fn a_bare_path_is_in_no_bundle() {
+        assert_eq!(app_bundle_root(Path::new("")), None);
+        assert_eq!(app_bundle_root(Path::new("/")), None);
+    }
+
+    fn bundle_with(plugins: &[&str]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root: PathBuf = dir.path().join("Hippius.app");
+        if !plugins.is_empty() {
+            let plugin_dir = root.join("Contents/PlugIns");
+            std::fs::create_dir_all(&plugin_dir).expect("create PlugIns");
+            for name in plugins {
+                std::fs::create_dir_all(plugin_dir.join(name)).expect("create appex");
+            }
+        }
+        dir
+    }
+
+    #[test]
+    fn an_embedded_extension_is_detected() {
+        let dir = bundle_with(&["HippiusFinder.appex"]);
+        assert!(bundle_embeds_app_extension(&dir.path().join("Hippius.app")));
+    }
+
+    /// A release built without the Finder embed step: the enablement question
+    /// is unanswerable, so the caller must stay silent rather than tell the
+    /// user to switch on something this build does not contain.
+    #[test]
+    fn a_bundle_without_plugins_embeds_nothing() {
+        let dir = bundle_with(&[]);
+        assert!(!bundle_embeds_app_extension(&dir.path().join("Hippius.app")));
+    }
+
+    #[test]
+    fn an_empty_plugins_directory_embeds_nothing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("Hippius.app");
+        std::fs::create_dir_all(root.join("Contents/PlugIns")).expect("create PlugIns");
+        assert!(!bundle_embeds_app_extension(&root));
+    }
+
+    /// Only `.appex` counts — a stray file in PlugIns is not an extension.
+    #[test]
+    fn a_non_appex_entry_does_not_count() {
+        let dir = bundle_with(&["notes.txt"]);
+        assert!(!bundle_embeds_app_extension(&dir.path().join("Hippius.app")));
+    }
+
+    /// `pluginkit -a` takes a PATH, so the enable path needs the appex itself
+    /// and not merely the yes/no the nudge gate asks for.
+    #[test]
+    fn the_embedded_extension_path_is_recoverable() {
+        let dir = bundle_with(&["HippiusFinder.appex"]);
+        let root = dir.path().join("Hippius.app");
+
+        assert_eq!(embedded_appex(&root), Some(root.join("Contents/PlugIns/HippiusFinder.appex")));
+    }
+}
+
+#[cfg(test)]
 mod tests {
-    use super::FinderExtensionState;
+    use super::{FINDER_EXTENSION_BUNDLE_ID, FinderExtensionState};
 
     /// Wire-shape pin: the frontend switches on `kind`, so these three strings are
     /// the contract. A `rename_all` or variant rename would silently turn the
@@ -200,5 +673,171 @@ mod tests {
         assert_eq!(json(FinderExtensionState::Enabled), serde_json::json!({"kind": "enabled"}));
         assert_eq!(json(FinderExtensionState::Disabled), serde_json::json!({"kind": "disabled"}));
         assert_eq!(json(FinderExtensionState::Unsupported), serde_json::json!({"kind": "unsupported"}));
+    }
+
+    /// The source text of the named `pub async fn`, from its signature to its
+    /// closing brace.
+    ///
+    /// Runtime translocation cannot be simulated in a unit test, so the two
+    /// gates below are pinned at their call sites — the repo's
+    /// `tests/*_wiring.rs` idiom.
+    ///
+    /// The end bound is the closing brace in COLUMN ZERO, and a missing one is
+    /// a panic rather than "take the rest of the file". Both details are what
+    /// keep these pins from passing vacuously: this reads the very file the
+    /// assertions live in, and those assertions contain the literal they search
+    /// for. A slice that overran its function would find the needle in the test
+    /// source and keep reporting success with the gate deleted — the exact
+    /// regression the pins exist to catch. An earlier version bounded on the
+    /// next `\n///` and fell back to the file end, which would have overrun the
+    /// moment a command became the last one with no doc comment after it.
+    fn command_body(name: &str) -> String {
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/finder_bridge/enablement.rs")).expect("read enablement.rs");
+        let start = src.find(&format!("pub async fn {name}")).unwrap_or_else(|| panic!("{name} is declared"));
+        let body = &src[start..];
+        // Every brace nested inside the function is indented, so the first
+        // `\n}` is the function's own close.
+        let end = body.find("\n}").unwrap_or_else(|| panic!("{name} has a closing brace in column zero"));
+
+        body[..end].to_string()
+    }
+
+    /// The translocation gate, as both call sites spell it.
+    ///
+    /// Matched with the `if` and without a `!` so an INVERTED gate fails the
+    /// pin — a bare `is_app_translocated` needle is blind to polarity, and
+    /// `if !…` would sail through while doing the opposite of the intent. The
+    /// cost is that importing the function would fail these pins; that is the
+    /// right direction to fail in, since the fix is one line and the alternative
+    /// is a guard that silently stops guarding.
+    const TRANSLOCATION_GATE: &str = "if crate::utils::app_location::is_app_translocated() {";
+
+    /// Wiring pin: the state check must stay silent on a translocated bundle.
+    ///
+    /// A copy opened from the mounted DMG has an unregistrable extension, so
+    /// `Disabled` is accurate and useless: the nudge would fire on every window
+    /// focus, its Enable button would refuse, and the Settings pane it falls
+    /// back to could not list Hippius. `TranslocationGuard` already tells the
+    /// user the one thing that helps.
+    #[test]
+    fn the_state_check_ignores_a_translocated_bundle() {
+        assert!(
+            command_body("finder_extension_state").contains(TRANSLOCATION_GATE),
+            "finder_extension_state must report Unsupported while translocated; otherwise the nudge \
+             nags on every focus with an Enable button that cannot succeed"
+        );
+    }
+
+    /// Wiring pin: launch-time registration must NEVER elect the extension.
+    ///
+    /// Registration makes the extension appear in the settings pane; election
+    /// switches it ON. Doing the second at launch would turn the extension back
+    /// on for a user who deliberately switched it off — every single launch,
+    /// with no way to make it stop. Election belongs behind the user's own
+    /// button and nowhere else.
+    ///
+    /// Asserts on the ELECT verb rather than on the whole helper, because the
+    /// registration half legitimately shells out too.
+    #[test]
+    fn the_launch_registration_never_elects() {
+        let body = command_body("register_finder_extension_at_launch");
+
+        assert!(
+            !body.contains(FINDER_EXTENSION_BUNDLE_ID) && !body.contains("\"use\""),
+            "register_finder_extension_at_launch must not run pluginkit's elect verb; switching the \
+             extension on is the user's decision, and doing it at launch overrides them every time"
+        );
+        assert!(
+            body.contains("register_with_the_system"),
+            "register_finder_extension_at_launch must actually register — that is its whole purpose"
+        );
+    }
+
+    /// Wiring pin: launch-time registration must refuse a translocated bundle.
+    ///
+    /// `lsregister -f` on a `…/AppTranslocation/<UUID>/d/` path writes a
+    /// bundle record for a directory that is gone by the next launch — worse
+    /// than the election hazard the enable path already guards, because it
+    /// pollutes the LaunchServices database rather than just the appex one.
+    #[test]
+    fn the_launch_registration_ignores_a_translocated_bundle() {
+        assert!(
+            command_body("register_finder_extension_at_launch").contains(TRANSLOCATION_GATE),
+            "register_finder_extension_at_launch must skip a translocated bundle; registering an \
+             ephemeral path writes a soon-to-vanish record into the LaunchServices database"
+        );
+    }
+
+    /// Wiring pin: registration must seed LaunchServices BEFORE PlugInKit.
+    ///
+    /// macOS discovers extensions in that order — `lsd` builds the app's bundle
+    /// record, and that record seeds `pkd`, which then finds the appex. Both
+    /// `pluginkit` verbs act downstream of the seed, so running them alone
+    /// cannot help an app LaunchServices has never recorded. Reversing the order
+    /// here would look fine and fix nothing.
+    #[test]
+    fn registration_seeds_launch_services_before_pluginkit() {
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/finder_bridge/enablement.rs")).expect("read enablement.rs");
+        let start = src
+            .find("async fn register_with_the_system")
+            .expect("register_with_the_system is declared");
+        let body = &src[start..];
+        let end = body.find("\n}").expect("register_with_the_system has a closing brace in column zero");
+        let body = &body[..end];
+
+        let seed = body
+            .find("LSREGISTER_BIN")
+            .expect("registration must run lsregister to seed LaunchServices");
+        let discover = body.find("run_pluginkit").expect("registration must run pluginkit to register the appex");
+
+        assert!(
+            seed < discover,
+            "lsregister must run BEFORE pluginkit: PlugInKit discovers the appex from the \
+             LaunchServices bundle record, so seeding second cannot help an app that has none"
+        );
+    }
+
+    /// Wiring pin: the enable path must refuse to run from a translocated
+    /// bundle.
+    ///
+    /// Registering the randomized `…/AppTranslocation/<UUID>/d/` path elects an
+    /// ephemeral copy by bundle identifier, which can leave the real
+    /// `/Applications` install reporting `Disabled` for good — the button would
+    /// make the very bug it exists to fix worse, for the fresh-from-DMG users it
+    /// targets.
+    #[test]
+    fn the_enable_path_refuses_a_translocated_bundle() {
+        assert!(
+            command_body("enable_finder_extension").contains(TRANSLOCATION_GATE),
+            "enable_finder_extension must refuse to register from a translocated bundle; \
+             electing an ephemeral copy can strand the real install as Disabled"
+        );
+    }
+
+    /// Drift pin: `pluginkit -e use -i` is keyed by bundle identifier, so if the
+    /// Xcode project's identifier is ever changed the enable button would elect
+    /// an identifier that no longer exists — and would fail SILENTLY, since the
+    /// verb reports success for an unknown identifier and the state check would
+    /// simply keep saying `disabled`.
+    ///
+    /// Reads the project file rather than duplicating the string, so the pin
+    /// cannot be satisfied by editing both copies in the same wrong way.
+    #[test]
+    fn bundle_id_matches_the_extension_project() {
+        let project = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../macos/HippiusFinder/project.yml"))
+            .expect("read macos/HippiusFinder/project.yml");
+
+        let declared = project
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("PRODUCT_BUNDLE_IDENTIFIER:"))
+            .map(str::trim)
+            .expect("project.yml declares PRODUCT_BUNDLE_IDENTIFIER");
+
+        assert_eq!(
+            declared,
+            super::FINDER_EXTENSION_BUNDLE_ID,
+            "the Finder extension's bundle identifier changed in macos/HippiusFinder/project.yml; \
+             update FINDER_EXTENSION_BUNDLE_ID to match or the enable button becomes a silent no-op"
+        );
     }
 }

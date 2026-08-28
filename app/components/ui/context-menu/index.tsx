@@ -20,7 +20,10 @@ import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 import { generateFolderUrl } from "@/app/utils/folderUrlUtils";
 import { Folder } from "@/components/ui/icons";
 import cn from "@/app/lib/utils/cn";
-import { shareFeatureEnabledAtom } from "@/app/lib/global-atoms/sharesAtoms";
+import {
+  folderShareFeatureEnabledAtom,
+  shareFeatureEnabledAtom,
+} from "@/app/lib/global-atoms/sharesAtoms";
 import { canRenameFile, RENAME_DISABLED_TOOLTIP } from "@/app/lib/utils/renameGating";
 
 const getFileManagerLabel = () => {
@@ -73,6 +76,7 @@ export default function FileContextMenu({
   const { polkadotAddress } = useWalletAuth();
   const { getParam } = useUrlParams();
   const shareEnabled = useAtomValue(shareFeatureEnabledAtom);
+  const folderSharesEnabled = useAtomValue(folderShareFeatureEnabledAtom);
 
   useEffect(() => {
     setMounted(true);
@@ -233,13 +237,14 @@ export default function FileContextMenu({
             a parent wired `onShareFile`, and either:
             - a FILE the sync engine has finished uploading (`syncStatus ===
               "synced"`), so the recipient's anonymous fetch will succeed, or
-            - a FOLDER, which is packed into one zip from disk.
+            - a FOLDER, which mints a live browsable link server-side.
 
             An in-flight file and an old-server deployment still hide the row
-            entirely. A folder that isn't fully here shows DISABLED with a
-            tooltip instead (`canShareFolder`), matching Rename: the capability
-            stays discoverable and the reason is stated, rather than the item
-            silently differing between two folders that look alike.
+            entirely. A folder shows DISABLED with a tooltip until the server
+            confirms the `folder_shares` capability (`canShareFolder`),
+            matching Rename: the capability stays discoverable and the reason
+            is stated, rather than the item silently differing between two
+            folders that look alike.
           */}
           {(file.isFolder || file.syncStatus === "synced")
             && shareEnabled
@@ -251,16 +256,16 @@ export default function FileContextMenu({
                 // and Delete rows below.
                 className={cn(menuItemClass, {
                   "opacity-60 cursor-not-allowed":
-                    file.isFolder && !canShareFolder(file),
+                    file.isFolder && !canShareFolder(file, folderSharesEnabled),
                 })}
-                disabled={file.isFolder && !canShareFolder(file)}
+                disabled={file.isFolder && !canShareFolder(file, folderSharesEnabled)}
                 title={
-                  file.isFolder && !canShareFolder(file)
+                  file.isFolder && !canShareFolder(file, folderSharesEnabled)
                     ? FOLDER_SHARE_DISABLED_TOOLTIP
                     : undefined
                 }
                 onClick={() => {
-                  if (file.isFolder && !canShareFolder(file)) return;
+                  if (file.isFolder && !canShareFolder(file, folderSharesEnabled)) return;
                   onShareFile(file);
                   onClose();
                 }}

@@ -179,7 +179,7 @@ describe("SyncStatusDialog", () => {
       makeFileProgress("invoice.pdf", {
         path: "docs/invoice.pdf",
         status: "error",
-        error: "Network error — couldn't reach the server. Check your connection.",
+        error: "Server error (500). Please try again.",
       }),
     ];
     const snapshot = {

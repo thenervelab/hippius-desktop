@@ -15,6 +15,7 @@ import { FC } from "react";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import { Link as LinkIcon } from "lucide-react";
 
+import { useFolderShareBadge } from "@/app/lib/hooks/useFolderShares";
 import { useSharedFiles } from "@/app/lib/hooks/useSharedFiles";
 import { cn } from "@/lib/utils";
 import { buildSharedBadgeTooltip } from "./sharedBadgeTooltip";
@@ -23,6 +24,17 @@ interface SharedLinkBadgeProps {
   label: string | null | undefined;
   actualName: string | null | undefined;
   className?: string;
+  /** This row is a folder — badge from the folder-share listing instead of
+   *  the file-share origin index. */
+  isFolder?: boolean;
+  /**
+   * The folder row's full drive-relative path, resolved by the CALLER via
+   * `folderShareRelativePath` — the same derivation `shareTargetFor` feeds
+   * the mint, so the badge looks up exactly the `pathPrefix` a share of this
+   * row was created with. A nested row's `actualName` is only a basename and
+   * must not be used as this key. Ignored for files.
+   */
+  folderRelativePath?: string;
   /**
    * Navigates to share-link management (the `/shares` page) for this file.
    * When provided the badge becomes clickable and stops the click from
@@ -38,21 +50,28 @@ const SharedLinkBadge: FC<SharedLinkBadgeProps> = ({
   label,
   actualName,
   className,
+  isFolder = false,
+  folderRelativePath,
   onManageShare,
 }) => {
   const { getSharesFor } = useSharedFiles();
 
-  // Folders CAN be shared now (`hcfs_create_folder_share` zips one and records
-  // the same `share_origin` row a file gets), so the badge is no longer
-  // suppressed for them.
-  //
-  // KNOWN LIMITATION: the lookup key is this row's `actualName`, which for a
-  // NESTED folder row is only the basename while the origin row stores the full
-  // drive-relative path — so a shared subfolder shows no badge. Files are
-  // unaffected (their `actualName` is already the full path). This is the same
-  // cosmetic-miss posture `shares/origin.rs` documents for NFD/NFC drift: the
-  // share itself is fine, only the badge is absent.
-  const rows = getSharesFor(label, actualName);
+  // Folder badges key on the share's server-side `(folderHash, pathPrefix)`
+  // identity from the folder-share LISTING — never on `share_origin` rows,
+  // which the folder mint deliberately does not write (the file-share prune
+  // would evict them).
+  const folderRows = useFolderShareBadge(
+    isFolder ? label : null,
+    folderRelativePath,
+    isFolder,
+  );
+
+  // Legacy zip-era folder shares were FILE shares of an archive with an
+  // origin row keyed by the folder's path, so a folder row still consults
+  // the file index too until those links age out.
+  const rows = isFolder
+    ? [...folderRows, ...getSharesFor(label, folderRelativePath ?? actualName)]
+    : getSharesFor(label, actualName);
   const tooltipLines = buildSharedBadgeTooltip(rows);
   // `buildSharedBadgeTooltip` returns null for unshared files, which
   // doubles as the "don't render the badge" signal.

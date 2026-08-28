@@ -14,6 +14,16 @@ use zeroize::Zeroizing;
 /// HKDF info string for key separation (drive-password encryption).
 pub const INFO_DRIVE_PASSWORD: &str = "hippius-drive-password-encryption";
 
+/// HKDF info string for the shared-drive grant passphrase
+/// (`crate::shared_drives::grant`).
+///
+/// CROSS-CLIENT CONTRACT (phase 3 console must mirror): the grant blob's
+/// Argon2id passphrase is `hex(derive_key(member_master, member_ss58, THIS))`
+/// — HKDF-SHA256 over the member master's 64-byte BIP-39 seed, salt = the
+/// member's ss58 bytes, info = this string. Changing it strands every issued
+/// grant blob; the value is pinned by the `grant_passphrase_is_pinned` KAT.
+pub const INFO_DRIVE_GRANT: &str = "hippius-drive-grant-v1";
+
 /// Minimum length of `base64(nonce[12] || tag[16])` — no ciphertext.
 const MIN_DECODED_LEN: usize = 12 + 16;
 

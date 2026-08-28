@@ -21,16 +21,21 @@ pub mod error;
 #[cfg(any(unix, windows))]
 pub mod finder_bridge;
 pub mod infra;
+pub mod media_preview;
 pub mod notifications;
 pub mod power;
 pub mod recovery;
 pub mod recovery_binding;
+mod recovery_proof;
+pub mod release_channel;
+pub mod shared_drives;
 pub mod shares;
 pub mod splash;
 pub mod sync;
 #[cfg(test)]
 mod test_helpers;
 pub mod tray;
+pub mod updates;
 mod utils;
 pub mod vpn;
 pub mod wallet;
@@ -73,6 +78,7 @@ use crate::console_access::validate_recovery_password;
 use crate::infra::vm::{
     create_vm, get_vm_instance, list_vm_applications, list_vm_flavors, list_vm_images, list_vm_instances, reboot_vm, start_vm, stop_vm, terminate_vm,
 };
+use crate::media_preview::prepare_motion_photo_preview;
 use crate::notifications::credits::{
     check_low_credit_notification, check_low_credit_notification_live, create_credit_notifications, create_sync_notification,
     get_is_above_half_credit, is_first_time, mark_first_time_seen, process_credit_events, update_is_above_half_credit,
@@ -86,15 +92,15 @@ use crate::notifications::crud::{
 };
 use crate::notifications::settings::{get_notification_settings, update_notification_settings};
 use crate::recovery::{
-    change_recovery_password, check_recovery_state, has_pending_rotation, mark_recovery_skipped, recover_mnemonic, resume_recovery_password_rotation,
-    seal_and_upload_mnemonic,
+    change_recovery_password, check_recovery_state, has_pending_rotation, mark_recovery_skipped, recover_mnemonic, reset_unlock_password,
+    restore_with_mnemonic, resume_recovery_password_rotation, seal_and_upload_mnemonic,
 };
 use crate::recovery_binding::{cancel_account_recovery, list_recoverable_accounts, recover_account_files};
 use crate::sync::control::{reveal_drive_in_finder, trigger_sync_now};
 use crate::sync::device::{get_device_name, set_device_name};
 use crate::sync::files::{
-    add_file, add_files, add_folder, allow_asset_scope, delete_files, export_file, filter_file_entries, get_recent_files, get_user_files,
-    list_sync_folder, list_sync_folder_grouped, rename_entry, resolve_file_info, resolve_file_path, search_user_files_recursive,
+    add_file, add_files, add_folder, allow_asset_scope, delete_files, export_file, export_folder_zip, filter_file_entries, get_recent_files,
+    get_user_files, list_sync_folder, list_sync_folder_grouped, rename_entry, resolve_file_info, resolve_file_path, search_user_files_recursive,
 };
 use crate::sync::folders::{delete_remote_folder, get_sync_folders_with_stats, list_remote_folders, restore_remote_folders};
 use crate::sync::lifecycle::{
@@ -108,6 +114,7 @@ use crate::sync::recent_uploads::{get_recent_uploads, search_files};
 use crate::sync::remote::{cache_remote_file, download_remote_file, get_thumbnail, list_remote_folder_files};
 use crate::sync::status::{app_close, get_all_drive_statuses, get_sync_activity_rows, get_sync_engine_health};
 use crate::tray::panel::{hide_tray_panel, toggle_tray_panel};
+use crate::updates::{check_for_update, current_release_channel, install_update, release_channel_status, switch_release_channel};
 use crate::utils::app_location::is_app_translocated;
 use crate::utils::logs::attach_logs_to_ticket;
 use crate::utils::platform_info::get_platform_info;
@@ -294,6 +301,7 @@ fn main() {
             filter_file_entries,
             search_user_files_recursive,
             export_file,
+            export_folder_zip,
             resolve_file_path,
             resolve_file_info,
             allow_asset_scope,
@@ -344,18 +352,29 @@ fn main() {
             download_remote_file,
             cache_remote_file,
             get_thumbnail,
+            prepare_motion_photo_preview,
             // File sharing (link-based public shares)
             crate::shares::commands::hcfs_create_share,
             crate::shares::commands::hcfs_create_folder_share,
-            crate::shares::commands::hcfs_folder_share_preflight,
             crate::shares::commands::hcfs_list_shares,
             crate::shares::commands::hcfs_revoke_share,
             crate::shares::commands::hcfs_update_share_expiry,
+            crate::shares::commands::hcfs_list_folder_shares,
+            crate::shares::commands::hcfs_revoke_folder_share,
+            crate::shares::commands::hcfs_update_folder_share_expiry,
             crate::shares::commands::hcfs_generate_share_password,
             crate::shares::commands::hcfs_list_share_history,
             crate::shares::commands::hcfs_remove_share_history,
             crate::shares::commands::hcfs_clear_share_history,
             crate::shares::capabilities::hcfs_get_capabilities,
+            // Shared drives (owner invites/members + member add/leave). No
+            // revoke-invite IPC in v1 — see shared_drives::commands docs.
+            crate::shared_drives::commands::create_drive_invite,
+            crate::shared_drives::commands::list_drive_members,
+            crate::shared_drives::commands::remove_drive_member,
+            crate::shared_drives::commands::list_my_drive_memberships,
+            crate::shared_drives::commands::leave_shared_drive,
+            crate::shared_drives::commands::add_shared_drive,
             // Shell "Share with Hippius": confirm/cancel the in-app visibility
             // chooser. Registered on all desktop platforms (macOS/Linux socket +
             // Windows named-pipe bridge); gated to `any(unix, windows)` to match
@@ -412,6 +431,8 @@ fn main() {
             seal_and_upload_mnemonic,
             mark_recovery_skipped,
             change_recovery_password,
+            restore_with_mnemonic,
+            reset_unlock_password,
             resume_recovery_password_rotation,
             has_pending_rotation,
             list_recoverable_accounts,
@@ -486,6 +507,11 @@ fn main() {
             get_tray_menu_data,
             // Tray popover panel (replaces the native tray menu)
             toggle_tray_panel,
+            check_for_update,
+            install_update,
+            current_release_channel,
+            release_channel_status,
+            switch_release_channel,
             hide_tray_panel,
             get_platform_info,
             is_app_translocated,
@@ -494,6 +520,7 @@ fn main() {
             // platform branch of its own.
             crate::finder_bridge::enablement::finder_extension_state,
             crate::finder_bridge::enablement::open_finder_extension_settings,
+            crate::finder_bridge::enablement::enable_finder_extension,
             // Local DB (notifications, address book, onboarding, preferences, app state)
             add_notification,
             list_notifications,
@@ -766,10 +793,40 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
             );
         }
 
-        // A folder share writes a plaintext zip of the folder to the temp dir and
-        // unlinks it on Drop. A crash or force-quit mid-upload skips that, leaving
-        // the archive behind — clear any from a previous run.
-        crate::shares::sweep_stale_share_archives();
+        // Register the Finder extension with the system, without switching it
+        // on. macOS is supposed to do this when the containing app first
+        // launches; on at least one Mac it never did, and nothing retried for
+        // six days — the extension sat on disk registered nowhere, so it was in
+        // no settings pane and the nudge's advice could not be followed. See
+        // `finder_bridge::enablement::register_with_the_system`.
+        //
+        // Spawned, not awaited: it shells out to two system helpers and must not
+        // sit in front of the window appearing.
+        #[cfg(target_os = "macos")]
+        {
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                crate::finder_bridge::enablement::register_finder_extension_at_launch(handle).await;
+            });
+        }
+
+        // Reclaim upload-chunk staging directories abandoned by earlier runs.
+        //
+        // This is the launch trigger, and it must live here rather than only in
+        // the sync-init funnel: `auto_init_sync` skips paused drives, so a user
+        // whose disk filled and who reacted by pausing everything — or who
+        // removed the drives outright — would otherwise reclaim nothing on the
+        // very launch they need it. `initialize_sync_inner` keeps its own
+        // `get_or_init` on the same `OnceCell`, which is what orders the pass
+        // BEFORE any upload starts; whichever fires first runs it exactly once
+        // and the other awaits that result. See `crate::sync::chunk_reclaim`.
+        {
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let state = handle.state::<crate::app_state::AppState>();
+                state.chunk_reclaim.get_or_init(crate::sync::chunk_reclaim::reclaim_startup).await;
+            });
+        }
 
         if let Ok(env_path) = app.path().resolve(".env", BaseDirectory::Resource) {
             let _ = dotenvy::from_filename(env_path);

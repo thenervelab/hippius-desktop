@@ -1,8 +1,6 @@
 "use client";
 
 import React, { useState, useMemo, useRef, useEffect } from "react";
-import * as TooltipPrimitive from "@radix-ui/react-tooltip";
-import { Info } from "lucide-react";
 import { toast } from "sonner";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getVersion } from "@tauri-apps/api/app";
@@ -29,11 +27,13 @@ import useUpdateSupportTicket from "@/app/lib/hooks/useUpdateSupportTicket";
 import CreateButton from "../../ui/button/CreateButton";
 import ConfirmModal from "./SupportConfirmModal";
 import { OAuthButtonsGroup } from "../../auth/OAuthButtons";
+import InfoTooltip from "@/components/ui/info-tooltip";
 
 // Single-page tickets fetch — the help-and-support page now lists all
 // tickets in one shot rather than paginating. 1000 is a safe ceiling
 // for any realistic user; the backend caps far below this in practice.
 const ALL_TICKETS_LIMIT = 1000;
+const SUPPORT_DOCS_URL = "https://docs.hippius.com/use/help-support";
 
 const Support: React.FC = () => {
   const { oauthSession, polkadotAddress } = useWalletAuth();
@@ -270,34 +270,15 @@ const Support: React.FC = () => {
                     <p className="text-[24px] font-medium leading-8 text-black-700 dark:text-white">
                       My Tickets
                     </p>
-                    <TooltipPrimitive.Provider delayDuration={300}>
-                      <TooltipPrimitive.Root>
-                        <TooltipPrimitive.Trigger asChild>
-                          <button
-                            type="button"
-                            aria-label="About support tickets"
-                            className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-grey-80 bg-white text-grey-50 transition-colors hover:bg-grey-90 hover:text-primary-50 dark:border-black-300 dark:bg-black-primary-bg dark:text-grey-dark-400 dark:hover:bg-black-300 dark:hover:text-white"
-                          >
-                            <Info className="size-3.5" />
-                          </button>
-                        </TooltipPrimitive.Trigger>
-                        <TooltipPrimitive.Portal>
-                          <TooltipPrimitive.Content
-                            side="bottom"
-                            align="start"
-                            sideOffset={8}
-                            avoidCollisions
-                            collisionPadding={8}
-                            className="z-[9999] max-w-[280px] rounded-[8px] border border-grey-dark-100 bg-white px-3 py-[10px] text-[12px] font-medium leading-4 tracking-[-0.24px] text-[#52525c] shadow-[0px_4px_24px_0px_rgba(0,0,0,0.08)] dark:border-[#494949] dark:bg-[#2c2c2c] dark:text-[#a3a3a3] dark:shadow-black/25"
-                          >
-                            View and manage your support tickets. Click &ldquo;New
-                            Ticket&rdquo; to start a conversation with our support
-                            team.
-                            <TooltipPrimitive.Arrow className="fill-white dark:fill-[#2c2c2c]" />
-                          </TooltipPrimitive.Content>
-                        </TooltipPrimitive.Portal>
-                      </TooltipPrimitive.Root>
-                    </TooltipPrimitive.Provider>
+                    <InfoTooltip
+                      ariaLabel="About support tickets"
+                      align="start"
+                      contentClassName="max-w-[280px]"
+                      learnMoreUrl={SUPPORT_DOCS_URL}
+                    >
+                      View and manage your support tickets. Click &ldquo;New
+                      Ticket&rdquo; to start a conversation with our support team.
+                    </InfoTooltip>
                   </div>
 
                   <CreateButton

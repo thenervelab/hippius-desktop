@@ -26,6 +26,40 @@ Conventions:
 - [ ] With an older version installed: the in-app updater offers the new version, downloads, and relaunches into it. (Known gap: verify `latest.json` was actually regenerated for this release — see CLAUDE.md "Finder extension in releases".)
 - [ ] Second launch while the app is running focuses the existing window instead of opening a second instance.
 
+### 1a. Release channels — the cross-channel install
+
+**No automated test covers any of this.** Signature verification against a real
+cross-channel manifest and the relaunch cannot be exercised in CI; a unit test can
+only pin which URL is chosen, never that the build behind it installs. Run this
+whenever a lane's signing, endpoint, or manifest changes — and at least once per
+production release.
+
+Run from a **real installed build**, not `pnpm tauri:dev`: a dev binary is in no
+`.app` bundle, reports itself as production, and cannot install anything.
+
+- [ ] On a **stable** build, the account menu shows **Explore Beta**. Choosing it
+      opens a dialog that says the features are **not fully stabilized** and names
+      the exact version it will install.
+- [ ] Cancelling the dialog downloads nothing. (Watch the network, or simply confirm
+      the app is still on the same version afterwards.)
+- [ ] Confirming downloads, installs, and relaunches — and the app comes back **on
+      the beta version**, not the stable one. This is the step that catches a
+      signing-key or endpoint mistake; nothing else does.
+- [ ] Settings → **Updates** now shows Beta as the current channel.
+- [ ] The account menu item now reads **Leave Beta**, not Explore Beta.
+- [ ] Leaving beta installs the **stable** build and relaunches into it, even though
+      stable's version number is *lower* than beta's. A failure here means the
+      cross-channel comparator regressed and the return path has become one-way.
+- [ ] **[internal]** On a **staging** build, the Explore Beta item is absent
+      entirely, and the app never offers an update. A staging build offering one
+      means it is checking another lane's manifest — the wrong-lane install bug.
+- [ ] With the machine offline: the Updates section still renders and says the
+      channel could not be reached, rather than showing a broken or empty section.
+- [ ] Check the published beta `latest.json` carries a `stateEpoch` field. It is
+      absent → every build treats the epoch as unknown and permits any switch,
+      which silently disables the downgrade guard:
+      `curl -sL https://github.com/thenervelab/hippius-desktop/releases/download/beta-channel/latest.json | jq .stateEpoch`
+
 ## 2. Onboarding & authentication
 
 - [ ] First-run onboarding carousel renders (video panel crops correctly when the window is resized).
@@ -154,15 +188,16 @@ My Shares page (`/shares`):
 - [ ] Password-protected rows show the lock badge, and Copy hands out a `#p=` link (never a password-free `#k=` link to a protected share).
 - [ ] Change expiry in place (URL unchanged, new expiry live); Revoke kills the link (opening it now fails).
 - [ ] Rows minted on another device show filename + Revoke but no Copy (no local key).
-- [ ] **Share history**: expired/revoked links are listed in the history view; removing one row and clearing all history both work; history never shows a live link as historical.
+- [ ] Folder-share rows appear in the same list ("Folder" in the size column) with copy/revoke/change-expiry on rows minted here; rows minted on another device are view-only with the honest tooltips; revoked/expired folder rows stay listed in their dead state with Copy suppressed.
+- [ ] **Share history**: expired/revoked FILE links are listed in the history view; removing one row and clearing all history both work; history never shows a live link as historical. Folder links never enter history — their dead state stays on the listing row above.
 
 Finder extension **[mac]**:
 
-- [ ] **On a Mac that has never run `pnpm finder:dev`** (`pluginkit -mAvvv -p com.apple.FinderSync | grep -A6 hippius` shows no leading `+`): first launch raises the "Turn on the Hippius Finder extension" notice, its **Open Settings** button opens the Extensions pane, and the notice clears by itself on returning to the app once the switch is on. A dev Mac cannot verify this — its enable election is keyed by bundle id and outlives reinstalls, which is exactly how the missing right-click menu shipped in v0.2.1.
+- [ ] **On a Mac that has never run `pnpm finder:dev`** (`pluginkit -mAvvv -p com.apple.FinderSync | grep -A6 hippius` shows no leading `+`): first launch raises the "Turn on the Hippius Finder extension" notice naming **File Providers** (not Finder — on Sequoia 15.2+ / Tahoe that category is Apple's Quick Actions), its **Open Settings** button opens the Extensions pane, and the notice clears by itself on returning to the app once the switch is on. A dev Mac cannot verify this — its enable election is keyed by bundle id and outlives reinstalls, which is exactly how the missing right-click menu shipped in v0.2.1. The toggle itself lives under System Settings › General › Login Items & Extensions › File Providers.
 - [ ] With the extension enabled, no notice appears on launch.
 - [ ] Right-click a synced file in Finder → "Share with Hippius": app comes forward with the chooser; both public and password variants mint working links.
 - [ ] Cancelling the chooser aborts (nothing uploaded, no orphan link).
-- [ ] Folder share from Finder produces a working zip share.
+- [ ] Folder share from Finder: a folder inside a synced drive mints a live browsable link (opens on the console's `/share/folder` page); a folder outside every drive is refused with the in-drive-only message.
 
 ## 12. Tray
 
@@ -216,7 +251,18 @@ Current expected state (`app/lib/featureFlags.ts`) — update this section when 
 - [ ] **VM** (`VM_FEATURE_ENABLED = false`): sidebar sub-item disabled with "Coming Soon" tag; `/vm`, `/vm/create`, `/vm/instance-details` redirect; no VM item in the tray menu.
 - [ ] **VPN** (`VPN_FEATURE_ENABLED = false`, `VM_VPN_ENABLED = false`): no VPN menu in the top bar, no VPN settings entry/section, no per-VM connect surface.
 - [ ] **Referrals** (`REFERRALS_FEATURE_ENABLED = false`): no sidebar entry, `/referrals` redirects.
+- [ ] **Shared drives** (`SHARED_DRIVES_ENABLED` — `false` on `main`, `true` on `beta`): no "Share drive…" in either folder menu, no "Shared with me" section in settings or `DriveOnboarding`, no owner badge on folder rows.
 - [ ] Direct navigation to every gated route lands on the overview (static export = client-side redirect; make sure no blank page).
+
+**`SHARED_DRIVES_ENABLED` is the one flag whose value differs by lane**, so every
+`beta` → `main` promotion shows it as a diff. Re-assert `false` on the promotion
+rather than taking beta's value. It cannot be pinned by `release_lane_pins.rs`,
+which runs on all three lanes and would then fail on `beta`.
+
+Also confirm the promotion did not drop `main`-only release controls that `beta`
+has never carried — `.github/CODEOWNERS` and the `approve-release` job in
+`tauri-build.yml`. `check-promotion-order` only verifies the head contains the
+previous lane; nothing checks that `main`-only files survive the squash.
 
 ## 18. Window & shell basics
 

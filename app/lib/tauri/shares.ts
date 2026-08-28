@@ -1,10 +1,9 @@
-// Typed wrappers around the Rust file-sharing IPC commands.
+// Typed wrappers around the Rust sharing IPC commands (file shares,
+// browsable folder shares, and the capability probe).
 //
-// The Rust source of truth lives at `src-tauri/src/shares/`.
-// `hcfs_create_share`, `hcfs_list_shares`, `hcfs_revoke_share`, and
-// `hcfs_get_capabilities` are the four commands; this file is the only
-// place in the FE that talks to them, so swapping the wire shape is a
-// one-file change.
+// The Rust source of truth lives at `src-tauri/src/shares/`. This file is
+// the only place in the FE that talks to those commands, so swapping the
+// wire shape is a one-file change.
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 
@@ -16,6 +15,12 @@ import { Channel, invoke } from "@tauri-apps/api/core";
  */
 export interface ServerCapabilities {
   shares: boolean;
+  /**
+   * Browsable folder shares (`/v1/folder-shares`). Snake_case because the
+   * Rust struct serializes its fields verbatim. Missing on old servers,
+   * which the Rust layer collapses to `false`.
+   */
+  folder_shares: boolean;
 }
 
 /**
@@ -169,61 +174,106 @@ export async function createShare(
 }
 
 /**
- * Size and file count of a folder share, plus whether it is within the
- * backend's limits.
- *
- * `withinLimits` is decided in Rust against the same constants the mint
- * enforces, so the modal never disables on a rule the backend doesn't apply —
- * or offers a folder it will refuse.
- */
-export interface FolderSharePreflight {
-  totalBytes: number;
-  fileCount: number;
-  withinLimits: boolean;
-  limitBytes: number;
-  limitFiles: number;
-}
-
-export async function folderSharePreflight(
-  folderLabel: string,
-  relativePath: string,
-): Promise<FolderSharePreflight> {
-  return invoke<FolderSharePreflight>("hcfs_folder_share_preflight", {
-    folderLabel,
-    relativePath,
-  });
-}
-
-/**
- * Mint a share link for a folder. The folder is packed into one `<name>.zip`
- * and that archive is shared, so the link is a snapshot: later changes to the
- * folder do not appear in it.
- *
- * Rejects when the folder is not fully synced on this device — the backend
- * refuses rather than hand the recipient an archive missing files — and when it
- * exceeds the size or entry cap. Same `Channel` progress mechanics as
- * {@link createShare}.
+ * Mint a live, browsable share link for a folder. One metadata POST — nothing
+ * is packed or uploaded, so the call is instant regardless of folder size and
+ * carries no progress channel. The link is live: later changes to the folder
+ * appear in it.
  */
 export async function createFolderShare(
   folderLabel: string,
   relativePath: string,
   choice: ShareChoice,
-  onProgress?: (progress: ShareProgress) => void,
 ): Promise<ShareLink> {
-  const onProgressChannel = new Channel<ShareProgress>();
-  if (onProgress) onProgressChannel.onmessage = onProgress;
   return invoke<ShareLink>("hcfs_create_folder_share", {
     folderLabel,
     relativePath,
     ttl: choice.ttl,
     visibility: choice.visibility,
     password: choice.password ?? null,
-    onProgress: onProgressChannel,
   });
 }
 
 export async function listShares(): Promise<ShareSummary[]> {
   return invoke<ShareSummary[]>("hcfs_list_shares");
+}
+
+/**
+ * One row of the owner's folder-share listing.
+ *
+ * The server returns `tokenHash` (blake3 hex of the plaintext token) only —
+ * folder-share tokens are never echoed after create. A row minted on THIS
+ * machine resolves against the persistent keystore: `resolvable` is `true`,
+ * `shareToken` carries the plaintext token (the handle
+ * {@link revokeFolderShare} and {@link updateFolderShareExpiry} take), and
+ * `shareUrl` is the rebuilt recipient link. A row minted on another device is
+ * view-only: `resolvable` is `false` and both are `null`.
+ *
+ * Unlike {@link ShareSummary}, revoked and expired rows ARE present (with
+ * `revokedAt` set / `expiresAt` in the past) until the server's reaper sweeps
+ * them — render their dead state from the row. `folderHash` + `pathPrefix`
+ * are the share's stable identity; the per-folder "Shared" badge keys on that
+ * pair, never on the file-share origin sidecar.
+ */
+export interface FolderShareSummary {
+  tokenHash: string;
+  folderHash: string;
+  /** `""` means the share covers the whole drive. */
+  pathPrefix: string;
+  displayName: string;
+  /** RFC 3339 timestamp. */
+  createdAt: string;
+  /** RFC 3339 timestamp, or `null` when the link never expires. */
+  expiresAt: string | null;
+  /** RFC 3339 timestamp, set once the owner has revoked the share. */
+  revokedAt: string | null;
+  /** Whether this device's keystore holds the plaintext token. */
+  resolvable: boolean;
+  /** Plaintext token, present only for resolvable rows. */
+  shareToken: string | null;
+  /**
+   * Recipient URL, or `null` for a foreign row. Carries `#k=` for a public
+   * share and `#p=` for a password-protected one — the backend derives it
+   * from the stored secret's kind, so this can never be a password-free link
+   * to a protected share.
+   */
+  shareUrl: string | null;
+  /**
+   * Whether the link is password-protected. `null` for a foreign row: there
+   * is no secret to inspect, so protection is UNKNOWN on this device —
+   * `false` would label a password-protected share "public". `null`
+   * coincides with `shareUrl` being `null`.
+   */
+  isPrivate: boolean | null;
+}
+
+/**
+ * List every folder share this account has minted, newest first — including
+ * revoked and not-yet-reaped expired rows in their dead state.
+ */
+export async function listFolderShares(): Promise<FolderShareSummary[]> {
+  return invoke<FolderShareSummary[]>("hcfs_list_folder_shares");
+}
+
+/**
+ * Revoke a folder share by its plaintext token (from a resolvable listing
+ * row). Idempotent: an already-revoked or unknown token resolves rather than
+ * rejecting, so a double-tapped Revoke needs no special-casing.
+ */
+export async function revokeFolderShare(shareToken: string): Promise<void> {
+  await invoke<void>("hcfs_revoke_folder_share", { shareToken });
+}
+
+/**
+ * Change an existing folder share's expiry, returning the new one (`null`
+ * when the link now never expires). Only the expiry is mutable — same
+ * contract as {@link updateShareExpiry}. Rejects with a `Validation` error
+ * when the link is no longer active.
+ */
+export async function updateFolderShareExpiry(
+  shareToken: string,
+  ttl: ShareTtl,
+): Promise<string | null> {
+  return invoke<string | null>("hcfs_update_folder_share_expiry", { shareToken, ttl });
 }
 
 export async function revokeShare(shareToken: string): Promise<void> {

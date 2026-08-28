@@ -11,6 +11,7 @@ import FailedFilesListener from "./FailedFilesListener";
 import FinderShareListener from "./FinderShareListener";
 import FailedFilesModal from "@/components/page-sections/drive/FailedFilesModal";
 import ShareFileModal from "@/components/page-sections/drive/ShareFileModal";
+import ShareDriveModal from "@/components/page-sections/drive/ShareDriveModal";
 import RenameDialog from "@/components/page-sections/drive/RenameDialog";
 import AccountRecoveryDialog from "@/components/recovery/AccountRecoveryDialog";
 import RecoveryEventListener from "@/components/recovery/RecoveryEventListener";
@@ -32,6 +33,8 @@ export default function ProtectedLayout({
         <InsufficientCreditsDialog />
         <FailedFilesModal />
         <ShareFileModal />
+        {/* Renders nothing while SHARED_DRIVES_ENABLED is off. */}
+        <ShareDriveModal />
         <RenameDialog />
         <RecoveryEventListener />
         <AccountRecoveryDialog />

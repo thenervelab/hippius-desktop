@@ -69,6 +69,20 @@ pub struct AppState {
     /// (`SyncCompleted`), `SyncStopped`, and globally on `SyncReset`. See
     /// `crate::sync::error_notify`.
     pub error_notify: std::sync::Arc<crate::sync::error_notify::ErrorNotifyState>,
+    /// Once-per-label latch deciding whether a `SHARED_DRIVE_REVOKED_MARKER`
+    /// `SyncError` surfaces its one-shot teardown + "Sync Failed"
+    /// notification. Reuses [`crate::sync::error_notify::ErrorNotifyState`]
+    /// with threshold 1 (an edge latch, not a flaky-endpoint counter): the
+    /// engine retries with backoff and may re-emit the marker each cycle
+    /// until the teardown removes the drive from the runner, and every
+    /// re-emit after the first must be suppressed. Kept SEPARATE from
+    /// `error_notify` so a revocation never feeds the 3-strike flaky counter
+    /// and a flaky episode never consumes a revocation's single edge.
+    /// Cleared on `SyncStopped` (the revocation teardown's own tail — a
+    /// later re-init that hits the marker again is a fresh episode and must
+    /// notify again), on the `SyncCompleted` recovery edge, and globally on
+    /// `SyncReset`.
+    pub revoked_notify: std::sync::Arc<crate::sync::error_notify::ErrorNotifyState>,
     /// Edge-triggered owner of the OS "prevent idle system sleep" assertion
     /// held while any sync session still has non-terminal files, so macOS/
     /// Windows can't idle-sleep mid-transfer of a large folder. Display sleep
@@ -78,6 +92,17 @@ pub struct AppState {
     /// (pause/remove/logout/stall all converge there). Linux no-ops (v1).
     /// See `crate::power`.
     pub keep_awake: std::sync::Arc<crate::power::SyncKeepAwake>,
+    /// Once-per-process latch for the abandoned upload-chunk reclaim.
+    ///
+    /// Awaited at the top of `initialize_sync_inner`, the single init funnel,
+    /// so the pass completes before ANY drive starts uploading. Running exactly
+    /// once is what makes the reclaim's budget rule safe without tracking
+    /// liveness: the first init happens with nothing in flight, so no directory
+    /// the pass may delete is one an active upload is reading. Every later init
+    /// — including one on a second drive while the first is mid-cycle — reads
+    /// the cached summary and touches no files. See
+    /// `crate::sync::chunk_reclaim`.
+    pub chunk_reclaim: tokio::sync::OnceCell<crate::sync::chunk_reclaim::ReclaimSummary>,
     /// Single per-label min-interval throttle gating the combined per-cycle
     /// folder-entity sync (reconcile disk→server THEN materialize server→disk).
     /// The per-cycle completion funnel (`handle_sync_completed`) fires the
@@ -260,7 +285,9 @@ impl AppState {
             preparing: std::sync::Arc::new(crate::sync::preparing::PreparingState::new()),
             credits_exhausted: std::sync::Arc::new(crate::sync::credits_exhausted::CreditsExhaustedState::new()),
             error_notify: std::sync::Arc::new(crate::sync::error_notify::ErrorNotifyState::new()),
+            revoked_notify: std::sync::Arc::new(crate::sync::error_notify::ErrorNotifyState::new()),
             keep_awake: std::sync::Arc::new(crate::power::SyncKeepAwake::new_native()),
+            chunk_reclaim: tokio::sync::OnceCell::new(),
             folder_entity_sync: std::sync::Arc::new(crate::sync::folder_entries_reconcile::PerLabelThrottle::new()),
             sync_session_epoch: AtomicU64::new(0),
             tray_panel_hidden_at: AtomicU64::new(0),

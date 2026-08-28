@@ -484,34 +484,16 @@ describe("ShareFileModal", () => {
     // interchangeable: hcfs_create_share rejects a directory outright.
     const FOLDER = { name: "Photos", actualFileName: "Photos", label: "Drive", isFolder: true };
 
-    /** Route the single invoke mock by command name, since a folder share
-     *  makes two different calls (preflight, then mint). */
-    function routeInvoke(preflight: unknown, mint?: unknown) {
-      invokeMock.mockImplementation((command: string) => {
-        if (command === "hcfs_folder_share_preflight") return Promise.resolve(preflight);
-        return Promise.resolve(
-          mint ?? {
-            shareToken: "tok-folder",
-            shareUrl: "https://console.hippius.com/share/tok-folder#k=K",
-            expiresAt: null,
-          },
-        );
-      });
-    }
-
-    const WITHIN_LIMITS = {
-      totalBytes: 1_400_000_000,
-      fileCount: 812,
-      withinLimits: true,
-      limitBytes: 2 * 1024 * 1024 * 1024,
-      limitFiles: 10_000,
+    const FOLDER_LINK = {
+      shareToken: "tok-folder",
+      shareUrl: "https://console.hippius.com/share/tok-folder#k=K",
+      expiresAt: null,
     };
 
     it("mints a folder through hcfs_create_folder_share, not the file command", async () => {
-      routeInvoke(WITHIN_LIMITS);
+      invokeMock.mockResolvedValueOnce(FOLDER_LINK);
 
       render(withProvider(<ShareFileModal />, FOLDER));
-      await screen.findByText(/812 files/);
       confirmChooser();
 
       await waitFor(() => {
@@ -521,53 +503,64 @@ describe("ShareFileModal", () => {
         );
       });
       expect(invokeMock).not.toHaveBeenCalledWith("hcfs_create_share", expect.anything());
+      // The mint is one metadata POST — no progress channel exists to pass.
+      const args = invokeMock.mock.calls[0][1] as Record<string, unknown>;
+      expect(args).not.toHaveProperty("onProgress");
     });
 
-    it("shows the folder's size and file count before minting", async () => {
-      routeInvoke(WITHIN_LIMITS);
-
+    it("opens straight on the chooser with the live-link notice — no preflight", async () => {
       render(withProvider(<ShareFileModal />, FOLDER));
 
-      expect(await screen.findByText(/812 files/)).toBeInTheDocument();
-      // SI units, matching the app-wide formatBytes and the backend cap message.
-      expect(screen.getByText(/1\.4 GB/)).toBeInTheDocument();
-    });
-
-    it("disables minting when the backend reports the folder is over its limit", async () => {
-      routeInvoke({
-        totalBytes: 31_000_000_000,
-        fileCount: 240_000,
-        withinLimits: false,
-        limitBytes: 2 * 1024 * 1024 * 1024,
-        limitFiles: 10_000,
-      });
-
-      render(withProvider(<ShareFileModal />, FOLDER));
-
-      await waitFor(() => {
-        expect(screen.getByRole("button", { name: /create share link/i })).toBeDisabled();
-      });
-    });
-
-    it("keeps minting available while the preflight is still in flight", async () => {
-      // A slow stat must not block sharing a small folder; the Rust cap is the
-      // real gate, and it re-checks on the mint.
-      invokeMock.mockImplementation((command: string) =>
-        command === "hcfs_folder_share_preflight" ? new Promise(() => {}) : Promise.resolve({}),
-      );
-
-      render(withProvider(<ShareFileModal />, FOLDER));
-
+      expect(screen.getByText(/general access/i)).toBeInTheDocument();
+      // The link is LIVE: the sender must be told later changes are visible.
+      expect(
+        screen.getByText(/the link always shows the current contents/i),
+      ).toBeInTheDocument();
+      // Nothing measured, nothing minted: the zip-era preflight is gone and
+      // minting is available immediately, whatever the folder's size.
+      expect(invokeMock).not.toHaveBeenCalled();
       expect(screen.getByRole("button", { name: /create share link/i })).toBeEnabled();
     });
 
-    it("does not preflight a file", async () => {
-      routeInvoke(WITHIN_LIMITS);
+    it("shows a plain minting spinner while the mint runs — no progress bar", async () => {
+      // Hang the IPC to hold the modal in `running`: the folder mint has no
+      // encrypt/upload phases, so a progress bar would fake work.
+      invokeMock.mockReturnValueOnce(new Promise(() => {}));
 
-      render(withProvider(<ShareFileModal />, { name: "doc.pdf", actualFileName: "doc.pdf", label: "Drive" }));
+      render(withProvider(<ShareFileModal />, FOLDER));
+      confirmChooser();
 
-      await screen.findByText(/general access/i);
-      expect(invokeMock).not.toHaveBeenCalledWith("hcfs_folder_share_preflight", expect.anything());
+      expect(await screen.findByText(/creating share link/i)).toBeInTheDocument();
+      expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+      expect(screen.queryByText(/encrypting and uploading/i)).not.toBeInTheDocument();
+    });
+
+    it("lands on the done state with the live link", async () => {
+      installClipboard();
+      invokeMock.mockResolvedValueOnce(FOLDER_LINK);
+
+      render(withProvider(<ShareFileModal />, FOLDER));
+      confirmChooser();
+
+      await screen.findByDisplayValue(/share\/tok-folder#k=K/);
+    });
+
+    it("surfaces the backend's refusal verbatim in the error state", async () => {
+      // The Rust funnel owns the folder-share refusals (member drive,
+      // capability off, unregistered drive) and words each one for the user;
+      // the modal must show that message, not a generic failure.
+      invokeMock.mockRejectedValueOnce({
+        kind: "Validation",
+        message: "Only the owner of a shared drive can share its folders as a link.",
+      });
+
+      render(withProvider(<ShareFileModal />, FOLDER));
+      confirmChooser();
+
+      expect(await screen.findByText(/couldn.?t create share link/i)).toBeInTheDocument();
+      expect(
+        screen.getByText(/only the owner of a shared drive can share its folders/i),
+      ).toBeInTheDocument();
     });
   });
 });

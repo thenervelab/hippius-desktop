@@ -1,0 +1,664 @@
+name: publish-staging
+
+# Updater: staging deliberately has NO auto-update story. Every lane signs with
+# the one TAURI_SIGNING_PRIVATE_KEY and tauri.conf.json carries the matching
+# pubkey on every branch, so there is no build-time key patch and no
+# branch-specific pubkey to carry across a merge.
+#
+# Staging is installed by hand. It used to be given a separate updater pubkey
+# while keeping the production ENDPOINT (releases/latest/..., which GitHub
+# resolves only to a non-prerelease), so every check fetched the production
+# manifest and failed signature verification — surfacing as "no update
+# available" rather than as a misconfiguration. `ReleaseChannel::Staging`
+# publishes no manifest URL at all now, which is why this lane needs no
+# latest.json fix job: nothing consumes one.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [staging]
+    # Keep in sync with tauri-build.yml — see the rationale there. Denylist on
+    # purpose: an unrecognized path still builds, so forgetting an entry costs
+    # one wasted build rather than a staging DMG that silently never ships.
+    # `workflow_dispatch` ignores path filters and stays the manual escape hatch.
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - ".claude/**"
+      - ".vscode/**"
+      - ".gitignore"
+      - ".git-blame-ignore-revs"
+
+# Least privilege by default; the three publishing jobs re-grant `contents:
+# write` individually, because each creates or uploads to a release. Granting
+# write workflow-wide meant every job — including the build-only steps that run
+# untrusted-ish dependency code — carried the token that can rewrite the repo.
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-staging-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
+jobs:
+  publish-tauri-macos:
+    runs-on: macos-latest
+    # Creates the staging release and uploads artifacts to it.
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          # Nothing here pushes over git — the release uploads go through `gh`
+          # with an explicit GH_TOKEN — so leaving the credential in .git/config
+          # only widens what a compromised build step could reach.
+          persist-credentials: false
+
+      - name: Setup SSH for private Rust git deps
+        shell: bash
+        env:
+          PRIVATE_GIT_DEPLOY_KEY_B64: ${{ secrets.HCFS_DEPLOY_KEY_B64 }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+
+          # Decode private key from base64
+          python3 - <<'PY' > ~/.ssh/private_git_key
+          import os, base64, sys
+          b64 = os.environ["PRIVATE_GIT_DEPLOY_KEY_B64"].strip()
+          sys.stdout.buffer.write(base64.b64decode(b64))
+          PY
+          chmod 600 ~/.ssh/private_git_key
+
+          # Trust GitHub host key
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+          # SSH config
+          cat > ~/.ssh/config <<'EOF'
+          Host github.com
+            HostName github.com
+            User git
+            IdentityFile ~/.ssh/private_git_key
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+            BatchMode yes
+          EOF
+          chmod 600 ~/.ssh/config
+
+          # Start ssh-agent
+          eval "$(ssh-agent -s)"
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
+          echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
+
+          # Add key (no passphrase)
+          ssh-add ~/.ssh/private_git_key
+          ssh-add -l
+
+      - name: Force Cargo to use git CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.cargo
+          cat > ~/.cargo/config.toml << 'EOF'
+          [net]
+          git-fetch-with-cli = true
+          EOF
+
+      - name: Verify SSH access to hcfs
+        shell: bash
+        run: |
+          set -euo pipefail
+          git ls-remote ssh://git@github.com/thenervelab/hcfs.git HEAD
+
+      - name: Verify pinned hcfs commit is fetchable
+        shell: bash
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+        run: |
+          set -euo pipefail
+          REV=$(grep -m1 'thenervelab/hcfs.git' src-tauri/Cargo.toml | sed 's/.*rev *= *"\([^"]*\)".*/\1/')
+          echo "Pinned hcfs rev: $REV"
+          if git ls-remote ssh://git@github.com/thenervelab/hcfs.git | grep -q "$REV"; then
+            echo "Commit $REV found at remote ref"
+          else
+            echo "Commit not at a ref tip, verifying via shallow clone..."
+            git clone --bare --filter=blob:none ssh://git@github.com/thenervelab/hcfs.git /tmp/hcfs-verify
+            git -C /tmp/hcfs-verify cat-file -t "$REV"
+          fi
+
+      - name: Get release notes
+        id: release_notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          SHA="$(git rev-parse HEAD)"
+          PR_NUMBER="$(git log -1 --pretty=format:'%s' | grep -oE '#[0-9]+' | tr -d '# ' || true)"
+
+          if [[ -z "${PR_NUMBER:-}" ]]; then
+            PR_NUMBER="$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              "https://api.github.com/repos/${{ github.repository }}/commits/${SHA}/pulls" \
+              | jq -r '.[0].number // empty')"
+          fi
+
+          if [[ -n "${PR_NUMBER:-}" ]]; then
+            PR_INFO="$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              "https://api.github.com/repos/${{ github.repository }}/pulls/${PR_NUMBER}")"
+
+            TITLE="$(jq -r '.title // empty' <<<"$PR_INFO")"
+            BODY="$(jq -r '.body // empty'  <<<"$PR_INFO")"
+          else
+            TITLE="$(git log -1 --pretty=%s)"
+            BODY="$(git log -1 --pretty=%b)"
+          fi
+
+          TITLE="${TITLE//$'\r'/}"
+          BODY="${BODY//$'\r'/}"
+          if [[ -z "${BODY:-}" ]]; then
+            BODY="See the assets to download this version and install."
+          fi
+
+          BODY="$(printf '%s' "$BODY" | head -c 30000)"
+
+          {
+            echo "title<<__TITLE__"
+            echo "$TITLE"
+            echo "__TITLE__"
+            echo "body<<__BODY__"
+            echo "$BODY"
+            echo "__BODY__"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      # rust-toolchain.toml pins the build toolchain, which rustup
+      # auto-installs at first cargo use with only the host (aarch64)
+      # target. A bare `rustup target add` is NOT enough: it applies to the
+      # rustup *default* (stable, set by the action above), not the pinned
+      # toolchain — run 27331470103 proved it ("rust-std up to date" in 0.1s
+      # while the universal build still missed x86_64). Parse the pinned
+      # channel and install/target it explicitly.
+      - name: Add Apple targets to the pinned toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The pin lives in src-tauri/ (the Rust workspace); fall back to the
+          # repo root in case it moves again.
+          channel=""
+          for f in src-tauri/rust-toolchain.toml rust-toolchain.toml; do
+            if [[ -f "$f" ]]; then
+              channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' "$f")
+              echo "Pinned toolchain channel: ${channel} (from $f)"
+              break
+            fi
+          done
+          if [[ -z "$channel" ]]; then
+            echo "No rust-toolchain.toml found — stable already has both targets"
+            exit 0
+          fi
+          rustup toolchain install "${channel}" --no-self-update
+          rustup target add --toolchain "${channel}" aarch64-apple-darwin x86_64-apple-darwin
+          rustup show
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 'lts/*'
+
+      - name: Setup PNPM
+        uses: pnpm/action-setup@eae0cfeb286e66ffb5155f1a79b90583a127a68b # v2.4.1
+        with:
+          version: 9.12.3
+          run_install: false
+
+      - name: PNPM store path
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_ENV"
+
+      - name: PNPM cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-pnpm-
+
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+
+      # The script fails the build when the secret carries no INDEXER_API_KEY —
+      # without it the app renders indexer-backed screens as zeros rather than
+      # errors, so a broken staging build looks healthy to testers.
+      - name: Create src-tauri/.env
+        shell: bash
+        env:
+          TAURI_ENV_FILE: ${{ secrets.TAURI_ENV_FILE }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$TAURI_ENV_FILE" | bash scripts/write-tauri-env.sh
+
+      - name: Build frontend
+        run: pnpm build
+        env:
+          NODE_ENV: production
+
+      # macOS packaging tools for the Finder extension: xcodegen builds the
+      # universal .appex; create-dmg builds the installer (the finalize step
+      # owns the DMG since the extension is embedded after Tauri builds the app).
+      - name: Install macOS packaging tools
+        run: brew install xcodegen create-dmg
+
+      # Apple code signing. The App Group the Finder extension needs is granted
+      # only to code signed by Team V28B5X732P, so a real Developer ID cert is
+      # required (the preview build was previously ad-hoc/unsigned). The CERT
+      # goes to GITHUB_ENV so tauri-action signs the app; notarization is
+      # withheld from tauri-action (the extension is embedded + the app re-signed
+      # afterwards, which invalidates any earlier notarization) and surfaced as
+      # step OUTPUTS consumed by the finalize step. Apple code signing is a
+      # separate concern from the UPDATER key, which every lane now shares —
+      # see the updater note at the top of this file.
+      - name: Set up Apple signing
+        id: apple
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: |
+          if [[ -n "$APPLE_CERTIFICATE" && -n "$APPLE_SIGNING_IDENTITY" ]]; then
+            {
+              echo "APPLE_CERTIFICATE=$APPLE_CERTIFICATE"
+              echo "APPLE_CERTIFICATE_PASSWORD=$APPLE_CERTIFICATE_PASSWORD"
+              echo "APPLE_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY"
+            } >> "$GITHUB_ENV"
+            echo "Code signing enabled."
+          else
+            echo "APPLE_CERTIFICATE / APPLE_SIGNING_IDENTITY not set — building unsigned; the Finder extension will be skipped (App Groups need a real Team ID)."
+          fi
+          if [[ -n "$APPLE_API_KEY_CONTENT" && -n "$APPLE_API_KEY_ID" && -n "$APPLE_API_ISSUER_ID" ]]; then
+            KEY_PATH="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
+            printf '%s' "$APPLE_API_KEY_CONTENT" | base64 --decode > "$KEY_PATH"
+            {
+              echo "api_key_path=$KEY_PATH"
+              echo "api_key=$APPLE_API_KEY_ID"
+              echo "api_issuer=$APPLE_API_ISSUER_ID"
+            } >> "$GITHUB_OUTPUT"
+            echo "finder_embed=yes" >> "$GITHUB_OUTPUT"
+            echo "Notarization enabled (finalize step)."
+          else
+            echo "finder_embed=no" >> "$GITHUB_OUTPUT"
+            # An annotation, not an echo: without the App Store Connect key this
+            # job still publishes a DMG, and that DMG contains NO Finder
+            # extension. A build like that looks complete and is not — testers
+            # spent days in August 2026 concluding "Share with Hippius is
+            # broken" from one, because the only trace of the difference was a
+            # log line nobody opens. Same rule as write-tauri-env.sh's missing
+            # INDEXER_API_KEY: a silent degradation that reads as a product bug
+            # has to announce itself. Deliberately NOT a hard failure — staging
+            # is also used to test everything unrelated to Finder, so losing the
+            # whole build to a lapsed secret costs more than it saves. Swap this
+            # for `exit 1` if that trade ever changes.
+            # Says nothing about SIGNING: that is decided by the separate
+            # APPLE_CERTIFICATE / APPLE_SIGNING_IDENTITY branch above, so with
+            # the cert present and only the notary key lapsed the build IS
+            # signed. Claiming otherwise here would be a warning testers learn
+            # to distrust.
+            echo "::error title=No Finder extension in this build::App Store Connect API key not set - skipping notarization and the Finder extension embed. 'Share with Hippius' will not exist in the published DMG. Do not use this build to test Finder integration."
+          fi
+
+      - name: Build & publish
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+          # Compile-time channel (release_channel.rs). Staging reports itself
+          # as staging, which is what disables its update checks — it has no
+          # manifest — and what lets it honour a console override.
+          HIPPIUS_RELEASE_CHANNEL: staging
+        with:
+          tagName: v__VERSION__-staging
+          # The suffix rides on the release NAME because that list is where a
+          # tester picks a build from; a caveat buried in the body is read after
+          # the download, if at all.
+          #
+          # BEST-EFFORT, not guaranteed: publish-tauri-linux and
+          # publish-tauri-windows have no `needs:` on this job and publish to
+          # this same tag with `overwrite: true` and a hardcoded
+          # `[STAGING] Hippius` name, so whichever job creates the release first
+          # wins the name. The RELIABLE signal is the ::error:: annotation
+          # above, which is per-run and cannot be raced. Do not weaken that one
+          # on the assumption this suffix will be visible.
+          releaseName: "[STAGING] ${{ steps.release_notes.outputs.title }}${{ steps.apple.outputs.finder_embed == 'no' && ' - NO FINDER EXTENSION' || '' }}"
+          releaseBody: |
+            **🎨 Staging Build - macOS Only**
+            ${{ steps.apple.outputs.finder_embed == 'no' && '
+            > **This build has NO Finder extension and is unsigned.** It was built without the App Store Connect key, so `HippiusFinder.appex` is not embedded and "Share with Hippius" will not appear on right-click. Use a production build to test Finder integration.
+            ' || '' }}
+            ${{ steps.release_notes.outputs.body }}
+          releaseDraft: false
+          prerelease: true
+          makeLatest: false
+          overwrite: true
+          # When notarization creds are present, build app-only — the finalize
+          # step (re)builds the DMG + updater tarball AFTER embedding the Finder
+          # extension (embedding re-signs the app and would invalidate a
+          # Tauri-built DMG/notarization). Without those creds, finalize is
+          # skipped, so fall back to Tauri's full build so a DMG is still produced
+          # (unsigned, no extension) rather than nothing.
+          args: ${{ steps.apple.outputs.api_key != '' && '--target universal-apple-darwin --bundles app' || '--target universal-apple-darwin' }}
+
+      # Embed the universal Finder extension into the app (Tauri built app-only),
+      # inside-out re-sign, notarize + staple, then build the DMG + regenerate the
+      # updater tarball from the embedded app, and attach them to the preview
+      # release. Runs only when notarization creds are present (else the preview
+      # stays app-only, as before). See
+      # docs/plans/2026-07-01-finder-release-packaging.md.
+      - name: Finalize macOS preview (embed Finder extension)
+        if: steps.apple.outputs.api_key != ''
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY_PATH: ${{ steps.apple.outputs.api_key_path }}
+          APPLE_API_KEY: ${{ steps.apple.outputs.api_key }}
+          APPLE_API_ISSUER: ${{ steps.apple.outputs.api_issuer }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # Re-import the Developer ID cert into a keychain THIS step owns.
+          # tauri-action imported the cert into its own temporary keychain
+          # during "Build & publish" and tore it down when that step ended, so
+          # codesign here would otherwise fail with "no identity found" (run
+          # 28510203939). The inside-out re-sign resolves the identity from the
+          # search list (embed-finder-extension.sh / finalize-macos-release.sh
+          # call `codesign --sign "$APPLE_SIGNING_IDENTITY"` with no explicit
+          # keychain), so create an unlocked keychain, import the cert, allow
+          # codesign to use its key non-interactively, and prepend it to the
+          # user search list. RUNNER_TEMP is ephemeral, so no teardown needed.
+          KEYCHAIN_PATH="$RUNNER_TEMP/finalize-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
+          CERT_PATH="$RUNNER_TEMP/finalize-cert.p12"
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$CERT_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          # -S grants codesign (and Apple tools) access to the private key with
+          # no GUI prompt — required on a headless runner.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" >/dev/null
+          # Put our keychain first on the search list, keeping the existing ones
+          # (login.keychain-db etc.) so codesign resolves the Developer ID.
+          # Word-splitting the inner command is intentional — each existing
+          # keychain path must be a separate `-s` argument; quoting would pass
+          # them as one and drop the rest of the search list.
+          # shellcheck disable=SC2046
+          security list-keychains -d user -s "$KEYCHAIN_PATH" \
+            $(security list-keychains -d user | sed 's/"//g')
+          rm -f "$CERT_PATH"
+
+          APP="src-tauri/target/universal-apple-darwin/release/bundle/macos/Hippius.app"
+          OUT="$RUNNER_TEMP/hippius-macos-dist"
+          macos/finalize-macos-release.sh "$APP" "$OUT"
+          TAG="v$(jq -r .version src-tauri/tauri.conf.json)-staging"
+          # The staging release already exists (tauri-action created it above).
+          gh release upload "$TAG" \
+            "$OUT"/*.dmg \
+            "$OUT"/Hippius.app.tar.gz \
+            "$OUT"/Hippius.app.tar.gz.sig \
+            --clobber
+
+  # Linux preview: the .deb (with the file-manager "Share with Hippius" action
+  # files wired in via tauri.conf.json's bundle.linux.deb). All three platform
+  # jobs upsert the same v<version>-staging release.
+  publish-tauri-linux:
+    runs-on: ubuntu-22.04
+    # Creates the staging release and uploads artifacts to it.
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          # Nothing here pushes over git — the release uploads go through `gh`
+          # with an explicit GH_TOKEN — so leaving the credential in .git/config
+          # only widens what a compromised build step could reach.
+          persist-credentials: false
+
+      - name: Setup SSH for private Rust git deps
+        shell: bash
+        env:
+          PRIVATE_GIT_DEPLOY_KEY_B64: ${{ secrets.HCFS_DEPLOY_KEY_B64 }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          python3 - <<'PY' > ~/.ssh/private_git_key
+          import os, base64, sys
+          sys.stdout.buffer.write(base64.b64decode(os.environ["PRIVATE_GIT_DEPLOY_KEY_B64"].strip()))
+          PY
+          chmod 600 ~/.ssh/private_git_key
+          ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+          cat > ~/.ssh/config <<'EOF'
+          Host github.com
+            HostName github.com
+            User git
+            IdentityFile ~/.ssh/private_git_key
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+            BatchMode yes
+          EOF
+          chmod 600 ~/.ssh/config
+
+      - name: Linux deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 'lts/*'
+
+      - name: Setup PNPM
+        uses: pnpm/action-setup@eae0cfeb286e66ffb5155f1a79b90583a127a68b # v2.4.1
+        with:
+          version: 9.12.3
+          run_install: false
+
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Create src-tauri/.env
+        shell: bash
+        env:
+          TAURI_ENV_FILE: ${{ secrets.TAURI_ENV_FILE }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$TAURI_ENV_FILE" | bash scripts/write-tauri-env.sh
+          # Console origin is the same on every lane (see release_channel.rs).
+
+
+      - name: Build frontend
+        run: pnpm build
+        env:
+          NODE_ENV: production
+
+      - name: Build & publish (deb)
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+          # Compile-time channel (release_channel.rs). Staging reports itself
+          # as staging, which is what disables its update checks — it has no
+          # manifest — and what lets it honour a console override.
+          HIPPIUS_RELEASE_CHANNEL: staging
+        with:
+          tagName: v__VERSION__-staging
+          releaseName: '[STAGING] Hippius'
+          releaseBody: |
+            **🎨 Staging Build**
+          releaseDraft: false
+          prerelease: true
+          makeLatest: false
+          overwrite: true
+          args: '--bundles deb'
+
+  # Windows preview: the app installer (NSIS) + a separate, self-signed shell
+  # extension bundle testers register manually (register-preview.ps1). The
+  # sparse MSIX can't be auto-registered by the installer without a procured
+  # cert, so for internal preview the extension ships as a side bundle.
+  publish-tauri-windows:
+    runs-on: windows-latest
+    # Creates the staging release and uploads artifacts to it.
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          # Nothing here pushes over git — the release uploads go through `gh`
+          # with an explicit GH_TOKEN — so leaving the credential in .git/config
+          # only widens what a compromised build step could reach.
+          persist-credentials: false
+
+      - name: Setup SSH for private Rust git deps
+        shell: bash
+        env:
+          PRIVATE_GIT_DEPLOY_KEY_B64: ${{ secrets.HCFS_DEPLOY_KEY_B64 }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          python3 - <<'PY' > ~/.ssh/private_git_key
+          import os, base64, sys
+          sys.stdout.buffer.write(base64.b64decode(os.environ["PRIVATE_GIT_DEPLOY_KEY_B64"].strip()))
+          PY
+          chmod 600 ~/.ssh/private_git_key
+          ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+          cat > ~/.ssh/config <<'EOF'
+          Host github.com
+            HostName github.com
+            User git
+            IdentityFile ~/.ssh/private_git_key
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+            BatchMode yes
+          EOF
+
+      - name: Force Cargo to use the git CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.cargo
+          printf '[net]\ngit-fetch-with-cli = true\n' > ~/.cargo/config.toml
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 'lts/*'
+
+      - name: Setup PNPM
+        uses: pnpm/action-setup@eae0cfeb286e66ffb5155f1a79b90583a127a68b # v2.4.1
+        with:
+          version: 9.12.3
+          run_install: false
+
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Create src-tauri/.env
+        shell: bash
+        env:
+          TAURI_ENV_FILE: ${{ secrets.TAURI_ENV_FILE }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$TAURI_ENV_FILE" | bash scripts/write-tauri-env.sh
+          # Console origin is the same on every lane (see release_channel.rs).
+
+
+      - name: Build frontend
+        run: pnpm build
+        env:
+          NODE_ENV: production
+
+      - name: Build the shell extension (self-signed sparse MSIX)
+        shell: pwsh
+        run: ./package-selfsigned.ps1
+        working-directory: windows/HippiusShell
+
+      - name: Build & publish (NSIS installer)
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+          # Compile-time channel (release_channel.rs). Staging reports itself
+          # as staging, which is what disables its update checks — it has no
+          # manifest — and what lets it honour a console override.
+          HIPPIUS_RELEASE_CHANNEL: staging
+        with:
+          tagName: v__VERSION__-staging
+          releaseName: '[STAGING] Hippius'
+          releaseBody: |
+            **🎨 Staging Build**
+          releaseDraft: false
+          prerelease: true
+          makeLatest: false
+          overwrite: true
+          args: '--bundles nsis'
+
+      - name: Bundle + upload the shell extension for testers
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ver = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          $tag = "v$ver-staging"
+          $out = "windows/HippiusShell/out"
+          Copy-Item windows/HippiusShell/register-preview.ps1 "$out/"
+          @"
+          Hippius Explorer 'Share with Hippius' — PREVIEW (self-signed).
+
+          1. Install Hippius from the *-setup.exe in this release.
+          2. Extract this zip; open an ADMIN PowerShell in the extracted folder.
+          3. Run:  ./register-preview.ps1
+          4. Right-click a file/folder in Explorer -> Share with Hippius.
+
+          Remove: Get-AppxPackage *Hippius.ShellExtension* | Remove-AppxPackage
+          "@ | Set-Content "$out/README-INSTALL.txt"
+          Compress-Archive -Path "$out/HippiusShell.dll","$out/HippiusShellSparse.msix","$out/HippiusPreviewCert.cer","$out/register-preview.ps1","$out/README-INSTALL.txt" -DestinationPath "HippiusShellExtension-preview.zip" -Force
+          gh release upload $tag HippiusShellExtension-preview.zip --clobber

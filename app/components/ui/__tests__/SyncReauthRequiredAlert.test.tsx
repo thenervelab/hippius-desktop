@@ -85,11 +85,12 @@ describe("SyncReauthRequiredAlert", () => {
     expect(checkRecoveryStateMock).not.toHaveBeenCalled();
   });
 
-  it("oauth user: shows unlock-password copy, never seed-phrase copy", () => {
+  it("oauth user: shows unlock-password copy, never the mnemonic-login title", () => {
     authState.authType = "oauth";
     renderBanner();
     expect(screen.getByText("Sync needs your unlock password")).toBeInTheDocument();
-    expect(screen.queryByText(/seed phrase/i)).not.toBeInTheDocument();
+    expect(screen.queryByText("Sync needs your seed phrase")).not.toBeInTheDocument();
+    expect(screen.getByText(/mnemonic seed if you forgot/i)).toBeInTheDocument();
   });
 
   it("oauth user with a server blob: opens the recovery dialog instead of the login form", async () => {

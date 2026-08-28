@@ -29,8 +29,9 @@ export interface TrayMenuData {
   sessionReady: boolean;
 }
 
-/** Max upload-feed rows the popover shows. */
-const FEED_LIMIT = 20;
+/** Max upload-feed rows the popover shows (product cap 2026-08-27: every
+ *  per-file surface — sync widget, Recent Files, this feed — shows ≤ 10). */
+const FEED_LIMIT = 10;
 
 /** Background refresh cadence for the server-backed slices (credits, recent
  *  uploads, unread). Live upload progress is event-driven, not polled. */

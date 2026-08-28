@@ -228,6 +228,28 @@ async fn ensure_sync_paths(conn: &mut SqliteConnection) -> Result<(), sqlx::Erro
             .await?;
     }
 
+    // Migration: add the shared-drive member-identity columns if missing.
+    //
+    // A MEMBER drive (shared-drives phase 2) syncs another account's folder:
+    // its WIRE identity on hcfs-server is the OWNER's ss58 plus the owner's
+    // folder hash, which the local label cannot derive. Both columns NULL is
+    // the own-drive shape (wire identity derived from the session account +
+    // label, byte-identical to pre-shared-drives behavior); both set is the
+    // member shape. Exactly one set is a corrupt row and
+    // `sync::identity::resolve_drive_identity` fails closed on it.
+    if !sync_paths_cols.contains("owner_ss58") {
+        info!("Adding owner_ss58 column to sync_paths");
+        sqlx::query("ALTER TABLE sync_paths ADD COLUMN owner_ss58 TEXT")
+            .execute(&mut *conn)
+            .await?;
+    }
+    if !sync_paths_cols.contains("wire_folder_hash") {
+        info!("Adding wire_folder_hash column to sync_paths");
+        sqlx::query("ALTER TABLE sync_paths ADD COLUMN wire_folder_hash TEXT")
+            .execute(&mut *conn)
+            .await?;
+    }
+
     // Older DDLs (e.g. `UNIQUE(owner, type)`) get rebuilt to the correct
     // constraint — SQLite cannot ALTER a constraint in place.
     ensure_sync_paths_unique_constraint(&mut *conn).await?;
@@ -242,11 +264,13 @@ async fn ensure_sync_paths(conn: &mut SqliteConnection) -> Result<(), sqlx::Erro
 /// inside a nested savepoint — `begin()` on a connection already in a
 /// transaction issues a `SAVEPOINT`, so a failed swap rolls back to it without
 /// aborting the rest of schema init. The copy MUST carry `is_paused`,
-/// `relative_paths_backfilled_at`, and `folder_entries_backfilled_at` (the
-/// caller's ALTERs guarantee all three exist on the source) so a paused drive
-/// stays paused and both one-shot backfill breadcrumbs survive — omitting them
-/// silently un-paused drives and re-triggered a backfill on legacy
-/// `UNIQUE(owner, type)` DBs.
+/// `relative_paths_backfilled_at`, `folder_entries_backfilled_at`, and the
+/// shared-drive identity pair `owner_ss58` / `wire_folder_hash` (the caller's
+/// ALTERs guarantee all five exist on the source) so a paused drive stays
+/// paused, both one-shot backfill breadcrumbs survive, and a member drive
+/// keeps its wire identity — omitting a column silently un-paused drives,
+/// re-triggered a backfill, or would turn a member drive back into an own
+/// drive on legacy `UNIQUE(owner, type)` DBs.
 async fn ensure_sync_paths_unique_constraint(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
     let table_sql = sqlx::query("SELECT sql FROM sqlite_master WHERE type='table' AND name='sync_paths'")
         .fetch_optional(&mut *conn)
@@ -281,6 +305,8 @@ async fn ensure_sync_paths_unique_constraint(conn: &mut SqliteConnection) -> Res
             is_paused INTEGER NOT NULL DEFAULT 0,
             relative_paths_backfilled_at INTEGER,
             folder_entries_backfilled_at INTEGER,
+            owner_ss58 TEXT,
+            wire_folder_hash TEXT,
             UNIQUE(owner, label)
         )",
     )
@@ -292,8 +318,8 @@ async fn ensure_sync_paths_unique_constraint(conn: &mut SqliteConnection) -> Res
     // only the private one (higher priority). OR IGNORE drops remaining dupes.
     sqlx::query(
         "INSERT OR IGNORE INTO sync_paths_new
-             (id, owner, path, type, label, timestamp, is_paused, relative_paths_backfilled_at, folder_entries_backfilled_at)
-         SELECT id, owner, path, type, label, timestamp, is_paused, relative_paths_backfilled_at, folder_entries_backfilled_at
+             (id, owner, path, type, label, timestamp, is_paused, relative_paths_backfilled_at, folder_entries_backfilled_at, owner_ss58, wire_folder_hash)
+         SELECT id, owner, path, type, label, timestamp, is_paused, relative_paths_backfilled_at, folder_entries_backfilled_at, owner_ss58, wire_folder_hash
          FROM sync_paths
          ORDER BY CASE type WHEN 'private' THEN 0 ELSE 1 END",
     )
@@ -1359,6 +1385,8 @@ mod tests {
             "is_paused",
             "relative_paths_backfilled_at",
             "folder_entries_backfilled_at",
+            "owner_ss58",
+            "wire_folder_hash",
         ] {
             assert!(names.contains(required), "sync_paths missing column `{required}`; present: {names:?}");
         }
@@ -1385,6 +1413,8 @@ mod tests {
                 timestamp INTEGER NOT NULL,
                 is_paused INTEGER NOT NULL DEFAULT 0,
                 relative_paths_backfilled_at INTEGER,
+                owner_ss58 TEXT,
+                wire_folder_hash TEXT,
                 UNIQUE(owner, type)
             )",
         )
@@ -1392,8 +1422,8 @@ mod tests {
         .await
         .expect("seed legacy sync_paths");
         sqlx::query(
-            "INSERT INTO sync_paths (owner, path, type, label, timestamp, is_paused, relative_paths_backfilled_at)
-             VALUES ('5Owner', '/data/Hippius', 'private', 'mylabel', 100, 1, 12345)",
+            "INSERT INTO sync_paths (owner, path, type, label, timestamp, is_paused, relative_paths_backfilled_at, owner_ss58, wire_folder_hash)
+             VALUES ('5Owner', '/data/Hippius', 'private', 'mylabel', 100, 1, 12345, '5DriveOwner', '0123456789abcdef')",
         )
         .execute(&pool)
         .await
@@ -1411,14 +1441,22 @@ mod tests {
             "migration must install UNIQUE(owner, label); got: {ddl}"
         );
 
-        // ...and the user's pause intent + backfill breadcrumb survived it.
-        let (is_paused, backfilled): (i64, Option<i64>) =
-            sqlx::query_as("SELECT is_paused, relative_paths_backfilled_at FROM sync_paths WHERE owner = '5Owner'")
+        // ...and the user's pause intent, backfill breadcrumb, and shared-drive
+        // wire identity all survived it.
+        type MigratedRow = (i64, Option<i64>, Option<String>, Option<String>);
+        let (is_paused, backfilled, owner_ss58, wire_folder_hash): MigratedRow =
+            sqlx::query_as("SELECT is_paused, relative_paths_backfilled_at, owner_ss58, wire_folder_hash FROM sync_paths WHERE owner = '5Owner'")
                 .fetch_one(&pool)
                 .await
                 .expect("read migrated row");
         assert_eq!(is_paused, 1, "paused drive must stay paused across the constraint swap");
         assert_eq!(backfilled, Some(12345), "relative_paths_backfilled_at must survive the constraint swap");
+        assert_eq!(owner_ss58.as_deref(), Some("5DriveOwner"), "owner_ss58 must survive the constraint swap");
+        assert_eq!(
+            wire_folder_hash.as_deref(),
+            Some("0123456789abcdef"),
+            "wire_folder_hash must survive the constraint swap — dropping it turns a member drive into an own drive"
+        );
     }
 
     /// The credit-dedup / low-credit probes filter on

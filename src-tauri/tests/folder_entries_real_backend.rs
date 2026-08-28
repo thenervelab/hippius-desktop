@@ -45,15 +45,27 @@
 //!
 //! ```text
 //! HCFS_DESKTOP_E2E_SERVER_URL=http://127.0.0.1:19999 \
-//! HCFS_DESKTOP_E2E_BEARER=5LrjePXpHpdFDzZXNAy3Yqy7kdfRyAq9 \
+//! HCFS_DESKTOP_E2E_ADMIN_BEARER=5LrjePXpHpdFDzZXNAy3Yqy7kdfRyAq9 \
 //!   cargo test --test folder_entries_real_backend -- --ignored
 //! ```
 //!
 //! Both vars are required; with either unset the test prints a skip note and
 //! returns Ok, so a default `cargo test` (and `--ignored` without the env)
-//! stays hermetic and green. The bearer is hcfs's committed admin-bypass token
+//! stays hermetic and green. Set `HCFS_DESKTOP_E2E_REQUIRE=1` to turn that
+//! skip into a panic, so a CI lane that forwards an unprovisioned secret
+//! fails instead of passing with nothing executed. The bearer is hcfs's
+//! committed admin-bypass token
 //! (public infra config, not a secret) — it short-circuits per-user ss58
 //! ownership server-side, so a fresh random test ss58 is accepted.
+//!
+//! The var is `HCFS_DESKTOP_E2E_ADMIN_BEARER`, deliberately NOT the plain
+//! `HCFS_DESKTOP_E2E_BEARER` that `folder_shares_real_backend` reads: that
+//! one must be a USER bearer, because the folder-share routes map the admin
+//! token to the literal `"admin"` owner. The two suites want opposite kinds
+//! of credential, so they must not share a name — otherwise exporting one
+//! suite's env and running `--ignored` across targets silently feeds this
+//! suite the wrong bearer, which (now that it honours REQUIRE) fails in a
+//! way that looks like a server bug rather than a mix-up.
 
 use sha2::{Digest, Sha256};
 use sqlx::sqlite::SqlitePool;
@@ -71,7 +83,10 @@ use tauri_project_lib::utils::schema::ensure_table_schema;
 /// Server URL env var. Unset → the test skips cleanly (default hermetic run).
 const SERVER_URL_ENV: &str = "HCFS_DESKTOP_E2E_SERVER_URL";
 /// Bearer-token env var (hcfs admin-bypass token, public infra config).
-const BEARER_ENV: &str = "HCFS_DESKTOP_E2E_BEARER";
+const BEARER_ENV: &str = "HCFS_DESKTOP_E2E_ADMIN_BEARER";
+/// `=1` turns the quiet env-skip into a panic, so a live CI lane cannot go
+/// green by silently not running these tests.
+const REQUIRE_ENV: &str = "HCFS_DESKTOP_E2E_REQUIRE";
 
 /// The drive label under test. The server namespaces folder entities by
 /// `(ss58_address, folder_hash)` and `folder_hash` is derived from this label;
@@ -80,7 +95,7 @@ const BEARER_ENV: &str = "HCFS_DESKTOP_E2E_BEARER";
 const LABEL: &str = "DesktopE2EFolders";
 
 /// `Some((server_url, bearer))` when both env vars are set and non-empty, else
-/// `None` after printing a skip note.
+/// `None` after printing a skip note — or a panic when [`REQUIRE_ENV`] is `1`.
 ///
 /// Treats an empty value as unset (mirrors hcfs-e2e-tests' `user_scoped_env`):
 /// a CI step that forwards an unconfigured secret materializes it as `""`, and
@@ -90,6 +105,10 @@ fn live_env() -> Option<(String, String)> {
     if let (Some(url), Some(bearer)) = (nonempty(SERVER_URL_ENV), nonempty(BEARER_ENV)) {
         return Some((url, bearer));
     }
+    assert!(
+        nonempty(REQUIRE_ENV).as_deref() != Some("1"),
+        "{REQUIRE_ENV}=1 but {SERVER_URL_ENV}/{BEARER_ENV} are not both set — the live lane must not skip"
+    );
     // `tracing::warn!` (not `println!`/`eprintln!`) because the workspace clippy
     // config denies stdout/stderr prints even in tests; the note still surfaces
     // under `RUST_LOG=warn`. The `#[ignore]` attribute already documents the
@@ -175,6 +194,8 @@ fn live_client(server_url: &str, bearer: &str, ss58: &str) -> HcfsClient {
         ss58_address: ss58.to_string(),
         folder_hash,
         read_timeout_ms: None,
+        // Mirrors `build_hcfs_config`: an own-drive client, never a member.
+        shared_drive_member: false,
     };
     HcfsClient::new(config).expect("construct HcfsClient for the live server")
 }
@@ -207,7 +228,7 @@ fn folder_named<'a>(folders: &'a [hcfs_shared::network::BrowseFolderEntry], name
 /// walk plus the reqwest driver need a real worker pool), which a
 /// current-thread runtime can't provide.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "live-lane: needs HCFS_DESKTOP_E2E_SERVER_URL + HCFS_DESKTOP_E2E_BEARER and a running hcfs-server"]
+#[ignore = "live-lane: needs HCFS_DESKTOP_E2E_SERVER_URL + HCFS_DESKTOP_E2E_ADMIN_BEARER and a running hcfs-server"]
 async fn empty_folder_round_trips_to_real_server() {
     let Some((server_url, bearer)) = live_env() else {
         return; // hermetic default stays green
@@ -352,7 +373,7 @@ async fn seed_reconcile_cache_row(pool: &SqlitePool, ss58: &str, rel: &str) {
 /// `multi_thread`: the materialize's `spawn_blocking` walk + apply plus the
 /// reqwest driver need a real worker pool.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "live-lane: needs HCFS_DESKTOP_E2E_SERVER_URL + HCFS_DESKTOP_E2E_BEARER and a running hcfs-server"]
+#[ignore = "live-lane: needs HCFS_DESKTOP_E2E_SERVER_URL + HCFS_DESKTOP_E2E_ADMIN_BEARER and a running hcfs-server"]
 async fn empty_folder_materializes_across_two_devices() {
     let Some((server_url, bearer)) = live_env() else {
         return; // hermetic default stays green
@@ -466,7 +487,7 @@ async fn empty_folder_materializes_across_two_devices() {
 /// server. No mock: the unregister + the post-reconcile `list_folder_entries`
 /// are real network round-trips against the live server.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "live-lane: needs HCFS_DESKTOP_E2E_SERVER_URL + HCFS_DESKTOP_E2E_BEARER and a running hcfs-server"]
+#[ignore = "live-lane: needs HCFS_DESKTOP_E2E_SERVER_URL + HCFS_DESKTOP_E2E_ADMIN_BEARER and a running hcfs-server"]
 async fn locally_deleted_empty_folder_not_resurrected() {
     let Some((server_url, bearer)) = live_env() else {
         return; // hermetic default stays green

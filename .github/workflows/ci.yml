@@ -3,25 +3,34 @@ name: ci
 # Test + lint gate for every PR and for pushes to the long-lived branches.
 #
 # Rust runs in three lanes:
-#   - `rust-linux` (ubuntu): the FAST lane, runs on every branch incl. redesign.
-#     Covers all cross-platform code. macOS-only `#[cfg(target_os = "macos")]`
-#     code is compiled out here.
+#   - `rust-linux` (ubuntu): the FAST lane, runs on every branch. Covers all
+#     cross-platform code. macOS-only `#[cfg(target_os = "macos")]` code is
+#     compiled out here.
 #   - `rust-macos` (macOS): the SLOW lane (~15-20 min), gated to release-bound
-#     merges (PRs into dev/main + pushes to them). Covers the macOS-only code
-#     (security-scoped bookmarks, App Translocation, apple-native keychain).
-#   - `rust-windows` (windows): a `cargo check` compile lane, gated to dev/main
-#     like rust-macos. It exists because ONLY the release (publish) workflow ever
-#     built on Windows, so Windows-specific breakage (e.g. a `#[cfg(unix)]` module
-#     referenced unconditionally in `generate_handler!`) surfaced at release time
-#     instead of at PR time. This lane catches that class before a release.
-# Branch protection requires `rust-linux` + `frontend` on redesign, and
-# `rust-linux` + `rust-macos` + `frontend` on dev/main. `rust-windows` is added
-# as a NON-required lane first; make it required once it has run green on a
-# dev/main PR (branch-protection is an admin change).
+#     merges (PRs into staging/beta/main + pushes to them). Covers the macOS-only
+#     code (security-scoped bookmarks, App Translocation, apple-native keychain).
+#   - `rust-windows` (windows): a `cargo check` compile lane, gated to
+#     staging/beta/main like rust-macos. It exists because ONLY the release (publish)
+#     workflow ever built on Windows, so Windows-specific breakage (e.g. a
+#     `#[cfg(unix)]` module referenced unconditionally in `generate_handler!`)
+#     surfaced at release time instead of at PR time. This lane catches that
+#     class before a release.
+#
+# All THREE long-lived branches cut releases — `staging` (tauri-staging.yml),
+# `beta` (tauri-beta.yml) and `main` (tauri-build.yml) — so the macOS and Windows
+# lanes gate all three. Under the old `redesign`/`dev` layout they gated neither,
+# which is how a Windows-only compile break reached a release. `beta` was missed
+# when that lane was created: it publishes to real users, yet a PR into it ran
+# neither lane — and neither could be made a required check without hanging
+# every such PR on a job that never starts.
+#
+# Branch protection requires `rust-linux` + `rust-macos` + `frontend` on
+# staging/main. `rust-windows` is a NON-required lane; make it required once it
+# has run green on a staging PR (branch-protection is an admin change).
 on:
   pull_request:
   push:
-    branches: [main, dev, redesign]
+    branches: [main, staging]
 
 # Least privilege: this workflow only reads the checkout.
 permissions:
@@ -66,12 +75,12 @@ jobs:
 
   rust-macos:
     # The macOS lane is the slow one (~15-20 min cold), so run it only where it
-    # gates a release-bound merge — PRs into dev/main and pushes to them — and
-    # skip it on redesign. It exists to cover the macOS-only code the Linux lane
-    # compiles out; `rust-linux` is the everywhere gate.
+    # gates a release-bound merge — PRs into staging/main and pushes to them.
+    # It exists to cover the macOS-only code the Linux lane compiles out;
+    # `rust-linux` is the everywhere gate.
     if: >-
-      (github.event_name == 'pull_request' && (github.base_ref == 'dev' || github.base_ref == 'main')) ||
-      (github.event_name == 'push' && (github.ref_name == 'dev' || github.ref_name == 'main'))
+      (github.event_name == 'pull_request' && (github.base_ref == 'staging' || github.base_ref == 'beta' || github.base_ref == 'main')) ||
+      (github.event_name == 'push' && (github.ref_name == 'staging' || github.ref_name == 'beta' || github.ref_name == 'main'))
     runs-on: macos-latest
     steps:
       - name: Checkout
@@ -102,14 +111,14 @@ jobs:
     # so a Windows-only compile break (a `#[cfg(unix)]` module referenced
     # unconditionally in `generate_handler!`) failed at release time, not PR time.
     # A fast `cargo check` (lib + bins — what actually ships, no test crates) here
-    # catches it. Gated to release-bound merges like rust-macos so redesign PRs
-    # stay quick. The shared rust-ci-setup composite is Linux/macOS-oriented
-    # (ssh-agent, apt), so this job mirrors the PROVEN Windows setup from
-    # tauri-build.yml: an ~/.ssh/config IdentityFile (no ssh-agent) + git-CLI
-    # fetch for the private hcfs dep.
+    # catches it. Gated to release-bound merges like rust-macos so ordinary
+    # feature PRs stay quick. The shared rust-ci-setup composite is
+    # Linux/macOS-oriented (ssh-agent, apt), so this job mirrors the PROVEN
+    # Windows setup from tauri-build.yml: an ~/.ssh/config IdentityFile (no
+    # ssh-agent) + git-CLI fetch for the private hcfs dep.
     if: >-
-      (github.event_name == 'pull_request' && (github.base_ref == 'dev' || github.base_ref == 'main')) ||
-      (github.event_name == 'push' && (github.ref_name == 'dev' || github.ref_name == 'main'))
+      (github.event_name == 'pull_request' && (github.base_ref == 'staging' || github.base_ref == 'beta' || github.base_ref == 'main')) ||
+      (github.event_name == 'push' && (github.ref_name == 'staging' || github.ref_name == 'beta' || github.ref_name == 'main'))
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -193,6 +202,47 @@ jobs:
           SQLX_OFFLINE: "true"
         run: cargo check
 
+  windows-shell-ext:
+    # Compile + test the standalone IExplorerCommand COM DLL crate
+    # (windows/HippiusShell) on Windows. It can't build on the author's macOS
+    # host (windows-crate COM), and the app's rust-windows lane only checks
+    # src-tauri (not this separate crate). No private deps, so no SSH key needed.
+    # Same gating as rust-windows.
+    if: >-
+      (github.event_name == 'pull_request' && (github.base_ref == 'staging' || github.base_ref == 'beta' || github.base_ref == 'main')) ||
+      (github.event_name == 'push' && (github.ref_name == 'staging' || github.ref_name == 'beta' || github.ref_name == 'main'))
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: './windows/HippiusShell -> target'
+          cache-on-failure: "true"
+
+      - name: Build + test the shell extension
+        working-directory: windows/HippiusShell
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --release
+          cargo test
+
+      # Validate the full packaging pipeline (build DLL -> self-signed cert ->
+      # stamp manifest -> makeappx pack -> signtool sign/verify -> export cert)
+      # here in the fast lane, before wiring it into the slow preview build.
+      - name: Package sparse MSIX (self-signed)
+        working-directory: windows/HippiusShell
+        shell: pwsh
+        run: ./package-selfsigned.ps1
+
   supply-chain:
     # Supply-chain advisory gate for the Rust backend. Lighter than the Rust
     # build jobs — it skips the toolchain, build cache and compile — but it
@@ -252,6 +302,29 @@ jobs:
       - name: cargo-deny (advisories, bans, sources)
         working-directory: src-tauri
         run: cargo deny check advisories bans sources
+
+  rust-fmt:
+    # Formatting gate. Without it the backend silently drifts from its own
+    # rustfmt.toml (max_width = 150) — it had accumulated 66 files of drift
+    # before this job existed, which made `cargo fmt` unusable: running it on
+    # ONE file rewrote dozens of unrelated ones, because rustfmt walks the whole
+    # module tree from the crate root. Keeping the tree clean keeps `cargo fmt`
+    # safe to run on a single file.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      # Only rustfmt is needed — no crate compilation, so this deliberately
+      # skips the full rust-ci-setup (SSH keys, sqlx, caches) and stays fast.
+      - name: Install rustfmt
+        run: rustup component add rustfmt
+
+      - name: Check formatting
+        working-directory: src-tauri
+        run: cargo fmt --check
 
   actionlint:
     # Lint the workflow files themselves so a malformed/insecure workflow fails

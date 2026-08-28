@@ -408,37 +408,73 @@ fn apply_init_commit_clears_paused_flag() {
     );
 }
 
-/// Static funnel pin: `pause_drive` MUST bump the drive-lifecycle epoch
-/// under the label's commit lock (`sync::lifecycle_guard` single-writer
-/// protocol). Without the bump, an in-flight init's commit step would
-/// silently overwrite the user's pause — the PR #17 race. The
-/// `drive_lifecycle.`-qualified needles bind to real call sites, not a
-/// comment mention.
+/// Static funnel pin: the shared suspend funnel (`suspend_drive_inmemory`,
+/// which `pause_drive` AND the revoked-shared-drive teardown route through)
+/// MUST bump the drive-lifecycle epoch under the label's commit lock
+/// (`sync::lifecycle_guard` single-writer protocol). Without the bump, an
+/// in-flight init's commit step would silently overwrite the teardown — the
+/// PR #17 race. The `drive_lifecycle.`-qualified needles bind to real call
+/// sites, not a comment mention.
 #[test]
-fn pause_drive_bumps_epoch_under_commit_lock() {
+fn suspend_funnel_bumps_epoch_under_commit_lock() {
     let src = lifecycle_src();
-    let body = fn_body(&src, "async fn pause_drive(");
+    let body = fn_body(&src, "async fn suspend_drive_inmemory<");
     let lock_idx = body
         .find("drive_lifecycle.commit_lock(")
-        .expect("pause_drive must take the label's commit lock before writing is_paused");
+        .expect("suspend funnel must take the label's commit lock before writing is_paused");
     let bump_idx = body
         .find("drive_lifecycle.bump(")
-        .expect("pause_drive must bump the pause epoch so in-flight inits see the supersession");
-    let write_idx = body.find("set_sync_path_paused(").expect("pause_drive must persist is_paused=true");
+        .expect("suspend funnel must bump the pause epoch so in-flight inits see the supersession");
+    let write_idx = body
+        .find("set_sync_path_paused(")
+        .expect("suspend funnel must persist is_paused=true for the Pause kind");
     let emit_idx = body
         .find("emit_drive_status(")
-        .expect("pause_drive must emit the Paused status inside its commit-locked block");
+        .expect("suspend funnel must emit the settled status inside its commit-locked block");
     // Protocol order, not mere presence: acquire the lock, bump under it,
-    // write the flag, then emit Paused — all before the guard drops. A
-    // bump after the write (or outside the lock) reopens the
-    // pause-overwrite race one level down; an emit outside the lock can
-    // be overtaken by an init's stale Active emit (the commit's
-    // on_committed hook runs under this same lock), leaving the status
-    // cache showing Active for a paused drive.
+    // write the flag, then emit — all before the guard drops. A bump after
+    // the write (or outside the lock) reopens the pause-overwrite race one
+    // level down; an emit outside the lock can be overtaken by an init's
+    // stale Active emit (the commit's on_committed hook runs under this
+    // same lock), leaving the status cache showing Active for a torn-down
+    // drive.
     assert!(
         lock_idx < bump_idx && bump_idx < write_idx && write_idx < emit_idx,
-        "pause_drive must order commit_lock < bump < set_sync_path_paused < emit_drive_status \
+        "suspend funnel must order commit_lock < bump < set_sync_path_paused < emit_drive_status \
          (got indices {lock_idx} / {bump_idx} / {write_idx} / {emit_idx})"
+    );
+    // The is_paused write must be gated on the teardown kind — a revoked
+    // teardown reaches this funnel too and must never persist a pause.
+    let gate_idx = body
+        .find("kind.persists_pause()")
+        .expect("the is_paused write must be gated on DriveSuspendKind::persists_pause");
+    assert!(
+        gate_idx < write_idx,
+        "persists_pause gate must guard the set_sync_path_paused call (gate {gate_idx} / write {write_idx})"
+    );
+}
+
+/// Both pause-shaped teardowns route through the ONE suspend funnel with
+/// their respective kinds, so the single-writer discipline pinned above
+/// covers them both and the two paths cannot drift.
+#[test]
+fn pause_and_revoked_teardowns_route_through_the_suspend_funnel() {
+    let src = lifecycle_src();
+
+    let pause = fn_body(&src, "async fn pause_drive(");
+    assert!(
+        pause.contains("suspend_drive_inmemory(") && pause.contains("DriveSuspendKind::Pause"),
+        "pause_drive must delegate to suspend_drive_inmemory with DriveSuspendKind::Pause"
+    );
+
+    let revoked = fn_body(&src, "async fn teardown_revoked_drive(");
+    assert!(
+        revoked.contains("suspend_drive_inmemory(") && revoked.contains("DriveSuspendKind::Revoked"),
+        "teardown_revoked_drive must delegate to suspend_drive_inmemory with DriveSuspendKind::Revoked"
+    );
+    assert!(
+        !revoked.contains("set_sync_path_paused"),
+        "the revoked teardown must never touch is_paused — the drive is dead, not paused"
     );
 }
 

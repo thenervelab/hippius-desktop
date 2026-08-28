@@ -1,8 +1,16 @@
-// NOTE: Intentionally kept in TypeScript — @tauri-apps/plugin-updater only exposes
-// check() and downloadAndInstall() as JS APIs with no Rust equivalent.
+// The update check runs in RUST (`src-tauri/src/updates.rs`), not through
+// @tauri-apps/plugin-updater's check()/downloadAndInstall(). Those read the one
+// `plugins.updater.endpoints` list compiled into tauri.conf.json and the JS
+// CheckOptions cannot override it, so a beta build would ask the production
+// lane for updates — and with every lane sharing one signing key that manifest
+// verifies and installs. This file is presentation: dialog, toasts, relaunch.
 /* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
-import { check, Update } from "@tauri-apps/plugin-updater";
+import {
+  checkForUpdate,
+  installUpdate,
+  type AvailableUpdate,
+} from "@/lib/tauri/updates";
 import { errorMessage as toErrorMessage } from "@/lib/utils/errorUtils";
 import { relaunch } from "@tauri-apps/plugin-process";
 import {
@@ -27,10 +35,10 @@ function formatPercentage(current: number, total: number): string {
   return ((current / total) * 100).toFixed(1);
 }
 
-// Store the current update object for dialog access
-let currentUpdateObject: Update | null = null;
+// Store the current update for dialog access
+let currentUpdateObject: AvailableUpdate | null = null;
 
-export function getCurrentUpdate(): Update | null {
+export function getCurrentUpdate(): AvailableUpdate | null {
   return currentUpdateObject;
 }
 
@@ -39,7 +47,7 @@ export async function checkForUpdates(notifyOnce = false) {
 
   try {
     console.log("Checking for updates...");
-    const update = await check();
+    const update = await checkForUpdate();
     if (!update) {
       console.log("No updates available");
       return;
@@ -47,7 +55,7 @@ export async function checkForUpdates(notifyOnce = false) {
 
     console.log("Update found:", update.version);
     const version = update.version;
-    const releaseNotes = update.body || "";
+    const releaseNotes = update.notes;
 
     // Optional in-app notification
     const notified = await hippusVersionNotificationExists(version);
@@ -78,7 +86,7 @@ export async function checkForUpdates(notifyOnce = false) {
     // Open the update dialog with the update info
     openUpdateDialog({
       version: update.version,
-      body: update.body || "",
+      body: update.notes,
     });
 
     // If this is a startup check (notifyOnce = true), don't wait for user response
@@ -117,65 +125,55 @@ export async function checkForUpdates(notifyOnce = false) {
 
 // Separate function to handle the actual update process
 async function performUpdate(
-  update: Update,
+  _update: AvailableUpdate,
   downloadToastId?: string | number,
 ) {
   let totalBytes = 0;
-  let downloadedBytes = 0;
+  let started = false;
 
-  // Download, install, then relaunch with enhanced error handling
-  await update.downloadAndInstall((e) => {
-    switch (e.event) {
-      case "Started":
-        totalBytes = e.data.contentLength ?? 0;
-        console.log(`Downloading ${formatBytes(totalBytes)} MB…`);
+  // Rust reports CUMULATIVE bytes, unlike the JS plugin's per-chunk deltas —
+  // no accumulator here, and no "Started"/"Finished" events either, so the
+  // first progress message stands in for the start of the download.
+  await installUpdate(({ bytesDone, bytesTotal }) => {
+    totalBytes = bytesTotal ?? totalBytes;
 
-        // Show initial download toast
-        downloadToastId = toast.loading(
-          `Starting download... (${formatBytes(totalBytes)} MB)`,
-          {
-            description:
-              "0% complete • 0 MB / " + formatBytes(totalBytes) + " MB",
-            duration: Infinity,
-          },
-        );
-        break;
-
-      case "Progress":
-        downloadedBytes += e.data.chunkLength;
-        const percentage = formatPercentage(downloadedBytes, totalBytes);
-        const downloadedMB = formatBytes(downloadedBytes);
-        const totalMB = formatBytes(totalBytes);
-        const remainingMB = formatBytes(totalBytes - downloadedBytes);
-
-        // Update the existing toast with progress
-        if (downloadToastId) {
-          toast.loading(`Downloading update... ${percentage}%`, {
-            id: downloadToastId,
-            description: `${downloadedMB} MB / ${totalMB} MB • ${remainingMB} MB remaining`,
-            duration: Infinity,
-          });
-        }
-        break;
-
-      case "Finished":
-        // Dismiss the download progress toast and show completion
-        if (downloadToastId) {
-          toast.dismiss(downloadToastId);
-        }
-
-        toast.success("Download completed!", {
-          description: `${formatBytes(totalBytes)} MB downloaded successfully`,
-          duration: 3000,
-        });
-
-        // Show installation progress
-        toast.loading("Installing update...", {
-          description: "Please wait while the update is being installed",
+    if (!started) {
+      started = true;
+      downloadToastId = toast.loading(
+        totalBytes
+          ? `Starting download... (${formatBytes(totalBytes)} MB)`
+          : "Starting download...",
+        {
+          description: totalBytes
+            ? "0% complete • 0 MB / " + formatBytes(totalBytes) + " MB"
+            : "Preparing…",
           duration: Infinity,
-        });
-        break;
+        },
+      );
+      return;
     }
+
+    if (!downloadToastId) return;
+
+    // An asset served without Content-Length gives no denominator, so show
+    // bytes downloaded rather than a percentage that would divide by zero.
+    if (!totalBytes) {
+      toast.loading("Downloading update...", {
+        id: downloadToastId,
+        description: `${formatBytes(bytesDone)} MB downloaded`,
+        duration: Infinity,
+      });
+      return;
+    }
+
+    const percentage = formatPercentage(bytesDone, totalBytes);
+    toast.loading(`Downloading update... ${percentage}%`, {
+      id: downloadToastId,
+      description: `${formatBytes(bytesDone)} MB / ${formatBytes(totalBytes)} MB • ${formatBytes(
+        Math.max(totalBytes - bytesDone, 0),
+      )} MB remaining`,
+      duration: Infinity,
+    });
   });
 
   // Dismiss any remaining toasts
@@ -219,22 +217,21 @@ function handleUpdateError(err: any, downloadToastId?: string | number) {
 }
 
 /**
- * Returns the Update object if there's a newer version,
- * or null if you're already up to date.
+ * Returns the available update if there's a newer version on this build's own
+ * channel, or null if you're already up to date.
  */
-export async function getAvailableUpdate(): Promise<Update | null> {
+export async function getAvailableUpdate(): Promise<AvailableUpdate | null> {
   try {
-    const update = await check();
-    return update ?? null;
+    return await checkForUpdate();
   } catch {
     return null;
   }
 }
 
 /**
- * Start the update process for a given Update object
+ * Start the update process for a given update
  */
-export async function startUpdateProcess(update?: Update) {
+export async function startUpdateProcess(update?: AvailableUpdate) {
   const updateToUse = update || currentUpdateObject;
   if (!updateToUse) {
     console.error("No update object available");

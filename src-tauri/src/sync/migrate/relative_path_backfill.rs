@@ -60,6 +60,13 @@ pub enum BackfillOutcome {
     /// The drive wasn't unlocked or registered yet. Harmless — next launch
     /// or next `initialize_sync_inner` will trigger another attempt.
     NotReady,
+    /// The label names a MEMBER drive (shared-drives phase 2). Its server
+    /// rows live under the OWNER's namespace and must not be rewritten from
+    /// a member device, and there is no legacy state to repair — member
+    /// drives postdate the `relative_path` column. The flag is stamped so
+    /// the FE's "Indexing folders…" banner (keyed on a NULL flag) never
+    /// shows for a state that will never change.
+    SkippedMemberDrive,
     /// A transient failure (network error, server error, missing client
     /// config). Flag stays NULL so the next launch retries.
     RetryLater,
@@ -85,6 +92,24 @@ pub async fn run_backfill_for_drive(state: &AppState, account_id: &str, label: &
     //    collapses into a no-op when an older invocation already won.
     if is_backfilled(&pool, &owner, label).await? {
         return Ok(BackfillOutcome::AlreadyDone);
+    }
+
+    // 1.5. Member drives have nothing to backfill: this job repairs LEGACY
+    //      rows, and a member drive postdates the feature; its server rows
+    //      belong to the OWNER's namespace besides. Stamp the flag (this is
+    //      final, not transient) so pre-backfill consumers — the FE's
+    //      "Indexing folders…" banner — don't wait forever on a state that
+    //      never changes.
+    // A vanished row (`None`) means a remove_drive / logout race between the
+    // flag check and here — the same transient state the later drive lookup
+    // reported as NotReady before this gate existed.
+    let Some(identity) = crate::sync::identity::lookup_drive_identity(&pool, account_id, label).await? else {
+        return Ok(BackfillOutcome::NotReady);
+    };
+    if identity.is_member {
+        info!(label = %label, "backfill: member drive; nothing to backfill — marking done");
+        mark_backfilled(&pool, &owner, label).await?;
+        return Ok(BackfillOutcome::SkippedMemberDrive);
     }
 
     // 2. Snapshot the drive's `path_index` off the in-memory registry. The
@@ -312,7 +337,15 @@ async fn build_one_shot_client(pool: &SqlitePool, account_id: &str, label: &str)
     let bearer_token = get_api_token(pool, account_id)
         .await?
         .ok_or_else(|| AppError::Auth("No authentication token found. Please log in again.".into()))?;
-    let config = build_hcfs_config(&server_url, &bearer_token, account_id, &folder_hash(label));
+    // Structurally own-drive: `run_backfill_for_drive` skips member drives
+    // outright (their server rows are the OWNER's and must not be rewritten
+    // from a member device), so by the time this client is built the label is
+    // known to be an own drive and the label-derived hash is correct.
+    let config = build_hcfs_config(
+        &server_url,
+        &bearer_token,
+        &crate::sync::identity::DriveIdentity::own(account_id, &folder_hash(label)),
+    );
     HcfsClient::new(config).map_err(|e| AppError::Hcfs(format!("Failed to create HCFS client for backfill: {e}")))
 }
 
@@ -371,6 +404,9 @@ pub(crate) fn spawn_backfill(app: tauri::AppHandle, account_id: String, label: S
             }
             Ok(BackfillOutcome::NotReady) => {
                 debug!(label = %label, "relative_paths backfill: drive not ready; will retry next launch");
+            }
+            Ok(BackfillOutcome::SkippedMemberDrive) => {
+                debug!(label = %label, "relative_paths backfill: member drive; nothing to backfill");
             }
             Ok(BackfillOutcome::RetryLater) => {
                 debug!(label = %label, "relative_paths backfill: transient failure; will retry next launch");

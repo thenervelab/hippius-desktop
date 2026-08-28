@@ -34,12 +34,51 @@ export function canSubmitRecoveryRotation(form: {
   );
 }
 
-export type RotationError = "wrong_password" | "generic";
+/** Settings forgot-password when the session already holds the master. */
+export function canSubmitNewPasswordOnly(form: {
+  submitting: boolean;
+  next: string;
+  confirm: string;
+  strength: { acceptableForSubmit: boolean } | null | undefined;
+}): boolean {
+  return (
+    !form.submitting &&
+    form.next.length > 0 &&
+    form.strength?.acceptableForSubmit === true &&
+    form.next === form.confirm
+  );
+}
+
+/** Unlock/settings phrase restore: seed + new password + confirm. */
+export function canSubmitPhraseRestore(form: {
+  submitting: boolean;
+  mnemonic: string;
+  next: string;
+  confirm: string;
+  strength: { acceptableForSubmit: boolean } | null | undefined;
+}): boolean {
+  return (
+    !form.submitting &&
+    form.mnemonic.trim().length > 0 &&
+    canSubmitNewPasswordOnly({
+      submitting: form.submitting,
+      next: form.next,
+      confirm: form.confirm,
+      strength: form.strength,
+    })
+  );
+}
+
+export type RotationError = "wrong_password" | "mnemonic_missing" | "generic";
 
 /**
  * Classify a rotation failure. Rust surfaces a bad current password as
  * `Validation("Wrong passphrase.")`; that case re-prompts the current field
- * inline, everything else is a generic toast.
+ * inline. `mnemonic_missing` is the Settings forgot path when this device
+ * cannot open the master — the FE switches to the seed form.
  */
-export const classifyRotationError = (message: string): RotationError =>
-  /wrong passphrase/i.test(message) ? "wrong_password" : "generic";
+export const classifyRotationError = (message: string): RotationError => {
+  if (/wrong passphrase/i.test(message)) return "wrong_password";
+  if (/doesn't have your mnemonic seed/i.test(message)) return "mnemonic_missing";
+  return "generic";
+};

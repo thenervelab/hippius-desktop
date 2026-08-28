@@ -79,9 +79,9 @@ export const ONBOARDING_SCREENS: OnboardingScreen[] = [
       "Set it once and it works across all your devices and the web console.",
     featureLink:
       "Need to open a file on console.hippius.com? This is the password",
-    body: "Your unlock password encrypts files locally and lets you access them on new devices. Without it, your encrypted files cannot be opened, not even by Hippius.",
+    body: "Your unlock password wraps your mnemonic seed so you can open it on new devices and on Hippius Console. Files themselves are encrypted with the seed. Lose both the password and the seed, and the files stay unreadable — including to us.",
     pills: [
-      "Encrypts files locally",
+      "Wraps your mnemonic seed",
       "Works on new devices",
       "Unlocks web console",
       "Not stored by Hippius",

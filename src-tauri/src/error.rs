@@ -154,6 +154,17 @@ pub enum NotReadyKind {
     /// VPN first, dispatched structurally on the `subkind` rather than the
     /// error message.
     VpnNotConnected,
+    /// The hcfs-server this account talks to does not expose the shared-drive
+    /// endpoints (`HCFS_FEATURE_SHARED_DRIVES` off — the routes are unmounted
+    /// and answer a bare 404). Raised by `shared_drives::commands` so the FE
+    /// can HIDE the shared-drives surface instead of surfacing an error.
+    ///
+    /// CAUTION for FE consumers: `errorUtils.isExpectedNoSessionError`
+    /// silences the whole `NotReady` kind on several call paths, so the
+    /// shared-drives surfaces must match this `subkind`
+    /// (`SHARED_DRIVES_UNAVAILABLE`) EXPLICITLY and hide themselves — never
+    /// rely on a generic toast to communicate it.
+    SharedDrivesUnavailable,
 }
 
 impl NotReadyKind {
@@ -178,6 +189,7 @@ impl NotReadyKind {
             Self::DatabaseNotReady => "DATABASE_NOT_READY",
             Self::RateLimited { .. } => "RATE_LIMITED",
             Self::VpnNotConnected => "VPN_NOT_CONNECTED",
+            Self::SharedDrivesUnavailable => "SHARED_DRIVES_UNAVAILABLE",
         }
     }
 }
@@ -224,6 +236,9 @@ impl std::fmt::Display for NotReadyKind {
             Self::RateLimited { message } => write!(f, "{message}"),
             Self::VpnNotConnected => {
                 write!(f, "Connect to the VPN before opening a VM connection.")
+            }
+            Self::SharedDrivesUnavailable => {
+                write!(f, "Shared drives are not available on this server.")
             }
         }
     }
@@ -505,6 +520,7 @@ mod tests {
                 NotReadyKind::DatabaseNotReady => "DATABASE_NOT_READY",
                 NotReadyKind::RateLimited { .. } => "RATE_LIMITED",
                 NotReadyKind::VpnNotConnected => "VPN_NOT_CONNECTED",
+                NotReadyKind::SharedDrivesUnavailable => "SHARED_DRIVES_UNAVAILABLE",
             }
         }
         for kind in [
@@ -524,6 +540,7 @@ mod tests {
                 message: "Try again in 5 minutes.".into(),
             },
             NotReadyKind::VpnNotConnected,
+            NotReadyKind::SharedDrivesUnavailable,
         ] {
             let expected = expected_wire_name(&kind);
             let json = serde_json::to_value(AppError::NotReady(kind.clone())).expect("serialize");

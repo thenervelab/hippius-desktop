@@ -29,12 +29,18 @@ const Home: React.FC = () => {
         <div className="px-3">
           <PageHeader />
           <div className="mt-3">
-            {/* Two small cards (mobile-overview style): usage bar + the
-                plan/credits summary. Both render from the same
+            {/* Usage bar + the plan/credits summary. Both render from the same
                 get_storage_overview fetch, so they can't disagree.
-                max-w keeps them genuinely SMALL on wide viewports —
-                stretched edge-to-edge they read as two empty banners. */}
-            <div className="mb-3 grid gap-4 grid-cols-1 @xl:grid-cols-2 items-stretch max-w-[960px]">
+
+                The row spans the full content width, matching the Recent Files
+                card below it. An earlier `max-w-[960px]` deliberately kept the
+                pair narrow, on the reasoning that stretched cards read as empty
+                banners — but that left a ragged gap to their right on any wide
+                window while every other block on the page went edge to edge,
+                which reads as a layout bug rather than as restraint. Keep the
+                two in step: if this row is ever re-capped, cap Recent Files to
+                the same width. */}
+            <div className="mb-3 grid gap-4 grid-cols-1 @xl:grid-cols-2 items-stretch">
               <StorageOverviewCard />
               <PlanOverviewCard />
             </div>

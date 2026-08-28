@@ -20,13 +20,18 @@ pub mod error;
 #[cfg(any(unix, windows))]
 pub mod finder_bridge;
 pub mod infra;
+pub mod media_preview;
 pub mod notifications;
 pub mod power;
 pub mod recovery;
 pub mod recovery_binding;
+pub mod recovery_proof;
+pub mod release_channel;
+pub mod shared_drives;
 pub mod shares;
 pub mod sync;
 pub mod tray;
+pub mod updates;
 pub mod utils;
 pub mod vpn;
 pub mod wallet;
