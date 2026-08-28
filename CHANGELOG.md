@@ -51,6 +51,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Deleting a paused folder from the server now removes it from your folder list.**
+  If a folder's sync was paused, deleting it from the server wiped the files but left
+  the folder sitting in Settings → Sync & Storage with no size or file count, and
+  there was no way to clear it. The folder is now removed from the list as it should be.
 - **Updating on a Mac no longer removes "Share with Hippius".** Installing from the
   disk image gave you the right-click share menu, but every automatic update after
   that quietly replaced Hippius with a copy that did not include it — so the feature

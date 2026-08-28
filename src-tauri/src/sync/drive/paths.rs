@@ -808,6 +808,76 @@ mod set_path_tests {
             "same label re-points to the new path in one row"
         );
     }
+
+    // ── sync_path_exists ────────────────────────────────────────────
+    //
+    // The regression this pins: `delete_remote_folder` used to ask the
+    // in-memory `sync.drives` map whether local teardown was owed. A PAUSED
+    // drive is absent from that map, so deleting its server copy skipped the
+    // teardown entirely — the row survived and the folder kept rendering in
+    // "Local Sync Folders" with blank stats. Pausing must not change this
+    // answer, so the test drives the REAL pause writer rather than asserting
+    // over a freshly-added row only.
+    #[tokio::test]
+    async fn sync_path_exists_stays_true_for_a_paused_drive() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pool = make_file_pool(dir.path()).await;
+        let acct = "5paused";
+
+        set_sync_path_internal(&pool, acct, "/u/Pictures/Camera Uploads", false, LabelMode::Exact("Camera Uploads"))
+            .await
+            .expect("add drive");
+        assert!(
+            sync_path_exists(&pool, acct, "Camera Uploads").await.expect("query"),
+            "an added drive is configured locally"
+        );
+
+        set_sync_path_paused(&pool, acct, "Camera Uploads", true).await.expect("pause");
+        assert!(
+            sync_path_exists(&pool, acct, "Camera Uploads").await.expect("query"),
+            "pausing a drive must NOT make it read as unconfigured — it is the user's standing sync intent, and the local teardown on a server delete is still owed"
+        );
+    }
+
+    #[tokio::test]
+    async fn sync_path_exists_is_false_after_removal_and_for_unknown_labels() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pool = make_file_pool(dir.path()).await;
+        let acct = "5gone";
+
+        set_sync_path_internal(&pool, acct, "/u/Documents/docs", false, LabelMode::Exact("docs"))
+            .await
+            .expect("add drive");
+        remove_sync_path_internal(&pool, acct, "docs").await.expect("remove");
+
+        assert!(
+            !sync_path_exists(&pool, acct, "docs").await.expect("query"),
+            "a removed drive is no longer configured locally"
+        );
+        assert!(
+            !sync_path_exists(&pool, acct, "never-added").await.expect("query"),
+            "a label with no row reads false, not an error"
+        );
+    }
+
+    // Scoping guard: the lookup is per-account, so one account's drive must
+    // never make another account's identically-labelled delete tear down a
+    // drive it does not own.
+    #[tokio::test]
+    async fn sync_path_exists_is_scoped_to_the_owning_account() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pool = make_file_pool(dir.path()).await;
+
+        set_sync_path_internal(&pool, "5owner", "/u/Pictures/shared-name", false, LabelMode::Exact("shared-name"))
+            .await
+            .expect("add drive");
+
+        assert!(sync_path_exists(&pool, "5owner", "shared-name").await.expect("query"));
+        assert!(
+            !sync_path_exists(&pool, "5other", "shared-name").await.expect("query"),
+            "another account's row must not answer for this one"
+        );
+    }
 }
 
 /// Look up the drive label for a given local sync-root `path`.
@@ -834,6 +904,35 @@ pub(crate) async fn label_for_sync_path(pool: &SqlitePool, account_id: &str, syn
         .fetch_optional(pool)
         .await?;
     Ok(label)
+}
+
+/// Whether `label` names a sync path configured for `account_id` on this device.
+///
+/// This is the DB-backed answer to "is this drive set up locally", and it is
+/// deliberately NOT the same question as `state.sync.drives.contains_key(label)`.
+/// That map holds only drives whose sync loop is currently registered: a paused
+/// drive is absent from it (`pause_drive` drops the slot, and `auto_init_sync`
+/// filters paused rows out of the init loop entirely), and so is one whose init
+/// has not finished yet on a slow login. A `sync_paths` row, by contrast, is the
+/// user's standing intent to sync the folder and survives both.
+///
+/// Callers deciding whether local teardown is owed MUST use this — see
+/// [`crate::sync::folders::delete_remote_folder`], where reading the map instead
+/// left paused drives with a live `sync_paths` row after their server side was
+/// wiped.
+///
+/// # Errors
+///
+/// Returns `Err` only when the SQL query itself fails (DB locked, connection
+/// lost). A missing row is an `Ok(false)` outcome, not an error.
+pub(crate) async fn sync_path_exists(pool: &SqlitePool, account_id: &str, label: &str) -> Result<bool> {
+    let owner = account_key(account_id);
+    let found: Option<i64> = sqlx::query_scalar("SELECT 1 FROM sync_paths WHERE owner = ? AND label = ? LIMIT 1")
+        .bind(&owner)
+        .bind(label)
+        .fetch_optional(pool)
+        .await?;
+    Ok(found.is_some())
 }
 
 /// Set the `is_paused` flag for a sync path in the DB.
