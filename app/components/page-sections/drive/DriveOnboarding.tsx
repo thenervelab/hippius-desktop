@@ -52,11 +52,15 @@ interface DriveOnboardingProps {
   // drive's active folder to that label instead of just showing actions.
   // Used by the Local view inside DriveContainer.
   onSelectFolder?: (label: string) => void;
+  // When provided, clicking a REMOTE folder card opens it as a browsable
+  // drive in the files view (server-only browsing — no local sync needed).
+  onOpenRemoteFolder?: (label: string) => void;
 }
 
 const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
   onSyncStarted,
   onSelectFolder,
+  onOpenRemoteFolder,
 }) => {
   const { polkadotAddress, getMnemonic } = useWalletAuth();
   const syncPathRefreshTrigger = useAtomValue(triggerSyncPathRefreshAtom);
@@ -566,6 +570,11 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
             openDeleteServerDialog(folderName)
           }
           onBrowseFolder={handleBrowseFolder}
+          onOpenFolder={
+            onOpenRemoteFolder
+              ? (folder) => onOpenRemoteFolder(folder.folderName)
+              : undefined
+          }
         />
 
         {/* Flag-gated; renders nothing unless drives are shared with this

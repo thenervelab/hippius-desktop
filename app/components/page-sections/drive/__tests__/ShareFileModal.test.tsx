@@ -479,6 +479,41 @@ describe("ShareFileModal", () => {
     });
   });
 
+  it("mints a cloud-only file through hcfs_create_remote_share, not the local command", async () => {
+    // A remote-drive row (fileId, no local source) must take the
+    // download→re-encrypt→upload pipeline — the local command resolves
+    // against a sync root the remote drive doesn't have. Mirrors the folder
+    // routing pin below: the three mint commands are not interchangeable.
+    installClipboard();
+    invokeMock.mockResolvedValueOnce({
+      shareToken: "tok-remote",
+      shareUrl: "https://console.hippius.com/share/tok-remote#k=K",
+      expiresAt: null,
+    });
+
+    render(
+      withProvider(<ShareFileModal />, {
+        name: "a.jpg",
+        actualFileName: "photos/a.jpg",
+        label: "Camera Uploads",
+        fileId: "deadbeef",
+      } as { actualFileName?: string; name: string; label: string }),
+    );
+    confirmChooser();
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        "hcfs_create_remote_share",
+        expect.objectContaining({
+          folderLabel: "Camera Uploads",
+          relativePath: "photos/a.jpg",
+          fileId: "deadbeef",
+        }),
+      );
+    });
+    expect(invokeMock).not.toHaveBeenCalledWith("hcfs_create_share", expect.anything());
+  });
+
   describe("folder shares", () => {
     // A folder opens the same modal, but the two mint commands are NOT
     // interchangeable: hcfs_create_share rejects a directory outright.
@@ -489,6 +524,24 @@ describe("ShareFileModal", () => {
       shareUrl: "https://console.hippius.com/share/tok-folder#k=K",
       expiresAt: null,
     };
+
+    it("opens the Link-expires dropdown for a folder target", async () => {
+      // Field report (2026-08-27, old zip-era build): the expiry dropdown did
+      // not open when sharing a FOLDER. The #128 shared-Select rewrite fixed
+      // the underlying paint-behind (its content portals above FramedDialog);
+      // this pins that a folder target's chooser actually opens the picker
+      // and renders its options, so the folder path can't regress separately
+      // from the file path again.
+      render(withProvider(<ShareFileModal />, FOLDER));
+      const trigger = screen.getByLabelText(/link expires/i);
+      fireEvent.keyDown(trigger, { key: "Enter" });
+      expect(
+        await screen.findByRole("option", { name: /until i revoke it/i }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("option", { name: /24 hours/i }),
+      ).toBeInTheDocument();
+    });
 
     it("mints a folder through hcfs_create_folder_share, not the file command", async () => {
       invokeMock.mockResolvedValueOnce(FOLDER_LINK);

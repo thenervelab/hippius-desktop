@@ -447,6 +447,19 @@ jobs:
             "$OUT"/Hippius.app.tar.gz.sig \
             --clobber
 
+          # tauri-action's own `--bundles app` output went up under a DIFFERENT
+          # filename, so the --clobber above never replaced it. It is this same
+          # app BEFORE the extension was embedded and before notarization: no
+          # HippiusFinder.appex, no staple. Once the manifest is corrected
+          # nothing references it — but it sits on the release page beside
+          # Hippius_universal.dmg reading as its sibling, and anyone who takes it
+          # installs a build with no "Share with Hippius" at all.
+          for stale in Hippius_universal.app.tar.gz Hippius_universal.app.tar.gz.sig; do
+            if gh release delete-asset "$TAG" "$stale" --yes 2>/dev/null; then
+              echo "Removed pre-finalize artifact $stale"
+            fi
+          done
+
   # Linux preview: the .deb (with the file-manager "Share with Hippius" action
   # files wired in via tauri.conf.json's bundle.linux.deb). All three platform
   # jobs upsert the same v<version> release.
@@ -711,10 +724,10 @@ jobs:
   #      `beta` release below holds one asset, latest.json, overwritten every
   #      build; that is the URL ReleaseChannel::Beta::manifest_url() points at.
   #      Its own `url` fields still address the real versioned assets.
-  publish-manifest:
+  assemble-release:
     needs: [publish-tauri-macos, publish-tauri-linux, publish-tauri-windows]
     permissions:
-      contents: write # upload latest.json to the versioned tag and to `beta`
+      contents: write # upload latest.json + SHA256SUMS, edit the release notes
     runs-on: ubuntu-latest
     steps:
       - name: Checkout (read version -> tag)
@@ -722,7 +735,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Correct latest.json and republish it to the rolling beta tag
+      - name: Correct latest.json
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -803,6 +816,93 @@ jobs:
 
           gh release upload "$TAG" --repo "$REPO" latest.json --clobber
 
+      # Checksums for every asset (from the API's own digests, nothing is
+      # downloaded) plus a Downloads table naming the installer per platform.
+      # Runs BEFORE verification so the asset set the next job checks is final.
+      - name: Attach SHA256SUMS and name the downloads
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          scripts/publish-release-downloads.sh "v$(jq -r .version src-tauri/tauri.conf.json)"
+
+  # ---------------------------------------------------------------------------
+  # Open the artifacts and refuse to publish a build that is not what the
+  # release claims. Same gate as tauri-build.yml, and it matters at least as
+  # much here: beta is where a packaging regression should be caught, and the
+  # rolling beta-channel pointer below is what the beta fleet updates from.
+  #
+  # Runs against the DRAFT's assets — the bytes testers will actually get —
+  # rather than the runner's build output, so a bad upload is caught too.
+  verify-release:
+    needs: assemble-release
+    permissions:
+      # Read-only in effect: this job only downloads. It needs `write` because
+      # GitHub hides DRAFT releases from tokens below push access, so
+      # `contents: read` cannot see the release at all.
+      contents: write
+    runs-on: macos-latest
+    steps:
+      - name: Checkout (verification scripts + the committed updater pubkey)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Install minisign
+        run: brew install minisign
+
+      - name: Verify the macOS artifacts and the manifest
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          VERSION="$(jq -r .version src-tauri/tauri.conf.json)"
+          TAG="v$VERSION"
+          DIR="$RUNNER_TEMP/release-assets"
+          mkdir -p "$DIR"
+
+          gh release download "$TAG" --repo "$REPO" --dir "$DIR" \
+            --pattern 'Hippius.app.tar.gz' \
+            --pattern 'Hippius.app.tar.gz.sig' \
+            --pattern '*.dmg'
+
+          macos/verify-macos-artifacts.sh "$DIR" "$VERSION"
+          scripts/verify-release-manifest.sh "$TAG" "$VERSION"
+
+  # ---------------------------------------------------------------------------
+  # Move the rolling pointer and publish — both only after verification, since
+  # republishing beta-channel is what actually offers the build to the fleet.
+  publish-release:
+    needs: verify-release
+    permissions:
+      contents: write # upload latest.json to `beta-channel`, draft -> published
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (read version -> tag)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Republish the rolling manifest and publish the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          cd "$work"
+          TAG="v$(jq -r .version "$GITHUB_WORKSPACE/src-tauri/tauri.conf.json")"
+
+          # The verified manifest, taken from the release rather than rebuilt,
+          # so the rolling pointer serves exactly the bytes the previous job
+          # checked.
+          gh release download "$TAG" --repo "$REPO" --pattern 'latest.json' --dir .
+
           # The rolling pointer. Created on first run, reused forever after; it
           # is a prerelease so it can never become `releases/latest` and be
           # served to production users. It deliberately holds NO build assets —
@@ -818,10 +918,14 @@ jobs:
               --prerelease \
               --target "$GITHUB_SHA"
           fi
-          gh release upload beta-channel --repo "$REPO" latest.json --clobber
-
-          # Only now is the versioned release complete: assets uploaded, macOS
-          # entry merged, rolling pointer moved. Publishing earlier would expose
-          # a DMG-less prerelease that reads as a finished build.
+          # Publish the versioned release BEFORE moving the pointer at it. A
+          # draft's asset URLs 404 for everyone, and the manifest's `url` fields
+          # address the versioned release — so republishing beta-channel first
+          # offers the fleet an update that cannot be downloaded until the flip
+          # below lands. The other order is only ever briefly wrong; this one is
+          # never wrong, since a pointer left on the previous beta is exactly
+          # the state every client is already in.
           gh release edit "$TAG" --repo "$REPO" --draft=false --prerelease
+
+          gh release upload beta-channel --repo "$REPO" latest.json --clobber
           echo "Beta $TAG published and the rolling manifest republished."

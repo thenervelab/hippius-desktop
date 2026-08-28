@@ -420,8 +420,21 @@ jobs:
             "$OUT"/Hippius.app.tar.gz.sig \
             --clobber
 
+          # tauri-action's own `--bundles app` output went up under a DIFFERENT
+          # filename, so the --clobber above never replaced it. It is this same
+          # app BEFORE the extension was embedded and before notarization: no
+          # HippiusFinder.appex, no staple. Once the manifest is corrected
+          # nothing references it — but it sits on the release page beside
+          # Hippius_universal.dmg reading as its sibling, and anyone who takes it
+          # installs a build with no "Share with Hippius" at all.
+          for stale in Hippius_universal.app.tar.gz Hippius_universal.app.tar.gz.sig; do
+            if gh release delete-asset "$TAG" "$stale" --yes 2>/dev/null; then
+              echo "Removed pre-finalize artifact $stale"
+            fi
+          done
+
   # ---------------------------------------------------------------------------
-  # Final job: fix latest.json for macOS, then publish the draft release.
+  # Job 2 of 4: fix latest.json for macOS and name the downloads.
   #
   # Runs ONCE, after all three platform builds have uploaded their assets to the
   # draft release (needs: publish-tauri waits for every matrix leg to succeed).
@@ -436,14 +449,17 @@ jobs:
   #      it already wrote untouched. Without this, a 0.2.0 macOS user is never
   #      offered the update (the reported gap).
   #
-  #   2. Publish last — flipping draft -> published as the final step means a
-  #      failed build or a rejected notarization never becomes the fleet's
-  #      "latest" (releases/latest/download/latest.json resolves to the newest
-  #      PUBLISHED, non-draft, non-prerelease release only).
-  publish-release:
+  #   2. Name the downloads — which asset a human should take is not derivable
+  #      from the asset list, and guessing wrong has already cost a release.
+  #
+  # Publication itself moved OUT of this job: assemble -> verify -> publish, so
+  # nothing reaches the fleet's "latest" until the artifacts have been opened and
+  # checked (releases/latest/download/latest.json resolves to the newest
+  # PUBLISHED, non-draft, non-prerelease release only).
+  assemble-release:
     needs: publish-tauri
     permissions:
-      contents: write # edit the release (draft -> published) + upload latest.json
+      contents: write # upload latest.json + SHA256SUMS, edit the release notes
     runs-on: ubuntu-latest
     steps:
       - name: Checkout (read version -> tag)
@@ -451,7 +467,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Fix latest.json (macOS) and publish
+      - name: Fix latest.json (macOS)
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -470,58 +486,148 @@ jobs:
           # (macOS was app-only). Absent only if no updater artifact was produced.
           gh release download "$TAG" --repo "$REPO" --pattern 'latest.json' --dir . || true
 
-          # The macOS updater signature the finalize step attached — present
-          # whenever notarization secrets are configured, absent otherwise.
-          MAC_SIG=""
-          if gh release download "$TAG" --repo "$REPO" \
-               --pattern 'Hippius.app.tar.gz.sig' --dir . 2>/dev/null \
-             && [[ -f Hippius.app.tar.gz.sig ]]; then
-            MAC_SIG="$(cat Hippius.app.tar.gz.sig)"
+          # The macOS updater signature the finalize step attached. Its absence
+          # means the finalize step never ran (no notarization creds) or failed,
+          # so this release has no DMG and no updater payload either. Publishing
+          # it would strand the whole macOS fleet on their installed version with
+          # no error anywhere, so the lane stops here rather than shipping a
+          # release that only looks complete. Matches tauri-beta.yml.
+          if ! gh release download "$TAG" --repo "$REPO" \
+                 --pattern 'Hippius.app.tar.gz.sig' --dir . \
+             || [[ ! -s Hippius.app.tar.gz.sig ]]; then
+            echo "::error title=No macOS updater signature::$TAG has no Hippius.app.tar.gz.sig, so the macOS finalize step did not produce a shippable build. Refusing to assemble the release."
+            exit 1
           fi
+          MAC_SIG="$(cat Hippius.app.tar.gz.sig)"
 
-          if [[ -n "$MAC_SIG" ]]; then
-            # The universal tarball serves BOTH Apple slices, so both darwin keys
-            # point at the same asset (mirrors tauri-action's own universal
-            # handling). The URL is the public tagged path, valid once published.
-            #
-            # The `-app` keys are NOT optional extras: tauri-plugin-updater
-            # resolves `[{os}-{arch}-{installer}, {os}-{arch}]` IN THAT ORDER
-            # (updater.rs, `get_urls`), and `installer_for_bundle_type` maps a
-            # macOS .app — which is also what a DMG install reports — to `app`.
-            # So `darwin-<arch>-app` is the key macOS actually reads, and
-            # tauri-action points it at ITS artifact: the pre-finalize
-            # `--bundles app` build, which has no Finder extension embedded and
-            # was never notarized or stapled. Patching only the bare keys left
-            # the fix unreachable and every macOS auto-update silently replaced
-            # the installed app with an extension-less, unstapled one.
-            URL="https://github.com/${REPO}/releases/download/${TAG}/Hippius.app.tar.gz"
-            if [[ -f latest.json ]]; then
-              jq --arg url "$URL" --arg sig "$MAC_SIG" '
-                .platforms["darwin-aarch64"] = {signature: $sig, url: $url}
-                | .platforms["darwin-x86_64"] = {signature: $sig, url: $url}
-                | .platforms["darwin-aarch64-app"] = {signature: $sig, url: $url}
-                | .platforms["darwin-x86_64-app"] = {signature: $sig, url: $url}
-              ' latest.json > latest.json.new
-            else
-              # No manifest from tauri-action -> emit a darwin-only one so macOS
-              # still updates (a windows-updater gap would need separate triage).
-              jq -n --arg v "${TAG#v}" --arg url "$URL" --arg sig "$MAC_SIG" '
-                {version: $v, notes: "", pub_date: (now | todate),
-                 platforms: {
-                   "darwin-aarch64": {signature: $sig, url: $url},
-                   "darwin-x86_64":  {signature: $sig, url: $url},
-                   "darwin-aarch64-app": {signature: $sig, url: $url},
-                   "darwin-x86_64-app":  {signature: $sig, url: $url}}}
-              ' > latest.json.new
-            fi
-            mv latest.json.new latest.json
-            gh release upload "$TAG" --repo "$REPO" latest.json --clobber
-            echo "latest.json updated with the macOS updater entry."
+          # The universal tarball serves BOTH Apple slices, so both darwin keys
+          # point at the same asset (mirrors tauri-action's own universal
+          # handling). The URL is the public tagged path, valid once published.
+          #
+          # The `-app` keys are NOT optional extras: tauri-plugin-updater
+          # resolves `[{os}-{arch}-{installer}, {os}-{arch}]` IN THAT ORDER
+          # (updater.rs, `get_urls`), and `installer_for_bundle_type` maps a
+          # macOS .app — which is also what a DMG install reports — to `app`.
+          # So `darwin-<arch>-app` is the key macOS actually reads, and
+          # tauri-action points it at ITS artifact: the pre-finalize
+          # `--bundles app` build, which has no Finder extension embedded and
+          # was never notarized or stapled. Patching only the bare keys left
+          # the fix unreachable and every macOS auto-update silently replaced
+          # the installed app with an extension-less, unstapled one.
+          URL="https://github.com/${REPO}/releases/download/${TAG}/Hippius.app.tar.gz"
+          if [[ -f latest.json ]]; then
+            jq --arg url "$URL" --arg sig "$MAC_SIG" '
+              .platforms["darwin-aarch64"] = {signature: $sig, url: $url}
+              | .platforms["darwin-x86_64"] = {signature: $sig, url: $url}
+              | .platforms["darwin-aarch64-app"] = {signature: $sig, url: $url}
+              | .platforms["darwin-x86_64-app"] = {signature: $sig, url: $url}
+            ' latest.json > latest.json.new
           else
-            echo "::warning::No macOS updater signature on $TAG — publishing without a darwin entry; macOS auto-update is unavailable this release."
+            # No manifest from tauri-action -> emit a darwin-only one so macOS
+            # still updates (a windows-updater gap would need separate triage).
+            jq -n --arg v "${TAG#v}" --arg url "$URL" --arg sig "$MAC_SIG" '
+              {version: $v, notes: "", pub_date: (now | todate),
+               platforms: {
+                 "darwin-aarch64": {signature: $sig, url: $url},
+                 "darwin-x86_64":  {signature: $sig, url: $url},
+                 "darwin-aarch64-app": {signature: $sig, url: $url},
+                 "darwin-x86_64-app":  {signature: $sig, url: $url}}}
+            ' > latest.json.new
           fi
+          mv latest.json.new latest.json
+          gh release upload "$TAG" --repo "$REPO" latest.json --clobber
+          echo "latest.json updated with the macOS updater entry."
 
-          # Flip the draft to a published, marked-latest release. Only now does
-          # the updater endpoint (releases/latest/download/latest.json) resolve.
+      # Checksums for every asset (from the API's own digests, nothing is
+      # downloaded) plus a Downloads table naming the installer per platform.
+      # Runs BEFORE verification so the asset set the next job checks is the
+      # final one.
+      - name: Attach SHA256SUMS and name the downloads
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          scripts/publish-release-downloads.sh "v$(jq -r .version src-tauri/tauri.conf.json)"
+
+  # ---------------------------------------------------------------------------
+  # Job 3 of 4: open the artifacts and refuse to publish a build that is not
+  # what the release claims.
+  #
+  # Every failure this catches is silent at build time — the finalize step
+  # reports success either way, a manifest naming the wrong tarball is valid
+  # JSON with a valid signature, and the resulting update installs cleanly. That
+  # is how v0.5.0 shipped a macOS update carrying no Finder extension and no
+  # notarization staple, and why the check reads the artifacts themselves rather
+  # than trusting the build log.
+  #
+  # It runs against the DRAFT's assets — the bytes users will actually get —
+  # rather than the runner's build output, so a bad upload is caught too.
+  verify-release:
+    needs: assemble-release
+    permissions:
+      # Read-only in effect: this job only downloads. It needs `write` because
+      # GitHub hides DRAFT releases from tokens below push access, so
+      # `contents: read` cannot see the release at all.
+      contents: write
+    runs-on: macos-latest
+    steps:
+      - name: Checkout (verification scripts + the committed updater pubkey)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      # The updater signature is Ed25519 over the tarball; verifying it against
+      # the pubkey compiled into shipped builds is the only point at which a
+      # key mismatch is still recoverable.
+      - name: Install minisign
+        run: brew install minisign
+
+      - name: Verify the macOS artifacts and the manifest
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          VERSION="$(jq -r .version src-tauri/tauri.conf.json)"
+          TAG="v$VERSION"
+          DIR="$RUNNER_TEMP/release-assets"
+          mkdir -p "$DIR"
+
+          gh release download "$TAG" --repo "$REPO" --dir "$DIR" \
+            --pattern 'Hippius.app.tar.gz' \
+            --pattern 'Hippius.app.tar.gz.sig' \
+            --pattern '*.dmg'
+
+          macos/verify-macos-artifacts.sh "$DIR" "$VERSION"
+          scripts/verify-release-manifest.sh "$TAG" "$VERSION"
+
+  # ---------------------------------------------------------------------------
+  # Job 4 of 4: publish. Nothing here but the flip, so that the draft becomes
+  # visible only after every check above has passed.
+  publish-release:
+    needs: verify-release
+    permissions:
+      contents: write # draft -> published
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (read version -> tag)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Publish the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          TAG="v$(jq -r .version src-tauri/tauri.conf.json)"
+
+          # Only now does the updater endpoint
+          # (releases/latest/download/latest.json) resolve to this release.
           gh release edit "$TAG" --repo "$REPO" --draft=false --latest
           echo "Published $TAG."

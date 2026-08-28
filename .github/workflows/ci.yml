@@ -356,6 +356,29 @@ jobs:
       - name: Lint workflows
         run: ./actionlint -color
 
+  shellcheck:
+    # actionlint above shellchecks inline `run:` blocks only. These scripts are
+    # standalone files, so nothing linted them — and three of them now gate every
+    # release: macos/verify-macos-artifacts.sh and scripts/verify-release-manifest.sh
+    # are what stand between a bad macOS build and the fleet, and they run
+    # nowhere except on a release push, where a typo is discovered by the release
+    # failing. `-x` follows the `source`d macos/group.env.
+    #
+    # The ubuntu runner ships shellcheck, so unlike actionlint and zizmor there
+    # is no binary to fetch or pin here.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Lint shell scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          shellcheck -x scripts/*.sh macos/*.sh
+
   zizmor:
     # Security audit of the workflow files (credential persistence, cache
     # poisoning of privileged/signed builds, template injection, …). Run

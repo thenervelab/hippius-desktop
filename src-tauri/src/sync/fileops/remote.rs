@@ -156,6 +156,31 @@ fn unique_part_path(cache_root: &std::path::Path, cache_name: &str) -> PathBuf {
     cache_root.join(format!("{cache_name}.{}.{n}.part", std::process::id()))
 }
 
+/// Root of the decrypted-preview cache (`$HOME/.hippius/preview-cache`).
+/// Shared with the remote-share staging path so its transient plaintext
+/// copies live somewhere the eviction sweep can reclaim (a crash-orphaned
+/// copy in the OS temp dir would sit there forever, world-readable on
+/// shared /tmp systems).
+pub(crate) fn preview_cache_root_dir() -> Result<PathBuf> {
+    Ok(dirs::home_dir()
+        .ok_or_else(|| AppError::Other("could not determine home directory".into()))?
+        .join(".hippius")
+        .join("preview-cache"))
+}
+
+/// Per-attempt-unique transient path under the preview cache for full-file
+/// staging (remote-share downloads). pid + a process-wide counter make two
+/// concurrent stagings of the SAME file collide-proof — pid alone does not,
+/// since the desktop is single-instance. Deliberately NOT `.part`-suffixed:
+/// the eviction sweep skips `.part` temps forever, and a crash-orphaned
+/// staging copy must eventually be reclaimable; the sweep's
+/// "never the file just written" guard keeps an in-flight one safe.
+pub(crate) fn unique_transient_path(cache_root: &std::path::Path, stem: &str) -> PathBuf {
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    cache_root.join(format!("{stem}.{}.{n}.tmp", std::process::id()))
+}
+
 // ─── Tauri Commands ────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -322,6 +347,17 @@ pub async fn cache_remote_file(
             .ok_or_else(|| AppError::Other("preview cache path is not valid UTF-8".into()));
     }
 
+    // Same backend-wide download bound as `download_cloud_file_to` — this
+    // path downloads the FULL file too (it is the HEIC thumbnail/preview
+    // route), and it must queue behind the same permits or a HEIC camera
+    // roll recreates the ungated per-row download burst. Acquired AFTER the
+    // cache-hit fast path above so already-cached previews never wait.
+    let _permit = state
+        .remote_media_semaphore
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|_| AppError::Other("download semaphore closed".into()))?;
     let pool = state.pool()?;
     let mnemonic = session_mnemonic(&state)?;
     // Lenient resolve, once per IPC — see list_remote_folder_files_inner.
@@ -488,6 +524,17 @@ async fn local_source_path(source: Option<&str>) -> Option<PathBuf> {
 /// [`AppError::NotReady`] (no session mnemonic), [`AppError::Crypto`] (key
 /// derivation), or [`AppError::Hcfs`] (download/decrypt).
 pub async fn download_cloud_file_to(state: &AppState, account_id: &str, label: &str, file_id: &str, dest: &Path) -> Result<()> {
+    // Backend-wide bound on concurrent full-file download+decrypt pipelines —
+    // the single choke point every cloud-media caller (thumbnails, HEIC
+    // preview caching, remote-share staging, one-off downloads) flows
+    // through, so no caller can recreate the ungated 30-50-download burst a
+    // remote camera roll produced. RAII permit: held for the whole pipeline.
+    let _permit = state
+        .remote_media_semaphore
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|_| AppError::Other("download semaphore closed".into()))?;
     let pool = state.pool()?;
     let mnemonic = session_mnemonic(state)?;
     // Lenient resolve, once per IPC — see list_remote_folder_files_inner.
@@ -646,9 +693,281 @@ pub async fn get_thumbnail(
     thumbnail_path_to_string(&target)
 }
 
+// ─── Browsable remote folders (grouped listing) ─────────────────────────────
+
+/// Per-request page size for the server's `/browse` walk.
+const BROWSE_PAGE_LIMIT: u32 = 500;
+
+/// Map one `/browse` page onto the shared listing row shape.
+///
+/// Folder rows carry the SERVER-computed recursive `total_bytes`/`file_count`
+/// (the desktop shows real subtree sizes where the console shows "Unknown").
+/// File rows: `arion_hash` carries the hex **path_hash** — the id
+/// `download_remote_file` / `cache_remote_file` take — matching what the
+/// local listing stores there; `arion_cid` carries the content hash. Rows are
+/// `synced`: a server-only file is a stable cloud object, not "waiting in the
+/// queue" (the same semantics as the search mapper).
+pub(crate) fn append_browse_page(
+    folders: &mut Vec<super::files::FileEntry>,
+    files: &mut Vec<super::files::FileEntry>,
+    page_folders: Vec<hcfs_shared::network::BrowseFolderEntry>,
+    page_files: Vec<hcfs_shared::network::RemoteFileEntry>,
+) {
+    for f in page_folders {
+        folders.push(super::files::FileEntry {
+            name: f.name,
+            is_folder: true,
+            size: f.total_bytes,
+            modified: None,
+            sync_status: "synced".to_string(),
+            arion_hash: String::new(),
+            arion_cid: String::new(),
+            file_count: f.file_count,
+            uploaded_at: 0,
+            updated_at: 0,
+        });
+    }
+    for f in page_files {
+        let path_hash_hex = hex::encode(f.path_hash);
+        // Prefer the server's plaintext file_name; fall back to the rel-path
+        // basename; a row with neither renders its path hash rather than
+        // vanishing (mirrors `SyncState::display_path`'s last rung).
+        let name = f
+            .file_name
+            .clone()
+            .filter(|n| !n.is_empty())
+            .or_else(|| {
+                f.relative_path
+                    .as_deref()
+                    .and_then(|p| p.trim_matches('/').rsplit('/').next().map(str::to_string))
+                    .filter(|n| !n.is_empty())
+            })
+            .unwrap_or_else(|| path_hash_hex.clone());
+        files.push(super::files::FileEntry {
+            name,
+            is_folder: false,
+            size: f.size_bytes,
+            modified: u64::try_from(f.updated_at.max(f.created_at)).ok().filter(|t| *t > 0),
+            sync_status: "synced".to_string(),
+            arion_hash: path_hash_hex,
+            arion_cid: f.arion_hash.unwrap_or_default(),
+            file_count: 0,
+            uploaded_at: f.created_at,
+            updated_at: f.updated_at,
+        });
+    }
+}
+
+/// One PAGE of one navigation level of a REMOTE (server-only) drive.
+/// Row shape matches `list_sync_folder_grouped`'s `FileEntry`, plus the
+/// pagination facts the frontend's progressive loader walks with.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteGroupedPage {
+    pub folders: Vec<super::files::FileEntry>,
+    pub files: Vec<super::files::FileEntry>,
+    /// More entries exist at this level beyond `offset + returned`.
+    pub has_more: bool,
+    /// Total entries (folders + files) at this level, from the server.
+    pub total_count: u64,
+}
+
+/// One page of a REMOTE drive level, for the files page's browse-in view.
+///
+/// Backed by the server's directory-scoped `/browse` endpoint — O(level), not
+/// O(drive): the flat `get_all_files` walk this replaced paged the ENTIRE
+/// drive before returning anything, which on a 280k-file camera roll meant
+/// minutes of skeleton for the first level. `/browse` also computes recursive
+/// folder sizes server-side and needs no per-path decrypt.
+///
+/// Deliberately a SINGLE page per IPC: the frontend appends pages
+/// progressively, so the first rows paint after one round-trip and a flat
+/// 8k-entry level never rides one multi-megabyte payload into the webview
+/// (the same payload discipline as `MAX_EVENT_FILES`).
+///
+/// NOTE: `/browse` hides files whose server-side plaintext `relative_path`
+/// was never populated (uploads from very old clients, pre-backfill). Such
+/// files appear once any device syncing that drive runs the relative-path
+/// backfill.
+#[tauri::command]
+pub async fn list_remote_folder_grouped(
+    state: tauri::State<'_, AppState>,
+    account_id: String,
+    label: String,
+    subfolder: String,
+    offset: u32,
+    limit: Option<u32>,
+) -> Result<RemoteGroupedPage> {
+    let account_id = state.require_session_account(&account_id)?;
+    let pool = state.pool()?;
+    // Lenient resolver: the label usually names a server-only drive with no
+    // local row (that is the whole point of browsable remote folders).
+    let identity = resolve_drive_identity_or_own(pool, &account_id, &label).await?;
+    let client = build_client(pool, &account_id, &identity).await?;
+    let path = subfolder.trim_matches('/');
+
+    // The FE picks the page size (scroll-driven lazy loading wants small
+    // pages); clamp to the server's per-request ceiling either way.
+    let limit = limit.unwrap_or(BROWSE_PAGE_LIMIT).clamp(1, BROWSE_PAGE_LIMIT);
+    let page = client
+        .browse(&identity.wire_ss58, &identity.wire_folder_hash, path, offset, limit)
+        .await
+        .map_err(|e| {
+            error!(label = %label, path = %path, offset, "Failed to browse remote folder: {e}");
+            AppError::Hcfs(e.to_string())
+        })?;
+
+    let mut folders: Vec<super::files::FileEntry> = Vec::new();
+    let mut files: Vec<super::files::FileEntry> = Vec::new();
+    let has_more = page.has_more;
+    let total_count = page.total_count;
+    append_browse_page(&mut folders, &mut files, page.folders, page.files);
+
+    Ok(RemoteGroupedPage {
+        folders,
+        files,
+        has_more,
+        total_count,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Remote grouped listing (/browse page mapper) ────────────────────
+
+    fn browse_file(name: Option<&str>, rel_path: Option<&str>, size: u64, created: i64, updated: i64) -> hcfs_shared::network::RemoteFileEntry {
+        hcfs_shared::network::RemoteFileEntry {
+            path_hash: [7u8; 32],
+            salted_hash: [0u8; 32],
+            size_bytes: size,
+            revision_seq: 1,
+            revision_id: [0u8; 32],
+            encrypted_path: Vec::new(),
+            file_name: name.map(str::to_string),
+            relative_path: rel_path.map(str::to_string),
+            arion_hash: Some("cid-abc".to_string()),
+            chunk_hashes: None,
+            created_at: created,
+            updated_at: updated,
+        }
+    }
+
+    #[test]
+    fn browse_page_maps_folders_with_server_sizes() {
+        let mut folders = Vec::new();
+        let mut files = Vec::new();
+        append_browse_page(
+            &mut folders,
+            &mut files,
+            vec![hcfs_shared::network::BrowseFolderEntry {
+                name: "photos".into(),
+                file_count: 2500,
+                total_bytes: 999,
+            }],
+            vec![],
+        );
+        assert_eq!(folders.len(), 1);
+        assert!(folders[0].is_folder);
+        // Server-computed recursive size/count survive onto the row — this is
+        // what lets the desktop show a number where the console says Unknown.
+        assert_eq!(folders[0].size, 999);
+        assert_eq!(folders[0].file_count, 2500);
+        assert_eq!(folders[0].sync_status, "synced");
+    }
+
+    #[test]
+    fn browse_page_maps_files_with_path_hash_as_id() {
+        let mut folders = Vec::new();
+        let mut files = Vec::new();
+        append_browse_page(
+            &mut folders,
+            &mut files,
+            vec![],
+            vec![browse_file(Some("a.jpg"), Some("photos/a.jpg"), 20, 100, 250)],
+        );
+        assert_eq!(files.len(), 1);
+        let row = &files[0];
+        assert_eq!(row.name, "a.jpg");
+        // The path_hash hex is the id download_remote_file/cache_remote_file
+        // take — it rides in arion_hash exactly like the local listing.
+        assert_eq!(row.arion_hash, hex::encode([7u8; 32]));
+        assert_eq!(row.arion_cid, "cid-abc");
+        assert_eq!(row.size, 20);
+        assert_eq!(row.modified, Some(250));
+        assert_eq!(row.sync_status, "synced");
+    }
+
+    #[test]
+    fn browse_page_file_name_falls_back_to_rel_path_then_hash() {
+        let mut folders = Vec::new();
+        let mut files = Vec::new();
+        append_browse_page(
+            &mut folders,
+            &mut files,
+            vec![],
+            vec![
+                browse_file(None, Some("deep/nested/b.txt"), 1, 1, 1),
+                browse_file(None, None, 1, 1, 1),
+                browse_file(Some(""), Some("c.txt"), 1, 1, 1),
+            ],
+        );
+        assert_eq!(files[0].name, "b.txt");
+        // No name anywhere → the hex hash renders rather than a blank row.
+        assert_eq!(files[1].name, hex::encode([7u8; 32]));
+        // Empty file_name is treated as absent, not as a real name.
+        assert_eq!(files[2].name, "c.txt");
+    }
+
+    /// Wire-contract pin for [`RemoteGroupedPage`]: camelCase OUTER keys
+    /// (`hasMore`/`totalCount`) wrapping snake_case `FileEntry` rows — the
+    /// same mixed-case wire the local grouped listing ships and the FE types
+    /// field-by-field (`use-nested-folder-listing.ts::RemoteGroupedPage`).
+    /// A serde rename on either layer would silently stop remote pagination
+    /// (the FE reads `page.hasMore` untyped at the IPC boundary).
+    #[test]
+    fn remote_grouped_page_pins_mixed_case_wire() {
+        use std::collections::BTreeSet;
+        let mut folders = Vec::new();
+        let mut files = Vec::new();
+        append_browse_page(
+            &mut folders,
+            &mut files,
+            vec![hcfs_shared::network::BrowseFolderEntry {
+                name: "photos".into(),
+                file_count: 1,
+                total_bytes: 2,
+            }],
+            vec![browse_file(Some("a.jpg"), Some("a.jpg"), 3, 4, 5)],
+        );
+        let page = RemoteGroupedPage {
+            folders,
+            files,
+            has_more: true,
+            total_count: 7,
+        };
+        let json = serde_json::to_value(&page).expect("serialize RemoteGroupedPage");
+        let outer: BTreeSet<String> = json.as_object().expect("object").keys().cloned().collect();
+        let expected_outer: BTreeSet<String> = ["folders", "files", "hasMore", "totalCount"].into_iter().map(String::from).collect();
+        assert_eq!(outer, expected_outer, "RemoteGroupedPage outer keys drifted");
+
+        let row = &json["files"][0];
+        for key in [
+            "name",
+            "is_folder",
+            "size",
+            "modified",
+            "sync_status",
+            "arion_hash",
+            "arion_cid",
+            "file_count",
+            "uploaded_at",
+            "updated_at",
+        ] {
+            assert!(row.get(key).is_some(), "FileEntry row lost snake_case key `{key}`");
+        }
+    }
 
     // ── Member-drive encryption key (shared drives phase 2) ─────────────
 
