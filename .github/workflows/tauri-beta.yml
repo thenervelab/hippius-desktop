@@ -918,11 +918,14 @@ jobs:
               --prerelease \
               --target "$GITHUB_SHA"
           fi
-          gh release upload beta-channel --repo "$REPO" latest.json --clobber
-
-          # Only now is the versioned release complete: assets uploaded, macOS
-          # entry merged, artifacts verified, rolling pointer moved. Publishing
-          # earlier would expose a DMG-less prerelease that reads as a finished
-          # build.
+          # Publish the versioned release BEFORE moving the pointer at it. A
+          # draft's asset URLs 404 for everyone, and the manifest's `url` fields
+          # address the versioned release — so republishing beta-channel first
+          # offers the fleet an update that cannot be downloaded until the flip
+          # below lands. The other order is only ever briefly wrong; this one is
+          # never wrong, since a pointer left on the previous beta is exactly
+          # the state every client is already in.
           gh release edit "$TAG" --repo "$REPO" --draft=false --prerelease
+
+          gh release upload beta-channel --repo "$REPO" latest.json --clobber
           echo "Beta $TAG published and the rolling manifest republished."
