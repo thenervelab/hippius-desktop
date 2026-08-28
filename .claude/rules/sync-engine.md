@@ -26,6 +26,7 @@ The ~32 submodules are organized into six private sub-domain group directories, 
 
 - `asset_scope.rs` (asset-protocol scope), `add.rs` (add file/folder + batch + the upload byte/count walkers), `delete.rs`, `rename.rs`, `recent.rs` (recent files + the shared per-drive `synced_paths_*` reads), `dir_stats.rs` (cached recursive dir size/count), `listing.rs` (flat + grouped listing, owns `FileEntry`), `user_files.rs` (files page + recursive search + filter cascade, owns `UserFileEntry`), `resolve.rs` (path resolve + single-file `export_file`), `export_zip.rs` (store-only `export_folder_zip`).
 - `pathops.rs` is a **dependency-free leaf** holding the shared path helpers `ensure_within`/`derive_relative_name`/`copy_dir_recursive`, so the submodules form a DAG — it breaks the `add`↔`resolve` cycle.
+- **`add_folder` copies into a hidden `.hippius-incoming-*` sibling then renames.** The live watcher would otherwise hash a growing tree (and, for an overwrite, the planner could treat the in-flight write as a local delete). hcfs-client skips `.*` names in `collect_files`; an existing dest still merges in place.
 
 ## Remote browse and account-wide search
 

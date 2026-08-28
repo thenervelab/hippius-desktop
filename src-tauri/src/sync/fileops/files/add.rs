@@ -8,9 +8,56 @@ use super::pathops::copy_dir_recursive;
 use crate::error::Result;
 use hcfs_client::engine::runner::trigger_sync;
 use serde::Serialize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter};
 use tracing::{info, warn};
+
+/// Hidden staging sibling for a dest that does not exist yet.
+///
+/// The live file watcher fires on every write into a watched tree.
+/// hcfs-client skips `.*` names in `collect_files`, so a 35 GB copy
+/// into `.hippius-incoming-*` is not hashed mid-flight; `rename`
+/// then makes the folder visible as a complete tree.
+fn incoming_staging_path(dest: &Path) -> PathBuf {
+    let parent = dest.parent().unwrap_or(dest);
+    let stem = dest.file_name().and_then(|n| n.to_str()).unwrap_or("folder");
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    parent.join(format!(".hippius-incoming-{stem}-{unique}"))
+}
+
+/// Copy `source` onto `dest`.
+///
+/// New dest: copy into a hidden sibling then `rename` into place so the
+/// watcher does not scan a growing tree. Existing dest: in-place merge
+/// (two uploads of the same folder name).
+async fn copy_tree_into_sync_dest(source: &Path, dest: &Path) -> Result<()> {
+    if tokio::fs::try_exists(dest).await.unwrap_or(false) {
+        return copy_dir_recursive(source, dest, 0).await;
+    }
+    let staging = incoming_staging_path(dest);
+    match copy_dir_recursive(source, &staging, 0).await {
+        Ok(()) => match tokio::fs::rename(&staging, dest).await {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let _ = tokio::fs::remove_dir_all(&staging).await;
+                Err(crate::error::AppError::Io(e))
+            }
+        },
+        Err(e) => {
+            let _ = tokio::fs::remove_dir_all(&staging).await;
+            Err(e)
+        }
+    }
+}
+
+async fn create_dir_all_spawn(path: PathBuf) -> Result<()> {
+    tokio::task::spawn_blocking(move || std::fs::create_dir_all(path))
+        .await
+        .map_err(|e| crate::error::AppError::Other(format!("Join error creating dir: {e}")))??;
+    Ok(())
+}
 
 /// Pure file-copy implementation, no eligibility check. The check is
 /// performed at the IPC boundary by `add_file` (single-file path) or
@@ -236,8 +283,8 @@ async fn add_folder_with_app_inner(sync_path: &str, folder_path: &str, subfolder
             return Err(crate::error::AppError::Validation("Subfolder path contains traversal component".into()));
         }
         let t = sync_root.join(sub);
-        if !t.exists() {
-            std::fs::create_dir_all(&t)?;
+        if !tokio::fs::try_exists(&t).await.unwrap_or(false) {
+            create_dir_all_spawn(t.clone()).await?;
         }
         // Verify resolved path is within sync root (async canonicalize so
         // we don't block the tokio worker thread on `realpath`).
@@ -270,7 +317,7 @@ async fn add_folder_with_app_inner(sync_path: &str, folder_path: &str, subfolder
         ));
     }
 
-    copy_dir_recursive(source, &canonical_dest, 0).await?;
+    copy_tree_into_sync_dest(source, &canonical_dest).await?;
 
     Ok(name)
 }
@@ -519,7 +566,7 @@ async fn add_folder_internal(canonical_parent: &Path, folder_path: &str) -> Resu
         ));
     }
 
-    copy_dir_recursive(source, &canonical_dest, 0).await?;
+    copy_tree_into_sync_dest(source, &canonical_dest).await?;
     Ok(name)
 }
 
@@ -624,11 +671,11 @@ pub async fn add_files(
             return Err(crate::error::AppError::Validation("Subfolder path contains traversal component".into()));
         }
         let target = Path::new(&sync_path).join(sub);
-        if !target.exists()
-            && let Err(e) = std::fs::create_dir_all(&target)
+        if !tokio::fs::try_exists(&target).await.unwrap_or(false)
+            && let Err(e) = create_dir_all_spawn(target.clone()).await
         {
             reset_banner(&app, &state);
-            return Err(crate::error::AppError::Io(e));
+            return Err(e);
         }
         // Verify resolved path stays within sync root.
         let canonical_root = match tokio::fs::canonicalize(Path::new(&sync_path)).await {
@@ -745,6 +792,65 @@ mod tests {
         let (bytes, count) = walk_regular_files_stats(root).await;
         assert_eq!(count, 3, "all three regular files counted across the nested dir");
         assert_eq!(bytes, 10, "byte total summed across the nested dir (5+2+3)");
+    }
+
+    #[test]
+    fn incoming_staging_path_is_hidden_and_stays_in_the_parent() {
+        let dest = PathBuf::from("/sync/Photos");
+        let staging = incoming_staging_path(&dest);
+        let name = staging.file_name().and_then(|n| n.to_str()).unwrap();
+        assert!(
+            name.starts_with(".hippius-incoming-Photos-"),
+            "staging name must be skipped by hcfs-client collect_files: {name}"
+        );
+        assert_eq!(staging.parent(), dest.parent());
+    }
+
+    #[tokio::test]
+    async fn copy_tree_into_sync_dest_renames_staging_away() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let src = tmp.path().join("src");
+        tokio::fs::create_dir(&src).await.unwrap();
+        tokio::fs::write(src.join("a.txt"), b"hi").await.unwrap();
+        let dest = tmp.path().join("Photos");
+        copy_tree_into_sync_dest(&src, &dest).await.unwrap();
+        assert_eq!(tokio::fs::read(dest.join("a.txt")).await.unwrap(), b"hi");
+        let leftovers: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with(".hippius-incoming-"))
+            .collect();
+        assert!(leftovers.is_empty(), "staging sibling must be renamed away, left {leftovers:?}");
+    }
+
+    #[tokio::test]
+    async fn copy_tree_into_sync_dest_cleans_staging_when_copy_fails() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let src = tmp.path().join("missing-src");
+        let dest = tmp.path().join("Photos");
+        let err = copy_tree_into_sync_dest(&src, &dest).await;
+        assert!(err.is_err(), "missing source must fail the copy");
+        assert!(!dest.exists(), "failed add must not leave a dest folder");
+        let leftovers: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with(".hippius-incoming-"))
+            .collect();
+        assert!(leftovers.is_empty(), "failed copy must remove the staging sibling, left {leftovers:?}");
+    }
+
+    #[tokio::test]
+    async fn copy_tree_into_sync_dest_merges_into_existing_dest() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let src = tmp.path().join("src");
+        tokio::fs::create_dir(&src).await.unwrap();
+        tokio::fs::write(src.join("new.txt"), b"n").await.unwrap();
+        let dest = tmp.path().join("Photos");
+        tokio::fs::create_dir(&dest).await.unwrap();
+        tokio::fs::write(dest.join("old.txt"), b"o").await.unwrap();
+        copy_tree_into_sync_dest(&src, &dest).await.unwrap();
+        assert_eq!(tokio::fs::read(dest.join("old.txt")).await.unwrap(), b"o");
+        assert_eq!(tokio::fs::read(dest.join("new.txt")).await.unwrap(), b"n");
     }
 
     #[cfg(unix)]

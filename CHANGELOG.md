@@ -51,6 +51,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Adding a large folder no longer freezes the app.** Dropping a multi-gigabyte
+  folder in used to lock the window until the copy and encryption finished.
+
 - **Updating on a Mac no longer removes "Share with Hippius".** Installing from the
   disk image gave you the right-click share menu, but every automatic update after
   that quietly replaced Hippius with a copy that did not include it — so the feature
