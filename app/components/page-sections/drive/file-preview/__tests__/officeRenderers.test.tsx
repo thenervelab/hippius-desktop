@@ -161,6 +161,30 @@ describe("SpreadsheetPreview", () => {
     expect(screen.queryByText("A1")).not.toBeInTheDocument();
   });
 
+  it("opens a newly selected sheet at A1 rather than the previous sheet's cell", async () => {
+    // The reset this pins only fires on an actual sheet CHANGE. It used to run
+    // on mount too, where it could land after a click made in the first frame
+    // and drag the selection back to A1.
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(
+      workbook,
+      XLSX.utils.aoa_to_sheet([["Name", "Qty"], ["Widget", 12]]),
+      "Data",
+    );
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([["Total", 12]]), "Summary");
+    serveBytes(new Uint8Array(XLSX.write(workbook, { type: "array", bookType: "xlsx" })));
+
+    render(<SpreadsheetPreview localPath="/drive/book.xlsx" filename="book.xlsx" />);
+    await waitFor(() => expect(screen.getByRole("cell", { name: "Qty" })).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("cell", { name: "Qty" }));
+    expect(screen.getByText("B1")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Summary" }));
+    expect(screen.getByText("A1")).toBeInTheDocument();
+    expect(screen.queryByText("B1")).not.toBeInTheDocument();
+  });
+
   it("shows no tab strip for a CSV, which has exactly one sheet", async () => {
     serveBytes(encode("a,b\n1,2"));
     render(<SpreadsheetPreview localPath="/drive/x.csv" filename="x.csv" />);

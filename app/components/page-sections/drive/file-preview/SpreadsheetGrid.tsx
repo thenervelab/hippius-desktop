@@ -158,7 +158,16 @@ export default function SpreadsheetGrid({
 
   // Switching sheet (or file) resets the selection and the scroll position, so
   // a new sheet never opens scrolled into the middle of the previous one.
+  //
+  // Guarded against the FIRST run rather than left to fire on mount: the state
+  // already starts at A1/0, so the mount pass only ever repeats what the
+  // initial state says — but if it is still pending when the user clicks a
+  // cell (the frame right after a sheet paints), it lands after that click and
+  // snaps the selection back to A1.
+  const previousSheet = useRef(sheet);
   useEffect(() => {
+    if (previousSheet.current === sheet) return;
+    previousSheet.current = sheet;
     setSelected({ row: 0, column: 0 });
     setScrollTop(0);
     if (viewportRef.current) viewportRef.current.scrollTop = 0;
