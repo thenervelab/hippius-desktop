@@ -351,10 +351,15 @@ mod tests {
         //
         // The largest per-format cap is presentations at 40 MiB.
         const LARGEST_FORMAT_CAP: u64 = 40 * 1024 * 1024;
-        assert!(
-            MAX_PREVIEW_READ_BYTES >= LARGEST_FORMAT_CAP,
-            "read ceiling must clear the largest per-format cap"
-        );
+        // A `const` block, not a plain `assert!`: both sides are constants, so
+        // this is decided at compile time and never needs the test to run
+        // (clippy's `assertions_on_constants` rejects the runtime form).
+        const {
+            assert!(
+                MAX_PREVIEW_READ_BYTES >= LARGEST_FORMAT_CAP,
+                "read ceiling must clear the largest per-format cap"
+            )
+        };
         // A file at that cap reads rather than being rejected by the ceiling.
         assert!(preview_read_limit(LARGEST_FORMAT_CAP, LARGEST_FORMAT_CAP).is_ok());
     }
