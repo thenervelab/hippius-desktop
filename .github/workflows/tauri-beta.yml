@@ -754,18 +754,33 @@ jobs:
 
           # The universal tarball serves BOTH Apple slices, so both darwin keys
           # point at the same asset (mirrors tauri-action's universal handling).
+          #
+          # The `-app` keys are NOT optional extras: tauri-plugin-updater
+          # resolves `[{os}-{arch}-{installer}, {os}-{arch}]` IN THAT ORDER
+          # (updater.rs, `get_urls`), and `installer_for_bundle_type` maps a
+          # macOS .app — which is also what a DMG install reports — to `app`.
+          # So `darwin-<arch>-app` is the key macOS actually reads, and
+          # tauri-action points it at ITS artifact: the pre-finalize
+          # `--bundles app` build, which has no Finder extension embedded and
+          # was never notarized or stapled. Patching only the bare keys left the
+          # fix unreachable and every macOS auto-update silently replaced the
+          # installed app with an extension-less, unstapled one.
           URL="https://github.com/${REPO}/releases/download/${TAG}/Hippius.app.tar.gz"
           if [[ -f latest.json ]]; then
             jq --arg url "$URL" --arg sig "$MAC_SIG" '
               .platforms["darwin-aarch64"] = {signature: $sig, url: $url}
               | .platforms["darwin-x86_64"] = {signature: $sig, url: $url}
+              | .platforms["darwin-aarch64-app"] = {signature: $sig, url: $url}
+              | .platforms["darwin-x86_64-app"] = {signature: $sig, url: $url}
             ' latest.json > latest.json.new
           else
             jq -n --arg v "${TAG#v}" --arg url "$URL" --arg sig "$MAC_SIG" '
               {version: $v, notes: "", pub_date: (now | todate),
                platforms: {
                  "darwin-aarch64": {signature: $sig, url: $url},
-                 "darwin-x86_64":  {signature: $sig, url: $url}}}
+                 "darwin-x86_64":  {signature: $sig, url: $url},
+                 "darwin-aarch64-app": {signature: $sig, url: $url},
+                 "darwin-x86_64-app":  {signature: $sig, url: $url}}}
             ' > latest.json.new
           fi
           mv latest.json.new latest.json
