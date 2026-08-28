@@ -45,12 +45,49 @@ export type PreviewType =
  * Rust re-checks the same number against the real file length so a renderer
  * cannot talk itself past the limit (see `read_preview_bytes`).
  */
-export const MAX_TEXT_PREVIEW_BYTES = 1024 * 1024;
+/**
+ * Markdown only. It is parsed into React **elements** on the main thread, one
+ * node per token, so its cost and its peak memory scale with the token count
+ * rather than the byte count. This is the tightest cap for that reason — do
+ * not extend it to another format without checking that the format's renderer
+ * does the same kind of work.
+ */
+export const MAX_MARKDOWN_PREVIEW_BYTES = 1024 * 1024;
+
+/**
+ * HTML. Deliberately far above Markdown's cap despite the two looking alike:
+ * HTML is never walked token-by-token in React. It is decoded, sanitised with
+ * the platform's own (native) parser, and handed to a sandboxed frame that
+ * parses it natively too — the browser does the work in both steps.
+ *
+ * Sharing Markdown's 1 MiB was a real bug: an ordinary `index.html` refused to
+ * open with "too large to preview" while the machinery that would have
+ * rendered it was never reached. It mirrors the same fix in the console
+ * (hippius-console#722), which measured peak resident memory on this path at
+ * roughly 6-9x the file size — a 25 MiB file lands near 200 MB, which is fine
+ * on desktop.
+ */
+export const MAX_HTML_PREVIEW_BYTES = 25 * 1024 * 1024;
+
+/**
+ * JSON. Re-serialised, then split into lines and rendered as one React element
+ * per line plus a span per highlighted token — the same element-per-token cost
+ * as Markdown, so it stays tight.
+ */
 export const MAX_STRUCTURED_TEXT_PREVIEW_BYTES = 2 * 1024 * 1024;
+
+/**
+ * Plain text. The cheapest renderer here: decoded once and dropped into a
+ * single `<pre>`, so the browser lays it out and React builds one node. Higher
+ * than JSON for that reason, but below HTML's because the `<pre>` is not
+ * virtualised, so the whole file is laid out at once.
+ */
+export const MAX_PLAIN_TEXT_PREVIEW_BYTES = 8 * 1024 * 1024;
+
 export const MAX_SPREADSHEET_PREVIEW_BYTES = 20 * 1024 * 1024;
 export const MAX_DOCUMENT_PREVIEW_BYTES = 25 * 1024 * 1024;
 export const MAX_PRESENTATION_PREVIEW_BYTES = 40 * 1024 * 1024;
-/** SVG is parsed into a `data:` URL, so it is held twice (bytes + base64). */
+/** SVG is sanitised, then base64-encoded into a `data:` URL, which inflates 4/3. */
 export const MAX_SVG_PREVIEW_BYTES = 4 * 1024 * 1024;
 /**
  * Ceiling for the types that stream rather than buffer. It is still finite so
@@ -58,13 +95,27 @@ export const MAX_SVG_PREVIEW_BYTES = 4 * 1024 * 1024;
  */
 export const MAX_STREAMED_PREVIEW_BYTES = 2 * 1024 * 1024 * 1024;
 
+/**
+ * Mirror of `MAX_PREVIEW_READ_BYTES` in `src-tauri/src/media_preview.rs`.
+ *
+ * Rust clamps every read to that ceiling, so a per-format cap above it would
+ * be silently unreachable: the file would be refused by Rust and reported as
+ * "too large to preview" even though it sat inside its own format's cap —
+ * exactly the failure this file's caps exist to prevent. Pinned by
+ * `filePreviewType.test.ts` on this side and by `preview_read_limit`'s tests
+ * on the Rust side.
+ */
+export const RUST_PREVIEW_READ_CEILING_BYTES = 64 * 1024 * 1024;
+
 /** Per-type ceiling for inline preview, in plaintext bytes. */
 export function previewByteCap(type: PreviewType): number {
   switch (type) {
     case "markdown":
+      return MAX_MARKDOWN_PREVIEW_BYTES;
     case "html":
-      return MAX_TEXT_PREVIEW_BYTES;
+      return MAX_HTML_PREVIEW_BYTES;
     case "text":
+      return MAX_PLAIN_TEXT_PREVIEW_BYTES;
     case "json":
       return MAX_STRUCTURED_TEXT_PREVIEW_BYTES;
     case "svg":

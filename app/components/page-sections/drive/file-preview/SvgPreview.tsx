@@ -2,7 +2,7 @@
 
 import { useCallback } from "react";
 
-import { MAX_SVG_PREVIEW_BYTES } from "@/app/lib/utils/filePreviewType";
+import { previewByteCap } from "@/app/lib/utils/filePreviewType";
 import { sanitizeSvgDocument } from "@/app/lib/utils/preview/sanitizeMarkup";
 
 import { PreviewError, PreviewLoading } from "./PreviewState";
@@ -47,7 +47,7 @@ export default function SvgPreview({
   filename: string;
 }) {
   const parse = useCallback(parseSvg, []);
-  const state = usePreviewResource(localPath, MAX_SVG_PREVIEW_BYTES, parse);
+  const state = usePreviewResource(localPath, previewByteCap("svg"), parse);
 
   if (state.status === "loading") {
     return <PreviewLoading title="Loading image preview…" />;

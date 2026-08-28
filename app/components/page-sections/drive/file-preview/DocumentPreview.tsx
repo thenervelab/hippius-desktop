@@ -1,6 +1,6 @@
 "use client";
 
-import { MAX_DOCUMENT_PREVIEW_BYTES } from "@/app/lib/utils/filePreviewType";
+import { previewByteCap } from "@/app/lib/utils/filePreviewType";
 
 import RenderedFilePreview from "./RenderedFilePreview";
 
@@ -119,7 +119,7 @@ export default function DocumentPreview({ localPath }: { localPath: string }) {
   return (
     <RenderedFilePreview
       localPath={localPath}
-      maxBytes={MAX_DOCUMENT_PREVIEW_BYTES}
+      maxBytes={previewByteCap("document")}
       loadingTitle="Opening document…"
       errorTitle="Couldn't preview this document"
       render={renderDocument}

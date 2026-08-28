@@ -4,7 +4,7 @@ import React, { useCallback } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-import { MAX_TEXT_PREVIEW_BYTES } from "@/app/lib/utils/filePreviewType";
+import { previewByteCap } from "@/app/lib/utils/filePreviewType";
 
 import { PreviewEmpty, PreviewError, PreviewLoading } from "./PreviewState";
 import { PreviewCard, PreviewPane } from "./PreviewSurface";
@@ -152,7 +152,7 @@ export const MarkdownBody = React.memo(function MarkdownBody({
 /** MD / Markdown rendered as formatted prose on the shared document card. */
 export default function MarkdownPreview({ localPath }: { localPath: string }) {
   const parse = useCallback(decodePlainText, []);
-  const state = usePreviewResource(localPath, MAX_TEXT_PREVIEW_BYTES, parse);
+  const state = usePreviewResource(localPath, previewByteCap("markdown"), parse);
 
   if (state.status === "loading") {
     return <PreviewLoading title="Loading Markdown preview…" />;

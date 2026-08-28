@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 
-import { MAX_PRESENTATION_PREVIEW_BYTES } from "@/app/lib/utils/filePreviewType";
+import { previewByteCap } from "@/app/lib/utils/filePreviewType";
 import { cn } from "@/lib/utils";
 
 import PreviewPager from "./PreviewPager";
@@ -300,7 +300,7 @@ export default function PresentationPreview({
   const parse = useCallback(parsePresentation, []);
   const state = usePreviewResource(
     localPath,
-    MAX_PRESENTATION_PREVIEW_BYTES,
+    previewByteCap("presentation"),
     parse,
     { dispose: disposePresentation },
   );

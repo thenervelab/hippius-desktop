@@ -110,7 +110,25 @@ A synced file is untrusted input rendered inside the app's own WebView. Each rul
 - **DOCX links are sanitised** after docx-preview renders (its only file-controlled script vector), and `renderAltChunks` stays off (alt chunks embed arbitrary foreign content, HTML included).
 - **PPTX slides are scrubbed** after rendering — pptx-viewer's table path goes through `innerHTML` — and font names are stripped before rendering because they are interpolated into `style="…"` strings.
 - **Nothing is sent to a third-party viewer.** All rendering is local and offline.
-- **Every format has a byte cap and a render cap.** Caps are in `filePreviewType.ts` (bytes, re-enforced in Rust) and `spreadsheetFormat.ts` / `PresentationPreview.tsx` (rendered cells and slides). The spreadsheet grid is plain DOM, so `MAX_TABLE_ROWS × MAX_TABLE_COLUMNS` is the real bound on what a hostile or merely enormous sheet can build.
+- **Every format has a byte cap and a render cap.** Caps are in `filePreviewType.ts` (bytes, re-enforced in Rust) and `spreadsheetFormat.ts` / `PresentationPreview.tsx` (rendered cells and slides). The spreadsheet grid virtualises rows, so `MAX_TABLE_COLUMNS` is the bound that matters for the DOM.
+
+### Byte caps: size them by what the renderer does, not by what the format looks like
+
+A cap is not a security dial to be turned down; it is a statement about **where the bytes are spent**. Two formats that read alike can be an order of magnitude apart:
+
+| Renderer does… | Formats | Cap |
+|---|---|---|
+| Builds one React element per token, on the main thread | `markdown` | 1 MiB |
+| …same, plus a span per highlighted token | `json` | 2 MiB |
+| Hands the browser one text node to lay out | `text` | 8 MiB |
+| Hands the browser a document to parse (natively, twice: sanitiser + frame) | `html` | 25 MiB |
+| Parses a zip archive in JS | `spreadsheet` / `document` / `presentation` | 20 / 25 / 40 MiB |
+
+**Markdown and HTML sharing one constant was a real bug** — an ordinary `index.html` a few MB in size refused to open with "too large to preview" while the renderer that would have shown it was never reached. Markdown's 1 MiB is justified by the element-per-token walk; that reasoning has never applied to HTML, which the browser parses natively. Same fix as hippius-console#722. Pinned by the "does not hold HTML to Markdown's cap" and "ranks the caps by how the renderer actually spends the bytes" tests.
+
+**Every renderer takes its cap from `previewByteCap(type)`, never from the constant directly.** The switch is the single source of truth; a renderer that imports a constant is how one format silently keeps another's limit (that is precisely how the console's `fetchPreviewText` would have kept rejecting HTML at 1 MiB after its own cap was raised).
+
+**No per-format cap may exceed `RUST_PREVIEW_READ_CEILING_BYTES`** (64 MiB, mirroring `MAX_PREVIEW_READ_BYTES` in `media_preview.rs`). Above it, Rust refuses the read and the user is told "too large" for a file inside its own cap — the same failure one layer down. Pinned from both sides: `filePreviewType.test.ts` and `preview_read_ceiling_clears_every_per_format_cap`.
 
 ### Renderers and why each library
 

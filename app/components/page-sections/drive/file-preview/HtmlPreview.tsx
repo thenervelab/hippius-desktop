@@ -2,7 +2,7 @@
 
 import { useCallback, useState } from "react";
 
-import { MAX_TEXT_PREVIEW_BYTES } from "@/app/lib/utils/filePreviewType";
+import { previewByteCap } from "@/app/lib/utils/filePreviewType";
 import { sanitizeHtmlDocument } from "@/app/lib/utils/preview/sanitizeMarkup";
 import { cn } from "@/lib/utils";
 
@@ -41,7 +41,7 @@ export default function HtmlPreview({
   filename: string;
 }) {
   const parse = useCallback(parseHtml, []);
-  const state = usePreviewResource(localPath, MAX_TEXT_PREVIEW_BYTES, parse);
+  const state = usePreviewResource(localPath, previewByteCap("html"), parse);
   const [frameReady, setFrameReady] = useState(false);
 
   if (state.status === "loading") {

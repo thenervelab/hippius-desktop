@@ -2,7 +2,7 @@
 
 import { useCallback, type ReactNode } from "react";
 
-import { MAX_STRUCTURED_TEXT_PREVIEW_BYTES } from "@/app/lib/utils/filePreviewType";
+import { previewByteCap } from "@/app/lib/utils/filePreviewType";
 
 import { PreviewEmpty, PreviewError, PreviewLoading } from "./PreviewState";
 import { PreviewCard, PreviewPane } from "./PreviewSurface";
@@ -61,11 +61,7 @@ function highlightedLine(line: string): ReactNode[] {
 /** JSON rendered indented, line-numbered and token-coloured. */
 export default function JsonPreview({ localPath }: { localPath: string }) {
   const parse = useCallback(formatJsonPreview, []);
-  const state = usePreviewResource(
-    localPath,
-    MAX_STRUCTURED_TEXT_PREVIEW_BYTES,
-    parse,
-  );
+  const state = usePreviewResource(localPath, previewByteCap("json"), parse);
 
   if (state.status === "loading") {
     return <PreviewLoading title="Loading JSON preview…" />;

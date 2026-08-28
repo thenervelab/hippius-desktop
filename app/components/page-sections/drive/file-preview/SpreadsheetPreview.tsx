@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-import { MAX_SPREADSHEET_PREVIEW_BYTES } from "@/app/lib/utils/filePreviewType";
+import { previewByteCap } from "@/app/lib/utils/filePreviewType";
 import {
   MAX_TABLE_COLUMNS,
   MAX_TABLE_ROWS,
@@ -34,11 +34,7 @@ export default function SpreadsheetPreview({
     () => (bytes, signal) => parseSpreadsheetPreview(bytes, signal, filename),
     [filename],
   );
-  const state = usePreviewResource(
-    localPath,
-    MAX_SPREADSHEET_PREVIEW_BYTES,
-    parser,
-  );
+  const state = usePreviewResource(localPath, previewByteCap("spreadsheet"), parser);
   const [activeSheetIndex, setActiveSheetIndex] = useState(0);
 
   // Stepping to the next file must not land on sheet 4 of a two-sheet book.

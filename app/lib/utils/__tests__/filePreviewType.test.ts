@@ -2,12 +2,15 @@ import { describe, expect, it } from "vitest";
 
 import {
   MAX_DOCUMENT_PREVIEW_BYTES,
+  MAX_HTML_PREVIEW_BYTES,
+  MAX_MARKDOWN_PREVIEW_BYTES,
+  MAX_PLAIN_TEXT_PREVIEW_BYTES,
   MAX_PRESENTATION_PREVIEW_BYTES,
   MAX_SPREADSHEET_PREVIEW_BYTES,
   MAX_STREAMED_PREVIEW_BYTES,
   MAX_STRUCTURED_TEXT_PREVIEW_BYTES,
   MAX_SVG_PREVIEW_BYTES,
-  MAX_TEXT_PREVIEW_BYTES,
+  RUST_PREVIEW_READ_CEILING_BYTES,
   derivePreviewType,
   isLegacyOfficeFilename,
   isPreviewableFileName,
@@ -207,9 +210,9 @@ describe("legacy Office formats are not mislabelled as supported", () => {
 
 describe("per-format byte caps", () => {
   it.each([
-    ["markdown", MAX_TEXT_PREVIEW_BYTES],
-    ["html", MAX_TEXT_PREVIEW_BYTES],
-    ["text", MAX_STRUCTURED_TEXT_PREVIEW_BYTES],
+    ["markdown", MAX_MARKDOWN_PREVIEW_BYTES],
+    ["html", MAX_HTML_PREVIEW_BYTES],
+    ["text", MAX_PLAIN_TEXT_PREVIEW_BYTES],
     ["json", MAX_STRUCTURED_TEXT_PREVIEW_BYTES],
     ["svg", MAX_SVG_PREVIEW_BYTES],
     ["spreadsheet", MAX_SPREADSHEET_PREVIEW_BYTES],
@@ -242,9 +245,40 @@ describe("per-format byte caps", () => {
     for (const type of ["document", "spreadsheet", "presentation"] as PreviewType[]) {
       expect(previewByteCap(type)).toBeLessThan(MAX_STREAMED_PREVIEW_BYTES);
     }
-    // Markdown and HTML are parsed on the main thread, so they get the
-    // tightest cap of all the buffered formats.
-    expect(previewByteCap("markdown")).toBeLessThan(previewByteCap("text"));
-    expect(previewByteCap("html")).toBeLessThan(previewByteCap("spreadsheet"));
+  });
+
+  it("does not hold HTML to Markdown's cap", () => {
+    // The bug this pins: the two shared one constant, so an ordinary
+    // `index.html` a few MB in size refused to open with "too large to
+    // preview" while the renderer that would have shown it was never reached.
+    // They only look alike — Markdown is walked token-by-token into React
+    // elements on the main thread, whereas HTML is parsed natively and handed
+    // to a sandboxed frame that parses it natively too.
+    expect(previewByteCap("html")).toBeGreaterThan(previewByteCap("markdown"));
+    expect(previewByteCap("html")).toBeGreaterThanOrEqual(8 * 1024 * 1024);
+  });
+
+  it("ranks the caps by how the renderer actually spends the bytes", () => {
+    // Element-per-token renderers (Markdown, JSON) stay tightest; the browser
+    // does the work for plain text and HTML, so those sit above them. Keeping
+    // this ordering explicit is what stops a format being given a neighbour's
+    // cap again just because the two read similarly.
+    expect(previewByteCap("markdown")).toBeLessThanOrEqual(previewByteCap("json"));
+    expect(previewByteCap("json")).toBeLessThan(previewByteCap("text"));
+    expect(previewByteCap("text")).toBeLessThan(previewByteCap("html"));
+  });
+
+  it("keeps every buffered cap within the ceiling Rust will actually read", () => {
+    // Rust clamps every read to `MAX_PREVIEW_READ_BYTES`, so a per-format cap
+    // above it would be unreachable: the file would be refused by Rust and
+    // reported as "too large" while sitting inside its own format's cap —
+    // the same class of failure as the HTML bug above, one layer down.
+    const buffered: PreviewType[] = [
+      "markdown", "html", "text", "json", "svg",
+      "document", "spreadsheet", "presentation",
+    ];
+    for (const type of buffered) {
+      expect(previewByteCap(type)).toBeLessThanOrEqual(RUST_PREVIEW_READ_CEILING_BYTES);
+    }
   });
 });
