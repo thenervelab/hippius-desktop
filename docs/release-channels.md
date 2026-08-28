@@ -161,7 +161,12 @@ stop receiving updates.
 Staging previously had its own keypair and `scripts/use-staging-updater-key.sh`
 patched it in at build time. Both are gone. `tests/release_lane_pins.rs` fails
 if any workflow reintroduces `TAURI_SIGNING_PRIVATE_KEY_STAGING` or
-`TAURI_UPDATER_PUBKEY_STAGING`.
+`TAURI_UPDATER_PUBKEY_STAGING`, and separately pins the committed pubkey value
+itself. Both halves are needed: the key that shipped wrong was edited straight
+into `tauri.conf.json`, not patched by a workflow. A wrong key is unrecoverable
+rather than merely broken — it is compiled into the binary, so no later release
+can reach an install that already has it, and a manual reinstall is the only
+way back.
 
 **Migration cost, once:** a tester on a build signed with the retired staging
 key cannot auto-update onto the new one and installs the next DMG by hand. That
