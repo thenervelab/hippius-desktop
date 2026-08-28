@@ -31,6 +31,7 @@ import React, {
 } from "react";
 import { useAtom } from "jotai";
 import { AlertCircle, Check, Loader2 } from "lucide-react";
+import { isCloudOnlyRow } from "@/app/lib/utils/cloudOnly";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { toast } from "sonner";
 
@@ -48,6 +49,7 @@ import {
   cancelFinderShare,
   confirmFinderShare,
   createFolderShare,
+  createRemoteShare,
   createShare,
   revokeShare,
   type ShareChoice,
@@ -137,10 +139,22 @@ export default function ShareFileModal() {
         );
       // A folder mints a live browsable link (one metadata POST, no upload,
       // no progress channel); the file command rejects a directory outright,
-      // so the two are not interchangeable.
+      // so the two are not interchangeable. A cloud-only file (remote-drive
+      // row, cloud search hit, or a pending not-yet-downloaded file — the
+      // shared isCloudOnlyRow discriminant) shares console-style: Rust
+      // downloads + decrypts it to a temp copy and runs the same
+      // re-encrypt-under-a-fresh-key pipeline.
       const link = target.file.isFolder
         ? await createFolderShare(folderLabel, target.relativePath, choice)
-        : await createShare(folderLabel, target.relativePath, choice, onProgress);
+        : isCloudOnlyRow(target.file) && target.file.fileId
+          ? await createRemoteShare(
+              folderLabel,
+              target.relativePath,
+              target.file.fileId,
+              choice,
+              onProgress,
+            )
+          : await createShare(folderLabel, target.relativePath, choice, onProgress);
       setState({ kind: "done", link });
     } catch (err) {
       setState({ kind: "error", message: errorMessage(err) });

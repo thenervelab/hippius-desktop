@@ -63,6 +63,34 @@ export function planThumbnail(
   };
 }
 
+/**
+ * Cloud-thumbnail concurrency gate (module-level: ONE pool across every
+ * mounted row). Each cloud thumbnail downloads + decrypts the full file, so
+ * the pool must stay small; queued acquirers are served FIFO.
+ */
+const MAX_CONCURRENT_CLOUD_THUMBNAILS = 3;
+let activeCloudThumbnails = 0;
+const cloudThumbnailWaiters: Array<() => void> = [];
+
+function acquireCloudThumbnailSlot(): Promise<void> {
+  if (activeCloudThumbnails < MAX_CONCURRENT_CLOUD_THUMBNAILS) {
+    activeCloudThumbnails += 1;
+    return Promise.resolve();
+  }
+  return new Promise<void>((resolve) => {
+    cloudThumbnailWaiters.push(() => {
+      activeCloudThumbnails += 1;
+      resolve();
+    });
+  });
+}
+
+function releaseCloudThumbnailSlot(): void {
+  activeCloudThumbnails -= 1;
+  const next = cloudThumbnailWaiters.shift();
+  if (next) next();
+}
+
 export interface ThumbnailState {
   /** Asset-protocol URL for the thumbnail, or `null` while unresolved/unavailable. */
   url: string | null;
@@ -191,8 +219,23 @@ export function useThumbnail(
       let cancelled = false;
       let thumbnailUrl = "";
       setState({ url: null, isLoading: true, error: null });
-      void prepareHeicThumbnail(file, plan, maxDim)
-        .then((url) => {
+      // A CLOUD HEIC thumbnail downloads + decrypts the full file (via
+      // cache_remote_file) exactly like the non-HEIC cloud branch below, so
+      // it must take a semaphore slot too — iPhone camera rolls are
+      // HEIC-dominant, and leaving this path ungated reproduced the very
+      // burst the semaphore exists to prevent. Local HEIC decodes skip the
+      // slot (no network; only the wasm convert).
+      const needsSlot = plan.kind === "cloud";
+      void (async () => {
+        if (needsSlot) {
+          await acquireCloudThumbnailSlot();
+          if (cancelled) {
+            releaseCloudThumbnailSlot();
+            return;
+          }
+        }
+        try {
+          const url = await prepareHeicThumbnail(file, plan, maxDim);
           thumbnailUrl = url;
           if (cancelled) {
             URL.revokeObjectURL(url);
@@ -200,15 +243,17 @@ export function useThumbnail(
             return;
           }
           setState({ url, isLoading: false, error: null });
-        })
-        .catch((error: unknown) => {
+        } catch (error: unknown) {
           if (cancelled) return;
           const message =
             error instanceof Error
               ? error.message
               : "Failed to prepare HEIC thumbnail.";
           setState({ url: null, isLoading: false, error: message });
-        });
+        } finally {
+          if (needsSlot) releaseCloudThumbnailSlot();
+        }
+      })();
 
       return () => {
         cancelled = true;
@@ -233,30 +278,44 @@ export function useThumbnail(
 
     let cancelled = false;
     setState({ url: null, isLoading: true, error: null });
-    invoke<string>("get_thumbnail", {
-      accountId: plan.accountId,
-      label: plan.label,
-      fileId: plan.fileId,
-      arionHash: plan.arionHash,
-      source: plan.source,
-      maxDim,
-    })
-      .then((path) => {
+    (async () => {
+      // A cloud thumbnail downloads + decrypts the FULL file — on a remote
+      // camera roll every visible row is a multi-MB photo, and an ungated
+      // burst of 30-50 of them saturated the network/CPU (page jank, and it
+      // starved the listing's own page fetches). The semaphore runs a few at
+      // a time; rows that scroll OUT of view while still queued are cancelled
+      // before their download ever starts, so fast scrolling stays cheap.
+      await acquireCloudThumbnailSlot();
+      if (cancelled) {
+        releaseCloudThumbnailSlot();
+        return;
+      }
+      try {
+        const path = await invoke<string>("get_thumbnail", {
+          accountId: plan.accountId,
+          label: plan.label,
+          fileId: plan.fileId,
+          arionHash: plan.arionHash,
+          source: plan.source,
+          maxDim,
+        });
         if (cancelled) return;
         setState({
           url: convertFileSrc(path.replace(/\\/g, "/")),
           isLoading: false,
           error: null,
         });
-      })
-      .catch((err: unknown) => {
+      } catch (err: unknown) {
         if (cancelled) return;
         const message =
           typeof err === "string"
             ? err
             : ((err as { message?: string })?.message ?? "Failed to load thumbnail.");
         setState({ url: null, isLoading: false, error: message });
-      });
+      } finally {
+        releaseCloudThumbnailSlot();
+      }
+    })();
 
     return () => {
       cancelled = true;

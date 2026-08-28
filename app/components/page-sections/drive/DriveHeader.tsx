@@ -71,6 +71,10 @@ interface DriveHeaderProps {
   privateFileCount?: number;
   publicFileCount?: number;
   isSyncPathEmpty?: boolean;
+  /** Hide the upload CTAs entirely — a REMOTE (server-only) drive has no
+   *  local folder to drop files into, so "+ Add Files"/"+ New Folder"
+   *  would upload somewhere else and read as data loss. */
+  hideUploads?: boolean;
   onStartSyncing?: () => void;
   hasNoSyncPaths?: boolean;
   /** When true, the header "Start Syncing" button is dimmed and its
@@ -98,6 +102,8 @@ interface DriveHeaderProps {
   // and line 2 (filter pills + stats/search/view-mode) can share one flex column.
   breadcrumbSegments?: BreadcrumbSegment[];
   onBreadcrumbLocalClick?: () => void;
+  /** Root segment label — "Remote" when browsing a server-only drive. */
+  breadcrumbRootLabel?: string;
   // Nested folder browsing mode. When `isNested` is true:
   //  - the "+ Add Files" upload and the "+ New Folder" creation target
   //    `nestedSubfolderPath` instead of the active sync drive's root,
@@ -139,6 +145,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
   refetchUserFiles,
   addButtonRef,
   isSyncPathEmpty = false,
+  hideUploads = false,
   onStartSyncing,
   hasNoSyncPaths = false,
   hasNoCredits = false,
@@ -156,6 +163,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
   folderUploadInitialPath,
   breadcrumbSegments = [],
   onBreadcrumbLocalClick,
+  breadcrumbRootLabel,
   isNested = false,
   nestedFolderName = null,
   nestedSubfolderPath = null,
@@ -188,7 +196,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
   const actionButtons = (
     <>
       {/* Folder Upload button - disabled for recent files with no sync paths or when sync is paused */}
-      {(!isRecentFiles || !hasNoSyncPaths) && !isSyncPathEmpty && (
+      {!hideUploads && (!isRecentFiles || !hasNoSyncPaths) && !isSyncPathEmpty && (
         <Button
           variant="defaultStable"
           size="auto"
@@ -240,7 +248,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
       )}
 
       {/* Add File button - disabled for recent files with no sync paths or when sync is paused */}
-      {isRecentFiles && hasNoSyncPaths ? (
+      {hideUploads ? null : isRecentFiles && hasNoSyncPaths ? (
         <Button
           variant="primary"
           size="auto"
@@ -390,6 +398,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
             <SyncFolderBreadcrumb
               segments={breadcrumbSegments}
               onLocalClick={onBreadcrumbLocalClick ?? (() => {})}
+              rootLabel={breadcrumbRootLabel}
               className="mt-0 mb-0"
             />
             <div className="flex items-center gap-3 flex-wrap">

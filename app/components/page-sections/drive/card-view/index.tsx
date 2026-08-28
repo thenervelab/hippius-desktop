@@ -1,12 +1,7 @@
-import React, {
-  FC,
-  useState,
-  useEffect,
-  useCallback,
-  memo,
-  useRef,
-} from "react";
+import React, { FC, useState, useCallback, memo, useRef } from "react";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
+import { FileCardSkeleton } from "./CardViewSkeleton";
+import { useLoadMoreSentinel } from "@/app/lib/hooks/use-load-more-sentinel";
 import { Button } from "@/components/ui/button";
 import { MoreVertical, Download, FolderOpen, Link2, Pencil } from "lucide-react";
 import { useAtomValue } from "jotai";
@@ -17,6 +12,7 @@ import {
 } from "@/app/lib/global-atoms/sharesAtoms";
 import { renameModalFileAtom } from "@/app/lib/global-atoms/renameAtoms";
 import { canRenameFile, RENAME_DISABLED_TOOLTIP } from "@/app/lib/utils/renameGating";
+import { isCloudOnlyRow } from "@/app/lib/utils/cloudOnly";
 import {
   canShareFolder,
   FOLDER_SHARE_DISABLED_TOOLTIP,
@@ -58,6 +54,10 @@ interface CardViewProps {
   ) => void;
   hasMore: boolean;
   loadMore: () => void;
+  /** A remote server page is on the wire — appends skeleton cards inside
+   *  the grid so the placeholders fill the same cells the incoming cards
+   *  will occupy. */
+  isLoadingMore?: boolean;
   /**
    * Drive-relative path of the folder currently being browsed, needed to
    * resolve a folder row's share path — its name alone is only the basename.
@@ -72,28 +72,12 @@ const CardView: FC<CardViewProps> = ({
   handleFileDownload,
   hasMore,
   loadMore,
+  isLoadingMore = false,
   currentSubfolderPath,
 }) => {
-  // Sentinel ref for infinite scroll
+  // Sentinel ref for infinite scroll — enter-transition-gated (see the hook).
   const sentinelRef = useRef<HTMLDivElement>(null);
-
-  // IntersectionObserver for infinite scroll
-  useEffect(() => {
-    if (!hasMore) return;
-    const sentinel = sentinelRef.current;
-    if (!sentinel) return;
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0].isIntersecting) {
-          loadMore();
-        }
-      },
-      { rootMargin: "200px" },
-    );
-    observer.observe(sentinel);
-    return () => observer.disconnect();
-  }, [hasMore, loadMore]);
+  useLoadMoreSentinel(sentinelRef, hasMore, loadMore);
 
   const router = useRouter();
   const { polkadotAddress } = useWalletAuth();
@@ -248,19 +232,25 @@ const CardView: FC<CardViewProps> = ({
                                 },
                               ]
                             : []),
-                          {
-                            icon: <Download className="size-4" />,
-                            itemTitle: "Download",
-                            onItemClick: async (e?: React.MouseEvent) => {
-                              // Prevent event bubbling to avoid triggering card's onClick
-                              if (e) {
-                                e.preventDefault();
-                                e.stopPropagation();
-                              }
-                              setOpenMenuIndex(null);
-                              handleFileDownload(file, polkadotAddress ?? "");
-                            },
-                          },
+                          // Cloud-only FOLDER rows have no zip-export source;
+                          // cloud-only FILE rows still download remotely.
+                          ...(isCloudOnlyRow(file) && file.isFolder
+                            ? []
+                            : [
+                                {
+                                  icon: <Download className="size-4" />,
+                                  itemTitle: "Download",
+                                  onItemClick: async (e?: React.MouseEvent) => {
+                                    // Prevent event bubbling to avoid triggering card's onClick
+                                    if (e) {
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                    }
+                                    setOpenMenuIndex(null);
+                                    handleFileDownload(file, polkadotAddress ?? "");
+                                  },
+                                },
+                              ]),
                           ...(fileType === "video" ||
                           fileType === "image" ||
                           fileType === "PDF"
@@ -276,33 +266,38 @@ const CardView: FC<CardViewProps> = ({
                               ]
                             : []),
 
-                          {
-                            icon: <FolderOpen className="size-4" />,
-                            itemTitle: "Reveal in Finder",
-                            onItemClick: async (e?: React.MouseEvent) => {
-                              if (e) {
-                                e.preventDefault();
-                                e.stopPropagation();
-                              }
-                              setOpenMenuIndex(null);
-                              try {
-                                await revealFile({
-                                  sourcePath: file.source,
-                                  label: file.label,
-                                  accountId: polkadotAddress ?? undefined,
-                                  fileName: file.actualFileName || file.name,
-                                });
-                              } catch (error) {
-                                console.error(
-                                  "Failed to reveal file in Finder:",
-                                  error,
-                                );
-                                toast.error(
-                                  "File is not available locally. It may only exist on another device.",
-                                );
-                              }
-                            },
-                          },
+                          // Nothing on disk to reveal for a cloud-only row.
+                          ...(isCloudOnlyRow(file)
+                            ? []
+                            : [
+                                {
+                                  icon: <FolderOpen className="size-4" />,
+                                  itemTitle: "Reveal in Finder",
+                                  onItemClick: async (e?: React.MouseEvent) => {
+                                    if (e) {
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                    }
+                                    setOpenMenuIndex(null);
+                                    try {
+                                      await revealFile({
+                                        sourcePath: file.source,
+                                        label: file.label,
+                                        accountId: polkadotAddress ?? undefined,
+                                        fileName: file.actualFileName || file.name,
+                                      });
+                                    } catch (error) {
+                                      console.error(
+                                        "Failed to reveal file in Finder:",
+                                        error,
+                                      );
+                                      toast.error(
+                                        "File is not available locally. It may only exist on another device.",
+                                      );
+                                    }
+                                  },
+                                },
+                              ]),
                           {
                             icon: <Icons.InfoCircle className="size-4" />,
                             itemTitle: `${file?.isFolder ? "Folder" : "File"} Details`,
@@ -404,40 +399,47 @@ const CardView: FC<CardViewProps> = ({
                               }
                             },
                           },
-                          // Always show delete option, but disabled for unpinned files
-                          {
-                            icon: <Icons.Trash className="size-4" />,
-                            itemTitle: !file.isAssigned
-                              ? "Delete (Syncing in progress...)"
-                              : "Delete",
-                            disabled: !file.isAssigned,
-                            className: !file.isAssigned
-                              ? "cursor-not-allowed opacity-60"
-                              : "",
-                            tooltip: !file.isAssigned
-                              ? "This file is currently being synced and cannot be deleted yet. Please wait for the sync to complete."
-                              : undefined,
-                            onItemClick: (e?: React.MouseEvent) => {
-                              // Always prevent event bubbling to avoid triggering card's onClick
-                              if (e) {
-                                e.preventDefault();
-                                e.stopPropagation();
-                              }
+                          // Delete: disabled for unpinned files, hidden for
+                          // cloud-only rows — the delete pipeline removes the
+                          // LOCAL copy and lets sync propagate, which a
+                          // server-only row has no path through.
+                          ...(isCloudOnlyRow(file)
+                            ? []
+                            : [
+                                {
+                                  icon: <Icons.Trash className="size-4" />,
+                                  itemTitle: !file.isAssigned
+                                    ? "Delete (Syncing in progress...)"
+                                    : "Delete",
+                                  disabled: !file.isAssigned,
+                                  className: !file.isAssigned
+                                    ? "cursor-not-allowed opacity-60"
+                                    : "",
+                                  tooltip: !file.isAssigned
+                                    ? "This file is currently being synced and cannot be deleted yet. Please wait for the sync to complete."
+                                    : undefined,
+                                  onItemClick: (e?: React.MouseEvent) => {
+                                    // Always prevent event bubbling to avoid triggering card's onClick
+                                    if (e) {
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                    }
 
-                              // Don't proceed if file is not assigned (disabled state)
-                              if (!file.isAssigned) {
-                                // Close the menu even for disabled items
-                                setOpenMenuIndex(null);
-                                return;
-                              }
+                                    // Don't proceed if file is not assigned (disabled state)
+                                    if (!file.isAssigned) {
+                                      // Close the menu even for disabled items
+                                      setOpenMenuIndex(null);
+                                      return;
+                                    }
 
-                              // Close the menu
-                              setOpenMenuIndex(null);
-                              // Enter selection mode and select file
-                              enterSelectionModeAndSelectFile(file);
-                            },
-                            variant: "destructive" as const,
-                          },
+                                    // Close the menu
+                                    setOpenMenuIndex(null);
+                                    // Enter selection mode and select file
+                                    enterSelectionModeAndSelectFile(file);
+                                  },
+                                  variant: "destructive" as const,
+                                },
+                              ]),
                         ]}
                       >
                         <Button
@@ -453,6 +455,13 @@ const CardView: FC<CardViewProps> = ({
                 </div>
               );
             })}
+            {/* Placeholder cards while the next remote page is on the wire —
+                rendered inside the SAME grid so they flow into the cells the
+                incoming cards will occupy. */}
+            {isLoadingMore &&
+              Array.from({ length: 4 }).map((_, index) => (
+                <FileCardSkeleton key={`loading-more-card-${index}`} />
+              ))}
           </div>
         </div>
         {/* Sentinel element for infinite scroll */}

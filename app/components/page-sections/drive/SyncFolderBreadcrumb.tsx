@@ -19,8 +19,15 @@ export interface BreadcrumbSegment {
 }
 
 interface SyncFolderBreadcrumbProps {
-  /** Click handler for the fixed "Local" segment — switches drive to the cards view. */
+  /** Click handler for the fixed root segment — switches drive to the cards view. */
   onLocalClick: () => void;
+  /**
+   * Label of the fixed root segment. "Local" for locally synced drives; the
+   * drive view passes "Remote" when browsing a server-only drive, since
+   * nothing about that drive is local to this machine. Both click through to
+   * the same cards view (which lists both sections).
+   */
+  rootLabel?: string;
   /**
    * Path segments rendered AFTER "Local". Empty when the user is on the
    * Local cards view. First entry is the top-level sync folder; subsequent
@@ -50,6 +57,7 @@ const SyncFolderBreadcrumb: FC<SyncFolderBreadcrumbProps> = ({
   onLocalClick,
   segments,
   className,
+  rootLabel = "Local",
 }) => {
   const hasSegments = segments.length > 0;
 
@@ -70,7 +78,7 @@ const SyncFolderBreadcrumb: FC<SyncFolderBreadcrumbProps> = ({
           "bg-transparent border-0 p-0 m-0",
         )}
       >
-        Local
+        {rootLabel}
       </button>
       {segments.map((segment, index) => {
         const isLast = index === segments.length - 1;
