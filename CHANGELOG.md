@@ -15,33 +15,67 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-28
+
 ### Added
 
-- **Try new features early with the beta channel.** Choose **Explore Beta** from
-  the account menu to move onto builds that get new features first, before they
-  are fully stabilized. Hippius downloads the build and restarts. You can go back
-  to the stable version at any time from Settings.
 - **Browse folders synced from your other devices without downloading them.**
   Click a folder under "Sync from Other Devices" to open it like any drive —
   navigate subfolders, see real sizes, preview and download individual files,
   and share files or folders via link, all straight from the server. Files
   load a page at a time as you scroll, so even huge camera rolls open
   instantly, and the app reopens wherever you left off.
+- **Release pages now name the file to download** for each platform, and publish a
+  checksum for every file so you can confirm a download arrived intact.
+
+### Fixed
+
+- **Filters and search now work while browsing inside a folder.** Applying a file-type,
+  date, size, or search filter inside a synced folder — including folders synced from
+  your other devices — quietly kept showing the full unfiltered list with the filter
+  chip still on.
+- **The Mac download list no longer offers a file that installs an incomplete copy.**
+  Release pages carried a second Mac file next to the disk image that read as an
+  alternative download but was missing "Share with Hippius" and Apple's security
+  check. It is gone from current releases and will not appear on new ones.
+
+## [0.5.1] - 2026-08-28
+
+### Fixed
+
+- **Updating on a Mac no longer removes "Share with Hippius".** Installing from the
+  disk image gave you the right-click share menu, but every automatic update after
+  that quietly replaced Hippius with a copy that did not include it — so the feature
+  disappeared and could not be switched back on from Settings, because it was no
+  longer there to switch on. Updates now install the same complete, Apple-checked
+  copy the disk image contains.
+
+  If you updated to `0.5.0` on a Mac you are on one of those incomplete copies;
+  updating to `0.5.1` restores the right-click menu. Windows and Linux were never
+  affected.
+
+## [0.5.0] - 2026-08-27
+
+### Added
+
+- **Try new features early with the beta channel.** Choose **Explore Beta** from
+  the account menu to move onto builds that get new features first, before they
+  are fully stabilized. Hippius downloads the build and restarts. You can go back
+  to the stable version at any time from Settings.
 - **Live Photos and HEIC images now preview throughout Drive**, including HEIC
   thumbnails, reliable repeated Live motion playback on supported systems, and
   an immediately disabled LIVE badge with an explanatory tooltip on Linux.
 - Drive, Billing, and Support information tooltips now link directly to their relevant
   documentation.
-- **Release pages now name the file to download** for each platform, and publish a
-  checksum for every file so you can confirm a download arrived intact.
-- **Share links can now expire.** Choose 24 hours, 7 days, 30 days, or until you revoke
-  it — both in the app and when right-clicking a file in Finder on Mac.
-- **Password-protect a share link with your own password**, from either place.
-- **Your computer stays awake while files are transferring.** Long uploads no longer die
-  when the machine goes idle. The screen can still switch off, and closing the lid still
-  puts the machine to sleep as normal.
+- **Forgot your unlock password?** You can now set a new one using your seed phrase,
+  instead of being locked out of your own files.
 
 ### Changed
+
+- **A shared folder link now shows what is in the folder right now.** Previously the
+  link handed over a zip of the folder as it stood the moment you shared it, so
+  anything you added later was missing and creating the link meant waiting for the
+  whole folder to be packed. Links are now created instantly and stay up to date.
 
 - **Uploads are substantially faster**, especially on slower or long-distance
   connections — parts of a file now transfer at the same time instead of one after
@@ -59,21 +93,6 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
-- **Filters and search now work while browsing inside a folder.** Applying a file-type,
-  date, size, or search filter inside a synced folder — including folders synced from
-  your other devices — quietly kept showing the full unfiltered list with the filter
-  chip still on.
-- **The Mac download list no longer offers a file that installs an incomplete copy.**
-  Release pages carried a second Mac file next to the disk image that read as an
-  alternative download but was missing "Share with Hippius" and Apple's security
-  check. It is gone from current releases and will not appear on new ones.
-- **Updating on a Mac no longer removes "Share with Hippius".** Installing from the
-  disk image gave you the right-click share menu, but every automatic update after
-  that quietly replaced Hippius with a copy that did not include it — so the feature
-  disappeared and could not be switched back on from Settings, because it was no
-  longer there to switch on. Updates now install the same complete, Apple-checked
-  copy the disk image contains. If yours went missing, reinstall from the disk image
-  once; updates from then on keep it.
 - **"Share with Hippius" now registers itself on Mac.** On some Macs the right-click
   menu never appeared no matter what you did in Settings, because macOS had never
   registered the feature at all — so it was not in any list to switch on. Hippius now
@@ -123,6 +142,26 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   usable credential.
 - **Sign-in links are no longer written to log files**, so a support log can never carry
   a working credential.
+
+---
+
+## [0.2.3] - 2026-08-20
+
+Already in users' hands before this file was first published. These notes were written
+alongside the work but never appeared in a release, and they are recorded here so the
+`0.5.0` notes do not announce them a second time. `0.2.2` and `0.2.3` shipped other work
+as well — the Finder and Linux "Share with Hippius" menu, empty folders, the home
+storage and plan cards, and the offline banner — which was never written up and is not
+reconstructed here.
+
+### Added
+
+- **Share links can now expire.** Choose 24 hours, 7 days, 30 days, or until you revoke
+  it — both in the app and when right-clicking a file in Finder on Mac.
+- **Password-protect a share link with your own password**, from either place.
+- **Your computer stays awake while files are transferring.** Long uploads no longer die
+  when the machine goes idle. The screen can still switch off, and closing the lid still
+  puts the machine to sleep as normal.
 
 ---
 
