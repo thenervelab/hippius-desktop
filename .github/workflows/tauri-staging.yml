@@ -259,8 +259,10 @@ jobs:
       # macOS packaging tools for the Finder extension: xcodegen builds the
       # universal .appex; create-dmg builds the installer (the finalize step
       # owns the DMG since the extension is embedded after Tauri builds the app).
+      # minisign is for the post-finalize verification, which checks the updater
+      # signature against the pubkey compiled into shipped builds.
       - name: Install macOS packaging tools
-        run: brew install xcodegen create-dmg
+        run: brew install xcodegen create-dmg minisign
 
       # Apple code signing. The App Group the Finder extension needs is granted
       # only to code signed by Team V28B5X732P, so a real Developer ID cert is
@@ -424,6 +426,14 @@ jobs:
           APP="src-tauri/target/universal-apple-darwin/release/bundle/macos/Hippius.app"
           OUT="$RUNNER_TEMP/hippius-macos-dist"
           macos/finalize-macos-release.sh "$APP" "$OUT"
+
+          # Open the artifacts BEFORE uploading them. The other two lanes build a
+          # draft and gate publication on a separate verify job; staging
+          # publishes on the spot, so this is the only place a bad build can be
+          # stopped — and a staging DMG that looks complete and is not costs
+          # testers days. finalize-macos-release.sh reports success either way.
+          macos/verify-macos-artifacts.sh "$OUT" "$(jq -r .version src-tauri/tauri.conf.json)"
+
           TAG="v$(jq -r .version src-tauri/tauri.conf.json)-staging"
           # The staging release already exists (tauri-action created it above).
           gh release upload "$TAG" \
@@ -431,6 +441,18 @@ jobs:
             "$OUT"/Hippius.app.tar.gz \
             "$OUT"/Hippius.app.tar.gz.sig \
             --clobber
+
+          # tauri-action's own `--bundles app` output went up under a DIFFERENT
+          # filename, so the --clobber above never replaced it. It is this same
+          # app BEFORE the extension was embedded and before notarization: no
+          # HippiusFinder.appex, no staple. It sits on the release page beside
+          # Hippius_universal.dmg reading as its sibling, and a tester who takes
+          # it files a bug about a Finder extension that was never in the build.
+          for stale in Hippius_universal.app.tar.gz Hippius_universal.app.tar.gz.sig; do
+            if gh release delete-asset "$TAG" "$stale" --yes 2>/dev/null; then
+              echo "Removed pre-finalize artifact $stale"
+            fi
+          done
 
   # Linux preview: the .deb (with the file-manager "Share with Hippius" action
   # files wired in via tauri.conf.json's bundle.linux.deb). All three platform
@@ -662,3 +684,32 @@ jobs:
           "@ | Set-Content "$out/README-INSTALL.txt"
           Compress-Archive -Path "$out/HippiusShell.dll","$out/HippiusShellSparse.msix","$out/HippiusPreviewCert.cer","$out/register-preview.ps1","$out/README-INSTALL.txt" -DestinationPath "HippiusShellExtension-preview.zip" -Force
           gh release upload $tag HippiusShellExtension-preview.zip --clobber
+
+  # ---------------------------------------------------------------------------
+  # Name the downloads. Staging publishes on the spot rather than as a draft, so
+  # there is no assemble/verify/publish chain here as in the other two lanes —
+  # this only annotates a release that already exists.
+  #
+  # Testers pick a build from the asset list, and the list is where the wrong
+  # file gets taken: the pre-finalize tarball read as the DMG's sibling for long
+  # enough to ship an extension-less build. The macOS job deletes that artifact
+  # now; this says positively which file to take, and publishes checksums.
+  name-downloads:
+    needs: [publish-tauri-macos, publish-tauri-linux, publish-tauri-windows]
+    permissions:
+      contents: write # upload SHA256SUMS + edit the release notes
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (read version -> tag)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Attach SHA256SUMS and name the downloads
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          scripts/publish-release-downloads.sh "v$(jq -r .version src-tauri/tauri.conf.json)-staging"
