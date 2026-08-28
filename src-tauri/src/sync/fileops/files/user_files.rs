@@ -114,6 +114,13 @@ pub struct UserFileEntry {
     /// for `/search_files` hits so cloud-only results can be opened.
     #[serde(default)]
     pub file_id: String,
+    /// Local path of a synced file. `#[serde(default)]` because this type is
+    /// also the INPUT of `filter_file_entries`, and the FE builds listing rows
+    /// itself (`use-nested-folder-listing.ts::mapEntries`) where a cloud-only
+    /// remote file deliberately has NO source — a required field made the
+    /// whole filter IPC reject remote listings, and the FE's error fallback
+    /// rendered the list UNFILTERED with the filter chip still on.
+    #[serde(default)]
     pub source: String,
     pub miner_ids: Vec<String>,
     pub is_assigned: bool,
@@ -124,8 +131,12 @@ pub struct UserFileEntry {
     pub is_erasure_coded: bool,
     pub main_req_hash: String,
     pub sync_status: String,
+    /// `#[serde(default)]`: FE-built rows can omit the label (see `source`).
+    #[serde(default)]
     pub label: String,
     pub file_count: Option<u64>,
+    /// `#[serde(default)]`: FE-built listing rows never carry `deleted`.
+    #[serde(default)]
     pub deleted: bool,
 }
 
@@ -861,6 +872,53 @@ mod tests {
             "must not emit `fileType` (rename = \"type\" overrides camelCase)"
         );
         assert_eq!(json["fileId"], "0".repeat(64), "file_id must serialize under key `fileId`");
+    }
+
+    /// `filter_file_entries` must accept the rows the FE BUILDS ITSELF for
+    /// nested/remote listings (`use-nested-folder-listing.ts::mapEntries`):
+    /// a cloud-only remote file has no `source`, and no FE-built row carries
+    /// `deleted`. When `source` was a required field, serde rejected the whole
+    /// remote payload, the invoke threw, and `useFilteredFiles`' error
+    /// fallback rendered the listing UNFILTERED while the filter chip stayed
+    /// active — filters/search silently did nothing in remote folders.
+    #[test]
+    fn filter_accepts_fe_built_remote_listing_rows() {
+        // Field set exactly as mapEntries emits for a remote FILE row —
+        // no `source`, no `deleted`, no `fileCount`.
+        let remote_row = |name: &str| {
+            serde_json::json!({
+                "name": name,
+                "actualFileName": name,
+                "size": 5_000_000u64,
+                "createdAt": 1_700_000_000_000i64,
+                "arionHash": "ab".repeat(32),
+                "arionCid": "cid",
+                "fileId": "ab".repeat(32),
+                "minerIds": [],
+                "isAssigned": true,
+                "lastChargedAt": 1_700_000_000_000i64,
+                "isFolder": false,
+                "type": "private",
+                "isErasureCoded": false,
+                "mainReqHash": "",
+                "label": "Camera Uploads",
+                "syncStatus": "synced",
+            })
+        };
+        let files: Vec<UserFileEntry> = serde_json::from_value(serde_json::json!([remote_row("photo.JPG"), remote_row("clip.MP4"),]))
+            .expect("FE-built remote listing rows must deserialize for filter_file_entries");
+
+        let filtered = filter_file_entries(
+            files,
+            FileFilterCriteria {
+                file_extensions: Some(vec!["MP4".to_string()]),
+                ..Default::default()
+            },
+        );
+        assert_eq!(filtered.len(), 1, "extension filter must apply to remote rows");
+        assert_eq!(filtered[0].name, "clip.MP4");
+        assert_eq!(filtered[0].source, "", "missing source defaults to empty");
+        assert!(!filtered[0].deleted, "missing deleted defaults to false");
     }
 
     fn make_file(name: &str, size: u64, label: &str, created_at: i64, is_folder: bool) -> UserFileEntry {

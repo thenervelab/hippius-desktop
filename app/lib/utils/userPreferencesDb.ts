@@ -83,6 +83,22 @@ export async function saveDriveOnLocalView(onLocalView: boolean): Promise<void> 
   await saveUserPreference(DRIVE_ON_LOCAL_VIEW_KEY, onLocalView);
 }
 
+// The REMOTE (server-only) drive the user was last browsing, mutually
+// exclusive with the local label above by write discipline: opening a remote
+// drive stores it here, while choosing a local folder or the cards view
+// clears it — so next session reopens exactly one of the three places the
+// user can be (a local drive, a remote drive, or the cards view).
+const ACTIVE_REMOTE_FOLDER_KEY = "active_remote_folder_label";
+
+export async function getActiveRemoteFolderLabel(): Promise<string | null> {
+  const value = await getUserPreference<string>(ACTIVE_REMOTE_FOLDER_KEY);
+  return value ? value : null;
+}
+
+export async function saveActiveRemoteFolderLabel(label: string | null): Promise<void> {
+  await saveUserPreference(ACTIVE_REMOTE_FOLDER_KEY, label ?? "");
+}
+
 // ── Last browse directory ──────────────────────────────────────────────────────
 // Remembers the last directory the user browsed to in file/folder pickers,
 // similar to how Chrome remembers the last download/upload location.

@@ -9,6 +9,7 @@ import { middleTruncate } from "@/lib/utils/middleTruncate";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import {
   Folder,
+  FolderOpen,
   CloudDownload,
   ServerCrash,
   FolderSearch,
@@ -26,6 +27,10 @@ interface RemoteFoldersSectionProps {
   onSyncFolder: (folder: RemoteFolder) => void;
   onDeleteFromServer: (folderName: string) => void;
   onBrowseFolder: (folder: RemoteFolder) => void;
+  /** When provided (files-page Local view), a row click opens the remote
+   *  drive as a BROWSABLE files view — distinct from "Browse Contents",
+   *  which stays the selective-sync picker dialog. */
+  onOpenFolder?: (folder: RemoteFolder) => void;
 }
 
 function formatDate(timestamp: number) {
@@ -46,6 +51,7 @@ export function RemoteFoldersSection({
   onSyncFolder,
   onDeleteFromServer,
   onBrowseFolder,
+  onOpenFolder,
 }: RemoteFoldersSectionProps) {
   const [cardContextMenu, setCardContextMenu] = useState<{
     x: number;
@@ -89,7 +95,40 @@ export function RemoteFoldersSection({
             {remoteFolders.map((folder) => (
               <div
                 key={folder.folderName}
-                className="flex items-start justify-between p-3 hover:bg-grey-light-400 dark:hover:bg-white/5 transition-colors"
+                className={cn(
+                  "flex items-start justify-between p-3 transition-colors",
+                  // Mirror LocalFoldersSection's clickable-row treatment
+                  // exactly: pointer cursor propagated past the
+                  // cursor-default tooltip spans, plus the focus ring.
+                  onOpenFolder
+                    ? "cursor-pointer [&_*]:cursor-pointer hover:bg-grey-light-400 dark:hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-50"
+                    : "hover:bg-grey-light-400 dark:hover:bg-white/5",
+                )}
+                role={onOpenFolder ? "button" : undefined}
+                tabIndex={onOpenFolder ? 0 : undefined}
+                onClick={(e) => {
+                  if (!onOpenFolder) return;
+                  // Mirror LocalFoldersSection's row-click guards: clicks on
+                  // the action menu (or an open menu) must not also open.
+                  const target = e.target as HTMLElement;
+                  if (target.closest(".action-menu-area")) return;
+                  if (target.closest("[role='menu']")) return;
+                  onOpenFolder(folder);
+                }}
+                onKeyDown={(e) => {
+                  if (!onOpenFolder) return;
+                  // Same guards as onClick: Enter/Space on the action-menu
+                  // trigger (or inside an open menu) must activate THAT
+                  // control, not open the drive — without this the menu was
+                  // unreachable by keyboard.
+                  const target = e.target as HTMLElement;
+                  if (target.closest(".action-menu-area")) return;
+                  if (target.closest("[role='menu']")) return;
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    onOpenFolder(folder);
+                  }
+                }}
                 onContextMenu={(e) => {
                   e.preventDefault();
                   setCardContextMenu({ x: e.clientX, y: e.clientY, folder });
@@ -172,6 +211,15 @@ export function RemoteFoldersSection({
                   dropdownTitle=""
                   items={
                     [
+                      ...(onOpenFolder
+                        ? [
+                            {
+                              icon: <FolderOpen className="size-4" />,
+                              itemTitle: "Open",
+                              onItemClick: () => onOpenFolder(folder),
+                            },
+                          ]
+                        : []),
                       {
                         icon: <FolderSearch className="size-4" />,
                         itemTitle: "Browse Contents",
@@ -213,6 +261,15 @@ export function RemoteFoldersSection({
           y={cardContextMenu.y}
           onClose={() => setCardContextMenu(null)}
           items={[
+            ...(onOpenFolder
+              ? [
+                  {
+                    icon: <FolderOpen className="size-4" />,
+                    label: "Open",
+                    onClick: () => onOpenFolder(cardContextMenu.folder),
+                  },
+                ]
+              : []),
             {
               icon: <FolderSearch className="size-4" />,
               label: "Browse Contents",
