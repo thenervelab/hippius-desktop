@@ -195,6 +195,49 @@ fn no_lane_patches_a_channel_specific_updater_key() {
     }
 }
 
+/// The committed pubkey must stay the one key every lane signs with.
+///
+/// Its sibling above only forbids a WORKFLOW from patching the key, which is
+/// the mechanism that has since been deleted. The committed value was never
+/// pinned, and that is the half that shipped: a pubkey swapped in `tauri.conf.json`
+/// for internal preview signing stayed on the lane for three months, so those
+/// builds verify with a key nothing is signed with and fail every update with
+/// minisign's "The signature was created with a different key than the one
+/// provided".
+///
+/// This is unrecoverable in the field rather than merely broken — the pubkey is
+/// compiled into the binary, so no re-signing, manifest edit, or later release
+/// can reach an install that already has the wrong one; a manual reinstall is
+/// the only remedy. That asymmetry is why the value is pinned and not just
+/// reviewed. It also covers all three lanes at once: they share this one file,
+/// so a branch that edits the key fails its own CI before it can merge.
+///
+/// A literal, because nothing in-repo can derive it — the matching private key
+/// is the `TAURI_SIGNING_PRIVATE_KEY` secret. Rotating the key therefore means
+/// deliberately editing this pin, which is the review the change needs.
+#[test]
+fn the_committed_updater_pubkey_is_the_one_every_lane_signs_with() {
+    // minisign public key E411FB37072F234F, base64 of the whole `.pub` file.
+    // Split only to stay inside the line width; the halves concatenate verbatim.
+    const UPDATER_PUBKEY: &str = concat!(
+        "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEU0MTFGQjM3MDcyRjIzNEYK",
+        "UldSUEl5OEhOL3NSNUdYMmxpUG1WUWtiTWd1TDRjMkt6aXBveFdmYmx3TjJTd01UUW1IMmJGZUgK",
+    );
+
+    let conf: serde_json::Value = serde_json::from_str(&repo_file("tauri.conf.json")).expect("tauri.conf.json is valid JSON");
+
+    let pubkey = conf["plugins"]["updater"]["pubkey"]
+        .as_str()
+        .expect("tauri.conf.json declares plugins.updater.pubkey");
+
+    assert_eq!(
+        pubkey, UPDATER_PUBKEY,
+        "tauri.conf.json carries an updater pubkey that is not the one every lane signs with. \
+         Shipping it strands every install it reaches — the key is compiled in, so those builds \
+         can never auto-update again. Change this pin only when rotating TAURI_SIGNING_PRIVATE_KEY."
+    );
+}
+
 /// The app's macOS floor must not drop below the Finder extension's.
 ///
 /// Three files declare it and nothing connected them. The floor was Tauri's
