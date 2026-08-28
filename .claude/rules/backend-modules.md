@@ -20,6 +20,7 @@ Deeper detail for individual subsystems lives in the sibling rules files: `sync-
 - **`shares/`**, **`shared_drives/`** — Encrypted share links and cross-account member drives. See `shares-and-shared-drives.md`.
 - **`recovery.rs`**, **`recovery_proof.rs`**, **`recovery_binding.rs`** — See `auth-recovery.md`.
 - **`console_access.rs`** — Web-console access/session bridging (typed `?` error propagation, no `Other(String)`).
+- **`media_preview.rs`** — The two commands that feed the in-app file viewer, sharing one gate. `prepare_motion_photo_preview` splits a Hippius Live image into the plaintext preview cache; `read_preview_bytes` returns a document's plaintext bytes under a byte cap (raw, via `tauri::ipc::Response` — the JSON path would encode 25 MiB as ~75 MiB of digits). Both run the caller-supplied path through the private `validate_preview_source`, which canonicalises and requires it to sit under a registered `sync_paths` row for the active account or under `~/.hippius/preview-cache` — **without that gate either command is an arbitrary filesystem reader for a compromised renderer.** The renderer's `max_bytes` is a request, not an authority: `preview_read_limit` clamps it to `MAX_PREVIEW_READ_BYTES` and rejects (never truncates — half a DOCX is a corrupt DOCX) with the `PREVIEW_TOO_LARGE` copy Rust owns. Unit-tested in-module.
 - **`splash.rs`** — Splash-window lifecycle during boot.
 - **`notifications/`** — Notification management commands.
 - **`infra/`** — VM provisioning and support ticket commands.

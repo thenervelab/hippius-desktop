@@ -17,6 +17,13 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
+- **Preview far more of your files without leaving Hippius.** Word documents open as
+  real pages, PowerPoint decks as slides you can click through, spreadsheets and CSVs
+  in a familiar spreadsheet grid with a formula bar and sheet tabs, and Markdown,
+  text, JSON, HTML and SVG files all open in the same viewer as your photos and
+  videos — with the same arrow-key navigation, thumbnails, download and delete.
+  Files are previewed on your own machine; nothing is sent to an outside viewing
+  service.
 - **Try new features early with the beta channel.** Choose **Explore Beta** from
   the account menu to move onto builds that get new features first, before they
   are fully stabilized. Hippius downloads the build and restarts. You can go back
