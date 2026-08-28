@@ -299,3 +299,42 @@ fn the_three_version_files_agree() {
          its tag) is on {canonical}"
     );
 }
+
+/// Every lane that writes a macOS entry into `latest.json` must write the
+/// `-app` keys too, not only the bare `darwin-<arch>` ones.
+///
+/// `tauri-plugin-updater` resolves `[{os}-{arch}-{installer}, {os}-{arch}]` in
+/// that order (`updater.rs::get_urls`), and `installer_for_bundle_type` maps a
+/// macOS `.app` — which is what a DMG install reports as well — to `app`. So
+/// `darwin-<arch>-app` is the key macOS actually reads, and `tauri-action`
+/// pre-populates it with ITS artifact: the `--bundles app` build produced
+/// BEFORE the finalize step embeds the Finder extension and notarizes.
+///
+/// Patching only the bare keys therefore fixes a key nothing reads. Both lanes
+/// shipped that way: the DMG was correct, every macOS auto-update replaced the
+/// installed app with an extension-less, unstapled one, and no job failed —
+/// the manifest was valid, the signature verified, and the update installed.
+#[test]
+fn the_macos_manifest_patch_covers_the_key_the_updater_actually_reads() {
+    // Only lanes that publish a manifest. Staging's `manifest_url()` is `None`,
+    // so it writes no macOS entry and has nothing to get wrong here.
+    for lane in ["tauri-build.yml", "tauri-beta.yml"] {
+        let workflow = repo_file(&format!("../.github/workflows/{lane}"));
+
+        for arch in ["aarch64", "x86_64"] {
+            let bare = format!("darwin-{arch}");
+            let app = format!("darwin-{arch}-app");
+
+            assert!(
+                workflow.contains(&format!("\"{bare}\"")),
+                "{lane} no longer writes a {bare} entry into latest.json"
+            );
+            assert!(
+                workflow.contains(&format!("\"{app}\"")),
+                "{lane} writes {bare} but not {app}. The updater reads {app} FIRST, so the \
+                 correction never reaches macOS and auto-updates serve tauri-action's \
+                 pre-finalize build — no Finder extension, never notarized or stapled."
+            );
+        }
+    }
+}
