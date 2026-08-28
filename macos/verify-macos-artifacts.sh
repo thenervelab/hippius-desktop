@@ -39,10 +39,12 @@ source "${script_dir}/group.env"
 TARBALL="${DIR}/Hippius.app.tar.gz"
 SIGNATURE="${TARBALL}.sig"
 
-# The pre-finalize `--bundles app` artifact. tauri-action uploads it under this
-# name before the extension is embedded; it must never reach a release, and it
-# must never be what this script was pointed at.
-STALE_TARBALL="${DIR}/Hippius_universal.app.tar.gz"
+# Note on the pre-finalize `--bundles app` artifact tauri-action uploads
+# (Hippius_universal.app.tar.gz): asserting its ABSENCE belongs to
+# scripts/verify-release-manifest.sh, which reads the release's own asset list.
+# It cannot be checked from here — this script is pointed at a directory that
+# only ever holds the finalized artifacts, so a check here could never fire and
+# would read as coverage that does not exist.
 
 problems=0
 work="$(mktemp -d)"
@@ -68,12 +70,24 @@ ok() {
   echo "  ok: $1"
 }
 
-# ---------------------------------------------------------------------------
-# The checks that apply to any .app, wherever it came from — the updater's
-# tarball and the DMG's copy must both pass, because users get one of each and
-# the two are built by different steps.
-# ---------------------------------------------------------------------------
-check_app_bundle() {
+# Both Apple slices, for a binary that ships to both. `lipo` failing at all
+# leaves `arches` empty, which fails the comparison — there is no reading of
+# this that passes without a genuinely universal binary.
+check_universal() {
+  local binary="$1" what="$2" label="$3"
+
+  local arches
+  arches="$(lipo -archs "${binary}" 2>/dev/null || echo "")"
+  if [[ "${arches}" != *x86_64* || "${arches}" != *arm64* ]]; then
+    fail "${label}: ${what} is '${arches}', not universal — it cannot run on the other arch"
+  else
+    ok "${label}: ${what} is universal (${arches})"
+  fi
+}
+
+# The Finder extension: the piece a failed embed step silently omits, and the
+# piece Tauri's own nested re-signing would strip the entitlements from.
+check_finder_extension() {
   local app="$1" label="$2"
   local appex="${app}/Contents/PlugIns/HippiusFinder.appex"
 
@@ -83,13 +97,7 @@ check_app_bundle() {
   fi
   ok "${label}: Finder extension embedded"
 
-  local arches
-  arches="$(lipo -archs "${appex}/Contents/MacOS/HippiusFinder" 2>/dev/null || echo "")"
-  if [[ "${arches}" != *x86_64* || "${arches}" != *arm64* ]]; then
-    fail "${label}: the extension is '${arches}', not universal — it cannot load on the other arch"
-  else
-    ok "${label}: extension is universal (${arches})"
-  fi
+  check_universal "${appex}/Contents/MacOS/HippiusFinder" "the extension" "${label}"
 
   # Signed with the app's non-sandboxed entitlements the extension loads on no
   # Mac at all, which is the failure Tauri's own nested re-signing would cause.
@@ -102,6 +110,26 @@ check_app_bundle() {
   else
     ok "${label}: extension entitlements carry the sandbox + ${HIPPIUS_APP_GROUP}"
   fi
+}
+
+# ---------------------------------------------------------------------------
+# The checks that apply to any .app, wherever it came from — the updater's
+# tarball and the DMG's copy must both pass, because users get one of each and
+# the two are built by different steps.
+# ---------------------------------------------------------------------------
+check_app_bundle() {
+  local app="$1" label="$2"
+
+  # A missing extension deliberately does NOT stop the rest: that is the v0.5.0
+  # build exactly, and the same build was also unnotarized and unstapled.
+  # Reporting only the first fault would describe a smaller problem than the
+  # one in front of us.
+  check_finder_extension "${app}" "${label}"
+
+  # The host binary, not only the extension. Tauri is told to build
+  # `--target universal-apple-darwin`, but nothing downstream re-checks it, and
+  # a thin app would run on half the fleet.
+  check_universal "${app}/Contents/MacOS/Hippius" "the app binary" "${label}"
 
   if ! xcrun stapler validate "${app}" >/dev/null 2>&1; then
     fail "${label}: no notarization ticket stapled — first launch needs a network round trip, \
@@ -142,12 +170,14 @@ check_updater_tarball() {
     fail "no Hippius.app.tar.gz in ${DIR} — macOS would have no update payload"
     return
   fi
-  if [[ -e "${STALE_TARBALL}" ]]; then
-    fail "Hippius_universal.app.tar.gz is present; that is tauri-action's pre-finalize build, \
-which carries no Finder extension and was never notarized"
-  fi
 
-  tar -xzf "${TARBALL}" -C "${work}"
+  # Guarded rather than left to `set -e`: an unguarded failure here aborts the
+  # script before the signature and DMG checks run and before the problem
+  # summary prints, turning a legible finding into a bare tar exit code.
+  if ! tar -xzf "${TARBALL}" -C "${work}"; then
+    fail "Hippius.app.tar.gz cannot be extracted — the updater payload is corrupt"
+    return
+  fi
   check_app_bundle "${work}/Hippius.app" "tarball"
 }
 

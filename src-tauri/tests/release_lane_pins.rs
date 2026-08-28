@@ -483,18 +483,32 @@ fn the_macos_manifest_patch_covers_the_key_the_updater_actually_reads() {
 /// installs a build with no "Share with Hippius" in it.
 #[test]
 fn every_lane_deletes_the_pre_finalize_artifact() {
-    for lane in ["tauri-staging.yml", "tauri-beta.yml", "tauri-build.yml"] {
-        let workflow = repo_file(&format!("../.github/workflows/{lane}"));
+    let sig = format!("{PRE_FINALIZE_ARTIFACT}.sig");
 
-        assert!(
-            workflow.contains("gh release delete-asset"),
-            "{lane} never deletes an asset, so tauri-action's pre-finalize \
-             {PRE_FINALIZE_ARTIFACT} stays attached to every release"
-        );
-        assert!(
-            workflow.contains(PRE_FINALIZE_ARTIFACT),
-            "{lane} does not name {PRE_FINALIZE_ARTIFACT}; that is the artifact it must remove"
-        );
+    for lane in ["tauri-staging.yml", "tauri-beta.yml", "tauri-build.yml"] {
+        let jobs = workflow_jobs(lane);
+
+        // Bound to the deleting JOB, and to a non-comment line inside it. A
+        // file-wide substring pair passes while the two strings sit in
+        // unrelated jobs, and the artifact name appears in the shell comment
+        // that explains the delete — so the obvious spelling of this pin keeps
+        // passing after the loop it guards has been removed.
+        let deleter = only_job_running(&jobs, "gh release delete-asset", lane);
+        let script = &jobs[&deleter].script;
+
+        for asset in [PRE_FINALIZE_ARTIFACT, sig.as_str()] {
+            let named_in_code = script
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.starts_with('#'))
+                .any(|line| line.contains(asset));
+
+            assert!(
+                named_in_code,
+                "{lane}'s {deleter} job deletes release assets but never names {asset} in an \
+                 executed line, so tauri-action's pre-finalize build stays attached to the release"
+            );
+        }
     }
 }
 

@@ -101,10 +101,23 @@ while read -r url; do
 done < <(jq -r '.platforms | to_entries[] | .value.url' "${manifest}")
 
 expected_url="https://github.com/${REPO}/releases/download/${TAG}/${MAC_TARBALL}"
-gh release download "${TAG}" --repo "${REPO}" --pattern "${MAC_TARBALL}.sig" --dir "${work}" \
-  >/dev/null 2>&1 || true
+
+# The signature to compare every macOS platform key against. Its absence is
+# already a finding above, so the only case left here is "the asset is on the
+# release but would not download" — which must be a failure too, not a quiet
+# skip: an empty `expected_sig` disables the comparison below, and a verifier
+# that silently stops checking is the failure mode this whole script exists to
+# prevent.
 expected_sig=""
-[[ -s "${work}/${MAC_TARBALL}.sig" ]] && expected_sig="$(cat "${work}/${MAC_TARBALL}.sig")"
+if grep -qxF "${MAC_TARBALL}.sig" "${assets}"; then
+  if gh release download "${TAG}" --repo "${REPO}" --pattern "${MAC_TARBALL}.sig" \
+    --dir "${work}" >/dev/null 2>&1 && [[ -s "${work}/${MAC_TARBALL}.sig" ]]; then
+    expected_sig="$(cat "${work}/${MAC_TARBALL}.sig")"
+  else
+    fail "${MAC_TARBALL}.sig is attached to ${TAG} but could not be downloaded, so the \
+manifest's signature could not be compared against the one shipped beside the tarball"
+  fi
+fi
 
 echo "== macOS platform keys"
 for arch in aarch64 x86_64; do
