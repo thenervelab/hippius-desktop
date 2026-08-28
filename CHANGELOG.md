@@ -26,6 +26,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   an immediately disabled LIVE badge with an explanatory tooltip on Linux.
 - Drive, Billing, and Support information tooltips now link directly to their relevant
   documentation.
+- **Release pages now name the file to download** for each platform, and publish a
+  checksum for every file so you can confirm a download arrived intact.
 - **Share links can now expire.** Choose 24 hours, 7 days, 30 days, or until you revoke
   it — both in the app and when right-clicking a file in Finder on Mac.
 - **Password-protect a share link with your own password**, from either place.
@@ -51,6 +53,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **The Mac download list no longer offers a file that installs an incomplete copy.**
+  Release pages carried a second Mac file next to the disk image that read as an
+  alternative download but was missing "Share with Hippius" and Apple's security
+  check. It is gone from current releases and will not appear on new ones.
 - **Updating on a Mac no longer removes "Share with Hippius".** Installing from the
   disk image gave you the right-click share menu, but every automatic update after
   that quietly replaced Hippius with a copy that did not include it — so the feature
