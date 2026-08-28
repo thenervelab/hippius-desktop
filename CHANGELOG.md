@@ -15,6 +15,21 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-08-28
+
+### Fixed
+
+- **Updating on a Mac no longer removes "Share with Hippius".** Installing from the
+  disk image gave you the right-click share menu, but every automatic update after
+  that quietly replaced Hippius with a copy that did not include it — so the feature
+  disappeared and could not be switched back on from Settings, because it was no
+  longer there to switch on. Updates now install the same complete, Apple-checked
+  copy the disk image contains.
+
+  If you updated to `0.5.0` on a Mac you are on one of those incomplete copies;
+  updating to `0.5.1` restores the right-click menu. Windows and Linux were never
+  affected.
+
 ## [0.5.0] - 2026-08-27
 
 ### Added
