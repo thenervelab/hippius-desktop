@@ -78,11 +78,17 @@ const MAX_PREVIEW_READ_BYTES: u64 = 64 * 1024 * 1024;
 /// with a parse error instead of the honest "too large to preview" state that
 /// carries the download fallback.
 fn preview_read_limit(requested_max_bytes: u64, file_length: u64) -> Result<u64> {
-    let effective = requested_max_bytes.clamp(1, MAX_PREVIEW_READ_BYTES);
+    // The budget is compared BEFORE any floor is applied. Clamping the request
+    // up to 1 first would let a 1-byte file through a 0-byte budget, which is
+    // the one thing a 0 request must never allow.
+    let effective = requested_max_bytes.min(MAX_PREVIEW_READ_BYTES);
     if file_length > effective {
         return Err(AppError::Validation(PREVIEW_TOO_LARGE.into()));
     }
-    Ok(effective)
+    // Never hand back 0: `read_preview_bytes` re-checks the bytes it actually
+    // holds against this limit, and a 0 would reject the empty file that just
+    // passed the check above.
+    Ok(effective.max(1))
 }
 
 /// User-facing copy for an over-cap preview. Owned here, not in the renderer,
@@ -333,6 +339,24 @@ mod tests {
         // budget can only ever satisfy an empty file.
         assert!(preview_read_limit(0, 1).is_err());
         assert_eq!(preview_read_limit(0, 0).expect("empty file"), 1);
+    }
+
+    #[test]
+    fn preview_read_ceiling_clears_every_per_format_cap() {
+        // Mirrored as `RUST_PREVIEW_READ_CEILING_BYTES` in
+        // `app/lib/utils/filePreviewType.ts`. The renderer's per-format caps
+        // must all fit under this, or a file inside its own format's cap would
+        // still be refused here and surface as "too large to preview" — the FE
+        // side pins the same relationship from the other direction.
+        //
+        // The largest per-format cap is presentations at 40 MiB.
+        const LARGEST_FORMAT_CAP: u64 = 40 * 1024 * 1024;
+        assert!(
+            MAX_PREVIEW_READ_BYTES >= LARGEST_FORMAT_CAP,
+            "read ceiling must clear the largest per-format cap"
+        );
+        // A file at that cap reads rather than being rejected by the ceiling.
+        assert!(preview_read_limit(LARGEST_FORMAT_CAP, LARGEST_FORMAT_CAP).is_ok());
     }
 
     #[test]
