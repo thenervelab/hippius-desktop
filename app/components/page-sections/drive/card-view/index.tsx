@@ -20,8 +20,7 @@ import {
 } from "@/app/lib/utils/folderShareGating";
 import { cn } from "@/lib/utils";
 
-import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
-import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
+import { isPreviewableFileName } from "@/app/lib/utils/filePreviewType";
 
 import { Icons } from "@/components/ui";
 import FileCard from "./FileCard";
@@ -164,8 +163,6 @@ const CardView: FC<CardViewProps> = ({
         <div className="duration-300 delay-300">
           <div className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-4">
             {files.map((file, index) => {
-              const { fileFormat } = getFilePartsFromFileName(file.name);
-              const fileType = getFileTypeFromExtension(fileFormat || null);
               const arionHash = file.arionHash;
 
               let cardState: "success" | "pending" | "error" = "success";
@@ -200,11 +197,7 @@ const CardView: FC<CardViewProps> = ({
 
                       // Normal mode behavior - only if not in selection mode
                       if (!isSelectionMode) {
-                        if (
-                          fileType === "video" ||
-                          fileType === "image" ||
-                          fileType === "PDF"
-                        ) {
+                        if (!file.isFolder && isPreviewableFileName(file.name)) {
                           setSelectedFile?.(file);
                         } else if (file.isFolder) {
                           router.push(folderUrl);
@@ -251,9 +244,7 @@ const CardView: FC<CardViewProps> = ({
                                   },
                                 },
                               ]),
-                          ...(fileType === "video" ||
-                          fileType === "image" ||
-                          fileType === "PDF"
+                          ...(!file.isFolder && isPreviewableFileName(file.name)
                             ? [
                                 {
                                   icon: <Icons.Eye className="size-4" />,

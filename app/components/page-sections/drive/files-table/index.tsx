@@ -59,9 +59,8 @@ import {
   getFileTypeFromExtension,
   getFileTypeDisplayLabel,
 } from "@/lib/utils/getTileTypeFromExtension";
-import { VideoDialogTrigger } from "./VideoDialog";
-import { ImageDialogTrigger } from "./ImageDialog";
-import { PdfDialogTrigger } from "./PdfDialog";
+import { PreviewTrigger } from "@/app/components/page-sections/drive/file-preview";
+import { isPreviewableFileName } from "@/app/lib/utils/filePreviewType";
 import { Icons } from "@/app/components/ui";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { FileViewSharedState } from "@/app/components/page-sections/drive/shared/FileViewUtils";
@@ -928,10 +927,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                 },
               ]
             : []),
-          ...((fileType === "video" ||
-            fileType === "image" ||
-            fileType === "PDF") &&
-          canPreview
+          ...(!file.isFolder && isPreviewableFileName(file.name) && canPreview
             ? [
                 {
                   icon: <Icons.Eye className="size-4" />,
@@ -1237,36 +1233,18 @@ const FilesTable: FC<FilesTableProps> = memo(
               />
             );
 
+            // One trigger for every previewable type: the row says "open this
+            // file", the unified dialog decides what renders it.
             let content: React.ReactNode = nameNode;
-            if (!isSelectionMode) {
-              if (fileType === "video") {
-                content = (
-                  <VideoDialogTrigger
-                    onClick={() => handleSetSelectedFile(file)}
-                    className={triggerClass}
-                  >
-                    {nameNode}
-                  </VideoDialogTrigger>
-                );
-              } else if (fileType === "image") {
-                content = (
-                  <ImageDialogTrigger
-                    onClick={() => handleSetSelectedFile(file)}
-                    className={triggerClass}
-                  >
-                    {nameNode}
-                  </ImageDialogTrigger>
-                );
-              } else if (fileType === "PDF") {
-                content = (
-                  <PdfDialogTrigger
-                    onClick={() => handleSetSelectedFile(file)}
-                    className={triggerClass}
-                  >
-                    {nameNode}
-                  </PdfDialogTrigger>
-                );
-              }
+            if (!isSelectionMode && !file.isFolder && isPreviewableFileName(file.name)) {
+              content = (
+                <PreviewTrigger
+                  onClick={() => handleSetSelectedFile(file)}
+                  className={triggerClass}
+                >
+                  {nameNode}
+                </PreviewTrigger>
+              );
             }
 
             return renderNameCellWithExpander(file, content);

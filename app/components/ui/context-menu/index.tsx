@@ -3,9 +3,8 @@ import { createPortal } from "react-dom";
 import { Download, Link2, Trash2, FolderOpen, Pencil } from "lucide-react";
 import { Icons } from "@/components/ui";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
+import { isPreviewableFileName } from "@/app/lib/utils/filePreviewType";
 import { isCloudOnlyRow } from "@/app/lib/utils/cloudOnly";
-import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
-import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
 import {
   canShareFolder,
   FOLDER_SHARE_DISABLED_TOOLTIP,
@@ -106,9 +105,6 @@ export default function FileContextMenu({
     left: `${Math.min(x, window.innerWidth - 200)}px`
   };
 
-  // Get file type for View option
-  const { fileFormat } = getFilePartsFromFileName(file.name);
-  const fileType = getFileTypeFromExtension(fileFormat || null);
 
   const handleShowFileDetails = () => {
     if (onShowFileDetails && file) {
@@ -191,9 +187,7 @@ export default function FileContextMenu({
             </button>
           )}
 
-          {(fileType === "video" ||
-            fileType === "image" ||
-            fileType === "PDF") &&
+          {!file.isFolder && isPreviewableFileName(file.name) &&
             onSelectFile && (
               <button
                 className={menuItemClass}
