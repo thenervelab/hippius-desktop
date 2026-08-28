@@ -1273,14 +1273,26 @@ pub(crate) async fn initialize_sync_inner(
     check_deleted_sync_dir(pool, &account_id, &label, &cfg.sync_path).await?;
     create_dir_all_async(PathBuf::from(&cfg.sync_path)).await?;
 
-    let (_acct_dir, folder_dir, master_path) = prepare_config_dir(
-        &account_id,
-        &label,
-        &cfg.sync_path,
-        &cfg.drive_password,
-        Some(&mnemonic_for_config),
-        identity.is_member,
-    )?;
+    // Argon2 recover_mnemonic + a possible legacy `temp/` copy must not
+    // sit on a Tokio worker (a leftover chunk cache can be tens of GB).
+    let account_id_owned = account_id.clone();
+    let label_owned = label.clone();
+    let sync_path_owned = cfg.sync_path.clone();
+    let drive_password_owned = cfg.drive_password.clone();
+    let mnemonic_owned = mnemonic_for_config.clone();
+    let is_member = identity.is_member;
+    let (_acct_dir, folder_dir, master_path) = tokio::task::spawn_blocking(move || {
+        prepare_config_dir(
+            &account_id_owned,
+            &label_owned,
+            &sync_path_owned,
+            &drive_password_owned,
+            Some(&mnemonic_owned),
+            is_member,
+        )
+    })
+    .await
+    .map_err(|e| crate::error::AppError::Other(format!("Join error preparing config dir: {e}")))??;
 
     // Create drive and set HCFS config
     let mut manager = DriveManager::new(PathBuf::from(&cfg.sync_path), folder_dir.clone());

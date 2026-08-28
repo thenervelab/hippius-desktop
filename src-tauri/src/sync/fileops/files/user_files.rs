@@ -781,6 +781,11 @@ fn classify_extension(ext: &str) -> &'static str {
     }
 }
 
+fn filter_file_entries_inner(mut files: Vec<UserFileEntry>, filters: FileFilterCriteria) -> Vec<UserFileEntry> {
+    apply_file_filters(&mut files, &filters);
+    files
+}
+
 /// Apply the user files filter to an arbitrary list of entries.
 ///
 /// Used by the files page and the folder view to re-filter a list the
@@ -788,11 +793,15 @@ fn classify_extension(ext: &str) -> &'static str {
 /// shared filter as its own command keeps every filter rule (date
 /// ranges, size thresholds, search behaviour) on the Rust side — the
 /// TS layer now just passes criteria and renders the result.
+///
+/// Async + `spawn_blocking` because Tauri 2 runs sync commands on the
+/// WKWebView / NSApp thread; a large listing round-tripped on every
+/// filter keystroke froze the window.
 #[tauri::command]
-pub fn filter_file_entries(files: Vec<UserFileEntry>, filters: FileFilterCriteria) -> Vec<UserFileEntry> {
-    let mut files = files;
-    apply_file_filters(&mut files, &filters);
-    files
+pub async fn filter_file_entries(files: Vec<UserFileEntry>, filters: FileFilterCriteria) -> crate::error::Result<Vec<UserFileEntry>> {
+    tokio::task::spawn_blocking(move || filter_file_entries_inner(files, filters))
+        .await
+        .map_err(|e| crate::error::AppError::Other(format!("filter_file_entries task panicked: {e}")))
 }
 
 #[cfg(test)]
@@ -908,7 +917,10 @@ mod tests {
         let files: Vec<UserFileEntry> = serde_json::from_value(serde_json::json!([remote_row("photo.JPG"), remote_row("clip.MP4"),]))
             .expect("FE-built remote listing rows must deserialize for filter_file_entries");
 
-        let filtered = filter_file_entries(
+        // `_inner` like every sibling test: the `#[tauri::command]` wrapper only
+        // moves this same call onto a blocking thread, so the deserialization
+        // and filtering under test are entirely here.
+        let filtered = filter_file_entries_inner(
             files,
             FileFilterCriteria {
                 file_extensions: Some(vec!["MP4".to_string()]),
@@ -960,7 +972,7 @@ mod tests {
             date_range: None,
             file_extensions: None,
         };
-        let out = filter_file_entries(files, criteria);
+        let out = filter_file_entries_inner(files, criteria);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].name, "Report.pdf");
     }
@@ -981,7 +993,7 @@ mod tests {
             date_range: None,
             file_extensions: None,
         };
-        let out = filter_file_entries(files, criteria);
+        let out = filter_file_entries_inner(files, criteria);
         assert_eq!(out.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), vec!["a.txt", "c.txt"]);
     }
 
@@ -1003,7 +1015,7 @@ mod tests {
             date_range: None,
             file_extensions: None,
         };
-        let out = filter_file_entries(files, criteria);
+        let out = filter_file_entries_inner(files, criteria);
         assert_eq!(out.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), vec!["medium.zip", "huge.iso"]);
     }
 
@@ -1024,7 +1036,7 @@ mod tests {
             date_range: None,
             file_extensions: None,
         };
-        let out = filter_file_entries(files, criteria);
+        let out = filter_file_entries_inner(files, criteria);
         assert_eq!(out.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), vec!["pic.png", "subfolder"]);
     }
 
@@ -1041,7 +1053,7 @@ mod tests {
             file_extensions: None,
         };
         assert!(criteria.is_empty());
-        let out = filter_file_entries(files, criteria);
+        let out = filter_file_entries_inner(files, criteria);
         assert_eq!(out.len(), 2);
     }
 

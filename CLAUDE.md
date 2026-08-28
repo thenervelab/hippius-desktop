@@ -129,6 +129,7 @@ These hold everywhere; the subsystem rules files carry the reasoning.
 - **Match IPC errors on the structured shape** `{ kind, message }`, not on substring matching of `err.message`.
 - **A Rust test that touches `$HOME` must acquire `crate::test_helpers::HOME_LOCK`** — cargo's parallel runner races them otherwise. Used across `sync/` and `recovery.rs`, so it lives here rather than in one subsystem's rules file.
 - **Run the live e2e lane on every `hcfs` pin bump**, before merging the bump PR.
+- **Sync `#[tauri::command]`s run on the OS main thread.** Listing/filter/copy work is `async` + `spawn_blocking`.
 
 ## Testing
 
