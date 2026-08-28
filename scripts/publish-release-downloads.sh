@@ -30,7 +30,16 @@ work="$(mktemp -d)"
 trap 'rm -rf "${work}"' EXIT
 
 release="${work}/release.json"
-gh api "repos/${REPO}/releases/tags/${TAG}" >"${release}"
+
+# Resolve the release through `gh release view`, NOT through
+# `gh api repos/{repo}/releases/tags/{tag}`. That REST endpoint serves PUBLISHED
+# releases only — a draft has no git tag behind it, so it 404s — and `main` and
+# `beta` run this while the release is still a draft. `gh release view` resolves
+# a draft (it carries a separate lookup for exactly this), and its `apiUrl` is
+# the by-id REST URL, which does work for drafts and returns the per-asset
+# `digest` the checksums below are built from.
+api_url="$(gh release view "${TAG}" --repo "${REPO}" --json apiUrl --jq .apiUrl)"
+gh api "${api_url}" >"${release}"
 
 # ---------------------------------------------------------------------------
 # SHA256SUMS, in the format `sha256sum -c` reads.
