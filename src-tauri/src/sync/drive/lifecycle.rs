@@ -1282,6 +1282,18 @@ pub(crate) async fn initialize_sync_inner(
         identity.is_member,
     )?;
 
+    // Arm the "Folder Restored" notification gate for this label, sampling the
+    // baseline BEFORE the sync loop can run: hcfs-client's per-cycle folder
+    // check DELETES `sync_state.json` as part of the recovery it is about to
+    // report, so by the time `FolderRecovered` arrives a genuine restore and a
+    // brand-new folder are indistinguishable on disk. Placed after
+    // `prepare_config_dir` because its Legacy-B migration can MOVE an existing
+    // baseline into `folder_dir`. See `sync::folder_restore_notify`.
+    app_state.folder_restore_notify.arm(
+        &label,
+        crate::sync::folder_restore_notify::FolderRestoreNotifyState::baseline_exists(&folder_dir),
+    );
+
     // Create drive and set HCFS config
     let mut manager = DriveManager::new(PathBuf::from(&cfg.sync_path), folder_dir.clone());
 
@@ -1742,6 +1754,12 @@ pub(crate) async fn remove_drive_for_account(app: AppHandle, label: String, expl
         // state to serialize, so it happens after the guard drops to
         // keep the locked region minimal.
         let preparing_cleared = app_state.preparing.clear(&label);
+
+        // Drop this label's folder-restore gate: the drive is gone, so nothing
+        // can notify for it, and a re-add re-arms from its own baseline at
+        // init. Hygiene rather than correctness — but without it the map keeps
+        // an entry per label ever initialized in this process.
+        app_state.folder_restore_notify.clear(&label);
 
         // Delete the DB row so the drive isn't resurrected on app restart, and
         // drop the intent-manifest rows for this drive so the snapshot overlay

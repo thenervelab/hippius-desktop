@@ -194,17 +194,25 @@ export function useFilesNotification() {
             });
             await refreshUnread();
           }),
-          listen<FolderRecovered>("hcfs_folder_recovered", async (e) => {
+          listen<FolderRecovered>("hcfs_folder_restored_notify", async (e) => {
             if (cancelled || !userAddress) return;
             const label = e.payload.label || "default";
             // The engine found this folder missing on the server and put it
             // back from this device, discarding the local baseline — so the
-            // whole drive re-uploads. Without this notification the event is
-            // emitted and nothing listens, so the usual cause (deleting the
-            // folder from the web console) looks like the folder returning by
-            // itself alongside a large unexplained upload. Not gated or
-            // debounced like the failure channel: recovery happens once per
-            // folder per outage, not once per retry cycle.
+            // whole drive re-uploads. Without this notification the user sees
+            // the usual cause (deleting the folder from the web console) as
+            // the folder returning by itself alongside a large unexplained
+            // upload.
+            //
+            // We listen to the GATED `hcfs_folder_restored_notify`, not the
+            // raw `hcfs_folder_recovered`: the engine re-emits the raw event
+            // on every cycle whose listing still lacks the folder, and also
+            // fires it for a BRAND-NEW folder whose detached registration has
+            // not reached the server yet — which would tell a user who just
+            // added a folder that it "was missing on the server". Rust owns
+            // both gates (`sync::folder_restore_notify`), so every event that
+            // reaches here is a real restore of a drive that had already
+            // synced.
             await invoke("create_sync_notification", {
               userAddress,
               description: `Folder "${label}" was missing on the server, so Hippius restored it from this device. Its files are being uploaded again.`,
