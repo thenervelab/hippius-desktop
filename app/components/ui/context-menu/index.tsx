@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { Download, Link2, Trash2, FolderOpen, Pencil } from "lucide-react";
 import { Icons } from "@/components/ui";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
+import { isCloudOnlyRow } from "@/app/lib/utils/cloudOnly";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
 import {
@@ -175,16 +176,20 @@ export default function FileContextMenu({
             </Link>
           )}
 
-          <button
-            className={menuItemClass}
-            onClick={() => {
-              onFileDownload(file, polkadotAddress ?? "");
-              onClose();
-            }}
-          >
-            <Download className="size-4" />
-            <span>Download</span>
-          </button>
+          {/* Cloud-only FOLDER rows: the zip export needs a local sync root.
+              Cloud-only FILE rows still download via download_remote_file. */}
+          {!(isCloudOnlyRow(file) && file.isFolder) && (
+            <button
+              className={menuItemClass}
+              onClick={() => {
+                onFileDownload(file, polkadotAddress ?? "");
+                onClose();
+              }}
+            >
+              <Download className="size-4" />
+              <span>Download</span>
+            </button>
+          )}
 
           {(fileType === "video" ||
             fileType === "image" ||
@@ -202,10 +207,13 @@ export default function FileContextMenu({
               </button>
             )}
 
-          <button className={menuItemClass} onClick={revealInFileManager}>
-            <FolderOpen className="size-4" />
-            <span>Reveal in {fileManagerLabel}</span>
-          </button>
+          {/* Nothing on disk to reveal for a cloud-only row. */}
+          {!isCloudOnlyRow(file) && (
+            <button className={menuItemClass} onClick={revealInFileManager}>
+              <FolderOpen className="size-4" />
+              <span>Reveal in {fileManagerLabel}</span>
+            </button>
+          )}
 
           <button className={menuItemClass} onClick={handleShowFileDetails}>
             <Icons.InfoCircle className="size-4" />
@@ -298,25 +306,29 @@ export default function FileContextMenu({
             </button>
           )}
 
-          <button
-            // Same rationale as the Rename row: `pointer-events-none` made
-            // the disabled-state `title` tooltip unreachable.
-            className={cn("flex items-center gap-2 p-2 text-xs font-medium hover:bg-grey-90 dark:hover:bg-error-70/10", {
-              "hover:!text-error-70 !text-error-60 cursor-pointer dark:!text-error-70 dark:hover:!text-error-60": file.isAssigned,
-              "opacity-60 cursor-not-allowed !text-grey-30 dark:!text-grey-dark-200": !file.isAssigned
-            })}
-            disabled={!file.isAssigned}
-            title={!file.isAssigned ? "This file is currently being synced and cannot be deleted yet. Please wait for the sync to complete." : "Delete this file"}
-            onClick={() => {
-              if (file.isAssigned && onDelete) {
-                onDelete(file);
-                onClose();
-              }
-            }}
-          >
-            <Trash2 className="size-4" />
-            <span>{!file.isAssigned ? "Delete (Syncing in progress...)" : "Delete"}</span>
-          </button>
+          {/* Cloud-only rows hide Delete — the pipeline removes the LOCAL
+              copy and lets sync propagate, which server-only rows lack. */}
+          {!isCloudOnlyRow(file) && (
+            <button
+              // Same rationale as the Rename row: `pointer-events-none` made
+              // the disabled-state `title` tooltip unreachable.
+              className={cn("flex items-center gap-2 p-2 text-xs font-medium hover:bg-grey-90 dark:hover:bg-error-70/10", {
+                "hover:!text-error-70 !text-error-60 cursor-pointer dark:!text-error-70 dark:hover:!text-error-60": file.isAssigned,
+                "opacity-60 cursor-not-allowed !text-grey-30 dark:!text-grey-dark-200": !file.isAssigned
+              })}
+              disabled={!file.isAssigned}
+              title={!file.isAssigned ? "This file is currently being synced and cannot be deleted yet. Please wait for the sync to complete." : "Delete this file"}
+              onClick={() => {
+                if (file.isAssigned && onDelete) {
+                  onDelete(file);
+                  onClose();
+                }
+              }}
+            >
+              <Trash2 className="size-4" />
+              <span>{!file.isAssigned ? "Delete (Syncing in progress...)" : "Delete"}</span>
+            </button>
+          )}
         </div>
       </div>
     </div>,

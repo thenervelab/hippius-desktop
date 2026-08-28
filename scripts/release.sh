@@ -23,8 +23,8 @@ pnpm tauri build
 mkdir -p releases
 
 # Copy and rename the release files (adjust paths as needed)
-cp src-tauri/target/release/bundle/dmg/*.dmg releases/hippius-$VERSION-macos.dmg
-cp src-tauri/target/release/bundle/appimage/*.AppImage releases/hippius-$VERSION-linux.AppImage
-cp src-tauri/target/release/bundle/msi/*.msi releases/hippius-$VERSION-windows.msi
+cp src-tauri/target/release/bundle/dmg/*.dmg "releases/hippius-$VERSION-macos.dmg"
+cp src-tauri/target/release/bundle/appimage/*.AppImage "releases/hippius-$VERSION-linux.AppImage"
+cp src-tauri/target/release/bundle/msi/*.msi "releases/hippius-$VERSION-windows.msi"
 
 echo "Release files created in the releases directory"
