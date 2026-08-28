@@ -397,10 +397,21 @@ pub async fn delete_remote_folder(
     // Snapshot "was this folder locally synced" before we tear anything down,
     // so the result we hand back to the FE matches the pre-deletion state the
     // user was looking at.
-    let was_local = {
-        let guard = state.sync.drives.lock().await;
-        guard.contains_key(&label)
-    };
+    //
+    // Sourced from `sync_paths`, NOT from `state.sync.drives`: that map holds
+    // only drives whose sync loop is currently registered, so a PAUSED drive is
+    // missing from it, as is one whose init hasn't finished on a slow login.
+    // Keying the teardown off the map therefore skipped it for exactly those
+    // drives, with two consequences: the row survived the server wipe, so the
+    // folder kept rendering in "Local Sync Folders" with blank stats forever;
+    // and the drive stayed configured, so resuming it ran the engine's
+    // pre-cycle folder check, which for an OWN drive re-registers the missing
+    // folder, discards the local baseline, and re-uploads the whole tree the
+    // user had just paid to delete. Same "map presence is not user intent"
+    // conflation `get_sync_folders_with_stats` below already had to fix for
+    // the status column. A DB failure bails before the server is touched,
+    // which is the same posture as a failed teardown.
+    let was_local = crate::sync::paths::sync_path_exists(pool, &account_id, &label).await?;
 
     if was_local {
         // Pass the explicit account (parity with `remove_sync_path`) so the
@@ -748,6 +759,54 @@ mod tests {
         assert!(
             remove_idx < unregister_idx,
             "remove_drive_for_account MUST be called before .unregister_folder so the local drive is dead before the server reports zero files",
+        );
+    }
+
+    // Static guard: `delete_remote_folder` must decide whether local teardown is
+    // owed from the `sync_paths` DB row, NEVER from the in-memory `sync.drives`
+    // map. The map holds only drives whose sync loop is registered, so a paused
+    // drive (and one still mid-init on a slow login) is missing from it — reading
+    // it there skipped `remove_drive_for_account`, leaving the row behind after
+    // the server wipe (the folder stayed listed with blank stats) plus an on-disk
+    // baseline still claiming the deleted files were synced. The command takes
+    // `tauri::State`, so the choice of source cannot be driven hermetically; the
+    // behaviour of the DB side is covered by `sync::paths`' own tests.
+    #[test]
+    fn delete_remote_folder_decides_teardown_from_the_db_not_the_drive_map() {
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/fileops/folders.rs")).expect("read folders.rs");
+        let sig_idx = src.find("pub async fn delete_remote_folder(").expect("declaration present");
+        let body_start = src[sig_idx..].find('{').expect("fn body opens") + sig_idx;
+        let mut depth = 0usize;
+        let mut body_end = body_start;
+        for (i, ch) in src[body_start..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        body_end = body_start + i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let body = &src[body_start..=body_end];
+        // Strip `//` comments: the body deliberately NAMES the map it must not
+        // read, in the comment explaining why. Only executable code counts.
+        let code: String = body
+            .lines()
+            .map(|line| line.split("//").next().unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(
+            code.contains("sync_path_exists("),
+            "delete_remote_folder must read local configuration from sync_paths via sync_path_exists",
+        );
+        assert!(
+            !code.contains("sync.drives"),
+            "delete_remote_folder must NOT consult the in-memory drives map — a paused or still-initializing drive is absent from it, so its sync_paths row and on-disk baseline would survive the server wipe",
         );
     }
 

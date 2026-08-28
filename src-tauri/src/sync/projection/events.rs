@@ -22,6 +22,16 @@ pub const SYNC_RESET: &str = "hcfs_sync_reset";
 pub const CONNECTIVITY_CHANGED: &str = "hcfs_connectivity_changed";
 /// Emitted after a remote folder is auto-recovered.
 pub const FOLDER_RECOVERED: &str = "hcfs_folder_recovered";
+/// Gated companion to [`FOLDER_RECOVERED`], carrying the same payload.
+///
+/// The raw event fires on every cycle whose listing still lacks the folder,
+/// and also for a brand-new folder whose detached registration has not
+/// reached the server yet — so it is the wrong thing to notify a user on.
+/// This channel is emitted only when `sync::folder_restore_notify` confirms
+/// the label had already synced and has not notified since its last init.
+/// Mirrors the [`SYNC_ERROR`] / [`SYNC_FAILED_NOTIFY`] split: live consumers
+/// keep the raw event, the persisted notification takes the gated one.
+pub const FOLDER_RESTORED_NOTIFY: &str = "hcfs_folder_restored_notify";
 /// Emitted when review mode times out.
 pub const REVIEW_MODE_TIMEOUT: &str = "hcfs_review_mode_timeout";
 /// Emitted when conflicts are detected that need user review.
