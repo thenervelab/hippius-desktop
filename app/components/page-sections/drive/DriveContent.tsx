@@ -45,10 +45,16 @@ interface DriveContentProps {
   } | null>;
   hasMore: boolean;
   loadMore: () => void;
+  /** A remote server page is being fetched — renders a skeleton strip under
+   *  the rows so scroll-driven appends never look stalled. */
+  isLoadingMore?: boolean;
   isSyncPathEmpty?: boolean;
   /** True when the user has insufficient credits to upload files.
    *  Swaps the empty-state into the "Add Credits" variant. */
   hasNoCredits?: boolean;
+  /** Browsing a remote (server-only) drive — uploads are not supported
+   *  there yet, so the empty state renders without an upload CTA. */
+  isRemoteView?: boolean;
   onSyncPathConfigured?: () => void;
   onUploadFile?: () => void;
   onAddFolder?: () => void;
@@ -77,8 +83,10 @@ const DriveContent: FC<DriveContentProps> = ({
   addButtonRef,
   hasMore,
   loadMore,
+  isLoadingMore = false,
   isSyncPathEmpty = false,
   hasNoCredits = false,
+  isRemoteView = false,
   onSyncPathConfigured,
   onUploadFile,
   onAddFolder,
@@ -356,6 +364,7 @@ const DriveContent: FC<DriveContentProps> = ({
           isRecentFiles={isRecentFiles}
           isSyncPathConfigured={!isSyncPathEmpty}
           hasNoCredits={hasNoCredits}
+          isRemoteView={isRemoteView}
           onStartSyncing={onSyncPathConfigured}
         />
       );
@@ -373,34 +382,45 @@ const DriveContent: FC<DriveContentProps> = ({
       );
     }
 
+    // While the next remote page is on the wire, `isLoadingMore` is passed
+    // INTO the table/grid so the placeholders render inside the real
+    // tbody/grid — columns, striping, chevron gutter and grid cells line up
+    // with the loaded rows by construction (skeletons for content loading,
+    // never a centered spinner and never bare full-width bars).
     if (viewMode === "list") {
       return (
-        <FilesTable
-          isRecentFiles={isRecentFiles}
-          files={displayedData}
-          allFiles={filteredData}
-          handleFileDownload={handleFileDownload}
-          sharedState={sharedState}
-          hasMore={hasMore}
-          loadMore={loadMore}
-          onHeaderContextMenu={handleHeaderContextMenu}
-          drivePathsByLabel={drivePathsByLabel}
-          currentSubfolderPath={currentSubfolderPath}
-          searchTerm={searchTerm}
-          activeFilterCount={activeFilters.length}
-        />
+        <>
+          <FilesTable
+            isRecentFiles={isRecentFiles}
+            files={displayedData}
+            allFiles={filteredData}
+            handleFileDownload={handleFileDownload}
+            sharedState={sharedState}
+            hasMore={hasMore}
+            loadMore={loadMore}
+            isLoadingMore={isLoadingMore}
+            onHeaderContextMenu={handleHeaderContextMenu}
+            drivePathsByLabel={drivePathsByLabel}
+            currentSubfolderPath={currentSubfolderPath}
+            searchTerm={searchTerm}
+            activeFilterCount={activeFilters.length}
+          />
+        </>
       );
     } else {
       return (
-        <CardView
-          isRecentFiles={isRecentFiles}
-          files={displayedData}
-          handleFileDownload={handleFileDownload}
-          sharedState={sharedState}
-          hasMore={hasMore}
-          loadMore={loadMore}
-          currentSubfolderPath={currentSubfolderPath}
-        />
+        <>
+          <CardView
+            isRecentFiles={isRecentFiles}
+            files={displayedData}
+            handleFileDownload={handleFileDownload}
+            sharedState={sharedState}
+            hasMore={hasMore}
+            loadMore={loadMore}
+            isLoadingMore={isLoadingMore}
+            currentSubfolderPath={currentSubfolderPath}
+          />
+        </>
       );
     }
   };

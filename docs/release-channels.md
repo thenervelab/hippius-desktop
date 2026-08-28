@@ -109,16 +109,20 @@ letting `staging`'s `-dev.N` flow into a lane that publishes to users.
 2. Bump the version to the next `-beta.N` in the same three files. Reusing a
    version means the jobs upload into the previous release instead of creating
    a new one, and beta users are never offered the build.
-3. Push. `publish-beta` runs the three platform jobs, then `publish-manifest`
-   corrects `latest.json` for macOS, republishes it to the fixed `beta-channel`
-   tag, and only then flips the versioned release out of draft.
+3. Push. `publish-beta` runs the three platform jobs, then **assemble → verify
+   → publish**: `assemble-release` corrects `latest.json` for macOS and names
+   the downloads, `verify-release` downloads the draft's own assets and opens
+   them, and `publish-release` flips the versioned release out of draft and
+   republishes the manifest to the fixed `beta-channel` tag.
 
-Nothing reaches a beta user until `publish-manifest` succeeds. The versioned
-release stays a **draft** until that job finishes, mirroring the production
-lane: macOS is built `--bundles app`, so until the finalize step runs the
-release carries no DMG at all and a published one would be indistinguishable
-from a good build. The job also fails rather than publish a manifest with no
-macOS signature, which would offer beta users an update they cannot verify.
+Nothing reaches a beta user until all three succeed. The versioned release
+stays a **draft** throughout, mirroring the production lane: macOS is built
+`--bundles app`, so until the finalize step runs the release carries no DMG at
+all and a published one would be indistinguishable from a good build.
+`assemble-release` also fails rather than publish a manifest with no macOS
+signature, which would offer beta users an update they cannot verify, and
+`verify-release` fails rather than publish artifacts it could not confirm are
+signed, notarized, stapled and carrying the Finder extension.
 
 ## Cutting a production build
 
@@ -137,9 +141,14 @@ The push to `main` then:
 2. on macOS runs `macos/finalize-macos-release.sh` — build the universal
    `.appex`, embed + inside-out re-sign, notarize, staple, rebuild the DMG and
    the updater tarball;
-3. runs `publish-release`, which merges the `darwin-aarch64` / `darwin-x86_64`
-   entries into `latest.json` (tauri-action omits them because macOS is built
-   `--bundles app`) and only then flips `--draft=false --latest`.
+3. runs `assemble-release`, which merges the `darwin-aarch64` /
+   `darwin-x86_64` entries into `latest.json` (tauri-action omits them because
+   macOS is built `--bundles app`) and names the per-platform downloads;
+4. runs `verify-release`, which downloads the draft's own assets and opens
+   them — Finder extension embedded, notarized, stapled, universal, version
+   matching the tag, updater signature verifying against the committed pubkey,
+   and `latest.json` naming assets the release actually carries;
+5. only then runs `publish-release`, which flips `--draft=false --latest`.
 
 Before announcing, confirm an already-installed copy is actually offered the
 update. That is the one check that would catch a signing-key mistake.
@@ -187,7 +196,7 @@ single source of these URLs.
 The beta manifest needs a **fixed** tag because every beta release carries its
 own version tag and GitHub's `releases/latest` resolves only to a
 non-prerelease, so neither addresses "the newest beta". `tauri-beta.yml`'s
-`publish-manifest` job overwrites one asset — `latest.json` — on a permanent
+`publish-release` job overwrites one asset — `latest.json` — on a permanent
 prerelease tagged **`beta-channel`**, which holds no build assets of its own;
 the manifest's `url` fields address the real versioned release.
 
@@ -196,7 +205,7 @@ makes `git push origin beta` fail with `src refspec beta matches more than one`
 for every developer and `git checkout beta` ambiguous — breaking the very
 promotion flow the lane exists for. `tests/release_lane_pins.rs` derives the tag
 from `manifest_url()` and asserts the workflow writes to that same tag, because
-a drift there leaves `publish-manifest` succeeding while beta builds check a URL
+a drift there leaves `publish-release` succeeding while beta builds check a URL
 nobody publishes to.
 
 The check itself runs in **Rust** (`src-tauri/src/updates.rs`), not through

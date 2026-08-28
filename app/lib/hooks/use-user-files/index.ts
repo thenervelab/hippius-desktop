@@ -110,22 +110,20 @@ export function useUserFiles() {
       // Single Rust call: fetches from all sync paths, resolves timestamps,
       // detects encrypted names, sorts. No loop or mapping in TypeScript.
       //
-      // A 15s wall-clock cap guards against the files page spinning
+      // A 60s wall-clock cap guards against the files page spinning
       // forever when a downstream call inside `get_user_files` stalls
       // (e.g. `tokio::fs::read_dir` on a path the app has lost
-      // permission for, or a drive registry lock held by a sync loop
-      // that is itself wedged). TanStack Query's `retry: 3` below
-      // retries on timeout, and the FE surfaces `error` via the files
-      // container when all retries are exhausted — instead of the
-      // indefinite spinner the bug report surfaced.
+      // permission for, or dir_stats walking a disk saturated by a
+      // large add). One retry covers a transient hitch; more piled
+      // extra walks onto the same disk.
       //
       // The timer is cleared in `finally` so the happy path doesn't
-      // keep a 15s timer alive (and its closure) per fetch — TanStack
+      // keep a 60s timer alive (and its closure) per fetch — TanStack
       // Query refetches keep arriving on events, so the leak would
       // accumulate noticeably.
       let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
       const timeout = new Promise<never>((_, reject) => {
-        timeoutHandle = setTimeout(() => reject(new Error("get_user_files timed out")), 15_000);
+        timeoutHandle = setTimeout(() => reject(new Error("get_user_files timed out")), 60_000);
       });
       let result: UserFilesResult;
       try {
@@ -150,7 +148,7 @@ export function useUserFiles() {
     },
     enabled: !!polkadotAddress,
     refetchOnMount: false,
-    retry: 3,
+    retry: 1,
     retryDelay: 1000,
   });
 }

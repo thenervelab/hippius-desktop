@@ -26,6 +26,7 @@ The ~32 submodules are organized into six private sub-domain group directories, 
 
 - `asset_scope.rs` (asset-protocol scope), `add.rs` (add file/folder + batch + the upload byte/count walkers), `delete.rs`, `rename.rs`, `recent.rs` (recent files + the shared per-drive `synced_paths_*` reads), `dir_stats.rs` (cached recursive dir size/count), `listing.rs` (flat + grouped listing, owns `FileEntry`), `user_files.rs` (files page + recursive search + filter cascade, owns `UserFileEntry`), `resolve.rs` (path resolve + single-file `export_file`), `export_zip.rs` (store-only `export_folder_zip`).
 - `pathops.rs` is a **dependency-free leaf** holding the shared path helpers `ensure_within`/`derive_relative_name`/`copy_dir_recursive`, so the submodules form a DAG — it breaks the `add`↔`resolve` cycle.
+- **Every copy into the sync root goes via a hidden `.hippius-incoming-*` sibling, then `rename`.** Both `add_folder` (new dest) and `add_file`/`add_files`. The live watcher would otherwise hash a growing tree, and `fs::copy` onto an existing path truncates before it refills, so a direct write lets a scan see a file shorter than the synced copy. hcfs carried a guard for that and **removed it in #367** — it could not distinguish a stalled copy from a finished smaller edit, so it delayed every legitimate shrink by a cycle — and its accepted residual names this staging as the replacement. The sibling is in the same directory, so the `rename` is atomic rather than a copy, and hcfs-client skips `.*` names in `collect_files` while it grows. **Gap:** `add_folder` onto an EXISTING dest still merges in place through hcfs's own `copy_dir_recursive`, so that path is unstaged; closing it is an hcfs change.
 
 ## Remote browse and account-wide search
 
@@ -53,6 +54,8 @@ Guard sites are counted by `tests/shared_drive_wiring.rs`, but a new call site i
 The sync engine delegates to `hcfs-client` (from the `hcfs` repo, pinned to a git rev in Cargo.toml). Drive API: `new()`, `init()`, `unlock()`, `sync_async(SyncMode)`, `stage()`, `set_config()`, `set_progress_handlers()`. All file encryption is handled by hcfs-client via BIP-39 mnemonic.
 
 `Cargo.toml` pins `hcfs-client` / `hcfs-shared` to the same merged hcfs `main` rev. The weekly `hcfs-bump` workflow advances it; CI's wire-contract guards gate the result. **Run the live e2e lane on every pin bump** (see `testing.md`).
+
+**`main.rs` must call `hcfs_client::cpu_pool::configure(CpuPolicy::Background)` before the Tauri builder.** hcfs hashes and encrypts on a rayon pool it owns, and that pool takes every core at default OS priority unless the host opts out — deliberately, since a library must not deprioritise its embedder's work uninvited, and the CLI/e2e/benches want `Full`. Without the call a large add pins every core and the window stops painting; nothing anywhere reports it, because the sync is otherwise correct. Ordering is half the contract: the policy is read when the pool is first built and the first build wins, so a call placed after any scan/hash/encrypt is indistinguishable at runtime from no call at all. `configure` returns the policy already in force rather than no-op'ing, and `main.rs` warns on that. Pinned by `tests/cpu_policy_pin.rs`, which checks the argument, the ordering against `Builder::default()`, and that hcfs still reports a late call.
 
 ## Multi-drive sync
 
