@@ -229,3 +229,50 @@ describe("useFilesNotification — failure path", () => {
     });
   });
 });
+
+// `hcfs_folder_recovered` fires when the engine finds a drive's folder missing
+// on the server and puts it back from this device, discarding the local
+// baseline so the whole drive re-uploads. The usual cause is deleting the
+// folder from the web console. The event was emitted with NO listener anywhere
+// in the app, so that re-upload reached the user as an unexplained transfer
+// alongside a folder that appeared to come back by itself.
+describe("useFilesNotification — folder recovered", () => {
+  it("raises a folder_restored notification naming the folder", async () => {
+    mount(true);
+    await flushRegistration();
+    await act(async () => {
+      await tauri.emitEvent("hcfs_folder_recovered", { label: "Camera Uploads" });
+    });
+    // Not debounced: recovery happens once per folder per outage, not once
+    // per retry cycle, so there is nothing to aggregate.
+    const calls = syncNotificationCalls();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.[1]).toMatchObject({
+      outcome: "folder_restored",
+      description:
+        'Folder "Camera Uploads" was missing on the server, so Hippius restored it from this device. Its files are being uploaded again.',
+    });
+  });
+
+  it("falls back to the 'default' label when the payload omits it", async () => {
+    mount(true);
+    await flushRegistration();
+    await act(async () => {
+      await tauri.emitEvent("hcfs_folder_recovered", {});
+    });
+    expect(syncNotificationCalls()[0]?.[1]).toMatchObject({
+      outcome: "folder_restored",
+      description:
+        'Folder "default" was missing on the server, so Hippius restored it from this device. Its files are being uploaded again.',
+    });
+  });
+
+  it("registers no listener when Files notifications are disabled", async () => {
+    mount(false);
+    await flushRegistration();
+    await act(async () => {
+      await tauri.emitEvent("hcfs_folder_recovered", { label: "photos" });
+    });
+    expect(syncNotificationCalls()).toHaveLength(0);
+  });
+});

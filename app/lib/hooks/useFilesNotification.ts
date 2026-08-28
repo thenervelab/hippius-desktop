@@ -70,6 +70,11 @@ interface SyncError {
   error: string;
 }
 
+/** Payload of `hcfs_folder_recovered` — Rust's `events::LabelPayload`. */
+interface FolderRecovered {
+  label?: string;
+}
+
 export function useFilesNotification() {
   const refreshUnread = useSetAtom(refreshUnreadCountAtom);
   const refreshEnabledTypes = useSetAtom(refreshEnabledTypesAtom);
@@ -186,6 +191,25 @@ export function useFilesNotification() {
               description: `Sync failed for folder "${label}": ${e.payload.error}`,
               fileDetailsJson: "",
               outcome: "error",
+            });
+            await refreshUnread();
+          }),
+          listen<FolderRecovered>("hcfs_folder_recovered", async (e) => {
+            if (cancelled || !userAddress) return;
+            const label = e.payload.label || "default";
+            // The engine found this folder missing on the server and put it
+            // back from this device, discarding the local baseline — so the
+            // whole drive re-uploads. Without this notification the event is
+            // emitted and nothing listens, so the usual cause (deleting the
+            // folder from the web console) looks like the folder returning by
+            // itself alongside a large unexplained upload. Not gated or
+            // debounced like the failure channel: recovery happens once per
+            // folder per outage, not once per retry cycle.
+            await invoke("create_sync_notification", {
+              userAddress,
+              description: `Folder "${label}" was missing on the server, so Hippius restored it from this device. Its files are being uploaded again.`,
+              fileDetailsJson: "",
+              outcome: "folder_restored",
             });
             await refreshUnread();
           }),

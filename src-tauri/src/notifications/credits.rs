@@ -370,8 +370,11 @@ pub async fn process_credit_events(
 /// can pick the right title, notification_subtype prefix, and description
 /// framing. Adding a new variant is a backend-side change — the frontend only
 /// picks from the variants defined here.
+// snake_case, not lowercase: the single-word variants serialize identically
+// either way, so the FE's existing "success"/"error" are unaffected, while a
+// multi-word variant gets "folder_restored" rather than "folderrestored".
 #[derive(serde::Deserialize, Clone, Copy)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum SyncNotificationOutcome {
     /// The sync cycle completed with one or more transfers. Title: "Sync Complete".
     Success,
@@ -380,6 +383,18 @@ pub enum SyncNotificationOutcome {
     /// self-cancels never reach this variant — they are silenced at the bridge
     /// (see `sync::tauri_bridge::on_event::SyncError`).
     Error,
+    /// The drive's folder was missing from the server and the engine
+    /// re-registered it from this device, discarding the local baseline — so
+    /// the whole drive re-uploads (`hcfs_folder_recovered`). Title: "Folder
+    /// Restored".
+    ///
+    /// Neither existing variant can carry this: nothing failed, so "Sync
+    /// Failed" would be a lie, and "Sync Complete" would bury a re-upload of
+    /// the entire drive under a routine success. It is its own variant because
+    /// the user needs to be able to tell this apart from an ordinary sync —
+    /// the usual cause is deleting the folder from the web console, which the
+    /// desktop then silently undoes.
+    FolderRestored,
 }
 
 impl SyncNotificationOutcome {
@@ -387,6 +402,7 @@ impl SyncNotificationOutcome {
         match self {
             Self::Success => "Sync Complete",
             Self::Error => "Sync Failed",
+            Self::FolderRestored => "Folder Restored",
         }
     }
 
@@ -394,6 +410,7 @@ impl SyncNotificationOutcome {
         match self {
             Self::Success => "FileSyncComplete",
             Self::Error => "FileSyncError",
+            Self::FolderRestored => "FileSyncFolderRestored",
         }
     }
 }
@@ -561,6 +578,31 @@ mod tests {
         let pool = SqlitePoolOptions::new().max_connections(1).connect_with(opts).await.expect("pool");
         crate::utils::schema::ensure_table_schema(&pool).await.expect("schema");
         (dir, pool)
+    }
+
+    // ── SyncNotificationOutcome wire contract ───────────────────────
+    //
+    // The FE passes this outcome as a bare string over IPC (there is no
+    // codegen across the boundary), so a rename here — or the `rename_all`
+    // style drifting back to "lowercase", which would turn `FolderRestored`
+    // into "folderrestored" — deserializes as an error INSIDE a Tauri event
+    // listener, where the rejection is invisible and the notification is
+    // simply never written. Pin the exact strings `useFilesNotification.ts`
+    // sends, and the title/subtype each selects.
+    #[test]
+    fn outcome_deserializes_the_strings_the_frontend_sends() {
+        let cases = [
+            ("success", "Sync Complete", "FileSyncComplete"),
+            ("error", "Sync Failed", "FileSyncError"),
+            ("folder_restored", "Folder Restored", "FileSyncFolderRestored"),
+        ];
+
+        for (wire, title, prefix) in cases {
+            let outcome: SyncNotificationOutcome =
+                serde_json::from_str(&format!("\"{wire}\"")).unwrap_or_else(|e| panic!("the frontend sends {wire:?}, which must deserialize: {e}"));
+            assert_eq!(outcome.title(), title, "title for {wire:?}");
+            assert_eq!(outcome.subtype_prefix(), prefix, "subtype prefix for {wire:?}");
+        }
     }
 
     async fn insert_low_credit(pool: &sqlx::SqlitePool, user: &str, is_deleted: i64, deleted_at: Option<i64>) {

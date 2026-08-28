@@ -51,6 +51,12 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **You are now told when Hippius restores a folder from your device.** If a folder
+  goes missing on the server — most often because it was deleted from the web
+  console while a device was still syncing it — Hippius puts it back and uploads its
+  files again. That used to happen silently, so the folder appeared to return on its
+  own alongside a large unexplained upload. You now get a "Folder Restored"
+  notification explaining what happened.
 - **Deleting a paused folder from the server now removes it from your folder list.**
   If a folder's sync was paused, deleting it from the server wiped the files but left
   the folder sitting in Settings → Sync & Storage with no size or file count, and
