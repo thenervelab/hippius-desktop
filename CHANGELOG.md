@@ -21,6 +21,12 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   the account menu to move onto builds that get new features first, before they
   are fully stabilized. Hippius downloads the build and restarts. You can go back
   to the stable version at any time from Settings.
+- **Browse folders synced from your other devices without downloading them.**
+  Click a folder under "Sync from Other Devices" to open it like any drive —
+  navigate subfolders, see real sizes, preview and download individual files,
+  and share files or folders via link, all straight from the server. Files
+  load a page at a time as you scroll, so even huge camera rolls open
+  instantly, and the app reopens wherever you left off.
 - **Live Photos and HEIC images now preview throughout Drive**, including HEIC
   thumbnails, reliable repeated Live motion playback on supported systems, and
   an immediately disabled LIVE badge with an explanatory tooltip on Linux.
@@ -53,6 +59,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Filters and search now work while browsing inside a folder.** Applying a file-type,
+  date, size, or search filter inside a synced folder — including folders synced from
+  your other devices — quietly kept showing the full unfiltered list with the filter
+  chip still on.
 - **The Mac download list no longer offers a file that installs an incomplete copy.**
   Release pages carried a second Mac file next to the disk image that read as an
   alternative download but was missing "Share with Hippius" and Apple's security

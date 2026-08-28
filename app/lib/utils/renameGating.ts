@@ -1,4 +1,5 @@
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
+import { isCloudOnlyRow } from "@/app/lib/utils/cloudOnly";
 
 /**
  * Single gate for whether a row's "Rename" action is enabled. Shared by the
@@ -10,15 +11,17 @@ import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
  * needs the entry to actually be on this device and at rest:
  *
  * - `!isAssigned`: still mid-upload — no settled server identity to rename.
- * - `fileId && !source`: a cloud-only row (search/recent-uploads hit with no
- *   local path) — there is nothing on disk to rename.
+ * - `isCloudOnlyRow`: nothing on disk to rename — a cloud-only search hit,
+ *   a pending download, or any row of a browsable REMOTE drive (whose
+ *   FOLDER rows carry a `remote://` sentinel `source` that a bare
+ *   `fileId && !source` check used to mistake for a local path).
  * - explicit non-"synced" status: pending download / uploading / failed rows
  *   are races waiting to happen. `undefined` status (plain local listings
  *   that never set one) stays renameable.
  */
 export function canRenameFile(file: FormattedUserFile): boolean {
   if (!file.isAssigned) return false;
-  if (file.fileId && !file.source) return false;
+  if (isCloudOnlyRow(file)) return false;
   if (file.syncStatus !== undefined && file.syncStatus !== "synced") return false;
   return true;
 }

@@ -174,6 +174,34 @@ export async function createShare(
 }
 
 /**
+ * Mint a share link for a file that exists ONLY on the server (a row in a
+ * browsable remote drive — `fileId` set, no local `source`). Console parity:
+ * Rust downloads + decrypts the file to a temp path, streams it through the
+ * same share pipeline as a local file, and removes the temp copy. Slower
+ * than a local share (a full download precedes the upload), which is why it
+ * is used only for remote rows.
+ */
+export async function createRemoteShare(
+  folderLabel: string,
+  relativePath: string,
+  fileId: string,
+  choice: ShareChoice,
+  onProgress?: (progress: ShareProgress) => void,
+): Promise<ShareLink> {
+  const onProgressChannel = new Channel<ShareProgress>();
+  if (onProgress) onProgressChannel.onmessage = onProgress;
+  return invoke<ShareLink>("hcfs_create_remote_share", {
+    folderLabel,
+    relativePath,
+    fileId,
+    ttl: choice.ttl,
+    visibility: choice.visibility,
+    password: choice.password ?? null,
+    onProgress: onProgressChannel,
+  });
+}
+
+/**
  * Mint a live, browsable share link for a folder. One metadata POST — nothing
  * is packed or uploaded, so the call is instant regardless of folder size and
  * carries no progress channel. The link is live: later changes to the folder

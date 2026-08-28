@@ -10,6 +10,7 @@ import { toast } from "sonner";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 import { fileDetailsPanelAtom } from "@/app/lib/global-atoms/fileDetailsAtoms";
+import { isCloudOnlyRow } from "@/app/lib/utils/cloudOnly";
 import { useBreakpoint } from "@/app/lib/hooks";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { cn } from "@/app/lib/utils";
@@ -143,29 +144,34 @@ const PanelBody: React.FC<PanelBodyProps> = ({ file, onClose }) => {
         {file.label && (
           <PillRow label="Sync Folder">
             <div className="break-words">{file.label}</div>
-            <button
-              type="button"
-              onClick={async () => {
-                try {
-                  await revealFile({
-                    sourcePath: file.source,
-                    label: file.label,
-                    accountId: polkadotAddress ?? undefined,
-                    fileName: file.actualFileName || file.name,
-                    revealFolder: true,
-                  });
-                } catch (err) {
-                  console.error("Failed to reveal in Finder:", err);
-                  toast.error(
-                    "File is not available locally. It may only exist on another device.",
-                  );
-                }
-              }}
-              className="mt-[6px] flex items-center gap-[4px] text-[14px] font-medium text-[#3167dd] dark:text-[#618ce8] hover:underline cursor-pointer w-fit"
-            >
-              <FolderOpen className="size-4" />
-              <span>Reveal in Finder</span>
-            </button>
+            {/* Nothing on disk to reveal for a cloud-only row (remote-drive
+                browsing, cloud search hits, pending downloads) — hidden,
+                matching the table/card/context-menu gating. */}
+            {!isCloudOnlyRow(file) && (
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    await revealFile({
+                      sourcePath: file.source,
+                      label: file.label,
+                      accountId: polkadotAddress ?? undefined,
+                      fileName: file.actualFileName || file.name,
+                      revealFolder: true,
+                    });
+                  } catch (err) {
+                    console.error("Failed to reveal in Finder:", err);
+                    toast.error(
+                      "File is not available locally. It may only exist on another device.",
+                    );
+                  }
+                }}
+                className="mt-[6px] flex items-center gap-[4px] text-[14px] font-medium text-[#3167dd] dark:text-[#618ce8] hover:underline cursor-pointer w-fit"
+              >
+                <FolderOpen className="size-4" />
+                <span>Reveal in Finder</span>
+              </button>
+            )}
           </PillRow>
         )}
       </div>
