@@ -104,6 +104,13 @@ uuid = { version = "1", features = ["v4"] }
 tempfile = "3"
 sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio"] }
 hex = "0.4"
+# Same glob engine hcfs-client compiles `.hippius/exclude` with. Two callers,
+# and the difference between them is deliberate: `validate_pattern` refuses a
+# pattern the engine would silently drop (validating with a different parser
+# would let the two disagree), while `user_files`' search needle builds a
+# case-INSENSITIVE matcher — a search miss hides nothing, an exclusion miss
+# lies about what is backed up.
+globset = "0.4"
 tauri-plugin-fs = "2"
 notify = "6.1"
 tauri-plugin-dialog = "2.6.0"
@@ -195,9 +202,6 @@ unicode-normalization = "0.1"
 # magic-byte sniffer in the desktop. The crate has no transitive
 # deps beyond `unicase` and is what hcfs-server itself uses.
 mime_guess = "2.0"
-# Same glob engine hcfs-client exclude rules use. Direct dep so file search
-# can match `*.pdf` at any depth without importing `ExcludeRules`.
-globset = "0.4"
 # Decode/resize/encode for server-side thumbnail generation (sync/remote.rs).
 # Capped below 0.25.9: image 0.25.9 bumped its `jpeg` feature to require
 # `zune-core ^0.5.0` / `zune-jpeg ^0.5.5`, and `zune-core 0.5.0` has no STABLE

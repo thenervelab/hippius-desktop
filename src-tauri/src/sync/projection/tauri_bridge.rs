@@ -279,6 +279,13 @@ pub(crate) fn handle_sync_completed(app: &AppHandle, mut payload: events::SyncCo
         );
     }
 
+    // A cycle that materialized or removed local files invalidates cached
+    // folder totals the same way a local delete does — the directories above
+    // the ones it touched keep their pre-cycle mtime, so nothing else would
+    // retire their rows and a folder receiving a file from another device
+    // would show its old size for the rest of the session.
+    crate::sync::files::invalidate_dir_stats_after_cycle(payload.files_downloaded, payload.files_deleted_locally);
+
     let _ = app.emit(events::SYNC_COMPLETED, payload);
 }
 

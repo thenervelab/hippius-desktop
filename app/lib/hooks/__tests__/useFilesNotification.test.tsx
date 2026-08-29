@@ -153,6 +153,8 @@ describe("useFilesNotification — completion aggregation", () => {
       description: "86 files uploaded.",
       outcome: "success",
       userAddress: "5poll",
+      // The title Rust writes counts THIS, not the (capped) detail list.
+      fileCount: 86,
     });
   });
 
@@ -174,9 +176,17 @@ describe("useFilesNotification — completion aggregation", () => {
     });
     await advance(AGGREGATION_MS);
 
-    const args = syncNotificationCalls()[0]?.[1] as { description: string; fileDetailsJson: string };
+    const args = syncNotificationCalls()[0]?.[1] as {
+      description: string;
+      fileDetailsJson: string;
+      fileCount: number;
+    };
     expect(args.description).toBe("250 files uploaded."); // count is NOT truncated
     expect(JSON.parse(args.fileDetailsJson)).toHaveLength(200); // detail list IS capped
+    // The `fileCount` key (camelCase — Tauri renames the Rust `file_count`
+    // param) is the ONLY uncapped number Rust can title with. Sending the
+    // list length instead would render "Synced 200 files" for 250 files.
+    expect(args.fileCount).toBe(250);
   });
 
   it("prefers the OAuth substrate address over the polkadot address", async () => {
@@ -216,6 +226,9 @@ describe("useFilesNotification — failure path", () => {
       outcome: "error",
       description: 'Sync failed for folder "photos": boom',
     });
+    // A failure carries no file count: Rust's title must come from the
+    // outcome alone, never from a number a success path happened to leave.
+    expect((calls[0]?.[1] as { fileCount?: number }).fileCount).toBeUndefined();
   });
 
   it("falls back to the 'default' label when the failure payload omits it", async () => {

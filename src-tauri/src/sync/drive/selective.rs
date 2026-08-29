@@ -7,8 +7,34 @@
 use crate::app_state::AppState;
 use crate::error::{AppError, Result};
 use hcfs_client::engine::runner::trigger_sync;
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter, Manager};
 use tracing::{debug, info, warn};
+
+/// Kick a listing refresh and a sync cycle after an exclude-rule edit.
+///
+/// `apply_sync_selection` already did this; add/remove used to write the
+/// file and return, so Drive stayed Pending until a manual refresh.
+/// `hcfs_activity_updated` is the listing-refresh event `useSyncEvents`
+/// already folds into `sync_files_completed_changed`.
+///
+/// A failed emit is non-fatal — the rule is already written and the next
+/// listing picks it up — but it must not pass silently: with the error
+/// swallowed it reads back to us as "the list just doesn't refresh" and there
+/// is nothing in the support bundle to say otherwise.
+///
+/// `trigger_sync`'s `bool` is "did any drive actually sync", not success:
+/// `false` is the ordinary "nothing to do" answer, so it is discarded.
+async fn trigger_sync_after_exclude_edit(app: &AppHandle, label: &str) {
+    if let Err(e) = app.emit(
+        crate::sync::events::ACTIVITY_UPDATED,
+        crate::sync::events::LabelPayload { label: label.to_string() },
+    ) {
+        warn!(label = %label, error = %e, "Failed to emit activity-updated after exclude edit — Drive refreshes on the next listing instead");
+    }
+
+    let sync = app.state::<crate::app_state::AppState>().sync.clone();
+    let _ = trigger_sync(&sync).await;
+}
 
 /// Validate and trim an exclusion pattern.
 ///
@@ -43,7 +69,36 @@ fn validate_pattern(pattern: &str) -> Result<String> {
             "Pattern would exclude the entire folder — nothing would sync. Use a more specific pattern.".into(),
         ));
     }
+    if let Err(e) = compile_like_the_engine(&trimmed) {
+        return Err(AppError::Validation(format!(
+            "Not a valid pattern: {e}. Try something like *.log, build/, or notes.txt."
+        )));
+    }
     Ok(trimmed)
+}
+
+/// Compile `pattern` exactly as `ExcludeRules::parse` will, and report why
+/// it cannot be.
+///
+/// `ExcludeRules::parse` drops an uncompilable line with a `warn!` and keeps
+/// the rest, so an unclosed `[` used to be accepted here, written to
+/// `.hippius/exclude`, listed back by `list_exclude_patterns` as an active
+/// rule — and match nothing, forever, with the only trace in a log file.
+/// Refusing it at the point the user types it turns a silent no-op into an
+/// error next to the input box. The expansions must stay in step with
+/// upstream: file patterns become `**/{p}`, a trailing-slash pattern becomes
+/// both `**/{dir}` and `**/{dir}/**`.
+fn compile_like_the_engine(pattern: &str) -> std::result::Result<(), globset::Error> {
+    match pattern.strip_suffix('/') {
+        Some(dir) => {
+            globset::Glob::new(&format!("**/{dir}"))?;
+            globset::Glob::new(&format!("**/{dir}/**"))?;
+        }
+        None => {
+            globset::Glob::new(&format!("**/{pattern}"))?;
+        }
+    }
+    Ok(())
 }
 
 /// Whether a pattern matches every path in the drive.
@@ -94,7 +149,7 @@ pub async fn list_exclude_patterns(label: String, app_state: tauri::State<'_, Ap
 /// patterns), then delegates to `Drive::add_exclude_pattern`. Returns `true`
 /// if the pattern was added, `false` if it already existed.
 #[tauri::command]
-pub async fn add_exclude_pattern(label: String, pattern: String, app_state: tauri::State<'_, AppState>) -> Result<bool> {
+pub async fn add_exclude_pattern(label: String, pattern: String, app_state: tauri::State<'_, AppState>, app: AppHandle) -> Result<bool> {
     let trimmed = validate_pattern(&pattern)?;
 
     let drive_arc = {
@@ -108,6 +163,7 @@ pub async fn add_exclude_pattern(label: String, pattern: String, app_state: taur
 
     let manager = arc.lock().await;
     let added = manager.add_exclude_pattern(&trimmed).map_err(AppError::Hcfs)?;
+    drop(manager);
     if added {
         info!(label = %label, pattern = %trimmed, "Added exclude pattern");
     } else {
@@ -117,6 +173,7 @@ pub async fn add_exclude_pattern(label: String, pattern: String, app_state: taur
             "Exclude pattern already exists",
         );
     }
+    trigger_sync_after_exclude_edit(&app, &label).await;
     Ok(added)
 }
 
@@ -125,7 +182,7 @@ pub async fn add_exclude_pattern(label: String, pattern: String, app_state: taur
 /// Delegates to `Drive::remove_exclude_pattern`. Returns `true` if the
 /// pattern was removed, `false` if it was not found.
 #[tauri::command]
-pub async fn remove_exclude_pattern(label: String, pattern: String, app_state: tauri::State<'_, AppState>) -> Result<bool> {
+pub async fn remove_exclude_pattern(label: String, pattern: String, app_state: tauri::State<'_, AppState>, app: AppHandle) -> Result<bool> {
     let drive_arc = {
         let guard = app_state.sync.drives.lock().await;
         guard.get(&label).map(|slot| slot.manager.clone())
@@ -137,6 +194,7 @@ pub async fn remove_exclude_pattern(label: String, pattern: String, app_state: t
 
     let manager = arc.lock().await;
     let removed = manager.remove_exclude_pattern(&pattern).map_err(AppError::Hcfs)?;
+    drop(manager);
     if removed {
         info!(label = %label, pattern = %pattern, "Removed exclude pattern");
     } else {
@@ -146,6 +204,7 @@ pub async fn remove_exclude_pattern(label: String, pattern: String, app_state: t
             "Exclude pattern not found for removal",
         );
     }
+    trigger_sync_after_exclude_edit(&app, &label).await;
     Ok(removed)
 }
 
@@ -220,19 +279,14 @@ pub async fn apply_sync_selection(
         "Applied sync selection"
     );
 
-    // Trigger sync to download newly included files
-    {
-        use tauri::Manager;
-        let s = app.state::<crate::app_state::AppState>().sync.clone();
-        let _ = trigger_sync(&s).await;
-    }
+    trigger_sync_after_exclude_edit(&app, &label).await;
 
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{matches_everything, validate_pattern};
+    use super::{compile_like_the_engine, matches_everything, validate_pattern};
     use proptest::prelude::*;
 
     #[test]
@@ -300,6 +354,32 @@ mod tests {
         }
     }
 
+    /// A pattern the engine cannot compile is stored, listed back as active,
+    /// and excludes nothing — a silent no-op the user has no way to see.
+    /// Refuse it here instead, and say what a working pattern looks like.
+    #[test]
+    fn uncompilable_globs_are_rejected_rather_than_silently_matching_nothing() {
+        for pattern in ["[", "[abc", "a[b", "log[0-9", "bad[/"] {
+            assert!(compile_like_the_engine(pattern).is_err(), "{pattern:?} must fail to compile");
+            match validate_pattern(pattern) {
+                Ok(accepted) => panic!("{pattern:?} does not compile but was accepted as {accepted:?}"),
+                Err(e) => {
+                    let msg = e.to_string();
+                    assert!(msg.contains("Not a valid pattern"), "{pattern:?} must say why it was refused: {msg}");
+                }
+            }
+        }
+    }
+
+    /// Character classes and `?` are legitimate glob syntax — the compile
+    /// check must reject only what actually fails to parse.
+    #[test]
+    fn well_formed_glob_syntax_survives_the_compile_check() {
+        for pattern in ["log[0-9].txt", "?.tmp", "cache[abc]/", "{a,b}.log", "*.pack.gz"] {
+            assert!(validate_pattern(pattern).is_ok(), "{pattern:?} is valid glob syntax and must be accepted");
+        }
+    }
+
     #[test]
     fn test_validate_trims_whitespace() {
         assert_eq!(validate_pattern("  *.tmp  ").unwrap(), "*.tmp");
@@ -309,11 +389,11 @@ mod tests {
         /// Full contract, both directions: an accepted pattern equals the
         /// trimmed input and carries neither a newline nor a `..` component, and
         /// any rejection is justified by emptiness, a newline, a `..`
-        /// component, or matching the entire drive. `(?s)` makes `.` match
-        /// newlines so the shrinker can reach the multi-line case the default
-        /// `.*` (newline-excluding) strategy never generates. The `invalid`
-        /// oracle mirrors `validate_pattern`'s rejection conditions exactly —
-        /// extend BOTH together.
+        /// component, matching the entire drive, or failing to compile as a
+        /// glob. `(?s)` makes `.` match newlines so the shrinker can reach the
+        /// multi-line case the default `.*` (newline-excluding) strategy never
+        /// generates. The `invalid` oracle mirrors `validate_pattern`'s
+        /// rejection conditions exactly — extend BOTH together.
         #[test]
         fn validated_pattern_is_single_line_trimmed_without_dotdot(s in "(?s).*") {
             let invalid = |t: &str| {
@@ -321,6 +401,7 @@ mod tests {
                     || t.contains(['\n', '\r'])
                     || t.split(['/', '\\']).any(|p| p == "..")
                     || matches_everything(t)
+                    || compile_like_the_engine(t).is_err()
             };
             if let Ok(out) = validate_pattern(&s) {
                 prop_assert_eq!(out.as_str(), s.trim());
