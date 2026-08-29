@@ -23,9 +23,11 @@ use serde::Serialize;
 // `tauri::Url` is Tauri's re-export of `url::Url`, so the endpoint type matches
 // the plugin's without taking a direct dependency on `url` for one call.
 use tauri::ipc::Channel;
+use tauri::utils::config::BundleType;
+use tauri::utils::platform::bundle_type;
 use tauri::{AppHandle, Url};
 use tauri_plugin_updater::UpdaterExt;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::error::{AppError, Result};
 use crate::release_channel::{self, ReleaseChannel};
@@ -131,20 +133,24 @@ fn updater_for(app: &AppHandle, channel: ReleaseChannel, cross_channel: bool) ->
         return Ok(None);
     };
 
-    let url = Url::parse(manifest).map_err(|err| AppError::Other(format!("update manifest URL for {channel:?} is not a valid URL: {err}")))?;
+    // Every failure below is a build misconfiguration, not something the user
+    // did or can fix, so they all reach the frontend as one sentence and the
+    // diagnostic detail is left to the log. `every_manifest_url_parses` pins
+    // the only one of the three that a source edit can realistically cause.
+    let misconfigured = |err: &dyn std::fmt::Display| {
+        error!(?channel, %err, "the updater could not be pointed at this channel's manifest");
+        AppError::Other("This build's updater is not configured correctly. Reinstall Hippius to update.".into())
+    };
 
-    let mut builder = app
-        .updater_builder()
-        .endpoints(vec![url])
-        .map_err(|err| AppError::Other(format!("could not target the {channel:?} update manifest: {err}")))?;
+    let url = Url::parse(manifest).map_err(|err| misconfigured(&err))?;
+
+    let mut builder = app.updater_builder().endpoints(vec![url]).map_err(|err| misconfigured(&err))?;
 
     if cross_channel {
         builder = builder.version_comparator(|_current, _remote| true);
     }
 
-    let updater = builder
-        .build()
-        .map_err(|err| AppError::Other(format!("could not build the updater for {channel:?}: {err}")))?;
+    let updater = builder.build().map_err(|err| misconfigured(&err))?;
 
     Ok(Some(updater))
 }
@@ -161,10 +167,7 @@ pub async fn check_for_update(app: AppHandle) -> Result<Option<AvailableUpdate>>
         return Ok(None);
     };
 
-    let found = updater
-        .check()
-        .await
-        .map_err(|err| AppError::Other(format!("could not check the {channel:?} channel for updates: {err}")))?;
+    let found = updater.check().await.map_err(|err| check_failure(channel, &err))?;
 
     let Some(update) = found else {
         debug!(?channel, "no update available");
@@ -180,18 +183,86 @@ pub async fn check_for_update(app: AppHandle) -> Result<Option<AvailableUpdate>>
     }))
 }
 
-/// Linux ships `.deb` (`tauri.conf.json` `bundle.targets`), not AppImage.
-/// Tauri's updater can only replace a self-contained image in-place;
-/// applying a `.deb` needs the package manager. Calling `download_and_install`
-/// on Linux looks like an update started and then fails with an opaque
-/// plugin error (H-061). The FE surfaces this string from the structured
-/// `{ kind: "Validation", message }` payload.
+/// Human name of a lane, for copy the user reads.
+fn channel_name(channel: ReleaseChannel) -> &'static str {
+    match channel {
+        ReleaseChannel::Production => "stable",
+        ReleaseChannel::Beta => "beta",
+        ReleaseChannel::Staging => "staging",
+    }
+}
+
+/// Where a user can pick up an installer by hand for `channel`.
 ///
-/// Referenced only from `#[cfg(target_os = "linux")]` arms (and the unit
-/// test that pins the wire shape). macOS/Windows CI still compile this
-/// module, so the const is dead there on purpose.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-const LINUX_DEB_INPLACE_UPDATE: &str = "This Linux package cannot update itself. Download the new .deb from the release page.";
+/// Production resolves through `releases/latest`, which GitHub only ever points
+/// at a non-prerelease. Beta and staging builds ARE prereleases, which that
+/// alias never resolves to, so they get the releases index instead — sending a
+/// beta user to `/latest` would hand them the stable build and silently move
+/// them off the lane they opted into.
+fn release_page_url(channel: ReleaseChannel) -> &'static str {
+    match channel {
+        ReleaseChannel::Production => "https://github.com/thenervelab/hippius-desktop/releases/latest",
+        ReleaseChannel::Beta | ReleaseChannel::Staging => "https://github.com/thenervelab/hippius-desktop/releases",
+    }
+}
+
+/// How to install `channel`'s build by hand, phrased for the package THIS
+/// binary was shipped in.
+///
+/// Keyed on the bundle, not the OS. A `.deb` and an AppImage are both Linux and
+/// are installed by different means, so `cfg!(target_os = "linux")` would name
+/// the wrong artifact the moment a second Linux target ships — and naming a
+/// file the user cannot use is worse than saying nothing. `bundle_type()` reads
+/// the marker tauri-bundler patches into the binary; an unbundled build (a
+/// local `cargo run`) reports nothing and gets the generic wording.
+fn manual_install_hint(channel: ReleaseChannel) -> String {
+    let url = release_page_url(channel);
+
+    match bundle_type() {
+        Some(BundleType::Deb) => format!("Download the .deb from {url} and install it with your package manager."),
+        Some(BundleType::Rpm) => format!("Download the .rpm from {url} and install it with your package manager."),
+        Some(BundleType::AppImage) => format!("Download the AppImage from {url} and replace the one you are running."),
+        _ => format!("Download the installer from {url} and run it."),
+    }
+}
+
+/// User-facing copy for a failed install; the raw error goes to the log.
+///
+/// The plugin's `Display` is diagnostics — "Failed to install package", a
+/// reqwest chain, "temp directory is not on the same mount point". The dialog
+/// and the toast show `message` verbatim, so whatever lands there IS the copy;
+/// it is written here, and the original is left to `error!` for the support
+/// bundle. Every arm ends in something the user can do next.
+fn install_failure(channel: ReleaseChannel, err: &tauri_plugin_updater::Error) -> AppError {
+    use tauri_plugin_updater::Error as UpdaterError;
+
+    error!(?channel, %err, "could not install the update");
+
+    let lead = match err {
+        // The signature is checked against the pubkey compiled into the RUNNING
+        // build. A mismatch means that copy carries a retired key, so no future
+        // release can ever install over it — "try again later" is the one thing
+        // that will never work, and a manual reinstall is the only way out.
+        UpdaterError::Minisign(_) | UpdaterError::SignatureUtf8(_) => "This update could not be verified, so it was not installed.",
+        // `dpkg`/`rpm` need root. The plugin escalates through pkexec, then a
+        // graphical sudo prompt, then sudo; a session offering none of those
+        // cannot finish the install however often it is retried.
+        UpdaterError::AuthenticationFailed => "The update was not installed because the administrator prompt was declined or unavailable.",
+        _ => "Could not install the update.",
+    };
+
+    AppError::Validation(format!("{lead} {}", manual_install_hint(channel)))
+}
+
+/// User-facing copy for a failed update check; the raw error goes to the log.
+fn check_failure(channel: ReleaseChannel, err: &tauri_plugin_updater::Error) -> AppError {
+    error!(?channel, %err, "could not check for updates");
+
+    AppError::Other(format!(
+        "Could not reach the {} update channel. Try again in a moment.",
+        channel_name(channel)
+    ))
+}
 
 /// Download and install the update the running channel is offering.
 ///
@@ -204,55 +275,51 @@ const LINUX_DEB_INPLACE_UPDATE: &str = "This Linux package cannot update itself.
 /// Does NOT relaunch. The caller decides when to restart, because on the
 /// channel-switch path it has a second thing to say first.
 ///
-/// Linux cannot apply a `.deb` in-place — that arm returns
-/// [`AppError::Validation`] with [`LINUX_DEB_INPLACE_UPDATE`] instead of
-/// calling `download_and_install`.
+/// **Every platform installs in place, Linux included.** The plugin resolves
+/// the manifest key for the bundle it is running as — `linux-x86_64-deb` for
+/// this app — and installs a `.deb` with `dpkg -i`, escalating through pkexec,
+/// a graphical sudo prompt, then sudo. When that escalation is unavailable the
+/// install fails, and [`install_failure`] turns the plugin's opaque error into
+/// the manual-install instruction (H-061). Refusing on `target_os = "linux"`
+/// instead would disable a working path for every user who does have pkexec,
+/// permanently and with nothing in the log to say why.
 #[tauri::command]
 pub async fn install_update(app: AppHandle, on_progress: Channel<DownloadProgress>) -> Result<()> {
-    #[cfg(target_os = "linux")]
-    {
-        drop((app, on_progress));
-        Err(AppError::Validation(LINUX_DEB_INPLACE_UPDATE.into()))
-    }
+    let channel = release_channel::current();
 
-    #[cfg(not(target_os = "linux"))]
-    {
-        let channel = release_channel::current();
+    let Some(updater) = updater_for(&app, channel, false)? else {
+        return Err(AppError::Validation("This build does not receive automatic updates.".into()));
+    };
 
-        let Some(updater) = updater_for(&app, channel, false)? else {
-            return Err(AppError::Validation("This build does not receive automatic updates.".into()));
-        };
+    let update = updater
+        .check()
+        .await
+        .map_err(|err| check_failure(channel, &err))?
+        .ok_or_else(|| AppError::Validation("There is no update to install.".into()))?;
 
-        let update = updater
-            .check()
-            .await
-            .map_err(|err| AppError::Other(format!("could not check the {channel:?} channel for updates: {err}")))?
-            .ok_or_else(|| AppError::Validation("There is no update to install.".into()))?;
+    let mut bytes_done: u64 = 0;
+    let version = update.version.clone();
 
-        let mut bytes_done: u64 = 0;
-        let version = update.version.clone();
+    update
+        .download_and_install(
+            |chunk, total| {
+                bytes_done += chunk as u64;
+                // A send failure means the webview dropped the channel (window
+                // closed mid-download). The install itself should still finish.
+                if let Err(err) = on_progress.send(DownloadProgress {
+                    bytes_done,
+                    bytes_total: total,
+                }) {
+                    debug!(%err, "update progress receiver is gone; continuing the download");
+                }
+            },
+            || debug!("update download finished; installing"),
+        )
+        .await
+        .map_err(|err| install_failure(channel, &err))?;
 
-        update
-            .download_and_install(
-                |chunk, total| {
-                    bytes_done += chunk as u64;
-                    // A send failure means the webview dropped the channel (window
-                    // closed mid-download). The install itself should still finish.
-                    if let Err(err) = on_progress.send(DownloadProgress {
-                        bytes_done,
-                        bytes_total: total,
-                    }) {
-                        debug!(%err, "update progress receiver is gone; continuing the download");
-                    }
-                },
-                || debug!("update download finished; installing"),
-            )
-            .await
-            .map_err(|err| AppError::Other(format!("could not install the {channel:?} update: {err}")))?;
-
-        info!(?channel, %version, "update installed; awaiting relaunch");
-        Ok(())
-    }
+    info!(?channel, %version, "update installed; awaiting relaunch");
+    Ok(())
 }
 
 /// What the channel-switch surface needs to render itself.
@@ -276,11 +343,7 @@ pub struct ChannelStatus {
 /// someone nothing they can act on; "wait for the stable release to catch up"
 /// tells them the condition that clears it.
 fn blocked_message(target: ReleaseChannel) -> String {
-    let name = match target {
-        ReleaseChannel::Production => "stable",
-        ReleaseChannel::Beta => "beta",
-        ReleaseChannel::Staging => "staging",
-    };
+    let name = channel_name(target);
 
     format!("This build has already saved data that the {name} version cannot read. Wait for the {name} release to catch up.")
 }
@@ -359,71 +422,64 @@ pub async fn release_channel_status(app: AppHandle) -> Result<ChannelStatus> {
 /// frontend computes the same thing, and a mismatch means the two have drifted.
 /// Installing whatever was asked for would be the wrong answer to that.
 ///
-/// Linux cannot apply a `.deb` in-place, so this shares
-/// [`install_update`]'s refusal rather than calling `download_and_install`.
+/// A failed install points at the TARGET channel's release page, not the
+/// running one's: the user asked to leave this lane, so the stable build's
+/// download page is no help to someone whose switch to beta failed.
 #[tauri::command]
 pub async fn switch_release_channel(app: AppHandle, target: String, on_progress: Channel<DownloadProgress>) -> Result<()> {
-    #[cfg(target_os = "linux")]
-    {
-        drop((app, target, on_progress));
-        Err(AppError::Validation(LINUX_DEB_INPLACE_UPDATE.into()))
+    let current = release_channel::current();
+    let expected = switch_target(current).ok_or_else(|| AppError::Validation("This build cannot switch release channels.".into()))?;
+
+    let requested = release_channel::parse_release_channel(Some(&target));
+    if requested != expected {
+        return Err(AppError::Validation(format!("Cannot switch from {current:?} to {requested:?}.")));
     }
 
-    #[cfg(not(target_os = "linux"))]
-    {
-        let current = release_channel::current();
-        let expected = switch_target(current).ok_or_else(|| AppError::Validation("This build cannot switch release channels.".into()))?;
+    let updater =
+        updater_for(&app, expected, true)?.ok_or_else(|| AppError::Validation("That channel does not publish installable builds.".into()))?;
 
-        let requested = release_channel::parse_release_channel(Some(&target));
-        if requested != expected {
-            return Err(AppError::Validation(format!("Cannot switch from {current:?} to {requested:?}.")));
-        }
+    let update = updater.check().await.map_err(|err| check_failure(expected, &err))?.ok_or_else(|| {
+        AppError::Validation(format!(
+            "The {} channel is not publishing a build for this platform.",
+            channel_name(expected)
+        ))
+    })?;
 
-        let updater =
-            updater_for(&app, expected, true)?.ok_or_else(|| AppError::Validation("That channel does not publish installable builds.".into()))?;
-
-        let update = updater
-            .check()
-            .await
-            .map_err(|err| AppError::Other(format!("could not reach the {expected:?} channel: {err}")))?
-            .ok_or_else(|| AppError::Other(format!("the {expected:?} channel is not publishing a build for this platform")))?;
-
-        // Re-checked here rather than trusting the status call: the two are
-        // separated by however long the confirmation dialog stays open, and this is
-        // the call that writes to disk.
-        let target_epoch = manifest_state_epoch(&update.raw_json);
-        if !downgrade_is_safe(STATE_EPOCH, target_epoch) {
-            info!(
-                ?expected,
-                local = STATE_EPOCH,
-                ?target_epoch,
-                "refusing the channel switch: state epoch guard"
-            );
-            return Err(AppError::Validation(blocked_message(expected)));
-        }
-
-        let mut bytes_done: u64 = 0;
-        let version = update.version.clone();
-
-        update
-            .download_and_install(
-                |chunk, total| {
-                    bytes_done += chunk as u64;
-                    if let Err(err) = on_progress.send(DownloadProgress {
-                        bytes_done,
-                        bytes_total: total,
-                    }) {
-                        debug!(%err, "switch progress receiver is gone; continuing the download");
-                    }
-                },
-                || debug!("channel build downloaded; installing"),
-            )
-            .await
-            .map_err(|err| AppError::Other(format!("could not install the {expected:?} build: {err}")))?;
-
-        info!(from = ?current, to = ?expected, %version, "switched release channel; awaiting relaunch");
-        Ok(())
+    // Re-checked here rather than trusting the status call: the two are
+    // separated by however long the confirmation dialog stays open, and this is
+    // the call that writes to disk.
+    let target_epoch = manifest_state_epoch(&update.raw_json);
+    if !downgrade_is_safe(STATE_EPOCH, target_epoch) {
+        info!(
+            ?expected,
+            local = STATE_EPOCH,
+            ?target_epoch,
+            "refusing the channel switch: state epoch guard"
+        );
+        return Err(AppError::Validation(blocked_message(expected)));
     }
+
+    let mut bytes_done: u64 = 0;
+    let version = update.version.clone();
+
+    update
+        .download_and_install(
+            |chunk, total| {
+                bytes_done += chunk as u64;
+                if let Err(err) = on_progress.send(DownloadProgress {
+                    bytes_done,
+                    bytes_total: total,
+                }) {
+                    debug!(%err, "switch progress receiver is gone; continuing the download");
+                }
+            },
+            || debug!("channel build downloaded; installing"),
+        )
+        .await
+        .map_err(|err| install_failure(expected, &err))?;
+
+    info!(from = ?current, to = ?expected, %version, "switched release channel; awaiting relaunch");
+    Ok(())
 }
 
 /// The channel this build came from, for display.
@@ -579,18 +635,102 @@ mod tests {
         );
     }
 
-    /// Wire shape the FE matches: `{ kind: "Validation", message: <stable copy> }`.
-    /// A kind rename or wrapping this in `Other` would make UpdateDialog's
-    /// structured match miss and show a generic "try again later".
+    /// A beta or staging build sent to `/releases/latest` lands on the STABLE
+    /// release, because GitHub never resolves that alias to a prerelease. The
+    /// user would install the wrong lane by hand and silently leave the channel
+    /// they opted into — the manual-install equivalent of a wrong-lane update.
     #[test]
-    fn linux_deb_refusal_serializes_as_validation() {
-        let json = serde_json::to_value(&AppError::Validation(LINUX_DEB_INPLACE_UPDATE.into())).expect("serialize");
+    fn only_production_uses_the_latest_alias() {
+        assert!(release_page_url(ReleaseChannel::Production).ends_with("/releases/latest"));
+
+        for channel in [ReleaseChannel::Beta, ReleaseChannel::Staging] {
+            let url = release_page_url(channel);
+            assert!(
+                !url.contains("/releases/latest"),
+                "{channel:?} ships prereleases, which /releases/latest never resolves to"
+            );
+            assert!(url.ends_with("/releases"), "{channel:?} needs the release index: {url}");
+        }
+    }
+
+    /// Every page a user can be sent to must be a URL on the real repo, over
+    /// TLS. A typo here is a dead end at exactly the moment the in-app path has
+    /// already failed.
+    #[test]
+    fn every_release_page_url_parses() {
+        for channel in [ReleaseChannel::Production, ReleaseChannel::Beta, ReleaseChannel::Staging] {
+            let raw = release_page_url(channel);
+            let url = Url::parse(raw).unwrap_or_else(|err| panic!("{channel:?} release page URL does not parse: {err}"));
+
+            assert_eq!(url.scheme(), "https", "release pages are fetched over TLS");
+            assert_eq!(url.host_str(), Some("github.com"));
+            assert!(url.path().starts_with("/thenervelab/hippius-desktop/releases"), "{raw}");
+        }
+    }
+
+    /// H-061's regression pin, from the copy side.
+    ///
+    /// An install failure must reach the user as `{ kind: "Validation" }` — the
+    /// shape UpdateDialog renders — and must name a page and an action. Dropping
+    /// the hint sends a Linux user whose pkexec escalation failed back to a bare
+    /// "Could not install the update", which is what H-061 was reported as.
+    #[test]
+    fn an_install_failure_tells_the_user_where_to_get_the_build() {
+        let err = tauri_plugin_updater::Error::PackageInstallFailed;
+        let failure = install_failure(ReleaseChannel::Beta, &err);
+
+        let json = serde_json::to_value(failure).expect("serialize");
         assert_eq!(json["kind"], "Validation");
-        assert_eq!(json["message"], LINUX_DEB_INPLACE_UPDATE);
-        assert_eq!(
-            LINUX_DEB_INPLACE_UPDATE,
-            "This Linux package cannot update itself. Download the new .deb from the release page."
-        );
+
+        let message = json["message"].as_str().expect("message is a string");
+        assert!(message.contains(release_page_url(ReleaseChannel::Beta)), "{message}");
+        assert!(message.starts_with("Could not install the update."), "{message}");
+    }
+
+    /// A verification failure is the one case where retrying can never work:
+    /// the running build's compiled-in pubkey is wrong, so every future release
+    /// fails the same way. The copy must say the update was NOT installed and
+    /// route the user to a manual reinstall.
+    #[test]
+    fn a_verification_failure_does_not_read_as_transient() {
+        let err = tauri_plugin_updater::Error::SignatureUtf8("not base64".into());
+        let AppError::Validation(message) = install_failure(ReleaseChannel::Production, &err) else {
+            panic!("an install failure must stay a Validation error");
+        };
+
+        assert!(message.starts_with("This update could not be verified"), "{message}");
+        assert!(message.contains(release_page_url(ReleaseChannel::Production)), "{message}");
+    }
+
+    /// Nothing the user reads may carry the plugin's own `Display`. Those
+    /// strings are diagnostics ("temp directory is not on the same mount
+    /// point", a reqwest chain) and the dialog shows `message` verbatim.
+    #[test]
+    fn failure_copy_never_leaks_the_plugin_error() {
+        let raw = "temp directory is not on the same mount point as the AppImage";
+        let err = tauri_plugin_updater::Error::TempDirNotOnSameMountPoint;
+        assert_eq!(err.to_string(), raw, "the fixture must be the string this test guards against");
+
+        for channel in [ReleaseChannel::Production, ReleaseChannel::Beta] {
+            let install = install_failure(channel, &tauri_plugin_updater::Error::TempDirNotOnSameMountPoint).to_string();
+            assert!(!install.contains(raw), "{install}");
+
+            let check = check_failure(channel, &tauri_plugin_updater::Error::ReleaseNotFound).to_string();
+            assert!(!check.contains("Could not fetch a valid release JSON"), "{check}");
+            assert!(check.contains(channel_name(channel)), "{check}");
+        }
+    }
+
+    /// The hint names the artifact the running build was packaged as, never the
+    /// OS. Tests run unbundled, so `bundle_type()` reports nothing and the
+    /// generic wording is what is reachable here; the per-bundle arms are pinned
+    /// by `updater_install_paths.rs`, which reads the source.
+    #[test]
+    fn the_manual_hint_names_a_page_and_an_action() {
+        let hint = manual_install_hint(ReleaseChannel::Production);
+
+        assert!(hint.contains(release_page_url(ReleaseChannel::Production)), "{hint}");
+        assert!(hint.ends_with('.'), "{hint}");
     }
 
     /// Every manifest a check can target must parse as a URL — `updater_for`

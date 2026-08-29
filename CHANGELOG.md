@@ -67,7 +67,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
-- **On Linux, Hippius tells you to install the new .deb instead of failing a silent in-app update.**
+- **A failed update now tells you what to do next.** Instead of "Please try
+  again later", Hippius names the problem and links to the download page for
+  your release channel, with the right instructions for how your copy was
+  installed.
 - **`--version` prints the version and exits.** Running Hippius with `--version`
   or `-V` no longer opens the full app.
 - **Adding a large folder no longer freezes the app.** Dropping a multi-gigabyte
