@@ -3,7 +3,11 @@
 //!
 //! One IPC round-trip composing three facts: bytes used (the same indexer
 //! row `get_drive_storage_stats` reads), the active subscription, and the
-//! credit balance. The **capacity-source priority chain lives HERE, once**:
+//! credit balance. `used_bytes` is always that indexer row — never a local
+//! dir_stats walk (that would be a confident wrong *account* total). When
+//! the indexer is still 0 but own-drive `dir_stats` is > 0, `used_pending`
+//! is set so the card shows "Updating…" instead of "0 B". The
+//! **capacity-source priority chain lives HERE, once**:
 //!
 //!   1. active subscription → capacity is the plan's allowance
 //!   2. else credits > 0    → capacity is `used + credits-buyable storage`
@@ -70,6 +74,14 @@ pub struct StorageOverview {
     /// the plan card can show it even alongside a subscription if design
     /// ever wants to.
     pub credits_hip: Option<String>,
+    /// True when `used_bytes` is the indexer's empty row (0) but this
+    /// device already has files under own-drive sync roots. The card
+    /// shows "Updating…" instead of a confident "0 B". Never substitute
+    /// the local walk into `used_bytes` — that is this device's files,
+    /// not the account total (other devices, member drives, and
+    /// encryption overhead all disagree).
+    #[serde(default)]
+    pub used_pending: bool,
 }
 
 /// Pure composition of the overview from its three inputs.
@@ -88,6 +100,7 @@ fn build_overview(used_bytes: u64, plan: Option<PlanInfo>, credits: f64, credits
             source: CapacitySource::Subscription,
             plan: Some(plan),
             credits_hip,
+            used_pending: false,
         };
     }
     if credits > 0.0 {
@@ -102,6 +115,7 @@ fn build_overview(used_bytes: u64, plan: Option<PlanInfo>, credits: f64, credits
             source: CapacitySource::Credits,
             plan: None,
             credits_hip,
+            used_pending: false,
         };
     }
     StorageOverview {
@@ -111,7 +125,72 @@ fn build_overview(used_bytes: u64, plan: Option<PlanInfo>, credits: f64, credits
         source: CapacitySource::None,
         plan: None,
         credits_hip,
+        used_pending: false,
     }
+}
+
+/// Indexer-lag flag for the home storage card.
+///
+/// `used_bytes` on the wire is ALWAYS the indexer row — never the local
+/// walk. When the indexer is still 0 but this device already has files,
+/// the FE shows "Updating…" instead of "0 B". A true empty (both 0)
+/// stays 0 B. An indexer HTTP failure must not reach this helper — the
+/// caller `?`s it first so the card errors.
+fn used_pending(indexer_bytes: u64, local_bytes: u64) -> bool {
+    indexer_bytes == 0 && local_bytes > 0
+}
+
+/// Sum of [`crate::sync::files::dir_stats_recursive`] over `paths`.
+///
+/// Short-circuits on the first non-zero size: the flag only needs `> 0`.
+/// Hidden (dot-prefixed) names are skipped by the same walk the Files
+/// header uses, so 46 B vs 0 B cannot disagree about what counts.
+async fn local_bytes_for_paths(paths: &[std::path::PathBuf]) -> u64 {
+    let mut total = 0u64;
+    for path in paths {
+        let (size, _) = crate::sync::files::dir_stats_recursive(path).await;
+        total = total.saturating_add(size);
+        if total > 0 {
+            return total;
+        }
+    }
+    total
+}
+
+/// Own-drive roots for the lag probe: skip the migration pseudo-drive
+/// and member slots. Member files live in the owner's indexer row, so
+/// counting them here would flash "Updating…" on a genuinely empty
+/// account that only has Shared-with-me data.
+async fn own_drive_paths(pool: &sqlx::SqlitePool, account_id: &str) -> Result<Vec<std::path::PathBuf>, AppError> {
+    use sqlx::Row;
+
+    let owner = crate::auth::account_key::account_key(account_id);
+    let rows = sqlx::query(
+        "SELECT path FROM sync_paths
+         WHERE owner = ?
+           AND label != 'migration'
+           AND owner_ss58 IS NULL
+           AND wire_folder_hash IS NULL",
+    )
+    .bind(&owner)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows.iter().map(|row| std::path::PathBuf::from(row.get::<String, _>("path"))).collect())
+}
+
+async fn local_own_drive_bytes(pool: &sqlx::SqlitePool, account_id: &str) -> u64 {
+    let paths = match own_drive_paths(pool, account_id).await {
+        Ok(paths) => paths,
+        Err(err) => {
+            tracing::warn!(
+                error = %err,
+                "storage overview: failed listing own drives for indexer-lag probe"
+            );
+            return 0;
+        }
+    };
+    local_bytes_for_paths(&paths).await
 }
 
 fn percent_of(used: u64, total: u64) -> f64 {
@@ -188,7 +267,19 @@ pub async fn get_storage_overview(
     // binary search is cheap, but skipping it keeps the plan path lean.
     let credits_capacity_gb = if plan.is_none() { capacity_gb_for_credits(credits) } else { 0 };
 
-    Ok(build_overview(stats.total_bytes, plan, credits, credits_capacity_gb, credits_hip))
+    // Indexer empty-row is success + 0 bytes (not an error). Probe local
+    // own-drive dir_stats only then, so a lagging indexer cannot paint
+    // "0 B" over files the Files header already shows. Skip the walk
+    // when the indexer already has a total.
+    let local_bytes = if stats.total_bytes == 0 {
+        local_own_drive_bytes(state.pool()?, account_id.as_str()).await
+    } else {
+        0
+    };
+
+    let mut overview = build_overview(stats.total_bytes, plan, credits, credits_capacity_gb, credits_hip);
+    overview.used_pending = used_pending(stats.total_bytes, local_bytes);
+    Ok(overview)
 }
 
 #[cfg(test)]
@@ -302,5 +393,99 @@ mod tests {
             })),
             None
         );
+    }
+
+    // H-007: indexer empty-row is success + 0 bytes. A local dir_stats
+    // walk that sees files means the indexer is lagging, not that the
+    // account is empty. used_bytes stays the indexer row (never the
+    // local walk — that would be a confident wrong account total).
+    #[test]
+    fn used_pending_when_indexer_is_zero_and_local_has_bytes() {
+        assert!(used_pending(0, 46));
+    }
+
+    #[test]
+    fn used_pending_false_when_both_are_zero() {
+        assert!(!used_pending(0, 0), "true empty must stay 0 B, not Updating");
+    }
+
+    #[test]
+    fn used_pending_false_when_indexer_already_has_bytes() {
+        assert!(!used_pending(46, 100));
+        assert!(!used_pending(1, 0));
+    }
+
+    #[test]
+    fn used_bytes_stay_the_indexer_row_when_pending() {
+        let mut overview = build_overview(0, None, 1.0, 300, Some("1".into()));
+        overview.used_pending = used_pending(overview.used_bytes, 46);
+        assert_eq!(overview.used_bytes, 0, "local walk must not be written into used_bytes");
+        assert!(overview.used_pending);
+        assert_eq!(overview.source, CapacitySource::Credits);
+    }
+
+    /// Brace-matched body of the function whose signature contains `sig`.
+    fn fn_body<'a>(src: &'a str, sig: &str) -> &'a str {
+        let sig_idx = src.find(sig).unwrap_or_else(|| panic!("`{sig}` declaration present"));
+        let body_start = src[sig_idx..].find('{').expect("fn body opens") + sig_idx;
+        let mut depth = 0usize;
+        for (i, ch) in src[body_start..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return &src[body_start..=body_start + i];
+                    }
+                }
+                _ => {}
+            }
+        }
+        panic!("`{sig}` body never closes");
+    }
+
+    #[test]
+    fn indexer_failure_still_errors_the_card() {
+        // The used-bytes fetch is `?`'d — an indexer HTTP failure must
+        // not degrade to 0 B / usedPending. The local walk is only
+        // consulted after a successful indexer read. Search the command
+        // body, not the whole file — a whole-file `contains` would match
+        // this test's own assertion string.
+        let src = include_str!("storage_overview.rs");
+        let body = fn_body(src, "pub async fn get_storage_overview(");
+        let stats_q = body
+            .find("let stats = stats_result?;")
+            .expect("indexer result is ?-propagated so a failed fetch still errors the card");
+        let pending = body
+            .find("overview.used_pending = used_pending(")
+            .expect("used_pending is assigned onto the overview after the indexer read");
+        assert!(stats_q < pending, "local lag probe must run only after a successful indexer read");
+        assert!(
+            !body.contains("stats_result.unwrap_or"),
+            "do not coerce an indexer error into a 0-byte overview"
+        );
+    }
+
+    #[tokio::test]
+    async fn local_dir_stats_walk_sees_a_visible_file_and_skips_dotfiles() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let empty = dir.path().join("empty");
+        std::fs::create_dir(&empty).expect("empty dir");
+        assert_eq!(
+            local_bytes_for_paths(&[empty.clone()]).await,
+            0,
+            "an empty own-drive root is a true empty, not pending"
+        );
+
+        std::fs::write(empty.join(".hidden"), b"secret").expect("dotfile");
+        assert_eq!(
+            local_bytes_for_paths(&[empty.clone()]).await,
+            0,
+            "dir_stats skips dotfiles — a hidden-only tree must not flip usedPending"
+        );
+
+        std::fs::write(empty.join("note.txt"), b"hello").expect("visible file");
+        let seen = local_bytes_for_paths(&[empty]).await;
+        assert!(seen > 0, "a visible file must make the lag probe > 0, got {seen}");
     }
 }

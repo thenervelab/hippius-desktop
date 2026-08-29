@@ -140,15 +140,18 @@ export function useSyncEvents() {
           // not produce a second refetch.
           scheduleCompletedDispatch(totalCompleted);
 
+          // Always refetch the home storage card. Empty indexer data is
+          // success + 0 bytes, so a no-op / first-sync cycle still has
+          // to re-run get_storage_overview (which then sets usedPending
+          // from the local dir_stats walk). Gating this on
+          // totalCompleted > 0 stuck the card at "0 B".
+          queryClient.invalidateQueries({
+            queryKey: [STORAGE_OVERVIEW_QUERY_KEY],
+          });
+
           if (totalCompleted > 0) {
             queryClient.invalidateQueries({
               queryKey: [DRIVE_STORAGE_STATS_QUERY_KEY],
-            });
-            // The home page's storage card reads the same indexer total via
-            // its own IPC, so refresh it in lockstep — its poll would catch
-            // up anyway, but this removes the visible lag right after a sync.
-            queryClient.invalidateQueries({
-              queryKey: [STORAGE_OVERVIEW_QUERY_KEY],
             });
           }
         }],

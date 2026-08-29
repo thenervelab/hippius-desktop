@@ -43,7 +43,7 @@ fn dir_stats_cache() -> &'static DirStatsMap {
 /// returned without descending the tree. A miss walks the tree once on a
 /// blocking thread and inserts a cache entry for **every** subdirectory
 /// so a later listing of a child does not re-walk.
-pub(super) async fn dir_stats_recursive(path: &Path) -> (u64, u64) {
+pub(crate) async fn dir_stats_recursive(path: &Path) -> (u64, u64) {
     let mtime = match tokio::fs::metadata(path).await {
         Ok(meta) => meta.modified().ok(),
         Err(_) => None,
