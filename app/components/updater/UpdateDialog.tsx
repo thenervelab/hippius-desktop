@@ -8,6 +8,7 @@ import {
   installUpdate,
   type AvailableUpdate,
 } from "@/lib/tauri/updates";
+import { tauriErrorMessage } from "@/lib/utils/dispatchTauriError";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { getVersion as getAppVersion } from "@tauri-apps/api/app";
 import { toast } from "sonner";
@@ -242,6 +243,7 @@ export default function UpdateDialog() {
   }, []);
 
   const [status, setStatus] = useState<Status>("checking");
+  const [errorDetail, setErrorDetail] = useState<string>("");
   const [update, setUpdate] = useState<AvailableUpdate | null>(null);
   const [currentVersion, setCurrentVersion] = useState<string>("");
   const [downloadProgress, setDownloadProgress] = useState(0);
@@ -318,6 +320,7 @@ export default function UpdateDialog() {
     const run = async () => {
       setStatus("checking");
       setUpdate(null);
+      setErrorDetail("");
       setDownloadProgress(0);
       setInstallProgress(0);
       setDownloadedBytes(0);
@@ -400,9 +403,14 @@ export default function UpdateDialog() {
       await simulateInstallation();
     } catch (err) {
       console.error("Update failed:", err);
+      // Structured `{ kind, message }` from Rust — Linux's Validation
+      // refusal carries the .deb instruction here. Do not invent a
+      // second install flow; just show the message.
+      const message = tauriErrorMessage(err);
+      setErrorDetail(message);
       setStatus("error");
       toast.error("Update failed", {
-        description: "Please try again later.",
+        description: message,
       });
     }
   };
@@ -419,6 +427,7 @@ export default function UpdateDialog() {
   const handleRetryCheck = async () => {
     setStatus("checking");
     setUpdate(null);
+    setErrorDetail("");
     try {
       const [u, ver] = await Promise.all([
         checkForUpdate(),
@@ -631,7 +640,7 @@ export default function UpdateDialog() {
                           )}
                           {effectiveStatus === "error" && (
                             <p className="text-[15px] font-medium leading-[22px] tracking-[-0.30px] text-grey-50 dark:text-grey-dark-500">
-                              Please try again later.
+                              {errorDetail || "Please try again later."}
                             </p>
                           )}
                           {effectiveStatus === "checking" && (

@@ -210,7 +210,10 @@ function handleUpdateError(err: any, downloadToastId?: string | number) {
     });
   } else {
     toast.error("Update failed", {
-      description: "Please try again later or download manually.",
+      // Structured `{ kind, message }` from Rust. Linux's Validation
+      // refusal is the .deb instruction; keep the generic fallback
+      // only when the payload has no message.
+      description: errorMessage || "Please try again later or download manually.",
       duration: 5000,
     });
   }

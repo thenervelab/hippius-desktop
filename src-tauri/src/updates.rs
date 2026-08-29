@@ -180,6 +180,19 @@ pub async fn check_for_update(app: AppHandle) -> Result<Option<AvailableUpdate>>
     }))
 }
 
+/// Linux ships `.deb` (`tauri.conf.json` `bundle.targets`), not AppImage.
+/// Tauri's updater can only replace a self-contained image in-place;
+/// applying a `.deb` needs the package manager. Calling `download_and_install`
+/// on Linux looks like an update started and then fails with an opaque
+/// plugin error (H-061). The FE surfaces this string from the structured
+/// `{ kind: "Validation", message }` payload.
+///
+/// Referenced only from `#[cfg(target_os = "linux")]` arms (and the unit
+/// test that pins the wire shape). macOS/Windows CI still compile this
+/// module, so the const is dead there on purpose.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+const LINUX_DEB_INPLACE_UPDATE: &str = "This Linux package cannot update itself. Download the new .deb from the release page.";
+
 /// Download and install the update the running channel is offering.
 ///
 /// Re-checks rather than holding a handle from [`check_for_update`]: the two
@@ -190,43 +203,56 @@ pub async fn check_for_update(app: AppHandle) -> Result<Option<AvailableUpdate>>
 ///
 /// Does NOT relaunch. The caller decides when to restart, because on the
 /// channel-switch path it has a second thing to say first.
+///
+/// Linux cannot apply a `.deb` in-place — that arm returns
+/// [`AppError::Validation`] with [`LINUX_DEB_INPLACE_UPDATE`] instead of
+/// calling `download_and_install`.
 #[tauri::command]
 pub async fn install_update(app: AppHandle, on_progress: Channel<DownloadProgress>) -> Result<()> {
-    let channel = release_channel::current();
+    #[cfg(target_os = "linux")]
+    {
+        drop((app, on_progress));
+        Err(AppError::Validation(LINUX_DEB_INPLACE_UPDATE.into()))
+    }
 
-    let Some(updater) = updater_for(&app, channel, false)? else {
-        return Err(AppError::Validation("This build does not receive automatic updates.".into()));
-    };
+    #[cfg(not(target_os = "linux"))]
+    {
+        let channel = release_channel::current();
 
-    let update = updater
-        .check()
-        .await
-        .map_err(|err| AppError::Other(format!("could not check the {channel:?} channel for updates: {err}")))?
-        .ok_or_else(|| AppError::Validation("There is no update to install.".into()))?;
+        let Some(updater) = updater_for(&app, channel, false)? else {
+            return Err(AppError::Validation("This build does not receive automatic updates.".into()));
+        };
 
-    let mut bytes_done: u64 = 0;
-    let version = update.version.clone();
+        let update = updater
+            .check()
+            .await
+            .map_err(|err| AppError::Other(format!("could not check the {channel:?} channel for updates: {err}")))?
+            .ok_or_else(|| AppError::Validation("There is no update to install.".into()))?;
 
-    update
-        .download_and_install(
-            |chunk, total| {
-                bytes_done += chunk as u64;
-                // A send failure means the webview dropped the channel (window
-                // closed mid-download). The install itself should still finish.
-                if let Err(err) = on_progress.send(DownloadProgress {
-                    bytes_done,
-                    bytes_total: total,
-                }) {
-                    debug!(%err, "update progress receiver is gone; continuing the download");
-                }
-            },
-            || debug!("update download finished; installing"),
-        )
-        .await
-        .map_err(|err| AppError::Other(format!("could not install the {channel:?} update: {err}")))?;
+        let mut bytes_done: u64 = 0;
+        let version = update.version.clone();
 
-    info!(?channel, %version, "update installed; awaiting relaunch");
-    Ok(())
+        update
+            .download_and_install(
+                |chunk, total| {
+                    bytes_done += chunk as u64;
+                    // A send failure means the webview dropped the channel (window
+                    // closed mid-download). The install itself should still finish.
+                    if let Err(err) = on_progress.send(DownloadProgress {
+                        bytes_done,
+                        bytes_total: total,
+                    }) {
+                        debug!(%err, "update progress receiver is gone; continuing the download");
+                    }
+                },
+                || debug!("update download finished; installing"),
+            )
+            .await
+            .map_err(|err| AppError::Other(format!("could not install the {channel:?} update: {err}")))?;
+
+        info!(?channel, %version, "update installed; awaiting relaunch");
+        Ok(())
+    }
 }
 
 /// What the channel-switch surface needs to render itself.
@@ -332,60 +358,72 @@ pub async fn release_channel_status(app: AppHandle) -> Result<ChannelStatus> {
 /// `target` is checked against [`switch_target`] rather than trusted: the
 /// frontend computes the same thing, and a mismatch means the two have drifted.
 /// Installing whatever was asked for would be the wrong answer to that.
+///
+/// Linux cannot apply a `.deb` in-place, so this shares
+/// [`install_update`]'s refusal rather than calling `download_and_install`.
 #[tauri::command]
 pub async fn switch_release_channel(app: AppHandle, target: String, on_progress: Channel<DownloadProgress>) -> Result<()> {
-    let current = release_channel::current();
-    let expected = switch_target(current).ok_or_else(|| AppError::Validation("This build cannot switch release channels.".into()))?;
-
-    let requested = release_channel::parse_release_channel(Some(&target));
-    if requested != expected {
-        return Err(AppError::Validation(format!("Cannot switch from {current:?} to {requested:?}.")));
+    #[cfg(target_os = "linux")]
+    {
+        drop((app, target, on_progress));
+        Err(AppError::Validation(LINUX_DEB_INPLACE_UPDATE.into()))
     }
 
-    let updater =
-        updater_for(&app, expected, true)?.ok_or_else(|| AppError::Validation("That channel does not publish installable builds.".into()))?;
+    #[cfg(not(target_os = "linux"))]
+    {
+        let current = release_channel::current();
+        let expected = switch_target(current).ok_or_else(|| AppError::Validation("This build cannot switch release channels.".into()))?;
 
-    let update = updater
-        .check()
-        .await
-        .map_err(|err| AppError::Other(format!("could not reach the {expected:?} channel: {err}")))?
-        .ok_or_else(|| AppError::Other(format!("the {expected:?} channel is not publishing a build for this platform")))?;
+        let requested = release_channel::parse_release_channel(Some(&target));
+        if requested != expected {
+            return Err(AppError::Validation(format!("Cannot switch from {current:?} to {requested:?}.")));
+        }
 
-    // Re-checked here rather than trusting the status call: the two are
-    // separated by however long the confirmation dialog stays open, and this is
-    // the call that writes to disk.
-    let target_epoch = manifest_state_epoch(&update.raw_json);
-    if !downgrade_is_safe(STATE_EPOCH, target_epoch) {
-        info!(
-            ?expected,
-            local = STATE_EPOCH,
-            ?target_epoch,
-            "refusing the channel switch: state epoch guard"
-        );
-        return Err(AppError::Validation(blocked_message(expected)));
+        let updater =
+            updater_for(&app, expected, true)?.ok_or_else(|| AppError::Validation("That channel does not publish installable builds.".into()))?;
+
+        let update = updater
+            .check()
+            .await
+            .map_err(|err| AppError::Other(format!("could not reach the {expected:?} channel: {err}")))?
+            .ok_or_else(|| AppError::Other(format!("the {expected:?} channel is not publishing a build for this platform")))?;
+
+        // Re-checked here rather than trusting the status call: the two are
+        // separated by however long the confirmation dialog stays open, and this is
+        // the call that writes to disk.
+        let target_epoch = manifest_state_epoch(&update.raw_json);
+        if !downgrade_is_safe(STATE_EPOCH, target_epoch) {
+            info!(
+                ?expected,
+                local = STATE_EPOCH,
+                ?target_epoch,
+                "refusing the channel switch: state epoch guard"
+            );
+            return Err(AppError::Validation(blocked_message(expected)));
+        }
+
+        let mut bytes_done: u64 = 0;
+        let version = update.version.clone();
+
+        update
+            .download_and_install(
+                |chunk, total| {
+                    bytes_done += chunk as u64;
+                    if let Err(err) = on_progress.send(DownloadProgress {
+                        bytes_done,
+                        bytes_total: total,
+                    }) {
+                        debug!(%err, "switch progress receiver is gone; continuing the download");
+                    }
+                },
+                || debug!("channel build downloaded; installing"),
+            )
+            .await
+            .map_err(|err| AppError::Other(format!("could not install the {expected:?} build: {err}")))?;
+
+        info!(from = ?current, to = ?expected, %version, "switched release channel; awaiting relaunch");
+        Ok(())
     }
-
-    let mut bytes_done: u64 = 0;
-    let version = update.version.clone();
-
-    update
-        .download_and_install(
-            |chunk, total| {
-                bytes_done += chunk as u64;
-                if let Err(err) = on_progress.send(DownloadProgress {
-                    bytes_done,
-                    bytes_total: total,
-                }) {
-                    debug!(%err, "switch progress receiver is gone; continuing the download");
-                }
-            },
-            || debug!("channel build downloaded; installing"),
-        )
-        .await
-        .map_err(|err| AppError::Other(format!("could not install the {expected:?} build: {err}")))?;
-
-    info!(from = ?current, to = ?expected, %version, "switched release channel; awaiting relaunch");
-    Ok(())
 }
 
 /// The channel this build came from, for display.
@@ -538,6 +576,20 @@ mod tests {
                 "targetVersion": "0.5.0-beta.1",
                 "blockedReason": null,
             })
+        );
+    }
+
+    /// Wire shape the FE matches: `{ kind: "Validation", message: <stable copy> }`.
+    /// A kind rename or wrapping this in `Other` would make UpdateDialog's
+    /// structured match miss and show a generic "try again later".
+    #[test]
+    fn linux_deb_refusal_serializes_as_validation() {
+        let json = serde_json::to_value(&AppError::Validation(LINUX_DEB_INPLACE_UPDATE.into())).expect("serialize");
+        assert_eq!(json["kind"], "Validation");
+        assert_eq!(json["message"], LINUX_DEB_INPLACE_UPDATE);
+        assert_eq!(
+            LINUX_DEB_INPLACE_UPDATE,
+            "This Linux package cannot update itself. Download the new .deb from the release page."
         );
     }
 

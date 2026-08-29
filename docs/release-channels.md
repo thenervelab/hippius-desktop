@@ -208,6 +208,11 @@ from `manifest_url()` and asserts the workflow writes to that same tag, because
 a drift there leaves `publish-release` succeeding while beta builds check a URL
 nobody publishes to.
 
+Linux ships `.deb`, which Tauri cannot apply in-place. `install_update` and
+`switch_release_channel` return `AppError::Validation` with a "download the
+new .deb" message instead of calling `download_and_install` (H-061; pinned by
+`tests/linux_deb_update_wiring.rs`). macOS and Windows still install in-app.
+
 The check itself runs in **Rust** (`src-tauri/src/updates.rs`), not through
 `@tauri-apps/plugin-updater`'s JS `check()`. That one reads the single
 `plugins.updater.endpoints` list compiled into `tauri.conf.json`, and
