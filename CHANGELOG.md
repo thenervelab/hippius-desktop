@@ -73,6 +73,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **An exclusion pattern that can't work is refused when you type it.**
   Previously a malformed pattern was saved and listed as active while
   quietly excluding nothing.
+- **Closing the window on Linux and Windows now quits Hippius.** The app
+  no longer leaves a background process running after you click the window X.
 - **`--version` prints the version and exits.** Running Hippius with `--version`
   or `-V` no longer opens the full app.
 - **Adding a large folder no longer freezes the app.** Dropping a multi-gigabyte
