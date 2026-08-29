@@ -67,14 +67,14 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
-- **Sync complete notifications name the file.** A single finished file shows
-  its name in the bell; several files show how many.
 - **Closing the window on Linux and Windows now quits Hippius.** The app
   no longer leaves a background process running after you click the window X.
 - **`--version` prints the version and exits.** Running Hippius with `--version`
   or `-V` no longer opens the full app.
 - **Adding a large folder no longer freezes the app.** Dropping a multi-gigabyte
   folder in used to lock the window until the copy and encryption finished.
+- **Sync complete notifications name the file.** A single finished file shows
+  its name in the bell; several files show how many.
 - **Replacing an already-synced file can no longer upload a half-copied version.**
   Adding a file over one you already had could, if the copy was slow, be picked up
   while it was still being written and back up an incomplete copy.
