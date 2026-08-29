@@ -67,6 +67,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **The low-credits warning clears after you add credits.** The bell no longer
+  showed an unread "you're running low on credits" notice next to the one saying
+  your credits had just landed.
 - **Closing the window on Linux and Windows now quits Hippius.** The app
   no longer leaves a background process running after you click the window X.
 - **`--version` prints the version and exits.** Running Hippius with `--version`
