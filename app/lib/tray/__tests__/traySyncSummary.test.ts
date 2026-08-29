@@ -87,6 +87,32 @@ describe("getTraySyncSummary", () => {
     });
   });
 
+  it("does not say Failed when Rust already cleared the verdict (H-080)", () => {
+    // Rust classifies a local file that vanished before upload as Gone and
+    // clears `statusVariant` to success while `failedFiles` stays 1. Deriving
+    // "failed" from the raw count overrode that and left the tray red for a
+    // sync the widget was already showing as complete.
+    const out = getTraySyncSummary(
+      snap({
+        totalFiles: 11,
+        actualTotal: 11,
+        syncedCount: 10,
+        failedFiles: 1,
+        statusVariant: "success",
+        overallPercent: 100,
+        effectiveCompleted: true,
+        widgetVisible: true,
+        files: [
+          errorFile("vanished.tmp", "File disappeared before upload — will retry."),
+        ],
+      }),
+    );
+    expect(out).toMatchObject({
+      tone: "completed",
+      statusLabel: "Complete",
+    });
+  });
+
   it("appends the shared reason when every failed file failed the same way", () => {
     const reason = "Insufficient credits — needs $1.00, you have $0.12.";
     const out = getTraySyncSummary(

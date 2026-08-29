@@ -8,6 +8,7 @@ import {
   installUpdate,
   type AvailableUpdate,
 } from "@/lib/tauri/updates";
+import { tauriErrorDetail } from "@/lib/utils/dispatchTauriError";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { getVersion as getAppVersion } from "@tauri-apps/api/app";
 import { toast } from "sonner";
@@ -32,6 +33,7 @@ import {
   updateStore,
 } from "./updateStore";
 import BasicMarkdown from "./BasicMarkdown";
+import { UPDATE_FAILED_FALLBACK } from "./checkForUpdates";
 
 /* Dev-only mock data. Used when the dev panel forces a state — the
  * real `update` object is null when no update is actually available,
@@ -242,6 +244,7 @@ export default function UpdateDialog() {
   }, []);
 
   const [status, setStatus] = useState<Status>("checking");
+  const [errorDetail, setErrorDetail] = useState<string>("");
   const [update, setUpdate] = useState<AvailableUpdate | null>(null);
   const [currentVersion, setCurrentVersion] = useState<string>("");
   const [downloadProgress, setDownloadProgress] = useState(0);
@@ -318,6 +321,7 @@ export default function UpdateDialog() {
     const run = async () => {
       setStatus("checking");
       setUpdate(null);
+      setErrorDetail("");
       setDownloadProgress(0);
       setInstallProgress(0);
       setDownloadedBytes(0);
@@ -400,9 +404,15 @@ export default function UpdateDialog() {
       await simulateInstallation();
     } catch (err) {
       console.error("Update failed:", err);
+      // `updates.rs` owns every sentence this can carry — including the
+      // manual-install instruction and the release-page link for the running
+      // channel. Show it verbatim; do not restate it or add a second flow.
+      // An IPC transport failure carries no message and keeps the fallback.
+      const detail = tauriErrorDetail(err);
+      setErrorDetail(detail);
       setStatus("error");
       toast.error("Update failed", {
-        description: "Please try again later.",
+        description: detail || UPDATE_FAILED_FALLBACK,
       });
     }
   };
@@ -419,6 +429,7 @@ export default function UpdateDialog() {
   const handleRetryCheck = async () => {
     setStatus("checking");
     setUpdate(null);
+    setErrorDetail("");
     try {
       const [u, ver] = await Promise.all([
         checkForUpdate(),
@@ -631,7 +642,7 @@ export default function UpdateDialog() {
                           )}
                           {effectiveStatus === "error" && (
                             <p className="text-[15px] font-medium leading-[22px] tracking-[-0.30px] text-grey-50 dark:text-grey-dark-500">
-                              Please try again later.
+                              {errorDetail || UPDATE_FAILED_FALLBACK}
                             </p>
                           )}
                           {effectiveStatus === "checking" && (

@@ -169,6 +169,7 @@ export default function MultiFolderSyncManager() {
           fileCount: number;
           totalBytes: number;
           lastModified: number;
+          origin: { kind: "locallyRemoved" } | { kind: "otherDevice" };
         }>;
       }>("get_sync_folders_with_stats", { accountId: polkadotAddress });
 
@@ -190,6 +191,7 @@ export default function MultiFolderSyncManager() {
         fileCount: f.fileCount,
         totalBytes: f.totalBytes,
         lastModified: f.lastModified,
+        origin: f.origin,
       }));
 
       setSyncFolders(localFolders);

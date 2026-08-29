@@ -85,10 +85,18 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **Replacing an already-synced file can no longer upload a half-copied version.**
   Adding a file over one you already had could, if the copy was slow, be picked up
   while it was still being written and back up an incomplete copy.
+- **Adding a folder no longer counts hidden files in the file total.**
+- **A folder's file count updates as soon as you add to it.** Adding a file or
+  folder could leave the count in Drive showing the total from before the upload
+  until something else changed that folder.
 - **Filters and search now work while browsing inside a folder.** Applying a file-type,
   date, size, or search filter inside a synced folder — including folders synced from
   your other devices — quietly kept showing the full unfiltered list with the filter
   chip still on.
+- **A failed update now tells you what to do next.** Instead of "Please try
+  again later", Hippius names the problem and links to the download page for
+  your release channel, with the right instructions for how your copy was
+  installed.
 - **The Mac download list no longer offers a file that installs an incomplete copy.**
   Release pages carried a second Mac file next to the disk image that read as an
   alternative download but was missing "Share with Hippius" and Apple's security
@@ -106,6 +114,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   longer there to switch on. Updates now install the same complete, Apple-checked
   copy the disk image contains. If yours went missing, reinstall from the disk image
   once; updates from then on keep it.
+- **Files that vanish before upload no longer mark the whole sync as Failed.** A
+  temporary file that the app or the system deletes mid-sync used to leave the sync
+  widget, the tray icon and the tray panel showing a red "Failed" at 100%, even
+  though every file you actually cared about had synced. Genuine failures still
+  show as before.
 - **"Share with Hippius" now registers itself on Mac.** On some Macs the right-click
   menu never appeared no matter what you did in Settings, because macOS had never
   registered the feature at all — so it was not in any list to switch on. Hippius now
@@ -122,6 +135,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **Every build now reports its real version number.** Installed copies all claimed to
   be version `0.0.1`, so there was no way to tell which build you were running when
   reporting a problem.
+- **A folder you remove from this computer is listed as not synced here, not as
+  if it came from another device.**
 - **Reclaimed disk space lost to interrupted uploads.** While preparing an upload,
   Hippius writes a temporary encrypted copy of the file. Copies left behind by uploads
   that were interrupted — by a dropped connection, a pause, or quitting the app — could

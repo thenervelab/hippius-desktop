@@ -210,8 +210,104 @@ mod tests {
         let kind = K::Other("Encryption error: key derivation failed".to_string());
         assert!(
             matches!(FileFailureKindPayload::from(&kind), FileFailureKindPayload::Other { .. }),
-            "only the mid-upload-modification and network-shaped messages may be carved out",
+            "only the mid-upload-modification, network-shaped, and local-gone messages may be carved out",
         );
+    }
+
+    /// H-080 / H-078: a file that existed at plan time and is gone at
+    /// `open()` lands as upstream `Other` carrying the OS missing-file
+    /// Display. That is self-resolving (the next cycle's plan will not
+    /// include it) and must not paint the widget Failed-at-100%.
+    #[test]
+    fn local_io_missing_file_other_is_carved_out_as_gone() {
+        use hcfs_client::engine::events::FileFailureKind as K;
+
+        let messages = [
+            "No such file or directory (os error 2)",
+            "IO error: No such file or directory (os error 2)",
+            "Failed to open ciphertext file: No such file or directory (os error 2)",
+            "The system cannot find the file specified. (os error 2)",
+            // Nested Display: the ENOENT sits behind an unrelated earlier code.
+            "IO error: Permission denied (os error 13); cause: No such file or directory (os error 2)",
+        ];
+        for msg in messages {
+            let payload = FileFailureKindPayload::from(&K::Other(msg.to_string()));
+            assert!(
+                matches!(payload, FileFailureKindPayload::Gone),
+                "local-IO missing file must classify as Gone, got {payload:?} from {msg:?}"
+            );
+            assert!(
+                payload.is_transient(),
+                "a vanished local file retries (or drops out of the next plan) without the user"
+            );
+            let reason = payload.display_reason();
+            assert_eq!(reason, GONE_DISPLAY_REASON);
+            let lower = reason.to_lowercase();
+            assert!(
+                !lower.contains("connection"),
+                "must not tell the user to check their connection: {reason}"
+            );
+            assert!(is_transient_reason(&reason), "authored Gone copy must round-trip as transient: {reason}");
+        }
+    }
+
+    /// Remote `FileNotFound` and download HTTP 404 are a different failure:
+    /// the server does not have the file. Mapping those to Gone would hide
+    /// a real download miss behind "the local file vanished".
+    #[test]
+    fn remote_or_download_404_is_not_gone() {
+        use hcfs_client::engine::events::FileFailureKind as K;
+
+        let cases = [
+            K::Other("File not found: deadbeef00112233".into()),
+            // An outer error prefixes the inner Display, so the remote-miss
+            // guard cannot be anchored to the start of the message.
+            K::Other("Download failed: File not found: deadbeef00112233".into()),
+            K::Other("Download failed: Server returned 404 Not Found: missing".into()),
+            K::Other("Server returned 404 Not Found: no such object".into()),
+            K::ServerError { status: 404 },
+        ];
+        for kind in cases {
+            let payload = FileFailureKindPayload::from(&kind);
+            assert!(
+                !matches!(payload, FileFailureKindPayload::Gone),
+                "remote/download 404 must not become Gone: {kind:?} → {payload:?}"
+            );
+        }
+    }
+
+    /// `(os error 2)` is ENOENT; `(os error 20)` is ENOTDIR. A prefix match
+    /// on `os error 2` would swallow every two-digit code that starts with 2.
+    #[test]
+    fn os_error_20_is_not_gone() {
+        use hcfs_client::engine::events::FileFailureKind as K;
+        let payload = FileFailureKindPayload::from(&K::Other("Not a directory (os error 20)".to_string()));
+        assert!(
+            matches!(payload, FileFailureKindPayload::Other { .. }),
+            "only ENOENT (os error 2), not os error 20: {payload:?}"
+        );
+    }
+
+    /// Upstream `Other` messages interpolate the failing path, so the file's
+    /// own NAME reaches the classifier. A file called `enoent.log` must not
+    /// launder a server 500 into a self-resolving Gone — matching a bare
+    /// `ENOENT` token would do exactly that, which is why only phrasings the
+    /// OS itself emits are accepted.
+    #[test]
+    fn a_path_containing_enoent_does_not_launder_a_server_error() {
+        use hcfs_client::engine::events::FileFailureKind as K;
+
+        for msg in [
+            "Upload failed for logs/enoent.log: Server returned 500 Internal Server Error",
+            "Failed to encrypt ENOENT/report.txt: unexpected end of input",
+        ] {
+            let payload = FileFailureKindPayload::from(&K::Other(msg.to_string()));
+            assert!(
+                matches!(payload, FileFailureKindPayload::Other { .. }),
+                "a filename is not a diagnosis: {msg:?} → {payload:?}"
+            );
+            assert!(!payload.is_transient(), "and it must stay a red, user-visible failure: {msg:?}");
+        }
     }
 
     /// The screenshot that motivated this: a reqwest send failure Display,
@@ -261,6 +357,7 @@ mod tests {
             FileFailureKindPayload::ChangedWhileUploading,
             FileFailureKindPayload::Network,
             FileFailureKindPayload::ServerError { status: 429 },
+            FileFailureKindPayload::Gone,
         ] {
             let authored = kind.display_reason();
             assert!(is_transient_reason(&authored), "authored reason must be recognised: {authored}");
@@ -291,6 +388,7 @@ mod tests {
         // chunks — a 5xx or a credits failure still needs the user.
         assert!(FileFailureKindPayload::ChangedWhileUploading.is_transient());
         assert!(FileFailureKindPayload::Network.is_transient());
+        assert!(FileFailureKindPayload::Gone.is_transient());
         assert!(
             FileFailureKindPayload::ServerError { status: 429 }.is_transient(),
             "session-limit 429 is retried next cycle"
@@ -680,6 +778,10 @@ mod tests {
         assert_eq!(network["kind"], "network");
         assert_eq!(network.as_object().expect("object").len(), 1, "Network carries only the discriminant");
 
+        let gone = serde_json::to_value(FileFailureKindPayload::Gone).expect("serialize");
+        assert_eq!(gone["kind"], "gone");
+        assert_eq!(gone.as_object().expect("object").len(), 1, "Gone carries only the discriminant");
+
         let other = serde_json::to_value(FileFailureKindPayload::Other { message: "x".to_string() }).expect("serialize");
         assert_eq!(other["kind"], "other");
         assert_eq!(other["message"], "x");
@@ -880,6 +982,7 @@ pub struct FilesFailedRepeatedlyPayload {
 /// {"kind":"insufficientBalance","balanceCents":12,"requiredCents":100}
 /// {"kind":"serverError","status":500}
 /// {"kind":"network"}
+/// {"kind":"gone"}
 /// {"kind":"other","message":"unrecognised upload failure"}
 /// ```
 #[derive(Serialize, Clone, Debug)]
@@ -906,6 +1009,13 @@ pub enum FileFailureKindPayload {
     /// writer stops touching the file. Presenting it like a real error sent
     /// users hunting for an encryption fault that does not exist.
     ChangedWhileUploading,
+    /// Local `open()` of a path that existed at plan time and is gone now
+    /// (ENOENT / `os error 2`). Carved out of [`Self::Other`] so a vanished
+    /// internal or a file the user deleted mid-cycle cannot paint the widget
+    /// Failed at 100%. Remote `FileNotFound` and download HTTP 404 stay
+    /// [`Self::ServerError`] / [`Self::Other`] — those are a missing *server*
+    /// object, not a missing local file (H-080 / H-078).
+    Gone,
     /// Fallback for failures we have not categorised. `message` is for
     /// display only — the FE MUST NOT parse it as a stable contract.
     Other { message: String },
@@ -941,6 +1051,10 @@ pub const SESSION_LIMIT_MARKER: &str = "Too many active upload sessions";
 /// the persisted-row `failureMessage()` stay word-aligned.
 const SESSION_LIMIT_DISPLAY_REASON: &str = "Too many uploads in progress — will retry.";
 
+/// User-facing copy for a local file that vanished between plan and open.
+/// The next cycle's plan will not include it. Do not blame the connection.
+const GONE_DISPLAY_REASON: &str = "File disappeared before upload — will retry.";
+
 /// Whether a snapshot row's authored `error` reason describes a self-resolving
 /// failure (see [`FileFailureKindPayload::is_transient`]).
 ///
@@ -955,6 +1069,16 @@ pub fn is_transient_reason(reason: &str) -> bool {
     reason == FileFailureKindPayload::ChangedWhileUploading.display_reason()
         || reason == FileFailureKindPayload::Network.display_reason()
         || reason == SESSION_LIMIT_DISPLAY_REASON
+        || is_gone_reason(reason)
+}
+
+/// Whether a snapshot row's authored `error` is the Gone copy.
+///
+/// Used by `fixup_stalled_completion` to keep a vanished local file from
+/// flipping the widget to Failed at 100%. Matches the authored string only
+/// — never a raw OS error — so a 5xx cannot be mistaken for Gone.
+pub fn is_gone_reason(reason: &str) -> bool {
+    reason == GONE_DISPLAY_REASON
 }
 
 /// hcfs-server session cap (`error=session_limit`, HTTP 429). The current
@@ -989,6 +1113,52 @@ fn is_network_shaped(message: &str) -> bool {
         || lower.contains("dns error")
 }
 
+/// Local-IO missing file (`open()` after the path left disk). Match ENOENT
+/// shapes only — never remote `FileNotFound` or a download HTTP 404.
+///
+/// `std::io::Error` Display is `{message} (os error {code})`; Unix/Windows
+/// ENOENT is code 2. The code is matched as a whole token so `os error 20`
+/// (ENOTDIR) is not swallowed. `SyncError::Io` prefixes this as `"IO error: …"`.
+///
+/// Deliberately matches only phrasings the OS itself produces. A bare `ENOENT`
+/// token is NOT accepted: upstream `Other` messages interpolate file paths, so
+/// any file or folder literally named `enoent` would have turned every failure
+/// on it — a 5xx included — into a self-resolving Gone.
+fn is_local_gone_shaped(message: &str) -> bool {
+    let message = message.trim();
+    if message.is_empty() {
+        return false;
+    }
+    let lower = message.to_ascii_lowercase();
+    if is_remote_not_found_shaped(&lower) {
+        return false;
+    }
+    has_os_error_2(&lower) || lower.contains("no such file or directory")
+}
+
+/// `SyncError::FileNotFound` Display is `"File not found: {id}"`. Download
+/// 404s usually classify as `ServerError { 404 }` via `"Server returned 404"`,
+/// but the full `DownloadFailed` Display can still land in `Other`.
+///
+/// Matched anywhere in the message, not just at the start: an outer error
+/// (`SyncError::Io`, `DownloadFailed`) prefixes the inner Display, so an
+/// anchored match would let a wrapped remote miss through as Gone.
+fn is_remote_not_found_shaped(lower: &str) -> bool {
+    lower.contains("file not found:") || lower.contains("server returned 404")
+}
+
+/// True when ANY `os error N` in the message is code 2 (ENOENT); false for
+/// `os error 20` (the leading `2` of a longer code).
+///
+/// Every occurrence is scanned, not just the first: nested errors stringify as
+/// `"{outer} ({inner})"`, so the ENOENT can sit behind an unrelated earlier code.
+fn has_os_error_2(lower: &str) -> bool {
+    lower.split("os error ").skip(1).any(|rest| {
+        let mut digits = rest.chars();
+        digits.next() == Some('2') && digits.next().is_none_or(|c| !c.is_ascii_digit())
+    })
+}
+
 /// reqwest 0.13 Display appends ` for url (https://host/path)`. Drop that
 /// tail so an `Other` message that is not remapped to Network still cannot
 /// leak an origin URL into the widget.
@@ -1018,13 +1188,14 @@ impl FileFailureKindPayload {
     /// cycle. [`Self::Network`] is the same shape for the user: chunk PUTs
     /// already retried in-cycle, cached ciphertext is kept, and the next
     /// cycle resumes. A session-limit 429 is the same: the next cycle
-    /// resumes live sessions (server-side) or retries the file. A 5xx or a
-    /// credits failure is *often* retried too, but those still need the
-    /// user (or a billing top-up), so they stay red.
+    /// resumes live sessions (server-side) or retries the file. [`Self::Gone`]
+    /// is a local path that left disk between plan and open — the next plan
+    /// will not include it. A 5xx or a credits failure is *often* retried too,
+    /// but those still need the user (or a billing top-up), so they stay red.
     pub fn is_transient(&self) -> bool {
         match self {
-            Self::ChangedWhileUploading | Self::Network | Self::ServerError { status: 429 } => true,
-            Self::Other { message } if is_session_limit_shaped(message) => true,
+            Self::ChangedWhileUploading | Self::Network | Self::Gone | Self::ServerError { status: 429 } => true,
+            Self::Other { message } if is_session_limit_shaped(message) || is_local_gone_shaped(message) => true,
             _ => false,
         }
     }
@@ -1043,6 +1214,7 @@ impl FileFailureKindPayload {
             Self::ServerError { status: 429 } => SESSION_LIMIT_DISPLAY_REASON.to_string(),
             Self::ServerError { status } => format!("Server error ({status}). Please try again."),
             Self::Network => NETWORK_DISPLAY_REASON.to_string(),
+            Self::Gone => GONE_DISPLAY_REASON.to_string(),
             // `Other` already carries upstream display text; fall back to a
             // generic line when it's empty/whitespace so the row never shows a
             // blank reason. Network-shaped leftovers (reqwest Display, nested
@@ -1056,6 +1228,8 @@ impl FileFailureKindPayload {
                     NETWORK_DISPLAY_REASON.to_string()
                 } else if is_session_limit_shaped(trimmed) {
                     SESSION_LIMIT_DISPLAY_REASON.to_string()
+                } else if is_local_gone_shaped(trimmed) {
+                    GONE_DISPLAY_REASON.to_string()
                 } else {
                     strip_request_url(trimmed).to_string()
                 }
@@ -1093,6 +1267,10 @@ impl From<&hcfs_client::engine::events::FileFailureKind> for FileFailureKindPayl
             // into `UploadFailed`/`Other` with reqwest's Display (the
             // `eu-central-1-…` URL in the widget). See `is_network_shaped`.
             K::Other(msg) if is_network_shaped(msg) => Self::Network,
+            // Local `open()` of a path that left disk between plan and encrypt.
+            // Must run after the remote-404 guard inside `is_local_gone_shaped`
+            // so a download miss cannot become Gone.
+            K::Other(msg) if is_local_gone_shaped(msg) => Self::Gone,
             // Upstream `Other(String)` carries display text. Clone-on-translate is
             // unavoidable (we own the wire payload); the alternative would be borrowing
             // and the bridge needs an owned struct for `app.emit`. Strip a
