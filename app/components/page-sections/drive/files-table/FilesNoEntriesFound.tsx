@@ -15,6 +15,10 @@ interface FilesNoEntriesFoundProps {
    *  variant instead of the upload CTA. Sync-setup CTA still wins when
    *  the sync path itself isn't configured yet. */
   hasNoCredits?: boolean;
+  /** Browsing a remote (server-only) folder. Remote folders cannot be
+   *  uploaded into from the desktop yet, so the empty state renders as a
+   *  plain "folder is empty" notice — no upload button, no drop target. */
+  isRemoteView?: boolean;
   onStartSyncing?: () => void;
 }
 
@@ -23,6 +27,7 @@ const FilesNoEntriesFound: React.FC<FilesNoEntriesFoundProps> = ({
   isSyncPathConfigured = true,
   isCheckingSyncPath = false,
   hasNoCredits = false,
+  isRemoteView = false,
   onStartSyncing,
 }) => {
   const router = useRouter();
@@ -79,6 +84,20 @@ const FilesNoEntriesFound: React.FC<FilesNoEntriesFoundProps> = ({
       window.dispatchEvent(event);
     }
   }, [isSyncPathConfigured, showNoCreditsVariant, router, onStartSyncing]);
+
+  // Remote folders are read-only from the desktop for now: uploading into
+  // one is not supported yet, so the empty state must not offer an upload
+  // button or a drop target — a plain notice is the whole surface. Sits
+  // after the hooks so the hook order never varies between renders.
+  if (isRemoteView) {
+    return (
+      <NoEntriesFound
+        title="This Folder Is Empty"
+        description="Files added to this folder from your other devices will appear here."
+        className="p-4 sm:p-8 2xl:p-16"
+      />
+    );
+  }
 
   const title = showNoCreditsVariant
     ? "You don't have enough credit to upload a file"

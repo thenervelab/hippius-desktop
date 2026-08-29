@@ -96,24 +96,15 @@ export const VM_VPN_ENABLED = false;
  * The Rust IPCs (`create_drive_invite`, `list_drive_members`,
  * `remove_drive_member`, `list_my_drive_memberships`, `leave_shared_drive`,
  * `add_shared_drive`) stay registered regardless, so flipping this needs no
- * other code change. Against a feature-off server every surface degrades
- * silently anyway (the backend maps the unmounted routes to
- * `NotReady(SHARED_DRIVES_UNAVAILABLE)`, which the FE matches explicitly
- * and hides).
- *
- * **The value differs by lane, and that is deliberate.** `beta` carries
- * `true` so the feature keeps getting exercised against the live fleet
- * (which runs `HCFS_FEATURE_SHARED_DRIVES=1`) and the console's
- * `/invite/{token}` accept page. Production carries `false`: desktop
- * invite links mint at the console, so shipping the surface before the
- * console flag is on for everyone would offer a flow that dead-ends.
- *
- * Because the lanes disagree, every `beta` -> `main` promotion shows this
- * line as a diff. Re-assert `false` on the promotion rather than taking
- * beta's value — see `docs/release-checklist.md`. It cannot be pinned by
- * `release_lane_pins.rs`, which runs on all three lanes.
+ * other code change. `true` since the 2026-08 rollout: the hcfs-server
+ * fleet runs with `HCFS_FEATURE_SHARED_DRIVES=1` and the console enables
+ * its `/invite/{token}` accept page in a parallel release (desktop invite
+ * links mint at the console, so both must be live). Against a feature-off
+ * server every surface degrades silently anyway (the backend maps the
+ * unmounted routes to `NotReady(SHARED_DRIVES_UNAVAILABLE)`, which the FE
+ * matches explicitly and hides).
  */
-export const SHARED_DRIVES_ENABLED = false;
+export const SHARED_DRIVES_ENABLED = true;
 
 /**
  * Referrals page. When `false`, referrals is fully invisible: the sidebar

@@ -15,6 +15,30 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-28
+
+### Added
+
+- **Browse folders synced from your other devices without downloading them.**
+  Click a folder under "Sync from Other Devices" to open it like any drive —
+  navigate subfolders, see real sizes, preview and download individual files,
+  and share files or folders via link, all straight from the server. Files
+  load a page at a time as you scroll, so even huge camera rolls open
+  instantly, and the app reopens wherever you left off.
+- **Release pages now name the file to download** for each platform, and publish a
+  checksum for every file so you can confirm a download arrived intact.
+
+### Fixed
+
+- **Filters and search now work while browsing inside a folder.** Applying a file-type,
+  date, size, or search filter inside a synced folder — including folders synced from
+  your other devices — quietly kept showing the full unfiltered list with the filter
+  chip still on.
+- **The Mac download list no longer offers a file that installs an incomplete copy.**
+  Release pages carried a second Mac file next to the disk image that read as an
+  alternative download but was missing "Share with Hippius" and Apple's security
+  check. It is gone from current releases and will not appear on new ones.
+
 ## [0.5.1] - 2026-08-28
 
 ### Fixed

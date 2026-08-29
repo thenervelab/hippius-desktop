@@ -13,6 +13,7 @@ import {
   useReactTable,
   getSortedRowModel,
   SortingState,
+  Row,
 } from "@tanstack/react-table";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { actionableSyncFilesAtom } from "@/lib/hooks/useSyncSnapshot";
@@ -41,6 +42,7 @@ import {
   canRenameFile,
   RENAME_DISABLED_TOOLTIP,
 } from "@/app/lib/utils/renameGating";
+import { isCloudOnlyRow } from "@/app/lib/utils/cloudOnly";
 import {
   canShareFolder,
   FOLDER_SHARE_DISABLED_TOOLTIP,
@@ -48,6 +50,8 @@ import {
 } from "@/app/lib/utils/folderShareGating";
 import { cn } from "@/lib/utils";
 import NameCell from "./NameCell";
+import { FolderRowsSkeleton } from "./FilesTableSkeleton";
+import { useLoadMoreSentinel } from "@/app/lib/hooks/use-load-more-sentinel";
 import SelectionActionBar from "../SelectionActionBar";
 import { SelectionColumn, SelectionHeaderColumn } from "../SelectionColumn";
 import TableActionMenu from "@/app/components/ui/alt-table/TableActionMenu";
@@ -206,6 +210,224 @@ const convertBaseWidthsToMode = (
   return selectionModeWidths;
 };
 
+type ExpandedFolderRowsProps = React.ComponentProps<typeof ExpandedFolderRows>;
+
+/**
+ * Per-render snapshot read by `DriveFileRow` through a ref — the row-level
+ * counterpart of `cellCtxRef` (see below). `DriveFileRow` is memoized so
+ * unchanged rows skip re-render entirely; event handlers and expanded-row
+ * props read the CURRENT values through this ref at call/render time, so a
+ * skipped render can never strand a stale closure.
+ */
+interface DriveRowCtx {
+  localHandleContextMenu: (
+    e: React.MouseEvent,
+    file: FormattedUserFile,
+    previewSiblings?: FormattedUserFile[],
+  ) => void;
+  handleToggleTopLevelRow: (file: FormattedUserFile) => void;
+  createTableItems: ExpandedFolderRowsProps["createTableItems"];
+  onSelectFile: ExpandedFolderRowsProps["onSelectFile"];
+  onOpenFolder: ExpandedFolderRowsProps["onOpenFolder"];
+  accountId: ExpandedFolderRowsProps["accountId"];
+  orderedColumnIds: string[];
+  sortBy: ExpandedFolderRowsProps["sortBy"];
+  sortDir: ExpandedFolderRowsProps["sortDir"];
+  cascadeAncestorChain: FormattedUserFile[];
+  isItemDeleting: ExpandedFolderRowsProps["isItemDeleting"];
+}
+
+interface DriveFileRowProps {
+  row: Row<FormattedUserFile>;
+  rowState: "success" | "pending" | "error";
+  isExpanded: boolean;
+  canInlineExpand: boolean;
+  syncPath: string | undefined;
+  isDeleting: boolean;
+  isSelectedRow: boolean;
+  canSelectRow: boolean;
+  isSelectionMode: boolean;
+  columnWidths: Record<string, number>;
+  hasAnyFolder: boolean;
+  normalizedSubfolderPath: string;
+  ctxRef: React.MutableRefObject<DriveRowCtx>;
+}
+
+/**
+ * Memo equality for `DriveFileRow`. `row` is compared by `row.original`
+ * (stable across appends/re-sorts thanks to the table's stable `getRowId`),
+ * NOT by the `Row` wrapper, which react-table recreates on every data
+ * change — comparing the wrapper would defeat the memo on every appended
+ * remote page, which is exactly the "list view re-renders 600 rows per
+ * page" freeze this component exists to prevent. Rendering with a stale
+ * `Row` wrapper is safe: cells read `row.original` plus `cellCtxRef`, and
+ * the column set only changes with `isSelectionMode`, which IS compared.
+ */
+const driveFileRowPropsEqual = (
+  prev: DriveFileRowProps,
+  next: DriveFileRowProps,
+) => {
+  // Expanded rows render `ExpandedFolderRows` from ctx values read at
+  // render time — never skip them so those reads stay fresh.
+  if (prev.isExpanded || next.isExpanded) return false;
+  return (
+    prev.row.original === next.row.original &&
+    prev.rowState === next.rowState &&
+    prev.canInlineExpand === next.canInlineExpand &&
+    prev.syncPath === next.syncPath &&
+    prev.isDeleting === next.isDeleting &&
+    prev.isSelectedRow === next.isSelectedRow &&
+    prev.canSelectRow === next.canSelectRow &&
+    prev.isSelectionMode === next.isSelectionMode &&
+    prev.columnWidths === next.columnWidths &&
+    prev.hasAnyFolder === next.hasAnyFolder &&
+    prev.normalizedSubfolderPath === next.normalizedSubfolderPath
+  );
+};
+
+/**
+ * One top-level table row (plus its optional inline-expanded children).
+ * Extracted and memoized so appending a remote page — or any unrelated
+ * container re-render — only mounts the NEW rows instead of re-reconciling
+ * every visible row's full subtree (the card view has always had this via
+ * `React.memo(FileCard)`, which is why it stayed smooth while list view
+ * froze on large folders).
+ */
+const DriveFileRow = memo(function DriveFileRow({
+  row,
+  rowState,
+  isExpanded,
+  canInlineExpand,
+  syncPath,
+  isDeleting,
+  isSelectedRow,
+  canSelectRow,
+  isSelectionMode,
+  columnWidths,
+  normalizedSubfolderPath,
+  ctxRef,
+}: DriveFileRowProps) {
+  const rowData = row.original;
+  // Annotated copy used by the expanded rows' ancestor chain — keeps the
+  // row's parent path on the row object so selection keys are unambiguous.
+  const annotatedRow: FormattedUserFile = {
+    ...rowData,
+    parentRelativePath: rowData.isFolder
+      ? normalizedSubfolderPath
+      : rowData.parentRelativePath,
+  };
+  const ctx = ctxRef.current;
+
+  return (
+    <>
+      <TableModule.Tr
+        rowHover={!isDeleting}
+        transparent
+        className={cn(
+          "border-b-0 odd:bg-grey-light-200 even:bg-grey-light-400 hover:bg-grey-light-300 dark:odd:bg-black-500 dark:even:bg-black-primary-bg dark:hover:bg-black-300",
+          rowState === "pending" && "animate-pulse",
+          rowState === "error" && "bg-red-200/20",
+          isDeleting && "opacity-50 cursor-not-allowed pointer-events-none",
+          isSelectionMode && canSelectRow && "cursor-pointer",
+          isSelectionMode &&
+            isSelectedRow &&
+            canSelectRow &&
+            "bg-primary-60/10",
+          isSelectionMode &&
+            !isSelectedRow &&
+            canSelectRow &&
+            "hover:bg-primary-60/8",
+          isSelectionMode && !canSelectRow && "opacity-50 cursor-not-allowed",
+        )}
+        onContextMenu={(e) => {
+          if (isDeleting) return;
+          ctxRef.current.localHandleContextMenu(e, rowData);
+        }}
+        onClick={(e) => {
+          if (isDeleting) {
+            e.preventDefault();
+            e.stopPropagation();
+            return;
+          }
+          // Don't handle clicks if it's on the action menu area or checkbox area
+          const target = e.target as HTMLElement;
+          if (
+            target.closest(".action-menu-area") ||
+            target.closest('[role="checkbox"]') ||
+            target.closest(".checkbox-container") ||
+            target.closest(".folder-expander-area")
+          ) {
+            return;
+          }
+
+          if (isSelectionMode && canSelectRow) {
+            e.preventDefault();
+            e.stopPropagation();
+            preserveClosestScrollPosition(target, () => {
+              ctxRef.current.handleToggleTopLevelRow(rowData);
+            });
+          }
+        }}
+      >
+        {row.getVisibleCells().map((cell) => {
+          const isSelectionCell = cell.column.id === "selection";
+          return (
+            <TableModule.Td
+              className={cn(
+                // Cell base is `text-sm` so the file NAME (which inherits
+                // it) reads as first-class data; the metadata columns
+                // (size/date/type) override back to `text-xs` to stay
+                // visually secondary.
+                "px-2 py-[5px] border-x-0 border-r last:border-r-0 border-grey-dark-100 text-grey-dark-800 text-sm dark:border-black-300",
+                cell.column.id === "actions" && "p-0",
+                cell.column.id === "name" && "p-0 relative",
+                cell.column.id === "arionHash" && "p-0",
+              )}
+              key={cell.id}
+              cell={cell}
+              columnWidth={
+                isSelectionCell ? undefined : columnWidths[cell.column.id]
+              }
+              style={
+                isSelectionCell
+                  ? {
+                      width: SELECTION_COLUMN_WIDTH_PX,
+                      minWidth: SELECTION_COLUMN_WIDTH_PX,
+                      maxWidth: SELECTION_COLUMN_WIDTH_PX,
+                    }
+                  : undefined
+              }
+            />
+          );
+        })}
+      </TableModule.Tr>
+
+      {rowData.isFolder && isExpanded && canInlineExpand && (
+        <ExpandedFolderRows
+          folder={rowData}
+          accountId={ctx.accountId}
+          syncPath={syncPath}
+          label={rowData.label}
+          baseSubfolderPath={normalizedSubfolderPath}
+          orderedColumnIds={ctx.orderedColumnIds}
+          createTableItems={ctx.createTableItems}
+          onSelectFile={ctx.onSelectFile}
+          onRowContextMenu={ctx.localHandleContextMenu}
+          onOpenFolder={ctx.onOpenFolder}
+          sortBy={ctx.sortBy}
+          sortDir={ctx.sortDir}
+          ancestorChain={
+            isSelectedRow
+              ? [...ctx.cascadeAncestorChain, annotatedRow]
+              : ctx.cascadeAncestorChain
+          }
+          isItemDeleting={ctx.isItemDeleting}
+        />
+      )}
+    </>
+  );
+}, driveFileRowPropsEqual);
+
 interface FilesTableProps {
   files: FormattedUserFile[];
   allFiles: FormattedUserFile[];
@@ -217,6 +439,10 @@ interface FilesTableProps {
   ) => void;
   hasMore: boolean;
   loadMore: () => void;
+  /** A remote server page is on the wire — appends skeleton rows inside the
+   *  table body so the placeholders share the real colgroup (columns,
+   *  striping and the chevron gutter line up by construction). */
+  isLoadingMore?: boolean;
   onHeaderContextMenu?: (e: React.MouseEvent) => void;
   drivePathsByLabel?: Record<string, string>;
   currentSubfolderPath?: string | null;
@@ -233,6 +459,7 @@ const FilesTable: FC<FilesTableProps> = memo(
     handleFileDownload,
     hasMore,
     loadMore,
+    isLoadingMore = false,
     onHeaderContextMenu,
     drivePathsByLabel,
     currentSubfolderPath,
@@ -358,26 +585,9 @@ const FilesTable: FC<FilesTableProps> = memo(
       [enrichedAllFiles],
     );
 
-    // Sentinel ref for infinite scroll
+    // Sentinel ref for infinite scroll — enter-transition-gated (see the hook).
     const sentinelRef = useRef<HTMLDivElement>(null);
-
-    // IntersectionObserver for infinite scroll
-    useEffect(() => {
-      if (!hasMore) return;
-      const sentinel = sentinelRef.current;
-      if (!sentinel) return;
-
-      const observer = new IntersectionObserver(
-        (entries) => {
-          if (entries[0].isIntersecting) {
-            loadMore();
-          }
-        },
-        { rootMargin: "200px" },
-      );
-      observer.observe(sentinel);
-      return () => observer.disconnect();
-    }, [hasMore, loadMore]);
+    useLoadMoreSentinel(sentinelRef, hasMore, loadMore);
 
     useEffect(() => {
       setExpandedFolders((previous) => {
@@ -679,12 +889,19 @@ const FilesTable: FC<FilesTableProps> = memo(
                 },
               ]
             : []),
-          {
-            icon: <Download className="size-4" />,
-            itemTitle: "Download",
-            onItemClick: () => handleDownload(file),
-            disabled: itemDeleting,
-          },
+          // Cloud-only FOLDER rows have no zip-export source (the pack walks
+          // the local sync root) — per-file downloads still work via
+          // download_remote_file, so only the folder case hides.
+          ...(isCloudOnlyRow(file) && file.isFolder
+            ? []
+            : [
+                {
+                  icon: <Download className="size-4" />,
+                  itemTitle: "Download",
+                  onItemClick: () => handleDownload(file),
+                  disabled: itemDeleting,
+                },
+              ]),
           ...(!file.isFolder && file.syncStatus === "failed" && file.label
             ? [
                 {
@@ -726,26 +943,32 @@ const FilesTable: FC<FilesTableProps> = memo(
               ]
             : []),
 
-          {
-            icon: <FolderOpen className="size-4" />,
-            itemTitle: "Reveal in Finder",
-            onItemClick: async () => {
-              try {
-                await revealFile({
-                  sourcePath: file.source,
-                  label: file.label,
-                  accountId: polkadotAddress ?? undefined,
-                  fileName: file.actualFileName || file.name,
-                });
-              } catch (error) {
-                console.error("Failed to reveal file in Finder:", error);
-                toast.error(
-                  "File is not available locally. It may only exist on another device.",
-                );
-              }
-            },
-            disabled: itemDeleting,
-          },
+          // Nothing on disk to reveal for a cloud-only row — hiding beats
+          // showing an action that can only error into a toast.
+          ...(isCloudOnlyRow(file)
+            ? []
+            : [
+                {
+                  icon: <FolderOpen className="size-4" />,
+                  itemTitle: "Reveal in Finder",
+                  onItemClick: async () => {
+                    try {
+                      await revealFile({
+                        sourcePath: file.source,
+                        label: file.label,
+                        accountId: polkadotAddress ?? undefined,
+                        fileName: file.actualFileName || file.name,
+                      });
+                    } catch (error) {
+                      console.error("Failed to reveal file in Finder:", error);
+                      toast.error(
+                        "File is not available locally. It may only exist on another device.",
+                      );
+                    }
+                  },
+                  disabled: itemDeleting,
+                },
+              ]),
           {
             icon: <Icons.InfoCircle className="size-4" />,
             itemTitle: `${file?.isFolder ? "Folder" : "File"} Details`,
@@ -827,26 +1050,33 @@ const FilesTable: FC<FilesTableProps> = memo(
           },
           // Delete is gated by both sync state (unassigned files are
           // mid-upload) and live deletion state (already in flight).
-          {
-            icon: <Icons.Trash className="size-4" />,
-            itemTitle: !file.isAssigned
-              ? "Delete (Syncing in progress...)"
-              : itemDeleting
-                ? "Deleting..."
-                : "Delete",
-            disabled: !file.isAssigned || itemDeleting,
-            tooltip: !file.isAssigned
-              ? "This file is currently being synced and cannot be deleted yet. Please wait for the sync to complete."
-              : itemDeleting
-                ? "This item is already being deleted."
-                : undefined,
-            onItemClick: () => {
-              if (file.isAssigned && !itemDeleting) {
-                handleDeleteFile(file);
-              }
-            },
-            variant: "destructive" as const,
-          },
+          // Cloud-only rows hide it entirely — the delete pipeline removes
+          // the LOCAL copy and lets sync propagate, which a server-only row
+          // has no path through.
+          ...(isCloudOnlyRow(file)
+            ? []
+            : [
+                {
+                  icon: <Icons.Trash className="size-4" />,
+                  itemTitle: !file.isAssigned
+                    ? "Delete (Syncing in progress...)"
+                    : itemDeleting
+                      ? "Deleting..."
+                      : "Delete",
+                  disabled: !file.isAssigned || itemDeleting,
+                  tooltip: !file.isAssigned
+                    ? "This file is currently being synced and cannot be deleted yet. Please wait for the sync to complete."
+                    : itemDeleting
+                      ? "This item is already being deleted."
+                      : undefined,
+                  onItemClick: () => {
+                    if (file.isAssigned && !itemDeleting) {
+                      handleDeleteFile(file);
+                    }
+                  },
+                  variant: "destructive" as const,
+                },
+              ]),
         ];
       },
       [
@@ -1374,10 +1604,17 @@ const FilesTable: FC<FilesTableProps> = memo(
     // is re-read so each Th picks up the new getIsSorted() value (sort
     // chevron + active style). `enrichedAllFiles` keeps the rows in sync
     // when the data source changes (folder tab switch, sync re-enrichment).
+    // Sorting runs over the FULL list (data: enrichedAllFiles) so the order
+    // is globally correct, but only the container's scroll window worth of
+    // rows is RENDERED (`files` is the windowed slice — its length is the
+    // window size). Without the cap the table painted every fetched row —
+    // including the remote prefetch buffer — so the DOM and every
+    // per-append reconciliation grew with the whole fetched list instead
+    // of what the user has scrolled to.
     const visibleRows = useMemo(() => {
-      return table.getRowModel().rows;
+      return table.getRowModel().rows.slice(0, files.length);
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [table, enrichedAllFiles, sorting]);
+    }, [table, enrichedAllFiles, sorting, files.length]);
 
     const headerRows = useMemo(
       () =>
@@ -1430,11 +1667,6 @@ const FilesTable: FC<FilesTableProps> = memo(
         sorting,
         hasAnyFolder,
       ],
-    );
-
-    const columnCount = useMemo(
-      () => Object.keys(columnWidths).length,
-      [columnWidths],
     );
 
     // Canonical column order shared by the outer table's <colgroup> and
@@ -1592,6 +1824,27 @@ const FilesTable: FC<FilesTableProps> = memo(
       ],
     );
 
+    // Latest-render snapshot for `DriveFileRow` (see the component's docs).
+    // Reassigned every render, mirroring `cellCtxRef`.
+    const rowCtx: DriveRowCtx = {
+      localHandleContextMenu,
+      handleToggleTopLevelRow,
+      createTableItems,
+      onSelectFile: handleSetSelectedFile,
+      onOpenFolder: (childFile, parentPath) => {
+        const { url } = generateFolderUrl(childFile, getParam, parentPath);
+        router.push(url);
+      },
+      accountId: polkadotAddress,
+      orderedColumnIds,
+      sortBy,
+      sortDir,
+      cascadeAncestorChain,
+      isItemDeleting,
+    };
+    const rowCtxRef = useRef<DriveRowCtx>(rowCtx);
+    rowCtxRef.current = rowCtx;
+
     const tableBody = useMemo(
       () =>
         visibleRows?.map((row) => {
@@ -1612,8 +1865,9 @@ const FilesTable: FC<FilesTableProps> = memo(
           const syncPath = rowData.label
             ? drivePaths[rowData.label]
             : undefined;
-          const canInlineExpand =
-            enableFolderExpander && rowData.isFolder && Boolean(syncPath);
+          const canInlineExpand = Boolean(
+            enableFolderExpander && rowData.isFolder && syncPath,
+          );
           // Annotated copy used everywhere selection/cascade keys are
           // looked up — keeps the row's parent path on the row object
           // so context helpers can build keys without re-deriving it.
@@ -1631,147 +1885,34 @@ const FilesTable: FC<FilesTableProps> = memo(
           const canSelectRow = rowData.isAssigned && !isDeleting;
 
           return (
-            <React.Fragment key={`${row.id}-${rowState}`}>
-              <TableModule.Tr
-                rowHover={!isDeleting}
-                transparent
-                className={cn(
-                  "border-b-0 odd:bg-grey-light-200 even:bg-grey-light-400 hover:bg-grey-light-300 dark:odd:bg-black-500 dark:even:bg-black-primary-bg dark:hover:bg-black-300",
-                  rowState === "pending" && "animate-pulse",
-                  rowState === "error" && "bg-red-200/20",
-                  isDeleting &&
-                    "opacity-50 cursor-not-allowed pointer-events-none",
-                  isSelectionMode && canSelectRow && "cursor-pointer",
-                  isSelectionMode &&
-                    isSelectedRow &&
-                    canSelectRow &&
-                    "bg-primary-60/10",
-                  isSelectionMode &&
-                    !isSelectedRow &&
-                    canSelectRow &&
-                    "hover:bg-primary-60/8",
-                  isSelectionMode &&
-                    !canSelectRow &&
-                    "opacity-50 cursor-not-allowed",
-                )}
-                onContextMenu={(e) => {
-                  if (isDeleting) return;
-                  localHandleContextMenu(e, rowData);
-                }}
-                onClick={(e) => {
-                  if (isDeleting) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    return;
-                  }
-                  // Don't handle clicks if it's on the action menu area or checkbox area
-                  const target = e.target as HTMLElement;
-                  if (
-                    target.closest(".action-menu-area") ||
-                    target.closest('[role="checkbox"]') ||
-                    target.closest(".checkbox-container") ||
-                    target.closest(".folder-expander-area")
-                  ) {
-                    return;
-                  }
-
-                  if (isSelectionMode && canSelectRow) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    preserveClosestScrollPosition(target, () => {
-                      handleToggleTopLevelRow(rowData);
-                    });
-                  }
-                }}
-              >
-                {row.getVisibleCells().map((cell) => {
-                  const isSelectionCell = cell.column.id === "selection";
-                  return (
-                    <TableModule.Td
-                      className={cn(
-                        // Cell base is `text-sm` so the file NAME (which inherits
-                        // it) reads as first-class data; the metadata columns
-                        // (size/date/type) override back to `text-xs` to stay
-                        // visually secondary.
-                        "px-2 py-[5px] border-x-0 border-r last:border-r-0 border-grey-dark-100 text-grey-dark-800 text-sm dark:border-black-300",
-                        cell.column.id === "actions" && "p-0",
-                        cell.column.id === "name" && "p-0 relative",
-                        cell.column.id === "arionHash" && "p-0",
-                      )}
-                      key={cell.id}
-                      cell={cell}
-                      columnWidth={
-                        isSelectionCell
-                          ? undefined
-                          : columnWidths[cell.column.id]
-                      }
-                      style={
-                        isSelectionCell
-                          ? {
-                              width: SELECTION_COLUMN_WIDTH_PX,
-                              minWidth: SELECTION_COLUMN_WIDTH_PX,
-                              maxWidth: SELECTION_COLUMN_WIDTH_PX,
-                            }
-                          : undefined
-                      }
-                    />
-                  );
-                })}
-              </TableModule.Tr>
-
-              {rowData.isFolder && isExpanded && canInlineExpand && (
-                <ExpandedFolderRows
-                  folder={rowData}
-                  accountId={polkadotAddress}
-                  syncPath={syncPath}
-                  label={rowData.label}
-                  baseSubfolderPath={normalizedSubfolderPath}
-                  orderedColumnIds={orderedColumnIds}
-                  createTableItems={createTableItems}
-                  onSelectFile={handleSetSelectedFile}
-                  onRowContextMenu={localHandleContextMenu}
-                  onOpenFolder={(childFile, parentPath) => {
-                    const { url } = generateFolderUrl(
-                      childFile,
-                      getParam,
-                      parentPath,
-                    );
-                    router.push(url);
-                  }}
-                  sortBy={sortBy}
-                  sortDir={sortDir}
-                  ancestorChain={
-                    isSelectedRow
-                      ? [...cascadeAncestorChain, annotatedRow]
-                      : cascadeAncestorChain
-                  }
-                  isItemDeleting={isItemDeleting}
-                />
-              )}
-            </React.Fragment>
+            <DriveFileRow
+              key={`${row.id}-${rowState}`}
+              row={row}
+              rowState={rowState}
+              isExpanded={isExpanded}
+              canInlineExpand={canInlineExpand}
+              syncPath={syncPath}
+              isDeleting={isDeleting}
+              isSelectedRow={isSelectedRow}
+              canSelectRow={canSelectRow}
+              isSelectionMode={isSelectionMode}
+              columnWidths={columnWidths}
+              hasAnyFolder={hasAnyFolder}
+              normalizedSubfolderPath={normalizedSubfolderPath}
+              ctxRef={rowCtxRef}
+            />
           );
         }),
       [
         visibleRows,
-        localHandleContextMenu,
         isSelectionMode,
-        handleToggleTopLevelRow,
         columnWidths,
         expandedFolders,
-        createTableItems,
         getFolderKey,
         drivePaths,
         enableFolderExpander,
         normalizedSubfolderPath,
-        polkadotAddress,
-        handleDownload,
-        handleSetSelectedFile,
-        getParam,
-        router,
-        columnCount,
-        sortBy,
-        sortDir,
-        orderedColumnIds,
+        hasAnyFolder,
         cascadeAncestorChain,
         isVisuallySelected,
         isItemDeleting,
@@ -1806,7 +1947,20 @@ const FilesTable: FC<FilesTableProps> = memo(
               >
                 {headerRows}
               </TableModule.THead>
-              <TableModule.TBody>{tableBody}</TableModule.TBody>
+              <TableModule.TBody>
+                {tableBody}
+                {/* Placeholder rows while the next remote page is on the
+                    wire. Rendered INSIDE the tbody so they inherit the
+                    colgroup: widths, striping (nth-child continues from the
+                    real rows) and the chevron gutter all line up. */}
+                {isLoadingMore && (
+                  <FolderRowsSkeleton
+                    rows={3}
+                    orderedColumnIds={orderedColumnIds}
+                    nameIndentPx={hasAnyFolder ? 36 : 8}
+                  />
+                )}
+              </TableModule.TBody>
             </TableModule.Table>
           </TableModule.TableWrapper>
           {/* Sentinel element for infinite scroll */}

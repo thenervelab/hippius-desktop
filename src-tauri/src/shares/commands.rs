@@ -593,6 +593,170 @@ pub(crate) async fn share_external_file(
     })
 }
 
+// ─── Remote (server-only) file shares ──────────────────────────────────────
+
+/// Mint a share link for a file that exists ONLY on the server — a row inside
+/// a browsable remote drive with no local copy on this machine.
+///
+/// Console parity, built from existing parts: the file is downloaded and
+/// decrypted to a private temp path (`sync::remote::download_cloud_file_to`,
+/// the same folder-key chain the remote preview uses), streamed through the
+/// SAME `create_share` pipeline as a local file — re-encrypted under a fresh
+/// per-share key, uploaded to share storage — and the temp copy is removed on
+/// every exit. The share therefore costs a download + upload, which is why
+/// the FE offers it only on remote rows: a locally synced file shares
+/// straight from disk via [`create_share_inner`].
+///
+/// `relative_path` is the file's drive-relative path (for the share-origin
+/// sidecar, so the "Shared" badge finds it), `file_id` the hex path_hash the
+/// remote listing carries — the same id `download_remote_file` takes.
+#[allow(clippy::too_many_arguments)] // mirrors hcfs_create_share's surface + the file_id the remote listing adds
+async fn create_remote_share_inner(
+    state: &AppState,
+    account_id: &str,
+    folder_label: &str,
+    relative_path: &str,
+    file_id: &str,
+    ttl: ShareTtl,
+    choice: ShareChoice,
+    progress: Option<ShareProgressFn>,
+) -> Result<ShareLink> {
+    require_shares_supported(state, account_id).await?;
+    require_eligible(state, account_id, InsufficientCreditsAction::Sharing, 0).await?;
+
+    let filename = relative_path
+        .trim_matches('/')
+        .rsplit('/')
+        .next()
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| AppError::Validation("File has no usable name".into()))?
+        .to_owned();
+
+    // Per-ATTEMPT-unique staging path (pid + counter — two concurrent shares
+    // of the same file must not interleave one temp), placed under the
+    // preview cache rather than the OS temp dir so a crash-orphaned
+    // plaintext copy is eventually reclaimed by the cache's eviction sweep.
+    let cache_root = crate::sync::remote::preview_cache_root_dir()?;
+    tokio::fs::create_dir_all(&cache_root).await?;
+    let tmp = crate::sync::remote::unique_transient_path(&cache_root, &format!("remote-share-{file_id}"));
+
+    let minted = mint_remote_share_at(
+        state,
+        account_id,
+        folder_label,
+        relative_path,
+        file_id,
+        &filename,
+        &tmp,
+        ttl,
+        choice,
+        progress,
+    )
+    .await;
+    // The temp copy is plaintext — remove it on success AND on every error.
+    let _ = tokio::fs::remove_file(&tmp).await;
+    minted
+}
+
+/// Body of [`create_remote_share_inner`] between temp-path creation and
+/// cleanup, split out so the caller can guarantee the plaintext temp file is
+/// removed on every exit without a maze of early-return cleanup calls.
+#[allow(clippy::too_many_arguments)]
+async fn mint_remote_share_at(
+    state: &AppState,
+    account_id: &str,
+    folder_label: &str,
+    relative_path: &str,
+    file_id: &str,
+    filename: &str,
+    tmp: &Path,
+    ttl: ShareTtl,
+    choice: ShareChoice,
+    progress: Option<ShareProgressFn>,
+) -> Result<ShareLink> {
+    let pool = state.pool()?;
+
+    crate::sync::remote::download_cloud_file_to(state, account_id, folder_label, file_id, tmp).await?;
+
+    let metadata = tokio::fs::metadata(tmp).await?;
+    let plaintext_size = metadata.len();
+    // MIME from the REAL filename, not the `.part` temp name.
+    let mime_type = mime_guess::from_path(filename).first_or_octet_stream().essence_str().to_owned();
+
+    info!(
+        label = %folder_label,
+        relative_path = %relative_path,
+        plaintext_size,
+        mime_type = %mime_type,
+        "Creating share from remote file (download → re-encrypt → upload)"
+    );
+
+    let client = build_account_client(pool, account_id).await?;
+    let mut reader = tokio::fs::File::open(tmp).await?;
+    let keystore = SqliteShareKeystore::new(pool.clone());
+    let console_base = console_base_url();
+    let result = client
+        .create_share(
+            &mut reader,
+            plaintext_size,
+            &ShareOptions {
+                filename,
+                mime_type: &mime_type,
+                ttl,
+                password: choice.password(),
+                console_base_url: &console_base,
+            },
+            &keystore,
+            progress,
+        )
+        .await
+        .map_err(|e| {
+            warn!(error = %e, "create_share (remote source) failed");
+            AppError::Hcfs(format!("create_share: {e}"))
+        })?;
+
+    // Same best-effort share-origin sidecar as the local path — the remote
+    // row has a real (label, relative_path), so the "Shared" badge works.
+    let owner = account_key(account_id);
+    if let Err(e) = origin::record(pool, &result.share_token, &owner, folder_label, relative_path).await {
+        warn!(
+            share_token = %result.share_token,
+            error = %e,
+            "Failed to record share_origin (share itself succeeded)"
+        );
+    }
+
+    Ok(ShareLink {
+        share_token: result.share_token,
+        share_url: result.share_url,
+        expires_at: result.expires_at.map(|e| e.to_rfc3339()),
+        password: choice.into_password(),
+    })
+}
+
+/// Mint a share link for a file in a REMOTE (server-only) drive. Same
+/// argument surface as [`hcfs_create_share`] plus the `file_id` the remote
+/// listing carries; the download → re-encrypt → upload behavior is
+/// documented on [`create_remote_share_inner`].
+#[tauri::command]
+#[allow(clippy::too_many_arguments)] // one arg over hcfs_create_share: the file_id the remote listing carries
+pub async fn hcfs_create_remote_share(
+    state: tauri::State<'_, AppState>,
+    folder_label: String,
+    relative_path: String,
+    file_id: String,
+    ttl: String,
+    visibility: String,
+    password: Option<String>,
+    on_progress: Channel<ShareProgress>,
+) -> Result<ShareLink> {
+    let account_id = state.current_account_id()?;
+    let ttl = parse_ttl(&ttl)?;
+    let choice = ShareChoice::parse(&visibility, password)?;
+    let progress = share_progress_forwarder(on_progress);
+    create_remote_share_inner(&state, &account_id, &folder_label, &relative_path, &file_id, ttl, choice, Some(progress)).await
+}
+
 // ─── Folder shares (browsable live links) ──────────────────────────────────
 
 /// Capability gate for the folder-share mint. Same posture as
@@ -680,10 +844,13 @@ pub async fn create_folder_share_inner(
     require_folder_shares_supported(state, account_id).await?;
 
     // Resolve the drive's wire identity ONCE and thread it down (resolver
-    // call discipline). The strict resolver: minting against a label with no
-    // local row is a caller bug, and its "Unknown sync folder label"
-    // Validation matches the file share's `sync_root_for_label` refusal.
-    let identity = crate::sync::identity::resolve_drive_identity(pool, account_id, folder_label).await?;
+    // call discipline). The LENIENT variant (the remote-browse IPCs' form):
+    // since remote drives became browsable, `folder_label` may legitimately
+    // name a server-only drive with no local row — the mint is metadata-only
+    // and the derived key chain below works from the master mnemonic, so a
+    // local sync path was never actually required. A member row still
+    // resolves to member identity and is refused just below.
+    let identity = crate::sync::identity::resolve_drive_identity_or_own(pool, account_id, folder_label).await?;
 
     // Folder shares are owner-mint-only (server v1), and a member's derived
     // key would be wrong anyway — the drive's file key belongs to the OWNER's

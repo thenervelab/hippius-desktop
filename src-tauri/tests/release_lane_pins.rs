@@ -1,17 +1,104 @@
 //! Static guards on the three release lanes.
 //!
-//! Both failures pinned here are SILENT: nothing errors, nothing is annotated,
-//! and the build publishes. They surface only as "the update never arrived" or
-//! "the beta build behaves like production", weeks later and far from the edit
-//! that caused them. Neither is reachable from a unit test — one lives in a
-//! workflow file, the other across three config files — so the files are read
-//! directly.
+//! Every failure pinned here is SILENT: nothing errors, nothing is annotated,
+//! and the build publishes. They surface only as "the update never arrived",
+//! "the beta build behaves like production", or "the Finder extension
+//! disappeared" — weeks later and far from the edit that caused them. None is
+//! reachable from a unit test, since they live in workflow files and across
+//! config files, so those files are read directly.
 
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 
 fn repo_file(relative: &str) -> String {
     let path = format!("{}/{relative}", env!("CARGO_MANIFEST_DIR"));
     fs::read_to_string(&path).unwrap_or_else(|err| panic!("read {path}: {err}"))
+}
+
+/// The artifact `tauri-action` uploads before the finalize step embeds the
+/// Finder extension and notarizes. A different FILENAME from the finalized
+/// tarball, so the finalize step's `--clobber` cannot replace it.
+const PRE_FINALIZE_ARTIFACT: &str = "Hippius_universal.app.tar.gz";
+
+/// One workflow job, reduced to what these pins reason about.
+struct Job {
+    /// Jobs this one waits for, however `needs:` was spelled.
+    needs: Vec<String>,
+    /// Every `run:` script in the job, concatenated.
+    script: String,
+}
+
+/// Parse a workflow into its job graph.
+///
+/// Structural rather than textual on purpose: the guarantee being pinned is
+/// "publication happens downstream of verification", which is a property of the
+/// `needs:` edges. A grep for both strings in one file would keep passing after
+/// someone moved the verify job off the publish job's dependency chain — the
+/// exact edit that would reopen the hole.
+fn workflow_jobs(lane: &str) -> HashMap<String, Job> {
+    let text = repo_file(&format!("../.github/workflows/{lane}"));
+    let document: serde_yaml::Value = serde_yaml::from_str(&text).unwrap_or_else(|err| panic!("{lane} is not valid YAML: {err}"));
+
+    let jobs = document
+        .get("jobs")
+        .and_then(serde_yaml::Value::as_mapping)
+        .unwrap_or_else(|| panic!("{lane} declares no jobs"));
+
+    jobs.iter()
+        .filter_map(|(name, body)| {
+            let name = name.as_str()?.to_string();
+
+            // `needs:` is either a single job name or a list of them.
+            let needs = match body.get("needs") {
+                Some(serde_yaml::Value::String(one)) => vec![one.clone()],
+                Some(serde_yaml::Value::Sequence(many)) => many.iter().filter_map(|value| value.as_str().map(str::to_string)).collect(),
+                _ => Vec::new(),
+            };
+
+            let script = body
+                .get("steps")
+                .and_then(serde_yaml::Value::as_sequence)
+                .map(|steps| {
+                    steps
+                        .iter()
+                        .filter_map(|step| step.get("run").and_then(serde_yaml::Value::as_str))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                })
+                .unwrap_or_default();
+
+            Some((name, Job { needs, script }))
+        })
+        .collect()
+}
+
+/// The single job whose script contains `needle`, panicking unless there is
+/// exactly one — two would make "which job publishes" ambiguous, and the pin
+/// would then be guarding the wrong one.
+fn only_job_running(jobs: &HashMap<String, Job>, needle: &str, lane: &str) -> String {
+    let mut found: Vec<&String> = jobs.iter().filter(|(_, job)| job.script.contains(needle)).map(|(name, _)| name).collect();
+    found.sort();
+
+    assert_eq!(found.len(), 1, "expected exactly one job in {lane} running `{needle}`, found {found:?}");
+    found[0].clone()
+}
+
+/// Whether any job `start` transitively depends on satisfies `predicate`.
+fn dependency_satisfies(jobs: &HashMap<String, Job>, start: &str, predicate: impl Fn(&Job) -> bool) -> bool {
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut queue: VecDeque<String> = VecDeque::from([start.to_string()]);
+
+    while let Some(name) = queue.pop_front() {
+        if !seen.insert(name.clone()) {
+            continue;
+        }
+        let Some(job) = jobs.get(&name) else { continue };
+        if predicate(job) {
+            return true;
+        }
+        queue.extend(job.needs.iter().cloned());
+    }
+    false
 }
 
 /// The value `release_channel::parse_release_channel` matches for the beta lane.
@@ -121,6 +208,54 @@ fn the_state_epoch_declaration_stays_greppable() {
     );
 }
 
+/// Every beta platform job must publish a DRAFT, and something must un-draft it.
+///
+/// The three jobs have no `needs:` on each other and each upserts the same tag
+/// with `overwrite: true`, so the release's properties are whatever the job that
+/// arrived FIRST asked for. One job setting `releaseDraft: true` while the others
+/// say `false` therefore does nothing — which is exactly what shipped: the
+/// `v0.5.0-beta.3` run published a release carrying macOS and Linux assets and no
+/// Windows installer, because the Linux job finished first.
+///
+/// `tauri-build.yml` cannot hit this because it builds the three platforms as a
+/// MATRIX, so there is one setting rather than three. This lane inherited
+/// staging's three-independent-jobs shape, where every release property is
+/// raceable — the same class the `releaseName` comment there already warns about.
+///
+/// Asserts on the count as well as the values: a fourth job added without the
+/// setting would otherwise pass while reintroducing the race.
+#[test]
+fn every_beta_job_publishes_a_draft() {
+    let workflow = repo_file("../.github/workflows/tauri-beta.yml");
+
+    let settings: Vec<&str> = workflow
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("releaseDraft:"))
+        .map(str::trim)
+        .collect();
+
+    assert_eq!(
+        settings.len(),
+        3,
+        "expected one releaseDraft per platform job in tauri-beta.yml, found {}: {settings:?}",
+        settings.len()
+    );
+    assert!(
+        settings.iter().all(|value| *value == "true"),
+        "every beta platform job must publish a draft, found {settings:?}; the jobs race to create \
+         the release and the first one's setting wins, so a single `false` publishes a half-built \
+         release with whatever assets happen to exist at that moment"
+    );
+
+    // A draft nothing un-drafts is worse than no draft at all — the release
+    // would never become visible.
+    assert!(
+        workflow.contains("--draft=false"),
+        "publish-manifest must flip the release out of draft once the manifest is correct; \
+         without it every beta release stays invisible"
+    );
+}
+
 /// Staging publishes no manifest, so it must not be handed a separate updater
 /// key either.
 ///
@@ -145,6 +280,49 @@ fn no_lane_patches_a_channel_specific_updater_key() {
              hazard the one-key model removes"
         );
     }
+}
+
+/// The committed pubkey must stay the one key every lane signs with.
+///
+/// Its sibling above only forbids a WORKFLOW from patching the key, which is
+/// the mechanism that has since been deleted. The committed value was never
+/// pinned, and that is the half that shipped: a pubkey swapped in `tauri.conf.json`
+/// for internal preview signing stayed on the lane for three months, so those
+/// builds verify with a key nothing is signed with and fail every update with
+/// minisign's "The signature was created with a different key than the one
+/// provided".
+///
+/// This is unrecoverable in the field rather than merely broken — the pubkey is
+/// compiled into the binary, so no re-signing, manifest edit, or later release
+/// can reach an install that already has the wrong one; a manual reinstall is
+/// the only remedy. That asymmetry is why the value is pinned and not just
+/// reviewed. It also covers all three lanes at once: they share this one file,
+/// so a branch that edits the key fails its own CI before it can merge.
+///
+/// A literal, because nothing in-repo can derive it — the matching private key
+/// is the `TAURI_SIGNING_PRIVATE_KEY` secret. Rotating the key therefore means
+/// deliberately editing this pin, which is the review the change needs.
+#[test]
+fn the_committed_updater_pubkey_is_the_one_every_lane_signs_with() {
+    // minisign public key E411FB37072F234F, base64 of the whole `.pub` file.
+    // Split only to stay inside the line width; the halves concatenate verbatim.
+    const UPDATER_PUBKEY: &str = concat!(
+        "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEU0MTFGQjM3MDcyRjIzNEYK",
+        "UldSUEl5OEhOL3NSNUdYMmxpUG1WUWtiTWd1TDRjMkt6aXBveFdmYmx3TjJTd01UUW1IMmJGZUgK",
+    );
+
+    let conf: serde_json::Value = serde_json::from_str(&repo_file("tauri.conf.json")).expect("tauri.conf.json is valid JSON");
+
+    let pubkey = conf["plugins"]["updater"]["pubkey"]
+        .as_str()
+        .expect("tauri.conf.json declares plugins.updater.pubkey");
+
+    assert_eq!(
+        pubkey, UPDATER_PUBKEY,
+        "tauri.conf.json carries an updater pubkey that is not the one every lane signs with. \
+         Shipping it strands every install it reaches — the key is compiled in, so those builds \
+         can never auto-update again. Change this pin only when rotating TAURI_SIGNING_PRIVATE_KEY."
+    );
 }
 
 /// The app's macOS floor must not drop below the Finder extension's.
@@ -289,4 +467,115 @@ fn the_macos_manifest_patch_covers_the_key_the_updater_actually_reads() {
             );
         }
     }
+}
+
+/// Every lane must delete `tauri-action`'s pre-finalize artifact.
+///
+/// The macOS release is built `--bundles app` so the Finder extension can be
+/// embedded afterwards, and `tauri-action` uploads THAT build — no
+/// `HippiusFinder.appex`, never notarized, never stapled — under a name the
+/// finalize step's `--clobber` does not cover. It then sits on the release page
+/// beside `Hippius_universal.dmg`, reading as its sibling, while the file a user
+/// actually wants is the differently-named `Hippius.app.tar.gz`.
+///
+/// Nothing references it once the manifest is corrected, so no job fails and no
+/// updater is affected. The cost lands entirely on whoever downloads by hand and
+/// installs a build with no "Share with Hippius" in it.
+#[test]
+fn every_lane_deletes_the_pre_finalize_artifact() {
+    let sig = format!("{PRE_FINALIZE_ARTIFACT}.sig");
+
+    for lane in ["tauri-staging.yml", "tauri-beta.yml", "tauri-build.yml"] {
+        let jobs = workflow_jobs(lane);
+
+        // Bound to the deleting JOB, and to a non-comment line inside it. A
+        // file-wide substring pair passes while the two strings sit in
+        // unrelated jobs, and the artifact name appears in the shell comment
+        // that explains the delete — so the obvious spelling of this pin keeps
+        // passing after the loop it guards has been removed.
+        let deleter = only_job_running(&jobs, "gh release delete-asset", lane);
+        let script = &jobs[&deleter].script;
+
+        for asset in [PRE_FINALIZE_ARTIFACT, sig.as_str()] {
+            let named_in_code = script
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.starts_with('#'))
+                .any(|line| line.contains(asset));
+
+            assert!(
+                named_in_code,
+                "{lane}'s {deleter} job deletes release assets but never names {asset} in an \
+                 executed line, so tauri-action's pre-finalize build stays attached to the release"
+            );
+        }
+    }
+}
+
+/// A lane must not publish a release it has not opened and checked.
+///
+/// The failures the verification catches are invisible from the build log:
+/// `finalize-macos-release.sh` reports success whether or not the extension made
+/// it into the bundle, a manifest naming the wrong tarball is valid JSON with a
+/// valid signature, and the resulting update installs cleanly. v0.5.0 shipped a
+/// macOS auto-update carrying no Finder extension and no notarization staple and
+/// every job was green.
+///
+/// So the guarantee is an ORDERING one — draft, verify, only then publish — and
+/// it is pinned on the `needs:` graph rather than on the presence of the strings,
+/// because moving the verify job off the publish job's dependency chain would
+/// leave both strings in the file and reopen the hole.
+#[test]
+fn no_lane_publishes_before_verifying_the_artifacts() {
+    // Staging publishes on the spot rather than as a draft and is covered by
+    // `staging_verifies_before_it_uploads` instead.
+    for lane in ["tauri-build.yml", "tauri-beta.yml"] {
+        let jobs = workflow_jobs(lane);
+        let publisher = only_job_running(&jobs, "--draft=false", lane);
+
+        assert!(
+            dependency_satisfies(&jobs, &publisher, |job| { job.script.contains("macos/verify-macos-artifacts.sh") }),
+            "in {lane} the job that publishes the release ({publisher}) does not depend on any job \
+             running macos/verify-macos-artifacts.sh, so a build with no Finder extension or no \
+             notarization staple would publish exactly as v0.5.0 did"
+        );
+        assert!(
+            dependency_satisfies(&jobs, &publisher, |job| { job.script.contains("scripts/verify-release-manifest.sh") }),
+            "in {lane} the job that publishes the release ({publisher}) does not depend on any job \
+             running scripts/verify-release-manifest.sh, so latest.json could point macOS at an \
+             asset this release does not carry"
+        );
+    }
+}
+
+/// Staging has no draft to hold a bad build back, so it must verify BEFORE it
+/// uploads.
+///
+/// The other two lanes build a draft and gate publication on a separate job.
+/// Staging's platform jobs publish immediately (`releaseDraft: false`), so by
+/// the time a separate job could run, testers can already have the build. The
+/// only point of control is ahead of the upload, in the same script.
+///
+/// A staging DMG that looks complete and is not costs testers days — the same
+/// reasoning that makes the lane stamp ` - NO FINDER EXTENSION` onto the release
+/// name when it builds without notarization creds.
+#[test]
+fn staging_verifies_before_it_uploads() {
+    let jobs = workflow_jobs("tauri-staging.yml");
+    let job = jobs.get("publish-tauri-macos").expect("tauri-staging.yml has a publish-tauri-macos job");
+
+    let verify = job
+        .script
+        .find("macos/verify-macos-artifacts.sh")
+        .expect("tauri-staging.yml's macOS job must verify the finalized artifacts");
+    let upload = job
+        .script
+        .find("gh release upload")
+        .expect("tauri-staging.yml's macOS job uploads the finalized artifacts");
+
+    assert!(
+        verify < upload,
+        "tauri-staging.yml verifies the macOS artifacts only AFTER uploading them; the lane \
+         publishes on the spot, so the check has to run first or testers already have the build"
+    );
 }
