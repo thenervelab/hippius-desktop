@@ -611,7 +611,7 @@ pub async fn search_user_files_recursive(
 enum SearchNeedle {
     /// Case-insensitive substring of the display name or Arion hash.
     Substring(String),
-    /// gitignore-style glob against the drive-relative path.
+    /// globset glob against the drive-relative path.
     Glob(GlobMatcher),
     /// Unparseable glob (e.g. unclosed `[`). Match nothing; never panic.
     MatchNothing,
@@ -620,10 +620,20 @@ enum SearchNeedle {
 /// Compile `search_term` into a needle.
 ///
 /// A term containing `*` or `?` is a glob — `*.bin` is not a literal
-/// substring of those two characters. Slash-free patterns are expanded
-/// the same way exclude rules expand them (`**/{pattern}`) so they match
-/// at any depth. Other terms keep the historical case-insensitive
-/// substring match on name/hash.
+/// substring of those two characters. EVERY pattern is expanded to
+/// `**/{pattern}`, exactly as hcfs's `ExcludeRules::parse` expands its
+/// own, so a term matches at any depth and the two engines agree on what
+/// a pattern means.
+///
+/// `literal_separator` stays at globset's default, so `*` crosses `/` and
+/// a term containing a slash is NOT root-anchored. That is looser than
+/// gitignore, and deliberately so twice over: it is the forgiving
+/// behaviour a search box wants, and it is what the exclude rules already
+/// do. Search differs from them in one respect only — it is
+/// case-insensitive.
+///
+/// Other terms keep the historical case-insensitive substring match on
+/// name/hash.
 fn compile_search_needle(term: &str) -> Option<SearchNeedle> {
     if term.is_empty() {
         return None;
@@ -1006,6 +1016,13 @@ mod tests {
         }
     }
 
+    fn make_hashed(name: &str, hash: &str) -> UserFileEntry {
+        UserFileEntry {
+            arion_hash: hash.to_string(),
+            ..make_file(name, 1, "d", 0, false)
+        }
+    }
+
     fn search(files: Vec<UserFileEntry>, q: &str) -> Vec<UserFileEntry> {
         filter_file_entries_inner(
             files,
@@ -1088,6 +1105,52 @@ mod tests {
         let files = vec![make_file("a.txt", 1, "d", 0, false)];
         let out = search(files, "*[");
         assert!(out.is_empty());
+    }
+
+    /// The `?` half of the glob trigger. Every other glob test uses `*`,
+    /// so narrowing the predicate to `contains('*')` would keep them all
+    /// green while silently turning `a?c.txt` back into a substring
+    /// search that matches nothing.
+    #[test]
+    fn filter_search_question_mark_is_a_glob() {
+        let files = vec![
+            make_file("abc.txt", 1, "d", 0, false),
+            make_file("ac.txt", 1, "d", 0, false),
+            make_file("abbc.txt", 1, "d", 0, false),
+        ];
+        let out = search(files, "a?c.txt");
+        assert_eq!(rel_names(&out), vec!["abc.txt"], "`?` stands for exactly one character");
+    }
+
+    /// The two needles read different fields: a substring term matches the
+    /// display name OR the Arion hash, a glob matches only the relative
+    /// path. Pinned because "let globs search the hash too" reads as a
+    /// harmless improvement, and would make any `*`-bearing term start
+    /// matching files whose hash merely contains the letters.
+    #[test]
+    fn filter_search_glob_matches_the_path_not_the_hash() {
+        let files = vec![make_hashed("photo.jpg", "deadbeef")];
+
+        let out = search(files.clone(), "deadbeef");
+        assert_eq!(rel_names(&out), vec!["photo.jpg"], "a substring term still matches the hash");
+
+        let out = search(files, "dead*");
+        assert!(out.is_empty(), "a glob is matched against the relative path only, never the hash");
+    }
+
+    /// A term containing `/` gets the same unconditional `**/` prefix, so
+    /// it is NOT root-anchored: `docs/*.pdf` also finds a nested `docs`.
+    /// That mirrors hcfs's exclude rules, so the pattern a user excludes
+    /// and the pattern they search mean the same thing.
+    #[test]
+    fn filter_search_glob_with_a_slash_is_not_root_anchored() {
+        let files = vec![
+            make_rel("a.pdf", "docs/a.pdf"),
+            make_rel("b.pdf", "work/docs/b.pdf"),
+            make_rel("c.pdf", "other/c.pdf"),
+        ];
+        let out = search(files, "docs/*.pdf");
+        assert_eq!(rel_names(&out), vec!["docs/a.pdf", "work/docs/b.pdf"]);
     }
 
     #[test]
