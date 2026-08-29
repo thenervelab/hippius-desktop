@@ -71,6 +71,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   again later", Hippius names the problem and links to the download page for
   your release channel, with the right instructions for how your copy was
   installed.
+- **Closing the window on Linux and Windows now quits Hippius.** The app
+  no longer leaves a background process running after you click the window X.
 - **`--version` prints the version and exits.** Running Hippius with `--version`
   or `-V` no longer opens the full app.
 - **Adding a large folder no longer freezes the app.** Dropping a multi-gigabyte
