@@ -93,6 +93,12 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   Release pages carried a second Mac file next to the disk image that read as an
   alternative download but was missing "Share with Hippius" and Apple's security
   check. It is gone from current releases and will not appear on new ones.
+- **Files you exclude with a pattern like `*.bin` disappear from Drive.**
+  Recent Files no longer shows them, your storage total stops counting them,
+  and clearing the pattern brings them back without a manual refresh.
+- **An exclusion pattern that can't work is refused when you type it.**
+  Previously a malformed pattern was saved and listed as active while
+  quietly excluding nothing.
 - **Updating on a Mac no longer removes "Share with Hippius".** Installing from the
   disk image gave you the right-click share menu, but every automatic update after
   that quietly replaced Hippius with a copy that did not include it — so the feature

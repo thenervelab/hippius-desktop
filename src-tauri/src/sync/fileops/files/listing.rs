@@ -106,6 +106,7 @@ async fn list_sync_folder_inner_with(
             None => (None, Vec::new()),
         },
     };
+    let exclude_rules = super::exclude_match::rules_from_patterns(&excluded_patterns);
 
     let mut entries = Vec::new();
     // A read_dir failure is an I/O fault → Io (#[from]).
@@ -152,8 +153,10 @@ async fn list_sync_folder_inner_with(
             None => name.clone(),
         };
 
-        // Folders don't have server-side entries — their children do
-        let is_excluded = !excluded_patterns.is_empty() && excluded_patterns.iter().any(|p| p == &relative_path);
+        // Folders don't have server-side entries — their children do.
+        // Match engine globs (`*.bin` → foo.bin and dir/foo.bin), not exact
+        // path equality — that left glob-excluded files Pending on Drive.
+        let is_excluded = super::exclude_match::path_is_excluded(&exclude_rules, &relative_path, is_folder);
         let (sync_status, info) = if is_excluded {
             ("excluded", None)
         } else if is_folder {
@@ -357,6 +360,7 @@ pub async fn list_sync_folder_grouped_inner(
         Some(l) => synced_paths_and_excludes_for_label(&state.sync, l).await,
         None => (None, Vec::new()),
     };
+    let exclude_rules = super::exclude_match::rules_from_patterns(&excluded_patterns);
     let disk_entries = list_sync_folder_inner_with(
         state,
         sync_path.clone(),
@@ -387,17 +391,28 @@ pub async fn list_sync_folder_grouped_inner(
             if remainder.is_empty() {
                 continue;
             }
+            // An excluded rel-path contributes nothing: not a row, and not a
+            // count toward the folder holding it. Testing this before the
+            // file/folder split is what stops `vendor/node_modules/a.js` from
+            // conjuring a `vendor` folder that opens empty.
+            if super::exclude_match::path_is_excluded(&exclude_rules, rel, false) {
+                continue;
+            }
             match remainder.split_once('/') {
                 Some((first_component, _rest)) => {
                     // Server-known subfolder at this level. Skip if already on
                     // disk (the on-disk entry's `file_count` is authoritative
                     // for this device's view of the subfolder).
-                    if !seen_names.contains(first_component) {
+                    // `prefix` is already `""` or `"<sub>/"`, so this is the
+                    // drive-relative path the exclude rules are matched on.
+                    let folder_rel = format!("{prefix}{first_component}");
+                    if !seen_names.contains(first_component) && !super::exclude_match::path_is_excluded(&exclude_rules, &folder_rel, true) {
                         *server_only_folders.entry(first_component.to_string()).or_insert(0) += 1;
                     }
                 }
                 None => {
-                    // Direct child file, server-known. Skip if on disk.
+                    // Direct child file, server-known. Skip if on disk —
+                    // excluded ones were already dropped above.
                     if !seen_names.contains(remainder) {
                         server_only_files.push(FileEntry {
                             name: remainder.to_string(),
@@ -424,6 +439,11 @@ pub async fn list_sync_folder_grouped_inner(
     let mut folders: Vec<FileEntry> = Vec::new();
     let mut files: Vec<FileEntry> = Vec::new();
     for entry in disk_entries {
+        // Tagged excluded by the glob matcher above; keep them off Drive
+        // rather than showing an Excluded pill.
+        if entry.sync_status == "excluded" {
+            continue;
+        }
         if entry.is_folder {
             folders.push(entry);
         } else {
@@ -470,6 +490,15 @@ pub async fn list_sync_folder_grouped_inner(
             .filter(|s| !s.is_empty())
             .map_or_else(|| PathBuf::from(&sync_path), |s| PathBuf::from(&sync_path).join(s));
         for entry in cache_only_folder_candidates(pool, &owner, l, &prefix, &level_dir).await {
+            // An excluded folder must not come back through the cache. The
+            // on-disk copy is already dropped above, and `seen_names` only
+            // covers folders that exist locally — a `node_modules/` rule on a
+            // drive whose tree was registered from another device would
+            // otherwise reappear here as a pending folder the engine never
+            // syncs.
+            if super::exclude_match::path_is_excluded(&exclude_rules, &format!("{prefix}{}", entry.name), true) {
+                continue;
+            }
             // `HashSet::insert` returns false when the name is already shown
             // (from disk or a file's parent) — the dedup-by-name the task
             // requires, so an on-disk folder is never doubled by its cache row.
