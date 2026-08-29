@@ -208,6 +208,16 @@ from `manifest_url()` and asserts the workflow writes to that same tag, because
 a drift there leaves `publish-release` succeeding while beta builds check a URL
 nobody publishes to.
 
+**Every platform installs in-app, Linux included.** `tauri-plugin-updater`
+picks the manifest key for the bundle it is running as — `linux-x86_64-deb`
+here, which every published `latest.json` carries — and installs the `.deb`
+with `dpkg -i`, escalating through pkexec, a graphical sudo prompt, then sudo.
+A session with none of those cannot finish, so `updates.rs` classifies the
+plugin's error and returns copy naming the channel's release page and how to
+install the package by hand (H-061). The wording is keyed on
+`bundle_type()`, not on `target_os`: a `.deb` and an AppImage are both Linux
+and need different instructions. Pinned by `tests/updater_install_paths.rs`.
+
 The check itself runs in **Rust** (`src-tauri/src/updates.rs`), not through
 `@tauri-apps/plugin-updater`'s JS `check()`. That one reads the single
 `plugins.updater.endpoints` list compiled into `tauri.conf.json`, and

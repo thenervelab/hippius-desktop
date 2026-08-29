@@ -91,6 +91,20 @@ export function tauriErrorMessage(error: unknown): string {
   return "Unknown error";
 }
 
+/**
+ * The Rust-owned sentence from a Tauri rejection, or `""` when the payload
+ * carries none.
+ *
+ * Use this instead of {@link tauriErrorMessage} wherever the caller has its own
+ * fallback copy. A rejection at the IPC transport layer arrives as a bare `{}`,
+ * and `tauriErrorMessage`'s "Unknown error" would then REPLACE a usable
+ * fallback with a string the user can do nothing with.
+ */
+export function tauriErrorDetail(error: unknown): string {
+  const message = (error as TauriError | null)?.message;
+  return typeof message === "string" ? message : "";
+}
+
 export function isNotReady(error: unknown, expected?: NotReadyKind): boolean {
   const e = error as TauriError | null;
   if (e?.kind !== "NotReady") return false;

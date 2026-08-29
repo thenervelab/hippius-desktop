@@ -13,6 +13,8 @@ export type FileFailureKind =
   /** The file's bytes changed between the scan hash and the encrypt hash, so
    *  the engine discarded the upload. Retries itself on the next cycle. */
   | "changedWhileUploading"
+  /** Local file vanished between plan and open (ENOENT). Next cycle drops it. */
+  | "gone"
   | "other";
 
 export interface FileFailureRecord {
