@@ -8,10 +8,12 @@ use std::sync::OnceLock;
 ///
 /// Keyed by absolute path. Each entry records the directory's mtime at the
 /// time of the walk. On lookup, if the current mtime matches the cached
-/// one, the cached `(size, count)` is returned without re-walking. APFS,
-/// ext4, and NTFS all bump a directory's mtime on add/remove/rename of
-/// children, which is the only invalidation case the file browser cares
-/// about — pure file-content changes within an unmodified directory don't
+/// one, the cached `(size, count)` is returned without re-walking. Direct
+/// children changing does bump that directory's mtime (APFS/ext4/NTFS),
+/// but a parent is **not** stamped when a descendant in a subdirectory is
+/// added or removed — so `delete_files` must call
+/// [`invalidate_dir_stats_after_delete`] rather than relying on mtime.
+/// Pure file-content changes within an unmodified directory don't
 /// invalidate the cache, but they don't change `count` and almost never
 /// shift the displayed size by a meaningful amount.
 ///
@@ -82,6 +84,35 @@ pub(crate) fn invalidate_dir_stats_under(root: &Path) {
         return;
     };
     cache.retain(|path, _| path != root && !path.starts_with(root));
+}
+
+/// Drop cached stats for `deleted` and every ancestor directory up to
+/// `sync_root` (inclusive).
+///
+/// Cache key is `(path, directory mtime)`. POSIX only stamps the directory
+/// whose entries changed, so deleting `root/sub/a.txt` updates `root/sub`
+/// but not `root`. A listing of `root` would keep serving the pre-delete
+/// totals unless those ancestor keys are dropped. `invalidate_dir_stats_under`
+/// at each step also clears descendants of a deleted DIRECTORY.
+///
+/// `delete_files` must call this after a successful remove; do not rely
+/// on parent mtime. Paths should be the listing form (DB sync path +
+/// relative), not a canonicalized target — listing never canonicalizes,
+/// and on macOS `/var` vs `/private/var` would miss every cache key.
+pub(super) fn invalidate_dir_stats_after_delete(sync_root: &Path, deleted: &Path) {
+    invalidate_dir_stats_under(deleted);
+
+    let mut ancestor = deleted.parent();
+    while let Some(path) = ancestor {
+        if !path.starts_with(sync_root) {
+            break;
+        }
+        invalidate_dir_stats_under(path);
+        if path == sync_root {
+            break;
+        }
+        ancestor = path.parent();
+    }
 }
 
 /// Iterative `std::fs` walk. Returns one `(path, mtime, size, count)`
@@ -251,5 +282,80 @@ mod tests {
         assert!(cache.contains_key(&keep));
         drop(cache);
         dir_stats_cache().lock().expect("lock").remove(&keep);
+    }
+
+    /// H-068: cache key is `(path, mtime)`. A parent directory's mtime does
+    /// not change when a file is deleted from a *subdirectory*, so seeding
+    /// root/ and root/sub/ then deleting root/sub/a.txt (9 B) must still
+    /// drop 9 B from `dir_stats_recursive(root)` after ancestor invalidation
+    /// — not because root mtime moved.
+    #[tokio::test]
+    async fn deleting_a_nested_file_drops_ancestor_dir_stats_without_root_mtime() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+        let sub = root.join("sub");
+        std::fs::create_dir(&sub).expect("mkdir sub");
+        let file = sub.join("a.txt");
+        std::fs::write(&file, b"123456789").expect("write 9 bytes");
+
+        let (size, count) = dir_stats_recursive(root).await;
+        assert_eq!(size, 9);
+        assert_eq!(count, 1);
+
+        std::fs::remove_file(&file).expect("delete nested file");
+
+        // Re-seed under the POST-delete mtimes so a filesystem that happens
+        // to bump root mtime cannot make this pass via a cache miss. The
+        // production bug is that Unix does *not* bump that mtime.
+        let root_mtime = std::fs::metadata(root).expect("meta").modified().expect("mtime");
+        let sub_mtime = std::fs::metadata(&sub).expect("meta").modified().expect("mtime");
+        {
+            let mut cache = dir_stats_cache().lock().expect("lock");
+            cache.insert(root.to_path_buf(), (root_mtime, 9, 1));
+            cache.insert(sub.clone(), (sub_mtime, 9, 1));
+        }
+
+        let (size, count) = dir_stats_recursive(root).await;
+        assert_eq!(size, 9, "seeded cache must be consulted before invalidation");
+        assert_eq!(count, 1);
+
+        invalidate_dir_stats_after_delete(root, &file);
+
+        let (size, count) = dir_stats_recursive(root).await;
+        assert_eq!(size, 0, "root totals must drop the deleted 9 B");
+        assert_eq!(count, 0);
+
+        dir_stats_cache().lock().expect("lock").remove(root);
+        dir_stats_cache().lock().expect("lock").remove(&sub);
+    }
+
+    #[test]
+    fn after_delete_invalidation_stops_at_sync_root() {
+        let keep_outside = std::path::PathBuf::from("/b/other");
+        let above_root = std::path::PathBuf::from("/a");
+        let sync_root = std::path::PathBuf::from("/a/drive");
+        let sub = sync_root.join("sub");
+        let file = sub.join("a.txt");
+        let now = std::time::SystemTime::now();
+        {
+            let mut cache = dir_stats_cache().lock().expect("lock");
+            cache.insert(sync_root.clone(), (now, 1, 1));
+            cache.insert(sub.clone(), (now, 2, 2));
+            cache.insert(keep_outside.clone(), (now, 3, 3));
+            cache.insert(above_root.clone(), (now, 4, 4));
+        }
+        invalidate_dir_stats_after_delete(&sync_root, &file);
+        {
+            let cache = dir_stats_cache().lock().expect("lock");
+            assert!(!cache.contains_key(&sync_root));
+            assert!(!cache.contains_key(&sub));
+            assert!(cache.contains_key(&keep_outside), "sibling trees must stay cached");
+            assert!(
+                cache.contains_key(&above_root),
+                "must not walk above the sync root into /Users or drive parents"
+            );
+        }
+        dir_stats_cache().lock().expect("lock").remove(&keep_outside);
+        dir_stats_cache().lock().expect("lock").remove(&above_root);
     }
 }

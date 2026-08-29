@@ -93,8 +93,11 @@ pub async fn delete_files(
         let parent = Path::new(&sync_path);
         let target = parent.join(&relative_name);
         match ensure_within(parent, &target) {
-            Ok(target) => match remove_entry(&target).await {
+            Ok(resolved) => match remove_entry(&resolved).await {
                 Ok((kind, size_bytes)) => {
+                    // Listing cache keys use the DB sync path, not a
+                    // canonicalized target (`/var` vs `/private/var` on macOS).
+                    super::dir_stats::invalidate_dir_stats_after_delete(parent, &target);
                     if kind == RemovedKind::Directory {
                         dirs_removed_for.push(file.label.clone());
                     }
@@ -283,6 +286,18 @@ mod tests {
         assert!(
             src.contains("FolderEntitySyncTrigger::Forced"),
             "the delete-triggered reconcile must bypass the interval throttle; a routine trigger can be skipped for 30s and the deleting cycle may never complete"
+        );
+    }
+
+    /// H-068: a parent directory's mtime does not change when a descendant
+    /// in a subdirectory is deleted, so `delete_files` must drop dir_stats
+    /// for the deleted path and every ancestor up to the sync root.
+    #[test]
+    fn delete_files_invalidates_dir_stats_after_a_successful_remove() {
+        let src = include_str!("delete.rs");
+        assert!(
+            src.contains("invalidate_dir_stats_after_delete"),
+            "delete_files must invalidate dir_stats after a successful remove; parent mtime is not a cache key for nested deletes"
         );
     }
 }
