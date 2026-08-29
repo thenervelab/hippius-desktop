@@ -67,7 +67,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
-- **Files that vanish before upload no longer mark the whole sync as Failed.**
+- **Files that vanish before upload no longer mark the whole sync as Failed.** A
+  temporary file that the app or the system deletes mid-sync used to leave the sync
+  widget, the tray icon and the tray panel showing a red "Failed" at 100%, even
+  though every file you actually cared about had synced. Genuine failures still
+  show as before.
 - **`--version` prints the version and exits.** Running Hippius with `--version`
   or `-V` no longer opens the full app.
 - **Adding a large folder no longer freezes the app.** Dropping a multi-gigabyte
