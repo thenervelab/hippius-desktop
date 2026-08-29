@@ -197,7 +197,16 @@ pub async fn add_file(
         }
     };
     match add_file_internal(&canonical_parent, &file_path).await {
-        Ok(name) => Ok(name),
+        Ok(name) => {
+            // Same cache drop as `add_folder` / `add_files`, and for the same
+            // reason: one more file in an already-browsed folder is exactly the
+            // case a coarse directory mtime hides from the path+mtime key.
+            // Invalidate under the RAW `sync_path`, not `canonical_parent` —
+            // listing keys the cache by the path the frontend passed, and on
+            // macOS the canonical form differs (`/tmp` → `/private/tmp`).
+            super::dir_stats::invalidate_dir_stats_under(Path::new(&sync_path));
+            Ok(name)
+        }
         Err(e) => {
             if let Some(label) = label_opt.as_deref() {
                 state.upload_processing.reset(&app, label);
@@ -388,12 +397,31 @@ fn is_unlisted_regular_file(name: &str, file_len: u64) -> bool {
         || (hcfs_client::engine::classify::is_encrypted_name_stub(name).is_some() && file_len == 0)
 }
 
+/// Local mirror of hcfs-client's `drive::exclude::should_skip_path` — the rule
+/// its real `Drive::collect_files` scan applies: skip the `.hippius` config dir
+/// and every `.`-prefixed name, files and directories alike. Upstream is
+/// `pub(super)`, hence re-derived rather than called.
+///
+/// The rule is the leading dot on EVERY platform, not an OS "hidden" notion.
+/// Windows sets hidden via `FILE_ATTRIBUTE_HIDDEN` and its dotfiles are not
+/// hidden, but the engine and the Drive listing both key off the dot there too,
+/// so a name-based rule is what keeps the three in agreement.
+///
+/// `to_str()`-gated on purpose, matching upstream exactly: a non-UTF-8 name is
+/// NOT skipped, so the engine uploads it. A lossy conversion here would drop
+/// such a name from counters whose whole job is to predict engine work.
+fn is_engine_hidden_name(name: &std::ffi::OsStr) -> bool {
+    name.to_str().is_some_and(|n| n.starts_with('.'))
+}
+
 /// One `DirEntry::metadata` per entry (lstat-shaped, does not follow
 /// symlinks) so we do not pay `file_type` + `metadata` on every file.
 ///
 /// Skips the same names Drive listing hides so the File No banner cannot
 /// count a file the table will omit (H-082: 130 visible + 2 hidden used
-/// to banner 132). Hidden directories are not descended.
+/// to banner 132). A hidden directory is skipped before it reaches the
+/// stack, so its whole subtree is excluded — matching both the listing and
+/// the engine scan, which drop the subtree the same way.
 fn walk_regular_files_stats_std(root: &std::path::Path) -> (u64, u64) {
     let mut bytes: u64 = 0;
     let mut count: u64 = 0;
@@ -405,18 +433,14 @@ fn walk_regular_files_stats_std(root: &std::path::Path) -> (u64, u64) {
         let Ok(entries) = std::fs::read_dir(&dir) else { continue };
         for entry in entries.flatten() {
             let name = entry.file_name();
-            let name = name.to_string_lossy();
-            // Same rule as listing.rs / pending-summary / dir_stats: a
-            // `.`-prefixed dir is skipped wholesale so its children are
-            // never counted.
-            if name.starts_with('.') {
+            if is_engine_hidden_name(&name) {
                 continue;
             }
             let Ok(meta) = entry.metadata() else { continue };
             if meta.is_dir() {
                 stack.push(entry.path());
             } else if meta.is_file() {
-                if is_unlisted_regular_file(&name, meta.len()) {
+                if is_unlisted_regular_file(&name.to_string_lossy(), meta.len()) {
                     continue;
                 }
                 count = count.saturating_add(1);
@@ -511,19 +535,13 @@ fn compute_startup_pending_summary_std(folder_dir: &std::path::Path, sync_root: 
         }
         let Ok(entries) = std::fs::read_dir(&dir) else { continue };
         for entry in entries.flatten() {
-            // Mirror hcfs-client's `drive::exclude::should_skip_path` — the rule
-            // its real `Drive::collect_files` scan applies: skip the `.hippius`
-            // config dir and every hidden entry (name starting with '.'). Those
-            // are never uploaded, so they never enter `sync_state.json`; without
-            // this skip a macOS `.DS_Store` (never synced) is counted as pending
-            // on every launch, painting a spurious "N files · Preparing" the
-            // engine then never transfers. `to_str()`-gated so a non-UTF-8 name
-            // is NOT skipped — matching upstream exactly. Same local
-            // reproduction as `migrate::folder_entries_backfill::is_skipped_dir_name`
-            // (upstream `should_skip_path` is `pub(super)`, hence re-derived).
-            // Skipping a hidden dir here means its whole subtree is never pushed,
-            // so descendants are excluded too — again matching the engine walk.
-            if entry.file_name().to_str().is_some_and(|name| name.starts_with('.')) {
+            // Hidden entries are never uploaded, so they never enter
+            // `sync_state.json`; without this skip a macOS `.DS_Store` (never
+            // synced) is counted as pending on every launch, painting a
+            // spurious "N files · Preparing" the engine then never transfers.
+            // Skipping a hidden dir here means its whole subtree is never
+            // pushed, so descendants are excluded too — matching the engine.
+            if is_engine_hidden_name(&entry.file_name()) {
                 continue;
             }
             let Ok(meta) = entry.metadata() else { continue };
@@ -915,38 +933,120 @@ mod tests {
         assert_eq!(walk_regular_files_stats_std(&src).1, 1);
     }
 
-    /// Extract the brace-matched body of the function whose signature contains
-    /// `sig` — a whole-file substring would pass if the call lived in a test.
+    /// Extract the body of the function whose signature contains `sig` — a
+    /// whole-file substring would pass if the call lived in a test.
+    ///
+    /// The end is the first `\n}\n`: rustfmt closes a top-level item's brace at
+    /// column 0 and indents every brace inside it, so this needs no brace
+    /// counting — and brace counting is what would silently overrun the body
+    /// (and then match a LATER function's call) the day a comment or string
+    /// literal in here carries an unbalanced brace.
     fn fn_body<'a>(src: &'a str, sig: &str) -> &'a str {
         let sig_idx = src.find(sig).unwrap_or_else(|| panic!("`{sig}` declaration present"));
-        let body_start = src[sig_idx..].find('{').expect("fn body opens") + sig_idx;
-        let mut depth = 0usize;
-        for (i, ch) in src[body_start..].char_indices() {
-            match ch {
-                '{' => depth += 1,
-                '}' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        return &src[body_start..=body_start + i];
-                    }
-                }
-                _ => {}
-            }
-        }
-        panic!("`{sig}` body never closes");
+        let rest = &src[sig_idx..];
+        let end = rest.find("\n}\n").unwrap_or_else(|| panic!("`{sig}` body never closes at column 0"));
+        &rest[..end]
     }
 
+    /// Wiring pin, not a behaviour test: the cache drop has no observable
+    /// effect from a unit test (the IPC needs `tauri::State`), and losing the
+    /// call is silent — the listing just serves a pre-copy file count until
+    /// some later change ticks the directory mtime.
     #[test]
-    fn add_folder_and_add_files_invalidate_listing_dir_stats() {
+    fn every_add_path_invalidates_listing_dir_stats() {
         let src = include_str!("add.rs");
+        for sig in ["pub async fn add_file(", "pub async fn add_folder(", "pub async fn add_files("] {
+            assert!(
+                fn_body(src, sig).contains("invalidate_dir_stats_under"),
+                "`{sig}` must drop the listing dir-stats cache after a copy"
+            );
+        }
+
+        // Guard the extractor itself, so the assertions above cannot pass
+        // vacuously on an over-long slice: `add_file` deliberately leaves the
+        // upload to the watcher, so a body that ran on into `add_folder`
+        // would carry that function's `trigger_sync`.
         assert!(
-            fn_body(src, "pub async fn add_folder(").contains("invalidate_dir_stats_under"),
-            "add_folder must drop the listing dir-stats cache after a copy"
+            !fn_body(src, "pub async fn add_file(").contains("trigger_sync"),
+            "fn_body over-ran `add_file` — the wiring assertions above prove nothing"
         );
-        assert!(
-            fn_body(src, "pub async fn add_files(").contains("invalidate_dir_stats_under"),
-            "add_files must drop the listing dir-stats cache after a copy"
-        );
+    }
+
+    /// The dot rule is name-based on every platform, deliberately: Windows
+    /// marks hidden with `FILE_ATTRIBUTE_HIDDEN` and treats dotfiles as
+    /// ordinary, but hcfs-client's scan and the Drive listing both key off the
+    /// dot there too. Counting by an OS-hidden notion would desync all three.
+    #[test]
+    fn is_engine_hidden_name_is_the_dot_rule_on_every_platform() {
+        use std::ffi::OsStr;
+
+        assert!(is_engine_hidden_name(OsStr::new(".DS_Store")));
+        assert!(is_engine_hidden_name(OsStr::new(".hippius")));
+        assert!(is_engine_hidden_name(OsStr::new(".hippius-incoming-Photos-1")));
+
+        // Windows-hidden names carry no dot — the engine uploads them, so the
+        // counter must include them.
+        assert!(!is_engine_hidden_name(OsStr::new("desktop.ini")));
+        assert!(!is_engine_hidden_name(OsStr::new("Thumbs.db")));
+        // A macOS bundle is a visible directory the user thinks of as one file;
+        // the engine walks into it, so the counter must too.
+        assert!(!is_engine_hidden_name(OsStr::new("Preview.app")));
+        assert!(!is_engine_hidden_name(OsStr::new("notes.txt")));
+    }
+
+    /// A hidden directory is skipped WHOLESALE at any depth: its visible
+    /// children, and their visible subdirectories, never reach the count.
+    /// The root-level `.git` case would also pass a per-entry-only skip that
+    /// still descended nested hidden dirs, so this pins the subtree rule.
+    /// Sizes are distinct powers of two so a wrong total names its culprit.
+    #[test]
+    fn walk_regular_files_stats_skips_hidden_subtrees_at_depth() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        std::fs::write(root.join("top.txt"), b"1").unwrap(); // 1
+
+        let visible = root.join("project");
+        std::fs::create_dir(&visible).unwrap();
+        std::fs::write(visible.join("keep.txt"), b"22").unwrap(); // 2
+
+        // Hidden dir nested under a VISIBLE dir, with a visible file and a
+        // visible sub-subtree inside it.
+        let nested_hidden = visible.join(".cache");
+        std::fs::create_dir_all(nested_hidden.join("blobs")).unwrap();
+        std::fs::write(nested_hidden.join("index.bin"), b"4444").unwrap();
+        std::fs::write(nested_hidden.join("blobs/a.bin"), b"88888888").unwrap();
+
+        // Hidden dir at the root whose children are entirely visible.
+        let top_hidden = root.join(".git");
+        std::fs::create_dir_all(top_hidden.join("objects")).unwrap();
+        std::fs::write(top_hidden.join("HEAD"), b"1616161616161616").unwrap();
+        std::fs::write(top_hidden.join("objects/pack"), b"32").unwrap();
+
+        let (bytes, count) = walk_regular_files_stats_std(root);
+        assert_eq!(count, 2, "only top.txt and project/keep.txt are engine-visible");
+        assert_eq!(bytes, 3, "1 + 2; no byte from either hidden subtree may be summed");
+    }
+
+    /// hcfs's `should_skip_path` is `to_str()`-gated, so a non-UTF-8 name that
+    /// happens to start with `.` is NOT skipped and the engine uploads it. The
+    /// counter must agree, or the banner under-counts real upload work.
+    ///
+    /// Linux-only: APFS and HFS+ reject filenames that are not valid UTF-8, so
+    /// the case cannot be staged on macOS at all.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn walk_regular_files_stats_counts_non_utf8_dot_name_like_the_engine() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        std::fs::write(root.join("plain.txt"), b"z").unwrap();
+        let raw = std::ffi::OsStr::from_bytes(b".caf\xe9");
+        std::fs::write(root.join(raw), b"xy").unwrap();
+
+        let (bytes, count) = walk_regular_files_stats_std(root);
+        assert_eq!(count, 2, "a non-UTF-8 `.`-name is uploaded by the engine, so it must be counted");
+        assert_eq!(bytes, 3);
     }
 
     #[test]

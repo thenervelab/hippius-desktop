@@ -74,9 +74,16 @@ pub(super) async fn dir_stats_recursive(path: &Path) -> (u64, u64) {
     root_stats
 }
 
-/// Drop every cached entry whose path is `root` or a descendant. Called
-/// from `remove_drive` so a re-add of the same path cannot reuse stale
-/// stats from the previous drive.
+/// Drop every cached entry whose path is `root` or a descendant.
+///
+/// Called from `remove_drive`, so a re-add of the same path cannot reuse
+/// stale stats from the previous drive, and from every `add_file` /
+/// `add_files` / `add_folder` copy, because the `(path, mtime)` key cannot
+/// see a copy that lands inside the directory mtime's resolution.
+///
+/// `root` must be the path the frontend passed, not its canonical form —
+/// the cache is keyed by whatever path the listing walked, and on macOS the
+/// two differ (`/tmp` → `/private/tmp`).
 pub(crate) fn invalidate_dir_stats_under(root: &Path) {
     let Ok(mut cache) = dir_stats_cache().lock() else {
         return;

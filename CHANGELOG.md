@@ -68,6 +68,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 ### Fixed
 
 - **Adding a folder no longer counts hidden files in the file total.**
+- **A folder's file count updates as soon as you add to it.** Adding a file or
+  folder could leave the count in Drive showing the total from before the upload
+  until something else changed that folder.
 - **`--version` prints the version and exits.** Running Hippius with `--version`
   or `-V` no longer opens the full app.
 - **Adding a large folder no longer freezes the app.** Dropping a multi-gigabyte
