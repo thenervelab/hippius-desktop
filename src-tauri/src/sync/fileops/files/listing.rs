@@ -391,25 +391,29 @@ pub async fn list_sync_folder_grouped_inner(
             if remainder.is_empty() {
                 continue;
             }
+            // An excluded rel-path contributes nothing: not a row, and not a
+            // count toward the folder holding it. Testing this before the
+            // file/folder split is what stops `vendor/node_modules/a.js` from
+            // conjuring a `vendor` folder that opens empty.
+            if super::exclude_match::path_is_excluded(&exclude_rules, rel, false) {
+                continue;
+            }
             match remainder.split_once('/') {
                 Some((first_component, _rest)) => {
                     // Server-known subfolder at this level. Skip if already on
                     // disk (the on-disk entry's `file_count` is authoritative
                     // for this device's view of the subfolder).
-                    let folder_rel = if prefix.is_empty() {
-                        first_component.to_string()
-                    } else {
-                        format!("{prefix}{first_component}")
-                    };
+                    // `prefix` is already `""` or `"<sub>/"`, so this is the
+                    // drive-relative path the exclude rules are matched on.
+                    let folder_rel = format!("{prefix}{first_component}");
                     if !seen_names.contains(first_component) && !super::exclude_match::path_is_excluded(&exclude_rules, &folder_rel, true) {
                         *server_only_folders.entry(first_component.to_string()).or_insert(0) += 1;
                     }
                 }
                 None => {
-                    // Direct child file, server-known. Skip if on disk or
-                    // excluded — excluded files stay off the Drive list
-                    // (no Excluded pill).
-                    if !seen_names.contains(remainder) && !super::exclude_match::path_is_excluded(&exclude_rules, rel, false) {
+                    // Direct child file, server-known. Skip if on disk —
+                    // excluded ones were already dropped above.
+                    if !seen_names.contains(remainder) {
                         server_only_files.push(FileEntry {
                             name: remainder.to_string(),
                             is_folder: false,
@@ -486,6 +490,15 @@ pub async fn list_sync_folder_grouped_inner(
             .filter(|s| !s.is_empty())
             .map_or_else(|| PathBuf::from(&sync_path), |s| PathBuf::from(&sync_path).join(s));
         for entry in cache_only_folder_candidates(pool, &owner, l, &prefix, &level_dir).await {
+            // An excluded folder must not come back through the cache. The
+            // on-disk copy is already dropped above, and `seen_names` only
+            // covers folders that exist locally — a `node_modules/` rule on a
+            // drive whose tree was registered from another device would
+            // otherwise reappear here as a pending folder the engine never
+            // syncs.
+            if super::exclude_match::path_is_excluded(&exclude_rules, &format!("{prefix}{}", entry.name), true) {
+                continue;
+            }
             // `HashSet::insert` returns false when the name is already shown
             // (from disk or a file's parent) — the dedup-by-name the task
             // requires, so an on-disk folder is never doubled by its cache row.

@@ -68,8 +68,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 ### Fixed
 
 - **Files you exclude with a pattern like `*.bin` disappear from Drive.**
-  Recent Files no longer shows them, and clearing the pattern updates the
-  list without a manual refresh.
+  Recent Files no longer shows them, your storage total stops counting them,
+  and clearing the pattern brings them back without a manual refresh.
+- **An exclusion pattern that can't work is refused when you type it.**
+  Previously a malformed pattern was saved and listed as active while
+  quietly excluding nothing.
 - **`--version` prints the version and exits.** Running Hippius with `--version`
   or `-V` no longer opens the full app.
 - **Adding a large folder no longer freezes the app.** Dropping a multi-gigabyte

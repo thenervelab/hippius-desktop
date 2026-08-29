@@ -104,6 +104,10 @@ uuid = { version = "1", features = ["v4"] }
 tempfile = "3"
 sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio"] }
 hex = "0.4"
+# Same glob engine hcfs-client compiles `.hippius/exclude` with. Direct dep so
+# `validate_pattern` can refuse a pattern the engine would silently drop —
+# validating with a different parser would let the two disagree.
+globset = "0.4"
 tauri-plugin-fs = "2"
 notify = "6.1"
 tauri-plugin-dialog = "2.6.0"

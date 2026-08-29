@@ -99,6 +99,46 @@ fn recent_files_filter_uses_the_same_matcher() {
     );
 }
 
+/// The Files-page storage total must be derived from the same per-label stats
+/// the rows are counted into, not summed separately over the raw listing.
+/// Summed separately it counted "excluded" rows the page hides, so the
+/// headline storage figure disagreed with the list under it — and no unit test
+/// can catch that, because `get_user_files` is a Tauri command.
+#[test]
+fn storage_total_is_derived_from_the_counted_label_stats() {
+    let src = read_src("sync/fileops/files/user_files.rs");
+    let body = fn_body(&src, "pub async fn get_user_files(");
+
+    assert!(
+        !body.contains("entries.iter().map(|e| e.size).sum"),
+        "total_private_size must not be summed over the unfiltered listing — excluded rows would inflate it"
+    );
+    assert!(
+        body.contains("label_stats.values().map(|s| s.total_bytes).sum"),
+        "total_private_size must be derived from label_stats, which already drops excluded rows"
+    );
+}
+
+/// A pattern the engine cannot compile is stored, listed back as active, and
+/// excludes nothing. `validate_pattern` must refuse it up front so the failure
+/// is an error next to the input box, not a line in a log file.
+#[test]
+fn validate_pattern_refuses_globs_the_engine_cannot_compile() {
+    let src = read_src("sync/drive/selective.rs");
+    let body = fn_body(&src, "fn validate_pattern(");
+
+    assert!(
+        body.contains("compile_like_the_engine"),
+        "validate_pattern must reject a pattern that fails to compile as a glob"
+    );
+
+    let compile = fn_body(&src, "fn compile_like_the_engine(");
+    assert!(
+        compile.contains("**/"),
+        "the check must mirror ExcludeRules::parse's `**/` expansion, or the two parsers can disagree"
+    );
+}
+
 /// Do not resurrect silent default exclude patterns — everything a user puts
 /// in a drive must sync unless they say otherwise.
 #[test]
