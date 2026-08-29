@@ -67,6 +67,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **The low-credits warning clears after you add credits.**
 - **`--version` prints the version and exits.** Running Hippius with `--version`
   or `-V` no longer opens the full app.
 - **Adding a large folder no longer freezes the app.** Dropping a multi-gigabyte

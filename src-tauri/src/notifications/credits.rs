@@ -100,6 +100,18 @@ pub async fn check_low_credit_notification(
     // session account so a caller can't drive another account's flags.
     let account_id = state.require_session_account(&account_id)?;
     let pool = state.pool()?;
+    check_low_credit_notification_inner(pool, &account_id, &credit_balance_planck).await
+}
+
+/// Pool-scoped implementation of [`check_low_credit_notification`].
+///
+/// Extracted so integration-style tests can drive the decision against an
+/// in-memory pool without constructing `AppState`.
+pub(crate) async fn check_low_credit_notification_inner(
+    pool: &sqlx::SqlitePool,
+    account_id: &str,
+    credit_balance_planck: &str,
+) -> Result<CreditNotificationCheck, AppError> {
     // Convert planck to credit value for threshold comparison.
     // f64 precision is fine for comparing against 0.5.
     //
@@ -117,10 +129,13 @@ pub async fn check_low_credit_notification(
     let credit_balance = planck as f64 / 1e18;
 
     // Per-account flags (audit NOTIF-4), keyed by the validated session account.
-    let owner = account_key(&account_id);
+    let owner = account_key(account_id);
     let (first_time, above_half) = read_flags(pool, &owner).await?;
 
-    // Credits >= 0.5: update flags and return no notification
+    // Credits >= 0.5: update flags, retire any live warning as *read*, and
+    // return no notification. Unread-clear (not `is_deleted = 1`) is load-bearing:
+    // soft-delete stamps `last_deleted_low_credit_at` and starts the one-per-day
+    // throttle, so a later dip today could not warn again.
     if credit_balance >= 0.5 {
         if first_time {
             set_first_time_seen(pool, &owner).await?;
@@ -128,6 +143,7 @@ pub async fn check_low_credit_notification(
         if !above_half {
             set_above_half(pool, &owner, true).await?;
         }
+        mark_low_credit_warnings_read(pool, account_id).await?;
         return Ok(CreditNotificationCheck {
             should_notify: false,
             credit_balance: 0.0,
@@ -142,13 +158,16 @@ pub async fn check_low_credit_notification(
     // Check if there's already an active low-credit notification FOR THIS USER.
     // Scoping by user_address keeps account A's active warning from suppressing
     // account B's notification on a shared multi-account device.
-    let active_count = active_low_credit_count(pool, &account_id).await?;
+    //
+    // A top-up retires the warning as read (`is_deleted` stays 0), so
+    // `active_count` is still > 0. Let a just-recovered `above_half` crossing
+    // through — otherwise a later dip the same day could not notify. Opening
+    // the warning while still low has `above_half == false` and still
+    // suppresses, so it cannot spam a new row on every route change.
+    let active_count = active_low_credit_count(pool, account_id).await?;
 
-    if active_count > 0 {
+    if active_count > 0 && !above_half {
         // Already showing a notification — just update state
-        if above_half {
-            set_above_half(pool, &owner, false).await?;
-        }
         return Ok(CreditNotificationCheck {
             should_notify: false,
             credit_balance: 0.0,
@@ -157,7 +176,7 @@ pub async fn check_low_credit_notification(
 
     // No active notification — check the one-per-day rule, also scoped to this
     // user so account A's deletion timestamp can't throttle account B.
-    let last_deleted = last_deleted_low_credit_at(pool, &account_id).await?;
+    let last_deleted = last_deleted_low_credit_at(pool, account_id).await?;
 
     let now = chrono::Utc::now().timestamp_millis();
     let can_notify = match last_deleted {
@@ -199,6 +218,24 @@ pub async fn check_low_credit_notification_live(state: tauri::State<'_, AppState
     // Delegate to the existing decision (it re-validates the session account and
     // owns all the one-per-day / dedup / flag-state logic).
     check_low_credit_notification(state, account_id, planck).await
+}
+
+/// Mark live `LowCreditWarning-%` rows for `user_address` as read.
+///
+/// Used when the balance recovers to >= 0.5 HIP. Must not set `is_deleted`:
+/// that is what [`last_deleted_low_credit_at`] reads for the one-per-day
+/// throttle.
+async fn mark_low_credit_warnings_read(pool: &sqlx::SqlitePool, user_address: &str) -> Result<(), AppError> {
+    sqlx::query(
+        "UPDATE notifications SET is_unread = 0 \
+         WHERE notification_subtype LIKE 'LowCreditWarning-%' \
+           AND is_deleted = 0 \
+           AND user_address = ?",
+    )
+    .bind(user_address)
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 /// Count active (non-deleted) low-credit warnings for a single user.
@@ -638,6 +675,79 @@ mod tests {
         insert_low_credit(&pool, "addrA", 1, Some(1_000_000)).await;
         assert_eq!(last_deleted_low_credit_at(&pool, "addrA").await.unwrap(), Some(1_000_000));
         assert_eq!(last_deleted_low_credit_at(&pool, "addrB").await.unwrap(), None);
+    }
+
+    // 1 HIP / 0.1 HIP in planck. Threshold is 0.5 HIP.
+    const ABOVE_HALF_PLANCK: &str = "1000000000000000000";
+    const BELOW_HALF_PLANCK: &str = "100000000000000000";
+
+    async fn warning_unread_deleted(pool: &sqlx::SqlitePool, user: &str) -> (i64, i64) {
+        sqlx::query_as::<_, (i64, i64)>(
+            "SELECT is_unread, is_deleted FROM notifications \
+             WHERE user_address = ? AND notification_subtype LIKE 'LowCreditWarning-%'",
+        )
+        .bind(user)
+        .fetch_one(pool)
+        .await
+        .expect("warning row")
+    }
+
+    // H-016: topping up must retire the warning as READ, not deleted, so the
+    // bell drops without starting the one-per-day throttle — a later dip the
+    // same day can still notify.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn recovering_above_half_marks_low_credit_warning_read_not_deleted() {
+        let (_dir, pool) = fresh_pool().await;
+        insert_low_credit(&pool, "addrA", 0, None).await;
+        insert_low_credit(&pool, "addrB", 0, None).await;
+
+        let recovered = check_low_credit_notification_inner(&pool, "addrA", ABOVE_HALF_PLANCK)
+            .await
+            .expect("recover");
+        assert!(!recovered.should_notify, "a recovered balance must not raise a new warning");
+
+        let (unread, deleted) = warning_unread_deleted(&pool, "addrA").await;
+        assert_eq!(unread, 0, "top-up must clear unread so the bell drops");
+        assert_eq!(deleted, 0, "must not soft-delete — that starts the one-per-day throttle");
+        assert_eq!(
+            last_deleted_low_credit_at(&pool, "addrA").await.unwrap(),
+            None,
+            "unread-clear must not stamp last_deleted_low_credit_at",
+        );
+
+        let (other_unread, other_deleted) = warning_unread_deleted(&pool, "addrB").await;
+        assert_eq!(other_unread, 1, "another account's warning must stay unread");
+        assert_eq!(other_deleted, 0);
+
+        let dip = check_low_credit_notification_inner(&pool, "addrA", BELOW_HALF_PLANCK).await.expect("dip");
+        assert!(dip.should_notify, "a later dip the same day must still be able to notify");
+    }
+
+    // Pin against a naive unread-only active-count: opening the warning while
+    // still low (is_unread=0, is_deleted=0, never recovered) must not spawn a
+    // new row on the next check — that would fire on every route change.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn read_warning_while_still_low_does_not_renotify() {
+        let (_dir, pool) = fresh_pool().await;
+        insert_low_credit(&pool, "addrA", 0, None).await;
+
+        let first = check_low_credit_notification_inner(&pool, "addrA", BELOW_HALF_PLANCK)
+            .await
+            .expect("first low");
+        assert!(!first.should_notify, "an existing live warning already covers this dip");
+
+        sqlx::query("UPDATE notifications SET is_unread = 0 WHERE user_address = 'addrA'")
+            .execute(&pool)
+            .await
+            .expect("user marked the warning read");
+
+        let again = check_low_credit_notification_inner(&pool, "addrA", BELOW_HALF_PLANCK)
+            .await
+            .expect("still low");
+        assert!(
+            !again.should_notify,
+            "reading the warning while still low must not re-notify on the next check"
+        );
     }
 
     // -----------------------------------------------------------------------
