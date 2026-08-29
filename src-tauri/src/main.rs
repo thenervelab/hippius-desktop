@@ -672,11 +672,12 @@ fn main() {
 /// Window-close dispatcher.
 ///
 /// On macOS, closing the main window (red-X / Cmd+W) hides the window so
-/// the app keeps running in the tray. All genuine quit paths on macOS —
-/// Cmd+Q, the app menu's Quit Hippius, the tray's Quit Hippius — let
-/// Tauri exit directly without app-level cleanup.
+/// the app keeps running in the tray; Cmd+Q and the app menu's Quit Hippius
+/// let Tauri exit directly.
 ///
-/// On Windows/Linux, closing the window exits the app via `app.exit(0)`.
+/// On Windows/Linux the close is **not** cancelled — the window is destroyed
+/// normally and the process quits through [`crate::tray::panel::quit_desktop`],
+/// which the tray's Quit Hippius (`app_close`) also uses.
 pub fn on_window_event(builder: Builder<Wry>) -> Builder<Wry> {
     builder.on_window_event(|window, event| {
         // Click-outside dismissal for the tray popover: when the panel loses
@@ -713,7 +714,7 @@ pub fn on_window_event(builder: Builder<Wry>) -> Builder<Wry> {
                 // inside the GTK/WebKit handler orphans the process (H-003).
                 let _ = api;
                 info!("Window close requested — exiting app");
-                crate::tray::panel::quit_desktop(&window.app_handle());
+                crate::tray::panel::quit_desktop(window.app_handle());
             }
         }
     })

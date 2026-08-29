@@ -33,6 +33,28 @@ fn main_src() -> String {
     std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/main.rs")).expect("read main.rs")
 }
 
+/// The handler must act only on the `main` window. The label guard used to
+/// matter only for hide-to-tray; now that the non-macOS arm quits the
+/// process, dropping it would make dismissing the tray popover (its own
+/// `CloseRequested`) kill the app.
+#[test]
+fn close_handler_only_acts_on_the_main_window() {
+    let src = main_src();
+    let body = fn_body(&src, "pub fn on_window_event(");
+
+    let close_at = body.find("WindowEvent::CloseRequested").expect("handles CloseRequested");
+    let rest = &body[close_at..];
+
+    let guard_at = rest.find("window.label() != \"main\"").expect("close handler guards on the window label");
+    let macos_at = rest.find("#[cfg(target_os = \"macos\")]").expect("close handler has a macOS arm");
+
+    assert!(guard_at < macos_at, "the label guard must run before either platform arm");
+    assert!(
+        rest[guard_at..macos_at].contains("return"),
+        "a non-main window must return early, or closing the tray popover quits the app",
+    );
+}
+
 /// `prevent_close` on Linux/Windows is the H-003 trap. It may appear only
 /// in the macOS hide-to-tray arm.
 #[test]
