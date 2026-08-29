@@ -637,4 +637,55 @@ describe("SyncStatusDialog", () => {
 
     expect(screen.getByText("Complete")).toBeInTheDocument();
   });
+
+  it("shows Complete once the cycle closes with only a vanished file failing", () => {
+    // H-080: the session has genuinely ended (isActive=false), so hcfs-client
+    // would author statusVariant="error" from `failedFiles > 0` alone. Rust's
+    // Gone carve-out rewrites it to success; the widget must follow that
+    // verdict rather than re-deriving Failed from the raw count.
+    const files = [
+      makeFileProgress("a.txt", { status: "completed", progressPercent: 100, bytesTransferred: 1000, totalBytes: 1000 }),
+      makeFileProgress("vanished.tmp", {
+        status: "error",
+        error: "File disappeared before upload — will retry.",
+        totalBytes: 500,
+      }),
+    ];
+    const snapshot = makeSnapshot(files, {
+      isActive: false,
+      overallPercent: 100,
+      effectiveCompleted: true,
+      effectiveInProgress: false,
+      widgetState: "completed",
+      statusVariant: "success",
+    });
+
+    renderWithJotai(<SyncStatusDialog snapshot={snapshot} open={true} />);
+
+    expect(screen.getByText("Complete")).toBeInTheDocument();
+    expect(screen.queryByText("Failed")).not.toBeInTheDocument();
+  });
+
+  it("still shows Failed when Rust leaves the error verdict standing", () => {
+    const files = [
+      makeFileProgress("a.txt", { status: "completed", progressPercent: 100, bytesTransferred: 1000, totalBytes: 1000 }),
+      makeFileProgress("big.bin", {
+        status: "error",
+        error: "Server error (500). Please try again.",
+        totalBytes: 500,
+      }),
+    ];
+    const snapshot = makeSnapshot(files, {
+      isActive: false,
+      overallPercent: 100,
+      effectiveCompleted: true,
+      effectiveInProgress: false,
+      widgetState: "completed",
+      statusVariant: "error",
+    });
+
+    renderWithJotai(<SyncStatusDialog snapshot={snapshot} open={true} />);
+
+    expect(screen.getByText("Failed")).toBeInTheDocument();
+  });
 });
