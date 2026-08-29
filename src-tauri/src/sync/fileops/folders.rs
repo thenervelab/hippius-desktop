@@ -527,7 +527,12 @@ pub async fn get_sync_folders_with_stats(state: tauri::State<'_, crate::app_stat
         crate::sync::device::get_device_name_internal(pool),
     );
     let sync_paths = sync_paths.unwrap_or_default();
-    let local_device_name = local_device_name.unwrap_or_else(|_| "My Device".to_string());
+    // Fail CLOSED on a read failure. `"My Device"` is `get_device_name_internal`'s
+    // DEFAULT for a machine that never set a name, not a sentinel — substituting it
+    // here would match every unnamed device's folders and file them under
+    // "removed from this computer". The empty string proves nothing, which is
+    // exactly what `classify_remote_origin` maps to `OtherDevice`.
+    let local_device_name = local_device_name.unwrap_or_default();
 
     // Build remote lookup by folder_hash (NOT label). Two local folders with the
     // same BASENAME (e.g. haloce_mcc/tags + halo2_mcc/tags → labels "tags" and
@@ -698,20 +703,14 @@ mod tests {
 
     #[test]
     fn remote_folder_from_a_different_device_is_other_device() {
-        assert_eq!(
-            classify_remote_origin("Office PC", "Georges-MacBook"),
-            RemoteFolderOrigin::OtherDevice,
-        );
+        assert_eq!(classify_remote_origin("Office PC", "Georges-MacBook"), RemoteFolderOrigin::OtherDevice,);
     }
 
     #[test]
     fn empty_remote_device_name_is_other_device() {
         // Display falls back to "Unknown Device"; classification uses the
         // raw server value so we cannot claim this machine registered it.
-        assert_eq!(
-            classify_remote_origin("", "Georges-MacBook"),
-            RemoteFolderOrigin::OtherDevice,
-        );
+        assert_eq!(classify_remote_origin("", "Georges-MacBook"), RemoteFolderOrigin::OtherDevice,);
     }
 
     #[test]
@@ -719,9 +718,38 @@ mod tests {
         // `get_device_name_internal` never returns empty, but matching two
         // empties would bucket unknown/Console-unstamped rows as removed.
         assert_eq!(classify_remote_origin("", ""), RemoteFolderOrigin::OtherDevice);
+        assert_eq!(classify_remote_origin("Georges-MacBook", ""), RemoteFolderOrigin::OtherDevice,);
+    }
+
+    /// The device-name read can fail (pool error). Its fallback must be
+    /// unprovable, not a plausible name: `"My Device"` is
+    /// `get_device_name_internal`'s DEFAULT for a machine that never set one,
+    /// so substituting it would match every unnamed device's folders and file
+    /// them under "removed from this computer".
+    #[test]
+    fn the_device_name_read_failure_fallback_is_unprovable() {
+        // `Result` in this module is the crate's single-parameter alias, so
+        // spell out std's to model the failed read.
+        let fallback = std::result::Result::<String, ()>::Err(()).unwrap_or_default();
+        assert!(fallback.is_empty(), "a failed read must not invent a name");
         assert_eq!(
-            classify_remote_origin("Georges-MacBook", ""),
+            classify_remote_origin("My Device", &fallback),
             RemoteFolderOrigin::OtherDevice,
+            "an unread local name cannot prove this machine registered the folder",
+        );
+    }
+
+    /// The discriminator is a display name, and `"My Device"` is the default
+    /// every unnamed machine registers under — so two unnamed devices are
+    /// indistinguishable and each files the other's folders as its own
+    /// removals. Documented here rather than silently accepted; closing it
+    /// needs a stable per-device id on the server row.
+    #[test]
+    fn two_default_named_devices_are_indistinguishable() {
+        assert_eq!(
+            classify_remote_origin("My Device", "My Device"),
+            RemoteFolderOrigin::LocallyRemoved,
+            "known limitation: the default name collides across devices",
         );
     }
 
