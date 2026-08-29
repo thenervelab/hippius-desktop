@@ -67,7 +67,6 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
-- **Storage on the home page no longer sticks at 0 B right after a sync.**
 - **Closing the window on Linux and Windows now quits Hippius.** The app
   no longer leaves a background process running after you click the window X.
 - **`--version` prints the version and exits.** Running Hippius with `--version`
@@ -97,6 +96,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   registered the feature at all — so it was not in any list to switch on. Hippius now
   registers it at startup, and the notice explains what to do when it is missing
   entirely rather than assuming it is only switched off.
+- **Storage on the home page no longer sticks at 0 B right after a sync.**
 - **"Share with Hippius" now turns itself on.** On Mac, the right-click share menu was
   missing on new installs, and the notice about it sent you to a Settings list that
   often did not contain Hippius at all. The notice now has an **Enable** button that
