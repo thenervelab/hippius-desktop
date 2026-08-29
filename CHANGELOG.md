@@ -69,6 +69,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 - **Sync complete notifications name the file.** A single finished file shows
   its name in the bell; several files show how many.
+- **Closing the window on Linux and Windows now quits Hippius.** The app
+  no longer leaves a background process running after you click the window X.
 - **`--version` prints the version and exits.** Running Hippius with `--version`
   or `-V` no longer opens the full app.
 - **Adding a large folder no longer freezes the app.** Dropping a multi-gigabyte

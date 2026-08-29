@@ -63,8 +63,10 @@ export function useCreditsNotification() {
             notificationLinkText: "Add Credits",
             notificationLink: "/billing",
           });
-          await refreshUnread();
         }
+        // Always refresh: a top-up retires existing LowCreditWarning rows as
+        // read (`shouldNotify` is false) and the bell badge must drop.
+        await refreshUnread();
       } catch (err) {
         // Skip the expected no-session / account-transition rejection (the
         // account-scoped command can race a stale address during a switch).
