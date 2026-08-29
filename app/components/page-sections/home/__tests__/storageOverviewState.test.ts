@@ -9,6 +9,7 @@ import {
   getPlanView,
   getStorageOverviewView,
   getUsageTone,
+  getUsedBytesDisplay,
 } from "../storage-overview/storageOverviewState";
 
 describe("getUsageTone", () => {
@@ -77,6 +78,24 @@ describe("getStorageOverviewView", () => {
         source: undefined,
       }),
     ).toBe("no-plan");
+  });
+});
+
+describe("getUsedBytesDisplay", () => {
+  // Pure projection of Rust's usedPending flag. The card must never
+  // invent this from usedBytes === 0 (that is also the true-empty
+  // state); Rust owns the indexer-vs-local lag decision.
+  it("shows pending instead of a confident 0 B while the indexer lags", () => {
+    expect(getUsedBytesDisplay(true, 0)).toEqual({ kind: "pending" });
+    expect(getUsedBytesDisplay(true, 46)).toEqual({ kind: "pending" });
+  });
+
+  it("shows the indexer bytes when not pending, including a true empty", () => {
+    expect(getUsedBytesDisplay(false, 0)).toEqual({ kind: "bytes", bytes: 0 });
+    expect(getUsedBytesDisplay(false, 46)).toEqual({
+      kind: "bytes",
+      bytes: 46,
+    });
   });
 });
 

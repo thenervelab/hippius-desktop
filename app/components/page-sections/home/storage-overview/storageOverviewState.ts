@@ -29,6 +29,23 @@ export type StorageOverviewView =
   | "no-plan" // neither a subscription nor credits: no capacity to plot
   | "usage"; // the normal used-of-total bar (plan- or credits-backed)
 
+/**
+ * Used-bytes line on the storage card. Pure projection of Rust's
+ * `usedPending` flag — never inferred from `usedBytes === 0`, which is
+ * also the true-empty state.
+ */
+export type UsedBytesDisplay =
+  | { kind: "pending" }
+  | { kind: "bytes"; bytes: number };
+
+export function getUsedBytesDisplay(
+  usedPending: boolean,
+  usedBytes: number,
+): UsedBytesDisplay {
+  if (usedPending) return { kind: "pending" };
+  return { kind: "bytes", bytes: usedBytes };
+}
+
 export function getStorageOverviewView(input: {
   showSkeleton: boolean;
   isError: boolean;

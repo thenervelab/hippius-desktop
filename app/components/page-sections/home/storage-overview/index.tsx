@@ -17,6 +17,7 @@ import {
   getCapacitySourceLabel,
   getStorageOverviewView,
   getUsageTone,
+  getUsedBytesDisplay,
   type UsageTone,
 } from "./storageOverviewState";
 
@@ -84,6 +85,9 @@ const StorageOverviewCard: React.FC<{ className?: string }> = ({
   const percent = overview?.percent ?? 0;
   const tone = getUsageTone(percent);
   const toneStyle = TONE_STYLES[tone];
+  const usedDisplay = overview
+    ? getUsedBytesDisplay(overview.usedPending, overview.usedBytes)
+    : null;
 
   return (
     <div
@@ -178,7 +182,9 @@ const StorageOverviewCard: React.FC<{ className?: string }> = ({
               <div className="flex items-end justify-between gap-3">
                 <div className="flex items-end gap-1 min-w-0">
                   <span className="font-mono font-medium text-[24px] leading-[30px] tracking-[-0.96px] text-grey-10 dark:text-white">
-                    {formatBytes(overview.usedBytes)}
+                    {usedDisplay?.kind === "pending"
+                      ? "Updating…"
+                      : formatBytes(usedDisplay?.bytes ?? 0)}
                   </span>
                   <span className="font-mono font-medium text-[12px] leading-[18px] tracking-[-0.48px] text-grey-10/50 dark:text-white/50 pb-[3px] whitespace-nowrap">
                     of {formatBytes(overview.totalBytes)} used
