@@ -6,9 +6,11 @@ use super::pathops::ensure_within;
 use super::synced_state::synced_paths_and_excludes_for_label;
 use crate::error::Result;
 use chrono::Datelike;
+use hcfs_client::drive::ExcludeRules;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Inclusive [from, to] date window for the files page Date filter.
 ///
@@ -201,7 +203,6 @@ pub async fn get_user_files(
     let sync_paths = crate::sync::folders::get_all_sync_paths_or_warn(pool, &account_id, "get_user_files").await;
 
     let mut all_files: Vec<UserFileEntry> = Vec::new();
-    let mut total_private_size: u64 = 0;
     let sync_folder_labels: Vec<String> = sync_paths.iter().filter(|sp| !sp.path.is_empty()).map(|sp| sp.label.clone()).collect();
 
     // Pre-build label → folder_path lookup so the per-entry loop below is
@@ -242,8 +243,6 @@ pub async fn get_user_files(
     let results = futures_util::future::join_all(folder_futures).await;
 
     for (label, entries) in &results {
-        total_private_size += entries.iter().map(|e| e.size).sum::<u64>();
-
         // Borrow the canonical `&str` from `sync_paths` so `label_stats`
         // keys are zero-copy. The `get_key_value` call returns the key
         // borrowed from `label_to_path` (and therefore from `sync_paths`,
@@ -324,6 +323,14 @@ pub async fn get_user_files(
     // Sort by timestamp (newest first)
     all_files.sort_by_key(|b| std::cmp::Reverse(b.last_charged_at));
 
+    // Derived from `label_stats` rather than summed over the raw listing, so
+    // it cannot disagree with the rows the user is actually shown: an
+    // "excluded" entry is dropped by `is_counted_for_label_stats` above, and
+    // a total that still counted it would report storage for files the Drive
+    // listing hides and the engine never uploads. Filters run after this, so
+    // the total stays the whole-drive figure, not the filtered one.
+    let total_private_size: u64 = label_stats.values().map(|s| s.total_bytes).sum();
+
     // Convert the borrowed-key map to owned-key for the result. One
     // allocation per label instead of one per file (the previous
     // `compute_label_stats(&all_files)` walk cloned `entry.label` for
@@ -350,14 +357,16 @@ pub async fn get_user_files(
 /// `prefix` is the rel-path of the directory we're descending into
 /// (`""` for the drive root, `"sub"` for a one-level descent, etc.).
 /// Hidden files (`.`-prefixed) and failed-download / encrypted-name
-/// stubs are skipped to match `list_sync_folder_inner`'s rules.
+/// stubs are skipped to match `list_sync_folder_inner`'s rules, as are
+/// paths matching `exclude_rules` (both the file and — pruned whole —
+/// the directory forms), so the walk sees what the engine syncs.
 fn walk_disk_files_std(
     base: &Path,
     rel_prefix: &str,
     label: &str,
     folder_path: &str,
     synced: Option<&HashMap<String, hcfs_client::engine::types::SyncedFileInfo>>,
-    excluded: &[String],
+    exclude_rules: &ExcludeRules,
     out: &mut Vec<UserFileEntry>,
 ) {
     let dir_path = if rel_prefix.is_empty() {
@@ -385,7 +394,10 @@ fn walk_disk_files_std(
         };
 
         if meta.is_dir() {
-            walk_disk_files_std(base, &rel_path, label, folder_path, synced, excluded, out);
+            if super::exclude_match::path_is_excluded(exclude_rules, &rel_path, true) {
+                continue;
+            }
+            walk_disk_files_std(base, &rel_path, label, folder_path, synced, exclude_rules, out);
             continue;
         }
 
@@ -398,17 +410,20 @@ fn walk_disk_files_std(
             continue;
         }
 
-        let is_excluded = !excluded.is_empty() && excluded.iter().any(|p| p == &rel_path);
-        let (sync_status, info) = if is_excluded {
-            ("excluded", None)
-        } else {
-            match synced {
-                Some(map) => match map.get(&rel_path) {
-                    Some(i) => ("synced", Some(i)),
-                    None => ("pending", None),
-                },
-                None => ("unknown", None),
-            }
+        // Drop excluded files outright rather than emitting an "excluded" row
+        // the only caller immediately discards. Same rule as the directory
+        // prune above, and it keeps this walk's output identical to what the
+        // recursive-search UI renders.
+        if super::exclude_match::path_is_excluded(exclude_rules, &rel_path, false) {
+            continue;
+        }
+
+        let (sync_status, info) = match synced {
+            Some(map) => match map.get(&rel_path) {
+                Some(i) => ("synced", Some(i)),
+                None => ("pending", None),
+            },
+            None => ("unknown", None),
         };
 
         // Match the timestamp rules used by `get_user_files` so the UI's
@@ -525,7 +540,11 @@ pub async fn search_user_files_recursive(
     let walk_label = label.clone();
     let walk_folder = sp.path.clone();
     let walk_synced = synced.clone();
-    let walk_excluded = excluded.clone();
+    // Compiled once and shared with the server-only overlay below: building a
+    // GlobSet is the expensive half of matching, and this IPC runs on every
+    // keystroke in the recursive search box.
+    let exclude_rules = Arc::new(super::exclude_match::rules_from_patterns(&excluded));
+    let walk_rules = Arc::clone(&exclude_rules);
     let mut out = tokio::task::spawn_blocking(move || {
         let mut collected = Vec::new();
         walk_disk_files_std(
@@ -534,7 +553,7 @@ pub async fn search_user_files_recursive(
             &walk_label,
             &walk_folder,
             walk_synced.as_ref(),
-            &walk_excluded,
+            &walk_rules,
             &mut collected,
         );
         collected
@@ -562,6 +581,9 @@ pub async fn search_user_files_recursive(
                 continue;
             }
             if seen.contains(rel) {
+                continue;
+            }
+            if super::exclude_match::path_is_excluded(&exclude_rules, rel, false) {
                 continue;
             }
             let basename = rel.rsplit('/').next().unwrap_or(rel).to_string();
@@ -1176,7 +1198,8 @@ mod tests {
         );
 
         let mut out = Vec::new();
-        walk_disk_files_std(root, "", "docs", root.to_str().unwrap(), Some(&synced), &[], &mut out);
+        let no_rules = super::super::exclude_match::rules_from_patterns(&[]);
+        walk_disk_files_std(root, "", "docs", root.to_str().unwrap(), Some(&synced), &no_rules, &mut out);
         let names: Vec<&str> = out.iter().map(|e| e.actual_file_name.as_str()).collect();
         assert!(names.contains(&"Photos/2024/a.jpg"));
         assert!(names.contains(&"pending.bin"));
@@ -1194,5 +1217,75 @@ mod tests {
         let pending = out.iter().find(|e| e.actual_file_name == "pending.bin").expect("pending");
         assert_eq!(pending.sync_status, "pending");
         assert_eq!(pending.size, 2);
+    }
+
+    /// `*.bin` must drop `pending.bin` and a nested `dir/foo.bin` via
+    /// ExcludeRules, not exact path equality. `foo.bin.bak` survives — the
+    /// glob is an extension match, not a substring one.
+    ///
+    /// `synced` is an EMPTY map, not `None`: a drive with no synced baseline
+    /// yields `"unknown"` for everything, which would let a broken matcher
+    /// pass a status assertion for the wrong reason.
+    #[test]
+    fn walk_disk_files_std_drops_glob_excludes_not_exact_paths() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("dir")).expect("mkdir");
+        std::fs::write(root.join("pending.bin"), b"ab").expect("bin");
+        std::fs::write(root.join("dir/foo.bin"), b"cd").expect("nested bin");
+        std::fs::write(root.join("foo.bin.bak"), b"ef").expect("bak");
+        std::fs::write(root.join("keep.txt"), b"ok").expect("txt");
+
+        let synced: HashMap<String, hcfs_client::engine::types::SyncedFileInfo> = HashMap::new();
+        let rules = super::super::exclude_match::rules_from_patterns(&["*.bin".to_string()]);
+        let mut out = Vec::new();
+        walk_disk_files_std(root, "", "docs", root.to_str().unwrap(), Some(&synced), &rules, &mut out);
+
+        let by_name: HashMap<&str, &str> = out.iter().map(|e| (e.actual_file_name.as_str(), e.sync_status.as_str())).collect();
+        assert_eq!(by_name.get("pending.bin"), None, "*.bin must not reach the search results");
+        assert_eq!(by_name.get("dir/foo.bin"), None, "*.bin applies at any depth, not just the root");
+        assert_eq!(by_name.get("foo.bin.bak").copied(), Some("pending"));
+        assert_eq!(by_name.get("keep.txt").copied(), Some("pending"));
+    }
+
+    /// A directory rule prunes the whole subtree in one step rather than
+    /// descending and rejecting each file: on a real `node_modules` that is
+    /// the difference between one `read_dir` and forty thousand.
+    #[test]
+    fn walk_disk_files_std_prunes_an_excluded_directory_subtree() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("node_modules/pkg/deep")).expect("mkdir");
+        std::fs::write(root.join("node_modules/pkg/deep/index.js"), b"x").expect("nested");
+        std::fs::create_dir_all(root.join("src")).expect("mkdir src");
+        std::fs::write(root.join("src/main.rs"), b"y").expect("src");
+
+        let synced: HashMap<String, hcfs_client::engine::types::SyncedFileInfo> = HashMap::new();
+        let rules = super::super::exclude_match::rules_from_patterns(&["node_modules/".to_string()]);
+        let mut out = Vec::new();
+        walk_disk_files_std(root, "", "docs", root.to_str().unwrap(), Some(&synced), &rules, &mut out);
+
+        let names: Vec<&str> = out.iter().map(|e| e.actual_file_name.as_str()).collect();
+        assert_eq!(names, vec!["src/main.rs"], "only the node_modules subtree may disappear");
+    }
+
+    /// The Files-page storage total must count exactly the rows the page
+    /// shows. `get_user_files` derives it from `label_stats`, so this pins
+    /// the rule the derivation rests on: an excluded row contributes nothing.
+    #[test]
+    fn label_stats_totals_exclude_hidden_rows_so_the_storage_total_matches_the_listing() {
+        let mut hidden = make_file("secret.bin", 999_999, "alpha", 0, false);
+        hidden.sync_status = "excluded".to_string();
+
+        let entries = vec![
+            make_file("a.txt", 1_000, "alpha", 0, false),
+            hidden,
+            make_file("b.txt", 500, "beta", 0, false),
+        ];
+
+        let stats = compute_label_stats(&entries);
+        let total: u64 = stats.values().map(|s| s.total_bytes).sum();
+
+        assert_eq!(total, 1_500, "an excluded row must not inflate the drive storage total");
     }
 }

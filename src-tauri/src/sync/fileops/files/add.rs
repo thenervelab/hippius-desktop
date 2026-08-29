@@ -4,6 +4,7 @@
 //! the credit gate.
 
 use super::delete::FileDeleteError;
+use super::dir_stats::invalidate_dir_stats_for_change;
 use super::pathops::copy_dir_recursive;
 use crate::error::Result;
 use hcfs_client::engine::runner::trigger_sync;
@@ -11,6 +12,20 @@ use serde::Serialize;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter};
 use tracing::{info, warn};
+
+/// Listing-form `(drive root, destination directory)` for an add.
+///
+/// The drive path exactly as the frontend passed it, optionally joined with
+/// the subfolder, and never canonicalized: the dir-stats cache is keyed by the
+/// paths `list_sync_folder` builds, and that listing does not canonicalize, so
+/// a `/private/var/…` key would never match the `/var/…` rows a macOS listing
+/// wrote. The add itself still copies through the canonicalized destination —
+/// this pair exists only to name the cache rows the add invalidates.
+fn listing_add_paths(sync_path: &str, subfolder: Option<&str>) -> (PathBuf, PathBuf) {
+    let root = PathBuf::from(sync_path);
+    let dest = subfolder.map_or_else(|| root.clone(), |sub| root.join(sub));
+    (root, dest)
+}
 
 /// Hidden staging sibling to copy into before `rename`ing onto a dest.
 ///
@@ -197,7 +212,14 @@ pub async fn add_file(
         }
     };
     match add_file_internal(&canonical_parent, &file_path).await {
-        Ok(name) => Ok(name),
+        Ok(name) => {
+            // The drive root's own mtime does move for a root-level add, but
+            // the cache is keyed on the listing path, so drop the row rather
+            // than trusting the two forms to agree.
+            let (root, dest) = listing_add_paths(&sync_path, None);
+            invalidate_dir_stats_for_change(&root, &dest.join(&name));
+            Ok(name)
+        }
         Err(e) => {
             if let Some(label) = label_opt.as_deref() {
                 state.upload_processing.reset(&app, label);
@@ -265,6 +287,12 @@ pub async fn add_folder(
     let result = add_folder_with_app_inner(&sync_path, &folder_path, subfolder.as_deref()).await;
     match result {
         Ok(name) => {
+            // Same mtime hole as a nested delete: creating `root/sub/New`
+            // stamps `root/sub` and nothing above it, so `root` would keep
+            // reporting the pre-upload size for the `sub` folder row.
+            let (root, dest) = listing_add_paths(&sync_path, subfolder.as_deref());
+            invalidate_dir_stats_for_change(&root, &dest.join(&name));
+
             // Trigger sync so the uploaded folder gets synced
             use tauri::Manager;
             let s = app.state::<crate::app_state::AppState>().sync.clone();
@@ -783,6 +811,15 @@ pub async fn add_files(
     // short-circuits when no entry exists.
     if added.is_empty() {
         reset_banner(&app, &state);
+    } else {
+        // Per added entry rather than once for the destination directory: a
+        // folder entry may have merged into an existing tree, whose own rows
+        // are then stale, but the destination's OTHER children are untouched
+        // and should keep the walk they already paid for.
+        let (root, dest) = listing_add_paths(&sync_path, subfolder.as_deref());
+        for name in &added {
+            invalidate_dir_stats_for_change(&root, &dest.join(name));
+        }
     }
 
     // Always trigger sync so successfully added files get uploaded
@@ -816,6 +853,43 @@ mod tests {
         let (bytes, count) = walk_regular_files_stats(root).await;
         assert_eq!(count, 3, "all three regular files counted across the nested dir");
         assert_eq!(bytes, 10, "byte total summed across the nested dir (5+2+3)");
+    }
+
+    #[test]
+    fn listing_add_paths_joins_the_subfolder_without_canonicalizing() {
+        let (root, dest) = listing_add_paths("/sync/drive", Some("photos/2024"));
+        assert_eq!(root, PathBuf::from("/sync/drive"));
+        assert_eq!(dest, PathBuf::from("/sync/drive/photos/2024"));
+
+        let (root, dest) = listing_add_paths("/sync/drive", None);
+        assert_eq!(dest, root, "a root-level add lands in the drive root itself");
+    }
+
+    /// The add side of H-068. Uploading into `root/sub` stamps `root/sub` and
+    /// nothing above it, so the drive root's warmed row still validates by
+    /// mtime and the `sub` folder row would keep showing the pre-upload size.
+    ///
+    /// Exercised through the same `listing_add_paths` + invalidate pair the
+    /// three `add_*` commands use; `add_file` itself needs a live `AppState`.
+    #[tokio::test]
+    async fn adding_into_a_subfolder_refreshes_the_root_total() {
+        let _cache_guard = super::super::dir_stats::CACHE_TEST_LOCK.lock().await;
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        let sub = root.join("sub");
+        tokio::fs::create_dir(&sub).await.unwrap();
+        tokio::fs::write(sub.join("a.txt"), b"12345").await.unwrap();
+
+        let (size, _) = super::super::dir_stats::dir_stats_recursive(root).await;
+        assert_eq!(size, 5, "warm the cache for root and root/sub");
+
+        let sync_path = root.to_string_lossy().to_string();
+        tokio::fs::write(sub.join("b.txt"), b"6789").await.unwrap();
+        let (listing_root, dest) = listing_add_paths(&sync_path, Some("sub"));
+        invalidate_dir_stats_for_change(&listing_root, &dest.join("b.txt"));
+
+        let (size, count) = super::super::dir_stats::dir_stats_recursive(root).await;
+        assert_eq!((size, count), (9, 2), "the root total must pick up a file added under sub");
     }
 
     #[test]

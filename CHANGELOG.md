@@ -67,12 +67,21 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **The low-credits warning clears after you add credits.** The bell no longer
+  showed an unread "you're running low on credits" notice next to the one saying
+  your credits had just landed.
 - **Closing the window on Linux and Windows now quits Hippius.** The app
   no longer leaves a background process running after you click the window X.
 - **`--version` prints the version and exits.** Running Hippius with `--version`
   or `-V` no longer opens the full app.
+- **Folder sizes stay correct as you work.** A folder's size and file count now
+  update right away when you delete or add something inside it, or when a file
+  arrives from another device — previously they could keep showing the old
+  numbers until the app was restarted.
 - **Adding a large folder no longer freezes the app.** Dropping a multi-gigabyte
   folder in used to lock the window until the copy and encryption finished.
+- **Sync complete notifications name the file.** A single finished file shows
+  its name in the bell; several files show how many.
 - **Replacing an already-synced file can no longer upload a half-copied version.**
   Adding a file over one you already had could, if the copy was slow, be picked up
   while it was still being written and back up an incomplete copy.
@@ -84,6 +93,12 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   Release pages carried a second Mac file next to the disk image that read as an
   alternative download but was missing "Share with Hippius" and Apple's security
   check. It is gone from current releases and will not appear on new ones.
+- **Files you exclude with a pattern like `*.bin` disappear from Drive.**
+  Recent Files no longer shows them, your storage total stops counting them,
+  and clearing the pattern brings them back without a manual refresh.
+- **An exclusion pattern that can't work is refused when you type it.**
+  Previously a malformed pattern was saved and listed as active while
+  quietly excluding nothing.
 - **Updating on a Mac no longer removes "Share with Hippius".** Installing from the
   disk image gave you the right-click share menu, but every automatic update after
   that quietly replaced Hippius with a copy that did not include it — so the feature
@@ -107,6 +122,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **Every build now reports its real version number.** Installed copies all claimed to
   be version `0.0.1`, so there was no way to tell which build you were running when
   reporting a problem.
+- **A folder you remove from this computer is listed as not synced here, not as
+  if it came from another device.**
 - **Reclaimed disk space lost to interrupted uploads.** While preparing an upload,
   Hippius writes a temporary encrypted copy of the file. Copies left behind by uploads
   that were interrupted — by a dropped connection, a pause, or quitting the app — could
