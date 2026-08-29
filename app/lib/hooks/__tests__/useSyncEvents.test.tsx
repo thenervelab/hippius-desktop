@@ -267,13 +267,13 @@ describe("useSyncEvents — debounced sync_files_completed_changed dispatch", ()
 });
 
 describe("useSyncEvents — storage overview invalidation (H-007)", () => {
-  // The home storage card reads the indexer via get_storage_overview.
-  // Empty indexer data is success + 0 bytes, so a first-sync / no-op
-  // cycle (totalCompleted == 0) still has to refetch — otherwise the
-  // card sticks at "0 B" while the Files header already shows local
-  // dir_stats. Gating the invalidate on totalCompleted > 0 was the
-  // bug; this pin requires the overview key to invalidate on every
-  // hcfs_sync_completed.
+  // The home storage card and the Files header read the SAME indexer
+  // row (get_storage_overview / get_drive_storage_stats). Empty indexer
+  // data is success + 0 bytes, so a first-sync / no-op cycle
+  // (totalCompleted == 0) still has to refetch — otherwise the card
+  // sticks at "0 B". Gating the invalidate on totalCompleted > 0 was
+  // the bug, and gating only ONE of the two keys just relocates it, so
+  // this pins BOTH keys on every hcfs_sync_completed.
   const zeroOutcome = {
     label: "default",
     files_uploaded: 0,
@@ -296,10 +296,13 @@ describe("useSyncEvents — storage overview invalidation (H-007)", () => {
     return { invalidateSpy, ...rendered };
   }
 
-  function overviewInvalidations(spy: { mock: { calls: unknown[][] } }) {
+  function invalidationsFor(
+    spy: { mock: { calls: unknown[][] } },
+    key: string,
+  ) {
     return spy.mock.calls.filter((call) => {
       const arg = call[0] as { queryKey?: unknown[] } | undefined;
-      return arg?.queryKey?.[0] === STORAGE_OVERVIEW_QUERY_KEY;
+      return arg?.queryKey?.[0] === key;
     }).length;
   }
 
@@ -312,7 +315,7 @@ describe("useSyncEvents — storage overview invalidation (H-007)", () => {
     vi.useRealTimers();
   });
 
-  it("invalidates storage overview when the cycle transferred zero files", async () => {
+  it("invalidates both storage surfaces when the cycle transferred zero files", async () => {
     const { invalidateSpy } = renderWithQueryClient();
     await waitForHandlerRegistration();
 
@@ -320,10 +323,17 @@ describe("useSyncEvents — storage overview invalidation (H-007)", () => {
       listenHandlers.get("hcfs_sync_completed")!({ payload: zeroOutcome });
     });
 
-    expect(overviewInvalidations(invalidateSpy)).toBeGreaterThanOrEqual(1);
+    expect(
+      invalidationsFor(invalidateSpy, STORAGE_OVERVIEW_QUERY_KEY),
+    ).toBeGreaterThanOrEqual(1);
+    // Same indexer row as the overview: if only one refreshes on a
+    // zero-file cycle, the two surfaces disagree about one number.
+    expect(
+      invalidationsFor(invalidateSpy, DRIVE_STORAGE_STATS_QUERY_KEY),
+    ).toBeGreaterThanOrEqual(1);
   });
 
-  it("still invalidates storage overview when files did transfer", async () => {
+  it("still invalidates both storage surfaces when files did transfer", async () => {
     const { invalidateSpy } = renderWithQueryClient();
     await waitForHandlerRegistration();
 
@@ -333,12 +343,12 @@ describe("useSyncEvents — storage overview invalidation (H-007)", () => {
       });
     });
 
-    expect(overviewInvalidations(invalidateSpy)).toBeGreaterThanOrEqual(1);
-    expect(invalidateSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        queryKey: [DRIVE_STORAGE_STATS_QUERY_KEY],
-      }),
-    );
+    expect(
+      invalidationsFor(invalidateSpy, STORAGE_OVERVIEW_QUERY_KEY),
+    ).toBeGreaterThanOrEqual(1);
+    expect(
+      invalidationsFor(invalidateSpy, DRIVE_STORAGE_STATS_QUERY_KEY),
+    ).toBeGreaterThanOrEqual(1);
   });
 });
 

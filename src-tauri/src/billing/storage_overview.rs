@@ -80,7 +80,6 @@ pub struct StorageOverview {
     /// the local walk into `used_bytes` — that is this device's files,
     /// not the account total (other devices, member drives, and
     /// encryption overhead all disagree).
-    #[serde(default)]
     pub used_pending: bool,
 }
 
@@ -161,6 +160,12 @@ async fn local_bytes_for_paths(paths: &[std::path::PathBuf]) -> u64 {
 /// and member slots. Member files live in the owner's indexer row, so
 /// counting them here would flash "Updating…" on a genuinely empty
 /// account that only has Shared-with-me data.
+///
+/// Paused drives are excluded too: "Updating…" promises the number is
+/// about to move, and a paused drive will never upload those bytes. An
+/// account whose every drive is paused reads an honest 0 B instead of a
+/// permanent "Updating…". (Files a paused drive already uploaded are in
+/// the indexer row, so the probe never runs for them.)
 async fn own_drive_paths(pool: &sqlx::SqlitePool, account_id: &str) -> Result<Vec<std::path::PathBuf>, AppError> {
     use sqlx::Row;
 
@@ -170,7 +175,8 @@ async fn own_drive_paths(pool: &sqlx::SqlitePool, account_id: &str) -> Result<Ve
          WHERE owner = ?
            AND label != 'migration'
            AND owner_ss58 IS NULL
-           AND wire_folder_hash IS NULL",
+           AND wire_folder_hash IS NULL
+           AND is_paused = 0",
     )
     .bind(&owner)
     .fetch_all(pool)
@@ -466,26 +472,133 @@ mod tests {
         );
     }
 
+    // Each phase gets its OWN directory rather than mutating one in
+    // place: `dir_stats_recursive` memoises on `(path, mtime)`, and three
+    // writes microseconds apart can land inside one mtime tick, which
+    // would serve the stale cached 0 and flake the last assertion.
     #[tokio::test]
     async fn local_dir_stats_walk_sees_a_visible_file_and_skips_dotfiles() {
         let dir = tempfile::tempdir().expect("tempdir");
+
         let empty = dir.path().join("empty");
         std::fs::create_dir(&empty).expect("empty dir");
         assert_eq!(
-            local_bytes_for_paths(&[empty.clone()]).await,
+            local_bytes_for_paths(std::slice::from_ref(&empty)).await,
             0,
             "an empty own-drive root is a true empty, not pending"
         );
 
-        std::fs::write(empty.join(".hidden"), b"secret").expect("dotfile");
+        let hidden_only = dir.path().join("hidden-only");
+        std::fs::create_dir(&hidden_only).expect("hidden-only dir");
+        std::fs::write(hidden_only.join(".hidden"), b"secret").expect("dotfile");
         assert_eq!(
-            local_bytes_for_paths(&[empty.clone()]).await,
+            local_bytes_for_paths(std::slice::from_ref(&hidden_only)).await,
             0,
             "dir_stats skips dotfiles — a hidden-only tree must not flip usedPending"
         );
 
-        std::fs::write(empty.join("note.txt"), b"hello").expect("visible file");
-        let seen = local_bytes_for_paths(&[empty]).await;
+        let visible = dir.path().join("visible");
+        std::fs::create_dir(&visible).expect("visible dir");
+        std::fs::write(visible.join("note.txt"), b"hello").expect("visible file");
+        let seen = local_bytes_for_paths(std::slice::from_ref(&visible)).await;
         assert!(seen > 0, "a visible file must make the lag probe > 0, got {seen}");
+
+        // The probe only needs `> 0`, so an earlier empty root must not
+        // stop the scan before a later root that does have bytes.
+        let across = local_bytes_for_paths(&[empty, hidden_only, visible]).await;
+        assert!(across > 0, "an empty first root must not short-circuit the scan, got {across}");
+    }
+
+    /// The own-drive filter is the part of this feature that fails
+    /// SILENTLY: `local_own_drive_bytes` swallows a query error into a
+    /// `warn!` and 0, so a renamed column or a wrong clause turns the whole
+    /// fix into a no-op nobody notices. Run it against the REAL production
+    /// DDL (`ensure_table_schema`), not a hand-copied CREATE TABLE, so a
+    /// schema change breaks this test rather than the feature.
+    #[tokio::test]
+    async fn own_drive_paths_selects_only_active_own_drives() {
+        use sqlx::sqlite::SqlitePoolOptions;
+
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory pool");
+        crate::utils::schema::ensure_table_schema(&pool).await.expect("schema");
+
+        let account = "5TestStorageOverviewAccount";
+        let owner = crate::auth::account_key::account_key(account);
+        let other = crate::auth::account_key::account_key("5SomeOtherAccount");
+
+        /// One seeded `sync_paths` row. A struct rather than a tuple so each
+        /// exclusion the query encodes is named at the call site.
+        struct Seed<'a> {
+            owner: &'a str,
+            path: &'a str,
+            label: &'a str,
+            is_paused: i64,
+            owner_ss58: Option<&'a str>,
+            wire_folder_hash: Option<&'a str>,
+        }
+
+        let own = |path, label| Seed {
+            owner: owner.as_str(),
+            path,
+            label,
+            is_paused: 0,
+            owner_ss58: None,
+            wire_folder_hash: None,
+        };
+
+        let rows = [
+            own("/tmp/own", "default"),
+            own("/tmp/mig", "migration"),
+            Seed {
+                owner: owner.as_str(),
+                path: "/tmp/team",
+                label: "team",
+                is_paused: 0,
+                owner_ss58: Some("5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty"),
+                wire_folder_hash: Some("0123456789abcdef"),
+            },
+            Seed {
+                is_paused: 1,
+                ..own("/tmp/paused", "paused")
+            },
+            Seed {
+                owner: other.as_str(),
+                ..own("/tmp/theirs", "default")
+            },
+        ];
+        for Seed {
+            owner: row_owner,
+            path,
+            label,
+            is_paused,
+            owner_ss58,
+            wire_folder_hash,
+        } in rows
+        {
+            sqlx::query(
+                "INSERT INTO sync_paths (owner, path, type, label, timestamp, is_paused, owner_ss58, wire_folder_hash)
+                 VALUES (?, ?, 'folder', ?, 0, ?, ?, ?)",
+            )
+            .bind(row_owner)
+            .bind(path)
+            .bind(label)
+            .bind(is_paused)
+            .bind(owner_ss58)
+            .bind(wire_folder_hash)
+            .execute(&pool)
+            .await
+            .expect("insert sync_path");
+        }
+
+        let paths = own_drive_paths(&pool, account).await.expect("query own drives");
+        assert_eq!(
+            paths,
+            vec![std::path::PathBuf::from("/tmp/own")],
+            "lag probe must count only this account's active, non-migration, non-member drives"
+        );
     }
 }
