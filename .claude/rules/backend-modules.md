@@ -7,7 +7,7 @@ paths:
 
 Deeper detail for individual subsystems lives in the sibling rules files: `sync-engine.md`, `auth-recovery.md`, `shares-and-shared-drives.md`, `tray.md`, `macos-packaging.md`.
 
-- **`main.rs`** — Entry point. Registers all IPC commands, initializes plugins, sets up single-instance and deep-link handling. `lib.rs` re-exports all modules for integration tests.
+- **`main.rs`** — Entry point. Registers all IPC commands, initializes plugins, sets up single-instance and deep-link handling. `lib.rs` re-exports all modules for integration tests. CLI-only modes (`--finder-share`, `--version` / `-V`) return from `main` *before* `load_env` / `init_logging` / `cpu_pool::configure` / `Builder::default()` so they never boot the UI. `--finder-share` still wins if both flags appear. Version handling lives in `cli.rs` (writeln + flush, not `println!` / not `process::exit` — a piped `--version` would otherwise lose the line). Pinned by `tests/cli_version_wiring.rs`.
 - **`error.rs`** — `AppError` enum with `thiserror`. A custom `Serialize` produces `{ "kind": "...", "message": "..." }` for frontend error matching. `NotReadyKind` gives machine-readable variants for auth/sync readiness errors.
 - **`app_state.rs`** — Centralized `AppState` with sub-states: `AuthInfo`, `BlockchainState`, `BlockSubscriptionState`, `OAuthState`, `MigrationState`, and `SyncRunner` (Arc). Also holds a shared `reqwest::Client` and a `tokio::sync::Notify` for drive-removal wakeups.
 - **`auth/`** — Authentication and account management. See `auth-recovery.md`.
