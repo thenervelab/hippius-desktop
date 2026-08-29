@@ -91,9 +91,12 @@ fn shorten_name(name: &str, max_len: usize) -> String {
 }
 
 /// Gracefully exit the application.
+///
+/// Same teardown as the Linux/Windows window-X path so tray Quit cannot
+/// leave the hidden tray-panel webview alive.
 #[tauri::command]
 pub fn app_close(app: AppHandle<Wry>) {
-    app.exit(0);
+    crate::tray::panel::quit_desktop(&app);
 }
 
 // ── Per-drive status (replaces the old global SyncEngineStatus) ────────

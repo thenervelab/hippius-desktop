@@ -697,10 +697,10 @@ pub fn on_window_event(builder: Builder<Wry>) -> Builder<Wry> {
                 return;
             }
 
-            api.prevent_close();
-
             #[cfg(target_os = "macos")]
             {
+                // Hide-to-tray: cancel the close so the process stays alive.
+                api.prevent_close();
                 info!("Window close requested on macOS — hiding to tray");
                 if let Err(e) = window.hide() {
                     warn!("Failed to hide window: {e}");
@@ -709,8 +709,11 @@ pub fn on_window_event(builder: Builder<Wry>) -> Builder<Wry> {
 
             #[cfg(not(target_os = "macos"))]
             {
+                // Do not cancel the close: doing so and then exit(0) from
+                // inside the GTK/WebKit handler orphans the process (H-003).
+                let _ = api;
                 info!("Window close requested — exiting app");
-                window.app_handle().exit(0);
+                crate::tray::panel::quit_desktop(&window.app_handle());
             }
         }
     })
