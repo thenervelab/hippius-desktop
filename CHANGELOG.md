@@ -93,6 +93,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   date, size, or search filter inside a synced folder — including folders synced from
   your other devices — quietly kept showing the full unfiltered list with the filter
   chip still on.
+- **A failed update now tells you what to do next.** Instead of "Please try
+  again later", Hippius names the problem and links to the download page for
+  your release channel, with the right instructions for how your copy was
+  installed.
 - **The Mac download list no longer offers a file that installs an incomplete copy.**
   Release pages carried a second Mac file next to the disk image that read as an
   alternative download but was missing "Share with Hippius" and Apple's security
