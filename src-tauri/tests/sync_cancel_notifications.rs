@@ -17,8 +17,14 @@
 //!    notifications page; any drift here is a user-visible bug.
 
 use sqlx::sqlite::SqlitePool;
-use tauri_project_lib::notifications::credits::{SyncNotificationOutcome, create_sync_notification_inner};
+use tauri_project_lib::notifications::credits::{SyncFileSummary, SyncNotificationOutcome, create_sync_notification_inner};
 use tauri_project_lib::sync::events::CANCELLED_MARKER;
+
+/// The success path always knows the cycle's file count; the error and
+/// folder-restored paths send neither list nor count.
+fn summary(details_json: &str, file_count: Option<u32>) -> SyncFileSummary<'_> {
+    SyncFileSummary { details_json, file_count }
+}
 
 /// Mirrors `utils::schema::ensure_table_schema` for the `notifications` table,
 /// scoped to what `create_sync_notification_inner` touches. Reusing the real
@@ -60,9 +66,15 @@ async fn cancelled_marker_matches_upstream_stringification() {
 async fn success_notification_uses_sync_complete_title() {
     let pool = setup_notifications_db().await;
 
-    let id = create_sync_notification_inner(&pool, "5Ft4uvTEST", "1 file uploaded.", "", SyncNotificationOutcome::Success)
-        .await
-        .expect("insert success notification");
+    let id = create_sync_notification_inner(
+        &pool,
+        "5Ft4uvTEST",
+        "1 file uploaded.",
+        summary("", Some(1)),
+        SyncNotificationOutcome::Success,
+    )
+    .await
+    .expect("insert success notification");
 
     let (title, subtype): (String, String) = sqlx::query_as("SELECT title_text, notification_subtype FROM notifications WHERE id = ?")
         .bind(id)
@@ -82,7 +94,7 @@ async fn error_notification_uses_sync_failed_title_and_distinct_subtype() {
         &pool,
         "5Ft4uvTEST",
         r#"Sync failed for folder "big folder copie 2": Rate limited, retry after 30s"#,
-        "",
+        summary("", None),
         SyncNotificationOutcome::Error,
     )
     .await
@@ -109,6 +121,15 @@ async fn fetch_title_description_subtype(pool: &SqlitePool, id: i64) -> (String,
         .expect("fetch row")
 }
 
+async fn fetch_release_notes(pool: &SqlitePool, id: i64) -> String {
+    let (notes,): (String,) = sqlx::query_as("SELECT release_notes FROM notifications WHERE id = ?")
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .expect("fetch row");
+    notes
+}
+
 /// The bell/page list renders `title_text`, not the description. One named
 /// file in `release_notes` must surface the basename in the title; the
 /// count sentence stays on the description.
@@ -118,15 +139,24 @@ async fn success_notification_names_single_file_in_title() {
     let details = r#"[{"fileName":"Vacation/IMG_1234.HEIC","totalBytes":1024,"action":"upload"}]"#;
     const DESCRIPTION: &str = "1 file uploaded.";
 
-    let id = create_sync_notification_inner(&pool, "5Ft4uvTEST", DESCRIPTION, details, SyncNotificationOutcome::Success)
-        .await
-        .expect("insert success notification");
+    let id = create_sync_notification_inner(
+        &pool,
+        "5Ft4uvTEST",
+        DESCRIPTION,
+        summary(details, Some(1)),
+        SyncNotificationOutcome::Success,
+    )
+    .await
+    .expect("insert success notification");
 
     let (title, description, subtype) = fetch_title_description_subtype(&pool, id).await;
 
     assert_eq!(title, "Synced IMG_1234.HEIC");
     assert_eq!(description, DESCRIPTION, "count sentence stays on the description");
     assert!(subtype.starts_with("FileSyncComplete-"), "unexpected subtype: {subtype}");
+    // The detail pane renders the file list from `release_notes`; deriving the
+    // title from it must not rewrite what is stored.
+    assert_eq!(fetch_release_notes(&pool, id).await, details);
 }
 
 /// Several files cannot all fit in the title; pin the count copy so a
@@ -141,15 +171,49 @@ async fn success_notification_counts_multiple_files_in_title() {
     ]"#;
     const DESCRIPTION: &str = "2 files uploaded, 1 file downloaded.";
 
-    let id = create_sync_notification_inner(&pool, "5Ft4uvTEST", DESCRIPTION, details, SyncNotificationOutcome::Success)
-        .await
-        .expect("insert success notification");
+    let id = create_sync_notification_inner(
+        &pool,
+        "5Ft4uvTEST",
+        DESCRIPTION,
+        summary(details, Some(3)),
+        SyncNotificationOutcome::Success,
+    )
+    .await
+    .expect("insert success notification");
 
     let (title, description, subtype) = fetch_title_description_subtype(&pool, id).await;
 
     assert_eq!(title, "Synced 3 files");
     assert_eq!(description, DESCRIPTION, "count sentence stays on the description");
     assert!(subtype.starts_with("FileSyncComplete-"), "unexpected subtype: {subtype}");
+}
+
+/// End-to-end shape of the capped-list case: the row keeps the 200-entry list
+/// the detail pane renders, while the title reports the cycle's real size. The
+/// two numbers coming from the same place is what produced "Synced 200 files"
+/// for a 5 000-file sync — a wrong number in the only line the list shows.
+#[tokio::test]
+async fn success_notification_title_counts_the_cycle_not_the_capped_list() {
+    let pool = setup_notifications_db().await;
+    let entries: Vec<String> = (0..200)
+        .map(|i| format!(r#"{{"fileName":"f{i}.bin","totalBytes":1,"action":"upload"}}"#))
+        .collect();
+    let details = format!("[{}]", entries.join(","));
+
+    let id = create_sync_notification_inner(
+        &pool,
+        "5Ft4uvTEST",
+        "5000 files uploaded.",
+        summary(&details, Some(5_000)),
+        SyncNotificationOutcome::Success,
+    )
+    .await
+    .expect("insert success notification");
+
+    let (title, _, _) = fetch_title_description_subtype(&pool, id).await;
+
+    assert_eq!(title, "Synced 5000 files");
+    assert_eq!(fetch_release_notes(&pool, id).await, details, "the stored list stays capped");
 }
 
 /// File details on an error row must not override the failure title — the
@@ -163,7 +227,7 @@ async fn error_notification_title_ignores_file_details() {
         &pool,
         "5Ft4uvTEST",
         r#"Sync failed for folder "docs": Rate limited, retry after 30s"#,
-        details,
+        summary(details, Some(1)),
         SyncNotificationOutcome::Error,
     )
     .await

@@ -376,7 +376,9 @@ pub async fn process_credit_events(
 #[derive(serde::Deserialize, Clone, Copy)]
 #[serde(rename_all = "snake_case")]
 pub enum SyncNotificationOutcome {
-    /// The sync cycle completed with one or more transfers. Title: "Sync Complete".
+    /// The sync cycle completed with one or more transfers. Title: the file's
+    /// name or the file count when the row carries a usable file list (see
+    /// [`success_list_title`]), otherwise "Sync Complete".
     Success,
     /// The sync cycle surfaced a non-cancel error (network, auth, rate limit,
     /// etc.). Title: "Sync Failed". User-initiated cancels and stall-watchdog
@@ -406,20 +408,15 @@ impl SyncNotificationOutcome {
         }
     }
 
-    /// Bell/page list renders `title_text`, not the description. A success
-    /// with one named file shows the basename; several files show a count.
-    /// Error / restored titles stay fixed so a failure cannot look like a
-    /// success. Empty or unparseable `release_notes` keep "Sync Complete".
-    fn list_title(self, file_details_json: &str) -> String {
+    /// Title as the bell and the notifications page render it — those surfaces
+    /// show `title_text` and nothing else, so this line is the whole of what a
+    /// user reads about a row.
+    ///
+    /// Only a success draws on the file list (see [`success_list_title`]); error
+    /// and restored titles stay fixed so a failure can never look like one.
+    fn list_title(self, files: &SyncFileSummary<'_>) -> String {
         match self {
-            Self::Success => {
-                let names = success_file_basenames(file_details_json);
-                match names.as_slice() {
-                    [name] => format!("Synced {name}"),
-                    names if names.len() > 1 => format!("Synced {} files", names.len()),
-                    _ => self.title().to_string(),
-                }
-            }
+            Self::Success => success_list_title(files),
             Self::Error | Self::FolderRestored => self.title().to_string(),
         }
     }
@@ -433,15 +430,85 @@ impl SyncNotificationOutcome {
     }
 }
 
-fn success_file_basenames(file_details_json: &str) -> Vec<String> {
-    let Ok(values) = serde_json::from_str::<Vec<serde_json::Value>>(file_details_json) else {
+/// The cycle's file list as it reached the notification row, plus how many
+/// files the cycle actually touched.
+///
+/// The two are not redundant. `details_json` is capped twice on its way here —
+/// `MAX_NOTIFICATION_FILES` in `collect_cycle_files_for_label`, then the
+/// notification hook's own 200-entry aggregation buffer — so its length is a
+/// floor on the cycle, never its size: a 5 000-file initial sync arrives as 200
+/// entries. `file_count` is the hook's uncapped running total, which is what a
+/// count in the title has to come from; `None` means the caller had no count to
+/// offer and the list length is the best answer available.
+pub struct SyncFileSummary<'a> {
+    pub details_json: &'a str,
+    pub file_count: Option<u32>,
+}
+
+/// One entry of the `release_notes` file list, reduced to what the title needs.
+struct FileDetail {
+    /// `None` when the entry carries no readable `fileName`.
+    name: Option<String>,
+    /// An upload or a download, as opposed to a local/remote delete.
+    transferred: bool,
+}
+
+/// Title for a finished cycle.
+///
+/// Only uploads and downloads may lend their name to the title: "Synced
+/// report.pdf" for a file the cycle *deleted* reads as a successful upload of a
+/// file that is in fact gone, so a delete-only cycle keeps the generic title and
+/// lets the description say what happened.
+///
+/// The single-file arm requires the count and the list to agree that there was
+/// exactly one file. The list is a capped projection of session state, so one
+/// entry alongside a count of five is a truncation rather than a one-file cycle,
+/// and naming that entry would bury the other four.
+fn success_list_title(files: &SyncFileSummary<'_>) -> String {
+    let generic = SyncNotificationOutcome::Success.title().to_string();
+
+    let details = parse_file_details(files.details_json);
+    let transferred: Vec<&str> = details.iter().filter(|d| d.transferred).filter_map(|d| d.name.as_deref()).collect();
+    if transferred.is_empty() {
+        return generic;
+    }
+
+    let total = files.file_count.map_or(details.len(), |n| n as usize);
+    match (total, transferred.as_slice()) {
+        (1, [name]) => format!("Synced {name}"),
+        (n, _) if n > 1 => format!("Synced {n} files"),
+        _ => generic,
+    }
+}
+
+/// Parse the `release_notes` array the notification hook sends. A non-array or
+/// unparseable payload yields no entries, which keeps the generic title.
+///
+/// `action` holds hcfs-client's `FileAction` wire string; the exact spellings
+/// are pinned by `sync::events::tests` (a drift there degrades every success
+/// title to "Sync Complete" rather than mislabelling a delete as a transfer).
+fn parse_file_details(details_json: &str) -> Vec<FileDetail> {
+    let Ok(values) = serde_json::from_str::<Vec<serde_json::Value>>(details_json) else {
         return Vec::new();
     };
     values
         .iter()
-        .filter_map(|v| v.get("fileName").and_then(|n| n.as_str()))
-        .map(|path| path.rsplit(['/', '\\']).next().filter(|s| !s.is_empty()).unwrap_or(path).to_string())
+        .map(|v| FileDetail {
+            name: v.get("fileName").and_then(serde_json::Value::as_str).map(basename),
+            transferred: matches!(v.get("action").and_then(serde_json::Value::as_str), Some("upload" | "download")),
+        })
         .collect()
+}
+
+/// Last path segment of a drive-relative entry — nested files carry the whole
+/// path, not the basename.
+///
+/// Splits on `\` as well because hcfs-client's own `extract_file_name` splits on
+/// `/` first and hands a Windows-shaped path back whole. A POSIX name that
+/// genuinely contains a backslash therefore shows only its tail, which is
+/// cosmetic in a line the UI already ellipsises.
+fn basename(path: &str) -> String {
+    path.rsplit(['/', '\\']).next().filter(|s| !s.is_empty()).unwrap_or(path).to_string()
 }
 
 /// Insert a sync notification row. Returns the new row's `id`.
@@ -453,12 +520,12 @@ pub async fn create_sync_notification_inner(
     pool: &sqlx::sqlite::SqlitePool,
     user_address: &str,
     description: &str,
-    file_details_json: &str,
+    files: SyncFileSummary<'_>,
     outcome: SyncNotificationOutcome,
 ) -> Result<i64, AppError> {
     let timestamp = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
     let subtype = format!("{}-{timestamp}", outcome.subtype_prefix());
-    let title = outcome.list_title(file_details_json);
+    let title = outcome.list_title(&files);
 
     let id = sqlx::query(
         r"
@@ -474,7 +541,7 @@ pub async fn create_sync_notification_inner(
     .bind(&subtype)
     .bind(title)
     .bind(description)
-    .bind(file_details_json)
+    .bind(files.details_json)
     .execute(pool)
     .await?
     .last_insert_rowid();
@@ -484,9 +551,13 @@ pub async fn create_sync_notification_inner(
 
 /// Create a sync notification row.
 ///
-/// `outcome` drives the title ("Sync Complete" vs. "Sync Failed") and the
-/// `notification_subtype` prefix — so the notifications page can filter
+/// `outcome` drives the title ("Sync Failed" vs. the success titles above) and
+/// the `notification_subtype` prefix — so the notifications page can filter
 /// success from failure without parsing the description string.
+///
+/// `file_count` is the cycle's uncapped file count, which only the success path
+/// sends; omitting it falls back to the length of the (capped) file list. See
+/// [`SyncFileSummary`] for why the two differ.
 ///
 /// Called by the frontend after its aggregation window closes for the success
 /// branch (see `useFilesNotification.ts`), and per-event for the error branch.
@@ -498,12 +569,17 @@ pub async fn create_sync_notification(
     description: String,
     file_details_json: String,
     outcome: SyncNotificationOutcome,
+    file_count: Option<u32>,
 ) -> Result<i64, AppError> {
     // Scope the write to the signed-in account; never trust the caller-supplied
     // address.
     let user_address = crate::notifications::session_scoped_notification_account(state.inner(), &user_address)?;
     let pool = state.pool()?;
-    create_sync_notification_inner(pool, &user_address, &description, &file_details_json, outcome).await
+    let files = SyncFileSummary {
+        details_json: &file_details_json,
+        file_count,
+    };
+    create_sync_notification_inner(pool, &user_address, &description, files, outcome).await
 }
 
 /// Persist multiple credit event notifications in a single call.
@@ -632,6 +708,119 @@ mod tests {
             assert_eq!(outcome.title(), title, "title for {wire:?}");
             assert_eq!(outcome.subtype_prefix(), prefix, "subtype prefix for {wire:?}");
         }
+    }
+
+    // ── Sync-complete list title ────────────────────────────────────
+    //
+    // The bell and the notifications page render `title_text` and nothing
+    // else, so every one of these cases is the whole of what the user reads
+    // about a finished cycle. The description (which only the detail pane
+    // shows) is the FE's; the title is Rust's.
+
+    fn title_for(details_json: &str, file_count: Option<u32>) -> String {
+        SyncNotificationOutcome::Success.list_title(&SyncFileSummary { details_json, file_count })
+    }
+
+    fn upload(name: &str) -> serde_json::Value {
+        serde_json::json!({ "fileName": name, "totalBytes": 1, "action": "upload" })
+    }
+
+    fn details(entries: &[serde_json::Value]) -> String {
+        serde_json::Value::Array(entries.to_vec()).to_string()
+    }
+
+    #[test]
+    fn one_transferred_file_is_named_by_its_basename() {
+        // Nested entries carry the drive-relative path, not the basename.
+        assert_eq!(
+            title_for(&details(&[upload("Vacation/2024/IMG_1234.HEIC")]), Some(1)),
+            "Synced IMG_1234.HEIC"
+        );
+        assert_eq!(title_for(&details(&[upload("report.pdf")]), Some(1)), "Synced report.pdf");
+        assert_eq!(title_for(&details(&[upload(r"Vacation\IMG_1234.HEIC")]), Some(1)), "Synced IMG_1234.HEIC");
+    }
+
+    #[test]
+    fn a_name_is_passed_through_verbatim() {
+        // Punctuation, spaces and quotes are data, not markup: the title is
+        // rendered as text and nothing here needs escaping or trimming.
+        let odd = "Q3 report [v2] {draft} 100% — o'brien \"final\".pdf";
+        assert_eq!(title_for(&details(&[upload(odd)]), Some(1)), format!("Synced {odd}"));
+
+        // Truncation is the UI's job (both surfaces ellipsise); Rust must not
+        // silently shorten a name the user would then fail to recognise.
+        let long = format!("{}.bin", "a".repeat(250));
+        assert_eq!(title_for(&details(&[upload(&long)]), Some(1)), format!("Synced {long}"));
+    }
+
+    #[test]
+    fn a_directory_shaped_entry_keeps_its_whole_name() {
+        // A trailing separator leaves no last segment to show; falling back to
+        // the whole string beats an empty "Synced ".
+        assert_eq!(title_for(&details(&[upload("Vacation/")]), Some(1)), "Synced Vacation/");
+    }
+
+    #[test]
+    fn several_files_are_counted() {
+        let three = details(&[upload("a.txt"), upload("b.txt"), upload("nested/c.txt")]);
+        assert_eq!(title_for(&three, Some(3)), "Synced 3 files");
+    }
+
+    // The regression this guards: `file_details_json` is capped at
+    // MAX_NOTIFICATION_FILES (and again by the hook's own buffer), so counting
+    // its entries reports "Synced 200 files" for a 5 000-file initial sync —
+    // a wrong number in the only line the list shows.
+    #[test]
+    fn the_count_comes_from_the_cycle_not_from_the_capped_list() {
+        let capped: Vec<serde_json::Value> = (0..200).map(|i| upload(&format!("f{i}.bin"))).collect();
+        assert_eq!(title_for(&details(&capped), Some(5_000)), "Synced 5000 files");
+    }
+
+    // A list of one next to a count of five is a truncation, not a one-file
+    // cycle; naming that entry would bury the other four.
+    #[test]
+    fn a_single_name_needs_the_count_to_agree() {
+        assert_eq!(title_for(&details(&[upload("a.txt")]), Some(5)), "Synced 5 files");
+        assert_eq!(title_for(&details(&[upload("a.txt"), upload("b.txt")]), Some(1)), "Sync Complete");
+    }
+
+    // Deletes must never be phrased as "Synced <name>": the file is gone, and
+    // the title would read as a successful upload of it.
+    #[test]
+    fn deletes_never_lend_their_name_to_the_title() {
+        let deleted = serde_json::json!({ "fileName": "report.pdf", "totalBytes": 8, "action": "remote_delete" });
+        assert_eq!(title_for(&details(&[deleted.clone()]), Some(1)), "Sync Complete");
+
+        // A mixed cycle still counts every file it touched.
+        assert_eq!(title_for(&details(&[upload("a.txt"), deleted]), Some(2)), "Synced 2 files");
+    }
+
+    #[test]
+    fn an_unusable_file_list_keeps_the_generic_title() {
+        for json in ["", "[]", "{}", "not json", r#"[{"totalBytes":1,"action":"upload"}]"#] {
+            assert_eq!(title_for(json, None), "Sync Complete", "unexpected title for {json:?}");
+        }
+    }
+
+    // The count is optional over IPC, so a caller that omits it (or a param
+    // rename that silently drops it) degrades to the list length rather than
+    // to no title at all.
+    #[test]
+    fn a_missing_count_falls_back_to_the_list_length() {
+        assert_eq!(title_for(&details(&[upload("a.txt")]), None), "Synced a.txt");
+        assert_eq!(title_for(&details(&[upload("a.txt"), upload("b.txt")]), None), "Synced 2 files");
+    }
+
+    // A failure that borrowed a filename from its file list would read as a
+    // success in the list, which is the one thing the title must never do.
+    #[test]
+    fn only_the_success_outcome_takes_its_title_from_the_file_list() {
+        let files = SyncFileSummary {
+            details_json: &details(&[upload("stuck.bin")]),
+            file_count: Some(1),
+        };
+        assert_eq!(SyncNotificationOutcome::Error.list_title(&files), "Sync Failed");
+        assert_eq!(SyncNotificationOutcome::FolderRestored.list_title(&files), "Folder Restored");
     }
 
     async fn insert_low_credit(pool: &sqlx::SqlitePool, user: &str, is_deleted: i64, deleted_at: Option<i64>) {

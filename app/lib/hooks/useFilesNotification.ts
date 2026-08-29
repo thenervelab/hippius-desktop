@@ -119,13 +119,19 @@ export function useFilesNotification() {
         : "";
 
       // Single Rust call creates the notification. Outcome drives the
-      // title ("Sync Complete") and notification_subtype prefix — the
-      // Rust side never infers it from the description.
+      // title and notification_subtype prefix — the Rust side never
+      // infers it from the description.
+      //
+      // `fileCount` is the aggregate above, NOT `capturedFiles.length`:
+      // the detail list is capped at MAX_PENDING_NOTIFICATION_FILES here
+      // and again at MAX_NOTIFICATION_FILES in Rust, so counting the list
+      // would title a 5,000-file sync "Synced 200 files".
       await invoke("create_sync_notification", {
         userAddress,
         description,
         fileDetailsJson,
         outcome: "success",
+        fileCount: total,
       });
       await refreshUnread();
     };
