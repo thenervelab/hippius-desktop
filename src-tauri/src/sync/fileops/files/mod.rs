@@ -7,14 +7,16 @@
 //! this is a move-only refactor with no behavioral change.
 //!
 //! Cross-submodule private helpers (`ensure_within`, `derive_relative_name`,
-//! `copy_dir_recursive`, the `synced_paths_*` reads, `dir_stats_recursive`) are
-//! `pub(super)` in their home submodule and reached by siblings via
-//! `super::<module>::<item>`; they are deliberately NOT re-exported here.
+//! `copy_dir_recursive`, the `synced_paths_*` reads, `dir_stats_recursive`,
+//! exclude-glob matching in `exclude_match`) are `pub(super)` in their home
+//! submodule and reached by siblings via `super::<mod>::<item>`; they are
+//! deliberately NOT re-exported here.
 
 mod add;
 mod asset_scope;
 mod delete;
 mod dir_stats;
+mod exclude_match;
 mod export_zip;
 mod listing;
 mod pathops;

@@ -7,8 +7,24 @@
 use crate::app_state::AppState;
 use crate::error::{AppError, Result};
 use hcfs_client::engine::runner::trigger_sync;
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 use tracing::{debug, info, warn};
+
+/// Kick a listing refresh and a sync cycle after an exclude-rule edit.
+///
+/// `apply_sync_selection` already did this; add/remove used to write the
+/// file and return, so Drive stayed Pending until a manual refresh.
+/// `hcfs_activity_updated` is the listing-refresh event `useSyncEvents`
+/// already folds into `sync_files_completed_changed`.
+async fn trigger_sync_after_exclude_edit(app: &AppHandle, label: &str) {
+    let _ = app.emit(
+        crate::sync::events::ACTIVITY_UPDATED,
+        crate::sync::events::LabelPayload { label: label.to_string() },
+    );
+    use tauri::Manager;
+    let s = app.state::<crate::app_state::AppState>().sync.clone();
+    let _ = trigger_sync(&s).await;
+}
 
 /// Validate and trim an exclusion pattern.
 ///
@@ -94,7 +110,7 @@ pub async fn list_exclude_patterns(label: String, app_state: tauri::State<'_, Ap
 /// patterns), then delegates to `Drive::add_exclude_pattern`. Returns `true`
 /// if the pattern was added, `false` if it already existed.
 #[tauri::command]
-pub async fn add_exclude_pattern(label: String, pattern: String, app_state: tauri::State<'_, AppState>) -> Result<bool> {
+pub async fn add_exclude_pattern(label: String, pattern: String, app_state: tauri::State<'_, AppState>, app: AppHandle) -> Result<bool> {
     let trimmed = validate_pattern(&pattern)?;
 
     let drive_arc = {
@@ -108,6 +124,7 @@ pub async fn add_exclude_pattern(label: String, pattern: String, app_state: taur
 
     let manager = arc.lock().await;
     let added = manager.add_exclude_pattern(&trimmed).map_err(AppError::Hcfs)?;
+    drop(manager);
     if added {
         info!(label = %label, pattern = %trimmed, "Added exclude pattern");
     } else {
@@ -117,6 +134,7 @@ pub async fn add_exclude_pattern(label: String, pattern: String, app_state: taur
             "Exclude pattern already exists",
         );
     }
+    trigger_sync_after_exclude_edit(&app, &label).await;
     Ok(added)
 }
 
@@ -125,7 +143,7 @@ pub async fn add_exclude_pattern(label: String, pattern: String, app_state: taur
 /// Delegates to `Drive::remove_exclude_pattern`. Returns `true` if the
 /// pattern was removed, `false` if it was not found.
 #[tauri::command]
-pub async fn remove_exclude_pattern(label: String, pattern: String, app_state: tauri::State<'_, AppState>) -> Result<bool> {
+pub async fn remove_exclude_pattern(label: String, pattern: String, app_state: tauri::State<'_, AppState>, app: AppHandle) -> Result<bool> {
     let drive_arc = {
         let guard = app_state.sync.drives.lock().await;
         guard.get(&label).map(|slot| slot.manager.clone())
@@ -137,6 +155,7 @@ pub async fn remove_exclude_pattern(label: String, pattern: String, app_state: t
 
     let manager = arc.lock().await;
     let removed = manager.remove_exclude_pattern(&pattern).map_err(AppError::Hcfs)?;
+    drop(manager);
     if removed {
         info!(label = %label, pattern = %pattern, "Removed exclude pattern");
     } else {
@@ -146,6 +165,7 @@ pub async fn remove_exclude_pattern(label: String, pattern: String, app_state: t
             "Exclude pattern not found for removal",
         );
     }
+    trigger_sync_after_exclude_edit(&app, &label).await;
     Ok(removed)
 }
 
@@ -220,12 +240,7 @@ pub async fn apply_sync_selection(
         "Applied sync selection"
     );
 
-    // Trigger sync to download newly included files
-    {
-        use tauri::Manager;
-        let s = app.state::<crate::app_state::AppState>().sync.clone();
-        let _ = trigger_sync(&s).await;
-    }
+    trigger_sync_after_exclude_edit(&app, &label).await;
 
     Ok(())
 }

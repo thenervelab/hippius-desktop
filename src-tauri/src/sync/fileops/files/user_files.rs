@@ -360,6 +360,19 @@ fn walk_disk_files_std(
     excluded: &[String],
     out: &mut Vec<UserFileEntry>,
 ) {
+    let rules = super::exclude_match::rules_from_patterns(excluded);
+    walk_disk_files_std_inner(base, rel_prefix, label, folder_path, synced, &rules, out);
+}
+
+fn walk_disk_files_std_inner(
+    base: &Path,
+    rel_prefix: &str,
+    label: &str,
+    folder_path: &str,
+    synced: Option<&HashMap<String, hcfs_client::engine::types::SyncedFileInfo>>,
+    exclude_rules: &hcfs_client::drive::ExcludeRules,
+    out: &mut Vec<UserFileEntry>,
+) {
     let dir_path = if rel_prefix.is_empty() {
         base.to_path_buf()
     } else {
@@ -385,7 +398,10 @@ fn walk_disk_files_std(
         };
 
         if meta.is_dir() {
-            walk_disk_files_std(base, &rel_path, label, folder_path, synced, excluded, out);
+            if super::exclude_match::path_is_excluded(exclude_rules, &rel_path, true) {
+                continue;
+            }
+            walk_disk_files_std_inner(base, &rel_path, label, folder_path, synced, exclude_rules, out);
             continue;
         }
 
@@ -398,7 +414,7 @@ fn walk_disk_files_std(
             continue;
         }
 
-        let is_excluded = !excluded.is_empty() && excluded.iter().any(|p| p == &rel_path);
+        let is_excluded = super::exclude_match::path_is_excluded(exclude_rules, &rel_path, false);
         let (sync_status, info) = if is_excluded {
             ("excluded", None)
         } else {
@@ -526,6 +542,7 @@ pub async fn search_user_files_recursive(
     let walk_folder = sp.path.clone();
     let walk_synced = synced.clone();
     let walk_excluded = excluded.clone();
+    let exclude_rules = super::exclude_match::rules_from_patterns(&excluded);
     let mut out = tokio::task::spawn_blocking(move || {
         let mut collected = Vec::new();
         walk_disk_files_std(
@@ -541,6 +558,7 @@ pub async fn search_user_files_recursive(
     })
     .await
     .unwrap_or_default();
+    out.retain(|e| e.sync_status != "excluded");
 
     // 2. Server-only overlay — files known on the server that haven't
     // downloaded to this device yet. We surface them as `sync_status =
@@ -562,6 +580,9 @@ pub async fn search_user_files_recursive(
                 continue;
             }
             if seen.contains(rel) {
+                continue;
+            }
+            if super::exclude_match::path_is_excluded(&exclude_rules, rel, false) {
                 continue;
             }
             let basename = rel.rsplit('/').next().unwrap_or(rel).to_string();
@@ -1194,5 +1215,27 @@ mod tests {
         let pending = out.iter().find(|e| e.actual_file_name == "pending.bin").expect("pending");
         assert_eq!(pending.sync_status, "pending");
         assert_eq!(pending.size, 2);
+    }
+
+    /// `*.bin` must tag `pending.bin` (and a nested `dir/foo.bin`) excluded
+    /// via ExcludeRules, not exact path equality. `foo.bin.bak` stays pending.
+    #[test]
+    fn walk_disk_files_std_tags_glob_excludes_not_exact_paths() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("dir")).expect("mkdir");
+        std::fs::write(root.join("pending.bin"), b"ab").expect("bin");
+        std::fs::write(root.join("dir/foo.bin"), b"cd").expect("nested bin");
+        std::fs::write(root.join("foo.bin.bak"), b"ef").expect("bak");
+        std::fs::write(root.join("keep.txt"), b"ok").expect("txt");
+
+        let mut out = Vec::new();
+        walk_disk_files_std(root, "", "docs", root.to_str().unwrap(), None, &["*.bin".to_string()], &mut out);
+
+        let by_name: HashMap<&str, &str> = out.iter().map(|e| (e.actual_file_name.as_str(), e.sync_status.as_str())).collect();
+        assert_eq!(by_name.get("pending.bin").copied(), Some("excluded"));
+        assert_eq!(by_name.get("dir/foo.bin").copied(), Some("excluded"));
+        assert_eq!(by_name.get("foo.bin.bak").copied(), Some("pending"));
+        assert_eq!(by_name.get("keep.txt").copied(), Some("pending"));
     }
 }
