@@ -121,6 +121,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **Every build now reports its real version number.** Installed copies all claimed to
   be version `0.0.1`, so there was no way to tell which build you were running when
   reporting a problem.
+- **A folder you remove from this computer is listed as not synced here, not as
+  if it came from another device.**
 - **Reclaimed disk space lost to interrupted uploads.** While preparing an upload,
   Hippius writes a temporary encrypted copy of the file. Copies left behind by uploads
   that were interrupted — by a dropped connection, a pause, or quitting the app — could
