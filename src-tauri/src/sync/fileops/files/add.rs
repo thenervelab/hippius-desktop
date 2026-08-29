@@ -265,6 +265,9 @@ pub async fn add_folder(
     let result = add_folder_with_app_inner(&sync_path, &folder_path, subfolder.as_deref()).await;
     match result {
         Ok(name) => {
+            // Listing's dir-stats cache is keyed by path+mtime. A coarse
+            // filesystem clock can miss the copy, so drop the tree explicitly.
+            super::dir_stats::invalidate_dir_stats_under(Path::new(&sync_path));
             // Trigger sync so the uploaded folder gets synced
             use tauri::Manager;
             let s = app.state::<crate::app_state::AppState>().sync.clone();
@@ -375,8 +378,22 @@ async fn walk_regular_files_stats(root: &std::path::Path) -> (u64, u64) {
         .unwrap_or((0, 0))
 }
 
+/// Failed-download artifacts (`downloaded_<hex>`) and 0-byte encrypted-name
+/// stubs (`file_<hex>`) that `list_sync_folder_inner` removes-and-skips.
+/// Dot-prefix names are skipped separately so a hidden directory is never
+/// pushed onto the walk stack. Copy still writes these names onto disk;
+/// this skip is the File No counter only. Do not add `DEFAULT_EXCLUDE_PATTERNS`.
+fn is_unlisted_regular_file(name: &str, file_len: u64) -> bool {
+    hcfs_client::engine::classify::is_failed_download_artifact(name).is_some()
+        || (hcfs_client::engine::classify::is_encrypted_name_stub(name).is_some() && file_len == 0)
+}
+
 /// One `DirEntry::metadata` per entry (lstat-shaped, does not follow
 /// symlinks) so we do not pay `file_type` + `metadata` on every file.
+///
+/// Skips the same names Drive listing hides so the File No banner cannot
+/// count a file the table will omit (H-082: 130 visible + 2 hidden used
+/// to banner 132). Hidden directories are not descended.
 fn walk_regular_files_stats_std(root: &std::path::Path) -> (u64, u64) {
     let mut bytes: u64 = 0;
     let mut count: u64 = 0;
@@ -387,10 +404,21 @@ fn walk_regular_files_stats_std(root: &std::path::Path) -> (u64, u64) {
         }
         let Ok(entries) = std::fs::read_dir(&dir) else { continue };
         for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            // Same rule as listing.rs / pending-summary / dir_stats: a
+            // `.`-prefixed dir is skipped wholesale so its children are
+            // never counted.
+            if name.starts_with('.') {
+                continue;
+            }
             let Ok(meta) = entry.metadata() else { continue };
             if meta.is_dir() {
                 stack.push(entry.path());
             } else if meta.is_file() {
+                if is_unlisted_regular_file(&name, meta.len()) {
+                    continue;
+                }
                 count = count.saturating_add(1);
                 bytes = bytes.saturating_add(meta.len());
             }
@@ -785,6 +813,10 @@ pub async fn add_files(
         reset_banner(&app, &state);
     }
 
+    // Same cache drop as `add_folder`: the listing file-count can otherwise
+    // keep a pre-copy total until mtime ticks.
+    super::dir_stats::invalidate_dir_stats_under(Path::new(&sync_path));
+
     // Always trigger sync so successfully added files get uploaded
     {
         use tauri::Manager;
@@ -816,6 +848,105 @@ mod tests {
         let (bytes, count) = walk_regular_files_stats(root).await;
         assert_eq!(count, 3, "all three regular files counted across the nested dir");
         assert_eq!(bytes, 10, "byte total summed across the nested dir (5+2+3)");
+    }
+
+    /// H-082: Drive listing skips `name.starts_with('.')`, but the add-folder
+    /// File No banner walked every regular file. A 130-file folder plus two
+    /// dotfiles banners 132, then Drive settles at 130.
+    #[test]
+    fn walk_regular_files_stats_skips_hidden_so_banner_matches_drive() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        for i in 0..130 {
+            std::fs::write(root.join(format!("visible-{i:03}.txt")), b"v").unwrap();
+        }
+        std::fs::write(root.join(".DS_Store"), b"mac").unwrap();
+        std::fs::write(root.join(".hidden"), b"dot").unwrap();
+
+        let (bytes, count) = walk_regular_files_stats_std(root);
+        assert_eq!(count, 130, "hidden files must not inflate the File No banner");
+        assert_eq!(bytes, 130, "each visible file is 1 byte; hidden bytes must not be summed");
+    }
+
+    /// The rest of listing's skip set: a hidden directory's children, a
+    /// `downloaded_<hex>` artifact, and a 0-byte `file_<hex>` stub. A non-zero
+    /// stub and a `downloaded_` name that is not all-hex stay counted — listing
+    /// only drops the 0-byte / hex-artifact cases.
+    #[test]
+    fn walk_regular_files_stats_skips_hidden_dirs_artifacts_and_zero_byte_stubs() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        std::fs::write(root.join("keep.txt"), b"ok").unwrap();
+        let hidden_dir = root.join(".git");
+        std::fs::create_dir(&hidden_dir).unwrap();
+        std::fs::write(hidden_dir.join("objects"), b"blob").unwrap();
+        std::fs::write(root.join("downloaded_deadbeef"), b"artifact").unwrap();
+        std::fs::write(root.join("file_0123456789abcdef"), b"").unwrap();
+        std::fs::write(root.join("file_0123456789abcdee"), b"data").unwrap();
+        std::fs::write(root.join("downloaded_notes.txt"), b"xy").unwrap();
+
+        let (bytes, count) = walk_regular_files_stats_std(root);
+        assert_eq!(count, 3, "keep.txt + non-zero stub + downloaded_notes.txt");
+        assert_eq!(bytes, 8, "2 + 4 + 2; hidden-dir / artifact / 0-byte stub omitted");
+    }
+
+    /// This PR is the counter: listing skip must not be copied into
+    /// `copy_dir_recursive`. A hidden source file still lands on disk.
+    #[tokio::test]
+    async fn add_folder_still_copies_hidden_files_onto_disk() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let sync = tmp.path().join("sync");
+        let src = tmp.path().join("photos");
+        tokio::fs::create_dir(&sync).await.unwrap();
+        tokio::fs::create_dir(&src).await.unwrap();
+        tokio::fs::write(src.join("a.txt"), b"hi").await.unwrap();
+        tokio::fs::write(src.join(".hidden"), b"dot").await.unwrap();
+
+        let name = add_folder_with_app_inner(sync.to_str().unwrap(), src.to_str().unwrap(), None)
+            .await
+            .unwrap();
+        assert_eq!(name, "photos");
+        assert_eq!(tokio::fs::read(sync.join("photos/a.txt")).await.unwrap(), b"hi");
+        assert_eq!(
+            tokio::fs::read(sync.join("photos/.hidden")).await.unwrap(),
+            b"dot",
+            "copy must still write hidden names; only the File No walker skips them"
+        );
+        assert_eq!(walk_regular_files_stats_std(&src).1, 1);
+    }
+
+    /// Extract the brace-matched body of the function whose signature contains
+    /// `sig` — a whole-file substring would pass if the call lived in a test.
+    fn fn_body<'a>(src: &'a str, sig: &str) -> &'a str {
+        let sig_idx = src.find(sig).unwrap_or_else(|| panic!("`{sig}` declaration present"));
+        let body_start = src[sig_idx..].find('{').expect("fn body opens") + sig_idx;
+        let mut depth = 0usize;
+        for (i, ch) in src[body_start..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return &src[body_start..=body_start + i];
+                    }
+                }
+                _ => {}
+            }
+        }
+        panic!("`{sig}` body never closes");
+    }
+
+    #[test]
+    fn add_folder_and_add_files_invalidate_listing_dir_stats() {
+        let src = include_str!("add.rs");
+        assert!(
+            fn_body(src, "pub async fn add_folder(").contains("invalidate_dir_stats_under"),
+            "add_folder must drop the listing dir-stats cache after a copy"
+        );
+        assert!(
+            fn_body(src, "pub async fn add_files(").contains("invalidate_dir_stats_under"),
+            "add_files must drop the listing dir-stats cache after a copy"
+        );
     }
 
     #[test]
