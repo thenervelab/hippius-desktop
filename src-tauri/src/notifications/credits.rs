@@ -830,7 +830,7 @@ mod tests {
     #[test]
     fn deletes_never_lend_their_name_to_the_title() {
         let deleted = serde_json::json!({ "fileName": "report.pdf", "totalBytes": 8, "action": "remote_delete" });
-        assert_eq!(title_for(&details(&[deleted.clone()]), Some(1)), "Sync Complete");
+        assert_eq!(title_for(&details(std::slice::from_ref(&deleted)), Some(1)), "Sync Complete");
 
         // A mixed cycle still counts every file it touched.
         assert_eq!(title_for(&details(&[upload("a.txt"), deleted]), Some(2)), "Synced 2 files");
