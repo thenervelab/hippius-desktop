@@ -15,6 +15,7 @@ mod app_state;
 pub mod auth;
 pub mod billing;
 pub mod blockchain;
+mod cli;
 pub mod console_access;
 pub mod crypto;
 pub mod error;
@@ -221,6 +222,16 @@ fn main() {
             };
             crate::finder_bridge::cli::run(path); // never returns
         }
+    }
+
+    // `--version` / `-V` must not boot the UI. Inspected *after*
+    // `--finder-share` so a file-manager share click still wins if both
+    // flags appear. `skip(1)` drops argv[0] so a strangely named binary
+    // cannot count as the flag. `return` (not `process::exit`) so a piped
+    // stdout flush lands. Pinned by `tests/cli_version_wiring.rs`.
+    if crate::cli::argv_requests_version(std::env::args().skip(1)) {
+        let _ = crate::cli::write_version(&mut std::io::stdout());
+        return;
     }
 
     load_env();

@@ -67,6 +67,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **`--version` prints the version and exits.** Running Hippius with `--version`
+  or `-V` no longer opens the full app.
 - **Adding a large folder no longer freezes the app.** Dropping a multi-gigabyte
   folder in used to lock the window until the copy and encryption finished.
 - **Replacing an already-synced file can no longer upload a half-copied version.**
