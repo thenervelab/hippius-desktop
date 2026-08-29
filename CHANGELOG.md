@@ -74,6 +74,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   no longer leaves a background process running after you click the window X.
 - **`--version` prints the version and exits.** Running Hippius with `--version`
   or `-V` no longer opens the full app.
+- **Folder sizes stay correct as you work.** A folder's size and file count now
+  update right away when you delete or add something inside it, or when a file
+  arrives from another device — previously they could keep showing the old
+  numbers until the app was restarted.
 - **Adding a large folder no longer freezes the app.** Dropping a multi-gigabyte
   folder in used to lock the window until the copy and encryption finished.
 - **Replacing an already-synced file can no longer upload a half-copied version.**
