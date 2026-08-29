@@ -6,6 +6,7 @@ use super::pathops::ensure_within;
 use super::synced_state::synced_paths_and_excludes_for_label;
 use crate::error::Result;
 use chrono::Datelike;
+use globset::{GlobBuilder, GlobMatcher};
 use hcfs_client::drive::ExcludeRules;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -30,6 +31,10 @@ pub struct DateRangeFilter {
 #[derive(serde::Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct FileFilterCriteria {
+    /// Free-text search. A term containing `*` or `?` is a case-insensitive
+    /// glob against [`UserFileEntry::actual_file_name`] (gitignore-style,
+    /// so `*.pdf` matches at any depth). Other terms are a case-insensitive
+    /// substring of the display name or Arion hash.
     pub search_term: Option<String>,
     pub file_types: Option<Vec<String>>,
     /// Explicit file extensions to match (e.g. `["mp4", "jpg"]`). Independent
@@ -623,6 +628,57 @@ pub async fn search_user_files_recursive(
     Ok(out)
 }
 
+/// Compiled search term. A glob is built once per filter pass so a large
+/// listing does not re-parse `*.pdf` on every row.
+enum SearchNeedle {
+    /// Case-insensitive substring of the display name or Arion hash.
+    Substring(String),
+    /// globset glob against the drive-relative path.
+    Glob(GlobMatcher),
+    /// Unparseable glob (e.g. unclosed `[`). Match nothing; never panic.
+    MatchNothing,
+}
+
+/// Compile `search_term` into a needle.
+///
+/// A term containing `*` or `?` is a glob — `*.bin` is not a literal
+/// substring of those two characters. EVERY pattern is expanded to
+/// `**/{pattern}`, exactly as hcfs's `ExcludeRules::parse` expands its
+/// own, so a term matches at any depth and the two engines agree on what
+/// a pattern means.
+///
+/// `literal_separator` stays at globset's default, so `*` crosses `/` and
+/// a term containing a slash is NOT root-anchored. That is looser than
+/// gitignore, and deliberately so twice over: it is the forgiving
+/// behaviour a search box wants, and it is what the exclude rules already
+/// do. Search differs from them in one respect only — it is
+/// case-insensitive.
+///
+/// Other terms keep the historical case-insensitive substring match on
+/// name/hash.
+fn compile_search_needle(term: &str) -> Option<SearchNeedle> {
+    if term.is_empty() {
+        return None;
+    }
+    if !term.contains(['*', '?']) {
+        return Some(SearchNeedle::Substring(term.to_lowercase()));
+    }
+
+    let expanded = format!("**/{term}");
+    match GlobBuilder::new(&expanded).case_insensitive(true).build() {
+        Ok(glob) => Some(SearchNeedle::Glob(glob.compile_matcher())),
+        Err(_) => Some(SearchNeedle::MatchNothing),
+    }
+}
+
+fn file_matches_search(file: &UserFileEntry, needle: &SearchNeedle) -> bool {
+    match needle {
+        SearchNeedle::Substring(s) => file.name.to_lowercase().contains(s) || file.arion_hash.to_lowercase().contains(s),
+        SearchNeedle::Glob(matcher) => matcher.is_match(file.actual_file_name.as_str()),
+        SearchNeedle::MatchNothing => false,
+    }
+}
+
 /// Apply the full filter chain to a mutable file list in place.
 ///
 /// Shared between [`get_user_files`] (initial fetch with filters) and
@@ -635,10 +691,7 @@ pub async fn search_user_files_recursive(
     reason = "flat per-criterion filter cascade; splitting into helpers hurts readability"
 )]
 fn apply_file_filters(files: &mut Vec<UserFileEntry>, f: &FileFilterCriteria) {
-    let search_lower = f.search_term.as_ref().and_then(|s| {
-        let low = s.to_lowercase();
-        if low.is_empty() { None } else { Some(low) }
-    });
+    let search_needle = f.search_term.as_deref().and_then(compile_search_needle);
     let now = chrono::Utc::now();
 
     files.retain(|file| {
@@ -648,9 +701,8 @@ fn apply_file_filters(files: &mut Vec<UserFileEntry>, f: &FileFilterCriteria) {
             return false;
         }
 
-        if let Some(ref search) = search_lower
-            && !file.name.to_lowercase().contains(search)
-            && !file.arion_hash.to_lowercase().contains(search)
+        if let Some(ref needle) = search_needle
+            && !file_matches_search(file, needle)
         {
             return false;
         }
@@ -979,6 +1031,34 @@ mod tests {
         }
     }
 
+    fn make_rel(name: &str, relative: &str) -> UserFileEntry {
+        UserFileEntry {
+            actual_file_name: relative.to_string(),
+            ..make_file(name, 1, "d", 0, false)
+        }
+    }
+
+    fn make_hashed(name: &str, hash: &str) -> UserFileEntry {
+        UserFileEntry {
+            arion_hash: hash.to_string(),
+            ..make_file(name, 1, "d", 0, false)
+        }
+    }
+
+    fn search(files: Vec<UserFileEntry>, q: &str) -> Vec<UserFileEntry> {
+        filter_file_entries_inner(
+            files,
+            FileFilterCriteria {
+                search_term: Some(q.into()),
+                ..Default::default()
+            },
+        )
+    }
+
+    fn rel_names(files: &[UserFileEntry]) -> Vec<&str> {
+        files.iter().map(|f| f.actual_file_name.as_str()).collect()
+    }
+
     #[test]
     fn filter_search_matches_name_case_insensitive() {
         let files = vec![
@@ -997,6 +1077,102 @@ mod tests {
         let out = filter_file_entries_inner(files, criteria);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].name, "Report.pdf");
+    }
+
+    /// A term with no `*`/`?` stays a case-insensitive substring of the
+    /// display name (and hash). `readme` must still find `Readme.txt`.
+    #[test]
+    fn filter_search_substring_matches_readme() {
+        let files = vec![make_file("Readme.txt", 1, "d", 0, false), make_file("notes.md", 1, "d", 0, false)];
+        let out = search(files, "readme");
+        assert_eq!(rel_names(&out), vec!["Readme.txt"]);
+    }
+
+    /// `*.bin` is a glob against the relative path, not a literal substring
+    /// of `*`. gitignore-style: it matches at any depth, and `*` does not
+    /// eat a trailing `.bak`.
+    #[test]
+    fn filter_search_glob_star_bin_matches_nested_not_bak() {
+        let files = vec![
+            make_file("foo.bin", 1, "d", 0, false),
+            make_rel("foo.bin", "dir/foo.bin"),
+            make_file("foo.bin.bak", 1, "d", 0, false),
+            make_file("foo.txt", 1, "d", 0, false),
+        ];
+        let out = search(files.clone(), "*.bin");
+        assert_eq!(rel_names(&out), vec!["foo.bin", "dir/foo.bin"]);
+
+        let out = search(files, "*.BIN");
+        assert_eq!(rel_names(&out), vec!["foo.bin", "dir/foo.bin"]);
+    }
+
+    /// Catch-all `*` is a glob, not a substring of the asterisk character.
+    /// Search (unlike exclude rules) treats it as "every name" — it must
+    /// not crash and must not silently match nothing.
+    #[test]
+    fn filter_search_star_is_a_glob_and_matches_every_name() {
+        let files = vec![
+            make_file("a.txt", 1, "d", 0, false),
+            make_rel("foo.bin", "dir/foo.bin"),
+            make_file("Readme.txt", 1, "d", 0, false),
+        ];
+        let out = search(files, "*");
+        assert_eq!(out.len(), 3, "catch-all glob must keep every file");
+    }
+
+    /// An unparseable glob must not panic the filter IPC, and must not
+    /// silently fall back to substring-matching the `*`/`?` characters.
+    #[test]
+    fn filter_search_invalid_glob_does_not_panic() {
+        let files = vec![make_file("a.txt", 1, "d", 0, false)];
+        let out = search(files, "*[");
+        assert!(out.is_empty());
+    }
+
+    /// The `?` half of the glob trigger. Every other glob test uses `*`,
+    /// so narrowing the predicate to `contains('*')` would keep them all
+    /// green while silently turning `a?c.txt` back into a substring
+    /// search that matches nothing.
+    #[test]
+    fn filter_search_question_mark_is_a_glob() {
+        let files = vec![
+            make_file("abc.txt", 1, "d", 0, false),
+            make_file("ac.txt", 1, "d", 0, false),
+            make_file("abbc.txt", 1, "d", 0, false),
+        ];
+        let out = search(files, "a?c.txt");
+        assert_eq!(rel_names(&out), vec!["abc.txt"], "`?` stands for exactly one character");
+    }
+
+    /// The two needles read different fields: a substring term matches the
+    /// display name OR the Arion hash, a glob matches only the relative
+    /// path. Pinned because "let globs search the hash too" reads as a
+    /// harmless improvement, and would make any `*`-bearing term start
+    /// matching files whose hash merely contains the letters.
+    #[test]
+    fn filter_search_glob_matches_the_path_not_the_hash() {
+        let files = vec![make_hashed("photo.jpg", "deadbeef")];
+
+        let out = search(files.clone(), "deadbeef");
+        assert_eq!(rel_names(&out), vec!["photo.jpg"], "a substring term still matches the hash");
+
+        let out = search(files, "dead*");
+        assert!(out.is_empty(), "a glob is matched against the relative path only, never the hash");
+    }
+
+    /// A term containing `/` gets the same unconditional `**/` prefix, so
+    /// it is NOT root-anchored: `docs/*.pdf` also finds a nested `docs`.
+    /// That mirrors hcfs's exclude rules, so the pattern a user excludes
+    /// and the pattern they search mean the same thing.
+    #[test]
+    fn filter_search_glob_with_a_slash_is_not_root_anchored() {
+        let files = vec![
+            make_rel("a.pdf", "docs/a.pdf"),
+            make_rel("b.pdf", "work/docs/b.pdf"),
+            make_rel("c.pdf", "other/c.pdf"),
+        ];
+        let out = search(files, "docs/*.pdf");
+        assert_eq!(rel_names(&out), vec!["docs/a.pdf", "work/docs/b.pdf"]);
     }
 
     #[test]
