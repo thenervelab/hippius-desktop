@@ -28,9 +28,8 @@ import TableActionMenu, {
 } from "@/app/components/ui/alt-table/TableActionMenu";
 import FileCheckbox from "./FileCheckbox";
 import NameCell from "./NameCell";
-import { VideoDialogTrigger } from "./VideoDialog";
-import { ImageDialogTrigger } from "./ImageDialog";
-import { PdfDialogTrigger } from "./PdfDialog";
+import { PreviewTrigger } from "@/app/components/page-sections/drive/file-preview";
+import { isPreviewableFileName } from "@/app/lib/utils/filePreviewType";
 import { FolderRowsSkeleton } from "./FilesTableSkeleton";
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { preserveClosestScrollPosition } from "./preserveClosestScrollPosition";
@@ -501,28 +500,19 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
           />
         );
 
+        // `sortedChildRows` is this folder's full listing: passing it keeps the
+        // viewer's rail and prev/next scoped to the folder the file lives in
+        // rather than the page's top-level rows.
         const nameContent =
-          !isSelectionMode && fileType === "video" ? (
-            <VideoDialogTrigger
+          !isSelectionMode &&
+          !childFile.isFolder &&
+          isPreviewableFileName(childFile.name) ? (
+            <PreviewTrigger
               onClick={() => onSelectFile(childFile, sortedChildRows)}
               className="min-w-0 px-0 py-0"
             >
               {nameNode}
-            </VideoDialogTrigger>
-          ) : !isSelectionMode && fileType === "image" ? (
-            <ImageDialogTrigger
-              onClick={() => onSelectFile(childFile, sortedChildRows)}
-              className="min-w-0 px-0 py-0"
-            >
-              {nameNode}
-            </ImageDialogTrigger>
-          ) : !isSelectionMode && fileType === "PDF" ? (
-            <PdfDialogTrigger
-              onClick={() => onSelectFile(childFile, sortedChildRows)}
-              className="min-w-0 px-0 py-0"
-            >
-              {nameNode}
-            </PdfDialogTrigger>
+            </PreviewTrigger>
           ) : (
             nameNode
           );

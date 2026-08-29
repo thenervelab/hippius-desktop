@@ -191,12 +191,17 @@ describe("NameCell hover preview icon", () => {
     ).toBeTruthy();
   });
 
-  it("renders no icon for file types that don't open a preview", () => {
+  it("renders no icon for files that don't open a preview", () => {
+    // The affordance is decided by the same classifier the row's trigger and
+    // the viewer use, so it is driven by the filename rather than the icon
+    // category: an archive has no renderer and must not look clickable.
     render(
       <NameCell
         {...baseProps}
+        rawName="bundle.zip"
+        actualName="bundle.zip"
         isPreviewable
-        fileType="document"
+        fileType="archive"
         syncStatus="pending"
       />,
     );
@@ -204,6 +209,25 @@ describe("NameCell hover preview icon", () => {
     expect(
       screen.queryByTestId("hover-preview-icon"),
     ).not.toBeInTheDocument();
+  });
+
+  it("renders the icon for the newly previewable document formats", () => {
+    // Adding a format must light up its row affordance automatically; before
+    // the classifier existed this gate carried its own hard-coded triple.
+    for (const name of ["contract.docx", "budget.xlsx", "deck.pptx", "notes.txt"]) {
+      const { unmount } = render(
+        <NameCell
+          {...baseProps}
+          rawName={name}
+          actualName={name}
+          isPreviewable
+          fileType="doc"
+          syncStatus="synced"
+        />,
+      );
+      expect(screen.getByTestId("hover-preview-icon")).toBeInTheDocument();
+      unmount();
+    }
   });
 
   it("renders no icon when previews are disabled (selection mode)", () => {

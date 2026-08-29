@@ -163,6 +163,7 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
           fileCount: number;
           totalBytes: number;
           lastModified: number;
+          origin: { kind: "locallyRemoved" } | { kind: "otherDevice" };
         }>;
       }>("get_sync_folders_with_stats", { accountId: polkadotAddress });
 
@@ -191,6 +192,7 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
         fileCount: f.fileCount,
         totalBytes: f.totalBytes,
         lastModified: f.lastModified,
+        origin: f.origin,
       }));
 
       setSyncFolders(localFolders);

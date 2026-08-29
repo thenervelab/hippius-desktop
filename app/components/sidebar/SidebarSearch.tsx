@@ -1,17 +1,13 @@
 import cn from "@/app/lib/utils/cn";
 import { Icons } from "@/components/ui";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import SearchShortcutHint from "./SearchShortcutHint";
 import SidebarSearchModal from "./SidebarSearchModal";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
-import VideoDialog from "@/app/components/page-sections/drive/files-table/VideoDialog";
-import ImageDialog from "@/app/components/page-sections/drive/files-table/ImageDialog";
-import PdfDialog from "@/app/components/page-sections/drive/files-table/PdfDialog";
+import { UnifiedMediaDialog } from "@/app/components/page-sections/drive/file-preview";
 import { downloadFile } from "@/app/lib/utils/downloadFile";
-import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
-import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
 import { FileSelectionProvider } from "@/app/contexts/FileSelectionContext";
 import { useDeleteFile } from "@/app/lib/hooks/use-delete-file";
 import ConfirmationDialog from "@/app/components/ConfirmationDialog";
@@ -36,15 +32,6 @@ const SidebarSearch: React.FC<SidebarSearchProps> = ({ collapsed = false }) => {
   const [previewList, setPreviewList] = useState<FormattedUserFile[]>([]);
 
   const { polkadotAddress } = useWalletAuth();
-
-  // Resolve which preview dialog to render for the selected file. Mirrors
-  // `getFileType` in `useFileViewShared`: name → extension → FileType. Only
-  // video/image/PDF have a preview dialog; anything else is a no-op.
-  const selectedFileType = useMemo(() => {
-    if (!selectedFile) return null;
-    const { fileFormat } = getFilePartsFromFileName(selectedFile.name);
-    return getFileTypeFromExtension(fileFormat || null);
-  }, [selectedFile]);
 
   // ⌘/Ctrl+F opens the palette from anywhere, regardless of whether the
   // sidebar is collapsed — the palette is a centered overlay and no longer
@@ -167,43 +154,21 @@ const SidebarSearch: React.FC<SidebarSearchProps> = ({ collapsed = false }) => {
         />
       )}
 
-      {/* Preview dialogs mirror DriveContent's mount pattern: one dialog per
-          type, gated on `selectedFileType`. The provider is required because
-          `FileViewerLayout` (inside each dialog) calls `useFileSelection`,
-          which throws when no provider is in scope. A local sidebar-scoped
-          instance keeps selection state isolated from the drive page. */}
-      {selectedFileType && (
+      {/* One viewer, the same one the drive page mounts — the palette only
+          decides *which* file opens, never which dialog. The provider is
+          required because `FileViewerLayout` calls `useFileSelection`, which
+          throws with no provider in scope; a sidebar-scoped instance keeps
+          selection state isolated from the drive page. */}
+      {selectedFile && (
         <FileSelectionProvider>
-          {selectedFileType === "video" && (
-            <VideoDialog
-              file={selectedFile}
-              allFiles={previewList}
-              onCloseClicked={handleClosePreview}
-              onNavigate={setSelectedFile}
-              handleFileDownload={handleFileDownload}
-              onDelete={handleViewerDelete}
-            />
-          )}
-          {selectedFileType === "image" && (
-            <ImageDialog
-              file={selectedFile}
-              allFiles={previewList}
-              onCloseClicked={handleClosePreview}
-              onNavigate={setSelectedFile}
-              handleFileDownload={handleFileDownload}
-              onDelete={handleViewerDelete}
-            />
-          )}
-          {selectedFileType === "PDF" && (
-            <PdfDialog
-              file={selectedFile}
-              allFiles={previewList}
-              onCloseClicked={handleClosePreview}
-              onNavigate={setSelectedFile}
-              handleFileDownload={handleFileDownload}
-              onDelete={handleViewerDelete}
-            />
-          )}
+          <UnifiedMediaDialog
+            file={selectedFile}
+            allFiles={previewList}
+            onCloseClicked={handleClosePreview}
+            onNavigate={setSelectedFile}
+            handleFileDownload={handleFileDownload}
+            onDelete={handleViewerDelete}
+          />
         </FileSelectionProvider>
       )}
 

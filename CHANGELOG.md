@@ -17,6 +17,14 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
+- **Preview far more of your files without leaving Hippius.** Word documents open as
+  real pages, PowerPoint decks as slides you can click through, spreadsheets and CSVs
+  in a familiar spreadsheet grid with a formula bar and sheet tabs, and Markdown,
+  text, JSON, HTML and SVG files all open in the same viewer as your photos and
+  videos — with the same arrow-key navigation, thumbnails, download and delete.
+  Files are previewed on your own machine; nothing is sent to an outside viewing
+  service. Anything too big to open quickly still offers a download instead, and
+  says so.
 - **Try new features early with the beta channel.** Choose **Explore Beta** from
   the account menu to move onto builds that get new features first, before they
   are fully stabilized. Hippius downloads the build and restarts. You can go back
@@ -59,14 +67,46 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **The low-credits warning clears after you add credits.** The bell no longer
+  showed an unread "you're running low on credits" notice next to the one saying
+  your credits had just landed.
+- **Closing the window on Linux and Windows now quits Hippius.** The app
+  no longer leaves a background process running after you click the window X.
+- **`--version` prints the version and exits.** Running Hippius with `--version`
+  or `-V` no longer opens the full app.
+- **Folder sizes stay correct as you work.** A folder's size and file count now
+  update right away when you delete or add something inside it, or when a file
+  arrives from another device — previously they could keep showing the old
+  numbers until the app was restarted.
+- **Adding a large folder no longer freezes the app.** Dropping a multi-gigabyte
+  folder in used to lock the window until the copy and encryption finished.
+- **Sync complete notifications name the file.** A single finished file shows
+  its name in the bell; several files show how many.
+- **Replacing an already-synced file can no longer upload a half-copied version.**
+  Adding a file over one you already had could, if the copy was slow, be picked up
+  while it was still being written and back up an incomplete copy.
+- **Adding a folder no longer counts hidden files in the file total.**
+- **A folder's file count updates as soon as you add to it.** Adding a file or
+  folder could leave the count in Drive showing the total from before the upload
+  until something else changed that folder.
 - **Filters and search now work while browsing inside a folder.** Applying a file-type,
   date, size, or search filter inside a synced folder — including folders synced from
   your other devices — quietly kept showing the full unfiltered list with the filter
   chip still on.
+- **A failed update now tells you what to do next.** Instead of "Please try
+  again later", Hippius names the problem and links to the download page for
+  your release channel, with the right instructions for how your copy was
+  installed.
 - **The Mac download list no longer offers a file that installs an incomplete copy.**
   Release pages carried a second Mac file next to the disk image that read as an
   alternative download but was missing "Share with Hippius" and Apple's security
   check. It is gone from current releases and will not appear on new ones.
+- **Files you exclude with a pattern like `*.bin` disappear from Drive.**
+  Recent Files no longer shows them, your storage total stops counting them,
+  and clearing the pattern brings them back without a manual refresh.
+- **An exclusion pattern that can't work is refused when you type it.**
+  Previously a malformed pattern was saved and listed as active while
+  quietly excluding nothing.
 - **Updating on a Mac no longer removes "Share with Hippius".** Installing from the
   disk image gave you the right-click share menu, but every automatic update after
   that quietly replaced Hippius with a copy that did not include it — so the feature
@@ -74,11 +114,17 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   longer there to switch on. Updates now install the same complete, Apple-checked
   copy the disk image contains. If yours went missing, reinstall from the disk image
   once; updates from then on keep it.
+- **Files that vanish before upload no longer mark the whole sync as Failed.** A
+  temporary file that the app or the system deletes mid-sync used to leave the sync
+  widget, the tray icon and the tray panel showing a red "Failed" at 100%, even
+  though every file you actually cared about had synced. Genuine failures still
+  show as before.
 - **"Share with Hippius" now registers itself on Mac.** On some Macs the right-click
   menu never appeared no matter what you did in Settings, because macOS had never
   registered the feature at all — so it was not in any list to switch on. Hippius now
   registers it at startup, and the notice explains what to do when it is missing
   entirely rather than assuming it is only switched off.
+- **Storage on the home page no longer sticks at 0 B right after a sync.**
 - **"Share with Hippius" now turns itself on.** On Mac, the right-click share menu was
   missing on new installs, and the notice about it sent you to a Settings list that
   often did not contain Hippius at all. The notice now has an **Enable** button that
@@ -86,9 +132,12 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   not work. Opening Hippius straight from the downloaded disk image no longer shows that
   notice at all — nothing there can turn the feature on, so it now just asks you to move
   Hippius to your Applications folder first.
+- **File search understands patterns like `*.pdf`.**
 - **Every build now reports its real version number.** Installed copies all claimed to
   be version `0.0.1`, so there was no way to tell which build you were running when
   reporting a problem.
+- **A folder you remove from this computer is listed as not synced here, not as
+  if it came from another device.**
 - **Reclaimed disk space lost to interrupted uploads.** While preparing an upload,
   Hippius writes a temporary encrypted copy of the file. Copies left behind by uploads
   that were interrupted — by a dropped connection, a pause, or quitting the app — could

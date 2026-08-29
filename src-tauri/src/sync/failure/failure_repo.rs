@@ -89,6 +89,13 @@ fn kind_columns(kind: &FileFailureKindPayload) -> KindColumns {
             balance_cents: None,
             required_cents: None,
         },
+        FileFailureKindPayload::Gone => KindColumns {
+            kind: "gone",
+            message: None,
+            http_status: None,
+            balance_cents: None,
+            required_cents: None,
+        },
         FileFailureKindPayload::Other { message } => KindColumns {
             kind: "other",
             message: Some(message.clone()),
@@ -264,6 +271,58 @@ mod tests {
         .await
         .expect("create table");
         pool
+    }
+
+    /// One sample per [`FileFailureKindPayload`] variant.
+    ///
+    /// The wildcard-free `match` is the point: adding a variant fails to
+    /// compile here until it is listed, which is what stops a new kind from
+    /// silently reaching the table without a pinned discriminant.
+    fn sample_of_every_kind() -> Vec<FileFailureKindPayload> {
+        use FileFailureKindPayload as K;
+
+        let all = vec![
+            K::InsufficientBalance {
+                balance_cents: 12,
+                required_cents: 100,
+            },
+            K::ServerError { status: 500 },
+            K::Network,
+            K::ChangedWhileUploading,
+            K::Gone,
+            K::Other { message: "x".to_string() },
+        ];
+        for kind in &all {
+            match kind {
+                K::InsufficientBalance { .. } | K::ServerError { .. } | K::Network | K::ChangedWhileUploading | K::Gone | K::Other { .. } => {}
+            }
+        }
+        all
+    }
+
+    /// IPC wire-contract guard: `kind_columns` is a SECOND, hand-written copy
+    /// of the discriminants serde derives for the live `hcfs_file_failed`
+    /// payload, and the FE's `fileFailure.ts` union switches on both without
+    /// distinguishing them. The events.rs pin covers only the serde half, so a
+    /// typo here would leave a persisted badge falling through to the generic
+    /// "Sync failed. Please try again." with nothing failing.
+    #[test]
+    fn persisted_kind_matches_the_serde_tag_for_every_variant() {
+        let tags: Vec<&str> = sample_of_every_kind()
+            .iter()
+            .map(|kind| {
+                let wire = serde_json::to_value(kind).expect("serialize");
+                let tag = wire["kind"].as_str().expect("tagged wire shape").to_string();
+                assert_eq!(kind_columns(kind).kind, tag, "persisted kind drifted from the serde tag for {kind:?}");
+                kind_columns(kind).kind
+            })
+            .collect();
+
+        assert_eq!(
+            tags,
+            vec!["insufficientBalance", "serverError", "network", "changedWhileUploading", "gone", "other"],
+            "these exact strings are the `FileFailureKind` union in app/lib/types/fileFailure.ts"
+        );
     }
 
     #[tokio::test]

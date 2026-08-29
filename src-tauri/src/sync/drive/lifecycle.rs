@@ -1273,14 +1273,38 @@ pub(crate) async fn initialize_sync_inner(
     check_deleted_sync_dir(pool, &account_id, &label, &cfg.sync_path).await?;
     create_dir_all_async(PathBuf::from(&cfg.sync_path)).await?;
 
-    let (_acct_dir, folder_dir, master_path) = prepare_config_dir(
-        &account_id,
+    // Argon2 recover_mnemonic + a possible legacy `temp/` copy must not
+    // sit on a Tokio worker (a leftover chunk cache can be tens of GB).
+    let account_id_owned = account_id.clone();
+    let label_owned = label.clone();
+    let sync_path_owned = cfg.sync_path.clone();
+    let drive_password_owned = cfg.drive_password.clone();
+    let mnemonic_owned = mnemonic_for_config.clone();
+    let is_member = identity.is_member;
+    let (_acct_dir, folder_dir, master_path) = tokio::task::spawn_blocking(move || {
+        prepare_config_dir(
+            &account_id_owned,
+            &label_owned,
+            &sync_path_owned,
+            &drive_password_owned,
+            Some(&mnemonic_owned),
+            is_member,
+        )
+    })
+    .await
+    .map_err(|e| crate::error::AppError::Other(format!("Join error preparing config dir: {e}")))??;
+
+    // Arm the "Folder Restored" notification gate for this label, sampling the
+    // baseline BEFORE the sync loop can run: hcfs-client's per-cycle folder
+    // check DELETES `sync_state.json` as part of the recovery it is about to
+    // report, so by the time `FolderRecovered` arrives a genuine restore and a
+    // brand-new folder are indistinguishable on disk. Placed after
+    // `prepare_config_dir` because its Legacy-B migration can MOVE an existing
+    // baseline into `folder_dir`. See `sync::folder_restore_notify`.
+    app_state.folder_restore_notify.arm(
         &label,
-        &cfg.sync_path,
-        &cfg.drive_password,
-        Some(&mnemonic_for_config),
-        identity.is_member,
-    )?;
+        crate::sync::folder_restore_notify::FolderRestoreNotifyState::baseline_exists(&folder_dir),
+    );
 
     // Create drive and set HCFS config
     let mut manager = DriveManager::new(PathBuf::from(&cfg.sync_path), folder_dir.clone());
@@ -1742,6 +1766,12 @@ pub(crate) async fn remove_drive_for_account(app: AppHandle, label: String, expl
         // state to serialize, so it happens after the guard drops to
         // keep the locked region minimal.
         let preparing_cleared = app_state.preparing.clear(&label);
+
+        // Drop this label's folder-restore gate: the drive is gone, so nothing
+        // can notify for it, and a re-add re-arms from its own baseline at
+        // init. Hygiene rather than correctness — but without it the map keeps
+        // an entry per label ever initialized in this process.
+        app_state.folder_restore_notify.clear(&label);
 
         // Delete the DB row so the drive isn't resurrected on app restart, and
         // drop the intent-manifest rows for this drive so the snapshot overlay

@@ -11,9 +11,7 @@ import UploadStatusWidget from "./UploadStatusWidget";
 import { ActiveFilter } from "@/lib/utils/fileFilterUtils";
 import ConfirmationDialog from "@/app/components/ConfirmationDialog";
 import { Trash2 } from "lucide-react";
-import VideoDialog from "./files-table/VideoDialog";
-import ImageDialog from "./files-table/ImageDialog";
-import PdfDialog from "./files-table/PdfDialog";
+import { UnifiedMediaDialog } from "./file-preview";
 import { toast } from "sonner";
 import { useFileViewShared } from "./shared/FileViewUtils";
 import FileContextMenu from "@/app/components/ui/context-menu";
@@ -128,12 +126,9 @@ const DriveContent: FC<DriveContentProps> = ({
     setFileDetailsFile,
     deleteFile,
     isDeleting,
-    getFileType,
     contextMenu,
     setContextMenu,
   } = sharedState;
-
-  const selectedFileType = selectedFile ? getFileType(selectedFile) : null;
 
   // The viewer's gallery scope: a file opened from an inline-expanded folder
   // carries that folder's rows as `previewList`, so its thumbnail rail and
@@ -578,33 +573,15 @@ const DriveContent: FC<DriveContentProps> = ({
         />
       )}
 
-      {selectedFileType === "video" && (
-        <VideoDialog
-          onCloseClicked={() => setSelectedFile(null)}
-          handleFileDownload={handleFileDownload}
-          file={selectedFile}
-          allFiles={viewerFiles}
-          onNavigate={handleViewerNavigate}
-        />
-      )}
-      {selectedFileType === "image" && (
-        <ImageDialog
-          onCloseClicked={() => setSelectedFile(null)}
-          handleFileDownload={handleFileDownload}
-          file={selectedFile}
-          allFiles={viewerFiles}
-          onNavigate={handleViewerNavigate}
-        />
-      )}
-      {selectedFileType === "PDF" && (
-        <PdfDialog
-          onCloseClicked={() => setSelectedFile(null)}
-          handleFileDownload={handleFileDownload}
-          file={selectedFile}
-          allFiles={viewerFiles}
-          onNavigate={handleViewerNavigate}
-        />
-      )}
+      {/* One dialog for every previewable type. It renders nothing when
+          `selectedFile` is null, so the page keeps a single viewer state. */}
+      <UnifiedMediaDialog
+        onCloseClicked={() => setSelectedFile(null)}
+        handleFileDownload={handleFileDownload}
+        file={selectedFile}
+        allFiles={viewerFiles}
+        onNavigate={handleViewerNavigate}
+      />
 
       <UploadStatusWidget />
     </>
