@@ -140,17 +140,19 @@ export function useSyncEvents() {
           // not produce a second refetch.
           scheduleCompletedDispatch(totalCompleted);
 
-          if (totalCompleted > 0) {
-            queryClient.invalidateQueries({
-              queryKey: [DRIVE_STORAGE_STATS_QUERY_KEY],
-            });
-            // The home page's storage card reads the same indexer total via
-            // its own IPC, so refresh it in lockstep — its poll would catch
-            // up anyway, but this removes the visible lag right after a sync.
-            queryClient.invalidateQueries({
-              queryKey: [STORAGE_OVERVIEW_QUERY_KEY],
-            });
-          }
+          // Always refetch BOTH storage surfaces. Empty indexer data is
+          // success + 0 bytes, so a no-op / first-sync cycle still has
+          // to re-probe: gating this on `totalCompleted > 0` stuck the
+          // home card at "0 B". The Files header reads the SAME indexer
+          // row, so gating one and not the other is exactly how the two
+          // surfaces come to disagree about one number — they refresh
+          // together or the bug is merely relocated.
+          queryClient.invalidateQueries({
+            queryKey: [STORAGE_OVERVIEW_QUERY_KEY],
+          });
+          queryClient.invalidateQueries({
+            queryKey: [DRIVE_STORAGE_STATS_QUERY_KEY],
+          });
         }],
         // Per-file completion — Rust emits this when bytes == total.
         // Coalesced with the rest so a multi-file batch produces one

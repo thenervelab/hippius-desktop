@@ -4,7 +4,7 @@
 //! registry on the HCFS server, plus the combined local+remote folder
 //! listing used by the sync manager UI.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tracing::{error, info, warn};
 
 use crate::auth::account_key::account_key;
@@ -38,6 +38,37 @@ pub struct SyncFolderInfo {
     pub owner_ss58: Option<String>,
 }
 
+/// Why a server folder is absent from this device's `sync_paths`.
+///
+/// `remove_drive` deletes the local row but does NOT unregister the server
+/// folder (that is Delete from Server). The folder therefore stays on the
+/// server stamped with THIS device's `device_name`. Listing it under
+/// "Sync from Other Devices" is a lie; the FE keys the section split on
+/// this tagged field, never by comparing names itself.
+///
+/// Wire format matches `DriveStatus`: `{"kind": "locallyRemoved"}` /
+/// `{"kind": "otherDevice"}`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum RemoteFolderOrigin {
+    LocallyRemoved,
+    OtherDevice,
+}
+
+/// Classify a remote-only folder as locally-removed vs. another device.
+///
+/// Empty `device_name` cannot prove this machine registered the folder
+/// (the display fallback is "Unknown Device"), so it stays `OtherDevice`.
+/// Two empty names also fail closed: `get_device_name_internal` never
+/// returns empty, and matching empties would bucket unknown rows here.
+pub(crate) fn classify_remote_origin(device_name: &str, local_device_name: &str) -> RemoteFolderOrigin {
+    if !device_name.is_empty() && !local_device_name.is_empty() && device_name == local_device_name {
+        RemoteFolderOrigin::LocallyRemoved
+    } else {
+        RemoteFolderOrigin::OtherDevice
+    }
+}
+
 /// A remote-only folder (not synced locally) for the browser UI.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -47,6 +78,9 @@ pub struct RemoteFolderDisplay {
     pub file_count: u64,
     pub total_bytes: u64,
     pub last_modified: i64,
+    /// Machine-readable bucket. The FE renders a distinct section for
+    /// `LocallyRemoved` and must not re-derive this from `device_name`.
+    pub origin: RemoteFolderOrigin,
 }
 
 /// Combined local + remote folder lists, ready for UI rendering.
@@ -397,10 +431,21 @@ pub async fn delete_remote_folder(
     // Snapshot "was this folder locally synced" before we tear anything down,
     // so the result we hand back to the FE matches the pre-deletion state the
     // user was looking at.
-    let was_local = {
-        let guard = state.sync.drives.lock().await;
-        guard.contains_key(&label)
-    };
+    //
+    // Sourced from `sync_paths`, NOT from `state.sync.drives`: that map holds
+    // only drives whose sync loop is currently registered, so a PAUSED drive is
+    // missing from it, as is one whose init hasn't finished on a slow login.
+    // Keying the teardown off the map therefore skipped it for exactly those
+    // drives, with two consequences: the row survived the server wipe, so the
+    // folder kept rendering in "Local Sync Folders" with blank stats forever;
+    // and the drive stayed configured, so resuming it ran the engine's
+    // pre-cycle folder check, which for an OWN drive re-registers the missing
+    // folder, discards the local baseline, and re-uploads the whole tree the
+    // user had just paid to delete. Same "map presence is not user intent"
+    // conflation `get_sync_folders_with_stats` below already had to fix for
+    // the status column. A DB failure bails before the server is touched,
+    // which is the same posture as a failed teardown.
+    let was_local = crate::sync::paths::sync_path_exists(pool, &account_id, &label).await?;
 
     if was_local {
         // Pass the explicit account (parity with `remove_sync_path`) so the
@@ -474,11 +519,20 @@ pub async fn get_sync_folders_with_stats(state: tauri::State<'_, crate::app_stat
     let account_id = state.require_session_account(&account_id)?;
     let pool = state.pool()?;
 
-    // Parallel fetch: local paths + remote folders
-    let (sync_paths, remote_folders) = tokio::join!(get_all_sync_paths_internal(pool, &account_id), async {
-        list_remote_folders_internal(pool, &account_id).await.unwrap_or_default()
-    });
+    // Parallel fetch: local paths + remote folders + this machine's
+    // registered device name (the discriminator for H-077).
+    let (sync_paths, remote_folders, local_device_name) = tokio::join!(
+        get_all_sync_paths_internal(pool, &account_id),
+        async { list_remote_folders_internal(pool, &account_id).await.unwrap_or_default() },
+        crate::sync::device::get_device_name_internal(pool),
+    );
     let sync_paths = sync_paths.unwrap_or_default();
+    // Fail CLOSED on a read failure. `"My Device"` is `get_device_name_internal`'s
+    // DEFAULT for a machine that never set a name, not a sentinel — substituting it
+    // here would match every unnamed device's folders and file them under
+    // "removed from this computer". The empty string proves nothing, which is
+    // exactly what `classify_remote_origin` maps to `OtherDevice`.
+    let local_device_name = local_device_name.unwrap_or_default();
 
     // Build remote lookup by folder_hash (NOT label). Two local folders with the
     // same BASENAME (e.g. haloce_mcc/tags + halo2_mcc/tags → labels "tags" and
@@ -549,10 +603,16 @@ pub async fn get_sync_folders_with_stats(state: tauri::State<'_, crate::app_stat
         });
     }
 
-    // Remote folders not configured locally (the "sync from other devices"
-    // section). Match on folder_hash, not label, for the same basename-collision
-    // reason above: a local "tags-2" drive registers on the server under display
-    // label "tags", so a label filter would fail to suppress it here.
+    // Remote folders not configured locally. Match on folder_hash, not
+    // label, for the same basename-collision reason above: a local "tags-2"
+    // drive registers on the server under display label "tags", so a label
+    // filter would fail to suppress it here.
+    //
+    // `remove_drive` leaves the server folder in place (Delete from Server
+    // is the unregister path), so a folder this machine used to sync
+    // reappears here stamped with THIS device_name. Classify that as
+    // LocallyRemoved — the FE renders a distinct section; putting it
+    // under "Sync from Other Devices" is the H-077 lie.
     let local_hashes: std::collections::HashSet<String> = sync_paths.iter().map(|sp| folder_hash(&sp.label)).collect();
     let mut remote_display: Vec<RemoteFolderDisplay> = remote_folders
         .iter()
@@ -569,6 +629,9 @@ pub async fn get_sync_folders_with_stats(state: tauri::State<'_, crate::app_stat
                 file_count: f.file_count,
                 total_bytes: f.total_bytes,
                 last_modified: ts * 1000,
+                // Classify on the RAW server name, not the display
+                // fallback — "Unknown Device" is not a proof of origin.
+                origin: classify_remote_origin(&f.device_name, &local_device_name),
             }
         })
         .collect();
@@ -626,6 +689,152 @@ mod tests {
         // second drive ("tags-2") would have matched nothing.
         let by_label: HashMap<String, &RemoteFolderInfoResult> = remotes.iter().map(|f| (f.label.clone(), f)).collect();
         assert_eq!(by_label.len(), 1, "label keying collapses same-basename folders (the bug)");
+    }
+
+    // ── remote origin (H-077: remove_drive is not another device) ───
+
+    #[test]
+    fn remote_folder_matching_local_device_name_is_locally_removed() {
+        assert_eq!(
+            classify_remote_origin("Georges-MacBook", "Georges-MacBook"),
+            RemoteFolderOrigin::LocallyRemoved,
+        );
+    }
+
+    #[test]
+    fn remote_folder_from_a_different_device_is_other_device() {
+        assert_eq!(classify_remote_origin("Office PC", "Georges-MacBook"), RemoteFolderOrigin::OtherDevice,);
+    }
+
+    #[test]
+    fn empty_remote_device_name_is_other_device() {
+        // Display falls back to "Unknown Device"; classification uses the
+        // raw server value so we cannot claim this machine registered it.
+        assert_eq!(classify_remote_origin("", "Georges-MacBook"), RemoteFolderOrigin::OtherDevice,);
+    }
+
+    #[test]
+    fn empty_local_device_name_never_matches() {
+        // `get_device_name_internal` never returns empty, but matching two
+        // empties would bucket unknown/Console-unstamped rows as removed.
+        assert_eq!(classify_remote_origin("", ""), RemoteFolderOrigin::OtherDevice);
+        assert_eq!(classify_remote_origin("Georges-MacBook", ""), RemoteFolderOrigin::OtherDevice,);
+    }
+
+    /// The device-name read can fail (pool error). Its fallback must be
+    /// unprovable, not a plausible name: `"My Device"` is
+    /// `get_device_name_internal`'s DEFAULT for a machine that never set one,
+    /// so substituting it would match every unnamed device's folders and file
+    /// them under "removed from this computer".
+    #[test]
+    fn the_device_name_read_failure_fallback_is_unprovable() {
+        assert_eq!(
+            classify_remote_origin("My Device", &String::default()),
+            RemoteFolderOrigin::OtherDevice,
+            "an unread local name cannot prove this machine registered the folder",
+        );
+
+        // And the call site must actually reach that arm. A `String` literal in
+        // the fallback is the regression: any name it invents is a name some
+        // real device registered under, `"My Device"` most of all.
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/fileops/folders.rs")).expect("read folders.rs");
+        let call = src
+            .lines()
+            .find(|l| l.contains("let local_device_name = local_device_name."))
+            .expect("get_sync_folders_with_stats resolves local_device_name");
+        assert!(
+            call.contains("unwrap_or_default()"),
+            "the device-name fallback must be the empty string, not an invented name: {call}",
+        );
+    }
+
+    /// The discriminator is a display name, and `"My Device"` is the default
+    /// every unnamed machine registers under — so two unnamed devices are
+    /// indistinguishable and each files the other's folders as its own
+    /// removals. Documented here rather than silently accepted; closing it
+    /// needs a stable per-device id on the server row.
+    #[test]
+    fn two_default_named_devices_are_indistinguishable() {
+        assert_eq!(
+            classify_remote_origin("My Device", "My Device"),
+            RemoteFolderOrigin::LocallyRemoved,
+            "known limitation: the default name collides across devices",
+        );
+    }
+
+    #[test]
+    fn remote_folder_origin_wire_is_tagged_camel_case() {
+        let removed = serde_json::to_value(RemoteFolderOrigin::LocallyRemoved).expect("serialize");
+        let other = serde_json::to_value(RemoteFolderOrigin::OtherDevice).expect("serialize");
+        assert_eq!(removed, serde_json::json!({"kind": "locallyRemoved"}));
+        assert_eq!(other, serde_json::json!({"kind": "otherDevice"}));
+    }
+
+    /// FE wire pin: `RemoteFolderDisplay` camelCase keys, including the
+    /// tagged `origin` the section split keys on. Dropping that field
+    /// ships as a silently-undefined FE value and every removed folder
+    /// falls back to "Sync from Other Devices".
+    #[test]
+    fn remote_folder_display_wire_keys_include_origin() {
+        let info = RemoteFolderDisplay {
+            folder_name: "docs".to_string(),
+            device_name: "Georges-MacBook".to_string(),
+            file_count: 3,
+            total_bytes: 1200,
+            last_modified: 1_700_000_000_000,
+            origin: RemoteFolderOrigin::LocallyRemoved,
+        };
+        let json = serde_json::to_value(&info).expect("serialize");
+        let keys: std::collections::BTreeSet<&str> = json.as_object().expect("object").keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            ["folderName", "deviceName", "fileCount", "totalBytes", "lastModified", "origin"]
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>(),
+            "RemoteFolderDisplay wire keys must stay exactly these camelCase names"
+        );
+        assert_eq!(json["origin"], serde_json::json!({"kind": "locallyRemoved"}));
+    }
+
+    // Static guard: `get_sync_folders_with_stats` must classify remote-only
+    // rows through `classify_remote_origin` using this machine's
+    // `get_device_name_internal` — a future refactor that drops either
+    // call reintroduces H-077 (removed folders listed as other devices).
+    #[test]
+    fn get_sync_folders_with_stats_classifies_remote_origin() {
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/fileops/folders.rs")).expect("read folders.rs");
+        let sig_idx = src
+            .find("pub async fn get_sync_folders_with_stats(")
+            .expect("get_sync_folders_with_stats declaration present");
+        let body_start = src[sig_idx..].find('{').expect("fn body opens") + sig_idx;
+        let mut depth = 0usize;
+        let mut body_end = body_start;
+        for (i, ch) in src[body_start..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        body_end = body_start + i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let body = &src[body_start..=body_end];
+        assert!(
+            body.contains("get_device_name_internal("),
+            "get_sync_folders_with_stats must read this machine's device name to classify remote rows",
+        );
+        assert!(
+            body.contains("classify_remote_origin("),
+            "get_sync_folders_with_stats must stamp origin via classify_remote_origin so the FE cannot mis-bucket a locally-removed folder",
+        );
+        assert!(
+            body.contains("classify_remote_origin(&f.device_name, &local_device_name)"),
+            "classification must use the raw server device_name, not the 'Unknown Device' display fallback",
+        );
     }
 
     /// FE wire pin: `SyncFolderInfo`'s camelCase keys, including `ownerSs58`
@@ -748,6 +957,54 @@ mod tests {
         assert!(
             remove_idx < unregister_idx,
             "remove_drive_for_account MUST be called before .unregister_folder so the local drive is dead before the server reports zero files",
+        );
+    }
+
+    // Static guard: `delete_remote_folder` must decide whether local teardown is
+    // owed from the `sync_paths` DB row, NEVER from the in-memory `sync.drives`
+    // map. The map holds only drives whose sync loop is registered, so a paused
+    // drive (and one still mid-init on a slow login) is missing from it — reading
+    // it there skipped `remove_drive_for_account`, leaving the row behind after
+    // the server wipe (the folder stayed listed with blank stats) plus an on-disk
+    // baseline still claiming the deleted files were synced. The command takes
+    // `tauri::State`, so the choice of source cannot be driven hermetically; the
+    // behaviour of the DB side is covered by `sync::paths`' own tests.
+    #[test]
+    fn delete_remote_folder_decides_teardown_from_the_db_not_the_drive_map() {
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/fileops/folders.rs")).expect("read folders.rs");
+        let sig_idx = src.find("pub async fn delete_remote_folder(").expect("declaration present");
+        let body_start = src[sig_idx..].find('{').expect("fn body opens") + sig_idx;
+        let mut depth = 0usize;
+        let mut body_end = body_start;
+        for (i, ch) in src[body_start..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        body_end = body_start + i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let body = &src[body_start..=body_end];
+        // Strip `//` comments: the body deliberately NAMES the map it must not
+        // read, in the comment explaining why. Only executable code counts.
+        let code: String = body
+            .lines()
+            .map(|line| line.split("//").next().unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(
+            code.contains("sync_path_exists("),
+            "delete_remote_folder must read local configuration from sync_paths via sync_path_exists",
+        );
+        assert!(
+            !code.contains("sync.drives"),
+            "delete_remote_folder must NOT consult the in-memory drives map — a paused or still-initializing drive is absent from it, so its sync_paths row and on-disk baseline would survive the server wipe",
         );
     }
 

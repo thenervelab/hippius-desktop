@@ -1,5 +1,4 @@
 import React, {
-  ReactNode,
   useState,
   useEffect,
   useRef,
@@ -8,17 +7,14 @@ import React, {
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
-import { Icons } from "@/components/ui";
-import { Loader2, AlertCircle, Info, Pause, Play } from "lucide-react";
+import { Loader2, Info, Pause, Play } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { motion } from "framer-motion";
-import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { useViewableFileUrl } from "@/app/lib/hooks/useViewableFileUrl";
-import {
-  FileViewerLayout,
-  FILE_VIEWER_OVERLAY_Z_INDEX,
-} from "@/app/components/page-sections/drive/file-viewer";
+import { FILE_VIEWER_OVERLAY_Z_INDEX } from "@/app/components/page-sections/drive/file-viewer";
 import { usePreparedImagePreview } from "@/app/lib/hooks/usePreparedImagePreview";
+import PreviewSurface from "./PreviewSurface";
+import { PreviewFallback } from "./PreviewState";
 
 interface MediaSize {
   width: number;
@@ -446,28 +442,6 @@ export const LivePhotoToggle: React.FC<{
   );
 };
 
-export const ImageDialogTrigger: React.FC<{
-  children: ReactNode;
-  onClick: () => void;
-  className?: string;
-}> = ({ children, onClick, className }) => {
-  // The hover eye icon lives inside NameCell (inline, left of the status
-  // badge) and reveals via this button's `group` class — an absolute overlay
-  // here would fade in on top of the Pending/Failed pills.
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "relative group overflow-hidden flex items-center w-full px-2 py-[5px]",
-        className,
-      )}
-    >
-      <span className="flex-1 min-w-0">{children}</span>
-    </button>
-  );
-};
-
 const ImageError: React.FC<{
   message: string;
   file: FormattedUserFile;
@@ -475,49 +449,31 @@ const ImageError: React.FC<{
     file: FormattedUserFile,
     polkadotAddress: string,
   ) => void;
-}> = ({ message, file, handleFileDownload }) => {
-  const { polkadotAddress } = useWalletAuth();
+}> = ({ message, file, handleFileDownload }) => (
+  <PreviewFallback
+    title="Failed to load image"
+    description={message}
+    file={file}
+    handleFileDownload={handleFileDownload}
+  />
+);
 
-  return (
-    <div className="flex flex-col items-center justify-center text-grey-10 dark:text-grey-light-100 p-6 rounded-[12px] w-full max-w-md bg-white/80 dark:bg-black-primary-bg/80 border border-grey-dark-100 dark:border-black-300 backdrop-blur-sm">
-      <div className="mb-6 text-center">
-        <AlertCircle className="size-12 mx-auto mb-3 text-red-400" />
-        <p className="text-lg font-medium">Failed to load image</p>
-        <p className="text-sm text-grey-50 dark:text-grey-light-300 mt-2">
-          {message ||
-            "This image format may not be supported by your browser or the connection failed."}
-        </p>
-      </div>
-
-      <button
-        onClick={() => handleFileDownload(file, polkadotAddress ?? "")}
-        className="flex items-center gap-x-2 bg-primary-50 hover:bg-primary-70 transition-colors px-4 py-2 rounded-md font-medium text-white"
-      >
-        <Icons.DocumentDownload className="size-5" />
-        <span>Download File Instead</span>
-      </button>
-    </div>
-  );
-};
-
-const ImageDialog: React.FC<{
-  file: null | FormattedUserFile;
-  allFiles: FormattedUserFile[];
-  onCloseClicked: () => void;
-  onNavigate: (file: FormattedUserFile) => void;
+/**
+ * Image renderer body for the unified viewer.
+ *
+ * Owns everything image-specific and nothing viewer-specific: the HEIC → JPEG
+ * adapter and the Hippius Live still/motion pairing (both prepared by Rust via
+ * `usePreparedImagePreview`), the contained-size framing, and the Live Photo
+ * play toggle with its Linux capability gate. `UnifiedMediaDialog` supplies the
+ * surrounding chrome.
+ */
+const ImagePreviewBody: React.FC<{
+  file: FormattedUserFile;
   handleFileDownload: (
     file: FormattedUserFile,
     polkadotAddress: string,
   ) => void;
-  onDelete?: (file: FormattedUserFile) => void;
-}> = ({
-  file,
-  allFiles,
-  onCloseClicked,
-  onNavigate,
-  handleFileDownload,
-  onDelete,
-}) => {
+}> = ({ file, handleFileDownload }) => {
   const [imageLoaded, setImageLoaded] = useState(false);
   const [imageError, setImageError] = useState<string | null>(null);
   const [livePlaying, setLivePlaying] = useState(false);
@@ -802,17 +758,8 @@ const ImageDialog: React.FC<{
     void playLiveFromStart();
   };
 
-  if (!file) return null;
-
   return (
-    <FileViewerLayout
-      file={file}
-      allFiles={allFiles}
-      onClose={onCloseClicked}
-      onNavigate={onNavigate}
-      handleFileDownload={handleFileDownload}
-      onDelete={onDelete}
-    >
+    <PreviewSurface className="items-center justify-center">
       <div className="relative w-full h-full min-h-0 min-w-0 flex items-center justify-center">
         {!imageLoaded &&
           !displayError &&
@@ -932,8 +879,8 @@ const ImageDialog: React.FC<{
           </motion.div>
         )}
       </div>
-    </FileViewerLayout>
+    </PreviewSurface>
   );
 };
 
-export default ImageDialog;
+export default ImagePreviewBody;

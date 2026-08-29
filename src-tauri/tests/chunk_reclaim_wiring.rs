@@ -109,6 +109,28 @@ fn launch_runs_the_reclaim_even_with_no_active_drives() {
     );
 }
 
+/// `Manager::state::<AppState>()` panics if it runs before `manage`. The launch
+/// reclaim used to `spawn` that lookup *above* `manage`, so a Tokio worker that
+/// won the race with setup logged `state() called before manage() for AppState`
+/// on every boot (H-005). The spawn must sit *after* `manage` so an immediately
+/// scheduled worker still finds the state. `try_state` is not a substitute: a
+/// `None` skip reopens "paused every drive, disk full, reclaim never runs".
+#[test]
+fn launch_reclaim_runs_after_appstate_is_managed() {
+    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/main.rs")).expect("read main.rs");
+    let body = fn_body(&src, "builder.setup(");
+
+    let manage_at = body.find("manage(app_state)").expect("setup must manage AppState");
+    let reclaim_at = body.find("reclaim_startup").expect("setup must trigger the reclaim");
+
+    assert!(
+        manage_at < reclaim_at,
+        "the launch reclaim spawn must sit AFTER app_handle.manage(app_state); \
+         spawning it earlier panics `state() called before manage()` on a Tokio \
+         worker that wins the race with setup",
+    );
+}
+
 /// A removed drive's staged chunks are unreachable by every other code path —
 /// no cycle will resume them and no `sync_paths` row points at them. Leaving
 /// them to the age rule means a user who removes a drive to free disk does not

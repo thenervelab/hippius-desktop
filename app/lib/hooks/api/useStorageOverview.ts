@@ -3,8 +3,12 @@ import { useInvokeQuery } from "./useInvokeQuery";
 
 /**
  * TanStack Query key for the home page's storage/plan cards and the top-bar
- * chip, exported so sync flows can invalidate it alongside
- * `DRIVE_STORAGE_STATS_QUERY_KEY` when uploads/deletes change the totals.
+ * chip, exported so sync flows can invalidate it on every
+ * `hcfs_sync_completed` (including zero-file cycles — empty indexer data
+ * is success + 0 bytes, so a no-op cycle still has to re-probe). Always
+ * invalidated in lockstep with `DRIVE_STORAGE_STATS_QUERY_KEY`: both read
+ * the same indexer row, so refreshing one alone makes the two surfaces
+ * disagree about one number.
  */
 export const STORAGE_OVERVIEW_QUERY_KEY = "storage-overview";
 
@@ -30,6 +34,12 @@ export interface StorageOverview {
   plan: PlanInfo | null;
   /** Pre-formatted HIP credit balance; null if the balance fetch failed. */
   creditsHip: string | null;
+  /**
+   * Indexer row is 0 but this device already has files. The card shows
+   * "Updating…" instead of a confident "0 B". Never inferred on the FE
+   * from `usedBytes === 0` — that is also the true-empty state.
+   */
+  usedPending: boolean;
 }
 
 /**

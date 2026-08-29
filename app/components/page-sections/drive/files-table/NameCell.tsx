@@ -2,6 +2,7 @@ import { FC, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { FileTypes } from "@/lib/types/fileTypes";
 import { getFileIcon } from "@/lib/utils/fileTypeUtils";
+import { isPreviewableFileName } from "@/app/lib/utils/filePreviewType";
 import { cn } from "@/lib/utils";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 import { buildFolderPath } from "@/app/utils/folderPathUtils";
@@ -417,13 +418,11 @@ const NameCell: FC<NameCellProps> = ({
               }
             />
           </div>
-          {/* Mirrors the trigger-wrap gate in FilesTable/ExpandedFolderRows:
-              only video/image/PDF rows open a preview, so only they get the
-              hover affordance. */}
+          {/* Mirrors the trigger-wrap gate in FilesTable/ExpandedFolderRows
+              by asking the same classifier, so a row's hover affordance and
+              whether it actually opens the viewer can never disagree. */}
           {isPreviewable &&
-            (fileType === "video" ||
-              fileType === "image" ||
-              fileType === "PDF") && (
+            isPreviewableFileName(rawName) && (
               <span
                 aria-hidden="true"
                 data-testid="hover-preview-icon"

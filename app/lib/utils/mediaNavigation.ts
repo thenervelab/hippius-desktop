@@ -1,9 +1,14 @@
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
-import { getFilePartsFromFileName } from "./getFilePartsFromFileName";
-import { getFileTypeFromExtension } from "./getTileTypeFromExtension";
+import { derivePreviewType, type PreviewType } from "./filePreviewType";
 import { isLocalFile } from "./fileUrlResolver";
 
-export type ViewableFileType = "image" | "video" | "PDF";
+/**
+ * A file's viewer category. Delegated to the central classifier so the
+ * gallery — the thumbnail rail and prev/next — walks exactly the set the
+ * unified dialog can open. When the two disagreed, a newly supported format
+ * opened fine but was skipped by the arrow keys and missing from the rail.
+ */
+export type ViewableFileType = PreviewType;
 
 /**
  * Options for filtering viewable files
@@ -14,42 +19,30 @@ export interface ViewableFileOptions {
 }
 
 /**
- * Determines if a file is viewable in a dialog (image, video, or PDF)
- * Excludes folders as they cannot be previewed in media dialogs
+ * Determines if a file can be opened in the unified viewer.
+ * Folders are excluded — they navigate rather than preview.
  */
 export function isViewableFile(file: FormattedUserFile, options?: ViewableFileOptions): boolean {
-  // Folders are not viewable in media dialogs
-  if (file.isFolder) {
-    return false;
-  }
-
-  // For private files (localOnly mode), only show files that are locally synced
-  if (options?.localOnly && !isLocalFile(file.source)) {
-    return false;
-  }
-
-  const { fileFormat } = getFilePartsFromFileName(file.name);
-  const fileType = getFileTypeFromExtension(fileFormat || null);
-  return fileType === "image" || fileType === "video" || fileType === "PDF";
+  return getViewableFileType(file, options) !== null;
 }
 
 /**
- * Get file type for navigation purposes
+ * Get a file's viewer category, or `null` when nothing can render it.
  */
-export function getViewableFileType(file: FormattedUserFile): ViewableFileType | null {
-  // Folders don't have a viewable type
+export function getViewableFileType(
+  file: FormattedUserFile,
+  options?: ViewableFileOptions,
+): ViewableFileType | null {
   if (file.isFolder) {
     return null;
   }
 
-  const { fileFormat } = getFilePartsFromFileName(file.name);
-  const fileType = getFileTypeFromExtension(fileFormat || null);
-
-  if (fileType === "image" || fileType === "video" || fileType === "PDF") {
-    return fileType as ViewableFileType;
+  // For private files (localOnly mode), only show files that are locally synced
+  if (options?.localOnly && !isLocalFile(file.source)) {
+    return null;
   }
 
-  return null;
+  return derivePreviewType(file.name);
 }
 
 /**

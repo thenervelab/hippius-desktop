@@ -3,11 +3,14 @@
 //! `synced_state` leaf.
 
 use crate::error::Result;
+use hcfs_client::drive::ExcludeRules;
 use hcfs_client::engine::manager::DriveManager;
 use hcfs_client::engine::runner::SyncRunner;
 use hcfs_client::engine::types::{SyncActivityAction, SyncedFileInfo, build_synced_paths_from_state};
 use serde::Serialize;
 use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::Mutex as TokioMutex;
 
 /// Return sync metadata (arion hashes, CIDs, timestamps) for all synced
 /// files across all drives. Used internally by `get_user_files` to look
@@ -42,6 +45,31 @@ async fn collect_label_maps(sync: &SyncRunner) -> Vec<(String, HashMap<String, S
             sync.update_synced_paths_cache(label, paths.clone());
             out.push((label.clone(), paths));
         }
+    }
+    out
+}
+
+/// Per-drive exclude rules for the recent-files filter.
+///
+/// Same lock discipline as [`collect_label_maps`]: copy Arcs out of the
+/// outer map, `try_lock` each manager, skip a drive whose lock is held.
+/// A missed exclude set means that drive's activity rows stay visible —
+/// fail-open, never block the feed.
+async fn collect_label_exclude_rules(sync: &SyncRunner) -> HashMap<String, ExcludeRules> {
+    let drive_arcs: Vec<(String, Arc<TokioMutex<DriveManager>>)> = match sync.drives.try_lock() {
+        Ok(guard) => guard.iter().map(|(k, slot)| (k.clone(), slot.manager.clone())).collect(),
+        Err(_) => Vec::new(),
+    };
+    let mut out = HashMap::new();
+    for (label, arc) in &drive_arcs {
+        let Ok(manager) = arc.try_lock() else {
+            continue;
+        };
+        let patterns = manager.list_exclude_patterns();
+        if patterns.is_empty() {
+            continue;
+        }
+        out.insert(label.clone(), super::exclude_match::rules_from_patterns(&patterns));
     }
     out
 }
@@ -150,9 +178,18 @@ pub async fn get_recent_files(
         .map(|item| format!("{}::{}", item.file_name, item.label))
         .collect();
 
+    // Drop rows whose rel-path matches that drive's exclude rules. The
+    // activity log is left intact — this is a read-time filter so a
+    // glob like `*.bin` does not keep a Drive-dropped file on Overview.
+    let exclude_rules = collect_label_exclude_rules(sync).await;
+
     let non_deleted: Vec<_> = items
         .iter()
-        .filter(|item| item.action != SyncActivityAction::Deleted && !deleted_names.contains(&format!("{}::{}", item.file_name, item.label)))
+        .filter(|item| {
+            item.action != SyncActivityAction::Deleted
+                && !deleted_names.contains(&format!("{}::{}", item.file_name, item.label))
+                && !super::exclude_match::recent_rel_path_is_excluded(exclude_rules.get(item.label.as_ref()), item.file_name.as_ref())
+        })
         .collect();
 
     if non_deleted.is_empty() {
@@ -293,5 +330,19 @@ mod tests {
         );
         let out = bundles_for_wanted_keys(vec![("d".to_string(), corpus)], &HashSet::new());
         assert!(out.is_empty());
+    }
+
+    /// The recent feed must drop glob matches through the shared matcher, not
+    /// by deleting activity history. `*.bin` hides `foo.bin` / `dir/foo.bin`
+    /// and leaves `foo.bin.bak`.
+    #[test]
+    fn recent_feed_omits_glob_excluded_rel_paths() {
+        use super::super::exclude_match::{recent_rel_path_is_excluded, rules_from_patterns};
+
+        let rules = rules_from_patterns(&["*.bin".to_string()]);
+        assert!(recent_rel_path_is_excluded(Some(&rules), "foo.bin"));
+        assert!(recent_rel_path_is_excluded(Some(&rules), "dir/foo.bin"));
+        assert!(!recent_rel_path_is_excluded(Some(&rules), "foo.bin.bak"));
+        assert!(!recent_rel_path_is_excluded(None, "foo.bin"));
     }
 }

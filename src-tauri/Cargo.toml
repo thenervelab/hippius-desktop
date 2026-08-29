@@ -1,6 +1,6 @@
 [package]
 name = "Hippius"
-version = "0.6.0-beta.3"
+version = "0.6.0-beta.4"
 description = "Hippius Desktop App"
 authors = ["you"]
 edition = "2024"
@@ -104,8 +104,14 @@ uuid = { version = "1", features = ["v4"] }
 tempfile = "3"
 sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio"] }
 hex = "0.4"
+# Same glob engine hcfs-client compiles `.hippius/exclude` with. Two callers,
+# and the difference between them is deliberate: `validate_pattern` refuses a
+# pattern the engine would silently drop (validating with a different parser
+# would let the two disagree), while `user_files`' search needle builds a
+# case-INSENSITIVE matcher — a search miss hides nothing, an exclusion miss
+# lies about what is backed up.
+globset = "0.4"
 tauri-plugin-fs = "2"
-sysinfo = "0.32"
 notify = "6.1"
 tauri-plugin-dialog = "2.6.0"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
@@ -147,16 +153,43 @@ alloy-signer-local = { version = "0.8", default-features = false, features = [
 # folder_share_token_hash), and #351 (share capability-leak fixes +
 # shared drives enabled server-side), and #360 (session-create looks up
 # the live row before counting so resume at cap never 429s; default cap
-# 32; session-create 429 classifies as ServerError { 429 }).
+# 32; session-create 429 classifies as ServerError { 429 }), and
+# and #367 (CPU-bound hash/encrypt run on a pool hcfs OWNS — private, not
+# `build_global`, which is first-caller-wins and would silently keep the
+# default size once any crate had touched rayon; a file still being
+# written is detected by walk/pre-hash/post-hash stat agreement in
+# `drive::unstable` and deferred via SyncState::deferred_ids so it
+# classifies LocalSkip; large-file encrypt-to-disk is process-serialized
+# with the permit held inside spawn_blocking).
+#
+# THAT POOL IS `CpuPolicy::Full` UNTIL THE HOST SAYS OTHERWISE. hcfs will
+# not deprioritise its host's work uninvited, so the desktop opts in with
+# `cpu_pool::configure(CpuPolicy::Background)` in main.rs — without that
+# call this rev gives NO UI protection at all, silently. Pinned by
+# `tests/cpu_policy_pin.rs`.
+#
+# #367 also landed WITHOUT a size-shrink guard: an earlier cut of it held
+# any file shorter than its synced size back for a cycle, which delayed
+# every legitimate smaller edit (delete a paragraph, sync, nothing
+# uploads until the next cycle). Its accepted residual is a copy that
+# truncates the destination and then stalls across a whole scan, and hcfs
+# names the desktop as where that is closed — so `fileops/files/add.rs`
+# stages every copy into a hidden `.hippius-incoming-*` sibling and
+# renames onto the destination. See `.claude/rules/sync-engine.md`.
+#
+# NOT ON `main` YET. This is hcfs#367's head, and hcfs squash-merges, so
+# this exact SHA disappears the moment that PR lands. Re-pin to the
+# squashed `main` commit before this desktop PR merges — see the note in
+# the desktop PR.
 #
 # Bumping this rev is the only way a hcfs change reaches the desktop, so it
 # stays exact and is guarded by the wire-contract pins in tests/hcfs_contract.rs.
-hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "3fbfb28f500c2562f8f75d747cd1fa3dcc86452d" }
+hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "b23c220e8fe723d5ca41c57907190b0eae68a571" }
 # hcfs-shared pulls in the `network` module types (RegisterRelativePathEntry,
 # MAX_REGISTER_RELATIVE_PATHS_BATCH, ...) that hcfs-client takes/returns on
 # its public API but does not re-export. Pinned to the same git rev so the
 # wire types stay in lockstep with the client.
-hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "3fbfb28f500c2562f8f75d747cd1fa3dcc86452d" }
+hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "b23c220e8fe723d5ca41c57907190b0eae68a571" }
 # NFC-normalise relative_path strings before posting them to the server's
 # register_relative_paths endpoint. macOS APFS hands filenames back in NFD
 # and the server's path_validator hard-rejects anything non-NFC — see the

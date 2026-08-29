@@ -437,3 +437,167 @@ async fn pending_backfill_flag_reflects_db_state() {
 
     assert!(listing.pending_backfill, "NULL column → FE banner should show");
 }
+
+/// Register a real `DriveManager` for `LABEL` whose config directory carries
+/// an `exclude` file with `patterns`.
+///
+/// The listing reads exclude rules off the drive manager, so a fixture that
+/// only seeds the synced-paths cache can never exercise them. Config dir is
+/// `<sync-root>/.hippius` to match production — the listing skips `.`-prefixed
+/// names, so the config directory does not show up as a folder.
+async fn register_drive_with_excludes(state: &AppState, sync_root: &std::path::Path, patterns: &str) {
+    use hcfs_client::engine::manager::DriveManager;
+    use hcfs_client::engine::runner::DriveSlot;
+    use tokio::sync::Mutex as TokioMutex;
+    use tokio_util::sync::CancellationToken;
+
+    let config_dir = sync_root.join(".hippius");
+    std::fs::create_dir_all(&config_dir).expect("config dir");
+    std::fs::write(config_dir.join("exclude"), patterns).expect("write exclude file");
+
+    let manager = DriveManager::new(sync_root.to_path_buf(), config_dir);
+    let mut guard = state.sync.drives.lock().await;
+    guard.insert(
+        LABEL.to_string(),
+        DriveSlot {
+            manager: Arc::new(TokioMutex::new(manager)),
+            cancel_token: CancellationToken::new(),
+            sync_path: sync_root.to_path_buf(),
+        },
+    );
+}
+
+/// The bug this guards (H-069): a user-typed `*.bin` was honoured by the sync
+/// engine but compared with `==` by the listing, so a file the engine refused
+/// to upload sat on Drive as Pending forever.
+///
+/// Drives the real grouped listing rather than the matcher, because every
+/// source that feeds a row has to agree: the on-disk walk, the server-only
+/// overlay, and the `folder_entries_local` cache. Each of the three was its
+/// own way for an excluded entry to come back.
+#[tokio::test]
+async fn excluded_globs_are_hidden_from_every_source_the_grouped_listing_merges() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    // On disk: an excluded file at the root and nested, a near-miss that must
+    // survive, an excluded directory with contents, and ordinary files.
+    write_file(root, "notes.txt");
+    write_file(root, "dump.bin");
+    write_file(root, "dump.bin.bak");
+    write_file(root, "sub/inner.bin");
+    write_file(root, "sub/inner.txt");
+    write_file(root, "node_modules/pkg/index.js");
+
+    let pool = make_pool().await;
+    insert_sync_path(&pool, &root.to_string_lossy(), Some(1_700_000_000)).await;
+    let state = make_state(pool.clone());
+    register_drive_with_excludes(&state, root, "*.bin\nnode_modules/\n").await;
+
+    // Server-only sources: a root-level excluded file, an excluded file under
+    // an otherwise legitimate folder, and a whole excluded tree that exists
+    // nowhere on this device.
+    seed_cache(
+        &state,
+        &[
+            "notes.txt",
+            "server-only.bin",
+            "remote/keep.txt",
+            "remote/drop.bin",
+            "vendor/node_modules/lib/a.js",
+        ],
+    );
+    // Cache-only folder rows: an excluded folder registered on another device
+    // (never materialised here) alongside a legitimate one.
+    insert_folder_entry(&pool, "node_modules").await;
+    insert_folder_entry(&pool, "Reports").await;
+
+    let root_listing = list_sync_folder_grouped_inner(&state, ACCOUNT.into(), root.to_string_lossy().into(), None, Some(LABEL.into()))
+        .await
+        .expect("root listing");
+
+    let file_names: Vec<&str> = root_listing.files.iter().map(|f| f.name.as_str()).collect();
+    let folder_names: Vec<&str> = root_listing.folders.iter().map(|f| f.name.as_str()).collect();
+
+    assert!(!file_names.contains(&"dump.bin"), "on-disk *.bin must be hidden: {file_names:?}");
+    assert!(
+        !file_names.contains(&"server-only.bin"),
+        "server-only *.bin must be hidden: {file_names:?}"
+    );
+    assert!(file_names.contains(&"notes.txt"), "unmatched files must stay: {file_names:?}");
+    assert!(
+        file_names.contains(&"dump.bin.bak"),
+        "*.bin is an extension match, not a substring: {file_names:?}"
+    );
+
+    assert!(
+        !folder_names.contains(&"node_modules"),
+        "an excluded directory must not come back from disk or the folder-entity cache: {folder_names:?}"
+    );
+    assert!(folder_names.contains(&"sub"), "unmatched folders must stay: {folder_names:?}");
+    assert!(folder_names.contains(&"Reports"), "the cache overlay must still work: {folder_names:?}");
+    assert!(
+        folder_names.contains(&"remote"),
+        "a server-only folder with surviving children must stay: {folder_names:?}"
+    );
+    assert!(
+        !folder_names.contains(&"vendor"),
+        "a server-only folder whose every child is excluded must not appear: {folder_names:?}"
+    );
+
+    // Drilling in: the same rules apply one level down, from both sources.
+    let sub = list_sync_folder_grouped_inner(
+        &state,
+        ACCOUNT.into(),
+        root.to_string_lossy().into(),
+        Some("sub".into()),
+        Some(LABEL.into()),
+    )
+    .await
+    .expect("sub listing");
+    let sub_files: Vec<&str> = sub.files.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(sub_files, vec!["inner.txt"], "*.bin applies at depth too");
+
+    let remote = list_sync_folder_grouped_inner(
+        &state,
+        ACCOUNT.into(),
+        root.to_string_lossy().into(),
+        Some("remote".into()),
+        Some(LABEL.into()),
+    )
+    .await
+    .expect("remote listing");
+    let remote_files: Vec<&str> = remote.files.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(remote_files, vec!["keep.txt"], "server-only overlay honours excludes at depth");
+}
+
+/// Clearing the pattern must bring the files straight back. The listing
+/// re-reads `.hippius/exclude` on every call rather than holding a compiled
+/// set, which is what lets `remove_exclude_pattern` plus a refresh be enough —
+/// a cached ruleset here would leave the file hidden until restart.
+#[tokio::test]
+async fn clearing_the_pattern_restores_the_hidden_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    write_file(root, "dump.bin");
+    write_file(root, "notes.txt");
+
+    let pool = make_pool().await;
+    insert_sync_path(&pool, &root.to_string_lossy(), Some(1_700_000_000)).await;
+    let state = make_state(pool);
+    register_drive_with_excludes(&state, root, "*.bin\n").await;
+    seed_cache(&state, &["dump.bin", "notes.txt"]);
+
+    let hidden = list_sync_folder_grouped_inner(&state, ACCOUNT.into(), root.to_string_lossy().into(), None, Some(LABEL.into()))
+        .await
+        .expect("listing with the rule");
+    assert_eq!(hidden.files.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), vec!["notes.txt"]);
+
+    std::fs::write(root.join(".hippius").join("exclude"), "").expect("clear exclude file");
+
+    let restored = list_sync_folder_grouped_inner(&state, ACCOUNT.into(), root.to_string_lossy().into(), None, Some(LABEL.into()))
+        .await
+        .expect("listing after clearing");
+    let names: Vec<&str> = restored.files.iter().map(|f| f.name.as_str()).collect();
+    assert!(names.contains(&"dump.bin"), "clearing the pattern must restore the file: {names:?}");
+    assert!(names.contains(&"notes.txt"), "{names:?}");
+}

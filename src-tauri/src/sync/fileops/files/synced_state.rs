@@ -74,8 +74,12 @@ pub(super) async fn synced_paths_and_excludes_for_label(sync: &SyncRunner, label
     let _ = sync.wait_for_first_reconcile(label, FIRST_RECONCILE_WAIT_BUDGET).await;
 
     if let Some(cached) = sync.get_cached_synced_paths(label) {
-        // Excludes are in-memory on the manager — cheap, no JSON. Still
-        // `try_lock` so a mid-sync listing does not wait on the cycle.
+        // `list_exclude_patterns` re-reads `.hippius/exclude` (a few short
+        // lines) rather than serving a cached copy, so this is a small
+        // synchronous read, not the sync-state JSON parse. Still `try_lock`
+        // so a mid-sync listing does not wait on the cycle — at the cost of
+        // returning NO patterns while a drive is syncing, which briefly
+        // un-hides excluded rows.
         let excludes = match acquire_drive_arc(sync, label) {
             DriveArcOutcome::Acquired(arc) => match arc.try_lock() {
                 Ok(manager) => manager.list_exclude_patterns(),

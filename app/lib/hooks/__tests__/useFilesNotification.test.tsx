@@ -153,6 +153,8 @@ describe("useFilesNotification — completion aggregation", () => {
       description: "86 files uploaded.",
       outcome: "success",
       userAddress: "5poll",
+      // The title Rust writes counts THIS, not the (capped) detail list.
+      fileCount: 86,
     });
   });
 
@@ -174,9 +176,17 @@ describe("useFilesNotification — completion aggregation", () => {
     });
     await advance(AGGREGATION_MS);
 
-    const args = syncNotificationCalls()[0]?.[1] as { description: string; fileDetailsJson: string };
+    const args = syncNotificationCalls()[0]?.[1] as {
+      description: string;
+      fileDetailsJson: string;
+      fileCount: number;
+    };
     expect(args.description).toBe("250 files uploaded."); // count is NOT truncated
     expect(JSON.parse(args.fileDetailsJson)).toHaveLength(200); // detail list IS capped
+    // The `fileCount` key (camelCase — Tauri renames the Rust `file_count`
+    // param) is the ONLY uncapped number Rust can title with. Sending the
+    // list length instead would render "Synced 200 files" for 250 files.
+    expect(args.fileCount).toBe(250);
   });
 
   it("prefers the OAuth substrate address over the polkadot address", async () => {
@@ -216,6 +226,9 @@ describe("useFilesNotification — failure path", () => {
       outcome: "error",
       description: 'Sync failed for folder "photos": boom',
     });
+    // A failure carries no file count: Rust's title must come from the
+    // outcome alone, never from a number a success path happened to leave.
+    expect((calls[0]?.[1] as { fileCount?: number }).fileCount).toBeUndefined();
   });
 
   it("falls back to the 'default' label when the failure payload omits it", async () => {
@@ -227,5 +240,68 @@ describe("useFilesNotification — failure path", () => {
     expect(syncNotificationCalls()[0]?.[1]).toMatchObject({
       description: 'Sync failed for folder "default": down',
     });
+  });
+});
+
+// `hcfs_folder_restored_notify` is the GATED companion to the raw
+// `hcfs_folder_recovered`, which fires when the engine finds a drive's folder missing
+// on the server and puts it back from this device, discarding the local
+// baseline so the whole drive re-uploads. The usual cause is deleting the
+// folder from the web console. The event was emitted with NO listener anywhere
+// in the app, so that re-upload reached the user as an unexplained transfer
+// alongside a folder that appeared to come back by itself.
+//
+// The hook must bind the GATED name. The raw event ALSO fires for a brand-new
+// folder whose detached registration has not reached the server yet, and
+// re-fires every cycle whose listing still lacks the folder; Rust owns both
+// gates (`sync::folder_restore_notify`), so listening to the raw name would
+// tell a user who just added a folder that it "was missing on the server".
+describe("useFilesNotification — folder restored", () => {
+  it("ignores the raw hcfs_folder_recovered event", async () => {
+    mount(true);
+    await flushRegistration();
+    await act(async () => {
+      await tauri.emitEvent("hcfs_folder_recovered", { label: "Camera Uploads" });
+    });
+    expect(syncNotificationCalls()).toHaveLength(0);
+  });
+
+  it("raises a folder_restored notification naming the folder", async () => {
+    mount(true);
+    await flushRegistration();
+    await act(async () => {
+      await tauri.emitEvent("hcfs_folder_restored_notify", { label: "Camera Uploads" });
+    });
+    // Not debounced: the Rust gate consumes its armed flag, so at most one
+    // event per init reaches here and there is nothing to aggregate.
+    const calls = syncNotificationCalls();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.[1]).toMatchObject({
+      outcome: "folder_restored",
+      description:
+        'Folder "Camera Uploads" was missing on the server, so Hippius restored it from this device. Its files are being uploaded again.',
+    });
+  });
+
+  it("falls back to the 'default' label when the payload omits it", async () => {
+    mount(true);
+    await flushRegistration();
+    await act(async () => {
+      await tauri.emitEvent("hcfs_folder_restored_notify", {});
+    });
+    expect(syncNotificationCalls()[0]?.[1]).toMatchObject({
+      outcome: "folder_restored",
+      description:
+        'Folder "default" was missing on the server, so Hippius restored it from this device. Its files are being uploaded again.',
+    });
+  });
+
+  it("registers no listener when Files notifications are disabled", async () => {
+    mount(false);
+    await flushRegistration();
+    await act(async () => {
+      await tauri.emitEvent("hcfs_folder_restored_notify", { label: "photos" });
+    });
+    expect(syncNotificationCalls()).toHaveLength(0);
   });
 });
