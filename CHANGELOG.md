@@ -67,11 +67,6 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
-- **Files that vanish before upload no longer mark the whole sync as Failed.** A
-  temporary file that the app or the system deletes mid-sync used to leave the sync
-  widget, the tray icon and the tray panel showing a red "Failed" at 100%, even
-  though every file you actually cared about had synced. Genuine failures still
-  show as before.
 - **Closing the window on Linux and Windows now quits Hippius.** The app
   no longer leaves a background process running after you click the window X.
 - **`--version` prints the version and exits.** Running Hippius with `--version`
@@ -96,6 +91,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   longer there to switch on. Updates now install the same complete, Apple-checked
   copy the disk image contains. If yours went missing, reinstall from the disk image
   once; updates from then on keep it.
+- **Files that vanish before upload no longer mark the whole sync as Failed.** A
+  temporary file that the app or the system deletes mid-sync used to leave the sync
+  widget, the tray icon and the tray panel showing a red "Failed" at 100%, even
+  though every file you actually cared about had synced. Genuine failures still
+  show as before.
 - **"Share with Hippius" now registers itself on Mac.** On some Macs the right-click
   menu never appeared no matter what you did in Settings, because macOS had never
   registered the feature at all — so it was not in any list to switch on. Hippius now
