@@ -654,6 +654,11 @@ fn apply_preparing_override(snapshot: &mut SyncSnapshot, preparing: &crate::sync
 /// When we detect this (active session, all files accounted for, 100%
 /// progress), override the display fields so the frontend shows
 /// "Complete" instead of "Syncing...".
+///
+/// A vanished local file (Gone) still increments `failed_files`, but it
+/// is not a user-visible failure: the next cycle's plan will not include
+/// it. If every remaining failure is Gone, the widget says success. A
+/// real 5xx in the same cycle still says Failed (H-080 / H-078).
 fn fixup_stalled_completion(snapshot: &mut SyncSnapshot) {
     if !snapshot.is_active || snapshot.total_files == 0 {
         return;
@@ -664,12 +669,28 @@ fn fixup_stalled_completion(snapshot: &mut SyncSnapshot) {
         snapshot.effective_in_progress = false;
         snapshot.effective_completed = true;
         snapshot.widget_state = "completed".to_string();
-        snapshot.status_variant = if snapshot.failed_files > 0 {
+        snapshot.status_variant = if snapshot.failed_files > 0 && !remaining_failures_are_all_gone(snapshot) {
             "error".to_string()
         } else {
             "success".to_string()
         };
     }
+}
+
+/// True when `failed_files` is explained entirely by Gone rows on the
+/// snapshot. Fail closed: a missing row (the files list is capped) or a
+/// non-Gone error keeps the widget on Failed, so a 5xx can never hide.
+fn remaining_failures_are_all_gone(snapshot: &SyncSnapshot) -> bool {
+    if snapshot.failed_files == 0 {
+        return false;
+    }
+    let gone = snapshot
+        .files
+        .iter()
+        .filter(|file| file.status == FileProgressStatus::Error)
+        .filter(|file| file.error.as_deref().is_some_and(crate::sync::events::is_gone_reason))
+        .count();
+    gone == snapshot.failed_files
 }
 
 // ── Tauri IPC Wrappers ─────────────────────────────────────────────────
@@ -782,6 +803,88 @@ mod tests {
 
         assert!(snap.effective_completed);
         assert_eq!(snap.status_variant, "error");
+    }
+
+    fn progress_file(name: &str, status: FileProgressStatus, error: Option<&str>) -> FileProgress {
+        FileProgress {
+            path: std::sync::Arc::from(name),
+            file_name: std::sync::Arc::from(name),
+            label: std::sync::Arc::from("default"),
+            action: FileAction::Upload,
+            status,
+            progress_percent: 100,
+            bytes_encrypted: 0,
+            bytes_transferred: 0,
+            total_bytes: 1,
+            resumed_from_bytes: None,
+            error: error.map(std::sync::Arc::from),
+            completed_at: Some(1),
+        }
+    }
+
+    /// H-080: ten user files synced and one vanished local file (ENOENT at
+    /// open) must not paint the widget Failed at 100%. Gone is transient and
+    /// excluded from the error variant.
+    #[test]
+    fn fixup_treats_only_gone_failures_as_success() {
+        use crate::sync::events::FileFailureKindPayload;
+
+        let gone = FileFailureKindPayload::Gone.display_reason();
+        let mut snap = base_snapshot();
+        snap.is_active = true;
+        snap.total_files = 11;
+        snap.completed_files = 10;
+        snap.failed_files = 1;
+        snap.overall_percent = 100;
+        snap.effective_in_progress = true;
+        snap.effective_completed = false;
+        snap.widget_state = "active".to_string();
+        snap.status_variant = "progress".to_string();
+        snap.files = (0..10)
+            .map(|i| progress_file(&format!("ok{i}.txt"), FileProgressStatus::Completed, None))
+            .chain(std::iter::once(progress_file("vanished.tmp", FileProgressStatus::Error, Some(&gone))))
+            .collect();
+
+        fixup_stalled_completion(&mut snap);
+
+        assert!(snap.effective_completed);
+        assert_eq!(
+            snap.status_variant, "success",
+            "a lone vanished local file must not mark the whole sync Failed"
+        );
+    }
+
+    /// A real 5xx next to a Gone file must still say Failed. The Gone carve-out
+    /// is not a blanket "any failure at 100% is success".
+    #[test]
+    fn fixup_keeps_error_when_a_server_500_remains_beside_gone() {
+        use crate::sync::events::FileFailureKindPayload;
+
+        let gone = FileFailureKindPayload::Gone.display_reason();
+        let server = FileFailureKindPayload::ServerError { status: 500 }.display_reason();
+        let mut snap = base_snapshot();
+        snap.is_active = true;
+        snap.total_files = 12;
+        snap.completed_files = 10;
+        snap.failed_files = 2;
+        snap.overall_percent = 100;
+        snap.effective_in_progress = true;
+        snap.effective_completed = false;
+        snap.files = (0..10)
+            .map(|i| progress_file(&format!("ok{i}.txt"), FileProgressStatus::Completed, None))
+            .chain([
+                progress_file("vanished.tmp", FileProgressStatus::Error, Some(&gone)),
+                progress_file("big.bin", FileProgressStatus::Error, Some(&server)),
+            ])
+            .collect();
+
+        fixup_stalled_completion(&mut snap);
+
+        assert!(snap.effective_completed);
+        assert_eq!(
+            snap.status_variant, "error",
+            "a 5xx must still mark the sync Failed even when a Gone file is in the same cycle"
+        );
     }
 
     #[test]

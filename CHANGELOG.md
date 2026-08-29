@@ -67,6 +67,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Files that vanish before upload no longer mark the whole sync as Failed.**
 - **`--version` prints the version and exits.** Running Hippius with `--version`
   or `-V` no longer opens the full app.
 - **Adding a large folder no longer freezes the app.** Dropping a multi-gigabyte

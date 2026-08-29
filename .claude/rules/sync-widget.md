@@ -62,6 +62,7 @@ The sidebar/tray row renders `FileProgress.error`, which Rust authors in `FileFa
 
 - Transport failures (`Network`, and `Other` messages shaped like `"Network error: error sending request for url (https://…)"`) are remapped to Network. Copy is **"Couldn't reach the server — will retry."** and `is_transient` is true so the row is amber **Retrying** rather than red **Error** (the next cycle resumes from cached chunks; origin/edge resets stringify identically to "no wifi").
 - Session-limit 429 (`ServerError { 429 }`, and `Other` carrying `"Too many active upload sessions"`) is the same shape: **"Too many uploads in progress — will retry."**, `is_transient`, amber. Do **not** say "too many devices" — desktop-only can trip the per-drive cap.
+- A local file that existed at plan time and is gone at `open()` (`Other` shaped like ENOENT / `No such file or directory` / `(os error 2)`) is **Gone**: **"File disappeared before upload — will retry."**, `is_transient`, amber. Remote `FileNotFound` and download HTTP 404 must not become Gone. If the only remaining failures at 100% are Gone, `fixup_stalled_completion` sets `status_variant=success` so the widget is not Failed; a real 5xx in the same cycle still is.
 - A 5xx or credits failure stays red.
 
 The FE `failureMessage()` for persisted Drive-table badges must stay word-aligned with `display_reason`. **Do not tell the user to check their connection.**
