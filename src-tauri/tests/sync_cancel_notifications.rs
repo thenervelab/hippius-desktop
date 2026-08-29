@@ -10,9 +10,11 @@
 //!    the `hcfs-client` git rev fails fast if the wording drifts.
 //! 2. **Outcome-typed notification rows** — `create_sync_notification_inner`
 //!    must write distinct titles and subtype prefixes for each
-//!    `SyncNotificationOutcome`. The FE relies on the title ("Sync Complete"
-//!    vs. "Sync Failed") and the `FileSyncComplete-`/`FileSyncError-` prefix to
-//!    filter the notifications page; any drift here is a user-visible bug.
+//!    `SyncNotificationOutcome`. The bell/page list renders `title_text`,
+//!    not the description, so a success row names the file (or the file
+//!    count) from `release_notes` JSON. Error rows stay "Sync Failed".
+//!    The `FileSyncComplete-`/`FileSyncError-` prefix still filters the
+//!    notifications page; any drift here is a user-visible bug.
 
 use sqlx::sqlite::SqlitePool;
 use tauri_project_lib::notifications::credits::{SyncNotificationOutcome, create_sync_notification_inner};
@@ -97,4 +99,78 @@ async fn error_notification_uses_sync_failed_title_and_distinct_subtype() {
     // Subtype prefix must differ from success so the notifications page can
     // partition the list without parsing the description string.
     assert!(!subtype.starts_with("FileSyncComplete-"));
+}
+
+async fn fetch_title_description_subtype(pool: &SqlitePool, id: i64) -> (String, String, String) {
+    sqlx::query_as("SELECT title_text, description, notification_subtype FROM notifications WHERE id = ?")
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .expect("fetch row")
+}
+
+/// The bell/page list renders `title_text`, not the description. One named
+/// file in `release_notes` must surface the basename in the title; the
+/// count sentence stays on the description.
+#[tokio::test]
+async fn success_notification_names_single_file_in_title() {
+    let pool = setup_notifications_db().await;
+    let details = r#"[{"fileName":"Vacation/IMG_1234.HEIC","totalBytes":1024,"action":"upload"}]"#;
+    const DESCRIPTION: &str = "1 file uploaded.";
+
+    let id = create_sync_notification_inner(&pool, "5Ft4uvTEST", DESCRIPTION, details, SyncNotificationOutcome::Success)
+        .await
+        .expect("insert success notification");
+
+    let (title, description, subtype) = fetch_title_description_subtype(&pool, id).await;
+
+    assert_eq!(title, "Synced IMG_1234.HEIC");
+    assert_eq!(description, DESCRIPTION, "count sentence stays on the description");
+    assert!(subtype.starts_with("FileSyncComplete-"), "unexpected subtype: {subtype}");
+}
+
+/// Several files cannot all fit in the title; pin the count copy so a
+/// rewording is a deliberate test change, not a silent UI drift.
+#[tokio::test]
+async fn success_notification_counts_multiple_files_in_title() {
+    let pool = setup_notifications_db().await;
+    let details = r#"[
+        {"fileName":"a.txt","totalBytes":1,"action":"upload"},
+        {"fileName":"b.txt","totalBytes":1,"action":"upload"},
+        {"fileName":"nested/c.txt","totalBytes":1,"action":"download"}
+    ]"#;
+    const DESCRIPTION: &str = "2 files uploaded, 1 file downloaded.";
+
+    let id = create_sync_notification_inner(&pool, "5Ft4uvTEST", DESCRIPTION, details, SyncNotificationOutcome::Success)
+        .await
+        .expect("insert success notification");
+
+    let (title, description, subtype) = fetch_title_description_subtype(&pool, id).await;
+
+    assert_eq!(title, "Synced 3 files");
+    assert_eq!(description, DESCRIPTION, "count sentence stays on the description");
+    assert!(subtype.starts_with("FileSyncComplete-"), "unexpected subtype: {subtype}");
+}
+
+/// File details on an error row must not override the failure title — the
+/// list would then look like a success.
+#[tokio::test]
+async fn error_notification_title_ignores_file_details() {
+    let pool = setup_notifications_db().await;
+    let details = r#"[{"fileName":"stuck.bin","totalBytes":8,"action":"upload"}]"#;
+
+    let id = create_sync_notification_inner(
+        &pool,
+        "5Ft4uvTEST",
+        r#"Sync failed for folder "docs": Rate limited, retry after 30s"#,
+        details,
+        SyncNotificationOutcome::Error,
+    )
+    .await
+    .expect("insert error notification");
+
+    let (title, _, subtype) = fetch_title_description_subtype(&pool, id).await;
+
+    assert_eq!(title, "Sync Failed");
+    assert!(subtype.starts_with("FileSyncError-"), "unexpected subtype: {subtype}");
 }

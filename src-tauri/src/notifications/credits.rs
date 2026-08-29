@@ -406,6 +406,24 @@ impl SyncNotificationOutcome {
         }
     }
 
+    /// Bell/page list renders `title_text`, not the description. A success
+    /// with one named file shows the basename; several files show a count.
+    /// Error / restored titles stay fixed so a failure cannot look like a
+    /// success. Empty or unparseable `release_notes` keep "Sync Complete".
+    fn list_title(self, file_details_json: &str) -> String {
+        match self {
+            Self::Success => {
+                let names = success_file_basenames(file_details_json);
+                match names.as_slice() {
+                    [name] => format!("Synced {name}"),
+                    names if names.len() > 1 => format!("Synced {} files", names.len()),
+                    _ => self.title().to_string(),
+                }
+            }
+            Self::Error | Self::FolderRestored => self.title().to_string(),
+        }
+    }
+
     pub fn subtype_prefix(self) -> &'static str {
         match self {
             Self::Success => "FileSyncComplete",
@@ -413,6 +431,17 @@ impl SyncNotificationOutcome {
             Self::FolderRestored => "FileSyncFolderRestored",
         }
     }
+}
+
+fn success_file_basenames(file_details_json: &str) -> Vec<String> {
+    let Ok(values) = serde_json::from_str::<Vec<serde_json::Value>>(file_details_json) else {
+        return Vec::new();
+    };
+    values
+        .iter()
+        .filter_map(|v| v.get("fileName").and_then(|n| n.as_str()))
+        .map(|path| path.rsplit(['/', '\\']).next().filter(|s| !s.is_empty()).unwrap_or(path).to_string())
+        .collect()
 }
 
 /// Insert a sync notification row. Returns the new row's `id`.
@@ -429,7 +458,7 @@ pub async fn create_sync_notification_inner(
 ) -> Result<i64, AppError> {
     let timestamp = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
     let subtype = format!("{}-{timestamp}", outcome.subtype_prefix());
-    let title = outcome.title();
+    let title = outcome.list_title(file_details_json);
 
     let id = sqlx::query(
         r"
