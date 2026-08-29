@@ -67,7 +67,6 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
-- **File search understands patterns like `*.pdf`.**
 - **Closing the window on Linux and Windows now quits Hippius.** The app
   no longer leaves a background process running after you click the window X.
 - **`--version` prints the version and exits.** Running Hippius with `--version`
@@ -104,6 +103,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   not work. Opening Hippius straight from the downloaded disk image no longer shows that
   notice at all — nothing there can turn the feature on, so it now just asks you to move
   Hippius to your Applications folder first.
+- **File search understands patterns like `*.pdf`.**
 - **Every build now reports its real version number.** Installed copies all claimed to
   be version `0.0.1`, so there was no way to tell which build you were running when
   reporting a problem.
