@@ -67,10 +67,6 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
-- **Adding a folder no longer counts hidden files in the file total.**
-- **A folder's file count updates as soon as you add to it.** Adding a file or
-  folder could leave the count in Drive showing the total from before the upload
-  until something else changed that folder.
 - **Closing the window on Linux and Windows now quits Hippius.** The app
   no longer leaves a background process running after you click the window X.
 - **`--version` prints the version and exits.** Running Hippius with `--version`
@@ -80,6 +76,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **Replacing an already-synced file can no longer upload a half-copied version.**
   Adding a file over one you already had could, if the copy was slow, be picked up
   while it was still being written and back up an incomplete copy.
+- **Adding a folder no longer counts hidden files in the file total.**
+- **A folder's file count updates as soon as you add to it.** Adding a file or
+  folder could leave the count in Drive showing the total from before the upload
+  until something else changed that folder.
 - **Filters and search now work while browsing inside a folder.** Applying a file-type,
   date, size, or search filter inside a synced folder — including folders synced from
   your other devices — quietly kept showing the full unfiltered list with the filter
