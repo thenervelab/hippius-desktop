@@ -17,7 +17,7 @@ The ~32 submodules are organized into six private sub-domain group directories, 
 |---|---|
 | `drive/` | `lifecycle.rs` (init, auto-init, teardown, progress handler setup), `lifecycle_guard.rs` (per-label epoch model + `apply_init_commit`), `drive_status.rs`, `control.rs` (start/stop/pause), `config.rs` (HCFS config loading), `paths.rs` (sync path DB ops), `selective.rs`, `device.rs`, `identity.rs` |
 | `projection/` | `progress.rs` (in-memory session/file progress), `preparing.rs`, `status.rs` (sync status queries), `logic.rs` (pure I/O-free helpers: snapshot throttling), `intent.rs`, `upload_processing.rs`, `tauri_bridge.rs` (OnceLock-based event dispatch to Tauri), `events.rs` (event name constants + payload structs) |
-| `fileops/` | `files/`, `folders.rs` (folder CRUD), `remote.rs`, `recent_uploads.rs` |
+| `fileops/` | `files/`, `folders.rs` (folder CRUD + remote origin classification), `remote.rs`, `recent_uploads.rs` |
 | `migrate/` | `migration.rs` (S3→HCFS: check, start, poll, `complete_migration_transition`), `relative_path_backfill*`, `folder_entries_backfill.rs`, `folder_entries_materialize.rs`, `folder_entries_reconcile.rs`, `user_stopped_*` |
 | `failure/` | `failure_*`, `error_notify.rs`, `credits_exhausted.rs` |
 | `shared/` | `mnemonic.rs`, `region.rs`, `chunk_reclaim.rs` |
@@ -27,6 +27,10 @@ The ~32 submodules are organized into six private sub-domain group directories, 
 - `asset_scope.rs` (asset-protocol scope), `add.rs` (add file/folder + batch + the upload byte/count walkers), `delete.rs`, `rename.rs`, `recent.rs` (recent files + the shared per-drive `synced_paths_*` reads), `dir_stats.rs` (cached recursive dir size/count), `listing.rs` (flat + grouped listing, owns `FileEntry`), `user_files.rs` (files page + recursive search + filter cascade, owns `UserFileEntry`), `resolve.rs` (path resolve + single-file `export_file`), `export_zip.rs` (store-only `export_folder_zip`).
 - `pathops.rs` is a **dependency-free leaf** holding the shared path helpers `ensure_within`/`derive_relative_name`/`copy_dir_recursive`, so the submodules form a DAG — it breaks the `add`↔`resolve` cycle.
 - **Every copy into the sync root goes via a hidden `.hippius-incoming-*` sibling, then `rename`.** Both `add_folder` (new dest) and `add_file`/`add_files`. The live watcher would otherwise hash a growing tree, and `fs::copy` onto an existing path truncates before it refills, so a direct write lets a scan see a file shorter than the synced copy. hcfs carried a guard for that and **removed it in #367** — it could not distinguish a stalled copy from a finished smaller edit, so it delayed every legitimate shrink by a cycle — and its accepted residual names this staging as the replacement. The sibling is in the same directory, so the `rename` is atomic rather than a copy, and hcfs-client skips `.*` names in `collect_files` while it grows. **Gap:** `add_folder` onto an EXISTING dest still merges in place through hcfs's own `copy_dir_recursive`, so that path is unstaged; closing it is an hcfs change.
+
+## Remote folder listing origin (H-077)
+
+`get_sync_folders_with_stats` (`folders.rs`) puts any server folder whose hash is not in local `sync_paths` into `remote`. `remove_drive` deletes the local row but does **not** unregister the server folder (that is Delete from Server), so the folder reappears stamped with THIS device's `device_name`. Classify that row `RemoteFolderOrigin::LocallyRemoved` via `classify_remote_origin(raw_device_name, get_device_name_internal())` — empty names fail closed to `OtherDevice`. The FE keys the "Not synced on this computer" vs "Sync from Other Devices" split on the tagged `origin` field and must not re-compare names.
 
 ## Remote browse and account-wide search
 
