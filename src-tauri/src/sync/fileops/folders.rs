@@ -728,14 +728,23 @@ mod tests {
     /// them under "removed from this computer".
     #[test]
     fn the_device_name_read_failure_fallback_is_unprovable() {
-        // `Result` in this module is the crate's single-parameter alias, so
-        // spell out std's to model the failed read.
-        let fallback = std::result::Result::<String, ()>::Err(()).unwrap_or_default();
-        assert!(fallback.is_empty(), "a failed read must not invent a name");
         assert_eq!(
-            classify_remote_origin("My Device", &fallback),
+            classify_remote_origin("My Device", &String::default()),
             RemoteFolderOrigin::OtherDevice,
             "an unread local name cannot prove this machine registered the folder",
+        );
+
+        // And the call site must actually reach that arm. A `String` literal in
+        // the fallback is the regression: any name it invents is a name some
+        // real device registered under, `"My Device"` most of all.
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/fileops/folders.rs")).expect("read folders.rs");
+        let call = src
+            .lines()
+            .find(|l| l.contains("let local_device_name = local_device_name."))
+            .expect("get_sync_folders_with_stats resolves local_device_name");
+        assert!(
+            call.contains("unwrap_or_default()"),
+            "the device-name fallback must be the empty string, not an invented name: {call}",
         );
     }
 
