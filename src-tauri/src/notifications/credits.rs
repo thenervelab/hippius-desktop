@@ -132,18 +132,22 @@ pub(crate) async fn check_low_credit_notification_inner(
     let owner = account_key(account_id);
     let (first_time, above_half) = read_flags(pool, &owner).await?;
 
-    // Credits >= 0.5: update flags, retire any live warning as *read*, and
-    // return no notification. Unread-clear (not `is_deleted = 1`) is load-bearing:
+    // Credits >= 0.5: update flags, retire any live warning as *read* on the
+    // crossing, and return no notification. Unread-clear (not `is_deleted = 1`) is load-bearing:
     // soft-delete stamps `last_deleted_low_credit_at` and starts the one-per-day
     // throttle, so a later dip today could not warn again.
     if credit_balance >= 0.5 {
         if first_time {
             set_first_time_seen(pool, &owner).await?;
         }
+        // Retire the warning on the low -> healthy CROSSING only. Running it on
+        // every healthy check would silently undo a user who reopened the
+        // warning from the bell ("Mark as unread") to come back to it, and
+        // would write on every route change for a perfectly healthy account.
         if !above_half {
             set_above_half(pool, &owner, true).await?;
+            mark_low_credit_warnings_read(pool, account_id).await?;
         }
-        mark_low_credit_warnings_read(pool, account_id).await?;
         return Ok(CreditNotificationCheck {
             should_notify: false,
             credit_balance: 0.0,
@@ -748,6 +752,108 @@ mod tests {
             !again.should_notify,
             "reading the warning while still low must not re-notify on the next check"
         );
+    }
+
+    // The other half of the `active_count > 0 && !above_half` relaxation: the
+    // dip after a top-up is let through the active-count guard, so the ONLY
+    // thing stopping it from firing again on the very next poll is the
+    // fall-through resetting `above_half` to false. Without that reset the
+    // user gets a fresh warning row on every route change.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dip_after_a_top_up_notifies_once_not_on_every_check() {
+        let (_dir, pool) = fresh_pool().await;
+        insert_low_credit(&pool, "addrA", 0, None).await;
+
+        check_low_credit_notification_inner(&pool, "addrA", ABOVE_HALF_PLANCK)
+            .await
+            .expect("top-up");
+
+        let dip = check_low_credit_notification_inner(&pool, "addrA", BELOW_HALF_PLANCK).await.expect("dip");
+        assert!(dip.should_notify, "the first dip after a top-up warns again");
+
+        let again = check_low_credit_notification_inner(&pool, "addrA", BELOW_HALF_PLANCK)
+            .await
+            .expect("still low");
+        assert!(
+            !again.should_notify,
+            "the dip must settle above_half back to false, or every later check raises another warning",
+        );
+    }
+
+    // `mark_low_credit_warnings_read` runs on EVERY check with a healthy
+    // balance, so a too-wide predicate silently marks the user's whole bell
+    // read. The "credits just landed" row sits next to the warning in that
+    // same bell — it is exactly what a widened UPDATE would swallow.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn top_up_only_retires_low_credit_warnings() {
+        let (_dir, pool) = fresh_pool().await;
+        insert_low_credit(&pool, "addrA", 0, None).await;
+        insert_notification(&pool, "addrA", "Credits", "CreditsAdded-42").await;
+        insert_notification(&pool, "addrA", "Files", "FileSyncComplete-7").await;
+
+        check_low_credit_notification_inner(&pool, "addrA", ABOVE_HALF_PLANCK)
+            .await
+            .expect("top-up");
+
+        for subtype in ["CreditsAdded-42", "FileSyncComplete-7"] {
+            assert_eq!(
+                unread_flag(&pool, "addrA", subtype).await,
+                1,
+                "{subtype} is not a low-credit warning and must stay unread after a top-up",
+            );
+        }
+    }
+
+    // "Mark as unread" is a real bell action (`mark_notification_unread`,
+    // wired to the notification context menu and detail view). Clearing on
+    // every healthy check — rather than on the low -> healthy crossing —
+    // silently undoes the user on their next route change.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_steady_healthy_balance_does_not_re_read_a_reopened_warning() {
+        let (_dir, pool) = fresh_pool().await;
+        insert_low_credit(&pool, "addrA", 0, None).await;
+
+        check_low_credit_notification_inner(&pool, "addrA", ABOVE_HALF_PLANCK)
+            .await
+            .expect("top-up");
+        assert_eq!(warning_unread_deleted(&pool, "addrA").await.0, 0, "the crossing retires the warning");
+
+        sqlx::query("UPDATE notifications SET is_unread = 1 WHERE user_address = 'addrA'")
+            .execute(&pool)
+            .await
+            .expect("user reopened the warning from the bell");
+
+        check_low_credit_notification_inner(&pool, "addrA", ABOVE_HALF_PLANCK)
+            .await
+            .expect("still healthy");
+        assert_eq!(
+            warning_unread_deleted(&pool, "addrA").await.0,
+            1,
+            "a steady healthy balance must leave the user's own unread state alone",
+        );
+    }
+
+    async fn insert_notification(pool: &sqlx::SqlitePool, user: &str, kind: &str, subtype: &str) {
+        sqlx::query(
+            "INSERT INTO notifications (user_address, notification_type, notification_subtype, is_deleted, creation_time) \
+             VALUES (?, ?, ?, 0, 1)",
+        )
+        .bind(user)
+        .bind(kind)
+        .bind(subtype)
+        .execute(pool)
+        .await
+        .expect("insert");
+    }
+
+    async fn unread_flag(pool: &sqlx::SqlitePool, user: &str, subtype: &str) -> i64 {
+        sqlx::query_as::<_, (i64,)>("SELECT is_unread FROM notifications WHERE user_address = ? AND notification_subtype = ?")
+            .bind(user)
+            .bind(subtype)
+            .fetch_one(pool)
+            .await
+            .expect("notification row")
+            .0
     }
 
     // -----------------------------------------------------------------------
