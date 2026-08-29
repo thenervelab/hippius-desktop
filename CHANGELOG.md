@@ -72,6 +72,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   widget, the tray icon and the tray panel showing a red "Failed" at 100%, even
   though every file you actually cared about had synced. Genuine failures still
   show as before.
+- **Closing the window on Linux and Windows now quits Hippius.** The app
+  no longer leaves a background process running after you click the window X.
 - **`--version` prints the version and exits.** Running Hippius with `--version`
   or `-V` no longer opens the full app.
 - **Adding a large folder no longer freezes the app.** Dropping a multi-gigabyte
