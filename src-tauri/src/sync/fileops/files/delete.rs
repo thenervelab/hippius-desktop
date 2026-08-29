@@ -90,39 +90,26 @@ pub async fn delete_files(
 
         let relative_name = derive_relative_name(&sync_path, file.source.as_deref(), &file.name);
 
-        let parent = Path::new(&sync_path);
-        let target = parent.join(&relative_name);
-        match ensure_within(parent, &target) {
-            Ok(resolved) => match remove_entry(&resolved).await {
-                Ok((kind, size_bytes)) => {
-                    // Listing cache keys use the DB sync path, not a
-                    // canonicalized target (`/var` vs `/private/var` on macOS).
-                    super::dir_stats::invalidate_dir_stats_after_delete(parent, &target);
-                    if kind == RemovedKind::Directory {
-                        dirs_removed_for.push(file.label.clone());
-                    }
-                    if let Some(lbl) = &file.label {
-                        state.sync.update_state(lbl, |st| {
-                            st.add_activity(SyncActivityItem {
-                                file_name: std::sync::Arc::from(relative_name.as_str()),
-                                action: SyncActivityAction::Deleted,
-                                timestamp: chrono::Utc::now().timestamp(),
-                                size_bytes,
-                                label: std::sync::Arc::from(lbl.as_str()),
-                            });
-                        });
-                    }
-                    deleted += 1;
+        match remove_and_invalidate(Path::new(&sync_path), &relative_name).await {
+            Ok((kind, size_bytes)) => {
+                if kind == RemovedKind::Directory {
+                    dirs_removed_for.push(file.label.clone());
                 }
-                Err(e) => {
-                    warn!(file = %file.name, error = %e, "Failed to delete file");
-                    failed.push(FileDeleteError {
-                        name: file.name.clone(),
-                        error: e.to_string(),
+                if let Some(lbl) = &file.label {
+                    state.sync.update_state(lbl, |st| {
+                        st.add_activity(SyncActivityItem {
+                            file_name: std::sync::Arc::from(relative_name.as_str()),
+                            action: SyncActivityAction::Deleted,
+                            timestamp: chrono::Utc::now().timestamp(),
+                            size_bytes,
+                            label: std::sync::Arc::from(lbl.as_str()),
+                        });
                     });
                 }
-            },
+                deleted += 1;
+            }
             Err(e) => {
+                warn!(file = %file.name, error = %e, "Failed to delete file");
                 failed.push(FileDeleteError {
                     name: file.name.clone(),
                     error: e.to_string(),
@@ -170,6 +157,27 @@ enum RemovedKind {
     File,
     /// Already gone — treated as success (delete is idempotent).
     Missing,
+}
+
+/// Resolve `relative_name` under `sync_root`, remove it, and drop the cached
+/// folder totals the removal makes stale.
+///
+/// The removal itself uses the CANONICALIZED path `ensure_within` returns —
+/// that is the containment check. The cache invalidation deliberately uses the
+/// unresolved `sync_root.join(relative_name)` instead: `list_sync_folder` keys
+/// the stats cache by the drive path exactly as stored in the DB, so on macOS
+/// the canonical `/private/var/…` form would miss every row a `/var/…` listing
+/// wrote and the folder size would stay stale anyway.
+///
+/// Keeping resolve + remove + invalidate in one function is what makes the
+/// wiring testable; `delete_files` itself needs a live `AppState`.
+async fn remove_and_invalidate(sync_root: &Path, relative_name: &str) -> Result<(RemovedKind, u64)> {
+    let target = sync_root.join(relative_name);
+    let resolved = ensure_within(sync_root, &target)?;
+    let removed = remove_entry(&resolved).await.map_err(crate::error::AppError::Io)?;
+
+    super::dir_stats::invalidate_dir_stats_for_change(sync_root, &target);
+    Ok(removed)
 }
 
 /// Remove one resolved target, reporting what it was and, for a file, how many
@@ -289,15 +297,71 @@ mod tests {
         );
     }
 
-    /// H-068: a parent directory's mtime does not change when a descendant
-    /// in a subdirectory is deleted, so `delete_files` must drop dir_stats
-    /// for the deleted path and every ancestor up to the sync root.
-    #[test]
-    fn delete_files_invalidates_dir_stats_after_a_successful_remove() {
-        let src = include_str!("delete.rs");
-        assert!(
-            src.contains("invalidate_dir_stats_after_delete"),
-            "delete_files must invalidate dir_stats after a successful remove; parent mtime is not a cache key for nested deletes"
-        );
+    /// H-068. A parent directory's mtime does not move when a descendant two
+    /// levels down is deleted, so the drive root keeps serving its pre-delete
+    /// total until the delete path drops the ancestor rows itself.
+    ///
+    /// The assertion is on the SIZE the next listing would report, not on the
+    /// presence of a call: reverting the invalidation, or narrowing it to the
+    /// immediate parent, both leave this at the stale 9 B.
+    #[tokio::test]
+    async fn deleting_a_file_two_levels_down_refreshes_the_root_total() {
+        let _cache_guard = super::super::dir_stats::CACHE_TEST_LOCK.lock().await;
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let root = tmp.path();
+        let deep = root.join("sub").join("deep");
+        std::fs::create_dir_all(&deep).expect("mkdir deep");
+        std::fs::write(deep.join("a.txt"), b"123456789").expect("write 9 bytes");
+
+        let (size, _) = super::super::dir_stats::dir_stats_recursive(root).await;
+        assert_eq!(size, 9, "warm the cache for root, root/sub and root/sub/deep");
+
+        remove_and_invalidate(root, "sub/deep/a.txt").await.expect("delete");
+
+        // Unlinking `root/sub/deep/a.txt` stamps `root/sub/deep` and nothing
+        // above it, so the warmed row for `root` still validates by mtime.
+        // Only the explicit ancestor drop can make this re-walk.
+        let (size, count) = super::super::dir_stats::dir_stats_recursive(root).await;
+        assert_eq!((size, count), (0, 0), "the root total must not survive a nested delete");
+    }
+
+    /// The invalidation must key off the path the LISTING builds (drive path
+    /// from the DB + relative name), not the canonicalized target used for the
+    /// removal. On macOS a temp dir lives under the `/var` -> `/private/var`
+    /// symlink, so canonicalizing would write `/private/var/…` keys that no
+    /// `/var/…` listing ever reads — the folder size would stay stale.
+    #[tokio::test]
+    async fn invalidation_uses_the_listing_path_not_the_canonical_one() {
+        let _cache_guard = super::super::dir_stats::CACHE_TEST_LOCK.lock().await;
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        // The uncanonicalized path is what `get_all_sync_paths` hands the
+        // delete loop; `dir_stats_recursive` is called with the same form.
+        let root = tmp.path();
+        let sub = root.join("sub");
+        std::fs::create_dir(&sub).expect("mkdir sub");
+        std::fs::write(sub.join("a.txt"), b"12345").expect("write 5 bytes");
+        std::fs::write(sub.join("b.txt"), b"67").expect("write 2 bytes");
+
+        let (size, _) = super::super::dir_stats::dir_stats_recursive(root).await;
+        assert_eq!(size, 7);
+
+        remove_and_invalidate(root, "sub/a.txt").await.expect("delete");
+
+        let (size, count) = super::super::dir_stats::dir_stats_recursive(root).await;
+        assert_eq!((size, count), (2, 1), "the listing-form key must be the one that was dropped");
+    }
+
+    /// Containment is still enforced on the way in, and a rejected path must
+    /// not be reported as a delete.
+    #[tokio::test]
+    async fn remove_and_invalidate_rejects_an_escaping_relative_name() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let root = tmp.path().join("drive");
+        std::fs::create_dir(&root).expect("mkdir drive");
+        std::fs::write(tmp.path().join("outside.txt"), b"x").expect("write");
+
+        let err = remove_and_invalidate(&root, "../outside.txt").await.expect_err("must reject");
+        assert!(matches!(err, crate::error::AppError::Validation(_)), "got {err:?}");
+        assert!(tmp.path().join("outside.txt").exists(), "the escaping target must survive");
     }
 }

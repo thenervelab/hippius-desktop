@@ -67,7 +67,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
-- **Folder size updates as soon as you delete a file inside it.**
+- **Folder sizes stay correct as you work.** A folder's size and file count now
+  update right away when you delete or add something inside it, or when a file
+  arrives from another device — previously they could keep showing the old
+  numbers until the app was restarted.
 - **`--version` prints the version and exits.** Running Hippius with `--version`
   or `-V` no longer opens the full app.
 - **Adding a large folder no longer freezes the app.** Dropping a multi-gigabyte
