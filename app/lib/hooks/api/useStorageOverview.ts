@@ -40,6 +40,14 @@ export interface StorageOverview {
    * from `usedBytes === 0` — that is also the true-empty state.
    */
   usedPending: boolean;
+  /**
+   * Used / total / free labels authored in Rust so they cannot disagree
+   * about units or rounding. Render these; do not `formatBytes` the raw
+   * counts (that is H-109: "5.03 TB used" next to "5 TB free").
+   */
+  usedDisplay: string;
+  totalDisplay: string;
+  freeDisplay: string;
 }
 
 /**

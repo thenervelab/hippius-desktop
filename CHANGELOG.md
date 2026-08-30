@@ -75,9 +75,12 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **A folder you remove from this computer is not labelled with this
   computer's name.** It stays under "Not synced on this computer" without
   repeating the device line.
-- **A folder's size and file count now leave out the files you excluded.** The
-  folder's row kept counting them while the folder itself correctly hid them, so
-  the row and the view disagreed until the app was restarted.
+- **Home storage used, total, and free now add up.** Remaining space uses
+  the same unit and decimals as the total, so a card no longer reads
+  “31.91 GB of 5.03 TB used” next to “5 TB free”.
+- **A folder's size and file count now leave out the files you excluded.**
+  Excluded files still show in the folder (they are not uploaded); the row
+  numbers match File No, which also skips them.
 
 - **The low-credits warning clears after you add credits.** The bell no longer
   showed an unread "you're running low on credits" notice next to the one saying
