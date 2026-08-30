@@ -1,8 +1,12 @@
 import React from "react";
 import { Icons } from "@/components/ui";
 import { cn } from "@/lib/utils";
+import type { ActiveFilter } from "@/lib/utils/fileFilterUtils";
 
-type FilterType = "fileExtension" | "dateRange" | "fileSize";
+// The chips render whatever `generateActiveFilters` produces, so the shape
+// is owned there. A second local copy silently drifted out of date when a
+// new filter kind was added and only surfaced as a typecheck failure.
+export type { ActiveFilter };
 
 const CHIP_CLASSES = cn(
   "relative inline-flex items-center gap-[4px] px-[6px] py-[4px]",
@@ -15,13 +19,6 @@ const CHIP_CLASSES = cn(
   "dark:shadow-[0px_0px_0px_1px_rgba(0,0,0,1)]",
   "dark:text-grey-light-300",
 );
-
-export interface ActiveFilter {
-  type: FilterType;
-  value: string;
-  label: string;
-  displayValue: string;
-}
 
 interface FilterChipsProps {
   filters: ActiveFilter[];

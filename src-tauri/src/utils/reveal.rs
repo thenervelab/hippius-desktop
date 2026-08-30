@@ -48,7 +48,7 @@ fn linux_xdg_open(path: &Path) -> Result<()> {
     // older XFCE `xdg-open` treats it as the file to open — a silent no-op
     // (H-085 still failing on 0.6.0-beta.5).
     let target = linux_open_target(path);
-    let child = match std::process::Command::new("xdg-open")
+    let mut child = match std::process::Command::new("xdg-open")
         .arg(target)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
