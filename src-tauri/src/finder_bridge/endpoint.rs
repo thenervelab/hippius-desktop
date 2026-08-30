@@ -14,9 +14,17 @@
 //!   on EVERY launch, with no entitlement to opt out of the service. The
 //!   sandboxed extension reaches this path through the SBPL exceptions in
 //!   `macos/FinderSync.entitlements` instead, which is what Google Drive's own
-//!   Finder extension does — it claims no App Group at all. This path MUST stay
-//!   byte-identical to `HippiusFinderSync.socketPath()` on the Swift side;
-//!   pinned by `tests/finder_socket_pins.rs`.
+//!   Finder extension does — it claims no App Group at all. The `.hippius/`
+//!   suffix MUST stay identical to `HippiusFinderSync.socketPath()` on the
+//!   Swift side; pinned by `tests/finder_socket_pins.rs`.
+//!
+//!   The two sides resolve the HOME portion differently and the pin cannot
+//!   cover that: `dirs::home_dir()` prefers `$HOME`, while the extension must
+//!   read `getpwuid` (`NSHomeDirectory()` is container-redirected inside an
+//!   .appex). They agree for any normally launched app, since launchd sets
+//!   `$HOME` from the password database — but a shell that overrides `$HOME`
+//!   and then runs `pnpm tauri:dev` binds a socket the extension will not dial.
+//!   Unset `$HOME` in that shell if the Finder menu goes quiet in dev.
 //! - **Linux (and other unixes):** a per-user socket under `$XDG_RUNTIME_DIR`
 //!   (tmpfs, `0700`, cleaned on logout), falling back to `~/.hippius/`.
 //! - **Windows:** a named pipe `\\.\pipe\hippius-finder-<user>` (the pipe
@@ -39,7 +47,7 @@ const SOCKET_FILE: &str = "finder.sock";
 /// transport is irrefutable per target rather than a fallible runtime check.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Endpoint {
-    /// A Unix-domain socket path (macOS App Group container / Linux XDG dir).
+    /// A Unix-domain socket path (macOS `~/.hippius` / Linux XDG dir).
     #[cfg(unix)]
     Unix(PathBuf),
     /// A Windows named-pipe name (`\\.\pipe\…`).

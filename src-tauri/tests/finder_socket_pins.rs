@@ -115,10 +115,26 @@ fn the_extension_can_reach_the_socket_from_its_sandbox() {
 
     let escaped_suffix = SOCKET_SUFFIX.replace('.', r"\.");
     for operation in ["file-read* file-write*", "network-outbound"] {
-        let rule = format!("(allow {operation} (regex #\"^/Users/[^/]+/{escaped_suffix}$\"))");
+        let rule = format!("(allow {operation} (regex #\"^/.*/{escaped_suffix}$\"))");
         assert!(
             entitlements.contains(&rule),
             "macos/FinderSync.entitlements is missing the SBPL rule `{rule}`"
         );
     }
+}
+
+/// The home portion must stay home-agnostic. Anchoring it under `/Users` denies
+/// every account whose real home is elsewhere (network/mobile homes, a
+/// relocated `NFSHomeDirectory`, the Data-volume firmlink form) — and denies it
+/// silently, since the extension still loads and only `connect(2)` fails.
+#[test]
+fn the_socket_rules_do_not_assume_a_home_under_users() {
+    let entitlements = read("../macos/FinderSync.entitlements");
+    let rules: String = entitlements.lines().filter(|line| line.contains("(allow ")).collect();
+
+    assert!(
+        !rules.contains("/Users/"),
+        "the SBPL rules hardcode /Users/, which locks out accounts whose home is mounted \
+         elsewhere; use the home-agnostic `^/.*/` form"
+    );
 }

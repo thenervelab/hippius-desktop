@@ -95,21 +95,36 @@ check_finder_extension() {
 
   # Signed with the app's non-sandboxed entitlements the extension loads on no
   # Mac at all, which is the failure Tauri's own nested re-signing would cause.
-  local entitlements
+  local entitlements app_entitlements missing_rule=""
   entitlements="$(codesign -d --entitlements :- "${appex}" 2>/dev/null | tr -d '\000')"
+  app_entitlements="$(codesign -d --entitlements :- "${app}" 2>/dev/null | tr -d '\000')"
+
+  # BOTH socket rules, checked separately: a Unix-domain socket needs the file
+  # node AND the socket operation, so losing one leaves an extension that loads,
+  # looks healthy, and can never connect(2). A shared-substring test would pass
+  # on whichever rule survived. The rules are regexes, so the signed blob holds
+  # the escaped `\.hippius/finder\.sock` — match the operation names instead.
+  local rule
+  for rule in "file-read" "network-outbound"; do
+    if [[ "${entitlements}" != *"${rule}"*"hippius/finder"* ]]; then
+      missing_rule="${rule}"
+    fi
+  done
+
   if [[ "${entitlements}" != *"com.apple.security.app-sandbox"* ]]; then
     fail "${label}: the extension is not sandboxed; macOS will refuse to load it"
-  elif [[ "${entitlements}" != *"hippius/finder"* ]]; then
-    # Loads fine without them, then fails every share click with no error. The
-    # SBPL rules are regexes, so the signed blob carries the escaped
-    # `\.hippius/finder\.sock` — match a fragment, not the literal path.
-    fail "${label}: the extension lacks the socket sandbox exceptions; it cannot reach the app"
+  elif [[ -n "${missing_rule}" ]]; then
+    fail "${label}: the extension lacks its '${missing_rule}' socket sandbox exception; it cannot reach the app"
   elif [[ "${entitlements}" == *"application-groups"* ]]; then
     # The regression this release must never ship again: a non-sandboxed app
     # reaching a Group Container costs a TCC consent prompt on every launch.
     fail "${label}: the extension claims an App Group again; the socket must stay in ~/.hippius"
+  elif [[ "${app_entitlements}" == *"application-groups"* ]]; then
+    # The app is the non-sandboxed half — its Group Container access is what
+    # raised the prompt, so it is the more important of the two to check.
+    fail "${label}: the APP claims an App Group again; that is what prompts on every launch"
   else
-    ok "${label}: extension entitlements carry the sandbox + the socket exceptions, no App Group"
+    ok "${label}: extension entitlements carry the sandbox + both socket exceptions, no App Group"
   fi
 }
 

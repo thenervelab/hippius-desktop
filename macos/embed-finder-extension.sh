@@ -40,18 +40,31 @@ codesign --force --options runtime --timestamp \
 #    share" — a failure with no error anywhere.
 codesign --verify --deep --strict --verbose=2 "${APP_PATH}"
 # `:-` dumps the raw entitlements plist to stdout; a plain `-` prints the
-# abbreviated human-readable form instead. Match on `hippius/finder` rather than
-# the full socket path: the SBPL rules are regexes, so the signed blob carries
-# the escaped `\.hippius/finder\.sock`, which no literal path match can find.
+# abbreviated human-readable form instead.
 ext_signed="$(codesign -d --entitlements :- "${plugins_dir}/HippiusFinder.appex" 2>/dev/null | tr -d '\000')"
-if [[ "${ext_signed}" != *"hippius/finder"* ]]; then
-  echo "ERROR: socket sandbox exception missing from the signed extension" >&2
-  exit 1
-fi
-# The app group is what raised a TCC prompt on every launch; it must not return
-# through a stray edit to either entitlements file.
+app_signed="$(codesign -d --entitlements :- "${APP_PATH}" 2>/dev/null | tr -d '\000')"
+
+# BOTH rules, checked separately. A Unix-domain socket needs the file node and
+# the socket operation, so losing just one leaves an extension that loads, looks
+# healthy, and can never connect(2). Testing a shared substring would pass on
+# the surviving rule. (The rules are regexes, so the signed blob carries the
+# escaped `\.hippius/finder\.sock` — match the operation names instead.)
+for rule in "file-read" "network-outbound"; do
+  if [[ "${ext_signed}" != *"${rule}"*"hippius/finder"* ]]; then
+    echo "ERROR: the signed extension is missing its '${rule}' socket sandbox exception" >&2
+    exit 1
+  fi
+done
+
+# The app group is what raised a TCC prompt on every launch. It must not return
+# through either entitlements file — and it is the NON-sandboxed app whose
+# Group Container access caused the prompt, so the app is checked too.
 if [[ "${ext_signed}" == *"application-groups"* ]]; then
   echo "ERROR: the extension claims an App Group again; see macos/FinderSync.entitlements" >&2
+  exit 1
+fi
+if [[ "${app_signed}" == *"application-groups"* ]]; then
+  echo "ERROR: the app claims an App Group again; see src-tauri/entitlements.plist" >&2
   exit 1
 fi
 

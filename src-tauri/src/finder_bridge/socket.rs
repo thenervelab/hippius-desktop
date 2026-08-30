@@ -157,7 +157,14 @@ fn spawn_accept_loop(
     // readable. On macOS/BSD `connect(2)` is gated by WRITE permission on the
     // socket node, so tightening to 0600 is what actually scopes the bridge to
     // this user — the extension runs as the same uid.
-    std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600))?;
+    //
+    // Warn-only, matching the `~/.hippius` and DB-file chmods in `main.rs`: a
+    // successful `bind` is all the bridge needs, so a hardening chmod that
+    // fails on a no-POSIX-perms $HOME (network/FAT mounts) must not cost the
+    // user the whole Finder integration.
+    if let Err(e) = std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600)) {
+        warn!(socket = %socket_path.display(), error = %e, "failed to chmod 0600 on the bridge socket (continuing)");
+    }
     tokio::spawn(accept_loop_unix(listener, outgoing, incoming_tx, roots, cancel, socket_path));
     Ok(())
 }

@@ -68,7 +68,7 @@ appex="$(macos/build-finder-appex.sh)"
 
 echo "==> [2/4] Build the debug app bundle"
 app="${repo_root}/src-tauri/target/debug/bundle/macos/Hippius.app"
-# The bundle is signed with the identity above so the App Group survives. The
+# The bundle is signed with the identity above so the sandbox exceptions survive. The
 # trailing "TAURI_SIGNING_PRIVATE_KEY" updater error is HARMLESS — the .app is
 # built + signed before it fires — so success is judged by the .app existing,
 # not by tauri's exit code.
