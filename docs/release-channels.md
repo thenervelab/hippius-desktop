@@ -215,8 +215,10 @@ Deb/Rpm before `download_and_install` and returns copy naming the channel's
 release page. The dialog's CTA is **Download**, not Install. An AppImage still
 self-updates — detection is `bundle_type()`, never `target_os`. The
 assemble job drops `linux-x86_64` when that key points at a `.deb` (the `-deb`
-key stays for apt). `install_failure` classifies Io PermissionDenied so EACCES
-is never the user-facing error. Pinned by `tests/updater_install_paths.rs`
+key stays for apt). `install_failure` never forwards plugin Display; Deb/Rpm
+failures are labelled as an unsupported package, while Io PermissionDenied
+(a declined macOS admin prompt uses that kind) stays a generic install
+failure plus the download hint. Pinned by `tests/updater_install_paths.rs`
 and `linux_updater_target_must_not_be_a_deb`.
 
 The check itself runs in **Rust** (`src-tauri/src/updates.rs`), not through

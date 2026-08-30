@@ -102,6 +102,18 @@ describe("getChannelView", () => {
     expect(view.description).toMatch(/download the \.deb/i);
     expect(view.description).not.toMatch(/restart/i);
   });
+
+  it("does not send a blocked Deb/Rpm switch to GitHub Releases", () => {
+    const view = getChannelView(
+      status({
+        installInPlace: false,
+        blockedReason: "This build has already saved data…",
+      }),
+    );
+
+    expect(view.canSwitch).toBe(false);
+    expect(view.confirmText).not.toBe("Open GitHub Releases");
+  });
 });
 
 describe("channelLabel", () => {
@@ -138,6 +150,18 @@ describe("wiring", () => {
     expect(card).toContain("openChannelDialog");
     // Hidden on the internal lane, which cannot switch in either direction.
     expect(card).toContain('channel !== "staging"');
+  });
+
+  it("does not open GitHub Releases when the epoch guard blocked the switch", () => {
+    const dialog = read(
+      "app",
+      "components",
+      "updater",
+      "ReleaseChannelDialog.tsx",
+    );
+
+    expect(dialog).toContain("!view.canSwitch");
+    expect(dialog).toContain("confirmDisabled");
   });
 
   it("registers the settings section", () => {

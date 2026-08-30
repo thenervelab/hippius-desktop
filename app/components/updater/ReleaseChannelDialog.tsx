@@ -66,6 +66,9 @@ export default function ReleaseChannelDialog() {
 
   const handleConfirm = async () => {
     if (!status.target) return;
+    // Epoch-blocked: do not open the release page. That skip is what
+    // would install a build `switch_release_channel` just refused.
+    if (!view.canSwitch) return;
 
     if (status.installInPlace === false) {
       try {
@@ -129,6 +132,7 @@ export default function ReleaseChannelDialog() {
       confirmText={view.confirmText}
       cancelText="Cancel"
       isLoading={switching}
+      confirmDisabled={!view.canSwitch}
       onConfirm={handleConfirm}
     />
   );

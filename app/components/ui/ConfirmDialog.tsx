@@ -26,6 +26,8 @@ interface BaseProps {
   cancelText?: string;
   onConfirm: () => void | Promise<void>;
   isLoading?: boolean;
+  /** When true the confirm button is shown but cannot fire `onConfirm`. */
+  confirmDisabled?: boolean;
 }
 
 interface AlertModeProps extends BaseProps {
@@ -83,11 +85,13 @@ const AlertModeDialog: React.FC<AlertModeProps> = ({
   onConfirm,
   variant = "warning",
   isLoading = false,
+  confirmDisabled = false,
 }) => {
   const [confirming, setConfirming] = useState(false);
   const busy = isLoading || confirming;
 
   const handleConfirm = async () => {
+    if (confirmDisabled) return;
     setConfirming(true);
     try {
       await onConfirm();
@@ -143,7 +147,7 @@ const AlertModeDialog: React.FC<AlertModeProps> = ({
           )}
           onClick={handleConfirm}
           loading={busy}
-          disabled={busy}
+          disabled={busy || confirmDisabled}
         >
           {confirmText}
         </Button>

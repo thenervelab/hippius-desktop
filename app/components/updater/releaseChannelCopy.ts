@@ -60,11 +60,15 @@ function withVersion(base: string, status: ChannelStatus): string {
 export function getChannelView(status: ChannelStatus): ChannelView {
   const currentLabel = CHANNEL_LABELS[status.current];
   const canSwitch = status.target !== null && status.blockedReason === null;
-  const confirmText = status.installInPlace === false
-    ? "Open GitHub Releases"
-    : status.current === "beta"
-      ? "Leave Beta"
-      : "Switch to Beta";
+  // A blocked switch must not become "Open GitHub Releases": that path
+  // skips `switch_release_channel` and would install a build the epoch
+  // guard just refused.
+  const confirmText =
+    canSwitch && status.installInPlace === false
+      ? "Open GitHub Releases"
+      : status.current === "beta"
+        ? "Leave Beta"
+        : "Switch to Beta";
 
   if (status.current === "beta") {
     return {

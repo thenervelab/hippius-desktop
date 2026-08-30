@@ -303,17 +303,13 @@ fn linux_x86_64_url_is_deb_payload(platforms: &serde_json::Value) -> bool {
         .is_some_and(url_names_deb_payload)
 }
 
-/// True when the plugin failed because this package cannot be written as the
-/// current user — EACCES, or an explicit deb/rpm install failure. The Display
-/// of these is diagnostics (`Permission denied (os error 13)`).
+/// True when the plugin failed because this is a `.deb` / `.rpm` it cannot
+/// apply as the current user. Io PermissionDenied is NOT this: macOS returns
+/// that kind when the AppleScript admin move is declined, and AppImage
+/// replace can EACCES a non-writable file — those bundles still support
+/// in-place install.
 fn is_privileged_package_failure(err: &tauri_plugin_updater::Error) -> bool {
     use tauri_plugin_updater::Error as UpdaterError;
-
-    if let UpdaterError::Io(io) = err
-        && io.kind() == std::io::ErrorKind::PermissionDenied
-    {
-        return true;
-    }
 
     matches!(err, UpdaterError::DebInstallFailed | UpdaterError::PackageInstallFailed)
 }
@@ -913,6 +909,12 @@ mod tests {
     /// QA log line: `err=Permission denied (os error 13)`. That Display must
     /// not be the user-facing error — not as the whole message, and not as a
     /// substring of the Validation copy.
+    ///
+    /// Io PermissionDenied is also what macOS returns when the admin move is
+    /// declined. Do not label that as "this package cannot be updated from
+    /// inside the app" — Deb/Rpm never reach `install_failure` (they refuse
+    /// first); remaining EACCES is a failed in-place install, not an
+    /// unsupported package type.
     #[test]
     fn permission_denied_is_not_the_user_facing_error() {
         let raw = "Permission denied (os error 13)";
@@ -928,6 +930,22 @@ mod tests {
         assert!(!message.contains(raw) && !message.contains("os error 13"), "raw EACCES leaked: {message}");
         assert!(!message.to_ascii_lowercase().contains("permission denied"), "{message}");
         assert!(message.contains(release_page_url(ReleaseChannel::Beta)), "{message}");
+        assert!(
+            message.starts_with("Could not install the update."),
+            "a declined macOS admin prompt must not read as an unsupported package: {message}"
+        );
+        assert!(!message.contains("cannot be updated from inside the app"), "{message}");
+    }
+
+    /// Deb/Rpm plugin failures (if they still reach install_failure) keep the
+    /// package-type copy. Io PermissionDenied above must not.
+    #[test]
+    fn a_deb_install_failure_names_the_package_type() {
+        let failure = install_failure(ReleaseChannel::Beta, &tauri_plugin_updater::Error::PackageInstallFailed);
+        let json = serde_json::to_value(&failure).expect("serialize");
+        let message = json["message"].as_str().expect("message is a string");
+
         assert!(message.contains("cannot be updated from inside the app"), "{message}");
+        assert!(message.contains(release_page_url(ReleaseChannel::Beta)), "{message}");
     }
 }
