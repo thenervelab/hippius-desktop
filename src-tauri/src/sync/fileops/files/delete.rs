@@ -313,7 +313,7 @@ mod tests {
         std::fs::create_dir_all(&deep).expect("mkdir deep");
         std::fs::write(deep.join("a.txt"), b"123456789").expect("write 9 bytes");
 
-        let (size, _) = super::super::dir_stats::dir_stats_recursive(root).await;
+        let (size, _) = super::super::dir_stats::dir_stats_recursive(root, None).await;
         assert_eq!(size, 9, "warm the cache for root, root/sub and root/sub/deep");
 
         remove_and_invalidate(root, "sub/deep/a.txt").await.expect("delete");
@@ -321,7 +321,7 @@ mod tests {
         // Unlinking `root/sub/deep/a.txt` stamps `root/sub/deep` and nothing
         // above it, so the warmed row for `root` still validates by mtime.
         // Only the explicit ancestor drop can make this re-walk.
-        let (size, count) = super::super::dir_stats::dir_stats_recursive(root).await;
+        let (size, count) = super::super::dir_stats::dir_stats_recursive(root, None).await;
         assert_eq!((size, count), (0, 0), "the root total must not survive a nested delete");
     }
 
@@ -342,12 +342,12 @@ mod tests {
         std::fs::write(sub.join("a.txt"), b"12345").expect("write 5 bytes");
         std::fs::write(sub.join("b.txt"), b"67").expect("write 2 bytes");
 
-        let (size, _) = super::super::dir_stats::dir_stats_recursive(root).await;
+        let (size, _) = super::super::dir_stats::dir_stats_recursive(root, None).await;
         assert_eq!(size, 7);
 
         remove_and_invalidate(root, "sub/a.txt").await.expect("delete");
 
-        let (size, count) = super::super::dir_stats::dir_stats_recursive(root).await;
+        let (size, count) = super::super::dir_stats::dir_stats_recursive(root, None).await;
         assert_eq!((size, count), (2, 1), "the listing-form key must be the one that was dropped");
     }
 

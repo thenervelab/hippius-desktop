@@ -171,10 +171,25 @@ async fn list_sync_folder_inner_with(
             }
         };
 
-        let (size, file_count) = if is_folder {
-            dir_stats_recursive(&target.join(&name)).await
-        } else {
+        // A folder row's totals must count what Drive shows inside it, so the
+        // walk applies the same rules that tagged the rows above (H-110).
+        // `base`, not `target`: the patterns are drive-relative.
+        //
+        // An excluded folder gets no walk at all. Every consumer drops the
+        // row (`list_sync_folder_grouped_inner` filters `"excluded"`, and so
+        // does `is_counted_for_label_stats`), so walking it spends a full
+        // recursive traversal of the one tree the rule exists to keep out —
+        // `node_modules/` — on a number nothing renders.
+        let (size, file_count) = if !is_folder {
             (meta.len(), 0)
+        } else if is_excluded {
+            (0, 0)
+        } else {
+            let excludes = super::dir_stats::DirStatsExcludes {
+                root: &base,
+                patterns: &excluded_patterns,
+            };
+            dir_stats_recursive(&target.join(&name), Some(&excludes)).await
         };
 
         entries.push(FileEntry {

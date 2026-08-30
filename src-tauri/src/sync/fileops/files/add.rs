@@ -1095,7 +1095,7 @@ mod tests {
         tokio::fs::create_dir(&sub).await.unwrap();
         tokio::fs::write(sub.join("a.txt"), b"12345").await.unwrap();
 
-        let (size, _) = super::super::dir_stats::dir_stats_recursive(root).await;
+        let (size, _) = super::super::dir_stats::dir_stats_recursive(root, None).await;
         assert_eq!(size, 5, "warm the cache for root and root/sub");
 
         let sync_path = root.to_string_lossy().to_string();
@@ -1103,7 +1103,7 @@ mod tests {
         let (listing_root, dest) = listing_add_paths(&sync_path, Some("sub"));
         invalidate_dir_stats_for_change(&listing_root, &dest.join("b.txt"));
 
-        let (size, count) = super::super::dir_stats::dir_stats_recursive(root).await;
+        let (size, count) = super::super::dir_stats::dir_stats_recursive(root, None).await;
         assert_eq!((size, count), (9, 2), "the root total must pick up a file added under sub");
     }
 

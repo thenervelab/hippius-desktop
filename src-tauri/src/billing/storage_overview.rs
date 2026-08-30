@@ -144,10 +144,20 @@ fn used_pending(indexer_bytes: u64, local_bytes: u64) -> bool {
 /// Short-circuits on the first non-zero size: the flag only needs `> 0`.
 /// Hidden (dot-prefixed) names are skipped by the same walk the Files
 /// header uses, so 46 B vs 0 B cannot disagree about what counts.
+///
+/// Walked with NO exclude rules, deliberately for now: this probe has no
+/// drive labels to resolve patterns from. The dir-stats cache keys on the
+/// ruleset AND holds one entry per ruleset, so this walk neither serves the
+/// listing's numbers nor evicts them — see `dir_stats::DirStatsKey`, and do
+/// not "simplify" that key back to the path alone: a single slot per
+/// directory would make this probe and the listing overwrite each other on
+/// every refresh. KNOWN GAP: a drive whose only un-uploaded bytes are
+/// excluded reads as "local data the indexer has not caught up with",
+/// pinning the card on "Updating…" for something that will never upload.
 async fn local_bytes_for_paths(paths: &[std::path::PathBuf]) -> u64 {
     let mut total = 0u64;
     for path in paths {
-        let (size, _) = crate::sync::files::dir_stats_recursive(path).await;
+        let (size, _) = crate::sync::files::dir_stats_recursive(path, None).await;
         total = total.saturating_add(size);
         if total > 0 {
             return total;

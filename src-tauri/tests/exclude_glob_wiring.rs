@@ -61,6 +61,32 @@ fn listing_and_user_files_use_the_exclude_rules_matcher() {
     );
 }
 
+/// A folder row's totals must be walked under the drive's patterns, against
+/// the DRIVE root (`base`) — the listing tags rows with drive-relative paths,
+/// so relativizing against the walked subfolder would stop matching any
+/// pattern that names a folder. And an already-excluded folder must not be
+/// walked at all: every consumer drops the row, so the walk is a full
+/// traversal of the tree the rule exists to keep out. Neither is reachable
+/// from a unit test — `list_sync_folder_inner_with` needs an `AppState`.
+#[test]
+fn folder_totals_are_walked_under_the_drive_patterns_and_skip_excluded_folders() {
+    let listing = read_src("sync/fileops/files/listing.rs");
+    let body = fn_body(&listing, "async fn list_sync_folder_inner_with(");
+
+    assert!(
+        body.contains("DirStatsExcludes"),
+        "folder rows must pass the drive's exclude patterns into the stats walk, or the row counts files the view hides"
+    );
+    assert!(
+        body.contains("root: &base"),
+        "the stats walk must relativize against the DRIVE root, not the walked subfolder"
+    );
+    assert!(
+        body.contains("} else if is_excluded {"),
+        "an excluded folder must skip the stats walk — every consumer drops the row"
+    );
+}
+
 /// add/remove_exclude_pattern must kick a sync the same way apply_sync_selection
 /// does, or Drive stays Pending after the user clears a pattern.
 #[test]
