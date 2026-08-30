@@ -2,7 +2,7 @@
 //! cascade. Owns `UserFileEntry`, `FileFilterCriteria`, and per-label stats.
 
 use super::listing::list_sync_folder;
-use super::pathops::ensure_within;
+use super::pathops::{ensure_within, is_engine_hidden_name};
 use super::synced_state::synced_paths_and_excludes_for_label;
 use crate::error::Result;
 use chrono::Datelike;
@@ -367,9 +367,9 @@ pub async fn get_user_files(
 /// `prefix` is the rel-path of the directory we're descending into
 /// (`""` for the drive root, `"sub"` for a one-level descent, etc.).
 /// Hidden files (`.`-prefixed) and failed-download / encrypted-name
-/// stubs are skipped to match `list_sync_folder_inner`'s rules, as are
-/// paths matching `exclude_rules` (both the file and — pruned whole —
-/// the directory forms), so the walk sees what the engine syncs.
+/// stubs are skipped to match `list_sync_folder_inner`'s rules. Excluded
+/// *folders* are pruned whole; excluded *files* stay as `excluded` rows
+/// (H-045). The engine never uploads UTF-8 hidden names (H-063).
 fn walk_disk_files_std(
     base: &Path,
     rel_prefix: &str,
@@ -390,10 +390,11 @@ fn walk_disk_files_std(
     };
 
     for entry in dir.flatten() {
-        let name = entry.file_name().to_string_lossy().to_string();
-        if name.starts_with('.') {
+        let os_name = entry.file_name();
+        if is_engine_hidden_name(&os_name) {
             continue;
         }
+        let name = os_name.to_string_lossy().to_string();
         let Ok(meta) = entry.metadata() else {
             continue;
         };

@@ -1,5 +1,6 @@
 //! Cached recursive directory size/file-count stats for the folder listing.
 
+use super::pathops::is_engine_hidden_name;
 use hcfs_client::drive::ExcludeRules;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -366,7 +367,7 @@ fn walk_dir_std(
     };
     for entry in dir.flatten() {
         let name = entry.file_name();
-        if name.to_string_lossy().starts_with('.') {
+        if is_engine_hidden_name(&name) {
             continue;
         }
         let Ok(meta) = entry.metadata() else {

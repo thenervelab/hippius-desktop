@@ -634,3 +634,42 @@ async fn clearing_the_pattern_restores_the_hidden_files() {
     );
     assert!(names.contains(&"notes.txt"), "{names:?}");
 }
+
+/// H-063: UTF-8 hidden names (`.env.qa`, `.hidden`) stay off Drive because
+/// the engine never uploads them. Listing one would pin it Pending forever.
+/// File No matches the visible rows (H-082), not disk.
+///
+/// A skip toast is frontend — this test pins the backend contract: omit,
+/// do not list-as-pending.
+#[tokio::test]
+async fn hidden_dotfiles_are_omitted_not_listed_pending() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    write_file(root, "keep.txt");
+    write_file(root, ".env.qa");
+    write_file(root, ".hidden");
+    std::fs::create_dir(root.join(".hidden_dir")).expect("mkdir .hidden_dir");
+    write_file(root, ".hidden_dir/inside.txt");
+
+    let pool = make_pool().await;
+    insert_sync_path(&pool, &root.to_string_lossy(), Some(1_700_000_000)).await;
+    let state = make_state(pool);
+    seed_cache(&state, &["keep.txt"]);
+
+    let listing = list_sync_folder_grouped_inner(&state, ACCOUNT.into(), root.to_string_lossy().into(), None, Some(LABEL.into()))
+        .await
+        .expect("listing");
+
+    let file_names: Vec<&str> = listing.files.iter().map(|f| f.name.as_str()).collect();
+    let folder_names: Vec<&str> = listing.folders.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(file_names, vec!["keep.txt"], "hidden files must not appear: {file_names:?}");
+    assert!(
+        folder_names.iter().all(|n| !n.starts_with('.')),
+        "hidden folders must not appear: {folder_names:?}"
+    );
+    assert!(
+        listing.files.iter().all(|f| f.sync_status != "pending" || f.name == "keep.txt"),
+        "a hidden file listed as pending is H-063 returning: {:?}",
+        listing.files.iter().map(|f| (&f.name, &f.sync_status)).collect::<Vec<_>>()
+    );
+}

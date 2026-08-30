@@ -2,7 +2,7 @@
 //! (`list_sync_folder_grouped`). Owns `FileEntry` and the Finder name ordering.
 
 use super::dir_stats::dir_stats_recursive;
-use super::pathops::ensure_within;
+use super::pathops::{ensure_within, is_engine_hidden_name};
 use super::synced_state::synced_paths_and_excludes_for_label;
 use crate::auth::account_key::account_key;
 use crate::error::Result;
@@ -20,7 +20,7 @@ pub struct FileEntry {
     pub is_folder: bool,
     pub size: u64,
     pub modified: Option<u64>,
-    /// Sync status: "synced", "pending", or "unknown"
+    /// Sync status: "synced", "pending", "excluded", or "unknown"
     pub sync_status: String,
     /// Hex-encoded path_hash from the synced state (empty if not synced yet)
     pub arion_hash: String,
@@ -113,12 +113,15 @@ async fn list_sync_folder_inner_with(
     let mut dir = tokio::fs::read_dir(&target).await?;
 
     while let Some(entry) = dir.next_entry().await? {
-        let name = entry.file_name().to_string_lossy().to_string();
-
-        // Skip .hippius config directory and hidden files
-        if name.starts_with('.') {
+        let os_name = entry.file_name();
+        // Same `to_str()`-gated dot rule as the engine. Listing a UTF-8
+        // hidden file would pin it Pending forever (H-063) — the engine
+        // never uploads `.env.qa`. A lossy `.` check would hide a
+        // non-UTF-8 name the engine does upload.
+        if is_engine_hidden_name(&os_name) {
             continue;
         }
+        let name = os_name.to_string_lossy().to_string();
 
         let meta = entry.metadata().await?;
         let is_folder = meta.is_dir();
@@ -171,13 +174,13 @@ async fn list_sync_folder_inner_with(
             }
         };
 
-        // A folder row's totals must count what Drive shows inside it, so the
-        // walk applies the same rules that tagged the rows above (H-110).
-        // `base`, not `target`: the patterns are drive-relative.
+        // Folder row numbers are billed: dir_stats omits excluded children
+        // (H-110) even though H-045 keeps those files as visible rows.
+        // `is_counted_for_label_stats` also omits them, so File No and the
+        // folder row stay one number. `base`, not `target`: the patterns
+        // are drive-relative.
         //
-        // An excluded folder gets no walk at all. Grouped listing still
-        // drops that folder row (H-045 keeps excluded *files* visible);
-        // `is_counted_for_label_stats` omits both from billed totals.
+        // An excluded folder gets no walk at all (H-045 drops that row).
         // Walking `node_modules/` for a number nothing bills is wasted.
         let (size, file_count) = if !is_folder {
             (meta.len(), 0)
