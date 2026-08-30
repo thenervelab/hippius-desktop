@@ -484,6 +484,13 @@ fn walk_disk_files_std(
     }
 }
 
+/// Search overlay omit: hidden names and files under an excluded *directory*.
+/// File globs (`*.bin`) must not omit — they stay as `excluded` rows (H-045).
+/// Extracted so a test fails if either skip is dropped from the overlay.
+fn search_overlay_omits(rules: &ExcludeRules, rel: &str) -> bool {
+    rel_has_engine_hidden_component(rel) || super::exclude_match::under_excluded_dir(rules, rel)
+}
+
 /// Recursively search a single sync drive for files matching `filters`.
 ///
 /// Returns a flat list of [`UserFileEntry`] across every nested folder in
@@ -591,10 +598,7 @@ pub async fn search_user_files_recursive(
             if seen.contains(rel) {
                 continue;
             }
-            if super::exclude_match::under_excluded_dir(&exclude_rules, rel) {
-                continue;
-            }
-            if rel_has_engine_hidden_component(rel) {
+            if search_overlay_omits(&exclude_rules, rel) {
                 continue;
             }
             let excluded_hit = super::exclude_match::path_is_excluded(&exclude_rules, rel, false);
@@ -1469,5 +1473,24 @@ mod tests {
         let total: u64 = stats.values().map(|s| s.total_bytes).sum();
 
         assert_eq!(total, 1_500, "an excluded row must not inflate the drive storage total");
+    }
+
+    /// Drive search overlay. Dropping `under_excluded_dir` re-lists a
+    /// previously synced `node_modules`. Dropping the hidden-name skip
+    /// resurrects `.env.qa` as Pending. File globs still overlay as rows.
+    #[test]
+    fn search_overlay_omits_hidden_names_and_excluded_dir_children() {
+        let dir_rule = super::super::exclude_match::rules_from_patterns(&["node_modules/".to_string()]);
+        let file_rule = super::super::exclude_match::rules_from_patterns(&["*.bin".to_string()]);
+
+        assert!(search_overlay_omits(&dir_rule, ".env.qa"));
+        assert!(search_overlay_omits(&dir_rule, ".hidden_dir/inside.txt"));
+        assert!(search_overlay_omits(&dir_rule, "node_modules/pkg/index.js"));
+        assert!(!search_overlay_omits(&dir_rule, "src/main.rs"));
+        assert!(
+            !search_overlay_omits(&file_rule, "dir/foo.bin"),
+            "file globs stay as excluded rows, not omitted"
+        );
+        assert!(!search_overlay_omits(&file_rule, "keep.txt"));
     }
 }

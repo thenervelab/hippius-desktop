@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 
 import {
   USAGE_CRITICAL_PERCENT,
@@ -162,5 +165,18 @@ describe("formatPlanPrice", () => {
   it("abbreviates month and passes other intervals through", () => {
     expect(formatPlanPrice(12, "month")).toBe("12$/mo.");
     expect(formatPlanPrice(99, "year")).toBe("99$/year");
+  });
+});
+
+describe("storage card renders Rust labels (H-109)", () => {
+  it("does not formatBytes the raw counts", () => {
+    const src = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), "../storage-overview/index.tsx"),
+      "utf8",
+    );
+    expect(src).not.toMatch(/\bformatBytes\b/);
+    expect(src).toContain("overview.usedDisplay");
+    expect(src).toContain("overview.totalDisplay");
+    expect(src).toContain("overview.freeDisplay");
   });
 });

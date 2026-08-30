@@ -78,6 +78,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **Home storage used, total, and free now add up.** Remaining space uses
   the same unit and decimals as the total, so a card no longer reads
   “31.91 GB of 5.03 TB used” next to “5 TB free”.
+- **Hidden files no longer reappear in Drive as waiting to sync.**
 - **A folder's size and file count now leave out the files you excluded.**
   Excluded files still show in the folder (they are not uploaded); the row
   numbers match File No, which also skips them.

@@ -137,15 +137,16 @@ fn stored_options() -> SimpleFileOptions {
 fn zip_datetime(modified: SystemTime) -> DateTime {
     let dt = chrono::DateTime::<Local>::from(modified).naive_local();
     let year = dt.year().clamp(1980, 2107) as u16;
-    DateTime::from_date_and_time(
-        year,
-        dt.month() as u8,
-        dt.day() as u8,
-        dt.hour() as u8,
-        dt.minute() as u8,
-        dt.second().min(58) as u8,
-    )
-    .unwrap_or_default()
+    let month = dt.month() as u8;
+    let hour = dt.hour() as u8;
+    let minute = dt.minute() as u8;
+    let second = dt.second().min(58) as u8;
+    DateTime::from_date_and_time(year, month, dt.day() as u8, hour, minute, second)
+        // Clamping the year can make Feb 29 invalid (1972 leap → 1980).
+        // Falling through to the crate default would put 1980-01-01 back
+        // on that entry (H-103). Prefer the 28th of the same month.
+        .or_else(|_| DateTime::from_date_and_time(year, month, 28, hour, minute, second))
+        .unwrap_or_else(|_| DateTime::from_date_and_time(1980, 1, 1, 0, 0, 0).expect("DOS epoch is a valid DateTime"))
 }
 
 fn stored_options_for(meta: &std::fs::Metadata) -> SimpleFileOptions {
@@ -394,9 +395,26 @@ mod tests {
     }
 
     #[test]
+    fn zip_datetime_does_not_fall_back_to_the_dos_epoch_on_a_clamped_leap_day() {
+        use chrono::TimeZone;
+        // 1972-02-29 is valid; 1980 is not a leap year. Clamp must keep
+        // February, not unwrap_or_default to 1980-01-01.
+        let leap = Local.with_ymd_and_hms(1972, 2, 29, 12, 0, 0).unwrap();
+        let dt = zip_datetime(leap.into());
+        assert_ne!(
+            (dt.year(), dt.month(), dt.day()),
+            (1980, 1, 1),
+            "invalid leap day after year clamp must not become the DOS epoch"
+        );
+        assert_eq!(dt.year(), 1980);
+        assert_eq!(dt.month(), 2);
+    }
+
+    #[test]
     fn zip_entries_use_source_mtime_not_the_dos_epoch() {
         let dir = TempDir::new().expect("tempdir");
         fs::write(dir.path().join("note.txt"), b"hi").expect("write");
+        fs::write(dir.path().join("empty.txt"), b"").expect("0-byte");
 
         let zip_dir = TempDir::new().expect("zip dest");
         let zip_path = zip_dir.path().join("out.zip");
@@ -404,17 +422,19 @@ mod tests {
 
         let file = fs::File::open(&zip_path).expect("open zip");
         let mut archive = ZipArchive::new(file).expect("read archive");
-        let entry = archive.by_name("note.txt").expect("note.txt");
-        let mtime = entry.last_modified().expect("zip entry must carry an mtime");
-        assert_ne!(
-            (mtime.year(), mtime.month(), mtime.day()),
-            (1980, 1, 1),
-            "H-103: zip crate default DOS epoch must not be left on entries"
-        );
         let now = Local::now();
-        assert_eq!(mtime.year(), now.year() as u16);
-        assert_eq!(mtime.month(), now.month() as u8);
-        assert_eq!(mtime.day(), now.day() as u8);
+        for name in ["note.txt", "empty.txt"] {
+            let entry = archive.by_name(name).unwrap_or_else(|_| panic!("{name}"));
+            let mtime = entry.last_modified().expect("zip entry must carry an mtime");
+            assert_ne!(
+                (mtime.year(), mtime.month(), mtime.day()),
+                (1980, 1, 1),
+                "H-103: zip crate default DOS epoch must not be left on {name}"
+            );
+            assert_eq!(mtime.year(), now.year() as u16);
+            assert_eq!(mtime.month(), now.month() as u8);
+            assert_eq!(mtime.day(), now.day() as u8);
+        }
     }
 
     #[test]
