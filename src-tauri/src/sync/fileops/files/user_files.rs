@@ -590,6 +590,9 @@ pub async fn search_user_files_recursive(
             if seen.contains(rel) {
                 continue;
             }
+            if super::exclude_match::under_excluded_dir(&exclude_rules, rel) {
+                continue;
+            }
             let excluded_hit = super::exclude_match::path_is_excluded(&exclude_rules, rel, false);
             let basename = rel.rsplit('/').next().unwrap_or(rel).to_string();
             let uploaded_at_ms = if info.uploaded_at != 0 { info.uploaded_at * 1000 } else { 0 };
