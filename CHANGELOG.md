@@ -67,6 +67,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **A folder's size and file count now leave out the files you excluded.** The
+  folder's row kept counting them while the folder itself correctly hid them, so
+  the row and the view disagreed until the app was restarted.
+
 - **The low-credits warning clears after you add credits.** The bell no longer
   showed an unread "you're running low on credits" notice next to the one saying
   your credits had just landed.

@@ -171,8 +171,15 @@ async fn list_sync_folder_inner_with(
             }
         };
 
+        // A folder row's totals must count what Drive shows inside it, so the
+        // walk applies the same rules that tagged the rows above (H-110).
+        // `base`, not `target`: the patterns are drive-relative.
         let (size, file_count) = if is_folder {
-            dir_stats_recursive(&target.join(&name)).await
+            let excludes = super::dir_stats::DirStatsExcludes {
+                root: &base,
+                patterns: &excluded_patterns,
+            };
+            dir_stats_recursive(&target.join(&name), Some(&excludes)).await
         } else {
             (meta.len(), 0)
         };
