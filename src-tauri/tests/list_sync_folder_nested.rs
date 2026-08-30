@@ -34,7 +34,7 @@ use sqlx::sqlite::SqlitePool;
 
 use tauri_project_lib::app_state::AppState;
 use tauri_project_lib::auth::state::AuthCapabilities;
-use tauri_project_lib::sync::files::list_sync_folder_grouped_inner;
+use tauri_project_lib::sync::files::{FileEntry, list_sync_folder_grouped_inner};
 
 const ACCOUNT: &str = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
 const LABEL: &str = "my-drive";
@@ -140,6 +140,18 @@ fn seed_cache(state: &AppState, entries: &[&str]) {
         map.insert((*rel).to_string(), fake_info(u8::try_from(i).unwrap_or(u8::MAX)));
     }
     state.sync.update_synced_paths_cache(LABEL, map);
+}
+
+fn entry_names(entries: &[FileEntry]) -> Vec<&str> {
+    entries.iter().map(|e| e.name.as_str()).collect()
+}
+
+fn assert_status(entries: &[FileEntry], name: &str, status: &str) {
+    assert_eq!(
+        entries.iter().find(|e| e.name == name).map(|e| e.sync_status.as_str()),
+        Some(status),
+        "{name}"
+    );
 }
 
 fn write_file(dir: &std::path::Path, rel: &str) {
@@ -509,36 +521,16 @@ async fn excluded_globs_are_hidden_from_every_source_the_grouped_listing_merges(
     let root_listing = list_sync_folder_grouped_inner(&state, ACCOUNT.into(), root.to_string_lossy().into(), None, Some(LABEL.into()))
         .await
         .expect("root listing");
+    let file_names = entry_names(&root_listing.files);
+    let folder_names = entry_names(&root_listing.folders);
 
-    let file_names: Vec<&str> = root_listing.files.iter().map(|f| f.name.as_str()).collect();
-    let folder_names: Vec<&str> = root_listing.folders.iter().map(|f| f.name.as_str()).collect();
-
-    assert!(
-        file_names.contains(&"dump.bin"),
-        "on-disk *.bin must stay visible as excluded: {file_names:?}"
-    );
-    assert_eq!(
-        root_listing.files.iter().find(|f| f.name == "dump.bin").map(|f| f.sync_status.as_str()),
-        Some("excluded"),
-    );
-    assert!(
-        file_names.contains(&"server-only.bin"),
-        "server-only *.bin must stay visible as excluded: {file_names:?}"
-    );
-    assert_eq!(
-        root_listing
-            .files
-            .iter()
-            .find(|f| f.name == "server-only.bin")
-            .map(|f| f.sync_status.as_str()),
-        Some("excluded"),
-    );
+    assert_status(&root_listing.files, "dump.bin", "excluded");
+    assert_status(&root_listing.files, "server-only.bin", "excluded");
     assert!(file_names.contains(&"notes.txt"), "unmatched files must stay: {file_names:?}");
     assert!(
         file_names.contains(&"dump.bin.bak"),
         "*.bin is an extension match, not a substring: {file_names:?}"
     );
-
     assert!(
         !folder_names.contains(&"node_modules"),
         "an excluded directory must not come back from disk or the folder-entity cache: {folder_names:?}"
@@ -564,13 +556,9 @@ async fn excluded_globs_are_hidden_from_every_source_the_grouped_listing_merges(
     )
     .await
     .expect("sub listing");
-    let sub_files: Vec<&str> = sub.files.iter().map(|f| f.name.as_str()).collect();
+    let sub_files = entry_names(&sub.files);
     assert!(sub_files.contains(&"inner.txt"), "unmatched nested file stays: {sub_files:?}");
-    assert!(sub_files.contains(&"inner.bin"), "nested *.bin stays as excluded: {sub_files:?}");
-    assert_eq!(
-        sub.files.iter().find(|f| f.name == "inner.bin").map(|f| f.sync_status.as_str()),
-        Some("excluded"),
-    );
+    assert_status(&sub.files, "inner.bin", "excluded");
 
     let remote = list_sync_folder_grouped_inner(
         &state,
@@ -581,16 +569,9 @@ async fn excluded_globs_are_hidden_from_every_source_the_grouped_listing_merges(
     )
     .await
     .expect("remote listing");
-    let remote_files: Vec<&str> = remote.files.iter().map(|f| f.name.as_str()).collect();
+    let remote_files = entry_names(&remote.files);
     assert!(remote_files.contains(&"keep.txt"), "unmatched server-only file stays: {remote_files:?}");
-    assert!(
-        remote_files.contains(&"drop.bin"),
-        "server-only excluded file stays as excluded: {remote_files:?}"
-    );
-    assert_eq!(
-        remote.files.iter().find(|f| f.name == "drop.bin").map(|f| f.sync_status.as_str()),
-        Some("excluded"),
-    );
+    assert_status(&remote.files, "drop.bin", "excluded");
 }
 
 /// Clearing the pattern must bring the files straight back. The listing
