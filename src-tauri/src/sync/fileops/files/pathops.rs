@@ -29,6 +29,16 @@ pub(super) fn is_engine_hidden_name(name: &OsStr) -> bool {
     name.to_str().is_some_and(|n| n.starts_with('.'))
 }
 
+/// True when any path component is an engine-hidden name.
+///
+/// Overlay keys are UTF-8 `String`s, so this is the same rule as
+/// [`is_engine_hidden_name`] for every name the rel-path index can hold.
+/// Applied to the server overlay so a `.env.qa` already in `synced_paths`
+/// cannot reappear as Pending after the disk walk skipped it (H-063).
+pub(super) fn rel_has_engine_hidden_component(rel: &str) -> bool {
+    rel.split('/').any(|part| !part.is_empty() && is_engine_hidden_name(OsStr::new(part)))
+}
+
 /// Verify that `child` is contained within `parent` after canonicalization.
 /// Delegates to hcfs-client library.
 pub(super) fn ensure_within(parent: &Path, child: &Path) -> Result<PathBuf> {
@@ -124,6 +134,30 @@ mod tests {
     #[test]
     fn empty_name_is_not_hidden() {
         assert!(!is_engine_hidden_name(OsStr::new("")));
+    }
+
+    /// The `to_str()` gate is the whole helper. A lossy `.`-prefix check
+    /// would skip this name; the engine uploads it.
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_dot_prefix_is_not_hidden() {
+        use std::os::unix::ffi::OsStrExt;
+
+        assert!(
+            !is_engine_hidden_name(OsStr::from_bytes(b".caf\xe9")),
+            "engine uploads a non-UTF-8 `.`-name; lossy would skip it"
+        );
+        assert!(!is_engine_hidden_name(OsStr::from_bytes(&[0x2E, 0xFF])));
+    }
+
+    #[test]
+    fn rel_hidden_component_matches_dot_segments_only() {
+        assert!(rel_has_engine_hidden_component(".env.qa"));
+        assert!(rel_has_engine_hidden_component(".hidden_dir/inside.txt"));
+        assert!(rel_has_engine_hidden_component("keep/.env.qa"));
+        assert!(!rel_has_engine_hidden_component("keep.txt"));
+        assert!(!rel_has_engine_hidden_component("keep/notes.txt"));
+        assert!(!rel_has_engine_hidden_component(""));
     }
 
     #[test]

@@ -654,7 +654,9 @@ async fn hidden_dotfiles_are_omitted_not_listed_pending() {
     let pool = make_pool().await;
     insert_sync_path(&pool, &root.to_string_lossy(), Some(1_700_000_000)).await;
     let state = make_state(pool);
-    seed_cache(&state, &["keep.txt"]);
+    // Seed hidden names in the rel-path index too: the disk walk skips
+    // them, so without an overlay skip they would reappear as Pending.
+    seed_cache(&state, &["keep.txt", ".env.qa", ".hidden", ".hidden_dir/inside.txt"]);
 
     let listing = list_sync_folder_grouped_inner(&state, ACCOUNT.into(), root.to_string_lossy().into(), None, Some(LABEL.into()))
         .await
@@ -668,8 +670,7 @@ async fn hidden_dotfiles_are_omitted_not_listed_pending() {
         "hidden folders must not appear: {folder_names:?}"
     );
     assert!(
-        listing.files.iter().all(|f| f.sync_status != "pending" || f.name == "keep.txt"),
-        "a hidden file listed as pending is H-063 returning: {:?}",
-        listing.files.iter().map(|f| (&f.name, &f.sync_status)).collect::<Vec<_>>()
+        listing.files.iter().chain(listing.folders.iter()).all(|e| !e.name.starts_with('.')),
+        "overlay must not resurrect a hidden rel-path as pending"
     );
 }

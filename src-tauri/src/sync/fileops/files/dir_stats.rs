@@ -373,8 +373,9 @@ fn walk_dir_std(
         let Ok(meta) = entry.metadata() else {
             continue;
         };
-        // Skip what the engine skips, so a folder row counts what Drive shows.
-        // An excluded directory is pruned whole: its contents are excluded too.
+        // Skip what the engine skips (hidden names) and what billing omits
+        // (exclude patterns). An excluded directory is pruned whole.
+
         if let Some(ex) = excludes
             && ex.skips(&entry.path(), meta.is_dir())
         {

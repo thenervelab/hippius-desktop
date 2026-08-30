@@ -2,7 +2,7 @@
 //! cascade. Owns `UserFileEntry`, `FileFilterCriteria`, and per-label stats.
 
 use super::listing::list_sync_folder;
-use super::pathops::{ensure_within, is_engine_hidden_name};
+use super::pathops::{ensure_within, is_engine_hidden_name, rel_has_engine_hidden_component};
 use super::synced_state::synced_paths_and_excludes_for_label;
 use crate::error::Result;
 use chrono::Datelike;
@@ -592,6 +592,9 @@ pub async fn search_user_files_recursive(
                 continue;
             }
             if super::exclude_match::under_excluded_dir(&exclude_rules, rel) {
+                continue;
+            }
+            if rel_has_engine_hidden_component(rel) {
                 continue;
             }
             let excluded_hit = super::exclude_match::path_is_excluded(&exclude_rules, rel, false);

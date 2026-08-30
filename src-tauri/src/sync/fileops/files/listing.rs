@@ -2,7 +2,7 @@
 //! (`list_sync_folder_grouped`). Owns `FileEntry` and the Finder name ordering.
 
 use super::dir_stats::dir_stats_recursive;
-use super::pathops::{ensure_within, is_engine_hidden_name};
+use super::pathops::{ensure_within, is_engine_hidden_name, rel_has_engine_hidden_component};
 use super::synced_state::synced_paths_and_excludes_for_label;
 use crate::auth::account_key::account_key;
 use crate::error::Result;
@@ -408,6 +408,11 @@ pub async fn list_sync_folder_grouped_inner(
             if remainder.is_empty() {
                 continue;
             }
+            // Hidden names are omitted on disk (engine skip). If the
+            // rel-path index still has one, do not resurrect it as Pending.
+            if rel_has_engine_hidden_component(remainder) {
+                continue;
+            }
             // Nested excluded paths still contribute nothing: that is what
             // stops `vendor/node_modules/a.js` from conjuring a `vendor`
             // folder. A *direct* excluded file stays as a row (H-045).
@@ -514,6 +519,9 @@ pub async fn list_sync_folder_grouped_inner(
             // otherwise reappear here as a pending folder the engine never
             // syncs.
             if super::exclude_match::path_is_excluded(&exclude_rules, &format!("{prefix}{}", entry.name), true) {
+                continue;
+            }
+            if rel_has_engine_hidden_component(&entry.name) {
                 continue;
             }
             // `HashSet::insert` returns false when the name is already shown
