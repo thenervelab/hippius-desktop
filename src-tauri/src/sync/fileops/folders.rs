@@ -16,7 +16,7 @@ use crate::sync::lifecycle::{initialize_sync_inner, remove_drive_for_account};
 use crate::sync::mnemonic::{config_dir_for_folder, folder_hash};
 use sqlx::sqlite::SqlitePool;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// A local sync folder with its status and remote stats pre-joined.
 #[derive(Serialize)]
@@ -159,6 +159,19 @@ pub(crate) fn sanitize_label(label: &str) -> Result<String> {
     Ok(trimmed.to_string())
 }
 
+/// On-disk destination for a remote-folder restore.
+///
+/// The picker is "choose a parent", so the dest is normally
+/// `base_path / label`. If the user picked the folder itself — the last
+/// component already equals the sanitized label — joining again nests
+/// `label/label` and Drive opens an empty tree (H-115).
+pub(crate) fn restore_dest_path(base_path: &Path, safe_label: &str) -> PathBuf {
+    match base_path.file_name().and_then(|n| n.to_str()) {
+        Some(name) if name == safe_label => base_path.to_path_buf(),
+        _ => base_path.join(safe_label),
+    }
+}
+
 /// Query all sync paths for an account directly from the DB (no Tauri state params).
 pub(crate) async fn get_all_sync_paths_internal(pool: &SqlitePool, account_id: &str) -> Result<Vec<crate::sync::paths::SyncPathResult>> {
     use sqlx::Row;
@@ -297,7 +310,7 @@ async fn restore_single_folder(
     existing_mnemonic: Option<&str>,
 ) -> Result<()> {
     let safe_label = sanitize_label(label)?;
-    let folder_path = PathBuf::from(base_path).join(&safe_label);
+    let folder_path = restore_dest_path(Path::new(base_path), &safe_label);
 
     std::fs::create_dir_all(&folder_path)?;
 
@@ -949,6 +962,63 @@ mod tests {
     #[test]
     fn sanitize_label_preserves_dots_in_middle() {
         assert_eq!(sanitize_label("file.backup.2024").unwrap(), "file.backup.2024");
+    }
+
+    // ── restore dest (H-115) ────────────────────────────────────────
+
+    #[test]
+    fn restore_dest_nests_under_a_parent_that_is_not_the_folder() {
+        assert_eq!(
+            restore_dest_path(Path::new("/workspace"), "hippius-qa-beta4-be"),
+            PathBuf::from("/workspace/hippius-qa-beta4-be"),
+        );
+    }
+
+    #[test]
+    fn restore_dest_does_not_nest_when_the_pick_is_the_folder_itself() {
+        // The reported bug: Choose Destination selected the existing
+        // folder row, then join(label) produced
+        // `/workspace/hippius-qa-beta4-be/hippius-qa-beta4-be`.
+        let picked = Path::new("/workspace/hippius-qa-beta4-be");
+        assert_eq!(
+            restore_dest_path(picked, "hippius-qa-beta4-be"),
+            PathBuf::from("/workspace/hippius-qa-beta4-be"),
+        );
+    }
+
+    #[test]
+    fn restore_dest_still_nests_when_the_parent_just_shares_a_prefix() {
+        // `/workspace/hippius-qa-beta4` is not the folder
+        // `hippius-qa-beta4-be`; joining is still correct.
+        assert_eq!(
+            restore_dest_path(Path::new("/workspace/hippius-qa-beta4"), "hippius-qa-beta4-be"),
+            PathBuf::from("/workspace/hippius-qa-beta4/hippius-qa-beta4-be"),
+        );
+    }
+
+    #[test]
+    fn restore_dest_treats_a_trailing_separator_as_the_same_folder() {
+        // GTK/Qt pickers sometimes hand back `foo/`. `file_name()` still
+        // yields `foo`, so the identity rule must fire.
+        assert_eq!(
+            restore_dest_path(Path::new("/workspace/hippius-qa-beta4-be/"), "hippius-qa-beta4-be"),
+            PathBuf::from("/workspace/hippius-qa-beta4-be/"),
+        );
+    }
+
+    #[test]
+    fn restore_single_folder_routes_through_restore_dest_path() {
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/fileops/folders.rs")).expect("read folders.rs");
+        let start = src.find("async fn restore_single_folder(").expect("restore_single_folder present");
+        let rest = &src[start..];
+        let end = rest
+            .find("pub async fn restore_remote_folders(")
+            .expect("restore_remote_folders follows restore_single_folder");
+        let body = &rest[..end];
+        assert!(
+            body.contains("restore_dest_path("),
+            "restore_single_folder must use restore_dest_path so picking the folder itself does not nest label/label"
+        );
     }
 
     // ── delete_remote_folder ordering invariant ─────────────────────
