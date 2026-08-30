@@ -5,7 +5,7 @@
 
 use super::delete::FileDeleteError;
 use super::dir_stats::invalidate_dir_stats_for_change;
-use super::pathops::copy_dir_recursive;
+use super::pathops::{copy_dir_recursive, is_engine_hidden_name};
 use crate::error::Result;
 use hcfs_client::engine::runner::trigger_sync;
 use serde::Serialize;
@@ -411,23 +411,6 @@ async fn walk_regular_files_stats(root: &std::path::Path) -> (u64, u64) {
 fn is_unlisted_regular_file(name: &str, file_len: u64) -> bool {
     hcfs_client::engine::classify::is_failed_download_artifact(name).is_some()
         || (hcfs_client::engine::classify::is_encrypted_name_stub(name).is_some() && file_len == 0)
-}
-
-/// Local mirror of hcfs-client's `drive::exclude::should_skip_path` — the rule
-/// its real `Drive::collect_files` scan applies: skip the `.hippius` config dir
-/// and every `.`-prefixed name, files and directories alike. Upstream is
-/// `pub(super)`, hence re-derived rather than called.
-///
-/// The rule is the leading dot on EVERY platform, not an OS "hidden" notion.
-/// Windows sets hidden via `FILE_ATTRIBUTE_HIDDEN` and its dotfiles are not
-/// hidden, but the engine and the Drive listing both key off the dot there too,
-/// so a name-based rule is what keeps the three in agreement.
-///
-/// `to_str()`-gated on purpose, matching upstream exactly: a non-UTF-8 name is
-/// NOT skipped, so the engine uploads it. A lossy conversion here would drop
-/// such a name from counters whose whole job is to predict engine work.
-fn is_engine_hidden_name(name: &std::ffi::OsStr) -> bool {
-    name.to_str().is_some_and(|n| n.starts_with('.'))
 }
 
 /// One `DirEntry::metadata` per entry (lstat-shaped, does not follow
@@ -889,9 +872,9 @@ mod tests {
         assert_eq!(bytes, 10, "byte total summed across the nested dir (5+2+3)");
     }
 
-    /// H-082: Drive listing skips `name.starts_with('.')`, but the add-folder
-    /// File No banner walked every regular file. A 130-file folder plus two
-    /// dotfiles banners 132, then Drive settles at 130.
+    /// H-082: Drive listing and the add-folder File No banner both skip
+    /// via `is_engine_hidden_name`. A 130-file folder plus two dotfiles
+    /// used to banner 132, then Drive settled at 130.
     #[test]
     fn walk_regular_files_stats_skips_hidden_so_banner_matches_drive() {
         let tmp = tempfile::TempDir::new().unwrap();
@@ -991,28 +974,6 @@ mod tests {
             !fn_body(src, "pub async fn add_file(").contains("trigger_sync"),
             "fn_body over-ran `add_file` — the wiring assertions above prove nothing"
         );
-    }
-
-    /// The dot rule is name-based on every platform, deliberately: Windows
-    /// marks hidden with `FILE_ATTRIBUTE_HIDDEN` and treats dotfiles as
-    /// ordinary, but hcfs-client's scan and the Drive listing both key off the
-    /// dot there too. Counting by an OS-hidden notion would desync all three.
-    #[test]
-    fn is_engine_hidden_name_is_the_dot_rule_on_every_platform() {
-        use std::ffi::OsStr;
-
-        assert!(is_engine_hidden_name(OsStr::new(".DS_Store")));
-        assert!(is_engine_hidden_name(OsStr::new(".hippius")));
-        assert!(is_engine_hidden_name(OsStr::new(".hippius-incoming-Photos-1")));
-
-        // Windows-hidden names carry no dot — the engine uploads them, so the
-        // counter must include them.
-        assert!(!is_engine_hidden_name(OsStr::new("desktop.ini")));
-        assert!(!is_engine_hidden_name(OsStr::new("Thumbs.db")));
-        // A macOS bundle is a visible directory the user thinks of as one file;
-        // the engine walks into it, so the counter must too.
-        assert!(!is_engine_hidden_name(OsStr::new("Preview.app")));
-        assert!(!is_engine_hidden_name(OsStr::new("notes.txt")));
     }
 
     /// A hidden directory is skipped WHOLESALE at any depth: its visible

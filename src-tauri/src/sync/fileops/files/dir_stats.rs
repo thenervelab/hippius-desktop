@@ -1,5 +1,6 @@
 //! Cached recursive directory size/file-count stats for the folder listing.
 
+use super::pathops::is_engine_hidden_name;
 use hcfs_client::drive::ExcludeRules;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -366,14 +367,15 @@ fn walk_dir_std(
     };
     for entry in dir.flatten() {
         let name = entry.file_name();
-        if name.to_string_lossy().starts_with('.') {
+        if is_engine_hidden_name(&name) {
             continue;
         }
         let Ok(meta) = entry.metadata() else {
             continue;
         };
-        // Skip what the engine skips, so a folder row counts what Drive shows.
-        // An excluded directory is pruned whole: its contents are excluded too.
+        // Skip what the engine skips (hidden names) and what billing omits
+        // (exclude patterns). An excluded directory is pruned whole.
+
         if let Some(ex) = excludes
             && ex.skips(&entry.path(), meta.is_dir())
         {
