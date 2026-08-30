@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { isIoError } from "@/lib/utils/dispatchTauriError";
 
 interface RevealFileParams {
   /** Direct source path to try first (e.g. file.source). */
@@ -31,15 +32,10 @@ export async function revealFile(params: RevealFileParams): Promise<void> {
       await invoke("reveal_path_in_file_manager", { path: target });
       return;
     } catch (error) {
-      // A missing path can still resolve via the DB. Other failures
-      // (xdg-open, not in a sync folder) must surface — swallowing them
-      // made Linux Reveal a silent no-op (H-085).
-      const message = error instanceof Error ? error.message : String(error);
-      const looksMissing =
-        message.toLowerCase().includes("no such file") ||
-        message.toLowerCase().includes("not found") ||
-        message.toLowerCase().includes("os error 2");
-      if (!looksMissing) {
+      // Missing path is Io (canonicalize). Other kinds — xdg-open
+      // missing, Validation (not a sync folder) — must surface.
+      // invoke() rejects a plain { kind, message }, not Error.
+      if (!isIoError(error)) {
         throw error;
       }
     }

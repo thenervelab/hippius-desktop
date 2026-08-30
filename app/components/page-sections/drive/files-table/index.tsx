@@ -19,6 +19,7 @@ import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { actionableSyncFilesAtom } from "@/lib/hooks/useSyncSnapshot";
 import * as TableModule from "@/components/ui/alt-table";
 import { formatBytesFromBigInt } from "@/lib/utils/formatBytes";
+import { omitsBilledSize } from "@/lib/utils/syncStatusDisplay";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { Button } from "@/components/ui/button";
 import {
@@ -1258,9 +1259,7 @@ const FilesTable: FC<FilesTableProps> = memo(
             const value = cell.getValue();
             const status = cell.row.original.syncStatus;
             if (cell.row.original.tempData) return "...";
-            // Excluded/hidden bytes are omitted from File No (H-045 / H-063).
-            // Showing 8 B + 7 B next to a 4 B header was the leftover gap.
-            if (status === "excluded" || status === "hidden") {
+            if (omitsBilledSize(status)) {
               return (
                 <div className="truncate text-grey-dark-800 text-xs">—</div>
               );

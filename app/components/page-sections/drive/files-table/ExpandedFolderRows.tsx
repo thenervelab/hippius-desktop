@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { FormattedTimestamp } from "@/app/components/ui";
 import { cn } from "@/lib/utils";
 import { formatBytesFromBigInt } from "@/lib/utils/formatBytes";
+import { omitsBilledSize } from "@/lib/utils/syncStatusDisplay";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import {
   getFileTypeDisplayLabel,
@@ -638,9 +639,11 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
               <td className={BASE_CELL_CLASS}>
                 {childFile.tempData
                   ? "..."
-                  : childFile.size
-                    ? formatBytesFromBigInt(BigInt(childFile.size))
-                    : "Unknown"}
+                  : omitsBilledSize(childFile.syncStatus)
+                    ? "—"
+                    : childFile.size
+                      ? formatBytesFromBigInt(BigInt(childFile.size))
+                      : "Unknown"}
               </td>
               <td className={BASE_CELL_CLASS}>
                 {childFile.createdAt === 0 ? (

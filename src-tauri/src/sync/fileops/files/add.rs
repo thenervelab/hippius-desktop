@@ -485,10 +485,11 @@ fn walk_regular_files_stats_std(root: &std::path::Path) -> FileWalkStats {
             let name = entry.file_name();
             let Ok(meta) = entry.metadata() else { continue };
             if is_engine_hidden_name(&name) {
-                if meta.is_file() {
+                // One unit per skipped name. Descending a hidden dir
+                // (`.git`) for a file count would walk the tree twice
+                // before eligibility/copy.
+                if meta.is_file() || meta.is_dir() {
                     stats.skipped_hidden = stats.skipped_hidden.saturating_add(1);
-                } else if meta.is_dir() {
-                    stats.skipped_hidden = stats.skipped_hidden.saturating_add(count_regular_files_including_hidden(&entry.path()));
                 }
                 continue;
             }
@@ -504,29 +505,6 @@ fn walk_regular_files_stats_std(root: &std::path::Path) -> FileWalkStats {
         }
     }
     stats
-}
-
-/// Count every regular file under `root`, including names the engine
-/// skips. Used only for the H-063 skipped-hidden toast so a `.hidden`
-/// directory is not reported as one item when it holds many files.
-fn count_regular_files_including_hidden(root: &std::path::Path) -> u64 {
-    let mut count = 0u64;
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        if stack.len() > FOLDER_BYTE_WALK_MAX_DEPTH {
-            break;
-        }
-        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
-        for entry in entries.flatten() {
-            let Ok(meta) = entry.metadata() else { continue };
-            if meta.is_dir() {
-                stack.push(entry.path());
-            } else if meta.is_file() {
-                count = count.saturating_add(1);
-            }
-        }
-    }
-    count
 }
 
 /// Sum the byte size of regular files (non-directory, non-symlink) under
@@ -991,7 +969,7 @@ mod tests {
         let walk = walk_regular_files_stats_std(root);
         assert_eq!(walk.count, 3, "keep.txt + non-zero stub + downloaded_notes.txt");
         assert_eq!(walk.bytes, 8, "2 + 4 + 2; hidden-dir / artifact / 0-byte stub omitted");
-        assert_eq!(walk.skipped_hidden, 1, ".git/objects is one skipped hidden file");
+        assert_eq!(walk.skipped_hidden, 1, ".git is one skipped hidden directory");
     }
 
     /// This PR is the counter: listing skip must not be copied into
@@ -1090,6 +1068,10 @@ mod tests {
         let walk = walk_regular_files_stats_std(root);
         assert_eq!(walk.count, 2, "only top.txt and project/keep.txt are engine-visible");
         assert_eq!(walk.bytes, 3, "1 + 2; no byte from either hidden subtree may be summed");
+        assert_eq!(
+            walk.skipped_hidden, 2,
+            ".cache and .git each count as one skipped name, not every file inside"
+        );
     }
 
     /// hcfs's `should_skip_path` is `to_str()`-gated, so a non-UTF-8 name that

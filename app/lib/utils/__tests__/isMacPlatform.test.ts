@@ -46,3 +46,10 @@ describe("fileManagerLabel", () => {
     expect(fileManagerLabel()).toBe("file manager");
   });
 });
+
+describe("isLinuxPlatform", () => {
+  it("does not treat Android as Linux", () => {
+    stubNavigator("Linux armv8l", "Mozilla/5.0 (Linux; Android 14)");
+    expect(isLinuxPlatform()).toBe(false);
+  });
+});

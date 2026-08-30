@@ -48,7 +48,7 @@ fn linux_xdg_open(path: &Path) -> Result<()> {
     // older XFCE `xdg-open` treats it as the file to open — a silent no-op
     // (H-085 still failing on 0.6.0-beta.5).
     let target = linux_open_target(path);
-    let mut child = match std::process::Command::new("xdg-open")
+    let child = match std::process::Command::new("xdg-open")
         .arg(target)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -109,7 +109,10 @@ pub async fn reveal_path_in_file_manager(state: tauri::State<'_, crate::app_stat
         if let Ok(root) = tokio::fs::canonicalize(&sync_path.path).await
             && path_is_under_root(&canonical, &root)
         {
-            return reveal_path(&canonical);
+            return match tokio::task::spawn_blocking(move || reveal_path(&canonical)).await {
+                Ok(inner) => inner,
+                Err(join_err) => Err(AppError::Other(format!("Reveal cancelled: {join_err}"))),
+            };
         }
     }
     Err(AppError::Validation(
@@ -191,6 +194,10 @@ mod tests {
         assert!(
             src.contains("get_all_sync_paths_internal"),
             "the IPC must prefix-check against this account's sync_paths"
+        );
+        assert!(
+            src.contains("spawn_blocking"),
+            "xdg-open wait must not occupy a Tokio worker for the 3s budget"
         );
     }
 

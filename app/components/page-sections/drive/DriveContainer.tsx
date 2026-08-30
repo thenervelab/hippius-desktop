@@ -29,7 +29,11 @@ import {
 } from "@/lib/utils/fileFilterUtils";
 import { useFilteredFiles } from "@/app/lib/hooks/useFilteredFiles";
 import { useRecursiveFileSearch } from "@/app/lib/hooks/useRecursiveFileSearch";
-import { shouldUseRecursiveSearch } from "@/lib/utils/filesViewMode";
+import {
+  filterCriteriaAreActive,
+  shouldUseRecursiveSearch,
+} from "@/lib/utils/filesViewMode";
+import { isExcludedSyncStatus } from "@/lib/utils/syncStatusDisplay";
 import DriveHeader from "./DriveHeader";
 import DriveContent from "./DriveContent";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
@@ -460,11 +464,13 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
       ? (nestedDrive?.label ?? null)
       : activeSyncFolderLabel;
   const recursiveSearchSubfolder = isNested ? (urlSubFolderPath ?? null) : null;
-  const hasActiveSearchOrFilter =
-    Boolean(searchTerm.trim()) ||
-    Boolean(filterState.fileExtension) ||
-    Boolean(filterState.dateRange?.from) ||
-    filterState.fileSizes.length > 0;
+  const hasActiveSearchOrFilter = filterCriteriaAreActive({
+    searchTerm,
+    fileExtension: filterState.fileExtension,
+    dateRange: filterState.dateRange,
+    fileSizes: filterState.fileSizes,
+    excludedOnly: filterState.excludedOnly,
+  });
   const useRecursiveResults = shouldUseRecursiveSearch({
     hasActiveSearchOrFilter,
     recursiveSearchLabel,
@@ -493,12 +499,14 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
       fileExtensions: fileExtensionsCriteria,
       dateRange: filterState.dateRange,
       fileSizes: filterState.fileSizes,
+      excludedOnly: filterState.excludedOnly,
     }),
     [
       searchTerm,
       fileExtensionsCriteria,
       filterState.dateRange,
       filterState.fileSizes,
+      filterState.excludedOnly,
     ],
   );
 
@@ -522,10 +530,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
 
   const statusFilteredData = useMemo(() => {
     if (!filterState.excludedOnly) return filteredData;
-    return filteredData.filter(
-      (file) =>
-        file.syncStatus === "excluded" || file.syncStatus === "hidden",
-    );
+    return filteredData.filter((file) => isExcludedSyncStatus(file.syncStatus));
   }, [filteredData, filterState.excludedOnly]);
 
   // Folded into `isLoading` so transitions where the underlying dataset
