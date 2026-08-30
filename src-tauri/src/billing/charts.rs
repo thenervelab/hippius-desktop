@@ -606,20 +606,9 @@ pub fn calculate_storage_capacity(credits_per_month: Vec<f64>) -> Vec<StorageCap
                 }
             }
 
-            // Return just the storage amount (e.g. "999 GB", "5 TB").
-            // The frontend appends " storage on Hippius" and highlights the amount in blue.
-            let storage_display = if credits <= 3.0 {
-                let gb_str = add_commas_to_int(&max_gb.to_string());
-                format!("{gb_str} GB")
-            } else {
-                let storage_tb = max_gb as f64 / 1000.0;
-                let tb_str = if storage_tb >= 10.0 {
-                    add_commas_to_int(&(storage_tb.floor() as u64).to_string())
-                } else {
-                    format!("{storage_tb:.2}")
-                };
-                format!("{tb_str} TB")
-            };
+            // Display-only — see `format_storage_display`. The frontend
+            // appends " storage on Hippius".
+            let storage_display = format_storage_display(max_gb);
 
             let usage_description = if credits <= 3.0 {
                 "Ideal for Personal Backups"
@@ -645,6 +634,29 @@ pub fn calculate_storage_capacity(credits_per_month: Vec<f64>) -> Vec<StorageCap
             }
         })
         .collect()
+}
+
+/// Plan-card label for a binary-searched GB capacity.
+///
+/// 1000 GB costs a hair over 3 credits, so the search lands 1 GB short
+/// of a round thousand. Switch to TB from 500 GB and round, so the
+/// marketed SKUs read 1 / 50 / 150 TB. Do not change `storage_gb`.
+fn format_storage_display(max_gb: u64) -> String {
+    const GB_PER_TB: f64 = 1000.0;
+    const MIN_TB_DISPLAY_GB: u64 = 500;
+
+    if max_gb < MIN_TB_DISPLAY_GB {
+        let gb_str = add_commas_to_int(&max_gb.to_string());
+        return format!("{gb_str} GB");
+    }
+
+    let storage_tb = max_gb as f64 / GB_PER_TB;
+    if storage_tb >= 10.0 {
+        let tb = storage_tb.round() as u64;
+        format!("{} TB", add_commas_to_int(&tb.to_string()))
+    } else {
+        format!("{storage_tb:.2} TB")
+    }
 }
 
 /// Internal helper that doesn't go through Tauri IPC.
@@ -987,11 +999,10 @@ mod tests {
         assert!((cost - 0.000_031_5).abs() < 1e-10);
     }
 
-    /// Regression: integer division `max_gb / 1000` for credits ≤ 3
+    /// Regression: integer division `max_gb / 1000` for small balances
     /// collapses any sub-1000 GB capacity to "0 TB" — a 0.74-credit
-    /// balance (~246 GB) would render as "≈0 GB / 0 TB" in the UI. The
-    /// formatter matches the console: GB units when credits ≤ 3, TB
-    /// units (with 2-decimal precision under 10 TB) when credits > 3.
+    /// balance (~246 GB) would render as "≈0 GB / 0 TB" in the UI.
+    /// Sub-500 GB stays in GB; SKUs near a terabyte switch to TB.
     #[test]
     fn storage_display_small_credits_shows_gb() {
         let info = calculate_storage_capacity(vec![0.74]);
@@ -1029,5 +1040,54 @@ mod tests {
         let display = &info[0].storage_display;
         assert!(display.ends_with(" TB"), "expected TB unit, got: {display}");
         assert!(!display.contains('.'), "expected integer TB above 10 TB, got: {display}");
+    }
+
+    /// H-021: the binary search lands one GB under a round thousand, and
+    /// flooring TB then advertised 999 GB / 49 TB / 149 TB. Display
+    /// rounds; `storage_gb` must NOT follow, or capacity math inflates.
+    #[test]
+    fn marketed_plan_skus_round_the_label_not_the_gb() {
+        let info = calculate_storage_capacity(vec![3.0, 15.0, 150.0, 450.0]);
+        assert_eq!(info[0].storage_display, "1.00 TB");
+        assert_eq!(info[1].storage_display, "5.00 TB");
+        assert_eq!(info[2].storage_display, "50 TB");
+        assert_eq!(info[3].storage_display, "150 TB");
+
+        assert!(
+            info[0].storage_gb < 1000,
+            "3-credit capacity must stay the searched GB, not snap to 1000; got {}",
+            info[0].storage_gb
+        );
+        assert!(
+            info[1].storage_gb < 5_000,
+            "15-credit capacity must stay the searched GB, not snap to 5000; got {}",
+            info[1].storage_gb
+        );
+        assert!(
+            info[2].storage_gb < 50_000,
+            "150-credit capacity must stay under 50 TB in GB; got {}",
+            info[2].storage_gb
+        );
+        assert!(
+            info[3].storage_gb < 150_000,
+            "450-credit capacity must stay under 150 TB in GB; got {}",
+            info[3].storage_gb
+        );
+    }
+
+    #[test]
+    fn format_storage_display_keeps_small_values_in_gb() {
+        assert_eq!(format_storage_display(0), "0 GB");
+        assert_eq!(format_storage_display(246), "246 GB");
+        assert_eq!(format_storage_display(499), "499 GB");
+    }
+
+    #[test]
+    fn format_storage_display_rounds_sku_sized_tb() {
+        assert_eq!(format_storage_display(500), "0.50 TB");
+        assert_eq!(format_storage_display(999), "1.00 TB");
+        assert_eq!(format_storage_display(4_999), "5.00 TB");
+        assert_eq!(format_storage_display(49_991), "50 TB");
+        assert_eq!(format_storage_display(149_975), "150 TB");
     }
 }
