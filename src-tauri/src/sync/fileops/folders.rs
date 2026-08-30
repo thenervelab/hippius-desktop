@@ -166,6 +166,12 @@ pub(crate) fn sanitize_label(label: &str) -> Result<String> {
 /// component already equals the sanitized label — joining again nests
 /// `label/label` and Drive opens an empty tree (H-115).
 pub(crate) fn restore_dest_path(base_path: &Path, safe_label: &str) -> PathBuf {
+    // Identity when the last component equals the label. That cannot tell
+    // "picked the existing drive folder" from "picked a parent that happens
+    // to have the same name" (`~/Documents` as parent of remote `Documents`
+    // would then not nest). The reported bug is the nested empty Drive;
+    // the coincidental-parent case is the rarer of the two and the FE
+    // preview still shows `{parent}/{name}` either way (H-115).
     match base_path.file_name().and_then(|n| n.to_str()) {
         Some(name) if name == safe_label => base_path.to_path_buf(),
         _ => base_path.join(safe_label),
@@ -983,6 +989,18 @@ mod tests {
         assert_eq!(
             restore_dest_path(picked, "hippius-qa-beta4-be"),
             PathBuf::from("/workspace/hippius-qa-beta4-be"),
+        );
+    }
+
+    #[test]
+    fn restore_dest_identity_when_the_parent_is_named_the_same_as_the_label() {
+        // Accepted trade-off (H-115): picking ~/Documents as a *parent* for
+        // a remote folder also named Documents uses ~/Documents as dest
+        // instead of nesting Documents/Documents. The reported bug is the
+        // nested empty Drive.
+        assert_eq!(
+            restore_dest_path(Path::new("/Users/me/Documents"), "Documents"),
+            PathBuf::from("/Users/me/Documents"),
         );
     }
 

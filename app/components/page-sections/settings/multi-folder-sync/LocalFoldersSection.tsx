@@ -27,6 +27,8 @@ import FolderRowSkeleton from "./FolderRowSkeleton";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import type { SyncFolder } from "@/app/lib/types/sync-folder";
 import { invoke } from "@tauri-apps/api/core";
+import { toast } from "sonner";
+import { tauriErrorMessage } from "@/lib/utils/dispatchTauriError";
 import FolderCardContextMenu from "@/app/components/ui/context-menu/FolderCardContextMenu";
 import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
 import { shareDriveModalAtom } from "@/app/lib/global-atoms/sharesAtoms";
@@ -261,6 +263,7 @@ export function LocalFoldersSection({
               });
             } catch (error) {
               console.error("Failed to open in file manager:", error);
+              toast.error(tauriErrorMessage(error));
             }
           },
         },

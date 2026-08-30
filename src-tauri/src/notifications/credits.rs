@@ -517,7 +517,14 @@ fn success_list_title(files: &SyncFileSummary<'_>) -> String {
     let transferred: Vec<&str> = details.iter().filter(|d| d.transferred).filter_map(|d| d.name.as_deref()).collect();
     let total = files.file_count.map_or(details.len(), |n| n as usize);
 
-    if transferred.is_empty() {
+    // Delete-only is inferred from the visible list. That list is capped,
+    // so a truncated mixed cycle whose visible slice is all deletes must
+    // not become "Deleted n files" (H-158). Only trust the list when it
+    // covers the whole cycle.
+    if !details.iter().any(|d| d.transferred) {
+        if total > details.len() {
+            return generic;
+        }
         return delete_only_title(total, &details).unwrap_or(generic);
     }
 
@@ -879,6 +886,13 @@ mod tests {
     fn a_mixed_cycle_does_not_name_a_deleted_file_as_synced() {
         let remote_delete = deleted("report.pdf", "remote_delete");
         assert_eq!(title_for(&details(&[upload("a.txt"), remote_delete]), Some(2)), "Synced 2 files");
+    }
+
+    #[test]
+    fn a_truncated_list_is_not_treated_as_delete_only() {
+        // The notification file list is capped at 200. A mixed cycle whose
+        // visible slice is all deletes would otherwise title as Deleted.
+        assert_eq!(title_for(&details(&[deleted("gone.txt", "remote_delete")]), Some(250)), "Sync Complete");
     }
 
     #[test]

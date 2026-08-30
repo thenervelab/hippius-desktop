@@ -147,6 +147,13 @@ async fn add_file_internal(canonical_parent: &Path, file_path: &str, overwrite: 
         let _ = tokio::fs::remove_file(&staging).await;
         return Err(crate::error::AppError::Io(e));
     }
+    // Re-check immediately before the replace. Two concurrent adds of a
+    // new name can both see missing at the first check; Unix rename would
+    // then clobber. Remaining TOCTOU is the rename itself (H-097 review).
+    if let Err(e) = refuse_unconfirmed_overwrite(&canonical_dest, &name, overwrite).await {
+        let _ = tokio::fs::remove_file(&staging).await;
+        return Err(e);
+    }
     if let Err(e) = tokio::fs::rename(&staging, &canonical_dest).await {
         let _ = tokio::fs::remove_file(&staging).await;
         return Err(crate::error::AppError::Io(e));
