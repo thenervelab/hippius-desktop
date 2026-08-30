@@ -30,7 +30,7 @@ The ~32 submodules are organized into six private sub-domain group directories, 
 
 ## Remote folder listing origin (H-077)
 
-`get_sync_folders_with_stats` (`folders.rs`) puts any server folder whose hash is not in local `sync_paths` into `remote`. `remove_drive` deletes the local row but does **not** unregister the server folder (that is Delete from Server), so the folder reappears stamped with THIS device's `device_name`. Classify that row `RemoteFolderOrigin::LocallyRemoved` via `classify_remote_origin(raw_device_name, get_device_name_internal())` — empty names fail closed to `OtherDevice`. The FE keys the "Not synced on this computer" vs "Sync from Other Devices" split on the tagged `origin` field and must not re-compare names.
+`get_sync_folders_with_stats` (`folders.rs`) puts any server folder whose hash is not in local `sync_paths` into `remote`. `remove_drive` deletes the local row but does **not** unregister the server folder (that is Delete from Server), so the folder reappears stamped with THIS device's `device_name`. Classify that row `RemoteFolderOrigin::LocallyRemoved` via `classify_remote_origin(raw_device_name, get_device_name_internal())` — empty names fail closed to `OtherDevice`. The FE keys the "Not synced on this computer" vs "Sync from Other Devices" split on the tagged `origin` field and must not re-compare names. A locally-removed row's `device_name` is blank so this machine's name does not appear under that heading (H-112).
 
 ## Remote browse and account-wide search
 

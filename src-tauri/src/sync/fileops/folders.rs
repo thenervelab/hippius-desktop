@@ -69,6 +69,31 @@ pub(crate) fn classify_remote_origin(device_name: &str, local_device_name: &str)
     }
 }
 
+/// Display row for a remote-only folder.
+///
+/// Classify on the RAW server name, not the "Unknown Device" fallback.
+/// A locally-removed folder still carries this machine's name on the
+/// server; sending that through made Settings / Drive label it as this
+/// computer under "Not synced on this computer" (H-112). Blank the
+/// name so the FE subtitle (`deviceName && …`) stays off.
+fn remote_folder_display(f: &RemoteFolderInfoResult, local_device_name: &str) -> RemoteFolderDisplay {
+    let origin = classify_remote_origin(&f.device_name, local_device_name);
+    let ts = if f.updated_at != 0 { f.updated_at } else { f.created_at };
+    let device_name = match origin {
+        RemoteFolderOrigin::LocallyRemoved => String::new(),
+        RemoteFolderOrigin::OtherDevice if f.device_name.is_empty() => "Unknown Device".to_string(),
+        RemoteFolderOrigin::OtherDevice => f.device_name.clone(),
+    };
+    RemoteFolderDisplay {
+        folder_name: f.label.clone(),
+        device_name,
+        file_count: f.file_count,
+        total_bytes: f.total_bytes,
+        last_modified: ts * 1000,
+        origin,
+    }
+}
+
 /// A remote-only folder (not synced locally) for the browser UI.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -617,23 +642,7 @@ pub async fn get_sync_folders_with_stats(state: tauri::State<'_, crate::app_stat
     let mut remote_display: Vec<RemoteFolderDisplay> = remote_folders
         .iter()
         .filter(|f| !local_hashes.contains(&f.folder_hash))
-        .map(|f| {
-            let ts = if f.updated_at != 0 { f.updated_at } else { f.created_at };
-            RemoteFolderDisplay {
-                folder_name: f.label.clone(),
-                device_name: if f.device_name.is_empty() {
-                    "Unknown Device".to_string()
-                } else {
-                    f.device_name.clone()
-                },
-                file_count: f.file_count,
-                total_bytes: f.total_bytes,
-                last_modified: ts * 1000,
-                // Classify on the RAW server name, not the display
-                // fallback — "Unknown Device" is not a proof of origin.
-                origin: classify_remote_origin(&f.device_name, &local_device_name),
-            }
-        })
+        .map(|f| remote_folder_display(f, &local_device_name))
         .collect();
     remote_display.sort_by_key(|b| std::cmp::Reverse(b.last_modified));
 
@@ -699,6 +708,39 @@ mod tests {
             classify_remote_origin("Georges-MacBook", "Georges-MacBook"),
             RemoteFolderOrigin::LocallyRemoved,
         );
+    }
+
+    fn sample_remote(device_name: &str) -> RemoteFolderInfoResult {
+        RemoteFolderInfoResult {
+            label: "docs".into(),
+            folder_hash: "abc".into(),
+            file_count: 1,
+            total_bytes: 10,
+            created_at: 0,
+            updated_at: 1_700_000_000,
+            device_name: device_name.into(),
+        }
+    }
+
+    #[test]
+    fn a_locally_removed_folder_has_no_device_name() {
+        let row = remote_folder_display(&sample_remote("cursor"), "cursor");
+        assert_eq!(row.origin, RemoteFolderOrigin::LocallyRemoved);
+        assert_eq!(row.device_name, "");
+    }
+
+    #[test]
+    fn an_other_device_folder_keeps_its_device_name() {
+        let row = remote_folder_display(&sample_remote("Office PC"), "cursor");
+        assert_eq!(row.origin, RemoteFolderOrigin::OtherDevice);
+        assert_eq!(row.device_name, "Office PC");
+    }
+
+    #[test]
+    fn an_unstamped_other_device_folder_falls_back_to_unknown() {
+        let row = remote_folder_display(&sample_remote(""), "cursor");
+        assert_eq!(row.origin, RemoteFolderOrigin::OtherDevice);
+        assert_eq!(row.device_name, "Unknown Device");
     }
 
     #[test]
@@ -828,12 +870,8 @@ mod tests {
             "get_sync_folders_with_stats must read this machine's device name to classify remote rows",
         );
         assert!(
-            body.contains("classify_remote_origin("),
-            "get_sync_folders_with_stats must stamp origin via classify_remote_origin so the FE cannot mis-bucket a locally-removed folder",
-        );
-        assert!(
-            body.contains("classify_remote_origin(&f.device_name, &local_device_name)"),
-            "classification must use the raw server device_name, not the 'Unknown Device' display fallback",
+            body.contains("remote_folder_display("),
+            "get_sync_folders_with_stats must build remote rows via remote_folder_display",
         );
     }
 
