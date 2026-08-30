@@ -10,19 +10,18 @@
 # bundled debug `.app`, embeds + signs the extension, and registers it ONCE.
 #
 # After that, the extension is a standalone process Finder loads; it talks to
-# whichever Hippius process is bound to the App Group socket
-# (`~/Library/Group Containers/V28B5X732P.com.hippius.shared/finder.sock`). The
-# app binds that socket on every macOS launch and `create_dir_all`s the
-# container itself (finder_bridge::socket::FinderBridge::start), so a subsequent
-# `pnpm tauri:dev` binary binds it too — hot-reload dev then drives the SAME
-# registered extension. Re-run this script only after editing the Swift
-# extension (macos/HippiusFinder/*.swift); Rust/frontend changes just need
+# whichever Hippius process is bound to `~/.hippius/finder.sock`. The app binds
+# that socket on every launch and creates the directory itself
+# (finder_bridge::socket::FinderBridge::start), so a subsequent `pnpm tauri:dev`
+# binary binds it too — hot-reload dev then drives the SAME registered
+# extension. Re-run this script only after editing the Swift extension
+# (macos/HippiusFinder/*.swift); Rust/frontend changes just need
 # `pnpm tauri:dev`.
 #
-# App Groups require a REAL Team ID — ad-hoc ("-") signing does not grant the
-# shared container, so a Developer ID Application identity is required even
-# locally. Set APPLE_SIGNING_IDENTITY, or this script auto-detects the first one
-# in your keychain.
+# The extension's sandbox exceptions are restricted entitlements, honoured only
+# for a properly signed binary, so a Developer ID Application identity is
+# required even locally. Set APPLE_SIGNING_IDENTITY, or this script auto-detects
+# the first one in your keychain.
 set -euo pipefail
 
 if [[ "$(uname)" != "Darwin" ]]; then
@@ -43,11 +42,11 @@ if [[ -z "${APPLE_SIGNING_IDENTITY}" ]]; then
   cat >&2 <<'EOHELP'
 ERROR: no 'Developer ID Application' code-signing identity found in your keychain.
 
-The Finder extension is sandboxed and reaches the app ONLY through the App Group
-container "V28B5X732P.com.hippius.shared". macOS grants that container only to code
-signed by Apple Team V28B5X732P, so a real Team-V28B5X732P certificate is required —
-ad-hoc ("-") or another team's cert cannot work. (Everything EXCEPT the Finder
-feature still runs fine under a plain `pnpm tauri:dev` with no cert.)
+The Finder extension is sandboxed and reaches the app only through the socket
+exceptions in macos/FinderSync.entitlements. Those are restricted entitlements,
+which macOS honours only for a properly signed binary — ad-hoc ("-") signing cannot
+carry them. (Everything EXCEPT the Finder feature still runs fine under a plain
+`pnpm tauri:dev` with no cert.)
 
 Fix with ONE of:
   • Import the shared Hippius "Developer ID Application" cert (the same .p12 CI uses
@@ -69,7 +68,7 @@ appex="$(macos/build-finder-appex.sh)"
 
 echo "==> [2/4] Build the debug app bundle"
 app="${repo_root}/src-tauri/target/debug/bundle/macos/Hippius.app"
-# The bundle is signed with the identity above so the App Group survives. The
+# The bundle is signed with the identity above so the sandbox exceptions survive. The
 # trailing "TAURI_SIGNING_PRIVATE_KEY" updater error is HARMLESS — the .app is
 # built + signed before it fires — so success is judged by the .app existing,
 # not by tauri's exit code.

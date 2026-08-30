@@ -35,34 +35,47 @@ pub async fn get_subscription_data(
 
     let active = active_result.unwrap_or(serde_json::json!({"has_subscription": false}));
     let plans_resp = plans_result.unwrap_or(serde_json::json!({"plans": [], "recommendation": ""}));
+    Ok(assemble_subscription_data(active, plans_resp))
+}
 
+/// Combine the two billing payloads into the FE-facing shape.
+///
+/// `is_on_highest_plan` is false when there is no subscription **or** when
+/// the plans list is empty/missing. An empty list is the fail-soft from a
+/// failed plans fetch; treating `current >= 0` as "highest" would hide the
+/// upgrade CTA while we do not actually know the catalog.
+fn assemble_subscription_data(active: serde_json::Value, plans_resp: serde_json::Value) -> SubscriptionData {
     let plans = plans_resp.get("plans").cloned().unwrap_or(serde_json::json!([]));
     let recommendation = plans_resp.get("recommendation").and_then(|v| v.as_str()).unwrap_or("").to_string();
 
-    // Derive is_on_highest_plan
     let has_subscription = active.get("has_subscription").and_then(serde_json::Value::as_bool).unwrap_or(false);
-    let is_on_highest_plan = if has_subscription {
-        let current_amount = active
-            .get("subscription")
-            .and_then(|s| s.get("amount"))
-            .and_then(serde_json::Value::as_f64)
-            .unwrap_or(0.0);
-        let highest_amount = plans.as_array().map_or(0.0, |arr| {
-            arr.iter()
-                .filter_map(|p| p.get("amount").and_then(serde_json::Value::as_f64))
-                .fold(0.0f64, f64::max)
-        });
-        current_amount >= highest_amount
-    } else {
-        false
-    };
+    let is_on_highest_plan = has_subscription && current_meets_highest_plan(&active, &plans);
 
-    Ok(SubscriptionData {
+    SubscriptionData {
         active_subscription: active,
         plans,
         recommendation,
         is_on_highest_plan,
-    })
+    }
+}
+
+fn current_meets_highest_plan(active: &serde_json::Value, plans: &serde_json::Value) -> bool {
+    let Some(arr) = plans.as_array() else {
+        return false;
+    };
+    if arr.is_empty() {
+        return false;
+    }
+    let current_amount = active
+        .get("subscription")
+        .and_then(|s| s.get("amount"))
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(0.0);
+    let highest_amount = arr
+        .iter()
+        .filter_map(|p| p.get("amount").and_then(serde_json::Value::as_f64))
+        .fold(0.0f64, f64::max);
+    current_amount >= highest_amount
 }
 
 /// Initiate a Stripe checkout session for a new subscription.
@@ -100,4 +113,53 @@ pub async fn get_customer_portal_url(
     Ok(client
         .post::<serde_json::Value, _>("/api/billing/stripe/customer-portal/", &body, &account_id)
         .await?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::assemble_subscription_data;
+    use serde_json::json;
+
+    #[test]
+    fn no_subscription_is_never_on_the_highest_plan() {
+        let data = assemble_subscription_data(
+            json!({"has_subscription": false}),
+            json!({"plans": [{"amount": 10.0}], "recommendation": "pro"}),
+        );
+        assert!(!data.is_on_highest_plan);
+        assert_eq!(data.recommendation, "pro");
+    }
+
+    #[test]
+    fn current_amount_at_or_above_the_catalog_max_is_highest() {
+        let data = assemble_subscription_data(
+            json!({"has_subscription": true, "subscription": {"amount": 20.0}}),
+            json!({"plans": [{"amount": 10.0}, {"amount": 20.0}]}),
+        );
+        assert!(data.is_on_highest_plan);
+    }
+
+    #[test]
+    fn current_amount_below_the_catalog_max_is_not_highest() {
+        let data = assemble_subscription_data(
+            json!({"has_subscription": true, "subscription": {"amount": 10.0}}),
+            json!({"plans": [{"amount": 10.0}, {"amount": 20.0}]}),
+        );
+        assert!(!data.is_on_highest_plan);
+    }
+
+    #[test]
+    fn empty_or_missing_plans_never_claim_highest() {
+        // Fail-soft from a failed plans fetch used to compare current >= 0 and
+        // hide the upgrade CTA. An empty catalog is "we don't know", not "top tier".
+        let empty = assemble_subscription_data(
+            json!({"has_subscription": true, "subscription": {"amount": 20.0}}),
+            json!({"plans": [], "recommendation": ""}),
+        );
+        assert!(!empty.is_on_highest_plan);
+
+        let missing = assemble_subscription_data(json!({"has_subscription": true, "subscription": {"amount": 20.0}}), json!({}));
+        assert!(!missing.is_on_highest_plan);
+        assert_eq!(missing.plans, json!([]));
+    }
 }

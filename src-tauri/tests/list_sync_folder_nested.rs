@@ -34,7 +34,7 @@ use sqlx::sqlite::SqlitePool;
 
 use tauri_project_lib::app_state::AppState;
 use tauri_project_lib::auth::state::AuthCapabilities;
-use tauri_project_lib::sync::files::list_sync_folder_grouped_inner;
+use tauri_project_lib::sync::files::{FileEntry, list_sync_folder_grouped_inner};
 
 const ACCOUNT: &str = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
 const LABEL: &str = "my-drive";
@@ -140,6 +140,18 @@ fn seed_cache(state: &AppState, entries: &[&str]) {
         map.insert((*rel).to_string(), fake_info(u8::try_from(i).unwrap_or(u8::MAX)));
     }
     state.sync.update_synced_paths_cache(LABEL, map);
+}
+
+fn entry_names(entries: &[FileEntry]) -> Vec<&str> {
+    entries.iter().map(|e| e.name.as_str()).collect()
+}
+
+fn assert_status(entries: &[FileEntry], name: &str, status: &str) {
+    assert_eq!(
+        entries.iter().find(|e| e.name == name).map(|e| e.sync_status.as_str()),
+        Some(status),
+        "{name}"
+    );
 }
 
 fn write_file(dir: &std::path::Path, rel: &str) {
@@ -467,14 +479,9 @@ async fn register_drive_with_excludes(state: &AppState, sync_root: &std::path::P
     );
 }
 
-/// The bug this guards (H-069): a user-typed `*.bin` was honoured by the sync
-/// engine but compared with `==` by the listing, so a file the engine refused
-/// to upload sat on Drive as Pending forever.
-///
-/// Drives the real grouped listing rather than the matcher, because every
-/// source that feeds a row has to agree: the on-disk walk, the server-only
-/// overlay, and the `folder_entries_local` cache. Each of the three was its
-/// own way for an excluded entry to come back.
+/// H-069: a user-typed `*.bin` must match via ExcludeRules, not `==`.
+/// H-045: matching *files* stay listed as `excluded`; matching *folders*
+/// stay off Drive. Every source that feeds a row has to agree.
 #[tokio::test]
 async fn excluded_globs_are_hidden_from_every_source_the_grouped_listing_merges() {
     let tmp = tempfile::tempdir().unwrap();
@@ -514,21 +521,16 @@ async fn excluded_globs_are_hidden_from_every_source_the_grouped_listing_merges(
     let root_listing = list_sync_folder_grouped_inner(&state, ACCOUNT.into(), root.to_string_lossy().into(), None, Some(LABEL.into()))
         .await
         .expect("root listing");
+    let file_names = entry_names(&root_listing.files);
+    let folder_names = entry_names(&root_listing.folders);
 
-    let file_names: Vec<&str> = root_listing.files.iter().map(|f| f.name.as_str()).collect();
-    let folder_names: Vec<&str> = root_listing.folders.iter().map(|f| f.name.as_str()).collect();
-
-    assert!(!file_names.contains(&"dump.bin"), "on-disk *.bin must be hidden: {file_names:?}");
-    assert!(
-        !file_names.contains(&"server-only.bin"),
-        "server-only *.bin must be hidden: {file_names:?}"
-    );
+    assert_status(&root_listing.files, "dump.bin", "excluded");
+    assert_status(&root_listing.files, "server-only.bin", "excluded");
     assert!(file_names.contains(&"notes.txt"), "unmatched files must stay: {file_names:?}");
     assert!(
         file_names.contains(&"dump.bin.bak"),
         "*.bin is an extension match, not a substring: {file_names:?}"
     );
-
     assert!(
         !folder_names.contains(&"node_modules"),
         "an excluded directory must not come back from disk or the folder-entity cache: {folder_names:?}"
@@ -554,8 +556,9 @@ async fn excluded_globs_are_hidden_from_every_source_the_grouped_listing_merges(
     )
     .await
     .expect("sub listing");
-    let sub_files: Vec<&str> = sub.files.iter().map(|f| f.name.as_str()).collect();
-    assert_eq!(sub_files, vec!["inner.txt"], "*.bin applies at depth too");
+    let sub_files = entry_names(&sub.files);
+    assert!(sub_files.contains(&"inner.txt"), "unmatched nested file stays: {sub_files:?}");
+    assert_status(&sub.files, "inner.bin", "excluded");
 
     let remote = list_sync_folder_grouped_inner(
         &state,
@@ -566,8 +569,9 @@ async fn excluded_globs_are_hidden_from_every_source_the_grouped_listing_merges(
     )
     .await
     .expect("remote listing");
-    let remote_files: Vec<&str> = remote.files.iter().map(|f| f.name.as_str()).collect();
-    assert_eq!(remote_files, vec!["keep.txt"], "server-only overlay honours excludes at depth");
+    let remote_files = entry_names(&remote.files);
+    assert!(remote_files.contains(&"keep.txt"), "unmatched server-only file stays: {remote_files:?}");
+    assert_status(&remote.files, "drop.bin", "excluded");
 }
 
 /// Clearing the pattern must bring the files straight back. The listing
@@ -590,7 +594,12 @@ async fn clearing_the_pattern_restores_the_hidden_files() {
     let hidden = list_sync_folder_grouped_inner(&state, ACCOUNT.into(), root.to_string_lossy().into(), None, Some(LABEL.into()))
         .await
         .expect("listing with the rule");
-    assert_eq!(hidden.files.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), vec!["notes.txt"]);
+    let with_rule: Vec<&str> = hidden.files.iter().map(|f| f.name.as_str()).collect();
+    assert!(with_rule.contains(&"dump.bin"), "excluded file stays listed: {with_rule:?}");
+    assert_eq!(
+        hidden.files.iter().find(|f| f.name == "dump.bin").map(|f| f.sync_status.as_str()),
+        Some("excluded"),
+    );
 
     std::fs::write(root.join(".hippius").join("exclude"), "").expect("clear exclude file");
 
@@ -599,5 +608,50 @@ async fn clearing_the_pattern_restores_the_hidden_files() {
         .expect("listing after clearing");
     let names: Vec<&str> = restored.files.iter().map(|f| f.name.as_str()).collect();
     assert!(names.contains(&"dump.bin"), "clearing the pattern must restore the file: {names:?}");
+    assert_ne!(
+        restored.files.iter().find(|f| f.name == "dump.bin").map(|f| f.sync_status.as_str()),
+        Some("excluded"),
+        "clearing the pattern must drop the excluded status",
+    );
     assert!(names.contains(&"notes.txt"), "{names:?}");
+}
+
+/// H-063: UTF-8 hidden names (`.env.qa`, `.hidden`) stay off Drive because
+/// the engine never uploads them. Listing one would pin it Pending forever.
+/// File No matches the visible rows (H-082), not disk.
+///
+/// A skip toast is frontend — this test pins the backend contract: omit,
+/// do not list-as-pending.
+#[tokio::test]
+async fn hidden_dotfiles_are_omitted_not_listed_pending() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    write_file(root, "keep.txt");
+    write_file(root, ".env.qa");
+    write_file(root, ".hidden");
+    std::fs::create_dir(root.join(".hidden_dir")).expect("mkdir .hidden_dir");
+    write_file(root, ".hidden_dir/inside.txt");
+
+    let pool = make_pool().await;
+    insert_sync_path(&pool, &root.to_string_lossy(), Some(1_700_000_000)).await;
+    let state = make_state(pool);
+    // Seed hidden names in the rel-path index too: the disk walk skips
+    // them, so without an overlay skip they would reappear as Pending.
+    seed_cache(&state, &["keep.txt", ".env.qa", ".hidden", ".hidden_dir/inside.txt"]);
+
+    let listing = list_sync_folder_grouped_inner(&state, ACCOUNT.into(), root.to_string_lossy().into(), None, Some(LABEL.into()))
+        .await
+        .expect("listing");
+
+    let file_names: Vec<&str> = listing.files.iter().map(|f| f.name.as_str()).collect();
+    let folder_names: Vec<&str> = listing.folders.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(file_names, vec!["keep.txt"], "hidden files must not appear: {file_names:?}");
+    assert!(
+        folder_names.iter().all(|n| !n.starts_with('.')),
+        "hidden folders must not appear: {folder_names:?}"
+    );
+    assert!(
+        listing.files.iter().chain(listing.folders.iter()).all(|e| !e.name.starts_with('.')),
+        "overlay must not resurrect a hidden rel-path as pending"
+    );
 }

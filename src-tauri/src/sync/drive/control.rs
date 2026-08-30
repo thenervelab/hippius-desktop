@@ -311,15 +311,14 @@ pub(crate) fn resolve_drive_path(paths: Vec<crate::sync::paths::SyncPathResult>,
 /// manager on Linux).
 ///
 /// Looks up the `sync_paths` row by `(owner, label)` for the currently
-/// logged-in account, then hands the resolved path to
-/// `tauri_plugin_opener::reveal_item_in_dir`. Path resolution lives in
-/// Rust so the frontend never reads the `sync_paths` table just to
-/// figure out which folder backs a label.
+/// logged-in account, then reveals it through [`crate::utils::reveal`].
+/// Path resolution lives in Rust so the frontend never reads the
+/// `sync_paths` table just to figure out which folder backs a label.
 ///
 /// Errors:
 /// - `NotReady` (no logged-in account)
 /// - `NotFound("No sync path with label '...'")` when the label is unknown
-/// - `Other("Failed to reveal ...")` when the opener plugin call fails
+/// - `Other("Failed to reveal ...")` when the file manager cannot be opened
 #[tauri::command]
 pub async fn reveal_drive_in_finder(state: tauri::State<'_, crate::app_state::AppState>, label: String) -> Result<()> {
     let pool = state.pool()?;
@@ -328,8 +327,7 @@ pub async fn reveal_drive_in_finder(state: tauri::State<'_, crate::app_state::Ap
     let paths = crate::sync::folders::get_all_sync_paths_internal(pool, &account_id).await?;
     let path = resolve_drive_path(paths, &label)?;
 
-    // The opener plugin's error has no fitting typed variant → documented Other.
-    tauri_plugin_opener::reveal_item_in_dir(&path).map_err(|e| crate::error::AppError::Other(format!("Failed to reveal '{path}': {e}")))?;
+    crate::utils::reveal::reveal_path(std::path::Path::new(&path))?;
 
     info!("Revealed drive '{}' at '{}' in file manager", label, path);
     Ok(())
@@ -372,6 +370,23 @@ mod tests {
     fn resolve_drive_path_errors_on_empty_list() {
         let err = resolve_drive_path(Vec::new(), "anything").unwrap_err();
         assert!(err.to_string().contains("anything"));
+    }
+
+    #[test]
+    fn reveal_drive_in_finder_routes_through_utils_reveal() {
+        let src = include_str!("control.rs");
+        let start = src.find("pub async fn reveal_drive_in_finder(").expect("command");
+        let rest = &src[start..];
+        let end = rest.find("#[cfg(test)]").unwrap_or(rest.len());
+        let body = &rest[..end];
+        assert!(
+            body.contains("crate::utils::reveal::reveal_path("),
+            "reveal_drive_in_finder must share the Linux xdg-open fallback with Drive kebabs"
+        );
+        assert!(
+            !body.contains("tauri_plugin_opener::reveal_item_in_dir"),
+            "do not call the opener plugin from this command; utils::reveal owns the platform split"
+        );
     }
 
     fn resolutions(pairs: &[(&str, &str)]) -> HashMap<String, String> {

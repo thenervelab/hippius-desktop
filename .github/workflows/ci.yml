@@ -362,7 +362,7 @@ jobs:
     # release: macos/verify-macos-artifacts.sh and scripts/verify-release-manifest.sh
     # are what stand between a bad macOS build and the fleet, and they run
     # nowhere except on a release push, where a typo is discovered by the release
-    # failing. `-x` follows the `source`d macos/group.env.
+    # failing. `-x` traces the resolved paths.
     #
     # The ubuntu runner ships shellcheck, so unlike actionlint and zizmor there
     # is no binary to fetch or pin here.

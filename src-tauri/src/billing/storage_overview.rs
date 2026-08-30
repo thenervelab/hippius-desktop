@@ -27,9 +27,12 @@ use crate::api::client::ApiClient;
 use crate::error::AppError;
 
 /// Capacity math is decimal GB end-to-end (`calculate_storage_capacity`
-/// returns SI GB; the FE formats with the SI `formatBytes`), so the GB→bytes
+/// returns SI GB; display labels are SI too), so the GB→bytes
 /// conversion must be SI too — 1e9, not 2^30.
 const BYTES_PER_GB: u64 = 1_000_000_000;
+
+/// SI units for the home storage card. Same 1000-based scale as `formatBytes`.
+const SI_UNITS: [&str; 6] = ["B", "KB", "MB", "GB", "TB", "PB"];
 
 /// Which source won the capacity decision. Lowercase on the wire.
 #[derive(Serialize, Debug, PartialEq, Eq, Clone, Copy)]
@@ -81,6 +84,12 @@ pub struct StorageOverview {
     /// not the account total (other devices, member drives, and
     /// encryption overhead all disagree).
     pub used_pending: bool,
+    /// Display labels for the storage card. Authored here so used / total /
+    /// free cannot disagree about units or rounding (H-109). The FE renders
+    /// these strings; it must not `formatBytes` the raw counts.
+    pub used_display: String,
+    pub total_display: String,
+    pub free_display: String,
 }
 
 /// Pure composition of the overview from its three inputs.
@@ -91,41 +100,101 @@ pub struct StorageOverview {
 fn build_overview(used_bytes: u64, plan: Option<PlanInfo>, credits: f64, credits_capacity_gb: u64, credits_hip: Option<String>) -> StorageOverview {
     if let Some(plan) = plan {
         let total_bytes = plan.storage_bytes;
-        let percent = percent_of(used_bytes, total_bytes);
-        return StorageOverview {
-            used_bytes,
-            total_bytes,
-            percent,
-            source: CapacitySource::Subscription,
-            plan: Some(plan),
-            credits_hip,
-            used_pending: false,
-        };
+        return finish_overview(used_bytes, total_bytes, CapacitySource::Subscription, Some(plan), credits_hip);
     }
     if credits > 0.0 {
         // The balance prices what can still be stored, so capacity is
         // used + buyable — matching the mobile app's original hybrid.
         let total_bytes = used_bytes.saturating_add(credits_capacity_gb.saturating_mul(BYTES_PER_GB));
-        let percent = percent_of(used_bytes, total_bytes);
-        return StorageOverview {
-            used_bytes,
-            total_bytes,
-            percent,
-            source: CapacitySource::Credits,
-            plan: None,
-            credits_hip,
-            used_pending: false,
-        };
+        return finish_overview(used_bytes, total_bytes, CapacitySource::Credits, None, credits_hip);
     }
+    finish_overview(used_bytes, 0, CapacitySource::None, None, credits_hip)
+}
+
+fn finish_overview(
+    used_bytes: u64,
+    total_bytes: u64,
+    source: CapacitySource,
+    plan: Option<PlanInfo>,
+    credits_hip: Option<String>,
+) -> StorageOverview {
+    let labels = format_overview_labels(used_bytes, total_bytes);
     StorageOverview {
         used_bytes,
-        total_bytes: 0,
-        percent: 0.0,
-        source: CapacitySource::None,
-        plan: None,
+        total_bytes,
+        percent: percent_of(used_bytes, total_bytes),
+        source,
+        plan,
         credits_hip,
         used_pending: false,
+        used_display: labels.used,
+        total_display: labels.total,
+        free_display: labels.free,
     }
+}
+
+struct OverviewLabels {
+    used: String,
+    total: String,
+    free: String,
+}
+
+/// Used stays in its natural unit (31.91 GB is more readable than 0.03 TB).
+/// Total and free share the total's unit and keep two decimal places so
+/// "5.03 TB" / "5.00 TB" cannot collapse to "5 TB" the way `formatBytes`
+/// does after `parseFloat` (H-109).
+fn format_overview_labels(used_bytes: u64, total_bytes: u64) -> OverviewLabels {
+    let free_bytes = total_bytes.saturating_sub(used_bytes);
+    let used_idx = si_unit_index(used_bytes);
+    let total_idx = si_unit_index(total_bytes);
+    // Same-unit used keeps `.00` so "5 TB of 5.00 TB" cannot return.
+    let keep_used_decimals = used_idx == total_idx && total_idx > 0;
+    let free = format_si(free_bytes, total_idx, true);
+    // Shared-unit rounding can hide leftover GB as "0.00 TB". Call that
+    // out rather than dropping to a smaller unit (which reopens H-109).
+    let free = if free_bytes > 0 && free.starts_with("0.00 ") {
+        format!("<0.01 {}", SI_UNITS[total_idx])
+    } else {
+        free
+    };
+    OverviewLabels {
+        used: format_si(used_bytes, used_idx, keep_used_decimals),
+        total: format_si(total_bytes, total_idx, true),
+        free,
+    }
+}
+
+fn si_unit_index(bytes: u64) -> usize {
+    if bytes == 0 {
+        return 0;
+    }
+    let mut i = 0;
+    let mut v = bytes;
+    while v >= 1000 && i + 1 < SI_UNITS.len() {
+        v /= 1000;
+        i += 1;
+    }
+    i
+}
+
+fn format_si(bytes: u64, unit_idx: usize, keep_two_decimals: bool) -> String {
+    if unit_idx == 0 {
+        return format!("{bytes} B");
+    }
+    let val = bytes as f64 / 1000f64.powi(unit_idx as i32);
+    if keep_two_decimals {
+        format!("{:.2} {}", val, SI_UNITS[unit_idx])
+    } else {
+        let formatted = format!("{val:.2}");
+        format!("{} {}", trim_dot_zeros(&formatted), SI_UNITS[unit_idx])
+    }
+}
+
+fn trim_dot_zeros(s: &str) -> &str {
+    if !s.contains('.') {
+        return s;
+    }
+    s.trim_end_matches('0').trim_end_matches('.')
 }
 
 /// Indexer-lag flag for the home storage card.
@@ -144,10 +213,20 @@ fn used_pending(indexer_bytes: u64, local_bytes: u64) -> bool {
 /// Short-circuits on the first non-zero size: the flag only needs `> 0`.
 /// Hidden (dot-prefixed) names are skipped by the same walk the Files
 /// header uses, so 46 B vs 0 B cannot disagree about what counts.
+///
+/// Walked with NO exclude rules, deliberately for now: this probe has no
+/// drive labels to resolve patterns from. The dir-stats cache keys on the
+/// ruleset AND holds one entry per ruleset, so this walk neither serves the
+/// listing's numbers nor evicts them — see `dir_stats::DirStatsKey`, and do
+/// not "simplify" that key back to the path alone: a single slot per
+/// directory would make this probe and the listing overwrite each other on
+/// every refresh. KNOWN GAP: a drive whose only un-uploaded bytes are
+/// excluded reads as "local data the indexer has not caught up with",
+/// pinning the card on "Updating…" for something that will never upload.
 async fn local_bytes_for_paths(paths: &[std::path::PathBuf]) -> u64 {
     let mut total = 0u64;
     for path in paths {
-        let (size, _) = crate::sync::files::dir_stats_recursive(path).await;
+        let (size, _) = crate::sync::files::dir_stats_recursive(path, None).await;
         total = total.saturating_add(size);
         if total > 0 {
             return total;
@@ -321,6 +400,78 @@ mod tests {
         assert_eq!(overview.total_bytes, 400 * BYTES_PER_GB);
         assert!((overview.percent - 25.0).abs() < 1e-9);
         assert_eq!(overview.plan, None);
+    }
+
+    /// H-109: 31.91 GB stored on a 15-credit balance (4,999 GB buyable) is
+    /// hybrid-total 5.03091 TB. FE `formatBytes` rounded free 4.999 TB to
+    /// "5 TB" (it drops `.00`), so the same card read "31.91 GB of 5.03 TB
+    /// used" and "5 TB free". Labels keep two decimals on total/free and
+    /// share that unit; used stays in its natural unit.
+    #[test]
+    fn hybrid_labels_keep_two_decimals_so_free_matches_total() {
+        let overview = build_overview(31_910_000_000, None, 15.0, 4_999, Some("15".into()));
+        assert_eq!(overview.source, CapacitySource::Credits);
+        assert_eq!(overview.used_bytes, 31_910_000_000);
+        assert_eq!(overview.total_bytes, 31_910_000_000 + 4_999 * BYTES_PER_GB);
+        assert_eq!(
+            overview.used_bytes + overview.total_bytes.saturating_sub(overview.used_bytes),
+            overview.total_bytes,
+            "raw used + free must equal total"
+        );
+        assert_eq!(overview.used_display, "31.91 GB");
+        assert_eq!(overview.total_display, "5.03 TB");
+        assert_eq!(overview.free_display, "5.00 TB");
+        assert!(
+            overview.free_display.ends_with("TB") && overview.total_display.ends_with("TB"),
+            "total and free must share a unit: {} / {}",
+            overview.total_display,
+            overview.free_display
+        );
+        // The bug was dropping `.00`. A refactor through `formatBytes` would
+        // turn 4.999 TB into "5 TB" and fail here.
+        assert_ne!(overview.free_display, "5 TB");
+    }
+
+    #[test]
+    fn overview_labels_use_camel_case_on_the_wire() {
+        let overview = build_overview(31_910_000_000, None, 15.0, 4_999, Some("15".into()));
+        let json = serde_json::to_value(&overview).expect("serialize");
+        assert_eq!(json["usedDisplay"], "31.91 GB");
+        assert_eq!(json["totalDisplay"], "5.03 TB");
+        assert_eq!(json["freeDisplay"], "5.00 TB");
+    }
+
+    #[test]
+    fn empty_drive_on_five_tb_credits_keeps_dot_zero() {
+        let overview = build_overview(0, None, 15.0, 4_999, Some("15".into()));
+        assert_eq!(overview.used_display, "0 B");
+        assert_eq!(overview.total_display, "5.00 TB");
+        assert_eq!(overview.free_display, "5.00 TB");
+    }
+
+    #[test]
+    fn over_quota_free_is_zero_in_the_total_unit() {
+        let overview = build_overview(6_000 * BYTES_PER_GB, Some(pro_plan(5_000)), 0.0, 0, None);
+        assert_eq!(overview.total_display, "5.00 TB");
+        assert_eq!(overview.free_display, "0.00 TB");
+        assert!((overview.percent - 100.0).abs() < 1e-9);
+    }
+
+    /// 4 GB leftover on a 5 TB plan must not vanish as "5 TB of 5.00 TB /
+    /// 0.00 TB free". Used keeps two decimals when it shares total's unit;
+    /// free that rounds to 0.00 while bytes remain is "<0.01 TB".
+    #[test]
+    fn leftover_gb_on_a_tb_plan_does_not_vanish() {
+        let overview = build_overview(4_996 * BYTES_PER_GB, Some(pro_plan(5_000)), 0.0, 0, None);
+        assert_eq!(overview.used_display, "5.00 TB");
+        assert_eq!(overview.total_display, "5.00 TB");
+        assert_eq!(overview.free_display, "<0.01 TB");
+        assert_ne!(overview.free_display, "0.00 TB");
+        assert!(
+            (overview.percent - 99.92).abs() < 0.01,
+            "raw percent must stay unclamped, got {}",
+            overview.percent
+        );
     }
 
     #[test]

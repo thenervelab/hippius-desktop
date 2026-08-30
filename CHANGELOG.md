@@ -67,6 +67,29 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **macOS no longer asks "Hippius would like to access data from other apps"
+  every time you open the app.** Answering Allow never made it stop; the prompt
+  is now gone entirely, and Finder right-click sharing works exactly as before.
+- **Open in Finder / Reveal in Finder now opens the file manager on Linux.**
+- **Uploading a file that already exists no longer replaces it silently.** The previous file stays; a confirmed replace is a follow-up.
+- **A finished delete is titled as a delete**, not "Sync Complete".
+- **Syncing a folder from another device uses the folder you picked.** Choosing the existing folder no longer creates a nested copy with the same name.
+- **The subscribe offer still shows if plan prices fail to load**, instead of looking like you are already on the top plan.
+- **Plan sizes on Billing now match the marketed amounts.** The 3 / 150 / 450
+  credit plans show 1 TB / 50 TB / 150 TB instead of 999 GB / 49 TB / 149 TB.
+- **Downloaded folders keep the original file dates.** Zip entries no longer
+  all show 1 January 1980.
+- **A folder you remove from this computer is not labelled with this
+  computer's name.** It stays under "Not synced on this computer" without
+  repeating the device line.
+- **Home storage used, total, and free now add up.** Remaining space uses
+  the same unit and decimals as the total, so a card no longer reads
+  “31.91 GB of 5.03 TB used” next to “5 TB free”.
+- **Hidden files no longer reappear in Drive as waiting to sync.**
+- **A folder's size and file count now leave out the files you excluded.**
+  Excluded files still show in the folder (they are not uploaded); the row
+  numbers match File No, which also skips them.
+
 - **The low-credits warning clears after you add credits.** The bell no longer
   showed an unread "you're running low on credits" notice next to the one saying
   your credits had just landed.
@@ -101,9 +124,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   Release pages carried a second Mac file next to the disk image that read as an
   alternative download but was missing "Share with Hippius" and Apple's security
   check. It is gone from current releases and will not appear on new ones.
-- **Files you exclude with a pattern like `*.bin` disappear from Drive.**
-  Recent Files no longer shows them, your storage total stops counting them,
-  and clearing the pattern brings them back without a manual refresh.
+- **Files you exclude with a pattern like `*.bin` stay in Drive as excluded.**
+  They are not uploaded, they do not count toward File No or storage totals,
+  and Recent Files no longer shows them. Clearing the pattern brings them
+  back to a normal row without a manual refresh. Folders you exclude
+  (`node_modules/`) still stay off Drive.
 - **An exclusion pattern that can't work is refused when you type it.**
   Previously a malformed pattern was saved and listed as active while
   quietly excluding nothing.

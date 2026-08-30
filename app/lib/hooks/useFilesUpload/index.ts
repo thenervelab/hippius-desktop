@@ -126,7 +126,7 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
       if (result.failed.length > 0) {
         // Partial-failure overwrites the loading toast with a warning;
         // explicit dismiss not needed because we reuse the same id.
-        const failedNames = result.failed.map((f) => f.name).join(", ");
+        const failedNames = result.failed.map((f) => `${f.name}: ${f.error}`).join("; ");
         toast.warning(`${result.added.length} files added, ${result.failed.length} failed: ${failedNames}`, {
           id: localToastId,
           duration: 6000,
