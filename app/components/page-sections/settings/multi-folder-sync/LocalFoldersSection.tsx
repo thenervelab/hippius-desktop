@@ -26,7 +26,7 @@ import { SettingsCard } from "../SettingsCard";
 import FolderRowSkeleton from "./FolderRowSkeleton";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import type { SyncFolder } from "@/app/lib/types/sync-folder";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { invoke } from "@tauri-apps/api/core";
 import FolderCardContextMenu from "@/app/components/ui/context-menu/FolderCardContextMenu";
 import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
 import { shareDriveModalAtom } from "@/app/lib/global-atoms/sharesAtoms";
@@ -256,7 +256,9 @@ export function LocalFoldersSection({
           title: `Open in ${getFileManagerLabel()}`,
           onClick: async () => {
             try {
-              await revealItemInDir(folder.localPath);
+              await invoke("reveal_path_in_file_manager", {
+                path: folder.localPath,
+              });
             } catch (error) {
               console.error("Failed to open in file manager:", error);
             }

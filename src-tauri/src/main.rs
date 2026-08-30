@@ -120,6 +120,7 @@ use crate::utils::app_location::is_app_translocated;
 use crate::utils::logs::attach_logs_to_ticket;
 use crate::utils::platform_info::get_platform_info;
 use crate::utils::preferences::{get_user_preference, is_onboarding_done, save_user_preference, set_onboarding_done};
+use crate::utils::reveal::reveal_path_in_file_manager;
 use crate::utils::support::{
     create_support_ticket, get_support_ticket_messages, list_support_tickets, post_ticket_message, update_support_ticket, upload_ticket_attachment,
 };
@@ -307,6 +308,7 @@ fn main() {
             resume_drive,
             trigger_sync_now,
             reveal_drive_in_finder,
+            reveal_path_in_file_manager,
             change_sync_folder,
             auto_init_sync,
             get_sync_folders_with_stats,

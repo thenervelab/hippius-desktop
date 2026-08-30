@@ -27,7 +27,7 @@ Deeper detail for individual subsystems lives in the sibling rules files: `sync-
 - **`infra/`** — VM provisioning and support ticket commands.
 - **`tray/`** — System-tray popover window. See `tray.md`.
 - **`vpn/`** — App-scoped NetBird VPN for **VM connections only** (opt-in; never routes the app's regular traffic). See below.
-- **`utils/`** — Schema management (`schema.rs` with `ensure_table_schema()`), bookmarks, preferences, platform info, macOS App Translocation detection (`app_location.rs`), tray menu data (`tray_menu.rs`: `get_tray_menu_data` — credits/address/login for the popover), support helpers, and support-log scrubbing (`logs.rs`). See below.
+- **`utils/`** — Schema management (`schema.rs` with `ensure_table_schema()`), bookmarks, preferences, platform info, macOS App Translocation detection (`app_location.rs`), tray menu data (`tray_menu.rs`: `get_tray_menu_data` — credits/address/login for the popover), support helpers, support-log scrubbing (`logs.rs`), and file-manager reveal (`reveal.rs`: Linux `xdg-open`s the directory because the opener plugin's FileManager1 path is a silent no-op on Thunar — H-085). See below.
 
 ## Global state
 
