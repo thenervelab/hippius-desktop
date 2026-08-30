@@ -467,14 +467,9 @@ async fn register_drive_with_excludes(state: &AppState, sync_root: &std::path::P
     );
 }
 
-/// The bug this guards (H-069): a user-typed `*.bin` was honoured by the sync
-/// engine but compared with `==` by the listing, so a file the engine refused
-/// to upload sat on Drive as Pending forever.
-///
-/// Drives the real grouped listing rather than the matcher, because every
-/// source that feeds a row has to agree: the on-disk walk, the server-only
-/// overlay, and the `folder_entries_local` cache. Each of the three was its
-/// own way for an excluded entry to come back.
+/// H-069: a user-typed `*.bin` must match via ExcludeRules, not `==`.
+/// H-045: matching *files* stay listed as `excluded`; matching *folders*
+/// stay off Drive. Every source that feeds a row has to agree.
 #[tokio::test]
 async fn excluded_globs_are_hidden_from_every_source_the_grouped_listing_merges() {
     let tmp = tempfile::tempdir().unwrap();
@@ -518,10 +513,25 @@ async fn excluded_globs_are_hidden_from_every_source_the_grouped_listing_merges(
     let file_names: Vec<&str> = root_listing.files.iter().map(|f| f.name.as_str()).collect();
     let folder_names: Vec<&str> = root_listing.folders.iter().map(|f| f.name.as_str()).collect();
 
-    assert!(!file_names.contains(&"dump.bin"), "on-disk *.bin must be hidden: {file_names:?}");
     assert!(
-        !file_names.contains(&"server-only.bin"),
-        "server-only *.bin must be hidden: {file_names:?}"
+        file_names.contains(&"dump.bin"),
+        "on-disk *.bin must stay visible as excluded: {file_names:?}"
+    );
+    assert_eq!(
+        root_listing.files.iter().find(|f| f.name == "dump.bin").map(|f| f.sync_status.as_str()),
+        Some("excluded"),
+    );
+    assert!(
+        file_names.contains(&"server-only.bin"),
+        "server-only *.bin must stay visible as excluded: {file_names:?}"
+    );
+    assert_eq!(
+        root_listing
+            .files
+            .iter()
+            .find(|f| f.name == "server-only.bin")
+            .map(|f| f.sync_status.as_str()),
+        Some("excluded"),
     );
     assert!(file_names.contains(&"notes.txt"), "unmatched files must stay: {file_names:?}");
     assert!(
@@ -555,7 +565,12 @@ async fn excluded_globs_are_hidden_from_every_source_the_grouped_listing_merges(
     .await
     .expect("sub listing");
     let sub_files: Vec<&str> = sub.files.iter().map(|f| f.name.as_str()).collect();
-    assert_eq!(sub_files, vec!["inner.txt"], "*.bin applies at depth too");
+    assert!(sub_files.contains(&"inner.txt"), "unmatched nested file stays: {sub_files:?}");
+    assert!(sub_files.contains(&"inner.bin"), "nested *.bin stays as excluded: {sub_files:?}");
+    assert_eq!(
+        sub.files.iter().find(|f| f.name == "inner.bin").map(|f| f.sync_status.as_str()),
+        Some("excluded"),
+    );
 
     let remote = list_sync_folder_grouped_inner(
         &state,
@@ -567,7 +582,15 @@ async fn excluded_globs_are_hidden_from_every_source_the_grouped_listing_merges(
     .await
     .expect("remote listing");
     let remote_files: Vec<&str> = remote.files.iter().map(|f| f.name.as_str()).collect();
-    assert_eq!(remote_files, vec!["keep.txt"], "server-only overlay honours excludes at depth");
+    assert!(remote_files.contains(&"keep.txt"), "unmatched server-only file stays: {remote_files:?}");
+    assert!(
+        remote_files.contains(&"drop.bin"),
+        "server-only excluded file stays as excluded: {remote_files:?}"
+    );
+    assert_eq!(
+        remote.files.iter().find(|f| f.name == "drop.bin").map(|f| f.sync_status.as_str()),
+        Some("excluded"),
+    );
 }
 
 /// Clearing the pattern must bring the files straight back. The listing
@@ -590,7 +613,12 @@ async fn clearing_the_pattern_restores_the_hidden_files() {
     let hidden = list_sync_folder_grouped_inner(&state, ACCOUNT.into(), root.to_string_lossy().into(), None, Some(LABEL.into()))
         .await
         .expect("listing with the rule");
-    assert_eq!(hidden.files.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), vec!["notes.txt"]);
+    let with_rule: Vec<&str> = hidden.files.iter().map(|f| f.name.as_str()).collect();
+    assert!(with_rule.contains(&"dump.bin"), "excluded file stays listed: {with_rule:?}");
+    assert_eq!(
+        hidden.files.iter().find(|f| f.name == "dump.bin").map(|f| f.sync_status.as_str()),
+        Some("excluded"),
+    );
 
     std::fs::write(root.join(".hippius").join("exclude"), "").expect("clear exclude file");
 
@@ -599,5 +627,10 @@ async fn clearing_the_pattern_restores_the_hidden_files() {
         .expect("listing after clearing");
     let names: Vec<&str> = restored.files.iter().map(|f| f.name.as_str()).collect();
     assert!(names.contains(&"dump.bin"), "clearing the pattern must restore the file: {names:?}");
+    assert_ne!(
+        restored.files.iter().find(|f| f.name == "dump.bin").map(|f| f.sync_status.as_str()),
+        Some("excluded"),
+        "clearing the pattern must drop the excluded status",
+    );
     assert!(names.contains(&"notes.txt"), "{names:?}");
 }

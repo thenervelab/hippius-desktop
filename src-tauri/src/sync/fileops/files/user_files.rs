@@ -262,7 +262,12 @@ pub async fn get_user_files(
         let label_key: &str = label_to_path.get_key_value(label.as_str()).map_or(label.as_str(), |(k, _)| *k);
         let folder_path = label_to_path.get(label_key).copied().unwrap_or("");
 
-        for entry in entries.iter().filter(|e| is_counted_for_label_stats(&e.sync_status)) {
+        for entry in entries {
+            // Excluded folders stay off the page. Excluded files stay as
+            // rows (H-045); billed totals still skip them below.
+            if entry.is_folder && !is_counted_for_label_stats(&entry.sync_status) {
+                continue;
+            }
             let local_modified_ms = entry.modified.map_or(0, |m| m as i64 * 1000);
             let uploaded_at_ms = if entry.uploaded_at != 0 { entry.uploaded_at * 1000 } else { 0 };
             let updated_at_ms = if entry.updated_at != 0 { entry.updated_at * 1000 } else { 0 };
@@ -295,7 +300,9 @@ pub async fn get_user_files(
             // Inline label_stats accumulation through the shared
             // `apply_label_stats_rule` helper so this path cannot drift
             // from the test-definition `compute_label_stats`.
-            apply_label_stats_rule(label_stats.entry(label_key).or_default(), entry.is_folder, entry.file_count, entry.size);
+            if is_counted_for_label_stats(&entry.sync_status) {
+                apply_label_stats_rule(label_stats.entry(label_key).or_default(), entry.is_folder, entry.file_count, entry.size);
+            }
 
             all_files.push(UserFileEntry {
                 name: display_name,
@@ -328,11 +335,9 @@ pub async fn get_user_files(
     // Sort by timestamp (newest first)
     all_files.sort_by_key(|b| std::cmp::Reverse(b.last_charged_at));
 
-    // Derived from `label_stats` rather than summed over the raw listing, so
-    // it cannot disagree with the rows the user is actually shown: an
-    // "excluded" entry is dropped by `is_counted_for_label_stats` above, and
-    // a total that still counted it would report storage for files the Drive
-    // listing hides and the engine never uploads. Filters run after this, so
+    // Derived from `label_stats` rather than summed over the raw listing.
+    // Excluded files stay as rows (H-045) but `is_counted_for_label_stats`
+    // omits them from billed File No / storage. Filters run after this, so
     // the total stays the whole-drive figure, not the filtered one.
     let total_private_size: u64 = label_stats.values().map(|s| s.total_bytes).sum();
 
@@ -415,20 +420,17 @@ fn walk_disk_files_std(
             continue;
         }
 
-        // Drop excluded files outright rather than emitting an "excluded" row
-        // the only caller immediately discards. Same rule as the directory
-        // prune above, and it keeps this walk's output identical to what the
-        // recursive-search UI renders.
-        if super::exclude_match::path_is_excluded(exclude_rules, &rel_path, false) {
-            continue;
-        }
-
-        let (sync_status, info) = match synced {
-            Some(map) => match map.get(&rel_path) {
-                Some(i) => ("synced", Some(i)),
-                None => ("pending", None),
-            },
-            None => ("unknown", None),
+        let is_excluded = super::exclude_match::path_is_excluded(exclude_rules, &rel_path, false);
+        let (sync_status, info) = if is_excluded {
+            ("excluded", None)
+        } else {
+            match synced {
+                Some(map) => match map.get(&rel_path) {
+                    Some(i) => ("synced", Some(i)),
+                    None => ("pending", None),
+                },
+                None => ("unknown", None),
+            }
         };
 
         // Match the timestamp rules used by `get_user_files` so the UI's
@@ -588,9 +590,7 @@ pub async fn search_user_files_recursive(
             if seen.contains(rel) {
                 continue;
             }
-            if super::exclude_match::path_is_excluded(&exclude_rules, rel, false) {
-                continue;
-            }
+            let excluded_hit = super::exclude_match::path_is_excluded(&exclude_rules, rel, false);
             let basename = rel.rsplit('/').next().unwrap_or(rel).to_string();
             let uploaded_at_ms = if info.uploaded_at != 0 { info.uploaded_at * 1000 } else { 0 };
             let updated_at_ms = if info.updated_at != 0 { info.updated_at * 1000 } else { 0 };
@@ -611,7 +611,7 @@ pub async fn search_user_files_recursive(
                 file_type: "private".to_string(),
                 is_erasure_coded: false,
                 main_req_hash: String::new(),
-                sync_status: "pending".to_string(),
+                sync_status: if excluded_hit { "excluded".to_string() } else { "pending".to_string() },
                 label: label.clone(),
                 file_count: None,
                 deleted: false,
@@ -1395,9 +1395,8 @@ mod tests {
         assert_eq!(pending.size, 2);
     }
 
-    /// `*.bin` must drop `pending.bin` and a nested `dir/foo.bin` via
-    /// ExcludeRules, not exact path equality. `foo.bin.bak` survives — the
-    /// glob is an extension match, not a substring one.
+    /// `*.bin` must tag `pending.bin` and a nested `dir/foo.bin` excluded
+    /// via ExcludeRules, not exact path equality. `foo.bin.bak` survives.
     ///
     /// `synced` is an EMPTY map, not `None`: a drive with no synced baseline
     /// yields `"unknown"` for everything, which would let a broken matcher
@@ -1418,8 +1417,8 @@ mod tests {
         walk_disk_files_std(root, "", "docs", root.to_str().unwrap(), Some(&synced), &rules, &mut out);
 
         let by_name: HashMap<&str, &str> = out.iter().map(|e| (e.actual_file_name.as_str(), e.sync_status.as_str())).collect();
-        assert_eq!(by_name.get("pending.bin"), None, "*.bin must not reach the search results");
-        assert_eq!(by_name.get("dir/foo.bin"), None, "*.bin applies at any depth, not just the root");
+        assert_eq!(by_name.get("pending.bin").copied(), Some("excluded"));
+        assert_eq!(by_name.get("dir/foo.bin").copied(), Some("excluded"));
         assert_eq!(by_name.get("foo.bin.bak").copied(), Some("pending"));
         assert_eq!(by_name.get("keep.txt").copied(), Some("pending"));
     }

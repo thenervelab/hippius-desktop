@@ -108,9 +108,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   Release pages carried a second Mac file next to the disk image that read as an
   alternative download but was missing "Share with Hippius" and Apple's security
   check. It is gone from current releases and will not appear on new ones.
-- **Files you exclude with a pattern like `*.bin` disappear from Drive.**
-  Recent Files no longer shows them, your storage total stops counting them,
-  and clearing the pattern brings them back without a manual refresh.
+- **Files you exclude with a pattern like `*.bin` stay in Drive as excluded.**
+  They are not uploaded, they do not count toward File No or storage totals,
+  and Recent Files no longer shows them. Clearing the pattern brings them
+  back to a normal row without a manual refresh. Folders you exclude
+  (`node_modules/`) still stay off Drive.
 - **An exclusion pattern that can't work is refused when you type it.**
   Previously a malformed pattern was saved and listed as active while
   quietly excluding nothing.
