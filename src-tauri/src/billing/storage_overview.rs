@@ -145,11 +145,22 @@ struct OverviewLabels {
 /// does after `parseFloat` (H-109).
 fn format_overview_labels(used_bytes: u64, total_bytes: u64) -> OverviewLabels {
     let free_bytes = total_bytes.saturating_sub(used_bytes);
+    let used_idx = si_unit_index(used_bytes);
     let total_idx = si_unit_index(total_bytes);
+    // Same-unit used keeps `.00` so "5 TB of 5.00 TB" cannot return.
+    let keep_used_decimals = used_idx == total_idx && total_idx > 0;
+    let free = format_si(free_bytes, total_idx, true);
+    // Shared-unit rounding can hide leftover GB as "0.00 TB". Call that
+    // out rather than dropping to a smaller unit (which reopens H-109).
+    let free = if free_bytes > 0 && free.starts_with("0.00 ") {
+        format!("<0.01 {}", SI_UNITS[total_idx])
+    } else {
+        free
+    };
     OverviewLabels {
-        used: format_si(used_bytes, si_unit_index(used_bytes), false),
+        used: format_si(used_bytes, used_idx, keep_used_decimals),
         total: format_si(total_bytes, total_idx, true),
-        free: format_si(free_bytes, total_idx, true),
+        free,
     }
 }
 
@@ -444,6 +455,23 @@ mod tests {
         assert_eq!(overview.total_display, "5.00 TB");
         assert_eq!(overview.free_display, "0.00 TB");
         assert!((overview.percent - 100.0).abs() < 1e-9);
+    }
+
+    /// 4 GB leftover on a 5 TB plan must not vanish as "5 TB of 5.00 TB /
+    /// 0.00 TB free". Used keeps two decimals when it shares total's unit;
+    /// free that rounds to 0.00 while bytes remain is "<0.01 TB".
+    #[test]
+    fn leftover_gb_on_a_tb_plan_does_not_vanish() {
+        let overview = build_overview(4_996 * BYTES_PER_GB, Some(pro_plan(5_000)), 0.0, 0, None);
+        assert_eq!(overview.used_display, "5.00 TB");
+        assert_eq!(overview.total_display, "5.00 TB");
+        assert_eq!(overview.free_display, "<0.01 TB");
+        assert_ne!(overview.free_display, "0.00 TB");
+        assert!(
+            (overview.percent - 99.92).abs() < 0.01,
+            "raw percent must stay unclamped, got {}",
+            overview.percent
+        );
     }
 
     #[test]
