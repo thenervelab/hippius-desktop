@@ -70,6 +70,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **The subscribe offer still shows if plan prices fail to load**, instead of looking like you are already on the top plan.
 - **Plan sizes on Billing now match the marketed amounts.** The 3 / 150 / 450
   credit plans show 1 TB / 50 TB / 150 TB instead of 999 GB / 49 TB / 149 TB.
+- **Downloaded folders keep the original file dates.** Zip entries no longer
+  all show 1 January 1980.
 - **A folder's size and file count now leave out the files you excluded.** The
   folder's row kept counting them while the folder itself correctly hid them, so
   the row and the view disagreed until the app was restarted.

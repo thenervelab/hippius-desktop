@@ -20,13 +20,16 @@ use super::pathops::ensure_within;
 use super::resolve::require_registered_sync_path;
 use crate::auth::account_key::account_key;
 use crate::error::{AppError, Result};
+use chrono::{Datelike, Local, Timelike};
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::io::{Seek, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::SystemTime;
 use tracing::info;
 use zip::CompressionMethod;
+use zip::DateTime;
 use zip::write::{SimpleFileOptions, ZipWriter};
 
 /// Pack `relative_folder` under a registered `sync_path` into `output_zip_path`.
@@ -127,6 +130,29 @@ fn stored_options() -> SimpleFileOptions {
         .large_file(true)
 }
 
+/// DOS mtime for a zip entry. The crate default is 1980-01-01 00:00; leaving
+/// that in place made every downloaded folder look like it was created in
+/// 1980 (H-103). Years outside 1980–2107 and second 59 (DOS max is 58)
+/// clamp rather than failing the pack.
+fn zip_datetime(modified: SystemTime) -> DateTime {
+    let dt = chrono::DateTime::<Local>::from(modified).naive_local();
+    let year = dt.year().clamp(1980, 2107) as u16;
+    DateTime::from_date_and_time(
+        year,
+        dt.month() as u8,
+        dt.day() as u8,
+        dt.hour() as u8,
+        dt.minute() as u8,
+        dt.second().min(58) as u8,
+    )
+    .unwrap_or_default()
+}
+
+fn stored_options_for(meta: &std::fs::Metadata) -> SimpleFileOptions {
+    let mtime = meta.modified().map(zip_datetime).unwrap_or_default();
+    stored_options().last_modified_time(mtime)
+}
+
 /// Unique sibling of `output_zip` so two concurrent packs cannot share a
 /// `.part` (same pattern as `cache_remote_file`).
 fn unique_part_path(output_zip: &Path) -> PathBuf {
@@ -180,8 +206,7 @@ fn zip_folder_store_only(src_dir: &Path, output_zip: &Path) -> Result<()> {
 fn write_store_only_zip(src_dir: &Path, output_zip: &Path) -> Result<()> {
     let file = std::fs::File::create(output_zip)?;
     let mut zip = ZipWriter::new(file);
-    let options = stored_options();
-    pack_tree_into_zip(src_dir, &mut zip, options)?;
+    pack_tree_into_zip(src_dir, &mut zip)?;
     zip.finish()?;
     Ok(())
 }
@@ -189,17 +214,15 @@ fn write_store_only_zip(src_dir: &Path, output_zip: &Path) -> Result<()> {
 struct PackWalk<'a, W: Write + Seek> {
     src_dir: &'a Path,
     zip: &'a mut ZipWriter<W>,
-    options: SimpleFileOptions,
     stack: Vec<(PathBuf, String)>,
     visited: HashSet<PathBuf>,
 }
 
-fn pack_tree_into_zip<W: Write + Seek>(src_dir: &Path, zip: &mut ZipWriter<W>, options: SimpleFileOptions) -> Result<()> {
+fn pack_tree_into_zip<W: Write + Seek>(src_dir: &Path, zip: &mut ZipWriter<W>) -> Result<()> {
     let src_canon = src_dir.canonicalize()?;
     let mut walk = PackWalk {
         src_dir,
         zip,
-        options,
         stack: vec![(src_dir.to_path_buf(), String::new())],
         visited: HashSet::from([src_canon]),
     };
@@ -247,10 +270,12 @@ fn pack_directory<W: Write + Seek>(dir: &Path, prefix: &str, walk: &mut PackWalk
             if !push_directory_if_new(walk.src_dir, &entry.path(), &mut walk.visited)? {
                 continue;
             }
-            walk.zip.add_directory(&archive_name, walk.options)?;
+            let options = stored_options_for(&entry.metadata()?);
+            walk.zip.add_directory(&archive_name, options)?;
             walk.stack.push((entry.path(), archive_name));
         } else if file_type.is_file() {
-            walk.zip.start_file(&archive_name, walk.options)?;
+            let options = stored_options_for(&entry.metadata()?);
+            walk.zip.start_file(&archive_name, options)?;
             let mut file = std::fs::File::open(entry.path())?;
             std::io::copy(&mut file, walk.zip)?;
         }
@@ -344,6 +369,52 @@ mod tests {
             "entry names are relative to the folder root"
         );
         assert_eq!(files["sub/deep/c.txt"], b"charlie");
+    }
+
+    #[test]
+    fn zip_datetime_keeps_civil_local_fields() {
+        use chrono::TimeZone;
+        let local = Local.with_ymd_and_hms(2024, 6, 15, 12, 30, 44).unwrap();
+        let dt = zip_datetime(local.into());
+        assert_eq!(
+            (dt.year(), dt.month(), dt.day(), dt.hour(), dt.minute(), dt.second()),
+            (2024, 6, 15, 12, 30, 44)
+        );
+    }
+
+    #[test]
+    fn zip_datetime_clamps_outside_the_dos_year_range() {
+        use chrono::TimeZone;
+        let early = Local.with_ymd_and_hms(1970, 1, 1, 0, 0, 0).unwrap();
+        let dt = zip_datetime(early.into());
+        assert_eq!(dt.year(), 1980);
+        let late = Local.with_ymd_and_hms(2108, 1, 1, 0, 0, 0).unwrap();
+        let dt = zip_datetime(late.into());
+        assert_eq!(dt.year(), 2107);
+    }
+
+    #[test]
+    fn zip_entries_use_source_mtime_not_the_dos_epoch() {
+        let dir = TempDir::new().expect("tempdir");
+        fs::write(dir.path().join("note.txt"), b"hi").expect("write");
+
+        let zip_dir = TempDir::new().expect("zip dest");
+        let zip_path = zip_dir.path().join("out.zip");
+        zip_folder_store_only(dir.path(), &zip_path).expect("zip");
+
+        let file = fs::File::open(&zip_path).expect("open zip");
+        let mut archive = ZipArchive::new(file).expect("read archive");
+        let entry = archive.by_name("note.txt").expect("note.txt");
+        let mtime = entry.last_modified().expect("zip entry must carry an mtime");
+        assert_ne!(
+            (mtime.year(), mtime.month(), mtime.day()),
+            (1980, 1, 1),
+            "H-103: zip crate default DOS epoch must not be left on entries"
+        );
+        let now = Local::now();
+        assert_eq!(mtime.year(), now.year() as u16);
+        assert_eq!(mtime.month(), now.month() as u8);
+        assert_eq!(mtime.day(), now.day() as u8);
     }
 
     #[test]
@@ -601,7 +672,7 @@ mod tests {
         let dir = TempDir::new().expect("tempdir");
         fs::write(dir.path().join("only.txt"), b"x").expect("write");
         let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
-        pack_tree_into_zip(dir.path(), &mut zip, stored_options()).expect("pack");
+        pack_tree_into_zip(dir.path(), &mut zip).expect("pack");
         let cursor = zip.finish().expect("finish");
         let archive = ZipArchive::new(Cursor::new(cursor.into_inner())).expect("read");
         assert_eq!(archive.len(), 1);
