@@ -216,11 +216,15 @@ export default function FolderUploadDialog({
         (await getPrivateSyncPath(polkadotAddress || ""))?.path ??
         "";
 
-      const name = await invoke<string>("add_folder", {
-        syncPath,
-        folderPath,
-        subfolder: null,
-      });
+      const result = await invoke<{ name: string; skippedHidden: number }>(
+        "add_folder",
+        {
+          syncPath,
+          folderPath,
+          subfolder: null,
+        },
+      );
+      const name = result.name;
 
       // Success toast AFTER add_folder resolves — add_folder runs the
       // require_eligible gate first and can reject (audit M-15), so firing
@@ -229,6 +233,13 @@ export default function FolderUploadDialog({
         duration: 4000,
         closeButton: true,
       });
+      if (result.skippedHidden > 0) {
+        toast.warning(
+          result.skippedHidden === 1
+            ? "1 hidden file was not synced."
+            : `${result.skippedHidden} hidden files were not synced.`,
+        );
+      }
 
       queryClient.invalidateQueries({
         queryKey: [DRIVE_STORAGE_STATS_QUERY_KEY],

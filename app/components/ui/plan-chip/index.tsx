@@ -3,7 +3,7 @@
 import React, { useRef } from "react";
 
 import { useStorageOverview } from "@/app/lib/hooks/api/useStorageOverview";
-import { formatBytes } from "@/app/lib/utils/formatBytes";
+
 import { nextSkeletonState } from "@/lib/utils/skeletonGate";
 import { cn } from "@/app/lib/utils";
 import {
@@ -70,7 +70,7 @@ const PlanChip: React.FC<{ className?: string }> = ({ className }) => {
         />
       ) : planView === "plan" && plan ? (
         <p className="whitespace-pre text-[12px] font-bold leading-[18px] tracking-[-0.36px] text-primary-50 dark:text-primary-brand-dark">
-          ≈ {formatBytes(plan.storageBytes)}
+          ≈ {plan.storageDisplay}
           <span className="text-[12px] font-medium text-black-700 dark:text-white">
             {"  "}({formatPlanPrice(plan.amount, plan.interval)})
           </span>

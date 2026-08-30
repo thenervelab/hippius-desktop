@@ -2,7 +2,7 @@
 //! cascade. Owns `UserFileEntry`, `FileFilterCriteria`, and per-label stats.
 
 use super::listing::list_sync_folder;
-use super::pathops::{ensure_within, is_engine_hidden_name, rel_has_engine_hidden_component};
+use super::pathops::{ensure_within, is_engine_hidden_name, is_internal_hidden_name, rel_has_engine_hidden_component};
 use super::synced_state::synced_paths_and_excludes_for_label;
 use crate::error::Result;
 use chrono::Datelike;
@@ -152,7 +152,7 @@ pub struct UserFileEntry {
 /// the test-definition `compute_label_stats` cannot disagree on the
 /// filter rule if only one of them is changed.
 fn is_counted_for_label_stats(sync_status: &str) -> bool {
-    sync_status != "excluded"
+    sync_status != "excluded" && sync_status != "hidden"
 }
 
 /// Apply the per-counted-entry stats accumulation rule.
@@ -391,7 +391,7 @@ fn walk_disk_files_std(
 
     for entry in dir.flatten() {
         let os_name = entry.file_name();
-        if is_engine_hidden_name(&os_name) {
+        if is_internal_hidden_name(&os_name) {
             continue;
         }
         let name = os_name.to_string_lossy().to_string();
@@ -403,8 +403,12 @@ fn walk_disk_files_std(
         } else {
             format!("{rel_prefix}/{name}")
         };
+        let is_hidden_file = is_engine_hidden_name(&os_name);
 
         if meta.is_dir() {
+            if is_hidden_file {
+                continue;
+            }
             if super::exclude_match::path_is_excluded(exclude_rules, &rel_path, true) {
                 continue;
             }
@@ -422,7 +426,9 @@ fn walk_disk_files_std(
         }
 
         let is_excluded = super::exclude_match::path_is_excluded(exclude_rules, &rel_path, false);
-        let (sync_status, info) = if is_excluded {
+        let (sync_status, info) = if is_hidden_file {
+            ("hidden", None)
+        } else if is_excluded {
             ("excluded", None)
         } else {
             match synced {
@@ -1390,11 +1396,12 @@ mod tests {
         let names: Vec<&str> = out.iter().map(|e| e.actual_file_name.as_str()).collect();
         assert!(names.contains(&"Photos/2024/a.jpg"));
         assert!(names.contains(&"pending.bin"));
-        assert!(
-            !names
-                .iter()
-                .any(|n| n.contains("hidden") || n.starts_with("downloaded_") || n.starts_with("file_"))
+        assert!(names.contains(&".hidden"));
+        assert_eq!(
+            out.iter().find(|e| e.actual_file_name == ".hidden").map(|e| e.sync_status.as_str()),
+            Some("hidden"),
         );
+        assert!(!names.iter().any(|n| n.starts_with("downloaded_") || n.starts_with("file_")));
 
         let photo = out.iter().find(|e| e.actual_file_name == "Photos/2024/a.jpg").expect("photo");
         assert_eq!(photo.name, "a.jpg");
@@ -1460,11 +1467,14 @@ mod tests {
     /// the rule the derivation rests on: an excluded row contributes nothing.
     #[test]
     fn label_stats_totals_exclude_hidden_rows_so_the_storage_total_matches_the_listing() {
-        let mut hidden = make_file("secret.bin", 999_999, "alpha", 0, false);
-        hidden.sync_status = "excluded".to_string();
+        let mut excluded = make_file("secret.bin", 999_999, "alpha", 0, false);
+        excluded.sync_status = "excluded".to_string();
+        let mut hidden = make_file(".env.qa", 50, "alpha", 0, false);
+        hidden.sync_status = "hidden".to_string();
 
         let entries = vec![
             make_file("a.txt", 1_000, "alpha", 0, false),
+            excluded,
             hidden,
             make_file("b.txt", 500, "beta", 0, false),
         ];
@@ -1472,7 +1482,7 @@ mod tests {
         let stats = compute_label_stats(&entries);
         let total: u64 = stats.values().map(|s| s.total_bytes).sum();
 
-        assert_eq!(total, 1_500, "an excluded row must not inflate the drive storage total");
+        assert_eq!(total, 1_500, "excluded and hidden rows must not inflate File No");
     }
 
     /// Drive search overlay. Dropping `under_excluded_dir` re-lists a

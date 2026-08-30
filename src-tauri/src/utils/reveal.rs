@@ -42,27 +42,39 @@ pub fn reveal_path(path: &Path) -> Result<()> {
 fn linux_xdg_open(path: &Path) -> Result<()> {
     use std::io::ErrorKind;
     use std::process::Stdio;
+    use std::time::Duration;
 
+    // Canonicalised paths always start with `/`, so `--` is unnecessary and
+    // older XFCE `xdg-open` treats it as the file to open — a silent no-op
+    // (H-085 still failing on 0.6.0-beta.5).
     let target = linux_open_target(path);
-    match std::process::Command::new("xdg-open")
-        .arg("--")
+    let mut child = match std::process::Command::new("xdg-open")
         .arg(target)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
     {
-        Ok(mut child) => {
-            // `xdg-open` hands off and exits; wait off-thread so we reap
-            // without blocking the IPC (and without Tokio killing the child
-            // on drop).
-            std::thread::spawn(move || {
-                let _ = child.wait();
-            });
-            Ok(())
+        Ok(child) => child,
+        Err(e) if e.kind() == ErrorKind::NotFound => {
+            return Err(AppError::Other("Couldn't open the file manager (xdg-open was not found).".into()));
         }
-        Err(e) if e.kind() == ErrorKind::NotFound => Err(AppError::Other("Couldn't open the file manager (xdg-open was not found).".into())),
-        Err(e) => Err(AppError::Io(e)),
+        Err(e) => return Err(AppError::Io(e)),
+    };
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(child.wait());
+    });
+    match rx.recv_timeout(Duration::from_secs(3)) {
+        Ok(Ok(status)) if status.success() => Ok(()),
+        Ok(Ok(status)) => Err(AppError::Other(format!(
+            "Couldn't open the file manager (xdg-open exited {}).",
+            status.code().unwrap_or(-1)
+        ))),
+        Ok(Err(e)) => Err(AppError::Io(e)),
+        // Still running: xdg-open handed off to the file manager.
+        Err(_) => Ok(()),
     }
 }
 
@@ -169,8 +181,8 @@ mod tests {
             "Linux reveal must spawn xdg-open; the opener plugin's FileManager1 path is a silent no-op on Thunar"
         );
         assert!(
-            src.contains(".arg(\"--\")"),
-            "xdg-open must get -- so a path starting with - is not a flag"
+            !src.contains(".arg(\"--\")"),
+            "canonical paths start with /; -- made XFCE xdg-open a silent no-op"
         );
         assert!(
             src.contains("cfg(target_os = \"linux\")"),

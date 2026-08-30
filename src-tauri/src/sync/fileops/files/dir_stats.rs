@@ -120,6 +120,35 @@ fn dir_stats_cache() -> &'static DirStatsMap {
     DIR_STATS_CACHE.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
 }
 
+/// Patterns from `<root>/.hippius/exclude`, matching the engine's file
+/// (one pattern per line; empty and `#` comments dropped).
+///
+/// Used by the local-folder list so it does not need the in-memory drive
+/// manager — a paused drive still has its exclude file (H-110).
+pub(crate) fn exclude_patterns_on_disk(root: &Path) -> Vec<String> {
+    let path = root.join(".hippius").join("exclude");
+    std::fs::read_to_string(path)
+        .map(|s| {
+            s.lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Billed size/count for a sync root, applying that drive's exclude file.
+///
+/// The Settings / Drive "local list" row used to show the *server* totals,
+/// which still counted files excluded locally (H-110: 19 B · 3 files next
+/// to a folder view of 4 B · 1).
+pub(crate) async fn dir_stats_for_sync_root(root: &Path) -> (u64, u64) {
+    let patterns = exclude_patterns_on_disk(root);
+    let excludes = DirStatsExcludes { root, patterns: &patterns };
+    dir_stats_recursive(root, Some(&excludes)).await
+}
+
 /// Recursively compute total size and file count within a directory.
 /// Hidden files (starting with '.') are excluded, and so is anything
 /// `excludes` matches — pass the drive's patterns wherever the result is
@@ -739,6 +768,24 @@ mod tests {
             dir_stats_recursive(root, None).await,
             (15, 2),
             "without patterns the same directory still counts everything"
+        );
+    }
+
+    #[tokio::test]
+    async fn sync_root_stats_read_the_exclude_file() {
+        let _cache_guard = CACHE_TEST_LOCK.lock().await;
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let root = tmp.path();
+        std::fs::write(root.join("keep.txt"), b"1234").expect("write keep");
+        std::fs::write(root.join("a.bin"), b"xxxxxxxx").expect("write bin");
+        std::fs::create_dir_all(root.join(".hippius")).expect("mkdir");
+        std::fs::write(root.join(".hippius/exclude"), "*.bin\n").expect("exclude");
+
+        assert_eq!(exclude_patterns_on_disk(root), vec!["*.bin".to_string()]);
+        assert_eq!(
+            dir_stats_for_sync_root(root).await,
+            (4, 1),
+            "local list row must match the folder view after excludes"
         );
     }
 

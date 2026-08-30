@@ -19,4 +19,19 @@ export function isMacPlatform(): boolean {
   return platform.includes("mac") || ua.includes("mac");
 }
 
+/** Synchronous Linux detect from UA — same rule as the tray (`detectLinuxPlatform`). */
+export function isLinuxPlatform(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const platform = (navigator.platform || "").toLowerCase();
+  const ua = (navigator.userAgent || "").toLowerCase();
+  return platform.includes("linux") || ua.includes("linux");
+}
+
+/** "Finder" / "Explorer" / "file manager" for reveal-in-folder copy. */
+export function fileManagerLabel(): string {
+  if (isMacPlatform()) return "Finder";
+  if (isLinuxPlatform()) return "file manager";
+  return "Explorer";
+}
+
 export default isMacPlatform;

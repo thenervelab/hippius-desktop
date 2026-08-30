@@ -30,8 +30,18 @@ export async function revealFile(params: RevealFileParams): Promise<void> {
       const target = revealFolder ? stripFileName(sourcePath, fileName) : sourcePath;
       await invoke("reveal_path_in_file_manager", { path: target });
       return;
-    } catch {
-      // Fall through to DB resolve
+    } catch (error) {
+      // A missing path can still resolve via the DB. Other failures
+      // (xdg-open, not in a sync folder) must surface — swallowing them
+      // made Linux Reveal a silent no-op (H-085).
+      const message = error instanceof Error ? error.message : String(error);
+      const looksMissing =
+        message.toLowerCase().includes("no such file") ||
+        message.toLowerCase().includes("not found") ||
+        message.toLowerCase().includes("os error 2");
+      if (!looksMissing) {
+        throw error;
+      }
     }
   }
 

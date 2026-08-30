@@ -159,6 +159,20 @@ describe("NameCell sync-status badge", () => {
     expect(screen.queryByTestId(/^sync-status-/)).not.toBeInTheDocument();
   });
 
+  it("renders the Excluded pill when syncStatus is excluded", () => {
+    render(<NameCell {...baseProps} syncStatus="excluded" />);
+
+    const badge = screen.getByTestId("sync-status-excluded");
+    expect(badge).toHaveTextContent("Excluded");
+  });
+
+  it("renders the Hidden pill when syncStatus is 'hidden'", () => {
+    render(<NameCell {...baseProps} syncStatus="hidden" />);
+
+    const badge = screen.getByTestId("sync-status-hidden");
+    expect(badge).toHaveTextContent("Hidden");
+  });
+
   it("renders no sync-status badge when syncStatus is undefined", () => {
     // Most `FormattedUserFile` rows arrive without a `syncStatus` set; the
     // badge must stay silent in that case so non-synced legacy rows don't

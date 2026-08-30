@@ -28,7 +28,7 @@ mod resolve;
 mod synced_state;
 mod user_files;
 
-pub use add::{AddFilesResult, add_file, add_files, add_folder};
+pub use add::{AddFilesResult, AddFolderResult, add_file, add_files, add_folder};
 pub use asset_scope::{allow_asset_directory, allow_asset_scope};
 pub use delete::{DeleteFilesResult, FileDeleteError, FileDeleteRequest, delete_files};
 pub use export_zip::export_folder_zip;
@@ -43,5 +43,5 @@ pub use user_files::{
 // Reachable from `crate::sync::lifecycle` as `crate::sync::files::X`, matching
 // these helpers' original `pub(super)` (= `crate::sync`) visibility.
 pub(in crate::sync) use add::{compute_startup_pending_summary, sum_regular_file_bytes};
-pub(crate) use dir_stats::dir_stats_recursive;
+pub(crate) use dir_stats::{dir_stats_for_sync_root, dir_stats_recursive};
 pub(in crate::sync) use dir_stats::{invalidate_dir_stats_after_cycle, invalidate_dir_stats_under};
