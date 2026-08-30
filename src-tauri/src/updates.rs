@@ -290,7 +290,11 @@ fn available_update_from(channel: ReleaseChannel, version: &str, current_version
 /// apt; the bare key must be an AppImage, or absent.
 #[cfg(test)]
 fn url_names_deb_payload(url: &str) -> bool {
-    url.rsplit('/').next().is_some_and(|name| name.ends_with(".deb"))
+    url.rsplit('/').next().is_some_and(|name| {
+        std::path::Path::new(name)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("deb"))
+    })
 }
 
 /// True when a latest.json `platforms` object puts a `.deb` on `linux-x86_64`.
