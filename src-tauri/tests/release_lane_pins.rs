@@ -580,31 +580,33 @@ fn staging_verifies_before_it_uploads() {
     );
 }
 
-/// plugin-updater cannot apply a `.deb` as the current user. tauri-action
-/// writes the `.deb` onto BOTH `linux-x86_64` and `linux-x86_64-deb`. The
-/// assemble job must drop the bare key when its URL is a `.deb`, or Install
-/// is offered a payload that fails with EACCES.
+/// The bare `linux-x86_64` key is the ONLY key a Linux build resolves.
+/// plugin-updater appends the installer segment (`-deb`) only when
+/// `bundle_type()` is `Some`, and the marker it reads is not patched into the
+/// shipped `.deb`, so it is `None` and `linux-x86_64-deb` is never searched.
+/// Deleting the bare key does not stop an install — it makes every Linux
+/// update CHECK fail with `TargetsNotFound`. Refusing the install belongs in
+/// the app (`updates.rs::refuse_if_privileged_package`), not in the manifest.
 #[test]
-fn assemble_release_strips_a_deb_off_the_bare_linux_key() {
-    for lane in ["tauri-build.yml", "tauri-beta.yml"] {
+fn no_lane_deletes_the_bare_linux_updater_key() {
+    for lane in ["tauri-build.yml", "tauri-beta.yml", "tauri-staging.yml"] {
         let workflow = repo_file(&format!("../.github/workflows/{lane}"));
         assert!(
-            workflow.contains(r#"del(.platforms["linux-x86_64"])"#),
-            "{lane} must drop linux-x86_64 when that key points at a .deb; otherwise \
-             Install is offered a payload plugin-updater cannot apply as the current user"
+            !workflow.contains(r#"del(.platforms["linux-x86_64"])"#),
+            "{lane} deletes the bare linux-x86_64 key; that is the only key Linux reads, so \
+             every Linux update check would report the channel as unreachable"
         );
     }
 }
 
-/// The publish-time verifier is the last chance to catch a .deb on the bare
-/// Linux updater key. A pin on the workflow jq alone still ships if someone
-/// uploads a hand-edited latest.json.
+/// The publish-time verifier must catch the same deletion in a hand-edited
+/// `latest.json`, which no workflow pin can see.
 #[test]
-fn verify_manifest_rejects_a_deb_on_the_bare_linux_key() {
+fn verify_manifest_requires_the_bare_linux_key() {
     let script = repo_file("../scripts/verify-release-manifest.sh");
     assert!(
-        script.contains(r#".platforms["linux-x86_64"]"#) && script.contains(".deb"),
-        "verify-release-manifest.sh must fail when linux-x86_64.url is a .deb"
+        script.contains(r#".platforms["linux-x86_64"]"#) && script.contains("TargetsNotFound"),
+        "verify-release-manifest.sh must fail when linux-x86_64 is missing"
     );
 }
 

@@ -798,18 +798,6 @@ jobs:
           fi
           mv latest.json.new latest.json
 
-          # plugin-updater cannot apply a .deb as the current user (needs dpkg
-          # + root; QA on amd64 got Permission denied (os error 13)).
-          # tauri-action writes the .deb onto BOTH linux-x86_64 and
-          # linux-x86_64-deb. Keep the -deb key for apt; drop the bare key so
-          # Install is never offered a .deb payload.
-          jq '
-            if (.platforms["linux-x86_64"].url // "" | test("\\.deb$")) then
-              del(.platforms["linux-x86_64"])
-            else . end
-          ' latest.json > latest.json.new
-          mv latest.json.new latest.json
-
           # Publish the build's STATE_EPOCH beside the version. Tauri ignores
           # unknown manifest keys and hands the whole document back on
           # Update::raw_json, which is how the OTHER channel reads it: a build

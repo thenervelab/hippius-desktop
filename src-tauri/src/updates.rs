@@ -221,15 +221,26 @@ fn release_page_url(channel: ReleaseChannel) -> &'static str {
 /// are installed by different means, so `cfg!(target_os = "linux")` would name
 /// the wrong artifact the moment a second Linux target ships — and naming a
 /// file the user cannot use is worse than saying nothing. `bundle_type()` reads
-/// the marker tauri-bundler patches into the binary; an unbundled build (a
-/// local `cargo run`) reports nothing and gets the generic wording.
+/// the marker tauri-bundler patches into the binary.
+///
+/// The marker is absent from the shipped `.deb` (see
+/// [`in_place_install_supported`]), so on Linux `None` is the released package
+/// rather than a dev build, and `.deb` is the only Linux artifact this project
+/// publishes. Sending that user to "the installer" names a file the release
+/// page does not carry, which is the failure this hint exists to avoid.
 fn manual_install_hint(channel: ReleaseChannel) -> String {
-    let url = release_page_url(channel);
+    manual_install_hint_on(channel, bundle_type(), cfg!(target_os = "linux"))
+}
 
-    match bundle_type() {
-        Some(BundleType::Deb) => format!("Download the .deb from {url} and install it with your package manager."),
+fn manual_install_hint_on(channel: ReleaseChannel, bundle: Option<BundleType>, on_linux: bool) -> String {
+    let url = release_page_url(channel);
+    let deb = format!("Download the .deb from {url} and install it with your package manager.");
+
+    match bundle {
+        Some(BundleType::Deb) => deb,
         Some(BundleType::Rpm) => format!("Download the .rpm from {url} and install it with your package manager."),
         Some(BundleType::AppImage) => format!("Download the AppImage from {url} and replace the one you are running."),
+        None if on_linux => deb,
         _ => format!("Download the installer from {url} and run it."),
     }
 }
@@ -240,13 +251,29 @@ fn manual_install_hint(channel: ReleaseChannel) -> String {
 /// then a graphical sudo prompt, then terminal sudo; a normal desktop session
 /// (QA on amd64, 0.6.0-beta.4 → 0.6.0-beta.5) got `Permission denied (os error
 /// 13)` instead of a prompt. AppImage, NSIS, MSI, and macOS `.app` write files
-/// the user owns. `None` is an unbundled `cargo run` — try the plugin.
+/// the user owns.
+///
+/// **On Linux, an unknown bundle must refuse.** `bundle_type()` reads a marker
+/// tauri-bundler patches into the binary, and it does NOT patch the `.deb`:
+/// the published `usr/bin/Hippius` still carries the literal
+/// `__TAURI_BUNDLE_TYPE_VAR_UNK`, so the shipped package reports `None`. Only
+/// macOS has a hard-coded fallback (`Some(App)`). Treating `None` as "try the
+/// plugin" therefore describes the shipped `.deb`, not a dev build, and sends
+/// it into `install_appimage`, which renames `/usr/bin/Hippius` and produces
+/// exactly the `Permission denied (os error 13)` this exists to prevent.
 fn in_place_install_supported(bundle: Option<BundleType>) -> bool {
+    in_place_install_supported_on(bundle, cfg!(target_os = "linux"))
+}
+
+/// `in_place_install_supported` with the host split out, so both platform
+/// answers are pinned from whichever runner the suite happens to run on.
+fn in_place_install_supported_on(bundle: Option<BundleType>, on_linux: bool) -> bool {
     match bundle {
         Some(BundleType::Deb | BundleType::Rpm) => false,
-        // AppImage/NSIS/MSI/macOS write files the user owns. `None` is an
-        // unbundled `cargo run` — try the plugin rather than lie about Deb.
-        Some(BundleType::AppImage | BundleType::Msi | BundleType::Nsis | BundleType::App | BundleType::Dmg) | None => true,
+        Some(BundleType::AppImage | BundleType::Msi | BundleType::Nsis | BundleType::App | BundleType::Dmg) => true,
+        // Unknown: the shipped Linux artifact, or an unbundled `cargo run`
+        // elsewhere. Only the second one is safe to hand to the plugin.
+        None => !on_linux,
     }
 }
 
@@ -279,32 +306,6 @@ fn available_update_from(channel: ReleaseChannel, version: &str, current_version
         release_page_url: release_page_url(channel).to_string(),
         manual_install_hint: manual_install_hint(channel),
     }
-}
-
-/// True when `url` names a `.deb` file — the payload plugin-updater cannot
-/// apply as the current user.
-///
-/// The bare `linux-x86_64` key is the AppImage / fallback lookup. A `.deb`
-/// there makes Install try to write a Debian package over the running binary
-/// (or run `dpkg -i` without a prompt). Keep `.deb` on `linux-x86_64-deb` for
-/// apt; the bare key must be an AppImage, or absent.
-#[cfg(test)]
-fn url_names_deb_payload(url: &str) -> bool {
-    url.rsplit('/').next().is_some_and(|name| {
-        std::path::Path::new(name)
-            .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("deb"))
-    })
-}
-
-/// True when a latest.json `platforms` object puts a `.deb` on `linux-x86_64`.
-#[cfg(test)]
-fn linux_x86_64_url_is_deb_payload(platforms: &serde_json::Value) -> bool {
-    platforms
-        .get("linux-x86_64")
-        .and_then(|entry| entry.get("url"))
-        .and_then(serde_json::Value::as_str)
-        .is_some_and(url_names_deb_payload)
 }
 
 /// True when the plugin failed because this is a `.deb` / `.rpm` it cannot
@@ -864,50 +865,52 @@ mod tests {
     }
 
     /// A `.deb` / `.rpm` cannot be applied as the current user. AppImage, the
-    /// Windows installers, and macOS `.app` can. `None` is an unbundled build.
+    /// Windows installers, and macOS `.app` can.
     #[test]
     fn deb_and_rpm_cannot_install_in_place() {
-        assert!(!in_place_install_supported(Some(BundleType::Deb)));
-        assert!(!in_place_install_supported(Some(BundleType::Rpm)));
-        assert!(in_place_install_supported(Some(BundleType::AppImage)));
-        assert!(in_place_install_supported(Some(BundleType::Nsis)));
-        assert!(in_place_install_supported(Some(BundleType::Msi)));
-        assert!(in_place_install_supported(Some(BundleType::App)));
-        assert!(in_place_install_supported(Some(BundleType::Dmg)));
-        assert!(in_place_install_supported(None));
+        for on_linux in [true, false] {
+            assert!(!in_place_install_supported_on(Some(BundleType::Deb), on_linux));
+            assert!(!in_place_install_supported_on(Some(BundleType::Rpm), on_linux));
+            assert!(in_place_install_supported_on(Some(BundleType::AppImage), on_linux));
+            assert!(in_place_install_supported_on(Some(BundleType::Nsis), on_linux));
+            assert!(in_place_install_supported_on(Some(BundleType::Msi), on_linux));
+            assert!(in_place_install_supported_on(Some(BundleType::App), on_linux));
+            assert!(in_place_install_supported_on(Some(BundleType::Dmg), on_linux));
+        }
     }
 
-    /// The live beta-channel latest.json put the `.deb` on BOTH
-    /// `linux-x86_64` and `linux-x86_64-deb`. The bare key is the AppImage
-    /// fallback; a `.deb` there is the payload Install cannot apply.
+    /// The regression that made the whole refusal a no-op in production.
+    ///
+    /// tauri-bundler does not patch the bundle-type marker into the shipped
+    /// `.deb` — its `usr/bin/Hippius` still carries
+    /// `__TAURI_BUNDLE_TYPE_VAR_UNK` — so `bundle_type()` is `None` on exactly
+    /// the build QA hit EACCES on. Treating `None` as "unbundled dev build,
+    /// try the plugin" therefore green-lit the released package, and
+    /// plugin-updater's `install_inner` fell through to `install_appimage`,
+    /// which renames `/usr/bin/Hippius`. Off Linux, `None` really is a local
+    /// `cargo run` and must stay permissive.
     #[test]
-    fn linux_updater_target_must_not_be_a_deb() {
-        let live_shape = serde_json::json!({
-            "linux-x86_64": {
-                "url": "https://github.com/thenervelab/hippius-desktop/releases/download/v0.6.0-beta.5/Hippius_0.6.0-beta.5_amd64.deb"
-            },
-            "linux-x86_64-deb": {
-                "url": "https://github.com/thenervelab/hippius-desktop/releases/download/v0.6.0-beta.5/Hippius_0.6.0-beta.5_amd64.deb"
-            }
-        });
+    fn an_unknown_bundle_refuses_in_place_install_on_linux_only() {
         assert!(
-            linux_x86_64_url_is_deb_payload(&live_shape),
-            "the published beta-channel shape is the bug this rejects"
+            !in_place_install_supported_on(None, true),
+            "the shipped .deb reports no bundle type; a permissive default is the EACCES path"
         );
+        assert!(in_place_install_supported_on(None, false));
+    }
 
-        let stripped = serde_json::json!({
-            "linux-x86_64-deb": {
-                "url": "https://github.com/thenervelab/hippius-desktop/releases/download/v0.6.0-beta.5/Hippius_0.6.0-beta.5_amd64.deb"
-            }
-        });
-        assert!(!linux_x86_64_url_is_deb_payload(&stripped));
+    /// With no marker on Linux there is still only one Linux artifact this
+    /// project publishes, so the hint must name the `.deb` rather than send the
+    /// user looking for an "installer" the release page does not carry.
+    #[test]
+    fn an_unknown_linux_bundle_is_still_told_about_the_deb() {
+        let channel = ReleaseChannel::Beta;
 
-        let appimage = serde_json::json!({
-            "linux-x86_64": {
-                "url": "https://github.com/thenervelab/hippius-desktop/releases/download/v0.6.0-beta.5/Hippius_0.6.0-beta.5_amd64.AppImage.tar.gz"
-            }
-        });
-        assert!(!linux_x86_64_url_is_deb_payload(&appimage));
+        let linux = manual_install_hint_on(channel, None, true);
+        assert!(linux.contains(".deb"), "{linux}");
+        assert_eq!(linux, manual_install_hint_on(channel, Some(BundleType::Deb), true));
+
+        let elsewhere = manual_install_hint_on(channel, None, false);
+        assert!(!elsewhere.contains(".deb"), "{elsewhere}");
     }
 
     /// QA log line: `err=Permission denied (os error 13)`. That Display must

@@ -26,14 +26,19 @@ interface BaseProps {
   cancelText?: string;
   onConfirm: () => void | Promise<void>;
   isLoading?: boolean;
-  /** When true the confirm button is shown but cannot fire `onConfirm`. */
-  confirmDisabled?: boolean;
 }
 
 interface AlertModeProps extends BaseProps {
   mode?: "alert";
   onOpenChange: (open: boolean) => void;
   variant?: "danger" | "warning" | "info";
+  /**
+   * When true the confirm button is shown but cannot fire `onConfirm`.
+   * Alert mode only — `BrandedDialog` renders a `CardButton` that does not
+   * read it, so declaring it on the shared base let a branded caller pass it
+   * and silently get a live confirm button.
+   */
+  confirmDisabled?: boolean;
   /** Not used in alert mode */
   icon?: never;
   iconBgColor?: never;
@@ -57,6 +62,7 @@ interface BrandedModeProps extends BaseProps {
   /** Not used in branded mode */
   onOpenChange?: never;
   variant?: never;
+  confirmDisabled?: never;
 }
 
 export type ConfirmDialogProps = AlertModeProps | BrandedModeProps;
