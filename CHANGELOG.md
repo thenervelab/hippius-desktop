@@ -70,6 +70,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **macOS no longer asks "Hippius would like to access data from other apps"
   every time you open the app.** Answering Allow never made it stop; the prompt
   is now gone entirely, and Finder right-click sharing works exactly as before.
+- **Open in Finder / Reveal in Finder now opens the file manager on Linux.**
+- **Uploading a file that already exists no longer replaces it silently.** The previous file stays; a confirmed replace is a follow-up.
+- **A finished delete is titled as a delete**, not "Sync Complete".
+- **Syncing a folder from another device uses the folder you picked.** Choosing the existing folder no longer creates a nested copy with the same name.
 - **The subscribe offer still shows if plan prices fail to load**, instead of looking like you are already on the top plan.
 - **Plan sizes on Billing now match the marketed amounts.** The 3 / 150 / 450
   credit plans show 1 TB / 50 TB / 150 TB instead of 999 GB / 49 TB / 149 TB.
