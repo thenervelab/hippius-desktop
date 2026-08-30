@@ -726,6 +726,18 @@ mod tests {
         assert_eq!(format_balance("-1000000000000000000", 6), "0", "negative sign not accepted");
     }
 
+    /// H-083: Drive storage is ~0.003 HIP per GB-month, so a day of ~32 GB
+    /// is ~0.0038 HIP. Two-decimal formatting turned that into "0.00" and
+    /// QA read it as "usage does not reflect uploaded bytes". The amount
+    /// is real spend; the formatter must keep the milli-HIP digits.
+    #[test]
+    fn format_balance_keeps_a_day_of_drive_storage_nonzero() {
+        // 0.0038 HIP = 3.8e15 planck.
+        assert_eq!(format_balance("3800000000000000", 6), "0.0038");
+        assert_ne!(format_balance("3800000000000000", 6), "0");
+        assert_ne!(format_balance("3800000000000000", 6), "0.00");
+    }
+
     #[test]
     fn test_format_bytes_basic() {
         assert_eq!(format_bytes(0.0), "0 B");
