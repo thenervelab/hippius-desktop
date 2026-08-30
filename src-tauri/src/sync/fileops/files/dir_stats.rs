@@ -267,7 +267,13 @@ impl WalkExcludes<'_> {
         let Ok(rel) = path.strip_prefix(self.root) else {
             return false;
         };
-        super::exclude_match::path_is_excluded(self.rules, &rel.to_string_lossy(), is_dir)
+        // Forward slashes, always. `listing.rs` tags its rows against
+        // `format!("{sub}/{name}")`, so on Windows a `to_string_lossy()` of the
+        // relative `Path` would hand the rules `docs\a.pdf` where the row was
+        // matched as `docs/a.pdf` — the row and its own totals would then
+        // disagree on exactly the platform nobody runs the listing tests on.
+        let rel = rel.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/");
+        super::exclude_match::path_is_excluded(self.rules, &rel, is_dir)
     }
 }
 
@@ -660,6 +666,30 @@ mod tests {
             dir_stats_recursive(root, None).await,
             (15, 2),
             "without patterns the same directory still counts everything"
+        );
+    }
+
+    /// A nested pattern must match the same string `listing.rs` tags rows
+    /// against — `format!("{sub}/{name}")`, forward slashes on every platform.
+    /// Handing the rules a `Path`'s native form instead leaves this passing on
+    /// Unix and failing on Windows, where the row and its own totals would
+    /// then disagree.
+    #[tokio::test]
+    async fn a_nested_pattern_matches_the_listing_form_of_the_path() {
+        let _cache_guard = CACHE_TEST_LOCK.lock().await;
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let root = tmp.path();
+        let docs = root.join("docs");
+        std::fs::create_dir(&docs).expect("mkdir docs");
+        std::fs::write(docs.join("a.pdf"), b"12345678").expect("write pdf");
+        std::fs::write(docs.join("b.txt"), b"123").expect("write txt");
+
+        let patterns = vec!["docs/*.pdf".to_string()];
+        let excludes = DirStatsExcludes { root, patterns: &patterns };
+        assert_eq!(
+            dir_stats_recursive(root, Some(&excludes)).await,
+            (3, 1),
+            "a slash-bearing pattern must match the nested file the listing hides"
         );
     }
 
