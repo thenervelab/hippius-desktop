@@ -4,7 +4,12 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const toastError = vi.fn();
 vi.mock("sonner", () => ({ toast: { error: (...args: unknown[]) => toastError(...args) } }));
 
-import { isNotReady, dispatchSigningError, tauriErrorMessage } from "@/lib/utils/dispatchTauriError";
+import {
+  isNotReady,
+  isMasterMnemonicUnrecoverable,
+  dispatchSigningError,
+  tauriErrorMessage,
+} from "@/lib/utils/dispatchTauriError";
 
 describe("isNotReady", () => {
   it("matches a specific NotReadyKind via subkind, independent of message text", () => {
@@ -26,6 +31,25 @@ describe("isNotReady", () => {
   it("returns false for non-NotReady errors and null", () => {
     expect(isNotReady({ kind: "Auth", message: "x" }, "INSUFFICIENT_CREDITS")).toBe(false);
     expect(isNotReady(null)).toBe(false);
+  });
+});
+
+describe("isMasterMnemonicUnrecoverable", () => {
+  it("keys on subkind so a reworded banner cannot miss the reauth path", () => {
+    expect(
+      isMasterMnemonicUnrecoverable({
+        kind: "NotReady",
+        subkind: "MASTER_MNEMONIC_UNRECOVERABLE",
+        message: "reworded",
+      })
+    ).toBe(true);
+    expect(
+      isMasterMnemonicUnrecoverable({
+        kind: "NotReady",
+        subkind: "CONFIG_MISSING",
+        message: "mnemonic unrecoverable",
+      })
+    ).toBe(false);
   });
 });
 

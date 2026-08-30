@@ -67,6 +67,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **The subscribe offer still shows if plan prices fail to load**, instead of looking like you are already on the top plan.
 - **A folder's size and file count now leave out the files you excluded.** The
   folder's row kept counting them while the folder itself correctly hid them, so
   the row and the view disagreed until the app was restarted.
