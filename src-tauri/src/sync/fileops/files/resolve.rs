@@ -157,3 +157,48 @@ pub async fn resolve_file_info(
 
     Ok(FilePathInfo { sync_path, relative_name })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::require_registered_sync_path;
+    use crate::error::AppError;
+    use sqlx::SqlitePool;
+
+    async fn empty_pool() -> SqlitePool {
+        let pool = SqlitePool::connect("sqlite::memory:").await.expect("memory sqlite");
+        sqlx::query("CREATE TABLE sync_paths (owner TEXT NOT NULL, path TEXT NOT NULL)")
+            .execute(&pool)
+            .await
+            .expect("create sync_paths");
+        pool
+    }
+
+    #[tokio::test]
+    async fn unregistered_path_is_validation_not_ok() {
+        let pool = empty_pool().await;
+        let err = require_registered_sync_path(&pool, "owner", "/tmp/not-a-drive")
+            .await
+            .expect_err("must reject");
+        match err {
+            AppError::Validation(msg) => {
+                assert!(msg.contains("not a registered sync folder"), "unexpected message: {msg}");
+            }
+            other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn registered_path_for_this_owner_is_ok() {
+        let pool = empty_pool().await;
+        sqlx::query("INSERT INTO sync_paths (owner, path) VALUES (?, ?)")
+            .bind("owner")
+            .bind("/tmp/drive")
+            .execute(&pool)
+            .await
+            .expect("insert");
+        require_registered_sync_path(&pool, "owner", "/tmp/drive").await.expect("registered");
+        require_registered_sync_path(&pool, "other", "/tmp/drive")
+            .await
+            .expect_err("other owner must not inherit the row");
+    }
+}

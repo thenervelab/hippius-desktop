@@ -222,3 +222,18 @@ fn oauth_mirror_consume_stays_inside_the_state_lock() {
         "fallback mirror drain must happen inside the lock"
     );
 }
+
+#[test]
+fn auth_logout_clears_persisted_credentials_before_in_memory_auth() {
+    // Wiping AuthInfo first would let a failed DB clear leave a live on-disk
+    // token that silently rehydrates the session on the next restore.
+    let src = source("src/auth/logout.rs");
+    let body = slice_between(&src, "pub async fn auth_logout_internal", "pub async fn logout_full");
+    let persist = body.find("auth_session_repo::clear").expect("must clear the auth_session row");
+    let token = body.find("clear_api_token").expect("must clear plaintext token fallbacks");
+    let memory = body.find("substrate_address = None").expect("must wipe in-memory AuthInfo");
+    assert!(
+        persist < memory && token < memory,
+        "persisted credentials must be cleared before AuthInfo is wiped"
+    );
+}
