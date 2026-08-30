@@ -30,12 +30,6 @@ EXPECTED_VERSION="${2:?usage: verify-macos-artifacts.sh <dir> <expected-version>
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
 
-# The App Group the extension must carry, from the same file the build reads.
-# Hardcoding it here would let the two drift into an extension macOS refuses to
-# load while this script still reported success.
-# shellcheck source=macos/group.env
-source "${script_dir}/group.env"
-
 TARBALL="${DIR}/Hippius.app.tar.gz"
 SIGNATURE="${TARBALL}.sig"
 
@@ -105,10 +99,17 @@ check_finder_extension() {
   entitlements="$(codesign -d --entitlements :- "${appex}" 2>/dev/null | tr -d '\000')"
   if [[ "${entitlements}" != *"com.apple.security.app-sandbox"* ]]; then
     fail "${label}: the extension is not sandboxed; macOS will refuse to load it"
-  elif [[ "${entitlements}" != *"${HIPPIUS_APP_GROUP}"* ]]; then
-    fail "${label}: the extension lacks App Group ${HIPPIUS_APP_GROUP}; it cannot reach the app"
+  elif [[ "${entitlements}" != *"hippius/finder"* ]]; then
+    # Loads fine without them, then fails every share click with no error. The
+    # SBPL rules are regexes, so the signed blob carries the escaped
+    # `\.hippius/finder\.sock` — match a fragment, not the literal path.
+    fail "${label}: the extension lacks the socket sandbox exceptions; it cannot reach the app"
+  elif [[ "${entitlements}" == *"application-groups"* ]]; then
+    # The regression this release must never ship again: a non-sandboxed app
+    # reaching a Group Container costs a TCC consent prompt on every launch.
+    fail "${label}: the extension claims an App Group again; the socket must stay in ~/.hippius"
   else
-    ok "${label}: extension entitlements carry the sandbox + ${HIPPIUS_APP_GROUP}"
+    ok "${label}: extension entitlements carry the sandbox + the socket exceptions, no App Group"
   fi
 }
 

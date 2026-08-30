@@ -3,14 +3,31 @@
 <plist version="1.0">
 <dict>
     <!-- App extensions MUST run sandboxed (Apple requirement); the main app
-         deliberately does not (src-tauri/entitlements.plist). The shared App
-         Group below is what lets this sandboxed process reach the same
-         container as the non-sandboxed app for the IPC socket. -->
+         deliberately does not (src-tauri/entitlements.plist).
+
+         This extension claims NO App Group. The bridge socket used to live in
+         the shared container, which forced the non-sandboxed app to reach into
+         ~/Library/Group Containers/ on every launch — and since macOS 15 that
+         raises the kTCCServiceSystemPolicyAppData prompt ("would like to access
+         data from other apps") with no entitlement to opt out. The socket now
+         lives at ~/.hippius/finder.sock and this sandbox reaches it through the
+         exceptions below. Google Drive's own Finder extension is built the same
+         way: sandboxed, no app group, socket outside every container.
+
+         TWO rules, not one. Connecting to a Unix-domain socket needs both the
+         file node (file-read*/file-write*) and the socket operation itself
+         (network-outbound); Apple's temporary-exception.files.* keys cover
+         regular files but NOT sockets, so both are expressed in SBPL. Each is
+         anchored to the exact socket path — a bare `(allow network-outbound)`
+         would hand the extension the entire network, which is more than it has
+         ever needed. `[^/]+` stands in for the user name because an entitlement
+         cannot interpolate the home directory. -->
     <key>com.apple.security.app-sandbox</key>
     <true/>
-    <key>com.apple.security.application-groups</key>
+    <key>com.apple.security.temporary-exception.sbpl</key>
     <array>
-        <string>V28B5X732P.com.hippius.shared</string>
+        <string>(allow file-read* file-write* (regex #"^/Users/[^/]+/\.hippius/finder\.sock$"))</string>
+        <string>(allow network-outbound (regex #"^/Users/[^/]+/\.hippius/finder\.sock$"))</string>
     </array>
 </dict>
 </plist>

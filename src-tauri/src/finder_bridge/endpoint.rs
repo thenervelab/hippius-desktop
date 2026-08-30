@@ -4,13 +4,19 @@
 //! *where*. The address is the only thing that differs per OS — the wire codec
 //! ([`super::protocol`]) and the server logic ([`super::socket`]) are shared.
 //!
-//! - **macOS:** a Unix-domain socket inside the App Group container
-//!   (`~/Library/Group Containers/<group>/finder.sock`) — the one directory the
-//!   sandboxed Finder extension and the non-sandboxed app both reach. This path
-//!   MUST stay byte-identical to `macos/group.env`, the
-//!   `com.apple.security.application-groups` entry in `entitlements.plist`, and
-//!   `macos/FinderSync.entitlements`, or the extension and app resolve different
-//!   containers and never see each other's socket.
+//! - **macOS:** a Unix-domain socket in the app's own directory
+//!   (`~/.hippius/finder.sock`), deliberately NOT an App Group container. Since
+//!   macOS 15 any non-sandboxed process that touches `~/Library/Group
+//!   Containers/` trips the `kTCCServiceSystemPolicyAppData` consent prompt
+//!   ("Hippius would like to access data from other apps"), and this app is
+//!   non-sandboxed by design — `pluginkit(8)` calls fail from inside a sandbox
+//!   (see `finder_bridge::enablement`). The container therefore cost one dialog
+//!   on EVERY launch, with no entitlement to opt out of the service. The
+//!   sandboxed extension reaches this path through the SBPL exceptions in
+//!   `macos/FinderSync.entitlements` instead, which is what Google Drive's own
+//!   Finder extension does — it claims no App Group at all. This path MUST stay
+//!   byte-identical to `HippiusFinderSync.socketPath()` on the Swift side;
+//!   pinned by `tests/finder_socket_pins.rs`.
 //! - **Linux (and other unixes):** a per-user socket under `$XDG_RUNTIME_DIR`
 //!   (tmpfs, `0700`, cleaned on logout), falling back to `~/.hippius/`.
 //! - **Windows:** a named pipe `\\.\pipe\hippius-finder-<user>` (the pipe
@@ -20,10 +26,9 @@ use std::path::PathBuf;
 
 use crate::finder_bridge::error::FinderBridgeError;
 
-/// The App Group identifier shared between the app and the macOS Finder
-/// extension. See the byte-identical-copies note in the module docs.
+/// The app's own per-user state directory (alongside `logs/`, `preview-cache/`).
 #[cfg(target_os = "macos")]
-const APP_GROUP: &str = "V28B5X732P.com.hippius.shared";
+const HIPPIUS_DIR: &str = ".hippius";
 
 /// Filename of the bridge socket inside its directory (Unix platforms).
 #[cfg(unix)]
@@ -50,10 +55,12 @@ pub enum Endpoint {
 pub fn resolve() -> Result<Endpoint, FinderBridgeError> {
     #[cfg(target_os = "macos")]
     {
+        // No `$XDG_RUNTIME_DIR` equivalent on macOS, and the sandboxed extension
+        // resolves the same path from the password database (`NSHomeDirectory()`
+        // is container-redirected inside an .appex), so the real home is the one
+        // location both ends can agree on without an App Group.
         let home = dirs::home_dir().ok_or(FinderBridgeError::NoEndpoint)?;
-        Ok(Endpoint::Unix(
-            home.join("Library").join("Group Containers").join(APP_GROUP).join(SOCKET_FILE),
-        ))
+        Ok(Endpoint::Unix(home.join(HIPPIUS_DIR).join(SOCKET_FILE)))
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
@@ -80,16 +87,28 @@ pub fn resolve() -> Result<Endpoint, FinderBridgeError> {
 mod tests {
     use super::*;
 
-    /// macOS resolves to the exact App Group socket path the Finder extension
-    /// expects. A drift here silently breaks the shipped macOS feature.
+    /// macOS resolves to the exact socket path the Finder extension expects. A
+    /// drift here silently breaks the shipped macOS feature.
     #[cfg(target_os = "macos")]
     #[test]
-    fn macos_endpoint_is_under_the_group_container() {
+    fn macos_endpoint_is_in_the_app_directory() {
+        let Endpoint::Unix(path) = resolve().expect("home dir on a test host");
+        let shown = path.to_string_lossy();
+        assert!(shown.ends_with(".hippius/finder.sock"), "unexpected macOS socket path: {shown}");
+    }
+
+    /// The socket must never move back under `~/Library/Group Containers/`: the
+    /// non-sandboxed app touching that tree is what raised a TCC "access data
+    /// from other apps" prompt on every single launch.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_endpoint_avoids_the_group_container() {
         let Endpoint::Unix(path) = resolve().expect("home dir on a test host");
         let shown = path.to_string_lossy();
         assert!(
-            shown.ends_with("Library/Group Containers/V28B5X732P.com.hippius.shared/finder.sock"),
-            "unexpected macOS socket path: {shown}"
+            !shown.contains("Group Containers"),
+            "the bridge socket is back inside an App Group container ({shown}), which costs a TCC \
+             consent prompt on every launch — see this module's docs"
         );
     }
 
