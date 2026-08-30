@@ -579,3 +579,52 @@ fn staging_verifies_before_it_uploads() {
          publishes on the spot, so the check has to run first or testers already have the build"
     );
 }
+
+/// plugin-updater cannot apply a `.deb` as the current user. tauri-action
+/// writes the `.deb` onto BOTH `linux-x86_64` and `linux-x86_64-deb`. The
+/// assemble job must drop the bare key when its URL is a `.deb`, or Install
+/// is offered a payload that fails with EACCES.
+#[test]
+fn assemble_release_strips_a_deb_off_the_bare_linux_key() {
+    for lane in ["tauri-build.yml", "tauri-beta.yml"] {
+        let workflow = repo_file(&format!("../.github/workflows/{lane}"));
+        assert!(
+            workflow.contains(r#"del(.platforms["linux-x86_64"])"#),
+            "{lane} must drop linux-x86_64 when that key points at a .deb; otherwise \
+             Install is offered a payload plugin-updater cannot apply as the current user"
+        );
+    }
+}
+
+/// The publish-time verifier is the last chance to catch a .deb on the bare
+/// Linux updater key. A pin on the workflow jq alone still ships if someone
+/// uploads a hand-edited latest.json.
+#[test]
+fn verify_manifest_rejects_a_deb_on_the_bare_linux_key() {
+    let script = repo_file("../scripts/verify-release-manifest.sh");
+    assert!(
+        script.contains(r#".platforms["linux-x86_64"]"#) && script.contains(".deb"),
+        "verify-release-manifest.sh must fail when linux-x86_64.url is a .deb"
+    );
+}
+
+/// Linux and Windows ship on every lane. "macOS Only" in the release body
+/// becomes latest.json `notes` (tauri-action copies releaseBody), so the
+/// in-app dialog told Linux QA the build was Mac-only while they were on it.
+#[test]
+fn no_lane_claims_macos_only() {
+    for lane in ["tauri-build.yml", "tauri-beta.yml", "tauri-staging.yml"] {
+        let workflow = repo_file(&format!("../.github/workflows/{lane}"));
+        for (i, line) in workflow.lines().enumerate() {
+            let trimmed = line.trim();
+            if trimmed.starts_with('#') {
+                continue;
+            }
+            assert!(
+                !trimmed.to_ascii_lowercase().contains("macos only"),
+                "{lane}:{} still says macOS Only: {trimmed}",
+                i + 1
+            );
+        }
+    }
+}

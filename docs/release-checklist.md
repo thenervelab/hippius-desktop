@@ -23,7 +23,7 @@ Conventions:
 - [ ] **[mac]** Launch the app directly from the mounted DMG (do not copy to /Applications): the "move Hippius to /Applications" translocation notice appears and persists.
 - [ ] **[mac]** After moving to /Applications: grant Documents/Desktop folder access once, relaunch — macOS does **not** re-prompt for folder access.
 - [ ] Splash screen shows during boot and hands off to the app without a blank-window gap.
-- [ ] With an older version installed: the in-app updater offers the new version, downloads, and relaunches into it. (Known gap: verify `latest.json` was actually regenerated for this release — see CLAUDE.md "Finder extension in releases".)
+- [ ] With an older version installed: the in-app updater offers the new version, downloads, and relaunches into it. **[linux `.deb`]** the dialog's CTA is Download and opens GitHub Releases — it must not fail with Permission denied. (Known gap: verify `latest.json` was actually regenerated for this release — see CLAUDE.md "Finder extension in releases".)
 - [ ] Second launch while the app is running focuses the existing window instead of opening a second instance.
 
 ### 1a. Release channels — the cross-channel install

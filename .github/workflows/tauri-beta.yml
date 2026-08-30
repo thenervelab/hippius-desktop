@@ -351,7 +351,7 @@ jobs:
           # wins the name.
           releaseName: "[BETA] ${{ steps.release_notes.outputs.title }}"
           releaseBody: |
-            **Beta Build - macOS Only**
+            **Beta Build**
 
             > This is a prerelease. It follows the development work, so it has
             > the newest features first and those features are not fully
@@ -796,6 +796,18 @@ jobs:
                  "darwin-x86_64-app":  {signature: $sig, url: $url}}}
             ' > latest.json.new
           fi
+          mv latest.json.new latest.json
+
+          # plugin-updater cannot apply a .deb as the current user (needs dpkg
+          # + root; QA on amd64 got Permission denied (os error 13)).
+          # tauri-action writes the .deb onto BOTH linux-x86_64 and
+          # linux-x86_64-deb. Keep the -deb key for apt; drop the bare key so
+          # Install is never offered a .deb payload.
+          jq '
+            if (.platforms["linux-x86_64"].url // "" | test("\\.deb$")) then
+              del(.platforms["linux-x86_64"])
+            else . end
+          ' latest.json > latest.json.new
           mv latest.json.new latest.json
 
           # Publish the build's STATE_EPOCH beside the version. Tauri ignores

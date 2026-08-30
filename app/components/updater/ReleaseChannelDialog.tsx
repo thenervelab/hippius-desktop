@@ -2,6 +2,7 @@
 
 import { useAtomValue } from "jotai";
 import { useEffect, useState } from "react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { toast } from "sonner";
 
@@ -65,6 +66,19 @@ export default function ReleaseChannelDialog() {
 
   const handleConfirm = async () => {
     if (!status.target) return;
+
+    if (status.installInPlace === false) {
+      try {
+        await openUrl(status.releasePageUrl);
+      } catch (err) {
+        toast.error("Could not open the release page", {
+          description: toErrorMessage(err),
+          duration: 8000,
+        });
+      }
+      closeChannelDialog();
+      return;
+    }
 
     setSwitching(true);
     const toastId = toast.loading("Downloading…", { duration: Infinity });

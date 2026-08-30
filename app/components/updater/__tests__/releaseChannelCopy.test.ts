@@ -22,6 +22,10 @@ function status(overrides: Partial<ChannelStatus> = {}): ChannelStatus {
     target: "beta",
     targetVersion: "0.5.0-beta.1",
     blockedReason: null,
+    installInPlace: true,
+    releasePageUrl: "https://github.com/thenervelab/hippius-desktop/releases",
+    manualInstallHint:
+      "Download the .deb from https://github.com/thenervelab/hippius-desktop/releases and install it with your package manager.",
     ...overrides,
   };
 }
@@ -89,6 +93,14 @@ describe("getChannelView", () => {
 
     expect(view.canSwitch).toBe(false);
     expect(view.currentLabel).toBe("Internal");
+  });
+
+  it("sends a Deb/Rpm install to GitHub Releases instead of promising a restart", () => {
+    const view = getChannelView(status({ installInPlace: false }));
+
+    expect(view.confirmText).toBe("Open GitHub Releases");
+    expect(view.description).toMatch(/download the \.deb/i);
+    expect(view.description).not.toMatch(/restart/i);
   });
 });
 

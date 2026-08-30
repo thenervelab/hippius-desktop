@@ -208,15 +208,16 @@ from `manifest_url()` and asserts the workflow writes to that same tag, because
 a drift there leaves `publish-release` succeeding while beta builds check a URL
 nobody publishes to.
 
-**Every platform installs in-app, Linux included.** `tauri-plugin-updater`
-picks the manifest key for the bundle it is running as — `linux-x86_64-deb`
-here, which every published `latest.json` carries — and installs the `.deb`
-with `dpkg -i`, escalating through pkexec, a graphical sudo prompt, then sudo.
-A session with none of those cannot finish, so `updates.rs` classifies the
-plugin's error and returns copy naming the channel's release page and how to
-install the package by hand (H-061). The wording is keyed on
-`bundle_type()`, not on `target_os`: a `.deb` and an AppImage are both Linux
-and need different instructions. Pinned by `tests/updater_install_paths.rs`.
+**macOS and Windows install in-app. A Linux `.deb` does not.** plugin-updater
+applies a `.deb` with `dpkg -i` behind pkexec; QA on amd64 got `Permission
+denied (os error 13)` instead of a prompt. `updates.rs` therefore refuses
+Deb/Rpm before `download_and_install` and returns copy naming the channel's
+release page. The dialog's CTA is **Download**, not Install. An AppImage still
+self-updates — detection is `bundle_type()`, never `target_os`. The
+assemble job drops `linux-x86_64` when that key points at a `.deb` (the `-deb`
+key stays for apt). `install_failure` classifies Io PermissionDenied so EACCES
+is never the user-facing error. Pinned by `tests/updater_install_paths.rs`
+and `linux_updater_target_must_not_be_a_deb`.
 
 The check itself runs in **Rust** (`src-tauri/src/updates.rs`), not through
 `@tauri-apps/plugin-updater`'s JS `check()`. That one reads the single

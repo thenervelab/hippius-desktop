@@ -100,6 +100,20 @@ while read -r url; do
   fi
 done < <(jq -r '.platforms | to_entries[] | .value.url' "${manifest}")
 
+# The bare linux-x86_64 key is what an AppImage (and the fallback) reads.
+# plugin-updater cannot apply a .deb as the current user. Keep
+# linux-x86_64-deb for apt; the bare key must be an updater payload
+# (AppImage) or absent. A .deb there is how in-app Install failed with
+# Permission denied (os error 13).
+linux_bare="$(jq -r '.platforms["linux-x86_64"].url // empty' "${manifest}")"
+if [[ "${linux_bare}" == *.deb ]]; then
+  fail "linux-x86_64 points at a .deb (${linux_bare##*/}); plugin-updater cannot \
+apply a .deb as the current user. Keep linux-x86_64-deb for apt; the bare key \
+must be an AppImage (or absent)"
+else
+  ok "linux-x86_64 is not a .deb"
+fi
+
 expected_url="https://github.com/${REPO}/releases/download/${TAG}/${MAC_TARBALL}"
 
 # The signature to compare every macOS platform key against. Its absence is

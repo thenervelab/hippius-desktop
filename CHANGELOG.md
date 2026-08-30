@@ -67,6 +67,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Linux updates no longer fail with a permission error.** On a `.deb` install, Hippius now opens the GitHub Releases page so you can download the new package, instead of trying (and failing) to install it from inside the app.
 - **macOS no longer asks "Hippius would like to access data from other apps"
   every time you open the app.** Answering Allow never made it stop; the prompt
   is now gone entirely, and Finder right-click sharing works exactly as before.

@@ -1,20 +1,18 @@
-//! Source pins for the in-app install path (H-061).
+//! Source pins for the in-app install path.
 //!
 //! The updater is the one surface whose regressions are silent: a build that
 //! cannot install its own successor reports nothing, and the fleet simply stops
-//! moving. Two rules hold it together, and neither is checkable at runtime on
-//! the platform that would break — a `#[cfg(target_os = "linux")]` test is green
-//! on the macOS and Windows lanes, which is where a Linux-only regression would
-//! be merged from. So this reads the source, like `keep_awake_wiring.rs`.
+//! moving. Neither rule is checkable at runtime on the platform that would
+//! break — a `#[cfg(target_os = "linux")]` test is green on the macOS and
+//! Windows lanes, which is where a Linux-only regression would be merged from.
+//! So this reads the source, like `keep_awake_wiring.rs`.
 //!
-//! 1. **Both install commands call `download_and_install` on every target.**
-//!    `tauri-plugin-updater` installs a `.deb` with `dpkg -i` (escalating
-//!    through pkexec, a graphical sudo prompt, then sudo), and every published
-//!    `latest.json` carries a `linux-x86_64-deb` entry pointing at the signed
-//!    package. Gating the install on `target_os = "linux"` would switch a
-//!    working path off for every user who does have pkexec — and, because the
-//!    manifest still advertises the build, would do it while the app keeps
-//!    announcing updates it refuses to apply.
+//! 1. **Deb/Rpm refuse before `download_and_install`.** plugin-updater applies
+//!    a `.deb` with `dpkg -i` behind pkexec; QA on amd64 got `Permission
+//!    denied (os error 13)` instead of a prompt. `refuse_if_privileged_package`
+//!    must run first so Install never fetches a payload it cannot apply. Gating
+//!    the whole command on `target_os = "linux"` would also disable AppImage,
+//!    which still self-updates.
 //!
 //! 2. **The manual-install fallback is keyed on the BUNDLE, not the OS.**
 //!    `bundle_type()` distinguishes a `.deb` from an AppImage, which
@@ -51,16 +49,29 @@ fn brace_matched(from_open: &str) -> &str {
     panic!("block never closes");
 }
 
-fn assert_installs_on_every_target(sig: &str) {
+fn assert_refuses_privileged_packages_before_install(sig: &str) {
     let body = fn_body(UPDATES_RS, sig);
 
-    assert!(body.contains("download_and_install"), "{sig} must install through the updater plugin");
+    assert!(
+        body.contains("refuse_if_privileged_package"),
+        "{sig} must refuse Deb/Rpm before calling the plugin:\n{body}"
+    );
+    assert!(
+        body.contains("download_and_install"),
+        "{sig} must still install through the updater plugin when the bundle supports it:\n{body}"
+    );
+
+    let refuse = body.find("refuse_if_privileged_package").expect("refuse marker");
+    let install = body.find("download_and_install").expect("install marker");
+    assert!(
+        refuse < install,
+        "{sig} must refuse privileged packages BEFORE download_and_install. Body:\n{body}"
+    );
+
     assert!(
         !body.contains("#[cfg(target_os"),
-        "{sig} must not gate the install on the OS — the plugin installs a .deb via dpkg, \
-         and every published latest.json carries a linux-x86_64-deb entry (H-061). \
-         A per-OS refusal disables a working path and leaves the app announcing \
-         updates it will not apply. Body:\n{body}"
+        "{sig} must not gate the install on the OS — AppImage still self-updates, \
+         and a per-OS refusal would disable it. Body:\n{body}"
     );
     assert!(
         !body.contains("cfg!(target_os"),
@@ -69,13 +80,13 @@ fn assert_installs_on_every_target(sig: &str) {
 }
 
 #[test]
-fn install_update_installs_on_every_target() {
-    assert_installs_on_every_target("pub async fn install_update(");
+fn install_update_refuses_privileged_packages_before_install() {
+    assert_refuses_privileged_packages_before_install("pub async fn install_update(");
 }
 
 #[test]
-fn switch_release_channel_installs_on_every_target() {
-    assert_installs_on_every_target("pub async fn switch_release_channel(");
+fn switch_release_channel_refuses_privileged_packages_before_install() {
+    assert_refuses_privileged_packages_before_install("pub async fn switch_release_channel(");
 }
 
 /// The fallback copy must name the artifact the running build was PACKAGED as.

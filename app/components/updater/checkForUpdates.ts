@@ -12,7 +12,9 @@ import {
   type AvailableUpdate,
 } from "@/lib/tauri/updates";
 import { tauriErrorDetail } from "@/lib/utils/dispatchTauriError";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { getUpdateInstallPlan } from "@/app/components/updater/updateInstallPlan";
 import {
   addNotification,
   hippusVersionNotificationExists,
@@ -133,9 +135,15 @@ export async function checkForUpdates(notifyOnce = false) {
 
 // Separate function to handle the actual update process
 async function performUpdate(
-  _update: AvailableUpdate,
+  update: AvailableUpdate,
   downloadToastId?: string | number,
 ) {
+  const plan = getUpdateInstallPlan(update);
+  if (plan.kind === "manual") {
+    await openUrl(plan.url);
+    return;
+  }
+
   let totalBytes = 0;
   let started = false;
 
