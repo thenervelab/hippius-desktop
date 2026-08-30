@@ -879,7 +879,10 @@ mod tests {
         );
         // Truncation: one named delete next to a count of five is not a
         // one-file cycle; naming that entry would bury the other four.
-        assert_eq!(title_for(&details(&[deleted("report.pdf", "remote_delete")]), Some(5)), "Deleted 5 files");
+        // It is also not a confirmed delete-only cycle — the four unseen
+        // files may be uploads — so keep the generic title rather than
+        // claiming "Deleted 5 files".
+        assert_eq!(title_for(&details(&[deleted("report.pdf", "remote_delete")]), Some(5)), "Sync Complete");
     }
 
     #[test]
