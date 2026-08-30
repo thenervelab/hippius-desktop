@@ -6,10 +6,11 @@
 //! caller (`sync::paths::set_sync_path_internal`) is itself macOS-gated,
 //! so on other platforms this module compiles to nothing (no stubs needed).
 
-// `SqlitePool` is referenced only by the macOS `store_bookmark`; gate the import
-// so the non-macOS build — where this module compiles to nothing — has no unused
+// `SqlitePool` is referenced by the macOS `store_bookmark` and by the SQL
+// persist helper the in-module tests drive. Gate the import so the non-macOS
+// non-test build — where this module compiles to nothing — has no unused
 // import under `-D warnings`.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", test))]
 use sqlx::sqlite::SqlitePool;
 
 #[cfg(target_os = "macos")]
@@ -129,22 +130,84 @@ pub fn create_security_scoped_bookmark(path: &str) -> Result<Vec<u8>, String> {
     Ok(data)
 }
 
-/// Stores a security-scoped bookmark for a path in the database.
-#[cfg(target_os = "macos")]
-pub async fn store_bookmark(pool: &SqlitePool, path: &str, scope_type: &str) -> Result<(), String> {
-    let bookmark_data = create_security_scoped_bookmark(path)?;
-
+/// Persist already-created bookmark bytes. Extracted so the SQL half is
+/// testable without a live ObjC `NSURL` bookmark (which needs a real path
+/// and a macOS TCC grant).
+#[cfg(any(target_os = "macos", test))]
+pub(crate) async fn persist_bookmark_bytes(pool: &SqlitePool, path: &str, bookmark_data: &[u8], scope_type: &str) -> Result<(), String> {
     sqlx::query(
         "INSERT OR REPLACE INTO security_scoped_bookmarks (path, bookmark_data, scope_type, last_accessed)
          VALUES (?, ?, ?, CURRENT_TIMESTAMP)",
     )
     .bind(path)
-    .bind(&bookmark_data)
+    .bind(bookmark_data)
     .bind(scope_type)
     .execute(pool)
     .await
     .map_err(|e| format!("Failed to store bookmark: {e}"))?;
+    Ok(())
+}
 
+/// Stores a security-scoped bookmark for a path in the database.
+#[cfg(target_os = "macos")]
+pub async fn store_bookmark(pool: &SqlitePool, path: &str, scope_type: &str) -> Result<(), String> {
+    let bookmark_data = create_security_scoped_bookmark(path)?;
+    persist_bookmark_bytes(pool, path, &bookmark_data, scope_type).await?;
     debug!("Stored security-scoped bookmark for: {}", path);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::persist_bookmark_bytes;
+    use sqlx::SqlitePool;
+
+    async fn pool() -> SqlitePool {
+        let pool = SqlitePool::connect("sqlite::memory:").await.expect("memory sqlite");
+        sqlx::query(
+            "CREATE TABLE security_scoped_bookmarks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                path TEXT NOT NULL UNIQUE,
+                bookmark_data BLOB NOT NULL,
+                scope_type TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_accessed TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create");
+        pool
+    }
+
+    #[tokio::test]
+    async fn persist_then_read_round_trips_bytes() {
+        let pool = pool().await;
+        persist_bookmark_bytes(&pool, "/tmp/drive", &[1, 2, 3], "sync").await.expect("persist");
+        let (data, scope): (Vec<u8>, String) = sqlx::query_as("SELECT bookmark_data, scope_type FROM security_scoped_bookmarks WHERE path = ?")
+            .bind("/tmp/drive")
+            .fetch_one(&pool)
+            .await
+            .expect("read");
+        assert_eq!(data, vec![1, 2, 3]);
+        assert_eq!(scope, "sync");
+    }
+
+    #[tokio::test]
+    async fn persist_replaces_the_same_path() {
+        let pool = pool().await;
+        persist_bookmark_bytes(&pool, "/tmp/drive", &[1], "sync").await.expect("first");
+        persist_bookmark_bytes(&pool, "/tmp/drive", &[9, 9], "sync").await.expect("replace");
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM security_scoped_bookmarks")
+            .fetch_one(&pool)
+            .await
+            .expect("count");
+        assert_eq!(count, 1);
+        let data: Vec<u8> = sqlx::query_scalar("SELECT bookmark_data FROM security_scoped_bookmarks WHERE path = ?")
+            .bind("/tmp/drive")
+            .fetch_one(&pool)
+            .await
+            .expect("read");
+        assert_eq!(data, vec![9, 9]);
+    }
 }

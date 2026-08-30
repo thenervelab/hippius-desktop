@@ -1,12 +1,16 @@
 //! Cached recursive directory size/file-count stats for the folder listing.
 
-use std::collections::HashMap;
-use std::path::Path;
+use super::pathops::is_engine_hidden_name;
+use hcfs_client::drive::ExcludeRules;
+use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 /// Process-wide cache for [`dir_stats_recursive`].
 ///
-/// Keyed by absolute path. Each entry records the directory's mtime at the
+/// Keyed by absolute path plus the ruleset the walk applied (see
+/// [`DirStatsKey`]). Each entry records the directory's mtime at the
 /// time of the walk. On lookup, if the current mtime matches the cached
 /// one, the cached `(size, count)` is returned without re-walking. Direct
 /// children changing does bump that directory's mtime (APFS/ext4/NTFS),
@@ -30,9 +34,85 @@ use std::sync::OnceLock;
 /// of entries on a long session). No TTL or LRU cap. If usage patterns
 /// change and the cache grows large, swap to `quick_cache` or wire a
 /// per-drive cache that drops on `remove_drive`.
-/// Cached `(mtime, size, count)` for each cached directory path.
+/// Cache key: the walked directory AND the ruleset it was walked under
+/// ([`DirStatsExcludes::key`]).
+///
+/// The ruleset belongs in the key, not the payload: the same directory has
+/// different totals under different exclude patterns, and editing
+/// `.hippius/exclude` touches no directory's mtime, so a two-part key would
+/// serve pre-exclusion totals for the rest of the session (H-110).
+///
+/// It belongs in the *map* key rather than a validity field alongside the
+/// mtime, because a map keyed on the path alone holds exactly ONE ruleset's
+/// answer per directory. The billing lag probe
+/// (`storage_overview::local_bytes_for_paths`) walks the same drive roots
+/// with no rules at all, so with a single slot the two callers overwrite
+/// each other and every listing pays the full walk the memo exists to avoid.
+/// Neither ever serves the other's numbers — a key mismatch is a miss, not a
+/// wrong answer — but neither ever hits either.
+///
+/// The extra entries are bounded at one per live ruleset: a superseded
+/// `.hippius/exclude` leaves entries behind until the next invalidation, and
+/// any sync cycle that touches local files clears the whole map.
+type DirStatsKey = (PathBuf, u64);
+/// Cached `(mtime, size, count)` for each cached `(directory, ruleset)`.
 type DirStatsEntry = (std::time::SystemTime, u64, u64);
-type DirStatsMap = std::sync::Mutex<HashMap<std::path::PathBuf, DirStatsEntry>>;
+type DirStatsMap = std::sync::Mutex<HashMap<DirStatsKey, DirStatsEntry>>;
+
+/// Ruleset key for a walk with no exclusions — both a `None` `excludes` and
+/// an empty pattern list. Reserved: [`DirStatsExcludes::key`] never returns
+/// it for a non-empty list.
+const NO_EXCLUDES_KEY: u64 = 0;
+
+/// Exclusion context for a stats walk.
+///
+/// Folder rows must count what Drive shows, and Drive hides what the engine
+/// skips — so the walk applies the same rules the listing tags rows with,
+/// against paths relative to `root`.
+///
+/// Carries the raw patterns rather than a compiled [`ExcludeRules`]: the walk
+/// runs on a blocking thread and `ExcludeRules` is not `Clone`, and compiling
+/// there keeps the cache key and the rules provably derived from one list.
+pub(crate) struct DirStatsExcludes<'a> {
+    /// Drive root the walked paths are relativized against, in the LISTING
+    /// form (never canonicalized) so the rules see the paths the user's
+    /// patterns were written against.
+    pub root: &'a Path,
+    pub patterns: &'a [String],
+}
+
+impl DirStatsExcludes<'_> {
+    /// Ruleset identity for the cache key.
+    ///
+    /// `root` is hashed as well as the patterns: it decides what each walked
+    /// path is relativized to before matching, so the same patterns under a
+    /// different root are a different ruleset with different answers and must
+    /// not share an entry.
+    ///
+    /// `DefaultHasher` is adequate because this value never leaves the
+    /// process — the cache is in memory, is never persisted, and is never
+    /// compared against a key minted by another build — so std's "unstable
+    /// across releases" caveat has nothing to bite. A collision would serve
+    /// one ruleset's totals to another until that directory's mtime moves or
+    /// something invalidates it; over the handful of rulesets alive in a
+    /// session, 64 bits is a better trade than storing every pattern list in
+    /// every cache entry.
+    fn key(&self) -> u64 {
+        if self.patterns.is_empty() {
+            return NO_EXCLUDES_KEY;
+        }
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.root.hash(&mut hasher);
+        self.patterns.hash(&mut hasher);
+        match hasher.finish() {
+            // Nudge only the one value that would alias onto "no exclusions".
+            // `| 1` would instead fold every even hash onto its odd
+            // neighbour, halving the space for no gain.
+            NO_EXCLUDES_KEY => 1,
+            other => other,
+        }
+    }
+}
 
 static DIR_STATS_CACHE: OnceLock<DirStatsMap> = OnceLock::new();
 
@@ -41,27 +121,41 @@ fn dir_stats_cache() -> &'static DirStatsMap {
 }
 
 /// Recursively compute total size and file count within a directory.
-/// Hidden files (starting with '.') are excluded.
+/// Hidden files (starting with '.') are excluded, and so is anything
+/// `excludes` matches — pass the drive's patterns wherever the result is
+/// shown next to a listing that hides them, or the folder row and the folder
+/// view disagree (H-110).
 ///
-/// Memoised by `(path, mtime)`. On a hit the cached `(size, count)` is
-/// returned without descending the tree. A miss walks the tree once on a
+/// Memoised by `(path, mtime, excludes)`. On a hit the cached `(size, count)`
+/// is returned without descending the tree. A miss walks the tree once on a
 /// blocking thread and inserts a cache entry for **every** subdirectory
 /// so a later listing of a child does not re-walk.
-pub(crate) async fn dir_stats_recursive(path: &Path) -> (u64, u64) {
+pub(crate) async fn dir_stats_recursive(path: &Path, excludes: Option<&DirStatsExcludes<'_>>) -> (u64, u64) {
+    let excludes_key = excludes.map_or(NO_EXCLUDES_KEY, DirStatsExcludes::key);
+    let lookup = (path.to_path_buf(), excludes_key);
     let mtime = match tokio::fs::metadata(path).await {
         Ok(meta) => meta.modified().ok(),
         Err(_) => None,
     };
     if let Some(mtime) = mtime
         && let Ok(cache) = dir_stats_cache().lock()
-        && let Some((cached_mtime, size, count)) = cache.get(path)
+        && let Some((cached_mtime, size, count)) = cache.get(&lookup)
         && *cached_mtime == mtime
     {
         return (*size, *count);
     }
 
     let walk_root = path.to_path_buf();
-    let Ok(filled) = tokio::task::spawn_blocking(move || dir_stats_walk_std(&walk_root)).await else {
+    // Owned copies: the walk runs on a blocking thread and cannot borrow the
+    // caller's frame. The rules are compiled there, once per walk.
+    let walk_excludes = excludes.map(|e| (e.root.to_path_buf(), e.patterns.to_vec()));
+    let Ok(filled) = tokio::task::spawn_blocking(move || {
+        let compiled = walk_excludes.map(|(root, patterns)| (root, super::exclude_match::rules_from_patterns(&patterns)));
+        let ctx = compiled.as_ref().map(|(root, rules)| WalkExcludes { root, rules });
+        dir_stats_walk_std(&walk_root, ctx.as_ref())
+    })
+    .await
+    else {
         return (0, 0);
     };
 
@@ -72,7 +166,7 @@ pub(crate) async fn dir_stats_recursive(path: &Path) -> (u64, u64) {
 
     if let Ok(mut cache) = dir_stats_cache().lock() {
         for (p, dir_mtime, size, count) in filled {
-            cache.insert(p, (dir_mtime, size, count));
+            cache.insert((p, excludes_key), (dir_mtime, size, count));
         }
     }
     root_stats
@@ -92,7 +186,9 @@ pub(crate) fn invalidate_dir_stats_under(root: &Path) {
     let Ok(mut cache) = dir_stats_cache().lock() else {
         return;
     };
-    cache.retain(|path, _| path != root && !path.starts_with(root));
+    // Every ruleset's entry for those paths, not just the one the last walk
+    // used: what changed on disk changed the totals under all of them.
+    cache.retain(|(path, _), _| path.as_path() != root && !path.starts_with(root));
 }
 
 /// Drop every cached entry a mutation at `changed` makes stale: the subtree
@@ -116,22 +212,32 @@ pub(crate) fn invalidate_dir_stats_under(root: &Path) {
 /// target: `list_sync_folder` never canonicalizes, so on macOS a
 /// `/private/var` key would miss every row a `/var` listing wrote.
 pub(super) fn invalidate_dir_stats_for_change(sync_root: &Path, changed: &Path) {
-    invalidate_dir_stats_under(changed);
+    // Collect the ancestors first so the cache is swept once. Under a
+    // two-part key an ancestor could be dropped with a single `remove`; now
+    // that a path can hold one entry per ruleset there is no single key to
+    // remove, and one `retain` beats one full scan per ancestor.
+    let mut ancestors: HashSet<&Path> = HashSet::new();
+    let mut ancestor = changed.parent();
+    while let Some(path) = ancestor {
+        if !path.starts_with(sync_root) {
+            break;
+        }
+        ancestors.insert(path);
+        if path == sync_root {
+            break;
+        }
+        ancestor = path.parent();
+    }
 
     let Ok(mut cache) = dir_stats_cache().lock() else {
         return;
     };
-    let mut ancestor = changed.parent();
-    while let Some(path) = ancestor {
-        if !path.starts_with(sync_root) {
-            return;
-        }
-        cache.remove(path);
-        if path == sync_root {
-            return;
-        }
-        ancestor = path.parent();
-    }
+    // Every ruleset's entry for those paths: the file that appeared or
+    // vanished changed the totals under all of them.
+    cache.retain(|(path, _), _| {
+        let dropped = path.as_path() == changed || path.starts_with(changed) || ancestors.contains(path.as_path());
+        !dropped
+    });
 }
 
 /// Drop the whole cache after a sync cycle that changed files on disk.
@@ -168,28 +274,45 @@ pub(super) static CACHE_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::
 /// a false failure that hides the real one.
 #[cfg(test)]
 pub(super) mod test_access {
-    use super::{DirStatsEntry, dir_stats_cache};
+    use super::{DirStatsEntry, NO_EXCLUDES_KEY, dir_stats_cache};
     use std::path::Path;
 
+    /// True when the path holds an entry under ANY ruleset.
     pub(in crate::sync::fileops::files) fn is_cached(path: &Path) -> bool {
-        dir_stats_cache().lock().is_ok_and(|cache| cache.contains_key(path))
+        dir_stats_cache()
+            .lock()
+            .is_ok_and(|cache| cache.keys().any(|(cached, _)| cached.as_path() == path))
     }
 
     pub(in crate::sync::fileops::files) fn read(path: &Path) -> Option<DirStatsEntry> {
-        dir_stats_cache().lock().ok().and_then(|cache| cache.get(path).copied())
+        read_keyed(path, NO_EXCLUDES_KEY)
     }
 
+    /// The entry a walk under `excludes_key` would hit, so a test can prove
+    /// one ruleset's entry survived another ruleset's walk.
+    pub(in crate::sync::fileops::files) fn read_keyed(path: &Path, excludes_key: u64) -> Option<DirStatsEntry> {
+        dir_stats_cache()
+            .lock()
+            .ok()
+            .and_then(|cache| cache.get(&(path.to_path_buf(), excludes_key)).copied())
+    }
+
+    /// Seeds under the "no exclusions" key, matching a
+    /// `dir_stats_recursive(path, None)` lookup.
     pub(in crate::sync::fileops::files) fn seed(path: &Path, mtime: std::time::SystemTime, size: u64, count: u64) {
+        seed_keyed(path, NO_EXCLUDES_KEY, mtime, size, count);
+    }
+
+    pub(in crate::sync::fileops::files) fn seed_keyed(path: &Path, excludes_key: u64, mtime: std::time::SystemTime, size: u64, count: u64) {
         if let Ok(mut cache) = dir_stats_cache().lock() {
-            cache.insert(path.to_path_buf(), (mtime, size, count));
+            cache.insert((path.to_path_buf(), excludes_key), (mtime, size, count));
         }
     }
 
+    /// Drops every ruleset's entry for each path.
     pub(in crate::sync::fileops::files) fn forget(paths: &[&Path]) {
         if let Ok(mut cache) = dir_stats_cache().lock() {
-            for path in paths {
-                cache.remove(*path);
-            }
+            cache.retain(|(cached, _), _| !paths.contains(&cached.as_path()));
         }
     }
 }
@@ -198,13 +321,45 @@ pub(super) mod test_access {
 /// per directory visited (including `root`). Hidden names are skipped.
 /// A directory with no readable mtime is omitted from the fill list
 /// (same "don't cache" rule as the old miss path).
-fn dir_stats_walk_std(root: &Path) -> Vec<(std::path::PathBuf, std::time::SystemTime, u64, u64)> {
+/// Borrowed exclusion context inside the blocking walk.
+struct WalkExcludes<'a> {
+    root: &'a Path,
+    rules: &'a ExcludeRules,
+}
+
+impl WalkExcludes<'_> {
+    /// Whether the walk should skip `path`. An entry outside `root` cannot be
+    /// relativized, so it is kept — the rules describe drive-relative paths and
+    /// have nothing to say about anything else.
+    fn skips(&self, path: &Path, is_dir: bool) -> bool {
+        let Ok(rel) = path.strip_prefix(self.root) else {
+            return false;
+        };
+        // Forward slashes, always: the same string `listing.rs` tags its rows
+        // against (`format!("{sub}/{name}")`) and `user_files.rs` walks with.
+        // This is belt-and-braces rather than load-bearing — `globset`'s
+        // `Candidate::new` rewrites every `is_separator` byte to `/` on
+        // non-Unix targets (globset-0.4.18 `src/pathutil.rs::normalize_path`),
+        // so a `to_string_lossy()` of the native `Path` would also match on
+        // Windows. Building the drive-relative form here anyway keeps the
+        // three walks textually identical instead of resting on a
+        // dependency's internal normalisation.
+        let rel = rel.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/");
+        super::exclude_match::path_is_excluded(self.rules, &rel, is_dir)
+    }
+}
+
+fn dir_stats_walk_std(root: &Path, excludes: Option<&WalkExcludes<'_>>) -> Vec<(std::path::PathBuf, std::time::SystemTime, u64, u64)> {
     let mut filled = Vec::new();
-    walk_dir_std(root, &mut filled);
+    walk_dir_std(root, excludes, &mut filled);
     filled
 }
 
-fn walk_dir_std(path: &Path, filled: &mut Vec<(std::path::PathBuf, std::time::SystemTime, u64, u64)>) -> (u64, u64) {
+fn walk_dir_std(
+    path: &Path,
+    excludes: Option<&WalkExcludes<'_>>,
+    filled: &mut Vec<(std::path::PathBuf, std::time::SystemTime, u64, u64)>,
+) -> (u64, u64) {
     let mut size: u64 = 0;
     let mut count: u64 = 0;
     let Ok(dir) = std::fs::read_dir(path) else {
@@ -212,14 +367,22 @@ fn walk_dir_std(path: &Path, filled: &mut Vec<(std::path::PathBuf, std::time::Sy
     };
     for entry in dir.flatten() {
         let name = entry.file_name();
-        if name.to_string_lossy().starts_with('.') {
+        if is_engine_hidden_name(&name) {
             continue;
         }
         let Ok(meta) = entry.metadata() else {
             continue;
         };
+        // Skip what the engine skips (hidden names) and what billing omits
+        // (exclude patterns). An excluded directory is pruned whole.
+
+        if let Some(ex) = excludes
+            && ex.skips(&entry.path(), meta.is_dir())
+        {
+            continue;
+        }
         if meta.is_dir() {
-            let (sub_size, sub_count) = walk_dir_std(&entry.path(), filled);
+            let (sub_size, sub_count) = walk_dir_std(&entry.path(), excludes, filled);
             size += sub_size;
             count += sub_count;
         } else {
@@ -235,7 +398,7 @@ fn walk_dir_std(path: &Path, filled: &mut Vec<(std::path::PathBuf, std::time::Sy
 
 #[cfg(test)]
 mod tests {
-    use super::test_access::{forget, is_cached, read, seed};
+    use super::test_access::{forget, is_cached, read, read_keyed, seed, seed_keyed};
     use super::*;
 
     /// `dir_stats_recursive` reads from `DIR_STATS_CACHE` when the
@@ -264,7 +427,7 @@ mod tests {
         let bogus_count = 123u64;
         seed(dir, mtime, bogus_size, bogus_count);
 
-        let (size, count) = dir_stats_recursive(dir).await;
+        let (size, count) = dir_stats_recursive(dir, None).await;
         forget(&[dir]);
 
         assert_eq!(size, bogus_size, "dir_stats_recursive must return the cached size on mtime match");
@@ -283,7 +446,7 @@ mod tests {
         tokio::fs::write(dir.join("one.txt"), b"x").await.expect("write");
         tokio::fs::write(dir.join("two.txt"), b"yz").await.expect("write");
 
-        let (size, count) = dir_stats_recursive(dir).await;
+        let (size, count) = dir_stats_recursive(dir, None).await;
         forget(&[dir]);
 
         assert_eq!(size, 3, "fresh walk must sum file bytes (1 + 2)");
@@ -299,7 +462,7 @@ mod tests {
         std::fs::create_dir(&sub).expect("mkdir sub");
         std::fs::write(sub.join("a.txt"), b"xyz").expect("write");
 
-        let (size, count) = dir_stats_recursive(root).await;
+        let (size, count) = dir_stats_recursive(root, None).await;
         assert_eq!(size, 3);
         assert_eq!(count, 1);
 
@@ -309,7 +472,7 @@ mod tests {
         // Prove the child entry is consulted: plant a bogus value under the
         // real mtime and re-query the child — must not re-walk.
         seed(&sub, sub_mtime, 42, 7);
-        let (size, count) = dir_stats_recursive(&sub).await;
+        let (size, count) = dir_stats_recursive(&sub, None).await;
         forget(&[root, &sub]);
 
         assert_eq!(size, 42);
@@ -326,7 +489,7 @@ mod tests {
         std::fs::create_dir(root.join(".git")).expect("mkdir .git");
         std::fs::write(root.join(".git").join("x"), b"yyyy").expect("write git");
 
-        let (size, count) = dir_stats_recursive(root).await;
+        let (size, count) = dir_stats_recursive(root, None).await;
         forget(&[root]);
 
         assert_eq!(size, 2, "dotfiles and .git must not count");
@@ -368,7 +531,7 @@ mod tests {
         let file = sub.join("a.txt");
         std::fs::write(&file, b"123456789").expect("write 9 bytes");
 
-        let (size, count) = dir_stats_recursive(root).await;
+        let (size, count) = dir_stats_recursive(root, None).await;
         assert_eq!((size, count), (9, 1));
 
         std::fs::remove_file(&file).expect("delete nested file");
@@ -381,12 +544,12 @@ mod tests {
         seed(root, root_mtime, 9, 1);
         seed(&sub, sub_mtime, 9, 1);
 
-        let (size, count) = dir_stats_recursive(root).await;
+        let (size, count) = dir_stats_recursive(root, None).await;
         assert_eq!((size, count), (9, 1), "seeded cache must be consulted before invalidation");
 
         invalidate_dir_stats_for_change(root, &file);
 
-        let (size, count) = dir_stats_recursive(root).await;
+        let (size, count) = dir_stats_recursive(root, None).await;
         forget(&[root, &sub]);
 
         assert_eq!((size, count), (0, 0), "root totals must drop the deleted 9 B");
@@ -404,7 +567,7 @@ mod tests {
         std::fs::create_dir(&sub).expect("mkdir sub");
         std::fs::write(sub.join("a.txt"), b"12345").expect("write 5 bytes");
 
-        let (size, count) = dir_stats_recursive(root).await;
+        let (size, count) = dir_stats_recursive(root, None).await;
         assert_eq!((size, count), (5, 1));
 
         let added = sub.join("b.txt");
@@ -415,12 +578,12 @@ mod tests {
         let root_mtime = std::fs::metadata(root).expect("meta").modified().expect("mtime");
         seed(root, root_mtime, 5, 1);
 
-        let (size, count) = dir_stats_recursive(root).await;
+        let (size, count) = dir_stats_recursive(root, None).await;
         assert_eq!((size, count), (5, 1), "seeded cache must be consulted before invalidation");
 
         invalidate_dir_stats_for_change(root, &added);
 
-        let (size, count) = dir_stats_recursive(root).await;
+        let (size, count) = dir_stats_recursive(root, None).await;
         forget(&[root, &sub]);
 
         assert_eq!((size, count), (9, 2), "root totals must pick up the added 4 B");
@@ -550,6 +713,185 @@ mod tests {
         assert!(
             cleared_by_local_delete,
             "a cycle that removed a local file must drop the pre-cycle totals"
+        );
+    }
+
+    /// H-110. The folder ROW's totals come from this walk while the folder
+    /// VIEW hides excluded rows, so a walk that ignores the patterns reports
+    /// "3 files" over a listing showing 1.
+    #[tokio::test]
+    async fn the_walk_skips_what_the_patterns_exclude() {
+        let _cache_guard = CACHE_TEST_LOCK.lock().await;
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let root = tmp.path();
+        std::fs::write(root.join("keep.txt"), b"12345").expect("write keep");
+        std::fs::write(root.join("blob.bin"), b"0123456789").expect("write blob");
+
+        let patterns = vec!["*.bin".to_string()];
+        let excludes = DirStatsExcludes { root, patterns: &patterns };
+        assert_eq!(
+            dir_stats_recursive(root, Some(&excludes)).await,
+            (5, 1),
+            "an excluded file must not be counted in the folder row"
+        );
+
+        assert_eq!(
+            dir_stats_recursive(root, None).await,
+            (15, 2),
+            "without patterns the same directory still counts everything"
+        );
+    }
+
+    /// A nested pattern must match the same string `listing.rs` tags rows
+    /// against — `format!("{sub}/{name}")`, forward slashes on every platform.
+    /// Handing the rules a `Path`'s native form instead leaves this passing on
+    /// Unix and failing on Windows, where the row and its own totals would
+    /// then disagree.
+    #[tokio::test]
+    async fn a_nested_pattern_matches_the_listing_form_of_the_path() {
+        let _cache_guard = CACHE_TEST_LOCK.lock().await;
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let root = tmp.path();
+        let docs = root.join("docs");
+        std::fs::create_dir(&docs).expect("mkdir docs");
+        std::fs::write(docs.join("a.pdf"), b"12345678").expect("write pdf");
+        std::fs::write(docs.join("b.txt"), b"123").expect("write txt");
+
+        let patterns = vec!["docs/*.pdf".to_string()];
+        let excludes = DirStatsExcludes { root, patterns: &patterns };
+        assert_eq!(
+            dir_stats_recursive(root, Some(&excludes)).await,
+            (3, 1),
+            "a slash-bearing pattern must match the nested file the listing hides"
+        );
+    }
+
+    /// A directory pattern prunes the subtree, matching the engine: the
+    /// contents of an excluded folder are excluded too.
+    #[tokio::test]
+    async fn a_directory_pattern_prunes_the_whole_subtree() {
+        let _cache_guard = CACHE_TEST_LOCK.lock().await;
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let root = tmp.path();
+        let build = root.join("build");
+        std::fs::create_dir(&build).expect("mkdir build");
+        std::fs::write(build.join("out.o"), b"12345678").expect("write out");
+        std::fs::write(root.join("keep.txt"), b"123").expect("write keep");
+
+        let patterns = vec!["build/".to_string()];
+        let excludes = DirStatsExcludes { root, patterns: &patterns };
+        assert_eq!(
+            dir_stats_recursive(root, Some(&excludes)).await,
+            (3, 1),
+            "an excluded directory contributes neither its size nor its file count"
+        );
+    }
+
+    /// The production shape: the listing walks a CHILD folder while the
+    /// patterns stay drive-relative, so `excludes.root` is the drive and the
+    /// walked directory is somewhere under it. Relativizing against the
+    /// walked directory instead leaves every same-root test above passing
+    /// while any pattern naming a folder silently stops matching — H-110
+    /// again, one level down.
+    #[tokio::test]
+    async fn a_child_walk_relativizes_against_the_drive_root_not_the_walked_folder() {
+        let _cache_guard = CACHE_TEST_LOCK.lock().await;
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let root = tmp.path();
+        let docs = root.join("docs");
+        std::fs::create_dir(&docs).expect("mkdir docs");
+        std::fs::write(docs.join("a.pdf"), b"12345678").expect("write pdf");
+        std::fs::write(docs.join("b.txt"), b"123").expect("write txt");
+
+        let patterns = vec!["docs/*.pdf".to_string()];
+        let excludes = DirStatsExcludes { root, patterns: &patterns };
+        let stats = dir_stats_recursive(&docs, Some(&excludes)).await;
+        forget(&[root, &docs]);
+
+        assert_eq!(stats, (3, 1), "a nested walk must match on the path the listing tagged the row with");
+    }
+
+    /// The billing lag probe walks the same drive roots with no rules at all
+    /// (`storage_overview::local_bytes_for_paths`). One entry per path would
+    /// let the two callers overwrite each other on every refresh, so every
+    /// listing would re-walk the drive the memo exists to spare it.
+    #[tokio::test]
+    async fn a_rule_less_walk_leaves_the_listings_entry_in_place() {
+        let _cache_guard = CACHE_TEST_LOCK.lock().await;
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let root = tmp.path();
+        std::fs::write(root.join("keep.txt"), b"12345").expect("write keep");
+        std::fs::write(root.join("blob.bin"), b"0123456789").expect("write blob");
+
+        let patterns = vec!["*.bin".to_string()];
+        let excludes = DirStatsExcludes { root, patterns: &patterns };
+        assert_eq!(dir_stats_recursive(root, Some(&excludes)).await, (5, 1), "warm the listing's entry");
+
+        // Sentinel under the listing's ruleset: getting it back after the
+        // rule-less walk proves the entry was never evicted or re-walked.
+        let mtime = std::fs::metadata(root).expect("meta").modified().expect("mtime");
+        seed_keyed(root, excludes.key(), mtime, 42, 7);
+
+        let rule_less = dir_stats_recursive(root, None).await;
+        let patterned = dir_stats_recursive(root, Some(&excludes)).await;
+        forget(&[root]);
+
+        assert_eq!(rule_less, (15, 2), "the rule-less caller gets its own totals, not the listing's");
+        assert_eq!(patterned, (42, 7), "and must not have evicted the listing's entry to get them");
+    }
+
+    /// A file appearing or vanishing changes the totals under every ruleset,
+    /// so invalidation cannot drop only the one the last walk happened to
+    /// use — the others would keep serving pre-mutation numbers.
+    #[test]
+    fn change_invalidation_drops_every_ruleset_for_the_affected_paths() {
+        let _cache_guard = CACHE_TEST_LOCK.blocking_lock();
+        let sync_root = PathBuf::from("/rulesets/drive");
+        let sub = sync_root.join("sub");
+        let now = std::time::SystemTime::now();
+        let other_ruleset = 7u64;
+        seed(&sync_root, now, 1, 1);
+        seed_keyed(&sync_root, other_ruleset, now, 2, 2);
+        seed(&sub, now, 3, 3);
+        seed_keyed(&sub, other_ruleset, now, 4, 4);
+
+        invalidate_dir_stats_for_change(&sync_root, &sub.join("a.txt"));
+        let leftovers = [
+            read(&sync_root),
+            read_keyed(&sync_root, other_ruleset),
+            read(&sub),
+            read_keyed(&sub, other_ruleset),
+        ];
+
+        assert_eq!(
+            leftovers,
+            [None, None, None, None],
+            "a mutation retires the directory under every ruleset"
+        );
+    }
+
+    /// Editing `.hippius/exclude` changes no directory's mtime, so the
+    /// ruleset has to be part of the cache key or the listing serves the
+    /// previous ruleset's totals for the rest of the session.
+    #[tokio::test]
+    async fn changing_the_patterns_does_not_serve_the_previous_totals() {
+        let _cache_guard = CACHE_TEST_LOCK.lock().await;
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let root = tmp.path();
+        std::fs::write(root.join("keep.txt"), b"12345").expect("write keep");
+        std::fs::write(root.join("blob.bin"), b"0123456789").expect("write blob");
+
+        let excluded = vec!["*.bin".to_string()];
+        let warm = DirStatsExcludes { root, patterns: &excluded };
+        assert_eq!(dir_stats_recursive(root, Some(&warm)).await, (5, 1), "warm the cache under *.bin");
+
+        // The user clears the pattern. Nothing on disk moved.
+        let cleared: Vec<String> = Vec::new();
+        let after = DirStatsExcludes { root, patterns: &cleared };
+        assert_eq!(
+            dir_stats_recursive(root, Some(&after)).await,
+            (15, 2),
+            "clearing the pattern must re-walk, not reuse the *.bin totals"
         );
     }
 }

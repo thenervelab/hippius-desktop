@@ -45,7 +45,8 @@ revocation marker had no live producer at pin `3ff8e9f` (every hermetic test gre
 the pin bump to `ab4b5cd` that fixed it was verified only by re-running the live suite.
 
 So: **on every `hcfs` pin bump PR, run `.github/workflows/e2e-live.yml` against the bumped
-branch before merging.**
+branch before merging.** That rule is also in [`docs/testing-policy.md`](../docs/testing-policy.md)
+(live lane vs hermetic pins).
 
 ```bash
 gh workflow run e2e-live.yml --ref automated/hcfs-bump -f suite=both

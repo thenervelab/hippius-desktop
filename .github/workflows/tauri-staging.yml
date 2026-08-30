@@ -264,7 +264,7 @@ jobs:
       - name: Install macOS packaging tools
         run: brew install xcodegen create-dmg minisign
 
-      # Apple code signing. The App Group the Finder extension needs is granted
+      # Apple code signing. The sandbox exceptions the Finder extension needs are honoured
       # only to code signed by Team V28B5X732P, so a real Developer ID cert is
       # required (the preview build was previously ad-hoc/unsigned). The CERT
       # goes to GITHUB_ENV so tauri-action signs the app; notarization is
@@ -292,7 +292,7 @@ jobs:
             } >> "$GITHUB_ENV"
             echo "Code signing enabled."
           else
-            echo "APPLE_CERTIFICATE / APPLE_SIGNING_IDENTITY not set — building unsigned; the Finder extension will be skipped (App Groups need a real Team ID)."
+            echo "APPLE_CERTIFICATE / APPLE_SIGNING_IDENTITY not set — building unsigned; the Finder extension will be skipped (its sandbox exceptions need a real signing identity)."
           fi
           if [[ -n "$APPLE_API_KEY_CONTENT" && -n "$APPLE_API_KEY_ID" && -n "$APPLE_API_ISSUER_ID" ]]; then
             KEY_PATH="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"

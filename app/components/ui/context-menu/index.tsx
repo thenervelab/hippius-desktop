@@ -9,8 +9,8 @@ import {
   canShareFolder,
   FOLDER_SHARE_DISABLED_TOOLTIP,
 } from "@/app/lib/utils/folderShareGating";
-import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
-import { invoke } from "@tauri-apps/api/core";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { revealFile } from "@/lib/utils/revealFile";
 import { useAtomValue } from "jotai";
 import { toast } from "sonner";
 
@@ -115,32 +115,12 @@ export default function FileContextMenu({
 
   const revealInFileManager = async () => {
     try {
-      let filePath = file.source;
-
-      // If source path is set, try it first
-      if (filePath) {
-        try {
-          await revealItemInDir(filePath);
-          onClose();
-          return;
-        } catch {
-          // Source path failed — fall through to resolve_file_path
-          console.warn("[RevealInFinder] source path failed, trying resolve_file_path. source:", filePath);
-        }
-      }
-
-      // Fallback: resolve canonical path from DB
-      if (file.label && polkadotAddress) {
-        const fileName = file.actualFileName || file.name;
-        filePath = await invoke<string>("resolve_file_path", {
-          accountId: polkadotAddress,
-          label: file.label,
-          fileName,
-        });
-        await revealItemInDir(filePath);
-      } else {
-        toast.error("File is not available locally. It may only exist on another device.");
-      }
+      await revealFile({
+        sourcePath: file.source,
+        label: file.label,
+        accountId: polkadotAddress ?? undefined,
+        fileName: file.actualFileName || file.name,
+      });
     } catch (error) {
       console.error("Failed to reveal in file manager:", error);
       toast.error("File is not available locally. It may only exist on another device.");

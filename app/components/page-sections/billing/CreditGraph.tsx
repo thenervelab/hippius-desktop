@@ -10,6 +10,7 @@ import AvailableCreditsChart from "@/components/page-sections/home/available-cre
 import { Select, RefreshButton } from "@/components/ui";
 import CustomTooltip2 from "@/components/ui/CustomTooltip2";
 import { GripIcon } from "@/components/ui/icons";
+import { formatDriveCreditsUsed } from "./formatDriveCreditsUsed";
 
 // Drive credit history only exists from the endpoint's first event onward, so
 // longer fixed windows (60 days, 1 year) would render mostly flat-zero before
@@ -130,11 +131,7 @@ const CreditGraph: FC<CreditGraphProps> = ({ className }) => {
           ) : (
             <>
               <span className="font-mono font-medium text-[24px] leading-[30px] tracking-[-0.96px] text-grey-10 dark:text-white">
-                {usedTotal >= 1e6
-                  ? `${(usedTotal / 1e6).toFixed(1)}M`
-                  : usedTotal >= 1e3
-                    ? `${(usedTotal / 1e3).toFixed(1)}K`
-                    : usedTotal.toFixed(usedTotal < 0.01 && usedTotal > 0 ? 4 : 2)}
+                {formatDriveCreditsUsed(usedTotal)}
               </span>
               <span className="font-mono font-medium text-[12px] leading-[18px] tracking-[-0.48px] text-grey-10/50 dark:text-white/50 pb-[3px]">
                 drive credits used

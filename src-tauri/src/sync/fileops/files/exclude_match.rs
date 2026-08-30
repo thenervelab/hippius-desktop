@@ -69,9 +69,36 @@ pub(super) fn recent_rel_path_is_excluded(rules: Option<&ExcludeRules>, rel_path
     }
 }
 
+/// True when some ancestor directory of `rel_path` is itself excluded.
+///
+/// A file glob (`*.bin`) tags `dir/foo.bin` excluded but does not exclude
+/// `dir/`. A directory rule (`node_modules/`) excludes the folder *and*
+/// every path under it. Search overlay must skip the latter so a previously
+/// synced `node_modules/` tree does not reappear as thousands of excluded
+/// rows (H-045).
+pub(super) fn under_excluded_dir(rules: &ExcludeRules, rel_path: &str) -> bool {
+    if rules.is_empty() {
+        return false;
+    }
+    let Some((parent, _)) = rel_path.rsplit_once('/') else {
+        return false;
+    };
+    let mut prefix = String::new();
+    for part in parent.split('/') {
+        if !prefix.is_empty() {
+            prefix.push('/');
+        }
+        prefix.push_str(part);
+        if path_is_excluded(rules, &prefix, true) {
+            return true;
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{path_is_excluded, recent_rel_path_is_excluded, rules_from_patterns};
+    use super::{path_is_excluded, recent_rel_path_is_excluded, rules_from_patterns, under_excluded_dir};
     use proptest::prelude::*;
 
     fn rules(patterns: &[&str]) -> hcfs_client::drive::ExcludeRules {
@@ -204,6 +231,22 @@ mod tests {
         assert!(recent_rel_path_is_excluded(Some(&rules), "dir/foo.bin"));
         assert!(!recent_rel_path_is_excluded(Some(&rules), "foo.bin.bak"));
         assert!(!recent_rel_path_is_excluded(None, "foo.bin"));
+    }
+
+    #[test]
+    fn file_glob_does_not_count_as_under_an_excluded_dir() {
+        let rules = rules(&["*.bin"]);
+        assert!(!under_excluded_dir(&rules, "foo.bin"));
+        assert!(!under_excluded_dir(&rules, "dir/foo.bin"));
+    }
+
+    #[test]
+    fn directory_rule_marks_every_path_under_the_folder() {
+        let rules = rules(&["node_modules/"]);
+        assert!(!under_excluded_dir(&rules, "keep.txt"));
+        assert!(under_excluded_dir(&rules, "node_modules/pkg/index.js"));
+        assert!(under_excluded_dir(&rules, "src/node_modules/a.js"));
+        assert!(!under_excluded_dir(&rules, "node_modules"));
     }
 
     /// Drive-relative paths built from a small alphabet that mixes the names

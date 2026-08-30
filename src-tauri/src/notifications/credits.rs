@@ -417,9 +417,10 @@ pub async fn process_credit_events(
 #[derive(serde::Deserialize, Clone, Copy)]
 #[serde(rename_all = "snake_case")]
 pub enum SyncNotificationOutcome {
-    /// The sync cycle completed with one or more transfers. Title: the file's
-    /// name or the file count when the row carries a usable file list (see
-    /// [`success_list_title`]), otherwise "Sync Complete".
+    /// The sync cycle completed with one or more transfers or deletes. Title:
+    /// the file's name or the file count when the row carries a usable file
+    /// list (see [`success_list_title`]), otherwise "Sync Complete". A
+    /// delete-only cycle is titled as a delete, not "Sync Complete".
     Success,
     /// The sync cycle surfaced a non-cancel error (network, auth, rate limit,
     /// etc.). Title: "Sync Failed". User-initiated cancels and stall-watchdog
@@ -492,14 +493,18 @@ struct FileDetail {
     name: Option<String>,
     /// An upload or a download, as opposed to a local/remote delete.
     transferred: bool,
+    /// A local or remote delete. Exclusive of `transferred` for known actions.
+    deleted: bool,
 }
 
 /// Title for a finished cycle.
 ///
-/// Only uploads and downloads may lend their name to the title: "Synced
-/// report.pdf" for a file the cycle *deleted* reads as a successful upload of a
-/// file that is in fact gone, so a delete-only cycle keeps the generic title and
-/// lets the description say what happened.
+/// Uploads and downloads may lend their name as "Synced {name}". A delete
+/// must never be phrased that way — the file is gone, and that line would
+/// read as a successful upload of it. A *delete-only* cycle is titled as a
+/// delete instead of the generic "Sync Complete" (H-158); a mixed cycle
+/// still uses the transfer phrasing and the total count, and the description
+/// names the deletes.
 ///
 /// The single-file arm requires the count and the list to agree that there was
 /// exactly one file. The list is a capped projection of session state, so one
@@ -510,16 +515,40 @@ fn success_list_title(files: &SyncFileSummary<'_>) -> String {
 
     let details = parse_file_details(files.details_json);
     let transferred: Vec<&str> = details.iter().filter(|d| d.transferred).filter_map(|d| d.name.as_deref()).collect();
-    if transferred.is_empty() {
-        return generic;
+    let total = files.file_count.map_or(details.len(), |n| n as usize);
+
+    // Delete-only is inferred from the visible list. That list is capped,
+    // so a truncated mixed cycle whose visible slice is all deletes must
+    // not become "Deleted n files" (H-158). Only trust the list when it
+    // covers the whole cycle.
+    if !details.iter().any(|d| d.transferred) {
+        if total > details.len() {
+            return generic;
+        }
+        return delete_only_title(total, &details).unwrap_or(generic);
     }
 
-    let total = files.file_count.map_or(details.len(), |n| n as usize);
     match (total, transferred.as_slice()) {
         (1, [name]) => format!("Synced {name}"),
         (n, _) if n > 1 => format!("Synced {n} files"),
         _ => generic,
     }
+}
+
+/// Title for a cycle that transferred nothing. `None` keeps the generic
+/// "Sync Complete" (no usable delete list — empty, unparseable, or unnamed
+/// with a mismatched count).
+fn delete_only_title(total: usize, details: &[FileDetail]) -> Option<String> {
+    if !details.iter().any(|d| d.deleted) {
+        return None;
+    }
+    let named: Vec<&str> = details.iter().filter(|d| d.deleted).filter_map(|d| d.name.as_deref()).collect();
+    Some(match (total, named.as_slice()) {
+        (1, [name]) => format!("Deleted {name}"),
+        (1, _) => "Deleted 1 file".to_string(),
+        (n, _) if n > 1 => format!("Deleted {n} files"),
+        _ => return None,
+    })
 }
 
 /// Parse the `release_notes` array the notification hook sends. A non-array or
@@ -534,9 +563,13 @@ fn parse_file_details(details_json: &str) -> Vec<FileDetail> {
     };
     values
         .iter()
-        .map(|v| FileDetail {
-            name: v.get("fileName").and_then(serde_json::Value::as_str).map(basename),
-            transferred: matches!(v.get("action").and_then(serde_json::Value::as_str), Some("upload" | "download")),
+        .map(|v| {
+            let action = v.get("action").and_then(serde_json::Value::as_str);
+            FileDetail {
+                name: v.get("fileName").and_then(serde_json::Value::as_str).map(basename),
+                transferred: matches!(action, Some("upload" | "download")),
+                deleted: matches!(action, Some("local_delete" | "remote_delete")),
+            }
         })
         .collect()
 }
@@ -826,14 +859,43 @@ mod tests {
     }
 
     // Deletes must never be phrased as "Synced <name>": the file is gone, and
-    // the title would read as a successful upload of it.
-    #[test]
-    fn deletes_never_lend_their_name_to_the_title() {
-        let deleted = serde_json::json!({ "fileName": "report.pdf", "totalBytes": 8, "action": "remote_delete" });
-        assert_eq!(title_for(&details(std::slice::from_ref(&deleted)), Some(1)), "Sync Complete");
+    // that line would read as a successful upload of it. A delete-only cycle
+    // is titled as a delete (H-158); a mixed cycle still uses the transfer
+    // phrasing and the total count.
+    fn deleted(name: &str, action: &str) -> serde_json::Value {
+        serde_json::json!({ "fileName": name, "totalBytes": 8, "action": action })
+    }
 
-        // A mixed cycle still counts every file it touched.
-        assert_eq!(title_for(&details(&[upload("a.txt"), deleted]), Some(2)), "Synced 2 files");
+    #[test]
+    fn a_delete_only_cycle_is_titled_as_a_delete() {
+        assert_eq!(
+            title_for(&details(&[deleted("from-disk.txt", "remote_delete")]), Some(1)),
+            "Deleted from-disk.txt"
+        );
+        assert_eq!(title_for(&details(&[deleted("gone.txt", "local_delete")]), Some(1)), "Deleted gone.txt");
+        assert_eq!(
+            title_for(&details(&[deleted("a.txt", "remote_delete"), deleted("b.txt", "local_delete")]), Some(2)),
+            "Deleted 2 files"
+        );
+        // Truncation: one named delete next to a count of five is not a
+        // one-file cycle; naming that entry would bury the other four.
+        // It is also not a confirmed delete-only cycle — the four unseen
+        // files may be uploads — so keep the generic title rather than
+        // claiming "Deleted 5 files".
+        assert_eq!(title_for(&details(&[deleted("report.pdf", "remote_delete")]), Some(5)), "Sync Complete");
+    }
+
+    #[test]
+    fn a_mixed_cycle_does_not_name_a_deleted_file_as_synced() {
+        let remote_delete = deleted("report.pdf", "remote_delete");
+        assert_eq!(title_for(&details(&[upload("a.txt"), remote_delete]), Some(2)), "Synced 2 files");
+    }
+
+    #[test]
+    fn a_truncated_list_is_not_treated_as_delete_only() {
+        // The notification file list is capped at 200. A mixed cycle whose
+        // visible slice is all deletes would otherwise title as Deleted.
+        assert_eq!(title_for(&details(&[deleted("gone.txt", "remote_delete")]), Some(250)), "Sync Complete");
     }
 
     #[test]

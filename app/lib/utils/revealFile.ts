@@ -1,4 +1,3 @@
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
 
 interface RevealFileParams {
@@ -29,7 +28,7 @@ export async function revealFile(params: RevealFileParams): Promise<void> {
   if (sourcePath) {
     try {
       const target = revealFolder ? stripFileName(sourcePath, fileName) : sourcePath;
-      await revealItemInDir(target);
+      await invoke("reveal_path_in_file_manager", { path: target });
       return;
     } catch {
       // Fall through to DB resolve
@@ -44,7 +43,7 @@ export async function revealFile(params: RevealFileParams): Promise<void> {
       fileName,
     });
     const target = revealFolder ? stripFileName(filePath, fileName) : filePath;
-    await revealItemInDir(target);
+    await invoke("reveal_path_in_file_manager", { path: target });
     return;
   }
 

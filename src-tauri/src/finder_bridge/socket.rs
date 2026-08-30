@@ -31,6 +31,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 #[cfg(unix)]
+use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+#[cfg(unix)]
 use tokio::net::UnixListener;
 #[cfg(windows)]
 use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
@@ -138,7 +140,11 @@ fn spawn_accept_loop(
     // compiled out), so this destructure is irrefutable.
     let Endpoint::Unix(socket_path) = endpoint;
     if let Some(parent) = socket_path.parent() {
-        std::fs::create_dir_all(parent)?;
+        // 0700 rather than whatever the umask yields: the socket lives in the
+        // app's own directory now (not a containermanagerd-managed container
+        // that arrives 0700 already), and anyone who can connect can drive the
+        // extension bridge. Only applies to directories this call creates.
+        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(parent)?;
     }
     // A stale socket file from a prior run makes `bind` fail with `EADDRINUSE`.
     match std::fs::remove_file(&socket_path) {
@@ -147,6 +153,18 @@ fn spawn_accept_loop(
         Err(e) => return Err(e.into()),
     }
     let listener = UnixListener::bind(&socket_path)?;
+    // `bind` applies the umask, which typically leaves the node group/world
+    // readable. On macOS/BSD `connect(2)` is gated by WRITE permission on the
+    // socket node, so tightening to 0600 is what actually scopes the bridge to
+    // this user — the extension runs as the same uid.
+    //
+    // Warn-only, matching the `~/.hippius` and DB-file chmods in `main.rs`: a
+    // successful `bind` is all the bridge needs, so a hardening chmod that
+    // fails on a no-POSIX-perms $HOME (network/FAT mounts) must not cost the
+    // user the whole Finder integration.
+    if let Err(e) = std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600)) {
+        warn!(socket = %socket_path.display(), error = %e, "failed to chmod 0600 on the bridge socket (continuing)");
+    }
     tokio::spawn(accept_loop_unix(listener, outgoing, incoming_tx, roots, cancel, socket_path));
     Ok(())
 }

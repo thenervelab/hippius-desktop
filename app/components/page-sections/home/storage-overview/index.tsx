@@ -7,7 +7,6 @@ import { toast } from "sonner";
 import { RefreshButton } from "@/components/ui";
 import { Button } from "@/components/ui/button";
 import { useStorageOverview } from "@/app/lib/hooks/api/useStorageOverview";
-import { formatBytes } from "@/app/lib/utils/formatBytes";
 import { nextSkeletonState } from "@/lib/utils/skeletonGate";
 import { cn } from "@/app/lib/utils";
 
@@ -184,10 +183,10 @@ const StorageOverviewCard: React.FC<{ className?: string }> = ({
                   <span className="font-mono font-medium text-[24px] leading-[30px] tracking-[-0.96px] text-grey-10 dark:text-white">
                     {usedDisplay?.kind === "pending"
                       ? "Updating…"
-                      : formatBytes(usedDisplay?.bytes ?? 0)}
+                      : overview.usedDisplay}
                   </span>
                   <span className="font-mono font-medium text-[12px] leading-[18px] tracking-[-0.48px] text-grey-10/50 dark:text-white/50 pb-[3px] whitespace-nowrap">
-                    of {formatBytes(overview.totalBytes)} used
+                    of {overview.totalDisplay} used
                   </span>
                 </div>
                 <span
@@ -222,10 +221,7 @@ const StorageOverviewCard: React.FC<{ className?: string }> = ({
                   {getCapacitySourceLabel(overview.source, overview.plan?.name)}
                 </p>
                 <p className="text-[12px] font-medium leading-[18px] text-grey-50 dark:text-grey-dark-500 whitespace-nowrap">
-                  {formatBytes(
-                    Math.max(overview.totalBytes - overview.usedBytes, 0),
-                  )}{" "}
-                  free
+                  {overview.freeDisplay} free
                 </p>
               </div>
             </>

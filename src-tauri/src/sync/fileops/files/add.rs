@@ -5,7 +5,7 @@
 
 use super::delete::FileDeleteError;
 use super::dir_stats::invalidate_dir_stats_for_change;
-use super::pathops::copy_dir_recursive;
+use super::pathops::{copy_dir_recursive, is_engine_hidden_name};
 use crate::error::Result;
 use hcfs_client::engine::runner::trigger_sync;
 use serde::Serialize;
@@ -86,10 +86,30 @@ async fn create_dir_all_spawn(path: PathBuf) -> Result<()> {
 /// canonicalize once outside the loop instead of paying the `realpath`
 /// syscall per file (10–100 ms each on slow filesystems).
 // Error-taxonomy convention for this module: rejected name/path input (bad name,
-// traversal, path-escape, self-add) is `Validation` (the FE renders the message);
-// filesystem faults (copy / canonicalize / create_dir) are `Io` (#[from], via `?`
-// where control flow allows, else `Io(e)` in a cleanup-then-return arm).
-async fn add_file_internal(canonical_parent: &Path, file_path: &str) -> Result<String> {
+// traversal, path-escape, self-add, unconfirmed overwrite) is `Validation` (the FE
+// renders the message); filesystem faults (copy / canonicalize / create_dir) are
+// `Io` (#[from], via `?` where control flow allows, else `Io(e)` in a
+// cleanup-then-return arm).
+fn already_exists_message(name: &str) -> String {
+    format!("A file named \"{name}\" already exists in this folder")
+}
+
+/// Refuse to clobber an existing dest unless the caller asked to replace.
+///
+/// `try_exists` failing is fail-closed: we do not overwrite when we cannot
+/// tell whether the dest is there (H-097).
+async fn refuse_unconfirmed_overwrite(dest: &Path, name: &str, overwrite: bool) -> Result<()> {
+    if overwrite {
+        return Ok(());
+    }
+    match tokio::fs::try_exists(dest).await {
+        Ok(false) => Ok(()),
+        Ok(true) => Err(crate::error::AppError::Validation(already_exists_message(name))),
+        Err(e) => Err(crate::error::AppError::Io(e)),
+    }
+}
+
+async fn add_file_internal(canonical_parent: &Path, file_path: &str, overwrite: bool) -> Result<String> {
     let source = Path::new(file_path);
     let name = source
         .file_name()
@@ -106,6 +126,8 @@ async fn add_file_internal(canonical_parent: &Path, file_path: &str) -> Result<S
     if !canonical_dest.starts_with(canonical_parent) {
         return Err(crate::error::AppError::Validation("Path escapes sync folder".into()));
     }
+
+    refuse_unconfirmed_overwrite(&canonical_dest, &name, overwrite).await?;
 
     // Stage then rename, rather than writing the destination directly.
     //
@@ -125,6 +147,13 @@ async fn add_file_internal(canonical_parent: &Path, file_path: &str) -> Result<S
         let _ = tokio::fs::remove_file(&staging).await;
         return Err(crate::error::AppError::Io(e));
     }
+    // Re-check immediately before the replace. Two concurrent adds of a
+    // new name can both see missing at the first check; Unix rename would
+    // then clobber. Remaining TOCTOU is the rename itself (H-097 review).
+    if let Err(e) = refuse_unconfirmed_overwrite(&canonical_dest, &name, overwrite).await {
+        let _ = tokio::fs::remove_file(&staging).await;
+        return Err(e);
+    }
     if let Err(e) = tokio::fs::rename(&staging, &canonical_dest).await {
         let _ = tokio::fs::remove_file(&staging).await;
         return Err(crate::error::AppError::Io(e));
@@ -140,6 +169,7 @@ pub async fn add_file(
     app: tauri::AppHandle,
     sync_path: String,
     file_path: String,
+    overwrite: Option<bool>,
 ) -> Result<String> {
     // Enforce credit eligibility at the IPC boundary, priced by actual
     // file size. The FE may still hit a 402 from hcfs-server if the
@@ -211,7 +241,7 @@ pub async fn add_file(
             return Err(crate::error::AppError::Io(e));
         }
     };
-    match add_file_internal(&canonical_parent, &file_path).await {
+    match add_file_internal(&canonical_parent, &file_path, overwrite.unwrap_or(false)).await {
         Ok(name) => {
             // The drive root's own mtime does move for a root-level add, but
             // the cache is keyed on the listing path, so drop the row rather
@@ -411,23 +441,6 @@ async fn walk_regular_files_stats(root: &std::path::Path) -> (u64, u64) {
 fn is_unlisted_regular_file(name: &str, file_len: u64) -> bool {
     hcfs_client::engine::classify::is_failed_download_artifact(name).is_some()
         || (hcfs_client::engine::classify::is_encrypted_name_stub(name).is_some() && file_len == 0)
-}
-
-/// Local mirror of hcfs-client's `drive::exclude::should_skip_path` — the rule
-/// its real `Drive::collect_files` scan applies: skip the `.hippius` config dir
-/// and every `.`-prefixed name, files and directories alike. Upstream is
-/// `pub(super)`, hence re-derived rather than called.
-///
-/// The rule is the leading dot on EVERY platform, not an OS "hidden" notion.
-/// Windows sets hidden via `FILE_ATTRIBUTE_HIDDEN` and its dotfiles are not
-/// hidden, but the engine and the Drive listing both key off the dot there too,
-/// so a name-based rule is what keeps the three in agreement.
-///
-/// `to_str()`-gated on purpose, matching upstream exactly: a non-UTF-8 name is
-/// NOT skipped, so the engine uploads it. A lossy conversion here would drop
-/// such a name from counters whose whole job is to predict engine work.
-fn is_engine_hidden_name(name: &std::ffi::OsStr) -> bool {
-    name.to_str().is_some_and(|n| n.starts_with('.'))
 }
 
 /// One `DirEntry::metadata` per entry (lstat-shaped, does not follow
@@ -696,6 +709,7 @@ pub async fn add_files(
     file_paths: Vec<String>,
     subfolder: Option<String>,
     for_folder: bool,
+    overwrite: Option<bool>,
 ) -> Result<AddFilesResult> {
     // Enforce credit eligibility once for the whole batch at the IPC
     // boundary. The per-file `add_file_internal` calls inside the loop
@@ -812,7 +826,7 @@ pub async fn add_files(
             // Use the internal helper that skips the per-file eligibility
             // check — the batch eligibility check at the top of `add_files`
             // covers the whole operation.
-            add_file_internal(&canonical_target, file_path).await
+            add_file_internal(&canonical_target, file_path, overwrite.unwrap_or(false)).await
         };
         match result {
             Ok(name) => added.push(name),
@@ -889,9 +903,9 @@ mod tests {
         assert_eq!(bytes, 10, "byte total summed across the nested dir (5+2+3)");
     }
 
-    /// H-082: Drive listing skips `name.starts_with('.')`, but the add-folder
-    /// File No banner walked every regular file. A 130-file folder plus two
-    /// dotfiles banners 132, then Drive settles at 130.
+    /// H-082: Drive listing and the add-folder File No banner both skip
+    /// via `is_engine_hidden_name`. A 130-file folder plus two dotfiles
+    /// used to banner 132, then Drive settled at 130.
     #[test]
     fn walk_regular_files_stats_skips_hidden_so_banner_matches_drive() {
         let tmp = tempfile::TempDir::new().unwrap();
@@ -993,28 +1007,6 @@ mod tests {
         );
     }
 
-    /// The dot rule is name-based on every platform, deliberately: Windows
-    /// marks hidden with `FILE_ATTRIBUTE_HIDDEN` and treats dotfiles as
-    /// ordinary, but hcfs-client's scan and the Drive listing both key off the
-    /// dot there too. Counting by an OS-hidden notion would desync all three.
-    #[test]
-    fn is_engine_hidden_name_is_the_dot_rule_on_every_platform() {
-        use std::ffi::OsStr;
-
-        assert!(is_engine_hidden_name(OsStr::new(".DS_Store")));
-        assert!(is_engine_hidden_name(OsStr::new(".hippius")));
-        assert!(is_engine_hidden_name(OsStr::new(".hippius-incoming-Photos-1")));
-
-        // Windows-hidden names carry no dot — the engine uploads them, so the
-        // counter must include them.
-        assert!(!is_engine_hidden_name(OsStr::new("desktop.ini")));
-        assert!(!is_engine_hidden_name(OsStr::new("Thumbs.db")));
-        // A macOS bundle is a visible directory the user thinks of as one file;
-        // the engine walks into it, so the counter must too.
-        assert!(!is_engine_hidden_name(OsStr::new("Preview.app")));
-        assert!(!is_engine_hidden_name(OsStr::new("notes.txt")));
-    }
-
     /// A hidden directory is skipped WHOLESALE at any depth: its visible
     /// children, and their visible subdirectories, never reach the count.
     /// The root-level `.git` case would also pass a per-entry-only skip that
@@ -1095,7 +1087,7 @@ mod tests {
         tokio::fs::create_dir(&sub).await.unwrap();
         tokio::fs::write(sub.join("a.txt"), b"12345").await.unwrap();
 
-        let (size, _) = super::super::dir_stats::dir_stats_recursive(root).await;
+        let (size, _) = super::super::dir_stats::dir_stats_recursive(root, None).await;
         assert_eq!(size, 5, "warm the cache for root and root/sub");
 
         let sync_path = root.to_string_lossy().to_string();
@@ -1103,7 +1095,7 @@ mod tests {
         let (listing_root, dest) = listing_add_paths(&sync_path, Some("sub"));
         invalidate_dir_stats_for_change(&listing_root, &dest.join("b.txt"));
 
-        let (size, count) = super::super::dir_stats::dir_stats_recursive(root).await;
+        let (size, count) = super::super::dir_stats::dir_stats_recursive(root, None).await;
         assert_eq!((size, count), (9, 2), "the root total must pick up a file added under sub");
     }
 
@@ -1175,7 +1167,7 @@ mod tests {
         let src = src_dir.join("note.txt");
         tokio::fs::write(&src, b"short").await.unwrap();
 
-        let name = add_file_internal(&sync_root, src.to_str().unwrap()).await.unwrap();
+        let name = add_file_internal(&sync_root, src.to_str().unwrap(), true).await.unwrap();
         assert_eq!(name, "note.txt");
         assert_eq!(tokio::fs::read(&dest).await.unwrap(), b"short");
 
@@ -1194,6 +1186,46 @@ mod tests {
         assert!(leftovers.is_empty(), "staging sibling must be renamed away, left {leftovers:?}");
     }
 
+    /// Same-name upload without an explicit replace must not clobber the
+    /// dest (H-097). The previous body was lost silently: File No stayed
+    /// put, size changed, no dialog.
+    #[tokio::test]
+    async fn add_file_internal_refuses_an_unconfirmed_overwrite() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let sync_root = tmp.path().join("sync");
+        let src_dir = tmp.path().join("src");
+        tokio::fs::create_dir(&sync_root).await.unwrap();
+        tokio::fs::create_dir(&src_dir).await.unwrap();
+
+        let dest = sync_root.join("qa-new.txt");
+        tokio::fs::write(&dest, b"original-13b").await.unwrap();
+        let src = src_dir.join("qa-new.txt");
+        tokio::fs::write(&src, b"qa-new-OVERWRITE").await.unwrap();
+
+        let err = add_file_internal(&sync_root, src.to_str().unwrap(), false)
+            .await
+            .expect_err("an existing dest without overwrite must fail closed");
+        assert!(
+            matches!(&err, crate::error::AppError::Validation(m) if m == &already_exists_message("qa-new.txt")),
+            "collision is Validation with the pinned message, got {err:?}"
+        );
+        assert_eq!(
+            tokio::fs::read(&dest).await.unwrap(),
+            b"original-13b",
+            "the existing file must be left untouched"
+        );
+
+        let leftovers: Vec<_> = std::fs::read_dir(&sync_root)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with(".hippius-incoming-"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "a refused overwrite must not leave a staging sibling, left {leftovers:?}"
+        );
+    }
+
     /// A failed single-file add must not leave a hidden partial behind.
     ///
     /// The staging name is skipped by hcfs's `collect_files`, so a leaked one
@@ -1205,7 +1237,7 @@ mod tests {
         let parent = tmp.path().to_path_buf();
         let missing = tmp.path().join("no-such-source.txt");
 
-        let result = add_file_internal(&parent, missing.to_str().unwrap()).await;
+        let result = add_file_internal(&parent, missing.to_str().unwrap(), false).await;
         assert!(result.is_err(), "a missing source must fail the add");
         assert!(!parent.join("no-such-source.txt").exists(), "a failed add must not create the dest");
 

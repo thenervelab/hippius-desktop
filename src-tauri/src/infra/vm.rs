@@ -226,3 +226,62 @@ pub async fn terminate_vm(
     let path = format!("/api/infrastructure/vm/instances/{instance_id}/terminate/");
     Ok(client.post::<serde_json::Value, _>(&path, &serde_json::json!({}), &account_id).await?)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{CreateVMBody, VMApplication};
+
+    #[test]
+    fn create_vm_enforces_eligibility_before_the_spawn_request() {
+        // The VM UI is gated off; the IPC is still registered. A missing first-line
+        // `require_eligible` would let a direct invoke skip the 10-credit floor.
+        let src = include_str!("vm.rs");
+        let start = src.find("pub async fn create_vm").expect("create_vm must exist");
+        let end = src[start..].find("pub async fn reboot_vm").map_or(src.len(), |i| start + i);
+        let body = &src[start..end];
+        let eligibility = body.find("require_eligible").expect("create_vm must call require_eligible");
+        let client = body.find("ApiClient::new").expect("create_vm must build an API client");
+        let spawn = body.find("/api/infrastructure/vm/spawn/").expect("create_vm must POST the spawn route");
+        assert!(
+            eligibility < client && eligibility < spawn,
+            "require_eligible must run before the spawn HTTP call"
+        );
+        assert!(
+            body.contains("InsufficientCreditsAction::VmCreation"),
+            "create_vm must gate on VmCreation, not an upload action"
+        );
+    }
+
+    #[test]
+    fn vm_application_forwards_logo_url() {
+        let parsed: VMApplication = serde_json::from_value(serde_json::json!({
+            "id": 1,
+            "name": "Postgres",
+            "slug": "postgres",
+            "logo_url": "https://example/logo.png",
+        }))
+        .expect("parse");
+        assert_eq!(parsed.logo_url.as_deref(), Some("https://example/logo.png"));
+        let back = serde_json::to_value(&parsed).expect("serialize");
+        assert_eq!(back["logo_url"], "https://example/logo.png");
+    }
+
+    #[test]
+    fn create_body_omits_application_id_when_none() {
+        let body = CreateVMBody {
+            flavor_id: 1,
+            image_id: 2,
+            ssh_public_key: "ssh-ed25519 AAAA".into(),
+            name: "box".into(),
+            application_id: None,
+        };
+        let json = serde_json::to_value(&body).expect("serialize");
+        assert!(json.get("application_id").is_none(), "omit None so the spawn API does not see null");
+        let with = CreateVMBody {
+            application_id: Some(9),
+            ..body
+        };
+        let json = serde_json::to_value(&with).expect("serialize");
+        assert_eq!(json["application_id"], 9);
+    }
+}

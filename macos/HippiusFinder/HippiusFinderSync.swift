@@ -5,7 +5,7 @@ import FinderSync
 ///
 /// Per Apple's guidance the extension does no heavy work: it renders the
 /// right-click menu and status badges and forwards the clicked path to the
-/// running Hippius app over the App Group socket ([`BridgeSocket`]); the app
+/// running Hippius app over the bridge socket ([`BridgeSocket`]); the app
 /// resolves the path and mints the share. The class is named
 /// `HippiusFinderSync` (not `FinderSync`) so it doesn't shadow the framework
 /// module — see Info.plist `NSExtensionPrincipalClass`.
@@ -148,16 +148,18 @@ final class HippiusFinderSync: FIFinderSync {
         }
     }
 
-    // MARK: - Container path
+    // MARK: - Socket path
 
+    /// The bridge socket, in the app's OWN directory — deliberately not an App
+    /// Group container: the non-sandboxed app touching
+    /// `~/Library/Group Containers/` cost a TCC "access data from other apps"
+    /// prompt on every launch. This sandbox reaches the path through the SBPL
+    /// exceptions in `macos/FinderSync.entitlements`.
+    ///
+    /// Must stay byte-identical to `finder_bridge::endpoint::resolve` on the
+    /// Rust side; pinned by `src-tauri/tests/finder_socket_pins.rs`.
     private static func socketPath() -> String {
-        let group = "V28B5X732P.com.hippius.shared"
-        if let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: group) {
-            return container.appendingPathComponent("finder.sock").path
-        }
-        // Fallback to the literal path (matches the Rust side) if the sandbox
-        // container API returns nil. Use the REAL home, not the sandbox one.
-        return realHomeDirectory() + "/Library/Group Containers/\(group)/finder.sock"
+        realHomeDirectory() + "/.hippius/finder.sock"
     }
 
     /// The user's real home directory. `NSHomeDirectory()` is sandbox-redirected
