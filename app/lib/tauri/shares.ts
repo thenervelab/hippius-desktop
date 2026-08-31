@@ -70,6 +70,18 @@ export interface ShareChoice {
 export interface FinderShareChoosing {
   id: string;
   name: string;
+  /**
+   * Size of the clicked file when it was right-clicked. `null` for a folder
+   * (nothing is uploaded at mint time) or an unreadable stat.
+   *
+   * Shown in the chooser. A file that has not finished downloading is
+   * indistinguishable from a smaller file at every level below this one, so
+   * the number in front of the user is the last place the difference is
+   * visible — see `source_stat` in `finder_bridge/dispatch.rs`.
+   */
+  sizeBytes: number | null;
+  /** Seconds since the file was last modified; `null` when unreadable. */
+  modifiedSecsAgo: number | null;
 }
 
 /** Phase of an in-flight share creation. */

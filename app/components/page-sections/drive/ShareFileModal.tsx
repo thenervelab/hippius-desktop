@@ -60,6 +60,19 @@ import {
   generateSharePassword,
 } from "@/app/lib/tauri/shares";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
+import { formatBytes } from "@/app/lib/utils/formatBytes";
+
+/**
+ * How recently a file must have been touched for the chooser to caution that
+ * it may still be arriving.
+ *
+ * Deliberately a hint, not a gate. "Modified seconds ago" is exactly as true
+ * of a file the user just saved on purpose as of one mid-download, so this
+ * only ever adds a line of text — the size above it is the signal that
+ * actually distinguishes the two. A minute is long enough to cover a stalled
+ * write and short enough not to nag the ordinary save-then-share flow.
+ */
+const RECENTLY_MODIFIED_SECS = 60;
 
 type ModalState =
   // Both entry points start here: the user picks expiry and public-vs-password
@@ -111,6 +124,15 @@ export default function ShareFileModal() {
     file?.name ||
     finderName;
   const folderLabel = file?.label;
+
+  // Only the Finder flow carries these — an in-app share is picked from a
+  // listing that already shows the size, whereas a Finder right-click is the
+  // one entry point with no size anywhere on screen. That is the path that
+  // minted a link to a half-downloaded zip on 2026-08-31.
+  const sourceSizeBytes =
+    finderShare?.kind === "choosing" ? finderShare.sizeBytes : null;
+  const sourceModifiedSecsAgo =
+    finderShare?.kind === "choosing" ? finderShare.modifiedSecsAgo : null;
 
   const close = useCallback(() => {
     // Release a still-parked Finder request (chooser open, or the user bailed).
@@ -295,6 +317,8 @@ export default function ShareFileModal() {
         <ChoosingBody
           filename={filename}
           isFolder={target?.file.isFolder ?? false}
+          sizeBytes={sourceSizeBytes}
+          modifiedSecsAgo={sourceModifiedSecsAgo}
           onConfirm={onConfirmChoice}
           onCancel={close}
         />
@@ -361,11 +385,17 @@ const PASSWORD_MIN_LEN = 8;
 function ChoosingBody({
   filename,
   isFolder,
+  sizeBytes,
+  modifiedSecsAgo,
   onConfirm,
   onCancel,
 }: {
   filename: string;
   isFolder: boolean;
+  /** Source size, when known. `null` renders nothing rather than "0 B". */
+  sizeBytes: number | null;
+  /** Seconds since last modification, when known. */
+  modifiedSecsAgo: number | null;
   onConfirm: (choice: ShareChoice) => void;
   onCancel: () => void;
 }) {
@@ -460,7 +490,20 @@ function ChoosingBody({
           title={filename}
         >
           {filename}
+          {sizeBytes !== null && (
+            <span className="ml-2 whitespace-nowrap text-grey-40 dark:text-grey-dark-600">
+              {formatBytes(sizeBytes)}
+            </span>
+          )}
         </p>
+
+        {modifiedSecsAgo !== null &&
+          modifiedSecsAgo < RECENTLY_MODIFIED_SECS && (
+            <p className="mt-1 text-xs text-grey-40 dark:text-grey-dark-600">
+              Modified moments ago — if it is still downloading, wait for it to
+              finish before sharing.
+            </p>
+          )}
 
         {isFolder && <FolderShareNotice />}
       </div>

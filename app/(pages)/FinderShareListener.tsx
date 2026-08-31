@@ -30,8 +30,18 @@ export default function FinderShareListener() {
       [
         "finder:share-choosing",
         (event) => {
-          const { id, name } = event.payload as FinderShareChoosing;
-          setFinderShare({ kind: "choosing", id, name });
+          const { id, name, sizeBytes, modifiedSecsAgo } =
+            event.payload as FinderShareChoosing;
+          setFinderShare({
+            kind: "choosing",
+            id,
+            name,
+            // `?? null` rather than a default: an older backend that does not
+            // send these leaves the chooser showing no size, which is what it
+            // showed before. Never invent a 0 — it would read as an empty file.
+            sizeBytes: sizeBytes ?? null,
+            modifiedSecsAgo: modifiedSecsAgo ?? null,
+          });
         },
       ],
     ]);

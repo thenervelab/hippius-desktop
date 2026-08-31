@@ -65,6 +65,40 @@ struct FinderShareChoosing {
     id: String,
     /// The clicked file/folder's display name, shown while choosing / minting.
     name: String,
+    /// Size of the clicked file at the moment it was right-clicked. `None`
+    /// for a directory (a folder share moves no bytes) and for an
+    /// unreadable stat.
+    ///
+    /// The chooser shows this. It is the cheapest defence there is against
+    /// sharing a file that has not finished arriving: on 2026-08-31 two zips
+    /// were shared out of `~/Downloads` mid-download and both minted links to
+    /// a 4 MiB prefix. Every byte-level check downstream was satisfied — the
+    /// blobs were internally consistent — so the only thing that could have
+    /// caught it was a human seeing "4.2 MB" next to a file they knew was
+    /// 6.8 MB.
+    size_bytes: Option<u64>,
+    /// How long ago the clicked file was last modified, in seconds. `None`
+    /// when unreadable or when the clock disagrees with the filesystem.
+    ///
+    /// A hint, never a gate. "Modified moments ago" is exactly as true of a
+    /// still-downloading file as of one the user just saved on purpose, so
+    /// the chooser cautions and lets them proceed.
+    modified_secs_ago: Option<u64>,
+}
+
+/// Size (files only) and mtime age of the clicked path, for the chooser.
+///
+/// Every field is best-effort: a failed stat degrades the chooser to what it
+/// showed before rather than failing a share the user asked for. A directory
+/// reports no size — `len()` on one is filesystem bookkeeping, not the number
+/// a person expects to see next to a folder.
+fn source_stat(path: &Path) -> (Option<u64>, Option<u64>) {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return (None, None);
+    };
+    let size = meta.is_file().then_some(meta.len());
+    let age = meta.modified().ok().and_then(|m| m.elapsed().ok()).map(|d| d.as_secs());
+    (size, age)
 }
 
 /// Handle a "Share with Hippius" click: resolve the display name, park the path
@@ -83,10 +117,30 @@ pub async fn handle(app: AppHandle, message: ClientMessage) {
     // Bring the app forward so the chooser modal is visible immediately (the
     // modal lives in the main window).
     reveal_main_window(&app);
-    info!(request_id = %id, path = %clicked.display(), "finder bridge: share requested; opening chooser");
+    // Stat once, here, so the chooser can show what it is about to share. The
+    // size is logged too: the 2026-08-31 truncated shares were diagnosed from
+    // exactly this number appearing as 4194304 in one log line and 6765321 in
+    // the next, for the same path.
+    let (size_bytes, modified_secs_ago) = source_stat(&clicked);
+    info!(
+        request_id = %id,
+        path = %clicked.display(),
+        size_bytes = ?size_bytes,
+        modified_secs_ago = ?modified_secs_ago,
+        "finder bridge: share requested; opening chooser",
+    );
     // Target the main window only — `FinderShareListener` runs there, and the
     // borderless `tray-panel` webview must never drive the share modal.
-    let _ = app.emit_to("main", "finder:share-choosing", &FinderShareChoosing { id, name });
+    let _ = app.emit_to(
+        "main",
+        "finder:share-choosing",
+        &FinderShareChoosing {
+            id,
+            name,
+            size_bytes,
+            modified_secs_ago,
+        },
+    );
 }
 
 /// Mint a share for a previously-parked path using the visibility the user chose
@@ -234,24 +288,75 @@ mod tests {
     }
 
     /// Wire-shape pin for the `finder:share-choosing` payload the FE
-    /// `FinderShareListener` reads as `{ id, name }`. A serde rename here would
-    /// leave the listener mapping `undefined` and a right-click doing nothing.
+    /// `FinderShareListener` reads. A serde rename here would leave the
+    /// listener mapping `undefined` and a right-click doing nothing.
     #[test]
     fn finder_share_choosing_wire_shape() {
         use std::collections::BTreeSet;
         let json = serde_json::to_value(FinderShareChoosing {
             id: "req-1".into(),
             name: "a.txt".into(),
+            size_bytes: Some(6_765_321),
+            modified_secs_ago: Some(3),
         })
         .expect("serialize");
         let keys: BTreeSet<String> = json.as_object().expect("object").keys().cloned().collect();
-        let expected: BTreeSet<String> = ["id", "name"].into_iter().map(String::from).collect();
+        let expected: BTreeSet<String> = ["id", "name", "sizeBytes", "modifiedSecsAgo"].into_iter().map(String::from).collect();
         assert_eq!(
             keys, expected,
-            "finder:share-choosing wire keys drifted (FE FinderShareListener reads id/name)"
+            "finder:share-choosing wire keys drifted (FE FinderShareListener reads these)"
         );
         assert_eq!(json["id"], "req-1");
         assert_eq!(json["name"], "a.txt");
+        assert_eq!(json["sizeBytes"], 6_765_321u64);
+        assert_eq!(json["modifiedSecsAgo"], 3u64);
+    }
+
+    /// An unreadable stat must degrade to nulls, not drop the keys — the FE
+    /// distinguishes "no size available" from "size is zero", and a missing
+    /// key would read as `undefined` on both.
+    #[test]
+    fn finder_share_choosing_carries_nulls_when_stat_is_unavailable() {
+        let json = serde_json::to_value(FinderShareChoosing {
+            id: "req-2".into(),
+            name: "gone.txt".into(),
+            size_bytes: None,
+            modified_secs_ago: None,
+        })
+        .expect("serialize");
+        assert!(json.get("sizeBytes").is_some_and(serde_json::Value::is_null));
+        assert!(json.get("modifiedSecsAgo").is_some_and(serde_json::Value::is_null));
+    }
+
+    #[test]
+    fn source_stat_reports_a_file_size_and_a_fresh_mtime() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("build.zip");
+        std::fs::write(&file, vec![0u8; 2_048]).expect("write");
+
+        let (size, age) = source_stat(&file);
+        assert_eq!(size, Some(2_048), "a file reports its length");
+        assert!(
+            age.is_some_and(|secs| secs < 60),
+            "a just-written file must look recently modified, got {age:?}",
+        );
+    }
+
+    /// A folder share moves no bytes at mint time, so there is no size to
+    /// show — and a directory's `len()` is filesystem bookkeeping, not
+    /// anything a person would recognise.
+    #[test]
+    fn source_stat_reports_no_size_for_a_directory() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (size, _age) = source_stat(dir.path());
+        assert_eq!(size, None);
+    }
+
+    #[test]
+    fn source_stat_degrades_to_none_on_an_unreadable_path() {
+        let (size, age) = source_stat(Path::new("/definitely/not/a/real/path.zip"));
+        assert_eq!(size, None);
+        assert_eq!(age, None);
     }
 
     /// Pin the deferred-mint invariant against a silent refactor: `handle` must
