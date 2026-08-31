@@ -489,6 +489,7 @@ const ImagePreviewBody: React.FC<{
     null,
   );
   const mediaAreaRef = useRef<HTMLDivElement>(null);
+  const imageElementRef = useRef<HTMLImageElement>(null);
   const liveVideoRef = useRef<HTMLVideoElement>(null);
   const livePlaybackWantedRef = useRef(false);
   const livePlaybackRunRef = useRef(0);
@@ -550,6 +551,31 @@ const ImagePreviewBody: React.FC<{
     };
   }, []);
 
+  /**
+   * Adopt an image the browser has finished decoding.
+   *
+   * Shared by `onLoad` and the cache sweep below so both paths produce exactly
+   * the same state; when this was inline on the element, only the event path
+   * existed and a cached image had no way in.
+   */
+  const adoptLoadedImage = useCallback((element: HTMLImageElement) => {
+    const naturalSize = {
+      width: element.naturalWidth,
+      height: element.naturalHeight,
+    };
+    setNaturalImageSize(naturalSize);
+    if (mediaAreaRef.current) {
+      setPreviewFrameSize(
+        containedSize(naturalSize, {
+          width: mediaAreaRef.current.clientWidth,
+          height: mediaAreaRef.current.clientHeight,
+        }),
+      );
+    }
+    setImageLoaded(true);
+    setImageError(null);
+  }, []);
+
   // Reset the <img> load state whenever the resolved URL changes (new file in
   // the strip, or a just-finished cloud decrypt).
   useEffect(() => {
@@ -565,6 +591,29 @@ const ImagePreviewBody: React.FC<{
     liveRestartingRef.current = false;
     return stopLivePlaybackWatchdog;
   }, [imageUrl, liveVideoUrl, stopLivePlaybackWatchdog]);
+
+  // `imageLoaded` gates the photo's OPACITY, not just the spinner, and only
+  // `onLoad` ever sets it — so an image the WebView had already cached stays
+  // invisible forever: it completes while React is still attaching props, and
+  // the `load` event is dispatched with no handler to hear it. That is the
+  // common case rather than the rare one, because the thumbnail rail serves a
+  // local file from the SAME full-size `convertFileSrc(source)` url, so the
+  // file the user clicks is essentially guaranteed to be in cache already.
+  //
+  // Declared after the reset effect so it settles the state for this url last;
+  // it shares that effect's deps so every reset is re-evaluated here.
+  useEffect(() => {
+    const element = imageElementRef.current;
+    if (!element || !imageUrl || !element.complete) return;
+    // `complete` is true for a decode FAILURE too. A zero intrinsic width is
+    // what separates them, and without the check adopting blindly would swap
+    // the endless spinner for an equally blank frame that claims success.
+    if (element.naturalWidth === 0) {
+      setImageError("Failed to load image");
+      return;
+    }
+    adoptLoadedImage(element);
+  }, [imageUrl, liveVideoUrl, adoptLoadedImage]);
 
   useEffect(() => {
     const area = mediaAreaRef.current;
@@ -797,23 +846,8 @@ const ImagePreviewBody: React.FC<{
             >
               <img
                 key={imageUrl}
-                onLoad={(event) => {
-                  const naturalSize = {
-                    width: event.currentTarget.naturalWidth,
-                    height: event.currentTarget.naturalHeight,
-                  };
-                  setNaturalImageSize(naturalSize);
-                  if (mediaAreaRef.current) {
-                    setPreviewFrameSize(
-                      containedSize(naturalSize, {
-                        width: mediaAreaRef.current.clientWidth,
-                        height: mediaAreaRef.current.clientHeight,
-                      }),
-                    );
-                  }
-                  setImageLoaded(true);
-                  setImageError(null);
-                }}
+                ref={imageElementRef}
+                onLoad={(event) => adoptLoadedImage(event.currentTarget)}
                 onError={() => {
                   setImageLoaded(false);
                   setImageError("Failed to load image");

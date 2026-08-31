@@ -67,6 +67,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Photos now show up when you open them.** Clicking the eye icon on an image
+  could leave a loading spinner turning forever, even though the picture had
+  already finished loading behind it.
 - **Linux updates no longer fail with a permission error.** On a `.deb` install, Hippius now opens the GitHub Releases page so you can download the new package, instead of trying (and failing) to install it from inside the app.
 - **macOS no longer asks "Hippius would like to access data from other apps"
   every time you open the app.** Answering Allow never made it stop; the prompt
