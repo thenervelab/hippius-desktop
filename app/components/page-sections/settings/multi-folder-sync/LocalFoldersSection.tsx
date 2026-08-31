@@ -29,6 +29,7 @@ import type { SyncFolder } from "@/app/lib/types/sync-folder";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { tauriErrorMessage } from "@/lib/utils/dispatchTauriError";
+import { fileManagerLabel } from "@/lib/utils/isMacPlatform";
 import FolderCardContextMenu from "@/app/components/ui/context-menu/FolderCardContextMenu";
 import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
 import { shareDriveModalAtom } from "@/app/lib/global-atoms/sharesAtoms";
@@ -220,11 +221,7 @@ export function LocalFoldersSection({
   } | null>(null);
   const setShareDriveTarget = useSetAtom(shareDriveModalAtom);
 
-  const getFileManagerLabel = useCallback(() => {
-    if (typeof navigator !== "undefined" && /win/i.test(navigator.platform))
-      return "Explorer";
-    return "Finder";
-  }, []);
+
 
   // One action list per folder feeds BOTH menus (3-dot + right-click), with
   // the own-vs-member gating resolved by the pure `resolveFolderMenuPlan`.
@@ -255,7 +252,7 @@ export function LocalFoldersSection({
         },
         {
           icon: <FolderOpen className="size-4" />,
-          title: `Open in ${getFileManagerLabel()}`,
+          title: `Open in ${fileManagerLabel()}`,
           onClick: async () => {
             try {
               await invoke("reveal_path_in_file_manager", {
@@ -330,7 +327,6 @@ export function LocalFoldersSection({
       onDeleteFromServer,
       onLeaveDrive,
       setShareDriveTarget,
-      getFileManagerLabel,
     ],
   );
 

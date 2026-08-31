@@ -4,7 +4,7 @@ import React, { useRef } from "react";
 
 import { Button } from "@/components/ui/button";
 import { useStorageOverview } from "@/app/lib/hooks/api/useStorageOverview";
-import { formatBytes } from "@/app/lib/utils/formatBytes";
+
 import { nextSkeletonState } from "@/lib/utils/skeletonGate";
 import { cn } from "@/app/lib/utils";
 
@@ -100,7 +100,7 @@ const PlanOverviewCard: React.FC<{ className?: string }> = ({ className }) => {
                   </span>
                 </div>
                 <p className="text-[12px] font-medium leading-[18px] text-primary-50 dark:text-primary-brand-dark whitespace-nowrap">
-                  ≈ {formatBytes(plan.storageBytes)} storage
+                  ≈ {plan.storageDisplay} storage
                 </p>
               </div>
               <Button

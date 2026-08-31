@@ -7,6 +7,7 @@ vi.mock("sonner", () => ({ toast: { error: (...args: unknown[]) => toastError(..
 import {
   isNotReady,
   isMasterMnemonicUnrecoverable,
+  isIoError,
   dispatchSigningError,
   tauriErrorMessage,
 } from "@/lib/utils/dispatchTauriError";
@@ -50,6 +51,24 @@ describe("isMasterMnemonicUnrecoverable", () => {
         message: "mnemonic unrecoverable",
       })
     ).toBe(false);
+  });
+});
+
+describe("isIoError", () => {
+  it("matches kind Io and nothing else", () => {
+    expect(
+      isIoError({
+        kind: "Io",
+        message: "I/O error: No such file or directory (os error 2)",
+      }),
+    ).toBe(true);
+    expect(
+      isIoError({
+        kind: "Other",
+        message: "Couldn't open the file manager (xdg-open was not found).",
+      }),
+    ).toBe(false);
+    expect(isIoError(new Error("No such file or directory"))).toBe(false);
   });
 });
 

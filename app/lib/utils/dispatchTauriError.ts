@@ -113,6 +113,15 @@ export function isNotReady(error: unknown, expected?: NotReadyKind): boolean {
 }
 
 /**
+ * `AppError::Io` — typically `canonicalize` of a missing path. Match the
+ * `kind` discriminant, never a substring of `message` (`xdg-open was not
+ * found` would otherwise look like a missing file).
+ */
+export function isIoError(error: unknown): boolean {
+  return (error as TauriError | null)?.kind === "Io";
+}
+
+/**
  * Structural match against `NotReady(MasterMnemonicUnrecoverable)`.
  * Surfaced by `ensure_sync_mnemonic` when encrypted state exists but
  * the mnemonic can't be recovered (OS keychain evicted the entry, or

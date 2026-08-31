@@ -13,6 +13,8 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { revealFile } from "@/lib/utils/revealFile";
 import { useAtomValue } from "jotai";
 import { toast } from "sonner";
+import { tauriErrorMessage } from "@/lib/utils/dispatchTauriError";
+import { fileManagerLabel } from "@/lib/utils/isMacPlatform";
 
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import Link from "next/link";
@@ -26,10 +28,7 @@ import {
 } from "@/app/lib/global-atoms/sharesAtoms";
 import { canRenameFile, RENAME_DISABLED_TOOLTIP } from "@/app/lib/utils/renameGating";
 
-const getFileManagerLabel = () => {
-  if (typeof navigator !== "undefined" && /win/i.test(navigator.platform)) return "Explorer";
-  return "Finder";
-};
+
 
 interface ContextMenuProps {
   x: number;
@@ -123,13 +122,13 @@ export default function FileContextMenu({
       });
     } catch (error) {
       console.error("Failed to reveal in file manager:", error);
-      toast.error("File is not available locally. It may only exist on another device.");
+      toast.error(tauriErrorMessage(error));
     }
     onClose();
   };
 
   const { url: folderUrl } = generateFolderUrl(file, getParam);
-  const fileManagerLabel = getFileManagerLabel();
+  const fileManagerName = fileManagerLabel();
 
   const menuItemClass = "flex items-center gap-2 p-2 text-xs font-medium !text-grey-30 hover:!text-grey-40 hover:bg-grey-90 border-b border-grey-80 cursor-pointer dark:!text-grey-dark-200 dark:hover:!text-grey-light-100 dark:hover:bg-white/5 dark:border-black-300";
 
@@ -185,7 +184,7 @@ export default function FileContextMenu({
           {!isCloudOnlyRow(file) && (
             <button className={menuItemClass} onClick={revealInFileManager}>
               <FolderOpen className="size-4" />
-              <span>Reveal in {fileManagerLabel}</span>
+              <span>Reveal in {fileManagerName}</span>
             </button>
           )}
 

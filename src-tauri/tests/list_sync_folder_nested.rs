@@ -617,13 +617,13 @@ async fn clearing_the_pattern_restores_the_hidden_files() {
 }
 
 /// H-063: UTF-8 hidden names (`.env.qa`, `.hidden`) stay off Drive because
-/// the engine never uploads them. Listing one would pin it Pending forever.
-/// File No matches the visible rows (H-082), not disk.
+/// the engine never uploads them. Listing one as Pending would pin it
+/// forever. File No still omits them (H-082 billed count).
 ///
-/// A skip toast is frontend — this test pins the backend contract: omit,
-/// do not list-as-pending.
+/// User dotfiles are listed as `hidden` so Drive is not a silent omit
+/// (H-063). Internal names and hidden directories stay off Drive.
 #[tokio::test]
-async fn hidden_dotfiles_are_omitted_not_listed_pending() {
+async fn hidden_dotfiles_are_listed_as_hidden_not_pending() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
     write_file(root, "keep.txt");
@@ -631,27 +631,37 @@ async fn hidden_dotfiles_are_omitted_not_listed_pending() {
     write_file(root, ".hidden");
     std::fs::create_dir(root.join(".hidden_dir")).expect("mkdir .hidden_dir");
     write_file(root, ".hidden_dir/inside.txt");
+    std::fs::create_dir(root.join(".hippius")).expect("mkdir .hippius");
+    write_file(root, ".hippius/exclude");
 
     let pool = make_pool().await;
     insert_sync_path(&pool, &root.to_string_lossy(), Some(1_700_000_000)).await;
     let state = make_state(pool);
-    // Seed hidden names in the rel-path index too: the disk walk skips
-    // them, so without an overlay skip they would reappear as Pending.
+    // Seed hidden names in the rel-path index too: overlay must not
+    // resurrect them as Pending next to the disk `hidden` rows.
     seed_cache(&state, &["keep.txt", ".env.qa", ".hidden", ".hidden_dir/inside.txt"]);
 
     let listing = list_sync_folder_grouped_inner(&state, ACCOUNT.into(), root.to_string_lossy().into(), None, Some(LABEL.into()))
         .await
         .expect("listing");
 
-    let file_names: Vec<&str> = listing.files.iter().map(|f| f.name.as_str()).collect();
+    let by_name: std::collections::HashMap<&str, &str> = listing.files.iter().map(|f| (f.name.as_str(), f.sync_status.as_str())).collect();
+    assert_eq!(by_name.get("keep.txt").copied(), Some("synced"));
+    assert_eq!(by_name.get(".env.qa").copied(), Some("hidden"));
+    assert_eq!(by_name.get(".hidden").copied(), Some("hidden"));
+    assert!(!by_name.contains_key(".hippius"), "engine config dir must stay off Drive");
     let folder_names: Vec<&str> = listing.folders.iter().map(|f| f.name.as_str()).collect();
-    assert_eq!(file_names, vec!["keep.txt"], "hidden files must not appear: {file_names:?}");
     assert!(
         folder_names.iter().all(|n| !n.starts_with('.')),
         "hidden folders must not appear: {folder_names:?}"
     );
     assert!(
-        listing.files.iter().chain(listing.folders.iter()).all(|e| !e.name.starts_with('.')),
+        listing
+            .files
+            .iter()
+            .chain(listing.folders.iter())
+            .filter(|e| e.name.starts_with('.'))
+            .all(|e| e.sync_status == "hidden"),
         "overlay must not resurrect a hidden rel-path as pending"
     );
 }

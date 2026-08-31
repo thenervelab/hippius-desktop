@@ -631,14 +631,38 @@ pub async fn get_sync_folders_with_stats(state: tauri::State<'_, crate::app_stat
         // the remote listing is own-account-scoped at the pinned rev anyway,
         // so a member-aware join has no server data to hit yet.
         let remote = remote_by_hash.get(&folder_hash(&sp.label));
+        // Local billed totals (excludes applied). Server stats still counted
+        // excluded files that had already uploaded, so the Drive onboarding
+        // row said 19 B · 3 files while the folder view said 4 B · 1 (H-110).
+        //
+        // The exclude file lives in the drive's CONFIG directory, not under
+        // the sync root — passing the root reads a path `run_migration`
+        // deletes, which makes the whole exclusion silently do nothing.
+        let (local_bytes, local_count) = match config_dir_for_folder(&account_id, &sp.label) {
+            Ok(config_dir) => crate::sync::files::dir_stats_for_sync_root(Path::new(&sp.path), &config_dir).await,
+            Err(e) => {
+                warn!(label = %sp.label, "no config dir for drive, counting without excludes: {e}");
+                crate::sync::files::dir_stats_for_sync_root(Path::new(&sp.path), Path::new("")).await
+            }
+        };
+
+        // A drive registered on this device but not yet downloaded walks to
+        // nothing. Reporting that as 0 B · 0 files reads as an empty drive
+        // rather than an un-synced one, so fall back to what the server says
+        // is in it — the excluded-file skew H-110 fixed cannot apply when
+        // there is nothing local to have excluded.
+        let (local_bytes, local_count) = match remote {
+            Some(r) if local_count == 0 && r.file_count > 0 => (r.total_bytes, r.file_count),
+            _ => (local_bytes, local_count),
+        };
 
         local.push(SyncFolderInfo {
             id: sp.label.clone(),
             folder_name,
             local_path: sp.path.clone(),
             status,
-            file_count: remote.map(|r| r.file_count),
-            total_bytes: remote.map(|r| r.total_bytes),
+            file_count: Some(local_count),
+            total_bytes: Some(local_bytes),
             last_modified: remote.map(|r| {
                 let ts = if r.updated_at != 0 { r.updated_at } else { r.created_at };
                 ts * 1000 // seconds → milliseconds
@@ -891,6 +915,10 @@ mod tests {
         assert!(
             body.contains("remote_folder_display("),
             "get_sync_folders_with_stats must build remote rows via remote_folder_display",
+        );
+        assert!(
+            body.contains("dir_stats_for_sync_root("),
+            "local list rows must use exclusion-aware dir_stats, not the server totals (H-110)",
         );
     }
 

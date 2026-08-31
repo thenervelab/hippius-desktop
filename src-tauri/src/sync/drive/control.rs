@@ -327,7 +327,13 @@ pub async fn reveal_drive_in_finder(state: tauri::State<'_, crate::app_state::Ap
     let paths = crate::sync::folders::get_all_sync_paths_internal(pool, &account_id).await?;
     let path = resolve_drive_path(paths, &label)?;
 
-    crate::utils::reveal::reveal_path(std::path::Path::new(&path))?;
+    // `reveal_path` now WAITS on xdg-open for up to 3s on Linux, so calling it
+    // inline would park a Tokio worker for that whole budget.
+    let target = std::path::PathBuf::from(&path);
+    match tokio::task::spawn_blocking(move || crate::utils::reveal::reveal_path(&target)).await {
+        Ok(inner) => inner?,
+        Err(join_err) => return Err(crate::error::AppError::Other(format!("Reveal cancelled: {join_err}"))),
+    }
 
     info!("Revealed drive '{}' at '{}' in file manager", label, path);
     Ok(())
@@ -386,6 +392,11 @@ mod tests {
         assert!(
             !body.contains("tauri_plugin_opener::reveal_item_in_dir"),
             "do not call the opener plugin from this command; utils::reveal owns the platform split"
+        );
+        assert!(
+            body.contains("spawn_blocking"),
+            "reveal_path waits on xdg-open for up to 3s; calling it inline parks a Tokio worker \
+             for that budget, the same reason reveal_path_in_file_manager offloads it"
         );
     }
 

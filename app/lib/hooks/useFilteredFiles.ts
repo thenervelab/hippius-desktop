@@ -20,6 +20,8 @@ export interface FileFilterRequest {
     dateRange?: DateRange;
     fileSizes?: number[];
     folderTab?: string | null;
+    /** FE-only: fires recursive search so nested excluded rows are found. */
+    excludedOnly?: boolean;
 }
 
 export interface UseFilteredFilesResult<T> {

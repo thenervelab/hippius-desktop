@@ -1,8 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
+  filterCriteriaAreActive,
   shouldRunInMemoryFilter,
   shouldUseRecursiveSearch,
 } from "@/lib/utils/filesViewMode";
+
+describe("filterCriteriaAreActive", () => {
+  it("treats the Excluded chip alone as an active filter", () => {
+    expect(filterCriteriaAreActive({ excludedOnly: true })).toBe(true);
+    expect(filterCriteriaAreActive({})).toBe(false);
+    expect(filterCriteriaAreActive({ searchTerm: "  " })).toBe(false);
+    expect(filterCriteriaAreActive({ fileSizes: [] })).toBe(false);
+  });
+});
 
 describe("filesViewMode", () => {
   it("uses recursive search when a filter is active on a drive", () => {

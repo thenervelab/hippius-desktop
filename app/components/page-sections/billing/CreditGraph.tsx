@@ -91,7 +91,7 @@ const CreditGraph: FC<CreditGraphProps> = ({ className }) => {
             showInfo
             iconSize={3.5}
             iconColor="text-primary-40 dark:text-primary-brand-dark"
-            tooltipContent="This chart shows credits consumed by Drive storage only. The home page shows your remaining credit balance instead. Your total credit usage across all Hippius products is shown on the web console."
+            tooltipContent="This is HIP spent on Drive usage, not a byte count of stored files. Included plan storage does not burn credits. Extra usage is billed at about 0.003 credits per GB-month, so tens of gigabytes look like a few thousandths of a credit. The home page shows your remaining balance instead."
           />
         </div>
         <div className="flex items-center gap-2.5">

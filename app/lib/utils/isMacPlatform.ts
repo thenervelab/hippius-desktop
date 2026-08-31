@@ -19,4 +19,23 @@ export function isMacPlatform(): boolean {
   return platform.includes("mac") || ua.includes("mac");
 }
 
+/**
+ * Synchronous Linux detect from the webview user-agent. webkit2gtk
+ * contains "Linux"; WKWebView and WebView2 do not. Android is excluded
+ * (this is a desktop app). Shared with the tray so the menu-on-left-click
+ * fallback cannot drift from Reveal copy.
+ */
+export function isLinuxPlatform(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent;
+  return /linux/i.test(ua) && !/android/i.test(ua);
+}
+
+/** "Finder" / "Explorer" / "file manager" for reveal-in-folder copy. */
+export function fileManagerLabel(): string {
+  if (isMacPlatform()) return "Finder";
+  if (isLinuxPlatform()) return "file manager";
+  return "Explorer";
+}
+
 export default isMacPlatform;

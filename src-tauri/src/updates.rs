@@ -37,6 +37,11 @@ use crate::release_channel::{self, ReleaseChannel};
 /// `channel` rides along so the frontend can say WHICH lane the update comes
 /// from — on a beta build "Update to 0.5.0-beta.4" is a different proposition
 /// from the same string on production, and the user opted into knowing that.
+///
+/// `install_in_place` is false for packages plugin-updater cannot write as the
+/// current user (a `.deb` / `.rpm`). The dialog must then open the release page
+/// rather than call [`install_update`] — calling it would download a `.deb` and
+/// fail with `Permission denied (os error 13)`.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AvailableUpdate {
@@ -44,6 +49,9 @@ pub struct AvailableUpdate {
     pub current_version: String,
     pub notes: String,
     pub channel: ReleaseChannel,
+    pub install_in_place: bool,
+    pub release_page_url: String,
+    pub manual_install_hint: String,
 }
 
 /// Download progress, mirroring `ShareProgress`'s camelCase wire shape.
@@ -175,12 +183,12 @@ pub async fn check_for_update(app: AppHandle) -> Result<Option<AvailableUpdate>>
     };
 
     info!(?channel, version = %update.version, current = %update.current_version, "update available");
-    Ok(Some(AvailableUpdate {
-        version: update.version.clone(),
-        current_version: update.current_version.clone(),
-        notes: update.body.clone().unwrap_or_default(),
+    Ok(Some(available_update_from(
         channel,
-    }))
+        &update.version,
+        &update.current_version,
+        update.body.as_deref().unwrap_or(""),
+    )))
 }
 
 /// Human name of a lane, for copy the user reads.
@@ -213,17 +221,102 @@ fn release_page_url(channel: ReleaseChannel) -> &'static str {
 /// are installed by different means, so `cfg!(target_os = "linux")` would name
 /// the wrong artifact the moment a second Linux target ships — and naming a
 /// file the user cannot use is worse than saying nothing. `bundle_type()` reads
-/// the marker tauri-bundler patches into the binary; an unbundled build (a
-/// local `cargo run`) reports nothing and gets the generic wording.
+/// the marker tauri-bundler patches into the binary.
+///
+/// The marker is absent from the shipped `.deb` (see
+/// [`in_place_install_supported`]), so on Linux `None` is the released package
+/// rather than a dev build, and `.deb` is the only Linux artifact this project
+/// publishes. Sending that user to "the installer" names a file the release
+/// page does not carry, which is the failure this hint exists to avoid.
 fn manual_install_hint(channel: ReleaseChannel) -> String {
-    let url = release_page_url(channel);
+    manual_install_hint_on(channel, bundle_type(), cfg!(target_os = "linux"))
+}
 
-    match bundle_type() {
-        Some(BundleType::Deb) => format!("Download the .deb from {url} and install it with your package manager."),
+fn manual_install_hint_on(channel: ReleaseChannel, bundle: Option<BundleType>, on_linux: bool) -> String {
+    let url = release_page_url(channel);
+    let deb = format!("Download the .deb from {url} and install it with your package manager.");
+
+    match bundle {
+        Some(BundleType::Deb) => deb,
         Some(BundleType::Rpm) => format!("Download the .rpm from {url} and install it with your package manager."),
         Some(BundleType::AppImage) => format!("Download the AppImage from {url} and replace the one you are running."),
+        None if on_linux => deb,
         _ => format!("Download the installer from {url} and run it."),
     }
+}
+
+/// Whether plugin-updater can replace THIS bundle as the current user.
+///
+/// A `.deb` / `.rpm` needs `dpkg`/`rpm` plus root. The plugin tries pkexec,
+/// then a graphical sudo prompt, then terminal sudo; a normal desktop session
+/// (QA on amd64, 0.6.0-beta.4 → 0.6.0-beta.5) got `Permission denied (os error
+/// 13)` instead of a prompt. AppImage, NSIS, MSI, and macOS `.app` write files
+/// the user owns.
+///
+/// **On Linux, an unknown bundle must refuse.** `bundle_type()` reads a marker
+/// tauri-bundler patches into the binary, and it does NOT patch the `.deb`:
+/// the published `usr/bin/Hippius` still carries the literal
+/// `__TAURI_BUNDLE_TYPE_VAR_UNK`, so the shipped package reports `None`. Only
+/// macOS has a hard-coded fallback (`Some(App)`). Treating `None` as "try the
+/// plugin" therefore describes the shipped `.deb`, not a dev build, and sends
+/// it into `install_appimage`, which renames `/usr/bin/Hippius` and produces
+/// exactly the `Permission denied (os error 13)` this exists to prevent.
+fn in_place_install_supported(bundle: Option<BundleType>) -> bool {
+    in_place_install_supported_on(bundle, cfg!(target_os = "linux"))
+}
+
+/// `in_place_install_supported` with the host split out, so both platform
+/// answers are pinned from whichever runner the suite happens to run on.
+fn in_place_install_supported_on(bundle: Option<BundleType>, on_linux: bool) -> bool {
+    match bundle {
+        Some(BundleType::Deb | BundleType::Rpm) => false,
+        Some(BundleType::AppImage | BundleType::Msi | BundleType::Nsis | BundleType::App | BundleType::Dmg) => true,
+        // Unknown: the shipped Linux artifact, or an unbundled `cargo run`
+        // elsewhere. Only the second one is safe to hand to the plugin.
+        None => !on_linux,
+    }
+}
+
+/// Refuse Deb/Rpm in-place install before the plugin downloads a payload it
+/// cannot apply. Must run AFTER the re-check so "already up to date" still
+/// wins, and BEFORE `download_and_install` so a `.deb` is never fetched only
+/// to fail with EACCES.
+fn refuse_if_privileged_package(channel: ReleaseChannel) -> Result<()> {
+    if in_place_install_supported(bundle_type()) {
+        return Ok(());
+    }
+
+    Err(privileged_package_manual_install(channel))
+}
+
+fn privileged_package_manual_install(channel: ReleaseChannel) -> AppError {
+    AppError::Validation(format!(
+        "This package cannot be updated from inside the app. {}",
+        manual_install_hint(channel)
+    ))
+}
+
+fn available_update_from(channel: ReleaseChannel, version: &str, current_version: &str, notes: &str) -> AvailableUpdate {
+    AvailableUpdate {
+        version: version.to_string(),
+        current_version: current_version.to_string(),
+        notes: notes.to_string(),
+        channel,
+        install_in_place: in_place_install_supported(bundle_type()),
+        release_page_url: release_page_url(channel).to_string(),
+        manual_install_hint: manual_install_hint(channel),
+    }
+}
+
+/// True when the plugin failed because this is a `.deb` / `.rpm` it cannot
+/// apply as the current user. Io PermissionDenied is NOT this: macOS returns
+/// that kind when the AppleScript admin move is declined, and AppImage
+/// replace can EACCES a non-writable file — those bundles still support
+/// in-place install.
+fn is_privileged_package_failure(err: &tauri_plugin_updater::Error) -> bool {
+    use tauri_plugin_updater::Error as UpdaterError;
+
+    matches!(err, UpdaterError::DebInstallFailed | UpdaterError::PackageInstallFailed)
 }
 
 /// User-facing copy for a failed install; the raw error goes to the log.
@@ -238,17 +331,25 @@ fn install_failure(channel: ReleaseChannel, err: &tauri_plugin_updater::Error) -
 
     error!(?channel, %err, "could not install the update");
 
-    let lead = match err {
-        // The signature is checked against the pubkey compiled into the RUNNING
-        // build. A mismatch means that copy carries a retired key, so no future
-        // release can ever install over it — "try again later" is the one thing
-        // that will never work, and a manual reinstall is the only way out.
-        UpdaterError::Minisign(_) | UpdaterError::SignatureUtf8(_) => "This update could not be verified, so it was not installed.",
-        // `dpkg`/`rpm` need root. The plugin escalates through pkexec, then a
-        // graphical sudo prompt, then sudo; a session offering none of those
-        // cannot finish the install however often it is retried.
-        UpdaterError::AuthenticationFailed => "The update was not installed because the administrator prompt was declined or unavailable.",
-        _ => "Could not install the update.",
+    let lead = if is_privileged_package_failure(err) {
+        // QA on a `.deb` install: the plugin's Io Display is exactly
+        // "Permission denied (os error 13)". That string is diagnostics. A
+        // match that forwarded Display — or a user message that WAS the EACCES
+        // line — is what the dialog must never show.
+        "This package cannot be updated from inside the app."
+    } else {
+        match err {
+            // The signature is checked against the pubkey compiled into the RUNNING
+            // build. A mismatch means that copy carries a retired key, so no future
+            // release can ever install over it — "try again later" is the one thing
+            // that will never work, and a manual reinstall is the only way out.
+            UpdaterError::Minisign(_) | UpdaterError::SignatureUtf8(_) => "This update could not be verified, so it was not installed.",
+            // `dpkg`/`rpm` need root. The plugin escalates through pkexec, then a
+            // graphical sudo prompt, then sudo; a session offering none of those
+            // cannot finish the install however often it is retried.
+            UpdaterError::AuthenticationFailed => "The update was not installed because the administrator prompt was declined or unavailable.",
+            _ => "Could not install the update.",
+        }
     };
 
     AppError::Validation(format!("{lead} {}", manual_install_hint(channel)))
@@ -275,14 +376,12 @@ fn check_failure(channel: ReleaseChannel, err: &tauri_plugin_updater::Error) -> 
 /// Does NOT relaunch. The caller decides when to restart, because on the
 /// channel-switch path it has a second thing to say first.
 ///
-/// **Every platform installs in place, Linux included.** The plugin resolves
-/// the manifest key for the bundle it is running as — `linux-x86_64-deb` for
-/// this app — and installs a `.deb` with `dpkg -i`, escalating through pkexec,
-/// a graphical sudo prompt, then sudo. When that escalation is unavailable the
-/// install fails, and [`install_failure`] turns the plugin's opaque error into
-/// the manual-install instruction (H-061). Refusing on `target_os = "linux"`
-/// instead would disable a working path for every user who does have pkexec,
-/// permanently and with nothing in the log to say why.
+/// **Deb and RPM do not install in place.** plugin-updater applies a `.deb`
+/// with `dpkg -i` behind pkexec; that path returned `Permission denied (os
+/// error 13)` in QA rather than a prompt. [`refuse_if_privileged_package`]
+/// returns the download instruction before the plugin is asked to write.
+/// AppImage / macOS / Windows still call `download_and_install`. Gating the
+/// whole command on `target_os = "linux"` would also disable AppImage.
 #[tauri::command]
 pub async fn install_update(app: AppHandle, on_progress: Channel<DownloadProgress>) -> Result<()> {
     let channel = release_channel::current();
@@ -296,6 +395,8 @@ pub async fn install_update(app: AppHandle, on_progress: Channel<DownloadProgres
         .await
         .map_err(|err| check_failure(channel, &err))?
         .ok_or_else(|| AppError::Validation("There is no update to install.".into()))?;
+
+    refuse_if_privileged_package(channel)?;
 
     let mut bytes_done: u64 = 0;
     let version = update.version.clone();
@@ -335,6 +436,30 @@ pub struct ChannelStatus {
     pub target: Option<ReleaseChannel>,
     pub target_version: Option<String>,
     pub blocked_reason: Option<String>,
+    /// False for Deb/Rpm: the switch dialog must open the target's release
+    /// page rather than call [`switch_release_channel`].
+    pub install_in_place: bool,
+    pub release_page_url: String,
+    pub manual_install_hint: String,
+}
+
+fn channel_status(
+    current: ReleaseChannel,
+    target: Option<ReleaseChannel>,
+    target_version: Option<String>,
+    blocked_reason: Option<String>,
+) -> ChannelStatus {
+    let page_channel = target.unwrap_or(current);
+
+    ChannelStatus {
+        current,
+        target,
+        target_version,
+        blocked_reason,
+        install_in_place: in_place_install_supported(bundle_type()),
+        release_page_url: release_page_url(page_channel).to_string(),
+        manual_install_hint: manual_install_hint(page_channel),
+    }
 }
 
 /// The message shown when the epoch guard refuses a switch.
@@ -359,21 +484,11 @@ fn blocked_message(target: ReleaseChannel) -> String {
 pub async fn release_channel_status(app: AppHandle) -> Result<ChannelStatus> {
     let current = release_channel::current();
     let Some(target) = switch_target(current) else {
-        return Ok(ChannelStatus {
-            current,
-            target: None,
-            target_version: None,
-            blocked_reason: None,
-        });
+        return Ok(channel_status(current, None, None, None));
     };
 
     let Some(updater) = updater_for(&app, target, true)? else {
-        return Ok(ChannelStatus {
-            current,
-            target: Some(target),
-            target_version: None,
-            blocked_reason: None,
-        });
+        return Ok(channel_status(current, Some(target), None, None));
     };
 
     // The cross-channel comparator always offers, so `None` here means the
@@ -387,12 +502,7 @@ pub async fn release_channel_status(app: AppHandle) -> Result<ChannelStatus> {
     };
 
     let Some(update) = found else {
-        return Ok(ChannelStatus {
-            current,
-            target: Some(target),
-            target_version: None,
-            blocked_reason: None,
-        });
+        return Ok(channel_status(current, Some(target), None, None));
     };
 
     let target_epoch = manifest_state_epoch(&update.raw_json);
@@ -406,12 +516,7 @@ pub async fn release_channel_status(app: AppHandle) -> Result<ChannelStatus> {
         );
     }
 
-    Ok(ChannelStatus {
-        current,
-        target: Some(target),
-        target_version: Some(update.version.clone()),
-        blocked_reason,
-    })
+    Ok(channel_status(current, Some(target), Some(update.version.clone()), blocked_reason))
 }
 
 /// Install the other channel's build, so the app restarts on that lane.
@@ -458,6 +563,8 @@ pub async fn switch_release_channel(app: AppHandle, target: String, on_progress:
         );
         return Err(AppError::Validation(blocked_message(expected)));
     }
+
+    refuse_if_privileged_package(expected)?;
 
     let mut bytes_done: u64 = 0;
     let version = update.version.clone();
@@ -511,6 +618,10 @@ mod tests {
             current_version: "0.5.0-beta.1".into(),
             notes: "notes".into(),
             channel: ReleaseChannel::Beta,
+            install_in_place: false,
+            release_page_url: "https://github.com/thenervelab/hippius-desktop/releases".into(),
+            manual_install_hint:
+                "Download the .deb from https://github.com/thenervelab/hippius-desktop/releases and install it with your package manager.".into(),
         })
         .expect("serialize");
 
@@ -521,6 +632,9 @@ mod tests {
                 "currentVersion": "0.5.0-beta.1",
                 "notes": "notes",
                 "channel": "beta",
+                "installInPlace": false,
+                "releasePageUrl": "https://github.com/thenervelab/hippius-desktop/releases",
+                "manualInstallHint": "Download the .deb from https://github.com/thenervelab/hippius-desktop/releases and install it with your package manager.",
             })
         );
     }
@@ -621,6 +735,9 @@ mod tests {
             target: Some(ReleaseChannel::Beta),
             target_version: Some("0.5.0-beta.1".into()),
             blocked_reason: None,
+            install_in_place: true,
+            release_page_url: "https://github.com/thenervelab/hippius-desktop/releases".into(),
+            manual_install_hint: "Download the installer from https://github.com/thenervelab/hippius-desktop/releases and run it.".into(),
         })
         .expect("serialize");
 
@@ -631,6 +748,9 @@ mod tests {
                 "target": "beta",
                 "targetVersion": "0.5.0-beta.1",
                 "blockedReason": null,
+                "installInPlace": true,
+                "releasePageUrl": "https://github.com/thenervelab/hippius-desktop/releases",
+                "manualInstallHint": "Download the installer from https://github.com/thenervelab/hippius-desktop/releases and run it.",
             })
         );
     }
@@ -684,7 +804,7 @@ mod tests {
 
         let message = json["message"].as_str().expect("message is a string");
         assert!(message.contains(release_page_url(ReleaseChannel::Beta)), "{message}");
-        assert!(message.starts_with("Could not install the update."), "{message}");
+        assert!(message.starts_with("This package cannot be updated from inside the app."), "{message}");
     }
 
     /// A verification failure is the one case where retrying can never work:
@@ -742,5 +862,97 @@ mod tests {
             let raw = channel.manifest_url().expect("public channels publish a manifest");
             Url::parse(raw).unwrap_or_else(|err| panic!("{channel:?} manifest URL does not parse: {err}"));
         }
+    }
+
+    /// A `.deb` / `.rpm` cannot be applied as the current user. AppImage, the
+    /// Windows installers, and macOS `.app` can.
+    #[test]
+    fn deb_and_rpm_cannot_install_in_place() {
+        for on_linux in [true, false] {
+            assert!(!in_place_install_supported_on(Some(BundleType::Deb), on_linux));
+            assert!(!in_place_install_supported_on(Some(BundleType::Rpm), on_linux));
+            assert!(in_place_install_supported_on(Some(BundleType::AppImage), on_linux));
+            assert!(in_place_install_supported_on(Some(BundleType::Nsis), on_linux));
+            assert!(in_place_install_supported_on(Some(BundleType::Msi), on_linux));
+            assert!(in_place_install_supported_on(Some(BundleType::App), on_linux));
+            assert!(in_place_install_supported_on(Some(BundleType::Dmg), on_linux));
+        }
+    }
+
+    /// The regression that made the whole refusal a no-op in production.
+    ///
+    /// tauri-bundler does not patch the bundle-type marker into the shipped
+    /// `.deb` — its `usr/bin/Hippius` still carries
+    /// `__TAURI_BUNDLE_TYPE_VAR_UNK` — so `bundle_type()` is `None` on exactly
+    /// the build QA hit EACCES on. Treating `None` as "unbundled dev build,
+    /// try the plugin" therefore green-lit the released package, and
+    /// plugin-updater's `install_inner` fell through to `install_appimage`,
+    /// which renames `/usr/bin/Hippius`. Off Linux, `None` really is a local
+    /// `cargo run` and must stay permissive.
+    #[test]
+    fn an_unknown_bundle_refuses_in_place_install_on_linux_only() {
+        assert!(
+            !in_place_install_supported_on(None, true),
+            "the shipped .deb reports no bundle type; a permissive default is the EACCES path"
+        );
+        assert!(in_place_install_supported_on(None, false));
+    }
+
+    /// With no marker on Linux there is still only one Linux artifact this
+    /// project publishes, so the hint must name the `.deb` rather than send the
+    /// user looking for an "installer" the release page does not carry.
+    #[test]
+    fn an_unknown_linux_bundle_is_still_told_about_the_deb() {
+        let channel = ReleaseChannel::Beta;
+
+        let linux = manual_install_hint_on(channel, None, true);
+        assert!(linux.contains(".deb"), "{linux}");
+        assert_eq!(linux, manual_install_hint_on(channel, Some(BundleType::Deb), true));
+
+        let elsewhere = manual_install_hint_on(channel, None, false);
+        assert!(!elsewhere.contains(".deb"), "{elsewhere}");
+    }
+
+    /// QA log line: `err=Permission denied (os error 13)`. That Display must
+    /// not be the user-facing error — not as the whole message, and not as a
+    /// substring of the Validation copy.
+    ///
+    /// Io PermissionDenied is also what macOS returns when the admin move is
+    /// declined. Do not label that as "this package cannot be updated from
+    /// inside the app" — Deb/Rpm never reach `install_failure` (they refuse
+    /// first); remaining EACCES is a failed in-place install, not an
+    /// unsupported package type.
+    #[test]
+    fn permission_denied_is_not_the_user_facing_error() {
+        let raw = "Permission denied (os error 13)";
+        let err = tauri_plugin_updater::Error::Io(std::io::Error::new(std::io::ErrorKind::PermissionDenied, raw));
+        assert_eq!(err.to_string(), raw, "fixture is the QA log line");
+
+        let failure = install_failure(ReleaseChannel::Beta, &err);
+        let json = serde_json::to_value(&failure).expect("serialize");
+        assert_eq!(json["kind"], "Validation");
+
+        let message = json["message"].as_str().expect("message is a string");
+        assert_ne!(message, raw, "EACCES must not be the only error the user sees");
+        assert!(!message.contains(raw) && !message.contains("os error 13"), "raw EACCES leaked: {message}");
+        assert!(!message.to_ascii_lowercase().contains("permission denied"), "{message}");
+        assert!(message.contains(release_page_url(ReleaseChannel::Beta)), "{message}");
+        assert!(
+            message.starts_with("Could not install the update."),
+            "a declined macOS admin prompt must not read as an unsupported package: {message}"
+        );
+        assert!(!message.contains("cannot be updated from inside the app"), "{message}");
+    }
+
+    /// Deb/Rpm plugin failures (if they still reach install_failure) keep the
+    /// package-type copy. Io PermissionDenied above must not.
+    #[test]
+    fn a_deb_install_failure_names_the_package_type() {
+        let failure = install_failure(ReleaseChannel::Beta, &tauri_plugin_updater::Error::PackageInstallFailed);
+        let json = serde_json::to_value(&failure).expect("serialize");
+        let message = json["message"].as_str().expect("message is a string");
+
+        assert!(message.contains("cannot be updated from inside the app"), "{message}");
+        assert!(message.contains(release_page_url(ReleaseChannel::Beta)), "{message}");
     }
 }

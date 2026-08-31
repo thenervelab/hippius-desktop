@@ -29,7 +29,11 @@ import {
 } from "@/lib/utils/fileFilterUtils";
 import { useFilteredFiles } from "@/app/lib/hooks/useFilteredFiles";
 import { useRecursiveFileSearch } from "@/app/lib/hooks/useRecursiveFileSearch";
-import { shouldUseRecursiveSearch } from "@/lib/utils/filesViewMode";
+import {
+  filterCriteriaAreActive,
+  shouldUseRecursiveSearch,
+} from "@/lib/utils/filesViewMode";
+import { isExcludedSyncStatus } from "@/lib/utils/syncStatusDisplay";
 import DriveHeader from "./DriveHeader";
 import DriveContent from "./DriveContent";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
@@ -177,6 +181,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     dateRange: undefined as DateRange | undefined,
     fileSize: 0,
     fileSizes: [] as number[],
+    excludedOnly: false,
     lastUpdated: Date.now(),
   });
 
@@ -459,11 +464,13 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
       ? (nestedDrive?.label ?? null)
       : activeSyncFolderLabel;
   const recursiveSearchSubfolder = isNested ? (urlSubFolderPath ?? null) : null;
-  const hasActiveSearchOrFilter =
-    Boolean(searchTerm.trim()) ||
-    Boolean(filterState.fileExtension) ||
-    Boolean(filterState.dateRange?.from) ||
-    filterState.fileSizes.length > 0;
+  const hasActiveSearchOrFilter = filterCriteriaAreActive({
+    searchTerm,
+    fileExtension: filterState.fileExtension,
+    dateRange: filterState.dateRange,
+    fileSizes: filterState.fileSizes,
+    excludedOnly: filterState.excludedOnly,
+  });
   const useRecursiveResults = shouldUseRecursiveSearch({
     hasActiveSearchOrFilter,
     recursiveSearchLabel,
@@ -492,12 +499,14 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
       fileExtensions: fileExtensionsCriteria,
       dateRange: filterState.dateRange,
       fileSizes: filterState.fileSizes,
+      excludedOnly: filterState.excludedOnly,
     }),
     [
       searchTerm,
       fileExtensionsCriteria,
       filterState.dateRange,
       filterState.fileSizes,
+      filterState.excludedOnly,
     ],
   );
 
@@ -519,6 +528,11 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     ? recursiveResults
     : inMemoryFilteredData;
 
+  const statusFilteredData = useMemo(() => {
+    if (!filterState.excludedOnly) return filteredData;
+    return filteredData.filter((file) => isExcludedSyncStatus(file.syncStatus));
+  }, [filteredData, filterState.excludedOnly]);
+
   // Folded into `isLoading` so transitions where the underlying dataset
   // swaps — nested→root navigation, switching `activeSyncFolderLabel`
   // from the Local cards — surface the skeleton instead of the previous
@@ -538,7 +552,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // Infinite scroll state for list and card views. Cheap keyFn (no row
   // serialization) so the source-changed check stays O(1) during sync refetches.
   const { visibleData, hasMore, loadMore, resetScroll } = useInfiniteScroll(
-    filteredData,
+    statusFilteredData,
     (f) => `${f.label ?? ""}::${f.actualFileName ?? f.arionHash}::${f.lastChargedAt}`
   );
 
@@ -613,6 +627,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
       filterState.dateRange,
       filterState.fileSize,
       filterState.fileSizes,
+      filterState.excludedOnly,
     );
     setActiveFilters(newActiveFilters);
   }, [
@@ -620,6 +635,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     filterState.dateRange,
     filterState.fileSize,
     filterState.fileSizes,
+    filterState.excludedOnly,
     filterState.lastUpdated,
   ]);
 
@@ -632,6 +648,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     filterState.dateRange,
     filterState.fileSize,
     filterState.fileSizes,
+    filterState.excludedOnly,
     filterState.lastUpdated,
     activeSyncFolderLabel,
     resetScroll,
@@ -660,6 +677,10 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
           updates.fileSizes = filterState.fileSizes.filter(
             (size: number) => size !== sizeValue,
           );
+          break;
+
+        case "excludedOnly":
+          updates.excludedOnly = false;
           break;
       }
 
@@ -719,6 +740,13 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   const handleFileSizesChange = useCallback(
     (sizes: number[]) => {
       updateFilters({ fileSizes: sizes });
+    },
+    [updateFilters],
+  );
+
+  const handleExcludedOnlyChange = useCallback(
+    (excludedOnly: boolean) => {
+      updateFilters({ excludedOnly });
     },
     [updateFilters],
   );
@@ -1476,7 +1504,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
               <DriveContent
                 isRecentFiles={isRecentFiles}
                 isLoading={isLoading}
-                filteredData={filteredData}
+                filteredData={statusFilteredData}
                 displayedData={visibleData}
                 searchTerm={searchTerm}
                 activeFilters={activeFilters}
@@ -1547,9 +1575,11 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 selectedFileExtension={filterState.fileExtension}
                 selectedDateRange={filterState.dateRange}
                 selectedFileSizes={filterState.fileSizes}
+                excludedOnly={filterState.excludedOnly}
                 onFileExtensionChange={handleFileExtensionChange}
                 onDateRangeChange={handleDateRangeChange}
                 onFileSizesChange={handleFileSizesChange}
+                onExcludedOnlyChange={handleExcludedOnlyChange}
                 defaultFolderLabel={activeSyncFolderLabel}
                 isFolderUploadOpen={isFolderUploadOpen}
                 onSetFolderUploadOpen={handleFolderUploadOpenChange}

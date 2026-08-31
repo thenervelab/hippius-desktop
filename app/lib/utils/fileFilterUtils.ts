@@ -21,7 +21,7 @@ export interface FilterCriteria {
 }
 
 export interface ActiveFilter {
-    type: 'fileExtension' | 'dateRange' | 'fileSize';
+    type: 'fileExtension' | 'dateRange' | 'fileSize' | 'excludedOnly';
     value: string;
     label: string;
     displayValue: string;
@@ -61,7 +61,8 @@ export function generateActiveFilters(
     fileExtension: FileExtension | undefined,
     dateRange: DateRange | undefined,
     fileSize: number,
-    fileSizes?: number[]
+    fileSizes?: number[],
+    excludedOnly?: boolean,
 ): ActiveFilter[] {
     const activeFilters: ActiveFilter[] = [];
 
@@ -110,6 +111,15 @@ export function generateActiveFilters(
             value: String(fileSize),
             label: 'File size',
             displayValue: `≥ ${formatBytesFromBigInt(BigInt(fileSize))}`
+        });
+    }
+
+    if (excludedOnly) {
+        activeFilters.push({
+            type: 'excludedOnly',
+            value: 'excluded',
+            label: 'Status',
+            displayValue: 'Excluded',
         });
     }
 

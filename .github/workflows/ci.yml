@@ -44,7 +44,50 @@ env:
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
 
 jobs:
+  # Which areas does this PR actually touch? Pure path gate for the Rust jobs
+  # below: a frontend-only PR compiles no Rust at all (rust-linux alone was
+  # ~18 min, rust-macos up to ~50 min cold — all spent re-checking code the
+  # PR did not change). Inline `git diff` rather than a third-party action,
+  # matching the repo's no-third-party preference in rust-ci-setup. Pushes to
+  # the long-lived branches skip the gate entirely so every lane keeps full
+  # post-merge coverage.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.diff.outputs.rust }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+          # Full history so the PR base sha is present to diff against.
+          fetch-depth: 0
+
+      - name: Detect changed areas
+        id: diff
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            echo "rust=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Anything under src-tauri/ (the crate), .github/ (this pipeline and
+          # its composite actions), or scripts/ (steps the jobs shell out to)
+          # can change what the Rust jobs verify; everything else cannot.
+          if git diff --name-only "$BASE_SHA" HEAD | grep -qE '^(src-tauri/|\.github/|scripts/)'; then
+            echo "rust=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "rust=false" >> "$GITHUB_OUTPUT"
+          fi
+
   rust-linux:
+    needs: changes
+    # Skipped when the PR touches no Rust-relevant path (frontend-only PRs).
+    # Pushes always run.
+    if: github.event_name != 'pull_request' || needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -74,12 +117,15 @@ jobs:
         run: cargo test
 
   rust-macos:
-    # The macOS lane is the slow one (~15-20 min cold), so run it only where it
-    # gates a release-bound merge — PRs into staging/main and pushes to them.
-    # It exists to cover the macOS-only code the Linux lane compiles out;
-    # `rust-linux` is the everywhere gate.
+    # The macOS lane is the slow one (up to ~50 min cold), so run it only on
+    # PROMOTION PRs (into beta/main) and on pushes to the three lane branches.
+    # Ordinary feature PRs target staging and rely on `rust-linux`; the push to
+    # staging after merge is the macOS backstop, and it lands before anything
+    # can promote toward users. It exists to cover the macOS-only code the
+    # Linux lane compiles out.
+    needs: changes
     if: >-
-      (github.event_name == 'pull_request' && (github.base_ref == 'staging' || github.base_ref == 'beta' || github.base_ref == 'main')) ||
+      (github.event_name == 'pull_request' && (github.base_ref == 'beta' || github.base_ref == 'main') && needs.changes.outputs.rust == 'true') ||
       (github.event_name == 'push' && (github.ref_name == 'staging' || github.ref_name == 'beta' || github.ref_name == 'main'))
     runs-on: macos-latest
     steps:
@@ -111,13 +157,14 @@ jobs:
     # so a Windows-only compile break (a `#[cfg(unix)]` module referenced
     # unconditionally in `generate_handler!`) failed at release time, not PR time.
     # A fast `cargo check` (lib + bins — what actually ships, no test crates) here
-    # catches it. Gated to release-bound merges like rust-macos so ordinary
-    # feature PRs stay quick. The shared rust-ci-setup composite is
+    # catches it. Gated to promotion PRs and lane pushes like rust-macos so
+    # ordinary feature PRs stay quick. The shared rust-ci-setup composite is
     # Linux/macOS-oriented (ssh-agent, apt), so this job mirrors the PROVEN
     # Windows setup from tauri-build.yml: an ~/.ssh/config IdentityFile (no
     # ssh-agent) + git-CLI fetch for the private hcfs dep.
+    needs: changes
     if: >-
-      (github.event_name == 'pull_request' && (github.base_ref == 'staging' || github.base_ref == 'beta' || github.base_ref == 'main')) ||
+      (github.event_name == 'pull_request' && (github.base_ref == 'beta' || github.base_ref == 'main') && needs.changes.outputs.rust == 'true') ||
       (github.event_name == 'push' && (github.ref_name == 'staging' || github.ref_name == 'beta' || github.ref_name == 'main'))
     runs-on: windows-latest
     steps:
@@ -175,6 +222,10 @@ jobs:
         uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: './src-tauri -> target'
+          # One cache family per OS instead of one per job: the repo cache is
+          # capped at 10 GB, and separate per-job families evicted each other,
+          # which is how promotion PRs kept hitting cold ~50 min builds.
+          shared-key: "ci"
           cache-on-failure: "true"
 
       # tauri-build requires the frontendDist dir (../out) to exist; the check

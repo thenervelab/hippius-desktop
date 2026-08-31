@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { isIoError } from "@/lib/utils/dispatchTauriError";
 
 interface RevealFileParams {
   /** Direct source path to try first (e.g. file.source). */
@@ -30,8 +31,13 @@ export async function revealFile(params: RevealFileParams): Promise<void> {
       const target = revealFolder ? stripFileName(sourcePath, fileName) : sourcePath;
       await invoke("reveal_path_in_file_manager", { path: target });
       return;
-    } catch {
-      // Fall through to DB resolve
+    } catch (error) {
+      // Missing path is Io (canonicalize). Other kinds — xdg-open
+      // missing, Validation (not a sync folder) — must surface.
+      // invoke() rejects a plain { kind, message }, not Error.
+      if (!isIoError(error)) {
+        throw error;
+      }
     }
   }
 
