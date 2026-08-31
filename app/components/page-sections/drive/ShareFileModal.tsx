@@ -125,12 +125,21 @@ export default function ShareFileModal() {
     finderName;
   const folderLabel = file?.label;
 
-  // Only the Finder flow carries these — an in-app share is picked from a
-  // listing that already shows the size, whereas a Finder right-click is the
-  // one entry point with no size anywhere on screen. That is the path that
-  // minted a link to a half-downloaded zip on 2026-08-31.
-  const sourceSizeBytes =
-    finderShare?.kind === "choosing" ? finderShare.sizeBytes : null;
+  // The Finder flow carries a freshly-stat'd size; the in-app flow already has
+  // one on the listing row. Show whichever is available, so the confirmation
+  // reads the same at both entry points — a share is the last moment either
+  // one can be checked by eye, and Finder is merely where that bit us first
+  // (a half-downloaded zip minted a truncated link on 2026-08-31).
+  //
+  // A folder reports no size in either flow: nothing is uploaded when a folder
+  // share is minted, so a byte count next to it would describe nothing.
+  const sourceSizeBytes = target?.file.isFolder
+    ? null
+    : finderShare?.kind === "choosing"
+      ? finderShare.sizeBytes
+      : (file?.size ?? null);
+  // Finder-only: the mtime age comes from the backend's stat of the clicked
+  // path, and the in-app listing carries no equivalent.
   const sourceModifiedSecsAgo =
     finderShare?.kind === "choosing" ? finderShare.modifiedSecsAgo : null;
 
