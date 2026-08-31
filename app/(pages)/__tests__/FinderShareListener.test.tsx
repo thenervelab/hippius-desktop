@@ -47,9 +47,40 @@ describe("FinderShareListener", () => {
     await waitFor(() => expect(listenHandlers.has("finder:share-choosing")).toBe(true));
 
     listenHandlers.get("finder:share-choosing")!({
-      payload: { id: "req-42", name: "report.pdf" },
+      payload: {
+        id: "req-42",
+        name: "report.pdf",
+        sizeBytes: 6_765_321,
+        modifiedSecsAgo: 4,
+      },
     });
 
-    expect(store.get(finderShareAtom)).toEqual({ kind: "choosing", id: "req-42", name: "report.pdf" });
+    expect(store.get(finderShareAtom)).toEqual({
+      kind: "choosing",
+      id: "req-42",
+      name: "report.pdf",
+      sizeBytes: 6_765_321,
+      modifiedSecsAgo: 4,
+    });
+  });
+
+  // An older backend emits only `{id, name}`. The chooser must still open —
+  // degraded to no size, exactly what it showed before — rather than seeding
+  // `undefined` into the atom and rendering "undefined B".
+  it("tolerates a payload without the stat fields", async () => {
+    const { store } = renderWithStore();
+    await waitFor(() => expect(listenHandlers.has("finder:share-choosing")).toBe(true));
+
+    listenHandlers.get("finder:share-choosing")!({
+      payload: { id: "req-43", name: "legacy.pdf" },
+    });
+
+    expect(store.get(finderShareAtom)).toEqual({
+      kind: "choosing",
+      id: "req-43",
+      name: "legacy.pdf",
+      sizeBytes: null,
+      modifiedSecsAgo: null,
+    });
   });
 });

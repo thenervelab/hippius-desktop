@@ -39,6 +39,8 @@ import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 import useDeleteFile from "@/app/lib/hooks/use-delete-file";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { revealFile } from "@/lib/utils/revealFile";
+import { fileManagerLabel } from "@/lib/utils/isMacPlatform";
+import { tauriErrorMessage } from "@/lib/utils/dispatchTauriError";
 import { toast } from "sonner";
 
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
@@ -263,7 +265,7 @@ const CardView: FC<CardViewProps> = ({
                             : [
                                 {
                                   icon: <FolderOpen className="size-4" />,
-                                  itemTitle: "Reveal in Finder",
+                                  itemTitle: `Reveal in ${fileManagerLabel()}`,
                                   onItemClick: async (e?: React.MouseEvent) => {
                                     if (e) {
                                       e.preventDefault();
@@ -279,12 +281,10 @@ const CardView: FC<CardViewProps> = ({
                                       });
                                     } catch (error) {
                                       console.error(
-                                        "Failed to reveal file in Finder:",
+                                        "Failed to reveal file in file manager:",
                                         error,
                                       );
-                                      toast.error(
-                                        "File is not available locally. It may only exist on another device.",
-                                      );
+                                      toast.error(tauriErrorMessage(error));
                                     }
                                   },
                                 },

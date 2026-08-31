@@ -259,6 +259,15 @@ pub async fn add_file(
     }
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddFolderResult {
+    pub name: String,
+    /// UTF-8 dotfiles the engine will not upload. The FE toasts this so
+    /// Drive is not a silent omit (H-063).
+    pub skipped_hidden: u64,
+}
+
 /// Add folder to sync folder
 #[tauri::command]
 pub async fn add_folder(
@@ -267,7 +276,7 @@ pub async fn add_folder(
     sync_path: String,
     folder_path: String,
     subfolder: Option<String>,
-) -> Result<String> {
+) -> Result<AddFolderResult> {
     // Enforce credit eligibility at the IPC boundary — same rationale
     // as `add_file`, but priced by the recursive byte total of the
     // source folder. A folder with permission-denied subdirectories
@@ -279,7 +288,9 @@ pub async fn add_folder(
     // banner file count (previously two separate full traversals). The byte
     // total is a best-effort lower bound on permission-denied subdirs, which
     // under-charges rather than over-charges — the server 402 is the backstop.
-    let (bytes, count) = walk_regular_files_stats(Path::new(&folder_path)).await;
+    let walk = walk_regular_files_stats(Path::new(&folder_path)).await;
+    let bytes = walk.bytes;
+    let count = walk.count;
     crate::billing::eligibility::require_eligible(
         &state,
         &account_id,
@@ -327,7 +338,10 @@ pub async fn add_folder(
             use tauri::Manager;
             let s = app.state::<crate::app_state::AppState>().sync.clone();
             let _ = trigger_sync(&s).await;
-            Ok(name)
+            Ok(AddFolderResult {
+                name,
+                skipped_hidden: walk.skipped_hidden,
+            })
         }
         Err(e) => {
             // IPC failed before any sync cycle ran — unconditional
@@ -419,18 +433,26 @@ async fn add_folder_with_app_inner(sync_path: &str, folder_path: &str, subfolder
 /// async-fn boxing. Does not read file contents — only iterates
 /// directory entries — so the cost is bounded by what `copy_dir_recursive`
 /// is about to do anyway.
-/// Single-pass walk returning `(total_bytes, regular_file_count)` for the tree
-/// under `root`. Folder uploads previously walked the identical tree TWICE —
-/// once for the credit-gate byte total and once for the banner count — before
-/// `copy_dir_recursive` walked it a third time; this collapses the first two
-/// into one traversal. Same invariants as [`sum_regular_file_bytes`]: symlinks
-/// are not followed, per-subdir I/O errors are skipped, the stack is capped at
+#[derive(Clone, Copy, Default)]
+struct FileWalkStats {
+    bytes: u64,
+    count: u64,
+    skipped_hidden: u64,
+}
+
+/// Single-pass walk returning billed bytes/count plus hidden files the
+/// engine will skip. Folder uploads previously walked the identical tree
+/// TWICE — once for the credit-gate byte total and once for the banner
+/// count — before `copy_dir_recursive` walked it a third time; this
+/// collapses the first two into one traversal. Same invariants as
+/// [`sum_regular_file_bytes`]: symlinks are not followed, per-subdir I/O
+/// errors are skipped, the stack is capped at
 /// [`FOLDER_BYTE_WALK_MAX_DEPTH`], and both accumulators use `saturating_add`.
-async fn walk_regular_files_stats(root: &std::path::Path) -> (u64, u64) {
+async fn walk_regular_files_stats(root: &std::path::Path) -> FileWalkStats {
     let root = root.to_path_buf();
     tokio::task::spawn_blocking(move || walk_regular_files_stats_std(&root))
         .await
-        .unwrap_or((0, 0))
+        .unwrap_or_default()
 }
 
 /// Failed-download artifacts (`downloaded_<hex>`) and 0-byte encrypted-name
@@ -451,9 +473,8 @@ fn is_unlisted_regular_file(name: &str, file_len: u64) -> bool {
 /// to banner 132). A hidden directory is skipped before it reaches the
 /// stack, so its whole subtree is excluded — matching both the listing and
 /// the engine scan, which drop the subtree the same way.
-fn walk_regular_files_stats_std(root: &std::path::Path) -> (u64, u64) {
-    let mut bytes: u64 = 0;
-    let mut count: u64 = 0;
+fn walk_regular_files_stats_std(root: &std::path::Path) -> FileWalkStats {
+    let mut stats = FileWalkStats::default();
     let mut stack: Vec<std::path::PathBuf> = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
         if stack.len() > FOLDER_BYTE_WALK_MAX_DEPTH {
@@ -462,22 +483,28 @@ fn walk_regular_files_stats_std(root: &std::path::Path) -> (u64, u64) {
         let Ok(entries) = std::fs::read_dir(&dir) else { continue };
         for entry in entries.flatten() {
             let name = entry.file_name();
+            let Ok(meta) = entry.metadata() else { continue };
             if is_engine_hidden_name(&name) {
+                // One unit per skipped name. Descending a hidden dir
+                // (`.git`) for a file count would walk the tree twice
+                // before eligibility/copy.
+                if meta.is_file() || meta.is_dir() {
+                    stats.skipped_hidden = stats.skipped_hidden.saturating_add(1);
+                }
                 continue;
             }
-            let Ok(meta) = entry.metadata() else { continue };
             if meta.is_dir() {
                 stack.push(entry.path());
             } else if meta.is_file() {
                 if is_unlisted_regular_file(&name.to_string_lossy(), meta.len()) {
                     continue;
                 }
-                count = count.saturating_add(1);
-                bytes = bytes.saturating_add(meta.len());
+                stats.count = stats.count.saturating_add(1);
+                stats.bytes = stats.bytes.saturating_add(meta.len());
             }
         }
     }
-    (bytes, count)
+    stats
 }
 
 /// Sum the byte size of regular files (non-directory, non-symlink) under
@@ -507,7 +534,7 @@ fn walk_regular_files_stats_std(root: &std::path::Path) -> (u64, u64) {
 ///   `saturating_add` so a malicious sparse file or `u64::MAX` length
 ///   can't panic.
 pub(in crate::sync) async fn sum_regular_file_bytes(root: &std::path::Path) -> u64 {
-    walk_regular_files_stats(root).await.0
+    walk_regular_files_stats(root).await.bytes
 }
 
 /// Stack-depth cap for [`sum_regular_file_bytes`]. Sized to match the
@@ -621,11 +648,11 @@ fn sum_and_count_batch_std(paths: &[String]) -> (u64, u64) {
         // `is_dir()` follows, matching the previous top-level classification
         // so a symlink-to-folder in the batch is still walked.
         if p.is_dir() {
-            let (b, c) = walk_regular_files_stats_std(p);
-            bytes = bytes.saturating_add(b);
+            let walk = walk_regular_files_stats_std(p);
+            bytes = bytes.saturating_add(walk.bytes);
             // Floor a directory's count at 1 so an unwalkable subdir still
             // raises the banner (mirrors the prior `count_regular_files().max(1)`).
-            count = count.saturating_add(c.max(1));
+            count = count.saturating_add(walk.count.max(1));
         } else {
             bytes = bytes.saturating_add(std::fs::metadata(p).map_or(0, |m| m.len()));
             count = count.saturating_add(1);
@@ -898,9 +925,9 @@ mod tests {
         tokio::fs::create_dir(&sub).await.unwrap();
         tokio::fs::write(sub.join("c.txt"), b"xyz").await.unwrap(); // 3 bytes
 
-        let (bytes, count) = walk_regular_files_stats(root).await;
-        assert_eq!(count, 3, "all three regular files counted across the nested dir");
-        assert_eq!(bytes, 10, "byte total summed across the nested dir (5+2+3)");
+        let walk = walk_regular_files_stats(root).await;
+        assert_eq!(walk.count, 3, "all three regular files counted across the nested dir");
+        assert_eq!(walk.bytes, 10, "byte total summed across the nested dir (5+2+3)");
     }
 
     /// H-082: Drive listing and the add-folder File No banner both skip
@@ -916,9 +943,10 @@ mod tests {
         std::fs::write(root.join(".DS_Store"), b"mac").unwrap();
         std::fs::write(root.join(".hidden"), b"dot").unwrap();
 
-        let (bytes, count) = walk_regular_files_stats_std(root);
-        assert_eq!(count, 130, "hidden files must not inflate the File No banner");
-        assert_eq!(bytes, 130, "each visible file is 1 byte; hidden bytes must not be summed");
+        let walk = walk_regular_files_stats_std(root);
+        assert_eq!(walk.count, 130, "hidden files must not inflate the File No banner");
+        assert_eq!(walk.bytes, 130, "each visible file is 1 byte; hidden bytes must not be summed");
+        assert_eq!(walk.skipped_hidden, 2, "H-063 toast counts the two dotfiles");
     }
 
     /// The rest of listing's skip set: a hidden directory's children, a
@@ -938,9 +966,10 @@ mod tests {
         std::fs::write(root.join("file_0123456789abcdee"), b"data").unwrap();
         std::fs::write(root.join("downloaded_notes.txt"), b"xy").unwrap();
 
-        let (bytes, count) = walk_regular_files_stats_std(root);
-        assert_eq!(count, 3, "keep.txt + non-zero stub + downloaded_notes.txt");
-        assert_eq!(bytes, 8, "2 + 4 + 2; hidden-dir / artifact / 0-byte stub omitted");
+        let walk = walk_regular_files_stats_std(root);
+        assert_eq!(walk.count, 3, "keep.txt + non-zero stub + downloaded_notes.txt");
+        assert_eq!(walk.bytes, 8, "2 + 4 + 2; hidden-dir / artifact / 0-byte stub omitted");
+        assert_eq!(walk.skipped_hidden, 1, ".git is one skipped hidden directory");
     }
 
     /// This PR is the counter: listing skip must not be copied into
@@ -965,7 +994,8 @@ mod tests {
             b"dot",
             "copy must still write hidden names; only the File No walker skips them"
         );
-        assert_eq!(walk_regular_files_stats_std(&src).1, 1);
+        assert_eq!(walk_regular_files_stats_std(&src).count, 1);
+        assert_eq!(walk_regular_files_stats_std(&src).skipped_hidden, 1);
     }
 
     /// Extract the body of the function whose signature contains `sig` — a
@@ -1035,9 +1065,13 @@ mod tests {
         std::fs::write(top_hidden.join("HEAD"), b"1616161616161616").unwrap();
         std::fs::write(top_hidden.join("objects/pack"), b"32").unwrap();
 
-        let (bytes, count) = walk_regular_files_stats_std(root);
-        assert_eq!(count, 2, "only top.txt and project/keep.txt are engine-visible");
-        assert_eq!(bytes, 3, "1 + 2; no byte from either hidden subtree may be summed");
+        let walk = walk_regular_files_stats_std(root);
+        assert_eq!(walk.count, 2, "only top.txt and project/keep.txt are engine-visible");
+        assert_eq!(walk.bytes, 3, "1 + 2; no byte from either hidden subtree may be summed");
+        assert_eq!(
+            walk.skipped_hidden, 2,
+            ".cache and .git each count as one skipped name, not every file inside"
+        );
     }
 
     /// hcfs's `should_skip_path` is `to_str()`-gated, so a non-UTF-8 name that
@@ -1057,9 +1091,9 @@ mod tests {
         let raw = std::ffi::OsStr::from_bytes(b".caf\xe9");
         std::fs::write(root.join(raw), b"xy").unwrap();
 
-        let (bytes, count) = walk_regular_files_stats_std(root);
-        assert_eq!(count, 2, "a non-UTF-8 `.`-name is uploaded by the engine, so it must be counted");
-        assert_eq!(bytes, 3);
+        let walk = walk_regular_files_stats_std(root);
+        assert_eq!(walk.count, 2, "a non-UTF-8 `.`-name is uploaded by the engine, so it must be counted");
+        assert_eq!(walk.bytes, 3);
     }
 
     #[test]
@@ -1287,9 +1321,9 @@ mod tests {
         tokio::fs::write(root.join("real.txt"), b"abc").await.unwrap();
         std::os::unix::fs::symlink(root.join("real.txt"), root.join("link.txt")).unwrap();
 
-        let (bytes, count) = walk_regular_files_stats(root).await;
-        assert_eq!(count, 1, "symlink must not be counted as a regular file");
-        assert_eq!(bytes, 3);
+        let walk = walk_regular_files_stats(root).await;
+        assert_eq!(walk.count, 1, "symlink must not be counted as a regular file");
+        assert_eq!(walk.bytes, 3);
     }
 
     /// No baseline on disk → empty synced set → ALL on-disk files are pending.

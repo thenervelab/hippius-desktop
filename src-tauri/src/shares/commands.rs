@@ -319,6 +319,79 @@ async fn require_shares_supported(state: &AppState, account_id: &str) -> Result<
     Ok(())
 }
 
+// ─── Source stability ──────────────────────────────────────────────────────
+
+/// A source file's identity at one instant: length plus mtime.
+///
+/// Compared either side of a mint with [`hcfs_client::drive::content_changed`]
+/// — the sync engine's own in-flight-write predicate — so there is one
+/// definition of "this file moved under us" rather than a second one here.
+type SourceStamp = (u64, Option<std::time::SystemTime>);
+
+fn stamp(meta: &std::fs::Metadata) -> SourceStamp {
+    (meta.len(), meta.modified().ok())
+}
+
+/// Re-stat `path` and report whether it differs from the stamp taken before
+/// the mint.
+///
+/// An unreadable re-stat reports `false`. It is not evidence of a change — the
+/// file may have been legitimately moved or removed after being read, and a
+/// share of bytes we already hold is still valid — so it must not fail a share
+/// the user asked for.
+async fn source_moved(path: &Path, before: SourceStamp) -> bool {
+    let Ok(after) = tokio::fs::metadata(path).await.map(|m| stamp(&m)) else {
+        return false;
+    };
+    hcfs_client::drive::content_changed(before.0, before.1, after.0, after.1)
+}
+
+/// Refuse a share whose source changed while it was being minted, destroying
+/// the token before it can reach the user.
+///
+/// **What this catches, precisely.** hcfs-client already refuses a source
+/// whose byte count disagrees with the declared size, but it can only see the
+/// window it is reading in. This widens that to the whole mint — encrypt,
+/// upload and finalize, seconds rather than milliseconds — and additionally
+/// catches an in-place rewrite that kept the same length, which no size check
+/// can see.
+///
+/// **What it does not catch**, and must not be mistaken for catching: a file
+/// that is a stalled prefix for the entire mint. A download that has written
+/// 4 MiB and paused looks identical at both stats, which is exactly what
+/// happened on 2026-08-31. Nothing on the filesystem distinguishes that from a
+/// finished smaller file; the size shown in the chooser is what covers it.
+///
+/// Revoking is best-effort. If it fails the link is live but was never
+/// returned to anyone, and the user still gets an error instead of a URL to a
+/// version that no longer exists — so a failed revoke is logged, not
+/// propagated over the more useful error.
+async fn refuse_if_source_moved(
+    client: &hcfs_client::client::HcfsClient,
+    keystore: &SqliteShareKeystore,
+    path: &Path,
+    before: SourceStamp,
+    share_token: &str,
+) -> Result<()> {
+    if !source_moved(path, before).await {
+        return Ok(());
+    }
+
+    warn!(
+        path = %path.display(),
+        before_len = before.0,
+        "source changed during the mint; revoking the share it produced",
+    );
+    if let Err(e) = client.revoke_share(share_token, keystore).await {
+        warn!(error = %e, "revoke of a stale-source share failed; the link is live but was never returned");
+    }
+    Err(AppError::Validation(
+        "The file changed while it was being shared, so the link was cancelled. \
+         If it is still downloading, wait for it to finish, then share again."
+            .into(),
+    ))
+}
+
 // ─── Commands ──────────────────────────────────────────────────────────────
 
 /// Inner share-creation pipeline for a file inside a synced folder.
@@ -358,6 +431,8 @@ async fn create_share_inner(
         return Err(AppError::Validation("Cannot share a directory".into()));
     }
     let plaintext_size = metadata.len();
+    // Kept for the post-mint comparison — see `refuse_if_source_moved`.
+    let before = stamp(&metadata);
 
     let filename = local_path
         .file_name()
@@ -406,6 +481,11 @@ async fn create_share_inner(
             warn!(error = %e, "create_share failed");
             AppError::Hcfs(format!("create_share: {e}"))
         })?;
+
+    // Before the sidecar, before the URL is returned: if the source moved
+    // under the mint, this destroys the token rather than handing out a link
+    // to bytes that no longer exist.
+    refuse_if_source_moved(&client, &keystore, &local_path, before, &result.share_token).await?;
 
     // Record the (folder_label, relative_path) the share was minted
     // from in the local sidecar so the per-file badge and Reshare
@@ -552,6 +632,10 @@ pub(crate) async fn share_external_file(
         return Err(AppError::Validation("Cannot share a directory".into()));
     }
     let plaintext_size = metadata.len();
+    // Kept for the post-mint comparison — see `refuse_if_source_moved`. This
+    // is the path a Finder right-click takes, so it is the one that shared a
+    // still-downloading zip on 2026-08-31.
+    let before = stamp(&metadata);
 
     let filename = abs_path
         .file_name()
@@ -584,6 +668,8 @@ pub(crate) async fn share_external_file(
             warn!(error = %e, "create_share failed");
             AppError::Hcfs(format!("create_share: {e}"))
         })?;
+
+    refuse_if_source_moved(&client, &keystore, abs_path, before, &result.share_token).await?;
 
     Ok(ShareLink {
         share_token: result.share_token,
@@ -680,6 +766,10 @@ async fn mint_remote_share_at(
 
     let metadata = tokio::fs::metadata(tmp).await?;
     let plaintext_size = metadata.len();
+    // No `refuse_if_source_moved` here, deliberately: `tmp` is a per-attempt
+    // path this function just wrote and nothing else can reach, so a
+    // before/after comparison could only ever agree. The guard belongs on the
+    // two paths that read a file the user (or a download) still owns.
     // MIME from the REAL filename, not the `.part` temp name.
     let mime_type = mime_guess::from_path(filename).first_or_octet_stream().essence_str().to_owned();
 
@@ -1428,6 +1518,61 @@ mod tests {
             let twice = resolve_console_base_url(channel, true, Some(once.clone()));
             prop_assert_eq!(once, twice);
         }
+    }
+
+    /// Helper: stamp a path the way the mint does before reading it.
+    async fn stamp_of(path: &Path) -> SourceStamp {
+        stamp(&tokio::fs::metadata(path).await.expect("stat"))
+    }
+
+    /// The production shape this exists for: a download that resumes while the
+    /// share is being encrypted and uploaded. hcfs-client only sees the window
+    /// it reads in; this widens the refusal to the whole mint.
+    #[tokio::test]
+    async fn source_moved_detects_a_file_that_grew_during_the_mint() {
+        let dir = TempDir::new().expect("tempdir");
+        let file = dir.path().join("qa-build.zip");
+        std::fs::write(&file, vec![0u8; 4_194_304]).expect("write prefix");
+        let before = stamp_of(&file).await;
+
+        std::fs::write(&file, vec![0u8; 6_765_321]).expect("download resumes");
+        assert!(source_moved(&file, before).await);
+    }
+
+    // A same-length in-place rewrite is the other case the stamp catches, via
+    // its mtime half. Not tested here on purpose: forcing it needs either a
+    // `filetime` dev-dependency for one assertion, or a sleep long enough to
+    // clear the coarsest filesystem timestamp granularity across three OS
+    // lanes. The predicate itself is `hcfs_client::drive::content_changed`,
+    // whose own tests already pin the mtime arm
+    // (`content_changed_when_mtime_moves`); what is worth testing here is the
+    // stat-and-compare wiring around it, which the cases either side do.
+
+    #[tokio::test]
+    async fn source_moved_is_false_for_a_file_nobody_touched() {
+        let dir = TempDir::new().expect("tempdir");
+        let file = dir.path().join("settled.bin");
+        std::fs::write(&file, vec![7u8; 1_024]).expect("write");
+        let before = stamp_of(&file).await;
+
+        assert!(
+            !source_moved(&file, before).await,
+            "an untouched source must not fail the share it was read for",
+        );
+    }
+
+    /// A vanished source is not evidence the bytes we uploaded were wrong, and
+    /// refusing here would fail a share the user legitimately asked for after
+    /// they moved the file.
+    #[tokio::test]
+    async fn source_moved_is_false_when_the_path_can_no_longer_be_read() {
+        let dir = TempDir::new().expect("tempdir");
+        let file = dir.path().join("gone.bin");
+        std::fs::write(&file, b"transient").expect("write");
+        let before = stamp_of(&file).await;
+        std::fs::remove_file(&file).expect("remove");
+
+        assert!(!source_moved(&file, before).await);
     }
 
     #[test]

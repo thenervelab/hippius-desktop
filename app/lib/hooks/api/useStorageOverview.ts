@@ -20,6 +20,8 @@ export interface PlanInfo {
   amount: number;
   interval: string;
   storageBytes: number;
+  /** Marketed SKU label from Rust (`1.00 TB`, not `999 GB`). */
+  storageDisplay: string;
 }
 
 /** Shape returned by the Rust `get_storage_overview` IPC (camelCase). */

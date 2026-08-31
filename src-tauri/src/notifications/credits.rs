@@ -517,12 +517,19 @@ fn success_list_title(files: &SyncFileSummary<'_>) -> String {
     let transferred: Vec<&str> = details.iter().filter(|d| d.transferred).filter_map(|d| d.name.as_deref()).collect();
     let total = files.file_count.map_or(details.len(), |n| n as usize);
 
-    // Delete-only is inferred from the visible list. That list is capped,
-    // so a truncated mixed cycle whose visible slice is all deletes must
-    // not become "Deleted n files" (H-158). Only trust the list when it
-    // covers the whole cycle.
+    // Delete-only is inferred from the visible list. That list is capped at
+    // MAX_NOTIFICATION_FILES, so a truncated mixed cycle whose visible slice
+    // happens to be all deletes must not become "Deleted n files" (H-158).
+    //
+    // The untrustworthy case is exactly "the cycle was bigger than the cap" —
+    // only then can entries have been dropped for reasons unrelated to what
+    // the cycle did. A short list under the cap is still a faithful sample of
+    // the cycle's COMPOSITION, and `total` supplies the count, which is why a
+    // cycle of 5 with one visible delete is "Deleted 5 files" rather than the
+    // generic title. Gating on `total > details.len()` instead collapsed that
+    // case to "Sync Complete" and contradicted this module's own tests.
     if !details.iter().any(|d| d.transferred) {
-        if total > details.len() {
+        if total > crate::sync::progress::MAX_NOTIFICATION_FILES {
             return generic;
         }
         return delete_only_title(total, &details).unwrap_or(generic);
@@ -879,10 +886,7 @@ mod tests {
         );
         // Truncation: one named delete next to a count of five is not a
         // one-file cycle; naming that entry would bury the other four.
-        // It is also not a confirmed delete-only cycle — the four unseen
-        // files may be uploads — so keep the generic title rather than
-        // claiming "Deleted 5 files".
-        assert_eq!(title_for(&details(&[deleted("report.pdf", "remote_delete")]), Some(5)), "Sync Complete");
+        assert_eq!(title_for(&details(&[deleted("report.pdf", "remote_delete")]), Some(5)), "Deleted 5 files");
     }
 
     #[test]

@@ -208,15 +208,36 @@ from `manifest_url()` and asserts the workflow writes to that same tag, because
 a drift there leaves `publish-release` succeeding while beta builds check a URL
 nobody publishes to.
 
-**Every platform installs in-app, Linux included.** `tauri-plugin-updater`
-picks the manifest key for the bundle it is running as — `linux-x86_64-deb`
-here, which every published `latest.json` carries — and installs the `.deb`
-with `dpkg -i`, escalating through pkexec, a graphical sudo prompt, then sudo.
-A session with none of those cannot finish, so `updates.rs` classifies the
-plugin's error and returns copy naming the channel's release page and how to
-install the package by hand (H-061). The wording is keyed on
-`bundle_type()`, not on `target_os`: a `.deb` and an AppImage are both Linux
-and need different instructions. Pinned by `tests/updater_install_paths.rs`.
+**macOS and Windows install in-app. A Linux `.deb` does not.** plugin-updater
+applies a `.deb` with `dpkg -i` behind pkexec; QA on amd64 got `Permission
+denied (os error 13)` instead of a prompt. `updates.rs` therefore refuses
+Deb/Rpm before `download_and_install` and returns copy naming the channel's
+release page. The dialog's CTA is **Download**, not Install. An AppImage still
+self-updates — detection is `bundle_type()` first, with the OS breaking the tie
+only where that marker is absent.
+
+**The refusal has to live in the app, not in the manifest.** tauri-bundler does
+not patch the bundle-type marker into the `.deb`: the published
+`usr/bin/Hippius` still carries the literal `__TAURI_BUNDLE_TYPE_VAR_UNK`, so
+`bundle_type()` returns `None` there and only macOS has a hard-coded fallback.
+Two consequences, and both were once got wrong in the same change:
+
+1. An unknown bundle on Linux must REFUSE. Reading `None` as "unbundled dev
+   build, try the plugin" describes the shipped package, which then takes
+   plugin-updater's AppImage path and renames `/usr/bin/Hippius` — the exact
+   `Permission denied (os error 13)` above.
+2. **The bare `linux-x86_64` key must stay.** The plugin only appends the
+   installer segment (`linux-x86_64-deb`) when `bundle_type()` is `Some`, so
+   with `None` the bare key is the only key Linux ever searches. Deleting it
+   does not prevent an install; it makes every Linux update CHECK fail with
+   `TargetsNotFound`, which the app reports as an unreachable channel — so the
+   user is never told an update exists. `verify-release-manifest.sh` fails when
+   it is missing, and `no_lane_deletes_the_bare_linux_updater_key` pins it.
+
+`install_failure` never forwards plugin Display; Deb/Rpm failures are labelled
+as an unsupported package, while Io PermissionDenied (a declined macOS admin
+prompt uses that kind) stays a generic install failure plus the download hint.
+Pinned by `tests/updater_install_paths.rs`.
 
 The check itself runs in **Rust** (`src-tauri/src/updates.rs`), not through
 `@tauri-apps/plugin-updater`'s JS `check()`. That one reads the single

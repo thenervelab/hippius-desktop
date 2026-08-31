@@ -23,10 +23,19 @@ use std::path::{Path, PathBuf};
 /// `to_str()`-gated on purpose, matching upstream exactly: a non-UTF-8 name is
 /// NOT skipped, so the engine uploads it. A lossy conversion here would drop
 /// such a name from Drive (and from File No) while the engine still syncs it,
-/// which is a silent split. Listing a UTF-8 hidden file would pin it Pending
-/// forever (H-063) — the engine never uploads it, so Drive omits it.
+/// which is a silent split. Listing a UTF-8 hidden file as Pending would
+/// pin it forever (H-063) — the engine never uploads it. Drive lists it
+/// as `hidden` instead, except for internal names
+/// ([`is_internal_hidden_name`]).
 pub(super) fn is_engine_hidden_name(name: &OsStr) -> bool {
     name.to_str().is_some_and(|n| n.starts_with('.'))
+}
+
+/// Engine-owned names that must never appear in Drive: the `.hippius`
+/// config dir and in-flight `.hippius-incoming-*` staging copies.
+/// User dotfiles (`.env.qa`, `.hidden`) are listed as `hidden`.
+pub(super) fn is_internal_hidden_name(name: &OsStr) -> bool {
+    name.to_str().is_some_and(|n| n == ".hippius" || n.starts_with(".hippius-incoming-"))
 }
 
 /// True when any path component is an engine-hidden name.
@@ -122,6 +131,10 @@ mod tests {
         assert!(is_engine_hidden_name(OsStr::new(".env.qa")));
         assert!(is_engine_hidden_name(OsStr::new(".hidden")));
         assert!(is_engine_hidden_name(OsStr::new(".hippius-incoming-Photos-1")));
+        assert!(is_internal_hidden_name(OsStr::new(".hippius")));
+        assert!(is_internal_hidden_name(OsStr::new(".hippius-incoming-Photos-1")));
+        assert!(!is_internal_hidden_name(OsStr::new(".env.qa")));
+        assert!(!is_internal_hidden_name(OsStr::new(".hidden")));
 
         // Windows-hidden names carry no dot — the engine uploads them, so
         // listing and File No must include them.

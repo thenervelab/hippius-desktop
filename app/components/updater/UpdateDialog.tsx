@@ -9,7 +9,9 @@ import {
   type AvailableUpdate,
 } from "@/lib/tauri/updates";
 import { tauriErrorDetail } from "@/lib/utils/dispatchTauriError";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { getUpdateInstallPlan } from "@/app/components/updater/updateInstallPlan";
 import { getVersion as getAppVersion } from "@tauri-apps/api/app";
 import { toast } from "sonner";
 import { X } from "lucide-react";
@@ -276,7 +278,17 @@ export default function UpdateDialog() {
   const effectiveStatus: Status = devForced ?? status;
   const effectiveUpdate: AvailableUpdate | null =
     devForced === "available" || devForced === "downloading"
-      ? ({ version: MOCK_VERSION, notes: MOCK_BODY } as unknown as AvailableUpdate)
+      ? {
+          version: MOCK_VERSION,
+          currentVersion: MOCK_VERSION,
+          notes: MOCK_BODY,
+          channel: "production",
+          installInPlace: true,
+          releasePageUrl:
+            "https://github.com/thenervelab/hippius-desktop/releases/latest",
+          manualInstallHint:
+            "Download the installer from https://github.com/thenervelab/hippius-desktop/releases/latest and run it.",
+        }
       : update;
   const effectiveDownloadProgress =
     devForced === "downloading" ? forcedProgress : downloadProgress;
@@ -371,6 +383,19 @@ export default function UpdateDialog() {
 
   const handleUpdateNow = async () => {
     if (!update) return;
+
+    const plan = getUpdateInstallPlan(update);
+    if (plan.kind === "manual") {
+      try {
+        await openUrl(plan.url);
+        closeUpdateDialog();
+      } catch (err) {
+        console.error("Could not open the release page:", err);
+        setErrorDetail(plan.hint);
+        setStatus("error");
+      }
+      return;
+    }
 
     try {
       setStatus("downloading");
@@ -473,10 +498,17 @@ export default function UpdateDialog() {
 
   // Whether the card has a primary CTA below the body. "checking",
   // "downloading", "installing" deliberately have no CTA.
+  const installPlan = effectiveUpdate
+    ? getUpdateInstallPlan(effectiveUpdate)
+    : { kind: "in-place" as const };
+
   const cta = (() => {
     switch (effectiveStatus) {
       case "available":
-        return { label: "Update", onClick: handleUpdateNow };
+        return {
+          label: installPlan.kind === "manual" ? "Download" : "Update",
+          onClick: handleUpdateNow,
+        };
       case "complete":
         return { label: "Restart App", onClick: handleRestart };
       case "no-update":
@@ -632,7 +664,9 @@ export default function UpdateDialog() {
                           </h1>
                           {effectiveStatus === "available" && (
                             <p className="text-[15px] font-medium leading-[22px] tracking-[-0.30px] text-grey-50 dark:text-grey-dark-500">
-                              Install Version {effectiveUpdate?.version} now
+                              {installPlan.kind === "manual"
+                                ? installPlan.hint
+                                : `Install Version ${effectiveUpdate?.version} now`}
                             </p>
                           )}
                           {effectiveStatus === "no-update" && (
