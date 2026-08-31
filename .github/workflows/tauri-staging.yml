@@ -351,7 +351,7 @@ jobs:
           # on the assumption this suffix will be visible.
           releaseName: "[STAGING] ${{ steps.release_notes.outputs.title }}${{ steps.apple.outputs.finder_embed == 'no' && ' - NO FINDER EXTENSION' || '' }}"
           releaseBody: |
-            **🎨 Staging Build - macOS Only**
+            **Staging Build**
             ${{ steps.apple.outputs.finder_embed == 'no' && '
             > **This build has NO Finder extension and is unsigned.** It was built without the App Store Connect key, so `HippiusFinder.appex` is not embedded and "Share with Hippius" will not appear on right-click. Use a production build to test Finder integration.
             ' || '' }}

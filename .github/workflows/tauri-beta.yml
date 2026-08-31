@@ -351,7 +351,7 @@ jobs:
           # wins the name.
           releaseName: "[BETA] ${{ steps.release_notes.outputs.title }}"
           releaseBody: |
-            **Beta Build - macOS Only**
+            **Beta Build**
 
             > This is a prerelease. It follows the development work, so it has
             > the newest features first and those features are not fully

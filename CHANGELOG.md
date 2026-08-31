@@ -67,11 +67,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
-- **Hidden files like `.env.qa` now show as Hidden** instead of vanishing from Drive with no explanation, and adding a folder with hidden files tells you how many were not synced.
-- **Storage used, total, and free now share one capacity** with the plan/credits chip. A 15-credit balance reads as 5.00 TB on every surface, not 5.03 TB next to 5.00 TB.
-- **Folder totals on the local list match the folder you open**, including after exclude rules. Excluded files show an Excluded pill, a filter that reaches nested folders, and no size that disagrees with File No.
-- **Drive Credit Usage now explains** that the number is HIP spent, not stored bytes, and that plan storage does not burn credits.
-- **Reveal in file manager on Linux actually opens the folder**, and a failure shows an error instead of doing nothing.
+- **Linux updates no longer fail with a permission error.** On a `.deb` install, Hippius now opens the GitHub Releases page so you can download the new package, instead of trying (and failing) to install it from inside the app.
 - **macOS no longer asks "Hippius would like to access data from other apps"
   every time you open the app.** Answering Allow never made it stop; the prompt
   is now gone entirely, and Finder right-click sharing works exactly as before.
