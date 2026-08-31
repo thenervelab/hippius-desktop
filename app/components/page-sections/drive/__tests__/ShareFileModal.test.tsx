@@ -59,7 +59,10 @@ function installClipboard(): { writeText: ReturnType<typeof vi.fn> } {
   return { writeText };
 }
 
-function withProvider(node: ReactNode, file: { actualFileName?: string; name: string; label: string }) {
+function withProvider(
+  node: ReactNode,
+  file: { actualFileName?: string; name: string; label: string; size?: number },
+) {
   const store = createStore();
   // Modal reads the target from this atom — populating it is the same signal a
   // `setShareModalFile(shareTargetFor(file, base))` handler from the file-row
@@ -287,6 +290,20 @@ describe("ShareFileModal", () => {
 
     expect(screen.getByText("hippius-frontend-qa-mac.zip")).toBeInTheDocument();
     expect(screen.getByText("4.19 MB")).toBeInTheDocument();
+  });
+
+  // Both entry points must read the same, so the confirmation is checkable by
+  // eye wherever the share started. The in-app path takes its number from the
+  // listing row rather than a fresh stat.
+  it("shows the size for an in-app share too, from the listing row", () => {
+    render(
+      withProvider(<ShareFileModal />, {
+        name: "report.pdf",
+        label: "Hippius-Team",
+        size: 6_765_321,
+      }),
+    );
+    expect(screen.getByText("6.77 MB")).toBeInTheDocument();
   });
 
   it("shows no size when the backend could not stat the file", () => {
