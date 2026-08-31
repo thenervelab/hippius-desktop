@@ -234,10 +234,13 @@ export default function FolderUploadDialog({
         closeButton: true,
       });
       if (result.skippedHidden > 0) {
+        // Rust counts one unit per skipped NAME and deliberately does not
+        // descend a hidden directory to size it, so `.git` is 1 here, not
+        // its 5,000 objects — "items", never "files".
         toast.warning(
           result.skippedHidden === 1
-            ? "1 hidden file was not synced."
-            : `${result.skippedHidden} hidden files were not synced.`,
+            ? "1 hidden item was not synced."
+            : `${result.skippedHidden} hidden items were not synced.`,
         );
       }
 

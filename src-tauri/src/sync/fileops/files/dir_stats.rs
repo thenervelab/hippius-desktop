@@ -120,13 +120,22 @@ fn dir_stats_cache() -> &'static DirStatsMap {
     DIR_STATS_CACHE.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
 }
 
-/// Patterns from `<root>/.hippius/exclude`, matching the engine's file
+/// Patterns from the drive's `exclude` file, matching the engine's parse
 /// (one pattern per line; empty and `#` comments dropped).
 ///
 /// Used by the local-folder list so it does not need the in-memory drive
 /// manager — a paused drive still has its exclude file (H-110).
-pub(crate) fn exclude_patterns_on_disk(root: &Path) -> Vec<String> {
-    let path = root.join(".hippius").join("exclude");
+///
+/// `config_dir` is the drive's CONFIG directory — the second argument
+/// `DriveManager::new` is handed, and the exact directory hcfs's
+/// `ExcludeRules::load` joins `exclude` onto:
+/// `~/.hippius/drives/<account_key>/<folder_hash>`. It is **not**
+/// `<sync_root>/.hippius`, which is the retired Legacy A layout that
+/// `run_migration` copies out of and then deletes — reading there finds no
+/// file, yields no patterns, and silently turns the whole exclusion into a
+/// no-op that a test writing its own fixture at that path cannot catch.
+pub(crate) fn exclude_patterns_on_disk(config_dir: &Path) -> Vec<String> {
+    let path = config_dir.join("exclude");
     std::fs::read_to_string(path)
         .map(|s| {
             s.lines()
@@ -143,8 +152,8 @@ pub(crate) fn exclude_patterns_on_disk(root: &Path) -> Vec<String> {
 /// The Settings / Drive "local list" row used to show the *server* totals,
 /// which still counted files excluded locally (H-110: 19 B · 3 files next
 /// to a folder view of 4 B · 1).
-pub(crate) async fn dir_stats_for_sync_root(root: &Path) -> (u64, u64) {
-    let patterns = exclude_patterns_on_disk(root);
+pub(crate) async fn dir_stats_for_sync_root(root: &Path, config_dir: &Path) -> (u64, u64) {
+    let patterns = exclude_patterns_on_disk(config_dir);
     let excludes = DirStatsExcludes { root, patterns: &patterns };
     dir_stats_recursive(root, Some(&excludes)).await
 }
@@ -771,21 +780,46 @@ mod tests {
         );
     }
 
+    /// The exclude file lives in the drive's CONFIG directory, which is a
+    /// sibling of the sync root, not a directory inside it. Writing the
+    /// fixture under `<root>/.hippius` instead is what let the original
+    /// H-110 fix pass its own test while reading a path production deletes.
     #[tokio::test]
     async fn sync_root_stats_read_the_exclude_file() {
         let _cache_guard = CACHE_TEST_LOCK.lock().await;
         let tmp = tempfile::TempDir::new().expect("tempdir");
-        let root = tmp.path();
+        let root = tmp.path().join("drive");
+        let config_dir = tmp.path().join("config");
+        std::fs::create_dir_all(&root).expect("mkdir root");
+        std::fs::create_dir_all(&config_dir).expect("mkdir config");
         std::fs::write(root.join("keep.txt"), b"1234").expect("write keep");
         std::fs::write(root.join("a.bin"), b"xxxxxxxx").expect("write bin");
-        std::fs::create_dir_all(root.join(".hippius")).expect("mkdir");
-        std::fs::write(root.join(".hippius/exclude"), "*.bin\n").expect("exclude");
+        std::fs::write(config_dir.join("exclude"), "*.bin\n").expect("exclude");
 
-        assert_eq!(exclude_patterns_on_disk(root), vec!["*.bin".to_string()]);
+        assert_eq!(exclude_patterns_on_disk(&config_dir), vec!["*.bin".to_string()]);
         assert_eq!(
-            dir_stats_for_sync_root(root).await,
+            dir_stats_for_sync_root(&root, &config_dir).await,
             (4, 1),
             "local list row must match the folder view after excludes"
+        );
+    }
+
+    /// The Legacy A layout (`<sync_root>/.hippius/exclude`) is migrated away
+    /// and deleted, so a file there must NOT be what the totals read — that
+    /// is the regression this pins.
+    #[tokio::test]
+    async fn the_legacy_in_root_exclude_path_is_not_read() {
+        let _cache_guard = CACHE_TEST_LOCK.lock().await;
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let root = tmp.path().join("drive");
+        let config_dir = tmp.path().join("config");
+        std::fs::create_dir_all(root.join(".hippius")).expect("mkdir legacy");
+        std::fs::create_dir_all(&config_dir).expect("mkdir config");
+        std::fs::write(root.join(".hippius/exclude"), "*.bin\n").expect("legacy exclude");
+
+        assert!(
+            exclude_patterns_on_disk(&config_dir).is_empty(),
+            "the retired in-root location must not be consulted"
         );
     }
 

@@ -18,6 +18,7 @@ import { FormattedTimestamp, Icons } from "@/app/components/ui";
 import * as TableModule from "@/app/components/ui/alt-table";
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { formatBytesFromBigInt } from "@/lib/utils/formatBytes";
+import { omitsBilledSize } from "@/lib/utils/syncStatusDisplay";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import {
   getFileTypeFromExtension,
@@ -72,9 +73,14 @@ const PanelBody: React.FC<PanelBodyProps> = ({ file, onClose }) => {
     !!file.isFolder,
   );
 
-  const fileSize = file.size
-    ? formatBytesFromBigInt(BigInt(file.size))
-    : "Unknown";
+  // An excluded/hidden row contributes nothing to the folder's billed
+  // totals, so showing its bytes here would disagree with the header and
+  // the table, which both render "—" for it.
+  const fileSize = omitsBilledSize(file.syncStatus)
+    ? "—"
+    : file.size
+      ? formatBytesFromBigInt(BigInt(file.size))
+      : "Unknown";
 
   const handleViewOnExplorer = async () => {
     try {

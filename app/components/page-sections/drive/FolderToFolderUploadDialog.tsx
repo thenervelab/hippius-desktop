@@ -119,10 +119,12 @@ export default function FolderToFolderUploadDialog({
             );
             const name = result.name;
             if (result.skippedHidden > 0) {
+                // One unit per skipped NAME (Rust does not descend a hidden
+                // directory to size it), so `.git` counts 1 — "items".
                 toast.warning(
                     result.skippedHidden === 1
-                        ? "1 hidden file was not synced."
-                        : `${result.skippedHidden} hidden files were not synced.`,
+                        ? "1 hidden item was not synced."
+                        : `${result.skippedHidden} hidden items were not synced.`,
                 );
             }
 
