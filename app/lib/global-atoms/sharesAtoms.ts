@@ -87,7 +87,15 @@ export const shareModalFileAtom = atom<ShareModalTarget | null>(null);
  * the confirm/cancel IPC so the backend mints the file it resolved, never one
  * the renderer names.
  */
-export type FinderShareState = { kind: "choosing"; id: string; name: string };
+export type FinderShareState = {
+  kind: "choosing";
+  id: string;
+  name: string;
+  /** Size of the clicked file; `null` for a folder or an unreadable stat. */
+  sizeBytes: number | null;
+  /** Seconds since the file was last modified; `null` when unreadable. */
+  modifiedSecsAgo: number | null;
+};
 
 export const finderShareAtom = atom<FinderShareState | null>(null);
 
