@@ -24,6 +24,10 @@ export type AvailableUpdate = {
   currentVersion: string;
   notes: string;
   channel: ReleaseChannel;
+  /** False for Deb/Rpm: open `releasePageUrl` instead of calling install. */
+  installInPlace: boolean;
+  releasePageUrl: string;
+  manualInstallHint: string;
 };
 
 /**
@@ -85,6 +89,10 @@ export type ChannelStatus = {
   target: ReleaseChannel | null;
   targetVersion: string | null;
   blockedReason: string | null;
+  /** False for Deb/Rpm: open `releasePageUrl` instead of switching in-app. */
+  installInPlace: boolean;
+  releasePageUrl: string;
+  manualInstallHint: string;
 };
 
 /** Read the switch surface's state. Never throws on a network problem. */
