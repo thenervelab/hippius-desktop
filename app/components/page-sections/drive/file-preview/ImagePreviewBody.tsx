@@ -609,7 +609,10 @@ const ImagePreviewBody: React.FC<{
     // what separates them, and without the check adopting blindly would swap
     // the endless spinner for an equally blank frame that claims success.
     if (element.naturalWidth === 0) {
-      setImageError("Failed to load image");
+      // `ImageError` already titles the fallback "Failed to load image", so
+      // this says what the title cannot: the bytes arrived and the decode is
+      // what failed, which points at the file rather than at the download.
+      setImageError("The image could not be decoded.");
       return;
     }
     adoptLoadedImage(element);

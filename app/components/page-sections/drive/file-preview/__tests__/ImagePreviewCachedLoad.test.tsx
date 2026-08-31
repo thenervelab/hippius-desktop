@@ -69,6 +69,14 @@ const file: FormattedUserFile = {
   syncStatus: "synced",
 };
 
+/**
+ * jsdom's own `complete` / `naturalWidth` / `naturalHeight` accessors, saved
+ * before the first override so `afterEach` can put them back. Deleting them
+ * instead would leave every later test in this file seeing `undefined` rather
+ * than real image semantics.
+ */
+const nativeImageDescriptors = new Map<string, PropertyDescriptor | undefined>();
+
 /** Make every `<img>` behave as one already decoded in the WebView cache. */
 function serveFromCache(naturalWidth: number) {
   for (const [prop, value] of [
@@ -76,6 +84,12 @@ function serveFromCache(naturalWidth: number) {
     ["naturalWidth", naturalWidth],
     ["naturalHeight", naturalWidth === 0 ? 0 : 600],
   ] as const) {
+    if (!nativeImageDescriptors.has(prop)) {
+      nativeImageDescriptors.set(
+        prop,
+        Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, prop),
+      );
+    }
     Object.defineProperty(HTMLImageElement.prototype, prop, {
       configurable: true,
       get: () => value,
@@ -96,9 +110,14 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  for (const prop of ["complete", "naturalWidth", "naturalHeight"]) {
-    Reflect.deleteProperty(HTMLImageElement.prototype, prop);
+  for (const [prop, descriptor] of nativeImageDescriptors) {
+    if (descriptor) {
+      Object.defineProperty(HTMLImageElement.prototype, prop, descriptor);
+    } else {
+      Reflect.deleteProperty(HTMLImageElement.prototype, prop);
+    }
   }
+  nativeImageDescriptors.clear();
   vi.unstubAllGlobals();
 });
 
@@ -130,9 +149,10 @@ describe("ImagePreviewBody: an image already in the WebView cache", () => {
       <ImagePreviewBody file={file} handleFileDownload={vi.fn()} />,
     );
 
-    // `PreviewFallback` carries the message as both its title and its body, so
-    // match all of them rather than pinning which node holds it.
-    expect(await screen.findAllByText(/failed to load image/i)).not.toHaveLength(0);
+    // The body must say something the title does not: the bytes arrived and
+    // the decode failed, which points at the file rather than the download.
+    expect(await screen.findByText(/could not be decoded/i)).toBeInTheDocument();
+    expect(screen.getByText(/failed to load image/i)).toBeInTheDocument();
     // The fallback's download affordance is the point: a failed preview must
     // still offer the file.
     expect(screen.getByRole("button", { name: /download/i })).toBeInTheDocument();
