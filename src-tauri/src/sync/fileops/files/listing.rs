@@ -2,7 +2,7 @@
 //! (`list_sync_folder_grouped`). Owns `FileEntry` and the Finder name ordering.
 
 use super::dir_stats::dir_stats_recursive;
-use super::pathops::{ensure_within, is_engine_hidden_name, rel_has_engine_hidden_component};
+use super::pathops::{ensure_within, is_engine_hidden_name, is_internal_hidden_name, rel_has_engine_hidden_component};
 use super::synced_state::synced_paths_and_excludes_for_label;
 use crate::auth::account_key::account_key;
 use crate::error::Result;
@@ -20,7 +20,7 @@ pub struct FileEntry {
     pub is_folder: bool,
     pub size: u64,
     pub modified: Option<u64>,
-    /// Sync status: "synced", "pending", "excluded", or "unknown"
+    /// Sync status: "synced", "pending", "excluded", "hidden", or "unknown"
     pub sync_status: String,
     /// Hex-encoded path_hash from the synced state (empty if not synced yet)
     pub arion_hash: String,
@@ -59,6 +59,31 @@ async fn list_sync_folder_inner(
     label: Option<String>,
 ) -> Result<Vec<FileEntry>> {
     list_sync_folder_inner_with(state, sync_path, subfolder, label, None).await
+}
+
+fn disk_row_status<'a>(
+    is_hidden_file: bool,
+    is_excluded: bool,
+    is_folder: bool,
+    synced_set: Option<&'a HashMap<String, SyncedFileInfo>>,
+    relative_path: &str,
+) -> (&'static str, Option<&'a SyncedFileInfo>) {
+    if is_hidden_file {
+        return ("hidden", None);
+    }
+    if is_excluded {
+        return ("excluded", None);
+    }
+    if is_folder {
+        return ("synced", None);
+    }
+    match synced_set {
+        Some(map) => match map.get(relative_path) {
+            Some(i) => ("synced", Some(i)),
+            None => ("pending", None),
+        },
+        None => ("unknown", None),
+    }
 }
 
 async fn list_sync_folder_inner_with(
@@ -114,17 +139,21 @@ async fn list_sync_folder_inner_with(
 
     while let Some(entry) = dir.next_entry().await? {
         let os_name = entry.file_name();
-        // Same `to_str()`-gated dot rule as the engine. Listing a UTF-8
-        // hidden file would pin it Pending forever (H-063) — the engine
-        // never uploads `.env.qa`. A lossy `.` check would hide a
-        // non-UTF-8 name the engine does upload.
-        if is_engine_hidden_name(&os_name) {
+        // `.hippius` and `.hippius-incoming-*` are engine-owned and stay
+        // off Drive. Other UTF-8 dotfiles (`.env.qa`) are listed as
+        // `hidden` so they are not a silent omit (H-063). Hidden
+        // directories stay omitted so `.git` does not appear as a folder.
+        if is_internal_hidden_name(&os_name) {
             continue;
         }
         let name = os_name.to_string_lossy().to_string();
 
         let meta = entry.metadata().await?;
         let is_folder = meta.is_dir();
+        let is_hidden_file = is_engine_hidden_name(&os_name);
+        if is_hidden_file && is_folder {
+            continue;
+        }
 
         // Remove and skip failed download artifacts (`downloaded_<hex>`) and
         // 0-byte encrypted-name stubs (`file_<hex>`) left by decryption
@@ -160,19 +189,7 @@ async fn list_sync_folder_inner_with(
         // Match engine globs (`*.bin` → foo.bin and dir/foo.bin), not exact
         // path equality — that left glob-excluded files Pending on Drive.
         let is_excluded = super::exclude_match::path_is_excluded(&exclude_rules, &relative_path, is_folder);
-        let (sync_status, info) = if is_excluded {
-            ("excluded", None)
-        } else if is_folder {
-            ("synced", None)
-        } else {
-            match &synced_set {
-                Some(map) => match map.get(&relative_path) {
-                    Some(i) => ("synced", Some(i)),
-                    None => ("pending", None),
-                },
-                None => ("unknown", None),
-            }
-        };
+        let (sync_status, info) = disk_row_status(is_hidden_file, is_excluded, is_folder, synced_set.as_ref(), &relative_path);
 
         // Folder row numbers are billed: dir_stats omits excluded children
         // (H-110) even though H-045 keeps those files as visible rows.

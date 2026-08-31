@@ -109,11 +109,24 @@ export default function FolderToFolderUploadDialog({
                 ((await getPrivateSyncPath(polkadotAddress ?? undefined))?.path ?? "");
             const subfolder = getFullPath(mainFolderActualName, subFolderPath);
 
-            const name = await invoke<string>("add_folder", {
-                syncPath: baseSyncPath,
-                folderPath,
-                subfolder: subfolder || null,
-            });
+            const result = await invoke<{ name: string; skippedHidden: number }>(
+                "add_folder",
+                {
+                    syncPath: baseSyncPath,
+                    folderPath,
+                    subfolder: subfolder || null,
+                },
+            );
+            const name = result.name;
+            if (result.skippedHidden > 0) {
+                // One unit per skipped NAME (Rust does not descend a hidden
+                // directory to size it), so `.git` counts 1 — "items".
+                toast.warning(
+                    result.skippedHidden === 1
+                        ? "1 hidden item was not synced."
+                        : `${result.skippedHidden} hidden items were not synced.`,
+                );
+            }
 
             queryClient.invalidateQueries({ queryKey: [DRIVE_STORAGE_STATS_QUERY_KEY] });
             if (onRefresh) {

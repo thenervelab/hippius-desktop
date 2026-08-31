@@ -19,6 +19,7 @@ import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { actionableSyncFilesAtom } from "@/lib/hooks/useSyncSnapshot";
 import * as TableModule from "@/components/ui/alt-table";
 import { formatBytesFromBigInt } from "@/lib/utils/formatBytes";
+import { omitsBilledSize } from "@/lib/utils/syncStatusDisplay";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { Button } from "@/components/ui/button";
 import {
@@ -74,6 +75,8 @@ import { useFolderAggregateSelection } from "@/app/lib/hooks/use-folder-aggregat
 import useDeleteFile from "@/app/lib/hooks/use-delete-file";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { revealFile } from "@/lib/utils/revealFile";
+import { fileManagerLabel } from "@/lib/utils/isMacPlatform";
+import { tauriErrorMessage } from "@/lib/utils/dispatchTauriError";
 import { macosNameCmp } from "@/lib/utils/fileSort";
 import ExpandedFolderRows from "./ExpandedFolderRows";
 import { NameCellExpander } from "./FolderRail";
@@ -946,7 +949,7 @@ const FilesTable: FC<FilesTableProps> = memo(
             : [
                 {
                   icon: <FolderOpen className="size-4" />,
-                  itemTitle: "Reveal in Finder",
+                  itemTitle: `Reveal in ${fileManagerLabel()}`,
                   onItemClick: async () => {
                     try {
                       await revealFile({
@@ -956,10 +959,8 @@ const FilesTable: FC<FilesTableProps> = memo(
                         fileName: file.actualFileName || file.name,
                       });
                     } catch (error) {
-                      console.error("Failed to reveal file in Finder:", error);
-                      toast.error(
-                        "File is not available locally. It may only exist on another device.",
-                      );
+                      console.error("Failed to reveal file in file manager:", error);
+                      toast.error(tauriErrorMessage(error));
                     }
                   },
                   disabled: itemDeleting,
@@ -1256,7 +1257,13 @@ const FilesTable: FC<FilesTableProps> = memo(
           id: "size",
           cell: (cell) => {
             const value = cell.getValue();
+            const status = cell.row.original.syncStatus;
             if (cell.row.original.tempData) return "...";
+            if (omitsBilledSize(status)) {
+              return (
+                <div className="truncate text-grey-dark-800 text-xs">—</div>
+              );
+            }
             if (value === undefined || value === 0) return "Unknown";
             return (
               <div className="text-grey-dark-800 text-xs font-medium truncate tracking-[-0.24px]">

@@ -641,7 +641,10 @@ pub fn calculate_storage_capacity(credits_per_month: Vec<f64>) -> Vec<StorageCap
 /// 1000 GB costs a hair over 3 credits, so the search lands 1 GB short
 /// of a round thousand. Switch to TB from 500 GB and round, so the
 /// marketed SKUs read 1 / 50 / 150 TB. Do not change `storage_gb`.
-fn format_storage_display(max_gb: u64) -> String {
+///
+/// Shared with [`crate::billing::storage_overview`] so the home card,
+/// plan chip, and Billing SKUs cannot disagree about one credit amount.
+pub(crate) fn format_storage_display(max_gb: u64) -> String {
     const GB_PER_TB: f64 = 1000.0;
     const MIN_TB_DISPLAY_GB: u64 = 500;
 

@@ -71,7 +71,6 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **macOS no longer asks "Hippius would like to access data from other apps"
   every time you open the app.** Answering Allow never made it stop; the prompt
   is now gone entirely, and Finder right-click sharing works exactly as before.
-- **Open in Finder / Reveal in Finder now opens the file manager on Linux.**
 - **Uploading a file that already exists no longer replaces it silently.** The previous file stays; a confirmed replace is a follow-up.
 - **A finished delete is titled as a delete**, not "Sync Complete".
 - **Syncing a folder from another device uses the folder you picked.** Choosing the existing folder no longer creates a nested copy with the same name.

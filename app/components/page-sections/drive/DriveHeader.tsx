@@ -87,9 +87,11 @@ interface DriveHeaderProps {
   selectedFileExtension?: FileExtension;
   selectedDateRange?: DateRange;
   selectedFileSizes: number[];
+  excludedOnly?: boolean;
   onFileExtensionChange: (extension: FileExtension | undefined) => void;
   onDateRangeChange: (range: DateRange | undefined) => void;
   onFileSizesChange: (sizes: number[]) => void;
+  onExcludedOnlyChange?: (excludedOnly: boolean) => void;
   defaultFolderLabel?: string | null;
   isFolderUploadOpen?: boolean;
   onSetFolderUploadOpen?: (open: boolean) => void;
@@ -154,9 +156,11 @@ const DriveHeader: FC<DriveHeaderProps> = ({
   selectedFileExtension,
   selectedDateRange,
   selectedFileSizes,
+  excludedOnly = false,
   onFileExtensionChange,
   onDateRangeChange,
   onFileSizesChange,
+  onExcludedOnlyChange,
   defaultFolderLabel,
   isFolderUploadOpen: isFolderUploadOpenProp,
   onSetFolderUploadOpen,
@@ -431,9 +435,11 @@ const DriveHeader: FC<DriveHeaderProps> = ({
                   selectedFileExtension={selectedFileExtension}
                   selectedDateRange={selectedDateRange}
                   selectedFileSizes={selectedFileSizes}
+                  excludedOnly={excludedOnly}
                   onFileExtensionChange={onFileExtensionChange}
                   onDateRangeChange={onDateRangeChange}
                   onFileSizesChange={onFileSizesChange}
+                  onExcludedOnlyChange={onExcludedOnlyChange}
                 />
                 <div className="flex items-center gap-3 shrink-0">
                   {/* Stats are hidden inside a nested folder — the totals

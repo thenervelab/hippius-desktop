@@ -17,6 +17,7 @@ import { useAtom } from "jotai";
 import type { SyncSnapshot } from "../types/syncSnapshot";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
 import { deriveTrayIconState } from "@/app/lib/tray/trayIconState";
+import { isLinuxPlatform as detectLinuxPlatform } from "@/lib/utils/isMacPlatform";
 
 /* ─ IDs ───────────────────────────────────────────────────────── */
 const TRAY_ID = "hippius-tray";
@@ -130,19 +131,6 @@ const CTX_QUIT_ID = "tray-ctx-quit";
 // did nothing and the menu was missing its only entry point. A synchronous,
 // can't-fail check removes that race entirely.
 let isLinuxPlatform = false;
-
-/**
- * Synchronous, never-throwing Linux check from the webview user-agent. The three
- * desktop webviews set a standard UA — webkit2gtk (Linux) contains "Linux",
- * while WKWebView (macOS) and WebView2 (Windows) do not — so this reliably
- * identifies Linux with no IPC round-trip. Android is excluded for safety (this
- * is a desktop app and never runs there).
- */
-function detectLinuxPlatform(): boolean {
-  if (typeof navigator === "undefined") return false;
-  const ua = navigator.userAgent;
-  return /linux/i.test(ua) && !/android/i.test(ua);
-}
 
 /**
  * Linux "Open Hippius" menu action: reveal the MAIN window.

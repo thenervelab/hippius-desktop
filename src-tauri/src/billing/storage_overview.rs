@@ -10,9 +10,9 @@
 //! **capacity-source priority chain lives HERE, once**:
 //!
 //!   1. active subscription → capacity is the plan's allowance
-//!   2. else credits > 0    → capacity is `used + credits-buyable storage`
-//!      (the mobile app's original hybrid: the balance prices the *free*
-//!      space, so what's already stored still counts toward the total)
+//!   2. else credits > 0    → capacity is credits-buyable storage
+//!      (the same model as a subscription: used counts against the
+//!      allowance; storing files must not grow the cap — H-109)
 //!   3. else                → no capacity to plot ("No active plan")
 //!
 //! Every consumer (storage card, plan card, top-bar chip) renders from this
@@ -55,6 +55,9 @@ pub struct PlanInfo {
     pub interval: String,
     /// The plan's storage allowance in bytes.
     pub storage_bytes: u64,
+    /// Marketed SKU label (`format_storage_display`): 999 GB → "1.00 TB".
+    /// Chip / plan card render this instead of `formatBytes(storageBytes)`.
+    pub storage_display: String,
 }
 
 /// Wire shape of the home overview. camelCase over IPC.
@@ -103,9 +106,14 @@ fn build_overview(used_bytes: u64, plan: Option<PlanInfo>, credits: f64, credits
         return finish_overview(used_bytes, total_bytes, CapacitySource::Subscription, Some(plan), credits_hip);
     }
     if credits > 0.0 {
-        // The balance prices what can still be stored, so capacity is
-        // used + buyable — matching the mobile app's original hybrid.
-        let total_bytes = used_bytes.saturating_add(credits_capacity_gb.saturating_mul(BYTES_PER_GB));
+        // Same model as a subscription: the balance buys a fixed allowance,
+        // and used counts against it. Adding used on top (the old hybrid)
+        // made a 15-credit / 5.00 TB SKU read "5.03 TB" on the storage card
+        // next to "5.00 TB" on the chip (H-109). Storing files must not
+        // grow the cap. A dust balance that prices 0 GB still uses `used`
+        // as the cap so the bar reads full ("you can't store more").
+        let buyable = credits_capacity_gb.saturating_mul(BYTES_PER_GB);
+        let total_bytes = if buyable == 0 { used_bytes } else { buyable };
         return finish_overview(used_bytes, total_bytes, CapacitySource::Credits, None, credits_hip);
     }
     finish_overview(used_bytes, 0, CapacitySource::None, None, credits_hip)
@@ -141,8 +149,8 @@ struct OverviewLabels {
 
 /// Used stays in its natural unit (31.91 GB is more readable than 0.03 TB).
 /// Total and free share the total's unit and keep two decimal places so
-/// "5.03 TB" / "5.00 TB" cannot collapse to "5 TB" the way `formatBytes`
-/// does after `parseFloat` (H-109).
+/// leftover GB cannot collapse to "5 TB" the way `formatBytes` does after
+/// `parseFloat` (H-109).
 fn format_overview_labels(used_bytes: u64, total_bytes: u64) -> OverviewLabels {
     let free_bytes = total_bytes.saturating_sub(used_bytes);
     let used_idx = si_unit_index(used_bytes);
@@ -298,11 +306,13 @@ fn plan_from_subscription(active: &serde_json::Value) -> Option<PlanInfo> {
     if credits_per_billing <= 0.0 {
         return None;
     }
+    let storage_gb = capacity_gb_for_credits(credits_per_billing);
     Some(PlanInfo {
         name: sub.get("plan_name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
         amount: sub.get("amount").and_then(serde_json::Value::as_f64).unwrap_or(0.0),
         interval: sub.get("interval").and_then(|v| v.as_str()).unwrap_or("month").to_string(),
-        storage_bytes: capacity_gb_for_credits(credits_per_billing).saturating_mul(BYTES_PER_GB),
+        storage_bytes: storage_gb.saturating_mul(BYTES_PER_GB),
+        storage_display: crate::billing::charts::format_storage_display(storage_gb),
     })
 }
 
@@ -377,6 +387,7 @@ mod tests {
             amount: 5.0,
             interval: "month".into(),
             storage_bytes: gb * BYTES_PER_GB,
+            storage_display: crate::billing::charts::format_storage_display(gb),
         }
     }
 
@@ -393,43 +404,40 @@ mod tests {
     }
 
     #[test]
-    fn credits_capacity_is_used_plus_buyable() {
-        // 100 GB stored, credits buy 300 GB → total 400 GB, 25% used.
+    fn credits_capacity_is_buyable_not_used_plus() {
+        // 100 GB stored, credits buy 300 GB → cap 300 GB, ~33% used.
+        // Adding used onto buyable was H-109: the cap grew as you stored.
         let overview = build_overview(100 * BYTES_PER_GB, None, 1.0, 300, Some("1".into()));
         assert_eq!(overview.source, CapacitySource::Credits);
-        assert_eq!(overview.total_bytes, 400 * BYTES_PER_GB);
-        assert!((overview.percent - 25.0).abs() < 1e-9);
+        assert_eq!(overview.total_bytes, 300 * BYTES_PER_GB);
+        assert!((overview.percent - (100.0 / 300.0 * 100.0)).abs() < 1e-9);
         assert_eq!(overview.plan, None);
     }
 
-    /// H-109: 31.91 GB stored on a 15-credit balance (4,999 GB buyable) is
-    /// hybrid-total 5.03091 TB. FE `formatBytes` rounded free 4.999 TB to
-    /// "5 TB" (it drops `.00`), so the same card read "31.91 GB of 5.03 TB
-    /// used" and "5 TB free". Labels keep two decimals on total/free and
-    /// share that unit; used stays in its natural unit.
+    /// H-109: 31.91 GB stored on a 15-credit balance (4,999 GB buyable).
+    /// Cap is the SKU (5.00 TB), not used+buyable (5.03 TB). Free is
+    /// remainder in the same unit. Chip / card / overview share 5.00 TB.
     #[test]
-    fn hybrid_labels_keep_two_decimals_so_free_matches_total() {
+    fn credits_labels_use_the_sku_cap_not_used_plus_buyable() {
         let overview = build_overview(31_910_000_000, None, 15.0, 4_999, Some("15".into()));
         assert_eq!(overview.source, CapacitySource::Credits);
         assert_eq!(overview.used_bytes, 31_910_000_000);
-        assert_eq!(overview.total_bytes, 31_910_000_000 + 4_999 * BYTES_PER_GB);
+        assert_eq!(overview.total_bytes, 4_999 * BYTES_PER_GB);
         assert_eq!(
             overview.used_bytes + overview.total_bytes.saturating_sub(overview.used_bytes),
             overview.total_bytes,
             "raw used + free must equal total"
         );
         assert_eq!(overview.used_display, "31.91 GB");
-        assert_eq!(overview.total_display, "5.03 TB");
-        assert_eq!(overview.free_display, "5.00 TB");
-        assert!(
-            overview.free_display.ends_with("TB") && overview.total_display.ends_with("TB"),
-            "total and free must share a unit: {} / {}",
+        assert_eq!(overview.total_display, "5.00 TB");
+        assert_eq!(overview.free_display, "4.97 TB");
+        assert_eq!(
+            crate::billing::charts::format_storage_display(4_999),
             overview.total_display,
-            overview.free_display
+            "storage card cap must match the Billing 15-credit SKU label"
         );
-        // The bug was dropping `.00`. A refactor through `formatBytes` would
-        // turn 4.999 TB into "5 TB" and fail here.
         assert_ne!(overview.free_display, "5 TB");
+        assert_ne!(overview.total_display, "5.03 TB");
     }
 
     #[test]
@@ -437,8 +445,8 @@ mod tests {
         let overview = build_overview(31_910_000_000, None, 15.0, 4_999, Some("15".into()));
         let json = serde_json::to_value(&overview).expect("serialize");
         assert_eq!(json["usedDisplay"], "31.91 GB");
-        assert_eq!(json["totalDisplay"], "5.03 TB");
-        assert_eq!(json["freeDisplay"], "5.00 TB");
+        assert_eq!(json["totalDisplay"], "5.00 TB");
+        assert_eq!(json["freeDisplay"], "4.97 TB");
     }
 
     #[test]
@@ -533,6 +541,10 @@ mod tests {
             plan.storage_bytes > 1000 * BYTES_PER_GB,
             "expected > 1 TB for 5 credits, got {}",
             plan.storage_bytes
+        );
+        assert!(
+            !plan.storage_display.is_empty(),
+            "chip/plan card render storageDisplay, not formatBytes(storageBytes)"
         );
     }
 
