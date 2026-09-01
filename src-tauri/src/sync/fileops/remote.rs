@@ -849,8 +849,7 @@ mod tests {
     /// ties the Rust cache location to the scope config, hence this pin.
     #[test]
     fn thumbnail_cache_is_inside_the_asset_protocol_scope() {
-        let conf = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tauri.conf.json"))
-            .expect("read tauri.conf.json");
+        let conf = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tauri.conf.json")).expect("read tauri.conf.json");
         let conf: serde_json::Value = serde_json::from_str(&conf).expect("parse tauri.conf.json");
 
         let scope = conf["app"]["security"]["assetProtocol"]["scope"]
