@@ -17,6 +17,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
+- **Support can diagnose problems faster from the logs you send.** Logs attached to
+  a support ticket now say which app version and platform they came from, and if
+  the app ever crashes, what went wrong is recorded instead of being lost.
 - **Preview far more of your files without leaving Hippius.** Word documents open as
   real pages, PowerPoint decks as slides you can click through, spreadsheets and CSVs
   in a familiar spreadsheet grid with a formula bar and sheet tabs, and Markdown,
