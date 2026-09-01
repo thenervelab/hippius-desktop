@@ -16,9 +16,12 @@ import "@testing-library/jest-dom";
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 
 // The strip's cells resolve thumbnails through useThumbnail (wallet context,
-// Tauri runtime); the windowing under test is independent of all of that.
+// Tauri runtime); the behaviour under test is independent of all of that.
+let thumbnailUrl: string | null = null;
+const evictMock = vi.fn();
 vi.mock("@/app/lib/hooks/useThumbnail", () => ({
-  useThumbnail: () => ({ url: null, isLoading: false, error: null }),
+  useThumbnail: () => ({ url: thumbnailUrl, isLoading: false, error: null }),
+  evictResolvedThumbnailUrl: (...args: unknown[]) => evictMock(...args),
 }));
 
 import FileViewerThumbnailStrip from "../FileViewerThumbnailStrip";
@@ -36,6 +39,7 @@ beforeEach(() => {
   // jsdom implements neither; the strip guards both, and the render window
   // is driven by state, not by real layout.
   Element.prototype.scrollTo = vi.fn();
+  thumbnailUrl = null;
 });
 
 describe("FileViewerThumbnailStrip virtualisation", () => {
@@ -125,6 +129,31 @@ describe("FileViewerThumbnailStrip virtualisation", () => {
       expect(screen.getByLabelText("Open IMG_400.jpg")).toBeInTheDocument(),
     );
     expect(screen.queryByLabelText("Open IMG_0.jpg")).not.toBeInTheDocument();
+  });
+
+  it("falls back to the file-type icon when a thumbnail img fails to load", () => {
+    // A resolved url whose fetch the WebView then refuses (asset-scope or a
+    // deleted cache file) must degrade to the icon, never a broken-image
+    // glyph — the failure mode 0.6.0-beta.8 shipped with.
+    thumbnailUrl = "asset://localhost/thumb.jpg";
+    const files = makeFiles(3);
+    const { container } = render(
+      <FileViewerThumbnailStrip
+        files={files}
+        currentFile={files[1]}
+        onSelect={() => {}}
+      />,
+    );
+
+    const images = container.querySelectorAll("img");
+    expect(images.length).toBe(3);
+    fireEvent.error(images[1]);
+
+    expect(container.querySelectorAll("img").length).toBe(2);
+    // The failed cell still renders — as its file-type icon — and the dead
+    // url is evicted so the next in-view resolution asks Rust again.
+    expect(screen.getByLabelText("Open IMG_1.jpg")).toBeInTheDocument();
+    expect(evictMock).toHaveBeenCalledWith(files[1], 160);
   });
 
   it("does not jump to the folder start when the active file is missing from the list", () => {

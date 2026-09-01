@@ -38,7 +38,7 @@ vi.mock("@/app/lib/wallet-auth-context", () => ({
   useWalletAuth: () => ({ polkadotAddress: "5Test" }),
 }));
 
-import { useThumbnail } from "../useThumbnail";
+import { useThumbnail, evictResolvedThumbnailUrl } from "../useThumbnail";
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 
 const CACHE_PATH = "/Users/me/.hippius/thumbnail-cache/ahash_160.jpg";
@@ -137,6 +137,27 @@ describe("useThumbnail local-image gating", () => {
     await waitFor(() => expect(result.current.url).toBe(ORIGINAL_URL));
     expect(result.current.error).toBeNull();
     expect(warn).toHaveBeenCalled();
+  });
+
+  it("re-asks Rust after eviction, so a deleted cache file heals instead of latching", async () => {
+    // An <img> onError means the cached url points at a file that no longer
+    // exists; Rust regenerates it on the next request, so the consumer
+    // evicts and the next mount must re-invoke rather than re-serve the
+    // dead url for the rest of the session.
+    const file = localJpg("hash-evict");
+    const first = renderHook(() => useThumbnail(file, { enabled: true, maxDim: 160 }));
+    await waitFor(() =>
+      expect(first.result.current.url).toBe(`asset://localhost/${CACHE_PATH}`),
+    );
+    first.unmount();
+
+    evictResolvedThumbnailUrl(file, 160);
+
+    const second = renderHook(() => useThumbnail(file, { enabled: true, maxDim: 160 }));
+    await waitFor(() =>
+      expect(second.result.current.url).toBe(`asset://localhost/${CACHE_PATH}`),
+    );
+    expect(invokeMock).toHaveBeenCalledTimes(2);
   });
 
   it("serves a remount from the resolved-url cache without a second IPC", async () => {

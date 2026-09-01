@@ -218,6 +218,21 @@ function rustThumbnailRequest(
 const RESOLVED_URL_CACHE_LIMIT = 8192;
 const resolvedUrlCache = new Map<string, string>();
 
+function resolvedUrlKey(arionHash: string, fileId: string, maxDim: number): string {
+  return `${arionHash || fileId}:${maxDim}`;
+}
+
+/**
+ * Drop a file's cached thumbnail url so the next in-view resolution asks
+ * Rust again. Consumers call this from an `<img>` onError: the cached url
+ * can point at a cache file that no longer exists (user cleanup, disk
+ * tools), and Rust regenerates the JPEG on the next `get_thumbnail` —
+ * without eviction the dead url is re-served for the rest of the session.
+ */
+export function evictResolvedThumbnailUrl(file: FormattedUserFile, maxDim: number): void {
+  resolvedUrlCache.delete(resolvedUrlKey(file.arionHash ?? "", file.fileId ?? "", maxDim));
+}
+
 function cacheResolvedUrl(key: string, url: string): void {
   if (resolvedUrlCache.size >= RESOLVED_URL_CACHE_LIMIT) {
     const oldest = resolvedUrlCache.keys().next().value;
@@ -404,7 +419,7 @@ export function useThumbnail(
         setState({ url: plan.url, isLoading: false, error: null });
         return;
       }
-      const cacheKey = `${request.arionHash || request.fileId}:${maxDim}`;
+      const cacheKey = resolvedUrlKey(request.arionHash, request.fileId, maxDim);
       const cached = resolvedUrlCache.get(cacheKey);
       if (cached) {
         setState({ url: cached, isLoading: false, error: null });
@@ -431,7 +446,7 @@ export function useThumbnail(
     // of them saturated the network/CPU (page jank, and it starved the
     // listing's own page fetches). Rows that scroll out of view while still
     // queued are cancelled before their download ever starts.
-    const cloudCacheKey = `${plan.arionHash || plan.fileId}:${maxDim}`;
+    const cloudCacheKey = resolvedUrlKey(plan.arionHash, plan.fileId, maxDim);
     const cachedCloud = resolvedUrlCache.get(cloudCacheKey);
     if (cachedCloud) {
       setState({ url: cachedCloud, isLoading: false, error: null });
