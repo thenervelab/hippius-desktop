@@ -152,14 +152,18 @@ async function downscaleThumbnail(blob: Blob, maxDim: number): Promise<Blob> {
 }
 
 /**
- * Local formats routed through the Rust `get_thumbnail` pipeline. Only
- * formats a JPEG thumbnail represents faithfully belong here: png/gif/webp
- * carry transparency or animation a JPEG flattens, avif/raw the Rust decoder
- * does not handle (the WebView renders them natively), and ico is already
- * thumbnail-sized. Everything else keeps the original asset url — bounded by
- * the same in-view gate.
+ * Local formats routed through the Rust `get_thumbnail` pipeline. Two rules
+ * decide membership, and both must hold:
+ *  - a JPEG thumbnail represents the format faithfully (png/gif/webp carry
+ *    transparency or animation a JPEG flattens — an alpha-preserving Rust
+ *    output would let png join; tracked as a follow-up);
+ *  - the Rust `image` crate is BUILT with the decoder — Cargo.toml pins
+ *    `features = ["jpeg", "png", "bmp"]`, so a tiff/avif/raw request is a
+ *    guaranteed decode error that burns a pool slot per cell remount.
+ * Everything else keeps the original asset url — bounded by the same
+ * in-view gate.
  */
-const RUST_THUMBNAIL_EXTENSIONS = new Set(["jpg", "jpeg", "tif", "tiff", "bmp"]);
+const RUST_THUMBNAIL_EXTENSIONS = new Set(["jpg", "jpeg", "bmp"]);
 
 interface RustThumbnailRequest {
   accountId: string;
@@ -174,8 +178,15 @@ interface RustThumbnailRequest {
  * `get_thumbnail` command cloud thumbnails use. Rust short-circuits to the
  * on-disk copy (no network), decodes off the WebView thread, and disk-caches
  * the small JPEG by content hash, so re-browsing a folder is a cache hit.
- * It needs the server ids the cache is keyed on, so a not-yet-uploaded row
- * returns `null` and keeps the original url.
+ *
+ * The gate keys on `arionHash` first, `fileId` as fallback — the same order
+ * Rust derives its cache key. LOCAL listing rows NEVER carry a `fileId`
+ * (`get_user_files` sets `file_id: ""`; the nested mapper sets it only for
+ * remote rows), so requiring one turns this whole path into dead code for
+ * the drive surfaces it exists for. A row with neither id (not yet
+ * uploaded) returns `null` and keeps the original url. `label` is passed
+ * through but not required: Rust only needs it for the cloud fallback when
+ * the on-disk copy has vanished.
  */
 function rustThumbnailRequest(
   file: FormattedUserFile,
@@ -185,14 +196,34 @@ function rustThumbnailRequest(
   const extension = name.split(".").pop()?.toLowerCase() ?? "";
   if (!RUST_THUMBNAIL_EXTENSIONS.has(extension)) return null;
 
-  if (!file.fileId || !file.label || !polkadotAddress) return null;
+  if ((!file.arionHash && !file.fileId) || !polkadotAddress) return null;
   return {
     accountId: polkadotAddress,
-    label: file.label,
-    fileId: file.fileId,
+    label: file.label ?? "",
+    fileId: file.fileId ?? "",
     arionHash: file.arionHash ?? "",
     source: file.source ?? null,
   };
+}
+
+/**
+ * Resolved thumbnail urls by content key (`arionHash`/`fileId` + maxDim —
+ * the same pair Rust's disk cache is keyed on). The virtualised filmstrip
+ * unmounts cells as it scrolls; without this, every remount re-issues a
+ * `get_thumbnail` IPC for a JPEG Rust already has on disk and flashes the
+ * file-type icon until it returns. Only stable asset paths are cached —
+ * never object URLs, which are revoked on unmount. FIFO-bounded so a long
+ * session cannot grow it without limit.
+ */
+const RESOLVED_URL_CACHE_LIMIT = 8192;
+const resolvedUrlCache = new Map<string, string>();
+
+function cacheResolvedUrl(key: string, url: string): void {
+  if (resolvedUrlCache.size >= RESOLVED_URL_CACHE_LIMIT) {
+    const oldest = resolvedUrlCache.keys().next().value;
+    if (oldest !== undefined) resolvedUrlCache.delete(oldest);
+  }
+  resolvedUrlCache.set(key, url);
 }
 
 /** Ask Rust for the cached (or freshly generated) thumbnail JPEG's path. */
@@ -373,9 +404,22 @@ export function useThumbnail(
         setState({ url: plan.url, isLoading: false, error: null });
         return;
       }
+      const cacheKey = `${request.arionHash || request.fileId}:${maxDim}`;
+      const cached = resolvedUrlCache.get(cacheKey);
+      if (cached) {
+        setState({ url: cached, isLoading: false, error: null });
+        return;
+      }
+      // Known edge, accepted: a local-planned row whose on-disk copy vanished
+      // outside the app falls through to Rust's cloud download under THIS
+      // pool rather than the cloud one — bounded at the pool width.
       return runThumbnailJob({
         pool: localThumbnailPool,
-        job: () => fetchRustThumbnail(request, maxDim),
+        job: async () => {
+          const url = await fetchRustThumbnail(request, maxDim);
+          cacheResolvedUrl(cacheKey, url);
+          return url;
+        },
         describe: "local thumbnail",
         fallbackUrl: plan.url,
         setState,
@@ -387,10 +431,16 @@ export function useThumbnail(
     // of them saturated the network/CPU (page jank, and it starved the
     // listing's own page fetches). Rows that scroll out of view while still
     // queued are cancelled before their download ever starts.
+    const cloudCacheKey = `${plan.arionHash || plan.fileId}:${maxDim}`;
+    const cachedCloud = resolvedUrlCache.get(cloudCacheKey);
+    if (cachedCloud) {
+      setState({ url: cachedCloud, isLoading: false, error: null });
+      return;
+    }
     return runThumbnailJob({
       pool: cloudThumbnailPool,
-      job: () =>
-        fetchRustThumbnail(
+      job: async () => {
+        const url = await fetchRustThumbnail(
           {
             accountId: plan.accountId,
             label: plan.label,
@@ -399,7 +449,10 @@ export function useThumbnail(
             source: plan.source,
           },
           maxDim,
-        ),
+        );
+        cacheResolvedUrl(cloudCacheKey, url);
+        return url;
+      },
       describe: "thumbnail",
       setState,
     });
