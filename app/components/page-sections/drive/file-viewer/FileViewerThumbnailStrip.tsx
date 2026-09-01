@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
@@ -19,8 +19,16 @@ const THUMB_HEIGHT = 82;
 const IMAGE_THUMB_WIDTH = 135;
 const NON_IMAGE_THUMB_WIDTH = 92;
 
-/** Flex gap between cells — must match the container's `gap-[13px]`. */
+/**
+ * Flex gap between cells and the container's horizontal padding. Both are
+ * emitted as inline styles from THESE constants (never as Tailwind classes)
+ * because the offset math below assumes them: a class edited without the
+ * constant desyncs the geometry silently — at 13k files a 1px gap drift
+ * misplaces cells by ~13,000px and the scrollbar stops corresponding to the
+ * cells mounted under it, and no test catches it since jsdom does no layout.
+ */
 const CELL_GAP = 13;
+const STRIP_PADDING_X = 15;
 
 /** Extra pixels of cells kept mounted beyond each edge of the viewport. */
 const OVERSCAN_PX = 600;
@@ -90,9 +98,17 @@ const FileViewerThumbnailStrip: React.FC<FileViewerThumbnailStripProps> = ({
 
   const offsets = useMemo(() => buildOffsets(files), [files]);
   const [viewport, setViewport] = useState(FALLBACK_VIEWPORT_PX);
-  const [scrollLeft, setScrollLeft] = useState(0);
+  const [scrollLeft, setScrollLeftState] = useState(0);
 
-  useEffect(() => {
+  // Mirrors the last scrollLeft committed to state, for the quantised
+  // scroll tracker below.
+  const storedScroll = useRef(0);
+
+  // Measure BEFORE first paint: the state update lands in the same commit,
+  // so the first centering pass below sees the real width instead of the
+  // fallback (which mis-centered every viewer open in windows narrower than
+  // the fallback, with nothing ever correcting it).
+  useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
     const measure = () => {
@@ -105,46 +121,56 @@ const FileViewerThumbnailStrip: React.FC<FileViewerThumbnailStripProps> = ({
     return () => observer.disconnect();
   }, []);
 
-  const activeIndex = useMemo(
-    () => files.findIndex((f) => fileKey(f) === currentKey),
-    [files, currentKey],
-  );
-
-  // Center the active cell when it changes. Setting `scrollLeft` state (not
-  // just the DOM scroll) mounts the cell in the same render, before any
-  // scroll event fires. Geometry comes through a ref so a refetch that
-  // leaves the active index unchanged never scroll-jacks the strip; an
-  // active file missing from the list (-1) keeps the position and loses
-  // only the highlight.
-  const geometry = useRef({ offsets, viewport, files });
-  geometry.current = { offsets, viewport, files };
+  // Center the active cell when the OPEN FILE changes (keyed on its
+  // identity, not its index — a list swap can leave a different file at the
+  // same index) and when the viewport is measured/resized. Setting
+  // `scrollLeft` state (not just the DOM scroll) mounts the cell in the same
+  // render, before any scroll event fires. The list geometry comes through a
+  // ref so a refetch that keeps the same open file never scroll-jacks the
+  // strip; an active file missing from the list keeps the position and
+  // loses only the highlight. Far jumps scroll instantly — a smooth
+  // animation from the far end would sweep a mount/unmount window across
+  // the whole strip and cancel the active cell's own thumbnail job.
+  const geometry = useRef({ offsets, files });
+  geometry.current = { offsets, files };
   useEffect(() => {
-    const { offsets, viewport, files } = geometry.current;
-    if (activeIndex < 0 || activeIndex >= files.length) return;
+    const { offsets, files } = geometry.current;
+    const index = files.findIndex((f) => fileKey(f) === currentKey);
+    if (index < 0) return;
     const target = Math.max(
       0,
-      offsets[activeIndex] - (viewport - cellWidth(files[activeIndex])) / 2,
+      STRIP_PADDING_X + offsets[index] - (viewport - cellWidth(files[index])) / 2,
     );
-    setScrollLeft(target);
-    scrollRef.current?.scrollTo?.({ left: target, behavior: "smooth" });
-  }, [activeIndex]);
+    storedScroll.current = target;
+    setScrollLeftState(target);
+    const el = scrollRef.current;
+    const distance = Math.abs((el?.scrollLeft ?? 0) - target);
+    el?.scrollTo?.({ left: target, behavior: distance > viewport ? "auto" : "smooth" });
+  }, [currentKey, viewport]);
 
-  // rAF-throttled scroll tracking: one state update per frame at most.
+  // rAF-throttled AND quantised scroll tracking: the window carries
+  // OVERSCAN_PX of slack on each side, so state — and with it a re-render
+  // of every mounted cell — only needs to move in coarse steps, not on
+  // every frame of a scroll.
   const frame = useRef(0);
   const handleScroll = () => {
     if (frame.current) return;
     frame.current = requestAnimationFrame(() => {
       frame.current = 0;
-      setScrollLeft(scrollRef.current?.scrollLeft ?? 0);
+      const next = scrollRef.current?.scrollLeft ?? 0;
+      if (Math.abs(next - storedScroll.current) < OVERSCAN_PX / 3) return;
+      storedScroll.current = next;
+      setScrollLeftState(next);
     });
   };
   useEffect(() => () => cancelAnimationFrame(frame.current), []);
 
   const [start, end] = useMemo(() => {
-    const from = lastIndexAtOrBelow(offsets, Math.max(0, scrollLeft - OVERSCAN_PX));
+    const origin = Math.max(0, scrollLeft - STRIP_PADDING_X);
+    const from = lastIndexAtOrBelow(offsets, Math.max(0, origin - OVERSCAN_PX));
     const to = Math.min(
       files.length,
-      lastIndexAtOrBelow(offsets, scrollLeft + viewport + OVERSCAN_PX) + 1,
+      lastIndexAtOrBelow(offsets, origin + viewport + OVERSCAN_PX) + 1,
     );
     return [Math.min(from, to), to];
   }, [offsets, files.length, scrollLeft, viewport]);
@@ -166,15 +192,19 @@ const FileViewerThumbnailStrip: React.FC<FileViewerThumbnailStripProps> = ({
       <div
         ref={scrollRef}
         onScroll={handleScroll}
+        data-testid="strip-scroll"
         className={cn(
-          "flex items-center gap-[13px] overflow-x-auto",
+          "flex items-center overflow-x-auto",
           // `safe center` centers the row when its content fits, but
           // falls back to flex-start when the row overflows so the
           // first thumbnail stays reachable via scroll.
           "[justify-content:safe_center]",
           "custom-scrollbar-thin",
-          "py-[8px] px-[15px]",
+          "py-[8px]",
         )}
+        // Gap and horizontal padding come from the geometry constants — see
+        // CELL_GAP / STRIP_PADDING_X.
+        style={{ gap: CELL_GAP, paddingLeft: STRIP_PADDING_X, paddingRight: STRIP_PADDING_X }}
       >
         {leadingSpacer > 0 && (
           <div
@@ -211,12 +241,21 @@ const FileViewerThumbnailStrip: React.FC<FileViewerThumbnailStripProps> = ({
  * resolution is gated on {@link useInView} so scrolling the strip doesn't fetch
  * every off-screen file at once. Non-images (and unresolved cloud thumbs) show
  * the file-type icon.
+ *
+ * Memoised: the quantised scroll tracker re-renders the parent on coarse
+ * scroll steps, and ~20+ mounted cells re-running the filename/type/icon
+ * derivation each time is exactly the per-frame work this strip exists to
+ * avoid.
  */
-const StripThumbnail: React.FC<{
+const StripThumbnail = React.memo(function StripThumbnail({
+  file,
+  isActive,
+  onSelect,
+}: {
   file: FormattedUserFile;
   isActive: boolean;
   onSelect: (file: FormattedUserFile) => void;
-}> = ({ file, isActive, onSelect }) => {
+}) {
   const { fileFormat } = getFilePartsFromFileName(file.name);
   const fileType = getFileTypeFromExtension(fileFormat || null);
   const isImage = fileType === "image";
@@ -265,6 +304,6 @@ const StripThumbnail: React.FC<{
       )}
     </button>
   );
-};
+});
 
 export default FileViewerThumbnailStrip;

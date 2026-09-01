@@ -10,7 +10,7 @@
 // cells near the scroll position mount.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom";
 
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
@@ -101,6 +101,30 @@ describe("FileViewerThumbnailStrip virtualisation", () => {
     expect(screen.getByLabelText("Open IMG_0.jpg")).toHaveAttribute("aria-current", "true");
     expect(screen.getByLabelText("Open IMG_1.jpg")).toBeInTheDocument();
     expect(screen.queryByLabelText("Open IMG_499.jpg")).not.toBeInTheDocument();
+  });
+
+  it("mounts the cells under the scrollbar when the user drags far from the active file", async () => {
+    const files = makeFiles(500);
+    render(
+      <FileViewerThumbnailStrip
+        files={files}
+        currentFile={files[0]}
+        onSelect={() => {}}
+      />,
+    );
+    expect(screen.queryByLabelText("Open IMG_400.jpg")).not.toBeInTheDocument();
+
+    // Drag the scrollbar deep into the folder: cell 400 sits at ~400 cell
+    // pitches from the start. jsdom does no layout, so scrollLeft is set
+    // directly and the scroll event drives the render window.
+    const scroller = screen.getByTestId("strip-scroll");
+    scroller.scrollLeft = 400 * 148;
+    fireEvent.scroll(scroller);
+
+    await waitFor(() =>
+      expect(screen.getByLabelText("Open IMG_400.jpg")).toBeInTheDocument(),
+    );
+    expect(screen.queryByLabelText("Open IMG_0.jpg")).not.toBeInTheDocument();
   });
 
   it("does not jump to the folder start when the active file is missing from the list", () => {
