@@ -67,6 +67,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Huge photo folders no longer freeze the app.** Browsing or previewing a
+  folder with thousands of pictures could lock everything up with spinners
+  that never finished; thumbnails now load only as they come into view, and
+  much faster.
 - **Photos now show up when you open them.** Clicking the eye icon on an image
   could leave a loading spinner turning forever, even though the picture had
   already finished loading behind it.
