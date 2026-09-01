@@ -863,12 +863,16 @@ mod tests {
         }
         let bundle = build_log_bundle(dir.path(), "").expect("bundle").expect("expected a bundle");
         let file = std::fs::File::open(bundle.path()).expect("open zip");
-        let archive = zip::ZipArchive::new(file).expect("read zip");
-        assert!(
-            archive.len() <= MAX_FILES + 1,
-            "must never ship more than MAX_FILES log entries plus system-info"
-        );
-        assert!(!archive.is_empty(), "small files must all fit");
+        let mut archive = zip::ZipArchive::new(file).expect("read zip");
+
+        // Count LOG entries by name, so the MAX_FILES cap is proven
+        // independently of the system-info entry — a raw `len() <= MAX + 1`
+        // would let an eighth log file pass whenever system-info went missing.
+        let log_entries = (0..archive.len())
+            .filter(|&i| archive.by_index(i).expect("entry").name() != "system-info.txt")
+            .count();
+        assert!(log_entries <= MAX_FILES, "must never ship more than MAX_FILES log entries");
+        assert!(log_entries > 0, "small files must all fit");
     }
 
     #[test]

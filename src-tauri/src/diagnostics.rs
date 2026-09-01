@@ -7,24 +7,18 @@
 //! prints only to stderr, which goes nowhere in a packaged app — the
 //! single event support most needs is the one guaranteed to be missing.
 
-use std::fmt;
-
 use crate::release_channel::{self, ReleaseChannel};
 
 /// The compile-time facts that identify a build: version, release lane,
-/// and target platform. One instance feeds both the startup banner and
-/// [`bundle_system_info`], so the two can never disagree.
+/// and target platform. Both renderings — the `main.rs` banner's structured
+/// fields and [`bundle_system_info`]'s `key: value` lines — read from one
+/// instance, and each rendering is pinned by its own test
+/// (`tests/diagnostics_wiring.rs` and `system_info_names_every_fact...`).
 pub struct BuildIdentity {
     pub version: &'static str,
     pub channel: ReleaseChannel,
     pub os: &'static str,
     pub arch: &'static str,
-}
-
-impl fmt::Display for BuildIdentity {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Hippius {} ({}) on {}/{}", self.version, self.channel, self.os, self.arch)
-    }
 }
 
 /// The identity of the running binary.
@@ -70,6 +64,14 @@ pub fn panic_payload_str(payload: &(dyn std::any::Any + Send)) -> &str {
 /// chaining to the previously installed hook, so a crash lands in the
 /// rolling log files a support bundle ships. Idempotent via `Once` so a
 /// second call can never chain the hook to itself and double-log.
+///
+/// Known limitation (accepted): the line rides the non-blocking file
+/// writer, which flushes when `main`'s `WorkerGuard` drops during unwind.
+/// An abort-style death — a double panic in a `Drop` during unwind, or a
+/// panic crossing FFI frames — skips destructors, so the queued line can
+/// be lost. Flushing synchronously from inside a panic hook is not safely
+/// available (the writer's guard lives in `main`), and the unwinding case
+/// is the overwhelmingly common one.
 pub fn install_panic_hook() {
     static INSTALL: std::sync::Once = std::sync::Once::new();
 
@@ -92,7 +94,7 @@ pub fn install_panic_hook() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_helpers::capture_subscriber;
+    use crate::test_helpers::capture_logs;
 
     #[test]
     fn payload_str_extracts_a_static_str() {
@@ -122,16 +124,6 @@ mod tests {
     }
 
     #[test]
-    fn identity_line_is_self_describing() {
-        let identity = build_identity();
-        let line = identity.to_string();
-        assert!(line.contains(env!("CARGO_PKG_VERSION")), "version missing: {line}");
-        assert!(line.contains(std::env::consts::OS), "os missing: {line}");
-        assert!(line.contains(std::env::consts::ARCH), "arch missing: {line}");
-        assert!(line.contains(&identity.channel.to_string()), "channel missing: {line}");
-    }
-
-    #[test]
     fn system_info_names_every_fact_on_its_own_line() {
         let info = bundle_system_info();
         for key in ["version:", "channel:", "os:", "arch:", "bundled_at:"] {
@@ -144,11 +136,11 @@ mod tests {
     fn panic_hook_logs_payload_and_location() {
         install_panic_hook();
 
-        let (subscriber, writer, _capture_guard) = capture_subscriber();
-        let panic_result = tracing::subscriber::with_default(subscriber, || std::panic::catch_unwind(|| panic!("boom-for-hook-test")));
+        let capture = capture_logs();
+        let panic_result = std::panic::catch_unwind(|| panic!("boom-for-hook-test"));
         assert!(panic_result.is_err(), "the closure must actually panic");
 
-        let text = writer.text();
+        let text = capture.text();
         assert!(text.contains("ERROR"), "expected an error-level line: {text}");
         assert!(text.contains("boom-for-hook-test"), "payload missing from log: {text}");
         assert!(text.contains("diagnostics.rs"), "panic location missing from log: {text}");

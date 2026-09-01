@@ -1,4 +1,7 @@
+use regex::Regex;
 use serde::Serialize;
+use std::borrow::Cow;
+use std::sync::LazyLock;
 
 /// Unified error type for the Hippius desktop backend.
 ///
@@ -246,6 +249,15 @@ impl std::fmt::Display for NotReadyKind {
 
 /// Serialize `AppError` for Tauri IPC.
 ///
+/// **This impl LOGS as a side effect** (see the comment at the log site):
+/// serialization is treated as "the error crossed the IPC boundary", which
+/// is true today because Tauri's `InvokeError` conversion is the only
+/// production serializer of `AppError`. Do not serialize `AppError` for any
+/// other purpose (persisted records, event payloads, structs deriving
+/// `Serialize` with an `AppError` field) — each such serialization would
+/// mint a spurious "IPC command returned an error" line. Give that use its
+/// own wire type instead.
+///
 /// Produces `{ "kind": "Db", "message": "..." }` for most variants. For
 /// `NotReady`, the serialized form also carries a `subkind` field whose
 /// value is the SCREAMING_SNAKE_CASE name of the [`NotReadyKind`]
@@ -260,7 +272,13 @@ impl AppError {
     /// forces a decision about its logging tier.
     fn is_expected_precondition(&self) -> bool {
         match self {
-            Self::NotReady(_) | Self::Validation(_) | Self::NotFound(_) => true,
+            // `Auth` is expected: the boot-gap rejection ("No active account
+            // set" from `require_session_account`) fires several times on
+            // every launch before `restore_session` hydrates, and the
+            // frontend documents it as such (`isExpectedNoSessionError`).
+            // Genuine auth failures still reach the debug stream and are
+            // surfaced prominently by the frontend.
+            Self::NotReady(_) | Self::Validation(_) | Self::NotFound(_) | Self::Auth(_) => true,
             Self::Db(_)
             | Self::Io(_)
             | Self::Http(_)
@@ -270,7 +288,6 @@ impl AppError {
             | Self::Hcfs(_)
             | Self::Crypto(_)
             | Self::Api { .. }
-            | Self::Auth(_)
             | Self::Progress(_)
             | Self::Lock(_)
             | Self::Intent(_)
@@ -279,21 +296,100 @@ impl AppError {
         }
     }
 
-    /// Display text for the boundary log line. reqwest 0.13's `Display`
-    /// appends `for url (…)`, and a tokenized share route carries the
-    /// plaintext capability in its path — stripped HERE because the log
-    /// scrubber has no pattern for a bare token inside a URL. Only the
-    /// logged copy is stripped; the wire message is unchanged (the
+    /// Display text for the boundary log line, with any reqwest-rendered
+    /// request URL scrubbed. reqwest 0.13's `Display` appends `for url (…)`,
+    /// and a tokenized share route carries the plaintext capability in its
+    /// path — which the log scrubber cannot redact (a bare token inside a
+    /// URL is unlabelled). The scrub runs on the RENDERED TEXT of every
+    /// variant, not on `Http`'s `Url` accessor: hcfs-client's `share.rs`
+    /// stringifies reqwest errors without `without_url` (unlike
+    /// `folder_share.rs`), so by the time a share-route failure reaches this
+    /// boundary it is an `Hcfs` string with the URL already baked in. Only
+    /// the logged copy is stripped; the wire message is unchanged (the
     /// frontend already receives it today).
     fn log_text(&self) -> String {
+        // reqwest's one URL-rendering form (its error.rs writes
+        // ` for url ({url})` whenever a URL is attached); URLs contain no
+        // `)`, so the class ends exactly at the closing parenthesis.
+        static REQWEST_URL_IN_TEXT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"for url \([^)]*\)").expect("static url regex"));
+
         let text = self.to_string();
-        if let Self::Http(e) = self
-            && let Some(url) = e.url()
-        {
-            return text.replace(url.as_str(), "<url redacted>");
+        match REQWEST_URL_IN_TEXT.replace_all(&text, "for url (<redacted>)") {
+            Cow::Borrowed(_) => text,
+            Cow::Owned(scrubbed) => scrubbed,
         }
-        text
     }
+}
+
+/// How long one boundary `warn!` speaks for its error kind. Sized against
+/// the frontend's fastest pollers (6s refresh on the billing/storage hooks):
+/// a dead dependency then costs one line a minute instead of ten, so hours
+/// of polling can no longer evict the actual incident from the support
+/// bundle's 5 MB per-file tail.
+const WARN_LOG_WINDOW: std::time::Duration = std::time::Duration::from_mins(1);
+
+/// Per-kind throttle for the boundary `warn!`. Keyed on the kind name, so
+/// the map is bounded by the variant count; suppressed repeats are counted
+/// and reported when the window reopens, keeping the timeline of a long
+/// outage legible from the warn lines alone.
+struct WarnThrottle {
+    window: std::time::Duration,
+    state: std::sync::Mutex<std::collections::HashMap<&'static str, KindWindow>>,
+}
+
+struct KindWindow {
+    last_logged: std::time::Instant,
+    suppressed: u64,
+}
+
+impl WarnThrottle {
+    fn new(window: std::time::Duration) -> Self {
+        Self {
+            window,
+            state: std::sync::Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+
+    /// `Some(suppressed)` — log now, naming how many repeats the closed
+    /// window swallowed; `None` — suppress (the caller demotes to debug).
+    /// `now` is a parameter so the window logic is testable without a clock.
+    fn decide(&self, kind: &'static str, now: std::time::Instant) -> Option<u64> {
+        // Poison recovery is safe: the map only paces log lines.
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        match state.entry(kind) {
+            std::collections::hash_map::Entry::Vacant(vacant) => {
+                vacant.insert(KindWindow {
+                    last_logged: now,
+                    suppressed: 0,
+                });
+                Some(0)
+            }
+            std::collections::hash_map::Entry::Occupied(mut occupied) => {
+                let window = occupied.get_mut();
+                // `duration_since` saturates to zero for an earlier `now`,
+                // so a non-monotonic-looking pair suppresses, never panics.
+                if now.duration_since(window.last_logged) >= self.window {
+                    let suppressed = window.suppressed;
+                    window.last_logged = now;
+                    window.suppressed = 0;
+                    Some(suppressed)
+                } else {
+                    window.suppressed += 1;
+                    None
+                }
+            }
+        }
+    }
+}
+
+static WARN_THROTTLE: LazyLock<WarnThrottle> = LazyLock::new(|| WarnThrottle::new(WARN_LOG_WINDOW));
+
+/// Test-only: forget a kind's window so a test can assert the warn path
+/// deterministically. Call while holding the capture lock.
+#[cfg(test)]
+fn reset_warn_throttle(kind: &'static str) {
+    WARN_THROTTLE.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(kind);
 }
 
 impl Serialize for AppError {
@@ -330,7 +426,14 @@ impl Serialize for AppError {
         if self.is_expected_precondition() {
             tracing::debug!(kind, error = %self.log_text(), "IPC command returned an expected precondition error");
         } else {
-            tracing::warn!(kind, error = %self.log_text(), "IPC command returned an error");
+            match WARN_THROTTLE.decide(kind, std::time::Instant::now()) {
+                Some(suppressed) => {
+                    tracing::warn!(kind, suppressed_repeats = suppressed, error = %self.log_text(), "IPC command returned an error");
+                }
+                None => {
+                    tracing::debug!(kind, error = %self.log_text(), "IPC command returned an error (repeat, throttled from warn)");
+                }
+            }
         }
 
         if let Self::NotReady(subkind) = self {
@@ -452,6 +555,10 @@ mod tests {
 
     #[test]
     fn serialize_api_error_has_kind_api() {
+        // Serializing a warn-tier error consumes its throttle window; hold
+        // the capture lock so this can't interleave with a capture test's
+        // reset-then-serialize sequence.
+        let _capture_guard = crate::test_helpers::capture_lock();
         let err = AppError::Api {
             status: 500,
             body: "internal".into(),
@@ -686,6 +793,10 @@ mod tests {
 
     #[test]
     fn serialize_every_variant_has_kind_and_message() {
+        // Serializing warn-tier errors consumes their throttle windows; hold
+        // the capture lock so this can't interleave with a capture test's
+        // reset-then-serialize sequence.
+        let _capture_guard = crate::test_helpers::capture_lock();
         let variants: Vec<AppError> = vec![
             AppError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "missing")),
             AppError::Json(serde_json::from_str::<String>("bad").unwrap_err()),
@@ -770,18 +881,59 @@ mod tests {
         }
     }
 
+    #[test]
+    fn warn_throttle_logs_first_and_counts_suppressed_repeats() {
+        let throttle = WarnThrottle::new(std::time::Duration::from_mins(1));
+        let t0 = std::time::Instant::now();
+        let at = |secs| t0 + std::time::Duration::from_secs(secs);
+
+        assert_eq!(throttle.decide("Db", t0), Some(0), "first hit logs immediately");
+        assert_eq!(throttle.decide("Db", at(6)), None, "a repeat inside the window is suppressed");
+        assert_eq!(throttle.decide("Db", at(12)), None);
+        assert_eq!(throttle.decide("Db", at(61)), Some(2), "the reopening warn names the suppressed count");
+        assert_eq!(throttle.decide("Db", at(122)), Some(0), "a quiet window resets the count");
+    }
+
+    #[test]
+    fn warn_throttle_tracks_kinds_independently() {
+        let throttle = WarnThrottle::new(std::time::Duration::from_mins(1));
+        let t0 = std::time::Instant::now();
+
+        assert_eq!(throttle.decide("Db", t0), Some(0));
+        assert_eq!(throttle.decide("Substrate", t0), Some(0), "a different kind has its own window");
+        assert_eq!(throttle.decide("Db", t0 + std::time::Duration::from_secs(1)), None);
+        assert_eq!(throttle.decide("Substrate", t0 + std::time::Duration::from_secs(1)), None);
+    }
+
+    /// A failing dependency behind a 6s frontend poller must not flood the
+    /// daily log: identical warns for hours evict the actual incident from
+    /// the support bundle's 5 MB tail. One warn per kind per window keeps
+    /// the outage timeline; repeats stay visible at debug.
+    #[test]
+    fn repeated_unexpected_errors_are_throttled_to_one_warn() {
+        let capture = crate::test_helpers::capture_logs();
+        reset_warn_throttle("Progress");
+        for _ in 0..3 {
+            let _ = serde_json::to_string(&AppError::Progress("indexer down".into()));
+        }
+
+        let text = capture.text();
+        assert_eq!(text.matches("WARN").count(), 1, "exactly one warn per window: {text}");
+        assert_eq!(text.matches("indexer down").count(), 3, "repeats must stay visible at debug: {text}");
+        assert!(text.contains("throttled"), "repeat lines should say why they are not warns: {text}");
+    }
+
     /// Serializing an error IS the moment it crosses the IPC boundary, so
     /// every unexpected error the frontend receives must leave a `warn!`
     /// line — a user reporting an error toast used to have no matching log
     /// line unless the individual command happened to log.
     #[test]
     fn serializing_an_unexpected_error_warns_with_kind_and_message() {
-        let (subscriber, writer, _capture_guard) = crate::test_helpers::capture_subscriber();
-        tracing::subscriber::with_default(subscriber, || {
-            let _ = serde_json::to_string(&AppError::Substrate("rpc exploded".into()));
-        });
+        let capture = crate::test_helpers::capture_logs();
+        reset_warn_throttle("Substrate");
+        let _ = serde_json::to_string(&AppError::Substrate("rpc exploded".into()));
 
-        let text = writer.text();
+        let text = capture.text();
         assert!(text.contains("WARN"), "expected a warn-level line: {text}");
         assert!(text.contains("Substrate"), "kind missing from log: {text}");
         assert!(text.contains("rpc exploded"), "message missing from log: {text}");
@@ -792,14 +944,18 @@ mod tests {
     /// at `warn!` they would drown real diagnostics in the support bundle.
     #[test]
     fn serializing_an_expected_precondition_stays_below_warn() {
-        let (subscriber, writer, _capture_guard) = crate::test_helpers::capture_subscriber();
-        tracing::subscriber::with_default(subscriber, || {
-            let _ = serde_json::to_string(&AppError::NotReady(NotReadyKind::InsufficientCredits));
-            let _ = serde_json::to_string(&AppError::Validation("bad label".into()));
-            let _ = serde_json::to_string(&AppError::NotFound("wallet gone".into()));
-        });
+        let capture = crate::test_helpers::capture_logs();
+        let _ = serde_json::to_string(&AppError::NotReady(NotReadyKind::InsufficientCredits));
+        let _ = serde_json::to_string(&AppError::Validation("bad label".into()));
+        let _ = serde_json::to_string(&AppError::NotFound("wallet gone".into()));
+        // The boot-gap rejection: mount-time invokes hit
+        // `require_session_account` before `restore_session` hydrates,
+        // several times on EVERY launch — documented as expected by the
+        // frontend (`errorUtils.isExpectedNoSessionError`). At warn it
+        // would open every day's log with a burst of phantom failures.
+        let _ = serde_json::to_string(&AppError::Auth("No active account set".into()));
 
-        let text = writer.text();
+        let text = capture.text();
         assert!(!text.is_empty(), "the debug tier must still record the preconditions");
         assert!(
             !text.contains("WARN") && !text.contains("ERROR"),
@@ -832,26 +988,56 @@ mod tests {
             "fixture no longer embeds the URL"
         );
 
-        let (subscriber, writer, _capture_guard) = crate::test_helpers::capture_subscriber();
-        tracing::subscriber::with_default(subscriber, || {
-            let _ = serde_json::to_string(&app_err);
-        });
+        let capture = crate::test_helpers::capture_logs();
+        reset_warn_throttle("Http");
+        let _ = serde_json::to_string(&app_err);
 
-        let text = writer.text();
+        let text = capture.text();
         assert!(!text.contains("SECRET-CAPABILITY-TOKEN"), "request URL leaked into the log: {text}");
         assert!(text.contains("Http"), "kind missing from log: {text}");
+    }
+
+    /// A tokenized share-route failure does NOT arrive as `AppError::Http`:
+    /// hcfs-client's `share.rs` builds `ShareError::Network(e.to_string())`
+    /// (no `without_url`, unlike `folder_share.rs`) and the desktop wraps it
+    /// as `AppError::Hcfs(format!(...))` — the reqwest URL text is baked into
+    /// the STRING by then, so the strip must work on the rendered text of
+    /// every variant, not on the `Http` variant's `Url` accessor.
+    #[tokio::test]
+    async fn hcfs_error_log_line_strips_the_embedded_request_url() {
+        let err = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .expect("client")
+            .get("http://127.0.0.1:9/v1/shares/SECRET-CAPABILITY-TOKEN")
+            .send()
+            .await
+            .expect_err("connecting to the discard port must fail");
+        // The exact shape shares/commands.rs produces from ShareError.
+        let app_err = AppError::Hcfs(format!("revoke_share: {err}"));
+
+        assert!(
+            app_err.to_string().contains("SECRET-CAPABILITY-TOKEN"),
+            "fixture no longer embeds the URL"
+        );
+
+        let capture = crate::test_helpers::capture_logs();
+        reset_warn_throttle("Hcfs");
+        let _ = serde_json::to_string(&app_err);
+
+        let text = capture.text();
+        assert!(!text.contains("SECRET-CAPABILITY-TOKEN"), "request URL leaked into the log: {text}");
+        assert!(text.contains("Hcfs"), "kind missing from log: {text}");
     }
 
     /// The expected kinds still leave a `debug!` trace, so a verbose run
     /// can reconstruct the full IPC error stream.
     #[test]
     fn expected_preconditions_still_log_at_debug() {
-        let (subscriber, writer, _capture_guard) = crate::test_helpers::capture_subscriber();
-        tracing::subscriber::with_default(subscriber, || {
-            let _ = serde_json::to_string(&AppError::Validation("bad-label-input".into()));
-        });
+        let capture = crate::test_helpers::capture_logs();
+        let _ = serde_json::to_string(&AppError::Validation("bad-label-input".into()));
 
-        let text = writer.text();
+        let text = capture.text();
         assert!(text.contains("DEBUG"), "expected a debug-level line: {text}");
         assert!(text.contains("bad-label-input"), "debug trace missing: {text}");
     }

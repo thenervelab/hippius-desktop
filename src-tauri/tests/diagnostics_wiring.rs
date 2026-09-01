@@ -22,11 +22,24 @@ fn main_installs_the_panic_hook_after_logging_init() {
 }
 
 /// The startup banner is what makes a fresh log file name the build that
-/// wrote it (version, channel, os, arch) — support's first question.
+/// wrote it (version, channel, os, arch) — support's first question. The
+/// pin must see the identity actually LOGGED at `info!`: a refactor that
+/// keeps the `build_identity()` call but drops or demotes the log line
+/// (debug! is filtered out by the default `warn,…,Hippius=info`) loses the
+/// invariant silently.
 #[test]
-fn main_logs_the_build_identity_banner() {
+fn main_logs_the_build_identity_banner_at_info() {
+    let identity = MAIN_RS
+        .find("diagnostics::build_identity()")
+        .expect("main must resolve the build identity");
+
+    let banner = &MAIN_RS[identity..identity + 600.min(MAIN_RS.len() - identity)];
+    assert!(banner.contains("info!"), "the identity must be logged at info!, got: {banner}");
     assert!(
-        MAIN_RS.contains("diagnostics::build_identity()"),
-        "main must log the build-identity startup banner"
+        banner.contains("\"Application starting\""),
+        "the banner message literal must survive: {banner}"
     );
+    for field in ["version", "channel", "os", "arch"] {
+        assert!(banner.contains(field), "banner must carry the {field} field: {banner}");
+    }
 }

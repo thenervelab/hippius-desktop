@@ -16,13 +16,23 @@ support ticket. Sources: `src-tauri/src/main.rs::init_logging`,
   `main` right after logging init) routes every panic through `error!` with
   payload, location, and thread before chaining to the default hook — so a
   crash leaves a trace in the same rolling files a support bundle ships.
-  Wiring pinned by `tests/diagnostics_wiring.rs`.
+  Wiring pinned by `tests/diagnostics_wiring.rs`. Caveat: the line rides
+  the non-blocking writer and flushes on unwind; an abort-style death (a
+  double panic in a `Drop`, a panic crossing FFI frames) can lose it.
 - **Every IPC error leaves a line.** `AppError`'s `Serialize` impl — the one
   choke point every command error crosses on its way to the renderer — logs
   the error as it is serialized: `warn!` for unexpected kinds, `debug!` for
-  expected user-state preconditions (`NotReady`, `Validation`, `NotFound`),
+  expected user-state preconditions (`NotReady`, `Validation`, `NotFound`,
+  `Auth` — the boot-gap "No active account set" fires on every launch),
   which the frontend surfaces itself and which would otherwise drown real
   diagnostics. So "I got an error toast" always has a matching log line.
+  Two guards keep the warn stream honest: the logged text scrubs any
+  reqwest-rendered `for url (…)` (tokenized share routes carry the
+  capability in the URL path, which the bundle scrubber cannot redact),
+  and the warn is throttled to one line per kind per minute (repeats drop
+  to `debug!`, and the reopening warn carries `suppressed_repeats`) so a
+  dead dependency behind a 6-second poller cannot evict the real incident
+  from the bundle's 5 MB tail.
 - **The frontend does not feed the log files.** There is no `tauri-plugin-log`
   and no console bridge: `console.log/warn/error` in `app/` reaches only the
   WebView dev tools and is lost otherwise. Anything that must be diagnosable
