@@ -16,6 +16,12 @@ use tracing::{debug, info, warn};
 /// Smallest wall-clock gap between two scan-progress log lines.
 const SCAN_LOG_INTERVAL: Duration = Duration::from_secs(2);
 
+/// A drop in the scanned count reads as a scan boundary only when it falls
+/// to at most `1 / SCAN_BOUNDARY_DIVISOR` of the high-water mark; smaller
+/// drops are out-of-order worker stragglers. See [`LogThrottle::decide`]
+/// for why the separator exists and what it costs at scan start.
+const SCAN_BOUNDARY_DIVISOR: u64 = 2;
+
 /// Rate-limits a repeating log line to at most one emission per `interval`.
 ///
 /// The scan callback fires once per file walked, and the `info!` behind it was
@@ -73,13 +79,28 @@ impl LogThrottle {
     /// of a small drive completes well inside one interval — 46 files in 0.9ms
     /// was measured — so the only tick that ever wins is the first, and every
     /// cycle logs `1 files scanned` forever while the real total is never
-    /// recorded. Counts rise monotonically within a scan and restart at the
-    /// next one, so a DROP is the scan boundary, and it is the only signal
-    /// this callback gets: there is no scan-complete callback to hook.
-    /// Reporting the previous high-water mark there gives support the final
-    /// count without adding a line per tick.
+    /// recorded. Counts restart at the next scan, so a DROP is the scan
+    /// boundary, and it is the only signal this callback gets: there is no
+    /// scan-complete callback to hook. Reporting the previous high-water mark
+    /// there gives support the final count without adding a line per tick.
     ///
-    /// That boundary check doubles as the cross-cycle reset. Without it the
+    /// Within a scan, though, counts are NOT quite monotone at this end of
+    /// the pipe: hcfs-client draws them from one shared `AtomicU64`, but the
+    /// ticks travel through several rayon workers, so a tick can arrive a few
+    /// positions behind a peer. Treating every drop as a boundary turned each
+    /// such inversion into an unthrottled "complete" pair and re-created the
+    /// flood this throttle exists to prevent (~1,800 lines per 13k-file scan,
+    /// support ticket 142). A genuine restart falls to near zero while worker
+    /// jitter stays within a few ticks of the high-water mark, so a drop only
+    /// reads as a boundary when it reaches half the mark; smaller drops are
+    /// stragglers and log nothing, leaving the mark alone so the eventual
+    /// boundary still reports the scan's true total. In a scan's opening
+    /// ticks the two are genuinely indistinguishable (a swapped `2,1` and a
+    /// finished 2-file scan are the same observation), so a couple of
+    /// duplicate lines per scan start remain possible — bounded, and far
+    /// cheaper than a lost final count.
+    ///
+    /// The boundary check doubles as the cross-cycle reset. Without it the
     /// interval spans cycle boundaries, so back-to-back cycles — a
     /// file-watcher burst, or a retry loop, exactly the "why is it spinning?"
     /// pattern support reads the log for — could emit nothing at all.
@@ -93,6 +114,9 @@ impl LogThrottle {
         };
 
         if scanned < state.highest_seen {
+            if scanned > state.highest_seen / SCAN_BOUNDARY_DIVISOR {
+                return ScanLog::Nothing;
+            }
             let finished = state.highest_seen;
             state.highest_seen = scanned;
             state.last_logged = Some(now);
@@ -922,6 +946,69 @@ mod tests {
             throttle.decide(start + Duration::from_millis(20), 1),
             ScanLog::FinishedPrevious(2),
             "a new cycle must not be silenced by the previous cycle's window",
+        );
+    }
+
+    /// The counter is one shared `AtomicU64` in hcfs-client, but the ticks
+    /// reach this throttle from several rayon workers, so they can arrive a
+    /// few positions out of order. Each such inversion is NOT a scan
+    /// boundary, and treating it as one re-created the support-bundle flood:
+    /// a 13k-file drive logged ~1,800 lines per scan, nearly all of them
+    /// phantom "complete" pairs (support ticket 142).
+    #[test]
+    fn out_of_order_worker_ticks_do_not_log_phantom_completions() {
+        let throttle = LogThrottle::new(Duration::from_secs(2));
+        let start = Instant::now();
+
+        // An in-order prefix; only tick #1 logs.
+        for n in 1..=100_u64 {
+            let now = start + Duration::from_micros(n);
+            let expected = if n == 1 { ScanLog::Progress } else { ScanLog::Nothing };
+            assert_eq!(throttle.decide(now, n), expected, "tick {n}");
+        }
+
+        // Worker interleave: counts keep climbing but arrive in reversed
+        // 5-tick windows (105,104,...,101, 110,109,...), all inside the
+        // interval. None of these drops is a scan boundary.
+        let mut delivered = 100_u64;
+        for window_end in (105..=300).step_by(5) {
+            for n in ((window_end - 4)..=window_end).rev() {
+                delivered += 1;
+                let now = start + Duration::from_micros(200 + delivered);
+                assert_eq!(
+                    throttle.decide(now, n),
+                    ScanLog::Nothing,
+                    "out-of-order tick {n} must not read as a scan boundary",
+                );
+            }
+        }
+    }
+
+    /// A late tick must not lower the high-water mark: the next genuine
+    /// boundary has to report the scan's true total, not whatever straggler
+    /// happened to arrive last.
+    #[test]
+    fn jitter_does_not_corrupt_the_reported_final_count() {
+        let throttle = LogThrottle::new(Duration::from_secs(2));
+        let start = Instant::now();
+
+        for n in 1..=100_u64 {
+            let now = start + Duration::from_micros(n);
+            throttle.decide(now, n);
+        }
+
+        // Tick 99 arrives after tick 100 - a straggler, not a new scan.
+        assert_eq!(
+            throttle.decide(start + Duration::from_millis(1), 99),
+            ScanLog::Nothing,
+            "a straggler tick must not read as a scan boundary",
+        );
+
+        // The next scan reports the true total of the previous one.
+        assert_eq!(
+            throttle.decide(start + Duration::from_secs(3), 1),
+            ScanLog::FinishedPrevious(100),
+            "the boundary must report the true high-water mark, not the straggler",
         );
     }
 }
