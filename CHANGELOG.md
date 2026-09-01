@@ -67,6 +67,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Photo thumbnails show real previews again.** Small preview images in the
+  file grid and the viewer's filmstrip could appear as broken-image icons even
+  though the photos themselves were fine.
 - **Huge photo folders no longer freeze the app.** Browsing or previewing a
   folder with thousands of pictures could lock everything up with spinners
   that never finished; thumbnails now load only as they come into view, and
