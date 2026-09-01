@@ -17,13 +17,16 @@ import SharedLinkBadge from "@/components/page-sections/drive/SharedLinkBadge";
 import { folderShareRelativePath } from "@/app/lib/utils/folderShareGating";
 import { useUrlParams } from '@/app/utils/hooks/useUrlParams';
 import { getFileUrl } from "@/app/lib/utils/fileUrlResolver";
-import { useThumbnail } from "@/app/lib/hooks/useThumbnail";
+import { useThumbnail, evictResolvedThumbnailUrl } from "@/app/lib/hooks/useThumbnail";
 import { useInView } from "@/app/lib/hooks/useInView";
 import { buildFolderPath } from '@/app/utils/folderPathUtils';
 import { useFileSelection } from '@/app/contexts/FileSelectionContext';
 import { useRouter } from "next/navigation";
 import * as Checkbox from "@radix-ui/react-checkbox";
 import { Check } from "lucide-react";
+/** Card thumbnail resolution — shared by the resolve and the evict-on-error. */
+const CARD_THUMB_MAX_DIM = 256;
+
 interface FileCardProps {
   file: FormattedUserFile;
   state: "success" | "pending" | "error";
@@ -56,7 +59,15 @@ const FileCard: React.FC<FileCardProps> = ({
   // Images (local AND cloud-only — other devices / unsynced folders) resolve
   // through the shared thumbnailer; cloud fetches are gated on `inView`. Videos
   // keep the canvas-frame path in the effect below (local only for now).
-  const imageThumb = useThumbnail(isImageType ? file : null, { enabled: inView });
+  const imageThumb = useThumbnail(isImageType ? file : null, { enabled: inView, maxDim: CARD_THUMB_MAX_DIM });
+
+  // An image url whose fetch fails degrades to the icon. Storing the FAILED
+  // url (not a boolean like the video path's `thumbnailError`, which never
+  // resets) lets a later successful url paint again, and the onError evicts
+  // the hook's resolved-url cache so the next in-view resolution asks Rust —
+  // which regenerates a deleted cache file — instead of re-serving the dead
+  // url all session. Mirrors the viewer filmstrip's cell.
+  const [failedImageUrl, setFailedImageUrl] = useState<string | null>(null);
 
   const displayName = formatDisplayName(file.name);
   const { icon: Icon, color } = getFileIcon(fileType ?? undefined, !!file.isFolder);
@@ -221,9 +232,8 @@ const FileCard: React.FC<FileCardProps> = ({
   // canvas grab above. One pair of display vars so the render stays uniform.
   const displayUrl = isImageType ? imageThumb.url : thumbnailUrl;
   const displayLoading = isImageType ? imageThumb.isLoading : isLoadingThumbnail;
-  // `thumbnailError` also covers an <Image> onError for a resolved image URL.
   const displayFailed = isImageType
-    ? !!imageThumb.error || thumbnailError
+    ? !!imageThumb.error || (displayUrl !== null && displayUrl === failedImageUrl)
     : thumbnailError;
 
   return (
@@ -349,7 +359,14 @@ const FileCard: React.FC<FileCardProps> = ({
               alt={fileName}
               fill
               className="object-cover"
-              onError={() => setThumbnailError(true)}
+              onError={() => {
+                if (isImageType) {
+                  evictResolvedThumbnailUrl(file, CARD_THUMB_MAX_DIM);
+                  setFailedImageUrl(displayUrl);
+                } else {
+                  setThumbnailError(true);
+                }
+              }}
             />
             {fileType === "video" && (
               <div className="absolute inset-0 flex items-center justify-center bg-black/50 hover:bg-black/60 transition-colors">
