@@ -296,13 +296,17 @@ impl Drop for TempZip {
     }
 }
 
-/// Builds a redacted zip of the most recent log files in `dir`.
+/// Builds a redacted zip of the most recent log files in `dir`, plus a
+/// `system-info.txt` entry carrying `system_info` (build identity — see
+/// `diagnostics::bundle_system_info`) so the bundle names the build that
+/// produced it even after the startup banner has rotated out.
 ///
 /// `dir` is a parameter (not hard-coded) so the bundling logic is unit-testable
 /// against a fixture directory. Returns `Ok(None)` when there is nothing to
 /// ship — the directory is absent (fresh install) or no eligible file remained
-/// after the size caps — so the caller can skip the upload cleanly.
-fn build_log_bundle(dir: &Path) -> Result<Option<TempZip>, AppError> {
+/// after the size caps — so the caller can skip the upload cleanly; metadata
+/// alone is never worth an upload.
+fn build_log_bundle(dir: &Path, system_info: &str) -> Result<Option<TempZip>, AppError> {
     if !dir.exists() {
         return Ok(None);
     }
@@ -352,6 +356,15 @@ fn build_log_bundle(dir: &Path) -> Result<Option<TempZip>, AppError> {
         total = total.saturating_add(redacted.len() as u64);
         wrote_any = true;
     }
+    // Identity metadata rides along only when log files shipped: on its own
+    // it explains nothing, and an upload of pure metadata would read as "logs
+    // arrived" on the ticket. Written outside the size budget — it is a few
+    // fixed lines, and the budget exists to bound log content.
+    if wrote_any {
+        zip.start_file("system-info.txt", options)
+            .map_err(|e| AppError::Other(format!("zip start_file: {e}")))?;
+        zip.write_all(system_info.as_bytes())?;
+    }
     zip.finish().map_err(|e| AppError::Other(format!("zip finish: {e}")))?;
 
     // No eligible files: let `temp` drop (removing the empty zip) and signal
@@ -395,9 +408,10 @@ async fn attach_logs_to_ticket_inner(
     let message_id = crate::utils::support::first_message_id(state, account_id, ticket_id).await?;
 
     let dir = logs_dir()?;
+    let system_info = crate::diagnostics::bundle_system_info();
     // File enumeration, reads, redaction, and zipping are blocking; keep them
     // off the async runtime. `build_log_bundle` owns all the blocking work.
-    let bundle = tokio::task::spawn_blocking(move || build_log_bundle(&dir))
+    let bundle = tokio::task::spawn_blocking(move || build_log_bundle(&dir, &system_info))
         .await
         .map_err(|e| AppError::Other(format!("Log bundling task failed: {e}")))??;
 
@@ -739,7 +753,8 @@ mod tests {
     #[test]
     fn empty_dir_returns_none() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let bundle = build_log_bundle(dir.path()).expect("bundle");
+        // Non-empty metadata proves system info alone never creates a bundle.
+        let bundle = build_log_bundle(dir.path(), "version: 1.2.3\n").expect("bundle");
         assert!(bundle.is_none(), "empty dir should yield no bundle");
     }
 
@@ -747,7 +762,7 @@ mod tests {
     fn missing_dir_returns_none() {
         let dir = tempfile::tempdir().expect("tempdir");
         let missing = dir.path().join("does-not-exist");
-        let bundle = build_log_bundle(&missing).expect("bundle");
+        let bundle = build_log_bundle(&missing, "version: 1.2.3\n").expect("bundle");
         assert!(bundle.is_none(), "missing dir should yield no bundle");
     }
 
@@ -757,7 +772,7 @@ mod tests {
         std::fs::write(dir.path().join("hippius.2026-06-08.log"), format!("INFO ok\nimport {MNEMONIC_12}\n")).expect("write log");
         std::fs::write(dir.path().join("hippius.2026-06-07.log"), "INFO previous day\n").expect("write log");
 
-        let bundle = build_log_bundle(dir.path()).expect("bundle").expect("expected a bundle");
+        let bundle = build_log_bundle(dir.path(), "").expect("bundle").expect("expected a bundle");
         let file = std::fs::File::open(bundle.path()).expect("open zip");
         let mut archive = zip::ZipArchive::new(file).expect("read zip");
         assert!(archive.len() >= 2, "expected both log files zipped, got {}", archive.len());
@@ -787,10 +802,11 @@ mod tests {
         std::fs::write(dir.path().join("hippius.big.log"), &big).expect("write big");
         std::fs::write(dir.path().join("hippius.small.log"), "INFO small\n").expect("write small");
 
-        let bundle = build_log_bundle(dir.path()).expect("bundle").expect("expected a bundle");
+        let bundle = build_log_bundle(dir.path(), "").expect("bundle").expect("expected a bundle");
         let file = std::fs::File::open(bundle.path()).expect("open zip");
         let mut archive = zip::ZipArchive::new(file).expect("read zip");
-        assert_eq!(archive.len(), 2, "an oversized file must still be shipped, truncated");
+        // Both log files plus the system-info entry.
+        assert_eq!(archive.len(), 3, "an oversized file must still be shipped, truncated");
 
         let mut big_entry = archive.by_name("hippius.big.log").expect("oversized file present in zip");
         let mut contents = String::new();
@@ -845,11 +861,38 @@ mod tests {
         for i in 0..9 {
             std::fs::write(dir.path().join(format!("hippius.{i}.log")), &chunk).expect("write");
         }
-        let bundle = build_log_bundle(dir.path()).expect("bundle").expect("expected a bundle");
+        let bundle = build_log_bundle(dir.path(), "").expect("bundle").expect("expected a bundle");
         let file = std::fs::File::open(bundle.path()).expect("open zip");
-        let archive = zip::ZipArchive::new(file).expect("read zip");
-        assert!(archive.len() <= MAX_FILES, "must never ship more than MAX_FILES entries");
-        assert!(!archive.is_empty(), "small files must all fit");
+        let mut archive = zip::ZipArchive::new(file).expect("read zip");
+
+        // Count LOG entries by name, so the MAX_FILES cap is proven
+        // independently of the system-info entry — a raw `len() <= MAX + 1`
+        // would let an eighth log file pass whenever system-info went missing.
+        let log_entries = (0..archive.len())
+            .filter(|&i| archive.by_index(i).expect("entry").name() != "system-info.txt")
+            .count();
+        assert!(log_entries <= MAX_FILES, "must never ship more than MAX_FILES log entries");
+        assert!(log_entries > 0, "small files must all fit");
+    }
+
+    #[test]
+    fn bundle_includes_a_system_info_entry() {
+        // The startup banner rotates out after seven days, so the bundle
+        // itself must name the build that produced it.
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("hippius.log"), "INFO ok\n").expect("write log");
+
+        let bundle = build_log_bundle(dir.path(), "version: 1.2.3\nchannel: staging\n")
+            .expect("bundle")
+            .expect("expected a bundle");
+        let file = std::fs::File::open(bundle.path()).expect("open zip");
+        let mut archive = zip::ZipArchive::new(file).expect("read zip");
+
+        let mut entry = archive.by_name("system-info.txt").expect("system-info.txt present in zip");
+        let mut contents = String::new();
+        entry.read_to_string(&mut contents).expect("read entry");
+        assert!(contents.contains("version: 1.2.3"), "got: {contents}");
+        assert!(contents.contains("channel: staging"), "got: {contents}");
     }
 
     #[test]
