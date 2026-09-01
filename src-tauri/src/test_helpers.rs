@@ -23,3 +23,47 @@ use std::sync::Mutex;
 /// reads `$HOME` after the override). Prevents parallel tests from
 /// seeing each other's tempdirs as their `$HOME`.
 pub(crate) static HOME_LOCK: Mutex<()> = Mutex::new(());
+
+/// Collects `tracing` output so a test can assert on what was logged.
+/// Clones share one buffer; read it back with [`CaptureWriter::text`].
+#[derive(Clone, Default)]
+pub(crate) struct CaptureWriter(std::sync::Arc<Mutex<Vec<u8>>>);
+
+impl CaptureWriter {
+    pub(crate) fn text(&self) -> String {
+        String::from_utf8_lossy(&self.0.lock().expect("capture buffer lock")).into_owned()
+    }
+}
+
+impl std::io::Write for CaptureWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().expect("capture buffer lock").extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for CaptureWriter {
+    type Writer = Self;
+
+    fn make_writer(&'a self) -> Self {
+        self.clone()
+    }
+}
+
+/// A plain-text `fmt` subscriber writing into a [`CaptureWriter`], for
+/// asserting that a code path logs (or stays silent) at `max_level`.
+/// Install it with `tracing::subscriber::with_default`, which is
+/// thread-local — parallel tests don't see each other's captures.
+pub(crate) fn capture_subscriber(max_level: tracing::Level) -> (impl tracing::Subscriber + Send + Sync, CaptureWriter) {
+    let writer = CaptureWriter::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(max_level)
+        .with_ansi(false)
+        .with_writer(writer.clone())
+        .finish();
+    (subscriber, writer)
+}
