@@ -144,11 +144,12 @@ mod tests {
     fn panic_hook_logs_payload_and_location() {
         install_panic_hook();
 
-        let (subscriber, writer) = capture_subscriber(tracing::Level::ERROR);
+        let (subscriber, writer, _capture_guard) = capture_subscriber();
         let panic_result = tracing::subscriber::with_default(subscriber, || std::panic::catch_unwind(|| panic!("boom-for-hook-test")));
         assert!(panic_result.is_err(), "the closure must actually panic");
 
         let text = writer.text();
+        assert!(text.contains("ERROR"), "expected an error-level line: {text}");
         assert!(text.contains("boom-for-hook-test"), "payload missing from log: {text}");
         assert!(text.contains("diagnostics.rs"), "panic location missing from log: {text}");
     }

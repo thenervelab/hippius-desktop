@@ -54,16 +54,33 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for CaptureWriter {
     }
 }
 
+/// Serialises every test that installs a capture subscriber, so their
+/// interactions with `tracing`'s process-global callsite state are ordered.
+static CAPTURE_LOCK: Mutex<()> = Mutex::new(());
+
 /// A plain-text `fmt` subscriber writing into a [`CaptureWriter`], for
-/// asserting that a code path logs (or stays silent) at `max_level`.
-/// Install it with `tracing::subscriber::with_default`, which is
-/// thread-local — parallel tests don't see each other's captures.
-pub(crate) fn capture_subscriber(max_level: tracing::Level) -> (impl tracing::Subscriber + Send + Sync, CaptureWriter) {
+/// asserting on what a code path logs. Install it with
+/// `tracing::subscriber::with_default`, which is thread-local — parallel
+/// tests don't see each other's captures. Hold the returned guard for the
+/// test's duration.
+///
+/// The subscriber always records at TRACE; assert on the level *text* in
+/// the captured output instead of passing a max level. This is
+/// load-bearing: `tracing` caches per-callsite interest PROCESS-GLOBALLY
+/// from whichever subscriber touches the callsite first, so a WARN-capped
+/// capture touching a `debug!` callsite pinned it disabled for every later
+/// test — an observed intermittent failure, ordering-dependent. A uniform
+/// TRACE ceiling means no capture can poison a callsite for another.
+pub(crate) fn capture_subscriber() -> (impl tracing::Subscriber + Send + Sync, CaptureWriter, std::sync::MutexGuard<'static, ()>) {
+    // A failed assertion inside a capture test poisons the lock; the state
+    // it protects is only "one capture subscriber at a time", so recovery
+    // is always safe.
+    let guard = CAPTURE_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let writer = CaptureWriter::default();
     let subscriber = tracing_subscriber::fmt()
-        .with_max_level(max_level)
+        .with_max_level(tracing::Level::TRACE)
         .with_ansi(false)
         .with_writer(writer.clone())
         .finish();
-    (subscriber, writer)
+    (subscriber, writer, guard)
 }

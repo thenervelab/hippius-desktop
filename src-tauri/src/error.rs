@@ -278,6 +278,22 @@ impl AppError {
             | Self::Other(_) => false,
         }
     }
+
+    /// Display text for the boundary log line. reqwest 0.13's `Display`
+    /// appends `for url (…)`, and a tokenized share route carries the
+    /// plaintext capability in its path — stripped HERE because the log
+    /// scrubber has no pattern for a bare token inside a URL. Only the
+    /// logged copy is stripped; the wire message is unchanged (the
+    /// frontend already receives it today).
+    fn log_text(&self) -> String {
+        let text = self.to_string();
+        if let Self::Http(e) = self
+            && let Some(url) = e.url()
+        {
+            return text.replace(url.as_str(), "<url redacted>");
+        }
+        text
+    }
 }
 
 impl Serialize for AppError {
@@ -312,9 +328,9 @@ impl Serialize for AppError {
         // preconditions stay at debug: the frontend surfaces them, and at
         // warn they would crowd real diagnostics out of the bundle.
         if self.is_expected_precondition() {
-            tracing::debug!(kind, error = %self, "IPC command returned an expected precondition error");
+            tracing::debug!(kind, error = %self.log_text(), "IPC command returned an expected precondition error");
         } else {
-            tracing::warn!(kind, error = %self, "IPC command returned an error");
+            tracing::warn!(kind, error = %self.log_text(), "IPC command returned an error");
         }
 
         if let Self::NotReady(subkind) = self {
@@ -760,12 +776,13 @@ mod tests {
     /// line unless the individual command happened to log.
     #[test]
     fn serializing_an_unexpected_error_warns_with_kind_and_message() {
-        let (subscriber, writer) = crate::test_helpers::capture_subscriber(tracing::Level::WARN);
+        let (subscriber, writer, _capture_guard) = crate::test_helpers::capture_subscriber();
         tracing::subscriber::with_default(subscriber, || {
             let _ = serde_json::to_string(&AppError::Substrate("rpc exploded".into()));
         });
 
         let text = writer.text();
+        assert!(text.contains("WARN"), "expected a warn-level line: {text}");
         assert!(text.contains("Substrate"), "kind missing from log: {text}");
         assert!(text.contains("rpc exploded"), "message missing from log: {text}");
     }
@@ -775,26 +792,67 @@ mod tests {
     /// at `warn!` they would drown real diagnostics in the support bundle.
     #[test]
     fn serializing_an_expected_precondition_stays_below_warn() {
-        let (subscriber, writer) = crate::test_helpers::capture_subscriber(tracing::Level::WARN);
+        let (subscriber, writer, _capture_guard) = crate::test_helpers::capture_subscriber();
         tracing::subscriber::with_default(subscriber, || {
             let _ = serde_json::to_string(&AppError::NotReady(NotReadyKind::InsufficientCredits));
             let _ = serde_json::to_string(&AppError::Validation("bad label".into()));
             let _ = serde_json::to_string(&AppError::NotFound("wallet gone".into()));
         });
 
-        assert_eq!(writer.text(), "", "expected preconditions must not log at warn or above");
+        let text = writer.text();
+        assert!(!text.is_empty(), "the debug tier must still record the preconditions");
+        assert!(
+            !text.contains("WARN") && !text.contains("ERROR"),
+            "expected preconditions must not log at warn or above: {text}"
+        );
+    }
+
+    /// reqwest 0.13's `Display` appends `for url (…)`, and a tokenized share
+    /// route carries the plaintext capability in its path — so the boundary
+    /// log line must strip the URL, or the rolling logs a support bundle
+    /// ships would hold live share tokens the scrubber has no pattern for
+    /// (a bare token in a URL path is unlabelled). The wire message keeps
+    /// the URL: the frontend already receives it today.
+    #[tokio::test]
+    async fn http_error_log_line_strips_the_request_url() {
+        let err = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .expect("client")
+            .get("http://127.0.0.1:9/folder-shares/SECRET-CAPABILITY-TOKEN")
+            .send()
+            .await
+            .expect_err("connecting to the discard port must fail");
+        let app_err = AppError::from(err);
+
+        // Precondition: the Display text really does embed the URL — if
+        // reqwest stops doing that, this test (and the strip) need a rethink.
+        assert!(
+            app_err.to_string().contains("SECRET-CAPABILITY-TOKEN"),
+            "fixture no longer embeds the URL"
+        );
+
+        let (subscriber, writer, _capture_guard) = crate::test_helpers::capture_subscriber();
+        tracing::subscriber::with_default(subscriber, || {
+            let _ = serde_json::to_string(&app_err);
+        });
+
+        let text = writer.text();
+        assert!(!text.contains("SECRET-CAPABILITY-TOKEN"), "request URL leaked into the log: {text}");
+        assert!(text.contains("Http"), "kind missing from log: {text}");
     }
 
     /// The expected kinds still leave a `debug!` trace, so a verbose run
     /// can reconstruct the full IPC error stream.
     #[test]
     fn expected_preconditions_still_log_at_debug() {
-        let (subscriber, writer) = crate::test_helpers::capture_subscriber(tracing::Level::DEBUG);
+        let (subscriber, writer, _capture_guard) = crate::test_helpers::capture_subscriber();
         tracing::subscriber::with_default(subscriber, || {
             let _ = serde_json::to_string(&AppError::Validation("bad-label-input".into()));
         });
 
         let text = writer.text();
+        assert!(text.contains("DEBUG"), "expected a debug-level line: {text}");
         assert!(text.contains("bad-label-input"), "debug trace missing: {text}");
     }
 }
