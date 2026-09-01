@@ -480,9 +480,14 @@ fn evict_preview_cache_dir(root: &Path, cap: u64, keep: &Path) -> usize {
 
 // ─── Thumbnails ────────────────────────────────────────────────────────────
 
-/// Root dir for cached thumbnails. Under `$HOME/.hippius/**` so the webview can
-/// load them via `convertFileSrc` — same asset-scope reasoning as the preview
-/// cache (the OS cache dir is outside the scope and would be blocked).
+/// Root dir for cached thumbnails. The webview loads these via
+/// `convertFileSrc`, which requires this exact directory to be allowlisted in
+/// `tauri.conf.json`'s `assetProtocol.scope` — being under `~/.hippius` is
+/// NOT sufficient (the static scope names `preview-cache` and
+/// `thumbnail-cache` individually, deliberately never all of `~/.hippius`,
+/// which would expose the mnemonic and DB to the renderer). Pinned by
+/// `thumbnail_cache_is_inside_the_asset_protocol_scope`; moving this
+/// directory means updating the scope in the same commit.
 fn thumbnail_cache_root() -> Result<PathBuf> {
     // home_dir None → documented Other (environment fault); see master_mnemonic_path.
     Ok(dirs::home_dir()
@@ -834,6 +839,30 @@ pub async fn list_remote_folder_grouped(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `get_thumbnail` hands the FE a path under `thumbnail_cache_root()`,
+    /// which the webview then loads through `convertFileSrc` — so the asset
+    /// protocol's STATIC scope must allowlist that directory. It didn't:
+    /// thumbnails generated perfectly on disk while every `<img>` load was
+    /// refused with no error anywhere, rendering broken-image glyphs across
+    /// the filmstrip and grid (found live on 0.6.0-beta.8). Nothing else
+    /// ties the Rust cache location to the scope config, hence this pin.
+    #[test]
+    fn thumbnail_cache_is_inside_the_asset_protocol_scope() {
+        let conf = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tauri.conf.json"))
+            .expect("read tauri.conf.json");
+        let conf: serde_json::Value = serde_json::from_str(&conf).expect("parse tauri.conf.json");
+
+        let scope = conf["app"]["security"]["assetProtocol"]["scope"]
+            .as_array()
+            .expect("assetProtocol.scope array");
+        assert!(
+            scope.iter().any(|s| s.as_str() == Some("$HOME/.hippius/thumbnail-cache/**")),
+            "the asset-protocol scope must cover thumbnail_cache_root() \
+             ($HOME/.hippius/thumbnail-cache) or every thumbnail img load is refused; \
+             scope = {scope:?}",
+        );
+    }
 
     // ── Remote grouped listing (/browse page mapper) ────────────────────
 

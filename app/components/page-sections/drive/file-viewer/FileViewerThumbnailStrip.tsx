@@ -265,6 +265,14 @@ const StripThumbnail = React.memo(function StripThumbnail({
   const [inViewRef, inView] = useInView<HTMLButtonElement>();
   const thumb = useThumbnail(isImage ? file : null, { enabled: inView, maxDim: 160 });
 
+  // A resolved url whose fetch is then refused (asset-scope, a deleted cache
+  // file) must degrade to the icon, never a broken-image glyph. Reset when a
+  // new url resolves so a later successful thumbnail still paints.
+  const [imageFailed, setImageFailed] = useState(false);
+  useEffect(() => {
+    setImageFailed(false);
+  }, [thumb.url]);
+
   return (
     <button
       ref={inViewRef}
@@ -284,12 +292,13 @@ const StripThumbnail = React.memo(function StripThumbnail({
         isActive && "ring-1 ring-primary-50 ring-offset-1 ring-offset-transparent",
       )}
     >
-      {isImage && thumb.url ? (
+      {isImage && thumb.url && !imageFailed ? (
         <img
           src={thumb.url}
           alt=""
           className="absolute inset-0 size-full object-cover"
           draggable={false}
+          onError={() => setImageFailed(true)}
         />
       ) : (
         <div
