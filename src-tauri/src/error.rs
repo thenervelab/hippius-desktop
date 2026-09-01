@@ -253,6 +253,33 @@ impl std::fmt::Display for NotReadyKind {
 /// dispatch on `err.subkind` instead of pattern-matching English
 /// substrings of `err.message` — the substring match was fragile and
 /// broke silently whenever the Display text was reworded.
+impl AppError {
+    /// True for the kinds that describe an expected user/state precondition
+    /// (surfaced by the frontend, routinely hit in normal operation) rather
+    /// than something going wrong. An explicit match so adding a variant
+    /// forces a decision about its logging tier.
+    fn is_expected_precondition(&self) -> bool {
+        match self {
+            Self::NotReady(_) | Self::Validation(_) | Self::NotFound(_) => true,
+            Self::Db(_)
+            | Self::Io(_)
+            | Self::Http(_)
+            | Self::Json(_)
+            | Self::Zip(_)
+            | Self::Substrate(_)
+            | Self::Hcfs(_)
+            | Self::Crypto(_)
+            | Self::Api { .. }
+            | Self::Auth(_)
+            | Self::Progress(_)
+            | Self::Lock(_)
+            | Self::Intent(_)
+            | Self::Vpn(_)
+            | Self::Other(_) => false,
+        }
+    }
+}
+
 impl Serialize for AppError {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
@@ -277,6 +304,18 @@ impl Serialize for AppError {
             Self::Vpn(_) => "Vpn",
             Self::Other(_) => "Other",
         };
+
+        // Serialization is the one choke point every IPC error crosses on
+        // its way to the renderer, so logging here guarantees that every
+        // error the user might see leaves a matching line in the support
+        // logs — even for commands that log nothing themselves. Expected
+        // preconditions stay at debug: the frontend surfaces them, and at
+        // warn they would crowd real diagnostics out of the bundle.
+        if self.is_expected_precondition() {
+            tracing::debug!(kind, error = %self, "IPC command returned an expected precondition error");
+        } else {
+            tracing::warn!(kind, error = %self, "IPC command returned an error");
+        }
 
         if let Self::NotReady(subkind) = self {
             let mut s = serializer.serialize_struct("AppError", 3)?;
@@ -713,5 +752,49 @@ mod tests {
         for (kind, expected) in cases {
             assert_eq!(kind.to_string(), expected);
         }
+    }
+
+    /// Serializing an error IS the moment it crosses the IPC boundary, so
+    /// every unexpected error the frontend receives must leave a `warn!`
+    /// line — a user reporting an error toast used to have no matching log
+    /// line unless the individual command happened to log.
+    #[test]
+    fn serializing_an_unexpected_error_warns_with_kind_and_message() {
+        let (subscriber, writer) = crate::test_helpers::capture_subscriber(tracing::Level::WARN);
+        tracing::subscriber::with_default(subscriber, || {
+            let _ = serde_json::to_string(&AppError::Substrate("rpc exploded".into()));
+        });
+
+        let text = writer.text();
+        assert!(text.contains("Substrate"), "kind missing from log: {text}");
+        assert!(text.contains("rpc exploded"), "message missing from log: {text}");
+    }
+
+    /// Expected user-state preconditions (not ready, bad input, not found)
+    /// fire routinely in normal operation and are surfaced by the frontend;
+    /// at `warn!` they would drown real diagnostics in the support bundle.
+    #[test]
+    fn serializing_an_expected_precondition_stays_below_warn() {
+        let (subscriber, writer) = crate::test_helpers::capture_subscriber(tracing::Level::WARN);
+        tracing::subscriber::with_default(subscriber, || {
+            let _ = serde_json::to_string(&AppError::NotReady(NotReadyKind::InsufficientCredits));
+            let _ = serde_json::to_string(&AppError::Validation("bad label".into()));
+            let _ = serde_json::to_string(&AppError::NotFound("wallet gone".into()));
+        });
+
+        assert_eq!(writer.text(), "", "expected preconditions must not log at warn or above");
+    }
+
+    /// The expected kinds still leave a `debug!` trace, so a verbose run
+    /// can reconstruct the full IPC error stream.
+    #[test]
+    fn expected_preconditions_still_log_at_debug() {
+        let (subscriber, writer) = crate::test_helpers::capture_subscriber(tracing::Level::DEBUG);
+        tracing::subscriber::with_default(subscriber, || {
+            let _ = serde_json::to_string(&AppError::Validation("bad-label-input".into()));
+        });
+
+        let text = writer.text();
+        assert!(text.contains("bad-label-input"), "debug trace missing: {text}");
     }
 }
