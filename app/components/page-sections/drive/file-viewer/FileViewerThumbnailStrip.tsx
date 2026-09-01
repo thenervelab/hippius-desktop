@@ -5,7 +5,7 @@ import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
 import { getFileIcon } from "@/app/lib/utils/fileTypeUtils";
-import { useThumbnail } from "@/app/lib/hooks/useThumbnail";
+import { useThumbnail, evictResolvedThumbnailUrl } from "@/app/lib/hooks/useThumbnail";
 import { useInView } from "@/app/lib/hooks/useInView";
 import { cn } from "@/app/lib/utils";
 
@@ -18,6 +18,9 @@ interface FileViewerThumbnailStripProps {
 const THUMB_HEIGHT = 82;
 const IMAGE_THUMB_WIDTH = 135;
 const NON_IMAGE_THUMB_WIDTH = 92;
+
+/** Cell thumbnail resolution — shared by the resolve and the evict-on-error. */
+const STRIP_THUMB_MAX_DIM = 160;
 
 /**
  * Flex gap between cells and the container's horizontal padding. Both are
@@ -263,15 +266,15 @@ const StripThumbnail = React.memo(function StripThumbnail({
   const width = isImage ? IMAGE_THUMB_WIDTH : NON_IMAGE_THUMB_WIDTH;
 
   const [inViewRef, inView] = useInView<HTMLButtonElement>();
-  const thumb = useThumbnail(isImage ? file : null, { enabled: inView, maxDim: 160 });
+  const thumb = useThumbnail(isImage ? file : null, { enabled: inView, maxDim: STRIP_THUMB_MAX_DIM });
 
   // A resolved url whose fetch is then refused (asset-scope, a deleted cache
-  // file) must degrade to the icon, never a broken-image glyph. Reset when a
-  // new url resolves so a later successful thumbnail still paints.
-  const [imageFailed, setImageFailed] = useState(false);
-  useEffect(() => {
-    setImageFailed(false);
-  }, [thumb.url]);
+  // file) must degrade to the icon, never a broken-image glyph. Storing the
+  // FAILED url (rather than a boolean) makes a later successful url paint
+  // with no reset bookkeeping, and the onError evicts the hook's resolved-url
+  // cache so the next in-view resolution asks Rust — which regenerates a
+  // deleted cache file — instead of re-serving the dead url all session.
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
 
   return (
     <button
@@ -292,13 +295,16 @@ const StripThumbnail = React.memo(function StripThumbnail({
         isActive && "ring-1 ring-primary-50 ring-offset-1 ring-offset-transparent",
       )}
     >
-      {isImage && thumb.url && !imageFailed ? (
+      {isImage && thumb.url && thumb.url !== failedUrl ? (
         <img
           src={thumb.url}
           alt=""
           className="absolute inset-0 size-full object-cover"
           draggable={false}
-          onError={() => setImageFailed(true)}
+          onError={() => {
+            evictResolvedThumbnailUrl(file, STRIP_THUMB_MAX_DIM);
+            setFailedUrl(thumb.url);
+          }}
         />
       ) : (
         <div

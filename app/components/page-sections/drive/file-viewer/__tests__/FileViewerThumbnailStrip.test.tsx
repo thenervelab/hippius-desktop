@@ -18,8 +18,10 @@ import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 // The strip's cells resolve thumbnails through useThumbnail (wallet context,
 // Tauri runtime); the behaviour under test is independent of all of that.
 let thumbnailUrl: string | null = null;
+const evictMock = vi.fn();
 vi.mock("@/app/lib/hooks/useThumbnail", () => ({
   useThumbnail: () => ({ url: thumbnailUrl, isLoading: false, error: null }),
+  evictResolvedThumbnailUrl: (...args: unknown[]) => evictMock(...args),
 }));
 
 import FileViewerThumbnailStrip from "../FileViewerThumbnailStrip";
@@ -148,8 +150,10 @@ describe("FileViewerThumbnailStrip virtualisation", () => {
     fireEvent.error(images[1]);
 
     expect(container.querySelectorAll("img").length).toBe(2);
-    // The failed cell still renders — as its file-type icon.
+    // The failed cell still renders — as its file-type icon — and the dead
+    // url is evicted so the next in-view resolution asks Rust again.
     expect(screen.getByLabelText("Open IMG_1.jpg")).toBeInTheDocument();
+    expect(evictMock).toHaveBeenCalledWith(files[1], 160);
   });
 
   it("does not jump to the folder start when the active file is missing from the list", () => {

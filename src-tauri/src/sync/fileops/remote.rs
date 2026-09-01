@@ -840,27 +840,41 @@ pub async fn list_remote_folder_grouped(
 mod tests {
     use super::*;
 
-    /// `get_thumbnail` hands the FE a path under `thumbnail_cache_root()`,
-    /// which the webview then loads through `convertFileSrc` — so the asset
-    /// protocol's STATIC scope must allowlist that directory. It didn't:
-    /// thumbnails generated perfectly on disk while every `<img>` load was
-    /// refused with no error anywhere, rendering broken-image glyphs across
-    /// the filmstrip and grid (found live on 0.6.0-beta.8). Nothing else
-    /// ties the Rust cache location to the scope config, hence this pin.
+    /// This module hands the FE paths under `thumbnail_cache_root()` and
+    /// `preview_cache_root_dir()`, which the webview loads through
+    /// `convertFileSrc` — so the asset protocol's STATIC scope must allowlist
+    /// BOTH directories. The thumbnail cache wasn't: thumbnails generated
+    /// perfectly on disk while every `<img>` load was refused with no error
+    /// anywhere, rendering broken-image glyphs across the filmstrip and grid
+    /// (found live on 0.6.0-beta.8).
+    ///
+    /// The expected globs are DERIVED from the same functions the commands
+    /// use, not hardcoded, so the pin is two-directional: moving a cache
+    /// directory without moving its scope entry fails here too.
     #[test]
-    fn thumbnail_cache_is_inside_the_asset_protocol_scope() {
+    fn webview_served_cache_roots_are_inside_the_asset_protocol_scope() {
         let conf = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tauri.conf.json")).expect("read tauri.conf.json");
         let conf: serde_json::Value = serde_json::from_str(&conf).expect("parse tauri.conf.json");
 
         let scope = conf["app"]["security"]["assetProtocol"]["scope"]
             .as_array()
             .expect("assetProtocol.scope array");
-        assert!(
-            scope.iter().any(|s| s.as_str() == Some("$HOME/.hippius/thumbnail-cache/**")),
-            "the asset-protocol scope must cover thumbnail_cache_root() \
-             ($HOME/.hippius/thumbnail-cache) or every thumbnail img load is refused; \
-             scope = {scope:?}",
-        );
+        let home = dirs::home_dir().expect("home dir");
+
+        let roots = [thumbnail_cache_root().unwrap(), preview_cache_root_dir().unwrap()];
+        for root in roots {
+            let rel = root.strip_prefix(&home).expect("cache root under $HOME");
+            // Forward slashes regardless of platform: the scope globs in
+            // tauri.conf.json are written with `/`.
+            let rel: Vec<&str> = rel.components().map(|c| c.as_os_str().to_str().expect("utf-8 path component")).collect();
+            let expected = format!("$HOME/{}/**", rel.join("/"));
+            assert!(
+                scope.iter().any(|s| s.as_str() == Some(expected.as_str())),
+                "the asset-protocol scope must contain {expected:?} or every img load \
+                 from {} is refused with no error anywhere; scope = {scope:?}",
+                root.display(),
+            );
+        }
     }
 
     // ── Remote grouped listing (/browse page mapper) ────────────────────
