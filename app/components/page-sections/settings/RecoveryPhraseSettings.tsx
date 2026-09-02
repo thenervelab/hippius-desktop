@@ -119,6 +119,27 @@ const RecoveryPhraseSettings: React.FC = () => {
     setMnemonic(null);
   };
 
+  // Re-probe at click time: the mount-time answer can be stale because an
+  // unlock password may have been set on Hippius Console (or another device)
+  // while this page was open, and "Set" would then offer to replace it. If
+  // the probe fails, fall back to the last-known state rather than block the
+  // user — Rust refuses an unsafe seal on its own.
+  const handleUnlockPasswordAction = async () => {
+    let serverBlob = hasServerBlob;
+    try {
+      const check = await checkRecoveryState();
+      serverBlob = check.hasServerBlob;
+      setHasServerBlob(serverBlob);
+    } catch {
+      // Network hiccup — keep the last-known state.
+    }
+    if (serverBlob) {
+      setShowChangePassword(true);
+    } else {
+      setShowSetPassword(true);
+    }
+  };
+
   return (
     <>
       <InView triggerOnce>
@@ -171,11 +192,7 @@ const RecoveryPhraseSettings: React.FC = () => {
                 actionLabel={
                   hasServerBlob ? "Change Unlock Password" : "Set Unlock Password"
                 }
-                onAction={() =>
-                  hasServerBlob
-                    ? setShowChangePassword(true)
-                    : setShowSetPassword(true)
-                }
+                onAction={() => void handleUnlockPasswordAction()}
               />
             </div>
           </div>
@@ -198,6 +215,7 @@ const RecoveryPhraseSettings: React.FC = () => {
         open={showSetPassword}
         onOpenChange={setShowSetPassword}
         onSuccess={refreshRecoveryState}
+        onError={refreshRecoveryState}
       />
     </>
   );

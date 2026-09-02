@@ -24,6 +24,13 @@ interface Props {
   onOpenChange: (open: boolean) => void;
   /** Called after a successful save so the parent can refresh state. */
   onSuccess?: () => void;
+  /**
+   * Called after a failed save. Rust refuses to seal when an unlock
+   * password already exists for the account (set on Hippius Console or
+   * another device), so the parent re-probes and flips its row to
+   * "Change Unlock Password" instead of offering "Set" again.
+   */
+  onError?: () => void;
 }
 
 /**
@@ -35,6 +42,7 @@ const SetRecoveryPasswordDialog: React.FC<Props> = ({
   open,
   onOpenChange,
   onSuccess,
+  onError,
 }) => {
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -74,10 +82,11 @@ const SetRecoveryPasswordDialog: React.FC<Props> = ({
       onSuccess?.();
     } catch (err) {
       toast.error(`Could not save unlock password: ${errMessage(err)}`);
+      onError?.();
     } finally {
       setSubmitting(false);
     }
-  }, [canSubmit, password, onOpenChange, onSuccess]);
+  }, [canSubmit, password, onOpenChange, onSuccess, onError]);
 
   return (
     <FramedDialog
