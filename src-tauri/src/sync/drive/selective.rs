@@ -6,6 +6,7 @@
 
 use crate::app_state::AppState;
 use crate::error::{AppError, Result};
+use crate::sync::exclude_literal::{ExcludePatternEntry, entries_from_patterns};
 use hcfs_client::engine::runner::trigger_sync;
 use tauri::{AppHandle, Emitter, Manager};
 use tracing::{debug, info, warn};
@@ -116,13 +117,14 @@ fn matches_everything(pattern: &str) -> bool {
     !pattern.is_empty() && pattern.chars().all(|c| matches!(c, '*' | '/' | '\\'))
 }
 
-/// List all active exclusion patterns for a drive.
+/// List all active exclusion patterns for a drive, each paired with the form
+/// to show the user (a literal exclusion reads back as its file name).
 ///
 /// Grabs the per-drive Arc from the drives map (microsecond outer lock),
 /// then locks the manager to read patterns. Returns an empty list if the
 /// drive does not exist.
 #[tauri::command]
-pub async fn list_exclude_patterns(label: String, app_state: tauri::State<'_, AppState>) -> Result<Vec<String>> {
+pub async fn list_exclude_patterns(label: String, app_state: tauri::State<'_, AppState>) -> Result<Vec<ExcludePatternEntry>> {
     let drive_arc = {
         let guard = app_state.sync.drives.lock().await;
         guard.get(&label).map(|slot| slot.manager.clone())
@@ -140,7 +142,7 @@ pub async fn list_exclude_patterns(label: String, app_state: tauri::State<'_, Ap
         count = patterns.len(),
         "Listed exclude patterns",
     );
-    Ok(patterns)
+    Ok(entries_from_patterns(patterns))
 }
 
 /// Add an exclusion pattern to a drive.

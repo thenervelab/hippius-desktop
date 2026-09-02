@@ -49,3 +49,43 @@ fn session_skip_is_tolerant_of_a_missing_drive() {
         "sp_skip_file's exclude write is supplementary and must stay optional"
     );
 }
+
+/// The path the Sync Issues dialog hands back is a file name, not a glob.
+/// Writing it verbatim into `.hippius/exclude` made `[`, `{`, `*` and `?`
+/// in a name change what the rule matched (and a leading `#` a comment), so
+/// the file was never excluded and the dialog kept returning. Both writers
+/// must go through `exclude_path_literally`, which escapes the name.
+#[test]
+fn exclude_and_skip_write_the_path_as_a_literal_pattern() {
+    let src = source();
+    let skip = slice_between(&src, "pub async fn sp_skip_file", "pub async fn sp_exclude_file");
+    let exclude = slice_between(&src, "pub async fn sp_exclude_file", "pub async fn sp_retry_file");
+    for (name, body) in [("sp_skip_file", skip), ("sp_exclude_file", exclude)] {
+        assert!(
+            body.contains("exclude_path_literally("),
+            "{name} must escape the path before writing it as a rule"
+        );
+        assert!(!body.contains("add_exclude_pattern("), "{name} must not write the raw path as a glob");
+    }
+}
+
+/// Every path that undoes a skip/exclude must remove the same escaped line
+/// the write produced — otherwise Retry reports success and the file stays
+/// excluded. `remove_literal_exclusion` owns that symmetry.
+#[test]
+fn every_retry_path_removes_the_literal_pattern() {
+    let src = source();
+    assert!(
+        !src.contains("remove_exclude_pattern("),
+        "failure_commands.rs must not remove raw paths directly"
+    );
+    for name in [
+        "pub async fn sp_retry_file",
+        "pub async fn retry_file_failure",
+        "pub async fn retry_all_failures",
+        "pub async fn cleanup_session_skips",
+    ] {
+        let body = slice_between(&src, name, "\n}\n");
+        assert!(body.contains("remove_literal_exclusion("), "{name} must remove the escaped rule");
+    }
+}

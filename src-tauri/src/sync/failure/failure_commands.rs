@@ -2,8 +2,13 @@
 //!
 //! These commands let the frontend skip, exclude, or retry files
 //! that have repeatedly failed to sync.
+//!
+//! The path is a file name, never a glob: every write and removal goes
+//! through `sync::exclude_literal` so `[`, `{`, `*`, `?` and a leading `#`
+//! in a name cannot change which file the rule matches.
 
 use crate::error::Result;
+use crate::sync::exclude_literal::{exclude_path_literally, remove_literal_exclusion};
 
 /// Skip a file for this session only.
 ///
@@ -26,8 +31,7 @@ pub async fn sp_skip_file(label: String, path: String, state: tauri::State<'_, c
     // is a session-scoped best-effort op, unlike permanent exclude.
     if let Some(arc) = drive_arc {
         let m = arc.lock().await;
-        m.add_exclude_pattern(&path)
-            .map_err(|e| crate::error::AppError::Hcfs(format!("add_exclude_pattern failed: {e}")))?;
+        exclude_path_literally(&m, &path).map_err(|e| crate::error::AppError::Hcfs(format!("add_exclude_pattern failed: {e}")))?;
     }
 
     state.sync.emit_snapshot(true);
@@ -58,8 +62,7 @@ pub async fn sp_exclude_file(label: String, path: String, state: tauri::State<'_
     };
     {
         let m = arc.lock().await;
-        m.add_exclude_pattern(&path)
-            .map_err(|e| crate::error::AppError::Hcfs(format!("add_exclude_pattern failed: {e}")))?;
+        exclude_path_literally(&m, &path).map_err(|e| crate::error::AppError::Hcfs(format!("add_exclude_pattern failed: {e}")))?;
     }
 
     state.sync.emit_snapshot(true);
@@ -85,8 +88,7 @@ pub async fn sp_retry_file(label: String, path: String, state: tauri::State<'_, 
     // stays tolerant (the failure counter / session-skip were already cleared).
     if let Some(arc) = drive_arc {
         let m = arc.lock().await;
-        m.remove_exclude_pattern(&path)
-            .map_err(|e| crate::error::AppError::Hcfs(format!("remove_exclude_pattern failed: {e}")))?;
+        remove_literal_exclusion(&m, &path).map_err(|e| crate::error::AppError::Hcfs(format!("remove_exclude_pattern failed: {e}")))?;
     }
 
     state.sync.emit_snapshot(true);
@@ -142,7 +144,7 @@ pub async fn retry_file_failure(label: String, path: String, state: tauri::State
     };
     if let Some(arc) = drive_arc {
         let m = arc.lock().await;
-        let _ = m.remove_exclude_pattern(&path);
+        let _ = remove_literal_exclusion(&m, &path);
     }
 
     hcfs_client::engine::runner::trigger_sync(&state.sync).await;
@@ -182,7 +184,7 @@ pub async fn retry_all_failures(label: String, state: tauri::State<'_, crate::ap
     if let Some(arc) = drive_arc {
         let m = arc.lock().await;
         for rec in &records {
-            let _ = m.remove_exclude_pattern(&rec.relative_path);
+            let _ = remove_literal_exclusion(&m, &rec.relative_path);
         }
     }
 
@@ -205,7 +207,7 @@ pub async fn cleanup_session_skips(state: &crate::app_state::AppState) {
         };
         if let Some(arc) = drive_arc {
             let m = arc.lock().await;
-            let _ = m.remove_exclude_pattern(&path);
+            let _ = remove_literal_exclusion(&m, &path);
         }
     }
     state.file_failures.reset();
