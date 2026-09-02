@@ -49,10 +49,41 @@ fn position(body: &str, needle: &str, what: &str) -> usize {
         .unwrap_or_else(|| panic!("{what}: {needle:?} not found in the function body"))
 }
 
+/// Drop `//` comment lines so a needle mentioned in prose cannot satisfy
+/// (or misplace) a pin that is meant to match code.
+fn without_comments(body: &str) -> String {
+    body.lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Assert the statement that starts at `needle` propagates its `Result`
+/// with `?`. Order alone is not the protection: `.await.ok()` or
+/// `let _ =` keeps the call in place, keeps clippy quiet (`Result` is
+/// `#[must_use]` but a consumed one is not), and silently disarms the guard.
+fn assert_propagates(body: &str, needle: &str, what: &str) {
+    let start = position(body, needle, what);
+    let statement = body[start..]
+        .split_once(';')
+        .map_or(&body[start..], |(statement, _)| statement)
+        .trim_end();
+    assert!(
+        statement.ends_with(")?") || statement.ends_with(".await?"),
+        "{what}: the guard's result must propagate with `?`, but the statement reads:\n{statement}"
+    );
+    let preceding_line = body[..start].rsplit('\n').next().unwrap_or("");
+    assert!(
+        !preceding_line.contains("let _") && !preceding_line.contains("_ ="),
+        "{what}: the guard's result must not be discarded with `let _ =`:\n{preceding_line}{statement}"
+    );
+}
+
 #[test]
 fn unlock_path_validates_the_recovered_master_before_installing_it() {
     let src = source("src/recovery.rs");
-    let body = slice_between(&src, "pub async fn recover_mnemonic(", "fn spawn_post_unlock_sync_init(");
+    let body = without_comments(slice_between(&src, "pub async fn recover_mnemonic(", "fn spawn_post_unlock_sync_init("));
+    let body = body.as_str();
 
     let guard = position(
         body,
@@ -78,12 +109,18 @@ fn unlock_path_validates_the_recovered_master_before_installing_it() {
         body.contains("GuardFlow::Unlock"),
         "the unlock path must ask for the unlock wording — the seal wording tells the user to unlock, which they just did"
     );
+    assert_propagates(body, "validate_master_against_existing_folders(", "recover_mnemonic's guard");
 }
 
 #[test]
 fn seal_and_upload_probes_for_an_existing_blob_immediately_before_the_post() {
     let src = source("src/recovery.rs");
-    let body = slice_between(&src, "pub async fn seal_and_upload_mnemonic(", "pub struct RecoveryRotationResult");
+    let body = without_comments(slice_between(
+        &src,
+        "pub async fn seal_and_upload_mnemonic(",
+        "pub struct RecoveryRotationResult",
+    ));
+    let body = body.as_str();
 
     let probe = position(
         body,
@@ -112,4 +149,6 @@ fn seal_and_upload_probes_for_an_existing_blob_immediately_before_the_post() {
         !between.contains("install_recovered_mnemonic(") && !between.contains("align_drive_password("),
         "nothing local may be written between the probe decision and the POST"
     );
+    assert_propagates(body, "decide_seal_upload(", "seal_and_upload_mnemonic's probe decision");
+    assert_propagates(body, "validate_master_against_existing_folders(", "seal_and_upload_mnemonic's guard");
 }
