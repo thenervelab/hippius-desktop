@@ -17,6 +17,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
+- **Support can diagnose problems faster from the logs you send.** Logs attached to
+  a support ticket now say which app version and platform they came from, and if
+  the app ever crashes, what went wrong is recorded instead of being lost.
 - **Preview far more of your files without leaving Hippius.** Word documents open as
   real pages, PowerPoint decks as slides you can click through, spreadsheets and CSVs
   in a familiar spreadsheet grid with a formula bar and sheet tabs, and Markdown,
@@ -67,6 +70,14 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Excluding a file from the "Sync Issues" dialog now sticks**, including names with
+  brackets or braces such as `Movie [2019].mkv`. Before, the file kept failing, the dialog
+  kept coming back after every restart, and in some cases a differently named file was
+  excluded instead. Retry now clears such a stale exclusion too. Files you untick in the
+  folder browser are covered by the same fix.
+- **Dismissing the "Sync Issues" dialog now sticks.** It no longer comes back every couple
+  of minutes, or after every restart, for files you have already seen. It reopens only
+  when a new file starts failing, and then lists everything that needs attention.
 - **Photo thumbnails show real previews again.** Small preview images in the
   file grid and the viewer's filmstrip could appear as broken-image icons even
   though the photos themselves were fine.
@@ -199,6 +210,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Security
 
+- **Unlocking and setting the unlock password can no longer overwrite your files' keys.**
+  Now that an unlock password can also be set from Hippius Console, unlocking with a
+  password that protects a different seed than the one this device's files were
+  encrypted with is refused with nothing changed, and "Set Unlock Password" refuses to
+  replace an unlock password that was already set elsewhere.
 - **Password-protected share links can no longer be copied as unprotected links.** The
   Shares page could hand out a password-free link for a file you had explicitly
   protected.

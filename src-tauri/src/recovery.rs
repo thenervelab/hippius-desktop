@@ -307,6 +307,45 @@ fn decide_recovery_flow(local: bool, can_decrypt: bool, has_server_blob: Option<
     }
 }
 
+/// What a metadata-only `GET /v1/mnemonic-blob` found.
+///
+/// Three-way on purpose: a failed probe is `Unknown`, never folded into
+/// `Absent`. Every caller that would write the blob on "absent" must
+/// refuse on `Unknown` instead (see `decide_recovery_flow` and
+/// [`decide_seal_upload`]). `Unknown` carries the failure so a refusal
+/// can tell an expired session ("sign in again") from a transport
+/// failure ("retry") instead of blaming the connection for both.
+#[derive(Debug)]
+enum BlobProbe {
+    Present { updated_at: Option<String> },
+    Absent,
+    Unknown(AppError),
+}
+
+/// Probe hcfs-server for blob existence using an already-resolved context.
+///
+/// Metadata only — the ciphertext is never materialised. Shared by the
+/// boot-time recovery probe and the pre-POST check in
+/// [`seal_and_upload_mnemonic`], so both classify the server's answer
+/// identically.
+async fn probe_blob_metadata(ctx: &HcfsServerCtx) -> BlobProbe {
+    debug!(server = %ctx.base_url, "recovery probe: GET /v1/mnemonic-blob (metadata only, no ciphertext fetch)");
+    match get_json::<BlobMetadata>(ctx, "/v1/mnemonic-blob").await {
+        Ok(HttpOutcome::Ok(meta)) => {
+            info!(updated_at = ?meta.updated_at, "recovery probe: server has a sealed mnemonic blob for this account");
+            BlobProbe::Present { updated_at: meta.updated_at }
+        }
+        Ok(HttpOutcome::NotFound) => {
+            info!("recovery probe: server has NO sealed mnemonic blob for this account (404)");
+            BlobProbe::Absent
+        }
+        Err(e) => {
+            warn!(error = %e, "recovery probe: server call failed — blob state unknown");
+            BlobProbe::Unknown(e)
+        }
+    }
+}
+
 /// Probe hcfs-server for blob existence.
 ///
 /// Returns `(Some(true), Some(updated_at))` when present,
@@ -321,20 +360,58 @@ async fn probe_server_blob(state: &tauri::State<'_, crate::app_state::AppState>)
             return (None, None);
         }
     };
-    debug!(server = %ctx.base_url, "recovery probe: GET /v1/mnemonic-blob (metadata only, no ciphertext fetch)");
-    match get_json::<BlobMetadata>(&ctx, "/v1/mnemonic-blob").await {
-        Ok(HttpOutcome::Ok(meta)) => {
-            info!(updated_at = ?meta.updated_at, "recovery probe: server has a sealed mnemonic blob for this account");
-            (Some(true), meta.updated_at)
+    match probe_blob_metadata(&ctx).await {
+        BlobProbe::Present { updated_at } => (Some(true), updated_at),
+        BlobProbe::Absent => (Some(false), None),
+        BlobProbe::Unknown(_) => (None, None),
+    }
+}
+
+/// Where the master that [`seal_and_upload_mnemonic`] is about to seal
+/// came from. Selects only the wording of a "blob already exists"
+/// refusal: a fresh signup holds nothing yet and should unlock with the
+/// existing password, whereas a device that already holds the real seed
+/// cannot be told to "unlock instead" — its way out is to reset the
+/// server password from the seed it has.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SealOrigin {
+    /// The master was minted in this call; nothing local exists yet.
+    FreshSignup,
+    /// The master was read from this device (legacy-user migration).
+    ExistingMaster,
+}
+
+const UNLOCK_PASSWORD_ALREADY_SET: &str = "An unlock password is already set for this account — it may have been set on Hippius Console or \
+                                          another device. Unlock with that password instead of creating a new one.";
+const UNLOCK_PASSWORD_SET_ELSEWHERE: &str = "This device already holds your seed, and an unlock password was set elsewhere (Hippius Console or \
+                                            another device). Use Change Unlock Password → Forgot current password? to make the server match \
+                                            this device.";
+const UNLOCK_PASSWORD_PROBE_FAILED: &str =
+    "Could not check whether this account already has an unlock password. Check your connection and try again.";
+const UNLOCK_PASSWORD_PROBE_UNAUTHENTICATED: &str = "Your session has expired. Sign in again, then retry.";
+
+/// May [`seal_and_upload_mnemonic`] POST its freshly sealed blob?
+///
+/// `POST /v1/mnemonic-blob` is an unconditional upsert and Hippius Console
+/// is now a second writer of it, so a blob that appeared after this app
+/// decided on the Signup flow must not be overwritten with this device's
+/// master — the console's blob may hold a different seed. Only a
+/// definite 404 proceeds; a failed probe refuses exactly like the
+/// `Unknown` arm of `decide_recovery_flow`, because treating "don't
+/// know" as "absent" is the overwrite this guard exists to prevent.
+///
+/// An unauthenticated probe (the bearer expired between context
+/// resolution and this call) is reported as `Auth` so the user is told to
+/// sign in rather than to check a connection that is fine.
+fn decide_seal_upload(probe: &BlobProbe, origin: SealOrigin) -> Result<()> {
+    match (probe, origin) {
+        (BlobProbe::Absent, SealOrigin::FreshSignup | SealOrigin::ExistingMaster) => Ok(()),
+        (BlobProbe::Present { updated_at: _ }, SealOrigin::FreshSignup) => Err(AppError::Validation(UNLOCK_PASSWORD_ALREADY_SET.into())),
+        (BlobProbe::Present { updated_at: _ }, SealOrigin::ExistingMaster) => Err(AppError::Validation(UNLOCK_PASSWORD_SET_ELSEWHERE.into())),
+        (BlobProbe::Unknown(AppError::Api { status: 401 | 403, body: _ }), SealOrigin::FreshSignup | SealOrigin::ExistingMaster) => {
+            Err(AppError::Auth(UNLOCK_PASSWORD_PROBE_UNAUTHENTICATED.into()))
         }
-        Ok(HttpOutcome::NotFound) => {
-            info!("recovery probe: server has NO sealed mnemonic blob for this account (404)");
-            (Some(false), None)
-        }
-        Err(e) => {
-            warn!(error = %e, "recovery probe: server call failed");
-            (None, None)
-        }
+        (BlobProbe::Unknown(_), SealOrigin::FreshSignup | SealOrigin::ExistingMaster) => Err(AppError::Hcfs(UNLOCK_PASSWORD_PROBE_FAILED.into())),
     }
 }
 
@@ -345,6 +422,11 @@ async fn probe_server_blob(state: &tauri::State<'_, crate::app_state::AppState>)
 /// Fetch the sealed blob, decrypt it with the user's recovery password,
 /// install the mnemonic into the local store, and mark the recovery gate
 /// resolved.
+///
+/// Runs the same folder-derivation guard as the write paths before
+/// touching local key material: the server blob has a second writer
+/// (Hippius Console), so an opened blob whose master does not derive
+/// this device's folder seals is refused with nothing changed.
 ///
 /// Wrong password surfaces as [`AppError::Validation("Wrong passphrase.")`]
 /// — same mapping the existing Console Access flow uses, so the frontend
@@ -381,6 +463,15 @@ pub async fn recover_mnemonic(app: tauri::AppHandle, state: tauri::State<'_, cra
     let password_k = password.clone();
     let ss58_k = ctx.ss58.clone();
     let mnemonic = run_kdf(move || open_mnemonic(&blob_k, &password_k, &ss58_k).map_err(crypto_to_err)).await?;
+
+    // Hippius Console can create or replace the server blob, so a blob
+    // that opens with the user's password is no longer proof that its
+    // master is the one this device's folder seals derive from. Refuse
+    // BEFORE any local write: `install_recovered_mnemonic` plus
+    // `align_drive_password` would otherwise re-derive every own-folder
+    // seal under a foreign master and destroy the only local copies of
+    // the real folder keys. Vacuous on a fresh device (no folders yet).
+    validate_master_against_existing_folders(pool, &account_id, &mnemonic, GuardFlow::Unlock).await?;
 
     // Persist the recovered mnemonic to the local store so subsequent
     // sync init picks it up without re-fetching. The file password is
@@ -598,6 +689,58 @@ async fn clear_rotation_sidecar(account_id: &str) {
     }
 }
 
+/// Which flow is asking [`validate_master_against_existing_folders`].
+///
+/// Selects only the user-facing wording of a mismatch; the check itself
+/// is identical. The seal paths hold a candidate the user is about to
+/// commit, so "unlock with your original password first" is the remedy.
+/// The unlock path holds a master that came OUT of the server blob, so
+/// that advice is circular — the remedy there is the original seed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GuardFlow {
+    /// A path about to seal or rewrite local key material under a
+    /// candidate master it obtained locally (signup, rotation, restore).
+    Seal,
+    /// [`recover_mnemonic`]: the candidate was opened from the server blob.
+    Unlock,
+}
+
+/// Why the candidate master failed the folder-derivation guard.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum MasterMismatch {
+    /// The candidate cannot decrypt the encrypted `drive_password` row.
+    DrivePassword,
+    /// The candidate does not derive the stored seal of this folder label.
+    Folder(String),
+}
+
+const UNLOCK_MASTER_MISMATCH: &str = "The unlock password on the server protects a different seed than the one this device's files were \
+                                      encrypted with. Nothing was changed on this device. Restore your original seed (choose \"Forgot \
+                                      your password?\", then \"Use your mnemonic seed\", and enter your recovery phrase) or contact \
+                                      support.";
+
+/// Map a guard mismatch to the error the calling flow should surface.
+///
+/// The `Seal` wordings (and their variants) are unchanged from before the
+/// flow parameter existed, so the existing call sites keep their behaviour.
+fn master_mismatch_error(flow: GuardFlow, mismatch: &MasterMismatch) -> AppError {
+    match (flow, mismatch) {
+        (GuardFlow::Unlock, MasterMismatch::DrivePassword | MasterMismatch::Folder(_)) => AppError::Validation(UNLOCK_MASTER_MISMATCH.into()),
+        (GuardFlow::Seal, MasterMismatch::DrivePassword) => AppError::Validation(
+            "Cannot seal recovery blob: the provided master mnemonic does not match this \
+             account's existing encrypted drive password. Unlock with your original recovery \
+             password first, then retry."
+                .into(),
+        ),
+        (GuardFlow::Seal, MasterMismatch::Folder(label)) => AppError::Other(format!(
+            "Cannot seal recovery blob: candidate master mnemonic does not derive folder '{label}'. \
+             The local master is out of sync with folder state — restoring recovery against this master \
+             would leave uploads in this folder undecryptable. \
+             Import your original master mnemonic via Settings → Recovery before retrying."
+        )),
+    }
+}
+
 /// Verify a candidate master mnemonic actually derives the folder
 /// mnemonics stored on disk for this account.
 ///
@@ -608,9 +751,13 @@ async fn clear_rotation_sidecar(account_id: &str) {
 /// encryption keys, leaving uploads encrypted under one master and
 /// recovery under another.
 ///
-/// Vacuously succeeds when there are no folders (fresh signup) or when
-/// the drive password isn't yet set (folder mnemonics aren't recoverable
-/// to compare; we have to trust the caller).
+/// The encrypted `drive_password` row is checked FIRST, folders or not:
+/// `align_drive_password` writes it under the real master on every
+/// signup, and a device that removed its drive locally still holds it
+/// while the remote ciphertext under that master lives on. Only when the
+/// row is absent, empty, or plaintext does an empty folder list make the
+/// guard vacuous (fresh device, legacy signup) — there is nothing local
+/// to compare against and we have to trust the caller.
 /// Own-drive `sync_paths` rows only. Member drives store the *owner's*
 /// folder mnemonic under a local label — comparing them to
 /// `derive_folder_mnemonic(this_master, local_label)` is a false mismatch
@@ -625,50 +772,60 @@ async fn own_drive_folder_rows(pool: &SqlitePool, account_id: &str) -> Result<Ve
     )
 }
 
-async fn validate_master_against_existing_folders(pool: &SqlitePool, account_id: &str, candidate_master: &str) -> Result<()> {
+/// Resolve the drive password the folder seals are compared under, or
+/// refuse when the candidate master provably is not the one it was
+/// encrypted with.
+///
+/// Three cases, told apart on purpose — collapsing the last two into a
+/// silent skip would let a WRONG master be sealed over an account that
+/// already had encrypted key material, leaving its uploads undecryptable:
+///   (a) no row / empty password  → pre-config, nothing to compare → `None`
+///   (b) plaintext (version 0)     → returned as-is for the folder compare
+///   (c) encrypted (version 1 | 2) → the candidate master MUST decrypt it;
+///                                   if it can't, it's the wrong master → refuse
+async fn guard_drive_password(pool: &SqlitePool, account_id: &str, candidate_master: &str, flow: GuardFlow) -> Result<Option<Zeroizing<String>>> {
     let owner = account_key(account_id);
-    let folders = own_drive_folder_rows(pool, account_id).await?;
-    if folders.is_empty() {
-        return Ok(());
-    }
-
-    // Inspect the drive-password row directly so we can tell three cases apart.
-    // Collapsing the last two into a silent skip would let a WRONG master be
-    // sealed over an account that already had encrypted key material, leaving
-    // its uploads undecryptable:
-    //   (a) no row / empty password  → pre-config, nothing to compare → allow
-    //   (b) plaintext (version 0)     → compare folders against it
-    //   (c) encrypted (version 1)     → the candidate master MUST decrypt it;
-    //                                   if it can't, it's the wrong master → refuse
     let row: Option<(String, i32)> = sqlx::query_as("SELECT drive_password, COALESCE(encryption_version, 0) FROM hcfs_config WHERE owner = ?")
         .bind(&owner)
         .fetch_optional(pool)
         .await?;
-    let drive_password = match row {
-        None => return Ok(()),
-        Some((pw, _)) if pw.is_empty() => return Ok(()),
-        Some((pw, 0)) => Zeroizing::new(pw),
+
+    match row {
+        None => Ok(None),
+        Some((pw, _)) if pw.is_empty() => Ok(None),
+        Some((pw, 0)) => Ok(Some(Zeroizing::new(pw))),
         // version 1 (no AAD) and 2 (AAD, audit R-33) both route through
         // `get_drive_password`, which decrypts per the version.
         Some((_, 1 | 2)) => match crate::sync::config::get_drive_password(pool, account_id, Some(candidate_master)).await {
-            Ok(pw) => pw,
+            Ok(pw) => Ok(Some(pw)),
             // Only an AEAD/key failure (`Crypto`) means "wrong master". A
             // transient DB/pool error must propagate truthfully — labelling
             // it "does not match" sends the user chasing a mnemonic problem
             // they don't have.
             Err(AppError::Crypto(_)) => {
-                return Err(AppError::Validation(
-                    "Cannot seal recovery blob: the provided master mnemonic does not match this \
-                     account's existing encrypted drive password. Unlock with your original recovery \
-                     password first, then retry."
-                        .into(),
-                ));
+                warn!(
+                    ?flow,
+                    "recovery validation: candidate master cannot decrypt the drive password row — refusing"
+                );
+                Err(master_mismatch_error(flow, &MasterMismatch::DrivePassword))
             }
-            Err(other) => return Err(other),
+            Err(other) => Err(other),
         },
-        Some((_, v)) => return Err(AppError::Other(format!("unknown drive password encryption_version: {v}"))),
+        Some((_, v)) => Err(AppError::Other(format!("unknown drive password encryption_version: {v}"))),
+    }
+}
+
+async fn validate_master_against_existing_folders(pool: &SqlitePool, account_id: &str, candidate_master: &str, flow: GuardFlow) -> Result<()> {
+    // The drive-password row is checked before the folder short-circuit: a
+    // v1/v2 row exists on every device that ever sealed a master, and it is
+    // evidence on its own (the restore path's `probe_drive_password_row`
+    // already treats it that way). Skipping it when `sync_paths` is empty
+    // left the unlock guard blind on a device that removed its drive locally.
+    let Some(drive_password) = guard_drive_password(pool, account_id, candidate_master, flow).await? else {
+        return Ok(());
     };
 
+    let folders = own_drive_folder_rows(pool, account_id).await?;
     for (_path, label) in &folders {
         let folder_dir = crate::sync::mnemonic::config_dir_for_folder(account_id, label)?;
         let folder_enc = folder_dir.join("enc_mnemonic.json");
@@ -703,12 +860,8 @@ async fn validate_master_against_existing_folders(pool: &SqlitePool, account_id:
                 .map_err(|e| AppError::Other(format!("derive_folder_mnemonic failed: {e}")))?,
         );
         if *stored != *expected {
-            return Err(AppError::Other(format!(
-                "Cannot seal recovery blob: candidate master mnemonic does not derive folder '{label}'. \
-                 The local master is out of sync with folder state — restoring recovery against this master \
-                 would leave uploads in this folder undecryptable. \
-                 Import your original master mnemonic via Settings → Recovery before retrying."
-            )));
+            warn!(?flow, label = %label, "recovery validation: candidate master does not derive the stored folder seal — refusing");
+            return Err(master_mismatch_error(flow, &MasterMismatch::Folder(label.clone())));
         }
     }
 
@@ -796,7 +949,7 @@ pub async fn seal_and_upload_mnemonic(state: tauri::State<'_, crate::app_state::
     // from this wrong master, and AEAD-tag-fails on chunk 0. Detect
     // here, surface a clear error, and abort instead of corrupting the
     // server-side recovery state.
-    validate_master_against_existing_folders(pool, &account_id, &mnemonic).await?;
+    validate_master_against_existing_folders(pool, &account_id, &mnemonic, GuardFlow::Seal).await?;
 
     let ctx = HcfsServerCtx::resolve(&state).await?;
     // Argon2id off the executor. `mnemonic` is reused after sealing (installed
@@ -805,6 +958,19 @@ pub async fn seal_and_upload_mnemonic(state: tauri::State<'_, crate::app_state::
     let password_k = password.clone();
     let ss58_k = ctx.ss58.clone();
     let blob = run_kdf(move || seal_mnemonic(&mnemonic_k, &password_k, &ss58_k).map_err(crypto_to_err)).await?;
+
+    // The boot-time `check_recovery_state` routed us here on "no blob", but
+    // that answer can be minutes old and Hippius Console may have set an
+    // unlock password since. Re-probe as late as possible — after the
+    // ~1.5 s KDF, immediately before the upsert — so the check-then-write
+    // window is as narrow as it can be without server-side conditional
+    // writes. Nothing local has been written yet, so refusing is free.
+    let origin = if is_fresh_signup {
+        SealOrigin::FreshSignup
+    } else {
+        SealOrigin::ExistingMaster
+    };
+    decide_seal_upload(&probe_blob_metadata(&ctx).await, origin)?;
 
     // Server upload is the commit point: if it fails on the fresh-signup
     // path, leaving a local `master_enc_mnemonic.json` behind would make
@@ -915,7 +1081,7 @@ pub async fn change_recovery_password(
 
     // 3. Derivation guard — refuse to rotate under a master that can't
     //    reproduce existing folder mnemonics.
-    validate_master_against_existing_folders(pool, &account_id, &mnemonic).await?;
+    validate_master_against_existing_folders(pool, &account_id, &mnemonic, GuardFlow::Seal).await?;
 
     commit_new_unlock_password(state.inner(), pool, &ctx, &account_id, &mnemonic, &new, None).await
 }
@@ -974,7 +1140,7 @@ pub async fn resume_recovery_password_rotation(state: tauri::State<'_, crate::ap
     // `align_drive_password` rewrite every `enc_mnemonic.json` under the wrong
     // master, destroying the folder keys that open already-uploaded ciphertext —
     // permanent AEAD-tag failures on later downloads (audit R-10).
-    validate_master_against_existing_folders(pool, &account_id, &mnemonic).await?;
+    validate_master_against_existing_folders(pool, &account_id, &mnemonic, GuardFlow::Seal).await?;
 
     install_recovered_mnemonic(&account_id, &mnemonic, &password).await?;
 
@@ -1060,7 +1226,7 @@ pub async fn restore_with_mnemonic(
         "recovery: typed mnemonic proven; resealing unlock password"
     );
 
-    validate_master_against_existing_folders(pool, &account_id, mnemonic.trim()).await?;
+    validate_master_against_existing_folders(pool, &account_id, mnemonic.trim(), GuardFlow::Seal).await?;
     let ctx = HcfsServerCtx::resolve(&state).await?;
     commit_new_unlock_password(state.inner(), pool, &ctx, &account_id, mnemonic.trim(), &new_password, Some(&app)).await
 }
@@ -1092,7 +1258,7 @@ pub async fn reset_unlock_password(
         return Err(AppError::Validation(SESSION_MNEMONIC_MISSING.into()));
     }
 
-    validate_master_against_existing_folders(pool, &account_id, &mnemonic).await?;
+    validate_master_against_existing_folders(pool, &account_id, &mnemonic, GuardFlow::Seal).await?;
     let ctx = HcfsServerCtx::resolve(&state).await?;
     commit_new_unlock_password(state.inner(), pool, &ctx, &account_id, &mnemonic, &new_password, Some(&app)).await
 }
@@ -1571,6 +1737,104 @@ mod tests {
         assert_eq!(decide_recovery_flow(true, false, None), RecoveryFlow::Unknown);
     }
 
+    /// The pre-POST probe in `seal_and_upload_mnemonic` must only let a
+    /// definite 404 through. A blob that appeared since boot (Hippius
+    /// Console is a second writer) is refused as user input, and a failed
+    /// probe is refused too — "don't know" folded into "absent" is exactly
+    /// the overwrite the probe exists to prevent.
+    #[test]
+    fn decide_seal_upload_only_proceeds_on_a_definite_404() {
+        for origin in [SealOrigin::FreshSignup, SealOrigin::ExistingMaster] {
+            decide_seal_upload(&BlobProbe::Absent, origin).expect("a definite 404 proceeds to POST");
+        }
+
+        let present = BlobProbe::Present {
+            updated_at: Some("2026-09-01T00:00:00Z".into()),
+        };
+        match decide_seal_upload(&present, SealOrigin::FreshSignup).unwrap_err() {
+            AppError::Validation(msg) => {
+                assert!(msg.contains("already set"), "fresh signup must say the password is already set: {msg}");
+                assert!(msg.contains("Hippius Console"), "fresh signup must name the other writer: {msg}");
+                assert!(msg.contains("Unlock with that password"), "fresh signup's remedy is to unlock: {msg}");
+            }
+            other => panic!("present blob must be a Validation error, got {other:?}"),
+        }
+        // A device that already holds the seed cannot be told to "unlock
+        // instead" — its remedy is to reset the server password from the seed.
+        match decide_seal_upload(&present, SealOrigin::ExistingMaster).unwrap_err() {
+            AppError::Validation(msg) => {
+                assert!(
+                    msg.contains("already holds your seed"),
+                    "migration must say the seed is already here: {msg}"
+                );
+                assert!(msg.contains("Forgot current password?"), "migration must point at the reset path: {msg}");
+                assert!(
+                    !msg.contains("Unlock with that password"),
+                    "migration must not tell the user to unlock: {msg}"
+                );
+            }
+            other => panic!("present blob must be a Validation error, got {other:?}"),
+        }
+
+        for status in [401u16, 403] {
+            let expired = BlobProbe::Unknown(AppError::Api {
+                status,
+                body: "/v1/mnemonic-blob: unauthorized".into(),
+            });
+            match decide_seal_upload(&expired, SealOrigin::FreshSignup).unwrap_err() {
+                AppError::Auth(msg) => assert!(msg.contains("Sign in again"), "HTTP {status} must ask for a re-login: {msg}"),
+                other => panic!("HTTP {status} must be an Auth error, got {other:?}"),
+            }
+        }
+
+        let transport_failures = [
+            AppError::Api {
+                status: 503,
+                body: "/v1/mnemonic-blob: unavailable".into(),
+            },
+            AppError::Other("connection reset".into()),
+        ];
+        for cause in transport_failures {
+            let unknown = BlobProbe::Unknown(cause);
+            match decide_seal_upload(&unknown, SealOrigin::ExistingMaster).unwrap_err() {
+                AppError::Hcfs(msg) => assert!(msg.contains("connection"), "transport failure must ask for a retry: {msg}"),
+                other => panic!("a transport failure must be retryable (Hcfs), never Validation/Other, got {other:?}"),
+            }
+        }
+    }
+
+    /// The two guard wordings must differ and each must name its own remedy:
+    /// the seal paths can be fixed by unlocking with the original password,
+    /// but on the unlock path that advice is circular — the user just did.
+    #[test]
+    fn guard_wording_names_the_remedy_for_each_flow() {
+        for mismatch in [MasterMismatch::DrivePassword, MasterMismatch::Folder("docs".into())] {
+            let seal = master_mismatch_error(GuardFlow::Seal, &mismatch).to_string();
+            // The unlock path surfaces inline in the Unlock dialog as user
+            // feedback, so it must be `Validation` for BOTH mismatch kinds —
+            // the seal path's `Other` for a folder mismatch must not leak in.
+            let unlock = match master_mismatch_error(GuardFlow::Unlock, &mismatch) {
+                AppError::Validation(msg) => msg,
+                other => panic!("{mismatch:?}: unlock mismatch must be Validation, got {other:?}"),
+            };
+
+            assert_ne!(seal, unlock, "{mismatch:?}: the two flows must not share wording");
+            assert!(seal.contains("Cannot seal recovery blob"), "{mismatch:?}: seal wording changed: {seal}");
+            assert!(
+                unlock.contains("different seed"),
+                "{mismatch:?}: unlock wording must explain the mismatch: {unlock}"
+            );
+            assert!(
+                unlock.contains("Nothing was changed"),
+                "{mismatch:?}: unlock wording must reassure nothing was written: {unlock}"
+            );
+            assert!(
+                !unlock.contains("original recovery password"),
+                "{mismatch:?}: unlock wording must not send the user back to the password they just used: {unlock}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn leaves_empty_url_alone_on_existing_row() {
         // Empty IS the default `server_url` — the auto-detect sentinel
@@ -1919,8 +2183,54 @@ mod tests {
         // A DIFFERENT master can't decrypt that drive password → must be refused,
         // not silently skipped, which would allow sealing a wrong master.
         let wrong = "legal winner thank year wave sausage worth useful legal winner thank yellow";
-        let err = super::validate_master_against_existing_folders(&pool, account, wrong).await.unwrap_err();
+        let err = super::validate_master_against_existing_folders(&pool, account, wrong, super::GuardFlow::Seal)
+            .await
+            .unwrap_err();
         assert!(matches!(err, AppError::Validation(_)), "wrong master must be refused, got {err:?}");
+
+        // Same mismatch asked by the unlock path: still refused, but with the
+        // unlock wording — the flow parameter must reach the mismatch site.
+        let err = super::validate_master_against_existing_folders(&pool, account, wrong, super::GuardFlow::Unlock)
+            .await
+            .unwrap_err();
+        match &err {
+            AppError::Validation(msg) => assert!(msg.contains("different seed"), "unlock path must use the unlock wording: {msg}"),
+            other => panic!("unlock path must refuse as Validation, got {other:?}"),
+        }
+    }
+
+    /// A device that removed its drive locally has no `sync_paths` rows but
+    /// still holds the v1/v2 `drive_password` row sealed under the real
+    /// master, and its remote ciphertext lives on. The guard must consult
+    /// that row on its own; short-circuiting on "no folders" left the
+    /// unlock path free to replace the last local copy of the real master.
+    #[tokio::test]
+    async fn validate_master_checks_the_drive_password_row_without_folders() {
+        let _home = crate::test_helpers::HOME_LOCK.lock().expect("HOME_LOCK");
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        // SAFETY: test-only; HOME is serialized by HOME_LOCK and Rust 2024
+        // requires the unsafe block for std::env::set_var.
+        unsafe {
+            std::env::set_var("HOME", tmp.path());
+        }
+        let account = "5TestValidateNoFoldersRow";
+        let pool = setup_validation_pool().await;
+        // No sync_paths rows at all; only the encrypted drive-password row.
+        crate::sync::config::save_hcfs_config_internal(&pool, account, "https://example.invalid", DRIVE_PW, Some(VALIDATION_MASTER))
+            .await
+            .expect("seal encrypted drive password");
+
+        let err = super::validate_master_against_existing_folders(&pool, account, WRONG_MASTER, super::GuardFlow::Unlock)
+            .await
+            .unwrap_err();
+        match &err {
+            AppError::Validation(msg) => assert!(msg.contains("different seed"), "must refuse with the unlock wording: {msg}"),
+            other => panic!("a wrong master must be refused as Validation even with no folders, got {other:?}"),
+        }
+
+        super::validate_master_against_existing_folders(&pool, account, VALIDATION_MASTER, super::GuardFlow::Unlock)
+            .await
+            .expect("the real master decrypts the row and passes");
     }
 
     #[tokio::test]
@@ -1941,7 +2251,7 @@ mod tests {
             .await
             .expect("seed sync_paths");
         // No hcfs_config row → pre-config → vacuously allowed.
-        super::validate_master_against_existing_folders(&pool, account, VALIDATION_MASTER)
+        super::validate_master_against_existing_folders(&pool, account, VALIDATION_MASTER, super::GuardFlow::Seal)
             .await
             .expect("validation allows pre-config");
     }
@@ -2006,7 +2316,7 @@ mod tests {
         plant_folder_seal(account, "docs", VALIDATION_MASTER, DRIVE_PW).await;
         plant_folder_seal(account, "shared", WRONG_MASTER, DRIVE_PW).await;
 
-        super::validate_master_against_existing_folders(&pool, account, VALIDATION_MASTER)
+        super::validate_master_against_existing_folders(&pool, account, VALIDATION_MASTER, super::GuardFlow::Seal)
             .await
             .expect("member seal must not fail a matching own-drive master");
     }
@@ -2025,7 +2335,7 @@ mod tests {
         seed_plaintext_drive_pw(&pool, &owner).await;
         plant_folder_seal(account, "docs", WRONG_MASTER, DRIVE_PW).await;
 
-        let err = super::validate_master_against_existing_folders(&pool, account, VALIDATION_MASTER)
+        let err = super::validate_master_against_existing_folders(&pool, account, VALIDATION_MASTER, super::GuardFlow::Seal)
             .await
             .unwrap_err();
         assert!(

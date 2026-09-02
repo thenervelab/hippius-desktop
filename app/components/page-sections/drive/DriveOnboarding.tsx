@@ -403,16 +403,17 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
       // hcfs_drive_status_changed event — see useDriveStatuses.
       // hasConfiguredDrivesAtom recomputes from that automatically.
 
-      // Apply any pending exclusion patterns from the browse dialog
+      // Files unticked in the browse dialog are paths, not globs: the
+      // selection IPC escapes each one so a bracket in a name cannot change
+      // which file the rule matches.
       if (pendingExclusions.length > 0) {
-        for (const path of pendingExclusions) {
-          await invoke("add_exclude_pattern", {
-            label: folder.folderName,
-            pattern: path,
-          }).catch((err: unknown) =>
-            console.warn("Failed to add exclusion pattern:", err)
-          );
-        }
+        await invoke("apply_sync_selection", {
+          label: folder.folderName,
+          include: [],
+          exclude: pendingExclusions,
+        }).catch((err: unknown) =>
+          console.warn("Failed to apply browse exclusions:", err)
+        );
         setPendingExclusions([]);
       }
 
