@@ -117,6 +117,35 @@ describe("RecoveryPhraseSettings — Unlock Password row", () => {
     ).toBeInTheDocument();
   });
 
+  // Offline does not throw: Rust answers `recommendedFlow: "unknown"` with
+  // `hasServerBlob: false`. Reading that as "no blob" would flip a correct
+  // "Change" row to "Set" and offer to overwrite the existing password.
+  it("keeps the last-known state when the click-time probe answers unknown", async () => {
+    recoveryMocks.checkRecoveryState.mockResolvedValueOnce(check(true));
+    render(<RecoveryPhraseSettings />);
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Change Unlock Password" })
+      ).toBeInTheDocument()
+    );
+    recoveryMocks.checkRecoveryState.mockResolvedValueOnce({
+      hasServerBlob: false,
+      hasLocalMnemonic: true,
+      updatedAt: null,
+      recommendedFlow: "unknown",
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Change Unlock Password" }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("change-dialog")).toBeInTheDocument()
+    );
+    expect(screen.queryByTestId("set-dialog")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Change Unlock Password" })
+    ).toBeInTheDocument();
+  });
+
   it("flips the row to Change after the set dialog reports a refused seal", async () => {
     await renderWithNoBlobAtMount();
     recoveryMocks.checkRecoveryState.mockResolvedValueOnce(check(false));
