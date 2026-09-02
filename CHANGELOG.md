@@ -210,6 +210,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Security
 
+- **Unlocking and setting the unlock password can no longer overwrite your files' keys.**
+  Now that an unlock password can also be set from Hippius Console, unlocking with a
+  password that protects a different seed than the one this device's files were
+  encrypted with is refused with nothing changed, and "Set Unlock Password" refuses to
+  replace an unlock password that was already set elsewhere.
 - **Password-protected share links can no longer be copied as unprotected links.** The
   Shares page could hand out a password-free link for a file you had explicitly
   protected.
