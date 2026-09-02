@@ -91,7 +91,7 @@ const BranchRouter: React.FC<{
 }> = ({ check, onDone, onRetry }) => {
   switch (check.recommendedFlow) {
     case "signup":
-      return <SignupBranch onDone={onDone} />;
+      return <SignupBranch onDone={onDone} onFailed={onRetry} />;
     case "unlock":
       return <UnlockBranch onDone={onDone} />;
     case "proceed":
@@ -107,7 +107,18 @@ const BranchRouter: React.FC<{
 // Signup — first-time OAuth user sets a recovery password
 // ---------------------------------------------------------------------------
 
-const SignupBranch: React.FC<{ onDone: () => void }> = ({ onDone }) => {
+/**
+ * `onFailed` re-runs the Rust recovery check after a refused seal. Rust
+ * refuses when an unlock password already exists for the account (set on
+ * Hippius Console or another device since this dialog opened); the fresh
+ * check then routes to the Unlock branch instead of leaving the user on a
+ * "Create Password" form that can never succeed. Best-effort: a failed
+ * re-check keeps this branch and the toast already told the user why.
+ */
+const SignupBranch: React.FC<{
+  onDone: () => void;
+  onFailed: () => Promise<void>;
+}> = ({ onDone, onFailed }) => {
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [strength, setStrength] = useState<PassphraseStrength | null>(null);
@@ -130,10 +141,11 @@ const SignupBranch: React.FC<{ onDone: () => void }> = ({ onDone }) => {
       onDone();
     } catch (err) {
       toast.error(`Could not set unlock password: ${errMessage(err)}`);
+      await onFailed().catch(() => {});
     } finally {
       setSubmitting(false);
     }
-  }, [canSubmit, password, onDone]);
+  }, [canSubmit, password, onDone, onFailed]);
 
   return (
     <FramedDialog

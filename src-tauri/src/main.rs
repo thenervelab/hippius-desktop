@@ -18,6 +18,7 @@ pub mod blockchain;
 mod cli;
 pub mod console_access;
 pub mod crypto;
+pub mod diagnostics;
 pub mod error;
 #[cfg(any(unix, windows))]
 pub mod finder_bridge;
@@ -242,8 +243,22 @@ fn main() {
     // flushing — see `init_logging`. Holding it in this `main` local does that.
     let _log_guard = init_logging();
 
-    info!("Application starting...");
-    info!("Tracing subscriber initialized - hcfs-client logs now visible");
+    // A packaged app's stderr goes nowhere, so an uncaptured panic is the one
+    // event guaranteed to be missing from a support bundle. Installed after
+    // logging init so the hook's error! has a subscriber to land in.
+    diagnostics::install_panic_hook();
+
+    // Which build wrote this log file — support's first question. The bundle
+    // also carries the same facts as system-info.txt, for logs old enough
+    // that this line has rotated out.
+    let identity = diagnostics::build_identity();
+    info!(
+        version = identity.version,
+        channel = %identity.channel,
+        os = identity.os,
+        arch = identity.arch,
+        "Application starting"
+    );
 
     // hcfs hashes and encrypts on a rayon pool it owns, and that pool runs at
     // FULL priority on every core unless the host opts out. The default is
@@ -364,6 +379,7 @@ fn main() {
             crate::sync::failure_commands::sp_skip_file,
             crate::sync::failure_commands::sp_exclude_file,
             crate::sync::failure_commands::sp_retry_file,
+            crate::sync::failure_commands::sp_dismiss_failed_files,
             crate::sync::failure_commands::get_drive_failures,
             crate::sync::failure_commands::retry_file_failure,
             crate::sync::failure_commands::retry_all_failures,

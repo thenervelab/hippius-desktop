@@ -13,6 +13,7 @@ pub mod blockchain;
 pub mod cli;
 pub mod console_access;
 pub mod crypto;
+pub mod diagnostics;
 pub mod error;
 /// File-manager shell-extension bridge. Compiled on macOS, Linux, and Windows
 /// so every CI `rust` job builds + tests the shared core (wire codec, transport

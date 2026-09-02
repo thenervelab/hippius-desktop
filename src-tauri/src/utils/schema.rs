@@ -400,11 +400,23 @@ async fn ensure_sync_file_failures(conn: &mut SqliteConnection) -> Result<(), sq
             required_cents INTEGER,
             failure_count  INTEGER NOT NULL DEFAULT 1,
             last_failed_at INTEGER NOT NULL,
+            dismissed_at   INTEGER,
             PRIMARY KEY (owner, label, relative_path)
         )",
     )
     .execute(&mut *conn)
     .await?;
+
+    // Migration: `dismissed_at` records that the user dismissed the file from
+    // the Sync Issues dialog, so the dialog stays closed for it across
+    // restarts. Nullable, so existing rows read as never dismissed.
+    let cols = table_columns(&mut *conn, "sync_file_failures").await?;
+    if !cols.contains("dismissed_at") {
+        info!("Adding dismissed_at column to sync_file_failures");
+        sqlx::query("ALTER TABLE sync_file_failures ADD COLUMN dismissed_at INTEGER")
+            .execute(&mut *conn)
+            .await?;
+    }
 
     sqlx::query(
         "CREATE INDEX IF NOT EXISTS idx_sync_file_failures_drive
