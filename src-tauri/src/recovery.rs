@@ -307,6 +307,43 @@ fn decide_recovery_flow(local: bool, can_decrypt: bool, has_server_blob: Option<
     }
 }
 
+/// What a metadata-only `GET /v1/mnemonic-blob` found.
+///
+/// Three-way on purpose: a failed probe is `Unknown`, never folded into
+/// `Absent`. Every caller that would write the blob on "absent" must
+/// refuse on `Unknown` instead (see `decide_recovery_flow` and
+/// [`decide_seal_upload`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum BlobProbe {
+    Present { updated_at: Option<String> },
+    Absent,
+    Unknown,
+}
+
+/// Probe hcfs-server for blob existence using an already-resolved context.
+///
+/// Metadata only — the ciphertext is never materialised. Shared by the
+/// boot-time recovery probe and the pre-POST check in
+/// [`seal_and_upload_mnemonic`], so both classify the server's answer
+/// identically.
+async fn probe_blob_metadata(ctx: &HcfsServerCtx) -> BlobProbe {
+    debug!(server = %ctx.base_url, "recovery probe: GET /v1/mnemonic-blob (metadata only, no ciphertext fetch)");
+    match get_json::<BlobMetadata>(ctx, "/v1/mnemonic-blob").await {
+        Ok(HttpOutcome::Ok(meta)) => {
+            info!(updated_at = ?meta.updated_at, "recovery probe: server has a sealed mnemonic blob for this account");
+            BlobProbe::Present { updated_at: meta.updated_at }
+        }
+        Ok(HttpOutcome::NotFound) => {
+            info!("recovery probe: server has NO sealed mnemonic blob for this account (404)");
+            BlobProbe::Absent
+        }
+        Err(e) => {
+            warn!(error = %e, "recovery probe: server call failed");
+            BlobProbe::Unknown
+        }
+    }
+}
+
 /// Probe hcfs-server for blob existence.
 ///
 /// Returns `(Some(true), Some(updated_at))` when present,
@@ -321,20 +358,32 @@ async fn probe_server_blob(state: &tauri::State<'_, crate::app_state::AppState>)
             return (None, None);
         }
     };
-    debug!(server = %ctx.base_url, "recovery probe: GET /v1/mnemonic-blob (metadata only, no ciphertext fetch)");
-    match get_json::<BlobMetadata>(&ctx, "/v1/mnemonic-blob").await {
-        Ok(HttpOutcome::Ok(meta)) => {
-            info!(updated_at = ?meta.updated_at, "recovery probe: server has a sealed mnemonic blob for this account");
-            (Some(true), meta.updated_at)
-        }
-        Ok(HttpOutcome::NotFound) => {
-            info!("recovery probe: server has NO sealed mnemonic blob for this account (404)");
-            (Some(false), None)
-        }
-        Err(e) => {
-            warn!(error = %e, "recovery probe: server call failed");
-            (None, None)
-        }
+    match probe_blob_metadata(&ctx).await {
+        BlobProbe::Present { updated_at } => (Some(true), updated_at),
+        BlobProbe::Absent => (Some(false), None),
+        BlobProbe::Unknown => (None, None),
+    }
+}
+
+const UNLOCK_PASSWORD_ALREADY_SET: &str = "An unlock password is already set for this account — it may have been set on Hippius Console or \
+                                          another device. Unlock with that password instead of creating a new one.";
+const UNLOCK_PASSWORD_PROBE_FAILED: &str =
+    "Could not check whether this account already has an unlock password. Check your connection and try again.";
+
+/// May [`seal_and_upload_mnemonic`] POST its freshly sealed blob?
+///
+/// `POST /v1/mnemonic-blob` is an unconditional upsert and Hippius Console
+/// is now a second writer of it, so a blob that appeared after this app
+/// decided on the Signup flow must not be overwritten with this device's
+/// master — the console's blob may hold a different seed. Only a
+/// definite 404 proceeds; a failed probe refuses exactly like the
+/// `Unknown` arm of `decide_recovery_flow`, because treating "don't
+/// know" as "absent" is the overwrite this guard exists to prevent.
+fn decide_seal_upload(probe: &BlobProbe) -> Result<()> {
+    match probe {
+        BlobProbe::Absent => Ok(()),
+        BlobProbe::Present { updated_at: _ } => Err(AppError::Validation(UNLOCK_PASSWORD_ALREADY_SET.into())),
+        BlobProbe::Unknown => Err(AppError::Other(UNLOCK_PASSWORD_PROBE_FAILED.into())),
     }
 }
 
@@ -865,6 +914,14 @@ pub async fn seal_and_upload_mnemonic(state: tauri::State<'_, crate::app_state::
     let password_k = password.clone();
     let ss58_k = ctx.ss58.clone();
     let blob = run_kdf(move || seal_mnemonic(&mnemonic_k, &password_k, &ss58_k).map_err(crypto_to_err)).await?;
+
+    // The boot-time `check_recovery_state` routed us here on "no blob", but
+    // that answer can be minutes old and Hippius Console may have set an
+    // unlock password since. Re-probe as late as possible — after the
+    // ~1.5 s KDF, immediately before the upsert — so the check-then-write
+    // window is as narrow as it can be without server-side conditional
+    // writes. Nothing local has been written yet, so refusing is free.
+    decide_seal_upload(&probe_blob_metadata(&ctx).await)?;
 
     // Server upload is the commit point: if it fails on the fresh-signup
     // path, leaving a local `master_enc_mnemonic.json` behind would make
@@ -1629,6 +1686,35 @@ mod tests {
         // their sealed blob. An unknown blob with an unopenable local file
         // must stay Unknown: gate Pending, retry dialog, no banner.
         assert_eq!(decide_recovery_flow(true, false, None), RecoveryFlow::Unknown);
+    }
+
+    /// The pre-POST probe in `seal_and_upload_mnemonic` must only let a
+    /// definite 404 through. A blob that appeared since boot (Hippius
+    /// Console is a second writer) is refused as user input, and a failed
+    /// probe is refused too — "don't know" folded into "absent" is exactly
+    /// the overwrite the probe exists to prevent.
+    #[test]
+    fn decide_seal_upload_only_proceeds_on_a_definite_404() {
+        decide_seal_upload(&BlobProbe::Absent).expect("a definite 404 proceeds to POST");
+
+        let present = decide_seal_upload(&BlobProbe::Present {
+            updated_at: Some("2026-09-01T00:00:00Z".into()),
+        })
+        .unwrap_err();
+        match &present {
+            AppError::Validation(msg) => {
+                assert!(msg.contains("already set"), "present must say the password is already set: {msg}");
+                assert!(msg.contains("Hippius Console"), "present must name the other writer: {msg}");
+            }
+            other => panic!("present blob must be a Validation error, got {other:?}"),
+        }
+
+        let unknown = decide_seal_upload(&BlobProbe::Unknown).unwrap_err();
+        assert!(
+            !matches!(unknown, AppError::Validation(_)),
+            "a failed probe is not bad input: {unknown:?}"
+        );
+        assert!(unknown.to_string().contains("connection"), "unknown must ask for a retry: {unknown}");
     }
 
     /// The two guard wordings must differ and each must name its own remedy:
