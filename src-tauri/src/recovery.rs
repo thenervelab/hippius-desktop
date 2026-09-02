@@ -346,6 +346,11 @@ async fn probe_server_blob(state: &tauri::State<'_, crate::app_state::AppState>)
 /// install the mnemonic into the local store, and mark the recovery gate
 /// resolved.
 ///
+/// Runs the same folder-derivation guard as the write paths before
+/// touching local key material: the server blob has a second writer
+/// (Hippius Console), so an opened blob whose master does not derive
+/// this device's folder seals is refused with nothing changed.
+///
 /// Wrong password surfaces as [`AppError::Validation("Wrong passphrase.")`]
 /// — same mapping the existing Console Access flow uses, so the frontend
 /// matches one error shape. SS58 mismatch collapses to the same variant
@@ -381,6 +386,15 @@ pub async fn recover_mnemonic(app: tauri::AppHandle, state: tauri::State<'_, cra
     let password_k = password.clone();
     let ss58_k = ctx.ss58.clone();
     let mnemonic = run_kdf(move || open_mnemonic(&blob_k, &password_k, &ss58_k).map_err(crypto_to_err)).await?;
+
+    // Hippius Console can create or replace the server blob, so a blob
+    // that opens with the user's password is no longer proof that its
+    // master is the one this device's folder seals derive from. Refuse
+    // BEFORE any local write: `install_recovered_mnemonic` plus
+    // `align_drive_password` would otherwise re-derive every own-folder
+    // seal under a foreign master and destroy the only local copies of
+    // the real folder keys. Vacuous on a fresh device (no folders yet).
+    validate_master_against_existing_folders(pool, &account_id, &mnemonic, GuardFlow::Unlock).await?;
 
     // Persist the recovered mnemonic to the local store so subsequent
     // sync init picks it up without re-fetching. The file password is
@@ -598,6 +612,57 @@ async fn clear_rotation_sidecar(account_id: &str) {
     }
 }
 
+/// Which flow is asking [`validate_master_against_existing_folders`].
+///
+/// Selects only the user-facing wording of a mismatch; the check itself
+/// is identical. The seal paths hold a candidate the user is about to
+/// commit, so "unlock with your original password first" is the remedy.
+/// The unlock path holds a master that came OUT of the server blob, so
+/// that advice is circular — the remedy there is the original seed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GuardFlow {
+    /// A path about to seal or rewrite local key material under a
+    /// candidate master it obtained locally (signup, rotation, restore).
+    Seal,
+    /// [`recover_mnemonic`]: the candidate was opened from the server blob.
+    Unlock,
+}
+
+/// Why the candidate master failed the folder-derivation guard.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum MasterMismatch {
+    /// The candidate cannot decrypt the encrypted `drive_password` row.
+    DrivePassword,
+    /// The candidate does not derive the stored seal of this folder label.
+    Folder(String),
+}
+
+const UNLOCK_MASTER_MISMATCH: &str = "The unlock password on the server protects a different seed than the one this device's files were \
+                                      encrypted with. Nothing was changed on this device. Restore your original seed (choose \"Forgot \
+                                      password?\" and enter your recovery phrase) or contact support.";
+
+/// Map a guard mismatch to the error the calling flow should surface.
+///
+/// The `Seal` wordings (and their variants) are unchanged from before the
+/// flow parameter existed, so the existing call sites keep their behaviour.
+fn master_mismatch_error(flow: GuardFlow, mismatch: &MasterMismatch) -> AppError {
+    match (flow, mismatch) {
+        (GuardFlow::Unlock, MasterMismatch::DrivePassword | MasterMismatch::Folder(_)) => AppError::Validation(UNLOCK_MASTER_MISMATCH.into()),
+        (GuardFlow::Seal, MasterMismatch::DrivePassword) => AppError::Validation(
+            "Cannot seal recovery blob: the provided master mnemonic does not match this \
+             account's existing encrypted drive password. Unlock with your original recovery \
+             password first, then retry."
+                .into(),
+        ),
+        (GuardFlow::Seal, MasterMismatch::Folder(label)) => AppError::Other(format!(
+            "Cannot seal recovery blob: candidate master mnemonic does not derive folder '{label}'. \
+             The local master is out of sync with folder state — restoring recovery against this master \
+             would leave uploads in this folder undecryptable. \
+             Import your original master mnemonic via Settings → Recovery before retrying."
+        )),
+    }
+}
+
 /// Verify a candidate master mnemonic actually derives the folder
 /// mnemonics stored on disk for this account.
 ///
@@ -625,7 +690,7 @@ async fn own_drive_folder_rows(pool: &SqlitePool, account_id: &str) -> Result<Ve
     )
 }
 
-async fn validate_master_against_existing_folders(pool: &SqlitePool, account_id: &str, candidate_master: &str) -> Result<()> {
+async fn validate_master_against_existing_folders(pool: &SqlitePool, account_id: &str, candidate_master: &str, flow: GuardFlow) -> Result<()> {
     let owner = account_key(account_id);
     let folders = own_drive_folder_rows(pool, account_id).await?;
     if folders.is_empty() {
@@ -657,12 +722,11 @@ async fn validate_master_against_existing_folders(pool: &SqlitePool, account_id:
             // it "does not match" sends the user chasing a mnemonic problem
             // they don't have.
             Err(AppError::Crypto(_)) => {
-                return Err(AppError::Validation(
-                    "Cannot seal recovery blob: the provided master mnemonic does not match this \
-                     account's existing encrypted drive password. Unlock with your original recovery \
-                     password first, then retry."
-                        .into(),
-                ));
+                warn!(
+                    ?flow,
+                    "recovery validation: candidate master cannot decrypt the drive password row — refusing"
+                );
+                return Err(master_mismatch_error(flow, &MasterMismatch::DrivePassword));
             }
             Err(other) => return Err(other),
         },
@@ -703,12 +767,8 @@ async fn validate_master_against_existing_folders(pool: &SqlitePool, account_id:
                 .map_err(|e| AppError::Other(format!("derive_folder_mnemonic failed: {e}")))?,
         );
         if *stored != *expected {
-            return Err(AppError::Other(format!(
-                "Cannot seal recovery blob: candidate master mnemonic does not derive folder '{label}'. \
-                 The local master is out of sync with folder state — restoring recovery against this master \
-                 would leave uploads in this folder undecryptable. \
-                 Import your original master mnemonic via Settings → Recovery before retrying."
-            )));
+            warn!(?flow, label = %label, "recovery validation: candidate master does not derive the stored folder seal — refusing");
+            return Err(master_mismatch_error(flow, &MasterMismatch::Folder(label.clone())));
         }
     }
 
@@ -796,7 +856,7 @@ pub async fn seal_and_upload_mnemonic(state: tauri::State<'_, crate::app_state::
     // from this wrong master, and AEAD-tag-fails on chunk 0. Detect
     // here, surface a clear error, and abort instead of corrupting the
     // server-side recovery state.
-    validate_master_against_existing_folders(pool, &account_id, &mnemonic).await?;
+    validate_master_against_existing_folders(pool, &account_id, &mnemonic, GuardFlow::Seal).await?;
 
     let ctx = HcfsServerCtx::resolve(&state).await?;
     // Argon2id off the executor. `mnemonic` is reused after sealing (installed
@@ -915,7 +975,7 @@ pub async fn change_recovery_password(
 
     // 3. Derivation guard — refuse to rotate under a master that can't
     //    reproduce existing folder mnemonics.
-    validate_master_against_existing_folders(pool, &account_id, &mnemonic).await?;
+    validate_master_against_existing_folders(pool, &account_id, &mnemonic, GuardFlow::Seal).await?;
 
     commit_new_unlock_password(state.inner(), pool, &ctx, &account_id, &mnemonic, &new, None).await
 }
@@ -974,7 +1034,7 @@ pub async fn resume_recovery_password_rotation(state: tauri::State<'_, crate::ap
     // `align_drive_password` rewrite every `enc_mnemonic.json` under the wrong
     // master, destroying the folder keys that open already-uploaded ciphertext —
     // permanent AEAD-tag failures on later downloads (audit R-10).
-    validate_master_against_existing_folders(pool, &account_id, &mnemonic).await?;
+    validate_master_against_existing_folders(pool, &account_id, &mnemonic, GuardFlow::Seal).await?;
 
     install_recovered_mnemonic(&account_id, &mnemonic, &password).await?;
 
@@ -1060,7 +1120,7 @@ pub async fn restore_with_mnemonic(
         "recovery: typed mnemonic proven; resealing unlock password"
     );
 
-    validate_master_against_existing_folders(pool, &account_id, mnemonic.trim()).await?;
+    validate_master_against_existing_folders(pool, &account_id, mnemonic.trim(), GuardFlow::Seal).await?;
     let ctx = HcfsServerCtx::resolve(&state).await?;
     commit_new_unlock_password(state.inner(), pool, &ctx, &account_id, mnemonic.trim(), &new_password, Some(&app)).await
 }
@@ -1092,7 +1152,7 @@ pub async fn reset_unlock_password(
         return Err(AppError::Validation(SESSION_MNEMONIC_MISSING.into()));
     }
 
-    validate_master_against_existing_folders(pool, &account_id, &mnemonic).await?;
+    validate_master_against_existing_folders(pool, &account_id, &mnemonic, GuardFlow::Seal).await?;
     let ctx = HcfsServerCtx::resolve(&state).await?;
     commit_new_unlock_password(state.inner(), pool, &ctx, &account_id, &mnemonic, &new_password, Some(&app)).await
 }
@@ -1571,6 +1631,32 @@ mod tests {
         assert_eq!(decide_recovery_flow(true, false, None), RecoveryFlow::Unknown);
     }
 
+    /// The two guard wordings must differ and each must name its own remedy:
+    /// the seal paths can be fixed by unlocking with the original password,
+    /// but on the unlock path that advice is circular — the user just did.
+    #[test]
+    fn guard_wording_names_the_remedy_for_each_flow() {
+        for mismatch in [MasterMismatch::DrivePassword, MasterMismatch::Folder("docs".into())] {
+            let seal = master_mismatch_error(GuardFlow::Seal, &mismatch).to_string();
+            let unlock = master_mismatch_error(GuardFlow::Unlock, &mismatch).to_string();
+
+            assert_ne!(seal, unlock, "{mismatch:?}: the two flows must not share wording");
+            assert!(seal.contains("Cannot seal recovery blob"), "{mismatch:?}: seal wording changed: {seal}");
+            assert!(
+                unlock.contains("different seed"),
+                "{mismatch:?}: unlock wording must explain the mismatch: {unlock}"
+            );
+            assert!(
+                unlock.contains("Nothing was changed"),
+                "{mismatch:?}: unlock wording must reassure nothing was written: {unlock}"
+            );
+            assert!(
+                !unlock.contains("original recovery password"),
+                "{mismatch:?}: unlock wording must not send the user back to the password they just used: {unlock}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn leaves_empty_url_alone_on_existing_row() {
         // Empty IS the default `server_url` — the auto-detect sentinel
@@ -1919,8 +2005,20 @@ mod tests {
         // A DIFFERENT master can't decrypt that drive password → must be refused,
         // not silently skipped, which would allow sealing a wrong master.
         let wrong = "legal winner thank year wave sausage worth useful legal winner thank yellow";
-        let err = super::validate_master_against_existing_folders(&pool, account, wrong).await.unwrap_err();
+        let err = super::validate_master_against_existing_folders(&pool, account, wrong, super::GuardFlow::Seal)
+            .await
+            .unwrap_err();
         assert!(matches!(err, AppError::Validation(_)), "wrong master must be refused, got {err:?}");
+
+        // Same mismatch asked by the unlock path: still refused, but with the
+        // unlock wording — the flow parameter must reach the mismatch site.
+        let err = super::validate_master_against_existing_folders(&pool, account, wrong, super::GuardFlow::Unlock)
+            .await
+            .unwrap_err();
+        match &err {
+            AppError::Validation(msg) => assert!(msg.contains("different seed"), "unlock path must use the unlock wording: {msg}"),
+            other => panic!("unlock path must refuse as Validation, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -1941,7 +2039,7 @@ mod tests {
             .await
             .expect("seed sync_paths");
         // No hcfs_config row → pre-config → vacuously allowed.
-        super::validate_master_against_existing_folders(&pool, account, VALIDATION_MASTER)
+        super::validate_master_against_existing_folders(&pool, account, VALIDATION_MASTER, super::GuardFlow::Seal)
             .await
             .expect("validation allows pre-config");
     }
@@ -2006,7 +2104,7 @@ mod tests {
         plant_folder_seal(account, "docs", VALIDATION_MASTER, DRIVE_PW).await;
         plant_folder_seal(account, "shared", WRONG_MASTER, DRIVE_PW).await;
 
-        super::validate_master_against_existing_folders(&pool, account, VALIDATION_MASTER)
+        super::validate_master_against_existing_folders(&pool, account, VALIDATION_MASTER, super::GuardFlow::Seal)
             .await
             .expect("member seal must not fail a matching own-drive master");
     }
@@ -2025,7 +2123,7 @@ mod tests {
         seed_plaintext_drive_pw(&pool, &owner).await;
         plant_folder_seal(account, "docs", WRONG_MASTER, DRIVE_PW).await;
 
-        let err = super::validate_master_against_existing_folders(&pool, account, VALIDATION_MASTER)
+        let err = super::validate_master_against_existing_folders(&pool, account, VALIDATION_MASTER, super::GuardFlow::Seal)
             .await
             .unwrap_err();
         assert!(
