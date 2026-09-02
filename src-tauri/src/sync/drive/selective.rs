@@ -6,6 +6,8 @@
 
 use crate::app_state::AppState;
 use crate::error::{AppError, Result};
+use crate::sync::exclude_literal::{ExcludePatternEntry, entries_from_patterns, exclude_path_literally, literal_pattern, remove_literal_exclusion};
+use hcfs_client::engine::DriveManager;
 use hcfs_client::engine::runner::trigger_sync;
 use tauri::{AppHandle, Emitter, Manager};
 use tracing::{debug, info, warn};
@@ -116,13 +118,14 @@ fn matches_everything(pattern: &str) -> bool {
     !pattern.is_empty() && pattern.chars().all(|c| matches!(c, '*' | '/' | '\\'))
 }
 
-/// List all active exclusion patterns for a drive.
+/// List all active exclusion patterns for a drive, each paired with the form
+/// to show the user (a literal exclusion reads back as its file name).
 ///
 /// Grabs the per-drive Arc from the drives map (microsecond outer lock),
 /// then locks the manager to read patterns. Returns an empty list if the
 /// drive does not exist.
 #[tauri::command]
-pub async fn list_exclude_patterns(label: String, app_state: tauri::State<'_, AppState>) -> Result<Vec<String>> {
+pub async fn list_exclude_patterns(label: String, app_state: tauri::State<'_, AppState>) -> Result<Vec<ExcludePatternEntry>> {
     let drive_arc = {
         let guard = app_state.sync.drives.lock().await;
         guard.get(&label).map(|slot| slot.manager.clone())
@@ -140,7 +143,7 @@ pub async fn list_exclude_patterns(label: String, app_state: tauri::State<'_, Ap
         count = patterns.len(),
         "Listed exclude patterns",
     );
-    Ok(patterns)
+    Ok(entries_from_patterns(patterns))
 }
 
 /// Add an exclusion pattern to a drive.
@@ -239,37 +242,7 @@ pub async fn apply_sync_selection(
     };
 
     let manager = arc.lock().await;
-
-    for path in &include {
-        // Trim for parity with the exclude branch (validate_pattern trims before
-        // storing), so an entry with surrounding whitespace actually matches the
-        // stored rule instead of silently no-op'ing, and observe the returned
-        // bool so a no-match is logged rather than vanishing. A remove can only
-        // delete a stored rule — it cannot escape
-        // the sync root — so the full validate_pattern (`..`/newline rejection)
-        // the add side needs is unnecessary here.
-        let trimmed = path.trim();
-        if trimmed.is_empty() {
-            warn!(pattern = %path, "Skipping empty include entry in batch");
-            continue;
-        }
-        let removed = manager.remove_exclude_pattern(trimmed).map_err(AppError::Hcfs)?;
-        if !removed {
-            debug!(label = %label, pattern = %trimmed, "Include entry matched no stored exclude rule (already included)");
-        }
-    }
-    for path in &exclude {
-        match validate_pattern(path) {
-            Ok(trimmed) => {
-                let _ = manager.add_exclude_pattern(&trimmed).map_err(AppError::Hcfs)?;
-            }
-            // Unlike `add_exclude_pattern`, a batch tolerates a bad entry rather
-            // than aborting the whole selection — but log it so a silently
-            // dropped exclusion is observable instead of vanishing.
-            Err(e) => warn!(pattern = %path, error = %e, "Skipping invalid exclude pattern in batch"),
-        }
-    }
-
+    apply_selection_on_manager(&manager, &label, &include, &exclude)?;
     drop(manager);
 
     info!(
@@ -280,6 +253,40 @@ pub async fn apply_sync_selection(
     );
 
     trigger_sync_after_exclude_edit(&app, &label).await;
+
+    Ok(())
+}
+
+/// Apply the folder browser's selection to one drive.
+///
+/// Both lists hold FILE PATHS the user ticked or unticked, never globs, so
+/// each unticked path is escaped before it becomes a rule and each re-ticked
+/// path removes that same escaped line (and the raw line an older build
+/// wrote). Validation runs on the escaped form, which is the line written:
+/// `..` survives escaping, so traversal is still refused, while a bracket in
+/// a name no longer trips the compile check. An invalid entry is logged and
+/// skipped rather than aborting the batch; a drive-side write failure aborts.
+fn apply_selection_on_manager(manager: &DriveManager, label: &str, include: &[String], exclude: &[String]) -> Result<()> {
+    for path in include {
+        let trimmed = path.trim();
+        if trimmed.is_empty() {
+            warn!(pattern = %path, "Skipping empty include entry in batch");
+            continue;
+        }
+        let removed = remove_literal_exclusion(manager, trimmed).map_err(AppError::Hcfs)?;
+        if !removed {
+            debug!(label = %label, path = %trimmed, "Include entry matched no stored exclude rule (already included)");
+        }
+    }
+
+    for path in exclude {
+        match validate_pattern(&literal_pattern(path)) {
+            Ok(_) => {
+                let _ = exclude_path_literally(manager, path.trim()).map_err(AppError::Hcfs)?;
+            }
+            Err(e) => warn!(path = %path, error = %e, "Skipping invalid exclude entry in batch"),
+        }
+    }
 
     Ok(())
 }
@@ -410,5 +417,58 @@ mod tests {
                 prop_assert!(invalid(s.trim()));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use super::apply_selection_on_manager;
+    use hcfs_client::engine::DriveManager;
+    use std::path::Path;
+
+    const PICKED: &str = "Photos [2024]/IMG [1].jpg";
+    const SIBLING: &str = "Photos 2/IMG 1.jpg";
+
+    fn temp_manager() -> (tempfile::TempDir, DriveManager) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let config_dir = tmp.path().join(".hippius");
+        std::fs::create_dir_all(&config_dir).expect("config dir");
+        let manager = DriveManager::new(tmp.path().to_path_buf(), config_dir);
+        (tmp, manager)
+    }
+
+    #[test]
+    fn an_unticked_file_is_excluded_by_name_not_as_a_glob() {
+        let (_tmp, manager) = temp_manager();
+
+        apply_selection_on_manager(&manager, "drive", &[], &[PICKED.to_string()]).expect("apply");
+
+        assert!(manager.is_excluded(Path::new(PICKED), false));
+        assert!(
+            !manager.is_excluded(Path::new(SIBLING), false),
+            "a bracket must not become a character class"
+        );
+    }
+
+    #[test]
+    fn re_ticking_a_file_removes_its_rule_and_a_raw_line_from_an_older_build() {
+        let (_tmp, manager) = temp_manager();
+        manager.add_exclude_pattern(PICKED).expect("legacy raw line");
+        apply_selection_on_manager(&manager, "drive", &[], &[PICKED.to_string()]).expect("apply");
+        assert_eq!(manager.list_exclude_patterns().len(), 2, "escaped line sits beside the legacy one");
+
+        apply_selection_on_manager(&manager, "drive", &[PICKED.to_string()], &[]).expect("apply");
+
+        assert!(manager.list_exclude_patterns().is_empty());
+        assert!(!manager.is_excluded(Path::new(PICKED), false));
+    }
+
+    #[test]
+    fn a_traversal_entry_is_skipped_without_aborting_the_batch() {
+        let (_tmp, manager) = temp_manager();
+
+        apply_selection_on_manager(&manager, "drive", &[], &["../secret".to_string(), "ok.txt".to_string()]).expect("apply");
+
+        assert_eq!(manager.list_exclude_patterns(), vec!["ok.txt"]);
     }
 }

@@ -70,6 +70,14 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Excluding a file from the "Sync Issues" dialog now sticks**, including names with
+  brackets or braces such as `Movie [2019].mkv`. Before, the file kept failing, the dialog
+  kept coming back after every restart, and in some cases a differently named file was
+  excluded instead. Retry now clears such a stale exclusion too. Files you untick in the
+  folder browser are covered by the same fix.
+- **Dismissing the "Sync Issues" dialog now sticks.** It no longer comes back every couple
+  of minutes, or after every restart, for files you have already seen. It reopens only
+  when a new file starts failing, and then lists everything that needs attention.
 - **Photo thumbnails show real previews again.** Small preview images in the
   file grid and the viewer's filmstrip could appear as broken-image icons even
   though the photos themselves were fine.

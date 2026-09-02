@@ -185,6 +185,47 @@ pub async fn clear_failures_for_label(pool: &SqlitePool, owner: &str, label: &st
     Ok(())
 }
 
+/// Remember that the user dismissed these files from the Sync Issues dialog.
+///
+/// Stamps `dismissed_at` on the existing rows only: a file with no failure
+/// row has nothing to be quiet about, and inventing a row would show a
+/// "Failed" badge for a file that never failed. A repeat failure re-upserts
+/// the row without touching the stamp; the row's deletion on success or
+/// retry is what ends the dismissal.
+///
+/// # Errors
+/// Returns [`crate::error::AppError::Db`] if the database write fails.
+pub async fn mark_dismissed(pool: &SqlitePool, owner: &str, label: &str, relative_paths: &[String], now_ms: i64) -> Result<()> {
+    for relative_path in relative_paths {
+        sqlx::query("UPDATE sync_file_failures SET dismissed_at = ? WHERE owner = ? AND label = ? AND relative_path = ?")
+            .bind(now_ms)
+            .bind(owner)
+            .bind(label)
+            .bind(relative_path)
+            .execute(pool)
+            .await?;
+    }
+    Ok(())
+}
+
+/// Relative paths of a drive's dismissed failures — read at drive init to
+/// reinstate them into the in-memory tracker.
+///
+/// # Errors
+/// Returns [`crate::error::AppError::Db`] if the database read fails.
+pub async fn list_dismissed_paths(pool: &SqlitePool, owner: &str, label: &str) -> Result<Vec<String>> {
+    let paths = sqlx::query_scalar(
+        "SELECT relative_path FROM sync_file_failures
+         WHERE owner = ? AND label = ? AND dismissed_at IS NOT NULL
+         ORDER BY relative_path",
+    )
+    .bind(owner)
+    .bind(label)
+    .fetch_all(pool)
+    .await?;
+    Ok(paths)
+}
+
 /// Read one file's persisted failure, if any — used to enrich a listing row.
 ///
 /// # Errors
@@ -264,6 +305,7 @@ mod tests {
                 required_cents INTEGER,
                 failure_count  INTEGER NOT NULL DEFAULT 1,
                 last_failed_at INTEGER NOT NULL,
+                dismissed_at   INTEGER,
                 PRIMARY KEY (owner, label, relative_path)
             )",
         )
@@ -402,5 +444,55 @@ mod tests {
 
         assert!(get_failure(&pool, "owner-b", "d", "f").await.unwrap().is_none());
         assert!(get_failure(&pool, "owner-a", "d", "f").await.unwrap().is_some());
+    }
+
+    /// A dismissal must outlive the failure that follows it — the file keeps
+    /// failing every cycle, and each failure re-upserts the row — but not the
+    /// success that deletes the row.
+    #[tokio::test]
+    async fn a_dismissal_survives_a_repeat_failure_and_dies_with_the_row() {
+        let pool = test_pool().await;
+        let k = FileFailureKindPayload::Network;
+        upsert_failure(&pool, "o", "d", "a", "a", &k, 1).await.unwrap();
+        upsert_failure(&pool, "o", "d", "b", "b", &k, 1).await.unwrap();
+
+        mark_dismissed(&pool, "o", "d", &["a".to_string()], 500).await.unwrap();
+        assert_eq!(list_dismissed_paths(&pool, "o", "d").await.unwrap(), vec!["a"]);
+
+        upsert_failure(&pool, "o", "d", "a", "a", &k, 600).await.unwrap();
+        assert_eq!(
+            list_dismissed_paths(&pool, "o", "d").await.unwrap(),
+            vec!["a"],
+            "a repeat failure keeps the dismissal"
+        );
+
+        clear_failure(&pool, "o", "d", "a").await.unwrap();
+        assert!(list_dismissed_paths(&pool, "o", "d").await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn dismissing_an_unknown_file_records_nothing() {
+        let pool = test_pool().await;
+        mark_dismissed(&pool, "o", "d", &["ghost".to_string()], 1).await.unwrap();
+        assert!(list_dismissed_paths(&pool, "o", "d").await.unwrap().is_empty());
+        assert!(
+            get_failure(&pool, "o", "d", "ghost").await.unwrap().is_none(),
+            "no row is conjured for it"
+        );
+    }
+
+    #[tokio::test]
+    async fn dismissals_are_scoped_per_owner_and_label() {
+        let pool = test_pool().await;
+        let k = FileFailureKindPayload::Network;
+        upsert_failure(&pool, "o", "alpha", "a", "a", &k, 1).await.unwrap();
+        upsert_failure(&pool, "o", "beta", "a", "a", &k, 1).await.unwrap();
+        upsert_failure(&pool, "other", "alpha", "a", "a", &k, 1).await.unwrap();
+
+        mark_dismissed(&pool, "o", "alpha", &["a".to_string()], 1).await.unwrap();
+
+        assert_eq!(list_dismissed_paths(&pool, "o", "alpha").await.unwrap(), vec!["a"]);
+        assert!(list_dismissed_paths(&pool, "o", "beta").await.unwrap().is_empty());
+        assert!(list_dismissed_paths(&pool, "other", "alpha").await.unwrap().is_empty());
     }
 }

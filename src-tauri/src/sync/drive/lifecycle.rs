@@ -1509,6 +1509,11 @@ pub(crate) async fn initialize_sync_inner(
     // drives (`FolderEntriesBackfillOutcome::SkippedMemberDrive`).
     crate::sync::folder_entries_backfill::spawn_folder_entries_backfill(app.clone(), account_id.clone(), label.clone());
 
+    // Dismissals from the Sync Issues dialog are durable, but the in-memory
+    // tracker starts empty on every launch; without this restore the dialog
+    // returns three cycles after every relaunch for a file already dismissed.
+    crate::sync::failure_commands::spawn_restore_dismissed_failures(app.clone(), account_id.clone(), label.clone());
+
     // Recovery is default-on: ensure this account's mnemonic is registered as a
     // read-only recovery principal, with no user action. Best-effort and guarded
     // to one success per account per session, so the per-drive funnel is a safe
