@@ -126,6 +126,41 @@ describe("AccountRecoveryDialog — Signup branch after a refused seal", () => {
     expect(recoveryMocks.sealAndUploadMnemonic).toHaveBeenCalledTimes(1);
   });
 
+  // A failed pre-POST probe is refused with a non-Validation kind. The
+  // re-check must run for that too, so a device that is really offline
+  // lands on the connection-retry branch instead of a form that can never
+  // succeed.
+  it("re-checks after a non-Validation refusal and routes to the retry branch on unknown", async () => {
+    recoveryMocks.sealAndUploadMnemonic.mockRejectedValue({
+      kind: "Hcfs",
+      message:
+        "HCFS client error: Could not check whether this account already has an unlock password. Check your connection and try again.",
+    });
+    const unknownCheck: RecoveryCheck = {
+      hasServerBlob: false,
+      hasLocalMnemonic: false,
+      updatedAt: null,
+      recommendedFlow: "unknown",
+    };
+    recoveryMocks.checkRecoveryState.mockResolvedValue(unknownCheck);
+    const store = renderSignupDialog();
+
+    await fillAndSave();
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        expect.stringContaining("Check your connection")
+      )
+    );
+    await waitFor(() =>
+      expect(store.get(activeRecoveryCheckAtom)).toEqual(unknownCheck)
+    );
+    expect(screen.getByText("Check Your Connection")).toBeInTheDocument();
+    expect(
+      screen.queryByPlaceholderText("Create a Strong Password")
+    ).not.toBeInTheDocument();
+  });
+
   it("stays on Signup when the re-check itself fails", async () => {
     recoveryMocks.sealAndUploadMnemonic.mockRejectedValue(ALREADY_SET);
     recoveryMocks.checkRecoveryState.mockRejectedValue(new Error("offline"));
