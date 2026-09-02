@@ -7,8 +7,29 @@
 //! through `sync::exclude_literal` so `[`, `{`, `*`, `?` and a leading `#`
 //! in a name cannot change which file the rule matches.
 
+use crate::app_state::AppState;
 use crate::error::Result;
 use crate::sync::exclude_literal::{exclude_path_literally, remove_literal_exclusion};
+use serde::Deserialize;
+use std::collections::HashMap;
+use tauri::{AppHandle, Manager};
+use tracing::warn;
+
+/// Drop the persisted failure row for a file the user acted on from the
+/// dialog. The row carries the dismissal stamp, so leaving it behind would
+/// restore a dismissal at the next launch for a file the user asked to
+/// retry. Logged out means there is no row to drop.
+///
+/// # Errors
+/// Returns an error if the database write fails.
+async fn clear_durable_failure(state: &AppState, label: &str, path: &str) -> Result<()> {
+    let Ok(account_id) = state.current_account_id() else {
+        return Ok(());
+    };
+    let owner = crate::auth::account_key::account_key(&account_id);
+    let pool = state.pool()?;
+    crate::sync::failure_repo::clear_failure(pool, &owner, label, path).await
+}
 
 /// Skip a file for this session only.
 ///
@@ -18,6 +39,7 @@ use crate::sync::exclude_literal::{exclude_path_literally, remove_literal_exclus
 #[tauri::command]
 pub async fn sp_skip_file(label: String, path: String, state: tauri::State<'_, crate::app_state::AppState>) -> Result<()> {
     state.file_failures.skip_file(&label, &path);
+    clear_durable_failure(&state, &label, &path).await?;
 
     let drive_arc = {
         let guard = state.sync.drives.lock().await;
@@ -46,6 +68,7 @@ pub async fn sp_skip_file(label: String, path: String, state: tauri::State<'_, c
 #[tauri::command]
 pub async fn sp_exclude_file(label: String, path: String, state: tauri::State<'_, crate::app_state::AppState>) -> Result<()> {
     state.file_failures.clear_failure(&label, &path);
+    clear_durable_failure(&state, &label, &path).await?;
 
     let drive_arc = {
         let guard = state.sync.drives.lock().await;
@@ -78,6 +101,7 @@ pub async fn sp_exclude_file(label: String, path: String, state: tauri::State<'_
 pub async fn sp_retry_file(label: String, path: String, state: tauri::State<'_, crate::app_state::AppState>) -> Result<()> {
     state.file_failures.clear_failure(&label, &path);
     state.file_failures.unskip_file(&label, &path);
+    clear_durable_failure(&state, &label, &path).await?;
 
     let drive_arc = {
         let guard = state.sync.drives.lock().await;
@@ -93,6 +117,65 @@ pub async fn sp_retry_file(label: String, path: String, state: tauri::State<'_, 
 
     state.sync.emit_snapshot(true);
     Ok(())
+}
+
+/// One `(label, path)` pair the Sync Issues dialog listed when the user
+/// pressed Dismiss.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DismissedFile {
+    pub label: String,
+    pub path: String,
+}
+
+/// Remember that the user dismissed these files from the Sync Issues dialog.
+///
+/// A dismissed file keeps failing and keeps its Failed badge, but it does not
+/// reopen the dialog on its own, in this session or after a relaunch; only a
+/// file the user has not seen does. Retry, Skip and Exclude forget the
+/// dismissal. The in-memory tracker learns it first so the very next cycle
+/// honours it; the durable write is what survives a restart.
+///
+/// # Errors
+/// Returns an error if the database write fails.
+#[tauri::command]
+pub async fn sp_dismiss_failed_files(files: Vec<DismissedFile>, state: tauri::State<'_, crate::app_state::AppState>) -> Result<()> {
+    let mut by_label: HashMap<String, Vec<String>> = HashMap::new();
+    for file in files {
+        state.file_failures.dismiss(&file.label, &file.path);
+        by_label.entry(file.label).or_default().push(file.path);
+    }
+
+    let Ok(account_id) = state.current_account_id() else {
+        return Ok(());
+    };
+    let owner = crate::auth::account_key::account_key(&account_id);
+    let pool = state.pool()?;
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    for (label, paths) in &by_label {
+        crate::sync::failure_repo::mark_dismissed(pool, &owner, label, paths, now_ms).await?;
+    }
+    Ok(())
+}
+
+/// Reinstate a drive's durable dismissals into the in-memory tracker.
+///
+/// Called from the drive-init funnel. Best-effort: a read failure is logged,
+/// and the only consequence is the dialog reopening once for files the user
+/// had already dismissed.
+pub fn spawn_restore_dismissed_failures(app: AppHandle, account_id: String, label: String) {
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<AppState>();
+        let Ok(pool) = state.pool() else {
+            return;
+        };
+        let owner = crate::auth::account_key::account_key(&account_id);
+        match crate::sync::failure_repo::list_dismissed_paths(pool, &owner, &label).await {
+            Ok(paths) if paths.is_empty() => {}
+            Ok(paths) => state.file_failures.restore_dismissed(&label, paths),
+            Err(e) => warn!(label = %label, error = %e, "Could not restore dismissed sync issues; the dialog may reopen once"),
+        }
+    });
 }
 
 /// Read every persisted file-failure record for a drive so the FE can show

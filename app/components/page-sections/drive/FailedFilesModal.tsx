@@ -151,9 +151,22 @@ export default function FailedFilesModal() {
     [failedFiles, removeFromList],
   );
 
+  // Dismiss is remembered in Rust: a dismissed file stays quiet however long
+  // it keeps failing, and across restarts; the dialog only returns when a
+  // file the user has not seen reaches the threshold. Retry, Skip and
+  // Exclude forget the dismissal. The atom is cleared first so the dialog
+  // closes at once; a failed write only means it may return next cycle.
   const handleDismiss = useCallback(() => {
+    const files = (failedFiles ?? []).map(({ label, path }) => ({
+      label,
+      path,
+    }));
     setFailedFiles(null);
-  }, [setFailedFiles]);
+    if (files.length === 0) return;
+    invoke("sp_dismiss_failed_files", { files }).catch((err: unknown) =>
+      console.warn("Failed to record dismissed sync issues:", err),
+    );
+  }, [failedFiles, setFailedFiles]);
 
   const count = failedFiles?.length ?? 0;
   const showBulkActions = count >= 2;

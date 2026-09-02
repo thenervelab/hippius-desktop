@@ -175,3 +175,29 @@ fn default_exclude_patterns_stay_gone() {
         "do not resurrect DEFAULT_EXCLUDE_PATTERNS"
     );
 }
+
+/// The folder browser hands over FILE PATHS the user unticked, not globs. A
+/// path written verbatim is compiled as a glob, so `Photos [2024]/IMG [1].jpg`
+/// never matched itself. The IPC must delegate to the unit-tested helper,
+/// and the helper must escape on the way in and remove the same line on the
+/// way out.
+#[test]
+fn apply_sync_selection_writes_picked_paths_literally() {
+    let src = read_src("sync/drive/selective.rs");
+    let ipc = fn_body(&src, "pub async fn apply_sync_selection(");
+    assert!(
+        ipc.contains("apply_selection_on_manager("),
+        "the IPC must delegate to the helper the tests cover"
+    );
+
+    let helper = fn_body(&src, "fn apply_selection_on_manager(");
+    assert!(
+        helper.contains("literal_pattern("),
+        "an unticked path must be escaped before it is written"
+    );
+    assert!(
+        helper.contains("remove_literal_exclusion("),
+        "a re-ticked path must remove the escaped line"
+    );
+    assert!(!helper.contains("add_exclude_pattern(&trimmed)"), "no raw path may be written as a glob");
+}

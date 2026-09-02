@@ -179,17 +179,10 @@ fn update_failure_counts(app: &AppHandle, label: &str) {
         });
     }
 
-    // Increment counters for failed files.
-    let mut any_newly_at_threshold = false;
-    for (path, error) in &failed_files {
-        failure_state.record_failure(label, path, error.clone());
-        if failure_state.just_reached_threshold(label, path) {
-            any_newly_at_threshold = true;
-        }
-    }
-
-    // Emit the event if any file just reached the threshold.
-    if any_newly_at_threshold {
+    // Bump the counters and let the tracker decide whether to prompt: a file
+    // the user dismissed stays quiet, a file they have not seen reopens the
+    // dialog with the whole set.
+    if failure_state.record_cycle_failures(label, &failed_files) {
         let at_threshold = failure_state.files_at_threshold();
         if !at_threshold.is_empty() {
             let _ = app.emit(

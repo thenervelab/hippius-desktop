@@ -379,6 +379,7 @@ fn main() {
             crate::sync::failure_commands::sp_skip_file,
             crate::sync::failure_commands::sp_exclude_file,
             crate::sync::failure_commands::sp_retry_file,
+            crate::sync::failure_commands::sp_dismiss_failed_files,
             crate::sync::failure_commands::get_drive_failures,
             crate::sync::failure_commands::retry_file_failure,
             crate::sync::failure_commands::retry_all_failures,
