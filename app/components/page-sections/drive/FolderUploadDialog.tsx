@@ -89,9 +89,7 @@ export default function FolderUploadDialog({
       }
     } catch (error) {
       console.error("Error selecting folder:", error);
-      toast.error(
-        `Failed to select folder: ${errorMessage(error)}`,
-      );
+      toast.error(`Failed to select folder: ${errorMessage(error)}`);
     }
   };
 
@@ -261,7 +259,7 @@ export default function FolderUploadDialog({
       console.error("Error uploading folder:", error);
       // A credit shortfall from add_folder's require_eligible gate (TOCTOU vs
       // the proactive check) opens the shared dialog, not a raw error (M-15).
-      if (isNotReady(error, "INSUFFICIENT_CREDITS")) {
+      if (isNotReady(error, "STORAGE_LIMIT_REACHED")) {
         setInsufficient("folder-upload");
       } else {
         toast.error(`Failed to upload folder: ${errorMessage(error)}`);

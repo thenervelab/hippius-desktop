@@ -18,6 +18,7 @@ export type NotReadyKind =
   | "NOT_ENOUGH_DISK_SPACE"
   | "SIGNING_KEY_UNAVAILABLE"
   | "INSUFFICIENT_CREDITS"
+  | "STORAGE_LIMIT_REACHED"
   | "SUPERSEDED_BY_PAUSE"
   | "DATABASE_NOT_READY"
   | "RATE_LIMITED"
@@ -129,12 +130,14 @@ export function isIoError(error: unknown): boolean {
  * `syncRequiresReauthAtom` and let the reauth banner drive recovery.
  */
 export function isMasterMnemonicUnrecoverable(error: unknown): boolean {
-  return (error as TauriError | null)?.subkind === "MASTER_MNEMONIC_UNRECOVERABLE";
+  return (
+    (error as TauriError | null)?.subkind === "MASTER_MNEMONIC_UNRECOVERABLE"
+  );
 }
 
 export function dispatchSigningError(
   error: unknown,
-  onReAuth: () => void
+  onReAuth: () => void,
 ): boolean {
   const e = error as TauriError | null;
   if (e?.kind === "NotReady" && e.subkind === "SIGNING_KEY_UNAVAILABLE") {
