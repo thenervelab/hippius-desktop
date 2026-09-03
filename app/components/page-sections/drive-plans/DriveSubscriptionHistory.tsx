@@ -19,12 +19,18 @@ import useDriveSubscriptionHistory from "@/lib/hooks/api/useDriveSubscriptionHis
 import { cn } from "@/lib/utils";
 
 type StatusKind = NonNullable<ComponentProps<typeof StatusTypeBadge>["type"]>;
+// Every state the billing badge draws, so a drive charge never loses its pill.
 const STATUS_KINDS: ReadonlySet<string> = new Set([
   "failed",
+  "error",
+  "declined",
+  "cancelled",
+  "canceled",
+  "expired",
   "pending",
+  "processing",
   "success",
   "successful",
-  "completed",
 ]);
 
 /** The badge only knows a fixed set of states; anything else draws no pill. */
