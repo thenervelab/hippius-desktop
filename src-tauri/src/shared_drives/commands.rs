@@ -135,17 +135,31 @@ fn build_invite_url(console_base: &str, invite_token: &str, entropy: &[u8; 32]) 
 /// A 404 whose body is NOT the server's JSON `{error, message}` envelope is
 /// axum's unmounted-route answer — the feature-off server — and maps to
 /// `NotReady(SharedDrivesUnavailable)`. A JSON-enveloped 404 is a domain
-/// "no such invite/member/drive" and maps to `NotFound`. 401/403 map to
-/// `Auth`; anything else is a surfaced `Hcfs` transport/server error.
+/// "no such invite/member/drive" and maps to `NotFound`. A 403 whose `error`
+/// slug is `shared_drives_not_entitled` is the mint plan gate and maps to
+/// `NotReady(SharedDrivesNotEntitled)` (the FE shows an upgrade prompt); other
+/// 401/403 map to `Auth`; anything else is a surfaced `Hcfs` transport/server
+/// error.
 fn classify_error_status(status: reqwest::StatusCode, body: &str) -> AppError {
     #[derive(serde::Deserialize)]
     struct ErrorEnvelope {
-        #[expect(dead_code, reason = "presence of the field is the discriminator; the message carries the info")]
         error: String,
         message: String,
     }
 
     let envelope: Option<ErrorEnvelope> = serde_json::from_str(body).ok();
+
+    // The mint plan gate: a 403 carrying this exact slug is a "not entitled"
+    // verdict the FE turns into an upgrade prompt. Match the SLUG, never the
+    // English message. Checked before the general 401/403 → Auth arm.
+    if status.as_u16() == 403
+        && envelope
+            .as_ref()
+            .is_some_and(|env| env.error == "shared_drives_not_entitled")
+    {
+        return AppError::NotReady(NotReadyKind::SharedDrivesNotEntitled);
+    }
+
     match (status.as_u16(), envelope) {
         (404, None) => AppError::NotReady(NotReadyKind::SharedDrivesUnavailable),
         (404, Some(env)) => AppError::NotFound(env.message),
@@ -777,6 +791,35 @@ mod tests {
 
         let server = classify_error_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR, "");
         assert!(matches!(server, AppError::Hcfs(_)), "500 must map to Hcfs, got {server:?}");
+    }
+
+    // The mint plan gate: a 403 carrying the `shared_drives_not_entitled` slug
+    // is a NotReady the FE turns into an upgrade prompt, discriminated on the
+    // SLUG — every other 403 stays Auth.
+    #[test]
+    fn classify_error_status_maps_not_entitled_slug_to_not_ready() {
+        let not_entitled = classify_error_status(
+            reqwest::StatusCode::FORBIDDEN,
+            r#"{"error":"shared_drives_not_entitled","message":"Shared drives need a Plus, Max, or Scale plan"}"#,
+        );
+        assert!(
+            matches!(
+                not_entitled,
+                AppError::NotReady(NotReadyKind::SharedDrivesNotEntitled)
+            ),
+            "403 shared_drives_not_entitled must map to NotReady, got {not_entitled:?}"
+        );
+
+        // A 403 with any other slug (or none) stays Auth — the message is not
+        // consulted, only the slug.
+        let suspended = classify_error_status(
+            reqwest::StatusCode::FORBIDDEN,
+            r#"{"error":"account_suspended","message":"shared_drives_not_entitled"}"#,
+        );
+        assert!(
+            matches!(suspended, AppError::Auth(_)),
+            "a different 403 slug must stay Auth even if the message echoes the slug, got {suspended:?}"
+        );
     }
 
     // The desktop invite policy: omitted parameters resolve to the named

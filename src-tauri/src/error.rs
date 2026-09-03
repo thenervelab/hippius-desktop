@@ -168,6 +168,13 @@ pub enum NotReadyKind {
     /// (`SHARED_DRIVES_UNAVAILABLE`) EXPLICITLY and hide themselves — never
     /// rely on a generic toast to communicate it.
     SharedDrivesUnavailable,
+    /// The server refused to MINT a shared-drive invite because the drive
+    /// owner's plan does not include shared drives (needs Plus/Max/Scale).
+    /// Raised by `shared_drives::commands` from the 403 `shared_drives_not_entitled`
+    /// slug so the FE can show an upgrade prompt (owners only) instead of a
+    /// generic auth error. Distinct from [`Self::SharedDrivesUnavailable`]
+    /// (feature off, bare 404): here the feature is on and the routes exist.
+    SharedDrivesNotEntitled,
 }
 
 impl NotReadyKind {
@@ -193,6 +200,7 @@ impl NotReadyKind {
             Self::RateLimited { .. } => "RATE_LIMITED",
             Self::VpnNotConnected => "VPN_NOT_CONNECTED",
             Self::SharedDrivesUnavailable => "SHARED_DRIVES_UNAVAILABLE",
+            Self::SharedDrivesNotEntitled => "SHARED_DRIVES_NOT_ENTITLED",
         }
     }
 }
@@ -242,6 +250,9 @@ impl std::fmt::Display for NotReadyKind {
             }
             Self::SharedDrivesUnavailable => {
                 write!(f, "Shared drives are not available on this server.")
+            }
+            Self::SharedDrivesNotEntitled => {
+                write!(f, "Shared drives need a Plus, Max, or Scale plan.")
             }
         }
     }
@@ -683,6 +694,7 @@ mod tests {
                 NotReadyKind::RateLimited { .. } => "RATE_LIMITED",
                 NotReadyKind::VpnNotConnected => "VPN_NOT_CONNECTED",
                 NotReadyKind::SharedDrivesUnavailable => "SHARED_DRIVES_UNAVAILABLE",
+                NotReadyKind::SharedDrivesNotEntitled => "SHARED_DRIVES_NOT_ENTITLED",
             }
         }
         for kind in [
@@ -703,6 +715,7 @@ mod tests {
             },
             NotReadyKind::VpnNotConnected,
             NotReadyKind::SharedDrivesUnavailable,
+            NotReadyKind::SharedDrivesNotEntitled,
         ] {
             let expected = expected_wire_name(&kind);
             let json = serde_json::to_value(AppError::NotReady(kind.clone())).expect("serialize");

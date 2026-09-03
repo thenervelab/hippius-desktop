@@ -38,12 +38,14 @@ import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
 import { shareDriveModalAtom } from "@/app/lib/global-atoms/sharesAtoms";
 import {
   createDriveInvite,
+  isSharedDrivesNotEntitled,
   isSharedDrivesUnavailable,
   listDriveMembers,
   removeDriveMember,
   type DriveMemberInfo,
 } from "@/app/lib/tauri/sharedDrives";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
+import { openLinkByKey } from "@/app/lib/utils/links";
 import { middleTruncate } from "@/lib/utils/middleTruncate";
 import {
   DEFAULT_INVITE_TTL_SECS,
@@ -126,6 +128,10 @@ export default function ShareDriveModal() {
       if (labelAtCall !== currentLabelRef.current) return;
       if (isSharedDrivesUnavailable(err)) {
         setInvite({ kind: "unavailable" });
+      } else if (isSharedDrivesNotEntitled(err)) {
+        // Owner's plan does not include shared drives: upgrade prompt, no
+        // toast (the notice carries the CTA).
+        setInvite({ kind: "notEntitled" });
       } else {
         setInvite({ kind: "error", message: errorMessage(err) });
       }
@@ -229,6 +235,10 @@ function InviteTab({
 
   if (state.kind === "unavailable") {
     return <SharedDrivesUnavailableNotice onClose={onClose} />;
+  }
+
+  if (state.kind === "notEntitled") {
+    return <SharedDrivesNotEntitledNotice onClose={onClose} />;
   }
 
   if (state.kind === "error") {
@@ -494,6 +504,37 @@ function SharedDrivesUnavailableNotice({ onClose }: { onClose: () => void }) {
       <Button type="button" variant="defaultStable" size="auto" onClick={onClose} className={secondaryButtonClass}>
         Close
       </Button>
+    </div>
+  );
+}
+
+// The mint plan gate (`SHARED_DRIVES_NOT_ENTITLED`): the drive owner's plan
+// does not include shared drives. An upgrade prompt, not an error — no retry,
+// no toast. Shown only to owners (the "Share drive…" surface is owner-only).
+function SharedDrivesNotEntitledNotice({ onClose }: { onClose: () => void }) {
+  return (
+    <div>
+      <p className="mb-1.5 pt-2 text-center text-sm font-medium text-grey-30 dark:text-grey-dark-700">
+        Shared drives need Plus, Max, or Scale
+      </p>
+      <p className="mb-6 text-center text-xs text-grey-50 dark:text-grey-dark-600">
+        Upgrade this drive&apos;s plan to invite members. Anyone you&apos;ve
+        already shared with keeps their access.
+      </p>
+      <div className="flex flex-col gap-3">
+        <Button
+          type="button"
+          variant="primary"
+          size="auto"
+          onClick={() => void openLinkByKey("PLANS")}
+          className={primaryButtonClass}
+        >
+          Upgrade plan
+        </Button>
+        <Button type="button" variant="defaultStable" size="auto" onClick={onClose} className={secondaryButtonClass}>
+          Close
+        </Button>
+      </div>
     </div>
   );
 }

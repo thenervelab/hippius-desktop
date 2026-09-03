@@ -50,7 +50,18 @@ vi.mock("next/dynamic", () => ({
   },
 }));
 
+// The upgrade CTA opens an external link via the tauri opener; stub the whole
+// links module so the test never pulls the plugin into jsdom.
+vi.mock("@/app/lib/utils/links", () => ({
+  openLinkByKey: vi.fn(),
+}));
+
 const UNAVAILABLE = { kind: "NotReady", subkind: "SHARED_DRIVES_UNAVAILABLE", message: "off" };
+const NOT_ENTITLED = {
+  kind: "NotReady",
+  subkind: "SHARED_DRIVES_NOT_ENTITLED",
+  message: "Shared drives need a Plus, Max, or Scale plan",
+};
 
 function installClipboard() {
   const writeText = vi.fn().mockResolvedValue(undefined);
@@ -126,6 +137,20 @@ describe("invite tab", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create invite link" }));
 
     await screen.findByText(/aren't available on your server yet/);
+    expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
+  });
+
+  it("shows an upgrade prompt when the owner's plan cannot mint — no error, no retry", async () => {
+    installClipboard();
+    createDriveInviteMock.mockRejectedValue(NOT_ENTITLED);
+
+    renderModal();
+    fireEvent.click(screen.getByRole("button", { name: "Create invite link" }));
+
+    await screen.findByText(/Shared drives need Plus, Max, or Scale/);
+    expect(screen.getByRole("button", { name: "Upgrade plan" })).toBeInTheDocument();
+    // An upgrade state, not an error: no generic error copy, no retry.
+    expect(screen.queryByText("Couldn't create invite link")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
   });
 });

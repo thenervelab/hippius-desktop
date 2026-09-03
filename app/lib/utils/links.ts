@@ -8,6 +8,10 @@ import { checkForUpdates } from "@/components/updater/checkForUpdates";
 export const APP_LINKS: any = {
   BILLING: "https://console.hippius.com/dashboard/billing",
   CREDITS: "https://console.hippius.com/dashboard/billing?addCredits=true",
+  // Drive subscription plans (the shared-drive upgrade CTA). Lives on
+  // production console only once DRIVE_SUBSCRIPTION_PLANS ships there; until
+  // then it 404s, same known-gap as the invite links. Do not point at hippicode.
+  PLANS: "https://console.hippius.com/dashboard/storage/drive/plans",
   // Add more links as needed
 };
 
