@@ -62,6 +62,10 @@ use crate::billing::queries::{
 };
 use crate::billing::storage_overview::get_storage_overview;
 use crate::billing::subscriptions::{create_subscription, get_customer_portal_url, get_subscription_data};
+use crate::billing::drive_plans::{
+    cancel_drive_subscription, change_drive_plan, get_drive_checkout_intent, get_drive_plans,
+    get_drive_subscription, get_drive_subscription_history, start_drive_card_checkout, subscribe_drive_plan,
+};
 use crate::blockchain::bridge::deposit::bridge_alpha_to_halpha;
 use crate::blockchain::bridge::explorer::bridge_fetch_onchain_data;
 use crate::blockchain::bridge::history::bridge_list_transactions;
@@ -520,6 +524,15 @@ fn main() {
             get_subscription_data,
             create_subscription,
             get_customer_portal_url,
+            // Drive storage plans
+            get_drive_plans,
+            get_drive_subscription,
+            subscribe_drive_plan,
+            change_drive_plan,
+            cancel_drive_subscription,
+            start_drive_card_checkout,
+            get_drive_checkout_intent,
+            get_drive_subscription_history,
             get_marketplace_credits,
             get_system_balance,
             get_balance_transfers,
