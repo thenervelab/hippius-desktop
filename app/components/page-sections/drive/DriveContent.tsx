@@ -50,7 +50,7 @@ interface DriveContentProps {
   isSyncPathEmpty?: boolean;
   /** True when the user has insufficient credits to upload files.
    *  Swaps the empty-state into the "Add Credits" variant. */
-  hasNoCredits?: boolean;
+  isStorageFull?: boolean;
   /** Browsing a remote (server-only) drive — uploads are not supported
    *  there yet, so the empty state renders without an upload CTA. */
   isRemoteView?: boolean;
@@ -84,7 +84,7 @@ const DriveContent: FC<DriveContentProps> = ({
   loadMore,
   isLoadingMore = false,
   isSyncPathEmpty = false,
-  hasNoCredits = false,
+  isStorageFull = false,
   isRemoteView = false,
   onSyncPathConfigured,
   onUploadFile,
@@ -360,7 +360,7 @@ const DriveContent: FC<DriveContentProps> = ({
           <FilesNoEntriesFound
             isRecentFiles={isRecentFiles}
             isSyncPathConfigured={!isSyncPathEmpty}
-            hasNoCredits={hasNoCredits}
+            isStorageFull={isStorageFull}
             isRemoteView={isRemoteView}
             onStartSyncing={onSyncPathConfigured}
           />
