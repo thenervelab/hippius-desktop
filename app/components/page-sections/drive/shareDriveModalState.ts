@@ -16,6 +16,9 @@ export type InviteState =
   | { kind: "running" }
   | { kind: "done"; inviteUrl: string }
   | { kind: "unavailable" }
+  // The mint plan gate: the owner's plan does not include shared drives. A
+  // terminal upgrade state, not an error — its own copy and CTA, no retry.
+  | { kind: "notEntitled" }
   | { kind: "error"; message: string };
 
 /**
