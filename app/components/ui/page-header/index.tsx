@@ -78,41 +78,41 @@ const PageHeader: React.FC<PageHeaderProps> = ({
               (its Stake button links to the gated /wallet page); the Active
               Plan cell then becomes the card's only content. */}
           {WALLET_FEATURE_ENABLED && (
-          <div className="flex flex-[3] items-center justify-between gap-4 px-4 py-3 border-r border-[#E3E3E3] dark:border-[#161616]">
-            <div className="flex flex-col gap-0.5">
-              <div className="flex items-center gap-1 mb-0.5">
-                <WalletMinimal className="size-[18px] text-primary-50 dark:text-primary-brand-dark" />
-                <span className="font-geist-mono text-[12px] font-medium uppercase leading-[18px] tracking-[-0.24px] text-primary-40 dark:text-primary-brand-dark">
-                  Wallet
-                </span>
-              </div>
-              {isStakingLoading ? (
-                <div className="flex items-center gap-1">
-                  <Loader2 className="size-3 animate-spin text-primary-50 dark:text-primary-brand-dark" />
-                  <span className="text-[12px] font-medium text-grey-10 dark:text-white">
-                    Loading...
+            <div className="flex flex-[3] items-center justify-between gap-4 px-4 py-3 border-r border-[#E3E3E3] dark:border-[#161616]">
+              <div className="flex flex-col gap-0.5">
+                <div className="flex items-center gap-1 mb-0.5">
+                  <WalletMinimal className="size-[18px] text-primary-50 dark:text-primary-brand-dark" />
+                  <span className="font-geist-mono text-[12px] font-medium uppercase leading-[18px] tracking-[-0.24px] text-primary-40 dark:text-primary-brand-dark">
+                    Wallet
                   </span>
                 </div>
-              ) : (
-                <p className="whitespace-nowrap text-[12px] font-bold leading-[18px] tracking-[-0.12px] tabular-nums text-primary-50 dark:text-primary-brand-dark">
-                  {stakedDisplay} hAlpha
-                  <span className="text-[12px] font-medium text-grey-10 dark:text-white">
-                    {" "}
-                    staked
-                  </span>
-                </p>
-              )}
+                {isStakingLoading ? (
+                  <div className="flex items-center gap-1">
+                    <Loader2 className="size-3 animate-spin text-primary-50 dark:text-primary-brand-dark" />
+                    <span className="text-[12px] font-medium text-grey-10 dark:text-white">
+                      Loading...
+                    </span>
+                  </div>
+                ) : (
+                  <p className="whitespace-nowrap text-[12px] font-bold leading-[18px] tracking-[-0.12px] tabular-nums text-primary-50 dark:text-primary-brand-dark">
+                    {stakedDisplay} hAlpha
+                    <span className="text-[12px] font-medium text-grey-10 dark:text-white">
+                      {" "}
+                      staked
+                    </span>
+                  </p>
+                )}
+              </div>
+              <Button
+                asLink
+                variant="primaryLight"
+                size="auto"
+                href="/dashboard/wallet"
+                className="px-4 py-2 text-[14px] font-medium leading-[1.109] tracking-[-0.28px]"
+              >
+                Stake
+              </Button>
             </div>
-            <Button
-              asLink
-              variant="primaryLight"
-              size="auto"
-              href="/dashboard/wallet"
-              className="px-4 py-2 text-[14px] font-medium leading-[1.109] tracking-[-0.28px]"
-            >
-              Stake
-            </Button>
-          </div>
           )}
 
           {/* Active Plan cell — 40% of card width when the wallet cell is
@@ -128,6 +128,17 @@ const PageHeader: React.FC<PageHeaderProps> = ({
                 get_storage_overview.source — identical to the home header
                 and the home cards, with a skeleton until it settles. */}
             <PlanChip />
+          </div>
+          <div className="flex items-center pr-4">
+            <Button
+              asLink
+              href="/drive-plans"
+              variant="raised"
+              size="auto"
+              className="px-4 py-2 text-[14px] font-medium leading-[1.109] tracking-[-0.28px]"
+            >
+              Subscriptions
+            </Button>
           </div>
         </div>
       )}

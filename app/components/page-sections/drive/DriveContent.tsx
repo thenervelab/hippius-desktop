@@ -7,6 +7,7 @@ import FilesTableSkeleton from "./files-table/FilesTableSkeleton";
 import CardViewSkeleton from "./card-view/CardViewSkeleton";
 import CardView from "./card-view";
 import FilesNoEntriesFound from "./files-table/FilesNoEntriesFound";
+import DriveEmptyStatePlans from "@/components/page-sections/drive-plans/DriveEmptyStatePlans";
 import UploadStatusWidget from "./UploadStatusWidget";
 import { ActiveFilter } from "@/lib/utils/fileFilterUtils";
 import ConfirmationDialog from "@/app/components/ConfirmationDialog";
@@ -355,13 +356,22 @@ const DriveContent: FC<DriveContentProps> = ({
       error
     ) {
       return (
-        <FilesNoEntriesFound
-          isRecentFiles={isRecentFiles}
-          isSyncPathConfigured={!isSyncPathEmpty}
-          hasNoCredits={hasNoCredits}
-          isRemoteView={isRemoteView}
-          onStartSyncing={onSyncPathConfigured}
-        />
+        <>
+          <FilesNoEntriesFound
+            isRecentFiles={isRecentFiles}
+            isSyncPathConfigured={!isSyncPathEmpty}
+            hasNoCredits={hasNoCredits}
+            isRemoteView={isRemoteView}
+            onStartSyncing={onSyncPathConfigured}
+          />
+          {/* An account with no files and no plan is offered the plans right
+              here. The component decides that for itself and renders nothing
+              for anyone who already holds one. Recent-files and remote views
+              are not the user's own empty drive, so they never show it. */}
+          {!isRecentFiles && !isRemoteView && !error ? (
+            <DriveEmptyStatePlans className="mt-6" />
+          ) : null}
+        </>
       );
     }
 
