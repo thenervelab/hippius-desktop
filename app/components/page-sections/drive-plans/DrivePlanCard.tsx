@@ -61,12 +61,19 @@ const DrivePlanCard: FC<DrivePlanCardProps> = ({
   const isInert = action === "current" || action === "none";
   const isCancel = action === "cancel";
   const storage = formatPlanStorage(plan.storage_bytes);
+  // Shared drives are part of these plans but are not switched on yet, so
+  // the line is greyed rather than removed: the plan does include it, it
+  // just cannot be used yet. Drop `pending` when the feature ships.
   const features = [
-    "Automatic renewal",
-    ...(hasSharedTeamDrive(plan) ? ["Shared team drive"] : []),
-    plan.is_free
-      ? "Upgrade whenever you need more"
-      : "Change or cancel anytime",
+    { label: "Automatic renewal" },
+    ...(hasSharedTeamDrive(plan)
+      ? [{ label: "Shared team drive", pending: true }]
+      : []),
+    {
+      label: plan.is_free
+        ? "Upgrade whenever you need more"
+        : "Change or cancel anytime",
+    },
   ];
 
   return (
@@ -121,10 +128,24 @@ const DrivePlanCard: FC<DrivePlanCardProps> = ({
               Features
             </p>
             {features.map((line) => (
-              <p key={line} className="flex items-center gap-2">
-                <ArrowRight className="size-[14px] shrink-0 text-grey-dark-600" />
-                <span className="min-w-0 text-[12px] font-medium leading-5 tracking-[-0.24px] text-black-900 dark:text-white">
-                  {line}
+              <p key={line.label} className="flex items-center gap-2">
+                <ArrowRight
+                  className={cn(
+                    "size-[14px] shrink-0",
+                    line.pending
+                      ? "text-grey-70 dark:text-grey-dark-800"
+                      : "text-grey-dark-600",
+                  )}
+                />
+                <span
+                  className={cn(
+                    "min-w-0 text-[12px] font-medium leading-5 tracking-[-0.24px]",
+                    line.pending
+                      ? "text-grey-70 dark:text-grey-dark-800"
+                      : "text-black-900 dark:text-white",
+                  )}
+                >
+                  {line.label}
                 </span>
               </p>
             ))}
