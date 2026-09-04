@@ -228,11 +228,11 @@ const DrivePlansSection: FC<{ className?: string }> = ({ className }) => {
         onSuccess: (out) => {
           setConfirm(null);
           setPendingIntent(out.intent_id);
-          setFlow({ stage: "processing", plan });
+          // Not `processing`: the payment happens in the browser and may
+          // never come back, so the card must be dismissible. The intent
+          // keeps polling while it is open and flips to success/error.
+          setFlow({ stage: "browser", plan });
           void openUrl(out.checkout_url);
-          toast.info(
-            "Finish the payment in your browser. This page updates when it lands.",
-          );
         },
         onError: (err) =>
           toast.error(err.message || "Could not start the card payment"),
@@ -370,6 +370,13 @@ const DrivePlansSection: FC<{ className?: string }> = ({ className }) => {
       <DrivePlanFlowDialog
         flow={flow}
         onContinue={() => setFlow(null)}
+        onDismissBrowser={() => {
+          // Stop polling the intent; a payment finished later is picked up
+          // by the subscription query's refetch when the window regains
+          // focus, so it still "shows up here" without the dialog.
+          setPendingIntent(null);
+          setFlow(null);
+        }}
         onRetry={() => {
           if (!flow) return;
           const action = actionFor(flow.plan);

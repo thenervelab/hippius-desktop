@@ -12,7 +12,15 @@ import PixelGridLoader from "@/components/ui/PixelGridLoader";
 import { formatPlanStorage, type DrivePlan } from "@/lib/types/drive-plans";
 import { cn } from "@/lib/utils";
 
-export type DrivePlanFlowStage = "processing" | "success" | "error";
+/**
+ * `browser` is the card rail's stand-in for `processing`: Stripe Checkout
+ * runs in the user's browser, so the app cannot know whether they paid,
+ * abandoned it, or closed the tab. A blocking "Processing…" there had no
+ * way out. This stage says where to finish and can be dismissed; the intent
+ * keeps polling while it is open, so a completed payment still flips to
+ * `success` on its own.
+ */
+export type DrivePlanFlowStage = "processing" | "browser" | "success" | "error";
 
 export interface DrivePlanFlow {
   stage: DrivePlanFlowStage;
@@ -26,6 +34,8 @@ interface DrivePlanFlowDialogProps {
   onContinue: () => void;
   onRetry: () => void;
   onBack: () => void;
+  /** Dismisses the `browser` stage. The caller stops polling the intent. */
+  onDismissBrowser: () => void;
 }
 
 /**
@@ -137,6 +147,7 @@ const DrivePlanFlowDialog: FC<DrivePlanFlowDialogProps> = ({
   onContinue,
   onRetry,
   onBack,
+  onDismissBrowser,
 }) => {
   if (!flow) return null;
 
@@ -145,6 +156,33 @@ const DrivePlanFlowDialog: FC<DrivePlanFlowDialogProps> = ({
       <Shell open tone="primary">
         <Dialog.Title className="sr-only">Processing your plan</Dialog.Title>
         <Status tone="primary" label="Processing..." />
+      </Shell>
+    );
+  }
+
+  if (flow.stage === "browser") {
+    return (
+      <Shell open tone="primary" onClose={onDismissBrowser}>
+        <div className="flex flex-1 flex-col items-center justify-center gap-6">
+          <PixelGridLoader tone="primary" />
+          <div className="flex flex-col items-center gap-2">
+            <Dialog.Title className="text-center text-[20px] font-medium tracking-[-0.4px] text-[#1d1d1d] dark:text-grey-light-100">
+              Finish your payment in the browser
+            </Dialog.Title>
+            <p className="max-w-[420px] text-center text-sm font-medium text-grey-50 dark:text-grey-dark-700">
+              Stripe opened in your browser to complete the {flow.plan.name}{" "}
+              Plan checkout. Once the payment goes through, your subscription
+              becomes active and shows up here automatically.
+            </p>
+          </div>
+        </div>
+        <Button
+          variant="raised"
+          className="h-[52px] w-full font-normal"
+          onClick={onDismissBrowser}
+        >
+          Close
+        </Button>
       </Shell>
     );
   }
