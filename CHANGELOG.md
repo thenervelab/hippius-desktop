@@ -17,6 +17,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
+- **Choose a storage plan without leaving Hippius.** A new Subscription Plans page
+  under Account lists every plan with what it includes, shows the one you are on,
+  and lets you subscribe, upgrade, downgrade or cancel. Pay from your credits, or
+  by card through Stripe in your browser. Your past subscriptions are listed
+  underneath.
 - **Support can diagnose problems faster from the logs you send.** Logs attached to
   a support ticket now say which app version and platform they came from, and if
   the app ever crashes, what went wrong is recorded instead of being lost.
@@ -54,6 +59,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **Your storage is now measured against your plan.** The home page shows how much
+  of your plan's storage you have used, and names the plan you are on — including
+  the free plan, which every account has. It previously showed how much storage
+  your credit balance could buy, which is not the same thing as the space you have.
 - **Plan cards no longer suggest shared drives are ready to use.** The shared team
   drive line is greyed out on the plans that include it, until the feature is
   switched on.
@@ -73,6 +82,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Uploads now stop when your plan is full, instead of failing later.** An upload
+  that would go past your plan's storage is refused up front with a link to the
+  plans page — the same answer the web console gives. Accounts on the free plan
+  were previously allowed to keep uploading here after passing their limit.
 - **Excluding a file from the "Sync Issues" dialog now sticks**, including names with
   brackets or braces such as `Movie [2019].mkv`. Before, the file kept failing, the dialog
   kept coming back after every restart, and in some cases a differently named file was
