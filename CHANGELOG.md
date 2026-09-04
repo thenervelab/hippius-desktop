@@ -54,6 +54,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **Plan cards no longer suggest shared drives are ready to use.** The shared team
+  drive line is greyed out on the plans that include it, until the feature is
+  switched on.
 - **Uploads are substantially faster**, especially on slower or long-distance
   connections — parts of a file now transfer at the same time instead of one after
   another.
