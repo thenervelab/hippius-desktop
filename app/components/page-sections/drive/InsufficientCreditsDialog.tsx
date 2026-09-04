@@ -1,6 +1,7 @@
 "use client";
 import React from "react";
 import { useAtom } from "jotai";
+import { useRouter } from "next/navigation";
 import { AlertCircle } from "lucide-react";
 
 import {
@@ -45,6 +46,7 @@ const copy: Record<
 
 const InsufficientCreditsDialog: React.FC = () => {
   const [reason, setReason] = useAtom(insufficientCreditsDialogOpenAtom);
+  const router = useRouter();
 
   if (!reason) return null;
 
@@ -52,9 +54,15 @@ const InsufficientCreditsDialog: React.FC = () => {
 
   const handleClose = () => setReason(false);
 
-  const handleOpenConsoleBillingPage = () => {
+  const handlePrimary = () => {
     setReason(false);
-    openLinkByKey(needsPlan ? "PLANS" : "BILLING");
+    if (needsPlan) {
+      // The desktop has its own Subscription Plans page — keep the user in
+      // the app instead of bouncing them out to the console.
+      router.push("/drive-plans");
+      return;
+    }
+    openLinkByKey("BILLING");
   };
   const handleOpenConsoleCreditsPage = () => {
     setReason(false);
@@ -80,7 +88,7 @@ const InsufficientCreditsDialog: React.FC = () => {
         <Button
           variant="primary"
           size="auto"
-          onClick={handleOpenConsoleBillingPage}
+          onClick={handlePrimary}
           className={cn(
             "h-[52px] w-full rounded-[6px] border text-base font-normal tracking-[-0.36px]",
             "border-[#3167DD] bg-[#3167DD] text-white",
