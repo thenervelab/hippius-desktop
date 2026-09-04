@@ -401,6 +401,13 @@ export default function SplashWrapper({
     return () => {
       cancelled = true;
       timers.forEach((t) => clearInterval(t));
+      // The guard must reset here or React StrictMode (dev only) hangs the
+      // splash forever: StrictMode mounts, CLEANS UP, and mounts again — this
+      // cleanup cancels run one, and without the reset the second mount sees
+      // "already started", starts nothing, and the splash sits at
+      // "Checking for Updates 0%" with no phase machine running. Production
+      // mounts effects once and never hits this path.
+      setupStartedRef.current = false;
     };
   }, [
     setPhase,

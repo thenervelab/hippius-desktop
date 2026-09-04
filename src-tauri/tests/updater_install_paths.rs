@@ -146,3 +146,28 @@ fn every_install_failure_carries_the_manual_hint() {
          the support bundle gets once the user-facing copy replaces it:\n{body}"
     );
 }
+
+/// A debug build is compiled from source, not installed from a lane: no
+/// manifest can meaningfully update it, and because an unset
+/// `HIPPIUS_RELEASE_CHANNEL` fails safe to Production, a local `tauri:dev`
+/// run would otherwise check the PRODUCTION manifest and nag on every launch
+/// (semver orders any published release above the tree's `-dev.N` version).
+/// The skip must sit before the updater is even built.
+#[test]
+fn debug_builds_skip_the_update_check() {
+    let body = fn_body(UPDATES_RS, "pub async fn check_for_update(");
+
+    assert!(
+        body.contains("cfg!(debug_assertions)"),
+        "check_for_update must skip in debug builds:\n{body}"
+    );
+    assert!(
+        body.contains("HIPPIUS_DEV_UPDATE_CHECK"),
+        "the debug skip must keep its escape hatch — HIPPIUS_DEV_UPDATE_CHECK=1 is how \
+         the update dialog/flow is exercised from a dev run at all:\n{body}"
+    );
+
+    let skip = body.find("cfg!(debug_assertions)").expect("skip marker");
+    let build = body.find("updater_for").expect("updater_for call");
+    assert!(skip < build, "the debug skip must run BEFORE the updater is built. Body:\n{body}");
+}

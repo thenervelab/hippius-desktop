@@ -169,6 +169,23 @@ fn updater_for(app: &AppHandle, channel: ReleaseChannel, cross_channel: bool) ->
 /// a channel with no manifest is simply `None`.
 #[tauri::command]
 pub async fn check_for_update(app: AppHandle) -> Result<Option<AvailableUpdate>> {
+    // A debug build is compiled from source, not installed from a lane, so no
+    // manifest can meaningfully update it. Without this skip a local dev run
+    // resolves to the Production channel (unset HIPPIUS_RELEASE_CHANNEL fails
+    // safe there) and nags on every launch: semver orders any published
+    // release above the working tree's `-dev.N` version. Release builds are
+    // unaffected — `debug_assertions` is off for every shipped lane.
+    //
+    // `HIPPIUS_DEV_UPDATE_CHECK=1` re-enables the check for a dev run so the
+    // update dialog/flow can still be exercised locally (e.g. with a lowered
+    // version in tauri.conf.json). Runtime env on purpose: it needs no
+    // rebuild, and in release builds this whole branch is compiled out, so
+    // the variable can never affect anything a user runs.
+    if cfg!(debug_assertions) && std::env::var("HIPPIUS_DEV_UPDATE_CHECK").is_err() {
+        debug!("debug build — skipping update check (set HIPPIUS_DEV_UPDATE_CHECK=1 to test the updater)");
+        return Ok(None);
+    }
+
     let channel = release_channel::current();
 
     let Some(updater) = updater_for(&app, channel, false)? else {
