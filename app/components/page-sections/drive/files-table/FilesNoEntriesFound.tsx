@@ -11,10 +11,10 @@ interface FilesNoEntriesFoundProps {
   isRecentFiles?: boolean;
   isSyncPathConfigured?: boolean;
   isCheckingSyncPath?: boolean;
-  /** When true (and sync is already configured), shows the "Add Credits"
+  /** When true (and sync is already configured), shows the out-of-storage
    *  variant instead of the upload CTA. Sync-setup CTA still wins when
    *  the sync path itself isn't configured yet. */
-  hasNoCredits?: boolean;
+  isStorageFull?: boolean;
   /** Browsing a remote (server-only) folder. Remote folders cannot be
    *  uploaded into from the desktop yet, so the empty state renders as a
    *  plain "folder is empty" notice — no upload button, no drop target. */
@@ -26,15 +26,15 @@ const FilesNoEntriesFound: React.FC<FilesNoEntriesFoundProps> = ({
   isRecentFiles = false,
   isSyncPathConfigured = true,
   isCheckingSyncPath = false,
-  hasNoCredits = false,
+  isStorageFull = false,
   isRemoteView = false,
   onStartSyncing,
 }) => {
   const router = useRouter();
-  // Show the no-credits variant whenever credits are zero, regardless of
-  // sync-folder state — without credits nothing else is actionable, so
-  // the "Add Credits" CTA wins over both upload and start-syncing CTAs.
-  const showNoCreditsVariant = hasNoCredits;
+  // Show the out-of-storage variant whenever the plan has no room left,
+  // regardless of sync-folder state — with nowhere to put a file nothing
+  // else is actionable, so this CTA wins over upload and start-syncing.
+  const showStorageFullVariant = isStorageFull;
   const handleFiles = useCallback(
     (files: FileList) => {
       if (files.length === 0) {
@@ -64,8 +64,10 @@ const FilesNoEntriesFound: React.FC<FilesNoEntriesFoundProps> = ({
     // No credits — send the user to the plans page to top up. Checked
     // FIRST so the button copy ("Add Credits") matches the click
     // destination even when sync isn't configured yet.
-    if (showNoCreditsVariant) {
-      router.push("/billing");
+    // Storage is sold as a plan, so the way out of a full drive is a
+    // larger plan, not a credit top-up.
+    if (showStorageFullVariant) {
+      router.push("/drive-plans");
       return;
     }
 
@@ -83,7 +85,7 @@ const FilesNoEntriesFound: React.FC<FilesNoEntriesFoundProps> = ({
       });
       window.dispatchEvent(event);
     }
-  }, [isSyncPathConfigured, showNoCreditsVariant, router, onStartSyncing]);
+  }, [isSyncPathConfigured, showStorageFullVariant, router, onStartSyncing]);
 
   // Remote folders are read-only from the desktop for now: uploading into
   // one is not supported yet, so the empty state must not offer an upload
@@ -99,14 +101,14 @@ const FilesNoEntriesFound: React.FC<FilesNoEntriesFoundProps> = ({
     );
   }
 
-  const title = showNoCreditsVariant
-    ? "You don't have enough credit to upload a file"
+  const title = showStorageFullVariant
+    ? "You've used all the storage in your plan"
     : isRecentFiles
       ? "No Recent files yet"
       : "No Entries in Your Storage";
 
-  const description = showNoCreditsVariant
-    ? "Please add credits to upload your files"
+  const description = showStorageFullVariant
+    ? "Upgrade your plan for more room, or remove some files to free space."
     : !isSyncPathConfigured
       ? isRecentFiles
         ? "Please set up sync path first"
@@ -115,28 +117,28 @@ const FilesNoEntriesFound: React.FC<FilesNoEntriesFoundProps> = ({
         ? "Start by uploading a file to see it here."
         : "You currently do not have any entries uploaded to Hippius. Drop files here or use the button.";
 
-  const dragDescription = showNoCreditsVariant
-    ? "Please add credits to upload your files"
+  const dragDescription = showStorageFullVariant
+    ? "Upgrade your plan to upload more files"
     : !isSyncPathConfigured
       ? "Please set up sync path first"
       : "Drop files here to upload";
 
-  const buttonText = showNoCreditsVariant
-    ? "+ Add Credits"
+  const buttonText = showStorageFullVariant
+    ? "View plans"
     : !isSyncPathConfigured
       ? "Start Syncing"
       : "Upload a File";
 
   return (
     <NoEntriesFound
-      variant={showNoCreditsVariant ? "noCredits" : "default"}
+      variant={showStorageFullVariant ? "noCredits" : "default"}
       title={title}
       description={description}
       dragDescription={dragDescription}
       buttonText={buttonText}
       onButtonClick={handlePrimaryClick}
       onFileDrop={
-        isRecentFiles || showNoCreditsVariant ? undefined : handleFiles
+        isRecentFiles || showStorageFullVariant ? undefined : handleFiles
       }
       isLoading={isCheckingSyncPath}
       className="p-4 sm:p-8 2xl:p-16"

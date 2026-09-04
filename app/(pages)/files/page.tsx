@@ -3,6 +3,8 @@
 import { Drive } from "@/components/page-sections";
 import { FC, useEffect } from "react";
 import PageHeader from "@/components/ui/page-header";
+import { Button } from "@/components/ui/button";
+import { PricingCard } from "@/components/ui/icons";
 import { useSetAtom } from "jotai";
 
 import InfoTooltip from "@/components/ui/info-tooltip";
@@ -39,6 +41,22 @@ const FilesPage: FC = () => {
         title="Your Files"
         className="!shadow-none"
         subtitle="All uploaded files are private and securely encrypted."
+        actions={
+          // The Drive page hides the header's stats card (and with it the
+          // card's Subscription Plans button), so the plans page gets its own
+          // persistent entry here — visible in the cards view and inside
+          // every local or remote drive alike.
+          <Button
+            asLink
+            href="/drive-plans"
+            variant="raised"
+            size="auto"
+            className="flex items-center gap-2 px-4 py-2 text-[14px] font-medium leading-[1.109] tracking-[-0.28px]"
+          >
+            <PricingCard className="size-4" />
+            Subscription Plans
+          </Button>
+        }
       />
       <Drive />
     </>

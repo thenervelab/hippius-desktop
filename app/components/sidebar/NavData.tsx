@@ -83,6 +83,11 @@ export const navSections: NavSection[] = [
     label: "ACCOUNT",
     items: [
       {
+        label: "Subscription Plans",
+        path: "/drive-plans",
+        icon: <Icons.PricingCard className={ICON_CLASS} />,
+      },
+      {
         label: "Billing",
         path: "/billing",
         icon: <Icons.CreditCard className={ICON_CLASS} />,

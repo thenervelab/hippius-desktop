@@ -49,11 +49,11 @@ describe("getStorageOverviewView", () => {
       }),
     ).toBe("error");
     expect(
-      getStorageOverviewView({ showSkeleton: false, isError: true, source: "none" }),
+      getStorageOverviewView({ showSkeleton: false, isError: true, source: "free" }),
     ).toBe("error");
   });
 
-  it("both plan- and credits-backed capacity render the usage bar", () => {
+  it("both plan- and free-tier-backed capacity render the usage bar", () => {
     expect(
       getStorageOverviewView({
         showSkeleton: false,
@@ -65,15 +65,12 @@ describe("getStorageOverviewView", () => {
       getStorageOverviewView({
         showSkeleton: false,
         isError: false,
-        source: "credits",
+        source: "free",
       }),
     ).toBe("usage");
   });
 
-  it("no source (or missing data) renders the no-plan state", () => {
-    expect(
-      getStorageOverviewView({ showSkeleton: false, isError: false, source: "none" }),
-    ).toBe("no-plan");
+  it("missing data renders the no-plan state", () => {
     expect(
       getStorageOverviewView({
         showSkeleton: false,
@@ -112,15 +109,15 @@ describe("getPlanView (plan card + top-bar chip)", () => {
     ).toBe("skeleton");
   });
 
-  it("maps each source to its variant, plan winning over credits by construction", () => {
+  it("maps each source to its variant, plan winning over free by construction", () => {
     expect(
       getPlanView({ showSkeleton: false, isError: false, source: "subscription" }),
     ).toBe("plan");
     expect(
-      getPlanView({ showSkeleton: false, isError: false, source: "credits" }),
-    ).toBe("credits");
+      getPlanView({ showSkeleton: false, isError: false, source: "free" }),
+    ).toBe("free");
     expect(
-      getPlanView({ showSkeleton: false, isError: false, source: "none" }),
+      getPlanView({ showSkeleton: false, isError: false, source: undefined }),
     ).toBe("none");
   });
 
@@ -138,11 +135,10 @@ describe("getCapacitySourceLabel", () => {
     expect(getCapacitySourceLabel("subscription", "")).toBe("Active plan");
   });
 
-  it("credits-derived capacity is labelled as such, never as a plan", () => {
-    expect(getCapacitySourceLabel("credits", null)).toBe(
-      "Based on your credit balance",
+  it("the free tier is labelled as such, never as a paid plan", () => {
+    expect(getCapacitySourceLabel("free", null)).toBe(
+      "Included with the free plan",
     );
-    expect(getCapacitySourceLabel("none", null)).toBe("");
   });
 });
 
