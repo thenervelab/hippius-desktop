@@ -3,12 +3,21 @@
 import Image from "next/image";
 import type { FC, ReactNode } from "react";
 
+import { Button } from "@/components/ui/button";
 import { CoinsIcon } from "@/components/ui/icons";
+import { openLinkByKey } from "@/app/lib/utils/links";
 import { cn } from "@/lib/utils";
 
 export type PaymentRail = "credits" | "card";
 
-/** Decorative square; the real input is the visually hidden radio. */
+/**
+ * Decorative square; the real input is the visually hidden radio.
+ *
+ * Deliberately the same square the settings checkboxes draw
+ * (`NotificationSection`'s `SquareCheck`): 18px, 5px radius, solid brand
+ * fill when on and a flat grey when off — no border, no checkmark, no
+ * inner dot. Selection controls should read identically everywhere.
+ */
 const Marker: FC<{ selected: boolean; disabled?: boolean }> = ({
   selected,
   disabled,
@@ -16,17 +25,11 @@ const Marker: FC<{ selected: boolean; disabled?: boolean }> = ({
   <span
     aria-hidden="true"
     className={cn(
-      "flex size-[18px] shrink-0 items-center justify-center rounded-[5px] border transition-colors",
-      selected
-        ? "border-primary-50 bg-primary-50 dark:border-primary-brand-dark dark:bg-primary-brand-dark"
-        : "border-grey-dark-100 bg-grey-light-800 dark:border-black-300 dark:bg-black-300",
+      "block size-[18px] shrink-0 rounded-[5px] transition-colors",
+      selected ? "bg-[#3167DD]" : "bg-[#F0F0F0] dark:bg-white/10",
       disabled && "opacity-50",
     )}
-  >
-    {selected ? (
-      <span className="size-1.5 rounded-[2px] bg-white dark:bg-black-600" />
-    ) : null}
-  </span>
+  />
 );
 
 const Row: FC<{
@@ -37,6 +40,11 @@ const Row: FC<{
   label: string;
   chip?: ReactNode;
   description: ReactNode;
+  /**
+   * Sits in the header row, left of the square, and is NOT inside a label —
+   * a button nested in one would pick the rail on its way out.
+   */
+  action?: ReactNode;
   onSelect: (rail: PaymentRail) => void;
 }> = ({
   value,
@@ -46,39 +54,57 @@ const Row: FC<{
   label,
   chip,
   description,
+  action,
   onSelect,
-}) => (
-  <label
-    className={cn(
-      "flex flex-col gap-1.5 px-2.5 py-3",
-      disabled ? "cursor-not-allowed" : "cursor-pointer",
-      // The design dims a rail that is not the chosen one.
-      !selected && "opacity-60",
-    )}
-  >
-    <span className="flex items-center justify-between gap-2">
-      <span className="flex min-w-0 items-center gap-2">
-        <input
-          type="radio"
-          name="drive-payment-rail"
-          className="sr-only"
-          checked={selected}
-          disabled={disabled}
-          onChange={() => onSelect(value)}
-        />
-        {icon}
-        <span className="text-sm font-medium text-black-700 dark:text-grey-light-100">
-          {label}
-        </span>
-        {chip}
-      </span>
-      <Marker selected={selected} disabled={disabled} />
-    </span>
-    <span className="block pl-[26px] text-sm font-medium text-black-700/40 dark:text-grey-dark-700">
-      {description}
-    </span>
-  </label>
-);
+}) => {
+  // Two labels drive one input (`htmlFor`), so the text AND the square both
+  // select the rail while the action button between them stays independent.
+  const inputId = `drive-rail-${value}`;
+  const dim = !selected && "opacity-60";
+  const cursor = disabled ? "cursor-not-allowed" : "cursor-pointer";
+
+  return (
+    <div className="flex flex-col gap-1.5 px-2.5 py-3">
+      <input
+        id={inputId}
+        type="radio"
+        name="drive-payment-rail"
+        className="sr-only"
+        checked={selected}
+        disabled={disabled}
+        onChange={() => onSelect(value)}
+      />
+      <div className="flex items-center justify-between gap-2">
+        <label
+          htmlFor={inputId}
+          className={cn("flex min-w-0 items-center gap-2", cursor, dim)}
+        >
+          {icon}
+          <span className="text-sm font-medium text-black-700 dark:text-grey-light-100">
+            {label}
+          </span>
+          {chip}
+        </label>
+        <div className="flex shrink-0 items-center gap-2">
+          {action}
+          <label htmlFor={inputId} className={cn("flex", cursor)}>
+            <Marker selected={selected} disabled={disabled} />
+          </label>
+        </div>
+      </div>
+      <label
+        htmlFor={inputId}
+        className={cn(
+          "block pl-[26px] text-sm font-medium text-black-700/40 dark:text-grey-dark-700",
+          cursor,
+          dim,
+        )}
+      >
+        {description}
+      </label>
+    </div>
+  );
+};
 
 /**
  * Choose how a subscription is paid for. Both rails are always listed; when
@@ -127,6 +153,20 @@ const PaymentMethodChoice: FC<{
           creditsShort
             ? `Not enough credits to cover this plan. You have ${(creditsBalance ?? 0).toFixed(2)}.`
             : "Use credits to pay for subscription. $1 = 1 credit"
+        }
+        action={
+          // Buying credits is not a desktop flow, so this deliberately
+          // leaves the app for the console's billing page (its add-credits
+          // view) rather than pointing at an in-app route that cannot
+          // complete the purchase.
+          <Button
+            variant="defaultStable"
+            size="auto"
+            onClick={() => void openLinkByKey("CREDITS")}
+            className="h-[30px] shrink-0 whitespace-nowrap rounded-[6px] px-3 text-sm font-medium tracking-[-0.28px]"
+          >
+            + Top up Credits
+          </Button>
         }
       />
       <Row
