@@ -1,24 +1,30 @@
-//! Integration tests for the bytes-priced layer of
-//! `crate::billing::eligibility::require_eligible` (Task 3.1 of the
-//! 2026-05-13 sync-402 plan).
+//! Integration tests for how `require_eligible` treats an upload's byte
+//! count.
 //!
-//! Companion to `tests/eligibility_enforcement.rs` (which pins the
-//! static-threshold layer at `bytes = 0`). This file pins the layer
-//! that scales with the byte count of the upload payload:
+//! This file was written for the bytes-priced CREDIT layer (Task 3.1 of
+//! the 2026-05-13 sync-402 plan). Drive storage is now sold as a plan, so
+//! `require_eligible` routes Drive writes to the plan-allowance gate and
+//! never reaches that layer — the constant and `cost_for_bytes` still
+//! exist, but no upload is priced against a balance any more.
 //!
-//! - A 1-byte file with a $0.33 marketplace balance passes — the
-//!   per-byte cost is far below any positive balance, so the gate
-//!   degenerates to the legacy `> 0` floor.
-//! - A "huge" file whose priced cost exceeds the balance is REJECTED
-//!   with the structured `NotReady(InsufficientCredits)` error.
-//! - A folder whose recursive byte sum exceeds the balance is REJECTED.
-//! - A folder whose recursive byte sum fits in the balance passes.
-//! - `VmCreation` (non-upload action) is unaffected by the bytes
-//!   argument — same threshold semantics as the existing test.
+//! The file therefore now pins the inverse, which is the property worth
+//! guarding: **an upload's outcome does not depend on the credit
+//! balance, at any size.** Reinstating the credit gate would refuse
+//! uploads for every account with an empty wallet and a paid plan.
+//! Payload sizes are still derived from the old priced boundary, so each
+//! case is by construction one the previous gate rejected.
 //!
-//! The mock-server / pool setup mirrors `eligibility_enforcement.rs` so
-//! the two files exercise the same contract surface against the same
-//! billing API shape; only the byte-count input changes.
+//! - A 1-byte upload passes.
+//! - A payload whose priced cost far exceeds the balance passes, for
+//!   every upload action.
+//! - The same payload passes when the balance would have covered it.
+//! - `VmCreation` is unaffected by the bytes argument in both
+//!   directions — its threshold is the up-front extrinsic fee.
+//!
+//! Whether the bytes fit the plan is `billing::drive_quota`'s question
+//! and is covered by its own tests. Companion:
+//! `tests/eligibility_enforcement.rs` pins the threshold layer at
+//! `bytes = 0`; the mock-server / pool setup mirrors it.
 
 use axum::{Json, Router, extract::State, routing::get};
 use serde_json::json;
@@ -163,54 +169,36 @@ async fn require_eligible_prices_uploads_by_byte_count() {
         .expect("1-byte upload must fit in $0.33 balance");
 
     // -----------------------------------------------------------------
-    // Case B: same balance, but a payload large enough that its priced
-    // cost EXCEEDS the balance. Must be REJECTED with the structured
-    // `NotReady(InsufficientCredits)` error.
+    // Case B: a payload whose PRICED cost exceeds the balance is still
+    // allowed, for every upload action.
     //
-    // Size is derived from `bytes_just_over(0.33)` so the assertion
-    // survives any future tuning of `CREDITS_PER_BYTE_MONTHLY` —
-    // re-running the helper recomputes the boundary against the
-    // current constant. The plan example ($1.38 storage cost vs $0.33
-    // balance) maps to ~470 GB at the per-month rate; the helper picks
-    // a similar magnitude.
+    // Storage is sold as a plan, so `require_eligible` routes Drive
+    // writes to the plan-allowance gate and never reaches the priced
+    // credit layer. This is the regression guard for that: reinstating
+    // the credit gate would refuse uploads for every account with an
+    // empty wallet and a paid plan. Whether the bytes FIT the plan is
+    // `drive_quota`'s question, covered by its own tests; the mock
+    // serves no drive endpoints, so that gate falls open here.
+    //
+    // The size still comes from `bytes_just_over(0.33)` so the case
+    // keeps its teeth if the priced layer is ever re-armed: it is by
+    // construction a payload the old gate rejected.
     // -----------------------------------------------------------------
     let too_many_bytes = bytes_just_over(0.33);
-    let err = require_eligible(&state, account_id, InsufficientCreditsAction::FileUpload, too_many_bytes)
-        .await
-        .expect_err("priced file upload must fail when cost exceeds balance");
-    assert!(
-        matches!(err, AppError::NotReady(NotReadyKind::InsufficientCredits)),
-        "expected NotReady(InsufficientCredits) for priced file overrun, got {err:?}",
-    );
+    for action in [
+        InsufficientCreditsAction::FileUpload,
+        InsufficientCreditsAction::FolderUpload,
+        InsufficientCreditsAction::FolderSync,
+    ] {
+        require_eligible(&state, account_id, action, too_many_bytes)
+            .await
+            .unwrap_or_else(|e| panic!("{action:?} must not be priced against the balance, got {e:?}"));
+    }
 
-    // -----------------------------------------------------------------
-    // Case C: folder upload — same byte threshold logic, different
-    // action. Pins that the bytes-priced layer applies to every upload
-    // action variant, not just `FileUpload`.
-    // -----------------------------------------------------------------
-    let err = require_eligible(&state, account_id, InsufficientCreditsAction::FolderUpload, too_many_bytes)
-        .await
-        .expect_err("priced folder upload must fail when cost exceeds balance");
-    assert!(
-        matches!(err, AppError::NotReady(NotReadyKind::InsufficientCredits)),
-        "expected NotReady(InsufficientCredits) for priced folder overrun, got {err:?}",
-    );
-
-    // Folder within balance: the same `FolderUpload` action passes with
-    // a payload sized below the boundary. Pins that the boundary is
-    // monotone (no "gate rejects everything once balance < threshold").
+    // A small payload passes too — the size is not what decides here.
     require_eligible(&state, account_id, InsufficientCreditsAction::FolderUpload, 1024)
         .await
-        .expect("1 KiB folder upload must fit in $0.33 balance");
-
-    // -----------------------------------------------------------------
-    // Case D: `add_local_sync_folder` action (`FolderSync`). Same
-    // bytes-priced gate.
-    // -----------------------------------------------------------------
-    let err = require_eligible(&state, account_id, InsufficientCreditsAction::FolderSync, too_many_bytes)
-        .await
-        .expect_err("priced folder-sync must fail when cost exceeds balance");
-    assert!(matches!(err, AppError::NotReady(NotReadyKind::InsufficientCredits)));
+        .expect("1 KiB folder upload must pass");
 
     // -----------------------------------------------------------------
     // Case E: non-upload action (VmCreation) is UNAFFECTED by the
@@ -235,25 +223,20 @@ async fn require_eligible_prices_uploads_by_byte_count() {
         .expect("VmCreation at threshold passes regardless of bytes (chain-balance fallthrough)");
 
     // -----------------------------------------------------------------
-    // Case F: enough balance to cover the priced layer. The same huge
-    // byte count from case B passes when the balance is above its
-    // computed cost. Confirms the gate is genuinely a comparison, not
-    // a unconditional rejection above some size.
+    // Case F: a balance that comfortably covers the priced cost also
+    // passes — the same payload, from the other side of the old
+    // boundary. Together with case B this pins that the outcome no
+    // longer depends on the balance at all for uploads.
+    //
+    // Fixed-point `{:.10}` rather than default `{}` so the f64 Display
+    // cannot emit scientific notation (e.g. `6e-3`) for small
+    // magnitudes — the billing balance parser expects a plain decimal.
     // -----------------------------------------------------------------
     let cost_for_big = cost_for_bytes(too_many_bytes);
-    // Add a safety margin so float-equality at the boundary doesn't
-    // flip the result; `required_credits >=` is `>=`, not `>`.
-    //
-    // Use fixed-point `{:.10}` rather than default `{}` to avoid the f64
-    // Display sometimes emitting scientific notation (e.g. `6e-3`) for
-    // small magnitudes — the billing balance parser on the other side
-    // expects a plain decimal string. 10 fractional digits is well
-    // beyond the precision needed for any plausible `cost_for_big * 2.0`
-    // in this test, and the value still parses back via `f64::from_str`.
     *mock.balance.lock().unwrap() = format!("{:.10}", cost_for_big * 2.0);
     require_eligible(&state, account_id, InsufficientCreditsAction::FileUpload, too_many_bytes)
         .await
-        .expect("priced upload passes when balance covers cost + margin");
+        .expect("upload passes when the balance covers the old priced cost too");
 
     unsafe {
         std::env::remove_var("HIPPIUS_API_BASE_URL");
