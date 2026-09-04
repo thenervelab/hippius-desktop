@@ -10,16 +10,16 @@
 //! **capacity-source priority chain lives HERE, once**:
 //!
 //!   1. active subscription → capacity is the plan's allowance
-//!   2. else credits > 0    → capacity is credits-buyable storage
-//!      (the same model as a subscription: used counts against the
-//!      allowance; storing files must not grow the cap — H-109)
-//!   3. else                → no capacity to plot ("No active plan")
+//!   2. else                → the free tier's allowance (10 GB)
+//!
+//! Credits deliberately do NOT price a capacity any more: Drive storage is
+//! sold as plans (the free tier included), and the earlier credits-buyable
+//! chain painted a "5 TB" cap for a balance the user might spend on
+//! anything. Credits still ride along on the wire for display.
 //!
 //! Every consumer (storage card, plan card, top-bar chip) renders from this
 //! single decision, so the surfaces can never disagree about whether the
-//! user is "on a plan" or "on credits". Allowances are derived from
-//! credit amounts through the same pricing model every other surface uses
-//! (`calculate_storage_capacity` — console ProHeader, plan cards).
+//! user is "on a plan" or on the free tier.
 
 use serde::Serialize;
 
@@ -39,9 +39,15 @@ const SI_UNITS: [&str; 6] = ["B", "KB", "MB", "GB", "TB", "PB"];
 #[serde(rename_all = "lowercase")]
 pub enum CapacitySource {
     Subscription,
-    Credits,
-    None,
+    /// No active subscription — the account sits on the free tier.
+    Free,
 }
+
+/// The free tier's storage allowance. Matches the server's "Free Drive
+/// Plan" SKU (10 GB); if that plan's allowance ever changes, this constant
+/// must follow — the plans page lists the server's number, and the home
+/// storage card renders this one.
+const FREE_TIER_STORAGE_GB: u64 = 10;
 
 /// Active-plan facts for the plan card / top-bar chip. camelCase over IPC.
 #[derive(Serialize, Debug, PartialEq, Clone)]
@@ -95,28 +101,16 @@ pub struct StorageOverview {
     pub free_display: String,
 }
 
-/// Pure composition of the overview from its three inputs.
-///
-/// `credits` is the balance in HIP units; `credits_capacity_gb` is what that
-/// balance buys per month (pre-computed by the caller so this stays pure and
-/// unit-testable without the pricing binary search).
-fn build_overview(used_bytes: u64, plan: Option<PlanInfo>, credits: f64, credits_capacity_gb: u64, credits_hip: Option<String>) -> StorageOverview {
+/// Pure composition of the overview from its inputs.
+fn build_overview(used_bytes: u64, plan: Option<PlanInfo>, credits_hip: Option<String>) -> StorageOverview {
     if let Some(plan) = plan {
         let total_bytes = plan.storage_bytes;
         return finish_overview(used_bytes, total_bytes, CapacitySource::Subscription, Some(plan), credits_hip);
     }
-    if credits > 0.0 {
-        // Same model as a subscription: the balance buys a fixed allowance,
-        // and used counts against it. Adding used on top (the old hybrid)
-        // made a 15-credit / 5.00 TB SKU read "5.03 TB" on the storage card
-        // next to "5.00 TB" on the chip (H-109). Storing files must not
-        // grow the cap. A dust balance that prices 0 GB still uses `used`
-        // as the cap so the bar reads full ("you can't store more").
-        let buyable = credits_capacity_gb.saturating_mul(BYTES_PER_GB);
-        let total_bytes = if buyable == 0 { used_bytes } else { buyable };
-        return finish_overview(used_bytes, total_bytes, CapacitySource::Credits, None, credits_hip);
-    }
-    finish_overview(used_bytes, 0, CapacitySource::None, None, credits_hip)
+    // No subscription: every account has the free tier, so there is always
+    // a capacity to plot — "No active plan" with an empty card is gone.
+    let total_bytes = FREE_TIER_STORAGE_GB.saturating_mul(BYTES_PER_GB);
+    finish_overview(used_bytes, total_bytes, CapacitySource::Free, None, credits_hip)
 }
 
 fn finish_overview(
@@ -297,6 +291,88 @@ fn percent_of(used: u64, total: u64) -> f64 {
 /// the account has no usable subscription. Fail-soft by design: a malformed
 /// or missing field reads as "no plan" (the priority chain then falls to
 /// credits), mirroring `get_subscription_data`'s `unwrap_or` posture.
+/// Marketed size of a drive-plan allowance: the label AND the decimal byte
+/// count it names.
+///
+/// Plan grants are exact powers of 1024 (10 GiB, 2 TiB, 10 TiB) but they
+/// are SOLD in marketing units — the plans page, the console and the mobile
+/// app all render "2 TB" through the same divide-by-1024 rule
+/// (`formatPlanStorage` in drive-plans.ts). The overview must agree, and
+/// its bar math must run on the same number: formatting the raw binary
+/// grant with the SI formatter put "≈ 2.20 TB" on the chip beside a plans
+/// page selling "2 TB".
+fn marketed_plan_size(raw_bytes: u64) -> (u64, String) {
+    const UNITS: [&str; 6] = ["B", "KB", "MB", "GB", "TB", "PB"];
+    if raw_bytes == 0 {
+        return (0, "0 GB".into());
+    }
+    let mut value = raw_bytes as f64;
+    let mut i = 0;
+    while value >= 1024.0 && i < UNITS.len() - 1 {
+        value /= 1024.0;
+        i += 1;
+    }
+    let rounded = (value * 100.0).round() / 100.0;
+    let label = format!("{rounded:.2}");
+    let display = format!("{} {}", trim_dot_zeros(&label), UNITS[i]);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let decimal_bytes = (rounded * 1000f64.powi(i32::try_from(i).unwrap_or(0))).round() as u64;
+    (decimal_bytes, display)
+}
+
+/// Map the DRIVE-rail subscription (`/api/drive/subscription/`) onto
+/// [`PlanInfo`], joining the plans catalogue for the price the subscription
+/// payload does not carry. This is the rail the Subscription Plans page
+/// subscribes through, so the chip/cards must read it FIRST or a
+/// credits-funded plan renders as the free tier (the page said "Plus", the
+/// home card said "Free Drive Plan").
+///
+/// The free tier can report as its own "plan" on this rail; it must resolve
+/// to `None` here so the chain lands on [`CapacitySource::Free`] — an
+/// "Active Plan (0$/mo.)" chip is the free tier mislabelled.
+fn plan_from_drive_subscription(sub: &serde_json::Value, plans: &serde_json::Value) -> Option<PlanInfo> {
+    if !sub.get("active").and_then(serde_json::Value::as_bool).unwrap_or(false) {
+        return None;
+    }
+    let code = sub.get("plan").and_then(serde_json::Value::as_str).unwrap_or("");
+    // The catalogue arrives as a bare array or `{ results: [...] }` — the
+    // same tolerance the FE's `useDrivePlans` select applies.
+    let catalogue = plans.as_array().or_else(|| plans.get("results").and_then(serde_json::Value::as_array));
+    let entry = catalogue.and_then(|list| list.iter().find(|p| p.get("code").and_then(serde_json::Value::as_str) == Some(code)));
+
+    if code.eq_ignore_ascii_case("free") || entry.and_then(|p| p.get("is_free")).and_then(serde_json::Value::as_bool).unwrap_or(false) {
+        return None;
+    }
+
+    let raw_bytes = sub
+        .get("storage_bytes")
+        .and_then(serde_json::Value::as_u64)
+        .filter(|bytes| *bytes > 0)
+        .or_else(|| entry.and_then(|p| p.get("storage_bytes")).and_then(serde_json::Value::as_u64))?;
+    let (storage_bytes, storage_display) = marketed_plan_size(raw_bytes);
+
+    let name = sub
+        .get("plan_name")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| entry.and_then(|p| p.get("name")).and_then(serde_json::Value::as_str))
+        .unwrap_or(code)
+        .to_string();
+
+    // Both price fields are effective per-month credits (drive-plans.ts),
+    // so the interval is "month" either way.
+    let annual = sub.get("billing_period").and_then(serde_json::Value::as_str) == Some("annual");
+    let price_key = if annual { "price_credits_annual" } else { "price_credits_monthly" };
+    let amount = entry.and_then(|p| p.get(price_key)).and_then(serde_json::Value::as_f64).unwrap_or(0.0);
+
+    Some(PlanInfo {
+        name,
+        amount,
+        interval: "month".into(),
+        storage_bytes,
+        storage_display,
+    })
+}
+
 fn plan_from_subscription(active: &serde_json::Value) -> Option<PlanInfo> {
     if !active.get("has_subscription").and_then(serde_json::Value::as_bool).unwrap_or(false) {
         return None;
@@ -316,8 +392,10 @@ fn plan_from_subscription(active: &serde_json::Value) -> Option<PlanInfo> {
     })
 }
 
-/// GB purchasable per month for a credit amount, via the canonical pricing
-/// model (`calculate_storage_capacity`'s binary search).
+/// GB a plan's monthly credit allowance buys, via the canonical pricing
+/// model (`calculate_storage_capacity`'s binary search). Sizes a
+/// SUBSCRIPTION's allowance from `credits_per_billing` — the free tier and
+/// the user's spendable balance never price a capacity.
 fn capacity_gb_for_credits(credits: f64) -> u64 {
     if credits <= 0.0 {
         return 0;
@@ -343,24 +421,27 @@ pub async fn get_storage_overview(
 ) -> Result<StorageOverview, AppError> {
     let client = ApiClient::new(state.api_client.clone(), state.pool()?.clone());
 
-    let (stats_result, active_result, credits_result) = tokio::join!(
+    let (stats_result, drive_sub_result, drive_plans_result, active_result, credits_result) = tokio::join!(
         crate::billing::queries::fetch_drive_storage_stats(state.inner(), account_id.as_str()),
+        client.get::<serde_json::Value>("/api/drive/subscription/", &account_id),
+        client.get::<serde_json::Value>("/api/drive/plans/", &account_id),
         client.get::<serde_json::Value>("/api/billing/stripe/active-subscription/", &account_id),
         crate::billing::credits::fetch_credit_balance_planck(state.inner(), &account_id),
     );
 
     let stats = stats_result?;
+    let drive_sub = drive_sub_result.unwrap_or_else(|_| serde_json::json!({ "active": false }));
+    let drive_plans = drive_plans_result.unwrap_or_else(|_| serde_json::json!([]));
     let active = active_result.unwrap_or_else(|_| serde_json::json!({ "has_subscription": false }));
 
+    // Credits no longer price a capacity; the balance rides along purely
+    // for display (the plan card / top-up cell).
     let credits_hip = credits_result.ok().map(|planck| crate::blockchain::convert::planck_to_hip(&planck));
-    // The display string is plain decimal ("1.5"), so it parses directly;
-    // an absent/unparseable balance reads as 0 → the chain falls to None.
-    let credits: f64 = credits_hip.as_deref().and_then(|hip| hip.parse().ok()).unwrap_or(0.0);
 
-    let plan = plan_from_subscription(&active);
-    // Only price the credits capacity when it can win the chain — the
-    // binary search is cheap, but skipping it keeps the plan path lean.
-    let credits_capacity_gb = if plan.is_none() { capacity_gb_for_credits(credits) } else { 0 };
+    // The drive rail (what the Subscription Plans page subscribes through)
+    // wins; the legacy Stripe storage subscription stays as the fallback for
+    // accounts that predate drive plans.
+    let plan = plan_from_drive_subscription(&drive_sub, &drive_plans).or_else(|| plan_from_subscription(&active));
 
     // Indexer empty-row is success + 0 bytes (not an error). Probe local
     // own-drive dir_stats only then, so a lagging indexer cannot paint
@@ -372,7 +453,7 @@ pub async fn get_storage_overview(
         0
     };
 
-    let mut overview = build_overview(stats.total_bytes, plan, credits, credits_capacity_gb, credits_hip);
+    let mut overview = build_overview(stats.total_bytes, plan, credits_hip);
     overview.used_pending = used_pending(stats.total_bytes, local_bytes);
     Ok(overview)
 }
@@ -392,74 +473,52 @@ mod tests {
     }
 
     #[test]
-    fn subscription_wins_over_credits() {
-        // 300 GB of a 1000 GB plan → 30%, even with a fat credit balance.
-        let overview = build_overview(300 * BYTES_PER_GB, Some(pro_plan(1000)), 500.0, 999_999, Some("500".into()));
+    fn subscription_wins() {
+        // 300 GB of a 1000 GB plan → 30%; the balance rides along for display.
+        let overview = build_overview(300 * BYTES_PER_GB, Some(pro_plan(1000)), Some("500".into()));
         assert_eq!(overview.source, CapacitySource::Subscription);
         assert_eq!(overview.total_bytes, 1000 * BYTES_PER_GB);
         assert!((overview.percent - 30.0).abs() < 1e-9);
         assert_eq!(overview.plan.as_ref().map(|p| p.name.as_str()), Some("Pro"));
-        // Credits still ride along for display.
         assert_eq!(overview.credits_hip.as_deref(), Some("500"));
     }
 
+    /// No subscription resolves to the FREE tier, never to a credits-priced
+    /// capacity and never to an empty "no plan" card — every account has the
+    /// free allowance, and a fat balance must not change the cap.
     #[test]
-    fn credits_capacity_is_buyable_not_used_plus() {
-        // 100 GB stored, credits buy 300 GB → cap 300 GB, ~33% used.
-        // Adding used onto buyable was H-109: the cap grew as you stored.
-        let overview = build_overview(100 * BYTES_PER_GB, None, 1.0, 300, Some("1".into()));
-        assert_eq!(overview.source, CapacitySource::Credits);
-        assert_eq!(overview.total_bytes, 300 * BYTES_PER_GB);
-        assert!((overview.percent - (100.0 / 300.0 * 100.0)).abs() < 1e-9);
+    fn no_subscription_falls_back_to_the_free_tier() {
+        let overview = build_overview(3 * BYTES_PER_GB, None, Some("500".into()));
+        assert_eq!(overview.source, CapacitySource::Free);
+        assert_eq!(overview.total_bytes, FREE_TIER_STORAGE_GB * BYTES_PER_GB);
+        assert!((overview.percent - 30.0).abs() < 1e-9);
         assert_eq!(overview.plan, None);
-    }
-
-    /// H-109: 31.91 GB stored on a 15-credit balance (4,999 GB buyable).
-    /// Cap is the SKU (5.00 TB), not used+buyable (5.03 TB). Free is
-    /// remainder in the same unit. Chip / card / overview share 5.00 TB.
-    #[test]
-    fn credits_labels_use_the_sku_cap_not_used_plus_buyable() {
-        let overview = build_overview(31_910_000_000, None, 15.0, 4_999, Some("15".into()));
-        assert_eq!(overview.source, CapacitySource::Credits);
-        assert_eq!(overview.used_bytes, 31_910_000_000);
-        assert_eq!(overview.total_bytes, 4_999 * BYTES_PER_GB);
-        assert_eq!(
-            overview.used_bytes + overview.total_bytes.saturating_sub(overview.used_bytes),
-            overview.total_bytes,
-            "raw used + free must equal total"
-        );
-        assert_eq!(overview.used_display, "31.91 GB");
-        assert_eq!(overview.total_display, "5.00 TB");
-        assert_eq!(overview.free_display, "4.97 TB");
-        assert_eq!(
-            crate::billing::charts::format_storage_display(4_999),
-            overview.total_display,
-            "storage card cap must match the Billing 15-credit SKU label"
-        );
-        assert_ne!(overview.free_display, "5 TB");
-        assert_ne!(overview.total_display, "5.03 TB");
+        assert_eq!(overview.credits_hip.as_deref(), Some("500"));
+        assert_eq!(overview.total_display, "10.00 GB");
     }
 
     #[test]
     fn overview_labels_use_camel_case_on_the_wire() {
-        let overview = build_overview(31_910_000_000, None, 15.0, 4_999, Some("15".into()));
+        let overview = build_overview(31_910_000_000, Some(pro_plan(4_999)), Some("15".into()));
         let json = serde_json::to_value(&overview).expect("serialize");
         assert_eq!(json["usedDisplay"], "31.91 GB");
         assert_eq!(json["totalDisplay"], "5.00 TB");
         assert_eq!(json["freeDisplay"], "4.97 TB");
+        assert_eq!(json["source"], "subscription");
     }
 
+    /// The FE keys three surfaces on this exact wire string; a rename hides
+    /// the free tier behind the resolvers' fallback branch.
     #[test]
-    fn empty_drive_on_five_tb_credits_keeps_dot_zero() {
-        let overview = build_overview(0, None, 15.0, 4_999, Some("15".into()));
-        assert_eq!(overview.used_display, "0 B");
-        assert_eq!(overview.total_display, "5.00 TB");
-        assert_eq!(overview.free_display, "5.00 TB");
+    fn free_source_serializes_lowercase() {
+        let overview = build_overview(0, None, None);
+        let json = serde_json::to_value(&overview).expect("serialize");
+        assert_eq!(json["source"], "free");
     }
 
     #[test]
     fn over_quota_free_is_zero_in_the_total_unit() {
-        let overview = build_overview(6_000 * BYTES_PER_GB, Some(pro_plan(5_000)), 0.0, 0, None);
+        let overview = build_overview(6_000 * BYTES_PER_GB, Some(pro_plan(5_000)), None);
         assert_eq!(overview.total_display, "5.00 TB");
         assert_eq!(overview.free_display, "0.00 TB");
         assert!((overview.percent - 100.0).abs() < 1e-9);
@@ -470,7 +529,7 @@ mod tests {
     /// free that rounds to 0.00 while bytes remain is "<0.01 TB".
     #[test]
     fn leftover_gb_on_a_tb_plan_does_not_vanish() {
-        let overview = build_overview(4_996 * BYTES_PER_GB, Some(pro_plan(5_000)), 0.0, 0, None);
+        let overview = build_overview(4_996 * BYTES_PER_GB, Some(pro_plan(5_000)), None);
         assert_eq!(overview.used_display, "5.00 TB");
         assert_eq!(overview.total_display, "5.00 TB");
         assert_eq!(overview.free_display, "<0.01 TB");
@@ -483,39 +542,83 @@ mod tests {
     }
 
     #[test]
-    fn no_plan_no_credits_yields_none() {
-        let overview = build_overview(42, None, 0.0, 0, Some("0".into()));
-        assert_eq!(overview.source, CapacitySource::None);
-        assert_eq!(overview.used_bytes, 42);
-        assert_eq!(overview.total_bytes, 0);
-        assert!(overview.percent.abs() < 1e-9);
-    }
-
-    #[test]
     fn over_quota_clamps_to_100() {
         // Usage above the allowance (downgrade case) must not overflow the bar.
-        let overview = build_overview(2000 * BYTES_PER_GB, Some(pro_plan(1000)), 0.0, 0, None);
+        let overview = build_overview(2000 * BYTES_PER_GB, Some(pro_plan(1000)), None);
         assert!((overview.percent - 100.0).abs() < 1e-9);
         // Raw byte counts stay honest even while the percent clamps.
         assert_eq!(overview.used_bytes, 2000 * BYTES_PER_GB);
     }
 
     #[test]
-    fn credits_that_buy_nothing_still_count_as_credits() {
-        // A dust balance prices 0 extra GB: total == used → a full bar,
-        // which is the honest reading ("you can't store more on this").
-        let overview = build_overview(500, None, 0.0001, 0, Some("0.0001".into()));
-        assert_eq!(overview.source, CapacitySource::Credits);
-        assert_eq!(overview.total_bytes, 500);
-        assert!((overview.percent - 100.0).abs() < 1e-9);
-    }
-
-    #[test]
     fn zero_gb_plan_does_not_divide_by_zero() {
-        let overview = build_overview(500, Some(pro_plan(0)), 0.0, 0, None);
+        let overview = build_overview(500, Some(pro_plan(0)), None);
         assert_eq!(overview.source, CapacitySource::Subscription);
         assert_eq!(overview.total_bytes, 0);
         assert!(overview.percent.abs() < 1e-9);
+    }
+
+    /// Plan grants come as exact powers of 1024 (2 TiB for the "2 TB" SKU).
+    const TWO_TIB: u64 = 2 * 1024 * 1024 * 1024 * 1024;
+    const TEN_GIB: u64 = 10 * 1024 * 1024 * 1024;
+
+    fn drive_catalogue() -> serde_json::Value {
+        serde_json::json!([
+            { "code": "free", "name": "Free Drive Plan", "storage_bytes": TEN_GIB, "price_credits_monthly": 0.0, "price_credits_annual": 0.0, "is_free": true },
+            { "code": "plus", "name": "Plus", "storage_bytes": TWO_TIB, "price_credits_monthly": 7.0, "price_credits_annual": 6.0, "is_free": false }
+        ])
+    }
+
+    /// The drive rail is what the Subscription Plans page subscribes
+    /// through; the chip/cards must map it, price joined from the
+    /// catalogue — a credits-funded Plus must never render as "Free Plan".
+    ///
+    /// The binary grant maps to its MARKETED size: the "2 TB" SKU must not
+    /// read "≈ 2.20 TB" on the chip (the SI formatter over 2 TiB), and the
+    /// bar math runs on the same 2 TB so every surface agrees.
+    #[test]
+    fn drive_subscription_maps_to_plan_with_catalogue_price() {
+        let sub = serde_json::json!({ "active": true, "plan": "plus", "plan_name": "Plus", "storage_bytes": TWO_TIB });
+        let plan = plan_from_drive_subscription(&sub, &drive_catalogue()).expect("plan expected");
+        assert_eq!(plan.name, "Plus");
+        assert!((plan.amount - 7.0).abs() < 1e-9);
+        assert_eq!(plan.storage_bytes, 2_000_000_000_000, "bar math must use the marketed size");
+        assert_eq!(plan.storage_display, "2 TB");
+
+        // And the overview built from it labels the cap the same way.
+        let overview = build_overview(500 * BYTES_PER_GB, Some(plan), None);
+        assert_eq!(overview.total_display, "2.00 TB");
+        assert!((overview.percent - 25.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn annual_drive_billing_uses_the_per_month_annual_price() {
+        let sub = serde_json::json!({ "active": true, "plan": "plus", "billing_period": "annual" });
+        let plan = plan_from_drive_subscription(&sub, &drive_catalogue()).expect("plan expected");
+        assert!((plan.amount - 6.0).abs() < 1e-9);
+        // Storage falls back to the catalogue when the payload omits it.
+        assert_eq!(plan.storage_bytes, 2_000_000_000_000);
+    }
+
+    #[test]
+    fn inactive_or_free_drive_subscription_is_no_plan() {
+        let inactive = serde_json::json!({ "active": false });
+        assert_eq!(plan_from_drive_subscription(&inactive, &drive_catalogue()), None);
+
+        // The free tier reporting as an "active plan" must still resolve to
+        // the Free source, not an active 0$/mo plan.
+        let free = serde_json::json!({ "active": true, "plan": "free", "storage_bytes": TEN_GIB });
+        assert_eq!(plan_from_drive_subscription(&free, &drive_catalogue()), None);
+    }
+
+    /// Mirrors `formatPlanStorage` in drive-plans.ts — the rule the plans
+    /// page, console and mobile all sell storage in.
+    #[test]
+    fn marketed_plan_size_renders_binary_grants_in_marketing_units() {
+        assert_eq!(marketed_plan_size(TWO_TIB), (2_000_000_000_000, "2 TB".into()));
+        assert_eq!(marketed_plan_size(TEN_GIB), (10_000_000_000, "10 GB".into()));
+        assert_eq!(marketed_plan_size(500 * 1024 * 1024 * 1024), (500_000_000_000, "500 GB".into()));
+        assert_eq!(marketed_plan_size(0), (0, "0 GB".into()));
     }
 
     #[test]
@@ -586,11 +689,11 @@ mod tests {
 
     #[test]
     fn used_bytes_stay_the_indexer_row_when_pending() {
-        let mut overview = build_overview(0, None, 1.0, 300, Some("1".into()));
+        let mut overview = build_overview(0, None, Some("1".into()));
         overview.used_pending = used_pending(overview.used_bytes, 46);
         assert_eq!(overview.used_bytes, 0, "local walk must not be written into used_bytes");
         assert!(overview.used_pending);
-        assert_eq!(overview.source, CapacitySource::Credits);
+        assert_eq!(overview.source, CapacitySource::Free);
     }
 
     /// Brace-matched body of the function whose signature contains `sig`.

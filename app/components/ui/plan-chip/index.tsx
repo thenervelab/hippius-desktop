@@ -17,12 +17,12 @@ import {
  * used by Files / VM / Notifications).
  *
  * Renders from the SAME `get_storage_overview` fetch as the home cards, so
- * the plan-vs-credits decision (made once, in Rust) is identical on every
+ * the plan-vs-free-tier decision (made once, in Rust) is identical on every
  * surface:
  *
  *   - subscription → heading "Active Plan", value "≈ 1 TB  (12$/mo.)"
- *   - credits only → heading "Credits",     value "12.5  credits"
- *   - neither      → heading "Active Plan", value "No active plan"
+ *   - no plan      → heading "Free Plan",   value "≈ 10.00 GB  included"
+ *   - unknown      → heading "Active Plan", value "No active plan"
  *
  * The heading itself waits for the decision: a skeleton holds BOTH lines
  * until the query settles, so the chip never flashes "No active plan" (or
@@ -59,7 +59,7 @@ const PlanChip: React.FC<{ className?: string }> = ({ className }) => {
           />
         ) : (
           <span className="font-mono text-[12px] font-medium uppercase leading-[18px] tracking-[-0.24px] text-primary-40 dark:text-primary-brand-dark">
-            {planView === "credits" ? "Credits" : "Active Plan"}
+            {planView === "free" ? "Free Plan" : "Active Plan"}
           </span>
         )}
       </div>
@@ -75,11 +75,11 @@ const PlanChip: React.FC<{ className?: string }> = ({ className }) => {
             {"  "}({formatPlanPrice(plan.amount, plan.interval)})
           </span>
         </p>
-      ) : planView === "credits" ? (
+      ) : planView === "free" ? (
         <p className="whitespace-pre text-[12px] font-bold leading-[18px] tracking-[-0.36px] text-primary-50 dark:text-primary-brand-dark">
-          {overview?.creditsHip ?? "0"}
+          ≈ {overview?.totalDisplay ?? ""}
           <span className="text-[12px] font-medium text-black-700 dark:text-white">
-            {"  "}credits
+            {"  "}included
           </span>
         </p>
       ) : (
