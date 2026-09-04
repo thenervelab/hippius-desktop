@@ -10,6 +10,7 @@ import {
   hasSharedTeamDrive,
   type DrivePlan,
 } from "@/lib/types/drive-plans";
+import CustomTooltip2 from "@/components/ui/CustomTooltip2";
 import { cn } from "@/lib/utils";
 
 /** What the button on a card does, decided by the section and passed down. */
@@ -61,12 +62,19 @@ const DrivePlanCard: FC<DrivePlanCardProps> = ({
   const isInert = action === "current" || action === "none";
   const isCancel = action === "cancel";
   const storage = formatPlanStorage(plan.storage_bytes);
+  // Shared drives are part of these plans but are not switched on yet, so
+  // the line is greyed rather than removed: the plan does include it, it
+  // just cannot be used yet. Drop `pending` when the feature ships.
   const features = [
-    "Automatic renewal",
-    ...(hasSharedTeamDrive(plan) ? ["Shared team drive"] : []),
-    plan.is_free
-      ? "Upgrade whenever you need more"
-      : "Change or cancel anytime",
+    { label: "Automatic renewal" },
+    ...(hasSharedTeamDrive(plan)
+      ? [{ label: "Shared team drive", pending: true }]
+      : []),
+    {
+      label: plan.is_free
+        ? "Upgrade whenever you need more"
+        : "Change or cancel anytime",
+    },
   ];
 
   return (
@@ -120,14 +128,54 @@ const DrivePlanCard: FC<DrivePlanCardProps> = ({
             <p className="font-mono text-[12px] font-medium uppercase leading-[19.45px] tracking-[-0.24px] text-grey-dark-800">
               Features
             </p>
-            {features.map((line) => (
-              <p key={line} className="flex items-center gap-2">
-                <ArrowRight className="size-[14px] shrink-0 text-grey-dark-600" />
-                <span className="min-w-0 text-[12px] font-medium leading-5 tracking-[-0.24px] text-black-900 dark:text-white">
-                  {line}
-                </span>
-              </p>
-            ))}
+            {features.map((line) => {
+              const body = (
+                <>
+                  <ArrowRight
+                    className={cn(
+                      "size-[14px] shrink-0",
+                      line.pending
+                        ? "text-grey-70 dark:text-grey-dark-800"
+                        : "text-grey-dark-600",
+                    )}
+                  />
+                  <span
+                    className={cn(
+                      "min-w-0 text-[12px] font-medium leading-5 tracking-[-0.24px]",
+                      line.pending
+                        ? "text-grey-70 dark:text-grey-dark-800"
+                        : "text-black-900 dark:text-white",
+                    )}
+                  >
+                    {line.label}
+                  </span>
+                </>
+              );
+
+              if (!line.pending) {
+                return (
+                  <p key={line.label} className="flex items-center gap-2">
+                    {body}
+                  </p>
+                );
+              }
+
+              // Grey alone does not say why the line is dimmed, so the row
+              // is the tooltip trigger. Focusable so the reason is reachable
+              // by keyboard: this tooltip has no click handler to fight the
+              // focus that a tab brings, unlike the console's.
+              return (
+                <CustomTooltip2 key={line.label} tooltipContent="Coming soon">
+                  <span
+                    tabIndex={0}
+                    className="flex cursor-help items-center gap-2"
+                  >
+                    {body}
+                    <span className="sr-only">, coming soon</span>
+                  </span>
+                </CustomTooltip2>
+              );
+            })}
           </div>
         </div>
 
