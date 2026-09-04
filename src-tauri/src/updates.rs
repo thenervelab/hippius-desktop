@@ -169,6 +169,17 @@ fn updater_for(app: &AppHandle, channel: ReleaseChannel, cross_channel: bool) ->
 /// a channel with no manifest is simply `None`.
 #[tauri::command]
 pub async fn check_for_update(app: AppHandle) -> Result<Option<AvailableUpdate>> {
+    // A debug build is compiled from source, not installed from a lane, so no
+    // manifest can meaningfully update it. Without this skip a local dev run
+    // resolves to the Production channel (unset HIPPIUS_RELEASE_CHANNEL fails
+    // safe there) and nags on every launch: semver orders any published
+    // release above the working tree's `-dev.N` version. Release builds are
+    // unaffected — `debug_assertions` is off for every shipped lane.
+    if cfg!(debug_assertions) {
+        debug!("debug build — skipping update check");
+        return Ok(None);
+    }
+
     let channel = release_channel::current();
 
     let Some(updater) = updater_for(&app, channel, false)? else {
