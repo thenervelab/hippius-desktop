@@ -41,17 +41,36 @@ impl QuotaVerdict {
     }
 }
 
-/// The plan's storage allowance in bytes, or `None` when the account has no
-/// readable Drive plan.
+/// The account's storage allowance in bytes, or `None` when it cannot be
+/// read (fail open — see the module doc).
+///
+/// `active: false` is NOT "no allowance": every account has the free tier.
+/// Treating it as unknown let a free account hundreds of GB past its 10 GB
+/// keep uploading from the desktop while the console — which asks the
+/// server's own `/can_upload` gate — refused the same bytes. The free
+/// allowance is read from the plans catalogue, the number the server
+/// itself enforces, so this check still cannot refuse a write the server
+/// would accept; only a failed READ falls open.
 async fn plan_allowance(state: &AppState, account: &SessionAccount) -> Option<u64> {
     let client = ApiClient::new(state.api_client.clone(), state.pool().ok()?.clone());
     let sub: serde_json::Value = client.get("/api/drive/subscription/", account).await.ok()?;
-    // `active: false` is the normal shape for an account with no plan, and
-    // a plan with no stated allowance tells us nothing either way.
-    if !sub.get("active").and_then(serde_json::Value::as_bool).unwrap_or(false) {
-        return None;
+    if sub.get("active").and_then(serde_json::Value::as_bool).unwrap_or(false) {
+        // A plan with no stated allowance tells us nothing either way.
+        return sub.get("storage_bytes").and_then(serde_json::Value::as_u64).filter(|b| *b > 0);
     }
-    sub.get("storage_bytes").and_then(serde_json::Value::as_u64).filter(|b| *b > 0)
+    let plans: serde_json::Value = client.get("/api/drive/plans/", account).await.ok()?;
+    free_plan_bytes(&plans)
+}
+
+/// The free plan's allowance out of the catalogue payload (a bare array or
+/// `{ results: [...] }`, same tolerance as the FE's `useDrivePlans`).
+fn free_plan_bytes(plans: &serde_json::Value) -> Option<u64> {
+    let list = plans.as_array().or_else(|| plans.get("results").and_then(serde_json::Value::as_array))?;
+    list.iter()
+        .find(|p| p.get("is_free").and_then(serde_json::Value::as_bool).unwrap_or(false))
+        .and_then(|p| p.get("storage_bytes"))
+        .and_then(serde_json::Value::as_u64)
+        .filter(|b| *b > 0)
 }
 
 /// Would storing `incoming_bytes` more keep the account inside its plan?
@@ -110,10 +129,32 @@ mod tests {
 
     #[test]
     fn an_unknown_allowance_allows_the_write() {
-        // Most accounts have no Drive plan mapped; refusing them here would
-        // block writes hcfs-server would accept.
+        // A failed READ falls open; refusing there would block writes
+        // hcfs-server would accept.
         let v = QuotaVerdict::unknown(123);
         assert!(v.allowed);
         assert!(v.limit_bytes.is_none());
+    }
+
+    /// A no-subscription account is judged against the FREE plan's
+    /// allowance from the catalogue — treating it as unknown was the hole
+    /// that let a free account far past 10 GB keep uploading from the
+    /// desktop while the console's server-side gate refused the same bytes.
+    #[test]
+    fn the_free_plan_allowance_is_read_from_the_catalogue() {
+        let ten_gib: u64 = 10 * 1024 * 1024 * 1024;
+        let plans = serde_json::json!([
+            { "code": "plus", "is_free": false, "storage_bytes": 999u64 },
+            { "code": "free", "is_free": true, "storage_bytes": ten_gib }
+        ]);
+        assert_eq!(free_plan_bytes(&plans), Some(ten_gib));
+
+        // The API may also wrap the list.
+        let wrapped = serde_json::json!({ "results": [ { "is_free": true, "storage_bytes": ten_gib } ] });
+        assert_eq!(free_plan_bytes(&wrapped), Some(ten_gib));
+
+        // No free plan listed → nothing to judge against (fail open).
+        let none = serde_json::json!([ { "code": "plus", "is_free": false, "storage_bytes": 999u64 } ]);
+        assert_eq!(free_plan_bytes(&none), None);
     }
 }
