@@ -64,7 +64,12 @@ async fn plan_allowance(state: &AppState, account: &SessionAccount) -> Option<u6
 
 /// The free plan's allowance out of the catalogue payload (a bare array or
 /// `{ results: [...] }`, same tolerance as the FE's `useDrivePlans`).
-fn free_plan_bytes(plans: &serde_json::Value) -> Option<u64> {
+///
+/// Shared with [`crate::billing::storage_overview`] so the number the home
+/// card plots and the number this gate enforces come from the SAME server
+/// field. They were briefly two constants, which is how a card and a
+/// refusal come to disagree about the same account.
+pub(crate) fn free_plan_bytes(plans: &serde_json::Value) -> Option<u64> {
     let list = plans.as_array().or_else(|| plans.get("results").and_then(serde_json::Value::as_array))?;
     list.iter()
         .find(|p| p.get("is_free").and_then(serde_json::Value::as_bool).unwrap_or(false))

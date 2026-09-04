@@ -10,7 +10,8 @@
 //! **capacity-source priority chain lives HERE, once**:
 //!
 //!   1. active subscription → capacity is the plan's allowance
-//!   2. else                → the free tier's allowance (10 GB)
+//!   2. else                → the free SKU's allowance, read from the same
+//!      plans catalogue `drive_quota` enforces against
 //!
 //! Credits deliberately do NOT price a capacity any more: Drive storage is
 //! sold as plans (the free tier included), and the earlier credits-buyable
@@ -43,11 +44,12 @@ pub enum CapacitySource {
     Free,
 }
 
-/// The free tier's storage allowance. Matches the server's "Free Drive
-/// Plan" SKU (10 GB); if that plan's allowance ever changes, this constant
-/// must follow — the plans page lists the server's number, and the home
-/// storage card renders this one.
-const FREE_TIER_STORAGE_GB: u64 = 10;
+/// Fallback free-tier allowance, used ONLY when the plans catalogue cannot
+/// be read. The live number comes from the catalogue's free SKU via
+/// `drive_quota::free_plan_bytes`, so the card and the upload gate quote
+/// the same server field; this constant just keeps the card from plotting
+/// a zero capacity during an outage.
+const FREE_TIER_FALLBACK_GB: u64 = 10;
 
 /// Active-plan facts for the plan card / top-bar chip. camelCase over IPC.
 #[derive(Serialize, Debug, PartialEq, Clone)]
@@ -102,14 +104,18 @@ pub struct StorageOverview {
 }
 
 /// Pure composition of the overview from its inputs.
-fn build_overview(used_bytes: u64, plan: Option<PlanInfo>, credits_hip: Option<String>) -> StorageOverview {
+///
+/// `free_tier_bytes` is the free SKU's allowance, already mapped to its
+/// marketed size by the caller; `None` when the catalogue could not be
+/// read, which falls back to [`FREE_TIER_FALLBACK_GB`].
+fn build_overview(used_bytes: u64, plan: Option<PlanInfo>, free_tier_bytes: Option<u64>, credits_hip: Option<String>) -> StorageOverview {
     if let Some(plan) = plan {
         let total_bytes = plan.storage_bytes;
         return finish_overview(used_bytes, total_bytes, CapacitySource::Subscription, Some(plan), credits_hip);
     }
     // No subscription: every account has the free tier, so there is always
     // a capacity to plot — "No active plan" with an empty card is gone.
-    let total_bytes = FREE_TIER_STORAGE_GB.saturating_mul(BYTES_PER_GB);
+    let total_bytes = free_tier_bytes.unwrap_or_else(|| FREE_TIER_FALLBACK_GB.saturating_mul(BYTES_PER_GB));
     finish_overview(used_bytes, total_bytes, CapacitySource::Free, None, credits_hip)
 }
 
@@ -453,7 +459,13 @@ pub async fn get_storage_overview(
         0
     };
 
-    let mut overview = build_overview(stats.total_bytes, plan, credits_hip);
+    // The free SKU's allowance comes from the catalogue already fetched
+    // above — the same field `drive_quota` enforces against — mapped to its
+    // marketed size like any other grant (the free plan is 10 GiB, sold as
+    // "10 GB").
+    let free_tier_bytes = crate::billing::drive_quota::free_plan_bytes(&drive_plans).map(|raw| marketed_plan_size(raw).0);
+
+    let mut overview = build_overview(stats.total_bytes, plan, free_tier_bytes, credits_hip);
     overview.used_pending = used_pending(stats.total_bytes, local_bytes);
     Ok(overview)
 }
@@ -475,7 +487,7 @@ mod tests {
     #[test]
     fn subscription_wins() {
         // 300 GB of a 1000 GB plan → 30%; the balance rides along for display.
-        let overview = build_overview(300 * BYTES_PER_GB, Some(pro_plan(1000)), Some("500".into()));
+        let overview = build_overview(300 * BYTES_PER_GB, Some(pro_plan(1000)), None, Some("500".into()));
         assert_eq!(overview.source, CapacitySource::Subscription);
         assert_eq!(overview.total_bytes, 1000 * BYTES_PER_GB);
         assert!((overview.percent - 30.0).abs() < 1e-9);
@@ -486,20 +498,44 @@ mod tests {
     /// No subscription resolves to the FREE tier, never to a credits-priced
     /// capacity and never to an empty "no plan" card — every account has the
     /// free allowance, and a fat balance must not change the cap.
+    ///
+    /// With no catalogue reading, the fallback constant keeps the card from
+    /// plotting a zero capacity during an outage.
     #[test]
     fn no_subscription_falls_back_to_the_free_tier() {
-        let overview = build_overview(3 * BYTES_PER_GB, None, Some("500".into()));
+        let overview = build_overview(3 * BYTES_PER_GB, None, None, Some("500".into()));
         assert_eq!(overview.source, CapacitySource::Free);
-        assert_eq!(overview.total_bytes, FREE_TIER_STORAGE_GB * BYTES_PER_GB);
+        assert_eq!(overview.total_bytes, FREE_TIER_FALLBACK_GB * BYTES_PER_GB);
         assert!((overview.percent - 30.0).abs() < 1e-9);
         assert_eq!(overview.plan, None);
         assert_eq!(overview.credits_hip.as_deref(), Some("500"));
         assert_eq!(overview.total_display, "10.00 GB");
     }
 
+    /// The catalogue's free SKU wins over the fallback, so the card plots
+    /// the same allowance `drive_quota` enforces. Both read the free plan
+    /// through `free_plan_bytes`; a raw 10 GiB grant maps to its marketed
+    /// "10 GB" exactly like a paid plan's does.
+    #[test]
+    fn the_catalogue_free_sku_beats_the_fallback_constant() {
+        let ten_gib: u64 = 10 * 1024 * 1024 * 1024;
+        let plans = serde_json::json!([{ "code": "free", "is_free": true, "storage_bytes": ten_gib }]);
+        let from_catalogue = crate::billing::drive_quota::free_plan_bytes(&plans).map(|raw| marketed_plan_size(raw).0);
+        assert_eq!(from_catalogue, Some(10_000_000_000));
+
+        // A server that moved the free tier to 20 GB must move the card.
+        let twenty_gib: u64 = 20 * 1024 * 1024 * 1024;
+        let bigger = serde_json::json!({ "results": [{ "is_free": true, "storage_bytes": twenty_gib }] });
+        let bumped = crate::billing::drive_quota::free_plan_bytes(&bigger).map(|raw| marketed_plan_size(raw).0);
+        let overview = build_overview(0, None, bumped, None);
+        assert_eq!(overview.total_bytes, 20_000_000_000);
+        assert_eq!(overview.total_display, "20.00 GB");
+        assert_ne!(overview.total_bytes, FREE_TIER_FALLBACK_GB * BYTES_PER_GB);
+    }
+
     #[test]
     fn overview_labels_use_camel_case_on_the_wire() {
-        let overview = build_overview(31_910_000_000, Some(pro_plan(4_999)), Some("15".into()));
+        let overview = build_overview(31_910_000_000, Some(pro_plan(4_999)), None, Some("15".into()));
         let json = serde_json::to_value(&overview).expect("serialize");
         assert_eq!(json["usedDisplay"], "31.91 GB");
         assert_eq!(json["totalDisplay"], "5.00 TB");
@@ -511,14 +547,14 @@ mod tests {
     /// the free tier behind the resolvers' fallback branch.
     #[test]
     fn free_source_serializes_lowercase() {
-        let overview = build_overview(0, None, None);
+        let overview = build_overview(0, None, None, None);
         let json = serde_json::to_value(&overview).expect("serialize");
         assert_eq!(json["source"], "free");
     }
 
     #[test]
     fn over_quota_free_is_zero_in_the_total_unit() {
-        let overview = build_overview(6_000 * BYTES_PER_GB, Some(pro_plan(5_000)), None);
+        let overview = build_overview(6_000 * BYTES_PER_GB, Some(pro_plan(5_000)), None, None);
         assert_eq!(overview.total_display, "5.00 TB");
         assert_eq!(overview.free_display, "0.00 TB");
         assert!((overview.percent - 100.0).abs() < 1e-9);
@@ -529,7 +565,7 @@ mod tests {
     /// free that rounds to 0.00 while bytes remain is "<0.01 TB".
     #[test]
     fn leftover_gb_on_a_tb_plan_does_not_vanish() {
-        let overview = build_overview(4_996 * BYTES_PER_GB, Some(pro_plan(5_000)), None);
+        let overview = build_overview(4_996 * BYTES_PER_GB, Some(pro_plan(5_000)), None, None);
         assert_eq!(overview.used_display, "5.00 TB");
         assert_eq!(overview.total_display, "5.00 TB");
         assert_eq!(overview.free_display, "<0.01 TB");
@@ -544,7 +580,7 @@ mod tests {
     #[test]
     fn over_quota_clamps_to_100() {
         // Usage above the allowance (downgrade case) must not overflow the bar.
-        let overview = build_overview(2000 * BYTES_PER_GB, Some(pro_plan(1000)), None);
+        let overview = build_overview(2000 * BYTES_PER_GB, Some(pro_plan(1000)), None, None);
         assert!((overview.percent - 100.0).abs() < 1e-9);
         // Raw byte counts stay honest even while the percent clamps.
         assert_eq!(overview.used_bytes, 2000 * BYTES_PER_GB);
@@ -552,7 +588,7 @@ mod tests {
 
     #[test]
     fn zero_gb_plan_does_not_divide_by_zero() {
-        let overview = build_overview(500, Some(pro_plan(0)), None);
+        let overview = build_overview(500, Some(pro_plan(0)), None, None);
         assert_eq!(overview.source, CapacitySource::Subscription);
         assert_eq!(overview.total_bytes, 0);
         assert!(overview.percent.abs() < 1e-9);
@@ -586,7 +622,7 @@ mod tests {
         assert_eq!(plan.storage_display, "2 TB");
 
         // And the overview built from it labels the cap the same way.
-        let overview = build_overview(500 * BYTES_PER_GB, Some(plan), None);
+        let overview = build_overview(500 * BYTES_PER_GB, Some(plan), None, None);
         assert_eq!(overview.total_display, "2.00 TB");
         assert!((overview.percent - 25.0).abs() < 1e-9);
     }
@@ -689,7 +725,7 @@ mod tests {
 
     #[test]
     fn used_bytes_stay_the_indexer_row_when_pending() {
-        let mut overview = build_overview(0, None, Some("1".into()));
+        let mut overview = build_overview(0, None, None, Some("1".into()));
         overview.used_pending = used_pending(overview.used_bytes, 46);
         assert_eq!(overview.used_bytes, 0, "local walk must not be written into used_bytes");
         assert!(overview.used_pending);
