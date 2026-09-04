@@ -476,3 +476,19 @@ body.body-scroll-locked {
   border-color: #313131;
   box-shadow: none;
 }
+
+/* Pixel grid loader (plan flow dialogs): each cell breathes between its dim
+   and lit state on its own offset, so the block reads as activity rather
+   than a static pattern. `PixelGridLoader` animates with
+   `animate-[pixel-twinkle_…]`, which is a no-op until this keyframe exists —
+   the loader shipped without it and sat frozen on "Processing…". Same block
+   as the console's globals.css. */
+@keyframes pixel-twinkle {
+  0%,
+  100% {
+    opacity: 0.2;
+  }
+  50% {
+    opacity: 1;
+  }
+}
