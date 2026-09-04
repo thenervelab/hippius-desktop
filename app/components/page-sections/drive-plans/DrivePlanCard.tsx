@@ -3,7 +3,8 @@
 import type { FC } from "react";
 
 import { Button } from "@/components/ui/button";
-import { ArrowRight, Star } from "@/components/ui/icons";
+import { ArrowRight } from "@/components/ui/icons";
+import GripIcon from "@/components/page-sections/home/GripIcon";
 import {
   formatPlanStorage,
   hasSharedTeamDrive,
@@ -77,13 +78,17 @@ const DrivePlanCard: FC<DrivePlanCardProps> = ({
       )}
     >
       <div className="flex items-center gap-2 px-2 py-[8.84px]">
-        <Star className="size-[18px] shrink-0 text-primary-50 dark:text-primary-brand-dark" />
+        {/* Same 3×3 dot grip that labels the console's and home's cards. */}
+        <GripIcon className="size-[18px] shrink-0 text-primary-50 dark:text-primary-brand-dark" />
         <p className="min-w-0 flex-1 truncate text-[14px] font-medium tracking-[-0.28px] text-black-700 dark:text-white">
           {plan.name}
         </p>
       </div>
 
-      <div className="flex flex-1 flex-col justify-between gap-4 rounded-t-[8px] border border-grey-dark-100 bg-white py-3 dark:border-black-300 dark:bg-black-600">
+      {/* Inner panel: border-t only — the left/right/bottom edges are the
+          outer card's border (billing's CreditsWidget pattern), so the two
+          never draw side by side as a double line. */}
+      <div className="flex flex-1 flex-col justify-between gap-4 rounded-t-[8px] border-t border-grey-dark-100 bg-white py-3 dark:border-black-300 dark:bg-black-600">
         <div className="flex flex-col gap-4 px-2">
           <p className="flex items-center gap-1 font-mono text-[24px] font-medium leading-[30px] tracking-[-0.96px] text-[#111] dark:text-white">
             {plan.is_free ? "Free" : `$${plan.price_credits_monthly}`}

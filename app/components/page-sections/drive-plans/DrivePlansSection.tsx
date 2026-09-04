@@ -296,7 +296,9 @@ const DrivePlansSection: FC<{ className?: string }> = ({ className }) => {
           Subscription plans
         </p>
       </div>
-      <div className="w-full rounded-[8px] border border-grey-dark-100 bg-white p-3 dark:border-black-300 dark:bg-black-600">
+      {/* Inner panel: border-t + top corners only — the outer card supplies
+          the other three edges (billing's CreditsWidget pattern). */}
+      <div className="w-full rounded-t-[8px] border-t border-grey-dark-100 bg-white p-3 dark:border-black-300 dark:bg-black-600">
         {isPlansLoading || (!plans && isSubLoading) ? (
           <div className="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(200px,1fr))]">
             {Array.from({ length: 4 }).map((_, i) => (

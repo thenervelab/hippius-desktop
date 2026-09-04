@@ -74,7 +74,9 @@ const DriveSubscriptionHistory: FC<{ className?: string }> = ({
           Subscription History
         </h2>
       </div>
-      <div className="w-full rounded-[8px] border border-grey-dark-100 bg-white dark:border-black-300 dark:bg-black-600">
+      {/* Inner panel: border-t + top corners only — the outer card supplies
+          the other three edges (billing's CreditsWidget pattern). */}
+      <div className="w-full rounded-t-[8px] border-t border-grey-dark-100 bg-white dark:border-black-300 dark:bg-black-600">
         {isLoading ? (
           <TableWrapper>
             <Table>
