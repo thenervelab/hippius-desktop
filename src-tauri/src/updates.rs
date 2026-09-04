@@ -175,8 +175,14 @@ pub async fn check_for_update(app: AppHandle) -> Result<Option<AvailableUpdate>>
     // safe there) and nags on every launch: semver orders any published
     // release above the working tree's `-dev.N` version. Release builds are
     // unaffected — `debug_assertions` is off for every shipped lane.
-    if cfg!(debug_assertions) {
-        debug!("debug build — skipping update check");
+    //
+    // `HIPPIUS_DEV_UPDATE_CHECK=1` re-enables the check for a dev run so the
+    // update dialog/flow can still be exercised locally (e.g. with a lowered
+    // version in tauri.conf.json). Runtime env on purpose: it needs no
+    // rebuild, and in release builds this whole branch is compiled out, so
+    // the variable can never affect anything a user runs.
+    if cfg!(debug_assertions) && std::env::var("HIPPIUS_DEV_UPDATE_CHECK").is_err() {
+        debug!("debug build — skipping update check (set HIPPIUS_DEV_UPDATE_CHECK=1 to test the updater)");
         return Ok(None);
     }
 

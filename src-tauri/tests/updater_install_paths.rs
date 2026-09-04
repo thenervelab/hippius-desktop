@@ -161,6 +161,11 @@ fn debug_builds_skip_the_update_check() {
         body.contains("cfg!(debug_assertions)"),
         "check_for_update must skip in debug builds:\n{body}"
     );
+    assert!(
+        body.contains("HIPPIUS_DEV_UPDATE_CHECK"),
+        "the debug skip must keep its escape hatch — HIPPIUS_DEV_UPDATE_CHECK=1 is how \
+         the update dialog/flow is exercised from a dev run at all:\n{body}"
+    );
 
     let skip = body.find("cfg!(debug_assertions)").expect("skip marker");
     let build = body.find("updater_for").expect("updater_for call");
