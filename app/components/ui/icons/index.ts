@@ -29,6 +29,7 @@ export { default as Setting } from "./Setting";
 export { default as StopCircle } from "./StopCircle";
 export { default as CpuCharge } from "./CpuCharge";
 export { default as Cpu } from "./Cpu";
+export { default as PricingCard } from "./PricingCard";
 export { default as Star } from "./Star";
 export { default as TagRight } from "./TagRight";
 export { default as Category } from "./Category";

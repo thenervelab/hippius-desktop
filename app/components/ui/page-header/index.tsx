@@ -4,7 +4,7 @@ import React from "react";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import PlanChip from "@/components/ui/plan-chip";
-import { WalletMinimal } from "@/components/ui/icons";
+import { PricingCard, WalletMinimal } from "@/components/ui/icons";
 import { useStaking } from "@/app/lib/hooks/useStaking";
 import { WALLET_FEATURE_ENABLED } from "@/app/lib/featureFlags";
 import { cn } from "@/app/lib/utils";
@@ -15,6 +15,10 @@ interface PageHeaderProps {
   className?: string;
   hideStats?: boolean;
   infoTooltip?: React.ReactNode;
+  /** Right-aligned actions on the title row. Unlike the stats card (xl-only,
+   *  and hidden by `hideStats`), these render at every width — the Drive page
+   *  hides the stats card, so this is its only header action slot. */
+  actions?: React.ReactNode;
 }
 
 const PageHeader: React.FC<PageHeaderProps> = ({
@@ -23,6 +27,7 @@ const PageHeader: React.FC<PageHeaderProps> = ({
   className,
   hideStats = false,
   infoTooltip,
+  actions,
 }) => {
   // The global page header reads the auth account's stake so the
   // number stays stable across pages. Per-active-wallet stake belongs
@@ -60,6 +65,8 @@ const PageHeader: React.FC<PageHeaderProps> = ({
           </p>
         )}
       </div>
+
+      {actions && <div className="flex items-center gap-2">{actions}</div>}
 
       {/* ─── Right: Wallet + Active Plan card — ~40% of header ─── */}
       {!hideStats && (
@@ -135,9 +142,10 @@ const PageHeader: React.FC<PageHeaderProps> = ({
               href="/drive-plans"
               variant="raised"
               size="auto"
-              className="px-4 py-2 text-[14px] font-medium leading-[1.109] tracking-[-0.28px]"
+              className="flex items-center gap-2 px-4 py-2 text-[14px] font-medium leading-[1.109] tracking-[-0.28px]"
             >
-              Subscriptions
+              <PricingCard className="size-4" />
+              Subscription Plans
             </Button>
           </div>
         </div>
