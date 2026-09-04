@@ -152,6 +152,13 @@ pub enum InsufficientCreditsAction {
 }
 
 impl InsufficientCreditsAction {
+    /// Whether this action consumes Drive storage, and so is judged by the
+    /// plan's allowance rather than by a credit balance. VM creation is the
+    /// one action that is genuinely credit-priced.
+    pub fn is_drive_storage(self) -> bool {
+        !matches!(self, Self::VmCreation)
+    }
+
     /// Look up the static credit threshold for this action. Does NOT
     /// include the per-byte priced layer — use
     /// [`required_credits`](Self::required_credits) at the gate site
@@ -320,6 +327,19 @@ pub(crate) async fn check_action_eligibility_inner(
     action: InsufficientCreditsAction,
     bytes: u64,
 ) -> Result<ActionEligibility> {
+    // Drive actions answer from the plan allowance so the proactive check
+    // and the gate below can never disagree about the same write.
+    if action.is_drive_storage() {
+        let account = state.require_session_account_typed(account_id)?;
+        let verdict = crate::billing::drive_quota::check_drive_quota(state, &account, bytes).await?;
+        return Ok(ActionEligibility {
+            eligible: verdict.allowed,
+            reason: if verdict.allowed { None } else { Some("storage_limit_reached".into()) },
+            current_balance: verdict.used_bytes as f64,
+            required_balance: verdict.limit_bytes.unwrap_or(0) as f64,
+        });
+    }
+
     let pool = state.pool()?;
     // The token fetch below requires proof the account is the session account.
     // Minting here also validates the (possibly frontend-supplied) `account_id`
@@ -446,6 +466,20 @@ pub async fn check_action_eligibility(
 /// }
 /// ```
 pub async fn require_eligible(state: &crate::app_state::AppState, account_id: &str, action: InsufficientCreditsAction, bytes: u64) -> Result<()> {
+    // Drive writes are paid for by a plan, so the question is whether the
+    // bytes fit the allowance, not whether a balance covers them. Keeping
+    // the check here means it stays atomic with the action and cannot be
+    // bypassed by a direct invoke or stale frontend state.
+    if action.is_drive_storage() {
+        let account = state.require_session_account_typed(account_id)?;
+        let verdict = crate::billing::drive_quota::check_drive_quota(state, &account, bytes).await?;
+        return if verdict.allowed {
+            Ok(())
+        } else {
+            Err(AppError::NotReady(NotReadyKind::StorageLimitReached))
+        };
+    }
+
     let result = check_action_eligibility_inner(state, account_id, action, bytes).await?;
     if result.eligible {
         Ok(())

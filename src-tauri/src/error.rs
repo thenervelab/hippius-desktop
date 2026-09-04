@@ -127,6 +127,13 @@ pub enum NotReadyKind {
     /// — keeping it as a unit variant preserves the existing
     /// `screaming_snake_case` JSON wire format.
     InsufficientCredits,
+    /// The write would go past the storage the account's Drive plan
+    /// includes. Raised by `require_eligible` for Drive writes, which are
+    /// gated on plan storage rather than on a credit balance. Distinct
+    /// from `InsufficientCredits` because the way out is a larger plan,
+    /// not a topped-up balance, and the two send the user to different
+    /// places.
+    StorageLimitReached,
     /// An in-flight drive init was superseded by a user pause/removal;
     /// the drive was not started. Not an error to retry automatically —
     /// the pause's Paused state stands.
@@ -188,6 +195,7 @@ impl NotReadyKind {
             Self::NotEnoughDiskSpace => "NOT_ENOUGH_DISK_SPACE",
             Self::SigningKeyUnavailable => "SIGNING_KEY_UNAVAILABLE",
             Self::InsufficientCredits => "INSUFFICIENT_CREDITS",
+            Self::StorageLimitReached => "STORAGE_LIMIT_REACHED",
             Self::SupersededByPause => "SUPERSEDED_BY_PAUSE",
             Self::DatabaseNotReady => "DATABASE_NOT_READY",
             Self::RateLimited { .. } => "RATE_LIMITED",
@@ -229,6 +237,9 @@ impl std::fmt::Display for NotReadyKind {
             }
             Self::InsufficientCredits => {
                 write!(f, "Insufficient credits to perform this action.")
+            }
+            Self::StorageLimitReached => {
+                write!(f, "This would go past the storage your plan includes.")
             }
             Self::SupersededByPause => {
                 write!(f, "Sync start was superseded by a pause or removal of this folder.")
@@ -678,6 +689,7 @@ mod tests {
                 NotReadyKind::NotEnoughDiskSpace => "NOT_ENOUGH_DISK_SPACE",
                 NotReadyKind::SigningKeyUnavailable => "SIGNING_KEY_UNAVAILABLE",
                 NotReadyKind::InsufficientCredits => "INSUFFICIENT_CREDITS",
+                NotReadyKind::StorageLimitReached => "STORAGE_LIMIT_REACHED",
                 NotReadyKind::SupersededByPause => "SUPERSEDED_BY_PAUSE",
                 NotReadyKind::DatabaseNotReady => "DATABASE_NOT_READY",
                 NotReadyKind::RateLimited { .. } => "RATE_LIMITED",
@@ -696,6 +708,7 @@ mod tests {
             NotReadyKind::NotEnoughDiskSpace,
             NotReadyKind::SigningKeyUnavailable,
             NotReadyKind::InsufficientCredits,
+            NotReadyKind::StorageLimitReached,
             NotReadyKind::SupersededByPause,
             NotReadyKind::DatabaseNotReady,
             NotReadyKind::RateLimited {
@@ -866,6 +879,7 @@ mod tests {
                 "This action requires re-entering your seed phrase. Please log out and log in again with your seed phrase to continue.",
             ),
             (NotReadyKind::InsufficientCredits, "Insufficient credits to perform this action."),
+            (NotReadyKind::StorageLimitReached, "This would go past the storage your plan includes."),
             (
                 NotReadyKind::SupersededByPause,
                 "Sync start was superseded by a pause or removal of this folder.",
