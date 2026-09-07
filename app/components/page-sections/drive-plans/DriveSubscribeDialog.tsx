@@ -71,11 +71,12 @@ const DriveSubscribeDialog: FC<{
       }
       icon={<CoinsIcon className="size-[18px] text-white" />}
       // Only a subscribe carries the payment chooser, which is what needs
-      // the room. Unlike the console's dialog, this FramedDialog's card is
-      // `w-full` up to `maxWidth` rather than sized to its content, so the
-      // content must stay `w-full` and the WIDTH comes from `maxWidth`: a
-      // forced 600px content box inside a 680px card (minus ~170px of frame
-      // and padding) overflowed and clipped the Stripe copy and buttons.
+      // the room: the card row runs icon, label, chip and the brand strip
+      // across one line. Unlike the console's dialog, this FramedDialog's
+      // card is `w-full` up to `maxWidth` rather than sized to its content,
+      // so the content must stay `w-full` and the WIDTH comes from
+      // `maxWidth`: a forced 600px content box inside a 680px card (minus
+      // ~170px of frame and padding) overflowed and clipped the row.
       maxWidth={isSubscribe ? "max-w-[880px]" : "max-w-[560px]"}
     >
       <div className="flex flex-col gap-[18px] font-geist">

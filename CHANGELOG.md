@@ -66,6 +66,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **Plan cards no longer suggest shared drives are ready to use.** The shared team
   drive line is greyed out on the plans that include it, until the feature is
   switched on.
+- **Paying for a plan is clearer about what you are choosing.** Paying by card is
+  now the first option and the one picked for you, since paying from credits needs
+  a balance you may not have yet. Each option says what actually happens, the card
+  option shows the cards and wallets the checkout accepts, and the labels are
+  readable in light mode as well as dark.
 - **Uploads are substantially faster**, especially on slower or long-distance
   connections — parts of a file now transfer at the same time instead of one after
   another.
