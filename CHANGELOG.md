@@ -20,8 +20,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **Choose a storage plan without leaving Hippius.** A new Subscription Plans page
   under Account lists every plan with what it includes, shows the one you are on,
   and lets you subscribe, upgrade, downgrade or cancel. Pay from your credits, or
-  by card through Stripe in your browser. Your past subscriptions are listed
-  underneath.
+  by card through Stripe in your browser.
 - **Support can diagnose problems faster from the logs you send.** Logs attached to
   a support ticket now say which app version and platform they came from, and if
   the app ever crashes, what went wrong is recorded instead of being lost.
@@ -66,6 +65,12 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **Plan cards no longer suggest shared drives are ready to use.** The shared team
   drive line is greyed out on the plans that include it, until the feature is
   switched on.
+- **Choosing how to pay is simpler.** The two ways to pay sit side by side, with
+  card first and picked for you, since paying from credits needs a balance you may
+  not have yet. The card option shows the cards and wallets the checkout accepts,
+  and one line underneath explains whichever you have picked. If your balance will
+  not cover the plan you can still open the credits option, so you can see how far
+  short you are and top up from there.
 - **Shared drives are hidden until they launch.** Sharing a drive with someone and
   the "Shared with me" list are not available in this release, matching what the
   plan cards say. Drives already set up keep syncing as normal.
@@ -89,6 +94,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   that would go past your plan's storage is refused up front with a link to the
   plans page — the same answer the web console gives. Accounts on the free plan
   were previously allowed to keep uploading here after passing their limit.
+- **A full plan now always points you at the plans page.** Adding a folder from
+  Settings, uploading into an existing folder, or creating a share link while your
+  Drive is full used to end in a plain error message with nowhere to go; all three
+  now open the same "Not enough storage" prompt as the other upload paths.
 - **Excluding a file from the "Sync Issues" dialog now sticks**, including names with
   brackets or braces such as `Movie [2019].mkv`. Before, the file kept failing, the dialog
   kept coming back after every restart, and in some cases a differently named file was

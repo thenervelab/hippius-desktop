@@ -39,6 +39,40 @@ impl QuotaVerdict {
             limit_bytes: None,
         }
     }
+
+    /// Judge `incoming_bytes` against a known allowance.
+    ///
+    /// The comparison lives here on its own so the tests can exercise the
+    /// REAL rule. They used to assert against a copy of this expression
+    /// written in the test module, which stays green no matter what this
+    /// line does — the one branch that decides every upload was, in
+    /// effect, uncovered.
+    fn decide(used_bytes: u64, incoming_bytes: u64, limit_bytes: u64) -> Self {
+        Self {
+            // Saturating so a bogus huge size cannot wrap into "fits", and
+            // `<=` because the allowance is what the account may store, not
+            // one byte less.
+            allowed: used_bytes.saturating_add(incoming_bytes) <= limit_bytes,
+            used_bytes,
+            limit_bytes: Some(limit_bytes),
+        }
+    }
+}
+
+/// Whether the payload describes an account on a paid plan.
+///
+/// A missing or non-boolean `active` reads as "not subscribed", which sends
+/// the account to the free tier rather than to an unknown allowance —
+/// every account has the free tier, so "no plan" is never "no limit".
+pub(crate) fn subscription_is_active(sub: &serde_json::Value) -> bool {
+    sub.get("active").and_then(serde_json::Value::as_bool).unwrap_or(false)
+}
+
+/// The allowance an ACTIVE subscription states, or `None` when it states
+/// none. A plan with no stated allowance tells us nothing either way, so
+/// the caller falls open rather than guessing a number.
+pub(crate) fn active_plan_bytes(sub: &serde_json::Value) -> Option<u64> {
+    sub.get("storage_bytes").and_then(serde_json::Value::as_u64).filter(|b| *b > 0)
 }
 
 /// The account's storage allowance in bytes, or `None` when it cannot be
@@ -54,9 +88,8 @@ impl QuotaVerdict {
 async fn plan_allowance(state: &AppState, account: &SessionAccount) -> Option<u64> {
     let client = ApiClient::new(state.api_client.clone(), state.pool().ok()?.clone());
     let sub: serde_json::Value = client.get("/api/drive/subscription/", account).await.ok()?;
-    if sub.get("active").and_then(serde_json::Value::as_bool).unwrap_or(false) {
-        // A plan with no stated allowance tells us nothing either way.
-        return sub.get("storage_bytes").and_then(serde_json::Value::as_u64).filter(|b| *b > 0);
+    if subscription_is_active(&sub) {
+        return active_plan_bytes(&sub);
     }
     let plans: serde_json::Value = client.get("/api/drive/plans/", account).await.ok()?;
     free_plan_bytes(&plans)
@@ -95,41 +128,46 @@ pub async fn check_drive_quota(state: &AppState, account: &SessionAccount, incom
         return Ok(QuotaVerdict::unknown(used_bytes));
     };
 
-    Ok(QuotaVerdict {
-        // Saturating so a bogus huge size cannot wrap into "fits".
-        allowed: used_bytes.saturating_add(incoming_bytes) <= limit_bytes,
-        used_bytes,
-        limit_bytes: Some(limit_bytes),
-    })
+    Ok(QuotaVerdict::decide(used_bytes, incoming_bytes, limit_bytes))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn verdict(used: u64, incoming: u64, limit: u64) -> bool {
-        used.saturating_add(incoming) <= limit
-    }
-
     #[test]
     fn a_write_that_fits_is_allowed() {
-        assert!(verdict(1_000, 500, 2_000));
+        assert!(QuotaVerdict::decide(1_000, 500, 2_000).allowed);
     }
 
     #[test]
     fn exactly_filling_the_plan_is_allowed() {
         // The allowance is what the account may store, not one byte less.
-        assert!(verdict(1_500, 500, 2_000));
+        assert!(QuotaVerdict::decide(1_500, 500, 2_000).allowed);
     }
 
     #[test]
     fn a_write_past_the_allowance_is_refused() {
-        assert!(!verdict(1_800, 500, 2_000));
+        assert!(!QuotaVerdict::decide(1_800, 500, 2_000).allowed);
+    }
+
+    #[test]
+    fn one_byte_past_the_allowance_is_refused() {
+        // Pins the boundary from the other side: with the pair above, a
+        // `<` or `<=` slip is caught whichever way it goes.
+        assert!(!QuotaVerdict::decide(1_500, 501, 2_000).allowed);
     }
 
     #[test]
     fn an_absurd_size_cannot_wrap_into_fitting() {
-        assert!(!verdict(u64::MAX - 1, u64::MAX, 2_000));
+        assert!(!QuotaVerdict::decide(u64::MAX - 1, u64::MAX, 2_000).allowed);
+    }
+
+    #[test]
+    fn a_verdict_reports_the_numbers_behind_it() {
+        let v = QuotaVerdict::decide(1_000, 500, 2_000);
+        assert_eq!(v.used_bytes, 1_000, "used bytes are the account's, not the sum");
+        assert_eq!(v.limit_bytes, Some(2_000));
     }
 
     #[test]
@@ -139,6 +177,32 @@ mod tests {
         let v = QuotaVerdict::unknown(123);
         assert!(v.allowed);
         assert!(v.limit_bytes.is_none());
+    }
+
+    /// An active plan is judged against the allowance it states.
+    #[test]
+    fn an_active_subscription_supplies_the_allowance() {
+        let sub = serde_json::json!({ "active": true, "storage_bytes": 2_000u64 });
+        assert!(subscription_is_active(&sub));
+        assert_eq!(active_plan_bytes(&sub), Some(2_000));
+    }
+
+    /// An active plan that states no usable allowance is unknown, NOT zero
+    /// — reading a missing or `0` field as an allowance would refuse every
+    /// write on a paid account the moment the API omitted the field.
+    #[test]
+    fn an_active_plan_with_no_stated_allowance_is_unknown() {
+        assert_eq!(active_plan_bytes(&serde_json::json!({ "active": true })), None);
+        assert_eq!(active_plan_bytes(&serde_json::json!({ "active": true, "storage_bytes": 0u64 })), None);
+    }
+
+    /// Anything that is not an explicit `active: true` sends the account to
+    /// the free tier, which is an allowance like any other.
+    #[test]
+    fn a_missing_or_false_active_flag_is_not_a_paid_plan() {
+        assert!(!subscription_is_active(&serde_json::json!({ "active": false })));
+        assert!(!subscription_is_active(&serde_json::json!({})));
+        assert!(!subscription_is_active(&serde_json::json!({ "active": "yes" })));
     }
 
     /// A no-subscription account is judged against the FREE plan's

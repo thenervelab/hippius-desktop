@@ -44,6 +44,7 @@ const DriveSubscribeDialog: FC<{
 }) => {
   if (!plan || !action) return null;
   const isSubscribe = action === "subscribe";
+  const creditsCannotPay = isSubscribe && rail === "credits" && creditsShort;
   const lead =
     action === "downgrade"
       ? "You're about to move down to"
@@ -70,13 +71,12 @@ const DriveSubscribeDialog: FC<{
         </>
       }
       icon={<CoinsIcon className="size-[18px] text-white" />}
-      // Only a subscribe carries the payment chooser, which is what needs
-      // the room. Unlike the console's dialog, this FramedDialog's card is
-      // `w-full` up to `maxWidth` rather than sized to its content, so the
-      // content must stay `w-full` and the WIDTH comes from `maxWidth`: a
-      // forced 600px content box inside a 680px card (minus ~170px of frame
-      // and padding) overflowed and clipped the Stripe copy and buttons.
-      maxWidth={isSubscribe ? "max-w-[880px]" : "max-w-[560px]"}
+      // The standard width for every action, subscribe included. The
+      // payment chooser used to need a card of its own at 880px, because
+      // each rail ran as a full-width row; two short rows spread across a
+      // card that wide read as stretched. It is two side-by-side tiles now,
+      // built for this width, so it needs no exception.
+      maxWidth="max-w-[560px]"
     >
       <div className="flex flex-col gap-[18px] font-geist">
         {isSubscribe ? (
@@ -99,7 +99,10 @@ const DriveSubscribeDialog: FC<{
           variant="primary"
           className="h-[52px] w-full text-[18px] font-normal tracking-[-0.36px]"
           onClick={onConfirm}
-          disabled={isWriting}
+          // Credits stays selectable when it cannot cover the plan, so the
+          // user sees the shortfall and the Top up link. What it cannot do
+          // is pay, so the button waits until they top up or switch to card.
+          disabled={isWriting || creditsCannotPay}
         >
           {isWriting ? "Working…" : isSubscribe ? "Make Payment" : "Confirm"}
           <ArrowRight className="ml-2.5 size-4" />
