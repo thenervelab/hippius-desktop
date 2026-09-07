@@ -6,7 +6,7 @@ import { AlertCircle, FolderIcon, FolderPlus } from "lucide-react";
 import { toast } from "sonner";
 import { open as openSelection } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
-import { useAtomValue } from "jotai";
+import { useAtomValue, useSetAtom } from "jotai";
 import { queryClientAtom } from "jotai-tanstack-query";
 
 import { Button, Input } from "@/components/ui";
@@ -24,6 +24,8 @@ import {
     saveLastBrowseDirectory,
 } from "@/lib/utils/userPreferencesDb";
 import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
+import { isNotReady } from "@/app/lib/utils/dispatchTauriError";
+import { insufficientCreditsDialogOpenAtom } from "@/app/components/page-sections/drive/atoms/query-atoms";
 
 type Props = {
     open: boolean;
@@ -50,6 +52,7 @@ export default function FolderToFolderUploadDialog({
     const queryClient = useAtomValue(queryClientAtom);
     const hasConfiguredDrives = useAtomValue(hasConfiguredDrivesAtom);
     const { checkEligibility } = useCreditCheck();
+    const setInsufficient = useSetAtom(insufficientCreditsDialogOpenAtom);
 
     const [folderPath, setFolderPath] = useState<string>("");
     const [folderError, setFolderError] = useState<string | null>(null);
@@ -138,9 +141,16 @@ export default function FolderToFolderUploadDialog({
             }
         } catch (error) {
             console.error("Error uploading folder:", error);
-            toast.error(
-                `Failed to upload folder: ${errorMessage(error)}`
-            );
+            // The proactive check can pass and the write still be refused
+            // (bytes landed in between), so the reactive path needs the same
+            // plan dialog — a bare toast leaves the user with no way out.
+            if (isNotReady(error, "STORAGE_LIMIT_REACHED")) {
+                setInsufficient("folder-upload");
+            } else {
+                toast.error(
+                    `Failed to upload folder: ${errorMessage(error)}`
+                );
+            }
         }
     };
 

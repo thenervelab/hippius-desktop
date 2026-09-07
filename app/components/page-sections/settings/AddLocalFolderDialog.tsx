@@ -16,7 +16,10 @@ import {
   saveHcfsConfig,
 } from "@/app/lib/utils/hcfsConfigUtils";
 import { HcfsSetupDialog } from "./HcfsSetupDialog";
+import { useSetAtom } from "jotai";
 import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
+import { isNotReady } from "@/app/lib/utils/dispatchTauriError";
+import { insufficientCreditsDialogOpenAtom } from "@/app/components/page-sections/drive/atoms/query-atoms";
 
 interface AddLocalFolderDialogProps {
   open: boolean;
@@ -41,6 +44,7 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
 }) => {
   const { polkadotAddress, getMnemonic } = useWalletAuth();
   const { checkEligibility } = useCreditCheck();
+  const setInsufficient = useSetAtom(insufficientCreditsDialogOpenAtom);
   const [selectedPath, setSelectedPath] = useState<string>("");
   const [folderName, setFolderName] = useState<string>("");
   const [isAdding, setIsAdding] = useState(false);
@@ -167,9 +171,17 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
       onClose();
     } catch (error) {
       console.error("Failed to add folder:", error);
-      toast.error(
-        error instanceof Error ? error.message : "Failed to add folder"
-      );
+      // The folder is sized and gated again inside `add_local_sync_folder`,
+      // so a folder that grew since the proactive check is refused here.
+      // Send that to the plan dialog like every other storage refusal.
+      if (isNotReady(error, "STORAGE_LIMIT_REACHED")) {
+        onClose();
+        setInsufficient("folder-sync");
+      } else {
+        toast.error(
+          error instanceof Error ? error.message : "Failed to add folder"
+        );
+      }
     } finally {
       setIsAdding(false);
     }
