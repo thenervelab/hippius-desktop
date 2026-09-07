@@ -36,6 +36,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   says so.
 - Drive, Billing, and Support information tooltips now link directly to their relevant
   documentation.
+- **You can see what you are about to share from your file manager.** Right-clicking
+  a file and choosing "Share with Hippius" now shows its size, and says so when the
+  file changed moments ago, so a download still in progress is obvious before you
+  create the link.
 
 ### Changed
 
@@ -60,9 +64,19 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - The information tooltip on the Files page now explains what the page actually holds:
   the folders you sync from this computer, and why your unlock password is needed to
   open them.
+- **The "Drive Credit Usage" card is gone from Billing.** Drive storage is sold as a
+  plan now, so what your credits were spent on there no longer describes the space
+  you have.
 
 ### Fixed
 
+- **A share link is never created for a file that is still being written.** If the
+  file changes while the link is being prepared, the link is withdrawn before you
+  ever see it, instead of handing out a link to a half-copied file.
+- **"Reveal in Finder" now opens your file manager on Linux.** On some desktops it
+  reported success and opened nothing.
+- **Deleting a folder from your account now also clears it from this computer when
+  that folder's sync was paused.** Previously the local copy was left behind.
 - **Uploads now stop when your plan is full, instead of failing later.** An upload
   that would go past your plan's storage is refused up front with a link to the
   plans page — the same answer the web console gives. Accounts on the free plan
