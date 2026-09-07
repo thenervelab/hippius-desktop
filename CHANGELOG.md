@@ -86,6 +86,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   that would go past your plan's storage is refused up front with a link to the
   plans page — the same answer the web console gives. Accounts on the free plan
   were previously allowed to keep uploading here after passing their limit.
+- **A full plan now always points you at the plans page.** Adding a folder from
+  Settings, uploading into an existing folder, or creating a share link while your
+  Drive is full used to end in a plain error message with nowhere to go; all three
+  now open the same "Not enough storage" prompt as the other upload paths.
 - **Excluding a file from the "Sync Issues" dialog now sticks**, including names with
   brackets or braces such as `Movie [2019].mkv`. Before, the file kept failing, the dialog
   kept coming back after every restart, and in some cases a differently named file was
