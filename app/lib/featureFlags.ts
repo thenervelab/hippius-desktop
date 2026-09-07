@@ -96,15 +96,20 @@ export const VM_VPN_ENABLED = false;
  * The Rust IPCs (`create_drive_invite`, `list_drive_members`,
  * `remove_drive_member`, `list_my_drive_memberships`, `leave_shared_drive`,
  * `add_shared_drive`) stay registered regardless, so flipping this needs no
- * other code change. `true` since the 2026-08 rollout: the hcfs-server
- * fleet runs with `HCFS_FEATURE_SHARED_DRIVES=1` and the console enables
- * its `/invite/{token}` accept page in a parallel release (desktop invite
- * links mint at the console, so both must be live). Against a feature-off
- * server every surface degrades silently anyway (the backend maps the
- * unmounted routes to `NotReady(SHARED_DRIVES_UNAVAILABLE)`, which the FE
- * matches explicitly and hides).
+ * other code change. Against a feature-off server every surface degrades
+ * silently anyway (the backend maps the unmounted routes to
+ * `NotReady(SHARED_DRIVES_UNAVAILABLE)`, which the FE matches and hides).
+ *
+ * `false` for the 0.6.1 release: the feature is not launching yet. It was
+ * left `true` through 0.6.0 without ever being announced, which left the
+ * app contradicting itself — the Drive plan cards grey out the shared team
+ * drive perk as "coming soon" while the sharing surfaces were reachable.
+ * Flip back to `true` when the launch is on, which needs the hcfs-server
+ * fleet on `HCFS_FEATURE_SHARED_DRIVES=1` and the console's
+ * `/invite/{token}` accept page live in the same window (desktop invite
+ * links mint at the console, so both sides must ship together).
  */
-export const SHARED_DRIVES_ENABLED = true;
+export const SHARED_DRIVES_ENABLED = false;
 
 /**
  * Referrals page. When `false`, referrals is fully invisible: the sidebar
