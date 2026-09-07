@@ -7,11 +7,10 @@ import PageHeader from "@/components/page-sections/home/PageHeader";
 import InfoTooltip from "@/components/ui/info-tooltip";
 
 import DrivePlansSection from "./DrivePlansSection";
-import DriveSubscriptionHistory from "./DriveSubscriptionHistory";
 
 const PLANS_DOCS_URL = "https://docs.hippius.com/use/desktop/billing";
 
-/** The subscriptions page: plans above, the plan's history below. */
+/** The subscriptions page. */
 export default function DrivePlans() {
   return (
     <DashboardTitleWrapper mainText="Subscription Plans">
@@ -38,7 +37,10 @@ export default function DrivePlans() {
           <Suspense fallback={null}>
             <DrivePlansSection />
           </Suspense>
-          <DriveSubscriptionHistory />
+          {/* Subscription history is hidden until the plan history endpoint
+              exists. Not rendered rather than hidden with CSS, so the page
+              does not call an API that is not there yet. Restore this line
+              and the DriveSubscriptionHistory import when it ships. */}
         </div>
       </div>
     </DashboardTitleWrapper>

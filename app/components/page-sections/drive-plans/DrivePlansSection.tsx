@@ -72,7 +72,7 @@ const DrivePlansSection: FC<{ className?: string }> = ({ className }) => {
   } | null>(null);
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [flow, setFlow] = useState<DrivePlanFlow | null>(null);
-  const [rail, setRail] = useState<PaymentRail>("credits");
+  const [rail, setRail] = useState<PaymentRail>("card");
   const [pendingIntent, setPendingIntent] = useState<string | null>(null);
 
   const { data: plans, isLoading: isPlansLoading } = useDrivePlans();
@@ -180,11 +180,11 @@ const DrivePlansSection: FC<{ className?: string }> = ({ className }) => {
     return credits !== null && cost > credits;
   };
 
-  // Default the rail to card when the balance is short; the user can flip it.
+  // Card is the default rail. It is the one that works for everyone: paying
+  // from credits needs a balance the account may not have, and a new
+  // subscriber almost never does. The user can flip it.
   useEffect(() => {
-    if (confirm?.action === "subscribe")
-      setRail(creditsShortFor(confirm.plan) ? "card" : "credits");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (confirm?.action === "subscribe") setRail("card");
   }, [confirm?.plan.code, confirm?.action]);
 
   const actionFor = (plan: DrivePlan): DrivePlanAction => {
@@ -336,9 +336,20 @@ const DrivePlansSection: FC<{ className?: string }> = ({ className }) => {
         isWriting={isWriting}
         onConfirm={() => {
           if (!confirm) return;
-          if (confirm.action === "subscribe" && rail === "card")
+          if (confirm.action === "subscribe" && rail === "card") {
             runCardCheckout(confirm.plan);
-          else runPlanWrite(confirm.plan, confirm.action);
+            return;
+          }
+          // The dialog's button is disabled in this state; this is the belt
+          // to that brace, so a stale click can never send a write the API
+          // would refuse with 402.
+          if (
+            confirm.action === "subscribe" &&
+            rail === "credits" &&
+            creditsShortFor(confirm.plan)
+          )
+            return;
+          runPlanWrite(confirm.plan, confirm.action);
         }}
         onClose={() => setConfirm(null)}
       />
