@@ -1,5 +1,5 @@
 import { cva, type VariantProps } from "class-variance-authority";
-import { TaoLogo } from "@/components/ui/icons";
+import { CoinsIcon, TaoLogo } from "@/components/ui/icons";
 import { CreditCard } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -14,6 +14,8 @@ const badgeVariants = cva(
       type: {
         card: "bg-[rgba(232,151,2,0.30)] text-[#0A0A0A] dark:text-[#FEB101]",
         tao:  "bg-[rgba(223,229,247,0.30)] text-[#0A0A0A] dark:text-[#DFE5F7]",
+        // A charge paid from the credit balance, as on a drive plan.
+        credits: "bg-[#dfe5f7] text-[#0A0A0A] dark:bg-[rgba(223,229,247,0.30)] dark:text-[#DFE5F7]",
       },
     },
   },
@@ -29,6 +31,8 @@ export const getData = (type: Props["type"]) => {
       return { Icon: CreditCard, label: "Credit Card" };
     case "tao":
       return { Icon: TaoLogo, label: "TAO" };
+    case "credits":
+      return { Icon: CoinsIcon, label: "Credits" };
     default:
       return { Icon: CreditCard, label: "Credit" };
   }

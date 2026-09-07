@@ -72,3 +72,50 @@ pub async fn save_user_preference_internal(pool: &sqlx::SqlitePool, key: &str, v
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{get_user_preference_internal, save_user_preference_internal};
+    use sqlx::SqlitePool;
+
+    async fn pool() -> SqlitePool {
+        let pool = SqlitePool::connect("sqlite::memory:").await.expect("memory sqlite");
+        sqlx::query(
+            "CREATE TABLE user_preferences (
+                preference_key TEXT PRIMARY KEY,
+                preference_value TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create user_preferences");
+        pool
+    }
+
+    #[tokio::test]
+    async fn missing_key_returns_none() {
+        let pool = pool().await;
+        let value = get_user_preference_internal(&pool, "lastBrowseDirectory").await.expect("get");
+        assert_eq!(value, None);
+    }
+
+    #[tokio::test]
+    async fn save_then_get_round_trips() {
+        let pool = pool().await;
+        save_user_preference_internal(&pool, "lastBrowseDirectory", "/tmp/drive")
+            .await
+            .expect("save");
+        let value = get_user_preference_internal(&pool, "lastBrowseDirectory").await.expect("get");
+        assert_eq!(value.as_deref(), Some("/tmp/drive"));
+    }
+
+    #[tokio::test]
+    async fn save_replaces_the_same_key() {
+        let pool = pool().await;
+        save_user_preference_internal(&pool, "theme", "light").await.expect("first");
+        save_user_preference_internal(&pool, "theme", "dark").await.expect("second");
+        let value = get_user_preference_internal(&pool, "theme").await.expect("get");
+        assert_eq!(value.as_deref(), Some("dark"));
+    }
+}

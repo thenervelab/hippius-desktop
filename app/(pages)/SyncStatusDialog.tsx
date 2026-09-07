@@ -20,6 +20,7 @@ import {
 } from "@/lib/utils";
 import { formatBytes } from "@/lib/utils/formatBytes";
 
+import { hasActionableFailures } from "../lib/sync/actionableFailures";
 import {
   syncEngineHealthAtom,
   CONNECTIVITY_STATUS_LABELS,
@@ -416,7 +417,8 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
     !snapshot.isActive &&
     !isRetrying &&
     (snapshot.completedFiles > 0 || snapshot.failedFiles > 0);
-  const hasFailed = (snapshot.failedFiles > 0 && isCompleted) || isRetrying;
+  const hasFailed =
+    (hasActionableFailures(snapshot) && isCompleted) || isRetrying;
   const effectiveCompleted = snapshot.effectiveCompleted;
   const effectiveInProgress = snapshot.effectiveInProgress;
   const isPreparing = snapshot.widgetState === "preparing";

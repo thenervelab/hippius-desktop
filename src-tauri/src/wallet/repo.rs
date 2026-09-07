@@ -279,3 +279,134 @@ pub async fn delete(pool: &SqlitePool, owner: &str, id: i64) -> Result<(), AppEr
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{PublicLocalWallet, count_for_owner, delete, get_active, get_by_id, insert, list_all, rename, set_active, update_secrets};
+    use crate::error::AppError;
+    use sqlx::SqlitePool;
+
+    async fn pool() -> SqlitePool {
+        let pool = SqlitePool::connect("sqlite::memory:").await.expect("memory sqlite");
+        sqlx::query(
+            "CREATE TABLE local_wallets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner TEXT NOT NULL,
+                name TEXT NOT NULL,
+                address TEXT NOT NULL,
+                encrypted_mnemonic TEXT NOT NULL,
+                password_hash TEXT NOT NULL,
+                is_active INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                UNIQUE(owner, address)
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create local_wallets");
+        pool
+    }
+
+    async fn insert_wallet(pool: &SqlitePool, owner: &str, name: &str, address: &str) -> super::LocalWallet {
+        insert(pool, owner, name, address, "enc", "hash").await.expect("insert")
+    }
+
+    #[tokio::test]
+    async fn first_wallet_for_an_owner_is_active() {
+        let pool = pool().await;
+        let a = insert_wallet(&pool, "alice", "A", "addr-a").await;
+        let b = insert_wallet(&pool, "alice", "B", "addr-b").await;
+        assert!(a.is_active);
+        assert!(!b.is_active);
+        let active = get_active(&pool, "alice").await.expect("active");
+        assert_eq!(active.unwrap().id, a.id);
+    }
+
+    #[tokio::test]
+    async fn duplicate_address_under_the_same_owner_is_rejected() {
+        let pool = pool().await;
+        insert_wallet(&pool, "alice", "A", "addr-a").await;
+        let err = insert(&pool, "alice", "A2", "addr-a", "enc", "hash").await.expect_err("dup");
+        match err {
+            AppError::Other(msg) => assert!(msg.contains("already exists"), "{msg}"),
+            other => panic!("expected Other, got {other:?}"),
+        }
+        assert_eq!(count_for_owner(&pool, "alice").await.expect("count"), 1);
+    }
+
+    #[tokio::test]
+    async fn same_address_under_another_owner_is_isolated() {
+        let pool = pool().await;
+        insert_wallet(&pool, "alice", "A", "shared-addr").await;
+        let bobs = insert_wallet(&pool, "bob", "B", "shared-addr").await;
+        assert!(bobs.is_active);
+        assert_eq!(count_for_owner(&pool, "alice").await.expect("alice"), 1);
+        assert_eq!(count_for_owner(&pool, "bob").await.expect("bob"), 1);
+        assert!(get_by_id(&pool, "alice", bobs.id).await.expect("cross").is_none());
+        let alice_list = list_all(&pool, "alice").await.expect("list");
+        assert_eq!(alice_list.len(), 1);
+        assert_eq!(alice_list[0].address, "shared-addr");
+    }
+
+    #[tokio::test]
+    async fn set_active_is_owner_scoped() {
+        let pool = pool().await;
+        let alice_a = insert_wallet(&pool, "alice", "A", "a1").await;
+        let alice_b = insert_wallet(&pool, "alice", "B", "a2").await;
+        let bob = insert_wallet(&pool, "bob", "B", "b1").await;
+        set_active(&pool, "alice", alice_b.id).await.expect("switch");
+        assert!(!get_by_id(&pool, "alice", alice_a.id).await.expect("a").unwrap().is_active);
+        assert!(get_by_id(&pool, "alice", alice_b.id).await.expect("b").unwrap().is_active);
+        assert!(
+            get_by_id(&pool, "bob", bob.id).await.expect("bob").unwrap().is_active,
+            "switching alice must not clear bob's active wallet"
+        );
+    }
+
+    #[tokio::test]
+    async fn deleting_the_active_wallet_promotes_the_oldest_remaining() {
+        let pool = pool().await;
+        let a = insert_wallet(&pool, "alice", "A", "a1").await;
+        let b = insert_wallet(&pool, "alice", "B", "a2").await;
+        let _c = insert_wallet(&pool, "alice", "C", "a3").await;
+        delete(&pool, "alice", a.id).await.expect("delete active");
+        let active = get_active(&pool, "alice").await.expect("active").expect("promoted");
+        assert_eq!(active.id, b.id, "oldest remaining must become active");
+        assert_eq!(count_for_owner(&pool, "alice").await.expect("count"), 2);
+    }
+
+    #[tokio::test]
+    async fn foreign_id_is_invisible_to_delete_rename_and_secrets() {
+        let pool = pool().await;
+        let alice = insert_wallet(&pool, "alice", "A", "a1").await;
+        delete(&pool, "bob", alice.id).await.expect("cross-owner delete is a no-op");
+        assert_eq!(count_for_owner(&pool, "alice").await.expect("count"), 1);
+        rename(&pool, "bob", alice.id, "stolen").await.expect("rename no-op");
+        update_secrets(&pool, "bob", alice.id, "other-enc", "other-hash")
+            .await
+            .expect("secrets no-op");
+        let row = get_by_id(&pool, "alice", alice.id).await.expect("get").unwrap();
+        assert_eq!(row.name, "A");
+        assert_eq!(row.encrypted_mnemonic, "enc");
+    }
+
+    #[test]
+    fn public_projection_omits_secrets_on_the_wire() {
+        let wallet = super::LocalWallet {
+            id: 1,
+            name: "A".into(),
+            address: "5G".into(),
+            encrypted_mnemonic: "secret-cipher".into(),
+            password_hash: "secret-hash".into(),
+            is_active: true,
+            created_at: 1,
+            updated_at: 1,
+        };
+        let json = serde_json::to_value(PublicLocalWallet::from(&wallet)).expect("ser");
+        assert!(json.get("encryptedMnemonic").is_none());
+        assert!(json.get("passwordHash").is_none());
+        assert_eq!(json["name"], "A");
+        assert_eq!(json["address"], "5G");
+    }
+}

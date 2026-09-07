@@ -1,8 +1,13 @@
 //! Per-file sync failure tracking.
 //!
 //! Tracks how many consecutive sync cycles each file has failed,
-//! and which files have been session-skipped by the user.
-//! All state is in-memory only -- cleared on app restart.
+//! which files have been session-skipped by the user, and which files the
+//! user has dismissed from the Sync Issues dialog.
+//!
+//! Counters and skips are in-memory only and start empty on every launch.
+//! Dismissals are also written to `sync_file_failures.dismissed_at` and
+//! restored from there when a drive initializes, so a dismissed file does
+//! not reopen the dialog three cycles after every relaunch.
 
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -34,6 +39,11 @@ pub struct FileFailureState {
     /// are also added to the drive's exclude patterns and removed on
     /// teardown.
     skipped: Mutex<HashSet<String>>,
+    /// Files the user dismissed from the Sync Issues dialog. A dismissed file
+    /// never reopens the dialog on its own; a file the user has not seen
+    /// does, and the dialog then lists every file at the threshold. Forgotten
+    /// on success, retry, skip, and exclude.
+    dismissed: Mutex<HashSet<String>>,
 }
 
 impl FileFailureState {
@@ -41,7 +51,49 @@ impl FileFailureState {
         Self {
             counts: Mutex::new(HashMap::new()),
             skipped: Mutex::new(HashSet::new()),
+            dismissed: Mutex::new(HashSet::new()),
         }
+    }
+
+    /// Bump the counter of every file that errored this cycle and decide
+    /// whether the Sync Issues dialog should open.
+    ///
+    /// Opens when a file the user has not dismissed reaches the threshold,
+    /// and again every `FAILURE_THRESHOLD` cycles after that while it keeps
+    /// failing. A dismissed file stays quiet however long it fails; a new
+    /// failing file reopens the dialog, which then lists every file at the
+    /// threshold, dismissed ones included, so the user sees the whole set.
+    pub fn record_cycle_failures(&self, label: &str, failed: &[(String, Option<String>)]) -> bool {
+        let mut prompt = false;
+        for (path, error) in failed {
+            self.record_failure(label, path, error.clone());
+            if self.just_reached_threshold(label, path) && !self.is_dismissed(label, path) {
+                prompt = true;
+            }
+        }
+        prompt
+    }
+
+    pub fn dismiss(&self, label: &str, path: &str) {
+        let key = Self::key(label, path);
+        self.dismissed.lock().expect("dismissed files lock poisoned").insert(key);
+    }
+
+    /// Reinstate dismissals read back from the durable store at drive init.
+    pub fn restore_dismissed(&self, label: &str, paths: impl IntoIterator<Item = String>) {
+        let mut dismissed = self.dismissed.lock().expect("dismissed files lock poisoned");
+        for path in paths {
+            dismissed.insert(Self::key(label, &path));
+        }
+    }
+
+    pub fn is_dismissed(&self, label: &str, path: &str) -> bool {
+        let key = Self::key(label, path);
+        self.dismissed.lock().expect("dismissed files lock poisoned").contains(&key)
+    }
+
+    fn forget_dismissal(&self, key: &str) {
+        self.dismissed.lock().expect("dismissed files lock poisoned").remove(key);
     }
 
     fn key(label: &str, path: &str) -> String {
@@ -57,16 +109,25 @@ impl FileFailureState {
         entry.0
     }
 
+    /// Forget a file's failures and its dismissal: a success or a retry
+    /// starts the file over, so a later outage prompts again.
     pub fn clear_failure(&self, label: &str, path: &str) {
         let key = Self::key(label, path);
-        let mut counts = self.counts.lock().expect("failure counts lock poisoned");
-        counts.remove(&key);
+        {
+            let mut counts = self.counts.lock().expect("failure counts lock poisoned");
+            counts.remove(&key);
+        }
+        self.forget_dismissal(&key);
     }
 
     pub fn clear_all_for_label(&self, label: &str) {
         let prefix = format!("{label}/");
-        let mut counts = self.counts.lock().expect("failure counts lock poisoned");
-        counts.retain(|k, _| !k.starts_with(&prefix));
+        {
+            let mut counts = self.counts.lock().expect("failure counts lock poisoned");
+            counts.retain(|k, _| !k.starts_with(&prefix));
+        }
+        let mut dismissed = self.dismissed.lock().expect("dismissed files lock poisoned");
+        dismissed.retain(|k| !k.starts_with(&prefix));
     }
 
     pub fn files_at_threshold(&self) -> Vec<FailedFileInfo> {
@@ -109,8 +170,11 @@ impl FileFailureState {
             skipped.insert(key.clone());
         }
         // Drop skipped guard before acquiring counts to avoid lock ordering issues.
-        let mut counts = self.counts.lock().expect("failure counts lock poisoned");
-        counts.remove(&key);
+        {
+            let mut counts = self.counts.lock().expect("failure counts lock poisoned");
+            counts.remove(&key);
+        }
+        self.forget_dismissal(&key);
     }
 
     pub fn unskip_file(&self, label: &str, path: &str) {
@@ -140,6 +204,7 @@ impl FileFailureState {
     pub fn reset(&self) {
         self.counts.lock().expect("failure counts lock poisoned").clear();
         self.skipped.lock().expect("skipped files lock poisoned").clear();
+        self.dismissed.lock().expect("dismissed files lock poisoned").clear();
     }
 }
 
@@ -274,5 +339,93 @@ mod tests {
         assert_eq!(at_threshold.len(), 1);
         // The error field should hold the latest failure message.
         assert_eq!(at_threshold[0].error.as_deref(), Some("network timeout"));
+    }
+}
+
+#[cfg(test)]
+mod dismiss_tests {
+    use super::*;
+
+    /// One failed cycle in which every listed path errored; returns whether
+    /// the Sync Issues dialog should open.
+    fn fail(state: &FileFailureState, label: &str, paths: &[&str]) -> bool {
+        let failed: Vec<(String, Option<String>)> = paths.iter().map(|p| ((*p).to_string(), None)).collect();
+        state.record_cycle_failures(label, &failed)
+    }
+
+    #[test]
+    fn prompts_when_a_file_first_reaches_the_threshold() {
+        let state = FileFailureState::new();
+        assert!(!fail(&state, "d", &["a"]));
+        assert!(!fail(&state, "d", &["a"]));
+        assert!(fail(&state, "d", &["a"]));
+    }
+
+    #[test]
+    fn a_dismissed_file_does_not_prompt_again_on_its_own() {
+        let state = FileFailureState::new();
+        for _ in 0..3 {
+            fail(&state, "d", &["a"]);
+        }
+        state.dismiss("d", "a");
+        for _ in 0..6 {
+            assert!(
+                !fail(&state, "d", &["a"]),
+                "a dismissed file must stay quiet however long it keeps failing"
+            );
+        }
+    }
+
+    #[test]
+    fn a_new_failing_file_prompts_and_the_list_includes_dismissed_ones() {
+        let state = FileFailureState::new();
+        for _ in 0..3 {
+            fail(&state, "d", &["a"]);
+        }
+        state.dismiss("d", "a");
+
+        assert!(!fail(&state, "d", &["a", "b"]));
+        assert!(!fail(&state, "d", &["a", "b"]));
+        assert!(fail(&state, "d", &["a", "b"]), "a file the user has not seen must reopen the dialog");
+
+        let listed: Vec<String> = state.files_at_threshold().into_iter().map(|f| f.path).collect();
+        assert!(listed.contains(&"a".to_string()) && listed.contains(&"b".to_string()));
+    }
+
+    #[test]
+    fn success_forgets_a_dismissal_so_a_later_outage_prompts_again() {
+        let state = FileFailureState::new();
+        for _ in 0..3 {
+            fail(&state, "d", &["a"]);
+        }
+        state.dismiss("d", "a");
+        state.clear_failure("d", "a");
+
+        assert!(!fail(&state, "d", &["a"]));
+        assert!(!fail(&state, "d", &["a"]));
+        assert!(fail(&state, "d", &["a"]));
+    }
+
+    #[test]
+    fn restored_dismissals_survive_a_restart() {
+        // A fresh process starts with empty counters; the durable dismissal
+        // is what keeps the dialog closed after a relaunch.
+        let state = FileFailureState::new();
+        state.restore_dismissed("d", ["a".to_string()]);
+        for _ in 0..3 {
+            assert!(!fail(&state, "d", &["a"]));
+        }
+        assert!(state.is_dismissed("d", "a"));
+    }
+
+    #[test]
+    fn skip_and_label_clear_forget_dismissals() {
+        let state = FileFailureState::new();
+        state.dismiss("d", "a");
+        state.dismiss("d", "b");
+        state.skip_file("d", "a");
+        assert!(!state.is_dismissed("d", "a"));
+        state.clear_all_for_label("d");
+        assert!(!state.is_dismissed("d", "b"));
     }
 }

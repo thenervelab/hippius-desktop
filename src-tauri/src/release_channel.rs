@@ -76,6 +76,18 @@ impl ReleaseChannel {
     }
 }
 
+/// Lowercase lane name, identical to the serde wire form, so a log line
+/// and the frontend name the same channel the same way.
+impl std::fmt::Display for ReleaseChannel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            ReleaseChannel::Production => "production",
+            ReleaseChannel::Beta => "beta",
+            ReleaseChannel::Staging => "staging",
+        })
+    }
+}
+
 /// Parse the baked channel string.
 ///
 /// Anything unrecognized — unset, empty, or a typo — is Production, the
@@ -152,6 +164,17 @@ mod tests {
     #[test]
     fn staging_publishes_no_manifest() {
         assert_eq!(ReleaseChannel::Staging.manifest_url(), None);
+    }
+
+    /// `Display` must stay in lockstep with the serde wire name: log lines
+    /// (the startup banner, `system-info.txt`) and the frontend both name
+    /// channels, and two spellings of one lane would break support's grep.
+    #[test]
+    fn display_matches_the_wire_name() {
+        for channel in [ReleaseChannel::Production, ReleaseChannel::Beta, ReleaseChannel::Staging] {
+            let wire = serde_json::to_value(channel).expect("serialize");
+            assert_eq!(wire, serde_json::json!(channel.to_string()));
+        }
     }
 
     /// Wire-shape pin: the frontend switches on these strings, and there is no

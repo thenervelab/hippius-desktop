@@ -19,6 +19,7 @@ import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { actionableSyncFilesAtom } from "@/lib/hooks/useSyncSnapshot";
 import * as TableModule from "@/components/ui/alt-table";
 import { formatBytesFromBigInt } from "@/lib/utils/formatBytes";
+import { omitsBilledSize } from "@/lib/utils/syncStatusDisplay";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { Button } from "@/components/ui/button";
 import {
@@ -59,9 +60,8 @@ import {
   getFileTypeFromExtension,
   getFileTypeDisplayLabel,
 } from "@/lib/utils/getTileTypeFromExtension";
-import { VideoDialogTrigger } from "./VideoDialog";
-import { ImageDialogTrigger } from "./ImageDialog";
-import { PdfDialogTrigger } from "./PdfDialog";
+import { PreviewTrigger } from "@/app/components/page-sections/drive/file-preview";
+import { isPreviewableFileName } from "@/app/lib/utils/filePreviewType";
 import { Icons } from "@/app/components/ui";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { FileViewSharedState } from "@/app/components/page-sections/drive/shared/FileViewUtils";
@@ -75,6 +75,8 @@ import { useFolderAggregateSelection } from "@/app/lib/hooks/use-folder-aggregat
 import useDeleteFile from "@/app/lib/hooks/use-delete-file";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { revealFile } from "@/lib/utils/revealFile";
+import { fileManagerLabel } from "@/lib/utils/isMacPlatform";
+import { tauriErrorMessage } from "@/lib/utils/dispatchTauriError";
 import { macosNameCmp } from "@/lib/utils/fileSort";
 import ExpandedFolderRows from "./ExpandedFolderRows";
 import { NameCellExpander } from "./FolderRail";
@@ -928,10 +930,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                 },
               ]
             : []),
-          ...((fileType === "video" ||
-            fileType === "image" ||
-            fileType === "PDF") &&
-          canPreview
+          ...(!file.isFolder && isPreviewableFileName(file.name) && canPreview
             ? [
                 {
                   icon: <Icons.Eye className="size-4" />,
@@ -950,7 +949,7 @@ const FilesTable: FC<FilesTableProps> = memo(
             : [
                 {
                   icon: <FolderOpen className="size-4" />,
-                  itemTitle: "Reveal in Finder",
+                  itemTitle: `Reveal in ${fileManagerLabel()}`,
                   onItemClick: async () => {
                     try {
                       await revealFile({
@@ -960,10 +959,8 @@ const FilesTable: FC<FilesTableProps> = memo(
                         fileName: file.actualFileName || file.name,
                       });
                     } catch (error) {
-                      console.error("Failed to reveal file in Finder:", error);
-                      toast.error(
-                        "File is not available locally. It may only exist on another device.",
-                      );
+                      console.error("Failed to reveal file in file manager:", error);
+                      toast.error(tauriErrorMessage(error));
                     }
                   },
                   disabled: itemDeleting,
@@ -1237,36 +1234,18 @@ const FilesTable: FC<FilesTableProps> = memo(
               />
             );
 
+            // One trigger for every previewable type: the row says "open this
+            // file", the unified dialog decides what renders it.
             let content: React.ReactNode = nameNode;
-            if (!isSelectionMode) {
-              if (fileType === "video") {
-                content = (
-                  <VideoDialogTrigger
-                    onClick={() => handleSetSelectedFile(file)}
-                    className={triggerClass}
-                  >
-                    {nameNode}
-                  </VideoDialogTrigger>
-                );
-              } else if (fileType === "image") {
-                content = (
-                  <ImageDialogTrigger
-                    onClick={() => handleSetSelectedFile(file)}
-                    className={triggerClass}
-                  >
-                    {nameNode}
-                  </ImageDialogTrigger>
-                );
-              } else if (fileType === "PDF") {
-                content = (
-                  <PdfDialogTrigger
-                    onClick={() => handleSetSelectedFile(file)}
-                    className={triggerClass}
-                  >
-                    {nameNode}
-                  </PdfDialogTrigger>
-                );
-              }
+            if (!isSelectionMode && !file.isFolder && isPreviewableFileName(file.name)) {
+              content = (
+                <PreviewTrigger
+                  onClick={() => handleSetSelectedFile(file)}
+                  className={triggerClass}
+                >
+                  {nameNode}
+                </PreviewTrigger>
+              );
             }
 
             return renderNameCellWithExpander(file, content);
@@ -1278,7 +1257,13 @@ const FilesTable: FC<FilesTableProps> = memo(
           id: "size",
           cell: (cell) => {
             const value = cell.getValue();
+            const status = cell.row.original.syncStatus;
             if (cell.row.original.tempData) return "...";
+            if (omitsBilledSize(status)) {
+              return (
+                <div className="truncate text-grey-dark-800 text-xs">—</div>
+              );
+            }
             if (value === undefined || value === 0) return "Unknown";
             return (
               <div className="text-grey-dark-800 text-xs font-medium truncate tracking-[-0.24px]">

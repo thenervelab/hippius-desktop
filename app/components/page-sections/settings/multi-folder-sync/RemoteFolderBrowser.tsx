@@ -31,6 +31,8 @@ import {
 } from "@/lib/utils/getTileTypeFromExtension";
 import { cn } from "@/lib/utils";
 import type { RemoteFolder } from "@/app/lib/types/sync-folder";
+import type { ExcludePatternEntry } from "@/lib/types/excludePattern";
+import { initialSelection } from "./exclusionSelection";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -275,18 +277,21 @@ export function RemoteFolderBrowser({
     });
 
     const fetchExclusions = isLocal
-      ? invoke<string[]>("list_exclude_patterns", { label: folder.folderName })
-      : Promise.resolve([]);
+      ? invoke<ExcludePatternEntry[]>("list_exclude_patterns", {
+          label: folder.folderName,
+        })
+      : Promise.resolve([] as ExcludePatternEntry[]);
 
     Promise.all([fetchFiles, fetchExclusions])
       .then(([result, exclusions]) => {
         if (cancelled) return;
         setFiles(result);
-        const excludedSet = new Set(exclusions);
-        const initialSelected = new Set(
-          result.map((f) => f.path).filter((p) => !excludedSet.has(p))
+        setSelected(
+          initialSelection(
+            result.map((f) => f.path),
+            exclusions,
+          ),
         );
-        setSelected(initialSelected);
       })
       .catch((err) => {
         if (cancelled) return;

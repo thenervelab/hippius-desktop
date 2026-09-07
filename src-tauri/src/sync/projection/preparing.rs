@@ -143,6 +143,31 @@ pub const PREPARING_WATCHDOG_SCAN_INTERVAL: Duration = Duration::from_secs(10);
 /// "preparing" within seconds instead of a dark window.
 pub const PREPARING_SURFACE_GRACE: Duration = Duration::from_secs(5);
 
+/// Merge an incoming pre-plan tick into a slot's stored detail.
+///
+/// Scan ticks reach this state from several rayon workers, so a tick can
+/// arrive a few positions behind a peer — the same jitter
+/// `drive::lifecycle::callbacks::LogThrottle` absorbs for the log path.
+/// Two scan details therefore keep the HIGHER count, so a straggler can
+/// never roll the visible "N files scanned" backwards. Everything else
+/// takes the incoming tick: a phase change overwrites, and fetch pages
+/// arrive in order from a single task. Cross-cycle staleness is handled
+/// upstream — `note_cycle_started_at` clears the stored detail, so the
+/// floor never leaks into the next cycle's restarted counter.
+fn merge_pre_plan_detail(stored: Option<PreparingActivity>, tick: PreparingActivity) -> PreparingActivity {
+    let PreparingActivity::Scanning { scanned_files } = tick else {
+        return tick;
+    };
+
+    let floor = match stored {
+        Some(PreparingActivity::Scanning { scanned_files: seen }) => seen,
+        Some(PreparingActivity::Fetching { .. }) | None => 0,
+    };
+    PreparingActivity::Scanning {
+        scanned_files: scanned_files.max(floor),
+    }
+}
+
 /// Live indexing detail carried by a pre-plan progress tick, so the
 /// "Preparing" widget can show ACTIVE work ("1,234 files scanned")
 /// instead of a bare label. The two variants mirror the only two
@@ -419,18 +444,19 @@ impl PreparingState {
                         .checked_duration_since(*cycle_started_at)
                         .is_some_and(|elapsed| elapsed >= PREPARING_SURFACE_GRACE);
                     if allow_promote && past_grace {
+                        let detail = merge_pre_plan_detail(*activity, tick);
                         slot.insert(PreparingEntry::Marked {
                             last_activity_at: now,
                             pending_files: 0,
                             pending_bytes: 0,
-                            activity: Some(tick),
+                            activity: Some(detail),
                         });
                         PrePlanTick::Promoted
                     } else {
                         // Track the counter while still invisible so the
                         // eventual promotion / `PlanReady` mark surfaces
                         // with a populated frame.
-                        *activity = Some(tick);
+                        *activity = Some(merge_pre_plan_detail(*activity, tick));
                         PrePlanTick::Invisible
                     }
                 }
@@ -438,7 +464,7 @@ impl PreparingState {
                     last_activity_at, activity, ..
                 } => {
                     *last_activity_at = now;
-                    *activity = Some(tick);
+                    *activity = Some(merge_pre_plan_detail(*activity, tick));
                     PrePlanTick::Refreshed
                 }
             },
@@ -1212,6 +1238,51 @@ mod tests {
             state.note_pre_plan_activity_at(t0 + PREPARING_SURFACE_GRACE, label, true, scan(100));
         }
         assert_eq!(state.activity_totals().scanned_files, Some(200));
+    }
+
+    /// Scan ticks reach this state from several rayon workers, so a tick
+    /// can arrive a few positions behind a peer — the same jitter the log
+    /// throttle in `drive::lifecycle::callbacks` absorbs. The visible
+    /// counter must never tick backwards on a straggler.
+    #[test]
+    fn a_straggler_scan_tick_does_not_lower_the_visible_counter() {
+        let state = PreparingState::new();
+        let t0 = Instant::now();
+        state.note_cycle_started_at(t0, "drive-a");
+        let visible = t0 + PREPARING_SURFACE_GRACE;
+        state.note_pre_plan_activity_at(visible, "drive-a", true, scan(105));
+        assert_eq!(state.activity_totals().scanned_files, Some(105));
+
+        state.note_pre_plan_activity_at(visible + Duration::from_millis(1), "drive-a", true, scan(101));
+        assert_eq!(
+            state.activity_totals().scanned_files,
+            Some(105),
+            "a straggler tick must not roll the visible counter backwards",
+        );
+
+        state.note_pre_plan_activity_at(visible + Duration::from_millis(2), "drive-a", true, scan(110));
+        assert_eq!(state.activity_totals().scanned_files, Some(110));
+    }
+
+    /// The straggler floor must not survive a cycle boundary: the next
+    /// cycle's scan restarts from zero, and `note_cycle_started_at`'s
+    /// detail reset is what lets its small early counts show.
+    #[test]
+    fn a_new_cycle_still_restarts_the_visible_counter() {
+        let state = PreparingState::new();
+        let t0 = Instant::now();
+        state.note_cycle_started_at(t0, "drive-a");
+        state.note_pre_plan_activity_at(t0 + PREPARING_SURFACE_GRACE, "drive-a", true, scan(13089));
+        assert_eq!(state.activity_totals().scanned_files, Some(13089));
+
+        let t1 = t0 + Duration::from_secs(30);
+        state.note_cycle_started_at(t1, "drive-a");
+        state.note_pre_plan_activity_at(t1 + Duration::from_secs(1), "drive-a", true, scan(3));
+        assert_eq!(
+            state.activity_totals().scanned_files,
+            Some(3),
+            "the new cycle's counter must not be floored by the previous cycle's total",
+        );
     }
 
     // ── startup pending summary ──────────────────────────────────────

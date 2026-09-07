@@ -15,8 +15,10 @@ mod app_state;
 pub mod auth;
 pub mod billing;
 pub mod blockchain;
+mod cli;
 pub mod console_access;
 pub mod crypto;
+pub mod diagnostics;
 pub mod error;
 #[cfg(any(unix, windows))]
 pub mod finder_bridge;
@@ -52,6 +54,10 @@ use crate::billing::charts::{
 use crate::billing::credit_balance::get_credit_balance_chart;
 use crate::billing::credits::{check_sync_eligibility, get_user_credits};
 use crate::billing::drive_credits::{get_drive_credits_chart, get_drive_credits_total};
+use crate::billing::drive_plans::{
+    cancel_drive_subscription, change_drive_plan, get_drive_checkout_intent, get_drive_plans, get_drive_subscription, get_drive_subscription_history,
+    start_drive_card_checkout, subscribe_drive_plan,
+};
 use crate::billing::drive_storage::get_drive_storage_chart;
 use crate::billing::eligibility::check_action_eligibility;
 use crate::billing::queries::{
@@ -78,7 +84,7 @@ use crate::console_access::validate_recovery_password;
 use crate::infra::vm::{
     create_vm, get_vm_instance, list_vm_applications, list_vm_flavors, list_vm_images, list_vm_instances, reboot_vm, start_vm, stop_vm, terminate_vm,
 };
-use crate::media_preview::prepare_motion_photo_preview;
+use crate::media_preview::{prepare_motion_photo_preview, read_preview_bytes};
 use crate::notifications::credits::{
     check_low_credit_notification, check_low_credit_notification_live, create_credit_notifications, create_sync_notification,
     get_is_above_half_credit, is_first_time, mark_first_time_seen, process_credit_events, update_is_above_half_credit,
@@ -119,6 +125,7 @@ use crate::utils::app_location::is_app_translocated;
 use crate::utils::logs::attach_logs_to_ticket;
 use crate::utils::platform_info::get_platform_info;
 use crate::utils::preferences::{get_user_preference, is_onboarding_done, save_user_preference, set_onboarding_done};
+use crate::utils::reveal::reveal_path_in_file_manager;
 use crate::utils::support::{
     create_support_ticket, get_support_ticket_messages, list_support_tickets, post_ticket_message, update_support_ticket, upload_ticket_attachment,
 };
@@ -223,6 +230,16 @@ fn main() {
         }
     }
 
+    // `--version` / `-V` must not boot the UI. Inspected *after*
+    // `--finder-share` so a file-manager share click still wins if both
+    // flags appear. `skip(1)` drops argv[0] so a strangely named binary
+    // cannot count as the flag. `return` (not `process::exit`) so a piped
+    // stdout flush lands. Pinned by `tests/cli_version_wiring.rs`.
+    if crate::cli::argv_requests_version(std::env::args().skip(1)) {
+        let _ = crate::cli::write_version(&mut std::io::stdout());
+        return;
+    }
+
     load_env();
 
     // Initialize tracing (stdout + daily rolling file under ~/.hippius/logs/).
@@ -230,8 +247,39 @@ fn main() {
     // flushing — see `init_logging`. Holding it in this `main` local does that.
     let _log_guard = init_logging();
 
-    info!("Application starting...");
-    info!("Tracing subscriber initialized - hcfs-client logs now visible");
+    // A packaged app's stderr goes nowhere, so an uncaptured panic is the one
+    // event guaranteed to be missing from a support bundle. Installed after
+    // logging init so the hook's error! has a subscriber to land in.
+    diagnostics::install_panic_hook();
+
+    // Which build wrote this log file — support's first question. The bundle
+    // also carries the same facts as system-info.txt, for logs old enough
+    // that this line has rotated out.
+    let identity = diagnostics::build_identity();
+    info!(
+        version = identity.version,
+        channel = %identity.channel,
+        os = identity.os,
+        arch = identity.arch,
+        "Application starting"
+    );
+
+    // hcfs hashes and encrypts on a rayon pool it owns, and that pool runs at
+    // FULL priority on every core unless the host opts out. The default is
+    // deliberate on their side — a library must not deprioritise its embedder's
+    // work uninvited — which makes this call the desktop's half of the contract:
+    // we are the only party that knows there is a window to keep painting.
+    // Without it, adding a large folder pins every core at default priority and
+    // the UI stops responding, which is the entire bug the pinned rev fixes.
+    //
+    // It must run before the first scan/encrypt, so it sits here rather than in
+    // `.setup()`: the policy is read when the pool is first built, and the first
+    // build wins. `configure` reports the policy already in force instead of
+    // no-op'ing, so a call that lands too late is a visible warning rather than
+    // the silent "the cap never applied" this whole mechanism exists to avoid.
+    if let Err(active) = hcfs_client::cpu_pool::configure(hcfs_client::cpu_pool::CpuPolicy::Background) {
+        warn!(?active, "hcfs CPU policy was already fixed; the UI priority cap is NOT in effect");
+    }
 
     let builder = Builder::default()
         .plugin(tauri_plugin_process::init())
@@ -279,6 +327,7 @@ fn main() {
             resume_drive,
             trigger_sync_now,
             reveal_drive_in_finder,
+            reveal_path_in_file_manager,
             change_sync_folder,
             auto_init_sync,
             get_sync_folders_with_stats,
@@ -334,6 +383,7 @@ fn main() {
             crate::sync::failure_commands::sp_skip_file,
             crate::sync::failure_commands::sp_exclude_file,
             crate::sync::failure_commands::sp_retry_file,
+            crate::sync::failure_commands::sp_dismiss_failed_files,
             crate::sync::failure_commands::get_drive_failures,
             crate::sync::failure_commands::retry_file_failure,
             crate::sync::failure_commands::retry_all_failures,
@@ -354,6 +404,7 @@ fn main() {
             cache_remote_file,
             get_thumbnail,
             prepare_motion_photo_preview,
+            read_preview_bytes,
             // File sharing (link-based public shares)
             crate::shares::commands::hcfs_create_share,
             crate::shares::commands::hcfs_create_remote_share,
@@ -473,6 +524,15 @@ fn main() {
             get_subscription_data,
             create_subscription,
             get_customer_portal_url,
+            // Drive storage plans
+            get_drive_plans,
+            get_drive_subscription,
+            subscribe_drive_plan,
+            change_drive_plan,
+            cancel_drive_subscription,
+            start_drive_card_checkout,
+            get_drive_checkout_intent,
+            get_drive_subscription_history,
             get_marketplace_credits,
             get_system_balance,
             get_balance_transfers,
@@ -643,11 +703,12 @@ fn main() {
 /// Window-close dispatcher.
 ///
 /// On macOS, closing the main window (red-X / Cmd+W) hides the window so
-/// the app keeps running in the tray. All genuine quit paths on macOS —
-/// Cmd+Q, the app menu's Quit Hippius, the tray's Quit Hippius — let
-/// Tauri exit directly without app-level cleanup.
+/// the app keeps running in the tray; Cmd+Q and the app menu's Quit Hippius
+/// let Tauri exit directly.
 ///
-/// On Windows/Linux, closing the window exits the app via `app.exit(0)`.
+/// On Windows/Linux the close is **not** cancelled — the window is destroyed
+/// normally and the process quits through [`crate::tray::panel::quit_desktop`],
+/// which the tray's Quit Hippius (`app_close`) also uses.
 pub fn on_window_event(builder: Builder<Wry>) -> Builder<Wry> {
     builder.on_window_event(|window, event| {
         // Click-outside dismissal for the tray popover: when the panel loses
@@ -668,10 +729,10 @@ pub fn on_window_event(builder: Builder<Wry>) -> Builder<Wry> {
                 return;
             }
 
-            api.prevent_close();
-
             #[cfg(target_os = "macos")]
             {
+                // Hide-to-tray: cancel the close so the process stays alive.
+                api.prevent_close();
                 info!("Window close requested on macOS — hiding to tray");
                 if let Err(e) = window.hide() {
                     warn!("Failed to hide window: {e}");
@@ -680,8 +741,11 @@ pub fn on_window_event(builder: Builder<Wry>) -> Builder<Wry> {
 
             #[cfg(not(target_os = "macos"))]
             {
+                // Do not cancel the close: doing so and then exit(0) from
+                // inside the GTK/WebKit handler orphans the process (H-003).
+                let _ = api;
                 info!("Window close requested — exiting app");
-                window.app_handle().exit(0);
+                crate::tray::panel::quit_desktop(window.app_handle());
             }
         }
     })
@@ -812,24 +876,6 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
             });
         }
 
-        // Reclaim upload-chunk staging directories abandoned by earlier runs.
-        //
-        // This is the launch trigger, and it must live here rather than only in
-        // the sync-init funnel: `auto_init_sync` skips paused drives, so a user
-        // whose disk filled and who reacted by pausing everything — or who
-        // removed the drives outright — would otherwise reclaim nothing on the
-        // very launch they need it. `initialize_sync_inner` keeps its own
-        // `get_or_init` on the same `OnceCell`, which is what orders the pass
-        // BEFORE any upload starts; whichever fires first runs it exactly once
-        // and the other awaits that result. See `crate::sync::chunk_reclaim`.
-        {
-            let handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                let state = handle.state::<crate::app_state::AppState>();
-                state.chunk_reclaim.get_or_init(crate::sync::chunk_reclaim::reclaim_startup).await;
-            });
-        }
-
         if let Ok(env_path) = app.path().resolve(".env", BaseDirectory::Resource) {
             let _ = dotenvy::from_filename(env_path);
         }
@@ -866,6 +912,31 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
         // VPN_STATUS_CHANGED. See vpn::state / vpn::commands::spawn_status_bridge.
         let vpn_status_rx = app_state.vpn.subscribe();
         app_handle.manage(app_state);
+
+        // Reclaim upload-chunk staging directories abandoned by earlier runs.
+        //
+        // This is the launch trigger, and it must live here rather than only in
+        // the sync-init funnel: `auto_init_sync` skips paused drives, so a user
+        // whose disk filled and who reacted by pausing everything — or who
+        // removed the drives outright — would otherwise reclaim nothing on the
+        // very launch they need it. `initialize_sync_inner` keeps its own
+        // `get_or_init` on the same `OnceCell`, which is what orders the pass
+        // BEFORE any upload starts; whichever fires first runs it exactly once
+        // and the other awaits that result. See `crate::sync::chunk_reclaim`.
+        //
+        // MUST sit after `manage`: `state::<AppState>()` panics if a Tokio
+        // worker wins the race with setup (H-005). `try_state` is not a
+        // substitute — a `None` skip reopens the paused-drive hole this
+        // trigger exists to close. Pinned by
+        // `launch_reclaim_runs_after_appstate_is_managed`.
+        {
+            let handle = app_handle.clone();
+            tauri::async_runtime::spawn(async move {
+                let state = handle.state::<crate::app_state::AppState>();
+                state.chunk_reclaim.get_or_init(crate::sync::chunk_reclaim::reclaim_startup).await;
+            });
+        }
+
         crate::sync::upload_processing::spawn_watchdog(upload_processing_weak, app_handle.clone());
         crate::sync::preparing::spawn_watchdog(preparing_weak, sync_weak);
         crate::vpn::commands::spawn_status_bridge(app_handle.clone(), vpn_status_rx);

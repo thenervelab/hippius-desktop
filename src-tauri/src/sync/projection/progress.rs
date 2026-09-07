@@ -607,8 +607,13 @@ fn sort_completed_tail_by_recency(snapshot: &mut SyncSnapshot) {
 /// the snapshot is still invisible (no real session yet).
 /// `sort_completed_tail_by_recency` then surfaces the newest completions, and
 /// `cap_snapshot_files` runs last to truncate the file list.
+///
+/// `fixup_gone_only_failures` must sit between the two: it reads the per-file
+/// `error` rows, so it has to run AFTER whichever author set `status_variant`
+/// and BEFORE `cap_snapshot_files` truncates the rows it reads.
 pub(crate) fn prepare_snapshot_for_emit(snapshot: &mut SyncSnapshot, preparing: &crate::sync::preparing::PreparingState) {
     fixup_stalled_completion(snapshot);
+    fixup_gone_only_failures(snapshot);
     apply_preparing_override(snapshot, preparing);
     sort_completed_tail_by_recency(snapshot);
     cap_snapshot_files(snapshot);
@@ -654,6 +659,10 @@ fn apply_preparing_override(snapshot: &mut SyncSnapshot, preparing: &crate::sync
 /// When we detect this (active session, all files accounted for, 100%
 /// progress), override the display fields so the frontend shows
 /// "Complete" instead of "Syncing...".
+///
+/// `status_variant` here is still derived from the raw `failed_files` count;
+/// [`fixup_gone_only_failures`] is what refines it, and it deliberately runs
+/// after this so it also covers the terminal snapshots hcfs-client authors.
 fn fixup_stalled_completion(snapshot: &mut SyncSnapshot) {
     if !snapshot.is_active || snapshot.total_files == 0 {
         return;
@@ -670,6 +679,51 @@ fn fixup_stalled_completion(snapshot: &mut SyncSnapshot) {
             "success".to_string()
         };
     }
+}
+
+/// Clear the Failed verdict when every failure in the cycle is a local file
+/// that vanished before upload (H-080 / H-078).
+///
+/// A Gone row still increments `failed_files`, and BOTH authors of
+/// `status_variant` derive "error" from that count alone —
+/// [`fixup_stalled_completion`] above for a stalled session, and hcfs-client's
+/// `build_snapshot` (`!is_active && failed_files > 0`) once the cycle really
+/// closes. Rewriting the verdict here rather than inside either one is what
+/// makes the carve-out survive the hand-off: fixing only the stalled branch
+/// left the widget flipping back to Failed the moment the session ended.
+///
+/// Only ever downgrades an "error" verdict, so it cannot invent a success.
+fn fixup_gone_only_failures(snapshot: &mut SyncSnapshot) {
+    if snapshot.status_variant != "error" {
+        return;
+    }
+    if remaining_failures_are_all_gone(snapshot) {
+        snapshot.status_variant = "success".to_string();
+    }
+}
+
+/// True when `failed_files` is explained entirely by Gone rows on the
+/// snapshot. Fail closed: a missing row (the files list is capped) or a
+/// non-Gone error keeps the widget on Failed, so a 5xx can never hide.
+///
+/// `completed_files == 0` also fails closed, and that guard is the whole
+/// difference between "the user deleted a file mid-cycle" and "the tree went
+/// away". An unmounted volume or a deleted drive root makes EVERY planned
+/// file ENOENT at `open()`, which is indistinguishable from a vanished file
+/// at the per-file level — but a cycle that finished nothing is never benign,
+/// and a silent green "Complete" that uploaded nothing is worse than the
+/// visible failure it replaced.
+fn remaining_failures_are_all_gone(snapshot: &SyncSnapshot) -> bool {
+    if snapshot.failed_files == 0 || snapshot.completed_files == 0 {
+        return false;
+    }
+    let gone = snapshot
+        .files
+        .iter()
+        .filter(|file| file.status == FileProgressStatus::Error)
+        .filter(|file| file.error.as_deref().is_some_and(crate::sync::events::is_gone_reason))
+        .count();
+    gone == snapshot.failed_files
 }
 
 // ── Tauri IPC Wrappers ─────────────────────────────────────────────────
@@ -782,6 +836,194 @@ mod tests {
 
         assert!(snap.effective_completed);
         assert_eq!(snap.status_variant, "error");
+    }
+
+    fn progress_file(name: &str, status: FileProgressStatus, error: Option<&str>) -> FileProgress {
+        FileProgress {
+            path: std::sync::Arc::from(name),
+            file_name: std::sync::Arc::from(name),
+            label: std::sync::Arc::from("default"),
+            action: FileAction::Upload,
+            status,
+            progress_percent: 100,
+            bytes_encrypted: 0,
+            bytes_transferred: 0,
+            total_bytes: 1,
+            resumed_from_bytes: None,
+            error: error.map(std::sync::Arc::from),
+            completed_at: Some(1),
+        }
+    }
+
+    /// Build the H-080 shape: `ok_files` completed rows plus one errored row
+    /// per supplied reason, with the counters hcfs-client would report.
+    fn gone_scenario(ok_files: usize, failure_reasons: &[String]) -> SyncSnapshot {
+        let mut snap = base_snapshot();
+        snap.total_files = ok_files + failure_reasons.len();
+        snap.completed_files = ok_files;
+        snap.failed_files = failure_reasons.len();
+        snap.overall_percent = 100;
+        snap.files = (0..ok_files)
+            .map(|i| progress_file(&format!("ok{i}.txt"), FileProgressStatus::Completed, None))
+            .chain(
+                failure_reasons
+                    .iter()
+                    .enumerate()
+                    .map(|(i, reason)| progress_file(&format!("bad{i}.tmp"), FileProgressStatus::Error, Some(reason))),
+            )
+            .collect();
+        snap
+    }
+
+    /// H-080: ten user files synced and one vanished local file (ENOENT at
+    /// open) must not paint the widget Failed at 100%.
+    #[test]
+    fn fixup_treats_only_gone_failures_as_success() {
+        use crate::sync::events::FileFailureKindPayload;
+
+        let mut snap = gone_scenario(10, &[FileFailureKindPayload::Gone.display_reason()]);
+        snap.is_active = true;
+        snap.effective_in_progress = true;
+        snap.widget_state = "active".to_string();
+        snap.status_variant = "progress".to_string();
+
+        fixup_stalled_completion(&mut snap);
+        fixup_gone_only_failures(&mut snap);
+
+        assert!(snap.effective_completed);
+        assert_eq!(
+            snap.status_variant, "success",
+            "a lone vanished local file must not mark the whole sync Failed"
+        );
+    }
+
+    /// The regression the first cut of this fix left behind: the stalled
+    /// session eventually closes, and hcfs-client then re-derives
+    /// `status_variant = "error"` from `!is_active && failed_files > 0`.
+    /// Carving Gone out only inside `fixup_stalled_completion` made the widget
+    /// go green and then flip back to Failed seconds later.
+    #[test]
+    fn gone_carve_out_survives_the_session_actually_closing() {
+        use crate::sync::events::FileFailureKindPayload;
+
+        let mut snap = gone_scenario(10, &[FileFailureKindPayload::Gone.display_reason()]);
+        // hcfs-client's terminal shape: the session is over, so
+        // `fixup_stalled_completion` returns early and cannot help here.
+        snap.is_active = false;
+        snap.effective_completed = true;
+        snap.widget_state = "completed".to_string();
+        snap.status_variant = "error".to_string();
+
+        fixup_stalled_completion(&mut snap);
+        fixup_gone_only_failures(&mut snap);
+
+        assert_eq!(
+            snap.status_variant, "success",
+            "a finished cycle whose only failure vanished locally is not a failure"
+        );
+    }
+
+    /// A real 5xx next to a Gone file must still say Failed. The Gone carve-out
+    /// is not a blanket "any failure at 100% is success".
+    #[test]
+    fn fixup_keeps_error_when_a_server_500_remains_beside_gone() {
+        use crate::sync::events::FileFailureKindPayload;
+
+        let mut snap = gone_scenario(
+            10,
+            &[
+                FileFailureKindPayload::Gone.display_reason(),
+                FileFailureKindPayload::ServerError { status: 500 }.display_reason(),
+            ],
+        );
+        snap.is_active = true;
+        snap.effective_in_progress = true;
+
+        fixup_stalled_completion(&mut snap);
+        fixup_gone_only_failures(&mut snap);
+
+        assert!(snap.effective_completed);
+        assert_eq!(
+            snap.status_variant, "error",
+            "a 5xx must still mark the sync Failed even when a Gone file is in the same cycle"
+        );
+    }
+
+    /// The failure mode the carve-out could otherwise create: an unmounted
+    /// volume or a deleted drive root ENOENTs EVERY planned file, which is
+    /// per-file indistinguishable from a user deleting one. A cycle that
+    /// completed nothing must stay Failed rather than report a green
+    /// "Complete" for a sync that uploaded zero bytes.
+    #[test]
+    fn a_cycle_where_every_file_vanished_still_reports_failed() {
+        use crate::sync::events::FileFailureKindPayload;
+
+        let gone = FileFailureKindPayload::Gone.display_reason();
+        let mut snap = gone_scenario(0, &[gone.clone(), gone.clone(), gone]);
+        snap.is_active = true;
+        snap.effective_in_progress = true;
+
+        fixup_stalled_completion(&mut snap);
+        fixup_gone_only_failures(&mut snap);
+
+        assert_eq!(
+            snap.status_variant, "error",
+            "nothing synced means the tree went away, not one file — that must stay visible"
+        );
+    }
+
+    /// Fail closed when the snapshot cannot account for every failure. The
+    /// file list is capped, so a Gone row can be missing; a `failed_files`
+    /// count the visible rows do not explain must never be waved through.
+    #[test]
+    fn unaccounted_failures_keep_the_error_verdict() {
+        use crate::sync::events::FileFailureKindPayload;
+
+        let mut snap = gone_scenario(10, &[FileFailureKindPayload::Gone.display_reason()]);
+        snap.is_active = false;
+        snap.effective_completed = true;
+        snap.status_variant = "error".to_string();
+        // One Gone row on the snapshot, but the engine counted two failures.
+        snap.failed_files = 2;
+        snap.total_files = 12;
+
+        fixup_gone_only_failures(&mut snap);
+
+        assert_eq!(snap.status_variant, "error", "an unexplained failure count is not a success");
+    }
+
+    /// The carve-out only ever DOWNGRADES an error verdict — it must not turn
+    /// an in-progress cycle into a premature success.
+    #[test]
+    fn gone_carve_out_never_upgrades_a_non_error_verdict() {
+        use crate::sync::events::FileFailureKindPayload;
+
+        let mut snap = gone_scenario(10, &[FileFailureKindPayload::Gone.display_reason()]);
+        snap.is_active = true;
+        snap.effective_in_progress = true;
+        snap.status_variant = "progress".to_string();
+
+        fixup_gone_only_failures(&mut snap);
+
+        assert_eq!(snap.status_variant, "progress");
+    }
+
+    /// Wiring pin: the emit funnel must apply the Gone carve-out, and must
+    /// apply it BEFORE `cap_snapshot_files` truncates the very rows it reads.
+    #[test]
+    fn prepare_snapshot_for_emit_applies_the_gone_carve_out() {
+        use crate::sync::events::FileFailureKindPayload;
+
+        let mut snap = gone_scenario(10, &[FileFailureKindPayload::Gone.display_reason()]);
+        snap.is_active = false;
+        snap.effective_completed = true;
+        snap.widget_visible = true;
+        snap.status_variant = "error".to_string();
+        let preparing = crate::sync::preparing::PreparingState::new();
+
+        prepare_snapshot_for_emit(&mut snap, &preparing);
+
+        assert_eq!(snap.status_variant, "success");
     }
 
     #[test]

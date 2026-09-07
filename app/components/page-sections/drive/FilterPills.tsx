@@ -12,9 +12,11 @@ interface FilterPillsProps {
   selectedFileExtension?: FileExtension;
   selectedDateRange?: DateRange;
   selectedFileSizes: number[];
+  excludedOnly?: boolean;
   onFileExtensionChange: (extension: FileExtension | undefined) => void;
   onDateRangeChange: (range: DateRange | undefined) => void;
   onFileSizesChange: (sizes: number[]) => void;
+  onExcludedOnlyChange?: (excludedOnly: boolean) => void;
   className?: string;
 }
 
@@ -28,9 +30,11 @@ const FilterPills: React.FC<FilterPillsProps> = ({
   selectedFileExtension,
   selectedDateRange,
   selectedFileSizes,
+  excludedOnly = false,
   onFileExtensionChange,
   onDateRangeChange,
   onFileSizesChange,
+  onExcludedOnlyChange,
   className = "",
 }) => {
   return (
@@ -49,6 +53,22 @@ const FilterPills: React.FC<FilterPillsProps> = ({
         selectedRange={selectedDateRange}
         onRangeSelect={onDateRangeChange}
       />
+
+      {onExcludedOnlyChange && (
+        <button
+          type="button"
+          aria-pressed={excludedOnly}
+          onClick={() => onExcludedOnlyChange(!excludedOnly)}
+          className={cn(
+            "h-8 px-3 rounded-[7px] border font-mono text-[12px] font-medium uppercase tracking-[-0.24px]",
+            excludedOnly
+              ? "bg-grey-light-700 border-grey-dark-100 text-black-600 dark:bg-black-300 dark:border-black-300 dark:text-white"
+              : "bg-[#fefefe] border-[#e0e0e0] text-black-600 dark:bg-black-primary-bg dark:border-black-300 dark:text-grey-light-200",
+          )}
+        >
+          Excluded
+        </button>
+      )}
     </div>
   );
 };

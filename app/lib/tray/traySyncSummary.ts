@@ -1,3 +1,4 @@
+import { hasActionableFailures } from "@/app/lib/sync/actionableFailures";
 import type { SyncSnapshot } from "@/app/lib/types/syncSnapshot";
 import { formatBytes } from "@/app/lib/utils/formatBytes";
 
@@ -109,9 +110,11 @@ export function getTraySyncSummary(
     };
   }
 
-  // Same precedence as the sidebar widget: a failure outranks completion.
+  // Same precedence as the sidebar widget: a failure outranks completion —
+  // but only for failures Rust still counts as failures.
   const hasFailed =
-    statusVariant === "error" || (failedFiles > 0 && effectiveCompleted);
+    statusVariant === "error" ||
+    (effectiveCompleted && hasActionableFailures(snapshot));
   if (hasFailed) {
     const countLine = `${failedFiles} of ${total} file${plural(total)} failed`;
     const reason = sharedFailureReason(snapshot.files);

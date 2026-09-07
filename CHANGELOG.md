@@ -15,6 +15,168 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-09-07
+
+### Added
+
+- **Choose a storage plan without leaving Hippius.** A new Subscription Plans page
+  under Account lists every plan with what it includes, shows the one you are on,
+  and lets you subscribe, upgrade, downgrade or cancel. Pay from your credits, or
+  by card through Stripe in your browser.
+- **Support can diagnose problems faster from the logs you send.** Logs attached to
+  a support ticket now say which app version and platform they came from, and if
+  the app ever crashes, what went wrong is recorded instead of being lost.
+- **Preview far more of your files without leaving Hippius.** Word documents open as
+  real pages, PowerPoint decks as slides you can click through, spreadsheets and CSVs
+  in a familiar spreadsheet grid with a formula bar and sheet tabs, and Markdown,
+  text, JSON, HTML and SVG files all open in the same viewer as your photos and
+  videos — with the same arrow-key navigation, thumbnails, download and delete.
+  Files are previewed on your own machine; nothing is sent to an outside viewing
+  service. Anything too big to open quickly still offers a download instead, and
+  says so.
+- Drive, Billing, and Support information tooltips now link directly to their relevant
+  documentation.
+- **You can see what you are about to share from your file manager.** Right-clicking
+  a file and choosing "Share with Hippius" now shows its size, and says so when the
+  file changed moments ago, so a download still in progress is obvious before you
+  create the link.
+
+### Changed
+
+- **Your storage is now measured against your plan.** The home page shows how much
+  of your plan's storage you have used, and names the plan you are on — including
+  the free plan, which every account has. It previously showed how much storage
+  your credit balance could buy, which is not the same thing as the space you have.
+- **Plan cards no longer suggest shared drives are ready to use.** The shared team
+  drive line is greyed out on the plans that include it, until the feature is
+  switched on.
+- **Choosing how to pay is simpler.** The two ways to pay sit side by side, with
+  card first and picked for you, since paying from credits needs a balance you may
+  not have yet. The card option shows the cards and wallets the checkout accepts,
+  and one line underneath explains whichever you have picked. If your balance will
+  not cover the plan you can still open the credits option, so you can see how far
+  short you are and top up from there.
+- **Shared drives are hidden until they launch.** Sharing a drive with someone and
+  the "Shared with me" list are not available in this release, matching what the
+  plan cards say. Drives already set up keep syncing as normal.
+- Uploads made from the desktop app are now labelled as such in your account's usage
+  breakdown, instead of being counted as "other".
+- The information tooltip on the Files page now explains what the page actually holds:
+  the folders you sync from this computer, and why your unlock password is needed to
+  open them.
+- **The "Drive Credit Usage" card is gone from Billing.** Drive storage is sold as a
+  plan now, so what your credits were spent on there no longer describes the space
+  you have.
+
+### Fixed
+
+- **A share link is never created for a file that is still being written.** If the
+  file changes while the link is being prepared, the link is withdrawn before you
+  ever see it, instead of handing out a link to a half-copied file.
+- **"Reveal in Finder" now opens your file manager on Linux.** On some desktops it
+  reported success and opened nothing.
+- **Deleting a folder from your account now also clears it from this computer when
+  that folder's sync was paused.** Previously the local copy was left behind.
+- **Uploads now stop when your plan is full, instead of failing later.** An upload
+  that would go past your plan's storage is refused up front with a link to the
+  plans page — the same answer the web console gives. Accounts on the free plan
+  were previously allowed to keep uploading here after passing their limit.
+- **A full plan now always points you at the plans page.** Adding a folder from
+  Settings, uploading into an existing folder, or creating a share link while your
+  Drive is full used to end in a plain error message with nowhere to go; all three
+  now open the same "Not enough storage" prompt as the other upload paths.
+- **Excluding a file from the "Sync Issues" dialog now sticks**, including names with
+  brackets or braces such as `Movie [2019].mkv`. Before, the file kept failing, the dialog
+  kept coming back after every restart, and in some cases a differently named file was
+  excluded instead. Retry now clears such a stale exclusion too. Files you untick in the
+  folder browser are covered by the same fix.
+- **Dismissing the "Sync Issues" dialog now sticks.** It no longer comes back every couple
+  of minutes, or after every restart, for files you have already seen. It reopens only
+  when a new file starts failing, and then lists everything that needs attention.
+- **Photo thumbnails show real previews again.** Small preview images in the
+  file grid and the viewer's filmstrip could appear as broken-image icons even
+  though the photos themselves were fine.
+- **Huge photo folders no longer freeze the app.** Browsing or previewing a
+  folder with thousands of pictures could lock everything up with spinners
+  that never finished; thumbnails now load only as they come into view, and
+  much faster.
+- **Photos now show up when you open them.** Clicking the eye icon on an image
+  could leave a loading spinner turning forever, even though the picture had
+  already finished loading behind it.
+- **Linux updates no longer fail with a permission error.** On a `.deb` install, Hippius now opens the GitHub Releases page so you can download the new package, instead of trying (and failing) to install it from inside the app.
+- **macOS no longer asks "Hippius would like to access data from other apps"
+  every time you open the app.** Answering Allow never made it stop; the prompt
+  is now gone entirely, and Finder right-click sharing works exactly as before.
+- **Uploading a file that already exists no longer replaces it silently.** The previous file stays; a confirmed replace is a follow-up.
+- **A finished delete is titled as a delete**, not "Sync Complete".
+- **Syncing a folder from another device uses the folder you picked.** Choosing the existing folder no longer creates a nested copy with the same name.
+- **The subscribe offer still shows if plan prices fail to load**, instead of looking like you are already on the top plan.
+- **Plan sizes on Billing now match the marketed amounts.** The 3 / 150 / 450
+  credit plans show 1 TB / 50 TB / 150 TB instead of 999 GB / 49 TB / 149 TB.
+- **Downloaded folders keep the original file dates.** Zip entries no longer
+  all show 1 January 1980.
+- **A folder you remove from this computer is not labelled with this
+  computer's name.** It stays under "Not synced on this computer" without
+  repeating the device line.
+- **Home storage used, total, and free now add up.** Remaining space uses
+  the same unit and decimals as the total, so a card no longer reads
+  “31.91 GB of 5.03 TB used” next to “5 TB free”.
+- **Hidden files no longer reappear in Drive as waiting to sync.**
+- **A folder's size and file count now leave out the files you excluded.**
+  Excluded files still show in the folder (they are not uploaded); the row
+  numbers match File No, which also skips them.
+- **The low-credits warning clears after you add credits.** The bell no longer
+  showed an unread "you're running low on credits" notice next to the one saying
+  your credits had just landed.
+- **Closing the window on Linux and Windows now quits Hippius.** The app
+  no longer leaves a background process running after you click the window X.
+- **`--version` prints the version and exits.** Running Hippius with `--version`
+  or `-V` no longer opens the full app.
+- **Folder sizes stay correct as you work.** A folder's size and file count now
+  update right away when you delete or add something inside it, or when a file
+  arrives from another device — previously they could keep showing the old
+  numbers until the app was restarted.
+- **Adding a large folder no longer freezes the app.** Dropping a multi-gigabyte
+  folder in used to lock the window until the copy and encryption finished.
+- **Sync complete notifications name the file.** A single finished file shows
+  its name in the bell; several files show how many.
+- **Replacing an already-synced file can no longer upload a half-copied version.**
+  Adding a file over one you already had could, if the copy was slow, be picked up
+  while it was still being written and back up an incomplete copy.
+- **Adding a folder no longer counts hidden files in the file total.**
+- **A folder's file count updates as soon as you add to it.** Adding a file or
+  folder could leave the count in Drive showing the total from before the upload
+  until something else changed that folder.
+- **A failed update now tells you what to do next.** Instead of "Please try
+  again later", Hippius names the problem and links to the download page for
+  your release channel, with the right instructions for how your copy was
+  installed.
+- **Files you exclude with a pattern like `*.bin` stay in Drive as excluded.**
+  They are not uploaded, they do not count toward File No or storage totals,
+  and Recent Files no longer shows them. Clearing the pattern brings them
+  back to a normal row without a manual refresh. Folders you exclude
+  (`node_modules/`) still stay off Drive.
+- **An exclusion pattern that can't work is refused when you type it.**
+  Previously a malformed pattern was saved and listed as active while
+  quietly excluding nothing.
+- **Files that vanish before upload no longer mark the whole sync as Failed.** A
+  temporary file that the app or the system deletes mid-sync used to leave the sync
+  widget, the tray icon and the tray panel showing a red "Failed" at 100%, even
+  though every file you actually cared about had synced. Genuine failures still
+  show as before.
+- **Storage on the home page no longer sticks at 0 B right after a sync.**
+- **File search understands patterns like `*.pdf`.**
+- **A folder you remove from this computer is listed as not synced here, not as
+  if it came from another device.**
+
+### Security
+
+- **Unlocking and setting the unlock password can no longer overwrite your files' keys.**
+  Now that an unlock password can also be set from Hippius Console, unlocking with a
+  password that protects a different seed than the one this device's files were
+  encrypted with is refused with nothing changed, and "Set Unlock Password" refuses to
+  replace an unlock password that was already set elsewhere.
+
 ## [0.6.0] - 2026-08-28
 
 ### Added

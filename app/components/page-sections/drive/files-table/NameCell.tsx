@@ -2,6 +2,7 @@ import { FC, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { FileTypes } from "@/lib/types/fileTypes";
 import { getFileIcon } from "@/lib/utils/fileTypeUtils";
+import { isPreviewableFileName } from "@/app/lib/utils/filePreviewType";
 import { cn } from "@/lib/utils";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 import { buildFolderPath } from "@/app/utils/folderPathUtils";
@@ -35,7 +36,8 @@ type SyncStatusType =
   | "downloading"
   | "failed"
   | "unknown"
-  | "excluded";
+  | "excluded"
+  | "hidden";
 
 type NameCellProps = {
   rawName: string;
@@ -71,7 +73,7 @@ type NameCellProps = {
   onManageShare?: () => void;
 };
 
-type BadgeStatus = LiveFileStatus;
+type BadgeStatus = LiveFileStatus | "excluded" | "hidden";
 
 /**
  * Maps the row's static `syncStatus` prop (server-reported) plus the
@@ -92,7 +94,9 @@ function resolveBadgeStatus(
     prop === "uploading" ||
     prop === "downloading" ||
     prop === "failed" ||
-    prop === "synced"
+    prop === "synced" ||
+    prop === "excluded" ||
+    prop === "hidden"
   ) {
     return prop;
   }
@@ -159,6 +163,34 @@ const FileStatusBadge: FC<{
   // (indeterminate) in which case we omit it from the label.
   const renderPercent = (n: number | null) =>
     n === null ? "" : ` ${n}%`;
+
+  if (status === "excluded" || status === "hidden") {
+    const isHidden = status === "hidden";
+    return (
+      <CustomTooltip2
+        side="top"
+        tooltipContent={
+          isHidden
+            ? "Hidden files are not synced. The engine skips names that start with a dot."
+            : "This file is excluded from sync on this device."
+        }
+      >
+        <span
+          data-testid={isHidden ? "sync-status-hidden" : "sync-status-excluded"}
+          className={cn(pillBase, "bg-grey-light-700 dark:bg-white/10")}
+        >
+          <span
+            className={cn(
+              pillLabel,
+              "text-grey-dark-800 dark:text-grey-dark-500",
+            )}
+          >
+            {isHidden ? "Hidden" : "Excluded"}
+          </span>
+        </span>
+      </CustomTooltip2>
+    );
+  }
 
   if (status === "pending") {
     // Dark mode uses a 20% tinted bg + solid coloured text (Figma node
@@ -417,13 +449,11 @@ const NameCell: FC<NameCellProps> = ({
               }
             />
           </div>
-          {/* Mirrors the trigger-wrap gate in FilesTable/ExpandedFolderRows:
-              only video/image/PDF rows open a preview, so only they get the
-              hover affordance. */}
+          {/* Mirrors the trigger-wrap gate in FilesTable/ExpandedFolderRows
+              by asking the same classifier, so a row's hover affordance and
+              whether it actually opens the viewer can never disagree. */}
           {isPreviewable &&
-            (fileType === "video" ||
-              fileType === "image" ||
-              fileType === "PDF") && (
+            isPreviewableFileName(rawName) && (
               <span
                 aria-hidden="true"
                 data-testid="hover-preview-icon"

@@ -137,6 +137,10 @@ runs:
       uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       with:
         workspaces: './src-tauri -> target'
+        # One cache family per OS instead of one per job: the repo cache is
+        # capped at 10 GB, and separate per-job families evicted each other,
+        # which is how promotion PRs kept hitting cold ~50 min builds.
+        shared-key: "ci"
         # Save the cache even when the job fails/preempts, so a cold cancelled
         # run doesn't force the next one to recompile the whole graph from
         # scratch — the difference between a ~20-min and a ~3-min retry.

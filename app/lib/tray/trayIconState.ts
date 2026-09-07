@@ -1,3 +1,4 @@
+import { hasActionableFailures } from "@/app/lib/sync/actionableFailures";
 import type { SyncSnapshot } from "@/app/lib/types/syncSnapshot";
 
 /**
@@ -85,7 +86,7 @@ export function deriveTrayIconState(
     (progress.totalFiles > 0 &&
       progress.completedFiles < progress.totalFiles &&
       progress.failedFiles === 0);
-  const hasFailed = progress.failedFiles > 0;
+  const hasFailed = hasActionableFailures(progress);
   const isCompleted = !isActive && (progress.completedFiles > 0 || hasFailed);
 
   const recentDeleteCount = countDeletes(progress);

@@ -2,13 +2,16 @@
 //! cascade. Owns `UserFileEntry`, `FileFilterCriteria`, and per-label stats.
 
 use super::listing::list_sync_folder;
-use super::pathops::ensure_within;
+use super::pathops::{ensure_within, is_engine_hidden_name, is_internal_hidden_name, rel_has_engine_hidden_component};
 use super::synced_state::synced_paths_and_excludes_for_label;
 use crate::error::Result;
 use chrono::Datelike;
+use globset::{GlobBuilder, GlobMatcher};
+use hcfs_client::drive::ExcludeRules;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Inclusive [from, to] date window for the files page Date filter.
 ///
@@ -28,6 +31,10 @@ pub struct DateRangeFilter {
 #[derive(serde::Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct FileFilterCriteria {
+    /// Free-text search. A term containing `*` or `?` is a case-insensitive
+    /// glob against [`UserFileEntry::actual_file_name`] (gitignore-style,
+    /// so `*.pdf` matches at any depth). Other terms are a case-insensitive
+    /// substring of the display name or Arion hash.
     pub search_term: Option<String>,
     pub file_types: Option<Vec<String>>,
     /// Explicit file extensions to match (e.g. `["mp4", "jpg"]`). Independent
@@ -145,7 +152,7 @@ pub struct UserFileEntry {
 /// the test-definition `compute_label_stats` cannot disagree on the
 /// filter rule if only one of them is changed.
 fn is_counted_for_label_stats(sync_status: &str) -> bool {
-    sync_status != "excluded"
+    sync_status != "excluded" && sync_status != "hidden"
 }
 
 /// Apply the per-counted-entry stats accumulation rule.
@@ -201,7 +208,6 @@ pub async fn get_user_files(
     let sync_paths = crate::sync::folders::get_all_sync_paths_or_warn(pool, &account_id, "get_user_files").await;
 
     let mut all_files: Vec<UserFileEntry> = Vec::new();
-    let mut total_private_size: u64 = 0;
     let sync_folder_labels: Vec<String> = sync_paths.iter().filter(|sp| !sp.path.is_empty()).map(|sp| sp.label.clone()).collect();
 
     // Pre-build label → folder_path lookup so the per-entry loop below is
@@ -242,8 +248,6 @@ pub async fn get_user_files(
     let results = futures_util::future::join_all(folder_futures).await;
 
     for (label, entries) in &results {
-        total_private_size += entries.iter().map(|e| e.size).sum::<u64>();
-
         // Borrow the canonical `&str` from `sync_paths` so `label_stats`
         // keys are zero-copy. The `get_key_value` call returns the key
         // borrowed from `label_to_path` (and therefore from `sync_paths`,
@@ -258,7 +262,12 @@ pub async fn get_user_files(
         let label_key: &str = label_to_path.get_key_value(label.as_str()).map_or(label.as_str(), |(k, _)| *k);
         let folder_path = label_to_path.get(label_key).copied().unwrap_or("");
 
-        for entry in entries.iter().filter(|e| is_counted_for_label_stats(&e.sync_status)) {
+        for entry in entries {
+            // Excluded folders stay off the page. Excluded files stay as
+            // rows (H-045); billed totals still skip them below.
+            if entry.is_folder && !is_counted_for_label_stats(&entry.sync_status) {
+                continue;
+            }
             let local_modified_ms = entry.modified.map_or(0, |m| m as i64 * 1000);
             let uploaded_at_ms = if entry.uploaded_at != 0 { entry.uploaded_at * 1000 } else { 0 };
             let updated_at_ms = if entry.updated_at != 0 { entry.updated_at * 1000 } else { 0 };
@@ -291,7 +300,9 @@ pub async fn get_user_files(
             // Inline label_stats accumulation through the shared
             // `apply_label_stats_rule` helper so this path cannot drift
             // from the test-definition `compute_label_stats`.
-            apply_label_stats_rule(label_stats.entry(label_key).or_default(), entry.is_folder, entry.file_count, entry.size);
+            if is_counted_for_label_stats(&entry.sync_status) {
+                apply_label_stats_rule(label_stats.entry(label_key).or_default(), entry.is_folder, entry.file_count, entry.size);
+            }
 
             all_files.push(UserFileEntry {
                 name: display_name,
@@ -324,6 +335,12 @@ pub async fn get_user_files(
     // Sort by timestamp (newest first)
     all_files.sort_by_key(|b| std::cmp::Reverse(b.last_charged_at));
 
+    // Derived from `label_stats` rather than summed over the raw listing.
+    // Excluded files stay as rows (H-045) but `is_counted_for_label_stats`
+    // omits them from billed File No / storage. Filters run after this, so
+    // the total stays the whole-drive figure, not the filtered one.
+    let total_private_size: u64 = label_stats.values().map(|s| s.total_bytes).sum();
+
     // Convert the borrowed-key map to owned-key for the result. One
     // allocation per label instead of one per file (the previous
     // `compute_label_stats(&all_files)` walk cloned `entry.label` for
@@ -350,14 +367,16 @@ pub async fn get_user_files(
 /// `prefix` is the rel-path of the directory we're descending into
 /// (`""` for the drive root, `"sub"` for a one-level descent, etc.).
 /// Hidden files (`.`-prefixed) and failed-download / encrypted-name
-/// stubs are skipped to match `list_sync_folder_inner`'s rules.
+/// stubs are skipped to match `list_sync_folder_inner`'s rules. Excluded
+/// *folders* are pruned whole; excluded *files* stay as `excluded` rows
+/// (H-045). The engine never uploads UTF-8 hidden names (H-063).
 fn walk_disk_files_std(
     base: &Path,
     rel_prefix: &str,
     label: &str,
     folder_path: &str,
     synced: Option<&HashMap<String, hcfs_client::engine::types::SyncedFileInfo>>,
-    excluded: &[String],
+    exclude_rules: &ExcludeRules,
     out: &mut Vec<UserFileEntry>,
 ) {
     let dir_path = if rel_prefix.is_empty() {
@@ -371,10 +390,11 @@ fn walk_disk_files_std(
     };
 
     for entry in dir.flatten() {
-        let name = entry.file_name().to_string_lossy().to_string();
-        if name.starts_with('.') {
+        let os_name = entry.file_name();
+        if is_internal_hidden_name(&os_name) {
             continue;
         }
+        let name = os_name.to_string_lossy().to_string();
         let Ok(meta) = entry.metadata() else {
             continue;
         };
@@ -383,9 +403,16 @@ fn walk_disk_files_std(
         } else {
             format!("{rel_prefix}/{name}")
         };
+        let is_hidden_file = is_engine_hidden_name(&os_name);
 
         if meta.is_dir() {
-            walk_disk_files_std(base, &rel_path, label, folder_path, synced, excluded, out);
+            if is_hidden_file {
+                continue;
+            }
+            if super::exclude_match::path_is_excluded(exclude_rules, &rel_path, true) {
+                continue;
+            }
+            walk_disk_files_std(base, &rel_path, label, folder_path, synced, exclude_rules, out);
             continue;
         }
 
@@ -398,8 +425,10 @@ fn walk_disk_files_std(
             continue;
         }
 
-        let is_excluded = !excluded.is_empty() && excluded.iter().any(|p| p == &rel_path);
-        let (sync_status, info) = if is_excluded {
+        let is_excluded = super::exclude_match::path_is_excluded(exclude_rules, &rel_path, false);
+        let (sync_status, info) = if is_hidden_file {
+            ("hidden", None)
+        } else if is_excluded {
             ("excluded", None)
         } else {
             match synced {
@@ -459,6 +488,13 @@ fn walk_disk_files_std(
             deleted: false,
         });
     }
+}
+
+/// Search overlay omit: hidden names and files under an excluded *directory*.
+/// File globs (`*.bin`) must not omit — they stay as `excluded` rows (H-045).
+/// Extracted so a test fails if either skip is dropped from the overlay.
+fn search_overlay_omits(rules: &ExcludeRules, rel: &str) -> bool {
+    rel_has_engine_hidden_component(rel) || super::exclude_match::under_excluded_dir(rules, rel)
 }
 
 /// Recursively search a single sync drive for files matching `filters`.
@@ -525,7 +561,11 @@ pub async fn search_user_files_recursive(
     let walk_label = label.clone();
     let walk_folder = sp.path.clone();
     let walk_synced = synced.clone();
-    let walk_excluded = excluded.clone();
+    // Compiled once and shared with the server-only overlay below: building a
+    // GlobSet is the expensive half of matching, and this IPC runs on every
+    // keystroke in the recursive search box.
+    let exclude_rules = Arc::new(super::exclude_match::rules_from_patterns(&excluded));
+    let walk_rules = Arc::clone(&exclude_rules);
     let mut out = tokio::task::spawn_blocking(move || {
         let mut collected = Vec::new();
         walk_disk_files_std(
@@ -534,7 +574,7 @@ pub async fn search_user_files_recursive(
             &walk_label,
             &walk_folder,
             walk_synced.as_ref(),
-            &walk_excluded,
+            &walk_rules,
             &mut collected,
         );
         collected
@@ -564,6 +604,10 @@ pub async fn search_user_files_recursive(
             if seen.contains(rel) {
                 continue;
             }
+            if search_overlay_omits(&exclude_rules, rel) {
+                continue;
+            }
+            let excluded_hit = super::exclude_match::path_is_excluded(&exclude_rules, rel, false);
             let basename = rel.rsplit('/').next().unwrap_or(rel).to_string();
             let uploaded_at_ms = if info.uploaded_at != 0 { info.uploaded_at * 1000 } else { 0 };
             let updated_at_ms = if info.updated_at != 0 { info.updated_at * 1000 } else { 0 };
@@ -584,7 +628,7 @@ pub async fn search_user_files_recursive(
                 file_type: "private".to_string(),
                 is_erasure_coded: false,
                 main_req_hash: String::new(),
-                sync_status: "pending".to_string(),
+                sync_status: if excluded_hit { "excluded".to_string() } else { "pending".to_string() },
                 label: label.clone(),
                 file_count: None,
                 deleted: false,
@@ -601,6 +645,57 @@ pub async fn search_user_files_recursive(
     Ok(out)
 }
 
+/// Compiled search term. A glob is built once per filter pass so a large
+/// listing does not re-parse `*.pdf` on every row.
+enum SearchNeedle {
+    /// Case-insensitive substring of the display name or Arion hash.
+    Substring(String),
+    /// globset glob against the drive-relative path.
+    Glob(GlobMatcher),
+    /// Unparseable glob (e.g. unclosed `[`). Match nothing; never panic.
+    MatchNothing,
+}
+
+/// Compile `search_term` into a needle.
+///
+/// A term containing `*` or `?` is a glob — `*.bin` is not a literal
+/// substring of those two characters. EVERY pattern is expanded to
+/// `**/{pattern}`, exactly as hcfs's `ExcludeRules::parse` expands its
+/// own, so a term matches at any depth and the two engines agree on what
+/// a pattern means.
+///
+/// `literal_separator` stays at globset's default, so `*` crosses `/` and
+/// a term containing a slash is NOT root-anchored. That is looser than
+/// gitignore, and deliberately so twice over: it is the forgiving
+/// behaviour a search box wants, and it is what the exclude rules already
+/// do. Search differs from them in one respect only — it is
+/// case-insensitive.
+///
+/// Other terms keep the historical case-insensitive substring match on
+/// name/hash.
+fn compile_search_needle(term: &str) -> Option<SearchNeedle> {
+    if term.is_empty() {
+        return None;
+    }
+    if !term.contains(['*', '?']) {
+        return Some(SearchNeedle::Substring(term.to_lowercase()));
+    }
+
+    let expanded = format!("**/{term}");
+    match GlobBuilder::new(&expanded).case_insensitive(true).build() {
+        Ok(glob) => Some(SearchNeedle::Glob(glob.compile_matcher())),
+        Err(_) => Some(SearchNeedle::MatchNothing),
+    }
+}
+
+fn file_matches_search(file: &UserFileEntry, needle: &SearchNeedle) -> bool {
+    match needle {
+        SearchNeedle::Substring(s) => file.name.to_lowercase().contains(s) || file.arion_hash.to_lowercase().contains(s),
+        SearchNeedle::Glob(matcher) => matcher.is_match(file.actual_file_name.as_str()),
+        SearchNeedle::MatchNothing => false,
+    }
+}
+
 /// Apply the full filter chain to a mutable file list in place.
 ///
 /// Shared between [`get_user_files`] (initial fetch with filters) and
@@ -613,10 +708,7 @@ pub async fn search_user_files_recursive(
     reason = "flat per-criterion filter cascade; splitting into helpers hurts readability"
 )]
 fn apply_file_filters(files: &mut Vec<UserFileEntry>, f: &FileFilterCriteria) {
-    let search_lower = f.search_term.as_ref().and_then(|s| {
-        let low = s.to_lowercase();
-        if low.is_empty() { None } else { Some(low) }
-    });
+    let search_needle = f.search_term.as_deref().and_then(compile_search_needle);
     let now = chrono::Utc::now();
 
     files.retain(|file| {
@@ -626,9 +718,8 @@ fn apply_file_filters(files: &mut Vec<UserFileEntry>, f: &FileFilterCriteria) {
             return false;
         }
 
-        if let Some(ref search) = search_lower
-            && !file.name.to_lowercase().contains(search)
-            && !file.arion_hash.to_lowercase().contains(search)
+        if let Some(ref needle) = search_needle
+            && !file_matches_search(file, needle)
         {
             return false;
         }
@@ -781,6 +872,11 @@ fn classify_extension(ext: &str) -> &'static str {
     }
 }
 
+fn filter_file_entries_inner(mut files: Vec<UserFileEntry>, filters: FileFilterCriteria) -> Vec<UserFileEntry> {
+    apply_file_filters(&mut files, &filters);
+    files
+}
+
 /// Apply the user files filter to an arbitrary list of entries.
 ///
 /// Used by the files page and the folder view to re-filter a list the
@@ -788,11 +884,15 @@ fn classify_extension(ext: &str) -> &'static str {
 /// shared filter as its own command keeps every filter rule (date
 /// ranges, size thresholds, search behaviour) on the Rust side — the
 /// TS layer now just passes criteria and renders the result.
+///
+/// Async + `spawn_blocking` because Tauri 2 runs sync commands on the
+/// WKWebView / NSApp thread; a large listing round-tripped on every
+/// filter keystroke froze the window.
 #[tauri::command]
-pub fn filter_file_entries(files: Vec<UserFileEntry>, filters: FileFilterCriteria) -> Vec<UserFileEntry> {
-    let mut files = files;
-    apply_file_filters(&mut files, &filters);
-    files
+pub async fn filter_file_entries(files: Vec<UserFileEntry>, filters: FileFilterCriteria) -> crate::error::Result<Vec<UserFileEntry>> {
+    tokio::task::spawn_blocking(move || filter_file_entries_inner(files, filters))
+        .await
+        .map_err(|e| crate::error::AppError::Other(format!("filter_file_entries task panicked: {e}")))
 }
 
 #[cfg(test)]
@@ -908,7 +1008,10 @@ mod tests {
         let files: Vec<UserFileEntry> = serde_json::from_value(serde_json::json!([remote_row("photo.JPG"), remote_row("clip.MP4"),]))
             .expect("FE-built remote listing rows must deserialize for filter_file_entries");
 
-        let filtered = filter_file_entries(
+        // `_inner` like every sibling test: the `#[tauri::command]` wrapper only
+        // moves this same call onto a blocking thread, so the deserialization
+        // and filtering under test are entirely here.
+        let filtered = filter_file_entries_inner(
             files,
             FileFilterCriteria {
                 file_extensions: Some(vec!["MP4".to_string()]),
@@ -945,6 +1048,34 @@ mod tests {
         }
     }
 
+    fn make_rel(name: &str, relative: &str) -> UserFileEntry {
+        UserFileEntry {
+            actual_file_name: relative.to_string(),
+            ..make_file(name, 1, "d", 0, false)
+        }
+    }
+
+    fn make_hashed(name: &str, hash: &str) -> UserFileEntry {
+        UserFileEntry {
+            arion_hash: hash.to_string(),
+            ..make_file(name, 1, "d", 0, false)
+        }
+    }
+
+    fn search(files: Vec<UserFileEntry>, q: &str) -> Vec<UserFileEntry> {
+        filter_file_entries_inner(
+            files,
+            FileFilterCriteria {
+                search_term: Some(q.into()),
+                ..Default::default()
+            },
+        )
+    }
+
+    fn rel_names(files: &[UserFileEntry]) -> Vec<&str> {
+        files.iter().map(|f| f.actual_file_name.as_str()).collect()
+    }
+
     #[test]
     fn filter_search_matches_name_case_insensitive() {
         let files = vec![
@@ -960,9 +1091,105 @@ mod tests {
             date_range: None,
             file_extensions: None,
         };
-        let out = filter_file_entries(files, criteria);
+        let out = filter_file_entries_inner(files, criteria);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].name, "Report.pdf");
+    }
+
+    /// A term with no `*`/`?` stays a case-insensitive substring of the
+    /// display name (and hash). `readme` must still find `Readme.txt`.
+    #[test]
+    fn filter_search_substring_matches_readme() {
+        let files = vec![make_file("Readme.txt", 1, "d", 0, false), make_file("notes.md", 1, "d", 0, false)];
+        let out = search(files, "readme");
+        assert_eq!(rel_names(&out), vec!["Readme.txt"]);
+    }
+
+    /// `*.bin` is a glob against the relative path, not a literal substring
+    /// of `*`. gitignore-style: it matches at any depth, and `*` does not
+    /// eat a trailing `.bak`.
+    #[test]
+    fn filter_search_glob_star_bin_matches_nested_not_bak() {
+        let files = vec![
+            make_file("foo.bin", 1, "d", 0, false),
+            make_rel("foo.bin", "dir/foo.bin"),
+            make_file("foo.bin.bak", 1, "d", 0, false),
+            make_file("foo.txt", 1, "d", 0, false),
+        ];
+        let out = search(files.clone(), "*.bin");
+        assert_eq!(rel_names(&out), vec!["foo.bin", "dir/foo.bin"]);
+
+        let out = search(files, "*.BIN");
+        assert_eq!(rel_names(&out), vec!["foo.bin", "dir/foo.bin"]);
+    }
+
+    /// Catch-all `*` is a glob, not a substring of the asterisk character.
+    /// Search (unlike exclude rules) treats it as "every name" — it must
+    /// not crash and must not silently match nothing.
+    #[test]
+    fn filter_search_star_is_a_glob_and_matches_every_name() {
+        let files = vec![
+            make_file("a.txt", 1, "d", 0, false),
+            make_rel("foo.bin", "dir/foo.bin"),
+            make_file("Readme.txt", 1, "d", 0, false),
+        ];
+        let out = search(files, "*");
+        assert_eq!(out.len(), 3, "catch-all glob must keep every file");
+    }
+
+    /// An unparseable glob must not panic the filter IPC, and must not
+    /// silently fall back to substring-matching the `*`/`?` characters.
+    #[test]
+    fn filter_search_invalid_glob_does_not_panic() {
+        let files = vec![make_file("a.txt", 1, "d", 0, false)];
+        let out = search(files, "*[");
+        assert!(out.is_empty());
+    }
+
+    /// The `?` half of the glob trigger. Every other glob test uses `*`,
+    /// so narrowing the predicate to `contains('*')` would keep them all
+    /// green while silently turning `a?c.txt` back into a substring
+    /// search that matches nothing.
+    #[test]
+    fn filter_search_question_mark_is_a_glob() {
+        let files = vec![
+            make_file("abc.txt", 1, "d", 0, false),
+            make_file("ac.txt", 1, "d", 0, false),
+            make_file("abbc.txt", 1, "d", 0, false),
+        ];
+        let out = search(files, "a?c.txt");
+        assert_eq!(rel_names(&out), vec!["abc.txt"], "`?` stands for exactly one character");
+    }
+
+    /// The two needles read different fields: a substring term matches the
+    /// display name OR the Arion hash, a glob matches only the relative
+    /// path. Pinned because "let globs search the hash too" reads as a
+    /// harmless improvement, and would make any `*`-bearing term start
+    /// matching files whose hash merely contains the letters.
+    #[test]
+    fn filter_search_glob_matches_the_path_not_the_hash() {
+        let files = vec![make_hashed("photo.jpg", "deadbeef")];
+
+        let out = search(files.clone(), "deadbeef");
+        assert_eq!(rel_names(&out), vec!["photo.jpg"], "a substring term still matches the hash");
+
+        let out = search(files, "dead*");
+        assert!(out.is_empty(), "a glob is matched against the relative path only, never the hash");
+    }
+
+    /// A term containing `/` gets the same unconditional `**/` prefix, so
+    /// it is NOT root-anchored: `docs/*.pdf` also finds a nested `docs`.
+    /// That mirrors hcfs's exclude rules, so the pattern a user excludes
+    /// and the pattern they search mean the same thing.
+    #[test]
+    fn filter_search_glob_with_a_slash_is_not_root_anchored() {
+        let files = vec![
+            make_rel("a.pdf", "docs/a.pdf"),
+            make_rel("b.pdf", "work/docs/b.pdf"),
+            make_rel("c.pdf", "other/c.pdf"),
+        ];
+        let out = search(files, "docs/*.pdf");
+        assert_eq!(rel_names(&out), vec!["docs/a.pdf", "work/docs/b.pdf"]);
     }
 
     #[test]
@@ -981,7 +1208,7 @@ mod tests {
             date_range: None,
             file_extensions: None,
         };
-        let out = filter_file_entries(files, criteria);
+        let out = filter_file_entries_inner(files, criteria);
         assert_eq!(out.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), vec!["a.txt", "c.txt"]);
     }
 
@@ -1003,7 +1230,7 @@ mod tests {
             date_range: None,
             file_extensions: None,
         };
-        let out = filter_file_entries(files, criteria);
+        let out = filter_file_entries_inner(files, criteria);
         assert_eq!(out.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), vec!["medium.zip", "huge.iso"]);
     }
 
@@ -1024,7 +1251,7 @@ mod tests {
             date_range: None,
             file_extensions: None,
         };
-        let out = filter_file_entries(files, criteria);
+        let out = filter_file_entries_inner(files, criteria);
         assert_eq!(out.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), vec!["pic.png", "subfolder"]);
     }
 
@@ -1041,7 +1268,7 @@ mod tests {
             file_extensions: None,
         };
         assert!(criteria.is_empty());
-        let out = filter_file_entries(files, criteria);
+        let out = filter_file_entries_inner(files, criteria);
         assert_eq!(out.len(), 2);
     }
 
@@ -1164,15 +1391,17 @@ mod tests {
         );
 
         let mut out = Vec::new();
-        walk_disk_files_std(root, "", "docs", root.to_str().unwrap(), Some(&synced), &[], &mut out);
+        let no_rules = super::super::exclude_match::rules_from_patterns(&[]);
+        walk_disk_files_std(root, "", "docs", root.to_str().unwrap(), Some(&synced), &no_rules, &mut out);
         let names: Vec<&str> = out.iter().map(|e| e.actual_file_name.as_str()).collect();
         assert!(names.contains(&"Photos/2024/a.jpg"));
         assert!(names.contains(&"pending.bin"));
-        assert!(
-            !names
-                .iter()
-                .any(|n| n.contains("hidden") || n.starts_with("downloaded_") || n.starts_with("file_"))
+        assert!(names.contains(&".hidden"));
+        assert_eq!(
+            out.iter().find(|e| e.actual_file_name == ".hidden").map(|e| e.sync_status.as_str()),
+            Some("hidden"),
         );
+        assert!(!names.iter().any(|n| n.starts_with("downloaded_") || n.starts_with("file_")));
 
         let photo = out.iter().find(|e| e.actual_file_name == "Photos/2024/a.jpg").expect("photo");
         assert_eq!(photo.name, "a.jpg");
@@ -1182,5 +1411,96 @@ mod tests {
         let pending = out.iter().find(|e| e.actual_file_name == "pending.bin").expect("pending");
         assert_eq!(pending.sync_status, "pending");
         assert_eq!(pending.size, 2);
+    }
+
+    /// `*.bin` must tag `pending.bin` and a nested `dir/foo.bin` excluded
+    /// via ExcludeRules, not exact path equality. `foo.bin.bak` survives.
+    ///
+    /// `synced` is an EMPTY map, not `None`: a drive with no synced baseline
+    /// yields `"unknown"` for everything, which would let a broken matcher
+    /// pass a status assertion for the wrong reason.
+    #[test]
+    fn walk_disk_files_std_drops_glob_excludes_not_exact_paths() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("dir")).expect("mkdir");
+        std::fs::write(root.join("pending.bin"), b"ab").expect("bin");
+        std::fs::write(root.join("dir/foo.bin"), b"cd").expect("nested bin");
+        std::fs::write(root.join("foo.bin.bak"), b"ef").expect("bak");
+        std::fs::write(root.join("keep.txt"), b"ok").expect("txt");
+
+        let synced: HashMap<String, hcfs_client::engine::types::SyncedFileInfo> = HashMap::new();
+        let rules = super::super::exclude_match::rules_from_patterns(&["*.bin".to_string()]);
+        let mut out = Vec::new();
+        walk_disk_files_std(root, "", "docs", root.to_str().unwrap(), Some(&synced), &rules, &mut out);
+
+        let by_name: HashMap<&str, &str> = out.iter().map(|e| (e.actual_file_name.as_str(), e.sync_status.as_str())).collect();
+        assert_eq!(by_name.get("pending.bin").copied(), Some("excluded"));
+        assert_eq!(by_name.get("dir/foo.bin").copied(), Some("excluded"));
+        assert_eq!(by_name.get("foo.bin.bak").copied(), Some("pending"));
+        assert_eq!(by_name.get("keep.txt").copied(), Some("pending"));
+    }
+
+    /// A directory rule prunes the whole subtree in one step rather than
+    /// descending and rejecting each file: on a real `node_modules` that is
+    /// the difference between one `read_dir` and forty thousand.
+    #[test]
+    fn walk_disk_files_std_prunes_an_excluded_directory_subtree() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("node_modules/pkg/deep")).expect("mkdir");
+        std::fs::write(root.join("node_modules/pkg/deep/index.js"), b"x").expect("nested");
+        std::fs::create_dir_all(root.join("src")).expect("mkdir src");
+        std::fs::write(root.join("src/main.rs"), b"y").expect("src");
+
+        let synced: HashMap<String, hcfs_client::engine::types::SyncedFileInfo> = HashMap::new();
+        let rules = super::super::exclude_match::rules_from_patterns(&["node_modules/".to_string()]);
+        let mut out = Vec::new();
+        walk_disk_files_std(root, "", "docs", root.to_str().unwrap(), Some(&synced), &rules, &mut out);
+
+        let names: Vec<&str> = out.iter().map(|e| e.actual_file_name.as_str()).collect();
+        assert_eq!(names, vec!["src/main.rs"], "only the node_modules subtree may disappear");
+    }
+
+    /// The Files-page storage total must count exactly the rows the page
+    /// shows. `get_user_files` derives it from `label_stats`, so this pins
+    /// the rule the derivation rests on: an excluded row contributes nothing.
+    #[test]
+    fn label_stats_totals_exclude_hidden_rows_so_the_storage_total_matches_the_listing() {
+        let mut excluded = make_file("secret.bin", 999_999, "alpha", 0, false);
+        excluded.sync_status = "excluded".to_string();
+        let mut hidden = make_file(".env.qa", 50, "alpha", 0, false);
+        hidden.sync_status = "hidden".to_string();
+
+        let entries = vec![
+            make_file("a.txt", 1_000, "alpha", 0, false),
+            excluded,
+            hidden,
+            make_file("b.txt", 500, "beta", 0, false),
+        ];
+
+        let stats = compute_label_stats(&entries);
+        let total: u64 = stats.values().map(|s| s.total_bytes).sum();
+
+        assert_eq!(total, 1_500, "excluded and hidden rows must not inflate File No");
+    }
+
+    /// Drive search overlay. Dropping `under_excluded_dir` re-lists a
+    /// previously synced `node_modules`. Dropping the hidden-name skip
+    /// resurrects `.env.qa` as Pending. File globs still overlay as rows.
+    #[test]
+    fn search_overlay_omits_hidden_names_and_excluded_dir_children() {
+        let dir_rule = super::super::exclude_match::rules_from_patterns(&["node_modules/".to_string()]);
+        let file_rule = super::super::exclude_match::rules_from_patterns(&["*.bin".to_string()]);
+
+        assert!(search_overlay_omits(&dir_rule, ".env.qa"));
+        assert!(search_overlay_omits(&dir_rule, ".hidden_dir/inside.txt"));
+        assert!(search_overlay_omits(&dir_rule, "node_modules/pkg/index.js"));
+        assert!(!search_overlay_omits(&dir_rule, "src/main.rs"));
+        assert!(
+            !search_overlay_omits(&file_rule, "dir/foo.bin"),
+            "file globs stay as excluded rows, not omitted"
+        );
+        assert!(!search_overlay_omits(&file_rule, "keep.txt"));
     }
 }

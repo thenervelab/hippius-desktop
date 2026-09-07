@@ -1,5 +1,9 @@
 # macOS WebDriver E2E (sync widget smoke)
 
+This directory is the **smoke** layer — "does the production webview paint
+this?" New tests belong here only when a replay harness or unit test cannot
+see the failure. Routing table: [`docs/testing-policy.md`](../docs/testing-policy.md).
+
 On-device end-to-end smoke tests that drive the **real** app in a **real macOS
 WKWebView** via [`tauri-plugin-webdriver`]. This is the layer the official
 `tauri-driver` can't provide on macOS (Apple ships no WKWebView WebDriver); the
@@ -11,6 +15,12 @@ It complements — does not replace — the jsdom **replay harness**
 `pnpm test`, and already targets the recurring data-projection bugs. This layer
 adds confidence that the production **renderer, CSS, and layout** show the right
 thing in the actual webview.
+
+The 2026-08-30 catalog (`docs/plans/2026-08-30-test-suite-audit.md`) found no
+second renderer-only failure, so this directory stays at **one spec**. Add
+another only when a unit or replay cannot see the bug; stabilize it locally
+until it is boring before merging. Never add these to `ci.yml`. Run on macOS
+before a UI-renderer change.
 
 ## Safety: never ships in production
 

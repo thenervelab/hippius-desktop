@@ -18,6 +18,7 @@ export type NotReadyKind =
   | "NOT_ENOUGH_DISK_SPACE"
   | "SIGNING_KEY_UNAVAILABLE"
   | "INSUFFICIENT_CREDITS"
+  | "STORAGE_LIMIT_REACHED"
   | "SUPERSEDED_BY_PAUSE"
   | "DATABASE_NOT_READY"
   | "RATE_LIMITED"
@@ -91,11 +92,34 @@ export function tauriErrorMessage(error: unknown): string {
   return "Unknown error";
 }
 
+/**
+ * The Rust-owned sentence from a Tauri rejection, or `""` when the payload
+ * carries none.
+ *
+ * Use this instead of {@link tauriErrorMessage} wherever the caller has its own
+ * fallback copy. A rejection at the IPC transport layer arrives as a bare `{}`,
+ * and `tauriErrorMessage`'s "Unknown error" would then REPLACE a usable
+ * fallback with a string the user can do nothing with.
+ */
+export function tauriErrorDetail(error: unknown): string {
+  const message = (error as TauriError | null)?.message;
+  return typeof message === "string" ? message : "";
+}
+
 export function isNotReady(error: unknown, expected?: NotReadyKind): boolean {
   const e = error as TauriError | null;
   if (e?.kind !== "NotReady") return false;
   if (expected === undefined) return true;
   return e.subkind === expected;
+}
+
+/**
+ * `AppError::Io` — typically `canonicalize` of a missing path. Match the
+ * `kind` discriminant, never a substring of `message` (`xdg-open was not
+ * found` would otherwise look like a missing file).
+ */
+export function isIoError(error: unknown): boolean {
+  return (error as TauriError | null)?.kind === "Io";
 }
 
 /**
@@ -106,12 +130,14 @@ export function isNotReady(error: unknown, expected?: NotReadyKind): boolean {
  * `syncRequiresReauthAtom` and let the reauth banner drive recovery.
  */
 export function isMasterMnemonicUnrecoverable(error: unknown): boolean {
-  return (error as TauriError | null)?.subkind === "MASTER_MNEMONIC_UNRECOVERABLE";
+  return (
+    (error as TauriError | null)?.subkind === "MASTER_MNEMONIC_UNRECOVERABLE"
+  );
 }
 
 export function dispatchSigningError(
   error: unknown,
-  onReAuth: () => void
+  onReAuth: () => void,
 ): boolean {
   const e = error as TauriError | null;
   if (e?.kind === "NotReady" && e.subkind === "SIGNING_KEY_UNAVAILABLE") {

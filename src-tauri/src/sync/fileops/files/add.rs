@@ -4,13 +4,78 @@
 //! the credit gate.
 
 use super::delete::FileDeleteError;
-use super::pathops::copy_dir_recursive;
+use super::dir_stats::invalidate_dir_stats_for_change;
+use super::pathops::{copy_dir_recursive, is_engine_hidden_name};
 use crate::error::Result;
 use hcfs_client::engine::runner::trigger_sync;
 use serde::Serialize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter};
 use tracing::{info, warn};
+
+/// Listing-form `(drive root, destination directory)` for an add.
+///
+/// The drive path exactly as the frontend passed it, optionally joined with
+/// the subfolder, and never canonicalized: the dir-stats cache is keyed by the
+/// paths `list_sync_folder` builds, and that listing does not canonicalize, so
+/// a `/private/var/…` key would never match the `/var/…` rows a macOS listing
+/// wrote. The add itself still copies through the canonicalized destination —
+/// this pair exists only to name the cache rows the add invalidates.
+fn listing_add_paths(sync_path: &str, subfolder: Option<&str>) -> (PathBuf, PathBuf) {
+    let root = PathBuf::from(sync_path);
+    let dest = subfolder.map_or_else(|| root.clone(), |sub| root.join(sub));
+    (root, dest)
+}
+
+/// Hidden staging sibling to copy into before `rename`ing onto a dest.
+///
+/// The live file watcher fires on every write into a watched tree.
+/// hcfs-client skips `.*` names in `collect_files`, so a 35 GB copy
+/// into `.hippius-incoming-*` is not hashed mid-flight; `rename`
+/// then makes the result visible complete, in one atomic step.
+///
+/// Always a sibling — same directory, therefore same filesystem — because
+/// that is what makes the `rename` atomic rather than a copy.
+fn incoming_staging_path(dest: &Path) -> PathBuf {
+    let parent = dest.parent().unwrap_or(dest);
+    let stem = dest.file_name().and_then(|n| n.to_str()).unwrap_or("folder");
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    parent.join(format!(".hippius-incoming-{stem}-{unique}"))
+}
+
+/// Copy `source` onto `dest`.
+///
+/// New dest: copy into a hidden sibling then `rename` into place so the
+/// watcher does not scan a growing tree. Existing dest: in-place merge
+/// (two uploads of the same folder name).
+async fn copy_tree_into_sync_dest(source: &Path, dest: &Path) -> Result<()> {
+    if tokio::fs::try_exists(dest).await.unwrap_or(false) {
+        return copy_dir_recursive(source, dest, 0).await;
+    }
+    let staging = incoming_staging_path(dest);
+    match copy_dir_recursive(source, &staging, 0).await {
+        Ok(()) => match tokio::fs::rename(&staging, dest).await {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let _ = tokio::fs::remove_dir_all(&staging).await;
+                Err(crate::error::AppError::Io(e))
+            }
+        },
+        Err(e) => {
+            let _ = tokio::fs::remove_dir_all(&staging).await;
+            Err(e)
+        }
+    }
+}
+
+async fn create_dir_all_spawn(path: PathBuf) -> Result<()> {
+    tokio::task::spawn_blocking(move || std::fs::create_dir_all(path))
+        .await
+        .map_err(|e| crate::error::AppError::Other(format!("Join error creating dir: {e}")))??;
+    Ok(())
+}
 
 /// Pure file-copy implementation, no eligibility check. The check is
 /// performed at the IPC boundary by `add_file` (single-file path) or
@@ -21,10 +86,30 @@ use tracing::{info, warn};
 /// canonicalize once outside the loop instead of paying the `realpath`
 /// syscall per file (10–100 ms each on slow filesystems).
 // Error-taxonomy convention for this module: rejected name/path input (bad name,
-// traversal, path-escape, self-add) is `Validation` (the FE renders the message);
-// filesystem faults (copy / canonicalize / create_dir) are `Io` (#[from], via `?`
-// where control flow allows, else `Io(e)` in a cleanup-then-return arm).
-async fn add_file_internal(canonical_parent: &Path, file_path: &str) -> Result<String> {
+// traversal, path-escape, self-add, unconfirmed overwrite) is `Validation` (the FE
+// renders the message); filesystem faults (copy / canonicalize / create_dir) are
+// `Io` (#[from], via `?` where control flow allows, else `Io(e)` in a
+// cleanup-then-return arm).
+fn already_exists_message(name: &str) -> String {
+    format!("A file named \"{name}\" already exists in this folder")
+}
+
+/// Refuse to clobber an existing dest unless the caller asked to replace.
+///
+/// `try_exists` failing is fail-closed: we do not overwrite when we cannot
+/// tell whether the dest is there (H-097).
+async fn refuse_unconfirmed_overwrite(dest: &Path, name: &str, overwrite: bool) -> Result<()> {
+    if overwrite {
+        return Ok(());
+    }
+    match tokio::fs::try_exists(dest).await {
+        Ok(false) => Ok(()),
+        Ok(true) => Err(crate::error::AppError::Validation(already_exists_message(name))),
+        Err(e) => Err(crate::error::AppError::Io(e)),
+    }
+}
+
+async fn add_file_internal(canonical_parent: &Path, file_path: &str, overwrite: bool) -> Result<String> {
     let source = Path::new(file_path);
     let name = source
         .file_name()
@@ -42,7 +127,37 @@ async fn add_file_internal(canonical_parent: &Path, file_path: &str) -> Result<S
         return Err(crate::error::AppError::Validation("Path escapes sync folder".into()));
     }
 
-    tokio::fs::copy(source, &canonical_dest).await?;
+    refuse_unconfirmed_overwrite(&canonical_dest, &name, overwrite).await?;
+
+    // Stage then rename, rather than writing the destination directly.
+    //
+    // `fs::copy` onto an EXISTING path truncates it and then fills it, so the
+    // watcher can hash a file that is momentarily shorter than what is already
+    // synced. hcfs used to hold such a file back for a cycle, but that guard
+    // was removed in #367 — it could not tell a stalled copy from a finished
+    // smaller edit, so it delayed every legitimate shrink — and hcfs's accepted
+    // residual names this staging as where the case is closed instead.
+    //
+    // A hidden sibling is skipped by hcfs's `collect_files` while it grows, and
+    // the `rename` onto the destination is atomic and replaces in one step, so
+    // no scan can observe a partial or truncated file at all. This matters most
+    // exactly where the old guard did: a large overwrite from a slow source.
+    let staging = incoming_staging_path(&canonical_dest);
+    if let Err(e) = tokio::fs::copy(source, &staging).await {
+        let _ = tokio::fs::remove_file(&staging).await;
+        return Err(crate::error::AppError::Io(e));
+    }
+    // Re-check immediately before the replace. Two concurrent adds of a
+    // new name can both see missing at the first check; Unix rename would
+    // then clobber. Remaining TOCTOU is the rename itself (H-097 review).
+    if let Err(e) = refuse_unconfirmed_overwrite(&canonical_dest, &name, overwrite).await {
+        let _ = tokio::fs::remove_file(&staging).await;
+        return Err(e);
+    }
+    if let Err(e) = tokio::fs::rename(&staging, &canonical_dest).await {
+        let _ = tokio::fs::remove_file(&staging).await;
+        return Err(crate::error::AppError::Io(e));
+    }
 
     Ok(name)
 }
@@ -54,6 +169,7 @@ pub async fn add_file(
     app: tauri::AppHandle,
     sync_path: String,
     file_path: String,
+    overwrite: Option<bool>,
 ) -> Result<String> {
     // Enforce credit eligibility at the IPC boundary, priced by actual
     // file size. The FE may still hit a 402 from hcfs-server if the
@@ -125,8 +241,15 @@ pub async fn add_file(
             return Err(crate::error::AppError::Io(e));
         }
     };
-    match add_file_internal(&canonical_parent, &file_path).await {
-        Ok(name) => Ok(name),
+    match add_file_internal(&canonical_parent, &file_path, overwrite.unwrap_or(false)).await {
+        Ok(name) => {
+            // The drive root's own mtime does move for a root-level add, but
+            // the cache is keyed on the listing path, so drop the row rather
+            // than trusting the two forms to agree.
+            let (root, dest) = listing_add_paths(&sync_path, None);
+            invalidate_dir_stats_for_change(&root, &dest.join(&name));
+            Ok(name)
+        }
         Err(e) => {
             if let Some(label) = label_opt.as_deref() {
                 state.upload_processing.reset(&app, label);
@@ -134,6 +257,15 @@ pub async fn add_file(
             Err(e)
         }
     }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddFolderResult {
+    pub name: String,
+    /// UTF-8 dotfiles the engine will not upload. The FE toasts this so
+    /// Drive is not a silent omit (H-063).
+    pub skipped_hidden: u64,
 }
 
 /// Add folder to sync folder
@@ -144,7 +276,7 @@ pub async fn add_folder(
     sync_path: String,
     folder_path: String,
     subfolder: Option<String>,
-) -> Result<String> {
+) -> Result<AddFolderResult> {
     // Enforce credit eligibility at the IPC boundary — same rationale
     // as `add_file`, but priced by the recursive byte total of the
     // source folder. A folder with permission-denied subdirectories
@@ -156,7 +288,9 @@ pub async fn add_folder(
     // banner file count (previously two separate full traversals). The byte
     // total is a best-effort lower bound on permission-denied subdirs, which
     // under-charges rather than over-charges — the server 402 is the backstop.
-    let (bytes, count) = walk_regular_files_stats(Path::new(&folder_path)).await;
+    let walk = walk_regular_files_stats(Path::new(&folder_path)).await;
+    let bytes = walk.bytes;
+    let count = walk.count;
     crate::billing::eligibility::require_eligible(
         &state,
         &account_id,
@@ -194,11 +328,20 @@ pub async fn add_folder(
     let result = add_folder_with_app_inner(&sync_path, &folder_path, subfolder.as_deref()).await;
     match result {
         Ok(name) => {
+            // Same mtime hole as a nested delete: creating `root/sub/New`
+            // stamps `root/sub` and nothing above it, so `root` would keep
+            // reporting the pre-upload size for the `sub` folder row.
+            let (root, dest) = listing_add_paths(&sync_path, subfolder.as_deref());
+            invalidate_dir_stats_for_change(&root, &dest.join(&name));
+
             // Trigger sync so the uploaded folder gets synced
             use tauri::Manager;
             let s = app.state::<crate::app_state::AppState>().sync.clone();
             let _ = trigger_sync(&s).await;
-            Ok(name)
+            Ok(AddFolderResult {
+                name,
+                skipped_hidden: walk.skipped_hidden,
+            })
         }
         Err(e) => {
             // IPC failed before any sync cycle ran — unconditional
@@ -236,8 +379,8 @@ async fn add_folder_with_app_inner(sync_path: &str, folder_path: &str, subfolder
             return Err(crate::error::AppError::Validation("Subfolder path contains traversal component".into()));
         }
         let t = sync_root.join(sub);
-        if !t.exists() {
-            std::fs::create_dir_all(&t)?;
+        if !tokio::fs::try_exists(&t).await.unwrap_or(false) {
+            create_dir_all_spawn(t.clone()).await?;
         }
         // Verify resolved path is within sync root (async canonicalize so
         // we don't block the tokio worker thread on `realpath`).
@@ -270,7 +413,7 @@ async fn add_folder_with_app_inner(sync_path: &str, folder_path: &str, subfolder
         ));
     }
 
-    copy_dir_recursive(source, &canonical_dest, 0).await?;
+    copy_tree_into_sync_dest(source, &canonical_dest).await?;
 
     Ok(name)
 }
@@ -290,25 +433,48 @@ async fn add_folder_with_app_inner(sync_path: &str, folder_path: &str, subfolder
 /// async-fn boxing. Does not read file contents — only iterates
 /// directory entries — so the cost is bounded by what `copy_dir_recursive`
 /// is about to do anyway.
-/// Single-pass walk returning `(total_bytes, regular_file_count)` for the tree
-/// under `root`. Folder uploads previously walked the identical tree TWICE —
-/// once for the credit-gate byte total and once for the banner count — before
-/// `copy_dir_recursive` walked it a third time; this collapses the first two
-/// into one traversal. Same invariants as [`sum_regular_file_bytes`]: symlinks
-/// are not followed, per-subdir I/O errors are skipped, the stack is capped at
+#[derive(Clone, Copy, Default)]
+struct FileWalkStats {
+    bytes: u64,
+    count: u64,
+    skipped_hidden: u64,
+}
+
+/// Single-pass walk returning billed bytes/count plus hidden files the
+/// engine will skip. Folder uploads previously walked the identical tree
+/// TWICE — once for the credit-gate byte total and once for the banner
+/// count — before `copy_dir_recursive` walked it a third time; this
+/// collapses the first two into one traversal. Same invariants as
+/// [`sum_regular_file_bytes`]: symlinks are not followed, per-subdir I/O
+/// errors are skipped, the stack is capped at
 /// [`FOLDER_BYTE_WALK_MAX_DEPTH`], and both accumulators use `saturating_add`.
-async fn walk_regular_files_stats(root: &std::path::Path) -> (u64, u64) {
+async fn walk_regular_files_stats(root: &std::path::Path) -> FileWalkStats {
     let root = root.to_path_buf();
     tokio::task::spawn_blocking(move || walk_regular_files_stats_std(&root))
         .await
-        .unwrap_or((0, 0))
+        .unwrap_or_default()
+}
+
+/// Failed-download artifacts (`downloaded_<hex>`) and 0-byte encrypted-name
+/// stubs (`file_<hex>`) that `list_sync_folder_inner` removes-and-skips.
+/// Dot-prefix names are skipped separately so a hidden directory is never
+/// pushed onto the walk stack. Copy still writes these names onto disk;
+/// this skip is the File No counter only. Do not add `DEFAULT_EXCLUDE_PATTERNS`.
+fn is_unlisted_regular_file(name: &str, file_len: u64) -> bool {
+    hcfs_client::engine::classify::is_failed_download_artifact(name).is_some()
+        || (hcfs_client::engine::classify::is_encrypted_name_stub(name).is_some() && file_len == 0)
 }
 
 /// One `DirEntry::metadata` per entry (lstat-shaped, does not follow
 /// symlinks) so we do not pay `file_type` + `metadata` on every file.
-fn walk_regular_files_stats_std(root: &std::path::Path) -> (u64, u64) {
-    let mut bytes: u64 = 0;
-    let mut count: u64 = 0;
+///
+/// Skips the same names Drive listing hides so the File No banner cannot
+/// count a file the table will omit (H-082: 130 visible + 2 hidden used
+/// to banner 132). A hidden directory is skipped before it reaches the
+/// stack, so its whole subtree is excluded — matching both the listing and
+/// the engine scan, which drop the subtree the same way.
+fn walk_regular_files_stats_std(root: &std::path::Path) -> FileWalkStats {
+    let mut stats = FileWalkStats::default();
     let mut stack: Vec<std::path::PathBuf> = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
         if stack.len() > FOLDER_BYTE_WALK_MAX_DEPTH {
@@ -316,16 +482,29 @@ fn walk_regular_files_stats_std(root: &std::path::Path) -> (u64, u64) {
         }
         let Ok(entries) = std::fs::read_dir(&dir) else { continue };
         for entry in entries.flatten() {
+            let name = entry.file_name();
             let Ok(meta) = entry.metadata() else { continue };
+            if is_engine_hidden_name(&name) {
+                // One unit per skipped name. Descending a hidden dir
+                // (`.git`) for a file count would walk the tree twice
+                // before eligibility/copy.
+                if meta.is_file() || meta.is_dir() {
+                    stats.skipped_hidden = stats.skipped_hidden.saturating_add(1);
+                }
+                continue;
+            }
             if meta.is_dir() {
                 stack.push(entry.path());
             } else if meta.is_file() {
-                count = count.saturating_add(1);
-                bytes = bytes.saturating_add(meta.len());
+                if is_unlisted_regular_file(&name.to_string_lossy(), meta.len()) {
+                    continue;
+                }
+                stats.count = stats.count.saturating_add(1);
+                stats.bytes = stats.bytes.saturating_add(meta.len());
             }
         }
     }
-    (bytes, count)
+    stats
 }
 
 /// Sum the byte size of regular files (non-directory, non-symlink) under
@@ -355,7 +534,7 @@ fn walk_regular_files_stats_std(root: &std::path::Path) -> (u64, u64) {
 ///   `saturating_add` so a malicious sparse file or `u64::MAX` length
 ///   can't panic.
 pub(in crate::sync) async fn sum_regular_file_bytes(root: &std::path::Path) -> u64 {
-    walk_regular_files_stats(root).await.0
+    walk_regular_files_stats(root).await.bytes
 }
 
 /// Stack-depth cap for [`sum_regular_file_bytes`]. Sized to match the
@@ -412,19 +591,13 @@ fn compute_startup_pending_summary_std(folder_dir: &std::path::Path, sync_root: 
         }
         let Ok(entries) = std::fs::read_dir(&dir) else { continue };
         for entry in entries.flatten() {
-            // Mirror hcfs-client's `drive::exclude::should_skip_path` — the rule
-            // its real `Drive::collect_files` scan applies: skip the `.hippius`
-            // config dir and every hidden entry (name starting with '.'). Those
-            // are never uploaded, so they never enter `sync_state.json`; without
-            // this skip a macOS `.DS_Store` (never synced) is counted as pending
-            // on every launch, painting a spurious "N files · Preparing" the
-            // engine then never transfers. `to_str()`-gated so a non-UTF-8 name
-            // is NOT skipped — matching upstream exactly. Same local
-            // reproduction as `migrate::folder_entries_backfill::is_skipped_dir_name`
-            // (upstream `should_skip_path` is `pub(super)`, hence re-derived).
-            // Skipping a hidden dir here means its whole subtree is never pushed,
-            // so descendants are excluded too — again matching the engine walk.
-            if entry.file_name().to_str().is_some_and(|name| name.starts_with('.')) {
+            // Hidden entries are never uploaded, so they never enter
+            // `sync_state.json`; without this skip a macOS `.DS_Store` (never
+            // synced) is counted as pending on every launch, painting a
+            // spurious "N files · Preparing" the engine then never transfers.
+            // Skipping a hidden dir here means its whole subtree is never
+            // pushed, so descendants are excluded too — matching the engine.
+            if is_engine_hidden_name(&entry.file_name()) {
                 continue;
             }
             let Ok(meta) = entry.metadata() else { continue };
@@ -475,11 +648,11 @@ fn sum_and_count_batch_std(paths: &[String]) -> (u64, u64) {
         // `is_dir()` follows, matching the previous top-level classification
         // so a symlink-to-folder in the batch is still walked.
         if p.is_dir() {
-            let (b, c) = walk_regular_files_stats_std(p);
-            bytes = bytes.saturating_add(b);
+            let walk = walk_regular_files_stats_std(p);
+            bytes = bytes.saturating_add(walk.bytes);
             // Floor a directory's count at 1 so an unwalkable subdir still
             // raises the banner (mirrors the prior `count_regular_files().max(1)`).
-            count = count.saturating_add(c.max(1));
+            count = count.saturating_add(walk.count.max(1));
         } else {
             bytes = bytes.saturating_add(std::fs::metadata(p).map_or(0, |m| m.len()));
             count = count.saturating_add(1);
@@ -519,7 +692,7 @@ async fn add_folder_internal(canonical_parent: &Path, folder_path: &str) -> Resu
         ));
     }
 
-    copy_dir_recursive(source, &canonical_dest, 0).await?;
+    copy_tree_into_sync_dest(source, &canonical_dest).await?;
     Ok(name)
 }
 
@@ -563,6 +736,7 @@ pub async fn add_files(
     file_paths: Vec<String>,
     subfolder: Option<String>,
     for_folder: bool,
+    overwrite: Option<bool>,
 ) -> Result<AddFilesResult> {
     // Enforce credit eligibility once for the whole batch at the IPC
     // boundary. The per-file `add_file_internal` calls inside the loop
@@ -624,11 +798,11 @@ pub async fn add_files(
             return Err(crate::error::AppError::Validation("Subfolder path contains traversal component".into()));
         }
         let target = Path::new(&sync_path).join(sub);
-        if !target.exists()
-            && let Err(e) = std::fs::create_dir_all(&target)
+        if !tokio::fs::try_exists(&target).await.unwrap_or(false)
+            && let Err(e) = create_dir_all_spawn(target.clone()).await
         {
             reset_banner(&app, &state);
-            return Err(crate::error::AppError::Io(e));
+            return Err(e);
         }
         // Verify resolved path stays within sync root.
         let canonical_root = match tokio::fs::canonicalize(Path::new(&sync_path)).await {
@@ -679,7 +853,7 @@ pub async fn add_files(
             // Use the internal helper that skips the per-file eligibility
             // check — the batch eligibility check at the top of `add_files`
             // covers the whole operation.
-            add_file_internal(&canonical_target, file_path).await
+            add_file_internal(&canonical_target, file_path, overwrite.unwrap_or(false)).await
         };
         match result {
             Ok(name) => added.push(name),
@@ -712,6 +886,15 @@ pub async fn add_files(
     // short-circuits when no entry exists.
     if added.is_empty() {
         reset_banner(&app, &state);
+    } else {
+        // Per added entry rather than once for the destination directory: a
+        // folder entry may have merged into an existing tree, whose own rows
+        // are then stale, but the destination's OTHER children are untouched
+        // and should keep the walk they already paid for.
+        let (root, dest) = listing_add_paths(&sync_path, subfolder.as_deref());
+        for name in &added {
+            invalidate_dir_stats_for_change(&root, &dest.join(name));
+        }
     }
 
     // Always trigger sync so successfully added files get uploaded
@@ -742,9 +925,392 @@ mod tests {
         tokio::fs::create_dir(&sub).await.unwrap();
         tokio::fs::write(sub.join("c.txt"), b"xyz").await.unwrap(); // 3 bytes
 
-        let (bytes, count) = walk_regular_files_stats(root).await;
-        assert_eq!(count, 3, "all three regular files counted across the nested dir");
-        assert_eq!(bytes, 10, "byte total summed across the nested dir (5+2+3)");
+        let walk = walk_regular_files_stats(root).await;
+        assert_eq!(walk.count, 3, "all three regular files counted across the nested dir");
+        assert_eq!(walk.bytes, 10, "byte total summed across the nested dir (5+2+3)");
+    }
+
+    /// H-082: Drive listing and the add-folder File No banner both skip
+    /// via `is_engine_hidden_name`. A 130-file folder plus two dotfiles
+    /// used to banner 132, then Drive settled at 130.
+    #[test]
+    fn walk_regular_files_stats_skips_hidden_so_banner_matches_drive() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        for i in 0..130 {
+            std::fs::write(root.join(format!("visible-{i:03}.txt")), b"v").unwrap();
+        }
+        std::fs::write(root.join(".DS_Store"), b"mac").unwrap();
+        std::fs::write(root.join(".hidden"), b"dot").unwrap();
+
+        let walk = walk_regular_files_stats_std(root);
+        assert_eq!(walk.count, 130, "hidden files must not inflate the File No banner");
+        assert_eq!(walk.bytes, 130, "each visible file is 1 byte; hidden bytes must not be summed");
+        assert_eq!(walk.skipped_hidden, 2, "H-063 toast counts the two dotfiles");
+    }
+
+    /// The rest of listing's skip set: a hidden directory's children, a
+    /// `downloaded_<hex>` artifact, and a 0-byte `file_<hex>` stub. A non-zero
+    /// stub and a `downloaded_` name that is not all-hex stay counted — listing
+    /// only drops the 0-byte / hex-artifact cases.
+    #[test]
+    fn walk_regular_files_stats_skips_hidden_dirs_artifacts_and_zero_byte_stubs() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        std::fs::write(root.join("keep.txt"), b"ok").unwrap();
+        let hidden_dir = root.join(".git");
+        std::fs::create_dir(&hidden_dir).unwrap();
+        std::fs::write(hidden_dir.join("objects"), b"blob").unwrap();
+        std::fs::write(root.join("downloaded_deadbeef"), b"artifact").unwrap();
+        std::fs::write(root.join("file_0123456789abcdef"), b"").unwrap();
+        std::fs::write(root.join("file_0123456789abcdee"), b"data").unwrap();
+        std::fs::write(root.join("downloaded_notes.txt"), b"xy").unwrap();
+
+        let walk = walk_regular_files_stats_std(root);
+        assert_eq!(walk.count, 3, "keep.txt + non-zero stub + downloaded_notes.txt");
+        assert_eq!(walk.bytes, 8, "2 + 4 + 2; hidden-dir / artifact / 0-byte stub omitted");
+        assert_eq!(walk.skipped_hidden, 1, ".git is one skipped hidden directory");
+    }
+
+    /// This PR is the counter: listing skip must not be copied into
+    /// `copy_dir_recursive`. A hidden source file still lands on disk.
+    #[tokio::test]
+    async fn add_folder_still_copies_hidden_files_onto_disk() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let sync = tmp.path().join("sync");
+        let src = tmp.path().join("photos");
+        tokio::fs::create_dir(&sync).await.unwrap();
+        tokio::fs::create_dir(&src).await.unwrap();
+        tokio::fs::write(src.join("a.txt"), b"hi").await.unwrap();
+        tokio::fs::write(src.join(".hidden"), b"dot").await.unwrap();
+
+        let name = add_folder_with_app_inner(sync.to_str().unwrap(), src.to_str().unwrap(), None)
+            .await
+            .unwrap();
+        assert_eq!(name, "photos");
+        assert_eq!(tokio::fs::read(sync.join("photos/a.txt")).await.unwrap(), b"hi");
+        assert_eq!(
+            tokio::fs::read(sync.join("photos/.hidden")).await.unwrap(),
+            b"dot",
+            "copy must still write hidden names; only the File No walker skips them"
+        );
+        assert_eq!(walk_regular_files_stats_std(&src).count, 1);
+        assert_eq!(walk_regular_files_stats_std(&src).skipped_hidden, 1);
+    }
+
+    /// Extract the body of the function whose signature contains `sig` — a
+    /// whole-file substring would pass if the call lived in a test.
+    ///
+    /// The end is the first `\n}\n`: rustfmt closes a top-level item's brace at
+    /// column 0 and indents every brace inside it, so this needs no brace
+    /// counting — and brace counting is what would silently overrun the body
+    /// (and then match a LATER function's call) the day a comment or string
+    /// literal in here carries an unbalanced brace.
+    fn fn_body<'a>(src: &'a str, sig: &str) -> &'a str {
+        let sig_idx = src.find(sig).unwrap_or_else(|| panic!("`{sig}` declaration present"));
+        let rest = &src[sig_idx..];
+        let end = rest.find("\n}\n").unwrap_or_else(|| panic!("`{sig}` body never closes at column 0"));
+        &rest[..end]
+    }
+
+    /// Wiring pin, not a behaviour test: the cache drop has no observable
+    /// effect from a unit test (the IPC needs `tauri::State`), and losing the
+    /// call is silent — the listing just serves a pre-copy file count until
+    /// some later change ticks the directory mtime.
+    #[test]
+    fn every_add_path_invalidates_listing_dir_stats() {
+        let src = include_str!("add.rs");
+        for sig in ["pub async fn add_file(", "pub async fn add_folder(", "pub async fn add_files("] {
+            assert!(
+                fn_body(src, sig).contains("invalidate_dir_stats_for_change"),
+                "`{sig}` must drop the listing dir-stats cache after a copy"
+            );
+        }
+
+        // Guard the extractor itself, so the assertions above cannot pass
+        // vacuously on an over-long slice: `add_file` deliberately leaves the
+        // upload to the watcher, so a body that ran on into `add_folder`
+        // would carry that function's `trigger_sync`.
+        assert!(
+            !fn_body(src, "pub async fn add_file(").contains("trigger_sync"),
+            "fn_body over-ran `add_file` — the wiring assertions above prove nothing"
+        );
+    }
+
+    /// A hidden directory is skipped WHOLESALE at any depth: its visible
+    /// children, and their visible subdirectories, never reach the count.
+    /// The root-level `.git` case would also pass a per-entry-only skip that
+    /// still descended nested hidden dirs, so this pins the subtree rule.
+    /// Sizes are distinct powers of two so a wrong total names its culprit.
+    #[test]
+    fn walk_regular_files_stats_skips_hidden_subtrees_at_depth() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        std::fs::write(root.join("top.txt"), b"1").unwrap(); // 1
+
+        let visible = root.join("project");
+        std::fs::create_dir(&visible).unwrap();
+        std::fs::write(visible.join("keep.txt"), b"22").unwrap(); // 2
+
+        // Hidden dir nested under a VISIBLE dir, with a visible file and a
+        // visible sub-subtree inside it.
+        let nested_hidden = visible.join(".cache");
+        std::fs::create_dir_all(nested_hidden.join("blobs")).unwrap();
+        std::fs::write(nested_hidden.join("index.bin"), b"4444").unwrap();
+        std::fs::write(nested_hidden.join("blobs/a.bin"), b"88888888").unwrap();
+
+        // Hidden dir at the root whose children are entirely visible.
+        let top_hidden = root.join(".git");
+        std::fs::create_dir_all(top_hidden.join("objects")).unwrap();
+        std::fs::write(top_hidden.join("HEAD"), b"1616161616161616").unwrap();
+        std::fs::write(top_hidden.join("objects/pack"), b"32").unwrap();
+
+        let walk = walk_regular_files_stats_std(root);
+        assert_eq!(walk.count, 2, "only top.txt and project/keep.txt are engine-visible");
+        assert_eq!(walk.bytes, 3, "1 + 2; no byte from either hidden subtree may be summed");
+        assert_eq!(
+            walk.skipped_hidden, 2,
+            ".cache and .git each count as one skipped name, not every file inside"
+        );
+    }
+
+    /// hcfs's `should_skip_path` is `to_str()`-gated, so a non-UTF-8 name that
+    /// happens to start with `.` is NOT skipped and the engine uploads it. The
+    /// counter must agree, or the banner under-counts real upload work.
+    ///
+    /// Linux-only: APFS and HFS+ reject filenames that are not valid UTF-8, so
+    /// the case cannot be staged on macOS at all.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn walk_regular_files_stats_counts_non_utf8_dot_name_like_the_engine() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        std::fs::write(root.join("plain.txt"), b"z").unwrap();
+        let raw = std::ffi::OsStr::from_bytes(b".caf\xe9");
+        std::fs::write(root.join(raw), b"xy").unwrap();
+
+        let walk = walk_regular_files_stats_std(root);
+        assert_eq!(walk.count, 2, "a non-UTF-8 `.`-name is uploaded by the engine, so it must be counted");
+        assert_eq!(walk.bytes, 3);
+    }
+
+    #[test]
+    fn listing_add_paths_joins_the_subfolder_without_canonicalizing() {
+        let (root, dest) = listing_add_paths("/sync/drive", Some("photos/2024"));
+        assert_eq!(root, PathBuf::from("/sync/drive"));
+        assert_eq!(dest, PathBuf::from("/sync/drive/photos/2024"));
+
+        let (root, dest) = listing_add_paths("/sync/drive", None);
+        assert_eq!(dest, root, "a root-level add lands in the drive root itself");
+    }
+
+    /// The add side of H-068. Uploading into `root/sub` stamps `root/sub` and
+    /// nothing above it, so the drive root's warmed row still validates by
+    /// mtime and the `sub` folder row would keep showing the pre-upload size.
+    ///
+    /// Exercised through the same `listing_add_paths` + invalidate pair the
+    /// three `add_*` commands use; `add_file` itself needs a live `AppState`.
+    #[tokio::test]
+    async fn adding_into_a_subfolder_refreshes_the_root_total() {
+        let _cache_guard = super::super::dir_stats::CACHE_TEST_LOCK.lock().await;
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        let sub = root.join("sub");
+        tokio::fs::create_dir(&sub).await.unwrap();
+        tokio::fs::write(sub.join("a.txt"), b"12345").await.unwrap();
+
+        let (size, _) = super::super::dir_stats::dir_stats_recursive(root, None).await;
+        assert_eq!(size, 5, "warm the cache for root and root/sub");
+
+        let sync_path = root.to_string_lossy().to_string();
+        tokio::fs::write(sub.join("b.txt"), b"6789").await.unwrap();
+        let (listing_root, dest) = listing_add_paths(&sync_path, Some("sub"));
+        invalidate_dir_stats_for_change(&listing_root, &dest.join("b.txt"));
+
+        let (size, count) = super::super::dir_stats::dir_stats_recursive(root, None).await;
+        assert_eq!((size, count), (9, 2), "the root total must pick up a file added under sub");
+    }
+
+    #[test]
+    fn incoming_staging_path_is_hidden_and_stays_in_the_parent() {
+        let dest = PathBuf::from("/sync/Photos");
+        let staging = incoming_staging_path(&dest);
+        let name = staging.file_name().and_then(|n| n.to_str()).unwrap();
+        assert!(
+            name.starts_with(".hippius-incoming-Photos-"),
+            "staging name must be skipped by hcfs-client collect_files: {name}"
+        );
+        assert_eq!(staging.parent(), dest.parent());
+    }
+
+    #[tokio::test]
+    async fn copy_tree_into_sync_dest_renames_staging_away() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let src = tmp.path().join("src");
+        tokio::fs::create_dir(&src).await.unwrap();
+        tokio::fs::write(src.join("a.txt"), b"hi").await.unwrap();
+        let dest = tmp.path().join("Photos");
+        copy_tree_into_sync_dest(&src, &dest).await.unwrap();
+        assert_eq!(tokio::fs::read(dest.join("a.txt")).await.unwrap(), b"hi");
+        let leftovers: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with(".hippius-incoming-"))
+            .collect();
+        assert!(leftovers.is_empty(), "staging sibling must be renamed away, left {leftovers:?}");
+    }
+
+    /// A single-file add must stage too, not just a folder add.
+    ///
+    /// `fs::copy` onto an existing path truncates before it refills, so writing
+    /// the destination directly lets a scan hash a file shorter than the synced
+    /// copy. hcfs dropped the guard that used to absorb that (it delayed every
+    /// legitimate smaller edit) and named this staging as the replacement, so
+    /// the overwrite has to reach the destination as one atomic rename.
+    /// Asserted on the INODE, not on the resulting bytes.
+    ///
+    /// Content alone cannot tell the two implementations apart — a direct
+    /// `fs::copy` onto the destination also ends with the right bytes and also
+    /// leaves no staging file, so a content-and-residue test passes just as
+    /// happily on the truncate-in-place version this replaced.
+    ///
+    /// Replacing the destination by `rename` gives it a NEW inode; truncating
+    /// and refilling it in place keeps the old one. That is precisely the
+    /// difference that makes a partly-written overwrite unobservable to a scan,
+    /// so it is the thing worth pinning.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn add_file_internal_replaces_an_existing_file_rather_than_rewriting_it() {
+        use std::os::unix::fs::MetadataExt;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let sync_root = tmp.path().join("sync");
+        let src_dir = tmp.path().join("src");
+        tokio::fs::create_dir(&sync_root).await.unwrap();
+        tokio::fs::create_dir(&src_dir).await.unwrap();
+
+        // A synced file LONGER than its replacement — the shape the removed
+        // shrink guard existed for, and the one where a truncate-in-place
+        // overwrite is briefly a short file on disk.
+        let dest = sync_root.join("note.txt");
+        tokio::fs::write(&dest, b"the original, considerably longer contents").await.unwrap();
+        let before = std::fs::metadata(&dest).unwrap().ino();
+
+        let src = src_dir.join("note.txt");
+        tokio::fs::write(&src, b"short").await.unwrap();
+
+        let name = add_file_internal(&sync_root, src.to_str().unwrap(), true).await.unwrap();
+        assert_eq!(name, "note.txt");
+        assert_eq!(tokio::fs::read(&dest).await.unwrap(), b"short");
+
+        assert_ne!(
+            std::fs::metadata(&dest).unwrap().ino(),
+            before,
+            "the destination kept its inode, so it was truncated and refilled in place — a scan \
+             landing mid-copy would hash the short prefix, which is the case hcfs stopped guarding"
+        );
+
+        let leftovers: Vec<_> = std::fs::read_dir(&sync_root)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with(".hippius-incoming-"))
+            .collect();
+        assert!(leftovers.is_empty(), "staging sibling must be renamed away, left {leftovers:?}");
+    }
+
+    /// Same-name upload without an explicit replace must not clobber the
+    /// dest (H-097). The previous body was lost silently: File No stayed
+    /// put, size changed, no dialog.
+    #[tokio::test]
+    async fn add_file_internal_refuses_an_unconfirmed_overwrite() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let sync_root = tmp.path().join("sync");
+        let src_dir = tmp.path().join("src");
+        tokio::fs::create_dir(&sync_root).await.unwrap();
+        tokio::fs::create_dir(&src_dir).await.unwrap();
+
+        let dest = sync_root.join("qa-new.txt");
+        tokio::fs::write(&dest, b"original-13b").await.unwrap();
+        let src = src_dir.join("qa-new.txt");
+        tokio::fs::write(&src, b"qa-new-OVERWRITE").await.unwrap();
+
+        let err = add_file_internal(&sync_root, src.to_str().unwrap(), false)
+            .await
+            .expect_err("an existing dest without overwrite must fail closed");
+        assert!(
+            matches!(&err, crate::error::AppError::Validation(m) if m == &already_exists_message("qa-new.txt")),
+            "collision is Validation with the pinned message, got {err:?}"
+        );
+        assert_eq!(
+            tokio::fs::read(&dest).await.unwrap(),
+            b"original-13b",
+            "the existing file must be left untouched"
+        );
+
+        let leftovers: Vec<_> = std::fs::read_dir(&sync_root)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with(".hippius-incoming-"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "a refused overwrite must not leave a staging sibling, left {leftovers:?}"
+        );
+    }
+
+    /// A failed single-file add must not leave a hidden partial behind.
+    ///
+    /// The staging name is skipped by hcfs's `collect_files`, so a leaked one
+    /// is never synced and never cleaned — it just consumes disk inside the
+    /// user's sync folder, invisibly, once per failed add.
+    #[tokio::test]
+    async fn add_file_internal_cleans_staging_when_the_copy_fails() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let parent = tmp.path().to_path_buf();
+        let missing = tmp.path().join("no-such-source.txt");
+
+        let result = add_file_internal(&parent, missing.to_str().unwrap(), false).await;
+        assert!(result.is_err(), "a missing source must fail the add");
+        assert!(!parent.join("no-such-source.txt").exists(), "a failed add must not create the dest");
+
+        let leftovers: Vec<_> = std::fs::read_dir(&parent)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with(".hippius-incoming-"))
+            .collect();
+        assert!(leftovers.is_empty(), "failed copy must remove the staging sibling, left {leftovers:?}");
+    }
+
+    #[tokio::test]
+    async fn copy_tree_into_sync_dest_cleans_staging_when_copy_fails() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let src = tmp.path().join("missing-src");
+        let dest = tmp.path().join("Photos");
+        let err = copy_tree_into_sync_dest(&src, &dest).await;
+        assert!(err.is_err(), "missing source must fail the copy");
+        assert!(!dest.exists(), "failed add must not leave a dest folder");
+        let leftovers: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with(".hippius-incoming-"))
+            .collect();
+        assert!(leftovers.is_empty(), "failed copy must remove the staging sibling, left {leftovers:?}");
+    }
+
+    #[tokio::test]
+    async fn copy_tree_into_sync_dest_merges_into_existing_dest() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let src = tmp.path().join("src");
+        tokio::fs::create_dir(&src).await.unwrap();
+        tokio::fs::write(src.join("new.txt"), b"n").await.unwrap();
+        let dest = tmp.path().join("Photos");
+        tokio::fs::create_dir(&dest).await.unwrap();
+        tokio::fs::write(dest.join("old.txt"), b"o").await.unwrap();
+        copy_tree_into_sync_dest(&src, &dest).await.unwrap();
+        assert_eq!(tokio::fs::read(dest.join("old.txt")).await.unwrap(), b"o");
+        assert_eq!(tokio::fs::read(dest.join("new.txt")).await.unwrap(), b"n");
     }
 
     #[cfg(unix)]
@@ -755,9 +1321,9 @@ mod tests {
         tokio::fs::write(root.join("real.txt"), b"abc").await.unwrap();
         std::os::unix::fs::symlink(root.join("real.txt"), root.join("link.txt")).unwrap();
 
-        let (bytes, count) = walk_regular_files_stats(root).await;
-        assert_eq!(count, 1, "symlink must not be counted as a regular file");
-        assert_eq!(bytes, 3);
+        let walk = walk_regular_files_stats(root).await;
+        assert_eq!(walk.count, 1, "symlink must not be counted as a regular file");
+        assert_eq!(walk.bytes, 3);
     }
 
     /// No baseline on disk → empty synced set → ALL on-disk files are pending.

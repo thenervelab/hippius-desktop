@@ -17,6 +17,7 @@ name: e2e-live
 #                  HCFS_DESKTOP_E2E_MEMBER_SS58
 #   folder_shares: HCFS_DESKTOP_E2E_SERVER_URL, HCFS_DESKTOP_E2E_BEARER,
 #                  HCFS_DESKTOP_E2E_SS58
+#   folder_entries: HCFS_DESKTOP_E2E_SERVER_URL, HCFS_DESKTOP_E2E_ADMIN_BEARER
 # HCFS_DESKTOP_E2E_SERVER_URL is a secret rather than a repository variable
 # purely so it travels with the account credentials it pairs with; expect it
 # to render as *** in the logs, which is masking, not a failure. STORE IT
@@ -30,12 +31,14 @@ name: e2e-live
 # folder-shares suite needs a USER bearer, not the admin-bypass token (admin
 # maps to a literal "admin" owner and the share mint 404s).
 #
-# A third live suite, folder_entries_real_backend.rs, is not wired in here. It
-# reads HCFS_DESKTOP_E2E_ADMIN_BEARER — hcfs's committed admin-bypass token,
-# the OPPOSITE kind of credential from the folder-shares bearer, which is why
-# the two no longer share a variable name. It already honours REQUIRE, so
-# adding it is now just: provision that secret and add a step mirroring the
-# two below.
+# folder_entries_real_backend.rs is wired below. It reads
+# HCFS_DESKTOP_E2E_ADMIN_BEARER from repository secrets — never a literal in
+# this public repo. That is the OPPOSITE kind of credential from the
+# folder-shares user bearer, which is why the two do not share a variable
+# name. `suite=both` and `suite=all` run every live file.
+# `tests/live_lane_wiring.rs` fails CI if a new `*_real_backend.rs` is not
+# named in a `cargo test --test` line here, and if a live-lane credential
+# is written into source as a literal.
 #
 # What it costs: a cold Rust compile of the whole subxt/alloy/tauri/hcfs graph
 # (~20-30 min; warm runs are minutes) plus real writes against the target
@@ -62,7 +65,7 @@ name: e2e-live
 # BRANCH. `--ref` picks which code runs, but until this workflow itself is
 # merged to main the dispatch fails with "workflow does not exist".
 #
-# HCFS_DESKTOP_E2E_REQUIRE=1 is the load-bearing part. Both suites skip QUIETLY
+# HCFS_DESKTOP_E2E_REQUIRE=1 is the load-bearing part. The suites skip QUIETLY
 # when their env is unset (so a plain `cargo test` stays hermetic), which means
 # a single typo'd or unprovisioned secret would otherwise produce a green job
 # that asserted nothing. With REQUIRE=1 the suites panic instead. The suites
@@ -81,8 +84,10 @@ on:
         default: both
         options:
           - both
+          - all
           - shared_drives
           - folder_shares
+          - folder_entries
 
 # Least privilege: this workflow only reads the checkout.
 permissions:
@@ -119,15 +124,19 @@ jobs:
           HCFS_DESKTOP_E2E_MEMBER_SS58: ${{ secrets.HCFS_DESKTOP_E2E_MEMBER_SS58 }}
           HCFS_DESKTOP_E2E_BEARER: ${{ secrets.HCFS_DESKTOP_E2E_BEARER }}
           HCFS_DESKTOP_E2E_SS58: ${{ secrets.HCFS_DESKTOP_E2E_SS58 }}
+          HCFS_DESKTOP_E2E_ADMIN_BEARER: ${{ secrets.HCFS_DESKTOP_E2E_ADMIN_BEARER }}
         run: |
           set -euo pipefail
           want=(HCFS_DESKTOP_E2E_SERVER_URL)
-          if [ "$SUITE" = shared_drives ] || [ "$SUITE" = both ]; then
+          if [ "$SUITE" = shared_drives ] || [ "$SUITE" = both ] || [ "$SUITE" = all ]; then
             want+=(HCFS_DESKTOP_E2E_BEARER_OWNER HCFS_DESKTOP_E2E_BEARER_MEMBER)
             want+=(HCFS_DESKTOP_E2E_OWNER_SS58 HCFS_DESKTOP_E2E_MEMBER_SS58)
           fi
-          if [ "$SUITE" = folder_shares ] || [ "$SUITE" = both ]; then
+          if [ "$SUITE" = folder_shares ] || [ "$SUITE" = both ] || [ "$SUITE" = all ]; then
             want+=(HCFS_DESKTOP_E2E_BEARER HCFS_DESKTOP_E2E_SS58)
+          fi
+          if [ "$SUITE" = folder_entries ] || [ "$SUITE" = both ] || [ "$SUITE" = all ]; then
+            want+=(HCFS_DESKTOP_E2E_ADMIN_BEARER)
           fi
           # Whitespace-only counts as missing, matching the suites' `live_env()`
           # (`.trim().is_empty()`) — otherwise a secret set to " " would clear
@@ -169,14 +178,15 @@ jobs:
       # a green job that asserted nothing, the exact failure this lane exists to
       # prevent. Asserting a non-zero executed count catches that directly.
       #
-      # Expected counts as of this commit: shared_drives 2, folder_shares 3.
+      # Expected counts as of this commit: shared_drives 2, folder_shares 3,
+      # folder_entries 2.
       # The guard is `>= 1`, not equality, so it would still pass if someone
       # dropped `#[ignore]` from one test of three and the rest stopped running
       # under `--ignored`. Pinning exact counts would fail every time a test is
       # legitimately added, so the counts live here as the thing to eyeball in
       # the step's "N live tests executed" line rather than as an assertion.
       - name: Shared drives (two-account live e2e)
-        if: inputs.suite == 'shared_drives' || inputs.suite == 'both'
+        if: inputs.suite == 'shared_drives' || inputs.suite == 'both' || inputs.suite == 'all'
         working-directory: src-tauri
         shell: bash
         env:
@@ -206,7 +216,7 @@ jobs:
       - name: Folder shares (single-bearer live e2e)
         if: >-
           !cancelled() && steps.setup.conclusion == 'success' &&
-          (inputs.suite == 'folder_shares' || inputs.suite == 'both')
+          (inputs.suite == 'folder_shares' || inputs.suite == 'both' || inputs.suite == 'all')
         working-directory: src-tauri
         shell: bash
         env:
@@ -226,3 +236,27 @@ jobs:
             exit 1
           fi
           echo "folder_shares: $passed live tests executed"
+
+      # Same independence rule as folder-shares vs shared-drives: a red sibling
+      # must not hide this suite's result. ADMIN bearer, not the user bearer.
+      - name: Folder entries (admin-bearer live e2e)
+        if: >-
+          !cancelled() && steps.setup.conclusion == 'success' &&
+          (inputs.suite == 'folder_entries' || inputs.suite == 'both' || inputs.suite == 'all')
+        working-directory: src-tauri
+        shell: bash
+        env:
+          SQLX_OFFLINE: "true"
+          HCFS_DESKTOP_E2E_REQUIRE: "1"
+          HCFS_DESKTOP_E2E_SERVER_URL: ${{ secrets.HCFS_DESKTOP_E2E_SERVER_URL }}
+          HCFS_DESKTOP_E2E_ADMIN_BEARER: ${{ secrets.HCFS_DESKTOP_E2E_ADMIN_BEARER }}
+        run: |
+          set -euo pipefail
+          out=$(mktemp)
+          cargo test --test folder_entries_real_backend -- --ignored | tee "$out"
+          passed=$(sed -n 's/^test result: ok\. \([0-9][0-9]*\) passed.*/\1/p' "$out" | tail -1)
+          if [ "${passed:-0}" -lt 1 ]; then
+            echo "folder_entries: no live test executed — refusing to report success" >&2
+            exit 1
+          fi
+          echo "folder_entries: $passed live tests executed"

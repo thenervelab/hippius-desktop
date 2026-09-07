@@ -346,6 +346,32 @@ mod tests {
         );
     }
 
+    /// H-083: the Billing card's last point is cumulative HIP spent on
+    /// Drive, not uploaded bytes. Inflating 0.0038 HIP to look like 32 GB
+    /// would lie about money. A 2-decimal round-trip to "0.00" is the
+    /// other wrong "fix" — the formatter must keep milli-HIP.
+    #[test]
+    fn a_day_of_drive_storage_plots_as_milli_hip_not_bytes() {
+        let today = chrono::Utc::now().date_naive();
+        let ts = format!("{}T12:00:00Z", today.format("%Y-%m-%d"));
+        // 0.0038 HIP in planck — ~1 day of ~32 GB at ~0.003 HIP/GB-month.
+        let events = vec![evt("CreditsConsumed", "3800000000000000", &ts)];
+        let chart = build_credits_chart(&events, "last7days");
+        assert!(!chart.is_empty(), "a same-day spend must produce a point");
+        let last = chart.last().expect("last point");
+        assert!(
+            (last.balance - 0.0038).abs() < 1e-9,
+            "last point must be 0.0038 HIP, not uploaded bytes; got {}",
+            last.balance
+        );
+        assert!(
+            last.balance < 1.0,
+            "drive credits are HIP (~0.003/GB-month), never scaled toward byte counts; got {}",
+            last.balance
+        );
+        assert_eq!(last.formatted_balance, "0.0038");
+    }
+
     #[test]
     fn total_sums_only_consumed_events() {
         // Mirrors the body of `get_drive_credits_total` so the

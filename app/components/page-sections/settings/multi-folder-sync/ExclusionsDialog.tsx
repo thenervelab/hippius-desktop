@@ -9,6 +9,7 @@ import FramedDialog from "@/components/ui/FramedDialog";
 import { Button } from "@/components/ui";
 import { Input } from "@/components/ui/input";
 import { FolderOpen } from "@/components/ui/icons";
+import type { ExcludePatternEntry } from "@/lib/types/excludePattern";
 
 interface ExclusionsDialogProps {
   open: boolean;
@@ -41,7 +42,7 @@ export default function ExclusionsDialog({
   label,
   onClose,
 }: ExclusionsDialogProps) {
-  const [patterns, setPatterns] = useState<string[]>([]);
+  const [patterns, setPatterns] = useState<ExcludePatternEntry[]>([]);
   const [draft, setDraft] = useState("");
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -51,7 +52,7 @@ export default function ExclusionsDialog({
     setLoading(true);
     try {
       setPatterns(
-        await invoke<string[]>("list_exclude_patterns", { label }),
+        await invoke<ExcludePatternEntry[]>("list_exclude_patterns", { label }),
       );
     } catch (error) {
       toast.error(errorMessage(error, "Could not load exclusions"));
@@ -72,8 +73,11 @@ export default function ExclusionsDialog({
       await invoke<boolean>("add_exclude_pattern", { label, pattern });
       // Reflect locally rather than refetching: the add already returned the
       // authoritative outcome, and a round trip would blank the list mid-edit.
+      // A typed glob is stored as typed, so it displays as itself.
       setPatterns((current) =>
-        current.includes(pattern) ? current : [...current, pattern],
+        current.some((p) => p.pattern === pattern)
+          ? current
+          : [...current, { pattern, display: pattern }],
       );
       setDraft("");
     } catch (error) {
@@ -88,7 +92,7 @@ export default function ExclusionsDialog({
     setBusy(true);
     try {
       await invoke<boolean>("remove_exclude_pattern", { label, pattern });
-      setPatterns((current) => current.filter((p) => p !== pattern));
+      setPatterns((current) => current.filter((p) => p.pattern !== pattern));
     } catch (error) {
       toast.error(errorMessage(error, "Could not remove that pattern"));
     } finally {
@@ -148,17 +152,17 @@ export default function ExclusionsDialog({
             </p>
           ) : (
             <ul className="flex flex-col gap-1.5">
-              {patterns.map((pattern) => (
+              {patterns.map(({ pattern, display }) => (
                 <li
                   key={pattern}
                   className="flex items-center justify-between gap-3 rounded-[8px] bg-[#F4F4F4] px-3 py-2.5 dark:bg-[#2C2C2C]"
                 >
                   <code className="min-w-0 truncate text-[13px] text-grey-10 dark:text-white">
-                    {pattern}
+                    {display}
                   </code>
                   <button
                     type="button"
-                    aria-label={`Remove ${pattern}`}
+                    aria-label={`Remove ${display}`}
                     disabled={busy}
                     onClick={() => void handleRemove(pattern)}
                     className="shrink-0 text-grey-10/60 transition-colors hover:text-error-50 disabled:opacity-50 dark:text-white/60"

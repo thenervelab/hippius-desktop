@@ -111,7 +111,7 @@ There is no codegen between the two sides, so the IPC boundary is the only place
 - **`app/`** — Next.js 15 frontend, static export (`output: "export"`, no SSR). Path aliases: `@/components/*` → `app/components/*`, `@/lib/*` → `app/lib/*`, `@/services/*` → `app/lib/services/*`.
 - **`src-tauri/src/`** — Rust backend. `main.rs` registers every IPC command; `app_state.rs` holds all shared state; `sync/` is the largest area.
 - **`macos/`** — Finder Sync extension (Swift) and its build/embed/sign scripts.
-- **`docs/`** — `release-channels.md`, `release-checklist.md`, and the design docs under `docs/plans/`.
+- **`docs/`** — `release-channels.md`, `release-checklist.md`, `testing-policy.md`, and the design docs under `docs/plans/`.
 
 ## Always-true invariants
 
@@ -124,11 +124,14 @@ These hold everywhere; the subsystem rules files carry the reasoning.
 - **Route every in-app file mutation through `notifyFilesMutated`** (`app/lib/utils/fileMutationEvents.ts`) — the nested folder listings only refresh on its window event.
 - **Read theme via `useAppTheme()`**, never `window.matchMedia("(prefers-color-scheme: dark)")`; raw CSS keys off `.dark`, not `@media (prefers-color-scheme: dark)`.
 - **Never read `useUserCredits` for an eligibility decision** — call `check_action_eligibility`. Every gated IPC also enforces `require_eligible` as its first line.
+- **Drive storage is sold as a plan, so a Drive write is gated by the plan allowance, never by credits** — `require_eligible` routes `is_drive_storage()` actions to `drive_quota::check_drive_quota` and refuses with `NotReady(StorageLimitReached)`. Credits gate VM creation only. The free tier is an allowance like any other (read from the plans catalogue), not "no plan".
 - **Every re-authentication from a stored mnemonic derives via `service.rs::derive_verified_keys`**, never the bare `derive_keys` — an OAuth account's sync mnemonic derives a different identity than its login SS58.
 - **Sync-failure copy comes from Rust** (`FileFailureKindPayload::display_reason`), never from reqwest's `Display`. Do not tell the user to check their connection.
 - **Match IPC errors on the structured shape** `{ kind, message }`, not on substring matching of `err.message`.
 - **A Rust test that touches `$HOME` must acquire `crate::test_helpers::HOME_LOCK`** — cargo's parallel runner races them otherwise. Used across `sync/` and `recovery.rs`, so it lives here rather than in one subsystem's rules file.
 - **Run the live e2e lane on every `hcfs` pin bump**, before merging the bump PR.
+- **A new test goes in the lowest layer that can fail for the same reason a user would notice** — routing table in `docs/testing-policy.md`. A higher-layer failure is a missing lower-level test.
+- **Sync `#[tauri::command]`s run on the OS main thread.** Listing/filter/copy work is `async` + `spawn_blocking`.
 
 ## Testing
 
@@ -143,7 +146,7 @@ cargo test --test migration_server_mock  # Server migration mock tests
 pnpm test                                # Vitest
 ```
 
-The `*_real_backend.rs` suites are `#[ignore]`d and skip quietly without their env, so a plain `cargo test` stays hermetic. See `.claude/rules/testing.md` for the live lane, the replay harnesses, and the hcfs wire-contract pins.
+The `*_real_backend.rs` suites are `#[ignore]`d and skip quietly without their env, so a plain `cargo test` stays hermetic. Which layer a new test belongs in: [`docs/testing-policy.md`](docs/testing-policy.md). Suite inventory, live-lane env, replay harnesses, and wire-pin tables: `.claude/rules/testing.md`.
 
 ## Where the detail lives
 
@@ -159,4 +162,4 @@ The `*_real_backend.rs` suites are `#[ignore]`d and skip quietly without their e
 | `backend-modules.md` | module map, global state, SQLite, credit eligibility, log scrubbing, VPN | `src-tauri/src/**` |
 | `tray.md` | tray popover panel, platform differences, tray icon state | `src-tauri/src/tray/**`, `app/tray-panel/**` |
 | `macos-packaging.md` | Finder extension, signing, notarization, bundle version, release packaging | `macos/**`, `tauri-*.yml` |
-| `testing.md` | test inventory, live e2e lane, replay harnesses, hcfs bump guards | `src-tauri/tests/**`, `**/__tests__/**` |
+| `testing.md` | test inventory, live e2e lane, replay harnesses, hcfs bump guards (routing: `docs/testing-policy.md`) | `src-tauri/tests/**`, `**/__tests__/**` |

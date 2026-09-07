@@ -83,6 +83,17 @@ pub struct AppState {
     /// notify again), on the `SyncCompleted` recovery edge, and globally on
     /// `SyncReset`.
     pub revoked_notify: std::sync::Arc<crate::sync::error_notify::ErrorNotifyState>,
+    /// Per-label gate for the "Folder Restored" notification raised when the
+    /// engine finds an own drive's folder missing from the server, re-registers
+    /// it, and discards the local baseline (so the whole drive re-uploads).
+    /// Armed at init with "did this drive already have a `sync_state.json`" and
+    /// consumed on the first `FolderRecovered` for that label: a brand-new
+    /// folder reports `Recovered` merely because the detached
+    /// `spawn_folder_registration` has not reached the server yet, and telling
+    /// the user their new folder "was missing on the server" is both false and
+    /// the most common flow in the product. See
+    /// `crate::sync::folder_restore_notify`.
+    pub folder_restore_notify: std::sync::Arc<crate::sync::folder_restore_notify::FolderRestoreNotifyState>,
     /// Edge-triggered owner of the OS "prevent idle system sleep" assertion
     /// held while any sync session still has non-terminal files, so macOS/
     /// Windows can't idle-sleep mid-transfer of a large folder. Display sleep
@@ -294,6 +305,7 @@ impl AppState {
             credits_exhausted: std::sync::Arc::new(crate::sync::credits_exhausted::CreditsExhaustedState::new()),
             error_notify: std::sync::Arc::new(crate::sync::error_notify::ErrorNotifyState::new()),
             revoked_notify: std::sync::Arc::new(crate::sync::error_notify::ErrorNotifyState::new()),
+            folder_restore_notify: std::sync::Arc::new(crate::sync::folder_restore_notify::FolderRestoreNotifyState::new()),
             keep_awake: std::sync::Arc::new(crate::power::SyncKeepAwake::new_native()),
             chunk_reclaim: tokio::sync::OnceCell::new(),
             folder_entity_sync: std::sync::Arc::new(crate::sync::folder_entries_reconcile::PerLabelThrottle::new()),

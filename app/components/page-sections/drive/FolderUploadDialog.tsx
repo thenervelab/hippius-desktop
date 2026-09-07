@@ -89,9 +89,7 @@ export default function FolderUploadDialog({
       }
     } catch (error) {
       console.error("Error selecting folder:", error);
-      toast.error(
-        `Failed to select folder: ${errorMessage(error)}`,
-      );
+      toast.error(`Failed to select folder: ${errorMessage(error)}`);
     }
   };
 
@@ -216,11 +214,15 @@ export default function FolderUploadDialog({
         (await getPrivateSyncPath(polkadotAddress || ""))?.path ??
         "";
 
-      const name = await invoke<string>("add_folder", {
-        syncPath,
-        folderPath,
-        subfolder: null,
-      });
+      const result = await invoke<{ name: string; skippedHidden: number }>(
+        "add_folder",
+        {
+          syncPath,
+          folderPath,
+          subfolder: null,
+        },
+      );
+      const name = result.name;
 
       // Success toast AFTER add_folder resolves — add_folder runs the
       // require_eligible gate first and can reject (audit M-15), so firing
@@ -229,6 +231,16 @@ export default function FolderUploadDialog({
         duration: 4000,
         closeButton: true,
       });
+      if (result.skippedHidden > 0) {
+        // Rust counts one unit per skipped NAME and deliberately does not
+        // descend a hidden directory to size it, so `.git` is 1 here, not
+        // its 5,000 objects — "items", never "files".
+        toast.warning(
+          result.skippedHidden === 1
+            ? "1 hidden item was not synced."
+            : `${result.skippedHidden} hidden items were not synced.`,
+        );
+      }
 
       queryClient.invalidateQueries({
         queryKey: [DRIVE_STORAGE_STATS_QUERY_KEY],
@@ -247,7 +259,7 @@ export default function FolderUploadDialog({
       console.error("Error uploading folder:", error);
       // A credit shortfall from add_folder's require_eligible gate (TOCTOU vs
       // the proactive check) opens the shared dialog, not a raw error (M-15).
-      if (isNotReady(error, "INSUFFICIENT_CREDITS")) {
+      if (isNotReady(error, "STORAGE_LIMIT_REACHED")) {
         setInsufficient("folder-upload");
       } else {
         toast.error(`Failed to upload folder: ${errorMessage(error)}`);

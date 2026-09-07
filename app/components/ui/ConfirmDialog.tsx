@@ -32,6 +32,13 @@ interface AlertModeProps extends BaseProps {
   mode?: "alert";
   onOpenChange: (open: boolean) => void;
   variant?: "danger" | "warning" | "info";
+  /**
+   * When true the confirm button is shown but cannot fire `onConfirm`.
+   * Alert mode only — `BrandedDialog` renders a `CardButton` that does not
+   * read it, so declaring it on the shared base let a branded caller pass it
+   * and silently get a live confirm button.
+   */
+  confirmDisabled?: boolean;
   /** Not used in alert mode */
   icon?: never;
   iconBgColor?: never;
@@ -55,6 +62,7 @@ interface BrandedModeProps extends BaseProps {
   /** Not used in branded mode */
   onOpenChange?: never;
   variant?: never;
+  confirmDisabled?: never;
 }
 
 export type ConfirmDialogProps = AlertModeProps | BrandedModeProps;
@@ -83,11 +91,13 @@ const AlertModeDialog: React.FC<AlertModeProps> = ({
   onConfirm,
   variant = "warning",
   isLoading = false,
+  confirmDisabled = false,
 }) => {
   const [confirming, setConfirming] = useState(false);
   const busy = isLoading || confirming;
 
   const handleConfirm = async () => {
+    if (confirmDisabled) return;
     setConfirming(true);
     try {
       await onConfirm();
@@ -143,7 +153,7 @@ const AlertModeDialog: React.FC<AlertModeProps> = ({
           )}
           onClick={handleConfirm}
           loading={busy}
-          disabled={busy}
+          disabled={busy || confirmDisabled}
         >
           {confirmText}
         </Button>

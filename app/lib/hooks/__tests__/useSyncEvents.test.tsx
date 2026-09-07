@@ -6,6 +6,8 @@ import { queryClientAtom } from "jotai-tanstack-query";
 import { QueryClient } from "@tanstack/react-query";
 import React from "react";
 import { AUTH_RELOGIN_TOAST_ID, useSyncEvents } from "../useSyncEvents";
+import { STORAGE_OVERVIEW_QUERY_KEY } from "../api/useStorageOverview";
+import { DRIVE_STORAGE_STATS_QUERY_KEY } from "../api/useDriveStorageStats";
 
 // ── Tauri mocks ─────────────────────────────────────────────────────
 //
@@ -261,6 +263,92 @@ describe("useSyncEvents — debounced sync_files_completed_changed dispatch", ()
     act(() => { transfer({ payload: {} }); });
     act(() => { vi.advanceTimersByTime(DEBOUNCE_MS); });
     expect(completedDispatchCount()).toBe(1);
+  });
+});
+
+describe("useSyncEvents — storage overview invalidation (H-007)", () => {
+  // The home storage card and the Files header read the SAME indexer
+  // row (get_storage_overview / get_drive_storage_stats). Empty indexer
+  // data is success + 0 bytes, so a first-sync / no-op cycle
+  // (totalCompleted == 0) still has to refetch — otherwise the card
+  // sticks at "0 B". Gating the invalidate on totalCompleted > 0 was
+  // the bug, and gating only ONE of the two keys just relocates it, so
+  // this pins BOTH keys on every hcfs_sync_completed.
+  const zeroOutcome = {
+    label: "default",
+    files_uploaded: 0,
+    files_downloaded: 0,
+    files_deleted_locally: 0,
+    files_deleted_remotely: 0,
+    conflicts_resolved: 0,
+    conflicts_skipped: 0,
+  };
+
+  function renderWithQueryClient() {
+    const queryClient = new QueryClient();
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+    const store = createStore();
+    store.set(queryClientAtom, queryClient);
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <Provider store={store}>{children}</Provider>
+    );
+    const rendered = renderHook(() => useSyncEvents(), { wrapper });
+    return { invalidateSpy, ...rendered };
+  }
+
+  function invalidationsFor(
+    spy: { mock: { calls: unknown[][] } },
+    key: string,
+  ) {
+    return spy.mock.calls.filter((call) => {
+      const arg = call[0] as { queryKey?: unknown[] } | undefined;
+      return arg?.queryKey?.[0] === key;
+    }).length;
+  }
+
+  beforeEach(() => {
+    listenHandlers.clear();
+    vi.useRealTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("invalidates both storage surfaces when the cycle transferred zero files", async () => {
+    const { invalidateSpy } = renderWithQueryClient();
+    await waitForHandlerRegistration();
+
+    act(() => {
+      listenHandlers.get("hcfs_sync_completed")!({ payload: zeroOutcome });
+    });
+
+    expect(
+      invalidationsFor(invalidateSpy, STORAGE_OVERVIEW_QUERY_KEY),
+    ).toBeGreaterThanOrEqual(1);
+    // Same indexer row as the overview: if only one refreshes on a
+    // zero-file cycle, the two surfaces disagree about one number.
+    expect(
+      invalidationsFor(invalidateSpy, DRIVE_STORAGE_STATS_QUERY_KEY),
+    ).toBeGreaterThanOrEqual(1);
+  });
+
+  it("still invalidates both storage surfaces when files did transfer", async () => {
+    const { invalidateSpy } = renderWithQueryClient();
+    await waitForHandlerRegistration();
+
+    act(() => {
+      listenHandlers.get("hcfs_sync_completed")!({
+        payload: { ...zeroOutcome, files_uploaded: 2 },
+      });
+    });
+
+    expect(
+      invalidationsFor(invalidateSpy, STORAGE_OVERVIEW_QUERY_KEY),
+    ).toBeGreaterThanOrEqual(1);
+    expect(
+      invalidationsFor(invalidateSpy, DRIVE_STORAGE_STATS_QUERY_KEY),
+    ).toBeGreaterThanOrEqual(1);
   });
 });
 

@@ -45,7 +45,7 @@
 //!
 //! ```text
 //! HCFS_DESKTOP_E2E_SERVER_URL=http://127.0.0.1:19999 \
-//! HCFS_DESKTOP_E2E_ADMIN_BEARER=5LrjePXpHpdFDzZXNAy3Yqy7kdfRyAq9 \
+//! HCFS_DESKTOP_E2E_ADMIN_BEARER=<admin-bypass> \
 //!   cargo test --test folder_entries_real_backend -- --ignored
 //! ```
 //!
@@ -53,10 +53,11 @@
 //! returns Ok, so a default `cargo test` (and `--ignored` without the env)
 //! stays hermetic and green. Set `HCFS_DESKTOP_E2E_REQUIRE=1` to turn that
 //! skip into a panic, so a CI lane that forwards an unprovisioned secret
-//! fails instead of passing with nothing executed. The bearer is hcfs's
-//! committed admin-bypass token
-//! (public infra config, not a secret) — it short-circuits per-user ss58
-//! ownership server-side, so a fresh random test ss58 is accepted.
+//! fails instead of passing with nothing executed. The bearer is the
+//! hcfs-server admin-bypass token (`HCFS_ADMIN_BEARER_TOKEN` on the server).
+//! Pass it through the environment; CI reads `HCFS_DESKTOP_E2E_ADMIN_BEARER`
+//! from GitHub secrets. The bypass short-circuits per-user ss58 ownership
+//! server-side, so a fresh random test ss58 is accepted.
 //!
 //! The var is `HCFS_DESKTOP_E2E_ADMIN_BEARER`, deliberately NOT the plain
 //! `HCFS_DESKTOP_E2E_BEARER` that `folder_shares_real_backend` reads: that
@@ -82,7 +83,7 @@ use tauri_project_lib::utils::schema::ensure_table_schema;
 
 /// Server URL env var. Unset → the test skips cleanly (default hermetic run).
 const SERVER_URL_ENV: &str = "HCFS_DESKTOP_E2E_SERVER_URL";
-/// Bearer-token env var (hcfs admin-bypass token, public infra config).
+/// Bearer-token env var (hcfs admin-bypass token, from env / CI secrets).
 const BEARER_ENV: &str = "HCFS_DESKTOP_E2E_ADMIN_BEARER";
 /// `=1` turns the quiet env-skip into a panic, so a live CI lane cannot go
 /// green by silently not running these tests.

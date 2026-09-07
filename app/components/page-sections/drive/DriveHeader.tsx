@@ -81,15 +81,17 @@ interface DriveHeaderProps {
    *  click is rerouted to the billing plans page — without credits the
    *  sync flow can't succeed anyway, so the button doubles as the
    *  top-up entry point. */
-  hasNoCredits?: boolean;
+  isStorageFull?: boolean;
   onNavigateToSettings?: () => void;
   // Filter props — single-select extension + date-range match console UX.
   selectedFileExtension?: FileExtension;
   selectedDateRange?: DateRange;
   selectedFileSizes: number[];
+  excludedOnly?: boolean;
   onFileExtensionChange: (extension: FileExtension | undefined) => void;
   onDateRangeChange: (range: DateRange | undefined) => void;
   onFileSizesChange: (sizes: number[]) => void;
+  onExcludedOnlyChange?: (excludedOnly: boolean) => void;
   defaultFolderLabel?: string | null;
   isFolderUploadOpen?: boolean;
   onSetFolderUploadOpen?: (open: boolean) => void;
@@ -148,15 +150,17 @@ const DriveHeader: FC<DriveHeaderProps> = ({
   hideUploads = false,
   onStartSyncing,
   hasNoSyncPaths = false,
-  hasNoCredits = false,
+  isStorageFull = false,
   onNavigateToSettings,
   // Filter props
   selectedFileExtension,
   selectedDateRange,
   selectedFileSizes,
+  excludedOnly = false,
   onFileExtensionChange,
   onDateRangeChange,
   onFileSizesChange,
+  onExcludedOnlyChange,
   defaultFolderLabel,
   isFolderUploadOpen: isFolderUploadOpenProp,
   onSetFolderUploadOpen,
@@ -196,25 +200,27 @@ const DriveHeader: FC<DriveHeaderProps> = ({
   const actionButtons = (
     <>
       {/* Folder Upload button - disabled for recent files with no sync paths or when sync is paused */}
-      {!hideUploads && (!isRecentFiles || !hasNoSyncPaths) && !isSyncPathEmpty && (
-        <Button
-          variant="defaultStable"
-          size="auto"
-          onClick={async () => {
-            if (!(await checkEligibility("folder-upload"))) return;
-            if (!hasConfiguredDrives) {
-              toast.warning(
-                "Set up a sync folder in Settings → Sync & Storage before uploading.",
-              );
-              return;
-            }
-            setIsFolderUploadOpen(true);
-          }}
-          className={SECONDARY_PILL_CLASSES}
-        >
-          + New Folder
-        </Button>
-      )}
+      {!hideUploads &&
+        (!isRecentFiles || !hasNoSyncPaths) &&
+        !isSyncPathEmpty && (
+          <Button
+            variant="defaultStable"
+            size="auto"
+            onClick={async () => {
+              if (!(await checkEligibility("folder-upload"))) return;
+              if (!hasConfiguredDrives) {
+                toast.warning(
+                  "Set up a sync folder in Settings → Sync & Storage before uploading.",
+                );
+                return;
+              }
+              setIsFolderUploadOpen(true);
+            }}
+            className={SECONDARY_PILL_CLASSES}
+          >
+            + New Folder
+          </Button>
+        )}
       {isRecentFiles && hasNoSyncPaths && (
         <Button
           variant="defaultStable"
@@ -279,17 +285,17 @@ const DriveHeader: FC<DriveHeaderProps> = ({
       {/* Start Syncing button - show for empty sync paths or no sync paths.
           When the user is out of credits the sync flow is a dead-end (every
           upload would 402), so the button dims and reroutes to the plans
-          page — same destination as the no-credits empty-state CTA. */}
+          page — same destination as the out-of-storage empty-state CTA. */}
       {(isSyncPathEmpty || (isRecentFiles && hasNoSyncPaths)) && (
         <StartSyncingButton
           onClick={
-            hasNoCredits
-              ? () => push("/billing/plans")
+            isStorageFull
+              ? () => push("/drive-plans")
               : isRecentFiles && hasNoSyncPaths
                 ? onNavigateToSettings
                 : onStartSyncing
           }
-          className={hasNoCredits ? "opacity-50" : undefined}
+          className={isStorageFull ? "opacity-50" : undefined}
         />
       )}
 
@@ -431,9 +437,11 @@ const DriveHeader: FC<DriveHeaderProps> = ({
                   selectedFileExtension={selectedFileExtension}
                   selectedDateRange={selectedDateRange}
                   selectedFileSizes={selectedFileSizes}
+                  excludedOnly={excludedOnly}
                   onFileExtensionChange={onFileExtensionChange}
                   onDateRangeChange={onDateRangeChange}
                   onFileSizesChange={onFileSizesChange}
+                  onExcludedOnlyChange={onExcludedOnlyChange}
                 />
                 <div className="flex items-center gap-3 shrink-0">
                   {/* Stats are hidden inside a nested folder — the totals

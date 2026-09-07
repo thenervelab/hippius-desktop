@@ -8,6 +8,7 @@ import { checkForUpdates } from "@/components/updater/checkForUpdates";
 export const APP_LINKS: any = {
   BILLING: "https://console.hippius.com/dashboard/billing",
   CREDITS: "https://console.hippius.com/dashboard/billing?addCredits=true",
+  PLANS: "https://console.hippius.com/dashboard/storage/drive/plans",
   // Add more links as needed
 };
 
@@ -28,7 +29,7 @@ export const openAppLink = async (url: string): Promise<void> => {
  * @param linkKey The key of the link in APP_LINKS
  */
 export const openLinkByKey = async (
-  linkKey: keyof typeof APP_LINKS | string
+  linkKey: keyof typeof APP_LINKS | string,
 ): Promise<void> => {
   await openAppLink(APP_LINKS[linkKey]);
 };

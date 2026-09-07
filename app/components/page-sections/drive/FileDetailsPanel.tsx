@@ -18,6 +18,7 @@ import { FormattedTimestamp, Icons } from "@/app/components/ui";
 import * as TableModule from "@/app/components/ui/alt-table";
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { formatBytesFromBigInt } from "@/lib/utils/formatBytes";
+import { omitsBilledSize } from "@/lib/utils/syncStatusDisplay";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import {
   getFileTypeFromExtension,
@@ -25,6 +26,8 @@ import {
 } from "@/lib/utils/getTileTypeFromExtension";
 import { getFileIcon } from "@/app/lib/utils/fileTypeUtils";
 import { revealFile } from "@/lib/utils/revealFile";
+import { fileManagerLabel } from "@/lib/utils/isMacPlatform";
+import { tauriErrorMessage } from "@/lib/utils/dispatchTauriError";
 
 const PANEL_WIDTH_PX = 305;
 
@@ -70,9 +73,14 @@ const PanelBody: React.FC<PanelBodyProps> = ({ file, onClose }) => {
     !!file.isFolder,
   );
 
-  const fileSize = file.size
-    ? formatBytesFromBigInt(BigInt(file.size))
-    : "Unknown";
+  // An excluded/hidden row contributes nothing to the folder's billed
+  // totals, so showing its bytes here would disagree with the header and
+  // the table, which both render "—" for it.
+  const fileSize = omitsBilledSize(file.syncStatus)
+    ? "—"
+    : file.size
+      ? formatBytesFromBigInt(BigInt(file.size))
+      : "Unknown";
 
   const handleViewOnExplorer = async () => {
     try {
@@ -160,16 +168,14 @@ const PanelBody: React.FC<PanelBodyProps> = ({ file, onClose }) => {
                       revealFolder: true,
                     });
                   } catch (err) {
-                    console.error("Failed to reveal in Finder:", err);
-                    toast.error(
-                      "File is not available locally. It may only exist on another device.",
-                    );
+                    console.error("Failed to reveal in file manager:", err);
+                    toast.error(tauriErrorMessage(err));
                   }
                 }}
                 className="mt-[6px] flex items-center gap-[4px] text-[14px] font-medium text-[#3167dd] dark:text-[#618ce8] hover:underline cursor-pointer w-fit"
               >
                 <FolderOpen className="size-4" />
-                <span>Reveal in Finder</span>
+                <span>Reveal in {fileManagerLabel()}</span>
               </button>
             )}
           </PillRow>

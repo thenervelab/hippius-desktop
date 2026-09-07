@@ -28,9 +28,9 @@ import {
   LIVE_PHOTO_LINUX_MESSAGE,
   LIVE_PHOTO_UNSUPPORTED_MESSAGE,
   getLivePlaybackError,
-} from "../ImageDialog";
+} from "../ImagePreviewBody";
 
-// ImageDialog's module graph reaches the Tauri IPC bridge and the auth context
+// ImagePreviewBody's module graph reaches the Tauri IPC bridge and the auth context
 // at import time; the badge itself needs neither.
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn().mockResolvedValue({ os: "linux", supportsLivePhotoMotion: false }),

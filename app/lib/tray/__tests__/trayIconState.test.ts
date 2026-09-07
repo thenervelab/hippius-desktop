@@ -78,6 +78,22 @@ describe("deriveTrayIconState — icon selection", () => {
     expect(latch.complete).toBe(true);
   });
 
+  it("shows the completed icon when Rust cleared the failure verdict (H-080)", () => {
+    // A vanished local file still counts in `failedFiles`; Rust's explicit
+    // success verdict is what says it is not the user's problem.
+    const { icon } = deriveTrayIconState(
+      snap({
+        startedAt: 1000,
+        totalFiles: 11,
+        completedFiles: 10,
+        failedFiles: 1,
+        statusVariant: "success",
+      }),
+      EMPTY_TRAY_LATCH,
+    );
+    expect(icon).toBe("completed");
+  });
+
   it("delete-only activity with no transfer marks the icon completed", () => {
     const { icon } = deriveTrayIconState(
       snap({

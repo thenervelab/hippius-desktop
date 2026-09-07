@@ -34,7 +34,12 @@ export default defineConfig({
         "app/e2e/**",
       ],
       thresholds: {
-        "app/lib/utils/**": { statements: 33, branches: 84, functions: 49, lines: 33 },
+        // Branches: 84 → 87 with the spreadsheet-preview parsers. Their first
+        // cut measured 84.x locally but 77.7 in CI, because the suite covering
+        // the ExcelJS path was `skipIf`-ed on a sample file that existed on one
+        // machine — a floor can only hold if every test that props it up runs
+        // everywhere, so that fixture is now generated in-process.
+        "app/lib/utils/**": { statements: 33, branches: 87, functions: 49, lines: 33 },
         "app/lib/upload-feed/**": { statements: 96, branches: 80, functions: 95, lines: 96 },
         "app/lib/tray/**": { statements: 82, branches: 83, functions: 65, lines: 82 },
         // History: 35 → 32 by P1-9 (removing ~1000 lines of dead tray-menu code

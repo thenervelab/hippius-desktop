@@ -59,7 +59,10 @@ function installClipboard(): { writeText: ReturnType<typeof vi.fn> } {
   return { writeText };
 }
 
-function withProvider(node: ReactNode, file: { actualFileName?: string; name: string; label: string }) {
+function withProvider(
+  node: ReactNode,
+  file: { actualFileName?: string; name: string; label: string; size?: number },
+) {
   const store = createStore();
   // Modal reads the target from this atom — populating it is the same signal a
   // `setShareModalFile(shareTargetFor(file, base))` handler from the file-row
@@ -79,8 +82,17 @@ function withFinderState(node: ReactNode, share: FinderShareState) {
   return <Provider store={store}>{node}</Provider>;
 }
 
-// A parked Finder request awaiting the user's visibility choice.
-const CHOOSING: FinderShareState = { kind: "choosing", id: "req-1", name: "big-movie.mov" };
+// A parked Finder request awaiting the user's visibility choice. The stat
+// fields are what the backend reads off the clicked path; `null` is the
+// legitimate "could not stat" case, so the default keeps them unset and the
+// tests that care supply their own.
+const CHOOSING: FinderShareState = {
+  kind: "choosing",
+  id: "req-1",
+  name: "big-movie.mov",
+  sizeBytes: null,
+  modifiedSecsAgo: null,
+};
 
 /**
  * Accept the chooser's defaults (public, 24h) and start the mint.
@@ -259,6 +271,74 @@ describe("ShareFileModal", () => {
     // Second call succeeds; URL appears.
     await screen.findByDisplayValue(/console\.hippius\.com\/share\/tok-xyz#k=KEY2/);
     expect(invokeMock).toHaveBeenCalledTimes(2);
+  });
+
+  // The size in the chooser is the last human-readable checkpoint before a
+  // share is minted. On 2026-08-31 two zips were right-clicked out of
+  // ~/Downloads mid-download; both stat'd at exactly 4 MiB and both produced
+  // links to a truncated archive. Every automated check downstream passed —
+  // the blobs were internally consistent — so seeing "4.19 MB" against a file
+  // known to be 6.8 MB was the only available way to catch it.
+  it("shows the source size in the chooser so a half-downloaded file is visible", () => {
+    render(
+      withFinderState(<ShareFileModal />, {
+        ...CHOOSING,
+        name: "hippius-frontend-qa-mac.zip",
+        sizeBytes: 4_194_304,
+      }),
+    );
+
+    expect(screen.getByText("hippius-frontend-qa-mac.zip")).toBeInTheDocument();
+    expect(screen.getByText("4.19 MB")).toBeInTheDocument();
+  });
+
+  // Both entry points must read the same, so the confirmation is checkable by
+  // eye wherever the share started. The in-app path takes its number from the
+  // listing row rather than a fresh stat.
+  it("shows the size for an in-app share too, from the listing row", () => {
+    render(
+      withProvider(<ShareFileModal />, {
+        name: "report.pdf",
+        label: "Hippius-Team",
+        size: 6_765_321,
+      }),
+    );
+    expect(screen.getByText("6.77 MB")).toBeInTheDocument();
+  });
+
+  it("shows no size when the backend could not stat the file", () => {
+    // `null` must render nothing at all. A "0 B" here would be a lie about a
+    // file the backend simply could not measure.
+    render(withFinderState(<ShareFileModal />, CHOOSING));
+    expect(screen.queryByText(/\b0 B\b/)).not.toBeInTheDocument();
+  });
+
+  it("cautions when the file was modified moments ago, without blocking the share", () => {
+    render(
+      withFinderState(<ShareFileModal />, {
+        ...CHOOSING,
+        sizeBytes: 4_194_304,
+        modifiedSecsAgo: 2,
+      }),
+    );
+
+    expect(screen.getByText(/still downloading/i)).toBeInTheDocument();
+    // A hint, never a gate — the same text is as true of a file just saved on
+    // purpose, so the button stays live.
+    expect(
+      screen.getByRole("button", { name: /create share link/i }),
+    ).toBeEnabled();
+  });
+
+  it("does not caution for a file that has been sitting still", () => {
+    render(
+      withFinderState(<ShareFileModal />, {
+        ...CHOOSING,
+        sizeBytes: 4_194_304,
+        modifiedSecsAgo: 3_600,
+      }),
+    );
+    expect(screen.queryByText(/still downloading/i)).not.toBeInTheDocument();
   });
 
   it("opens into the visibility chooser (not a spinner) for a Finder request", async () => {

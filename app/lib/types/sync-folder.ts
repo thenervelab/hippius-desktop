@@ -30,10 +30,24 @@ export interface SyncFolder {
   ownerSs58?: string;
 }
 
+/**
+ * Why a remote-only folder is not in this device's `sync_paths`.
+ * Tagged by Rust (`RemoteFolderOrigin`); the FE must not re-derive this
+ * by comparing `deviceName` to the local device name.
+ */
+export type RemoteFolderOrigin =
+  | { kind: "locallyRemoved" }
+  | { kind: "otherDevice" };
+
 export interface RemoteFolder {
   folderName: string;
   deviceName: string;
   lastModified: number;
   fileCount: number;
   totalBytes: number;
+  /**
+   * Threaded from Rust. Absent on synthetic browse targets built from a
+   * local row (those never hit the remote section).
+   */
+  origin?: RemoteFolderOrigin;
 }

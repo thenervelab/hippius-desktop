@@ -179,17 +179,10 @@ fn update_failure_counts(app: &AppHandle, label: &str) {
         });
     }
 
-    // Increment counters for failed files.
-    let mut any_newly_at_threshold = false;
-    for (path, error) in &failed_files {
-        failure_state.record_failure(label, path, error.clone());
-        if failure_state.just_reached_threshold(label, path) {
-            any_newly_at_threshold = true;
-        }
-    }
-
-    // Emit the event if any file just reached the threshold.
-    if any_newly_at_threshold {
+    // Bump the counters and let the tracker decide whether to prompt: a file
+    // the user dismissed stays quiet, a file they have not seen reopens the
+    // dialog with the whole set.
+    if failure_state.record_cycle_failures(label, &failed_files) {
         let at_threshold = failure_state.files_at_threshold();
         if !at_threshold.is_empty() {
             let _ = app.emit(
@@ -278,6 +271,13 @@ pub(crate) fn handle_sync_completed(app: &AppHandle, mut payload: events::SyncCo
             crate::sync::folder_entries_materialize::FolderEntitySyncTrigger::PerCycle,
         );
     }
+
+    // A cycle that materialized or removed local files invalidates cached
+    // folder totals the same way a local delete does — the directories above
+    // the ones it touched keep their pre-cycle mtime, so nothing else would
+    // retire their rows and a folder receiving a file from another device
+    // would show its old size for the rest of the session.
+    crate::sync::files::invalidate_dir_stats_after_cycle(payload.files_downloaded, payload.files_deleted_locally);
 
     let _ = app.emit(events::SYNC_COMPLETED, payload);
 }
@@ -443,6 +443,27 @@ pub(crate) fn handle_sync_error(app: &AppHandle, payload: events::SyncErrorPaylo
         let _ = app.emit(events::SYNC_FAILED_NOTIFY, payload.clone());
     }
     let _ = app.emit(events::SYNC_ERROR, payload);
+}
+
+/// Handle `SyncEvent::FolderRecovered` — the engine found an own drive's
+/// folder missing from the server listing, re-registered it, and deleted the
+/// local baseline, so the whole drive is about to re-upload.
+///
+/// [`events::FOLDER_RECOVERED`] still fires unconditionally so any live
+/// consumer sees every recovery. The user-facing notification takes the gated
+/// [`events::FOLDER_RESTORED_NOTIFY`] instead, for the two reasons
+/// `sync::folder_restore_notify` documents: the engine re-emits the raw event
+/// every cycle whose listing still lacks the folder, and a brand-new folder
+/// reports `Recovered` merely because its detached registration has not
+/// landed yet. Same split as `SYNC_ERROR` / `SYNC_FAILED_NOTIFY` above.
+fn handle_folder_recovered(app: &AppHandle, label: String) {
+    use tauri::Manager;
+    let should_notify = app.state::<crate::app_state::AppState>().folder_restore_notify.take(&label);
+
+    if should_notify {
+        let _ = app.emit(events::FOLDER_RESTORED_NOTIFY, events::LabelPayload { label: label.clone() });
+    }
+    let _ = app.emit(events::FOLDER_RECOVERED, events::LabelPayload { label });
 }
 
 /// Handle a `SyncError` carrying [`events::SHARED_DRIVE_REVOKED_MARKER`]:
@@ -625,6 +646,10 @@ fn handle_sync_reset(app: &AppHandle, account_id: String, message: String) {
     // And for the revocation latch — a previous account's revoked drive
     // must not swallow a different account's first revocation edge.
     app_state.revoked_notify.clear_all();
+    // And for the folder-restore gate — its armed flags describe the previous
+    // account's drives, and a label reused by the new account must be re-armed
+    // from that account's own baseline at init, never inherited.
+    app_state.folder_restore_notify.clear_all();
     // Wipe every folder-entity-sync throttle stamp: a previous account's
     // last-run times must not gate the new account's first sync after a switch.
     app_state.folder_entity_sync.clear_all();
@@ -1030,9 +1055,7 @@ impl SyncEventHandler for TauriSyncBridge {
             SyncEvent::HealthChanged { health } => {
                 let _ = app.emit(events::CONNECTIVITY_CHANGED, &health);
             }
-            SyncEvent::FolderRecovered { label } => {
-                let _ = app.emit(events::FOLDER_RECOVERED, events::LabelPayload { label });
-            }
+            SyncEvent::FolderRecovered { label } => handle_folder_recovered(&app, label),
             SyncEvent::ReviewModeTimeout { label } => {
                 let _ = app.emit(events::REVIEW_MODE_TIMEOUT, events::LabelPayload { label });
             }

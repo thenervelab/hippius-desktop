@@ -6,9 +6,12 @@ paths:
   - "**/*.test.tsx"
   - "**/__tests__/**"
   - ".github/workflows/*.yml"
+  - "docs/testing-policy.md"
 ---
 
 # Testing
+
+**Which layer a new test belongs in** is [`docs/testing-policy.md`](../../docs/testing-policy.md): lowest layer that can fail for the same reason a user would notice. This file is the inventory of suites, live-lane env, replay harnesses, and wire-pin tables.
 
 ## Test files in `src-tauri/tests/`
 
@@ -23,13 +26,13 @@ paths:
 
 The `*_real_backend.rs` suites are `#[ignore]`d and skip QUIETLY when their env is unset, so a plain `cargo test` stays hermetic — which also means they run only when a human remembers, and they can go stale across an hcfs pin bump.
 
-`e2e-live` is a **manual** (`workflow_dispatch`) workflow that runs them for real: pick `suite` = `shared_drives` | `folder_shares` | `both` (`gh workflow run e2e-live.yml -f suite=both`, or the Actions tab). Note `workflow_dispatch` resolves the workflow file BY PATH ON THE DEFAULT BRANCH, so `--ref <branch>` chooses which code runs but the dispatch itself fails with "workflow does not exist" until `e2e-live.yml` is merged to `main`.
+`e2e-live` is a **manual** (`workflow_dispatch`) workflow that runs them for real: pick `suite` = `shared_drives` | `folder_shares` | `folder_entries` | `both` | `all` (`gh workflow run e2e-live.yml -f suite=both`, or the Actions tab). `both` and `all` run every live file. Note `workflow_dispatch` resolves the workflow file BY PATH ON THE DEFAULT BRANCH, so `--ref <branch>` chooses which code runs but the dispatch itself fails with "workflow does not exist" until `e2e-live.yml` is merged to `main`.
 
 It sets **`HCFS_DESKTOP_E2E_REQUIRE=1`** (matched EXACTLY against `1` — `=true`/`=yes` disable it), which every live suite's `live_env()` honours by PANICKING instead of skipping — without it a mistyped or unprovisioned secret would produce a green job that asserted nothing, the entire failure mode the lane exists to prevent. A preflight step names any missing secret before the compile, and each suite step asserts a NON-ZERO executed-test count afterwards, because REQUIRE panics from inside a test body and so cannot catch "no test body ran" (drop `-- --ignored` and cargo exits 0 with `0 passed; N ignored`).
 
 The lane is deliberately non-blocking and **must never become a required check** (it depends on a live external service), and it deliberately has no cron: **the standing rule is to run it on every `hcfs` pin bump** — the moment that matters — before merging the bump PR.
 
-`folder_entries_real_backend.rs` is not wired into the lane yet; the blocker is provisioning. It reads **`HCFS_DESKTOP_E2E_ADMIN_BEARER`** (hcfs's committed admin-bypass token), renamed away from the plain `HCFS_DESKTOP_E2E_BEARER` that `folder_shares_real_backend.rs` reads — that one must be a USER bearer, so the two suites want opposite credentials and must not share a variable name. Provision that secret and add a step mirroring the existing two.
+`folder_entries_real_backend.rs` is a third step on the same workflow. It reads **`HCFS_DESKTOP_E2E_ADMIN_BEARER`** from repository secrets (never a value in this public repo), renamed away from the plain `HCFS_DESKTOP_E2E_BEARER` that `folder_shares_real_backend.rs` reads — that one must be a USER bearer, so the two suites want opposite credentials and must not share a variable name. `tests/live_lane_wiring.rs` fails if a new `*_real_backend.rs` is not a `cargo test --test` line in the workflow, and if a live-lane credential is committed as a literal.
 
 ## Sync widget replay harness
 

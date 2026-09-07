@@ -18,6 +18,7 @@ const CornerDots = ({
     | "defaultStable"
     | "primary"
     | "primaryLight"
+    | "raised"
     | "destructive"
     | "warning"
     | null;
@@ -129,6 +130,10 @@ const buttonVariants = cva(
         warning: "bg-warning-200 text-white rounded-md hover:bg-warning-300 ",
         primaryLight:
           "border border-primary-50 bg-primary-50/[0.21] text-primary-50 rounded-[6px] hover:bg-primary-50/[0.25] dark:border-primary-brand-dark dark:bg-primary-65/[0.21] dark:text-primary-brand-dark dark:hover:bg-primary-50/[0.18]",
+        // A white button that still reads as a control on a grey ground; the
+        // grey defaultStable variant vanishes on the plan cards and dialogs.
+        raised:
+          "border border-grey-dark-100 bg-[#fefefe] text-grey-10 rounded-md shadow-[0px_5px_2.3px_0px_rgba(0,0,0,0.03),0px_1px_1.9px_0px_rgba(0,0,0,0.14),0px_0px_1px_0px_rgba(0,0,0,0.16),0px_1px_0px_0px_white] hover:bg-grey-light-900 dark:border-black-300 dark:bg-black-500 dark:text-grey-light-100 dark:shadow-[0px_0px_0px_1px_black] dark:hover:bg-black-300",
         destructive: "bg-[#fc7d73] hover:bg-[#fb695e] rounded-md",
         ghost: "bg-transparent",
       },

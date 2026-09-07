@@ -35,7 +35,10 @@ describe("ExclusionsDialog", () => {
   });
 
   it("lists the drive's current patterns", async () => {
-    invoke.mockResolvedValueOnce(["node_modules/", "*.tmp"]);
+    invoke.mockResolvedValueOnce([
+      { pattern: "node_modules/", display: "node_modules/" },
+      { pattern: "*.tmp", display: "*.tmp" },
+    ]);
 
     renderDialog();
 
@@ -92,7 +95,9 @@ describe("ExclusionsDialog", () => {
   });
 
   it("removes a pattern", async () => {
-    invoke.mockResolvedValueOnce(["node_modules/"]);
+    invoke.mockResolvedValueOnce([
+      { pattern: "node_modules/", display: "node_modules/" },
+    ]);
     invoke.mockResolvedValueOnce(true); // remove_exclude_pattern
 
     renderDialog();
@@ -117,5 +122,39 @@ describe("ExclusionsDialog", () => {
     invoke.mockResolvedValueOnce([]);
     renderDialog();
     expect(await screen.findByText(/nothing is excluded/i)).toBeInTheDocument();
+  });
+});
+
+describe("ExclusionsDialog literal exclusions", () => {
+  beforeEach(() => {
+    invoke.mockReset();
+    toastError.mockReset();
+  });
+
+  // A file excluded from the Sync Issues dialog is stored as an escaped glob
+  // (`[[]` for `[`). Rust pairs that stored line with the file name; the
+  // dialog must show the name and still remove by the stored line.
+  it("shows a literal exclusion as its file name and removes it by the stored line", async () => {
+    const stored = "Movies/Blade Runner [[]2049[]].mkv";
+    const display = "Movies/Blade Runner [2049].mkv";
+    invoke.mockResolvedValueOnce([{ pattern: stored, display }]);
+    invoke.mockResolvedValueOnce(true); // remove_exclude_pattern
+
+    renderDialog();
+
+    expect(await screen.findByText(display)).toBeInTheDocument();
+    expect(screen.queryByText(stored)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: `Remove ${display}` }));
+
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("remove_exclude_pattern", {
+        label: "tags",
+        pattern: stored,
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.queryByText(display)).not.toBeInTheDocument(),
+    );
   });
 });

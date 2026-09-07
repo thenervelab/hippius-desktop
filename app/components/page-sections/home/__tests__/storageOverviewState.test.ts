@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 
 import {
   USAGE_CRITICAL_PERCENT,
@@ -9,6 +12,7 @@ import {
   getPlanView,
   getStorageOverviewView,
   getUsageTone,
+  getUsedBytesDisplay,
 } from "../storage-overview/storageOverviewState";
 
 describe("getUsageTone", () => {
@@ -45,11 +49,11 @@ describe("getStorageOverviewView", () => {
       }),
     ).toBe("error");
     expect(
-      getStorageOverviewView({ showSkeleton: false, isError: true, source: "none" }),
+      getStorageOverviewView({ showSkeleton: false, isError: true, source: "free" }),
     ).toBe("error");
   });
 
-  it("both plan- and credits-backed capacity render the usage bar", () => {
+  it("both plan- and free-tier-backed capacity render the usage bar", () => {
     expect(
       getStorageOverviewView({
         showSkeleton: false,
@@ -61,15 +65,12 @@ describe("getStorageOverviewView", () => {
       getStorageOverviewView({
         showSkeleton: false,
         isError: false,
-        source: "credits",
+        source: "free",
       }),
     ).toBe("usage");
   });
 
-  it("no source (or missing data) renders the no-plan state", () => {
-    expect(
-      getStorageOverviewView({ showSkeleton: false, isError: false, source: "none" }),
-    ).toBe("no-plan");
+  it("missing data renders the no-plan state", () => {
     expect(
       getStorageOverviewView({
         showSkeleton: false,
@@ -77,6 +78,24 @@ describe("getStorageOverviewView", () => {
         source: undefined,
       }),
     ).toBe("no-plan");
+  });
+});
+
+describe("getUsedBytesDisplay", () => {
+  // Pure projection of Rust's usedPending flag. The card must never
+  // invent this from usedBytes === 0 (that is also the true-empty
+  // state); Rust owns the indexer-vs-local lag decision.
+  it("shows pending instead of a confident 0 B while the indexer lags", () => {
+    expect(getUsedBytesDisplay(true, 0)).toEqual({ kind: "pending" });
+    expect(getUsedBytesDisplay(true, 46)).toEqual({ kind: "pending" });
+  });
+
+  it("shows the indexer bytes when not pending, including a true empty", () => {
+    expect(getUsedBytesDisplay(false, 0)).toEqual({ kind: "bytes", bytes: 0 });
+    expect(getUsedBytesDisplay(false, 46)).toEqual({
+      kind: "bytes",
+      bytes: 46,
+    });
   });
 });
 
@@ -90,15 +109,15 @@ describe("getPlanView (plan card + top-bar chip)", () => {
     ).toBe("skeleton");
   });
 
-  it("maps each source to its variant, plan winning over credits by construction", () => {
+  it("maps each source to its variant, plan winning over free by construction", () => {
     expect(
       getPlanView({ showSkeleton: false, isError: false, source: "subscription" }),
     ).toBe("plan");
     expect(
-      getPlanView({ showSkeleton: false, isError: false, source: "credits" }),
-    ).toBe("credits");
+      getPlanView({ showSkeleton: false, isError: false, source: "free" }),
+    ).toBe("free");
     expect(
-      getPlanView({ showSkeleton: false, isError: false, source: "none" }),
+      getPlanView({ showSkeleton: false, isError: false, source: undefined }),
     ).toBe("none");
   });
 
@@ -116,11 +135,10 @@ describe("getCapacitySourceLabel", () => {
     expect(getCapacitySourceLabel("subscription", "")).toBe("Active plan");
   });
 
-  it("credits-derived capacity is labelled as such, never as a plan", () => {
-    expect(getCapacitySourceLabel("credits", null)).toBe(
-      "Based on your credit balance",
+  it("the free tier is labelled as such, never as a paid plan", () => {
+    expect(getCapacitySourceLabel("free", null)).toBe(
+      "Included with the free plan",
     );
-    expect(getCapacitySourceLabel("none", null)).toBe("");
   });
 });
 
@@ -143,5 +161,18 @@ describe("formatPlanPrice", () => {
   it("abbreviates month and passes other intervals through", () => {
     expect(formatPlanPrice(12, "month")).toBe("12$/mo.");
     expect(formatPlanPrice(99, "year")).toBe("99$/year");
+  });
+});
+
+describe("storage card renders Rust labels (H-109)", () => {
+  it("does not formatBytes the raw counts", () => {
+    const src = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), "../storage-overview/index.tsx"),
+      "utf8",
+    );
+    expect(src).not.toMatch(/\bformatBytes\b/);
+    expect(src).toContain("overview.usedDisplay");
+    expect(src).toContain("overview.totalDisplay");
+    expect(src).toContain("overview.freeDisplay");
   });
 });

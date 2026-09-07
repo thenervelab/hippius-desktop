@@ -73,6 +73,14 @@ describe("failureMessage", () => {
     expect(msg.toLowerCase()).not.toContain("encryption");
   });
 
+  it("phrases a vanished local file as self-resolving, not as a connection fault", () => {
+    // Must read identically to Rust's
+    // `FileFailureKindPayload::Gone::display_reason()`.
+    const msg = failureMessage({ ...base, kind: "gone" });
+    expect(msg).toBe("File disappeared before upload — will retry.");
+    expect(msg.toLowerCase()).not.toContain("connection");
+  });
+
   it("degrades an unknown future kind to the generic line", () => {
     expect(failureMessage({ ...base, kind: "somethingNew" })).toBe(
       "Sync failed. Please try again."

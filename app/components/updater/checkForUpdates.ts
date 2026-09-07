@@ -11,8 +11,10 @@ import {
   installUpdate,
   type AvailableUpdate,
 } from "@/lib/tauri/updates";
-import { errorMessage as toErrorMessage } from "@/lib/utils/errorUtils";
+import { tauriErrorDetail } from "@/lib/utils/dispatchTauriError";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { getUpdateInstallPlan } from "@/app/components/updater/updateInstallPlan";
 import {
   addNotification,
   hippusVersionNotificationExists,
@@ -24,6 +26,14 @@ import {
   updateStore,
   updateConfirmedAtom,
 } from "@/app/components/updater/updateStore";
+
+/**
+ * Shown only when a rejection carried no Rust-owned message — an IPC transport
+ * failure, which arrives as a bare `{}`. Every error `updates.rs` returns names
+ * a next step, so this generic line should be unreachable in practice; it exists
+ * so a transport failure does not render as "Unknown error".
+ */
+export const UPDATE_FAILED_FALLBACK = "Please try again later.";
 
 // Utility function to format bytes to MB
 function formatBytes(bytes: number): string {
@@ -125,9 +135,15 @@ export async function checkForUpdates(notifyOnce = false) {
 
 // Separate function to handle the actual update process
 async function performUpdate(
-  _update: AvailableUpdate,
+  update: AvailableUpdate,
   downloadToastId?: string | number,
 ) {
+  const plan = getUpdateInstallPlan(update);
+  if (plan.kind === "manual") {
+    await openUrl(plan.url);
+    return;
+  }
+
   let totalBytes = 0;
   let started = false;
 
@@ -197,23 +213,16 @@ function handleUpdateError(err: any, downloadToastId?: string | number) {
 
   console.log("Error in updating:", err);
 
-  // Handle signature verification errors specifically
-  const errorMessage = toErrorMessage(err);
-  if (
-    errorMessage.includes("signature") ||
-    errorMessage.includes("verification")
-  ) {
-    toast.error("Update signature verification failed", {
-      description:
-        "Please download the latest version manually from our website.",
-      duration: 8000,
-    });
-  } else {
-    toast.error("Update failed", {
-      description: "Please try again later or download manually.",
-      duration: 5000,
-    });
-  }
+  // `updates.rs` owns every sentence here, signature failures included — it
+  // classifies the plugin's error and returns copy that already names the
+  // channel's release page and how to install by hand. The substring match on
+  // `err.message` this replaces was the pattern CLAUDE.md forbids: it keyed
+  // user-visible behaviour off English text Rust is free to reword, and it
+  // could only ever fire while raw plugin errors were being forwarded.
+  toast.error("Update failed", {
+    description: tauriErrorDetail(err) || UPDATE_FAILED_FALLBACK,
+    duration: 8000,
+  });
 }
 
 /**

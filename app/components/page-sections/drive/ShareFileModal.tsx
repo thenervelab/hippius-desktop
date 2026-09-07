@@ -29,7 +29,7 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { useAtom } from "jotai";
+import { useAtom, useSetAtom } from "jotai";
 import { AlertCircle, Check, Loader2 } from "lucide-react";
 import { isCloudOnlyRow } from "@/app/lib/utils/cloudOnly";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -60,6 +60,21 @@ import {
   generateSharePassword,
 } from "@/app/lib/tauri/shares";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
+import { isNotReady } from "@/app/lib/utils/dispatchTauriError";
+import { insufficientCreditsDialogOpenAtom } from "@/app/components/page-sections/drive/atoms/query-atoms";
+import { formatBytes } from "@/app/lib/utils/formatBytes";
+
+/**
+ * How recently a file must have been touched for the chooser to caution that
+ * it may still be arriving.
+ *
+ * Deliberately a hint, not a gate. "Modified seconds ago" is exactly as true
+ * of a file the user just saved on purpose as of one mid-download, so this
+ * only ever adds a line of text — the size above it is the signal that
+ * actually distinguishes the two. A minute is long enough to cover a stalled
+ * write and short enough not to nag the ordinary save-then-share flow.
+ */
+const RECENTLY_MODIFIED_SECS = 60;
 
 type ModalState =
   // Both entry points start here: the user picks expiry and public-vs-password
@@ -93,6 +108,11 @@ export default function ShareFileModal() {
   // This component is mounted permanently by the pages layout, so `state`
   // outlives any single share. See `sessionKey` below for why that matters.
   const [state, setState] = useState<ModalState>({ kind: "choosing" });
+  // Sharing is gated on the plan allowance like every other Drive action,
+  // so an over-allowance account is refused here. Route that to the plan
+  // dialog rather than showing the raw message inline: the way out is a
+  // bigger plan, and the modal has nowhere to send them.
+  const setInsufficient = useSetAtom(insufficientCreditsDialogOpenAtom);
   // Remembered so "Try again" after a failure re-mints with the same choice
   // instead of silently falling back to a default the user never picked.
   const lastChoiceRef = useRef<ShareChoice | null>(null);
@@ -111,6 +131,24 @@ export default function ShareFileModal() {
     file?.name ||
     finderName;
   const folderLabel = file?.label;
+
+  // The Finder flow carries a freshly-stat'd size; the in-app flow already has
+  // one on the listing row. Show whichever is available, so the confirmation
+  // reads the same at both entry points — a share is the last moment either
+  // one can be checked by eye, and Finder is merely where that bit us first
+  // (a half-downloaded zip minted a truncated link on 2026-08-31).
+  //
+  // A folder reports no size in either flow: nothing is uploaded when a folder
+  // share is minted, so a byte count next to it would describe nothing.
+  const sourceSizeBytes = target?.file.isFolder
+    ? null
+    : finderShare?.kind === "choosing"
+      ? finderShare.sizeBytes
+      : (file?.size ?? null);
+  // Finder-only: the mtime age comes from the backend's stat of the clicked
+  // path, and the in-app listing carries no equivalent.
+  const sourceModifiedSecsAgo =
+    finderShare?.kind === "choosing" ? finderShare.modifiedSecsAgo : null;
 
   const close = useCallback(() => {
     // Release a still-parked Finder request (chooser open, or the user bailed).
@@ -157,10 +195,15 @@ export default function ShareFileModal() {
           : await createShare(folderLabel, target.relativePath, choice, onProgress);
       setState({ kind: "done", link });
     } catch (err) {
+      if (isNotReady(err, "STORAGE_LIMIT_REACHED")) {
+        setTarget(null);
+        setInsufficient("sharing");
+        return;
+      }
       setState({ kind: "error", message: errorMessage(err) });
     }
     },
-    [target, folderLabel],
+    [target, folderLabel, setTarget, setInsufficient],
   );
 
   // Confirm a Finder share once the user picks visibility in the chooser: mint
@@ -181,10 +224,15 @@ export default function ShareFileModal() {
         );
         setState({ kind: "done", link: created });
       } catch (err) {
+        if (isNotReady(err, "STORAGE_LIMIT_REACHED")) {
+          setFinderShare(null);
+          setInsufficient("sharing");
+          return;
+        }
         setState({ kind: "error", message: errorMessage(err) });
       }
     },
-    [finderShare],
+    [finderShare, setFinderShare, setInsufficient],
   );
 
   // One confirm handler for both entry points — the chooser does not care which
@@ -295,6 +343,8 @@ export default function ShareFileModal() {
         <ChoosingBody
           filename={filename}
           isFolder={target?.file.isFolder ?? false}
+          sizeBytes={sourceSizeBytes}
+          modifiedSecsAgo={sourceModifiedSecsAgo}
           onConfirm={onConfirmChoice}
           onCancel={close}
         />
@@ -361,11 +411,17 @@ const PASSWORD_MIN_LEN = 8;
 function ChoosingBody({
   filename,
   isFolder,
+  sizeBytes,
+  modifiedSecsAgo,
   onConfirm,
   onCancel,
 }: {
   filename: string;
   isFolder: boolean;
+  /** Source size, when known. `null` renders nothing rather than "0 B". */
+  sizeBytes: number | null;
+  /** Seconds since last modification, when known. */
+  modifiedSecsAgo: number | null;
   onConfirm: (choice: ShareChoice) => void;
   onCancel: () => void;
 }) {
@@ -460,7 +516,20 @@ function ChoosingBody({
           title={filename}
         >
           {filename}
+          {sizeBytes !== null && (
+            <span className="ml-2 whitespace-nowrap text-grey-40 dark:text-grey-dark-600">
+              {formatBytes(sizeBytes)}
+            </span>
+          )}
         </p>
+
+        {modifiedSecsAgo !== null &&
+          modifiedSecsAgo < RECENTLY_MODIFIED_SECS && (
+            <p className="mt-1 text-xs text-grey-40 dark:text-grey-dark-600">
+              Modified moments ago — if it is still downloading, wait for it to
+              finish before sharing.
+            </p>
+          )}
 
         {isFolder && <FolderShareNotice />}
       </div>

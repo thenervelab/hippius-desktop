@@ -2,7 +2,7 @@
 //! (`list_sync_folder_grouped`). Owns `FileEntry` and the Finder name ordering.
 
 use super::dir_stats::dir_stats_recursive;
-use super::pathops::ensure_within;
+use super::pathops::{ensure_within, is_engine_hidden_name, is_internal_hidden_name, rel_has_engine_hidden_component};
 use super::synced_state::synced_paths_and_excludes_for_label;
 use crate::auth::account_key::account_key;
 use crate::error::Result;
@@ -20,7 +20,7 @@ pub struct FileEntry {
     pub is_folder: bool,
     pub size: u64,
     pub modified: Option<u64>,
-    /// Sync status: "synced", "pending", or "unknown"
+    /// Sync status: "synced", "pending", "excluded", "hidden", or "unknown"
     pub sync_status: String,
     /// Hex-encoded path_hash from the synced state (empty if not synced yet)
     pub arion_hash: String,
@@ -59,6 +59,31 @@ async fn list_sync_folder_inner(
     label: Option<String>,
 ) -> Result<Vec<FileEntry>> {
     list_sync_folder_inner_with(state, sync_path, subfolder, label, None).await
+}
+
+fn disk_row_status<'a>(
+    is_hidden_file: bool,
+    is_excluded: bool,
+    is_folder: bool,
+    synced_set: Option<&'a HashMap<String, SyncedFileInfo>>,
+    relative_path: &str,
+) -> (&'static str, Option<&'a SyncedFileInfo>) {
+    if is_hidden_file {
+        return ("hidden", None);
+    }
+    if is_excluded {
+        return ("excluded", None);
+    }
+    if is_folder {
+        return ("synced", None);
+    }
+    match synced_set {
+        Some(map) => match map.get(relative_path) {
+            Some(i) => ("synced", Some(i)),
+            None => ("pending", None),
+        },
+        None => ("unknown", None),
+    }
 }
 
 async fn list_sync_folder_inner_with(
@@ -106,21 +131,29 @@ async fn list_sync_folder_inner_with(
             None => (None, Vec::new()),
         },
     };
+    let exclude_rules = super::exclude_match::rules_from_patterns(&excluded_patterns);
 
     let mut entries = Vec::new();
     // A read_dir failure is an I/O fault → Io (#[from]).
     let mut dir = tokio::fs::read_dir(&target).await?;
 
     while let Some(entry) = dir.next_entry().await? {
-        let name = entry.file_name().to_string_lossy().to_string();
-
-        // Skip .hippius config directory and hidden files
-        if name.starts_with('.') {
+        let os_name = entry.file_name();
+        // `.hippius` and `.hippius-incoming-*` are engine-owned and stay
+        // off Drive. Other UTF-8 dotfiles (`.env.qa`) are listed as
+        // `hidden` so they are not a silent omit (H-063). Hidden
+        // directories stay omitted so `.git` does not appear as a folder.
+        if is_internal_hidden_name(&os_name) {
             continue;
         }
+        let name = os_name.to_string_lossy().to_string();
 
         let meta = entry.metadata().await?;
         let is_folder = meta.is_dir();
+        let is_hidden_file = is_engine_hidden_name(&os_name);
+        if is_hidden_file && is_folder {
+            continue;
+        }
 
         // Remove and skip failed download artifacts (`downloaded_<hex>`) and
         // 0-byte encrypted-name stubs (`file_<hex>`) left by decryption
@@ -152,26 +185,30 @@ async fn list_sync_folder_inner_with(
             None => name.clone(),
         };
 
-        // Folders don't have server-side entries — their children do
-        let is_excluded = !excluded_patterns.is_empty() && excluded_patterns.iter().any(|p| p == &relative_path);
-        let (sync_status, info) = if is_excluded {
-            ("excluded", None)
-        } else if is_folder {
-            ("synced", None)
-        } else {
-            match &synced_set {
-                Some(map) => match map.get(&relative_path) {
-                    Some(i) => ("synced", Some(i)),
-                    None => ("pending", None),
-                },
-                None => ("unknown", None),
-            }
-        };
+        // Folders don't have server-side entries — their children do.
+        // Match engine globs (`*.bin` → foo.bin and dir/foo.bin), not exact
+        // path equality — that left glob-excluded files Pending on Drive.
+        let is_excluded = super::exclude_match::path_is_excluded(&exclude_rules, &relative_path, is_folder);
+        let (sync_status, info) = disk_row_status(is_hidden_file, is_excluded, is_folder, synced_set.as_ref(), &relative_path);
 
-        let (size, file_count) = if is_folder {
-            dir_stats_recursive(&target.join(&name)).await
-        } else {
+        // Folder row numbers are billed: dir_stats omits excluded children
+        // (H-110) even though H-045 keeps those files as visible rows.
+        // `is_counted_for_label_stats` also omits them, so File No and the
+        // folder row stay one number. `base`, not `target`: the patterns
+        // are drive-relative.
+        //
+        // An excluded folder gets no walk at all (H-045 drops that row).
+        // Walking `node_modules/` for a number nothing bills is wasted.
+        let (size, file_count) = if !is_folder {
             (meta.len(), 0)
+        } else if is_excluded {
+            (0, 0)
+        } else {
+            let excludes = super::dir_stats::DirStatsExcludes {
+                root: &base,
+                patterns: &excluded_patterns,
+            };
+            dir_stats_recursive(&target.join(&name), Some(&excludes)).await
         };
 
         entries.push(FileEntry {
@@ -357,6 +394,7 @@ pub async fn list_sync_folder_grouped_inner(
         Some(l) => synced_paths_and_excludes_for_label(&state.sync, l).await,
         None => (None, Vec::new()),
     };
+    let exclude_rules = super::exclude_match::rules_from_patterns(&excluded_patterns);
     let disk_entries = list_sync_folder_inner_with(
         state,
         sync_path.clone(),
@@ -387,24 +425,38 @@ pub async fn list_sync_folder_grouped_inner(
             if remainder.is_empty() {
                 continue;
             }
+            // Hidden names are omitted on disk (engine skip). If the
+            // rel-path index still has one, do not resurrect it as Pending.
+            if rel_has_engine_hidden_component(remainder) {
+                continue;
+            }
+            // Nested excluded paths still contribute nothing: that is what
+            // stops `vendor/node_modules/a.js` from conjuring a `vendor`
+            // folder. A *direct* excluded file stays as a row (H-045).
+            let file_excluded = super::exclude_match::path_is_excluded(&exclude_rules, rel, false);
             match remainder.split_once('/') {
                 Some((first_component, _rest)) => {
+                    if file_excluded {
+                        continue;
+                    }
                     // Server-known subfolder at this level. Skip if already on
                     // disk (the on-disk entry's `file_count` is authoritative
                     // for this device's view of the subfolder).
-                    if !seen_names.contains(first_component) {
+                    // `prefix` is already `""` or `"<sub>/"`, so this is the
+                    // drive-relative path the exclude rules are matched on.
+                    let folder_rel = format!("{prefix}{first_component}");
+                    if !seen_names.contains(first_component) && !super::exclude_match::path_is_excluded(&exclude_rules, &folder_rel, true) {
                         *server_only_folders.entry(first_component.to_string()).or_insert(0) += 1;
                     }
                 }
                 None => {
-                    // Direct child file, server-known. Skip if on disk.
                     if !seen_names.contains(remainder) {
                         server_only_files.push(FileEntry {
                             name: remainder.to_string(),
                             is_folder: false,
                             size: 0,
                             modified: None,
-                            sync_status: "pending".to_string(),
+                            sync_status: if file_excluded { "excluded".to_string() } else { "pending".to_string() },
                             arion_hash: info.path_hash_hex(),
                             arion_cid: info.arion_cid.to_string(),
                             file_count: 0,
@@ -424,6 +476,13 @@ pub async fn list_sync_folder_grouped_inner(
     let mut folders: Vec<FileEntry> = Vec::new();
     let mut files: Vec<FileEntry> = Vec::new();
     for entry in disk_entries {
+        // Excluded folders stay off Drive (a `node_modules/` row that
+        // opens into thousands of excluded children is not useful).
+        // Excluded *files* stay, tagged `excluded` (H-045): silent drop
+        // with no badge was the bug. Billed File No still omits them.
+        if entry.sync_status == "excluded" && entry.is_folder {
+            continue;
+        }
         if entry.is_folder {
             folders.push(entry);
         } else {
@@ -470,6 +529,18 @@ pub async fn list_sync_folder_grouped_inner(
             .filter(|s| !s.is_empty())
             .map_or_else(|| PathBuf::from(&sync_path), |s| PathBuf::from(&sync_path).join(s));
         for entry in cache_only_folder_candidates(pool, &owner, l, &prefix, &level_dir).await {
+            // An excluded folder must not come back through the cache. The
+            // on-disk copy is already dropped above, and `seen_names` only
+            // covers folders that exist locally — a `node_modules/` rule on a
+            // drive whose tree was registered from another device would
+            // otherwise reappear here as a pending folder the engine never
+            // syncs.
+            if super::exclude_match::path_is_excluded(&exclude_rules, &format!("{prefix}{}", entry.name), true) {
+                continue;
+            }
+            if rel_has_engine_hidden_component(&entry.name) {
+                continue;
+            }
             // `HashSet::insert` returns false when the name is already shown
             // (from disk or a file's parent) — the dedup-by-name the task
             // requires, so an on-disk folder is never doubled by its cache row.

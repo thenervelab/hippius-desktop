@@ -100,6 +100,24 @@ while read -r url; do
   fi
 done < <(jq -r '.platforms | to_entries[] | .value.url' "${manifest}")
 
+# The bare linux-x86_64 key is the ONLY key a Linux build reads. The plugin
+# appends an installer segment (linux-x86_64-deb) only when bundle_type() is
+# Some, and tauri-bundler does not patch the bundle-type marker into the .deb
+# binary — the published usr/bin/Hippius still carries
+# __TAURI_BUNDLE_TYPE_VAR_UNK, so bundle_type() is None and the -deb key is
+# never searched. Dropping the bare key therefore does not make Install safe;
+# it makes every Linux update CHECK fail with TargetsNotFound, which the app
+# reports as "could not reach the update channel". Refusing the install is the
+# app's job (updates.rs::refuse_if_privileged_package); the manifest's job is
+# to let the check succeed so the user is told a version exists.
+linux_bare="$(jq -r '.platforms["linux-x86_64"].url // empty' "${manifest}")"
+if [[ -z "${linux_bare}" ]]; then
+  fail "no linux-x86_64 key; that is the only key a Linux build resolves, so \
+every Linux update check would fail with TargetsNotFound"
+else
+  ok "linux-x86_64 is present (${linux_bare##*/})"
+fi
+
 expected_url="https://github.com/${REPO}/releases/download/${TAG}/${MAC_TARBALL}"
 
 # The signature to compare every macOS platform key against. Its absence is

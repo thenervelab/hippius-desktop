@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import type { FileFilterRequest } from "@/app/lib/hooks/useFilteredFiles";
+import { filterCriteriaAreActive } from "@/lib/utils/filesViewMode";
 
 /**
  * Cross-folder file search via the Rust `search_user_files_recursive`
@@ -43,15 +44,13 @@ export interface UseRecursiveFileSearchResult {
 }
 
 function hasAnyCriteria(criteria: FileFilterRequest): boolean {
-    return Boolean(
-        criteria.searchTerm?.trim() ||
-            (criteria.fileExtensions && criteria.fileExtensions.length > 0) ||
-            // `dateRange` is `{from, to}` — `from` is the required field
-            // (the picker can't commit a range without a start date), so
-            // its presence is sufficient to say "filter active".
-            (criteria.dateRange && criteria.dateRange.from) ||
-            (criteria.fileSizes && criteria.fileSizes.length > 0),
-    );
+    return filterCriteriaAreActive({
+        searchTerm: criteria.searchTerm,
+        fileExtensions: criteria.fileExtensions,
+        dateRange: criteria.dateRange,
+        fileSizes: criteria.fileSizes,
+        excludedOnly: criteria.excludedOnly,
+    });
 }
 
 export function useRecursiveFileSearch(
@@ -88,6 +87,7 @@ export function useRecursiveFileSearch(
             dateFilter: criteria.dateRange,
             fileSizes: criteria.fileSizes,
             folderTab: criteria.folderTab,
+            excludedOnly: criteria.excludedOnly,
             refreshKey,
         }),
         [
@@ -99,6 +99,7 @@ export function useRecursiveFileSearch(
             criteria.dateRange,
             criteria.fileSizes,
             criteria.folderTab,
+            criteria.excludedOnly,
             refreshKey,
         ],
     );
@@ -161,6 +162,7 @@ export function useRecursiveFileSearch(
         criteria.dateRange,
         criteria.fileSizes,
         criteria.folderTab,
+        criteria.excludedOnly,
         refreshKey,
         debounceMs,
         currentInputs,

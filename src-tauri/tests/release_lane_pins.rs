@@ -579,3 +579,54 @@ fn staging_verifies_before_it_uploads() {
          publishes on the spot, so the check has to run first or testers already have the build"
     );
 }
+
+/// The bare `linux-x86_64` key is the ONLY key a Linux build resolves.
+/// plugin-updater appends the installer segment (`-deb`) only when
+/// `bundle_type()` is `Some`, and the marker it reads is not patched into the
+/// shipped `.deb`, so it is `None` and `linux-x86_64-deb` is never searched.
+/// Deleting the bare key does not stop an install — it makes every Linux
+/// update CHECK fail with `TargetsNotFound`. Refusing the install belongs in
+/// the app (`updates.rs::refuse_if_privileged_package`), not in the manifest.
+#[test]
+fn no_lane_deletes_the_bare_linux_updater_key() {
+    for lane in ["tauri-build.yml", "tauri-beta.yml", "tauri-staging.yml"] {
+        let workflow = repo_file(&format!("../.github/workflows/{lane}"));
+        assert!(
+            !workflow.contains(r#"del(.platforms["linux-x86_64"])"#),
+            "{lane} deletes the bare linux-x86_64 key; that is the only key Linux reads, so \
+             every Linux update check would report the channel as unreachable"
+        );
+    }
+}
+
+/// The publish-time verifier must catch the same deletion in a hand-edited
+/// `latest.json`, which no workflow pin can see.
+#[test]
+fn verify_manifest_requires_the_bare_linux_key() {
+    let script = repo_file("../scripts/verify-release-manifest.sh");
+    assert!(
+        script.contains(r#".platforms["linux-x86_64"]"#) && script.contains("TargetsNotFound"),
+        "verify-release-manifest.sh must fail when linux-x86_64 is missing"
+    );
+}
+
+/// Linux and Windows ship on every lane. "macOS Only" in the release body
+/// becomes latest.json `notes` (tauri-action copies releaseBody), so the
+/// in-app dialog told Linux QA the build was Mac-only while they were on it.
+#[test]
+fn no_lane_claims_macos_only() {
+    for lane in ["tauri-build.yml", "tauri-beta.yml", "tauri-staging.yml"] {
+        let workflow = repo_file(&format!("../.github/workflows/{lane}"));
+        for (i, line) in workflow.lines().enumerate() {
+            let trimmed = line.trim();
+            if trimmed.starts_with('#') {
+                continue;
+            }
+            assert!(
+                !trimmed.to_ascii_lowercase().contains("macos only"),
+                "{lane}:{} still says macOS Only: {trimmed}",
+                i + 1
+            );
+        }
+    }
+}

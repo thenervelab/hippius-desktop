@@ -20,8 +20,7 @@ import {
 } from "@/app/lib/utils/folderShareGating";
 import { cn } from "@/lib/utils";
 
-import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
-import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
+import { isPreviewableFileName } from "@/app/lib/utils/filePreviewType";
 
 import { Icons } from "@/components/ui";
 import FileCard from "./FileCard";
@@ -40,6 +39,8 @@ import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 import useDeleteFile from "@/app/lib/hooks/use-delete-file";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { revealFile } from "@/lib/utils/revealFile";
+import { fileManagerLabel } from "@/lib/utils/isMacPlatform";
+import { tauriErrorMessage } from "@/lib/utils/dispatchTauriError";
 import { toast } from "sonner";
 
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
@@ -164,8 +165,6 @@ const CardView: FC<CardViewProps> = ({
         <div className="duration-300 delay-300">
           <div className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-4">
             {files.map((file, index) => {
-              const { fileFormat } = getFilePartsFromFileName(file.name);
-              const fileType = getFileTypeFromExtension(fileFormat || null);
               const arionHash = file.arionHash;
 
               let cardState: "success" | "pending" | "error" = "success";
@@ -200,11 +199,7 @@ const CardView: FC<CardViewProps> = ({
 
                       // Normal mode behavior - only if not in selection mode
                       if (!isSelectionMode) {
-                        if (
-                          fileType === "video" ||
-                          fileType === "image" ||
-                          fileType === "PDF"
-                        ) {
+                        if (!file.isFolder && isPreviewableFileName(file.name)) {
                           setSelectedFile?.(file);
                         } else if (file.isFolder) {
                           router.push(folderUrl);
@@ -251,9 +246,7 @@ const CardView: FC<CardViewProps> = ({
                                   },
                                 },
                               ]),
-                          ...(fileType === "video" ||
-                          fileType === "image" ||
-                          fileType === "PDF"
+                          ...(!file.isFolder && isPreviewableFileName(file.name)
                             ? [
                                 {
                                   icon: <Icons.Eye className="size-4" />,
@@ -272,7 +265,7 @@ const CardView: FC<CardViewProps> = ({
                             : [
                                 {
                                   icon: <FolderOpen className="size-4" />,
-                                  itemTitle: "Reveal in Finder",
+                                  itemTitle: `Reveal in ${fileManagerLabel()}`,
                                   onItemClick: async (e?: React.MouseEvent) => {
                                     if (e) {
                                       e.preventDefault();
@@ -288,12 +281,10 @@ const CardView: FC<CardViewProps> = ({
                                       });
                                     } catch (error) {
                                       console.error(
-                                        "Failed to reveal file in Finder:",
+                                        "Failed to reveal file in file manager:",
                                         error,
                                       );
-                                      toast.error(
-                                        "File is not available locally. It may only exist on another device.",
-                                      );
+                                      toast.error(tauriErrorMessage(error));
                                     }
                                   },
                                 },

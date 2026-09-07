@@ -3,17 +3,18 @@ import { createPortal } from "react-dom";
 import { Download, Link2, Trash2, FolderOpen, Pencil } from "lucide-react";
 import { Icons } from "@/components/ui";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
+import { isPreviewableFileName } from "@/app/lib/utils/filePreviewType";
 import { isCloudOnlyRow } from "@/app/lib/utils/cloudOnly";
-import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
-import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
 import {
   canShareFolder,
   FOLDER_SHARE_DISABLED_TOOLTIP,
 } from "@/app/lib/utils/folderShareGating";
-import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
-import { invoke } from "@tauri-apps/api/core";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { revealFile } from "@/lib/utils/revealFile";
 import { useAtomValue } from "jotai";
 import { toast } from "sonner";
+import { tauriErrorMessage } from "@/lib/utils/dispatchTauriError";
+import { fileManagerLabel } from "@/lib/utils/isMacPlatform";
 
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import Link from "next/link";
@@ -27,10 +28,7 @@ import {
 } from "@/app/lib/global-atoms/sharesAtoms";
 import { canRenameFile, RENAME_DISABLED_TOOLTIP } from "@/app/lib/utils/renameGating";
 
-const getFileManagerLabel = () => {
-  if (typeof navigator !== "undefined" && /win/i.test(navigator.platform)) return "Explorer";
-  return "Finder";
-};
+
 
 interface ContextMenuProps {
   x: number;
@@ -106,9 +104,6 @@ export default function FileContextMenu({
     left: `${Math.min(x, window.innerWidth - 200)}px`
   };
 
-  // Get file type for View option
-  const { fileFormat } = getFilePartsFromFileName(file.name);
-  const fileType = getFileTypeFromExtension(fileFormat || null);
 
   const handleShowFileDetails = () => {
     if (onShowFileDetails && file) {
@@ -119,41 +114,21 @@ export default function FileContextMenu({
 
   const revealInFileManager = async () => {
     try {
-      let filePath = file.source;
-
-      // If source path is set, try it first
-      if (filePath) {
-        try {
-          await revealItemInDir(filePath);
-          onClose();
-          return;
-        } catch {
-          // Source path failed — fall through to resolve_file_path
-          console.warn("[RevealInFinder] source path failed, trying resolve_file_path. source:", filePath);
-        }
-      }
-
-      // Fallback: resolve canonical path from DB
-      if (file.label && polkadotAddress) {
-        const fileName = file.actualFileName || file.name;
-        filePath = await invoke<string>("resolve_file_path", {
-          accountId: polkadotAddress,
-          label: file.label,
-          fileName,
-        });
-        await revealItemInDir(filePath);
-      } else {
-        toast.error("File is not available locally. It may only exist on another device.");
-      }
+      await revealFile({
+        sourcePath: file.source,
+        label: file.label,
+        accountId: polkadotAddress ?? undefined,
+        fileName: file.actualFileName || file.name,
+      });
     } catch (error) {
       console.error("Failed to reveal in file manager:", error);
-      toast.error("File is not available locally. It may only exist on another device.");
+      toast.error(tauriErrorMessage(error));
     }
     onClose();
   };
 
   const { url: folderUrl } = generateFolderUrl(file, getParam);
-  const fileManagerLabel = getFileManagerLabel();
+  const fileManagerName = fileManagerLabel();
 
   const menuItemClass = "flex items-center gap-2 p-2 text-xs font-medium !text-grey-30 hover:!text-grey-40 hover:bg-grey-90 border-b border-grey-80 cursor-pointer dark:!text-grey-dark-200 dark:hover:!text-grey-light-100 dark:hover:bg-white/5 dark:border-black-300";
 
@@ -191,9 +166,7 @@ export default function FileContextMenu({
             </button>
           )}
 
-          {(fileType === "video" ||
-            fileType === "image" ||
-            fileType === "PDF") &&
+          {!file.isFolder && isPreviewableFileName(file.name) &&
             onSelectFile && (
               <button
                 className={menuItemClass}
@@ -211,7 +184,7 @@ export default function FileContextMenu({
           {!isCloudOnlyRow(file) && (
             <button className={menuItemClass} onClick={revealInFileManager}>
               <FolderOpen className="size-4" />
-              <span>Reveal in {fileManagerLabel}</span>
+              <span>Reveal in {fileManagerName}</span>
             </button>
           )}
 

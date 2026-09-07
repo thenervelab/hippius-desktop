@@ -8,3 +8,4 @@ pub mod error_notify;
 pub mod failure_commands;
 pub mod failure_repo;
 pub mod failure_tracking;
+pub mod folder_restore_notify;

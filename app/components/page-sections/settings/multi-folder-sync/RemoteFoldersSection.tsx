@@ -10,6 +10,7 @@ import * as Tooltip from "@radix-ui/react-tooltip";
 import {
   Folder,
   FolderOpen,
+  FolderMinus,
   CloudDownload,
   ServerCrash,
   FolderSearch,
@@ -20,6 +21,12 @@ import { SettingsCard } from "../SettingsCard";
 import FolderRowSkeleton from "./FolderRowSkeleton";
 import type { RemoteFolder } from "@/app/lib/types/sync-folder";
 import FolderCardContextMenu from "@/app/components/ui/context-menu/FolderCardContextMenu";
+import {
+  LOCALLY_REMOVED_SECTION_LABEL,
+  OTHER_DEVICE_SECTION_LABEL,
+  partitionRemoteFolders,
+  remoteFolderSectionVisibility,
+} from "./remoteFoldersState";
 
 interface RemoteFoldersSectionProps {
   remoteFolders: RemoteFolder[];
@@ -45,6 +52,178 @@ function formatDate(timestamp: number) {
   return `${month} ${day}, ${year} at ${hours}:${minutes} ${ampm}`;
 }
 
+function folderActionItems(
+  folder: RemoteFolder,
+  onBrowseFolder: (folder: RemoteFolder) => void,
+  onSyncFolder: (folder: RemoteFolder) => void,
+  onDeleteFromServer: (folderName: string) => void,
+  onOpenFolder?: (folder: RemoteFolder) => void,
+): ActionItem[] {
+  return [
+    ...(onOpenFolder
+      ? [
+          {
+            icon: <FolderOpen className="size-4" />,
+            itemTitle: "Open",
+            onItemClick: () => onOpenFolder(folder),
+          },
+        ]
+      : []),
+    {
+      icon: <FolderSearch className="size-4" />,
+      itemTitle: "Browse Contents",
+      onItemClick: () => onBrowseFolder(folder),
+    },
+    {
+      icon: <CloudDownload className="size-4" />,
+      itemTitle: "Sync to This Device",
+      onItemClick: () => onSyncFolder(folder),
+    },
+    {
+      icon: <ServerCrash className="size-4" />,
+      itemTitle: "Delete from Server",
+      variant: "destructive" as const,
+      onItemClick: () => onDeleteFromServer(folder.folderName),
+    },
+  ] satisfies ActionItem[];
+}
+
+function RemoteFolderRow({
+  folder,
+  onOpenFolder,
+  onBrowseFolder,
+  onSyncFolder,
+  onDeleteFromServer,
+  onContextMenu,
+}: {
+  folder: RemoteFolder;
+  onOpenFolder?: (folder: RemoteFolder) => void;
+  onBrowseFolder: (folder: RemoteFolder) => void;
+  onSyncFolder: (folder: RemoteFolder) => void;
+  onDeleteFromServer: (folderName: string) => void;
+  onContextMenu: (x: number, y: number, folder: RemoteFolder) => void;
+}) {
+  return (
+    <div
+      className={cn(
+        "flex items-start justify-between p-3 transition-colors",
+        onOpenFolder
+          ? "cursor-pointer [&_*]:cursor-pointer hover:bg-grey-light-400 dark:hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-50"
+          : "hover:bg-grey-light-400 dark:hover:bg-white/5",
+      )}
+      role={onOpenFolder ? "button" : undefined}
+      tabIndex={onOpenFolder ? 0 : undefined}
+      onClick={(e) => {
+        if (!onOpenFolder) return;
+        const target = e.target as HTMLElement;
+        if (target.closest(".action-menu-area")) return;
+        if (target.closest("[role='menu']")) return;
+        onOpenFolder(folder);
+      }}
+      onKeyDown={(e) => {
+        if (!onOpenFolder) return;
+        const target = e.target as HTMLElement;
+        if (target.closest(".action-menu-area")) return;
+        if (target.closest("[role='menu']")) return;
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onOpenFolder(folder);
+        }
+      }}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        onContextMenu(e.clientX, e.clientY, folder);
+      }}
+    >
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-[7px] flex-wrap">
+          <Folder className="size-4 text-primary-50 flex-shrink-0" />
+          <Tooltip.Provider delayDuration={200}>
+            <Tooltip.Root>
+              <Tooltip.Trigger asChild>
+                <span className="text-sm font-medium text-grey-10 dark:text-white cursor-default">
+                  {middleTruncate(folder.folderName, 30)}
+                </span>
+              </Tooltip.Trigger>
+              {middleTruncate(folder.folderName, 30) !== folder.folderName && (
+                <Tooltip.Portal>
+                  <Tooltip.Content
+                    side="bottom"
+                    sideOffset={4}
+                    className="z-[9999] max-w-[25rem] bg-white border border-grey-80 rounded-lg px-3 py-2 text-xs font-medium text-grey-40 shadow-lg break-all animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95"
+                  >
+                    {folder.folderName}
+                    <Tooltip.Arrow className="fill-white" width={12} height={6} />
+                  </Tooltip.Content>
+                </Tooltip.Portal>
+              )}
+            </Tooltip.Root>
+          </Tooltip.Provider>
+
+          {(folder.totalBytes > 0 ||
+            folder.fileCount > 0 ||
+            folder.lastModified > 0) && (
+            <span className="h-4 w-px bg-grey-80 dark:bg-[#3a3a3a] flex-shrink-0" />
+          )}
+
+          {folder.totalBytes > 0 && (
+            <span className="flex items-center gap-1 text-xs text-grey-60 dark:text-grey-dark-600 whitespace-nowrap">
+              <Icons.Database className="size-3.5 text-[#1F50BD]" />
+              {formatBytes(folder.totalBytes)}
+            </span>
+          )}
+          {folder.fileCount > 0 && (
+            <>
+              {folder.totalBytes > 0 && (
+                <span aria-hidden="true" className="w-[3px] h-[3px] rounded-full bg-[#9D9D9D] dark:bg-[#5a5a5a] flex-shrink-0" />
+              )}
+              <span className="flex items-center gap-1 text-xs text-grey-60 dark:text-grey-dark-600 whitespace-nowrap">
+                <Icons.Folders className="size-3.5 text-[#1F50BD]" />
+                {folder.fileCount} {folder.fileCount === 1 ? "file" : "files"}
+              </span>
+            </>
+          )}
+          {folder.lastModified > 0 && (
+            <>
+              {(folder.totalBytes > 0 || folder.fileCount > 0) && (
+                <span aria-hidden="true" className="w-[3px] h-[3px] rounded-full bg-[#9D9D9D] dark:bg-[#5a5a5a] flex-shrink-0" />
+              )}
+              <span className="flex items-center gap-1 text-xs text-grey-60 dark:text-grey-dark-600 whitespace-nowrap">
+                <Icons.Clock8 className="size-3.5 text-[#1F50BD]" />
+                {formatDate(folder.lastModified)}
+              </span>
+            </>
+          )}
+        </div>
+        {folder.deviceName && (
+          <p className="font-geist text-[14px] font-medium leading-normal text-[#0A0A0A]/40 dark:text-white/40 mt-2 ml-6 cursor-default">
+            {folder.deviceName}
+          </p>
+        )}
+      </div>
+
+      <TableActionMenu
+        dropdownTitle=""
+        items={folderActionItems(
+          folder,
+          onBrowseFolder,
+          onSyncFolder,
+          onDeleteFromServer,
+          onOpenFolder,
+        )}
+      >
+        <Button
+          variant="ghost"
+          size="auto"
+          className="h-8 w-8 p-0 action-menu-area mt-0.5 flex-shrink-0 rounded-md text-grey-70 hover:text-grey-30 hover:bg-grey-90 dark:text-grey-dark-600 dark:hover:text-white dark:hover:bg-white/10 transition-colors"
+        >
+          <Icons.EllipsisVertical className="size-[18px]" />
+        </Button>
+      </TableActionMenu>
+    </div>
+  );
+}
+
 export function RemoteFoldersSection({
   remoteFolders,
   isLoading,
@@ -59,6 +238,22 @@ export function RemoteFoldersSection({
     folder: RemoteFolder;
   } | null>(null);
 
+  const { locallyRemoved, otherDevice } = partitionRemoteFolders(remoteFolders);
+  const visibility = remoteFolderSectionVisibility(
+    isLoading,
+    locallyRemoved.length,
+    otherDevice.length,
+  );
+
+  const rowProps = {
+    onOpenFolder,
+    onBrowseFolder,
+    onSyncFolder,
+    onDeleteFromServer,
+    onContextMenu: (x: number, y: number, folder: RemoteFolder) =>
+      setCardContextMenu({ x, y, folder }),
+  };
+
   return (
     <InView triggerOnce>
       {({ inView, ref }) => (
@@ -66,229 +261,97 @@ export function RemoteFoldersSection({
           <div
             ref={ref}
             className={cn(
-              "transition-all duration-500 ease-out delay-150",
-              inView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-3"
+              "flex flex-col gap-3 transition-all duration-500 ease-out delay-150",
+              inView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-3",
             )}
           >
-            <SettingsCard
-              label="Sync from Other Devices"
-              icon={<Icons.HardDriveUpload className="size-4" />}
-      >
-        {/* Content */}
-        {isLoading ? (
-          <div>
-            <FolderRowSkeleton />
-            <FolderRowSkeleton />
-            <FolderRowSkeleton />
-          </div>
-        ) : remoteFolders.length === 0 ? (
-          <div className="flex min-h-[139px] flex-col items-center justify-center gap-[5px] px-4 py-6 text-center">
-            <p className="font-geist text-[14px] font-medium leading-[20px] tracking-[-0.28px] text-black dark:text-white">
-              No Remote Folder Found
-            </p>
-            <p className="font-geist w-[262px] max-w-full text-[14px] font-medium leading-[17px] tracking-[-0.28px] text-[#7D7D7D] dark:text-grey-dark-600">
-              Folder synced from your devices will appear here
-            </p>
-          </div>
-        ) : (
-          <div className="max-h-[420px] overflow-y-auto">
-            {remoteFolders.map((folder) => (
-              <div
-                key={folder.folderName}
-                className={cn(
-                  "flex items-start justify-between p-3 transition-colors",
-                  // Mirror LocalFoldersSection's clickable-row treatment
-                  // exactly: pointer cursor propagated past the
-                  // cursor-default tooltip spans, plus the focus ring.
-                  onOpenFolder
-                    ? "cursor-pointer [&_*]:cursor-pointer hover:bg-grey-light-400 dark:hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-50"
-                    : "hover:bg-grey-light-400 dark:hover:bg-white/5",
-                )}
-                role={onOpenFolder ? "button" : undefined}
-                tabIndex={onOpenFolder ? 0 : undefined}
-                onClick={(e) => {
-                  if (!onOpenFolder) return;
-                  // Mirror LocalFoldersSection's row-click guards: clicks on
-                  // the action menu (or an open menu) must not also open.
-                  const target = e.target as HTMLElement;
-                  if (target.closest(".action-menu-area")) return;
-                  if (target.closest("[role='menu']")) return;
-                  onOpenFolder(folder);
-                }}
-                onKeyDown={(e) => {
-                  if (!onOpenFolder) return;
-                  // Same guards as onClick: Enter/Space on the action-menu
-                  // trigger (or inside an open menu) must activate THAT
-                  // control, not open the drive — without this the menu was
-                  // unreachable by keyboard.
-                  const target = e.target as HTMLElement;
-                  if (target.closest(".action-menu-area")) return;
-                  if (target.closest("[role='menu']")) return;
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    onOpenFolder(folder);
-                  }
-                }}
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  setCardContextMenu({ x: e.clientX, y: e.clientY, folder });
-                }}
+            {visibility.otherDevice && (
+              <SettingsCard
+                label={OTHER_DEVICE_SECTION_LABEL}
+                icon={<Icons.HardDriveUpload className="size-4" />}
               >
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-[7px] flex-wrap">
-                    <Folder className="size-4 text-primary-50 flex-shrink-0" />
-                    <Tooltip.Provider delayDuration={200}>
-                      <Tooltip.Root>
-                        <Tooltip.Trigger asChild>
-                          <span className="text-sm font-medium text-grey-10 dark:text-white cursor-default">
-                            {middleTruncate(folder.folderName, 30)}
-                          </span>
-                        </Tooltip.Trigger>
-                        {middleTruncate(folder.folderName, 30) !==
-                          folder.folderName && (
-                          <Tooltip.Portal>
-                            <Tooltip.Content
-                              side="bottom"
-                              sideOffset={4}
-                              className="z-[9999] max-w-[25rem] bg-white border border-grey-80 rounded-lg px-3 py-2 text-xs font-medium text-grey-40 shadow-lg break-all animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95"
-                            >
-                              {folder.folderName}
-                              <Tooltip.Arrow
-                                className="fill-white"
-                                width={12}
-                                height={6}
-                              />
-                            </Tooltip.Content>
-                          </Tooltip.Portal>
-                        )}
-                      </Tooltip.Root>
-                    </Tooltip.Provider>
-
-                    {(folder.totalBytes > 0 ||
-                      folder.fileCount > 0 ||
-                      folder.lastModified > 0) && (
-                      <span className="h-4 w-px bg-grey-80 dark:bg-[#3a3a3a] flex-shrink-0" />
-                    )}
-
-                    {folder.totalBytes > 0 && (
-                      <span className="flex items-center gap-1 text-xs text-grey-60 dark:text-grey-dark-600 whitespace-nowrap">
-                        <Icons.Database className="size-3.5 text-[#1F50BD]" />
-                        {formatBytes(folder.totalBytes)}
-                      </span>
-                    )}
-                    {folder.fileCount > 0 && (
-                      <>
-                        {folder.totalBytes > 0 && (
-                          <span aria-hidden="true" className="w-[3px] h-[3px] rounded-full bg-[#9D9D9D] dark:bg-[#5a5a5a] flex-shrink-0" />
-                        )}
-                        <span className="flex items-center gap-1 text-xs text-grey-60 dark:text-grey-dark-600 whitespace-nowrap">
-                          <Icons.Folders className="size-3.5 text-[#1F50BD]" />
-                          {folder.fileCount}{" "}
-                          {folder.fileCount === 1 ? "file" : "files"}
-                        </span>
-                      </>
-                    )}
-                    {folder.lastModified > 0 && (
-                      <>
-                        {(folder.totalBytes > 0 || folder.fileCount > 0) && (
-                          <span aria-hidden="true" className="w-[3px] h-[3px] rounded-full bg-[#9D9D9D] dark:bg-[#5a5a5a] flex-shrink-0" />
-                        )}
-                        <span className="flex items-center gap-1 text-xs text-grey-60 dark:text-grey-dark-600 whitespace-nowrap">
-                          <Icons.Clock8 className="size-3.5 text-[#1F50BD]" />
-                          {formatDate(folder.lastModified)}
-                        </span>
-                      </>
-                    )}
+                {isLoading ? (
+                  <div>
+                    <FolderRowSkeleton />
+                    <FolderRowSkeleton />
+                    <FolderRowSkeleton />
                   </div>
-                  {folder.deviceName && (
-                    <p className="font-geist text-[14px] font-medium leading-normal text-[#0A0A0A]/40 dark:text-white/40 mt-2 ml-6 cursor-default">
-                      {folder.deviceName}
+                ) : otherDevice.length === 0 ? (
+                  <div className="flex min-h-[139px] flex-col items-center justify-center gap-[5px] px-4 py-6 text-center">
+                    <p className="font-geist text-[14px] font-medium leading-[20px] tracking-[-0.28px] text-black dark:text-white">
+                      No Remote Folder Found
                     </p>
-                  )}
+                    <p className="font-geist w-[262px] max-w-full text-[14px] font-medium leading-[17px] tracking-[-0.28px] text-[#7D7D7D] dark:text-grey-dark-600">
+                      Folder synced from your devices will appear here
+                    </p>
+                  </div>
+                ) : (
+                  <div className="max-h-[420px] overflow-y-auto">
+                    {otherDevice.map((folder) => (
+                      <RemoteFolderRow
+                        key={folder.folderName}
+                        folder={folder}
+                        {...rowProps}
+                      />
+                    ))}
+                  </div>
+                )}
+              </SettingsCard>
+            )}
+
+            {visibility.locallyRemoved && (
+              <SettingsCard
+                label={LOCALLY_REMOVED_SECTION_LABEL}
+                icon={<FolderMinus className="size-4" />}
+              >
+                <div className="max-h-[420px] overflow-y-auto">
+                  {locallyRemoved.map((folder) => (
+                    <RemoteFolderRow
+                      key={folder.folderName}
+                      folder={folder}
+                      {...rowProps}
+                    />
+                  ))}
                 </div>
-
-                <TableActionMenu
-                  dropdownTitle=""
-                  items={
-                    [
-                      ...(onOpenFolder
-                        ? [
-                            {
-                              icon: <FolderOpen className="size-4" />,
-                              itemTitle: "Open",
-                              onItemClick: () => onOpenFolder(folder),
-                            },
-                          ]
-                        : []),
-                      {
-                        icon: <FolderSearch className="size-4" />,
-                        itemTitle: "Browse Contents",
-                        onItemClick: () => onBrowseFolder(folder),
-                      },
-                      {
-                        icon: <CloudDownload className="size-4" />,
-                        itemTitle: "Sync to This Device",
-                        onItemClick: () => onSyncFolder(folder),
-                      },
-                      {
-                        icon: <ServerCrash className="size-4" />,
-                        itemTitle: "Delete from Server",
-                        variant: "destructive" as const,
-                        onItemClick: () => onDeleteFromServer(folder.folderName),
-                      },
-                    ] satisfies ActionItem[]
-                  }
-                >
-                  <Button
-                    variant="ghost"
-                    size="auto"
-                    className="h-8 w-8 p-0 action-menu-area mt-0.5 flex-shrink-0 rounded-md text-grey-70 hover:text-grey-30 hover:bg-grey-90 dark:text-grey-dark-600 dark:hover:text-white dark:hover:bg-white/10 transition-colors"
-                  >
-                    <Icons.EllipsisVertical className="size-[18px]" />
-                  </Button>
-                </TableActionMenu>
-              </div>
-            ))}
-          </div>
-        )}
-
-            </SettingsCard>
+              </SettingsCard>
+            )}
           </div>
 
-      {cardContextMenu && (
-        <FolderCardContextMenu
-          x={cardContextMenu.x}
-          y={cardContextMenu.y}
-          onClose={() => setCardContextMenu(null)}
-          items={[
-            ...(onOpenFolder
-              ? [
-                  {
-                    icon: <FolderOpen className="size-4" />,
-                    label: "Open",
-                    onClick: () => onOpenFolder(cardContextMenu.folder),
-                  },
-                ]
-              : []),
-            {
-              icon: <FolderSearch className="size-4" />,
-              label: "Browse Contents",
-              onClick: () => onBrowseFolder(cardContextMenu.folder),
-            },
-            {
-              icon: <CloudDownload className="size-4" />,
-              label: "Sync to This Device",
-              onClick: () => onSyncFolder(cardContextMenu.folder),
-            },
-            {
-              icon: <ServerCrash className="size-4" />,
-              label: "Delete from Server",
-              variant: "destructive" as const,
-              onClick: () => onDeleteFromServer(cardContextMenu.folder.folderName),
-            },
-          ]}
-        />
-      )}
+          {cardContextMenu && (
+            <FolderCardContextMenu
+              x={cardContextMenu.x}
+              y={cardContextMenu.y}
+              onClose={() => setCardContextMenu(null)}
+              items={[
+                ...(onOpenFolder
+                  ? [
+                      {
+                        icon: <FolderOpen className="size-4" />,
+                        label: "Open",
+                        onClick: () => onOpenFolder(cardContextMenu.folder),
+                      },
+                    ]
+                  : []),
+                {
+                  icon: <FolderSearch className="size-4" />,
+                  label: "Browse Contents",
+                  onClick: () => onBrowseFolder(cardContextMenu.folder),
+                },
+                {
+                  icon: <CloudDownload className="size-4" />,
+                  label: "Sync to This Device",
+                  onClick: () => onSyncFolder(cardContextMenu.folder),
+                },
+                {
+                  icon: <ServerCrash className="size-4" />,
+                  label: "Delete from Server",
+                  variant: "destructive" as const,
+                  onClick: () =>
+                    onDeleteFromServer(cardContextMenu.folder.folderName),
+                },
+              ]}
+            />
+          )}
         </>
       )}
     </InView>

@@ -27,6 +27,16 @@ fn indexer_api_key() -> Option<&'static str> {
     INDEXER_API_KEY.get_or_init(|| std::env::var("INDEXER_API_KEY").ok()).as_deref()
 }
 
+/// Refuse a missing or whitespace-only key so indexer-backed screens can
+/// error instead of rendering a confident zero. Extracted so the rule is
+/// unit-testable without the process-wide `OnceLock`.
+pub(crate) fn require_indexer_api_key(key: Option<&str>) -> Result<&str, ApiError> {
+    match key.map(str::trim) {
+        Some(k) if !k.is_empty() => Ok(k),
+        _ => Err(ApiError::Other("INDEXER_API_KEY not set".into())),
+    }
+}
+
 /// HTTP client for the Hippius indexer. Uses `X-API-KEY` header for authentication.
 ///
 /// `base_url` and `api_key` are `&'static str` borrowed from process-wide
@@ -45,7 +55,7 @@ impl IndexerClient {
     /// All subsequent calls return a client backed by the same `&'static`
     /// strings — no allocation, no env lookup.
     pub fn from_env(client: reqwest::Client) -> Result<Self, ApiError> {
-        let api_key = indexer_api_key().ok_or_else(|| ApiError::Other("INDEXER_API_KEY not set".into()))?;
+        let api_key = require_indexer_api_key(indexer_api_key())?;
         Ok(Self {
             client,
             base_url: indexer_base_url(),
@@ -82,5 +92,30 @@ impl IndexerClient {
                 body,
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_key_is_an_error_not_a_client() {
+        let err = require_indexer_api_key(None).expect_err("must refuse");
+        assert!(err.to_string().contains("INDEXER_API_KEY not set"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn empty_or_whitespace_key_is_an_error_not_a_client() {
+        for key in [Some(""), Some("   "), Some("\n")] {
+            let err = require_indexer_api_key(key).expect_err("must refuse blank key");
+            assert!(err.to_string().contains("INDEXER_API_KEY not set"), "key={key:?} unexpected: {err}");
+        }
+    }
+
+    #[test]
+    fn a_non_empty_key_is_accepted() {
+        assert_eq!(require_indexer_api_key(Some("k")).expect("ok"), "k");
+        assert_eq!(require_indexer_api_key(Some("  k  ")).expect("trim"), "k");
     }
 }

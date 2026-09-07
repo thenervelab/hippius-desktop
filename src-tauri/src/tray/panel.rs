@@ -193,6 +193,21 @@ pub fn hide_tray_panel(app: AppHandle) -> Result<()> {
     Ok(())
 }
 
+/// Tear down the tray panel and exit the process.
+///
+/// Shared by Linux/Windows window-close and the tray Quit IPC so X and Quit
+/// cannot diverge. The panel is prewarmed hidden even on Linux (where the
+/// popover is unused). Destroy it *before* `exit(0)` so a leftover webview
+/// cannot keep the event loop alive after the main window is gone.
+pub fn quit_desktop(app: &AppHandle) {
+    if let Some(panel) = app.get_webview_window(PANEL_LABEL)
+        && let Err(e) = panel.destroy()
+    {
+        warn!("failed to destroy tray panel on quit: {e}");
+    }
+    app.exit(0);
+}
+
 /// Hide the panel in response to it losing focus (click-outside dismissal),
 /// recording the hide time so an immediately following tray click is treated as
 /// a dismiss instead of a re-open. Called from the global window-event handler

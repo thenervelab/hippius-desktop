@@ -2,6 +2,7 @@
 
 import { useAtomValue } from "jotai";
 import { useEffect, useState } from "react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { toast } from "sonner";
 
@@ -65,6 +66,22 @@ export default function ReleaseChannelDialog() {
 
   const handleConfirm = async () => {
     if (!status.target) return;
+    // Epoch-blocked: do not open the release page. That skip is what
+    // would install a build `switch_release_channel` just refused.
+    if (!view.canSwitch) return;
+
+    if (status.installInPlace === false) {
+      try {
+        await openUrl(status.releasePageUrl);
+      } catch (err) {
+        toast.error("Could not open the release page", {
+          description: toErrorMessage(err),
+          duration: 8000,
+        });
+      }
+      closeChannelDialog();
+      return;
+    }
 
     setSwitching(true);
     const toastId = toast.loading("Downloading…", { duration: Infinity });
@@ -115,6 +132,7 @@ export default function ReleaseChannelDialog() {
       confirmText={view.confirmText}
       cancelText="Cancel"
       isLoading={switching}
+      confirmDisabled={!view.canSwitch}
       onConfirm={handleConfirm}
     />
   );

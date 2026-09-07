@@ -111,11 +111,18 @@ function registeredCommands(): Set<string> {
 function invokedCommands(): Set<string> {
   // `invokeWithTimeout` listed first so the alternation matches the longer name
   // before the `invoke` substring inside it.
-  const re =
+  const invokeRe =
     /\b(?:invokeWithTimeout|invoke)\s*(?:<[^>]*>)?\s*\(\s*["']([a-z_][a-z0-9_]*)["']/g;
+  // useInvokeQuery / useInvokeMutation take `{ command: "list_ssh_keys" }` —
+  // a rename of those hooks' command field used to be invisible here.
+  const commandFieldRe = /\bcommand:\s*["']([a-z_][a-z0-9_]*)["']/g;
+  // VM action hooks pass the command as useVMAction("start_vm").
+  const vmActionRe = /\buseVMAction\s*\(\s*["']([a-z_][a-z0-9_]*)["']/g;
   const names = new Set<string>();
   for (const src of frontendSourceFiles()) {
-    for (const m of src.matchAll(re)) names.add(m[1]);
+    for (const m of src.matchAll(invokeRe)) names.add(m[1]);
+    for (const m of src.matchAll(commandFieldRe)) names.add(m[1]);
+    for (const m of src.matchAll(vmActionRe)) names.add(m[1]);
   }
   return names;
 }
@@ -193,6 +200,11 @@ const KNOWN_UNREGISTERED_COMMANDS = new Set<string>([
   "toggle_autoconnect_status",
 ]);
 
+// Splash `PHASE_CONTENT` uses a `command:` field for cosmetic beat names, not
+// Tauri IPC. `finish_splash` IS a real command and must stay registered;
+// these two are display-only and must not trip the invoke⊆registered check.
+const KNOWN_NON_IPC_COMMAND_FIELDS = new Set<string>(["check_updates", "checking_tools"]);
+
 // Commands the FE dispatches through a NON-literal (a `Record<Action, string>`
 // lookup in FailedFilesModal), invisible to the string-literal scan above. List
 // them so a Rust rename still trips CI; update this list if that table changes.
@@ -215,12 +227,58 @@ describe("IPC command contract (FE invoke ↔ Rust generate_handler!)", () => {
     const registered = registeredCommands();
     const invoked = invokedCommands();
     const missing = [...invoked]
-      .filter((c) => !registered.has(c) && !KNOWN_UNREGISTERED_COMMANDS.has(c))
+      .filter(
+        (c) =>
+          !registered.has(c) &&
+          !KNOWN_UNREGISTERED_COMMANDS.has(c) &&
+          !KNOWN_NON_IPC_COMMAND_FIELDS.has(c)
+      )
       .sort();
     expect(
       missing,
       `FE invokes commands with no #[tauri::command] in generate_handler![]: ${missing.join(", ")}`
     ).toEqual([]);
+  });
+
+  it("recent IPCs (shares, preview, vpn, shared drives) stay registered", () => {
+    // Floor pin so a generate_handler! edit that drops a newly added command
+    // fails even if the FE wrapper still compiles (stringly invoke).
+    const registered = registeredCommands();
+    const required = [
+      "create_drive_invite",
+      "list_drive_members",
+      "remove_drive_member",
+      "list_my_drive_memberships",
+      "leave_shared_drive",
+      "add_shared_drive",
+      "hcfs_create_folder_share",
+      "hcfs_list_folder_shares",
+      "hcfs_revoke_folder_share",
+      "read_preview_bytes",
+      "prepare_motion_photo_preview",
+      "vpn_status",
+      "vpn_connect",
+      "vpn_disconnect",
+      "vpn_open_vm_connection",
+      "list_ssh_keys",
+      "create_vm",
+      "get_notification_settings",
+    ];
+    const missing = required.filter((c) => !registered.has(c));
+    expect(
+      missing,
+      `generate_handler![] dropped required commands: ${missing.join(", ")}`
+    ).toEqual([]);
+  });
+
+  it("KNOWN_NON_IPC_COMMAND_FIELDS is not a real handler name", () => {
+    const registered = registeredCommands();
+    for (const c of KNOWN_NON_IPC_COMMAND_FIELDS) {
+      expect(
+        registered.has(c),
+        `"${c}" is now a #[tauri::command] — drop it from KNOWN_NON_IPC_COMMAND_FIELDS`
+      ).toBe(false);
+    }
   });
 
   it("table-dispatched commands (non-literal invoke) are registered in Rust", () => {

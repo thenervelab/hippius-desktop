@@ -28,16 +28,17 @@
     <true/>
     <key>com.apple.security.files.bookmarks.document-scope</key>
     <true/>
-    <!-- Shared App Group container for the Finder Sync extension. The app is
-         non-sandboxed and reaches the container by literal path; this
-         entitlement is what lets the SANDBOXED extension share it (the IPC
-         socket lives there). Team-ID-prefixed => no Apple-portal registration.
-         Keep this string identical to macos/FinderSync.entitlements and
-         macos/group.env. -->
-    <key>com.apple.security.application-groups</key>
-    <array>
-        <string>V28B5X732P.com.hippius.shared</string>
-    </array>
+    <!-- NO com.apple.security.application-groups, deliberately. The Finder
+         extension bridge used to run over a socket in the App Group container,
+         which meant this NON-sandboxed app reached into
+         ~/Library/Group Containers/ on every launch. Since macOS 15 that path
+         is guarded by kTCCServiceSystemPolicyAppData, so every launch raised
+         "Hippius would like to access data from other apps" — and the grant was
+         re-created rather than matched each time, so it never stopped. There is
+         no entitlement that opts out of that service. The socket now lives in
+         ~/.hippius/ (finder_bridge::endpoint) and the sandboxed extension
+         reaches it via the SBPL exceptions in macos/FinderSync.entitlements.
+         Adding an app group back here reintroduces the prompt. -->
     <!-- allow-jit + allow-unsigned-executable-memory are required by the
          WKWebView / JavaScriptCore JIT under the hardened runtime, so they stay. -->
     <key>com.apple.security.cs.allow-jit</key>

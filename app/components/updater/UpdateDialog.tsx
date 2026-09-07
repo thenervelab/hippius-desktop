@@ -8,7 +8,10 @@ import {
   installUpdate,
   type AvailableUpdate,
 } from "@/lib/tauri/updates";
+import { tauriErrorDetail } from "@/lib/utils/dispatchTauriError";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { getUpdateInstallPlan } from "@/app/components/updater/updateInstallPlan";
 import { getVersion as getAppVersion } from "@tauri-apps/api/app";
 import { toast } from "sonner";
 import { X } from "lucide-react";
@@ -32,6 +35,7 @@ import {
   updateStore,
 } from "./updateStore";
 import BasicMarkdown from "./BasicMarkdown";
+import { UPDATE_FAILED_FALLBACK } from "./checkForUpdates";
 
 /* Dev-only mock data. Used when the dev panel forces a state — the
  * real `update` object is null when no update is actually available,
@@ -242,6 +246,7 @@ export default function UpdateDialog() {
   }, []);
 
   const [status, setStatus] = useState<Status>("checking");
+  const [errorDetail, setErrorDetail] = useState<string>("");
   const [update, setUpdate] = useState<AvailableUpdate | null>(null);
   const [currentVersion, setCurrentVersion] = useState<string>("");
   const [downloadProgress, setDownloadProgress] = useState(0);
@@ -273,7 +278,17 @@ export default function UpdateDialog() {
   const effectiveStatus: Status = devForced ?? status;
   const effectiveUpdate: AvailableUpdate | null =
     devForced === "available" || devForced === "downloading"
-      ? ({ version: MOCK_VERSION, notes: MOCK_BODY } as unknown as AvailableUpdate)
+      ? {
+          version: MOCK_VERSION,
+          currentVersion: MOCK_VERSION,
+          notes: MOCK_BODY,
+          channel: "production",
+          installInPlace: true,
+          releasePageUrl:
+            "https://github.com/thenervelab/hippius-desktop/releases/latest",
+          manualInstallHint:
+            "Download the installer from https://github.com/thenervelab/hippius-desktop/releases/latest and run it.",
+        }
       : update;
   const effectiveDownloadProgress =
     devForced === "downloading" ? forcedProgress : downloadProgress;
@@ -318,6 +333,7 @@ export default function UpdateDialog() {
     const run = async () => {
       setStatus("checking");
       setUpdate(null);
+      setErrorDetail("");
       setDownloadProgress(0);
       setInstallProgress(0);
       setDownloadedBytes(0);
@@ -368,6 +384,19 @@ export default function UpdateDialog() {
   const handleUpdateNow = async () => {
     if (!update) return;
 
+    const plan = getUpdateInstallPlan(update);
+    if (plan.kind === "manual") {
+      try {
+        await openUrl(plan.url);
+        closeUpdateDialog();
+      } catch (err) {
+        console.error("Could not open the release page:", err);
+        setErrorDetail(plan.hint);
+        setStatus("error");
+      }
+      return;
+    }
+
     try {
       setStatus("downloading");
       setDownloadProgress(0);
@@ -400,9 +429,15 @@ export default function UpdateDialog() {
       await simulateInstallation();
     } catch (err) {
       console.error("Update failed:", err);
+      // `updates.rs` owns every sentence this can carry — including the
+      // manual-install instruction and the release-page link for the running
+      // channel. Show it verbatim; do not restate it or add a second flow.
+      // An IPC transport failure carries no message and keeps the fallback.
+      const detail = tauriErrorDetail(err);
+      setErrorDetail(detail);
       setStatus("error");
       toast.error("Update failed", {
-        description: "Please try again later.",
+        description: detail || UPDATE_FAILED_FALLBACK,
       });
     }
   };
@@ -419,6 +454,7 @@ export default function UpdateDialog() {
   const handleRetryCheck = async () => {
     setStatus("checking");
     setUpdate(null);
+    setErrorDetail("");
     try {
       const [u, ver] = await Promise.all([
         checkForUpdate(),
@@ -462,10 +498,17 @@ export default function UpdateDialog() {
 
   // Whether the card has a primary CTA below the body. "checking",
   // "downloading", "installing" deliberately have no CTA.
+  const installPlan = effectiveUpdate
+    ? getUpdateInstallPlan(effectiveUpdate)
+    : { kind: "in-place" as const };
+
   const cta = (() => {
     switch (effectiveStatus) {
       case "available":
-        return { label: "Update", onClick: handleUpdateNow };
+        return {
+          label: installPlan.kind === "manual" ? "Download" : "Update",
+          onClick: handleUpdateNow,
+        };
       case "complete":
         return { label: "Restart App", onClick: handleRestart };
       case "no-update":
@@ -621,7 +664,9 @@ export default function UpdateDialog() {
                           </h1>
                           {effectiveStatus === "available" && (
                             <p className="text-[15px] font-medium leading-[22px] tracking-[-0.30px] text-grey-50 dark:text-grey-dark-500">
-                              Install Version {effectiveUpdate?.version} now
+                              {installPlan.kind === "manual"
+                                ? installPlan.hint
+                                : `Install Version ${effectiveUpdate?.version} now`}
                             </p>
                           )}
                           {effectiveStatus === "no-update" && (
@@ -631,7 +676,7 @@ export default function UpdateDialog() {
                           )}
                           {effectiveStatus === "error" && (
                             <p className="text-[15px] font-medium leading-[22px] tracking-[-0.30px] text-grey-50 dark:text-grey-dark-500">
-                              Please try again later.
+                              {errorDetail || UPDATE_FAILED_FALLBACK}
                             </p>
                           )}
                           {effectiveStatus === "checking" && (

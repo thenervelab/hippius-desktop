@@ -44,14 +44,31 @@ const LEAVE_DESCRIPTION =
   "You will move back to the stable version, which changes less often and is more thoroughly tested.";
 
 /** Append the version being installed, when the target channel published one. */
-function withVersion(base: string, version: string | null): string {
+function withVersion(base: string, status: ChannelStatus): string {
+  if (status.installInPlace === false) {
+    return status.targetVersion
+      ? `${base} ${status.targetVersion} is available. ${status.manualInstallHint}`
+      : `${base} ${status.manualInstallHint}`;
+  }
+
   const restart = "Hippius will download the build and restart.";
-  return version ? `${base} ${restart.replace("the build", version)}` : `${base} ${restart}`;
+  return status.targetVersion
+    ? `${base} ${restart.replace("the build", status.targetVersion)}`
+    : `${base} ${restart}`;
 }
 
 export function getChannelView(status: ChannelStatus): ChannelView {
   const currentLabel = CHANNEL_LABELS[status.current];
   const canSwitch = status.target !== null && status.blockedReason === null;
+  // A blocked switch must not become "Open GitHub Releases": that path
+  // skips `switch_release_channel` and would install a build the epoch
+  // guard just refused.
+  const confirmText =
+    canSwitch && status.installInPlace === false
+      ? "Open GitHub Releases"
+      : status.current === "beta"
+        ? "Leave Beta"
+        : "Switch to Beta";
 
   if (status.current === "beta") {
     return {
@@ -59,8 +76,8 @@ export function getChannelView(status: ChannelStatus): ChannelView {
       title: "Leave the beta channel",
       // Returning to stable needs a restart notice, not a warning — the user is
       // moving toward the more tested build, not away from it.
-      description: withVersion(LEAVE_DESCRIPTION, status.targetVersion),
-      confirmText: "Leave Beta",
+      description: withVersion(LEAVE_DESCRIPTION, status),
+      confirmText,
       currentLabel,
       canSwitch,
     };
@@ -69,8 +86,8 @@ export function getChannelView(status: ChannelStatus): ChannelView {
   return {
     menuLabel: "Explore Beta",
     title: "Explore the beta channel",
-    description: withVersion(JOIN_DESCRIPTION, status.targetVersion),
-    confirmText: "Switch to Beta",
+    description: withVersion(JOIN_DESCRIPTION, status),
+    confirmText,
     currentLabel,
     canSwitch,
   };

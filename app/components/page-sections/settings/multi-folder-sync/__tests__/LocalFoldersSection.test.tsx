@@ -19,8 +19,8 @@ vi.mock("react-intersection-observer", () => ({
   }) => children({ inView: true, ref: () => {} }),
 }));
 
-vi.mock("@tauri-apps/plugin-opener", () => ({
-  revealItemInDir: vi.fn(),
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn(),
 }));
 
 // Flip the shared-drives flag per test — the section reads it at render
