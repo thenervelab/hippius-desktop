@@ -572,12 +572,15 @@ pub async fn hcfs_create_share(
     // server hides the feature instead of failing create_share with a
     // 404 several KB into a multipart upload.
     //
-    // Sharing's bytes-priced layer is intentionally `0`: the file
-    // already exists in paid storage (the user paid to upload it), and
-    // minting a share token serves anonymous reads from the SAME
-    // ciphertext, not a new upload. The static `Sharing` threshold
-    // (any positive balance) is the right gate here — keeps the
-    // pre-Task-3.1 behavior unchanged for shares.
+    // Sharing passes `0` bytes because minting a share token serves
+    // anonymous reads from the SAME ciphertext the user already paid to
+    // store, not a new upload. That is NOT the same as a free gate:
+    // `is_drive_storage()` covers every action except VM creation, so
+    // this runs the plan-allowance check with zero incoming bytes, and an
+    // account ALREADY past its allowance is refused a share. Deliberate —
+    // an over-allowance account is frozen out of Drive actions until it
+    // upgrades — but it does mean `thresholds::SHARING` no longer decides
+    // anything here. Pinned by `tests/drive_quota_enforcement.rs`.
     require_shares_supported(&state, &account_id).await?;
     require_eligible(&state, &account_id, InsufficientCreditsAction::Sharing, 0).await?;
 

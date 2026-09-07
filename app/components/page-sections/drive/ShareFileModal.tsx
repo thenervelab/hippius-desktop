@@ -29,7 +29,7 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { useAtom } from "jotai";
+import { useAtom, useSetAtom } from "jotai";
 import { AlertCircle, Check, Loader2 } from "lucide-react";
 import { isCloudOnlyRow } from "@/app/lib/utils/cloudOnly";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -60,6 +60,8 @@ import {
   generateSharePassword,
 } from "@/app/lib/tauri/shares";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
+import { isNotReady } from "@/app/lib/utils/dispatchTauriError";
+import { insufficientCreditsDialogOpenAtom } from "@/app/components/page-sections/drive/atoms/query-atoms";
 import { formatBytes } from "@/app/lib/utils/formatBytes";
 
 /**
@@ -106,6 +108,11 @@ export default function ShareFileModal() {
   // This component is mounted permanently by the pages layout, so `state`
   // outlives any single share. See `sessionKey` below for why that matters.
   const [state, setState] = useState<ModalState>({ kind: "choosing" });
+  // Sharing is gated on the plan allowance like every other Drive action,
+  // so an over-allowance account is refused here. Route that to the plan
+  // dialog rather than showing the raw message inline: the way out is a
+  // bigger plan, and the modal has nowhere to send them.
+  const setInsufficient = useSetAtom(insufficientCreditsDialogOpenAtom);
   // Remembered so "Try again" after a failure re-mints with the same choice
   // instead of silently falling back to a default the user never picked.
   const lastChoiceRef = useRef<ShareChoice | null>(null);
@@ -188,10 +195,15 @@ export default function ShareFileModal() {
           : await createShare(folderLabel, target.relativePath, choice, onProgress);
       setState({ kind: "done", link });
     } catch (err) {
+      if (isNotReady(err, "STORAGE_LIMIT_REACHED")) {
+        setTarget(null);
+        setInsufficient("sharing");
+        return;
+      }
       setState({ kind: "error", message: errorMessage(err) });
     }
     },
-    [target, folderLabel],
+    [target, folderLabel, setTarget, setInsufficient],
   );
 
   // Confirm a Finder share once the user picks visibility in the chooser: mint
@@ -212,10 +224,15 @@ export default function ShareFileModal() {
         );
         setState({ kind: "done", link: created });
       } catch (err) {
+        if (isNotReady(err, "STORAGE_LIMIT_REACHED")) {
+          setFinderShare(null);
+          setInsufficient("sharing");
+          return;
+        }
         setState({ kind: "error", message: errorMessage(err) });
       }
     },
-    [finderShare],
+    [finderShare, setFinderShare, setInsufficient],
   );
 
   // One confirm handler for both entry points — the chooser does not care which
