@@ -6,9 +6,9 @@ import { cn } from "@/lib/utils";
  * What a card checkout will actually offer, shown as the brand marks people
  * recognise.
  *
- * "Pay by card" undersells the row: Stripe's checkout also offers Apple Pay
- * and Link, and someone scanning for the way they normally pay will not find
- * it in a sentence. The marks answer that at a glance.
+ * "Card" on its own undersells the rail: Stripe's checkout also offers Link
+ * and Apple Pay, and someone scanning for the way they normally pay will not
+ * find it in a sentence. The marks answer that at a glance.
  *
  * Deliberately not an entry in `ui/icons`: those are single-colour glyphs
  * driven by `currentColor`, and a brand mark is neither. It lives here as a

@@ -336,9 +336,20 @@ const DrivePlansSection: FC<{ className?: string }> = ({ className }) => {
         isWriting={isWriting}
         onConfirm={() => {
           if (!confirm) return;
-          if (confirm.action === "subscribe" && rail === "card")
+          if (confirm.action === "subscribe" && rail === "card") {
             runCardCheckout(confirm.plan);
-          else runPlanWrite(confirm.plan, confirm.action);
+            return;
+          }
+          // The dialog's button is disabled in this state; this is the belt
+          // to that brace, so a stale click can never send a write the API
+          // would refuse with 402.
+          if (
+            confirm.action === "subscribe" &&
+            rail === "credits" &&
+            creditsShortFor(confirm.plan)
+          )
+            return;
+          runPlanWrite(confirm.plan, confirm.action);
         }}
         onClose={() => setConfirm(null)}
       />

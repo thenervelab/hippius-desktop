@@ -20,8 +20,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **Choose a storage plan without leaving Hippius.** A new Subscription Plans page
   under Account lists every plan with what it includes, shows the one you are on,
   and lets you subscribe, upgrade, downgrade or cancel. Pay from your credits, or
-  by card through Stripe in your browser. Your past subscriptions are listed
-  underneath.
+  by card through Stripe in your browser.
 - **Support can diagnose problems faster from the logs you send.** Logs attached to
   a support ticket now say which app version and platform they came from, and if
   the app ever crashes, what went wrong is recorded instead of being lost.
@@ -66,11 +65,12 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **Plan cards no longer suggest shared drives are ready to use.** The shared team
   drive line is greyed out on the plans that include it, until the feature is
   switched on.
-- **Paying for a plan is clearer about what you are choosing.** Paying by card is
-  now the first option and the one picked for you, since paying from credits needs
-  a balance you may not have yet. Each option says what actually happens, the card
-  option shows the cards and wallets the checkout accepts, and the labels are
-  readable in light mode as well as dark.
+- **Choosing how to pay is simpler.** The two ways to pay sit side by side, with
+  card first and picked for you, since paying from credits needs a balance you may
+  not have yet. The card option shows the cards and wallets the checkout accepts,
+  and one line underneath explains whichever you have picked. If your balance will
+  not cover the plan you can still open the credits option, so you can see how far
+  short you are and top up from there.
 - **Shared drives are hidden until they launch.** Sharing a drive with someone and
   the "Shared with me" list are not available in this release, matching what the
   plan cards say. Drives already set up keep syncing as normal.
