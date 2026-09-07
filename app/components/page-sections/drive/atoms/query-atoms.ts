@@ -8,7 +8,7 @@ export const uploadProgressAtom = atom(0);
  * own reason and its own copy.
  */
 export type InsufficientCreditsReason =
-  "file-upload" | "folder-upload" | "folder-sync" | "vm-creation";
+  "file-upload" | "folder-upload" | "folder-sync" | "sharing" | "vm-creation";
 export const insufficientCreditsDialogOpenAtom = atom<
   InsufficientCreditsReason | false
 >(false);
