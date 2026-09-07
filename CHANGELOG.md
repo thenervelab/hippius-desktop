@@ -71,6 +71,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   a balance you may not have yet. Each option says what actually happens, the card
   option shows the cards and wallets the checkout accepts, and the labels are
   readable in light mode as well as dark.
+- **Shared drives are hidden until they launch.** Sharing a drive with someone and
+  the "Shared with me" list are not available in this release, matching what the
+  plan cards say. Drives already set up keep syncing as normal.
 - **Uploads are substantially faster**, especially on slower or long-distance
   connections — parts of a file now transfer at the same time instead of one after
   another.
