@@ -74,6 +74,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **Billing and plans are one place instead of two.** "Subscription Plans" and
   "Billing" were separate sidebar entries for the same subject. Your Drive plans
   now live inside Billing, and Billing has moved into Settings.
+- **Drive always opens on your full folder list.** It used to reopen wherever you
+  last were, which left no reliable way back to the top — clicking Drive in the
+  sidebar returned you to a folder rather than the list. This replaces the
+  "reopens where you left off" behaviour added in 0.6.0.
 - **The button in the top corner now offers what your account actually needs.**
   On the free plan it offers to upgrade instead of topping up credits, which buy
   no Drive storage. On a plan it shows how much of your storage you have used, and

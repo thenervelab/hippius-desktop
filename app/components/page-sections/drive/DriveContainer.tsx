@@ -50,12 +50,6 @@ import { useAtomValue, useSetAtom } from "jotai";
 import {
   getViewModePreference,
   saveViewModePreference,
-  getActiveSyncFolderLabel,
-  saveActiveSyncFolderLabel,
-  getActiveRemoteFolderLabel,
-  saveActiveRemoteFolderLabel,
-  getDriveOnLocalView,
-  saveDriveOnLocalView,
 } from "@/lib/utils/userPreferencesDb";
 import { useInfiniteScroll } from "@/lib/hooks/use-infinite-scroll";
 import { FILES_MUTATED_EVENT } from "@/app/lib/utils/fileMutationEvents";
@@ -146,17 +140,18 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // model where the user navigates back to a "Local" cards view via the
   // breadcrumb (see SyncFolderBreadcrumb / DriveOnboarding).
   //
-  // - `activeSyncFolderLabel`: persisted in user prefs. `null` means we
+  // - `activeSyncFolderLabel`: which folder is open, for the session
+  //   only. `null` means we
   //   haven't picked a folder yet (first launch or saved label removed);
   //   the bootstrap effect below resolves it to the first available label.
-  // - `isOnLocalView`: also persisted in user prefs so leaving Drive and
-  //   coming back restores the same section. True when the user is on the
-  //   "Local" cards view (the section picker showing Local Sync Folders +
-  //   Sync From Other Devices); false when inside a specific folder.
+  // - `isOnLocalView`: true on the main folder list, false inside a
+  //   specific folder. Starts TRUE and is no longer persisted — opening
+  //   the app, or clicking Drive, always lands on the full list rather
+  //   than wherever the last session happened to end.
   const [activeSyncFolderLabel, setActiveSyncFolderLabel] = useState<
     string | null
   >(null);
-  const [isOnLocalView, setIsOnLocalView] = useState(false);
+  const [isOnLocalView, setIsOnLocalView] = useState(true);
   // Tracks whether the saved label has been hydrated, so the bootstrap
   // / fallback effects don't fight each other on first mount.
   const [activeFolderHydrated, setActiveFolderHydrated] = useState(false);
@@ -888,8 +883,6 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
         pendingActiveLabelRef.current = newLabel;
         setActiveSyncFolderLabel(newLabel);
         setIsOnLocalView(false);
-        void saveActiveSyncFolderLabel(newLabel);
-        void saveDriveOnLocalView(false);
       }
       triggerSyncPathRefresh((prev) => prev + 1);
       refetchUserFiles();
@@ -999,8 +992,6 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   const handleNavigateToLocalView = useCallback(() => {
     setIsOnLocalView(true);
     setActiveRemoteLabel(null);
-    void saveDriveOnLocalView(true);
-    void saveActiveRemoteFolderLabel(null);
     if (isNested) {
       router.push("/files");
     }
@@ -1013,12 +1004,8 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     (label: string, remote = false) => {
       if (remote) {
         // Back to the REMOTE drive's root: state-based (no nested URL).
-        // Persisted so reopening the app lands back in this drive — the
-        // same "remember me here" the local labels get.
         setActiveRemoteLabel(label);
         setIsOnLocalView(false);
-        void saveActiveRemoteFolderLabel(label);
-        void saveDriveOnLocalView(false);
         router.push("/files");
         return;
       }
@@ -1026,9 +1013,6 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
       setActiveSyncFolderLabel(label);
       setActiveRemoteLabel(null);
       setIsOnLocalView(false);
-      void saveActiveSyncFolderLabel(label);
-      void saveActiveRemoteFolderLabel(null);
-      void saveDriveOnLocalView(false);
       router.push("/files");
     },
     [router],
@@ -1059,19 +1043,13 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     setActiveSyncFolderLabel(label);
     setActiveRemoteLabel(null);
     setIsOnLocalView(false);
-    void saveActiveSyncFolderLabel(label);
-    void saveActiveRemoteFolderLabel(null);
-    void saveDriveOnLocalView(false);
   }, []);
 
   // Open a REMOTE (server-only) drive from its card row — the browsable
   // counterpart of `handleSelectFolderFromCards`, with the same
-  // "remember me here" persistence.
   const handleSelectRemoteFolderFromCards = useCallback((label: string) => {
     setActiveRemoteLabel(label);
     setIsOnLocalView(false);
-    void saveActiveRemoteFolderLabel(label);
-    void saveDriveOnLocalView(false);
   }, []);
 
   // Build the breadcrumb path that lives in the drive header. Empty when
@@ -1263,46 +1241,17 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     saveViewModePreference(mode);
   }, []);
 
-  // Hydrate active sync folder + Local-view flag from user preferences on
-  // mount. This is the breadcrumb's "remember me here" — picks up where the
-  // user left off in a previous session, including whether they were on the
-  // Local cards view (section picker) vs. inside a specific folder. Runs
-  // once and toggles `activeFolderHydrated` so the fallback effect below
-  // knows when it's safe to fill in a default.
+  // The Drive page always opens on the full folder list.
+  //
+  // This used to restore where the last session ended (active label,
+  // local-view flag, remote label — three preferences kept mutually
+  // exclusive by write discipline). Resuming there made the app hard to
+  // navigate: there was no reliable way back to the list, and clicking
+  // Drive in the sidebar returned to a folder rather than the top. There
+  // is nothing to hydrate now, so this only releases the gate the
+  // fallback effect below waits on.
   useEffect(() => {
-    if (isRecentFiles) {
-      setActiveFolderHydrated(true);
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      try {
-        const [saved, savedOnLocalView, savedRemote] = await Promise.all([
-          getActiveSyncFolderLabel(),
-          getDriveOnLocalView(),
-          getActiveRemoteFolderLabel(),
-        ]);
-        if (cancelled) return;
-        if (saved) {
-          setActiveSyncFolderLabel(saved);
-        }
-        if (savedOnLocalView) {
-          setIsOnLocalView(true);
-        }
-        // Last session ended inside a REMOTE drive — reopen it. The write
-        // discipline keeps this exclusive with the two flags above (opening
-        // a local folder or the cards view clears it), and the render guard
-        // (`isRemoteRoot` requires `!isOnLocalView`) breaks any tie safely.
-        if (savedRemote) {
-          setActiveRemoteLabel(savedRemote);
-        }
-      } finally {
-        if (!cancelled) setActiveFolderHydrated(true);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+    setActiveFolderHydrated(true);
   }, [isRecentFiles]);
 
   // Auto-fill / reconcile the active folder against the live label list.
@@ -1338,7 +1287,6 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     }
     const fallback = syncFolderLabels[0];
     setActiveSyncFolderLabel(fallback);
-    void saveActiveSyncFolderLabel(fallback);
   }, [
     isRecentFiles,
     activeFolderHydrated,
@@ -1477,7 +1425,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     // User clicked the "Local" breadcrumb segment. Reuses DriveOnboarding
     // for the cards view, but here we also pass `onSelectFolder` so a
     // card click switches the active folder instead of just opening the
-    // action menu. Persisted via `saveDriveOnLocalView` so next session
+    // action menu.
     // resumes on the same section the user last viewed.
     content = (
       <DriveOnboarding
