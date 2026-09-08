@@ -50,10 +50,10 @@ vi.mock("next/dynamic", () => ({
   },
 }));
 
-// The upgrade CTA opens an external link via the tauri opener; stub the whole
-// links module so the test never pulls the plugin into jsdom.
-vi.mock("@/app/lib/utils/links", () => ({
-  openLinkByKey: vi.fn(),
+// The upgrade CTA navigates to the in-app plans page.
+const push = vi.hoisted(() => vi.fn());
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push }),
 }));
 
 const UNAVAILABLE = { kind: "NotReady", subkind: "SHARED_DRIVES_UNAVAILABLE", message: "off" };
@@ -148,10 +148,14 @@ describe("invite tab", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create invite link" }));
 
     await screen.findByText(/Shared drives need Plus, Max, or Scale/);
-    expect(screen.getByRole("button", { name: "Upgrade plan" })).toBeInTheDocument();
     // An upgrade state, not an error: no generic error copy, no retry.
     expect(screen.queryByText("Couldn't create invite link")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
+
+    // The same in-app destination every other Drive upgrade prompt uses, so
+    // the user is never sent to the console for a plan the app can change.
+    fireEvent.click(screen.getByRole("button", { name: "Upgrade plan" }));
+    expect(push).toHaveBeenCalledWith("/drive-plans");
   });
 });
 

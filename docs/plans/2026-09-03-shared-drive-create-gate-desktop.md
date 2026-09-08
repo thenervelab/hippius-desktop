@@ -90,11 +90,9 @@ the `NotReadyKind` string-literal union (~10-25).
 
 ## Task 2.2 — Invite-tab upgrade state
 
-- **`app/lib/utils/links.ts`** — `APP_LINKS` (typed `any`, keys `BILLING`/`CREDITS`)
-  gains `PLANS: "https://console.hippius.com/dashboard/storage/drive/plans"`.
-  (The prod page 404s until console ships `DRIVE_SUBSCRIPTION_PLANS`; same
-  known-gap class as the invite links. Do **not** point at hippicode in prod
-  builds.)
+- The upgrade CTA navigates to the in-app Subscription Plans page
+  (`router.push("/drive-plans")`), the destination every other Drive upgrade
+  prompt uses since the plans page shipped on `staging`; no console link.
 - **`app/lib/tauri/sharedDrives.ts`** — `isSharedDrivesNotEntitled(error)` =
   `isNotReady(error, "SHARED_DRIVES_NOT_ENTITLED")`, twin of
   `isSharedDrivesUnavailable`.
@@ -109,7 +107,8 @@ the `NotReadyKind` string-literal union (~10-25).
   and a `notEntitled` render arm beside the `unavailable`/`error` arms (~230-234).
 - **Chrome** — copy `InsufficientCreditsDialog.tsx`'s visual (FramedDialog + two
   stacked buttons): heading **"Shared drives need Plus, Max, or Scale"**, primary
-  **Upgrade plan** → `openLinkByKey("PLANS")`, secondary **Close**. No "Try again".
+  **Upgrade plan** → close the modal and `router.push("/drive-plans")`, secondary
+  **Close**. No "Try again".
 
 **Tests:**
 - `ShareDriveModal.test.tsx` — `{ kind: "NotReady", subkind: "SHARED_DRIVES_NOT_ENTITLED" }`

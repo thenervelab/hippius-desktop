@@ -44,8 +44,8 @@ import {
   removeDriveMember,
   type DriveMemberInfo,
 } from "@/app/lib/tauri/sharedDrives";
+import { useRouter } from "next/navigation";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
-import { openLinkByKey } from "@/app/lib/utils/links";
 import { middleTruncate } from "@/lib/utils/middleTruncate";
 import {
   DEFAULT_INVITE_TTL_SECS,
@@ -511,7 +511,18 @@ function SharedDrivesUnavailableNotice({ onClose }: { onClose: () => void }) {
 // The mint plan gate (`SHARED_DRIVES_NOT_ENTITLED`): the drive owner's plan
 // does not include shared drives. An upgrade prompt, not an error — no retry,
 // no toast. Shown only to owners (the "Share drive…" surface is owner-only).
+//
+// The CTA goes to the in-app Subscription Plans page, the same destination
+// every other Drive upgrade prompt uses (`InsufficientCreditsDialog`, the
+// files empty state, the plan chip) — not the console, where the user would
+// have to sign in again to change a plan the app can change itself.
 function SharedDrivesNotEntitledNotice({ onClose }: { onClose: () => void }) {
+  const router = useRouter();
+  const upgrade = () => {
+    onClose();
+    router.push("/drive-plans");
+  };
+
   return (
     <div>
       <p className="mb-1.5 pt-2 text-center text-sm font-medium text-grey-30 dark:text-grey-dark-700">
@@ -526,7 +537,7 @@ function SharedDrivesNotEntitledNotice({ onClose }: { onClose: () => void }) {
           type="button"
           variant="primary"
           size="auto"
-          onClick={() => void openLinkByKey("PLANS")}
+          onClick={upgrade}
           className={primaryButtonClass}
         >
           Upgrade plan
