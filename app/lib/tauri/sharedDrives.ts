@@ -146,3 +146,13 @@ export async function addSharedDrive(
 export function isSharedDrivesUnavailable(error: unknown): boolean {
   return isNotReady(error, "SHARED_DRIVES_UNAVAILABLE");
 }
+
+/**
+ * Structural match for the mint plan gate: the server refused to mint a
+ * shared-drive invite because the owner's plan is not Plus/Max/Scale. Owners
+ * hitting this get an upgrade prompt (never a generic auth toast); joining is
+ * never gated, so only the mint path raises it.
+ */
+export function isSharedDrivesNotEntitled(error: unknown): boolean {
+  return isNotReady(error, "SHARED_DRIVES_NOT_ENTITLED");
+}
