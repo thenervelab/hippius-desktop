@@ -210,7 +210,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
           {isLoading ? (
             <Loader2 className="animate-spin size-4" />
           ) : (
-            <>+ New File</>
+            <>+ {UPLOAD_FILE_LABEL}</>
           )}
         </Button>
 

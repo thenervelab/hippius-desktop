@@ -275,7 +275,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
           disabled
           className="h-[30px] px-3 py-[10px] gap-[10px] rounded-[6px] font-geist text-[14px] tracking-[-0.28px] leading-[1.109]"
         >
-          {UPLOAD_FILE_LABEL}
+          + {UPLOAD_FILE_LABEL}
         </Button>
       ) : uploadAction === "enabled" ? (
         <AddButton
