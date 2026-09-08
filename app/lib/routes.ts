@@ -12,3 +12,21 @@
  * to disagree in the first place.
  */
 export const BILLING_ROUTE = "/settings?section=billing";
+
+/**
+ * Open one folder on the Drive page.
+ *
+ * Settings and Drive are separate routes, so "open this folder" has to
+ * survive a navigation. It travels as a query param rather than an atom
+ * because an atom is lost on a full page load, and this is also a
+ * perfectly good deep link.
+ *
+ * `remote` distinguishes a folder synced on this machine from one that is
+ * only on the server — the two open through different paths on the Drive
+ * page, and guessing from the label alone is the H-077 mistake.
+ */
+export function driveFolderRoute(label: string, remote: boolean): string {
+  const params = new URLSearchParams({ openLabel: label });
+  if (remote) params.set("openRemote", "1");
+  return `/files?${params.toString()}`;
+}

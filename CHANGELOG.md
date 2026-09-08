@@ -93,6 +93,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   your Drive without downloading the folder first.
 - **You can rename files in folders that are not synced on this computer**, from the
   same menu as anywhere else, without downloading the folder first.
+- **Clicking a folder in Settings opens that folder**, instead of dropping you on
+  the Drive page to find it again.
 - **All your folders are in one list.** The Drive page split them across three
   headings — folders on this computer, folders from other devices, and folders
   synced nowhere. They are now a single list, each row showing where that folder

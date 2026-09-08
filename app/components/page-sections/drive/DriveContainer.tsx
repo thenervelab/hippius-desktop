@@ -279,6 +279,10 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   const urlMainFolderActualName = getParam("mainFolderActualName");
   const urlSubFolderPath = getParam("subFolderPath");
   const urlFolderSource = getParam("folderSource");
+  // "Open this folder", handed over from another page (Settings). See
+  // `driveFolderRoute`.
+  const urlOpenLabel = getParam("openLabel");
+  const urlOpenRemote = getParam("openRemote") === "1";
   const urlMainReqHash = getParam("mainReqHash");
   const isNested = !isRecentFiles && Boolean(urlFolderName && urlSubFolderPath);
 
@@ -1056,6 +1060,32 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     setActiveRemoteLabel(label);
     setIsOnLocalView(false);
   }, []);
+
+  // Open a folder this page was navigated to WITH — the handover from
+  // Settings, where clicking a row used to land on the folder list and
+  // leave the user to find the folder again.
+  //
+  // Runs once and clears the param: without the clear, going back to the
+  // list and refreshing would drop the user into the folder again, which
+  // fights the rule that Drive opens on the list. Explicitly asking for a
+  // folder is the exception to that rule, not a contradiction of it.
+  const openedFromUrlRef = useRef(false);
+  useEffect(() => {
+    if (!urlOpenLabel || openedFromUrlRef.current) return;
+    openedFromUrlRef.current = true;
+    if (urlOpenRemote) {
+      handleSelectRemoteFolderFromCards(urlOpenLabel);
+    } else {
+      handleSelectFolderFromCards(urlOpenLabel);
+    }
+    router.replace("/files");
+  }, [
+    urlOpenLabel,
+    urlOpenRemote,
+    handleSelectFolderFromCards,
+    handleSelectRemoteFolderFromCards,
+    router,
+  ]);
 
   // Build the breadcrumb path that lives in the drive header. Empty when
   // the user is on the Local cards view (DriveOnboarding); otherwise the

@@ -36,9 +36,10 @@ import { appStore } from "@/lib/store/jotaiStore";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import FolderList from "@/components/page-sections/drive/folder-list/FolderList";
-import { toFolderRows } from "@/components/page-sections/drive/folder-list/folderRows";
+import { toFolderRows, type FolderRow } from "@/components/page-sections/drive/folder-list/folderRows";
 import { buildFolderActions } from "@/components/page-sections/drive/folder-list/buildFolderActions";
 import { SYNC_FOLDER_LABEL } from "@/components/page-sections/drive/uploadActions";
+import { driveFolderRoute } from "@/app/lib/routes";
 import { applyDriveStatusToRow } from "@/app/lib/utils/driveRowStatus";
 import { useAtomValue } from "jotai";
 import {
@@ -55,6 +56,18 @@ export default function MultiFolderSyncManager() {
   const { polkadotAddress, getMnemonic } = useWalletAuth();
   const queryClient = useQueryClient();
   const driveStatuses = useAtomValue(driveStatusesAtom);
+/**
+ * The identifier the Drive page opens a row by.
+ *
+ * A local drive is keyed by its sync LABEL (which may be suffixed —
+ * `tags-2` — when two folders share a basename), a server-only one by its
+ * folder name. Using the display name for both would open the wrong drive
+ * for any suffixed label.
+ */
+function openTarget(row: FolderRow): string {
+  return row.local?.id ?? row.folderName;
+}
+
   const router = useRouter();
   const [syncFolders, setSyncFolders] = useState<SyncFolder[]>([]);
 
@@ -546,10 +559,14 @@ export default function MultiFolderSyncManager() {
               {SYNC_FOLDER_LABEL}
             </Button>
           }
-          onOpenRow={() => router.push("/files")}
+          // Open the folder the user actually clicked, not just the Drive
+          // page — landing on the list and making them find it again is
+          // the complaint this fixes.
+          onOpenRow={(row) => router.push(driveFolderRoute(openTarget(row), row.presence !== "on-this-device"))}
           buildActions={(row) =>
             buildFolderActions(row, {
-              onOpen: () => router.push("/files"),
+              onOpen: (row) =>
+                router.push(driveFolderRoute(openTarget(row), row.presence !== "on-this-device")),
               onPause: (folder) => setPauseDialog({ open: true, folder }),
               onResume: (folder) => void handleResumeSync(folder),
               onManageExclusions: (folder) => setExclusionsLabel(folder.id),
