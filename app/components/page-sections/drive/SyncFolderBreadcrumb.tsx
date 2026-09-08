@@ -1,7 +1,8 @@
 "use client";
 
 import { FC, Fragment } from "react";
-import { ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
+import { resolveBreadcrumbBack } from "./breadcrumbBack";
 import { cn } from "@/lib/utils";
 
 /**
@@ -44,8 +45,8 @@ const SEGMENT_BASE = cn(
 );
 
 const SEGMENT_INACTIVE = cn(
-  "text-black-700 dark:text-grey-light-200 opacity-40",
-  "hover:opacity-100 transition-opacity cursor-pointer",
+  "text-black-700 dark:text-grey-light-200 opacity-70",
+  "hover:opacity-100 hover:underline underline-offset-2 transition-opacity cursor-pointer",
 );
 
 const SEGMENT_ACTIVE = "text-black-700 dark:text-grey-light-200";
@@ -60,6 +61,7 @@ const SyncFolderBreadcrumb: FC<SyncFolderBreadcrumbProps> = ({
   rootLabel = "Local",
 }) => {
   const hasSegments = segments.length > 0;
+  const back = resolveBreadcrumbBack(segments, onLocalClick);
 
   return (
     <nav
@@ -69,6 +71,25 @@ const SyncFolderBreadcrumb: FC<SyncFolderBreadcrumbProps> = ({
         className,
       )}
     >
+      {/* Up one level. The trail alone was the only way out of a folder,
+          and reading it means working out which word is your parent. This
+          says it plainly and is the first thing in the row, where a back
+          control is looked for. */}
+      {back && (
+        <button
+          type="button"
+          onClick={back.go}
+          aria-label={back.label}
+          title={back.label}
+          className={cn(
+            "mr-1 inline-flex size-[26px] shrink-0 items-center justify-center rounded-[6px]",
+            "border border-grey-80 text-black-700 transition-colors",
+            "hover:bg-grey-90 dark:border-black-300 dark:text-grey-light-200 dark:hover:bg-white/10",
+          )}
+        >
+          <ChevronLeft className="size-4" />
+        </button>
+      )}
       <button
         type="button"
         onClick={onLocalClick}
