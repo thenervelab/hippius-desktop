@@ -351,11 +351,16 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
 
   // One hook serves all three browse shapes: local nested, remote nested,
   // and the remote drive ROOT (state-based, subfolder = drive root).
+  // Which remote drive an upload from this view belongs to — the same
+  // label the listing below reads, so the two cannot point at different
+  // folders.
+  const remoteUploadLabel = nestedDrive?.label ?? (isRemoteRoot ? activeRemoteLabel : null);
+
   const nestedListing = useNestedFolderListing({
     accountId: polkadotAddress,
     syncPath: nestedDrive?.syncPath ?? null,
     subfolder: isNested ? urlSubFolderPath || null : null,
-    label: nestedDrive?.label ?? (isRemoteRoot ? activeRemoteLabel : null),
+    label: remoteUploadLabel,
     refreshKey: nestedRefreshKey,
     enabled: isNested || isRemoteRoot,
     remote: isRemoteView,
@@ -1547,6 +1552,18 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 privateFileCount={privateFileCount}
                 isSyncPathEmpty={effectiveSyncPathEmpty}
                 hideUploads={isRemoteView}
+                remoteUpload={
+                  // The label the remote listing itself reads, so the
+                  // upload lands in the folder on screen rather than in
+                  // whichever drive happened to be active before.
+                  isRemoteView && remoteUploadLabel
+                    ? {
+                        label: remoteUploadLabel,
+                        parentPath: isNested ? (urlSubFolderPath || undefined) : undefined,
+                        onUploaded: () => setNestedRefreshKey((k) => k + 1),
+                      }
+                    : undefined
+                }
                 onStartSyncing={handleStartSyncing}
                 hasNoSyncPaths={hasNoSyncPaths}
                 isStorageFull={isStorageFull}

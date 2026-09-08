@@ -31,6 +31,7 @@ import {
   UPLOAD_FILE_LABEL,
   UPLOAD_FOLDER_LABEL,
 } from "./uploadActions";
+import RemoteUploadButton from "./RemoteUploadButton";
 
 // Figma white pill style shared by Add Folder / View All Files / Shared Links.
 // Mirrors the trigger styling used across the home dashboard cards.
@@ -81,6 +82,15 @@ interface DriveHeaderProps {
    *  files somewhere else and read as data loss. This is the single gate
    *  the shared-drive viewer and frozen-drive cases belong in. */
   hideUploads?: boolean;
+  /** Browsing a folder that is not synced here. Files go straight to the
+   *  server instead of through a local sync folder, so this view gets its
+   *  own upload button. Folder upload is still hidden: it would mean
+   *  walking a directory and posting each file, which is a separate job. */
+  remoteUpload?: {
+    label: string;
+    parentPath?: string;
+    onUploaded?: () => void;
+  };
   onStartSyncing?: () => void;
   hasNoSyncPaths?: boolean;
   /** When true, the header "Start Syncing" button is dimmed and its
@@ -154,6 +164,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
   addButtonRef,
   isSyncPathEmpty = false,
   hideUploads = false,
+  remoteUpload,
   onStartSyncing,
   hasNoSyncPaths = false,
   isStorageFull = false,
@@ -265,6 +276,16 @@ const DriveHeader: FC<DriveHeaderProps> = ({
           )}
           Download Folder
         </Button>
+      )}
+
+      {/* A folder that is not synced here uploads straight to the server,
+          so it gets its own button rather than the local flow's. */}
+      {remoteUpload && (
+        <RemoteUploadButton
+          label={remoteUpload.label}
+          parentPath={remoteUpload.parentPath}
+          onUploaded={remoteUpload.onUploaded}
+        />
       )}
 
       {/* Upload File — the primary CTA, same gate as Upload Folder above. */}

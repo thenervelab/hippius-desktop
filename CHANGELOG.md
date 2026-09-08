@@ -78,6 +78,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   the folder path, and the path itself is easier to read. Before, the faint trail
   of folder names was the only way out.
 - **You can upload straight from the folder list**, without opening a folder first.
+- **You can now upload into folders that are not synced on this computer.** Open a
+  folder you are only browsing and add files to it directly; they go straight to
+  your Drive without downloading the folder first.
 - **All your folders are in one list.** The Drive page split them across three
   headings — folders on this computer, folders from other devices, and folders
   synced nowhere. They are now a single list, each row showing where that folder
