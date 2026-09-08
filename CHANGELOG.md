@@ -74,6 +74,12 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **Billing and plans are one place instead of two.** "Subscription Plans" and
   "Billing" were separate sidebar entries for the same subject. Your Drive plans
   now live inside Billing, and Billing has moved into Settings.
+- **The button in the top corner now offers what your account actually needs.**
+  On the free plan it offers to upgrade instead of topping up credits, which buy
+  no Drive storage. On a plan it shows how much of your storage you have used, and
+  offers an upgrade once you pass 80% — or a top-up only when your credits will not
+  cover the next renewal. A healthy plan is not sold anything. The same cell now
+  behaves this way on the Drive page as well as the overview.
 - **Billing no longer mixes in plans for a different product.** The credit-reload
   packages and the billing history table have been taken off the page, so it shows
   the plan that governs your Drive storage and the credits that pay for it.

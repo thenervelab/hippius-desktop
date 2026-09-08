@@ -6,6 +6,7 @@ import { Loader2 } from "lucide-react";
 import { Icons } from "@/components/ui";
 import { Button } from "@/components/ui/button";
 import PlanChip from "@/components/ui/plan-chip";
+import PlanActionButton from "@/components/ui/plan-chip/PlanActionButton";
 import { cn } from "@/app/lib/utils";
 import { useStaking } from "@/app/lib/hooks/useStaking";
 import { WALLET_FEATURE_ENABLED } from "@/app/lib/featureFlags";
@@ -193,22 +194,12 @@ const PageHeader: FC<PageHeaderProps> = ({
         </div>
 
         {showTopUpCredits && (
-          <div className="flex shrink-0 items-center py-[11px]">
-            <Button
-              asLink
-              href="/billing"
-              variant="defaultStable"
-              size="auto"
-              className={cn(
-                "h-[33px] rounded-[7px] px-[14px] text-[14px] font-medium tracking-[-0.28px]",
-                "border border-grey-dark-100 bg-white text-black-600",
-                "shadow-[0px_5px_2.3px_0px_rgba(0,0,0,0.03),0px_1px_1.9px_0px_rgba(0,0,0,0.14),0px_0px_1px_0px_rgba(0,0,0,0.16),0px_1px_0px_0px_white,0px_1px_0px_0px_white]",
-                "dark:border-black-300 dark:bg-black-primary-bg dark:text-grey-dark-400",
-                "dark:shadow-[0px_0px_0px_1px_black]",
-              )}
-            >
-              + Top up Credits
-            </Button>
+          <div className="flex shrink-0 items-center py-[11px] pr-3.5">
+            {/* What this offers depends on the account: Upgrade on the free
+                tier or a plan filling up, Top up Credits only for a
+                credits-funded plan that cannot cover its renewal, and
+                nothing at all for a healthy plan. Decided in Rust. */}
+            <PlanActionButton />
           </div>
         )}
       </div>

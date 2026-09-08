@@ -22,9 +22,13 @@ export interface PlanInfo {
   storageBytes: number;
   /** Marketed SKU label from Rust (`1.00 TB`, not `999 GB`). */
   storageDisplay: string;
+  /** `"credits"` or `"card"`; null for the legacy Stripe subscription. */
+  funding: string | null;
 }
 
 /** Shape returned by the Rust `get_storage_overview` IPC (camelCase). */
+export type PlanAction = "upgrade" | "top-up-credits" | "none";
+
 export interface StorageOverview {
   usedBytes: number;
   /** Effective capacity in bytes (the free tier when no subscription). */
@@ -50,6 +54,22 @@ export interface StorageOverview {
   usedDisplay: string;
   totalDisplay: string;
   freeDisplay: string;
+  /**
+   * What the header should offer this account, decided in Rust:
+   *
+   *   - `upgrade`         — no plan, or a plan at/over 80% full. More
+   *                         storage means a bigger plan, so credits are
+   *                         not the answer and must not be offered.
+   *   - `top-up-credits`  — a credits-funded plan whose balance will not
+   *                         cover its next renewal. Card plans never get
+   *                         this: the card renews itself.
+   *   - `none`            — a healthy plan with room left.
+   *
+   * Render this. Do NOT re-derive a prompt from source/percent/plan on the
+   * FE: three surfaces show this cell and a locally-derived prompt is one
+   * that eventually contradicts the others.
+   */
+  planAction: PlanAction;
 }
 
 /**

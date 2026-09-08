@@ -6,10 +6,7 @@ import { useStorageOverview } from "@/app/lib/hooks/api/useStorageOverview";
 
 import { nextSkeletonState } from "@/lib/utils/skeletonGate";
 import { cn } from "@/app/lib/utils";
-import {
-  formatPlanPrice,
-  getPlanView,
-} from "@/app/components/page-sections/home/storage-overview/storageOverviewState";
+import { getPlanView } from "@/app/components/page-sections/home/storage-overview/storageOverviewState";
 
 /**
  * The top-header plan/credits chip, shared by every page header that shows
@@ -69,10 +66,13 @@ const PlanChip: React.FC<{ className?: string }> = ({ className }) => {
           aria-hidden="true"
         />
       ) : planView === "plan" && plan ? (
+        /* On a plan, what matters is how much of it is left — the price is
+           already known to someone who chose it, and the free tier's line
+           below sells the allowance instead. */
         <p className="whitespace-pre text-[12px] font-bold leading-[18px] tracking-[-0.36px] text-primary-50 dark:text-primary-brand-dark">
-          ≈ {plan.storageDisplay}
+          {overview?.usedDisplay ?? ""}
           <span className="text-[12px] font-medium text-black-700 dark:text-white">
-            {"  "}({formatPlanPrice(plan.amount, plan.interval)})
+            {"  "}of {plan.storageDisplay} used
           </span>
         </p>
       ) : planView === "free" ? (
