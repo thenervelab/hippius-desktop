@@ -8,10 +8,14 @@
 // reinstalls. The whole feature is therefore invisible to new users until
 // something asks them to flip the switch.
 //
-// The two failure modes this pins are the ones that would make the nudge worse
-// than nothing: never showing it (the bug we are fixing), and nagging a user who
+// The failure modes this pins are the ones that would make the nudge worse
+// than nothing: never showing it (the bug we are fixing), nagging a user who
 // has ALREADY enabled it — which is why the re-check on window focus must
-// actually dismiss, and a user who closes the toast must not see it again.
+// actually dismiss — and raising it more than once per launch. The earlier
+// version re-raised on every window focus while the state read `disabled`,
+// which a user who had just pressed Enable reported as a notice that "doesn't
+// go away" (2026-09-08). Rust now elects the extension itself on first run and
+// after updates; this notice is the fallback, and a fallback asks once.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, waitFor, act } from "@testing-library/react";
@@ -36,6 +40,7 @@ type ToastOptions = {
   duration?: number;
   description?: string;
   action?: { label: string; onClick: () => void };
+  cancel?: { label: string; onClick: () => void };
   onDismiss?: () => void;
 };
 
@@ -237,7 +242,22 @@ describe("FinderExtensionGuard", () => {
     expect(toastMock.warning).toHaveBeenCalledTimes(1);
   });
 
-  it("nudges again if the user opened Settings but did not enable it", async () => {
+  // The loop behind the 2026-09-08 report: the state kept reading `disabled`
+  // after Enable, and every window focus put the notice straight back. One
+  // launch asks once; a focus re-check may only clear.
+  it("does not raise the notice again on focus while the extension is still off", async () => {
+    stateIs("disabled");
+    render(<FinderExtensionGuard />);
+    await waitFor(() => expect(toastMock.warning).toHaveBeenCalledTimes(1));
+
+    await refocus();
+    await refocus();
+
+    expect(invokeMock.mock.calls.filter(([command]) => command === "finder_extension_state")).toHaveLength(3);
+    expect(toastMock.warning).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks once per launch even when the enable attempt did not take", async () => {
     stateIs("disabled");
     render(<FinderExtensionGuard />);
     await waitFor(() => expect(toastMock.warning).toHaveBeenCalledTimes(1));
@@ -245,18 +265,51 @@ describe("FinderExtensionGuard", () => {
     // Model the real library: sonner removes the toast on an action click by
     // calling `deleteToast()` itself, and does NOT invoke `onDismiss` (verified
     // in sonner 2.0.7 — only the close button, a swipe, and a programmatic
-    // `toast.dismiss` reach it). Calling `onDismiss` here too would assert a
-    // sequence that never happens in production, and did: it hid the notice
-    // being suppressed for the rest of the session after its own action button
-    // was used.
+    // `toast.dismiss` reach it).
     await act(async () => {
       nudgeOptions().action?.onClick();
     });
+    expect(invokeMock).toHaveBeenCalledWith("open_finder_extension_settings");
 
+    // The user comes back from Settings without having enabled it.
     stateIs("disabled");
     await refocus();
 
-    expect(toastMock.warning).toHaveBeenCalledTimes(2);
+    expect(toastMock.warning).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not nudge again this session once an enable was verified, even if the state flips back", async () => {
+    enableSucceeds();
+    await pressAction();
+    expect(toastMock.success).toHaveBeenCalledTimes(1);
+
+    // macOS reads the switch as off again (a second registered copy, an MDM
+    // profile). That is the next launch's problem — Rust re-elects there.
+    stateIs("disabled");
+    await refocus();
+
+    expect(toastMock.warning).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers a way to never be asked again, and stores it in Rust", async () => {
+    stateIs("disabled");
+    render(<FinderExtensionGuard />);
+    await waitFor(() => expect(toastMock.warning).toHaveBeenCalledTimes(1));
+
+    const { cancel } = nudgeOptions();
+    expect(cancel?.label).toMatch(/don.t ask again/i);
+    await act(async () => {
+      cancel?.onClick();
+    });
+
+    // The decision is persisted by the backend, not in localStorage: the
+    // preference is what makes `finder_extension_state` answer `unsupported`
+    // on every later launch.
+    expect(invokeMock).toHaveBeenCalledWith("set_finder_extension_preference", { preference: "unwanted" });
+
+    stateIs("disabled");
+    await refocus();
+    expect(toastMock.warning).toHaveBeenCalledTimes(1);
   });
 
   it("clears a notice left behind by a previous mount", async () => {

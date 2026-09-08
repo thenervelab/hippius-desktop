@@ -398,12 +398,12 @@ async fn refuse_if_source_moved(
 ///
 /// Caller responsibilities (everything outside the pipeline):
 /// - extract `account_id`,
-/// - run [`require_shares_supported`] and [`require_eligible`],
+/// - run [`require_shares_supported`],
 /// - hand us the `(folder_label, relative_path)` of the source file.
 ///
-/// We do everything else: resolve the plaintext path, run the
-/// streaming share via hcfs-client, persist the origin sidecar, and
-/// return the wire `ShareLink`.
+/// We do everything else: resolve the plaintext path, run the storage
+/// gate on the file's real size, run the streaming share via hcfs-client,
+/// persist the origin sidecar, and return the wire `ShareLink`.
 ///
 /// `progress`, when `Some`, is hcfs-client's per-phase
 /// encrypting→uploading→finalizing callback, so the share modal can render
@@ -431,6 +431,14 @@ async fn create_share_inner(
         return Err(AppError::Validation("Cannot share a directory".into()));
     }
     let plaintext_size = metadata.len();
+    // A share link is not free storage: the file is re-encrypted under a
+    // per-share key and uploaded again, and hcfs-server bills that copy
+    // through the same quota gate as `/upload`. So the pre-flight carries
+    // the real size — an earlier version passed `0` on the theory that a
+    // share only served bytes already paid for, which the server never
+    // agreed with. Sits here rather than in the callers because this is
+    // where the size becomes known.
+    require_eligible(state, account_id, InsufficientCreditsAction::Sharing, plaintext_size).await?;
     // Kept for the post-mint comparison — see `refuse_if_source_moved`.
     let before = stamp(&metadata);
 
@@ -567,29 +575,19 @@ pub async fn hcfs_create_share(
     let ttl = parse_ttl(&ttl)?;
     let choice = ShareChoice::parse(&visibility, password)?;
 
-    // Capability + eligibility gates. The capability call is a single
-    // anonymous HTTP request; we accept the round-trip so that an old
-    // server hides the feature instead of failing create_share with a
-    // 404 several KB into a multipart upload.
-    //
-    // Sharing passes `0` bytes because minting a share token serves
-    // anonymous reads from the SAME ciphertext the user already paid to
-    // store, not a new upload. That is NOT the same as a free gate:
-    // `is_drive_storage()` covers every action except VM creation, so
-    // this runs the plan-allowance check with zero incoming bytes, and an
-    // account ALREADY past its allowance is refused a share. Deliberate —
-    // an over-allowance account is frozen out of Drive actions until it
-    // upgrades — but it does mean `thresholds::SHARING` no longer decides
-    // anything here. Pinned by `tests/drive_quota_enforcement.rs`.
+    // Capability gate. A single anonymous HTTP request; we accept the
+    // round-trip so that an old server hides the feature instead of failing
+    // create_share with a 404 several KB into a multipart upload. The
+    // storage gate runs inside `create_share_inner`, once the file's size
+    // is known — see the note there.
     require_shares_supported(&state, &account_id).await?;
-    require_eligible(&state, &account_id, InsufficientCreditsAction::Sharing, 0).await?;
 
     let progress = share_progress_forwarder(on_progress);
     create_share_inner(&state, &account_id, &folder_label, &relative_path, ttl, choice, Some(progress)).await
 }
 
-/// Mint a share for a synced file with the same capability + eligibility
-/// guards as [`hcfs_create_share`]. Entry point for the macOS Finder bridge
+/// Mint a share for a synced file with the same capability guard as
+/// [`hcfs_create_share`]. Entry point for the macOS Finder bridge
 /// dispatcher. `progress` streams the encrypt/upload bar to the confirm modal
 /// (`Some`) — the Finder confirm flow opens a webview `Channel`.
 ///
@@ -606,7 +604,6 @@ pub(crate) async fn share_synced_file(
     progress: Option<ShareProgressFn>,
 ) -> Result<ShareLink> {
     require_shares_supported(state, account_id).await?;
-    require_eligible(state, account_id, InsufficientCreditsAction::Sharing, 0).await?;
     create_share_inner(state, account_id, folder_label, relative_path, ttl, choice, progress).await
 }
 
@@ -627,7 +624,6 @@ pub(crate) async fn share_external_file(
     progress: Option<ShareProgressFn>,
 ) -> Result<ShareLink> {
     require_shares_supported(state, account_id).await?;
-    require_eligible(state, account_id, InsufficientCreditsAction::Sharing, 0).await?;
 
     let pool = state.pool()?;
     let metadata = tokio::fs::metadata(abs_path).await?;
@@ -635,6 +631,8 @@ pub(crate) async fn share_external_file(
         return Err(AppError::Validation("Cannot share a directory".into()));
     }
     let plaintext_size = metadata.len();
+    // The upload the server bills is this file's size — see `create_share_inner`.
+    require_eligible(state, account_id, InsufficientCreditsAction::Sharing, plaintext_size).await?;
     // Kept for the post-mint comparison — see `refuse_if_source_moved`. This
     // is the path a Finder right-click takes, so it is the one that shared a
     // still-downloading zip on 2026-08-31.
@@ -711,7 +709,6 @@ async fn create_remote_share_inner(
     progress: Option<ShareProgressFn>,
 ) -> Result<ShareLink> {
     require_shares_supported(state, account_id).await?;
-    require_eligible(state, account_id, InsufficientCreditsAction::Sharing, 0).await?;
 
     let filename = relative_path
         .trim_matches('/')
@@ -769,6 +766,10 @@ async fn mint_remote_share_at(
 
     let metadata = tokio::fs::metadata(tmp).await?;
     let plaintext_size = metadata.len();
+    // The size is only known once the copy is on disk, so the storage gate
+    // runs after the download rather than before it; the caller removes
+    // `tmp` on this error like on every other. See `create_share_inner`.
+    require_eligible(state, account_id, InsufficientCreditsAction::Sharing, plaintext_size).await?;
     // No `refuse_if_source_moved` here, deliberately: `tmp` is a per-attempt
     // path this function just wrote and nothing else can reach, so a
     // before/after comparison could only ever agree. The guard belongs on the
@@ -1757,6 +1758,45 @@ mod tests {
             !without_correct_calls.contains("build_share_url("),
             "hcfs_list_shares must NOT call build_share_url directly — that takes a raw \
              key and would emit a password-free #k= link for a password-protected share",
+        );
+    }
+
+    /// Every path that uploads a share copy must run the storage gate on the
+    /// copy's real size, after that size is known. A `0` here re-opens the
+    /// bug where a share was judged as free storage the server then billed;
+    /// a gate placed before the stat has no size to pass.
+    #[test]
+    fn every_share_upload_is_gated_on_its_plaintext_size() {
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/shares/commands.rs")).expect("read commands.rs");
+        const GATE: &str = "require_eligible(state, account_id, InsufficientCreditsAction::Sharing, plaintext_size)";
+
+        for sig in [
+            "async fn create_share_inner(",
+            "async fn share_external_file(",
+            "async fn mint_remote_share_at(",
+        ] {
+            let body = fn_body(&src, sig);
+            let size_known = body
+                .find("let plaintext_size = metadata.len();")
+                .unwrap_or_else(|| panic!("{sig} stats its source"));
+            let gated = body.find(GATE).unwrap_or_else(|| panic!("{sig} must gate on the plaintext size"));
+            assert!(size_known < gated, "{sig} must gate AFTER the size is known, not before");
+        }
+    }
+
+    /// No share entry point may run the gate with a fabricated byte count.
+    ///
+    /// Scans the production half of the file only: this test names the
+    /// needle it hunts, so an unbounded scan would find itself and fail
+    /// forever (the same trap `enablement.rs`'s pins guard against).
+    #[test]
+    fn no_share_path_gates_with_zero_bytes() {
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/shares/commands.rs")).expect("read commands.rs");
+        let tests_start = src.find("#[cfg(test)]\nmod tests").expect("test module follows the production code");
+        let production = &src[..tests_start];
+        assert!(
+            !production.contains("InsufficientCreditsAction::Sharing, 0)"),
+            "a share gated at 0 bytes is judged as free storage the server then bills"
         );
     }
 

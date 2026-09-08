@@ -35,14 +35,13 @@ const copy: Record<
       "Syncing this folder would go past the storage your plan includes. Upgrade your plan for more room, or pick a smaller folder.",
     needsPlan: true,
   },
-  // Sharing mints no new bytes, but it is still a Drive action: an account
-  // already past its allowance is refused until it upgrades, so the copy
-  // names what is actually blocking rather than implying the share is
-  // somehow too large.
+  // A share link uploads a re-encrypted copy of the file, and the server
+  // bills that copy like any upload — so a refusal here means THIS share
+  // does not fit, the same as an upload of the same size would not.
   sharing: {
     title: "Not enough storage",
     description:
-      "Your Drive is past the storage your plan includes, so new share links are paused. Upgrade your plan for more room, or remove some files to free space.",
+      "Sharing this file would go past the storage your plan includes. Upgrade your plan for more room, or free some space.",
     needsPlan: true,
   },
   // VM creation is genuinely credit-priced and keeps the credits route.
