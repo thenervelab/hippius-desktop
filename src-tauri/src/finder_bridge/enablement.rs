@@ -415,9 +415,11 @@ mod policy {
 }
 
 pub use policy::FinderExtensionPreference;
-use policy::{ElectionFingerprint, LaunchAction, launch_action, load_preference, report_state, store_preference};
+// Only the macOS launch/enable paths consult the policy; off macOS the
+// commands answer `Unsupported` before touching it, and an unused import is a
+// build error on the Linux CI lane.
 #[cfg(target_os = "macos")]
-use policy::{adopt_election, load_fingerprint};
+use policy::{ElectionFingerprint, LaunchAction, adopt_election, launch_action, load_fingerprint, load_preference, report_state, store_preference};
 
 /// Report whether the Finder extension is enabled for the current user, as
 /// the frontend should understand it.
