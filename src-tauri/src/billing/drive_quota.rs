@@ -38,11 +38,19 @@ use crate::auth::tokens::get_api_token;
 /// click is worse than falling open.
 const PREFLIGHT_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// The one `/can_upload` refusal that is not a verdict: the server could not
-/// read the credit balance. Its write path treats this as retryable rather
-/// than as a denial (the hippius-s3 gateway keys on the same string), so a
-/// transient billing outage must not read as "over quota" here either.
-const BILLING_OUTAGE_ERROR: &str = "Failed to fetch billing balance";
+/// Marks the one `/can_upload` refusal that is not a verdict: the server
+/// could not read the credit balance. hcfs-server documents that string as
+/// "the only `/can_upload` error carrying the word billing", which is how the
+/// hippius-s3 gateway tells a transient outage from a quota refusal — so this
+/// matches the same way, by the word and not the sentence, and a reworded or
+/// detail-suffixed message still falls open instead of refusing every
+/// desktop for the length of a billing blip.
+const BILLING_OUTAGE_MARKER: &str = "billing";
+
+/// Whether a `/can_upload` refusal is the server saying it could not answer.
+fn is_billing_outage(error: &str) -> bool {
+    error.to_ascii_lowercase().contains(BILLING_OUTAGE_MARKER)
+}
 
 /// What a quota check concluded.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,7 +71,8 @@ impl QuotaVerdict {
             return Self::allowed();
         }
         match resp.error.as_deref() {
-            Some(BILLING_OUTAGE_ERROR) | None => Self::unknown(),
+            None => Self::unknown(),
+            Some(reason) if is_billing_outage(reason) => Self::unknown(),
             Some(reason) => Self {
                 allowed: false,
                 server_reason: Some(reason.to_owned()),
@@ -169,8 +178,18 @@ async fn preflight_target(state: &AppState, account: &SessionAccount) -> Option<
         }
     };
     let base_url = if stored.is_empty() {
-        match hcfs_client::client::pick_fastest(&state.api_client).await {
-            Ok(url) => url,
+        // Resolved once per process: nearly every install stores the
+        // auto-detect sentinel, and racing the regions in front of every
+        // upload, share and sync-init click (twice — the proactive check and
+        // the gate) put two probes and up to the probe timeout ahead of each
+        // one. Either region answers identically, so the first winner is as
+        // good as any later one.
+        let resolved = state
+            .hcfs_region
+            .get_or_try_init(|| hcfs_client::client::pick_fastest(&state.api_client))
+            .await;
+        match resolved {
+            Ok(url) => url.clone(),
             Err(err) => {
                 tracing::warn!(%err, "can_upload pre-flight skipped: no region answered");
                 return None;
@@ -222,8 +241,33 @@ mod tests {
     /// write path retries that case rather than refusing, and so must this.
     #[test]
     fn a_transient_billing_outage_falls_open() {
-        let verdict = QuotaVerdict::from_preflight(&preflight(false, Some(BILLING_OUTAGE_ERROR)));
-        assert!(verdict.allowed);
+        // The exact string the server sends today, and the shapes it could
+        // drift to — matched the way the hippius-s3 gateway matches, by the
+        // word. A drift that refused every desktop for a billing blip would
+        // be a worse outage than the one it reports.
+        for wording in [
+            "Failed to fetch billing balance",
+            "Failed to fetch billing balance: upstream timeout",
+            "billing unavailable",
+            "Billing service returned 503",
+        ] {
+            let verdict = QuotaVerdict::from_preflight(&preflight(false, Some(wording)));
+            assert!(verdict.allowed, "{wording:?} must fall open");
+        }
+    }
+
+    /// The quota and entitlement slugs carry no such word, so the marker
+    /// cannot swallow a real refusal.
+    #[test]
+    fn the_outage_marker_matches_no_denial_slug() {
+        for slug in [
+            "drive_quota_exceeded",
+            "drive_not_entitled",
+            "zero_balance",
+            "insufficient_balance: need 3 cents, have 1 cents",
+        ] {
+            assert!(!is_billing_outage(slug), "{slug} is a verdict, not an outage");
+        }
     }
 
     /// A `false` with no reason is malformed for the wire contract (the

@@ -709,6 +709,14 @@ async fn create_remote_share_inner(
     progress: Option<ShareProgressFn>,
 ) -> Result<ShareLink> {
     require_shares_supported(state, account_id).await?;
+    // The exact gate runs in `mint_remote_share_at` once the copy is on disk
+    // and its size is known. This zero-byte probe runs BEFORE the download so
+    // an account the server already refuses outright (past its allowance
+    // with nothing to pay the overflow) is told so without first pulling the
+    // whole file down only to delete it. It cannot pass anything the sized
+    // gate would refuse; it only spares the download when the answer is
+    // already no.
+    require_eligible(state, account_id, InsufficientCreditsAction::Sharing, 0).await?;
 
     let filename = relative_path
         .trim_matches('/')
@@ -1784,20 +1792,31 @@ mod tests {
         }
     }
 
-    /// No share entry point may run the gate with a fabricated byte count.
+    /// A zero-byte gate is never the ONLY gate on a share, and exists in one
+    /// place: the pre-download probe in `create_remote_share_inner`, which
+    /// spares an already-refused account a download the sized gate would
+    /// then throw away. Anywhere else it would judge a share as free storage
+    /// the server then bills.
     ///
     /// Scans the production half of the file only: this test names the
     /// needle it hunts, so an unbounded scan would find itself and fail
     /// forever (the same trap `enablement.rs`'s pins guard against).
     #[test]
-    fn no_share_path_gates_with_zero_bytes() {
+    fn a_zero_byte_gate_exists_only_as_the_remote_predownload_probe() {
         let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/shares/commands.rs")).expect("read commands.rs");
         let tests_start = src.find("#[cfg(test)]\nmod tests").expect("test module follows the production code");
         let production = &src[..tests_start];
-        assert!(
-            !production.contains("InsufficientCreditsAction::Sharing, 0)"),
-            "a share gated at 0 bytes is judged as free storage the server then bills"
+        const ZERO_GATE: &str = "InsufficientCreditsAction::Sharing, 0)";
+
+        assert_eq!(
+            production.matches(ZERO_GATE).count(),
+            1,
+            "exactly one zero-byte probe, in create_remote_share_inner"
         );
+        let body = fn_body(production, "async fn create_remote_share_inner(");
+        let probe = body.find(ZERO_GATE).expect("the probe lives in create_remote_share_inner");
+        let download = body.find("mint_remote_share_at(").expect("the mint follows");
+        assert!(probe < download, "the probe must run before the download it exists to spare");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

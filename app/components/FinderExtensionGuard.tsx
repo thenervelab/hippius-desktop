@@ -118,10 +118,16 @@ export default function FinderExtensionGuard() {
       }
     };
 
-    /** Record that the user never wants this notice; Rust reports `unsupported` from then on. */
+    /**
+     * Record that the user never wants this notice; Rust reports `muted` from
+     * then on, which the silence branch below covers. `switchOff: false` —
+     * "stop asking" is about the notice, not the extension: with a second
+     * registered copy of the app, sharing may be working through the other
+     * copy, and switching it off by bundle id would break it.
+     */
     const neverAskAgain = () => {
       dismissed.current = true;
-      invoke("set_finder_extension_preference", { preference: PREFERENCE_UNWANTED }).catch(() => {
+      invoke("set_finder_extension_preference", { preference: PREFERENCE_UNWANTED, switchOff: false }).catch(() => {
         // Storing the preference is best-effort; the session is silenced
         // regardless, and an unwritten preference costs one nudge next launch.
       });
@@ -170,10 +176,11 @@ export default function FinderExtensionGuard() {
           if (cancelled) return;
 
           if (state.kind !== "disabled") {
-            // `unsupported` (every non-macOS platform, a state macOS would not
-            // report, or a user who chose "Don't ask again") is treated exactly
-            // like `enabled`: silence beats nagging on an answer we can't stand
-            // behind.
+            // `unsupported` (every non-macOS platform, or a state macOS would
+            // not report) and `muted` (the user chose "Don't ask again") are
+            // treated exactly like `enabled`: silence beats nagging on an answer
+            // we can't stand behind or one the user declined. Keyed on
+            // "anything but disabled" so a new kind defaults to silence.
             //
             // Dismiss UNCONDITIONALLY rather than only when this instance raised
             // the notice: a re-mount hands the new instance fresh refs, so a
