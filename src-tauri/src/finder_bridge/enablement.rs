@@ -98,12 +98,16 @@ const DISCOVERY_WAIT: Duration = Duration::from_secs(5);
 const REELECT_WAIT: Duration = Duration::from_secs(1);
 
 /// Upper bound on how long `finder_extension_state` waits for the launch
-/// check to finish before answering. The check needs at most
-/// [`DISCOVERY_WAIT`] plus a few tool invocations; past this the answer is
-/// given from whatever state the system is in, so a wedged helper can never
-/// hang the IPC.
+/// check to finish before answering. Sized to the check's own worst case —
+/// two registration helpers at [`TOOL_TIMEOUT`] each, [`DISCOVERY_WAIT`],
+/// and the election — with room to spare: a cap below that lets a fresh
+/// install nudge over the election it was told to wait for, and the notice
+/// then sits there until the next window focus clears it. Past this the
+/// answer is given from whatever state the system is in, so a wedged helper
+/// can never hang the IPC; the cap is only ever reached when the launch
+/// check could not run at all.
 #[cfg(target_os = "macos")]
-const LAUNCH_CHECK_CAP: Duration = Duration::from_secs(8);
+const LAUNCH_CHECK_CAP: Duration = Duration::from_secs(30);
 
 /// Settings-store key for [`FinderExtensionPreference`].
 const PREFERENCE_KEY: &str = "finder_extension_preference";
@@ -376,6 +380,13 @@ mod policy {
         RegisterAndElect,
         /// After an app or macOS update: register, un-elect, re-elect, so Finder
         /// drops the stale extension host and loads the current bundle.
+        ///
+        /// Applies whether the switch reads on or off, because an update is
+        /// the one event known to flip it off by itself, and the table cannot
+        /// tell that apart from a user who turned it off in System Settings
+        /// and then updated. That user is re-elected once and gets the
+        /// in-app switch to make it stick; the off that is never overridden
+        /// is the one made in Hippius (`Unwanted`).
         Reelect,
     }
 
@@ -622,36 +633,46 @@ pub async fn enable_finder_extension(app: AppHandle) -> Result<FinderExtensionSt
     }
 }
 
-/// Record what the user wants and act on it now: `wanted` registers and
-/// elects like the Enable button; `unwanted` switches the extension off.
+/// Record what the user wants and act on it: `wanted` registers and elects
+/// like the Enable button; `unwanted` with `switch_off` also switches the
+/// extension off.
 ///
-/// Backs both "Don't ask again" on the nudge and the Settings switch. Returns
-/// the resulting state so a switch can render the truth rather than its own
-/// optimism.
+/// Backs both "Don't ask again" on the nudge (`switch_off: false`) and the
+/// Settings switch (`switch_off: true`). The two differ on purpose: "stop
+/// asking" is about the notice, and the extension it is asking about may be a
+/// working one — with two registered copies of the app, the non-elected copy
+/// reads `Disabled` while sharing works through the other, and `pluginkit -e
+/// ignore` is keyed by bundle id, so running it there would switch off the
+/// copy that works. Only the switch, whose whole meaning is off, gets the
+/// verb. Returns the resulting state so a switch can render the truth rather
+/// than its own optimism.
 #[tauri::command]
 pub async fn set_finder_extension_preference(
     app: AppHandle,
     state: tauri::State<'_, AppState>,
     preference: FinderExtensionPreference,
+    switch_off: bool,
 ) -> Result<FinderExtensionState> {
     #[cfg(target_os = "macos")]
     {
         store_preference(state.pool()?, preference).await?;
-        tracing::info!(?preference, "finder extension preference recorded");
+        tracing::info!(?preference, switch_off, "finder extension preference recorded");
 
         match preference {
             FinderExtensionPreference::Wanted => enable_finder_extension(app).await,
             FinderExtensionPreference::Unwanted => {
-                let unelected = unelect().await;
+                if switch_off {
+                    let unelected = unelect().await;
+                    tracing::info!(unelected, "switched the Finder extension off at the user's request");
+                }
                 let raw = read_state(&app).await;
-                tracing::info!(unelected, ?raw, "switched the Finder extension off at the user's request");
                 Ok(report_state(raw, Some(preference)))
             }
         }
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (app, state, preference);
+        let _ = (app, state, preference, switch_off);
         Err(AppError::Validation("Finder extensions are only available on macOS.".into()))
     }
 }
@@ -739,12 +760,14 @@ async fn register_with_the_system(bundle: &std::path::Path, appex: &std::path::P
 ///
 /// This is how every Finder Sync peer does it — MEGAsync, ownCloud and
 /// Nextcloud all elect their extension themselves and none of them nag — with
-/// one addition: an explicit "off" from the user is never overridden. The
-/// decision table is [`launch_action`]; in short, a fresh install is elected
-/// once, a wanted extension is re-elected after an app or macOS update (the
-/// events that flip or stale it in the field), and an extension the user
-/// switched off in steady state is only registered so the pane can list it,
-/// leaving the nudge to ask.
+/// one addition: an "off" chosen in Hippius ("Don't ask again", the Settings
+/// switch) is never overridden. The decision table is [`launch_action`]; in
+/// short, a fresh install is elected once, a wanted extension is re-elected
+/// after an app or macOS update (the events that flip or stale it in the
+/// field — an off made only in System Settings is re-elected there too, see
+/// [`LaunchAction::Reelect`]), and an extension the user switched off in
+/// steady state is only registered so the pane can list it, leaving the nudge
+/// to ask.
 ///
 /// Spawned from `main.rs` once the database is open, because the preference
 /// and the fingerprint live there. Settles `AppState::finder_launch_check` on

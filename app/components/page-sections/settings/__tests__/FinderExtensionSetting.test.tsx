@@ -79,7 +79,7 @@ describe("FinderExtensionSetting", () => {
       fireEvent.click(toggle);
     });
 
-    expect(invokeMock).toHaveBeenCalledWith("set_finder_extension_preference", { preference: "wanted" });
+    expect(invokeMock).toHaveBeenCalledWith("set_finder_extension_preference", { preference: "wanted", switchOff: false });
     expect(screen.getByRole("switch")).toHaveAttribute("aria-checked", "true");
     expect(toastMock.warning).not.toHaveBeenCalled();
   });
@@ -93,7 +93,8 @@ describe("FinderExtensionSetting", () => {
       fireEvent.click(toggle);
     });
 
-    expect(invokeMock).toHaveBeenCalledWith("set_finder_extension_preference", { preference: "unwanted" });
+    // Unlike "Don't ask again", the switch's off means the extension itself.
+    expect(invokeMock).toHaveBeenCalledWith("set_finder_extension_preference", { preference: "unwanted", switchOff: true });
     expect(screen.getByRole("switch")).toHaveAttribute("aria-checked", "false");
   });
 

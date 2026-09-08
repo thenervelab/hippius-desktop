@@ -167,6 +167,11 @@ pub struct AppState {
     /// the frontend cannot nudge about a switch the launch check is in the
     /// middle of flipping. Never reset: the check runs once per process.
     pub finder_launch_check: tokio::sync::watch::Sender<bool>,
+    /// The hcfs region the Drive gate pre-flights against when the account
+    /// stores the auto-detect sentinel, resolved by `pick_fastest` once per
+    /// process (`billing::drive_quota`). The regions answer identically, so
+    /// the first winner is kept rather than re-raced on every gated click.
+    pub hcfs_region: tokio::sync::OnceCell<String>,
     /// HTTP client for HCFS health checks (accepts self-signed certs in debug).
     pub health_client: reqwest::Client,
     /// HTTP client for Hippius API calls (reuses connection pool + TLS cache).
@@ -322,6 +327,7 @@ impl AppState {
             recovery_in_progress: std::sync::atomic::AtomicBool::new(false),
             recovery_bound: std::sync::Mutex::new(std::collections::HashSet::new()),
             finder_launch_check: tokio::sync::watch::Sender::new(false),
+            hcfs_region: tokio::sync::OnceCell::new(),
             health_client,
             // Explicit timeouts. Without them a hung connection (e.g. a
             // billing-server blip during `check_action_eligibility`) would
