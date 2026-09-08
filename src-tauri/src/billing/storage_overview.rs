@@ -10,8 +10,8 @@
 //! **capacity-source priority chain lives HERE, once**:
 //!
 //!   1. active subscription → capacity is the plan's allowance
-//!   2. else                → the free SKU's allowance, read from the same
-//!      plans catalogue `drive_quota` enforces against
+//!   2. else                → the free SKU's allowance, read from the plans
+//!      catalogue (the number the server itself enforces)
 //!
 //! Credits deliberately do NOT price a capacity any more: Drive storage is
 //! sold as plans (the free tier included), and the earlier credits-buyable
@@ -46,9 +46,8 @@ pub enum CapacitySource {
 
 /// Fallback free-tier allowance, used ONLY when the plans catalogue cannot
 /// be read. The live number comes from the catalogue's free SKU via
-/// `drive_quota::free_plan_bytes`, so the card and the upload gate quote
-/// the same server field; this constant just keeps the card from plotting
-/// a zero capacity during an outage.
+/// `free_plan_bytes`, the field the server enforces; this constant just
+/// keeps the card from plotting a zero capacity during an outage.
 const FREE_TIER_FALLBACK_GB: u64 = 10;
 
 /// Active-plan facts for the plan card / top-bar chip. camelCase over IPC.
@@ -326,6 +325,21 @@ fn marketed_plan_size(raw_bytes: u64) -> (u64, String) {
     (decimal_bytes, display)
 }
 
+/// The free plan's allowance out of the catalogue payload (a bare array or
+/// `{ results: [...] }`, same tolerance as the FE's `useDrivePlans`).
+///
+/// Display only: the upload gate no longer enforces a number of its own —
+/// it asks hcfs-server (`drive_quota`) — so the card is the last reader of
+/// this field.
+fn free_plan_bytes(plans: &serde_json::Value) -> Option<u64> {
+    let list = plans.as_array().or_else(|| plans.get("results").and_then(serde_json::Value::as_array))?;
+    list.iter()
+        .find(|p| p.get("is_free").and_then(serde_json::Value::as_bool).unwrap_or(false))
+        .and_then(|p| p.get("storage_bytes"))
+        .and_then(serde_json::Value::as_u64)
+        .filter(|b| *b > 0)
+}
+
 /// Map the DRIVE-rail subscription (`/api/drive/subscription/`) onto
 /// [`PlanInfo`], joining the plans catalogue for the price the subscription
 /// payload does not carry. This is the rail the Subscription Plans page
@@ -460,10 +474,9 @@ pub async fn get_storage_overview(
     };
 
     // The free SKU's allowance comes from the catalogue already fetched
-    // above — the same field `drive_quota` enforces against — mapped to its
-    // marketed size like any other grant (the free plan is 10 GiB, sold as
-    // "10 GB").
-    let free_tier_bytes = crate::billing::drive_quota::free_plan_bytes(&drive_plans).map(|raw| marketed_plan_size(raw).0);
+    // above, mapped to its marketed size like any other grant (the free plan
+    // is 10 GiB, sold as "10 GB").
+    let free_tier_bytes = free_plan_bytes(&drive_plans).map(|raw| marketed_plan_size(raw).0);
 
     let mut overview = build_overview(stats.total_bytes, plan, free_tier_bytes, credits_hip);
     overview.used_pending = used_pending(stats.total_bytes, local_bytes);
@@ -512,21 +525,39 @@ mod tests {
         assert_eq!(overview.total_display, "10.00 GB");
     }
 
-    /// The catalogue's free SKU wins over the fallback, so the card plots
-    /// the same allowance `drive_quota` enforces. Both read the free plan
-    /// through `free_plan_bytes`; a raw 10 GiB grant maps to its marketed
-    /// "10 GB" exactly like a paid plan's does.
+    /// The free plan is read from the catalogue's `is_free` SKU, in either
+    /// wrapping the API uses; no free SKU means nothing to plot from.
+    #[test]
+    fn the_free_plan_allowance_is_read_from_the_catalogue() {
+        let ten_gib: u64 = 10 * 1024 * 1024 * 1024;
+        let plans = serde_json::json!([
+            { "code": "plus", "is_free": false, "storage_bytes": 999u64 },
+            { "code": "free", "is_free": true, "storage_bytes": ten_gib }
+        ]);
+        assert_eq!(free_plan_bytes(&plans), Some(ten_gib));
+
+        let wrapped = serde_json::json!({ "results": [ { "is_free": true, "storage_bytes": ten_gib } ] });
+        assert_eq!(free_plan_bytes(&wrapped), Some(ten_gib));
+
+        let none = serde_json::json!([ { "code": "plus", "is_free": false, "storage_bytes": 999u64 } ]);
+        assert_eq!(free_plan_bytes(&none), None);
+        assert_eq!(free_plan_bytes(&serde_json::json!([ { "is_free": true, "storage_bytes": 0u64 } ])), None);
+    }
+
+    /// The catalogue's free SKU wins over the fallback constant, so the
+    /// card plots the number the server enforces. A raw 10 GiB grant maps to
+    /// its marketed "10 GB" exactly like a paid plan's does.
     #[test]
     fn the_catalogue_free_sku_beats_the_fallback_constant() {
         let ten_gib: u64 = 10 * 1024 * 1024 * 1024;
         let plans = serde_json::json!([{ "code": "free", "is_free": true, "storage_bytes": ten_gib }]);
-        let from_catalogue = crate::billing::drive_quota::free_plan_bytes(&plans).map(|raw| marketed_plan_size(raw).0);
+        let from_catalogue = free_plan_bytes(&plans).map(|raw| marketed_plan_size(raw).0);
         assert_eq!(from_catalogue, Some(10_000_000_000));
 
         // A server that moved the free tier to 20 GB must move the card.
         let twenty_gib: u64 = 20 * 1024 * 1024 * 1024;
         let bigger = serde_json::json!({ "results": [{ "is_free": true, "storage_bytes": twenty_gib }] });
-        let bumped = crate::billing::drive_quota::free_plan_bytes(&bigger).map(|raw| marketed_plan_size(raw).0);
+        let bumped = free_plan_bytes(&bigger).map(|raw| marketed_plan_size(raw).0);
         let overview = build_overview(0, None, bumped, None);
         assert_eq!(overview.total_bytes, 20_000_000_000);
         assert_eq!(overview.total_display, "20.00 GB");

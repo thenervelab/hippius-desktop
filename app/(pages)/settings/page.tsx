@@ -6,6 +6,8 @@ import AppearanceSettings from "@/components/page-sections/settings/AppearanceSe
 import ReleaseChannelSettings from "@/components/page-sections/settings/ReleaseChannelSettings";
 import MultiFolderSyncManager from "@/components/page-sections/settings/MultiFolderSyncManager";
 import DeviceNameSetting from "@/components/page-sections/settings/DeviceNameSetting";
+import FinderExtensionSetting from "@/components/page-sections/settings/FinderExtensionSetting";
+import { isMacPlatform } from "@/app/lib/utils/isMacPlatform";
 import RecoveryPhraseSettings from "@/components/page-sections/settings/RecoveryPhraseSettings";
 import WalletSettings from "@/components/page-sections/settings/WalletSettings";
 import ApiTokenSection from "@/components/page-sections/settings/ApiTokenSection";
@@ -120,6 +122,10 @@ function SettingsContent() {
           <>
             <DeviceNameSetting />
             <MultiFolderSyncManager />
+            {/* Finder Sync exists only on macOS; the row also hides itself
+                when this build carries no extension (Rust answers
+                `unsupported`), so a dev binary shows nothing here. */}
+            {isMacPlatform() && <FinderExtensionSetting />}
           </>
         )}
 
