@@ -78,6 +78,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   the folder path, and the path itself is easier to read. Before, the faint trail
   of folder names was the only way out.
 - **You can upload straight from the folder list**, without opening a folder first.
+- **You can sign in with Apple.** The button was there but permanently greyed out;
+  it works now.
 - **You can now upload into folders that are not synced on this computer.** Open a
   folder you are only browsing and add files to it directly; they go straight to
   your Drive without downloading the folder first.
