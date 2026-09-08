@@ -120,8 +120,6 @@ interface DriveHeaderProps {
   // and line 2 (filter pills + stats/search/view-mode) can share one flex column.
   breadcrumbSegments?: BreadcrumbSegment[];
   onBreadcrumbLocalClick?: () => void;
-  /** Root segment label — "Remote" when browsing a server-only drive. */
-  breadcrumbRootLabel?: string;
   // Nested folder browsing mode. When `isNested` is true:
   //  - the Upload File and Upload Folder actions target
   //    `nestedSubfolderPath` instead of the active sync drive's root,
@@ -184,7 +182,6 @@ const DriveHeader: FC<DriveHeaderProps> = ({
   folderUploadInitialPath,
   breadcrumbSegments = [],
   onBreadcrumbLocalClick,
-  breadcrumbRootLabel,
   isNested = false,
   nestedFolderName = null,
   nestedSubfolderPath = null,
@@ -437,7 +434,6 @@ const DriveHeader: FC<DriveHeaderProps> = ({
             <SyncFolderBreadcrumb
               segments={breadcrumbSegments}
               onLocalClick={onBreadcrumbLocalClick ?? (() => {})}
-              rootLabel={breadcrumbRootLabel}
               className="mt-0 mb-0"
             />
             <div className="flex items-center gap-3 flex-wrap">

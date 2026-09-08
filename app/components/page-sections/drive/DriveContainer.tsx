@@ -1582,7 +1582,6 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 folderUploadInitialPath={folderUploadInitialPath}
                 breadcrumbSegments={breadcrumbSegments}
                 onBreadcrumbLocalClick={handleNavigateToLocalView}
-                breadcrumbRootLabel={isRemoteView ? "Remote" : undefined}
                 isNested={isNested}
                 nestedFolderName={isNested ? urlFolderName : null}
                 nestedSubfolderPath={isNested ? urlSubFolderPath : null}

@@ -74,6 +74,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **Billing and plans are one place instead of two.** "Subscription Plans" and
   "Billing" were separate sidebar entries for the same subject. Your Drive plans
   now live inside Billing, and Billing has moved into Settings.
+- **The folder path now starts at "Drive"** wherever the folder is synced, instead
+  of "Local" or "Remote". Clicking it returns you to the full folder list.
 - **Getting back out of a folder is obvious now.** There is a back button next to
   the folder path, and the path itself is easier to read. Before, the faint trail
   of folder names was the only way out.

@@ -23,13 +23,6 @@ interface SyncFolderBreadcrumbProps {
   /** Click handler for the fixed root segment — switches drive to the cards view. */
   onLocalClick: () => void;
   /**
-   * Label of the fixed root segment. "Local" for locally synced drives; the
-   * drive view passes "Remote" when browsing a server-only drive, since
-   * nothing about that drive is local to this machine. Both click through to
-   * the same cards view (which lists both sections).
-   */
-  rootLabel?: string;
-  /**
    * Path segments rendered AFTER "Local". Empty when the user is on the
    * Local cards view. First entry is the top-level sync folder; subsequent
    * entries are nested folders the user has dived into.
@@ -38,6 +31,18 @@ interface SyncFolderBreadcrumbProps {
   /** Optional overrides for the outer nav — used when embedding inline with action buttons. */
   className?: string;
 }
+
+/**
+ * The root segment reads "Drive" for every folder, wherever it is synced.
+ *
+ * It used to say "Local" or "Remote" depending on the drive, which named
+ * an implementation detail the user has no reason to hold: both click
+ * through to the SAME place — the full folder list — so two labels for
+ * one destination only invited the question of what the difference was.
+ * Whether a folder is on this machine is now shown on its own row, which
+ * is where it is actually useful.
+ */
+const ROOT_LABEL = "Drive";
 
 const SEGMENT_BASE = cn(
   "font-geist text-[14px] font-medium leading-normal tracking-[-0.28px]",
@@ -58,7 +63,6 @@ const SyncFolderBreadcrumb: FC<SyncFolderBreadcrumbProps> = ({
   onLocalClick,
   segments,
   className,
-  rootLabel = "Local",
 }) => {
   const hasSegments = segments.length > 0;
   const back = resolveBreadcrumbBack(segments, onLocalClick);
@@ -99,7 +103,7 @@ const SyncFolderBreadcrumb: FC<SyncFolderBreadcrumbProps> = ({
           "bg-transparent border-0 p-0 m-0",
         )}
       >
-        {rootLabel}
+        {ROOT_LABEL}
       </button>
       {segments.map((segment, index) => {
         const isLast = index === segments.length - 1;
