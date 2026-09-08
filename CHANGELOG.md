@@ -74,6 +74,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **Billing and plans are one place instead of two.** "Subscription Plans" and
   "Billing" were separate sidebar entries for the same subject. Your Drive plans
   now live inside Billing, and Billing has moved into Settings.
+- **All your folders are in one list.** The Drive page split them across three
+  headings — folders on this computer, folders from other devices, and folders
+  synced nowhere. They are now a single list, each row showing where that folder
+  actually is: a cloud mark for the ones not on this machine, and a line naming
+  the device that has it.
 - **Drive always opens on your full folder list.** It used to reopen wherever you
   last were, which left no reliable way back to the top — clicking Drive in the
   sidebar returned you to a folder rather than the list. This replaces the

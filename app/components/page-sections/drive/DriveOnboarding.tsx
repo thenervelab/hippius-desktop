@@ -25,9 +25,16 @@ import {
   saveHcfsConfig,
 } from "@/app/lib/utils/hcfsConfigUtils";
 import { HcfsSetupDialog } from "@/components/page-sections/settings/HcfsSetupDialog";
+import { Icons } from "@/components/ui";
+import { PauseCircle, PlayCircle, FolderMinus, CloudDownload, FolderSearch } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import FolderList from "./folder-list/FolderList";
+import { toFolderRows, type FolderRow } from "./folder-list/folderRows";
+import { resolveFolderMenuPlan } from "@/components/page-sections/settings/multi-folder-sync/folderMenuGating";
+import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
+import { SYNC_FOLDER_LABEL } from "./uploadActions";
+import type { ActionItem } from "@/components/ui/alt-table/TableActionMenu";
 import {
-  LocalFoldersSection,
-  RemoteFoldersSection,
   SharedWithMeSection,
   RemoveFolderDialog,
   PauseSyncDialog,
@@ -516,6 +523,108 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
     }
   };
 
+  // One list, built from the two sources the page already loads.
+  const folderRows = toFolderRows(syncFolders, remoteFolders);
+
+  // Opening a row: a local folder selects it, a remote one opens the
+  // browsable server view. Both were row clicks before; they still are.
+  const handleOpenRow = (row: FolderRow) => {
+    if (row.local) {
+      onSelectFolder?.(row.local.id);
+      return;
+    }
+    if (row.remote) {
+      onOpenRemoteFolder?.(row.remote.folderName);
+    }
+  };
+
+  // Menus are composed here rather than inside FolderList because what a
+  // row may do depends on rules that already live elsewhere — member-drive
+  // gating above all. A second copy of those rules is how a member row
+  // regains an item that keys the delete by the wrong identity.
+  const buildRowActions = (row: FolderRow): ActionItem[] => {
+    if (row.local) {
+      const folder = row.local;
+      const plan = resolveFolderMenuPlan(folder, {
+        sharedDrivesEnabled: SHARED_DRIVES_ENABLED,
+      });
+      const items: ActionItem[] = [
+        {
+          icon: <Icons.FolderOpen className="size-4" />,
+          itemTitle: "Open",
+          onItemClick: () => onSelectFolder?.(folder.id),
+        },
+        {
+          icon:
+            folder.status === "paused" ? (
+              <PlayCircle className="size-4" />
+            ) : (
+              <PauseCircle className="size-4" />
+            ),
+          itemTitle: folder.status === "paused" ? "Resume Sync" : "Pause Sync",
+          onItemClick: () =>
+            folder.status === "paused"
+              ? void handleResumeSync(folder)
+              : setPauseDialog({ open: true, folder }),
+        },
+      ];
+      if (plan.showExclusions) {
+        items.push({
+          icon: <FolderMinus className="size-4" />,
+          itemTitle: "Excluded from Sync",
+          onItemClick: () => setExclusionsLabel(folder.id),
+        });
+      }
+      if (plan.showDeleteFromServer) {
+        items.push({
+          icon: <Icons.Trash className="size-4" />,
+          itemTitle: "Delete from Server",
+          variant: "destructive",
+          onItemClick: () => openDeleteServerDialog(folder.folderName, folder.id),
+        });
+      }
+      items.push({
+        icon: <Icons.CloseCircle className="size-4" />,
+        itemTitle: plan.removeItemTitle,
+        variant: "destructive",
+        onItemClick: () =>
+          setRemoveDialog({
+            open: true,
+            folderId: folder.id,
+            folderName: folder.folderName,
+            mode: plan.removeIsLeave ? "leave" : "remove",
+          }),
+      });
+      return items;
+    }
+
+    const folder = row.remote;
+    if (!folder) return [];
+    return [
+      {
+        icon: <Icons.FolderOpen className="size-4" />,
+        itemTitle: "Open",
+        onItemClick: () => onOpenRemoteFolder?.(folder.folderName),
+      },
+      {
+        icon: <CloudDownload className="size-4" />,
+        itemTitle: "Sync to this computer",
+        onItemClick: () => handleSyncRemoteFolder(folder),
+      },
+      {
+        icon: <FolderSearch className="size-4" />,
+        itemTitle: "Browse Contents",
+        onItemClick: () => void handleBrowseFolder(folder),
+      },
+      {
+        icon: <Icons.Trash className="size-4" />,
+        itemTitle: "Delete from Server",
+        variant: "destructive",
+        onItemClick: () => openDeleteServerDialog(folder.folderName),
+      },
+    ];
+  };
+
   return (
     <>
       {/* `px-3` mirrors the 12px gutter the drive page applies to the
@@ -525,59 +634,26 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
           RemoteFoldersSection directly without this wrapper, so its
           gutter is unaffected. */}
       <div className="w-full flex flex-col gap-3 px-3">
-        {/* ──────── Local Sync Folders (shared component) ──────── */}
-        <LocalFoldersSection
-          syncFolders={syncFolders}
+        {/* One list for every folder on the account. The three cards
+            this replaces — Local Sync Folders, Sync from Other Devices,
+            Not synced on this computer — split one idea across three
+            headings; what they said now rides on each row as a cloud
+            mark and a short label. */}
+        <FolderList
+          rows={folderRows}
           isLoading={isLoading}
-          onAddFolder={() => setShowAddDialog(true)}
-          onPauseFolder={(folder) => setPauseDialog({ open: true, folder })}
-          onResumeFolder={handleResumeSync}
-          onManageExclusions={(folder) => setExclusionsLabel(folder.id)}
-          onRemoveFolder={(folder) =>
-            setRemoveDialog({
-              open: true,
-              folderId: folder.id,
-              folderName: folder.folderName,
-              mode: "remove",
-            })
+          headerAction={
+            <Button
+              variant="defaultStable"
+              size="auto"
+              onClick={() => setShowAddDialog(true)}
+              className="h-[26px] rounded-[6px] px-2.5 text-[12px] font-medium"
+            >
+              {SYNC_FOLDER_LABEL}
+            </Button>
           }
-          onLeaveDrive={(folder) =>
-            setRemoveDialog({
-              open: true,
-              folderId: folder.id,
-              folderName: folder.folderName,
-              mode: "leave",
-            })
-          }
-          onDeleteFromServer={openDeleteServerDialog}
-          onBrowseFolder={(folder) => handleBrowseFolder({
-            folderName: folder.folderName,
-            deviceName: folder.deviceName ?? "This Device",
-            lastModified: folder.lastModified ?? 0,
-            fileCount: folder.fileCount ?? 0,
-            totalBytes: folder.totalBytes ?? 0,
-          }, true)}
-          onSelectFolder={
-            onSelectFolder
-              ? (folder) => onSelectFolder(folder.id)
-              : undefined
-          }
-        />
-
-        {/* ──────── Sync from Other Devices (shared component) ──────── */}
-        <RemoteFoldersSection
-          remoteFolders={remoteFolders}
-          isLoading={isLoading}
-          onSyncFolder={handleSyncRemoteFolder}
-          onDeleteFromServer={(folderName) =>
-            openDeleteServerDialog(folderName)
-          }
-          onBrowseFolder={handleBrowseFolder}
-          onOpenFolder={
-            onOpenRemoteFolder
-              ? (folder) => onOpenRemoteFolder(folder.folderName)
-              : undefined
-          }
+          onOpenRow={handleOpenRow}
+          buildActions={buildRowActions}
         />
 
         {/* Flag-gated; renders nothing unless drives are shared with this
