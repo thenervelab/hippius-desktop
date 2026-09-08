@@ -50,7 +50,12 @@ export default function FinderExtensionSetting() {
   const setPreference = async (preference: FinderExtensionPreference) => {
     setBusy(true);
     try {
-      const next = await invoke<FinderExtensionState>("set_finder_extension_preference", { preference });
+      // The switch is the one surface whose "off" means the extension itself,
+      // so it is the one caller that asks Rust to run the off verb.
+      const next = await invoke<FinderExtensionState>("set_finder_extension_preference", {
+        preference,
+        switchOff: preference === "unwanted",
+      });
       setState(next.kind);
       if (preference === "wanted" && next.kind !== "enabled") {
         // Registered and elected but macOS does not read it as on yet — the
