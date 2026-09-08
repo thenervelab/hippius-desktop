@@ -561,6 +561,19 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
       onDeleteFromServer: openDeleteServerDialog,
       onSyncRemote: handleSyncRemoteFolder,
       onBrowseRemote: (folder) => void handleBrowseFolder(folder),
+      // The selective-sync picker for a LOCAL drive — the synthetic
+      // browse target the old section built, unchanged.
+      onBrowseLocal: (folder) =>
+        void handleBrowseFolder(
+          {
+            folderName: folder.folderName,
+            deviceName: folder.deviceName ?? "This Device",
+            lastModified: folder.lastModified ?? 0,
+            fileCount: folder.fileCount ?? 0,
+            totalBytes: folder.totalBytes ?? 0,
+          },
+          true,
+        ),
     });
 
   return (

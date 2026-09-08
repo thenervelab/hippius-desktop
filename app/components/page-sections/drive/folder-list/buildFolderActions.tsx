@@ -7,7 +7,13 @@ import {
   FolderMinus,
   CloudDownload,
   FolderSearch,
+  FolderOpen,
+  UserPlus,
 } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
+import { toast } from "sonner";
+import { fileManagerLabel } from "@/lib/utils/isMacPlatform";
+import { tauriErrorMessage } from "@/lib/utils/dispatchTauriError";
 
 import { Icons } from "@/components/ui";
 import type { ActionItem } from "@/components/ui/alt-table/TableActionMenu";
@@ -27,6 +33,10 @@ export interface FolderActionHandlers {
   onDeleteFromServer?: (folderName: string, folderId?: string) => void;
   onSyncRemote?: (folder: RemoteFolder) => void;
   onBrowseRemote?: (folder: RemoteFolder) => void;
+  /** Selective-sync picker for a LOCAL drive. */
+  onBrowseLocal?: (folder: SyncFolder) => void;
+  /** Only offered while `SHARED_DRIVES_ENABLED`, and never on a member row. */
+  onShareDrive?: (folder: SyncFolder) => void;
 }
 
 /**
@@ -57,6 +67,13 @@ export function buildFolderActions(
         onItemClick: () => handlers.onOpen?.(row),
       });
     }
+    if (handlers.onBrowseLocal) {
+      items.push({
+        icon: <FolderSearch className="size-4" />,
+        itemTitle: "Browse Contents",
+        onItemClick: () => handlers.onBrowseLocal?.(folder),
+      });
+    }
     if (handlers.onPause || handlers.onResume) {
       const paused = folder.status === "paused";
       items.push({
@@ -64,6 +81,27 @@ export function buildFolderActions(
         itemTitle: paused ? "Resume Sync" : "Pause Sync",
         onItemClick: () =>
           paused ? handlers.onResume?.(folder) : handlers.onPause?.(folder),
+      });
+    }
+    // Reveal on disk. Only a local row has a path to reveal, which is why
+    // it lives in this branch rather than beside the shared items.
+    items.push({
+      icon: <FolderOpen className="size-4" />,
+      itemTitle: `Open in ${fileManagerLabel()}`,
+      onItemClick: () => {
+        void invoke("reveal_path_in_file_manager", { path: folder.localPath }).catch(
+          (error: unknown) => {
+            console.error("Failed to open in file manager:", error);
+            toast.error(tauriErrorMessage(error));
+          },
+        );
+      },
+    });
+    if (plan.showShareDrive && handlers.onShareDrive) {
+      items.push({
+        icon: <UserPlus className="size-4" />,
+        itemTitle: "Share drive…",
+        onItemClick: () => handlers.onShareDrive?.(folder),
       });
     }
     if (plan.showExclusions && handlers.onManageExclusions) {

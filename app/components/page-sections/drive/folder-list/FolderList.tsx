@@ -1,12 +1,13 @@
 "use client";
 
-import React from "react";
+import React, { useState } from "react";
 import { Cloud, CloudOff } from "lucide-react";
 
 import { Icons } from "@/components/ui";
 import { Button } from "@/components/ui/button";
 import TableActionMenu, { type ActionItem } from "@/components/ui/alt-table/TableActionMenu";
 import { SettingsCard } from "@/components/page-sections/settings/SettingsCard";
+import FolderCardContextMenu from "@/app/components/ui/context-menu/FolderCardContextMenu";
 import FolderRowSkeleton from "@/components/page-sections/settings/multi-folder-sync/FolderRowSkeleton";
 import { cn } from "@/lib/utils";
 import { formatBytes } from "@/lib/utils/formatBytes";
@@ -114,6 +115,16 @@ const FolderList: React.FC<FolderListProps> = ({
   buildActions,
   emptyState,
 }) => {
+  // Right-click opens the SAME menu as the three dots. The sectioned list
+  // it replaced offered both, and they were built from one resolver so
+  // they could not drift — keeping that here rather than giving the two
+  // affordances separate item lists.
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    row: FolderRow;
+  } | null>(null);
+
   return (
     <SettingsCard
       label={label}
@@ -137,6 +148,11 @@ const FolderList: React.FC<FolderListProps> = ({
                 // The menu lives inside the row; its clicks are not opens.
                 if ((e.target as HTMLElement).closest(".action-menu-area")) return;
                 onOpenRow?.(row);
+              }}
+              onContextMenu={(e) => {
+                if (!buildActions) return;
+                e.preventDefault();
+                setContextMenu({ x: e.clientX, y: e.clientY, row });
               }}
               className={cn(
                 "flex items-start gap-2 border-t border-grey-dark-100 px-3 py-3 first:border-t-0 dark:border-black-300",
@@ -209,6 +225,21 @@ const FolderList: React.FC<FolderListProps> = ({
             </div>
           ))}
         </div>
+      )}
+      {contextMenu && buildActions && (
+        <FolderCardContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          onClose={() => setContextMenu(null)}
+          items={buildActions(contextMenu.row).map((item) => ({
+            icon: item.icon,
+            label: String(item.itemTitle),
+            onClick: () => item.onItemClick?.(),
+            ...(item.variant ? { variant: item.variant } : {}),
+            ...(item.disabled ? { disabled: true } : {}),
+            ...(item.tooltip ? { tooltip: item.tooltip } : {}),
+          }))}
+        />
       )}
     </SettingsCard>
   );
