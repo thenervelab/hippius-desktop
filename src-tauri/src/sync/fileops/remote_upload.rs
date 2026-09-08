@@ -34,7 +34,7 @@ use crate::sync::identity::DriveIdentity;
 /// first 32 bytes. Derived here rather than reusing the encryption key —
 /// the two happen to be the same bytes today, and writing that assumption
 /// into a second place is how it survives a change upstream that breaks it.
-fn signing_key_for_folder(master_mnemonic: &str, label: &str) -> Result<SigningKey> {
+pub(crate) fn signing_key_for_folder(master_mnemonic: &str, label: &str) -> Result<SigningKey> {
     use bip39::Mnemonic;
     use std::str::FromStr;
 
