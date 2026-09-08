@@ -71,7 +71,7 @@ export default function MultiFolderSyncManager() {
       // `applyDriveStatusToRow` resolver — DriveOnboarding uses the same
       // one, so the two surfaces cannot diverge. An errored drive (init
       // failure, revoked shared drive) renders the error treatment in
-      // LocalFoldersSection instead of being collapsed into "paused".
+      // the folder list instead of being collapsed into "paused".
       prev.map((f) => applyDriveStatusToRow(driveStatuses.get(f.id), f))
     );
   }, [driveStatuses]);

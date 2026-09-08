@@ -84,7 +84,7 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
       // `applyDriveStatusToRow` resolver — MultiFolderSyncManager uses the
       // same one, so the two surfaces cannot diverge. An errored drive
       // (init failure, revoked shared drive) renders the error treatment
-      // in LocalFoldersSection instead of being collapsed into "paused".
+      // in the folder list instead of being collapsed into "paused".
       prev.map((f) => applyDriveStatusToRow(driveStatuses.get(f.id), f))
     );
   }, [driveStatuses]);
@@ -175,7 +175,7 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
 
       // Keep all three stat fields the Rust IPC returns
       // (`get_sync_folders_with_stats` already populates them). The
-      // shared `LocalFoldersSection` renders them inline next to the
+      // shared folder list renders them inline next to the
       // status pill, so dropping them here was the difference between
       // the Files-page card showing "default · Syncing" and the
       // Settings-page card showing "default · Syncing · 229.8 MB ·
@@ -581,9 +581,8 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
       {/* `px-3` mirrors the 12px gutter the drive page applies to the
           files view (see DriveContainer), so the Local cards line up
           with the files table when switching between the breadcrumb's
-          "Local" and folder views. Settings reuses LocalFoldersSection /
-          RemoteFoldersSection directly without this wrapper, so its
-          gutter is unaffected. */}
+          "Local" and folder views. Settings renders the same FolderList
+          without this wrapper, so its gutter is unaffected. */}
       <div className="w-full flex flex-col gap-3 px-3">
         {/* One list for every folder on the account. The three cards
             this replaces — Local Sync Folders, Sync from Other Devices,
