@@ -151,43 +151,54 @@ async fn require_eligible_enforces_thresholds_against_mock_billing_api() {
         .expect("set session account");
 
     // -----------------------------------------------------------------
-    // Case 1: zero balance — every action must be rejected with
-    // `NotReady(InsufficientCredits)`. This is the IPC enforcement
-    // guarantee that the FE can't bypass.
+    // Case 1: zero balance — VM creation is credit-priced, so it must be
+    // rejected with `NotReady(InsufficientCredits)`. This is the IPC
+    // enforcement guarantee that the FE can't bypass.
+    //
+    // Drive actions are NOT in this list on purpose: storage is sold as a
+    // plan, so they answer to `drive_quota` (plan allowance vs usage) and
+    // never to the credit balance. Asserting they still pass here is what
+    // pins that separation — a regression that reinstated the credit gate
+    // would refuse uploads for every account with an empty wallet but a
+    // paid plan. The quota rule itself is covered by `drive_quota`'s own
+    // tests; the mock serves no drive endpoints, so the gate falls open
+    // exactly as it does for an account the Drive backend cannot map.
     // -----------------------------------------------------------------
     *mock.balance.lock().unwrap() = "0".to_string();
+    let err = require_eligible(&state, account_id, InsufficientCreditsAction::VmCreation, 0)
+        .await
+        .expect_err("zero balance must reject VmCreation");
+    match err {
+        AppError::NotReady(NotReadyKind::InsufficientCredits) => {}
+        other => panic!("expected NotReady(InsufficientCredits) for VmCreation, got {other:?}"),
+    }
     for action in [
         InsufficientCreditsAction::FileUpload,
         InsufficientCreditsAction::FolderUpload,
         InsufficientCreditsAction::FolderSync,
-        InsufficientCreditsAction::VmCreation,
     ] {
-        let err = require_eligible(&state, account_id, action, 0)
+        require_eligible(&state, account_id, action, 0)
             .await
-            .expect_err(&format!("zero balance must reject {action:?}"));
-        match err {
-            AppError::NotReady(NotReadyKind::InsufficientCredits) => {}
-            other => panic!("expected NotReady(InsufficientCredits) for {action:?}, got {other:?}"),
-        }
+            .unwrap_or_else(|e| panic!("{action:?} must not consult the credit balance, got {e:?}"));
     }
 
     // -----------------------------------------------------------------
-    // Case 2: sub-threshold for VM creation (≥ 10) but enough for the
-    // `> 0` actions. VM creation must still be rejected — and because
-    // 5 credits fails at the credit gate, the chain-balance branch is
-    // never reached, so the test does not depend on a wired substrate
-    // client. The other three actions must pass.
+    // Case 2: sub-threshold for VM creation (≥ 10). VM creation must be
+    // rejected — and because 5 credits fails at the credit gate, the
+    // chain-balance branch is never reached, so the test does not depend
+    // on a wired substrate client. The Drive actions pass, as they do at
+    // every balance.
     // -----------------------------------------------------------------
     *mock.balance.lock().unwrap() = "5".to_string();
     require_eligible(&state, account_id, InsufficientCreditsAction::FileUpload, 0)
         .await
-        .expect("5 credits passes FileUpload `> 0` gate");
+        .expect("FileUpload answers to the storage gate, not the balance");
     require_eligible(&state, account_id, InsufficientCreditsAction::FolderUpload, 0)
         .await
-        .expect("5 credits passes FolderUpload `> 0` gate");
+        .expect("FolderUpload answers to the storage gate, not the balance");
     require_eligible(&state, account_id, InsufficientCreditsAction::FolderSync, 0)
         .await
-        .expect("5 credits passes FolderSync `> 0` gate");
+        .expect("FolderSync answers to the storage gate, not the balance");
     let err = require_eligible(&state, account_id, InsufficientCreditsAction::VmCreation, 0)
         .await
         .expect_err("5 credits must NOT pass VmCreation ≥10 gate");

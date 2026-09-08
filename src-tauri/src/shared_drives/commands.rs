@@ -152,11 +152,7 @@ fn classify_error_status(status: reqwest::StatusCode, body: &str) -> AppError {
     // The mint plan gate: a 403 carrying this exact slug is a "not entitled"
     // verdict the FE turns into an upgrade prompt. Match the SLUG, never the
     // English message. Checked before the general 401/403 → Auth arm.
-    if status.as_u16() == 403
-        && envelope
-            .as_ref()
-            .is_some_and(|env| env.error == "shared_drives_not_entitled")
-    {
+    if status.as_u16() == 403 && envelope.as_ref().is_some_and(|env| env.error == "shared_drives_not_entitled") {
         return AppError::NotReady(NotReadyKind::SharedDrivesNotEntitled);
     }
 
@@ -803,10 +799,7 @@ mod tests {
             r#"{"error":"shared_drives_not_entitled","message":"Shared drives need a Plus, Max, or Scale plan"}"#,
         );
         assert!(
-            matches!(
-                not_entitled,
-                AppError::NotReady(NotReadyKind::SharedDrivesNotEntitled)
-            ),
+            matches!(not_entitled, AppError::NotReady(NotReadyKind::SharedDrivesNotEntitled)),
             "403 shared_drives_not_entitled must map to NotReady, got {not_entitled:?}"
         );
 

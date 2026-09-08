@@ -24,10 +24,10 @@ export function getUsageTone(percent: number): UsageTone {
 }
 
 export type StorageOverviewView =
-  | "skeleton" // first load not settled yet — never flash "No active plan"
+  | "skeleton" // first load not settled yet — never flash a wrong state
   | "error" // query failed — must not read as a confident zero (audit M-16)
-  | "no-plan" // neither a subscription nor credits: no capacity to plot
-  | "usage"; // the normal used-of-total bar (plan- or credits-backed)
+  | "no-plan" // unknown source — unreachable now that the free tier is the floor
+  | "usage"; // the normal used-of-total bar (plan- or free-tier-backed)
 
 /**
  * Used-bytes line on the storage card. Pure projection of Rust's
@@ -53,14 +53,14 @@ export function getStorageOverviewView(input: {
 }): StorageOverviewView {
   if (input.showSkeleton) return "skeleton";
   if (input.isError) return "error";
-  if (input.source === "subscription" || input.source === "credits")
+  if (input.source === "subscription" || input.source === "free")
     return "usage";
   return "no-plan";
 }
 
 /**
- * Footer caption naming the capacity source, so a credits-derived total is
- * never mistaken for a plan allowance.
+ * Footer caption naming the capacity source, so the free tier's allowance
+ * is never mistaken for a paid plan.
  */
 export function getCapacitySourceLabel(
   source: CapacitySource,
@@ -68,7 +68,7 @@ export function getCapacitySourceLabel(
 ): string {
   if (source === "subscription")
     return planName ? `${planName} plan` : "Active plan";
-  if (source === "credits") return "Based on your credit balance";
+  if (source === "free") return "Included with the free plan";
   return "";
 }
 
@@ -76,8 +76,8 @@ export function getCapacitySourceLabel(
 export type PlanView =
   | "skeleton" // hold until the source decision has settled
   | "plan" // active subscription: name + price + allowance
-  | "credits" // no subscription, positive balance: credits headline
-  | "none"; // neither: "No active plan" + subscribe CTA
+  | "free" // no subscription: the free plan, with its allowance + upgrade CTA
+  | "none"; // unknown source (error path): "No active plan"
 
 export function getPlanView(input: {
   showSkeleton: boolean;
@@ -90,7 +90,7 @@ export function getPlanView(input: {
   // we never show "none" while the answer is merely still loading.
   if (input.showSkeleton) return "skeleton";
   if (input.source === "subscription") return "plan";
-  if (input.source === "credits") return "credits";
+  if (input.source === "free") return "free";
   return "none";
 }
 

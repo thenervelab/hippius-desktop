@@ -99,4 +99,23 @@ describe("filterNavSections", () => {
       .find((sub) => sub.label === "Virtual Machines");
     expect(vm?.comingSoon).toBe(!VM_FEATURE_ENABLED);
   });
+
+  // The plans page must be reachable from the sidebar: an ACCOUNT entry
+  // directly above Billing, always visible (no feature flag). The header
+  // stats card that also links there is hidden on the Drive page and below
+  // the xl breakpoint, so this entry is the one path that always exists.
+  it("lists Subscription Plans above Billing under ACCOUNT", () => {
+    const account = navSections.find((s) => s.label === "ACCOUNT");
+    const labels = (account?.items ?? []).map((i) => i.label);
+
+    const plans = labels.indexOf("Subscription Plans");
+    const billing = labels.indexOf("Billing");
+    expect(plans).toBeGreaterThanOrEqual(0);
+    expect(billing).toBeGreaterThanOrEqual(0);
+    expect(plans).toBeLessThan(billing);
+
+    const item = account?.items.find((i) => i.label === "Subscription Plans");
+    expect(item?.path).toBe("/drive-plans");
+    expect(item?.featureFlag).toBeUndefined();
+  });
 });

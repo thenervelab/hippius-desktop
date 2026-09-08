@@ -38,10 +38,10 @@ const TONE_STYLES: Record<UsageTone, { bar: string; label: string }> = {
 
 /**
  * The simple storage card: bytes used against the effective capacity —
- * the subscription plan's allowance, or (credits-only accounts) used +
- * credits-buyable storage. The plan-vs-credits decision comes from Rust
- * (`get_storage_overview.source`); the footer names the source so a
- * credits-derived total is never mistaken for a plan allowance.
+ * the subscription plan's allowance, or the free tier's when there is no
+ * plan. The decision comes from Rust (`get_storage_overview.source`); the
+ * footer names the source so the free allowance is never mistaken for a
+ * paid plan.
  */
 const StorageOverviewCard: React.FC<{ className?: string }> = ({
   className,
@@ -161,7 +161,7 @@ const StorageOverviewCard: React.FC<{ className?: string }> = ({
                   No storage available
                 </p>
                 <p className="text-[13px] font-medium leading-[18px] text-grey-50 dark:text-grey-dark-500">
-                  Subscribe to a plan or top up credits to get Drive storage.
+                  Subscribe to a plan to get Drive storage.
                 </p>
               </div>
               <Button

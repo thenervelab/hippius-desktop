@@ -210,14 +210,16 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     eligible: boolean;
   }>({
     command: "check_action_eligibility",
-    queryKey: (addr) => ["action-eligibility", "file-upload", addr],
+    queryKey: (addr) => ["drive-storage-eligibility", "file-upload", addr],
     params: (addr) => ({ accountId: addr, action: "file-upload" }),
     options: {
       staleTime: 30_000,
       refetchOnWindowFocus: true,
     },
   });
-  const hasNoCredits = fileUploadEligibility?.eligible === false;
+  // `check_action_eligibility` answers Drive actions from the plan's
+  // storage allowance now, not from a credit balance.
+  const isStorageFull = fileUploadEligibility?.eligible === false;
 
   // Per-drive sync status is owned by Rust and pushed via the
   // `useDriveStatuses` hook mounted in `SyncEventLogger`. The previous
@@ -310,7 +312,11 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     if (activeSyncFolderLabel) {
       const entry = driveStatuses.get(activeSyncFolderLabel);
       if (entry?.path) {
-        return { label: activeSyncFolderLabel, syncPath: entry.path, remote: false };
+        return {
+          label: activeSyncFolderLabel,
+          syncPath: entry.path,
+          remote: false,
+        };
       }
     }
     return null;
@@ -319,7 +325,9 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // A REMOTE drive opened at its root. State-based (not URL-based) because
   // the root of a remote drive has no subfolder to put in the URL; deeper
   // levels switch to the normal nested URLs via the remote:// folderSource.
-  const [activeRemoteLabel, setActiveRemoteLabel] = useState<string | null>(null);
+  const [activeRemoteLabel, setActiveRemoteLabel] = useState<string | null>(
+    null,
+  );
   const isRemoteRoot =
     !isRecentFiles && !isNested && !isOnLocalView && Boolean(activeRemoteLabel);
   const isRemoteView = isRemoteRoot || Boolean(nestedDrive?.remote);
@@ -458,11 +466,12 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // Remote drives are excluded: the recursive search IPC walks the LOCAL
   // disk, which a server-only drive has nothing on — filtering falls back
   // to the in-memory pass over the current listing level.
-  const recursiveSearchLabel = isRecentFiles || isRemoteView
-    ? null
-    : isNested
-      ? (nestedDrive?.label ?? null)
-      : activeSyncFolderLabel;
+  const recursiveSearchLabel =
+    isRecentFiles || isRemoteView
+      ? null
+      : isNested
+        ? (nestedDrive?.label ?? null)
+        : activeSyncFolderLabel;
   const recursiveSearchSubfolder = isNested ? (urlSubFolderPath ?? null) : null;
   const hasActiveSearchOrFilter = filterCriteriaAreActive({
     searchTerm,
@@ -484,7 +493,10 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
       fileExtensions: fileExtensionsCriteria,
       dateRange: filterState.dateRange,
       fileSizes: filterState.fileSizes,
-      folderTab: isRecentFiles || isNested || isRemoteRoot ? null : activeSyncFolderLabel,
+      folderTab:
+        isRecentFiles || isNested || isRemoteRoot
+          ? null
+          : activeSyncFolderLabel,
     },
     150,
     !useRecursiveResults,
@@ -553,7 +565,8 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // serialization) so the source-changed check stays O(1) during sync refetches.
   const { visibleData, hasMore, loadMore, resetScroll } = useInfiniteScroll(
     statusFilteredData,
-    (f) => `${f.label ?? ""}::${f.actualFileName ?? f.arionHash}::${f.lastChargedAt}`
+    (f) =>
+      `${f.label ?? ""}::${f.actualFileName ?? f.arionHash}::${f.lastChargedAt}`,
   );
 
   // Remote views chain TWO pagination layers behind one scroll sentinel:
@@ -568,7 +581,11 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // container re-render repainted all visible rows) and re-armed the
   // prefetch effect below on every render. The destructured pieces are
   // referentially stable (useCallback / primitives).
-  const { hasMore: remoteListingHasMore, loadMore: remoteListingLoadMore, isLoadingMore: remoteIsLoadingMore } = nestedListing;
+  const {
+    hasMore: remoteListingHasMore,
+    loadMore: remoteListingLoadMore,
+    isLoadingMore: remoteIsLoadingMore,
+  } = nestedListing;
   const remoteHasMore = isRemoteView && remoteListingHasMore;
   const effectiveHasMore = hasMore || remoteHasMore;
   const effectiveLoadMore = useCallback(() => {
@@ -1068,7 +1085,9 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     const topLabel = isNested
       ? nestedDrive?.label
       : (activeRemoteLabel ?? activeSyncFolderLabel);
-    const topIsRemote = isNested ? Boolean(nestedDrive?.remote) : Boolean(activeRemoteLabel);
+    const topIsRemote = isNested
+      ? Boolean(nestedDrive?.remote)
+      : Boolean(activeRemoteLabel);
     if (topLabel) {
       const topDisplayName = labelDisplayNames[topLabel] ?? topLabel;
       segments.push({
@@ -1159,9 +1178,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
       });
     } catch (err) {
       console.error("Error downloading folder:", err);
-      toast.error(
-        `Failed to download folder: ${errorMessage(err)}`,
-      );
+      toast.error(`Failed to download folder: ${errorMessage(err)}`);
     } finally {
       setIsDownloadingFolder(false);
     }
@@ -1428,7 +1445,12 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
         </button>
       </div>
     );
-  } else if (isSyncPathConfigured === false && !isRecentFiles && !isNested && !isRemoteRoot) {
+  } else if (
+    isSyncPathConfigured === false &&
+    !isRecentFiles &&
+    !isNested &&
+    !isRemoteRoot
+  ) {
     // `!isRemoteRoot` on this and the two branches below: an account with NO
     // local drives can still browse into a remote (server-only) drive, and
     // that view must win over the onboarding/cards screens.
@@ -1438,7 +1460,12 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
         onOpenRemoteFolder={handleSelectRemoteFolderFromCards}
       />
     );
-  } else if (showCurrentStartSyncingSelector && !isRecentFiles && !isNested && !isRemoteRoot) {
+  } else if (
+    showCurrentStartSyncingSelector &&
+    !isRecentFiles &&
+    !isNested &&
+    !isRemoteRoot
+  ) {
     // Show onboarding when Start Syncing is clicked
     content = (
       <DriveOnboarding
@@ -1515,14 +1542,18 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 loadMore={effectiveLoadMore}
                 isLoadingMore={remoteIsLoadingMore}
                 isSyncPathEmpty={effectiveSyncPathEmpty}
-                hasNoCredits={hasNoCredits}
+                isStorageFull={isStorageFull}
                 isRemoteView={isRemoteView}
                 onSyncPathConfigured={
                   isRecentFiles ? handleNavigateToSettings : handleStartSyncing
                 }
-                onUploadFile={isRemoteView ? undefined : handleContextUploadFile}
+                onUploadFile={
+                  isRemoteView ? undefined : handleContextUploadFile
+                }
                 onAddFolder={isRemoteView ? undefined : handleContextAddFolder}
-                onAddSyncFolder={isRemoteView ? undefined : handleContextAddSyncFolder}
+                onAddSyncFolder={
+                  isRemoteView ? undefined : handleContextAddSyncFolder
+                }
                 onAddFolderFromDrop={
                   isRemoteView ? undefined : handleAddFolderFromDrop
                 }
@@ -1570,7 +1601,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 hideUploads={isRemoteView}
                 onStartSyncing={handleStartSyncing}
                 hasNoSyncPaths={hasNoSyncPaths}
-                hasNoCredits={hasNoCredits}
+                isStorageFull={isStorageFull}
                 onNavigateToSettings={handleNavigateToSettings}
                 selectedFileExtension={filterState.fileExtension}
                 selectedDateRange={filterState.dateRange}
@@ -1602,7 +1633,9 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 onDownloadFolder={
                   // Local nested only: the zip export packs from the local
                   // sync root, which a remote drive doesn't have.
-                  isNested && !isRemoteView ? handleDownloadNestedFolder : undefined
+                  isNested && !isRemoteView
+                    ? handleDownloadNestedFolder
+                    : undefined
                 }
                 isDownloadingFolder={isDownloadingFolder}
               >

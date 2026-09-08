@@ -18,11 +18,10 @@ import {
  * The small plan card beside the storage card (mobile PlanCard's desktop
  * sibling). Renders from the SAME `get_storage_overview` fetch as the
  * storage card and the top-bar chip, so all three commit to the same
- * plan-vs-credits decision:
+ * plan-vs-free-tier decision:
  *
- *   - subscription → plan name, price, allowance
- *   - credits only → credit balance (≈ $, 1 credit ≈ $1) + Top up CTA
- *   - neither      → "No active plan" + Subscribe CTA
+ *   - subscription → plan name, price, allowance + Manage CTA
+ *   - no plan      → the free plan and its allowance + Upgrade CTA
  */
 const PlanOverviewCard: React.FC<{ className?: string }> = ({ className }) => {
   const { data: overview, isLoading, isError } = useStorageOverview();
@@ -40,11 +39,6 @@ const PlanOverviewCard: React.FC<{ className?: string }> = ({ className }) => {
   });
 
   const plan = overview?.plan ?? null;
-  const creditsHip = overview?.creditsHip ?? "0";
-  const dollarValue = (() => {
-    const num = Number(creditsHip);
-    return Number.isFinite(num) ? num.toFixed(2) : "0.00";
-  })();
 
   return (
     <div
@@ -61,7 +55,7 @@ const PlanOverviewCard: React.FC<{ className?: string }> = ({ className }) => {
           <div className="flex items-center gap-1">
             <GripIcon className="size-[18px] text-primary-40 dark:text-primary-brand-dark" />
             <p className="font-mono font-medium text-[12px] leading-[18px] tracking-[-0.24px] text-primary-40 dark:text-primary-brand-dark uppercase">
-              {view === "credits" ? "Credits" : "Plan"}
+              Plan
             </p>
           </div>
         </div>
@@ -105,7 +99,7 @@ const PlanOverviewCard: React.FC<{ className?: string }> = ({ className }) => {
               </div>
               <Button
                 asLink
-                href="/billing"
+                href="/drive-plans"
                 variant="defaultStable"
                 size="auto"
                 className="px-4 py-2 text-[14px] font-medium leading-[1.109] tracking-[-0.28px]"
@@ -115,29 +109,26 @@ const PlanOverviewCard: React.FC<{ className?: string }> = ({ className }) => {
             </div>
           )}
 
-          {view === "credits" && (
+          {view === "free" && (
             <div className="flex flex-wrap items-center justify-between gap-3 w-full">
               <div className="flex flex-col items-start gap-1 min-w-0">
-                <div className="flex items-end gap-1">
-                  <span className="font-mono font-medium text-[24px] leading-[30px] tracking-[-0.96px] text-grey-10 dark:text-white">
-                    {creditsHip}
-                  </span>
-                  <span className="font-mono font-medium text-[12px] leading-[18px] tracking-[-0.48px] text-grey-10/50 dark:text-white/50 pb-[3px]">
-                    credits
-                  </span>
-                </div>
+                <span className="font-mono font-medium text-[24px] leading-[30px] tracking-[-0.96px] text-grey-10 dark:text-white truncate">
+                  Free Drive Plan
+                </span>
                 <p className="text-[12px] font-medium leading-[18px] text-primary-50 dark:text-primary-brand-dark whitespace-nowrap">
-                  ≈ ${dollarValue}
+                  {/* Rust's total is the free allowance, so the card and the
+                      storage bar can never quote different numbers. */}
+                  ≈ {overview?.totalDisplay ?? ""} storage
                 </p>
               </div>
               <Button
                 asLink
-                href="/billing"
-                variant="defaultStable"
+                href="/drive-plans"
+                variant="primaryLight"
                 size="auto"
                 className="px-4 py-2 text-[14px] font-medium leading-[1.109] tracking-[-0.28px]"
               >
-                Top up
+                Upgrade
               </Button>
             </div>
           )}
@@ -149,12 +140,12 @@ const PlanOverviewCard: React.FC<{ className?: string }> = ({ className }) => {
                   No active plan
                 </p>
                 <p className="text-[13px] font-medium leading-[18px] text-grey-50 dark:text-grey-dark-500">
-                  Subscribe or top up credits to get started.
+                  Subscribe to get started.
                 </p>
               </div>
               <Button
                 asLink
-                href="/billing"
+                href="/drive-plans"
                 variant="primaryLight"
                 size="auto"
                 className="px-4 py-2 text-[14px] font-medium leading-[1.109] tracking-[-0.28px]"

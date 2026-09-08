@@ -10,7 +10,8 @@ import { Decoration } from "@/components/ui/icons";
 export interface FramedDialogProps {
   open: boolean;
   onClose: () => void;
-  title: string;
+  /** A node, not a string, so a heading can carry a muted lead line. */
+  title: ReactNode;
   icon: ReactNode;
   children: ReactNode;
   contentClassName?: string;
@@ -90,9 +91,7 @@ export function FramedDialog({
           aria-describedby={undefined}
           className="fixed top-0 left-0 right-0 h-screen z-[61] flex items-center justify-center p-3 sm:p-6"
           onClick={preventClose ? undefined : onClose}
-          onEscapeKeyDown={
-            preventClose ? (e) => e.preventDefault() : undefined
-          }
+          onEscapeKeyDown={preventClose ? (e) => e.preventDefault() : undefined}
           onPointerDownOutside={
             preventClose ? (e) => e.preventDefault() : undefined
           }

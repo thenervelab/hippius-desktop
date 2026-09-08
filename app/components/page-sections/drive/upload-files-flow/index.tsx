@@ -72,7 +72,7 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
 
   // Root-mode state
   const [selectedFolderLabel, setSelectedFolderLabel] = useState<string | null>(
-    !isFolder ? (props.defaultFolderLabel ?? null) : null
+    !isFolder ? (props.defaultFolderLabel ?? null) : null,
   );
   const [selectedSyncPath, setSelectedSyncPath] = useState<string | null>(null);
 
@@ -87,7 +87,7 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
       // upload. `invoke()` failures arrive here as plain objects, not
       // `Error` instances, so match on the structured `subkind` discriminant
       // via `isNotReady` instead of brittle substring checks.
-      if (isNotReady(err, "INSUFFICIENT_CREDITS")) {
+      if (isNotReady(err, "STORAGE_LIMIT_REACHED")) {
         setInsufficient(isFolder ? "folder-upload" : "file-upload");
         resetFn?.();
       }
@@ -126,7 +126,7 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
             initialPaths.map(async (p) => ({
               path: p,
               name: await basename(p),
-            }))
+            })),
           );
           setFiles(pathInfos);
           if (pathInfos.length > 1) setRevealFiles(true);
@@ -150,7 +150,7 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
             paths.map(async (path) => ({
               path,
               name: await basename(path),
-            }))
+            })),
           );
         }
 
@@ -170,7 +170,7 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
 
           const seen = new Set(prev.map((f) => f.path || f.name));
           const unique = newPathInfos.filter(
-            (f) => !seen.has(f.path || f.name)
+            (f) => !seen.has(f.path || f.name),
           );
           if (unique.length === 0) return prev;
 
@@ -183,7 +183,7 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
         toast.error("Failed to process selected files");
       }
     },
-    []
+    [],
   );
 
   const removeFile = useCallback(
@@ -192,13 +192,13 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
       setFiles(newFiles);
       if (newFiles.length === 1) setRevealFiles(false);
     },
-    [files]
+    [files],
   );
 
   // ── Shared: write browser File objects to temp disk ────────────────────────
 
   const writeBrowserFilesToDisk = async (
-    fileList: FilePathInfo[]
+    fileList: FilePathInfo[],
   ): Promise<string[]> => {
     const processedPaths: string[] = [];
 
@@ -211,15 +211,14 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
         try {
           const arrayBuffer = await fileInfo.file.arrayBuffer();
           const tempPath = `${tmpDir}${fileInfo.name}`;
-          const { writeFile: tauriWriteFile } = await import(
-            "@tauri-apps/plugin-fs"
-          );
+          const { writeFile: tauriWriteFile } =
+            await import("@tauri-apps/plugin-fs");
           await tauriWriteFile(tempPath, new Uint8Array(arrayBuffer));
           processedPaths.push(tempPath);
         } catch (error) {
           console.error(`Error processing file ${fileInfo.name}:`, error);
           toast.error(
-            `Failed to process file: ${formatDisplayName(fileInfo.name)}`
+            `Failed to process file: ${formatDisplayName(fileInfo.name)}`,
           );
         }
       } else if (fileInfo.path) {
@@ -265,18 +264,12 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
       });
 
       props.reset();
-      upload(
-        processedPaths,
-        { toastId },
-        selectedSyncPath ?? undefined
-      );
+      upload(processedPaths, { toastId }, selectedSyncPath ?? undefined);
     } catch (error) {
       console.error("Error preparing files:", error);
       toast.error(
-        `Error preparing ${firstFileName} for upload: ${
-          errorMessage(error)
-        }`,
-        { id: toastId }
+        `Error preparing ${firstFileName} for upload: ${errorMessage(error)}`,
+        { id: toastId },
       );
       setIsUploading(false);
     }
@@ -312,13 +305,18 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
     const loadingToastId = UPLOAD_PROCESSING_TOAST_ID;
     toast.loading(
       fileCount === 1 ? "Adding file..." : `Adding ${fileCount} files...`,
-      { id: loadingToastId, duration: Infinity, closeButton: true }
+      { id: loadingToastId, duration: Infinity, closeButton: true },
     );
 
     // Listen for per-file progress events from Rust
-    const unlisten = await listen<{ completed: number; total: number }>("add_files_progress", (event) => {
-      setUploadProgress(Math.round((event.payload.completed / event.payload.total) * 100));
-    });
+    const unlisten = await listen<{ completed: number; total: number }>(
+      "add_files_progress",
+      (event) => {
+        setUploadProgress(
+          Math.round((event.payload.completed / event.payload.total) * 100),
+        );
+      },
+    );
 
     try {
       // Reuse the shared helper for browser File → temp disk conversion
@@ -331,13 +329,17 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
       }
 
       const baseSyncPath =
-        syncBasePath || ((await getPrivateSyncPath(polkadotAddress ?? undefined))?.path ?? "");
+        syncBasePath ||
+        ((await getPrivateSyncPath(polkadotAddress ?? undefined))?.path ?? "");
 
       // Single batch call — Rust handles subfolder join, file copy, and sync trigger.
       // `forFolder: true` because this code path is reached only from the
       // folder-upload flow (`uploadFilesFolder` above bails for non-folder
       // mode), so the IPC enforces `FolderUpload` credit eligibility.
-      const result = await invoke<{ added: string[]; failed: Array<{ name: string; error: string }> }>("add_files", {
+      const result = await invoke<{
+        added: string[];
+        failed: Array<{ name: string; error: string }>;
+      }>("add_files", {
         syncPath: baseSyncPath,
         filePaths: processedPaths,
         subfolder: props.subfolder ?? null,
@@ -347,28 +349,35 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
       if (result.failed.length > 0) {
         // Partial-failure overwrites the loading toast with a warning;
         // explicit dismiss not needed because we reuse the same id.
-        const failedNames = result.failed.map((f) => `${f.name}: ${f.error}`).join("; ");
-        toast.warning(`${result.added.length} added, ${result.failed.length} failed: ${failedNames}`, {
-          id: loadingToastId,
-          duration: 6000,
-          closeButton: true,
-        });
+        const failedNames = result.failed
+          .map((f) => `${f.name}: ${f.error}`)
+          .join("; ");
+        toast.warning(
+          `${result.added.length} added, ${result.failed.length} failed: ${failedNames}`,
+          {
+            id: loadingToastId,
+            duration: 6000,
+            closeButton: true,
+          },
+        );
       }
       // Success path: do NOT dismiss the loading toast here. The
       // `useUploadProcessing` hook dismisses `UPLOAD_PROCESSING_TOAST_ID`
       // on the Rust `hcfs_upload_processing { active: false }` event,
       // which fires when the sync cycle actually starts.
 
-      queryClient.invalidateQueries({ queryKey: [DRIVE_STORAGE_STATS_QUERY_KEY] });
+      queryClient.invalidateQueries({
+        queryKey: [DRIVE_STORAGE_STATS_QUERY_KEY],
+      });
       props.onSuccess();
     } catch (error) {
       // Reuse the same toast id so the error overwrites the loading
       // toast instead of stacking — matches the partial-failure path.
       toast.error(
-        `Failed to add ${fileCount === 1 ? "file" : "files"}: ${
-          errorMessage(error)
-        }`,
-        { id: loadingToastId, closeButton: true }
+        `Failed to add ${fileCount === 1 ? "file" : "files"}: ${errorMessage(
+          error,
+        )}`,
+        { id: loadingToastId, closeButton: true },
       );
     } finally {
       unlisten();
@@ -384,23 +393,21 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
   const uploadLabel = isFolder
     ? `Add ${files.length > 1 ? "Files" : "File"} to Folder`
     : `Upload File${files.length > 1 ? "s" : ""}`;
-  const uploadingLabel = isFolder ? "Adding to Folder..." : "Preparing Files...";
+  const uploadingLabel = isFolder
+    ? "Adding to Folder..."
+    : "Preparing Files...";
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
     <div className="w-full">
-      <FileDropzone
-        setFiles={handleFiles}
-      />
+      <FileDropzone setFiles={handleFiles} />
 
       {/* Sync folder selector — root mode only, shown when 2+ folders */}
       {!isFolder && (
         <SyncFolderSelect
           value={selectedFolderLabel}
-          defaultLabel={
-            (props as RootUploadProps).defaultFolderLabel
-          }
+          defaultLabel={(props as RootUploadProps).defaultFolderLabel}
           onChange={(label, path) => {
             setSelectedFolderLabel(label);
             setSelectedSyncPath(path);
@@ -499,7 +506,7 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
             "h-[52px] w-full rounded-[6px] border text-base font-normal tracking-[-0.36px] gap-2.5",
             "border-[#3167DD] bg-[#3167DD] text-white",
             "hover:bg-[#2454c4] hover:border-[#2454c4]",
-            "dark:hover:bg-[#2a5ad0] dark:hover:border-[#2a5ad0]"
+            "dark:hover:bg-[#2a5ad0] dark:hover:border-[#2a5ad0]",
           )}
         >
           {isUploading ? uploadingLabel : uploadLabel}

@@ -3,7 +3,6 @@
 import React from "react";
 
 import CreditsWidget from "./CreditsWidget";
-import CreditGraph from "./CreditGraph";
 import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
 import BillingnHistoryTable from "./BillingnHistoryTable";
 import SubscriptionPlansSection from "./SubscriptionPlansSection";
@@ -34,11 +33,13 @@ export default function Billing() {
             }
           />
 
-          {/* Top 3-column grid: Credits, TAO Deposit, Credit Overview */}
+          {/* Top grid. Deliberately kept at 3 columns with the third left
+              empty: the Drive Credit Usage card was removed by product
+              decision, and the remaining two cards keep their width instead
+              of stretching to fill the row. */}
           <div className="mt-4 grid grid-cols-1 @md:grid-cols-2 @3xl:grid-cols-3 gap-4">
             <CreditsWidget />
             <TaoDepositWidget />
-            <CreditGraph />
           </div>
 
           {/* Subscription Plans - embedded inline */}

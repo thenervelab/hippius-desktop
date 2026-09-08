@@ -124,6 +124,7 @@ These hold everywhere; the subsystem rules files carry the reasoning.
 - **Route every in-app file mutation through `notifyFilesMutated`** (`app/lib/utils/fileMutationEvents.ts`) — the nested folder listings only refresh on its window event.
 - **Read theme via `useAppTheme()`**, never `window.matchMedia("(prefers-color-scheme: dark)")`; raw CSS keys off `.dark`, not `@media (prefers-color-scheme: dark)`.
 - **Never read `useUserCredits` for an eligibility decision** — call `check_action_eligibility`. Every gated IPC also enforces `require_eligible` as its first line.
+- **Drive storage is sold as a plan, so a Drive write is gated by the plan allowance, never by credits** — `require_eligible` routes `is_drive_storage()` actions to `drive_quota::check_drive_quota` and refuses with `NotReady(StorageLimitReached)`. Credits gate VM creation only. The free tier is an allowance like any other (read from the plans catalogue), not "no plan".
 - **Every re-authentication from a stored mnemonic derives via `service.rs::derive_verified_keys`**, never the bare `derive_keys` — an OAuth account's sync mnemonic derives a different identity than its login SS58.
 - **Sync-failure copy comes from Rust** (`FileFailureKindPayload::display_reason`), never from reqwest's `Display`. Do not tell the user to check their connection.
 - **Match IPC errors on the structured shape** `{ kind, message }`, not on substring matching of `err.message`.

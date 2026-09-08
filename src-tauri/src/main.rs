@@ -54,6 +54,10 @@ use crate::billing::charts::{
 use crate::billing::credit_balance::get_credit_balance_chart;
 use crate::billing::credits::{check_sync_eligibility, get_user_credits};
 use crate::billing::drive_credits::{get_drive_credits_chart, get_drive_credits_total};
+use crate::billing::drive_plans::{
+    cancel_drive_subscription, change_drive_plan, get_drive_checkout_intent, get_drive_plans, get_drive_subscription, get_drive_subscription_history,
+    start_drive_card_checkout, subscribe_drive_plan,
+};
 use crate::billing::drive_storage::get_drive_storage_chart;
 use crate::billing::eligibility::check_action_eligibility;
 use crate::billing::queries::{
@@ -520,6 +524,15 @@ fn main() {
             get_subscription_data,
             create_subscription,
             get_customer_portal_url,
+            // Drive storage plans
+            get_drive_plans,
+            get_drive_subscription,
+            subscribe_drive_plan,
+            change_drive_plan,
+            cancel_drive_subscription,
+            start_drive_card_checkout,
+            get_drive_checkout_intent,
+            get_drive_subscription_history,
             get_marketplace_credits,
             get_system_balance,
             get_balance_transfers,
