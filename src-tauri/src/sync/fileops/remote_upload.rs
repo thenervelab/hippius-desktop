@@ -83,7 +83,7 @@ fn encrypt_to_temp(source: &Path, dest: &Path, key: &[u8; 32]) -> Result<String>
 }
 
 /// Send one file to a folder this device does not sync.
-pub(crate) async fn upload_to_remote_folder(
+pub async fn upload_to_remote_folder(
     state: &AppState,
     pool: &SqlitePool,
     account_id: &str,

@@ -195,6 +195,26 @@ pub async fn list_remote_folder_files(state: tauri::State<'_, AppState>, account
 /// can drive it without a `tauri::State`. The command wrapper performs the
 /// session-authority check before delegating here (mirrors the `*_inner` split
 /// used by `list_sync_folder_grouped_inner` and friends).
+/// `build_client` for the live lane, which has no `tauri::State`.
+///
+/// A named alias rather than widening `build_client` itself: the wider
+/// visibility exists for one caller, and saying so here keeps the reason
+/// attached to it.
+pub async fn build_client_for_tests(pool: &SqlitePool, account_id: &str, identity: &DriveIdentity) -> Result<hcfs_client::client::HcfsClient> {
+    build_client(pool, account_id, identity).await
+}
+
+/// `encryption_key_for_label` for the live lane — see above.
+pub async fn encryption_key_for_tests(
+    pool: &SqlitePool,
+    account_id: &str,
+    label: &str,
+    mnemonic: &str,
+    identity: &DriveIdentity,
+) -> Result<[u8; 32]> {
+    encryption_key_for_label(pool, account_id, label, mnemonic, identity).await
+}
+
 pub async fn list_remote_folder_files_inner(state: &AppState, account_id: &str, label: &str) -> Result<Vec<RemoteFileInfo>> {
     info!(account_id = %account_id, label = %label, "Listing remote folder files");
     let pool = state.pool()?;

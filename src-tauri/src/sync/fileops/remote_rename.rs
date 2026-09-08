@@ -68,7 +68,7 @@ async fn current_revision_id(client: &hcfs_client::client::HcfsClient, ss58: &st
 /// `new_name` are the same type and adjacent, which is a swap waiting to
 /// happen, and swapping them here renames the file to itself and then
 /// fails to find the original.
-pub(crate) struct RemoteRename<'a> {
+pub struct RemoteRename<'a> {
     pub account_id: &'a str,
     pub label: &'a str,
     /// Folder-relative path of the containing folder; empty for its root.
@@ -79,7 +79,7 @@ pub(crate) struct RemoteRename<'a> {
 }
 
 /// Rename one file in a folder this device does not sync.
-pub(crate) async fn rename_in_remote_folder(state: &AppState, pool: &SqlitePool, req: RemoteRename<'_>) -> Result<()> {
+pub async fn rename_in_remote_folder(state: &AppState, pool: &SqlitePool, req: RemoteRename<'_>) -> Result<()> {
     let RemoteRename {
         account_id,
         label,
