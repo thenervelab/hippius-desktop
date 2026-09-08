@@ -50,7 +50,7 @@ function nudgeOptions(): ToastOptions {
   return toastMock.warning.mock.calls[0][1] as ToastOptions;
 }
 
-type Kind = "enabled" | "disabled" | "unsupported";
+type Kind = "enabled" | "disabled" | "muted" | "unsupported";
 
 /**
  * What the backend currently reports, and what its two action commands do.
@@ -140,7 +140,7 @@ describe("FinderExtensionGuard", () => {
     expect(description).not.toMatch(/under Finder in/);
   });
 
-  it.each(["enabled", "unsupported"] as const)("stays silent when the state is %s", async (kind) => {
+  it.each(["enabled", "muted", "unsupported"] as const)("stays silent when the state is %s", async (kind) => {
     stateIs(kind);
     render(<FinderExtensionGuard />);
 
@@ -303,9 +303,10 @@ describe("FinderExtensionGuard", () => {
     });
 
     // The decision is persisted by the backend, not in localStorage: the
-    // preference is what makes `finder_extension_state` answer `unsupported`
-    // on every later launch.
-    expect(invokeMock).toHaveBeenCalledWith("set_finder_extension_preference", { preference: "unwanted" });
+    // preference is what makes `finder_extension_state` answer `muted` on
+    // every later launch. `switchOff: false` — the notice is declined, the
+    // extension is not touched (it may be working through another copy).
+    expect(invokeMock).toHaveBeenCalledWith("set_finder_extension_preference", { preference: "unwanted", switchOff: false });
 
     stateIs("disabled");
     await refocus();

@@ -68,7 +68,14 @@ must act on and the nudge still works when it does not help.
 
 **The app elects the extension itself, the way every Finder Sync peer does
 (MEGAsync, ownCloud, Nextcloud) — with one guarantee they do not give: an
-explicit off is never overridden.** `ensure_finder_extension_at_launch`
+off chosen in Hippius (`unwanted`) is never overridden.** An off made only in
+System Settings survives steady state but is re-elected once after the next
+app or macOS update, because the table cannot tell it from an update that
+flipped the switch; the in-app switch is how to make it stick. "Don't ask
+again" on the nudge records `unwanted` WITHOUT running the off verb
+(`switch_off: false`) — with a second registered copy sharing may be working
+through the other copy, and `-e ignore` by bundle id would break it; only the
+Settings switch passes `switch_off: true`. `ensure_finder_extension_at_launch`
 (spawned from `main.rs` once the DB is open, because the preference and the
 election fingerprint live in `user_preferences`) applies the pure, fully
 unit-tested `policy::launch_action` table: never asked + off → register, wait
