@@ -1,9 +1,7 @@
 import { Icons } from "@/components/ui";
-import { Monitor, Share2Icon } from "lucide-react";
+import { Share2Icon } from "lucide-react";
 import Support from "../ui/icons/Support";
-import SidebarVm from "../ui/icons/SidebarVm";
 import {
-  VM_FEATURE_ENABLED,
   WALLET_FEATURE_ENABLED,
   REFERRALS_FEATURE_ENABLED,
 } from "@/app/lib/featureFlags";
@@ -62,21 +60,15 @@ export const navSections: NavSection[] = [
         path: "/files",
         icon: <Icons.Category className={ICON_CLASS} />,
       },
-      {
-        label: "Confidential Computing",
-        path: "/vm",
-        icon: <Monitor className={ICON_CLASS} strokeWidth={1.5} />,
-        subMenuItems: [
-          {
-            label: "Virtual Machines",
-            path: "/vm",
-            icon: <SidebarVm className={ICON_CLASS} strokeWidth={1.5} />,
-            // Disabled + orange "Coming Soon" tag while the feature is
-            // gated off (mirrors the web console's sidebar treatment).
-            comingSoon: !VM_FEATURE_ENABLED,
-          },
-        ],
-      },
+      // The "Confidential Computing" group and its single Virtual Machines
+      // child were removed here on 2026-09-08: the term is going from the
+      // product, and the group's only child is gated off by
+      // VM_FEATURE_ENABLED anyway, so it advertised a name we no longer use
+      // for a page that redirects. Restoring VM to the sidebar when the flag
+      // flips means adding a plain item under INFRASTRUCTURE — not the
+      // wrapper group, which is what collapsed into a link to a 404 when its
+      // only child was gated off. The /vm routes and their redirect are
+      // untouched.
     ],
   },
   {

@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 import { filterNavSections, navSections } from "../NavData";
 import type { NavSection } from "../NavData";
 import {
-  VM_FEATURE_ENABLED,
   WALLET_FEATURE_ENABLED,
   REFERRALS_FEATURE_ENABLED,
 } from "@/app/lib/featureFlags";
@@ -84,20 +83,33 @@ describe("filterNavSections", () => {
   });
 
   // Pins the WIRING (not today's flag values, which are release decisions):
-  // the real nav data must derive Wallet visibility and the Virtual
-  // Machines coming-soon state from the build-time flags, so flipping a
-  // flag in featureFlags.ts is guaranteed to reach the sidebar.
-  it("wires Wallet visibility and VM coming-soon to the feature flags", () => {
+  // the real nav data must derive Wallet and Referrals visibility from the
+  // build-time flags, so flipping a flag in featureFlags.ts is guaranteed
+  // to reach the sidebar.
+  it("wires Wallet and Referrals visibility to the feature flags", () => {
     const out = filterNavSections(navSections, { shareEnabled: true });
     const labels = out.flatMap((s) => s.items.map((i) => i.label));
     expect(labels.includes("Wallet")).toBe(WALLET_FEATURE_ENABLED);
     expect(labels.includes("Referrals")).toBe(REFERRALS_FEATURE_ENABLED);
+  });
 
-    const vm = out
-      .flatMap((s) => s.items)
-      .flatMap((i) => i.subMenuItems ?? [])
-      .find((sub) => sub.label === "Virtual Machines");
-    expect(vm?.comingSoon).toBe(!VM_FEATURE_ENABLED);
+  // "Confidential Computing" is gone from the product vocabulary. Its group
+  // held one child, Virtual Machines, which is gated off anyway — and a
+  // group whose only child is gated is exactly what collapsed into a
+  // top-level link to a 404. Neither name may come back to the sidebar
+  // without a deliberate decision, so both are pinned absent.
+  it("offers no Confidential Computing or Virtual Machines entry", () => {
+    const out = filterNavSections(navSections, { shareEnabled: true });
+    const every = out.flatMap((s) =>
+      s.items.flatMap((i) => [i.label, ...(i.subMenuItems ?? []).map((x) => x.label)]),
+    );
+    expect(every).not.toContain("Confidential Computing");
+    expect(every).not.toContain("Virtual Machines");
+
+    const paths = out.flatMap((s) =>
+      s.items.flatMap((i) => [i.path, ...(i.subMenuItems ?? []).map((x) => x.path)]),
+    );
+    expect(paths.filter((p) => p === "/vm")).toHaveLength(0);
   });
 
   // The plans page must be reachable from the sidebar: an ACCOUNT entry
