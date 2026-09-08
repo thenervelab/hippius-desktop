@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { filterNavSections, navSections } from "../NavData";
 import type { NavSection } from "../NavData";
+import { settingsNavItems } from "../SettingsSidebar";
 import {
   WALLET_FEATURE_ENABLED,
   REFERRALS_FEATURE_ENABLED,
@@ -112,22 +113,23 @@ describe("filterNavSections", () => {
     expect(paths.filter((p) => p === "/vm")).toHaveLength(0);
   });
 
-  // The plans page must be reachable from the sidebar: an ACCOUNT entry
-  // directly above Billing, always visible (no feature flag). The header
-  // stats card that also links there is hidden on the Drive page and below
-  // the xl breakpoint, so this entry is the one path that always exists.
-  it("lists Subscription Plans above Billing under ACCOUNT", () => {
-    const account = navSections.find((s) => s.label === "ACCOUNT");
-    const labels = (account?.items ?? []).map((i) => i.label);
+  // Billing owns plan detail, and Billing lives in Settings. The two used
+  // to sit adjacent in the main sidebar as one subject split by tense —
+  // what you could buy vs what you have paid. Neither may return here
+  // without moving the destination too, or the app offers two routes to
+  // the same thing again.
+  it("keeps Billing and plan detail out of the main sidebar", () => {
+    const labels = filterNavSections(navSections, { shareEnabled: true })
+      .flatMap((s) => s.items.map((i) => i.label));
+    expect(labels).not.toContain("Billing");
+    expect(labels).not.toContain("Subscription Plans");
+  });
 
-    const plans = labels.indexOf("Subscription Plans");
-    const billing = labels.indexOf("Billing");
-    expect(plans).toBeGreaterThanOrEqual(0);
-    expect(billing).toBeGreaterThanOrEqual(0);
-    expect(plans).toBeLessThan(billing);
-
-    const item = account?.items.find((i) => i.label === "Subscription Plans");
-    expect(item?.path).toBe("/drive-plans");
-    expect(item?.featureFlag).toBeUndefined();
+  it("offers Billing in the settings nav instead", () => {
+    const labels = settingsNavItems.map((i) => i.label);
+    expect(labels).toContain("Billing");
+    // First: it is what people arrive looking for, unlike the
+    // device-scoped items below it.
+    expect(labels.indexOf("Billing")).toBe(0);
   });
 });

@@ -74,16 +74,12 @@ export const navSections: NavSection[] = [
   {
     label: "ACCOUNT",
     items: [
-      {
-        label: "Subscription Plans",
-        path: "/drive-plans",
-        icon: <Icons.PricingCard className={ICON_CLASS} />,
-      },
-      {
-        label: "Billing",
-        path: "/billing",
-        icon: <Icons.CreditCard className={ICON_CLASS} />,
-      },
+      // Subscription Plans and Billing were two adjacent entries for one
+      // subject split by tense — what you could buy vs what you have paid.
+      // Plan detail now lives under Billing, and Billing lives in
+      // Settings → Billing, so neither belongs in this sidebar. The
+      // /billing and /drive-plans routes still exist for deep links and
+      // for the upgrade prompts that push to them.
       {
         label: "Wallet",
         path: "/wallet",

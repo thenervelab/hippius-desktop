@@ -15,6 +15,7 @@ import VPNSettings from "@/components/page-sections/settings/VPNSettings";
 import CustomizeRPC from "@/components/page-sections/settings/CustomizeRPC";
 import InfoTooltip from "@/components/ui/info-tooltip";
 import NotificationSection from "@/components/page-sections/settings/NotificationSection";
+import BillingSections from "@/components/page-sections/billing/BillingSections";
 import {
   VPN_FEATURE_ENABLED,
   WALLET_FEATURE_ENABLED,
@@ -30,6 +31,12 @@ const SECTION_META: Record<
     showDescription?: boolean;
   }
 > = {
+  billing: {
+    title: "Billing",
+    description:
+      "Your plan, your credits, and everything you have been charged for.",
+    showDescription: true,
+  },
   sync: {
     title: "Sync & Storage",
     description: "Configure your sync folders and storage options.",
@@ -118,6 +125,8 @@ function SettingsContent() {
 
       {/* Section content */}
       <div className="flex flex-col gap-4 w-full">
+        {section === "billing" && <BillingSections />}
+
         {section === "sync" && (
           <>
             <DeviceNameSetting />
