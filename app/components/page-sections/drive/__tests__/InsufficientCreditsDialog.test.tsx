@@ -64,6 +64,16 @@ describe("InsufficientCreditsDialog", () => {
     },
   );
 
+  // A share uploads a re-encrypted copy the server bills, so a refusal is
+  // about THIS share's size — not a Drive-wide freeze. The old copy said
+  // "new share links are paused", which read as a policy, not a full plan.
+  it("explains a share refusal as this share not fitting", () => {
+    renderWithReason("sharing");
+
+    expect(screen.getByText(/sharing this file would go past the storage your plan includes/i)).toBeInTheDocument();
+    expect(screen.queryByText(/paused/i)).not.toBeInTheDocument();
+  });
+
   it("keeps VM creation on the credits route", () => {
     renderWithReason("vm-creation");
 

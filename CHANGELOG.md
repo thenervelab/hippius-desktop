@@ -90,6 +90,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Uploads and share links work again on every paid plan.** Some accounts saw
+  "This would go past the storage your plan includes" with plenty of room left;
+  Hippius now checks with the server before refusing, instead of working it out
+  on its own.
 - **Uploads now stop when your plan is full, instead of failing later.** An upload
   that would go past your plan's storage is refused up front with a link to the
   plans page — the same answer the web console gives. Accounts on the free plan
