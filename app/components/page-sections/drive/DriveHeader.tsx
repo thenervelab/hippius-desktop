@@ -32,6 +32,7 @@ import {
   UPLOAD_FOLDER_LABEL,
 } from "./uploadActions";
 import RemoteUploadButton from "./RemoteUploadButton";
+import { BILLING_ROUTE } from "@/app/lib/routes";
 
 // Figma white pill style shared by Add Folder / View All Files / Shared Links.
 // Mirrors the trigger styling used across the home dashboard cards.
@@ -320,7 +321,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
         <StartSyncingButton
           onClick={
             isStorageFull
-              ? () => push("/drive-plans")
+              ? () => push(BILLING_ROUTE)
               : isRecentFiles && hasNoSyncPaths
                 ? onNavigateToSettings
                 : onStartSyncing

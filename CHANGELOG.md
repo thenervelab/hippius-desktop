@@ -71,6 +71,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   and one line underneath explains whichever you have picked. If your balance will
   not cover the plan you can still open the credits option, so you can see how far
   short you are and top up from there.
+- **Every upgrade and top-up prompt now goes to the same place**, the Billing page
+  in Settings. The separate Subscription Plans page is gone — it showed a subset of
+  what Billing shows, so the two prompts used to lead to two different screens.
 - **Billing and plans are one place instead of two.** "Subscription Plans" and
   "Billing" were separate sidebar entries for the same subject. Your Drive plans
   now live inside Billing, and Billing has moved into Settings.

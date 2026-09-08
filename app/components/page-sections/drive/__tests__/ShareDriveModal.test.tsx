@@ -12,6 +12,7 @@ import type { ReactNode } from "react";
 
 import ShareDriveModal from "../ShareDriveModal";
 import { shareDriveModalAtom } from "@/app/lib/global-atoms/sharesAtoms";
+import { BILLING_ROUTE } from "@/app/lib/routes";
 
 // Flip the flag per test — the modal reads it at render time.
 const flagState = vi.hoisted(() => ({ sharedDrivesEnabled: true }));
@@ -155,7 +156,7 @@ describe("invite tab", () => {
     // The same in-app destination every other Drive upgrade prompt uses, so
     // the user is never sent to the console for a plan the app can change.
     fireEvent.click(screen.getByRole("button", { name: "Upgrade plan" }));
-    expect(push).toHaveBeenCalledWith("/drive-plans");
+    expect(push).toHaveBeenCalledWith(BILLING_ROUTE);
   });
 });
 

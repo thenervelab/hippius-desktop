@@ -1,4 +1,5 @@
 import type { PlanAction } from "@/app/lib/hooks/api/useStorageOverview";
+import { BILLING_ROUTE } from "@/app/lib/routes";
 
 export interface PlanActionView {
   label: string;
@@ -22,9 +23,9 @@ export function getPlanActionView(action: PlanAction | undefined): PlanActionVie
     case "upgrade":
       // Credits buy no Drive storage, so an account short of space is
       // never sent to the credits flow — only to a bigger plan.
-      return { label: "Upgrade", href: "/drive-plans", withPlanIcon: true };
+      return { label: "Upgrade", href: BILLING_ROUTE, withPlanIcon: true };
     case "top-up-credits":
-      return { label: "+ Top up Credits", href: "/billing", withPlanIcon: false };
+      return { label: "+ Top up Credits", href: BILLING_ROUTE, withPlanIcon: false };
     default:
       // Includes `undefined`: while the decision is still loading there is
       // nothing to offer, and guessing would flash the wrong prompt.

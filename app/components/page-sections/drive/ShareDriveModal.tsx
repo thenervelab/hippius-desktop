@@ -47,6 +47,7 @@ import {
 import { useRouter } from "next/navigation";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
 import { middleTruncate } from "@/lib/utils/middleTruncate";
+import { BILLING_ROUTE } from "@/app/lib/routes";
 import {
   DEFAULT_INVITE_TTL_SECS,
   formatJoinedDate,
@@ -520,7 +521,7 @@ function SharedDrivesNotEntitledNotice({ onClose }: { onClose: () => void }) {
   const router = useRouter();
   const upgrade = () => {
     onClose();
-    router.push("/drive-plans");
+    router.push(BILLING_ROUTE);
   };
 
   return (
