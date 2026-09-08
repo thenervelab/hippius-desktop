@@ -128,8 +128,8 @@ describe("filterNavSections", () => {
   it("offers Billing in the settings nav instead", () => {
     const labels = settingsNavItems.map((i) => i.label);
     expect(labels).toContain("Billing");
-    // First: it is what people arrive looking for, unlike the
-    // device-scoped items below it.
-    expect(labels.indexOf("Billing")).toBe(0);
+    // Not at the top: Settings is opened for the device-scoped items, so
+    // Billing sits with them rather than above them.
+    expect(labels.indexOf("Billing")).toBeGreaterThan(labels.indexOf("Notifications"));
   });
 });

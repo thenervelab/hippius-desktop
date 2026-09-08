@@ -21,11 +21,6 @@ const ICON_CLASS = "size-[18px]";
 // Exported so the nav-shape tests can assert where Billing lives.
 export const settingsNavItems = [
   {
-    label: "Billing",
-    section: "billing",
-    icon: <Icons.CreditCard className={ICON_CLASS} />,
-  },
-  {
     label: "Sync & Storage",
     section: "sync",
     icon: <Icons.Folder className={ICON_CLASS} />,
@@ -44,6 +39,11 @@ export const settingsNavItems = [
     label: "Notifications",
     section: "notifications",
     icon: <Icons.Notification className={ICON_CLASS} />,
+  },
+  {
+    label: "Billing",
+    section: "billing",
+    icon: <Icons.CreditCard className={ICON_CLASS} />,
   },
   {
     label: "Appearance",

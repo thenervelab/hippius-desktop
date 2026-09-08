@@ -72,8 +72,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   not cover the plan you can still open the credits option, so you can see how far
   short you are and top up from there.
 - **Billing and plans are one place instead of two.** "Subscription Plans" and
-  "Billing" were separate sidebar entries for the same subject. Plans now live
-  inside Billing, and Billing has moved into Settings.
+  "Billing" were separate sidebar entries for the same subject. Your Drive plans
+  now live inside Billing, and Billing has moved into Settings.
+- **Billing no longer mixes in plans for a different product.** The credit-reload
+  packages and the billing history table have been taken off the page, so it shows
+  the plan that governs your Drive storage and the credits that pay for it.
 - **"Confidential Computing" is gone from the sidebar.** The entry held only
   Virtual Machines, which is not available yet, so it advertised a section that
   led nowhere.
