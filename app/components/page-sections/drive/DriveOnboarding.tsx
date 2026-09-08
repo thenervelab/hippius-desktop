@@ -25,15 +25,13 @@ import {
   saveHcfsConfig,
 } from "@/app/lib/utils/hcfsConfigUtils";
 import { HcfsSetupDialog } from "@/components/page-sections/settings/HcfsSetupDialog";
-import { Icons } from "@/components/ui";
-import { PauseCircle, PlayCircle, FolderMinus, CloudDownload, FolderSearch } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import FolderList from "./folder-list/FolderList";
+import AddButton from "./AddFileButton";
+import FolderUploadDialog from "./FolderUploadDialog";
 import { toFolderRows, type FolderRow } from "./folder-list/folderRows";
-import { resolveFolderMenuPlan } from "@/components/page-sections/settings/multi-folder-sync/folderMenuGating";
-import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
-import { SYNC_FOLDER_LABEL } from "./uploadActions";
-import type { ActionItem } from "@/components/ui/alt-table/TableActionMenu";
+import { buildFolderActions } from "./folder-list/buildFolderActions";
+import { SYNC_FOLDER_LABEL, UPLOAD_FOLDER_LABEL } from "./uploadActions";
 import {
   SharedWithMeSection,
   RemoveFolderDialog,
@@ -109,6 +107,7 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
   // Pause sync dialog state
   // Drive label whose exclusions are being edited, or null when closed.
   const [exclusionsLabel, setExclusionsLabel] = useState<string | null>(null);
+  const [isFolderUploadOpen, setIsFolderUploadOpen] = useState(false);
   const [pauseDialog, setPauseDialog] = useState<{
     open: boolean;
     folder: SyncFolder | null;
@@ -523,6 +522,14 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
     }
   };
 
+  // Uploading from the folder list needs a destination, and this view has
+  // no active folder — so both dialogs default to the first local drive
+  // and let the user pick another inside. A folder that is not synced here
+  // cannot receive an upload yet, so an account with none gets no buttons
+  // rather than ones that open onto an empty picker.
+  const firstLocalLabel = syncFolders[0]?.id ?? null;
+  const canUpload = Boolean(firstLocalLabel);
+
   // One list, built from the two sources the page already loads.
   const folderRows = toFolderRows(syncFolders, remoteFolders);
 
@@ -538,92 +545,23 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
     }
   };
 
-  // Menus are composed here rather than inside FolderList because what a
-  // row may do depends on rules that already live elsewhere — member-drive
-  // gating above all. A second copy of those rules is how a member row
-  // regains an item that keys the delete by the wrong identity.
-  const buildRowActions = (row: FolderRow): ActionItem[] => {
-    if (row.local) {
-      const folder = row.local;
-      const plan = resolveFolderMenuPlan(folder, {
-        sharedDrivesEnabled: SHARED_DRIVES_ENABLED,
-      });
-      const items: ActionItem[] = [
-        {
-          icon: <Icons.FolderOpen className="size-4" />,
-          itemTitle: "Open",
-          onItemClick: () => onSelectFolder?.(folder.id),
-        },
-        {
-          icon:
-            folder.status === "paused" ? (
-              <PlayCircle className="size-4" />
-            ) : (
-              <PauseCircle className="size-4" />
-            ),
-          itemTitle: folder.status === "paused" ? "Resume Sync" : "Pause Sync",
-          onItemClick: () =>
-            folder.status === "paused"
-              ? void handleResumeSync(folder)
-              : setPauseDialog({ open: true, folder }),
-        },
-      ];
-      if (plan.showExclusions) {
-        items.push({
-          icon: <FolderMinus className="size-4" />,
-          itemTitle: "Excluded from Sync",
-          onItemClick: () => setExclusionsLabel(folder.id),
-        });
-      }
-      if (plan.showDeleteFromServer) {
-        items.push({
-          icon: <Icons.Trash className="size-4" />,
-          itemTitle: "Delete from Server",
-          variant: "destructive",
-          onItemClick: () => openDeleteServerDialog(folder.folderName, folder.id),
-        });
-      }
-      items.push({
-        icon: <Icons.CloseCircle className="size-4" />,
-        itemTitle: plan.removeItemTitle,
-        variant: "destructive",
-        onItemClick: () =>
-          setRemoveDialog({
-            open: true,
-            folderId: folder.id,
-            folderName: folder.folderName,
-            mode: plan.removeIsLeave ? "leave" : "remove",
-          }),
-      });
-      return items;
-    }
-
-    const folder = row.remote;
-    if (!folder) return [];
-    return [
-      {
-        icon: <Icons.FolderOpen className="size-4" />,
-        itemTitle: "Open",
-        onItemClick: () => onOpenRemoteFolder?.(folder.folderName),
-      },
-      {
-        icon: <CloudDownload className="size-4" />,
-        itemTitle: "Sync to this computer",
-        onItemClick: () => handleSyncRemoteFolder(folder),
-      },
-      {
-        icon: <FolderSearch className="size-4" />,
-        itemTitle: "Browse Contents",
-        onItemClick: () => void handleBrowseFolder(folder),
-      },
-      {
-        icon: <Icons.Trash className="size-4" />,
-        itemTitle: "Delete from Server",
-        variant: "destructive",
-        onItemClick: () => openDeleteServerDialog(folder.folderName),
-      },
-    ];
-  };
+  const buildRowActions = (row: FolderRow) =>
+    buildFolderActions(row, {
+      onOpen: handleOpenRow,
+      onPause: (folder) => setPauseDialog({ open: true, folder }),
+      onResume: (folder) => void handleResumeSync(folder),
+      onManageExclusions: (folder) => setExclusionsLabel(folder.id),
+      onRemove: (folder, mode) =>
+        setRemoveDialog({
+          open: true,
+          folderId: folder.id,
+          folderName: folder.folderName,
+          mode,
+        }),
+      onDeleteFromServer: openDeleteServerDialog,
+      onSyncRemote: handleSyncRemoteFolder,
+      onBrowseRemote: (folder) => void handleBrowseFolder(folder),
+    });
 
   return (
     <>
@@ -643,14 +581,32 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
           rows={folderRows}
           isLoading={isLoading}
           headerAction={
-            <Button
-              variant="defaultStable"
-              size="auto"
-              onClick={() => setShowAddDialog(true)}
-              className="h-[26px] rounded-[6px] px-2.5 text-[12px] font-medium"
-            >
-              {SYNC_FOLDER_LABEL}
-            </Button>
+            <div className="flex items-center gap-2">
+              {canUpload && (
+                <>
+                  <Button
+                    variant="defaultStable"
+                    size="auto"
+                    onClick={() => setIsFolderUploadOpen(true)}
+                    className="h-[26px] rounded-[6px] px-2.5 text-[12px] font-medium"
+                  >
+                    {UPLOAD_FOLDER_LABEL}
+                  </Button>
+                  <AddButton
+                    defaultFolderLabel={firstLocalLabel}
+                    className="h-[26px] rounded-[6px] px-2.5 text-[12px] font-medium"
+                  />
+                </>
+              )}
+              <Button
+                variant="defaultStable"
+                size="auto"
+                onClick={() => setShowAddDialog(true)}
+                className="h-[26px] rounded-[6px] px-2.5 text-[12px] font-medium"
+              >
+                {SYNC_FOLDER_LABEL}
+              </Button>
+            </div>
           }
           onOpenRow={handleOpenRow}
           buildActions={buildRowActions}
@@ -669,6 +625,13 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
       </div>
 
       {/* ──────── Dialogs ──────── */}
+      <FolderUploadDialog
+        open={isFolderUploadOpen}
+        onClose={() => setIsFolderUploadOpen(false)}
+        onRefresh={loadFolders}
+        defaultFolderLabel={firstLocalLabel}
+      />
+
       <AddLocalFolderDialog
         open={showAddDialog}
         onClose={() => setShowAddDialog(false)}

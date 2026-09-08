@@ -33,11 +33,15 @@ import {
   driveStatusesAtom,
 } from "@/app/lib/global-atoms/unpinAtoms";
 import { appStore } from "@/lib/store/jotaiStore";
+import { useRouter } from "next/navigation";
+import { Button } from "@/components/ui/button";
+import FolderList from "@/components/page-sections/drive/folder-list/FolderList";
+import { toFolderRows } from "@/components/page-sections/drive/folder-list/folderRows";
+import { buildFolderActions } from "@/components/page-sections/drive/folder-list/buildFolderActions";
+import { SYNC_FOLDER_LABEL } from "@/components/page-sections/drive/uploadActions";
 import { applyDriveStatusToRow } from "@/app/lib/utils/driveRowStatus";
 import { useAtomValue } from "jotai";
 import {
-  LocalFoldersSection,
-  RemoteFoldersSection,
   SharedWithMeSection,
   RemoveFolderDialog,
   PauseSyncDialog,
@@ -51,6 +55,7 @@ export default function MultiFolderSyncManager() {
   const { polkadotAddress, getMnemonic } = useWalletAuth();
   const queryClient = useQueryClient();
   const driveStatuses = useAtomValue(driveStatusesAtom);
+  const router = useRouter();
   const [syncFolders, setSyncFolders] = useState<SyncFolder[]>([]);
 
   // Reconcile each SyncFolder.status with the per-drive atom on every
@@ -524,52 +529,44 @@ export default function MultiFolderSyncManager() {
   return (
     <>
       <div className="flex flex-col gap-4 w-full">
-        <LocalFoldersSection
-          syncFolders={syncFolders}
+        {/* The same list the Drive page shows — one component so the two
+            cannot drift while it is still open whether Settings keeps a
+            folder list at all. Opening a row leaves Settings for the Drive
+            page, which is where a folder's contents live. */}
+        <FolderList
+          rows={toFolderRows(syncFolders, remoteFolders)}
           isLoading={isLoading}
-          onAddFolder={() => setShowAddDialog(true)}
-          onPauseFolder={(folder) => setPauseDialog({ open: true, folder })}
-          onResumeFolder={handleResumeSync}
-          onManageExclusions={(folder) => setExclusionsLabel(folder.id)}
-          onRemoveFolder={(folder) =>
-            setRemoveDialog({
-              open: true,
-              folderId: folder.id,
-              folderName: folder.folderName,
-              mode: "remove",
+          headerAction={
+            <Button
+              variant="defaultStable"
+              size="auto"
+              onClick={() => setShowAddDialog(true)}
+              className="h-[26px] rounded-[6px] px-2.5 text-[12px] font-medium"
+            >
+              {SYNC_FOLDER_LABEL}
+            </Button>
+          }
+          onOpenRow={() => router.push("/files")}
+          buildActions={(row) =>
+            buildFolderActions(row, {
+              onOpen: () => router.push("/files"),
+              onPause: (folder) => setPauseDialog({ open: true, folder }),
+              onResume: (folder) => void handleResumeSync(folder),
+              onManageExclusions: (folder) => setExclusionsLabel(folder.id),
+              onRemove: (folder, mode) =>
+                setRemoveDialog({
+                  open: true,
+                  folderId: folder.id,
+                  folderName: folder.folderName,
+                  mode,
+                }),
+              onDeleteFromServer: openDeleteServerDialog,
+              onSyncRemote: handleSyncRemoteFolder,
+              onBrowseRemote: (folder) => void handleBrowseFolder(folder),
             })
           }
-          onLeaveDrive={(folder) =>
-            setRemoveDialog({
-              open: true,
-              folderId: folder.id,
-              folderName: folder.folderName,
-              mode: "leave",
-            })
-          }
-          onDeleteFromServer={openDeleteServerDialog}
-          onBrowseFolder={(folder) => handleBrowseFolder({
-            folderName: folder.folderName,
-            deviceName: folder.deviceName ?? "This Device",
-            lastModified: folder.lastModified ?? 0,
-            fileCount: folder.fileCount ?? 0,
-            totalBytes: folder.totalBytes ?? 0,
-          }, true)}
         />
 
-        <RemoteFoldersSection
-          remoteFolders={remoteFolders}
-          isLoading={isLoading}
-          onSyncFolder={handleSyncRemoteFolder}
-          onDeleteFromServer={(folderName) =>
-            openDeleteServerDialog(folderName)
-          }
-          onBrowseFolder={handleBrowseFolder}
-        />
-
-        {/* Flag-gated; renders nothing unless drives are shared with this
-            account (see sharedWithMeState). A newly synced drive lands in
-            the Local list above via the refresh. */}
         <SharedWithMeSection onDriveAdded={() => refreshFoldersAndStats()} />
       </div>
 
