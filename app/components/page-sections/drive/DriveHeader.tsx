@@ -26,6 +26,11 @@ import { hasConfiguredDrivesAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import { shareFeatureEnabledAtom } from "@/app/lib/global-atoms/sharesAtoms";
 import { toast } from "sonner";
 import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
+import {
+  resolveUploadAction,
+  UPLOAD_FILE_LABEL,
+  UPLOAD_FOLDER_LABEL,
+} from "./uploadActions";
 
 // Figma white pill style shared by Add Folder / View All Files / Shared Links.
 // Mirrors the trigger styling used across the home dashboard cards.
@@ -72,8 +77,9 @@ interface DriveHeaderProps {
   publicFileCount?: number;
   isSyncPathEmpty?: boolean;
   /** Hide the upload CTAs entirely — a REMOTE (server-only) drive has no
-   *  local folder to drop files into, so "+ Add Files"/"+ New Folder"
-   *  would upload somewhere else and read as data loss. */
+   *  local folder to drop files into, so the upload actions would send
+   *  files somewhere else and read as data loss. This is the single gate
+   *  the shared-drive viewer and frozen-drive cases belong in. */
   hideUploads?: boolean;
   onStartSyncing?: () => void;
   hasNoSyncPaths?: boolean;
@@ -107,10 +113,10 @@ interface DriveHeaderProps {
   /** Root segment label — "Remote" when browsing a server-only drive. */
   breadcrumbRootLabel?: string;
   // Nested folder browsing mode. When `isNested` is true:
-  //  - the "+ Add Files" upload and the "+ New Folder" creation target
+  //  - the Upload File and Upload Folder actions target
   //    `nestedSubfolderPath` instead of the active sync drive's root,
   //  - per-folder stats (StorageStateList) are hidden,
-  //  - a "Download Folder" pill is shown next to "+ New Folder".
+  //  - a "Download Folder" pill is shown next to Upload Folder.
   isNested?: boolean;
   /** Display name of the folder the user is currently inside. Used as the upload dialog title. */
   nestedFolderName?: string | null;
@@ -194,15 +200,23 @@ const DriveHeader: FC<DriveHeaderProps> = ({
     push("/files");
   };
 
+  // One decision for both upload buttons — see `resolveUploadAction`.
+  const uploadAction = resolveUploadAction({
+    hideUploads,
+    isRecentFiles: Boolean(isRecentFiles),
+    hasNoSyncPaths: Boolean(hasNoSyncPaths),
+    isSyncPathEmpty: Boolean(isSyncPathEmpty),
+  });
+
   // Action buttons shared by both header layouts. Hoisted into a const so the
   // recent-files row and the drive row don't fork the gated/conditional logic
   // (Folder Upload eligibility, hasNoSyncPaths disabled fallback, etc.).
   const actionButtons = (
     <>
-      {/* Folder Upload button - disabled for recent files with no sync paths or when sync is paused */}
-      {!hideUploads &&
-        (!isRecentFiles || !hasNoSyncPaths) &&
-        !isSyncPathEmpty && (
+      {/* Upload Folder. Both this and Upload File resolve through the
+          shared `resolveUploadAction` so they can never disagree about
+          whether this view accepts uploads — they used to. */}
+      {uploadAction === "enabled" && (
           <Button
             variant="defaultStable"
             size="auto"
@@ -218,23 +232,23 @@ const DriveHeader: FC<DriveHeaderProps> = ({
             }}
             className={SECONDARY_PILL_CLASSES}
           >
-            + New Folder
+            {UPLOAD_FOLDER_LABEL}
           </Button>
         )}
-      {isRecentFiles && hasNoSyncPaths && (
+      {uploadAction === "disabled" && (
         <Button
           variant="defaultStable"
           size="auto"
           disabled
           className={SECONDARY_PILL_CLASSES}
         >
-          + New Folder
+          {UPLOAD_FOLDER_LABEL}
         </Button>
       )}
 
       {/* Download Folder — only when browsing inside a nested folder.
-          Same secondary pill style as "+ New Folder" so it doesn't compete
-          with the primary "+ New File" CTA. Saves a store-only .zip
+          Same secondary pill style as Upload Folder so it doesn't compete
+          with the primary Upload File CTA. Saves a store-only .zip
           (export_folder_zip), not a copied directory tree. */}
       {isNested && onDownloadFolder && (
         <Button
@@ -253,19 +267,18 @@ const DriveHeader: FC<DriveHeaderProps> = ({
         </Button>
       )}
 
-      {/* Add File button - disabled for recent files with no sync paths or when sync is paused */}
-      {hideUploads ? null : isRecentFiles && hasNoSyncPaths ? (
+      {/* Upload File — the primary CTA, same gate as Upload Folder above. */}
+      {uploadAction === "disabled" ? (
         <Button
           variant="primary"
           size="auto"
           disabled
           className="h-[30px] px-3 py-[10px] gap-[10px] rounded-[6px] font-geist text-[14px] tracking-[-0.28px] leading-[1.109]"
         >
-          + Add Files
+          {UPLOAD_FILE_LABEL}
         </Button>
-      ) : (
-        !isSyncPathEmpty && (
-          <AddButton
+      ) : uploadAction === "enabled" ? (
+        <AddButton
             ref={addButtonRef}
             defaultFolderLabel={defaultFolderLabel}
             nestedUpload={
@@ -279,8 +292,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
                 : undefined
             }
           />
-        )
-      )}
+      ) : null}
 
       {/* Start Syncing button - show for empty sync paths or no sync paths.
           When the user is out of credits the sync flow is a dead-end (every
@@ -396,7 +408,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
             "dark:shadow-[0px_1px_1.1px_0px_rgba(0,0,0,0.4)]",
           )}
         >
-          {/* Line 1 — Breadcrumb (left) | Refresh + New Folder + Add File + … (right).
+          {/* Line 1 — Breadcrumb (left) | Refresh + Upload Folder + Upload File + … (right).
               Lives inside the outer grey card's top section (px-2.5 py-2 per Figma).
               The default mt-6/mb-5 from SyncFolderBreadcrumb is overridden so the
               row stays compact and vertically aligned with the buttons. */}
@@ -481,7 +493,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
         </div>
       )}
 
-      {/* Folder Upload Dialog. In nested mode the "+ New Folder" button
+      {/* Folder Upload Dialog. In nested mode the Upload Folder button
           uploads a directory INTO the current nested location, so we use
           the to-folder variant. In root mode it uploads into the sync
           drive's root and we use the existing FolderUploadDialog. */}

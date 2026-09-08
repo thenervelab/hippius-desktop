@@ -32,6 +32,7 @@ import { tauriErrorMessage } from "@/lib/utils/dispatchTauriError";
 import { fileManagerLabel } from "@/lib/utils/isMacPlatform";
 import FolderCardContextMenu from "@/app/components/ui/context-menu/FolderCardContextMenu";
 import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
+import { SYNC_FOLDER_LABEL } from "@/app/components/page-sections/drive/uploadActions";
 import { shareDriveModalAtom } from "@/app/lib/global-atoms/sharesAtoms";
 import {
   LEAVE_UNAVAILABLE_TOOLTIP,
@@ -357,7 +358,7 @@ export function LocalFoldersSection({
               "dark:border-black-300 dark:bg-black-600 dark:text-grey-dark-300 dark:shadow-[0_1px_2px_rgba(0,0,0,0.4)] dark:hover:bg-black-500"
             )}
           >
-            + Add Folder
+            {SYNC_FOLDER_LABEL}
           </Button>
         }
       >

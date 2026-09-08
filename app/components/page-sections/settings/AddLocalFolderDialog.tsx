@@ -17,6 +17,7 @@ import {
 } from "@/app/lib/utils/hcfsConfigUtils";
 import { HcfsSetupDialog } from "./HcfsSetupDialog";
 import { useSetAtom } from "jotai";
+import { SYNC_FOLDER_LABEL } from "@/app/components/page-sections/drive/uploadActions";
 import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
 import { isNotReady } from "@/app/lib/utils/dispatchTauriError";
 import { insufficientCreditsDialogOpenAtom } from "@/app/components/page-sections/drive/atoms/query-atoms";
@@ -251,7 +252,7 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
       <FramedDialog
         open={open}
         onClose={handleClose}
-        title="Add a Local Folder"
+        title={SYNC_FOLDER_LABEL}
         icon={<Icons.FolderPlus className="size-5 text-white" />}
         maxWidth="max-w-[680px]"
       >
@@ -262,7 +263,7 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
         <div className="flex flex-col gap-4">
           <div className="flex flex-col gap-2">
             <span className="text-xs text-grey-40 dark:text-grey-dark-600">
-              Upload Folder
+              Folder to sync
             </span>
 
             <div
@@ -397,7 +398,7 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
               "dark:hover:bg-[#2a5ad0] dark:hover:border-[#2a5ad0]"
             )}
           >
-            {isAdding ? "Adding..." : "Add Folder"}
+            {isAdding ? "Adding..." : SYNC_FOLDER_LABEL}
           </Button>
 
           <Button

@@ -71,6 +71,15 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   and one line underneath explains whichever you have picked. If your balance will
   not cover the plan you can still open the credits option, so you can see how far
   short you are and top up from there.
+- **"Confidential Computing" is gone from the sidebar.** The entry held only
+  Virtual Machines, which is not available yet, so it advertised a section that
+  led nowhere.
+- **The upload buttons say what they do.** "+ New Folder" and "+ Add Files" are now
+  "Upload Folder" and "Upload File", worded the same way everywhere they appear.
+  The old wording suggested you could create a folder in the app, which was never
+  possible — both buttons send something that already exists on your computer.
+- **Setting up a folder to sync reads differently from uploading one**, so the two
+  are no longer easy to confuse.
 - **Shared drives are hidden until they launch.** Sharing a drive with someone and
   the "Shared with me" list are not available in this release, matching what the
   plan cards say. Drives already set up keep syncing as normal.
