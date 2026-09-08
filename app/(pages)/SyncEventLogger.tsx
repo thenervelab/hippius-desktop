@@ -2,6 +2,7 @@
 
 import { useSyncEvents } from "@/lib/hooks/useSyncEvents";
 import { useSyncSnapshotListener } from "@/lib/hooks/useSyncSnapshot";
+import { useRemoteUploadFeedListener } from "@/app/lib/remote-upload/useRemoteUploadFeed";
 import { useDriveStatuses } from "@/lib/hooks/useDriveStatuses";
 import { useServerCapabilities } from "@/lib/hooks/useServerCapabilities";
 import { useUploadProcessing } from "@/lib/hooks/useUploadProcessing";
@@ -32,6 +33,10 @@ export default function SyncEventLogger() {
   useSyncEvents();
   useUploadProcessing();
   useSyncSnapshotListener();
+  // Uploads into folders this device does not sync happen outside the
+  // engine, so they arrive on their own channel and are merged into the
+  // widget's view by SyncStatusHandler.
+  useRemoteUploadFeedListener();
   useDriveStatuses();
   useCreditsExhausted();
   useMetadataStale();

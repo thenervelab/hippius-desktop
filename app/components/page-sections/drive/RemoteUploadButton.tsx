@@ -44,9 +44,10 @@ const RemoteUploadButton: React.FC<{
     if (paths.length === 0) return;
 
     setBusy(true);
-    const toastId = toast.loading(
-      paths.length === 1 ? "Uploading 1 file…" : `Uploading ${paths.length} files…`,
-    );
+    // No loading toast: the sync widget shows each file moving, and a
+    // toast that sits there for the length of a large upload is noise
+    // covering the thing the user is trying to watch. Only the OUTCOME
+    // is worth a toast.
     try {
       const failures = await uploadFilesToRemoteFolder(
         polkadotAddress,
@@ -57,13 +58,12 @@ const RemoteUploadButton: React.FC<{
       const uploaded = paths.length - failures.length;
 
       if (failures.length === 0) {
-        toast.success(
-          uploaded === 1 ? "1 file uploaded" : `${uploaded} files uploaded`,
-          { id: toastId },
-        );
+        // The widget already showed each row completing, so this is a
+        // brief confirmation rather than the only signal.
+        toast.success(uploaded === 1 ? "1 file uploaded" : `${uploaded} files uploaded`);
       } else if (uploaded === 0) {
         // Rust owns the sentence; it already explains why.
-        toast.error(failures[0].error, { id: toastId });
+        toast.error(failures[0].error);
       } else {
         // Partial success is a real outcome here, so say both halves
         // rather than picking one and hiding the other.
@@ -71,7 +71,7 @@ const RemoteUploadButton: React.FC<{
           `${uploaded} uploaded, ${failures.length} failed: ${failures
             .map((f) => f.name)
             .join(", ")}`,
-          { id: toastId, duration: 6000 },
+          { duration: 6000 },
         );
       }
       if (uploaded > 0) onUploaded?.();
@@ -79,12 +79,9 @@ const RemoteUploadButton: React.FC<{
       // The plan gate refuses before any encryption happens, and the way
       // out is a bigger plan — same dialog as every other storage refusal.
       if (isNotReady(err, "STORAGE_LIMIT_REACHED")) {
-        toast.dismiss(toastId);
         setInsufficient("file-upload");
       } else {
-        toast.error(err instanceof Error ? err.message : "Upload failed", {
-          id: toastId,
-        });
+        toast.error(err instanceof Error ? err.message : "Upload failed");
       }
     } finally {
       setBusy(false);

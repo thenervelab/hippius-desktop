@@ -24,9 +24,40 @@ use hcfs_shared::network::Manifest;
 use sqlx::sqlite::SqlitePool;
 use zeroize::Zeroize;
 
+use tauri::Emitter;
+
+use crate::sync::projection::events::REMOTE_UPLOAD_PROGRESS;
+
+/// Smallest gap between two transfer-progress frames for one file.
+///
+/// Matches the sync engine's own snapshot throttle: the widget cannot
+/// render faster than that, so anything more is webview traffic nobody
+/// sees.
+const PROGRESS_EMIT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
+
 use crate::app_state::AppState;
 use crate::error::{AppError, Result};
 use crate::sync::identity::DriveIdentity;
+
+/// One file's position in a remote upload, as the widget renders it.
+#[derive(serde::Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteUploadProgress {
+    /// Stable per-file key for the whole upload — the wire path, which is
+    /// unique within the folder, so two files of the same name in
+    /// different subfolders do not collapse into one row.
+    pub path: String,
+    pub file_name: String,
+    /// The drive label, shown as the row's folder.
+    pub label: String,
+    pub bytes_transferred: u64,
+    pub total_bytes: u64,
+    /// `encrypting` | `inProgress` | `completed` | `error` — the same
+    /// vocabulary `FileProgress.status` already uses, so the merge does
+    /// not have to translate.
+    pub status: String,
+    pub error: Option<String>,
+}
 
 /// The Ed25519 key the manifest is signed with.
 ///
@@ -82,7 +113,107 @@ fn encrypt_to_temp(source: &Path, dest: &Path, key: &[u8; 32]) -> Result<String>
     Ok(hasher.finalize().to_hex().to_string())
 }
 
+/// The per-chunk transfer callback, throttled.
+///
+/// hcfs calls this per chunk, so a large file would emit hundreds of
+/// events into the webview — the same per-item flood `sync-engine.md`
+/// warns about, and the reason the engine's own scan/fetch progress rides
+/// a throttled snapshot rather than its own channel. One frame per
+/// [`PROGRESS_EMIT_INTERVAL`] is all a bar can show; the terminal states
+/// are emitted separately and unthrottled, so a row always settles even
+/// if its last transfer frame was dropped.
+fn transfer_progress(
+    app: tauri::AppHandle,
+    relative_path: &str,
+    file_name: &str,
+    label: &str,
+    size_bytes: u64,
+) -> impl Fn(u64, u64) + Send + Sync + 'static {
+    let path = relative_path.to_string();
+    let file_name = file_name.to_string();
+    let label = label.to_string();
+    let last_emit = std::sync::Mutex::new(None::<std::time::Instant>);
+
+    move |sent: u64, total: u64| {
+        {
+            // A poisoned lock must not stop the upload — skipping a frame
+            // is the correct degradation for a progress bar.
+            let Ok(mut last) = last_emit.lock() else { return };
+            if last.is_some_and(|at| at.elapsed() < PROGRESS_EMIT_INTERVAL) {
+                return;
+            }
+            *last = Some(std::time::Instant::now());
+        }
+        let _ = app.emit(
+            REMOTE_UPLOAD_PROGRESS,
+            RemoteUploadProgress {
+                path: path.clone(),
+                file_name: file_name.clone(),
+                label: label.clone(),
+                bytes_transferred: sent,
+                // hcfs reports the CIPHERTEXT length; the row is measured
+                // in plaintext bytes so it matches the size shown
+                // everywhere else, and a ciphertext slightly larger than
+                // the plaintext cannot push the bar past 100%.
+                total_bytes: total.max(size_bytes),
+                status: "inProgress".into(),
+                error: None,
+            },
+        );
+    }
+}
+
+/// Everything the manifest for one file is built from.
+struct SealRequest<'a> {
+    source: &'a Path,
+    ciphertext_path: &'a Path,
+    encryption_key: &'a [u8; 32],
+    signing_key: &'a SigningKey,
+    account_id: &'a str,
+    label: &'a str,
+    size_bytes: u64,
+    path_hash: [u8; 32],
+    salted_hash: [u8; 32],
+    encrypted_path: Vec<u8>,
+    file_name: &'a str,
+    relative_path: &'a str,
+}
+
+/// Encrypt the file and describe it in the manifest the server verifies.
+///
+/// The two belong together: the manifest signs the ciphertext's hash, so a
+/// manifest built against a different encryption than the bytes actually
+/// uploaded is a file that lands and cannot be read back.
+fn seal_and_describe(req: SealRequest<'_>) -> Result<Manifest> {
+    let ciphertext_hash = encrypt_to_temp(req.source, req.ciphertext_path, req.encryption_key)?;
+    let signature = req.signing_key.sign(Manifest::generate_text(&ciphertext_hash).as_bytes());
+
+    Ok(Manifest {
+        ss58_address: req.account_id.to_string(),
+        folder_hash: hcfs_client::drive::keys::folder_hash(req.label),
+        ciphertext_hash,
+        size_bytes: req.size_bytes,
+        timestamp: chrono::Utc::now().timestamp(),
+        signature: signature.to_bytes(),
+        signing_key: req.signing_key.verifying_key().to_bytes(),
+        path_hash: req.path_hash,
+        salted_hash: req.salted_hash,
+        // A first upload of this path has no base revision; the server
+        // treats it as a new file and rejects a stale one on conflict.
+        revision_seq: 0,
+        base_revision_id: None,
+        encrypted_path: req.encrypted_path,
+        file_name: Some(req.file_name.to_string()),
+        relative_path: Some(req.relative_path.to_string()),
+        ..Default::default()
+    })
+}
+
 /// Send one file to a folder this device does not sync.
+///
+/// `app` is optional so the live lane can drive this without a Tauri
+/// runtime; when present, each phase is emitted so the sync widget can
+/// show the file moving instead of a toast sitting there.
 pub async fn upload_to_remote_folder(
     state: &AppState,
     pool: &SqlitePool,
@@ -91,6 +222,20 @@ pub async fn upload_to_remote_folder(
     parent_path: &str,
     source: &Path,
     identity: &DriveIdentity,
+) -> Result<()> {
+    upload_to_remote_folder_with_progress(state, pool, account_id, label, parent_path, source, identity, None).await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn upload_to_remote_folder_with_progress(
+    state: &AppState,
+    pool: &SqlitePool,
+    account_id: &str,
+    label: &str,
+    parent_path: &str,
+    source: &Path,
+    identity: &DriveIdentity,
+    app: Option<&tauri::AppHandle>,
 ) -> Result<()> {
     let file_name = source
         .file_name()
@@ -119,30 +264,40 @@ pub async fn upload_to_remote_folder(
     std::fs::create_dir_all(&temp_dir)?;
     let ciphertext_path = temp_dir.join(format!("{}.bin", uuid::Uuid::new_v4()));
 
-    let result = (|| -> Result<Manifest> {
-        let ciphertext_hash = encrypt_to_temp(source, &ciphertext_path, &encryption_key)?;
-        let signature = signing_key.sign(Manifest::generate_text(&ciphertext_hash).as_bytes());
+    // One emitter for every phase, so a row cannot appear with one shape
+    // here and another there.
+    let emit = |status: &str, sent: u64, error: Option<String>| {
+        if let Some(app) = app {
+            let _ = app.emit(
+                REMOTE_UPLOAD_PROGRESS,
+                RemoteUploadProgress {
+                    path: relative_path.clone(),
+                    file_name: file_name.clone(),
+                    label: label.to_string(),
+                    bytes_transferred: sent,
+                    total_bytes: size_bytes,
+                    status: status.to_string(),
+                    error,
+                },
+            );
+        }
+    };
 
-        Ok(Manifest {
-            ss58_address: account_id.to_string(),
-            folder_hash: hcfs_client::drive::keys::folder_hash(label),
-            ciphertext_hash,
-            size_bytes,
-            timestamp: chrono::Utc::now().timestamp(),
-            signature: signature.to_bytes(),
-            signing_key: signing_key.verifying_key().to_bytes(),
-            path_hash,
-            salted_hash,
-            // A first upload of this path has no base revision; the server
-            // treats it as a new file and rejects a stale one on conflict.
-            revision_seq: 0,
-            base_revision_id: None,
-            encrypted_path,
-            file_name: Some(file_name.clone()),
-            relative_path: Some(relative_path.clone()),
-            ..Default::default()
-        })
-    })();
+    emit("encrypting", 0, None);
+    let result = seal_and_describe(SealRequest {
+        source,
+        ciphertext_path: &ciphertext_path,
+        encryption_key: &encryption_key,
+        signing_key: &signing_key,
+        account_id,
+        label,
+        size_bytes,
+        path_hash,
+        salted_hash,
+        encrypted_path,
+        file_name: &file_name,
+        relative_path: &relative_path,
+    });
 
     // The ciphertext is a plaintext-equivalent artifact; remove it whether
     // the upload succeeded, failed, or the manifest never got built.
@@ -156,16 +311,26 @@ pub async fn upload_to_remote_folder(
         Ok(m) => m,
         Err(e) => {
             cleanup(&ciphertext_path);
+            emit("error", 0, Some(e.to_string()));
             return Err(e);
         }
     };
 
     let client = crate::sync::fileops::remote::build_client(pool, account_id, identity).await?;
+
+    // The transfer callback runs on hcfs's thread, so it gets its own
+    // owned copies rather than borrowing the closure above.
+    let progress = app.map(|app| transfer_progress(app.clone(), &relative_path, &file_name, label, size_bytes));
+
     let outcome = client
-        .upload(manifest, &ciphertext_path, None::<fn(u64, u64)>)
+        .upload(manifest, &ciphertext_path, progress)
         .await
         .map_err(|e| AppError::Hcfs(format!("Upload failed: {e}")));
     cleanup(&ciphertext_path);
+    match &outcome {
+        Ok(_) => emit("completed", size_bytes, None),
+        Err(e) => emit("error", 0, Some(e.to_string())),
+    }
     outcome.map(|_| ())
 }
 
@@ -181,6 +346,7 @@ pub async fn upload_to_remote_folder(
 #[tauri::command]
 pub async fn upload_files_to_remote_folder(
     state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
     account_id: String,
     label: String,
     parent_path: Option<String>,
@@ -204,7 +370,8 @@ pub async fn upload_files_to_remote_folder(
     let mut failures = Vec::new();
     for path in &file_paths {
         let source = std::path::Path::new(path);
-        if let Err(e) = upload_to_remote_folder(state.inner(), pool, &account_id, &label, &parent, source, &identity).await {
+        let sent = upload_to_remote_folder_with_progress(state.inner(), pool, &account_id, &label, &parent, source, &identity, Some(&app)).await;
+        if let Err(e) = sent {
             tracing::warn!(file = %path, error = %e, "remote upload failed");
             failures.push(RemoteUploadFailure {
                 name: source.file_name().and_then(|n| n.to_str()).unwrap_or(path).to_string(),

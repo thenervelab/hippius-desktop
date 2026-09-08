@@ -6,6 +6,8 @@ import { useAtom, useSetAtom } from "jotai";
 
 import SyncStatusDialog from "./SyncStatusDialog";
 import { useSyncSnapshot } from "../lib/hooks/useSyncSnapshot";
+import { useAtomValue } from "jotai";
+import { remoteUploadsAtom, mergeRemoteUploads } from "@/app/lib/remote-upload/remoteUploadFeed";
 import { registerTauriListeners } from "../lib/utils/tauriListeners";
 import { syncWidgetMinimizedAtom } from "../lib/store/syncAtoms";
 import { sidebarCollapsedAtom } from "@/app/components/sidebar/sideBarAtoms";
@@ -36,7 +38,14 @@ const SyncStatusHandler: React.FC<SyncStatusHandlerProps> = ({
   host = "portal",
   collapsed = false,
 }) => {
-  const snapshot = useSyncSnapshot();
+  const engineSnapshot = useSyncSnapshot();
+  const remoteUploads = useAtomValue(remoteUploadsAtom);
+  // Remote uploads are real uploads that the engine never sees, so they
+  // join the same queue rather than getting a toast of their own.
+  const snapshot = React.useMemo(
+    () => mergeRemoteUploads(engineSnapshot, remoteUploads),
+    [engineSnapshot, remoteUploads],
+  );
   const [minimized, setMinimized] = useAtom(syncWidgetMinimizedAtom);
   const setSidebarCollapsed = useSetAtom(sidebarCollapsedAtom);
   const [sidebarHostPresent, setSidebarHostPresent] = useState(() => {
