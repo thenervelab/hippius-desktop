@@ -90,6 +90,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **"Share with Hippius" in Finder switches itself on.** On a Mac it is turned on
+  for you on the first launch and comes back by itself after a macOS or Hippius
+  update, instead of asking you to turn it on. If it is ever off, Hippius asks once
+  per launch, with a "Don't ask again" option, and Settings › Sync & Storage has a
+  switch for it.
 - **Uploads and share links work again on every paid plan.** Some accounts saw
   "This would go past the storage your plan includes" with plenty of room left;
   Hippius now checks with the server before refusing, instead of working it out

@@ -161,6 +161,12 @@ pub struct AppState {
     /// so the per-drive sync-init funnel doesn't re-bind on every init/resume; a
     /// failed attempt leaves the account absent, so it retries on the next init.
     pub recovery_bound: std::sync::Mutex<std::collections::HashSet<String>>,
+    /// Flipped to `true` once the macOS Finder-extension launch check has
+    /// run (`finder_bridge::enablement::ensure_finder_extension_at_launch`),
+    /// on every exit path. `finder_extension_state` waits on it, bounded, so
+    /// the frontend cannot nudge about a switch the launch check is in the
+    /// middle of flipping. Never reset: the check runs once per process.
+    pub finder_launch_check: tokio::sync::watch::Sender<bool>,
     /// HTTP client for HCFS health checks (accepts self-signed certs in debug).
     pub health_client: reqwest::Client,
     /// HTTP client for Hippius API calls (reuses connection pool + TLS cache).
@@ -315,6 +321,7 @@ impl AppState {
             recovery_cancel: std::sync::atomic::AtomicBool::new(false),
             recovery_in_progress: std::sync::atomic::AtomicBool::new(false),
             recovery_bound: std::sync::Mutex::new(std::collections::HashSet::new()),
+            finder_launch_check: tokio::sync::watch::Sender::new(false),
             health_client,
             // Explicit timeouts. Without them a hung connection (e.g. a
             // billing-server blip during `check_action_eligibility`) would
