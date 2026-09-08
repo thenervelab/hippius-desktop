@@ -66,14 +66,34 @@ into the bundle instead of registering it. That `lsregister` re-seeds PlugInKit
 is INFERRED from the upgrade evidence, not proven, so it reports a bool nobody
 must act on and the nudge still works when it does not help.
 
-**Registration and ELECTION are separate, and only election is the user's
-choice.** `register_finder_extension_at_launch` (spawned from `main.rs`'s setup)
-runs the registration half only. Adding `pluginkit -e use` there would switch the
-extension back on at every launch for a user who deliberately turned it off;
-`the_launch_registration_never_elects` pins that. It also skips a translocated
-bundle — `lsregister -f` on a `…/AppTranslocation/<UUID>/d/` path writes a
-soon-to-vanish record into the LaunchServices database, which is worse than the
-appex-database hazard the enable path already guards.
+**The app elects the extension itself, the way every Finder Sync peer does
+(MEGAsync, ownCloud, Nextcloud) — with one guarantee they do not give: an
+explicit off is never overridden.** `ensure_finder_extension_at_launch`
+(spawned from `main.rs` once the DB is open, because the preference and the
+election fingerprint live in `user_preferences`) applies the pure, fully
+unit-tested `policy::launch_action` table: never asked + off → register, wait
+`DISCOVERY_WAIT` (5 s, the PlugInKit discovery gap every peer waits out), elect;
+wanted + the `<app version>|<macOS build>` fingerprint changed since the last
+election → re-elect (`-e ignore`, 1 s, `-e use`, so Finder loads the new bundle —
+MEGA's post-update step, and the fix for "updated macOS and it is off again");
+wanted + off in steady state → register only, and the nudge asks ONCE per launch;
+`unwanted` → nothing, ever. The user's answer is `FinderExtensionPreference`
+(`wanted` / `unwanted`), written by a verified Enable, by "Don't ask again" on
+the nudge, and by the Settings › Sync & Storage switch (`set_finder_extension_preference`,
+which also runs `use`/`ignore`). `Disabled` + `unwanted` reports as **`muted`**:
+the nudge treats it as silence, the switch renders it as off so there is a way
+back. `finder_extension_state` waits (≤ `LAUNCH_CHECK_CAP`) on
+`AppState::finder_launch_check` so the frontend cannot nudge over an election
+in progress. The `ignore` verb exists in exactly one helper and is called from
+exactly two places, pinned by `only_the_preference_and_the_reelection_may_switch_the_extension_off`.
+Every election attempt logs `pluginkit -m -p com.apple.FinderSync` verbatim
+(`finder sync extensions registered with the system`) so a support bundle shows
+a second registered copy without a Terminal round-trip. Tahoe 26.6.2 keeps an
+election across `pluginkit -a` and `lsregister -f`, so a nudge that returns after
+Enable is a second copy or a real flip, never launch-time registration. The
+launch check also skips a translocated bundle — `lsregister -f` on a
+`…/AppTranslocation/<UUID>/d/` path writes a soon-to-vanish record into the
+LaunchServices database.
 
 **The app's `LSMinimumSystemVersion` is 11.0**, matching the appex's deployment
 target, and `the_app_floor_is_at_least_the_extension_floor` pins it across
@@ -107,7 +127,7 @@ Both commands hop to the main thread (`run_on_main_thread`); anything unanswerab
 
 **Testing gotcha:** the answer is about the SYSTEM-ELECTED instance, not merely "is this identifier enabled" — with two registered copies of the app (a `pnpm finder:dev` bundle alongside `/Applications/Hippius.app`, which `pluginkit -mADvvv -i hippius.com.FinderSync` shows as two entries), the copy that is not the elected one reports `Disabled` while `pluginkit` shows `+`. Unregister the other instance (`pluginkit -r <appex>`) before concluding the check is broken.
 
-**FE**: `app/components/FinderExtensionGuard.tsx` (mounted in `AppShell`'s full-app branch beside `TranslocationGuard`) raises one persistent sonner notice whose action is **"Enable"** — it calls `enable_finder_extension` and only falls back to `open_finder_extension_settings` when the result is not an explicit `enabled`. `unsupported` deliberately does NOT count as success: it means the backend could not verify the outcome. The notice styling is inherited from `AppShell`'s `ThemedToaster` — per-call `classNames` would make it inconsistent with every other toast. It re-checks on every **window focus** (Apple's documented flow, and what makes the notice clear itself when the user returns from System Settings) and never re-raises a notice the user closed (it returns on the next launch).
+**FE**: `app/components/FinderExtensionGuard.tsx` (mounted in `AppShell`'s full-app branch beside `TranslocationGuard`) raises one persistent sonner notice whose action is **"Enable"** — it calls `enable_finder_extension` and only falls back to `open_finder_extension_settings` when the result is not an explicit `enabled`. `unsupported` deliberately does NOT count as success: it means the backend could not verify the outcome. The notice styling is inherited from `AppShell`'s `ThemedToaster` — per-call `classNames` would make it inconsistent with every other toast. It is raised **at most once per launch**: the re-check on every **window focus** (Apple's documented flow) may only DISMISS it when the user returns from System Settings, never raise it again — the per-focus re-raise was the "it doesn't go away" loop. Its cancel button is "Don't ask again" (`set_finder_extension_preference` → `unwanted`), and a verified Enable latches the session.
 
 The notice copy names **File Providers**, not Finder: on Sequoia 15.2+ / Tahoe the Finder category is Apple's Quick Actions (Rotate Left, Markup, …) and Finder Sync lives under File Providers. The fallback if the pane will not open is `System Settings › General › Login Items & Extensions › File Providers`.
 

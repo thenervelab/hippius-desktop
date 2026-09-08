@@ -327,16 +327,20 @@ pub(crate) async fn check_action_eligibility_inner(
     action: InsufficientCreditsAction,
     bytes: u64,
 ) -> Result<ActionEligibility> {
-    // Drive actions answer from the plan allowance so the proactive check
-    // and the gate below can never disagree about the same write.
+    // Drive actions answer from hcfs-server's pre-flight so the proactive
+    // check and the gate below can never disagree about the same write.
     if action.is_drive_storage() {
         let account = state.require_session_account_typed(account_id)?;
-        let verdict = crate::billing::drive_quota::check_drive_quota(state, &account, bytes).await?;
+        let verdict = crate::billing::drive_quota::check_drive_quota(state, &account, bytes).await;
         return Ok(ActionEligibility {
             eligible: verdict.allowed,
             reason: if verdict.allowed { None } else { Some("storage_limit_reached".into()) },
-            current_balance: verdict.used_bytes as f64,
-            required_balance: verdict.limit_bytes.unwrap_or(0) as f64,
+            // The pre-flight answers yes/no; it carries no numbers. The
+            // frontend reads only `eligible` for Drive actions (the balance
+            // pair renders in the VM dialog alone), so zero here is honest
+            // rather than a guess at the plan.
+            current_balance: 0.0,
+            required_balance: 0.0,
         });
     }
 
@@ -472,7 +476,7 @@ pub async fn require_eligible(state: &crate::app_state::AppState, account_id: &s
     // bypassed by a direct invoke or stale frontend state.
     if action.is_drive_storage() {
         let account = state.require_session_account_typed(account_id)?;
-        let verdict = crate::billing::drive_quota::check_drive_quota(state, &account, bytes).await?;
+        let verdict = crate::billing::drive_quota::check_drive_quota(state, &account, bytes).await;
         return if verdict.allowed {
             Ok(())
         } else {

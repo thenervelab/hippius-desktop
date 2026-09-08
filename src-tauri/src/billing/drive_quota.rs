@@ -1,229 +1,236 @@
-//! Drive storage quota: would this write fit under the account's plan?
+//! Drive storage quota: would hcfs-server accept this write?
 //!
-//! Drive storage is sold as a plan, so what may be written is decided by
-//! the plan's allowance and what is already stored — not by a credit
-//! balance. This replaces the credit gate on every Drive write path; VM
-//! creation is genuinely credit-priced and keeps its own gate.
+//! Every Drive write path asks this before it starts, so the user gets a
+//! clear refusal up front instead of a failed upload several chunks in. The
+//! answer comes from hcfs-server's own `/can_upload` pre-flight, the same
+//! question its write handlers ask themselves, so the desktop and the server
+//! cannot disagree about one account.
+//!
+//! ## Why the server decides, not this module
+//!
+//! The server's rule is grant-only: a plan covers its allowance, the legacy
+//! credit balance pays for anything beyond it, and only a double denial
+//! refuses (`hcfs-server/src/billing/entitlement.rs`). Which plan an account
+//! is on is itself the Drive backend's business — the drive rail, the legacy
+//! Stripe subscription, and the free tier all count. An earlier version of
+//! this module re-derived that from the drive rail alone and judged
+//! everything else against the free tier, which refused uploads, sync setup
+//! and share links to paying accounts the server accepted. Re-implementing
+//! the server's rule here is how it drifts; asking is how it stays right.
 //!
 //! ## Fail open, deliberately
 //!
-//! An account the Drive backend does not map to a plan has no allowance to
-//! check. Rather than refuse it, the write proceeds and hcfs-server decides
-//! with its own gate, which is the real backstop on every write. The same
-//! applies when the allowance or the usage cannot be read: this check
-//! exists to give a clear answer early, never to be the only thing standing
-//! between a paying account and its own storage.
+//! A pre-flight that produces no verdict — no token yet, transport failure,
+//! a 5xx, an unparseable body, or the server's own billing outage — lets the
+//! write proceed. hcfs-server gates the write itself, which is the real
+//! backstop; this check exists to give a clear answer early, never to be the
+//! only thing standing between a paying account and its own storage.
 
-use crate::api::client::ApiClient;
+use std::time::Duration;
+
+use hcfs_shared::network::{CanUploadRequest, CanUploadResponse};
+
 use crate::app_state::{AppState, SessionAccount};
-use crate::error::AppError;
-use serde::Serialize;
+use crate::auth::tokens::get_api_token;
 
-/// What a quota check concluded, and the numbers behind it.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
+/// Bound on the pre-flight round-trip. hcfs-server's own entitlement client
+/// gives its backend 3 s; a gate that hangs longer than that in front of a
+/// click is worse than falling open.
+const PREFLIGHT_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// The one `/can_upload` refusal that is not a verdict: the server could not
+/// read the credit balance. Its write path treats this as retryable rather
+/// than as a denial (the hippius-s3 gateway keys on the same string), so a
+/// transient billing outage must not read as "over quota" here either.
+const BILLING_OUTAGE_ERROR: &str = "Failed to fetch billing balance";
+
+/// What a quota check concluded.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuotaVerdict {
     pub allowed: bool,
-    /// Bytes already stored, per the indexer.
-    pub used_bytes: u64,
-    /// The plan's allowance, or `None` when no plan could be read.
-    pub limit_bytes: Option<u64>,
+    /// hcfs-server's denial slug (`drive_quota_exceeded`, `zero_balance`, …),
+    /// kept for logs and support bundles. Never shown to the user: every
+    /// refusal is answered by a bigger plan, so the UI needs one message.
+    pub server_reason: Option<String>,
 }
 
 impl QuotaVerdict {
-    /// No allowance to judge against; the server decides on the write.
-    fn unknown(used_bytes: u64) -> Self {
+    /// hcfs-server answered. Its rule is grant-only (plan, then credits), so a
+    /// `false` is a real refusal — except the billing-outage string, which is
+    /// the server saying it could not answer.
+    fn from_preflight(resp: &CanUploadResponse) -> Self {
+        if resp.result {
+            return Self::allowed();
+        }
+        match resp.error.as_deref() {
+            Some(BILLING_OUTAGE_ERROR) | None => Self::unknown(),
+            Some(reason) => Self {
+                allowed: false,
+                server_reason: Some(reason.to_owned()),
+            },
+        }
+    }
+
+    fn allowed() -> Self {
         Self {
             allowed: true,
-            used_bytes,
-            limit_bytes: None,
+            server_reason: None,
         }
     }
 
-    /// Judge `incoming_bytes` against a known allowance.
-    ///
-    /// The comparison lives here on its own so the tests can exercise the
-    /// REAL rule. They used to assert against a copy of this expression
-    /// written in the test module, which stays green no matter what this
-    /// line does — the one branch that decides every upload was, in
-    /// effect, uncovered.
-    fn decide(used_bytes: u64, incoming_bytes: u64, limit_bytes: u64) -> Self {
-        Self {
-            // Saturating so a bogus huge size cannot wrap into "fits", and
-            // `<=` because the allowance is what the account may store, not
-            // one byte less.
-            allowed: used_bytes.saturating_add(incoming_bytes) <= limit_bytes,
-            used_bytes,
-            limit_bytes: Some(limit_bytes),
+    /// No verdict from the server; the write proceeds and the server's own
+    /// gate decides.
+    fn unknown() -> Self {
+        Self::allowed()
+    }
+}
+
+/// Would hcfs-server accept `incoming_bytes` more from this account?
+///
+/// Never errors: anything short of a server verdict falls open (see the
+/// module doc), and the reason is logged so a refusal that failed to fire is
+/// traceable from a support bundle.
+pub async fn check_drive_quota(state: &AppState, account: &SessionAccount, incoming_bytes: u64) -> QuotaVerdict {
+    let Some((base_url, token)) = preflight_target(state, account).await else {
+        return QuotaVerdict::unknown();
+    };
+
+    let request = CanUploadRequest {
+        ss58_address: account.as_str().to_owned(),
+        // Own drive: the empty hash keeps the server's membership fallback
+        // inert and checks quota against the caller, who pays.
+        folder_hash: String::new(),
+        size_bytes: incoming_bytes,
+    };
+    let response = state
+        .api_client
+        .post(format!("{base_url}/can_upload"))
+        .bearer_auth(token)
+        .timeout(PREFLIGHT_TIMEOUT)
+        .json(&request)
+        .send()
+        .await
+        .and_then(reqwest::Response::error_for_status);
+
+    let response = match response {
+        Ok(r) => r,
+        Err(err) => {
+            tracing::warn!(%err, "can_upload pre-flight produced no verdict; letting the write through to the server's own gate");
+            return QuotaVerdict::unknown();
         }
-    }
-}
-
-/// Whether the payload describes an account on a paid plan.
-///
-/// A missing or non-boolean `active` reads as "not subscribed", which sends
-/// the account to the free tier rather than to an unknown allowance —
-/// every account has the free tier, so "no plan" is never "no limit".
-pub(crate) fn subscription_is_active(sub: &serde_json::Value) -> bool {
-    sub.get("active").and_then(serde_json::Value::as_bool).unwrap_or(false)
-}
-
-/// The allowance an ACTIVE subscription states, or `None` when it states
-/// none. A plan with no stated allowance tells us nothing either way, so
-/// the caller falls open rather than guessing a number.
-pub(crate) fn active_plan_bytes(sub: &serde_json::Value) -> Option<u64> {
-    sub.get("storage_bytes").and_then(serde_json::Value::as_u64).filter(|b| *b > 0)
-}
-
-/// The account's storage allowance in bytes, or `None` when it cannot be
-/// read (fail open — see the module doc).
-///
-/// `active: false` is NOT "no allowance": every account has the free tier.
-/// Treating it as unknown let a free account hundreds of GB past its 10 GB
-/// keep uploading from the desktop while the console — which asks the
-/// server's own `/can_upload` gate — refused the same bytes. The free
-/// allowance is read from the plans catalogue, the number the server
-/// itself enforces, so this check still cannot refuse a write the server
-/// would accept; only a failed READ falls open.
-async fn plan_allowance(state: &AppState, account: &SessionAccount) -> Option<u64> {
-    let client = ApiClient::new(state.api_client.clone(), state.pool().ok()?.clone());
-    let sub: serde_json::Value = client.get("/api/drive/subscription/", account).await.ok()?;
-    if subscription_is_active(&sub) {
-        return active_plan_bytes(&sub);
-    }
-    let plans: serde_json::Value = client.get("/api/drive/plans/", account).await.ok()?;
-    free_plan_bytes(&plans)
-}
-
-/// The free plan's allowance out of the catalogue payload (a bare array or
-/// `{ results: [...] }`, same tolerance as the FE's `useDrivePlans`).
-///
-/// Shared with [`crate::billing::storage_overview`] so the number the home
-/// card plots and the number this gate enforces come from the SAME server
-/// field. They were briefly two constants, which is how a card and a
-/// refusal come to disagree about the same account.
-pub(crate) fn free_plan_bytes(plans: &serde_json::Value) -> Option<u64> {
-    let list = plans.as_array().or_else(|| plans.get("results").and_then(serde_json::Value::as_array))?;
-    list.iter()
-        .find(|p| p.get("is_free").and_then(serde_json::Value::as_bool).unwrap_or(false))
-        .and_then(|p| p.get("storage_bytes"))
-        .and_then(serde_json::Value::as_u64)
-        .filter(|b| *b > 0)
-}
-
-/// Would storing `incoming_bytes` more keep the account inside its plan?
-pub async fn check_drive_quota(state: &AppState, account: &SessionAccount, incoming_bytes: u64) -> Result<QuotaVerdict, AppError> {
-    let (allowance, stats) = tokio::join!(
-        plan_allowance(state, account),
-        crate::billing::queries::fetch_drive_storage_stats(state, account.as_str()),
-    );
-
-    // Usage that cannot be read is not evidence of being over quota.
-    let used_bytes = match stats {
-        Ok(s) => s.total_bytes,
-        Err(_) => return Ok(QuotaVerdict::unknown(0)),
+    };
+    let verdict = match response.json::<CanUploadResponse>().await {
+        Ok(body) => QuotaVerdict::from_preflight(&body),
+        Err(err) => {
+            tracing::warn!(%err, "can_upload pre-flight body did not parse; letting the write through to the server's own gate");
+            return QuotaVerdict::unknown();
+        }
     };
 
-    let Some(limit_bytes) = allowance else {
-        return Ok(QuotaVerdict::unknown(used_bytes));
+    if !verdict.allowed {
+        tracing::info!(
+            account = %account.as_str(),
+            reason = verdict.server_reason.as_deref().unwrap_or(""),
+            size_bytes = incoming_bytes,
+            "hcfs-server refused the Drive write pre-flight"
+        );
+    }
+    verdict
+}
+
+/// The server to ask and the bearer to ask with, or `None` when the account
+/// has no usable session yet (fall open — the write cannot start either).
+///
+/// An empty stored server URL is the region auto-detect sentinel: the sync
+/// engine lets hcfs-client race the regions itself, and this raw-reqwest
+/// path has no such step, so it resolves one here the way `console_access`
+/// does. Either region is correctness-equivalent (shared replicated DB), so
+/// the race is a pure latency choice.
+async fn preflight_target(state: &AppState, account: &SessionAccount) -> Option<(String, String)> {
+    let pool = state.pool().ok()?;
+
+    let token = match get_api_token(pool, account.as_str()).await {
+        Ok(Some(token)) => token,
+        Ok(None) => {
+            tracing::debug!("can_upload pre-flight skipped: no API token for the session account");
+            return None;
+        }
+        Err(err) => {
+            tracing::warn!(%err, "can_upload pre-flight skipped: token lookup failed");
+            return None;
+        }
     };
 
-    Ok(QuotaVerdict::decide(used_bytes, incoming_bytes, limit_bytes))
+    let stored = match crate::sync::remote::get_server_url(pool, account.as_str()).await {
+        Ok(url) => url,
+        Err(err) => {
+            tracing::warn!(%err, "can_upload pre-flight skipped: no sync server configured for the account");
+            return None;
+        }
+    };
+    let base_url = if stored.is_empty() {
+        match hcfs_client::client::pick_fastest(&state.api_client).await {
+            Ok(url) => url,
+            Err(err) => {
+                tracing::warn!(%err, "can_upload pre-flight skipped: no region answered");
+                return None;
+            }
+        }
+    } else {
+        stored
+    };
+
+    Some((base_url, token))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn a_write_that_fits_is_allowed() {
-        assert!(QuotaVerdict::decide(1_000, 500, 2_000).allowed);
+    fn preflight(result: bool, error: Option<&str>) -> CanUploadResponse {
+        CanUploadResponse {
+            result,
+            error: error.map(str::to_owned),
+        }
     }
 
     #[test]
-    fn exactly_filling_the_plan_is_allowed() {
-        // The allowance is what the account may store, not one byte less.
-        assert!(QuotaVerdict::decide(1_500, 500, 2_000).allowed);
+    fn a_server_yes_allows() {
+        let verdict = QuotaVerdict::from_preflight(&preflight(true, None));
+        assert!(verdict.allowed);
+        assert_eq!(verdict.server_reason, None);
     }
 
+    /// Every slug the server can answer with is a storage refusal here —
+    /// including the credit ones, because on the server credits are the
+    /// overflow for the plan and the fix for all of them is a bigger plan.
     #[test]
-    fn a_write_past_the_allowance_is_refused() {
-        assert!(!QuotaVerdict::decide(1_800, 500, 2_000).allowed);
+    fn every_server_denial_is_a_refusal_that_keeps_its_reason() {
+        for slug in [
+            "drive_quota_exceeded",
+            "drive_not_entitled",
+            "zero_balance",
+            "insufficient_balance: need 3 cents, have 1 cents",
+        ] {
+            let verdict = QuotaVerdict::from_preflight(&preflight(false, Some(slug)));
+            assert!(!verdict.allowed, "{slug} must refuse");
+            assert_eq!(verdict.server_reason.as_deref(), Some(slug));
+        }
     }
 
+    /// The server's own "I could not read the balance" is not a verdict; its
+    /// write path retries that case rather than refusing, and so must this.
     #[test]
-    fn one_byte_past_the_allowance_is_refused() {
-        // Pins the boundary from the other side: with the pair above, a
-        // `<` or `<=` slip is caught whichever way it goes.
-        assert!(!QuotaVerdict::decide(1_500, 501, 2_000).allowed);
+    fn a_transient_billing_outage_falls_open() {
+        let verdict = QuotaVerdict::from_preflight(&preflight(false, Some(BILLING_OUTAGE_ERROR)));
+        assert!(verdict.allowed);
     }
 
+    /// A `false` with no reason is malformed for the wire contract (the
+    /// server always names its refusal); treat it as no verdict rather than
+    /// inventing one.
     #[test]
-    fn an_absurd_size_cannot_wrap_into_fitting() {
-        assert!(!QuotaVerdict::decide(u64::MAX - 1, u64::MAX, 2_000).allowed);
-    }
-
-    #[test]
-    fn a_verdict_reports_the_numbers_behind_it() {
-        let v = QuotaVerdict::decide(1_000, 500, 2_000);
-        assert_eq!(v.used_bytes, 1_000, "used bytes are the account's, not the sum");
-        assert_eq!(v.limit_bytes, Some(2_000));
-    }
-
-    #[test]
-    fn an_unknown_allowance_allows_the_write() {
-        // A failed READ falls open; refusing there would block writes
-        // hcfs-server would accept.
-        let v = QuotaVerdict::unknown(123);
-        assert!(v.allowed);
-        assert!(v.limit_bytes.is_none());
-    }
-
-    /// An active plan is judged against the allowance it states.
-    #[test]
-    fn an_active_subscription_supplies_the_allowance() {
-        let sub = serde_json::json!({ "active": true, "storage_bytes": 2_000u64 });
-        assert!(subscription_is_active(&sub));
-        assert_eq!(active_plan_bytes(&sub), Some(2_000));
-    }
-
-    /// An active plan that states no usable allowance is unknown, NOT zero
-    /// — reading a missing or `0` field as an allowance would refuse every
-    /// write on a paid account the moment the API omitted the field.
-    #[test]
-    fn an_active_plan_with_no_stated_allowance_is_unknown() {
-        assert_eq!(active_plan_bytes(&serde_json::json!({ "active": true })), None);
-        assert_eq!(active_plan_bytes(&serde_json::json!({ "active": true, "storage_bytes": 0u64 })), None);
-    }
-
-    /// Anything that is not an explicit `active: true` sends the account to
-    /// the free tier, which is an allowance like any other.
-    #[test]
-    fn a_missing_or_false_active_flag_is_not_a_paid_plan() {
-        assert!(!subscription_is_active(&serde_json::json!({ "active": false })));
-        assert!(!subscription_is_active(&serde_json::json!({})));
-        assert!(!subscription_is_active(&serde_json::json!({ "active": "yes" })));
-    }
-
-    /// A no-subscription account is judged against the FREE plan's
-    /// allowance from the catalogue — treating it as unknown was the hole
-    /// that let a free account far past 10 GB keep uploading from the
-    /// desktop while the console's server-side gate refused the same bytes.
-    #[test]
-    fn the_free_plan_allowance_is_read_from_the_catalogue() {
-        let ten_gib: u64 = 10 * 1024 * 1024 * 1024;
-        let plans = serde_json::json!([
-            { "code": "plus", "is_free": false, "storage_bytes": 999u64 },
-            { "code": "free", "is_free": true, "storage_bytes": ten_gib }
-        ]);
-        assert_eq!(free_plan_bytes(&plans), Some(ten_gib));
-
-        // The API may also wrap the list.
-        let wrapped = serde_json::json!({ "results": [ { "is_free": true, "storage_bytes": ten_gib } ] });
-        assert_eq!(free_plan_bytes(&wrapped), Some(ten_gib));
-
-        // No free plan listed → nothing to judge against (fail open).
-        let none = serde_json::json!([ { "code": "plus", "is_free": false, "storage_bytes": 999u64 } ]);
-        assert_eq!(free_plan_bytes(&none), None);
+    fn a_reasonless_denial_falls_open() {
+        assert!(QuotaVerdict::from_preflight(&preflight(false, None)).allowed);
     }
 }

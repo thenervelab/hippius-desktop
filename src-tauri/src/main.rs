@@ -583,6 +583,7 @@ fn main() {
             crate::finder_bridge::enablement::finder_extension_state,
             crate::finder_bridge::enablement::open_finder_extension_settings,
             crate::finder_bridge::enablement::enable_finder_extension,
+            crate::finder_bridge::enablement::set_finder_extension_preference,
             // Local DB (notifications, address book, onboarding, preferences, app state)
             add_notification,
             list_notifications,
@@ -859,23 +860,6 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
             );
         }
 
-        // Register the Finder extension with the system, without switching it
-        // on. macOS is supposed to do this when the containing app first
-        // launches; on at least one Mac it never did, and nothing retried for
-        // six days — the extension sat on disk registered nowhere, so it was in
-        // no settings pane and the nudge's advice could not be followed. See
-        // `finder_bridge::enablement::register_with_the_system`.
-        //
-        // Spawned, not awaited: it shells out to two system helpers and must not
-        // sit in front of the window appearing.
-        #[cfg(target_os = "macos")]
-        {
-            let handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                crate::finder_bridge::enablement::register_finder_extension_at_launch(handle).await;
-            });
-        }
-
         if let Ok(env_path) = app.path().resolve(".env", BaseDirectory::Resource) {
             let _ = dotenvy::from_filename(env_path);
         }
@@ -1077,6 +1061,21 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
             // idempotent background migrations below so the user sees the app
             // the moment it is usable, not after the data fixups finish.
             show_main();
+
+            // Keep the Finder extension in the state the user wants: elect it
+            // on a first run, re-elect it after an app or macOS update, leave
+            // it alone when they switched it off. Needs the pool (preference
+            // + election fingerprint), so it sits here and not in `setup`.
+            // Spawned, not awaited: it shells out to system helpers and waits
+            // seconds for PlugInKit discovery, none of which may hold up the
+            // migrations below.
+            #[cfg(target_os = "macos")]
+            {
+                let handle = app_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    crate::finder_bridge::enablement::ensure_finder_extension_at_launch(handle).await;
+                });
+            }
 
             // Migrate account keys from 8-char to 16-char format
             if let Err(e) = crate::utils::schema::migrate_account_keys(&pool).await {
