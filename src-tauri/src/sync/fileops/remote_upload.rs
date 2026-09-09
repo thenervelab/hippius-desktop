@@ -367,6 +367,30 @@ pub async fn upload_files_to_remote_folder(
     let identity = crate::sync::identity::resolve_drive_identity_or_own(pool, &account_id, &label).await?;
     let parent = parent_path.unwrap_or_default();
 
+    // Announce the WHOLE batch before uploading any of it, so the widget
+    // shows a queue rather than one row that is replaced each time the
+    // next file starts. Sizes come from disk here because nothing has
+    // been read yet; a file that cannot be stat'd still gets a row, since
+    // a missing row is worse than an unknown size.
+    for path in &file_paths {
+        let source = std::path::Path::new(path);
+        let Some(name) = source.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let _ = app.emit(
+            REMOTE_UPLOAD_PROGRESS,
+            RemoteUploadProgress {
+                path: wire_relative_path(&parent, name),
+                file_name: name.to_string(),
+                label: label.clone(),
+                bytes_transferred: 0,
+                total_bytes: std::fs::metadata(source).map_or(0, |m| m.len()),
+                status: "pending".into(),
+                error: None,
+            },
+        );
+    }
+
     let mut failures = Vec::new();
     for path in &file_paths {
         let source = std::path::Path::new(path);

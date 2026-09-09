@@ -9,7 +9,7 @@ export interface RemoteUploadProgress {
   label: string;
   bytesTransferred: number;
   totalBytes: number;
-  status: "encrypting" | "inProgress" | "completed" | "error";
+  status: "pending" | "encrypting" | "inProgress" | "completed" | "error";
   error?: string | null;
 }
 
@@ -49,18 +49,82 @@ export function applyRemoteUpload(
   };
 }
 
-/** Drop terminal rows older than the linger window. */
+/** True while any row in the batch has not reached a terminal state. */
+function batchStillRunning(rows: RemoteUploadProgress[]): boolean {
+  return rows.some((r) => r.status !== "completed" && r.status !== "error");
+}
+
+/**
+ * Drop the batch once ALL of it has settled and the linger has passed.
+ *
+ * Pruning each row as it finished emptied the queue behind the user: with
+ * files uploaded one after another, the finished row vanished while the
+ * next was still going, so the widget showed a single row being replaced
+ * over and over instead of a batch making progress. A queue is only
+ * finished when nothing in it is still moving.
+ */
 export function pruneRemoteUploads(
   current: Record<string, RemoteUploadProgress>,
   now = Date.now(),
 ): Record<string, RemoteUploadProgress> {
-  const next: Record<string, RemoteUploadProgress> = {};
-  for (const [key, row] of Object.entries(current)) {
-    const finishedAt = (row as RemoteUploadProgress & { finishedAt?: number }).finishedAt;
-    if (finishedAt !== undefined && now - finishedAt > REMOTE_UPLOAD_LINGER_MS) continue;
-    next[key] = row;
-  }
-  return next;
+  const rows = Object.values(current);
+  if (rows.length === 0) return current;
+  if (batchStillRunning(rows)) return current;
+
+  const lastFinish = rows.reduce((latest, row) => {
+    const at = (row as RemoteUploadProgress & { finishedAt?: number }).finishedAt ?? 0;
+    return Math.max(latest, at);
+  }, 0);
+  return now - lastFinish > REMOTE_UPLOAD_LINGER_MS ? {} : current;
+}
+
+/**
+ * The widget's row cap, mirroring Rust's `MAX_EVENT_FILES`.
+ *
+ * A product decision, not a performance one: the widget is about four
+ * rows tall, so anything past the first handful is already behind a
+ * scroll, and a long list renders as a wall. Lowering is safe; raising
+ * re-grows the per-tick payload the freeze guard exists for.
+ */
+export const MAX_WIDGET_FILES = 10;
+
+/**
+ * Rows reserved for the most recent completions, mirroring Rust's
+ * `COMPLETED_RETAINED`.
+ *
+ * Without it a blind truncate drops completed rows first — they sort
+ * last — so in a batch larger than the cap a finished upload never
+ * appears at all.
+ */
+export const COMPLETED_RETAINED = 3;
+
+/** Sort rank: errors, then in-flight, then pending, then completed. */
+function statusRank(status: FileProgress["status"]): number {
+  if (status === "error") return 0;
+  if (status === "inProgress" || status === "encrypting" || status === "decrypting") return 1;
+  if (status === "pending") return 2;
+  return 3;
+}
+
+/**
+ * Order and truncate the merged rows the way Rust orders the engine's.
+ *
+ * The two lists are shown in one widget, so they have to obey one rule —
+ * otherwise a remote upload could push every engine row off the list, or
+ * sit below completed rows nobody is watching.
+ */
+export function capWidgetFiles(files: FileProgress[]): FileProgress[] {
+  const ordered = [...files].sort((a, b) => statusRank(a.status) - statusRank(b.status));
+  if (ordered.length <= MAX_WIDGET_FILES) return ordered;
+
+  const firstCompleted = ordered.findIndex((f) => f.status === "completed");
+  if (firstCompleted === -1) return ordered.slice(0, MAX_WIDGET_FILES);
+
+  const active = ordered.slice(0, firstCompleted);
+  const completed = ordered.slice(firstCompleted);
+  const keepCompleted = Math.min(COMPLETED_RETAINED, completed.length);
+  const keepActive = Math.min(active.length, MAX_WIDGET_FILES - keepCompleted);
+  return [...active.slice(0, keepActive), ...completed.slice(0, MAX_WIDGET_FILES - keepActive)];
 }
 
 function toFileProgress(row: RemoteUploadProgress): FileProgress {
@@ -111,7 +175,10 @@ export function mergeRemoteUploads(
   return {
     ...snapshot,
     isActive: snapshot.isActive || active.length > 0,
-    files: [...snapshot.files, ...files],
+    // Capped as one list: the engine's rows are already capped by Rust,
+    // so appending without re-capping would let a large batch push the
+    // widget past the row limit it is sized for.
+    files: capWidgetFiles([...snapshot.files, ...files]),
     totalFiles: snapshot.totalFiles + files.length,
     completedFiles: snapshot.completedFiles + completed.length,
     failedFiles: snapshot.failedFiles + failed.length,
