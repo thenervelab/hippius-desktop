@@ -18,7 +18,12 @@ import {
   Copy,
   Check,
   Star,
+  Google,
+  Github,
+  Apple,
+  WalletMinimal,
 } from "@/components/ui/icons";
+import { resolveAccountIdentity } from "./accountIdentity";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -86,14 +91,19 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
   const displayAddress =
     oauthSession?.substrateAddress || polkadotAddress || null;
 
-  // Center truncation with an equal number of leading/trailing characters.
-  // The address span is never CSS-clipped, so the trailing half always
-  // survives — only this middle ellipsis shortens the address.
-  const truncatedAddress = displayAddress
-    ? `${displayAddress.slice(0, 8)}...${displayAddress.slice(
-        displayAddress.length - 8,
-      )}`
-    : "";
+  // Who the account belongs to, resolved the same way the console
+  // resolves it — the sign-in identity leads and the SS58 moves to its own
+  // row, because users were mistaking the address for a deposit address.
+  const identity = resolveAccountIdentity(oauthSession, displayAddress ?? "");
+  const { truncatedAddress } = identity;
+  const ProviderIcon =
+    oauthSession?.provider === "google"
+      ? Google
+      : oauthSession?.provider === "github"
+        ? Github
+        : oauthSession?.provider === "apple"
+          ? Apple
+          : null;
 
   // Mark copied + schedule the 2s reset (shared by both copy paths).
   const markCopied = () => {
@@ -189,8 +199,12 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
     // would clip the hover layer), so text clipping lives here instead.
     <span className="relative flex flex-col items-start min-w-0 flex-1 overflow-hidden">
       <span className="flex items-center gap-1.5">
-        <span className="text-sm font-medium font-inter leading-none text-zinc-800 dark:text-grey-light-600 tracking-[-0.4px] whitespace-nowrap text-left">
-          {truncatedAddress}
+        {/* The sign-in identity for an OAuth account, the address for a
+            mnemonic one. `truncate` rather than `whitespace-nowrap` alone:
+            an email is longer than an SS58 and has to be allowed to clip
+            inside the rail. */}
+        <span className="min-w-0 truncate text-sm font-medium font-inter leading-none text-zinc-800 dark:text-grey-light-600 tracking-[-0.4px] text-left">
+          {identity.primary}
         </span>
         {withChevron && (
           <ChevronDown className="size-[12px] shrink-0 text-black-700/60 dark:text-grey-light-300/60 transition-transform duration-200 group-data-[state=open]:rotate-180" />
@@ -293,21 +307,75 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
           // Match the menu to the trigger row (avatar + address + block +
           // chevron) via Radix's measured trigger width. Collapsed, the trigger
           // is just the avatar, so fall back to a fixed width that fits the items.
+          // A minimum rather than the trigger's width: the header's name +
+          // provider badge and the address row are both wider than the
+          // collapsed rail, and matching the trigger clipped them.
           collapsed
-            ? "w-[238px]"
-            : "w-[var(--radix-dropdown-menu-trigger-width)]",
+            ? "w-[248px]"
+            : "min-w-[248px] w-[max(248px,var(--radix-dropdown-menu-trigger-width))]",
           "shadow-[0_4px_24px_0_rgba(0,0,0,0.08)]",
           "dark:border-[#313131] dark:bg-[#161616]",
         )}
       >
-        {/* Copy address replaces the old avatar/address/block header. The copy
-            icon cross-fades into a green check (handler preventDefaults so the
-            menu stays open to show it). No separator per design. */}
+        {/* Who the account belongs to. Only for an account that HAS a
+            sign-in identity — a mnemonic account would show its address
+            twice, once here and once on the row below. */}
+        {identity.isOAuthAccount && (
+          <>
+            <div className="flex items-center gap-2 px-3 pb-2 pt-2">
+              <span className="flex shrink-0 overflow-hidden rounded-full">
+                <Avatar
+                  colors={["#D3DFF8", "#183E91", "#3167DE", "#A6F4C5"]}
+                  name={displayAddress}
+                  size={32}
+                  variant="pixel"
+                />
+              </span>
+              <span className="flex min-w-0 flex-1 flex-col">
+                <span className="flex items-center gap-2">
+                  <span className="min-w-0 flex-1 truncate font-geist text-[13px] font-medium leading-[1.2] tracking-[-0.28px] text-grey-10 dark:text-white">
+                    {identity.menuName}
+                  </span>
+                  {identity.providerLabel && (
+                    <span className="flex shrink-0 items-center gap-1 rounded-full border border-[#e3e3e3] bg-[#f5f5f5] px-1.5 py-0.5 dark:border-[#313131] dark:bg-[#222222]">
+                      {/* GitHub and Apple are monochrome marks drawn in
+                          currentColor, so they need a colour to stand out
+                          on the badge; Google is multicolour and ignores
+                          it. */}
+                      {ProviderIcon && (
+                        <ProviderIcon className="size-3 shrink-0 text-grey-10 dark:text-white" />
+                      )}
+                      <span className="font-geist text-[10px] font-medium leading-none text-[#52525c] dark:text-[#a3a3a3]">
+                        {identity.providerLabel}
+                      </span>
+                    </span>
+                  )}
+                </span>
+                {identity.menuEmail && (
+                  <span className="mt-0.5 truncate font-geist text-[11px] font-medium leading-4 tracking-[-0.2px] text-[#52525c] dark:text-[#a3a3a3]">
+                    {identity.menuEmail}
+                  </span>
+                )}
+              </span>
+            </div>
+            <div className="mx-1 mb-1 h-px bg-[#e3e3e3] dark:bg-[#313131]" />
+          </>
+        )}
+
+        {/* The address IS the row: wallet mark → address → copy/check.
+            Clicking anywhere on it copies the full SS58, and the handler
+            preventDefaults so the menu stays open for the crossfade. It
+            replaces the old "Copy address" label, which named the action
+            without ever showing what would be copied. */}
         <DropdownMenuItem
           onSelect={handleCopyAddress}
-          aria-label="Copy address"
+          aria-label={`Copy ${truncatedAddress} wallet address`}
           className={menuItemClass}
         >
+          <WalletMinimal className="size-4 shrink-0" />
+          <span className="min-w-0 flex-1 truncate text-left font-geist">
+            {copied ? "Copied!" : truncatedAddress}
+          </span>
           <span className="relative size-4 shrink-0">
             <Copy
               className={cn(
@@ -322,7 +390,6 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
               )}
             />
           </span>
-          <span>{copied ? "Copied!" : "Copy address"}</span>
         </DropdownMenuItem>
 
         <DropdownMenuItem
