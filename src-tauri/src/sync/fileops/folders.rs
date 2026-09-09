@@ -36,6 +36,10 @@ pub struct SyncFolderInfo {
     /// the wire identity lives on the `sync_paths` row and must never be
     /// inferred in TypeScript.
     pub owner_ss58: Option<String>,
+    /// Why Finder integration will not work as expected on this root
+    /// (`fileProvider` / `specialFolder`), `None` for a root Hippius owns
+    /// outright. See `sync::root_host`.
+    pub hosted_by: Option<crate::sync::root_host::HostedBy>,
 }
 
 /// Why a server folder is absent from this device's `sync_paths`.
@@ -600,6 +604,7 @@ pub async fn get_sync_folders_with_stats(state: tauri::State<'_, crate::app_stat
     let member_owners = crate::sync::identity::member_owner_by_label(pool, &account_id).await?;
 
     // Build local folders with status and remote stats
+    let home = dirs::home_dir();
     let mut local = Vec::with_capacity(sync_paths.len());
     for sp in &sync_paths {
         let folder_name = std::path::Path::new(&sp.path)
@@ -668,6 +673,9 @@ pub async fn get_sync_folders_with_stats(state: tauri::State<'_, crate::app_stat
                 ts * 1000 // seconds → milliseconds
             }),
             owner_ss58: member_owners.get(&sp.label).cloned(),
+            hosted_by: home
+                .as_deref()
+                .and_then(|home| crate::sync::root_host::root_host(Path::new(&sp.path), home)),
         });
     }
 
@@ -939,6 +947,7 @@ mod tests {
             total_bytes: None,
             last_modified: None,
             owner_ss58: None,
+            hosted_by: None,
         };
         let json = serde_json::to_value(&info).expect("serialize");
         let keys: std::collections::BTreeSet<&str> = json.as_object().expect("object").keys().map(String::as_str).collect();
@@ -952,13 +961,37 @@ mod tests {
                 "fileCount",
                 "totalBytes",
                 "lastModified",
-                "ownerSs58"
+                "ownerSs58",
+                "hostedBy"
             ]
             .into_iter()
             .collect::<std::collections::BTreeSet<_>>(),
             "SyncFolderInfo wire keys must stay exactly these camelCase names"
         );
         assert_eq!(json["ownerSs58"], serde_json::Value::Null, "an own drive serializes ownerSs58 as null");
+        assert_eq!(
+            json["hostedBy"],
+            serde_json::Value::Null,
+            "a root Hippius owns serializes hostedBy as null"
+        );
+    }
+
+    #[test]
+    fn sync_folder_info_hosted_by_is_the_tagged_shape() {
+        let info = SyncFolderInfo {
+            id: "gd".to_string(),
+            folder_name: "Design".to_string(),
+            local_path: "/Users/me/Library/CloudStorage/GoogleDrive-x/Design".to_string(),
+            status: "syncing".to_string(),
+            file_count: None,
+            total_bytes: None,
+            last_modified: None,
+            owner_ss58: None,
+            hosted_by: Some(crate::sync::root_host::HostedBy::FileProvider { name: "Google Drive".into() }),
+        };
+        let json = serde_json::to_value(&info).expect("serialize");
+        assert_eq!(json["hostedBy"]["kind"], "fileProvider");
+        assert_eq!(json["hostedBy"]["name"], "Google Drive");
     }
 
     // ── sanitize_label ──────────────────────────────────────────────

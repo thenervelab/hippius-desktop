@@ -163,18 +163,22 @@ fn map_search_hit_to_entry(
         created_at_ms
     };
 
+    // Same split as `list_sync_folder` / `append_browse_page`:
+    // `arion_hash` is the path id, `arion_cid` is the Arion content hash
+    // (server `RemoteFileEntry.arion_hash`).
+    let path_hash_hex = hex::encode(hit.file.path_hash);
     Some(UserFileEntry {
         name: display_name,
         actual_file_name,
         size: hit.file.size_bytes,
         created_at: created_at_ms,
-        arion_hash: hit.file.arion_hash.clone().unwrap_or_default(),
-        arion_cid: String::new(),
+        arion_hash: path_hash_hex.clone(),
+        arion_cid: hit.file.arion_hash.clone().unwrap_or_default(),
         // Hex of the 32-byte server path_hash — the file id the download path
         // (`download_remote_file` / `cache_remote_file`) needs to fetch this
         // file when it isn't on disk locally. Matches the console's
         // `id = hex(path_hash)`.
-        file_id: hex::encode(hit.file.path_hash),
+        file_id: path_hash_hex,
         source,
         miner_ids: Vec::new(),
         is_assigned: true,
@@ -299,12 +303,26 @@ fn build_search_query(params: &SearchFilesParams) -> Vec<(&'static str, String)>
 /// `query` is the already-assembled query-string; callers build it — recents
 /// uses a fixed `created_at`/`desc` slice, search uses [`build_search_query`].
 ///
+/// `search_ss58` names WHOSE files are searched; `session_account` supplies
+/// the server config and bearer used to ask. They are the same for an own
+/// drive and DIFFERENT for a member drive, whose files live in the OWNER's
+/// namespace — so the path carries the owner while the credentials stay
+/// ours. Passing one value for both is how a member-drive search silently
+/// returns the wrong account's files, the conflation `DriveIdentity` exists
+/// to prevent.
+///
 /// # Errors
 ///
 /// - [`AppError::Auth`] when the account has no stored bearer token (logged out).
 /// - [`AppError::Hcfs`] on a transport failure, a non-success HTTP status, an
 ///   unparseable body, or a server `Error`/`Conflict` envelope.
-async fn fetch_search_files(state: &AppState, account_id: &str, query: &[(&'static str, String)]) -> Result<Vec<UserFileEntry>> {
+async fn fetch_search_files(
+    state: &AppState,
+    session_account: &str,
+    search_ss58: &str,
+    query: &[(&'static str, String)],
+) -> Result<Vec<UserFileEntry>> {
+    let account_id = session_account;
     let pool = state.pool()?;
 
     // `server_url` is empty in auto-detect mode; `resolve_base_url` collapses
@@ -322,7 +340,7 @@ async fn fetch_search_files(state: &AppState, account_id: &str, query: &[(&'stat
     // (user-supplied) values just like the console's `URLSearchParams`. This
     // reqwest build doesn't expose `RequestBuilder::query`, so we assemble the
     // URL up front — the same approach `auth::oauth` uses.
-    let mut url = reqwest::Url::parse(&format!("{base}/search_files/{account_id}", base = base.trim_end_matches('/')))
+    let mut url = reqwest::Url::parse(&format!("{base}/search_files/{search_ss58}", base = base.trim_end_matches('/')))
         .map_err(|e| AppError::Hcfs(format!("invalid search_files URL: {e}")))?;
     url.query_pairs_mut().extend_pairs(query.iter().map(|(k, v)| (*k, v.as_str())));
 
@@ -414,7 +432,7 @@ pub async fn get_recent_uploads(state: tauri::State<'_, AppState>, account_id: S
         ("offset", "0".to_string()),
         ("limit", limit.to_string()),
     ];
-    fetch_search_files(state.inner(), &account_id, &query).await
+    fetch_search_files(state.inner(), &account_id, &account_id, &query).await
 }
 
 /// Cross-folder, account-wide file search backing the sidebar search palette.
@@ -438,7 +456,42 @@ pub async fn search_files(state: tauri::State<'_, AppState>, account_id: String,
     let account_id = state.require_session_account(&account_id)?;
     debug!(account_id = %account_id, ?params, "Cross-folder file search via HCFS /search_files");
     let query = build_search_query(&params);
-    fetch_search_files(state.inner(), &account_id, &query).await
+    fetch_search_files(state.inner(), &account_id, &account_id, &query).await
+}
+
+/// Search one drive, by its local label.
+///
+/// The drive-page equivalent of [`search_files`], which searches the whole
+/// account. Scoping happens here rather than on the frontend because the
+/// server wants a folder HASH, and the frontend must never derive one from
+/// a label — that is correct only for an own drive, and produces a member
+/// drive's wrong namespace (H-077). `resolve_drive_identity_or_own` is the
+/// funnel that answers both halves.
+///
+/// This is what makes search work in a folder this device does not sync:
+/// the recursive search walks local disk, which such a drive has none of,
+/// so the page could previously only filter the rows already on screen.
+#[tauri::command]
+pub async fn search_files_in_drive(
+    state: tauri::State<'_, AppState>,
+    account_id: String,
+    label: String,
+    params: SearchFilesParams,
+) -> Result<Vec<UserFileEntry>> {
+    let account_id = state.require_session_account(&account_id)?;
+    let pool = state.pool()?;
+    let identity = crate::sync::identity::resolve_drive_identity_or_own(pool, &account_id, &label).await?;
+
+    // The caller states the query; the DRIVE states the scope. Overriding
+    // rather than defaulting, so a stale or hand-made folder_hash from the
+    // frontend can never widen the search past the drive it names.
+    let scoped = SearchFilesParams {
+        folder_hash: Some(identity.wire_folder_hash.clone()),
+        ..params
+    };
+    debug!(account_id = %account_id, label = %label, "Scoped file search via HCFS /search_files");
+    let query = build_search_query(&scoped);
+    fetch_search_files(state.inner(), &account_id, &identity.wire_ss58, &query).await
 }
 
 #[cfg(test)]
@@ -527,11 +580,27 @@ mod tests {
         // Seconds → milliseconds.
         assert_eq!(entry.created_at, 1_700_000_000_000);
         assert_eq!(entry.last_charged_at, 1_700_000_005_000);
-        assert_eq!(entry.arion_hash, "Qm123");
+        // Path id (hex of the fixture's all-zero path_hash), NOT the
+        // server content hash — that belongs on `arion_cid`.
+        assert_eq!(entry.arion_hash, "0".repeat(64));
+        assert_eq!(entry.arion_cid, "Qm123");
         assert!(!entry.is_folder);
         // file_id is the hex of the 32-byte path_hash (all zeros in the
         // fixture) — the id the download path needs for a non-synced file.
         assert_eq!(entry.file_id, "0".repeat(64));
+    }
+
+    /// A server row with no content hash yet (chunk-native, or not
+    /// pushed to Arion) must not invent one. File Details shows
+    /// "Not yet synced" off an empty `arion_cid`.
+    #[test]
+    fn maps_missing_server_arion_hash_to_empty_cid() {
+        let map = drive_map(&[("Docs", "/home/me/Docs")]);
+        let mut hit = hit("Docs", Some("Work/report.pdf"), Some("report.pdf"), 1_700_000_000, 0);
+        hit.file.arion_hash = None;
+        let entry = map_search_hit_to_entry(&hit, &map, &on_disk).expect("maps");
+        assert_eq!(entry.arion_cid, "");
+        assert_eq!(entry.arion_hash, "0".repeat(64));
     }
 
     /// A configured drive whose file isn't on disk yet is the ONE genuine

@@ -72,6 +72,31 @@ export function folderShareRelativePath(
  * full drive-relative path, while a FOLDER's may be just the basename and has
  * to be resolved against the surface's `basePath`.
  */
+/**
+ * Whether a FILE row can be shared.
+ *
+ * The viewer used to require a local `source`, on the reasoning that a
+ * share is minted from the file's synced copy on disk. That stopped being
+ * true when `createRemoteShare` landed: for a cloud-only row Rust
+ * downloads the file, re-encrypts it under a fresh share key and mints
+ * from that, so nothing local is needed. The gate outlived its reason and
+ * hid the share button on every file in a drive this device does not
+ * sync.
+ *
+ * What a cloud-only share DOES need is the server id of the file and the
+ * drive it lives in — without either there is nothing to fetch — so those
+ * are what is checked instead of a disk path.
+ */
+export function canShareFile(file: FormattedUserFile): boolean {
+  if (file.isFolder) return false;
+  // A row still uploading has no settled server identity to share.
+  if (file.syncStatus !== undefined && file.syncStatus !== "synced") return false;
+  // Synced here: share from the local copy.
+  if (file.source) return true;
+  // Not here: Rust fetches it by id from the drive that holds it.
+  return Boolean(file.fileId && file.label);
+}
+
 export function shareTargetFor(
   file: FormattedUserFile,
   basePath: string | null | undefined,

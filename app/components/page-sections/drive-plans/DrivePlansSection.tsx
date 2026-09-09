@@ -35,6 +35,7 @@ import DrivePlanFlowDialog, { type DrivePlanFlow } from "./DrivePlanFlowDialog";
 import DrivePlansGrid from "./DrivePlansGrid";
 import DriveSubscribeDialog from "./DriveSubscribeDialog";
 import type { PaymentRail } from "./PaymentMethodChoice";
+import { BILLING_ROUTE } from "@/app/lib/routes";
 
 /** How long to wait for the on-chain write to show up in the subscription read. */
 const CONFIRM_TIMEOUT_MS = 60_000;
@@ -268,7 +269,10 @@ const DrivePlansSection: FC<{ className?: string }> = ({ className }) => {
     if (!requestedPlan || openedRequestedRef.current) return;
     if (!plans || isSubLoading) return;
     openedRequestedRef.current = true;
-    router.replace("/drive-plans");
+    // Clear ?plan= so a refresh does not reopen the dialog. Replaces with
+    // the page this section now lives on — replacing with the old plans
+    // route would bounce the user out through its redirect and back.
+    router.replace(BILLING_ROUTE);
     const plan = plans.find((p) => p.code === requestedPlan);
     if (!plan) return;
     const action = actionFor(plan);

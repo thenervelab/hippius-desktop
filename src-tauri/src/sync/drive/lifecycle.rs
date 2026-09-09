@@ -478,6 +478,17 @@ async fn register_drive(app: &AppHandle, sync: &Arc<SyncRunner>, manager: DriveM
     }
 
     sync.register_label_root(label.to_string(), PathBuf::from(sync_path));
+    // Tell the Finder extension about this root now, not at the next
+    // launch: `register_drive_roots` runs only at the end of auto-init, so a
+    // drive added from Settings had no Finder badges (the query gate keys
+    // on registered roots) until the app was restarted. The share menu is
+    // already home-wide; this call is for badges.
+    {
+        use tauri::Manager;
+        if let Some(bridge) = app.state::<crate::app_state::AppState>().finder_bridge() {
+            bridge.register_root(PathBuf::from(sync_path));
+        }
+    }
     let manager_arc = std::sync::Arc::new(TokioMutex::new(manager));
     let reconcile_arc = std::sync::Arc::clone(&manager_arc);
     {
@@ -1753,7 +1764,13 @@ pub(crate) async fn remove_drive_for_account(app: AppHandle, label: String, expl
         let _guard = commit_lock.lock().await;
         app_state.drive_lifecycle.bump(&label);
 
-        let (remaining, _removed_path) = remove_drive_inmemory(sync, &label, path_hint).await;
+        let (remaining, removed_path) = remove_drive_inmemory(sync, &label, path_hint).await;
+        // The Finder extension keeps monitoring a root until told otherwise;
+        // a removed drive's folder would keep its "Share with Hippius" menu
+        // while every click on it failed to resolve.
+        if let (Some(path), Some(bridge)) = (removed_path.as_ref(), app_state.finder_bridge()) {
+            bridge.unregister_root(path);
+        }
 
         // Drop the preparing override for this label so a remove during
         // the SyncStarted → plan_ready window cannot leave a stuck

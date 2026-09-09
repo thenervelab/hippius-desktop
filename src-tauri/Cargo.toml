@@ -1,6 +1,6 @@
 [package]
 name = "Hippius"
-version = "0.6.2-beta.2"
+version = "0.6.2-beta.3"
 description = "Hippius Desktop App"
 authors = ["you"]
 edition = "2024"
@@ -104,6 +104,10 @@ uuid = { version = "1", features = ["v4"] }
 tempfile = "3"
 sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio"] }
 hex = "0.4"
+# Same version hcfs-client resolves to, so `blake3::Hasher` is the very
+# type `crypto::encrypt_stream_with_hash` takes — a second major version
+# in the graph would be a different type with an identical name.
+blake3 = "1.8"
 # Same glob engine hcfs-client compiles `.hippius/exclude` with. Two callers,
 # and the difference between them is deliberate: `validate_pattern` refuses a
 # pattern the engine would silently drop (validating with a different parser

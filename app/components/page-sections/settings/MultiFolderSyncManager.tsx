@@ -33,11 +33,17 @@ import {
   driveStatusesAtom,
 } from "@/app/lib/global-atoms/unpinAtoms";
 import { appStore } from "@/lib/store/jotaiStore";
+import { useRouter } from "next/navigation";
+import { Button } from "@/components/ui/button";
+import FolderList from "@/components/page-sections/drive/folder-list/FolderList";
+import FolderListEmptyState from "@/components/page-sections/drive/folder-list/FolderListEmptyState";
+import { toFolderRows, type FolderRow } from "@/components/page-sections/drive/folder-list/folderRows";
+import { buildFolderActions } from "@/components/page-sections/drive/folder-list/buildFolderActions";
+import { SYNC_FOLDER_LABEL } from "@/components/page-sections/drive/uploadActions";
+import { driveFolderRoute } from "@/app/lib/routes";
 import { applyDriveStatusToRow } from "@/app/lib/utils/driveRowStatus";
 import { useAtomValue } from "jotai";
 import {
-  LocalFoldersSection,
-  RemoteFoldersSection,
   SharedWithMeSection,
   RemoveFolderDialog,
   PauseSyncDialog,
@@ -51,6 +57,19 @@ export default function MultiFolderSyncManager() {
   const { polkadotAddress, getMnemonic } = useWalletAuth();
   const queryClient = useQueryClient();
   const driveStatuses = useAtomValue(driveStatusesAtom);
+/**
+ * The identifier the Drive page opens a row by.
+ *
+ * A local drive is keyed by its sync LABEL (which may be suffixed —
+ * `tags-2` — when two folders share a basename), a server-only one by its
+ * folder name. Using the display name for both would open the wrong drive
+ * for any suffixed label.
+ */
+function openTarget(row: FolderRow): string {
+  return row.local?.id ?? row.folderName;
+}
+
+  const router = useRouter();
   const [syncFolders, setSyncFolders] = useState<SyncFolder[]>([]);
 
   // Reconcile each SyncFolder.status with the per-drive atom on every
@@ -66,7 +85,7 @@ export default function MultiFolderSyncManager() {
       // `applyDriveStatusToRow` resolver — DriveOnboarding uses the same
       // one, so the two surfaces cannot diverge. An errored drive (init
       // failure, revoked shared drive) renders the error treatment in
-      // LocalFoldersSection instead of being collapsed into "paused".
+      // the folder list instead of being collapsed into "paused".
       prev.map((f) => applyDriveStatusToRow(driveStatuses.get(f.id), f))
     );
   }, [driveStatuses]);
@@ -524,52 +543,62 @@ export default function MultiFolderSyncManager() {
   return (
     <>
       <div className="flex flex-col gap-4 w-full">
-        <LocalFoldersSection
-          syncFolders={syncFolders}
+        {/* The same list the Drive page shows — one component so the two
+            cannot drift while it is still open whether Settings keeps a
+            folder list at all. Opening a row leaves Settings for the Drive
+            page, which is where a folder's contents live. */}
+        <FolderList
+          rows={toFolderRows(syncFolders, remoteFolders)}
           isLoading={isLoading}
-          onAddFolder={() => setShowAddDialog(true)}
-          onPauseFolder={(folder) => setPauseDialog({ open: true, folder })}
-          onResumeFolder={handleResumeSync}
-          onManageExclusions={(folder) => setExclusionsLabel(folder.id)}
-          onRemoveFolder={(folder) =>
-            setRemoveDialog({
-              open: true,
-              folderId: folder.id,
-              folderName: folder.folderName,
-              mode: "remove",
+          headerAction={
+            <Button
+              variant="defaultStable"
+              size="auto"
+              onClick={() => setShowAddDialog(true)}
+              className="h-[26px] rounded-[6px] px-2.5 text-[12px] font-medium"
+            >
+              {SYNC_FOLDER_LABEL}
+            </Button>
+          }
+          // Open the folder the user actually clicked, not just the Drive
+          // page — landing on the list and making them find it again is
+          // the complaint this fixes.
+          onOpenRow={(row) => router.push(driveFolderRoute(openTarget(row), row.presence !== "on-this-device"))}
+          buildActions={(row) =>
+            buildFolderActions(row, {
+              onOpen: (row) =>
+                router.push(driveFolderRoute(openTarget(row), row.presence !== "on-this-device")),
+              onPause: (folder) => setPauseDialog({ open: true, folder }),
+              onResume: (folder) => void handleResumeSync(folder),
+              onManageExclusions: (folder) => setExclusionsLabel(folder.id),
+              onRemove: (folder, mode) =>
+                setRemoveDialog({
+                  open: true,
+                  folderId: folder.id,
+                  folderName: folder.folderName,
+                  mode,
+                }),
+              onDeleteFromServer: openDeleteServerDialog,
+              onSyncRemote: handleSyncRemoteFolder,
+              onBrowseRemote: (folder) => void handleBrowseFolder(folder),
+              onBrowseLocal: (folder) =>
+                void handleBrowseFolder(
+                  {
+                    folderName: folder.folderName,
+                    deviceName: folder.deviceName ?? "This Device",
+                    lastModified: folder.lastModified ?? 0,
+                    fileCount: folder.fileCount ?? 0,
+                    totalBytes: folder.totalBytes ?? 0,
+                  },
+                  true,
+                ),
             })
           }
-          onLeaveDrive={(folder) =>
-            setRemoveDialog({
-              open: true,
-              folderId: folder.id,
-              folderName: folder.folderName,
-              mode: "leave",
-            })
+          emptyState={
+            <FolderListEmptyState onSyncFolder={() => setShowAddDialog(true)} />
           }
-          onDeleteFromServer={openDeleteServerDialog}
-          onBrowseFolder={(folder) => handleBrowseFolder({
-            folderName: folder.folderName,
-            deviceName: folder.deviceName ?? "This Device",
-            lastModified: folder.lastModified ?? 0,
-            fileCount: folder.fileCount ?? 0,
-            totalBytes: folder.totalBytes ?? 0,
-          }, true)}
         />
 
-        <RemoteFoldersSection
-          remoteFolders={remoteFolders}
-          isLoading={isLoading}
-          onSyncFolder={handleSyncRemoteFolder}
-          onDeleteFromServer={(folderName) =>
-            openDeleteServerDialog(folderName)
-          }
-          onBrowseFolder={handleBrowseFolder}
-        />
-
-        {/* Flag-gated; renders nothing unless drives are shared with this
-            account (see sharedWithMeState). A newly synced drive lands in
-            the Local list above via the refresh. */}
         <SharedWithMeSection onDriveAdded={() => refreshFoldersAndStats()} />
       </div>
 

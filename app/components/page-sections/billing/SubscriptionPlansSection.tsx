@@ -18,6 +18,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { cn } from "@/lib/utils";
+import PlanRenewalNotice from "@/components/ui/plan-chip/PlanRenewalNotice";
 
 interface StorageCapacityInfo {
   storageGb: number;
@@ -147,6 +148,11 @@ export default function SubscriptionPlansSection() {
           "p-3",
         )}
       >
+        {/* Says why the plan is at risk before showing the plans to fix
+            it with. Renders nothing unless Rust says the balance is
+            short, so it costs a healthy account no space. */}
+        <PlanRenewalNotice />
+
         {isLoadingPlans ? (
           <div className="flex items-center justify-center py-12">
             <Loader2 className="size-6 text-primary-50 animate-spin" />

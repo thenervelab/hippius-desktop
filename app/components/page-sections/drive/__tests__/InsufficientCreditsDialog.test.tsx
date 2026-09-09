@@ -5,6 +5,7 @@ import { Provider, createStore } from "jotai";
 import React from "react";
 
 import InsufficientCreditsDialog from "../InsufficientCreditsDialog";
+import { BILLING_ROUTE } from "@/app/lib/routes";
 import {
   insufficientCreditsDialogOpenAtom,
   InsufficientCreditsReason,
@@ -51,7 +52,7 @@ describe("InsufficientCreditsDialog", () => {
   // the way out is a bigger plan, not a topped-up balance. A Drive refusal
   // that offered credits would send the user somewhere that cannot help.
   it.each(DRIVE_REASONS)(
-    "sends a %s refusal to the plans page and never offers credits",
+    "sends a %s refusal to Billing and never offers credits",
     (reason) => {
       renderWithReason(reason);
 
@@ -59,7 +60,7 @@ describe("InsufficientCreditsDialog", () => {
       expect(screen.queryByRole("button", { name: /buy credits/i })).not.toBeInTheDocument();
 
       fireEvent.click(screen.getByRole("button", { name: /view plans/i }));
-      expect(push).toHaveBeenCalledWith("/drive-plans");
+      expect(push).toHaveBeenCalledWith(BILLING_ROUTE);
       expect(openLinkByKey).not.toHaveBeenCalled();
     },
   );

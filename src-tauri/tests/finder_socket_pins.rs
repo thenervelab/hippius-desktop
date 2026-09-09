@@ -138,3 +138,152 @@ fn the_socket_rules_do_not_assume_a_home_under_users() {
          elsewhere; use the home-agnostic `^/.*/` form"
     );
 }
+
+/// The extension paints a badge only for an identifier it registered an image
+/// under, and an unregistered one paints nothing without any error. So every
+/// state the Rust side can send must appear in the Swift registration table,
+/// keyed by the exact wire token, and that token must name a 320×320 template
+/// PDF that xcodegen actually copies into the .appex.
+#[test]
+fn swift_registers_an_image_for_every_painted_badge_state() {
+    use tauri_project_lib::finder_bridge::protocol::BadgeState;
+
+    let swift = swift_code_only(&read("../macos/HippiusFinder/HippiusFinderSync.swift"));
+    assert!(
+        !swift.contains("systemSymbolName"),
+        "SF Symbols carry optical padding, so stretching one into a 320×320 frame \
+         still leaves a small glyph in the well; Apple wants edge-to-edge PDFs"
+    );
+    assert!(
+        swift.contains("isTemplate = true"),
+        "badge PDFs must be template images so Finder can tint them"
+    );
+    assert!(
+        swift.contains("url(forResource: spec.id, withExtension: \"pdf\")"),
+        "registerBadges must load the PDF named after the wire token"
+    );
+
+    let project = read("../macos/HippiusFinder/project.yml");
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    for state in BadgeState::PAINTED {
+        let token = state.token();
+        let entry = format!("(\"{token}\", ");
+        assert!(
+            swift.contains(&entry),
+            "HippiusFinderSync.registerBadges has no image for the `{token}` badge; the app will send \
+             STATUS:{token}:<path> and Finder will paint nothing"
+        );
+
+        let resource = format!("Badges/{token}.pdf");
+        assert!(
+            project.contains(&resource),
+            "project.yml does not copy {resource} into the .appex; url(forResource:) would be nil"
+        );
+
+        let pdf = manifest.join("../macos/HippiusFinder").join(&resource);
+        let bytes = std::fs::read(&pdf).unwrap_or_else(|e| panic!("read {}: {e}", pdf.display()));
+        assert!(bytes.starts_with(b"%PDF"), "{} is not a PDF", pdf.display());
+        assert!(
+            bytes
+                .windows(b"/MediaBox [0 0 320 320]".len())
+                .any(|window| window == b"/MediaBox [0 0 320 320]"),
+            "{} must be a 320×320 page so it fills Apple's max badge frame",
+            pdf.display()
+        );
+    }
+}
+
+/// The pull half of the badge feed: the extension asks for a badge with the
+/// same verb the Rust codec parses. A drift here is silent — the app logs
+/// "dropping unparseable line" at warn and every badge stays blank.
+#[test]
+fn swift_asks_for_badges_with_the_verb_the_app_parses() {
+    let swift = swift_code_only(&read("../macos/HippiusFinder/WireProtocol.swift"));
+    assert!(
+        swift.contains("\"BADGE_QUERY:"),
+        "WireProtocol.badgeQueryLine must emit the BADGE_QUERY verb that finder_bridge::protocol parses"
+    );
+    let sync = swift_code_only(&read("../macos/HippiusFinder/HippiusFinderSync.swift"));
+    assert!(
+        sync.contains("badgeQueryLine(for:"),
+        "requestBadgeIdentifier no longer asks the app for a badge it does not hold; only pushed \
+         badges would ever paint"
+    );
+}
+
+/// Apple: the initial badge is set FROM requestBadgeIdentifier before that
+/// call returns. An async hop plus a miss that never plants even `""` leaves
+/// Finder with nothing, and it will not re-ask for items still on screen.
+#[test]
+fn swift_plants_the_initial_badge_before_request_returns() {
+    let sync = swift_code_only(&read("../macos/HippiusFinder/HippiusFinderSync.swift"));
+    assert!(
+        sync.contains("func requestBadgeIdentifier(for url: URL)"),
+        "requestBadgeIdentifier must still be the Finder entry point"
+    );
+    assert!(
+        !sync.contains("DispatchQueue.main.async { self.applyBadgeRequest"),
+        "requestBadgeIdentifier must not hop async before planting a badge"
+    );
+    assert!(
+        sync.contains("setBadgeIdentifier(\"\", for: url)"),
+        "a cache miss must plant an empty identifier so later STATUS is an update"
+    );
+    assert!(
+        sync.contains("func beginObservingDirectory(at url: URL)") && sync.contains("func endObservingDirectory(at url: URL)"),
+        "begin/endObservingDirectory are Apple's visible-set; without them a closed \
+         Finder window keeps URLs in the cache forever"
+    );
+}
+
+/// Clearing the Swift dict does not clear Finder's paint. Socket drop and
+/// unregister must call setBadgeIdentifier(\"\") for every URL they drop.
+#[test]
+fn swift_clears_finder_paint_when_the_cache_drops() {
+    let sync = swift_code_only(&read("../macos/HippiusFinder/HippiusFinderSync.swift"));
+    assert!(
+        sync.contains("func forgetBadgePaint()"),
+        "socket drop must go through forgetBadgePaint so Finder's overlay is cleared"
+    );
+    let forget_at = sync.find("func forgetBadgePaint()").expect("forgetBadgePaint");
+    let forget = &sync[forget_at..];
+    assert!(
+        forget.contains("setBadgeIdentifier(\"\", for: url)"),
+        "forgetBadgePaint must plant empty identifiers, not only drop the dictionary"
+    );
+}
+
+/// Plan-ready is one REFRESH_ROOT, not a bulk STATUS push. The Swift codec
+/// must parse the same verb the Rust side emits.
+#[test]
+fn swift_parses_the_refresh_root_verb() {
+    let swift = swift_code_only(&read("../macos/HippiusFinder/WireProtocol.swift"));
+    assert!(
+        swift.contains("\"REFRESH_ROOT\""),
+        "WireProtocol.parse must accept REFRESH_ROOT so a plan start re-queries visible items"
+    );
+    let sync = swift_code_only(&read("../macos/HippiusFinder/HippiusFinderSync.swift"));
+    assert!(
+        sync.contains("requeryDisplayed(under:"),
+        "REFRESH_ROOT / REGISTER_PATH must re-query already-displayed URLs; Finder will not \
+         call requestBadgeIdentifier again for items still on screen"
+    );
+}
+
+/// SHARE is spawned (network). BADGE_QUERY is answered on the drain loop so
+/// a Finder scroll cannot start unbounded tasks.
+#[test]
+fn badge_queries_are_serialized_on_the_drain_loop() {
+    let src = read("src/finder_bridge/lifecycle.rs");
+    assert!(
+        src.contains("ClientMessage::BadgeQuery(_) => false"),
+        "BadgeQuery must be the serial arm of the drain loop"
+    );
+    assert!(
+        src.contains("ClientMessage::Share(_) => true"),
+        "Share must still spawn so a click cannot stall behind queries"
+    );
+    let serial = src.split("} else {").nth(1).expect("serial else arm");
+    let serial_body = serial.split("info!").next().expect("else body");
+    assert!(!serial_body.contains("spawn"), "the BadgeQuery else arm must not spawn");
+}

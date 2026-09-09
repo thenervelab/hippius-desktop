@@ -27,7 +27,7 @@ import {
   shareFeatureEnabledAtom,
   shareModalFileAtom,
 } from "@/app/lib/global-atoms/sharesAtoms";
-import { shareTargetFor } from "@/app/lib/utils/folderShareGating";
+import { canShareFile, shareTargetFor } from "@/app/lib/utils/folderShareGating";
 import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 
 import FileViewerThumbnailStrip from "./FileViewerThumbnailStrip";
@@ -222,16 +222,9 @@ const FileViewerLayout: React.FC<FileViewerLayoutProps> = ({
 
   // Share is gated on the same conditions as the table-row "Share via link"
   // menu item: server advertises support, file is not a folder, file is
-  // fully synced. The viewer only opens for synced viewable files, so we
-  // still defensively check syncStatus.
-  // Sharing operates on the file's local synced path, so a cloud-only search
-  // result (no local `source`) hides the action even though its status reads
-  // "synced" — it isn't in a sync folder on this device.
-  const canShare =
-    shareEnabled &&
-    !file.isFolder &&
-    file.syncStatus === "synced" &&
-    !!file.source;
+  // fully synced. `canShareFile` owns the rest of the rule, including
+  // cloud-only rows, which Rust can share by fetching and re-encrypting.
+  const canShare = shareEnabled && canShareFile(file);
 
   return (
     <Dialog.Root

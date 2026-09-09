@@ -4,7 +4,9 @@ import React from "react";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import PlanChip from "@/components/ui/plan-chip";
-import { PricingCard, WalletMinimal } from "@/components/ui/icons";
+import PlanActionButton from "@/components/ui/plan-chip/PlanActionButton";
+import { usePlanActionView } from "@/components/ui/plan-chip/usePlanActionView";
+import { WalletMinimal } from "@/components/ui/icons";
 import { useStaking } from "@/app/lib/hooks/useStaking";
 import { WALLET_FEATURE_ENABLED } from "@/app/lib/featureFlags";
 import { cn } from "@/app/lib/utils";
@@ -35,6 +37,11 @@ const PageHeader: React.FC<PageHeaderProps> = ({
   const { stakingInfo, isLoading: isStakingLoading } = useStaking("auth");
 
   const stakedDisplay = stakingInfo?.bondedHip ?? "—";
+
+  // Drop the cell, not just its button: an account with a healthy plan has
+  // nothing to be offered, and the padded cell left behind ended the card
+  // in a strip of empty space.
+  const hasPlanAction = usePlanActionView() !== null;
 
   return (
     <div
@@ -136,18 +143,14 @@ const PageHeader: React.FC<PageHeaderProps> = ({
                 and the home cards, with a skeleton until it settles. */}
             <PlanChip />
           </div>
-          <div className="flex items-center pr-4">
-            <Button
-              asLink
-              href="/drive-plans"
-              variant="raised"
-              size="auto"
-              className="flex items-center gap-2 px-4 py-2 text-[14px] font-medium leading-[1.109] tracking-[-0.28px]"
-            >
-              <PricingCard className="size-4" />
-              Subscription Plans
-            </Button>
-          </div>
+          {/* Was an unconditional "Subscription Plans" button, shown even
+              to accounts already on a plan. Now it offers what the account
+              actually needs, and nothing when it needs nothing. */}
+          {hasPlanAction && (
+            <div className="flex items-center pr-4">
+              <PlanActionButton variant="raised" />
+            </div>
+          )}
         </div>
       )}
     </div>

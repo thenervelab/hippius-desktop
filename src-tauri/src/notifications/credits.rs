@@ -592,6 +592,64 @@ fn basename(path: &str) -> String {
     path.rsplit(['/', '\\']).next().filter(|s| !s.is_empty()).unwrap_or(path).to_string()
 }
 
+/// The renewal warning's title and copy. Rust owns the sentence the user
+/// reads, as it does for every other notification here.
+const RENEWAL_CREDITS_TITLE: &str = "Your credits won't cover the next renewal";
+const RENEWAL_CREDITS_DESCRIPTION: &str = "Top up your credits to keep your storage plan running. Without enough credits the plan will not renew.";
+
+/// Raise the "credits will not cover your renewal" notification, once.
+///
+/// `renewal_unix_day` — days since the epoch, the drive rail's own unit —
+/// is what makes "once" mean once per BILLING CYCLE rather than once ever.
+/// Keyed on the days-remaining instead, this would fire on each of the ten
+/// days before the charge; keyed on nothing, a user warned this month
+/// would never be warned again.
+///
+/// Returns `Ok(())` on both the inserted and the already-present paths, so
+/// the caller can run it on every poll. Failure is the caller's to log and
+/// swallow: a missing notification must not fail the storage overview the
+/// whole home page renders from.
+pub async fn ensure_renewal_credits_notification(pool: &sqlx::SqlitePool, user_address: &str, renewal_unix_day: i64) -> Result<(), AppError> {
+    let subtype = format!("RenewalCreditsLow-{renewal_unix_day}");
+
+    let existing: Option<(i64,)> = sqlx::query_as(
+        "SELECT 1 FROM notifications \
+         WHERE user_address = ? AND notification_subtype = ? \
+         LIMIT 1",
+    )
+    .bind(user_address)
+    .bind(&subtype)
+    .fetch_optional(pool)
+    .await?;
+
+    // Deliberately NOT filtered on `is_deleted`: a user who dismissed this
+    // warning has read it, and re-raising it on the next poll would make
+    // the notification impossible to get rid of.
+    if existing.is_some() {
+        return Ok(());
+    }
+
+    sqlx::query(
+        r"
+        INSERT INTO notifications (
+            user_address, notification_type, notification_subtype,
+            title_text, description, link_text, link,
+            is_unread, creation_time, is_deleted, release_notes
+        )
+        VALUES (?, 'Hippius', ?, ?, ?, 'View Billing', '/settings?section=billing', 1, CAST(strftime('%s','now') * 1000 AS INTEGER), 0, NULL)
+        ",
+    )
+    .bind(user_address)
+    .bind(&subtype)
+    .bind(RENEWAL_CREDITS_TITLE)
+    .bind(RENEWAL_CREDITS_DESCRIPTION)
+    .execute(pool)
+    .await?;
+
+    tracing::info!(user_address = %user_address, renewal_unix_day, "raised the renewal credits warning");
+    Ok(())
+}
+
 /// Insert a sync notification row. Returns the new row's `id`.
 ///
 /// Pure DB helper — no Tauri state dependency so integration tests can drive it

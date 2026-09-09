@@ -12,6 +12,7 @@ import { Button } from "@/components/ui";
 import { FramedDialog } from "@/components/ui/FramedDialog";
 import { cn } from "@/lib/utils";
 import { openLinkByKey } from "@/app/lib/utils/links";
+import { BILLING_ROUTE } from "@/app/lib/routes";
 
 const copy: Record<
   InsufficientCreditsReason,
@@ -68,7 +69,7 @@ const InsufficientCreditsDialog: React.FC = () => {
     if (needsPlan) {
       // The desktop has its own Subscription Plans page — keep the user in
       // the app instead of bouncing them out to the console.
-      router.push("/drive-plans");
+      router.push(BILLING_ROUTE);
       return;
     }
     openLinkByKey("BILLING");

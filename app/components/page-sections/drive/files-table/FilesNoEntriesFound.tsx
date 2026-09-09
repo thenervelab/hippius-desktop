@@ -2,6 +2,7 @@ import NoEntriesFound from "@/components/ui/NoEntriesFound";
 import React, { useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
+import { BILLING_ROUTE } from "@/app/lib/routes";
 
 // Custom events for communicating with AddButton
 const HIPPIUS_DROP_EVENT = "hippius:file-drop";
@@ -67,7 +68,7 @@ const FilesNoEntriesFound: React.FC<FilesNoEntriesFoundProps> = ({
     // Storage is sold as a plan, so the way out of a full drive is a
     // larger plan, not a credit top-up.
     if (showStorageFullVariant) {
-      router.push("/drive-plans");
+      router.push(BILLING_ROUTE);
       return;
     }
 

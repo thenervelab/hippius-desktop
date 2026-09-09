@@ -97,17 +97,32 @@ const DISCOVERY_WAIT: Duration = Duration::from_secs(5);
 #[cfg(target_os = "macos")]
 const REELECT_WAIT: Duration = Duration::from_secs(1);
 
+/// How long to keep re-asking the system after an election before concluding
+/// it did not take. PlugInKit applies `-e use` asynchronously and
+/// `isExtensionEnabled` reports what it has applied, so the first read after
+/// the verb can say `false` for an election that lands a moment later. Acting
+/// on that first read is what turned one slow answer into a loop: the
+/// fingerprint went unadopted, every later launch re-elected (switching the
+/// extension OFF for a second on the way), and the frontend, told the check
+/// had settled, read `Disabled` and nudged — after Enable, on every launch.
+#[cfg(target_os = "macos")]
+const ELECTION_SETTLE: Duration = Duration::from_secs(5);
+
+/// Interval between those re-reads.
+#[cfg(target_os = "macos")]
+const ELECTION_POLL: Duration = Duration::from_millis(500);
+
 /// Upper bound on how long `finder_extension_state` waits for the launch
 /// check to finish before answering. Sized to the check's own worst case —
 /// two registration helpers at [`TOOL_TIMEOUT`] each, [`DISCOVERY_WAIT`],
-/// and the election — with room to spare: a cap below that lets a fresh
-/// install nudge over the election it was told to wait for, and the notice
-/// then sits there until the next window focus clears it. Past this the
-/// answer is given from whatever state the system is in, so a wedged helper
-/// can never hang the IPC; the cap is only ever reached when the launch
-/// check could not run at all.
+/// the election, and [`ELECTION_SETTLE`] — with room to spare: a cap below
+/// that lets a fresh install nudge over the election it was told to wait
+/// for, and the notice then sits there until the next window focus clears
+/// it. Past this the answer is given from whatever state the system is in,
+/// so a wedged helper can never hang the IPC; the cap is only ever reached
+/// when the launch check could not run at all.
 #[cfg(target_os = "macos")]
-const LAUNCH_CHECK_CAP: Duration = Duration::from_secs(30);
+const LAUNCH_CHECK_CAP: Duration = Duration::from_secs(45);
 
 /// Settings-store key for [`FinderExtensionPreference`].
 const PREFERENCE_KEY: &str = "finder_extension_preference";
@@ -611,8 +626,9 @@ pub async fn enable_finder_extension(app: AppHandle) -> Result<FinderExtensionSt
 
         // Ask the system, rather than trusting either exit status: `-e use` can
         // report success while the elected instance is a different copy of the
-        // app (see the module docs on system election).
-        let state = read_state(&app).await;
+        // app (see the module docs on system election). Keep asking for a
+        // moment — the answer lags the verb (see `ELECTION_SETTLE`).
+        let state = settle_after_election(&app).await;
         tracing::info!(registered, elected, ?state, "attempted to enable the Finder extension");
         log_registry().await;
 
@@ -820,7 +836,10 @@ async fn launch_check(app: &AppHandle) -> Result<()> {
         }
     }
 
-    let after = read_state(app).await;
+    let after = match action {
+        LaunchAction::RegisterAndElect | LaunchAction::Reelect => settle_after_election(app).await,
+        LaunchAction::Nothing | LaunchAction::RegisterOnly => read_state(app).await,
+    };
     tracing::info!(?action, ?before, ?after, fingerprint_changed, "finder extension launch check");
     if action != LaunchAction::Nothing {
         log_registry().await;
@@ -831,6 +850,22 @@ async fn launch_check(app: &AppHandle) -> Result<()> {
         adopt_election(pool, &fingerprint).await;
     }
     Ok(())
+}
+
+/// The state after an election, re-read until it says `Enabled` or
+/// [`ELECTION_SETTLE`] passes. Returns the last reading either way — a
+/// caller adopts the fingerprint only on `Enabled`, so a slow answer costs a
+/// wait, never a wrong record.
+#[cfg(target_os = "macos")]
+async fn settle_after_election(app: &AppHandle) -> FinderExtensionState {
+    let deadline = tokio::time::Instant::now() + ELECTION_SETTLE;
+    loop {
+        let state = read_state(app).await;
+        if state == FinderExtensionState::Enabled || tokio::time::Instant::now() >= deadline {
+            return state;
+        }
+        tokio::time::sleep(ELECTION_POLL).await;
+    }
 }
 
 /// Run `pluginkit` with `args`, reporting only whether it succeeded.
@@ -1373,6 +1408,37 @@ mod tests {
         assert!(
             body.contains("register_with_the_system"),
             "launch_check must be able to register — a first run has nothing to elect otherwise"
+        );
+    }
+
+    /// Wiring pin: an election is followed by a settle, not a single read.
+    ///
+    /// `isExtensionEnabled` lags `pluginkit -e use`; a single read after the
+    /// verb can say `false` for an election that lands a moment later, which
+    /// left the fingerprint unadopted and every later launch re-electing and
+    /// nudging. Both electing paths must read through `settle_after_election`.
+    #[test]
+    fn every_election_is_followed_by_a_settle() {
+        let launch = body_of("async fn launch_check(");
+        assert!(
+            launch.contains("settle_after_election(app)"),
+            "launch_check must settle after electing; a single read can miss an election that lands late"
+        );
+        let enable = command_body("enable_finder_extension");
+        assert!(
+            enable.contains("settle_after_election(&app)"),
+            "enable_finder_extension must settle after electing; a single read can miss an election that lands late"
+        );
+        assert!(
+            !enable.contains("read_state(&app)"),
+            "enable_finder_extension reads the post-election state only through the settle"
+        );
+        // The durations only exist on macOS; the source-text pins above run
+        // everywhere.
+        #[cfg(target_os = "macos")]
+        assert!(
+            super::LAUNCH_CHECK_CAP > super::TOOL_TIMEOUT * 2 + super::DISCOVERY_WAIT + super::ELECTION_SETTLE,
+            "the launch-check cap must cover the settle, or the frontend nudges over an election in progress"
         );
     }
 
