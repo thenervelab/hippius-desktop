@@ -24,7 +24,12 @@ describe("planThumbnail", () => {
 
   it("routes a cloud-only file (no local copy) to the Rust thumbnailer", () => {
     const plan = planThumbnail(
-      file({ fileId: "deadbeef", label: "Drive", arionHash: "hash1" }),
+      file({
+        fileId: "deadbeef",
+        label: "Drive",
+        arionHash: "deadbeef",
+        arionCid: "content-digest",
+      }),
       "5Addr",
     );
     expect(plan).toEqual({
@@ -32,9 +37,26 @@ describe("planThumbnail", () => {
       accountId: "5Addr",
       label: "Drive",
       fileId: "deadbeef",
-      arionHash: "hash1",
+      arionHash: "content-digest",
       source: null,
     });
+  });
+
+  it("does not pass the path id as the thumbnail cache key", () => {
+    const plan = planThumbnail(
+      file({
+        fileId: "path-id",
+        label: "Drive",
+        arionHash: "path-id",
+        arionCid: "",
+      }),
+      "5Addr",
+    );
+    expect(plan.kind).toBe("cloud");
+    if (plan.kind === "cloud") {
+      expect(plan.arionHash).toBe("");
+      expect(plan.fileId).toBe("path-id");
+    }
   });
 
   it("treats a `pending` hit as cloud even though it carries a would-be local path", () => {

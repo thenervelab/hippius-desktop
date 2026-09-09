@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { arionContentHash, fileTrackerUrl } from "../arionContentHash";
+import {
+  arionContentHash,
+  fileTrackerUrl,
+  previewCacheContentHash,
+} from "../arionContentHash";
 
 const HEX =
   "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -29,6 +33,17 @@ describe("arionContentHash", () => {
   it("does not consult a path-id field — only arionCid", () => {
     const row = { arionCid: "", arionHash: HEX };
     expect(arionContentHash(row)).toBeNull();
+  });
+});
+
+describe("previewCacheContentHash", () => {
+  it("returns the content digest for the preview/thumbnail cache", () => {
+    expect(previewCacheContentHash({ arionCid: HEX })).toBe(HEX);
+  });
+
+  it("returns empty when missing so Rust falls back to file_id", () => {
+    expect(previewCacheContentHash({ arionCid: "" })).toBe("");
+    expect(previewCacheContentHash({ arionCid: "pending" })).toBe("");
   });
 });
 

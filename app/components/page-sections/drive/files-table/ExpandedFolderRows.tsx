@@ -86,7 +86,6 @@ export interface ExpandedFolderRowsProps {
   createTableItems: (
     file: FormattedUserFile,
     fileType: string | null,
-    arionHash: string,
     canPreview?: boolean,
     folderExpansion?: { expanded: boolean; onToggle: () => void },
     parentSubFolderPath?: string,
@@ -533,7 +532,6 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
         const actionItems = createTableItems(
           childFile,
           fileType,
-          childFile.arionHash,
           true,
           undefined,
           folderRelativePath,

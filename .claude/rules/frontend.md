@@ -71,7 +71,7 @@ Hand-rolling the pair per hook is how they drift: `useDeleteFile` refetched the 
 
 ## File Details hash
 
-`FileDetailsPanel` and every "View on Explorer" menu show the Arion **content** hash — `arionCid` on `FormattedUserFile`, which is the server's `arion_hash` (BLAKE3 of the stored file, 64 hex; older rows may still be `Qm…`/`baf…`). `arionHash` is the path id (`blake3(relative_path)` hex) used for download/folder URLs. Never display or Hipstats-link the path id as the Arion hash, and never fall back to it when `arionCid` is empty — show "Not yet synced". The shared resolver is `app/lib/utils/arionContentHash.ts`.
+`FileDetailsPanel` and every "View on Explorer" menu show the Arion **content** hash — `arionCid` on `FormattedUserFile`, which is the server's `arion_hash` (BLAKE3 of the stored file, 64 hex; older rows may still be `Qm…`/`baf…`). `arionHash` is the path id (`blake3(relative_path)` hex) used for download/folder URLs. Never display or Hipstats-link the path id as the Arion hash, and never fall back to it when `arionCid` is empty — show "Not yet synced". The shared resolver is `app/lib/utils/arionContentHash.ts`. `cache_remote_file` / `get_thumbnail` take an IPC param named `arionHash` that is the **content** cache key: pass `previewCacheContentHash(file)` (`arionCid`), never the path-id field.
 
 ## Files table: expanded folder rows and viewer scoping
 

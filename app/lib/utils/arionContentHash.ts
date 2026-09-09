@@ -21,3 +21,18 @@ export function arionContentHash(file: {
 export function fileTrackerUrl(hash: string): string {
   return `https://hipstats.com/file-tracker/${hash}`;
 }
+
+/**
+ * `arion_hash` argument for `cache_remote_file` / `get_thumbnail`.
+ *
+ * Those commands treat a non-empty value as the content-addressed cache
+ * filename so an edit cannot serve a stale decrypt. Pass the digest
+ * (`arionCid`); empty lets Rust fall back to `file_id` (the path id).
+ * Never pass `arionHash` — that field is the path id.
+ */
+export function previewCacheContentHash(file: {
+  arionCid?: string | null;
+  isFolder?: boolean;
+}): string {
+  return arionContentHash(file) ?? "";
+}

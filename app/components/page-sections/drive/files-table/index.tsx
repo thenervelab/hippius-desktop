@@ -829,7 +829,6 @@ const FilesTable: FC<FilesTableProps> = memo(
       (
         file: FormattedUserFile,
         fileType: string | null,
-        _arionHash: string,
         canPreview: boolean = true,
         folderExpansion?: { expanded: boolean; onToggle: () => void },
         // Parent path inside the sync drive when the action menu is
@@ -1331,8 +1330,7 @@ const FilesTable: FC<FilesTableProps> = memo(
               createTableItems,
             } = cellCtxRef.current;
             const file = cell.row.original;
-            const { arionHash, name } = file;
-            const resolvedHash = arionHash;
+            const { name } = file;
             const { fileFormat } = getFilePartsFromFileName(name);
             const fileType = getFileTypeFromExtension(fileFormat || null);
             const folderKey = file.isFolder ? getFolderKey(file) : "";
@@ -1347,7 +1345,6 @@ const FilesTable: FC<FilesTableProps> = memo(
             const menuItems = createTableItems(
               file,
               fileType,
-              resolvedHash,
               true,
               canExpand
                 ? {

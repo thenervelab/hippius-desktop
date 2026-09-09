@@ -165,8 +165,7 @@ fn map_search_hit_to_entry(
 
     // Same split as `list_sync_folder` / `append_browse_page`:
     // `arion_hash` is the path id, `arion_cid` is the Arion content hash
-    // (server `RemoteFileEntry.arion_hash`). Inverting them left File
-    // Details on "Not yet synced" for every search/recent hit.
+    // (server `RemoteFileEntry.arion_hash`).
     let path_hash_hex = hex::encode(hit.file.path_hash);
     Some(UserFileEntry {
         name: display_name,
