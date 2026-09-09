@@ -37,6 +37,8 @@ import { isExcludedSyncStatus } from "@/lib/utils/syncStatusDisplay";
 import DriveHeader from "./DriveHeader";
 import DriveContent from "./DriveContent";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
+import { navReclickAtom } from "@/app/components/sidebar/sideBarAtoms";
+import { shouldHandleReclick } from "@/app/components/sidebar/navReclick";
 import {
   useNestedFolderListing,
   remoteLabelFromSource,
@@ -1060,6 +1062,21 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     setActiveRemoteLabel(label);
     setIsOnLocalView(false);
   }, []);
+
+  // Clicking "Drive" in the sidebar returns to the folder list from
+  // wherever the user is — a folder, a nested subfolder, a remote drive.
+  //
+  // The Link points at the route this page already occupies, so Next does
+  // not remount it and the view state survives; without this the click
+  // did nothing at all. Reacting to the nonce rather than the pathname is
+  // the point — the pathname has not changed.
+  const navReclick = useAtomValue(navReclickAtom);
+  const lastHandledReclick = useRef(0);
+  useEffect(() => {
+    if (!shouldHandleReclick(navReclick, "/files", lastHandledReclick.current)) return;
+    lastHandledReclick.current = navReclick!.nonce;
+    handleNavigateToLocalView();
+  }, [navReclick, handleNavigateToLocalView]);
 
   // Open a folder this page was navigated to WITH — the handover from
   // Settings, where clicking a row used to land on the folder list and
