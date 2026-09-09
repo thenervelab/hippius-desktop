@@ -155,6 +155,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   that is not synced on this computer failed with a server error at the very end of
   the transfer. Files of any size now go up the same way they do for a synced
   folder, still encrypted on your machine before they leave it.
+- **You can see that a cloud upload started, and it stays in the list.** Uploading
+  into a folder that is not synced on this computer now shows a brief confirmation
+  that the upload has begun, and the files stay in the sync list until your next
+  upload instead of disappearing a few seconds after they finish.
 - **"Share with Hippius" in Finder switches itself on.** On a Mac it is turned on
   for you on the first launch and comes back by itself after a macOS or Hippius
   update, instead of asking you to turn it on. If it is ever off, Hippius asks once

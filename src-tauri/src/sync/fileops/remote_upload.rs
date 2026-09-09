@@ -53,6 +53,8 @@ use crate::sync::identity::DriveIdentity;
 #[derive(serde::Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteUploadProgress {
+    /// Which upload this row belongs to — see [`UploadBatch`].
+    pub batch_id: u64,
     /// Stable per-file key for the whole upload — the wire path, which is
     /// unique within the folder, so two files of the same name in
     /// different subfolders do not collapse into one row.
@@ -67,6 +69,32 @@ pub struct RemoteUploadProgress {
     /// not have to translate.
     pub status: String,
     pub error: Option<String>,
+}
+
+/// One user-initiated upload, and the handle its rows are emitted on.
+///
+/// The id groups every file of one pick, so the widget can tell a NEW
+/// upload from the next file of the current one and clear the previous
+/// batch exactly then. The frontend cannot derive that boundary itself: a
+/// small file can finish before the next file's first event arrives,
+/// which looks identical to a fresh upload starting.
+pub(crate) struct UploadBatch {
+    app: tauri::AppHandle,
+    id: u64,
+}
+
+impl UploadBatch {
+    pub(crate) fn new(app: tauri::AppHandle) -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        Self {
+            app,
+            id: NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        }
+    }
+
+    fn emit(&self, row: RemoteUploadProgress) {
+        let _ = self.app.emit(REMOTE_UPLOAD_PROGRESS, row);
+    }
 }
 
 /// The Ed25519 key the manifest is signed with.
@@ -134,6 +162,7 @@ fn encrypt_to_temp(source: &Path, dest: &Path, key: &[u8; 32]) -> Result<String>
 /// if its last transfer frame was dropped.
 fn transfer_progress(
     app: tauri::AppHandle,
+    batch_id: u64,
     relative_path: &str,
     file_name: &str,
     label: &str,
@@ -157,6 +186,7 @@ fn transfer_progress(
         let _ = app.emit(
             REMOTE_UPLOAD_PROGRESS,
             RemoteUploadProgress {
+                batch_id,
                 path: path.clone(),
                 file_name: file_name.clone(),
                 label: label.clone(),
@@ -334,7 +364,7 @@ pub(crate) async fn upload_to_remote_folder_with_progress(
     parent_path: &str,
     source: &Path,
     identity: &DriveIdentity,
-    app: Option<&tauri::AppHandle>,
+    batch: Option<&UploadBatch>,
 ) -> Result<()> {
     let file_name = source
         .file_name()
@@ -366,19 +396,17 @@ pub(crate) async fn upload_to_remote_folder_with_progress(
     // One emitter for every phase, so a row cannot appear with one shape
     // here and another there.
     let emit = |status: &str, sent: u64, error: Option<String>| {
-        if let Some(app) = app {
-            let _ = app.emit(
-                REMOTE_UPLOAD_PROGRESS,
-                RemoteUploadProgress {
-                    path: relative_path.clone(),
-                    file_name: file_name.clone(),
-                    label: label.to_string(),
-                    bytes_transferred: sent,
-                    total_bytes: size_bytes,
-                    status: status.to_string(),
-                    error,
-                },
-            );
+        if let Some(batch) = batch {
+            batch.emit(RemoteUploadProgress {
+                batch_id: batch.id,
+                path: relative_path.clone(),
+                file_name: file_name.clone(),
+                label: label.to_string(),
+                bytes_transferred: sent,
+                total_bytes: size_bytes,
+                status: status.to_string(),
+                error,
+            });
         }
     };
 
@@ -419,7 +447,7 @@ pub(crate) async fn upload_to_remote_folder_with_progress(
 
     // The transfer callback runs on hcfs's thread, so it gets its own
     // owned copies rather than borrowing the closure above.
-    let progress = app.map(|app| transfer_progress(app.clone(), &relative_path, &file_name, label, size_bytes));
+    let progress = batch.map(|batch| transfer_progress(batch.app.clone(), batch.id, &relative_path, &file_name, label, size_bytes));
 
     let ciphertext_size = std::fs::metadata(&ciphertext_path).map_or(0, |m| m.len());
     // Not `?`: the ciphertext still has to be cleaned up below, whichever
@@ -481,29 +509,28 @@ pub async fn upload_files_to_remote_folder(
     // next file starts. Sizes come from disk here because nothing has
     // been read yet; a file that cannot be stat'd still gets a row, since
     // a missing row is worse than an unknown size.
+    let batch = UploadBatch::new(app);
     for path in &file_paths {
         let source = std::path::Path::new(path);
         let Some(name) = source.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
-        let _ = app.emit(
-            REMOTE_UPLOAD_PROGRESS,
-            RemoteUploadProgress {
-                path: wire_relative_path(&parent, name),
-                file_name: name.to_string(),
-                label: label.clone(),
-                bytes_transferred: 0,
-                total_bytes: std::fs::metadata(source).map_or(0, |m| m.len()),
-                status: "pending".into(),
-                error: None,
-            },
-        );
+        batch.emit(RemoteUploadProgress {
+            batch_id: batch.id,
+            path: wire_relative_path(&parent, name),
+            file_name: name.to_string(),
+            label: label.clone(),
+            bytes_transferred: 0,
+            total_bytes: std::fs::metadata(source).map_or(0, |m| m.len()),
+            status: "pending".into(),
+            error: None,
+        });
     }
 
     let mut failures = Vec::new();
     for path in &file_paths {
         let source = std::path::Path::new(path);
-        let sent = upload_to_remote_folder_with_progress(state.inner(), pool, &account_id, &label, &parent, source, &identity, Some(&app)).await;
+        let sent = upload_to_remote_folder_with_progress(state.inner(), pool, &account_id, &label, &parent, source, &identity, Some(&batch)).await;
         if let Err(e) = sent {
             tracing::warn!(file = %path, error = %e, "remote upload failed");
             failures.push(RemoteUploadFailure {

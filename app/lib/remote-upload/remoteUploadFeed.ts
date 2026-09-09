@@ -4,6 +4,8 @@ import type { FileProgress, SyncSnapshot } from "@/app/lib/types/syncSnapshot";
 
 /** One in-flight remote upload, as Rust reports it. */
 export interface RemoteUploadProgress {
+  /** Which upload this row belongs to, assigned by Rust. */
+  batchId: number;
   path: string;
   fileName: string;
   label: string;
@@ -22,60 +24,29 @@ export interface RemoteUploadProgress {
  */
 export const remoteUploadsAtom = atom<Record<string, RemoteUploadProgress>>({});
 
-/** How long a finished row lingers before it is dropped, in ms. */
-export const REMOTE_UPLOAD_LINGER_MS = 4000;
-
 /**
  * Apply one progress event to the map.
  *
- * A terminal row is KEPT rather than deleted so the widget can show the
- * file finishing — deleting on completion makes a fast upload flash into
- * existence and vanish, which reads as a glitch rather than as done.
- * `pruneRemoteUploads` drops it once it has been seen.
+ * A finished batch is KEPT until the NEXT upload starts. Sweeping it on a
+ * timer emptied the widget seconds after an upload ended, so the only
+ * record that it happened was gone by the time the user looked — and the
+ * sidebar widget is easy to miss while the upload is running. Old rows
+ * cost nothing; the next batch replaces them.
+ *
+ * The boundary is Rust's `batchId`, not anything derived here. "A new
+ * path while every row has settled" looks like a new upload but is also
+ * what a small file finishing before the next file's first event looks
+ * like, and treating that as a boundary empties the queue behind the
+ * user mid-batch.
  */
 export function applyRemoteUpload(
   current: Record<string, RemoteUploadProgress>,
   event: RemoteUploadProgress,
-  now = Date.now(),
 ): Record<string, RemoteUploadProgress> {
-  return {
-    ...current,
-    [event.path]: {
-      ...event,
-      ...(event.status === "completed" || event.status === "error"
-        ? { finishedAt: now }
-        : {}),
-    } as RemoteUploadProgress,
-  };
-}
-
-/** True while any row in the batch has not reached a terminal state. */
-function batchStillRunning(rows: RemoteUploadProgress[]): boolean {
-  return rows.some((r) => r.status !== "completed" && r.status !== "error");
-}
-
-/**
- * Drop the batch once ALL of it has settled and the linger has passed.
- *
- * Pruning each row as it finished emptied the queue behind the user: with
- * files uploaded one after another, the finished row vanished while the
- * next was still going, so the widget showed a single row being replaced
- * over and over instead of a batch making progress. A queue is only
- * finished when nothing in it is still moving.
- */
-export function pruneRemoteUploads(
-  current: Record<string, RemoteUploadProgress>,
-  now = Date.now(),
-): Record<string, RemoteUploadProgress> {
-  const rows = Object.values(current);
-  if (rows.length === 0) return current;
-  if (batchStillRunning(rows)) return current;
-
-  const lastFinish = rows.reduce((latest, row) => {
-    const at = (row as RemoteUploadProgress & { finishedAt?: number }).finishedAt ?? 0;
-    return Math.max(latest, at);
-  }, 0);
-  return now - lastFinish > REMOTE_UPLOAD_LINGER_MS ? {} : current;
+  const startsNewBatch = Object.values(current).some(
+    (r) => r.batchId !== event.batchId,
+  );
+  return { ...(startsNewBatch ? {} : current), [event.path]: event };
 }
 
 /**
