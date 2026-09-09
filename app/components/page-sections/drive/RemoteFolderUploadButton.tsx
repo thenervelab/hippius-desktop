@@ -14,7 +14,7 @@ import { insufficientCreditsDialogOpenAtom } from "./atoms/query-atoms";
 import { uploadFolderToRemoteFolder } from "@/app/lib/tauri/remoteUpload";
 import {
   reportRemoteUploadOutcomeForFolder,
-  reportRemoteUploadStarted,
+  reportRemoteFolderUploadStarted,
 } from "@/app/lib/remote-upload/reportOutcome";
 import { UPLOAD_FOLDER_LABEL, UPLOAD_FOLDER_HINT } from "./uploadActions";
 
@@ -51,7 +51,7 @@ const RemoteFolderUploadButton: React.FC<{
     // The file count is not known until Rust has walked the tree, so the
     // start notice speaks of the folder rather than promising a number
     // that would be wrong.
-    reportRemoteUploadStarted(1);
+    reportRemoteFolderUploadStarted();
     try {
       const failures = await uploadFolderToRemoteFolder(
         polkadotAddress,

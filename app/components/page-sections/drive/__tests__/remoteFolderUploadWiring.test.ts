@@ -50,3 +50,25 @@ describe("uploading a folder into a drive that is not synced here", () => {
     expect(button).toContain("STORAGE_LIMIT_REACHED");
   });
 });
+
+describe("the folder upload announces a folder", () => {
+  // Passing the file version a count of one announced "Your file is being
+  // uploaded" for a folder of any size. The count cannot be known up front
+  // — Rust only walks the tree once the upload starts.
+  const surfaces = [
+    ["the in-folder button", "../RemoteFolderUploadButton.tsx"],
+    ["the upload dialog", "../FolderUploadDialog.tsx"],
+  ] as const;
+
+  it.each(surfaces)("%s uses the folder wording", (_name, path) => {
+    const src = readCode(path);
+    expect(src).toContain("reportRemoteFolderUploadStarted");
+    expect(src).not.toMatch(/reportRemoteUploadStarted\s*\(/);
+  });
+
+  it("the folder notice never says file", () => {
+    const copy = readCode("../../../../lib/remote-upload/reportOutcome.ts");
+    const started = copy.slice(copy.indexOf("reportRemoteFolderUploadStarted"));
+    expect(started).toMatch(/Your folder is being uploaded/);
+  });
+});

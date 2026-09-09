@@ -25,7 +25,7 @@ import { GET_USER_IPFS_FILES_QUERY_KEY } from "@/app/lib/hooks/use-user-files";
 import SyncFolderSelect from "@/components/ui/SyncFolderSelect";
 import { uploadFolderToRemoteFolder } from "@/app/lib/tauri/remoteUpload";
 import {
-  reportRemoteUploadStarted,
+  reportRemoteFolderUploadStarted,
   reportRemoteUploadOutcomeForFolder,
 } from "@/app/lib/remote-upload/reportOutcome";
 import { hasConfiguredDrivesAtom } from "@/app/lib/global-atoms/unpinAtoms";
@@ -223,7 +223,7 @@ export default function FolderUploadDialog({
       if (selectedIsRemote && selectedFolderLabel) {
         // Straight to the server. Rust owns the walk and the wire paths;
         // the widget shows the batch the same way an in-folder upload does.
-        reportRemoteUploadStarted(1);
+        reportRemoteFolderUploadStarted();
         const failures = await uploadFolderToRemoteFolder(
           polkadotAddress || "",
           selectedFolderLabel,

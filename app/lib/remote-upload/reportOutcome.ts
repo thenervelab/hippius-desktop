@@ -8,14 +8,31 @@ export const REMOTE_UPLOAD_TOAST_ID = "remote-upload-started";
 /** How long the "upload started" notice stays up, in ms. */
 export const REMOTE_UPLOAD_TOAST_MS = 4000;
 
-/** Tell the user an upload into a non-synced folder has begun. */
+/** Tell the user a FILE upload into a non-synced folder has begun. */
 export function reportRemoteUploadStarted(fileCount: number): void {
-  toast.info(
+  announceUploadStarted(
     fileCount === 1
       ? "Your file is being uploaded"
       : "Your files are being uploaded",
-    { id: REMOTE_UPLOAD_TOAST_ID, duration: REMOTE_UPLOAD_TOAST_MS },
   );
+}
+
+/**
+ * Tell the user a FOLDER upload into a non-synced folder has begun.
+ *
+ * Its own wording rather than the file version with a count of one: the
+ * file count is not known until Rust has walked the tree, so passing 1
+ * announced "Your file is being uploaded" for a folder of any size.
+ */
+export function reportRemoteFolderUploadStarted(): void {
+  announceUploadStarted("Your folder is being uploaded");
+}
+
+function announceUploadStarted(message: string): void {
+  toast.info(message, {
+    id: REMOTE_UPLOAD_TOAST_ID,
+    duration: REMOTE_UPLOAD_TOAST_MS,
+  });
 }
 
 /**
