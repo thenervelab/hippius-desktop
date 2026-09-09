@@ -7,8 +7,10 @@ import { useStorageOverview } from "@/app/lib/hooks/api/useStorageOverview";
 import { nextSkeletonState } from "@/lib/utils/skeletonGate";
 import { cn } from "@/app/lib/utils";
 import {
+  formatPercentLabel,
   getPlanView,
   getUsageTone,
+  getUsedBytesDisplay,
   shouldShowUsageBar,
   type UsageTone,
 } from "@/app/components/page-sections/home/storage-overview/storageOverviewState";
@@ -27,6 +29,13 @@ const BAR_TONE: Record<UsageTone, string> = {
   critical: "bg-error-50 dark:bg-error-50",
 };
 
+/** Percent-label colour per tone, matching the bar it annotates. */
+const PERCENT_TONE: Record<UsageTone, string> = {
+  ok: "text-primary-50 dark:text-primary-brand-dark",
+  warn: "text-warning-40 dark:text-warning-50",
+  critical: "text-error-40 dark:text-error-50",
+};
+
 /**
  * The top-header plan/credits chip, shared by every page header that shows
  * the "Active Plan" cell (home `PageHeader`, the global `ui/page-header`
@@ -34,20 +43,22 @@ const BAR_TONE: Record<UsageTone, string> = {
  *
  * Renders from the SAME `get_storage_overview` fetch as the home cards, so
  * the plan-vs-free-tier decision (made once, in Rust) is identical on every
- * surface:
+ * surface. Three lines, in the order the question is asked — which plan,
+ * how full, and by how much:
  *
- *   - subscription → heading "Active Plan", value "≈ 1 TB  (12$/mo.)"
- *   - no plan      → heading "Free Plan",   value "≈ 10.00 GB  included"
- *   - unknown      → heading "Active Plan", value "No active plan"
+ *   ● FREE PLAN
+ *   ▓▓▓▓▓░░░░░░░░░░░░░░░
+ *   2.82 GB of 10.00 GB used                                          28%
  *
- * The heading itself waits for the decision: a skeleton holds BOTH lines
- * until the query settles, so the chip never flashes "No active plan" (or
- * the wrong heading) while loading.
+ * The free tier used to state its allowance alone ("≈ 10.00 GB included"),
+ * which names the size of the box without saying how much room is left —
+ * the one thing the header is there to answer, and the thing that decides
+ * whether the Upgrade button beside it matters.
  *
- * A slim usage bar sits under the value on both the plan and free-tier
- * branches. The words alone ("2.82 GB of 10.00 GB used") make the reader
- * do the arithmetic to find out whether that is comfortable or nearly
- * full, which is the one thing the header is there to answer.
+ * The heading waits for the decision: a skeleton holds BOTH lines until
+ * the query settles, so the chip never flashes "No active plan" (or the
+ * wrong heading) while loading. The error branch keeps its single line —
+ * with no number to draw, a bar there would read as "nothing used".
  */
 const PlanChip: React.FC<{ className?: string }> = ({ className }) => {
   const {
@@ -71,8 +82,29 @@ const PlanChip: React.FC<{ className?: string }> = ({ className }) => {
   const tone = getUsageTone(percent);
   const showUsageBar = shouldShowUsageBar(planView);
 
+  // "Updating…" rather than a byte count while the indexer catches up:
+  // the pending flag comes from Rust and is never inferred from a zero,
+  // which is also the genuinely-empty state.
+  const used = overview
+    ? getUsedBytesDisplay(overview.usedPending, overview.usedBytes)
+    : null;
+  const usedLabel = used?.kind === "pending" ? "Updating…" : (overview?.usedDisplay ?? "");
+  // A plan quotes its own allowance; the free tier quotes the effective
+  // total. Both come from Rust already formatted (H-109) so the chip and
+  // the storage card cannot round the same number differently.
+  const capacityLabel =
+    planView === "plan" && plan ? plan.storageDisplay : (overview?.totalDisplay ?? "");
+
   return (
-    <div className={cn("flex flex-col items-start justify-center gap-0.5", className)}>
+    <div
+      className={cn(
+        // A floor, not a fixed width: the bar needs a length to be worth
+        // reading, and the two lines around it are short enough that the
+        // chip would otherwise collapse to the width of "Free Plan".
+        "flex min-w-[188px] flex-col items-stretch justify-center gap-1",
+        className,
+      )}
+    >
       <div className="flex items-center gap-1">
         <span className="inline-flex size-4 shrink-0 items-center justify-center rounded-full bg-primary-40/20">
           <span className="size-[6.15px] rounded-full bg-primary-40" />
@@ -88,50 +120,55 @@ const PlanChip: React.FC<{ className?: string }> = ({ className }) => {
           </span>
         )}
       </div>
+
       {planView === "skeleton" ? (
         <span
-          className="h-[18px] w-[112px] rounded bg-grey-light-700 dark:bg-grey-dark-200 animate-pulse"
+          className="h-[18px] w-[132px] rounded bg-grey-light-700 dark:bg-grey-dark-200 animate-pulse"
           aria-hidden="true"
         />
-      ) : planView === "plan" && plan ? (
-        /* On a plan, what matters is how much of it is left — the price is
-           already known to someone who chose it, and the free tier's line
-           below sells the allowance instead. */
-        <p className="whitespace-pre text-[12px] font-bold leading-[18px] tracking-[-0.36px] text-primary-50 dark:text-primary-brand-dark">
-          {overview?.usedDisplay ?? ""}
-          <span className="text-[12px] font-medium text-black-700 dark:text-white">
-            {"  "}of {plan.storageDisplay} used
-          </span>
-        </p>
-      ) : planView === "free" ? (
-        <p className="whitespace-pre text-[12px] font-bold leading-[18px] tracking-[-0.36px] text-primary-50 dark:text-primary-brand-dark">
-          ≈ {overview?.totalDisplay ?? ""}
-          <span className="text-[12px] font-medium text-black-700 dark:text-white">
-            {"  "}included
-          </span>
-        </p>
+      ) : showUsageBar ? (
+        <>
+          <div
+            role="progressbar"
+            aria-valuenow={Math.round(percent)}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-label="Storage used"
+            className="h-[4px] w-full overflow-hidden rounded-full bg-grey-light-700 dark:bg-grey-dark-200"
+          >
+            <div
+              className={cn("h-full rounded-full transition-[width] duration-500", BAR_TONE[tone])}
+              style={{ width: `${Math.min(Math.max(percent, 0), 100)}%` }}
+            />
+          </div>
+
+          {/* The numbers under the bar, the way the home storage card
+              states them. The free tier used to read "≈ 10.00 GB
+              included", which names the allowance and says nothing about
+              how much of it is left — the question the header exists to
+              answer, and the one that decides whether Upgrade matters. */}
+          <div className="flex items-baseline justify-between gap-2">
+            <p className="whitespace-pre text-[12px] leading-[18px] tracking-[-0.24px] text-black-700 dark:text-white">
+              <span className="font-bold tracking-[-0.36px] text-primary-50 dark:text-primary-brand-dark">
+                {usedLabel}
+              </span>
+              {" of "}
+              {capacityLabel} used
+            </p>
+            <span
+              className={cn(
+                "shrink-0 font-mono text-[12px] font-medium leading-[18px] tracking-[-0.24px]",
+                PERCENT_TONE[tone],
+              )}
+            >
+              {formatPercentLabel(percent)}
+            </span>
+          </div>
+        </>
       ) : (
         <p className="text-[12px] font-medium leading-[18px] tracking-[-0.24px] text-black-700 dark:text-grey-dark-500">
           No active plan
         </p>
-      )}
-      {showUsageBar && (
-        <div
-          role="progressbar"
-          aria-valuenow={Math.round(percent)}
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-label="Storage used"
-          /* self-stretch, so the bar is exactly as wide as the longest
-             line above it rather than needing a width nobody can keep in
-             step with the copy. */
-          className="mt-1 h-[4px] w-full self-stretch overflow-hidden rounded-full bg-grey-light-700 dark:bg-grey-dark-200"
-        >
-          <div
-            className={cn("h-full rounded-full transition-[width] duration-500", BAR_TONE[tone])}
-            style={{ width: `${Math.min(Math.max(percent, 0), 100)}%` }}
-          />
-        </div>
       )}
     </div>
   );

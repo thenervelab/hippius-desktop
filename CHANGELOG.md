@@ -149,9 +149,13 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   the folders you sync from this computer, and why your unlock password is needed to
   open them.
 - **Drive now shows your plan and how full it is.** The Drive page header carries
-  the same plan card as the home page — which plan you are on, how much of it you
-  have used, and an Upgrade or Top up Credits button when you need one — in place
-  of the old Subscription Plans button. It stays with you inside every folder.
+  the same plan card as the home page — which plan you are on, a bar showing how
+  much of it you have used with the figures and percentage below it, and an
+  Upgrade or Top up Credits button when you need one — in place of the old
+  Subscription Plans button. It stays with you inside every folder.
+- **The plan in the page header says how much storage is left.** On the free plan
+  it showed only the size of the allowance; every header now states what you have
+  used out of it, and what percentage that is.
 
 ### Fixed
 

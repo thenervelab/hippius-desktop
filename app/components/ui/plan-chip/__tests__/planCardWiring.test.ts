@@ -6,6 +6,18 @@ import { fileURLToPath } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url));
 const read = (rel: string) => readFileSync(join(here, rel), "utf8");
 
+/**
+ * Source with comments stripped.
+ *
+ * These pins are about what the component RENDERS. A doc comment that
+ * quotes the old copy to explain why it changed would otherwise fail the
+ * very assertion documenting it.
+ */
+const readCode = (rel: string) =>
+  read(rel)
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "");
+
 describe("the Drive header shows the plan card, not a standing plans button", () => {
   const drivePage = read("../../../../(pages)/files/page.tsx");
 
@@ -25,7 +37,7 @@ describe("the Drive header shows the plan card, not a standing plans button", ()
 });
 
 describe("the header card and the storage card share one usage scale", () => {
-  const chip = read("../index.tsx");
+  const chip = readCode("../index.tsx");
 
   // A second copy of the thresholds is how the bar and the Upgrade prompt
   // come to disagree about the same account.
@@ -33,10 +45,34 @@ describe("the header card and the storage card share one usage scale", () => {
     expect(chip).toContain("getUsageTone");
     expect(chip).not.toMatch(/>=\s*(80|95)\b/);
   });
+
+  // H-109: the byte counts are formatted in Rust so every surface quotes
+  // the same rounding. Re-formatting them here is how "2.82 GB" on one
+  // card becomes "2.8 GB" on another.
+  it("renders Rust's byte labels rather than formatting counts itself", () => {
+    expect(chip).not.toMatch(/\bformatBytes\b/);
+    expect(chip).toContain("usedDisplay");
+    expect(chip).toContain("totalDisplay");
+    expect(chip).toContain("storageDisplay");
+  });
+
+  // A free-tier account saw only the size of its allowance, which says
+  // nothing about whether the Upgrade button beside it matters.
+  it("states usage on the free tier too, not just the allowance", () => {
+    expect(chip).not.toMatch(/included/);
+    expect(chip).toContain("formatPercentLabel");
+  });
+
+  // usedPending is Rust's flag; inferring it from a zero would report a
+  // genuinely-empty drive as perpetually updating.
+  it("says Updating rather than a count while the indexer catches up", () => {
+    expect(chip).toContain("getUsedBytesDisplay");
+    expect(chip).toMatch(/Updating/);
+  });
 });
 
 describe("PlanSummaryCard", () => {
-  const card = read("../PlanSummaryCard.tsx");
+  const card = readCode("../PlanSummaryCard.tsx");
 
   // Rust decides what an account needs; the card must not re-derive it
   // from the plan or the percentage.
