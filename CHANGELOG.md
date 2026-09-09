@@ -17,6 +17,17 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
+- **File Details now shows the file's Arion hash** (the BLAKE3 content digest)
+  so you can copy it or open it on the file tracker.
+- **Finder shows how each file in your Hippius folders is doing.** Files and
+  folders carry a badge in Finder: synced, syncing, shared by link, or failed.
+- **Hippius tells you when a folder lives inside Google Drive, Dropbox, OneDrive
+  or iCloud Drive, or on Desktop, Documents, Downloads or Applications.** Those
+  folders still sync. Finder badges and "Share with Hippius" cannot appear
+  inside another provider's folder, and syncing waits for that provider to
+  download each file. Finder may also skip badges on Desktop, Documents,
+  Downloads and Applications. The folder row and the add-folder dialog now
+  say so.
 - **Choose a storage plan without leaving Hippius.** A new Subscription Plans page
   under Account lists every plan with what it includes, shows the one you are on,
   and lets you subscribe, upgrade, downgrade or cancel. Pay from your credits, or
@@ -58,6 +69,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **Finder badges on your files are easier to see.** They fill the badge well
+  instead of sitting small inside it.
 - **Your storage is now measured against your plan.** The home page shows how much
   of your plan's storage you have used, and names the plan you are on — including
   the free plan, which every account has. It previously showed how much storage
@@ -71,6 +84,67 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   and one line underneath explains whichever you have picked. If your balance will
   not cover the plan you can still open the credits option, so you can see how far
   short you are and top up from there.
+- **Every upgrade and top-up prompt now goes to the same place**, the Billing page
+  in Settings. The separate Subscription Plans page is gone — it showed a subset of
+  what Billing shows, so the two prompts used to lead to two different screens.
+- **Billing and plans are one place instead of two.** "Subscription Plans" and
+  "Billing" were separate sidebar entries for the same subject. Your Drive plans
+  now live inside Billing, and Billing has moved into Settings.
+- **The folder path now starts at "Drive"** wherever the folder is synced, instead
+  of "Local" or "Remote". Clicking it returns you to the full folder list.
+- **Getting back out of a folder is obvious now.** There is a back button next to
+  the folder path, and the path itself is easier to read. Before, the faint trail
+  of folder names was the only way out.
+- **You can upload straight from the folder list**, without opening a folder first.
+- **You can sign in with Apple.** The button was there but permanently greyed out;
+  it works now.
+- **Uploads into a folder you are browsing show in the sync queue**, alongside
+  everything else being synced, instead of a message that sat on screen for the
+  whole upload.
+- **The share button is back on files you are only browsing.** Opening a file from
+  a drive that is not synced on this computer showed no share option; it does now,
+  and the link works the same way.
+- **Folders expand inside drives that are not synced on this computer.** The arrow
+  next to a folder did nothing there; it now opens the folder in place, the same as
+  it does for folders synced here.
+- **Search works inside folders that are not synced on this computer.** It now
+  searches the whole drive, including subfolders you have not opened, the way it
+  already did for folders synced here.
+- **You can create folders in drives that are not synced on this computer.**
+- **You can now upload into folders that are not synced on this computer.** Open a
+  folder you are only browsing and add files to it directly; they go straight to
+  your Drive without downloading the folder first.
+- **You can rename files in folders that are not synced on this computer**, from the
+  same menu as anywhere else, without downloading the folder first.
+- **Clicking a folder in Settings opens that folder**, instead of dropping you on
+  the Drive page to find it again.
+- **All your folders are in one list.** The Drive page split them across three
+  headings — folders on this computer, folders from other devices, and folders
+  synced nowhere. They are now a single list, each row showing where that folder
+  actually is: a cloud mark for the ones not on this machine, and a line naming
+  the device that has it.
+- **Drive always opens on your full folder list.** It used to reopen wherever you
+  last were, which left no reliable way back to the top — clicking Drive in the
+  sidebar returned you to a folder rather than the list. This replaces the
+  "reopens where you left off" behaviour added in 0.6.0.
+- **The button in the top corner now offers what your account actually needs.**
+  On the free plan it offers to upgrade instead of topping up credits, which buy
+  no Drive storage. On a plan it shows how much of your storage you have used, and
+  offers an upgrade once you pass 80% — or a top-up only when your credits will not
+  cover the next renewal. A healthy plan is not sold anything. The same cell now
+  behaves this way on the Drive page as well as the overview.
+- **Billing no longer mixes in plans for a different product.** The credit-reload
+  packages and the billing history table have been taken off the page, so it shows
+  the plan that governs your Drive storage and the credits that pay for it.
+- **"Confidential Computing" is gone from the sidebar.** The entry held only
+  Virtual Machines, which is not available yet, so it advertised a section that
+  led nowhere.
+- **The upload buttons say what they do.** "+ New Folder" and "+ Add Files" are now
+  "Upload Folder" and "Upload File", worded the same way everywhere they appear.
+  The old wording suggested you could create a folder in the app, which was never
+  possible — both buttons send something that already exists on your computer.
+- **Setting up a folder to sync reads differently from uploading one**, so the two
+  are no longer easy to confuse.
 - **Shared drives are hidden until they launch.** Sharing a drive with someone and
   the "Shared with me" list are not available in this release, matching what the
   plan cards say. Drives already set up keep syncing as normal.
@@ -87,9 +161,44 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - The information tooltip on the Files page now explains what the page actually holds:
   the folders you sync from this computer, and why your unlock password is needed to
   open them.
+- **Drive now shows your plan and how full it is.** The Drive page header carries
+  the same plan card as the home page — which plan you are on, a bar showing how
+  much of it you have used with the figures and percentage below it, and an
+  Upgrade or Top up Credits button when you need one — in place of the old
+  Subscription Plans button. It stays with you inside every folder.
+- **The plan in the page header says how much storage is left.** On the free plan
+  it showed only the size of the allowance; the header now states what you have
+  used out of it, and what percentage that is. A subscribed account is headed by
+  its plan's name rather than a generic "Active Plan".
+- **You are told before a plan fails to renew.** When your credits will not cover
+  the next cycle, the page header and the billing page say so and count down to the
+  renewal date, and a single notification is raised in the ten days before it —
+  once per billing cycle, not once a day.
+- **A drive with no folders yet explains what to do.** The folder list showed an
+  empty panel; it now says the list is empty and offers to sync your first folder,
+  on both the Drive page and in Settings.
+- **The home page no longer repeats your plan in the header.** The Storage and Plan
+  cards below it already say all of that, with the room to say it properly.
+- **The plan card no longer quotes your monthly price back at you.** It shows the
+  plan and its storage; billing detail is behind Manage.
+- **A plan with room left ends cleanly.** The page header no longer leaves an empty
+  gap where an Upgrade button would have been.
 
 ### Fixed
 
+- **Large files upload to a cloud folder again.** Uploading a big file into a folder
+  that is not synced on this computer failed with a server error at the very end of
+  the transfer. Files of any size now go up the same way they do for a synced
+  folder, still encrypted on your machine before they leave it.
+- **You can see that a cloud upload started, and it stays in the list.** Uploading
+  into a folder that is not synced on this computer now shows a brief confirmation
+  that the upload has begun, and the files stay in the sync list until your next
+  upload instead of disappearing a few seconds after they finish.
+- **A folder added from Settings gets Finder badges right away**, not after
+  the next launch, and a removed folder stops showing them.
+- **The "Turn on the Hippius Finder extension" notice no longer comes back after
+  you enable it and relaunch.** The app now waits for macOS to confirm the
+  switch before recording that it is on.
 - **"Share with Hippius" in Finder switches itself on.** On a Mac it is turned on
   for you on the first launch and comes back by itself after a macOS or Hippius
   update, instead of asking you to turn it on. If it is ever off, Hippius asks once

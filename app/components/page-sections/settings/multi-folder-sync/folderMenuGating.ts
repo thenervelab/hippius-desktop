@@ -1,6 +1,6 @@
 // Pure own-vs-member gating for the folder row menus (the 3-dot
 // TableActionMenu and the right-click FolderCardContextMenu in
-// LocalFoldersSection). One resolver feeds both menus so they cannot
+// the shared FolderList). One resolver feeds both menus so they cannot
 // diverge — the sidebar-nav `filterNavSections` / `settingsNavGating`
 // convention. Unit-tested in `__tests__/folderMenuGating.test.ts`.
 
@@ -65,7 +65,7 @@ export function isMemberDrive(folder: Pick<SyncFolder, "ownerSs58">): boolean {
  * flag and both parent surfaces wire `onLeaveDrive` unconditionally.
  *
  * The flag gates only the OPT-IN surface: "Share drive…" (and, in
- * LocalFoldersSection, the cosmetic owner badge) stays hidden until the
+ * the folder list, the cosmetic owner badge) stays hidden until the
  * feature ships, since minting invites against a feature-off server is a
  * dead control.
  */

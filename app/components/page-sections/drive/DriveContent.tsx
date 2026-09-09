@@ -265,7 +265,7 @@ const DriveContent: FC<DriveContentProps> = ({
             if (files.length > 0) {
               if (folders.length > 0) {
                 toast.info(
-                  'Folders were skipped. Use "+ New Folder" to upload a folder.',
+                  'Folders were skipped. Use "Upload Folder" to upload a folder.',
                 );
               }
               addButtonRef.current.openWithPaths(files);

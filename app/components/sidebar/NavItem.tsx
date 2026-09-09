@@ -4,7 +4,8 @@ import cn from "@/app/lib/utils/cn";
 import { RevealTextLine } from "@/components/ui";
 import { ChevronDown } from "lucide-react";
 import { SubMenuItemData } from "./NavData";
-import { activeSubMenuItemAtom, sidebarCollapsedAtom } from "./sideBarAtoms";
+import { activeSubMenuItemAtom, sidebarCollapsedAtom, navReclickAtom } from "./sideBarAtoms";
+import { nextReclick } from "./navReclick";
 import { usePathname } from "next/navigation";
 
 import { useState, useEffect, useMemo, useRef } from "react";
@@ -41,6 +42,7 @@ const NavItem: React.FC<NavItemProps> = ({
   const hasSubMenu = subMenuItems.length > 0;
   const setActiveSubMenuItem = useSetAtom(activeSubMenuItemAtom);
   const setSidebarCollapsed = useSetAtom(sidebarCollapsedAtom);
+  const setNavReclick = useSetAtom(navReclickAtom);
   const pathname = usePathname();
   const pendingClearRef = useRef<string | null>(null);
 
@@ -272,7 +274,11 @@ const NavItem: React.FC<NavItemProps> = ({
       onClick={() => {
         if (pathname !== href) {
           pendingClearRef.current = href;
+          return;
         }
+        // Already here. The Link will not remount the page, so announce
+        // the click for any page that holds its own view state.
+        setNavReclick((prev) => nextReclick(prev, href));
       }}
     >
       {itemContent}

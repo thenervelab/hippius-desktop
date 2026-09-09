@@ -42,6 +42,18 @@ The widget's header numbers and its file/upload lists must agree. Invariants:
 
 All four are unit-tested (`syncStatusDialogLogic.test.ts`, `mergeUploadFeed.test.ts`, `useFileLiveProgress.test.ts`, `relPath.test.ts`).
 
+## Remote uploads join the same queue
+
+An upload into a folder this device does not sync never reaches the sync engine, so it produces no `sync_progress_snapshot` and would otherwise be visible only as a toast — one that sits there for the length of a large upload, covering the thing the user is watching.
+
+Rust emits `remote_upload_progress` (`events::REMOTE_UPLOAD_PROGRESS`) per file, and `SyncStatusHandler` folds those rows into the snapshot it hands `SyncStatusDialog` (`app/lib/remote-upload/`). The merge is additive and pure (`mergeRemoteUploads`, unit-tested): engine rows are kept, remote rows appended, and counts/bytes/percent extended.
+
+- **Not a write into the engine's snapshot.** That snapshot is rebuilt wholesale on every emit, so a row written into it is erased by the engine's next tick.
+- **`widgetVisible` is forced true when any remote row exists**, or the rows would render inside a widget that never opens — indistinguishable from not tracking the upload at all.
+- **The transfer callback is throttled to 250ms per file** (`PROGRESS_EMIT_INTERVAL`), matching the engine's snapshot throttle. hcfs calls it per chunk; unthrottled, one large file is the per-item flood `sync-engine.md` forbids. Terminal states (`completed` / `error`) are emitted separately and unthrottled, so a row always settles even when its last transfer frame was dropped.
+- **Percent is clamped.** hcfs reports CIPHERTEXT bytes, which exceed the plaintext total; a bar past 100% reads as a bug.
+- **A finished row lingers** (`REMOTE_UPLOAD_LINGER_MS`) before being pruned — deleting on completion makes a fast upload flash and vanish, which reads as a glitch rather than as done.
+
 ## Collapsed / minimized form
 
 The widget has a compact circular form (`app/(pages)/SyncStatusMini.tsx` — a percentage progress ring) shown _instead of_ hiding it, in two cases: the **sidebar is collapsed** (the narrow rail can't fit the full 239px card), and the user clicked the widget's **✕ icon**.

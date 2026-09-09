@@ -7,3 +7,5 @@ pub mod files;
 pub mod folders;
 pub mod recent_uploads;
 pub mod remote;
+pub mod remote_rename;
+pub mod remote_upload;

@@ -1133,3 +1133,100 @@ async fn create_credit_notifications_handles_chunk_boundaries() {
     assert_eq!(inserted, 250);
     assert_eq!(count_credits_for(&pool, carol).await, 250);
 }
+
+// ── Renewal credits warning ───────────────────────────────────────────
+//
+// The user's requirement was "only one time". Keyed on days REMAINING the
+// warning would fire on each of the ten days before the charge; keyed on
+// nothing at all, an account warned this month would never be warned
+// again. It is keyed on the renewal day itself, so "once" means once per
+// billing cycle — which is what these pin.
+
+use tauri_project_lib::notifications::credits::ensure_renewal_credits_notification;
+
+#[tokio::test]
+async fn the_renewal_warning_is_raised_once_per_cycle() {
+    let pool = setup_db().await;
+    let alice = "alice-addr";
+    let renewal_day = 20_400_i64;
+
+    // The overview is polled repeatedly; every poll inside the window
+    // calls this.
+    for _ in 0..5 {
+        ensure_renewal_credits_notification(&pool, alice, renewal_day).await.unwrap();
+    }
+
+    let (count,) = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM notifications WHERE user_address = ? AND notification_subtype = ?")
+        .bind(alice)
+        .bind(format!("RenewalCreditsLow-{renewal_day}"))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 1, "one warning per renewal, however often it is polled");
+}
+
+#[tokio::test]
+async fn the_next_billing_cycle_warns_again() {
+    let pool = setup_db().await;
+    let alice = "alice-addr";
+
+    ensure_renewal_credits_notification(&pool, alice, 20_400).await.unwrap();
+    ensure_renewal_credits_notification(&pool, alice, 20_430).await.unwrap();
+
+    let (count,) = sqlx::query_as::<_, (i64,)>(
+        "SELECT COUNT(*) FROM notifications \
+         WHERE user_address = ? AND notification_subtype LIKE 'RenewalCreditsLow-%'",
+    )
+    .bind(alice)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(count, 2, "a new cycle is a new warning, not a silenced one");
+}
+
+/// A dismissed warning stays dismissed: the dedup deliberately ignores
+/// `is_deleted`, or the next poll would resurrect a notification the user
+/// has already read and cleared.
+#[tokio::test]
+async fn a_dismissed_renewal_warning_is_not_raised_again() {
+    let pool = setup_db().await;
+    let alice = "alice-addr";
+    let renewal_day = 20_400_i64;
+
+    ensure_renewal_credits_notification(&pool, alice, renewal_day).await.unwrap();
+    sqlx::query("UPDATE notifications SET is_deleted = 1 WHERE user_address = ?")
+        .bind(alice)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    ensure_renewal_credits_notification(&pool, alice, renewal_day).await.unwrap();
+
+    let (count,) = sqlx::query_as::<_, (i64,)>(
+        "SELECT COUNT(*) FROM notifications \
+         WHERE user_address = ? AND notification_subtype LIKE 'RenewalCreditsLow-%'",
+    )
+    .bind(alice)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(count, 1, "dismissing must not make it come back");
+}
+
+/// One account's warning must not silence another's — the dedup is
+/// user-scoped for the same reason `process_credit_events`' is.
+#[tokio::test]
+async fn the_renewal_warning_is_scoped_to_one_account() {
+    let pool = setup_db().await;
+    let renewal_day = 20_400_i64;
+
+    ensure_renewal_credits_notification(&pool, "alice-addr", renewal_day).await.unwrap();
+    ensure_renewal_credits_notification(&pool, "bob-addr", renewal_day).await.unwrap();
+
+    let (count,) = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM notifications WHERE notification_subtype = ?")
+        .bind(format!("RenewalCreditsLow-{renewal_day}"))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 2);
+}

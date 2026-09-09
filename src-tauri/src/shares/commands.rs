@@ -15,6 +15,7 @@ use crate::app_state::AppState;
 use crate::auth::account_key::account_key;
 use crate::billing::eligibility::{InsufficientCreditsAction, require_eligible};
 use crate::error::{AppError, Result};
+use crate::finder_bridge::protocol::BadgeState;
 use crate::release_channel::ReleaseChannel;
 use crate::shares::SqliteShareKeystore;
 use crate::shares::capabilities::fetch_capabilities;
@@ -510,6 +511,7 @@ async fn create_share_inner(
             "Failed to record share_origin (share itself succeeded)"
         );
     }
+    crate::finder_bridge::badges::push_from_state(state, folder_label, relative_path, BadgeState::Shared);
 
     Ok(ShareLink {
         share_token: result.share_token,
@@ -827,6 +829,7 @@ async fn mint_remote_share_at(
             "Failed to record share_origin (share itself succeeded)"
         );
     }
+    crate::finder_bridge::badges::push_from_state(state, folder_label, relative_path, BadgeState::Shared);
 
     Ok(ShareLink {
         share_token: result.share_token,
@@ -996,6 +999,16 @@ pub async fn create_folder_share_inner(
             warn!(error = %e, "create_folder_share failed");
             map_folder_share_error(e)
         })?;
+
+    let owner = account_key(account_id);
+    if let Err(e) = origin::record_folder(pool, &result.share_token, &owner, folder_label, path_prefix).await {
+        warn!(
+            share_token = %result.share_token,
+            error = %e,
+            "Failed to record folder_share_origin (share itself succeeded)"
+        );
+    }
+    crate::finder_bridge::badges::push_from_state(state, folder_label, path_prefix, BadgeState::Shared);
 
     Ok(ShareLink {
         share_token: result.share_token,
@@ -1193,8 +1206,13 @@ pub async fn revoke_folder_share_inner(state: &AppState, account_id: &str, share
     let pool = state.pool()?;
     let client = build_account_client(pool, account_id).await?;
     let keystore = SqliteShareKeystore::new(pool.clone());
+    let owner = account_key(account_id);
+    let origin_row = origin::folder_origin(pool, &owner, share_token).await.ok().flatten();
     match client.revoke_folder_share(share_token, &keystore).await {
-        Ok(()) => Ok(()),
+        Ok(()) => {
+            forget_folder_origin_and_badge(state, pool, &owner, share_token, origin_row).await;
+            Ok(())
+        }
         Err(FolderShareError::NotFound) => {
             // A 404 normally means already-revoked / never-existed, which
             // makes forgetting the local secret safe. But a server ROLLBACK
@@ -1207,9 +1225,20 @@ pub async fn revoke_folder_share_inner(state: &AppState, account_id: &str, share
             if let Err(e) = keystore.forget(share_token) {
                 warn!(error = %e, "folder-share keystore forget failed after 404 revoke (non-fatal)");
             }
+            forget_folder_origin_and_badge(state, pool, &owner, share_token, origin_row).await;
             Ok(())
         }
         Err(e) => Err(AppError::Hcfs(format!("revoke_folder_share: {e}"))),
+    }
+}
+
+async fn forget_folder_origin_and_badge(state: &AppState, pool: &SqlitePool, owner: &str, share_token: &str, origin_row: Option<(String, String)>) {
+    if let Err(e) = origin::forget_folder(pool, owner, share_token).await {
+        warn!(share_token = %share_token, error = %e, "Failed to forget folder_share_origin after revoke");
+    }
+    if let Some((label, prefix)) = origin_row {
+        let badge = crate::finder_bridge::badges::badge_after_unshare(state, &label, &prefix, true);
+        crate::finder_bridge::badges::push_from_state(state, &label, &prefix, badge);
     }
 }
 
@@ -1469,12 +1498,25 @@ pub async fn hcfs_revoke_share(state: tauri::State<'_, AppState>, share_token: S
     // row is fine — and best-effort: a sidecar leftover after a
     // successful revoke would only show up as a "ghost" badge until
     // the next prune in `hcfs_list_shares`, never as a security issue.
-    if let Err(e) = origin::forget(pool, &account_key(&account_id), &share_token).await {
+    //
+    // The row is read first because it is the only record of which file the
+    // token was minted from, and the Finder badge on that file has to step
+    // back from "shared" once the row is gone.
+    let owner = account_key(&account_id);
+    let origin_row = origin::fetch_for_tokens(pool, &owner, &[share_token.as_str()])
+        .await
+        .ok()
+        .and_then(|mut rows| rows.remove(share_token.as_str()));
+    if let Err(e) = origin::forget(pool, &owner, &share_token).await {
         warn!(
             share_token = %share_token,
             error = %e,
             "Failed to forget share_origin after successful revoke"
         );
+    }
+    if let Some(row) = origin_row {
+        let badge = crate::finder_bridge::badges::badge_after_unshare(&state, &row.folder_label, &row.relative_path, false);
+        crate::finder_bridge::badges::push_from_state(&state, &row.folder_label, &row.relative_path, badge);
     }
     Ok(())
 }

@@ -88,6 +88,7 @@ on:
           - shared_drives
           - folder_shares
           - folder_entries
+          - remote_write
 
 # Least privilege: this workflow only reads the checkout.
 permissions:
@@ -236,6 +237,36 @@ jobs:
             exit 1
           fi
           echo "folder_shares: $passed live tests executed"
+
+      # Writes into a folder with NO local sync root — the upload and rename
+      # paths that assemble a Manifest / BatchRenameRequest by hand. The
+      # hermetic tests prove the path strings; only a real server proves the
+      # signature is accepted and the ciphertext decrypts back. USER bearer,
+      # same as folder-shares: an admin token maps to a literal "admin" owner,
+      # so the upload would land under an account the listing never reads.
+      - name: Remote writes (upload + rename into an unsynced folder)
+        if: >-
+          !cancelled() && steps.setup.conclusion == 'success' &&
+          (inputs.suite == 'remote_write' || inputs.suite == 'both' || inputs.suite == 'all')
+        working-directory: src-tauri
+        shell: bash
+        env:
+          SQLX_OFFLINE: "true"
+          HCFS_DESKTOP_E2E_REQUIRE: "1"
+          HCFS_DESKTOP_E2E_SERVER_URL: ${{ secrets.HCFS_DESKTOP_E2E_SERVER_URL }}
+          HCFS_DESKTOP_E2E_BEARER: ${{ secrets.HCFS_DESKTOP_E2E_BEARER }}
+          HCFS_DESKTOP_E2E_SS58: ${{ secrets.HCFS_DESKTOP_E2E_SS58 }}
+        # Same non-zero-count guard as the steps above.
+        run: |
+          set -euo pipefail
+          out=$(mktemp)
+          cargo test --test remote_write_real_backend -- --ignored | tee "$out"
+          passed=$(sed -n 's/^test result: ok\. \([0-9][0-9]*\) passed.*/\1/p' "$out" | tail -1)
+          if [ "${passed:-0}" -lt 1 ]; then
+            echo "remote_write: no live test executed — refusing to report success" >&2
+            exit 1
+          fi
+          echo "remote_write: $passed live tests executed"
 
       # Same independence rule as folder-shares vs shared-drives: a red sibling
       # must not hide this suite's result. ADMIN bearer, not the user bearer.

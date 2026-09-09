@@ -35,6 +35,7 @@ const EXPECTED_TABLES: &[&str] = &[
     "user_preferences",
     "share_keystore",
     "share_origin",
+    "folder_share_origin",
     "shared_link_history",
     "local_wallets",
     "bridge_transactions",
@@ -137,6 +138,7 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     ensure_user_preferences(&mut tx).await?;
     ensure_share_keystore(&mut tx).await?;
     ensure_share_origin(&mut tx).await?;
+    ensure_folder_share_origin(&mut tx).await?;
     ensure_bridge_transactions(&mut tx).await?;
     ensure_credit_notification_flags(&mut tx).await?;
     ensure_shared_link_history(&mut tx).await?;
@@ -977,6 +979,27 @@ async fn ensure_share_origin(conn: &mut SqliteConnection) -> Result<(), sqlx::Er
     .execute(&mut *conn)
     .await?;
     sqlx::query("CREATE INDEX IF NOT EXISTS share_origin_owner_idx ON share_origin (owner, folder_label)")
+        .execute(&mut *conn)
+        .await?;
+    Ok(())
+}
+
+/// Local sidecar for folder shares minted on this device. Separate from
+/// `share_origin` because `hcfs_list_shares` prunes that table against the
+/// file listing and would evict a folder-share token.
+async fn ensure_folder_share_origin(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS folder_share_origin (
+            share_token TEXT PRIMARY KEY,
+            owner TEXT NOT NULL,
+            folder_label TEXT NOT NULL,
+            path_prefix TEXT NOT NULL,
+            created_at INTEGER NOT NULL DEFAULT (unixepoch())
+        )",
+    )
+    .execute(&mut *conn)
+    .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS folder_share_origin_owner_idx ON folder_share_origin (owner, folder_label)")
         .execute(&mut *conn)
         .await?;
     Ok(())
