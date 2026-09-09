@@ -5,8 +5,6 @@ import {
   COMPLETED_RETAINED,
   MAX_WIDGET_FILES,
   mergeRemoteUploads,
-  pruneRemoteUploads,
-  REMOTE_UPLOAD_LINGER_MS,
   type RemoteUploadProgress,
 } from "../remoteUploadFeed";
 import type { FileProgress, SyncSnapshot } from "@/app/lib/types/syncSnapshot";
@@ -42,6 +40,7 @@ const EMPTY: SyncSnapshot = {
 };
 
 const row = (over: Partial<RemoteUploadProgress> = {}): RemoteUploadProgress => ({
+  batchId: 1,
   path: "Photos/a.jpg",
   fileName: "a.jpg",
   label: "Camera Uploads",
@@ -112,7 +111,7 @@ describe("mergeRemoteUploads", () => {
   });
 });
 
-describe("applyRemoteUpload / pruneRemoteUploads", () => {
+describe("applyRemoteUpload", () => {
   it("keys rows by path so same-named files in different folders stay apart", () => {
     let map = applyRemoteUpload({}, row({ path: "A/a.jpg" }));
     map = applyRemoteUpload(map, row({ path: "B/a.jpg" }));
@@ -126,35 +125,36 @@ describe("applyRemoteUpload / pruneRemoteUploads", () => {
     expect(map["Photos/a.jpg"].bytesTransferred).toBe(90);
   });
 
-  // Deleting on completion makes a fast upload flash and vanish, which
-  // reads as a glitch rather than as done.
-  it("keeps a finished batch until the linger window passes", () => {
-    const t = 1_000;
-    const map = applyRemoteUpload({}, row({ status: "completed" }), t);
-    expect(Object.keys(pruneRemoteUploads(map, t + 1))).toHaveLength(1);
-    expect(
-      Object.keys(pruneRemoteUploads(map, t + REMOTE_UPLOAD_LINGER_MS + 1)),
-    ).toHaveLength(0);
+  // The widget is the record that an upload happened, and a timer that
+  // swept it took that record away seconds after the upload ended.
+  it("keeps a finished batch until another upload starts", () => {
+    let map = applyRemoteUpload({}, row({ path: "a.jpg", status: "completed" }));
+    map = applyRemoteUpload(map, row({ path: "b.jpg", status: "error" }));
+    expect(Object.keys(map)).toHaveLength(2);
   });
 
-  it("never prunes a row that is still uploading", () => {
-    const map = applyRemoteUpload({}, row(), 0);
-    expect(Object.keys(pruneRemoteUploads(map, 10_000_000))).toHaveLength(1);
+  // The regression a derived boundary reintroduces: a small file settles
+  // before the next file's first event, which is indistinguishable from a
+  // new upload unless the id says otherwise.
+  it("keeps a settled row when the next file of the SAME batch starts", () => {
+    let map = applyRemoteUpload({}, row({ path: "a.jpg", status: "completed" }));
+    map = applyRemoteUpload(map, row({ path: "b.jpg", status: "pending" }));
+    expect(Object.keys(map)).toHaveLength(2);
   });
 
-  // The regression this batch rule fixes: files upload one after another,
-  // so pruning each row as it finished emptied the queue behind the user
-  // and the widget showed one row being replaced over and over.
-  it("keeps finished rows while the rest of the batch is still going", () => {
-    let map = applyRemoteUpload({}, row({ path: "a.jpg", status: "completed" }), 0);
-    map = applyRemoteUpload(map, row({ path: "b.jpg", status: "inProgress" }), 0);
-    expect(Object.keys(pruneRemoteUploads(map, REMOTE_UPLOAD_LINGER_MS * 10))).toHaveLength(2);
+  it("clears the previous batch when a new one starts", () => {
+    let map = applyRemoteUpload({}, row({ path: "a.jpg", status: "completed" }));
+    map = applyRemoteUpload(map, row({ path: "b.jpg", status: "error" }));
+    map = applyRemoteUpload(map, row({ batchId: 2, path: "c.jpg", status: "pending" }));
+    expect(Object.keys(map)).toEqual(["c.jpg"]);
   });
 
-  it("drops the whole batch once every row has settled", () => {
-    let map = applyRemoteUpload({}, row({ path: "a.jpg", status: "completed" }), 0);
-    map = applyRemoteUpload(map, row({ path: "b.jpg", status: "error" }), 100);
-    expect(Object.keys(pruneRemoteUploads(map, 100 + REMOTE_UPLOAD_LINGER_MS + 1))).toHaveLength(0);
+  // A new batch can start while the previous one is still uploading —
+  // the user can pick again without waiting — and the old rows still go.
+  it("clears an unfinished previous batch too", () => {
+    let map = applyRemoteUpload({}, row({ path: "a.jpg", status: "inProgress" }));
+    map = applyRemoteUpload(map, row({ batchId: 2, path: "b.jpg", status: "pending" }));
+    expect(Object.keys(map)).toEqual(["b.jpg"]);
   });
 });
 
