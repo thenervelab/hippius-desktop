@@ -5,6 +5,7 @@ import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import PlanChip from "@/components/ui/plan-chip";
 import PlanActionButton from "@/components/ui/plan-chip/PlanActionButton";
+import { usePlanActionView } from "@/components/ui/plan-chip/usePlanActionView";
 import { WalletMinimal } from "@/components/ui/icons";
 import { useStaking } from "@/app/lib/hooks/useStaking";
 import { WALLET_FEATURE_ENABLED } from "@/app/lib/featureFlags";
@@ -36,6 +37,11 @@ const PageHeader: React.FC<PageHeaderProps> = ({
   const { stakingInfo, isLoading: isStakingLoading } = useStaking("auth");
 
   const stakedDisplay = stakingInfo?.bondedHip ?? "—";
+
+  // Drop the cell, not just its button: an account with a healthy plan has
+  // nothing to be offered, and the padded cell left behind ended the card
+  // in a strip of empty space.
+  const hasPlanAction = usePlanActionView() !== null;
 
   return (
     <div
@@ -140,9 +146,11 @@ const PageHeader: React.FC<PageHeaderProps> = ({
           {/* Was an unconditional "Subscription Plans" button, shown even
               to accounts already on a plan. Now it offers what the account
               actually needs, and nothing when it needs nothing. */}
-          <div className="flex items-center pr-4">
-            <PlanActionButton variant="raised" />
-          </div>
+          {hasPlanAction && (
+            <div className="flex items-center pr-4">
+              <PlanActionButton variant="raised" />
+            </div>
+          )}
         </div>
       )}
     </div>

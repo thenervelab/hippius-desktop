@@ -70,6 +70,17 @@ pub struct PlanInfo {
     /// predates the field. Only [`PlanAction`] reads it — the FE must not
     /// re-derive a prompt from it, or the two disagree.
     pub funding: Option<String>,
+    /// Days until the plan next charges, or `None` when the rail did not
+    /// say. Negative means the charge date has passed and the rail has not
+    /// caught up — stale data, not a state to warn about.
+    pub renews_in_days: Option<i64>,
+    /// The renewal itself, as days since the epoch.
+    ///
+    /// Not on the wire: the frontend has no use for an absolute day, but
+    /// the notification does — it is what makes the warning fire once per
+    /// CYCLE rather than once per day of the ten leading up to it.
+    #[serde(skip)]
+    pub renewal_unix_day: Option<i64>,
 }
 
 /// What the header should offer this account, decided once here.
@@ -136,6 +147,30 @@ fn credits_short_for_renewal(plan: &PlanInfo, credits_hip: Option<&str>) -> bool
         Some(balance) if balance.is_finite() => balance < plan.amount,
         _ => false,
     }
+}
+
+/// How close a renewal has to be before it is worth interrupting over.
+const RENEWAL_WARNING_DAYS: i64 = 10;
+
+/// Today, as days since the epoch — the unit the drive rail reports the
+/// next charge in.
+fn today_unix_day() -> i64 {
+    chrono::Utc::now().timestamp().div_euclid(86_400)
+}
+
+/// Whether to raise the one-off "your credits will not cover the renewal"
+/// notification.
+///
+/// The header says this whenever the balance is short, because a line of
+/// text costs the reader nothing. A notification is louder, so it waits
+/// until the renewal is close enough to be worth acting on — and a date
+/// already past is stale data from the rail rather than a renewal that is
+/// about to happen, so it does not qualify.
+fn should_warn_about_renewal(action: PlanAction, renews_in_days: Option<i64>) -> bool {
+    if action != PlanAction::TopUpCredits {
+        return false;
+    }
+    matches!(renews_in_days, Some(days) if (0..=RENEWAL_WARNING_DAYS).contains(&days))
 }
 
 /// Wire shape of the home overview. camelCase over IPC.
@@ -476,6 +511,10 @@ fn plan_from_drive_subscription(sub: &serde_json::Value, plans: &serde_json::Val
         .map(|f| if f == "stripe" { "card" } else { f })
         .map(str::to_string);
 
+    // Days since the epoch, not seconds — the rail's own unit (see
+    // `DriveSubscription.next_charge_unix_day`).
+    let renewal_unix_day = sub.get("next_charge_unix_day").and_then(serde_json::Value::as_i64);
+
     Some(PlanInfo {
         name,
         amount,
@@ -483,6 +522,8 @@ fn plan_from_drive_subscription(sub: &serde_json::Value, plans: &serde_json::Val
         storage_bytes,
         storage_display,
         funding,
+        renews_in_days: renewal_unix_day.map(|day| day - today_unix_day()),
+        renewal_unix_day,
     })
 }
 
@@ -505,6 +546,9 @@ fn plan_from_subscription(active: &serde_json::Value) -> Option<PlanInfo> {
         // The legacy Stripe storage subscription predates the field; it is
         // card-billed by definition of the rail it came from.
         funding: Some("card".into()),
+        // A card plan renews itself, so there is nothing this would drive.
+        renews_in_days: None,
+        renewal_unix_day: None,
     })
 }
 
@@ -576,6 +620,24 @@ pub async fn get_storage_overview(
 
     let mut overview = build_overview(stats.total_bytes, plan, free_tier_bytes, credits_hip);
     overview.used_pending = used_pending(stats.total_bytes, local_bytes);
+
+    // The header states this the moment the balance is short; the
+    // notification waits until the renewal is close. Raised from here
+    // because this is where the decision already exists — a second copy of
+    // it on a timer would eventually disagree with what the header shows.
+    // Idempotent per billing cycle, so running it on every poll is safe,
+    // and a failure is logged rather than failing the whole overview.
+    let warn_about = overview
+        .plan
+        .as_ref()
+        .filter(|p| should_warn_about_renewal(overview.plan_action, p.renews_in_days))
+        .and_then(|p| p.renewal_unix_day);
+    if let Some(day) = warn_about
+        && let Err(e) = crate::notifications::credits::ensure_renewal_credits_notification(state.pool()?, account_id.as_str(), day).await
+    {
+        tracing::warn!(error = %e, "could not record the renewal credits warning");
+    }
+
     Ok(overview)
 }
 
@@ -591,6 +653,8 @@ mod tests {
             storage_bytes: gb * BYTES_PER_GB,
             storage_display: crate::billing::charts::format_storage_display(gb),
             funding: None,
+            renews_in_days: None,
+            renewal_unix_day: None,
         }
     }
 
@@ -1121,5 +1185,75 @@ mod tests {
             vec![std::path::PathBuf::from("/tmp/own")],
             "lag probe must count only this account's active, non-migration, non-member drives"
         );
+    }
+
+    /// The whole point of the absolute-day key: keyed on days REMAINING,
+    /// the warning would fire on each of the ten days before the charge.
+    #[test]
+    fn the_warning_window_is_the_ten_days_before_the_charge() {
+        let short = |days: Option<i64>| should_warn_about_renewal(PlanAction::TopUpCredits, days);
+
+        assert!(short(Some(0)), "the charge is today");
+        assert!(short(Some(1)));
+        assert!(short(Some(RENEWAL_WARNING_DAYS)));
+        assert!(!short(Some(RENEWAL_WARNING_DAYS + 1)), "still too far off to interrupt");
+    }
+
+    /// A date already past is the rail lagging, not a renewal about to
+    /// happen — warning about it would be noise the user cannot act on.
+    #[test]
+    fn a_renewal_date_in_the_past_does_not_warn() {
+        assert!(!should_warn_about_renewal(PlanAction::TopUpCredits, Some(-1)));
+    }
+
+    /// No date from the rail is not evidence of anything.
+    #[test]
+    fn an_unknown_renewal_date_does_not_warn() {
+        assert!(!should_warn_about_renewal(PlanAction::TopUpCredits, None));
+    }
+
+    /// The notification exists to say credits are short. An account being
+    /// asked to upgrade, or asked nothing at all, has no business getting
+    /// it however close its renewal is.
+    #[test]
+    fn only_the_top_up_prompt_warns() {
+        for action in [PlanAction::Upgrade, PlanAction::None] {
+            assert!(
+                !should_warn_about_renewal(action, Some(1)),
+                "{action:?} must not raise the credits warning",
+            );
+        }
+    }
+
+    /// The rail reports the charge as days since the epoch, so the
+    /// remaining count is a subtraction against the same unit — computed
+    /// in Rust so every surface counts down from the same "today".
+    #[test]
+    fn the_drive_rail_renewal_reaches_the_wire_as_days_remaining() {
+        let today = today_unix_day();
+        let sub = serde_json::json!({
+            "active": true,
+            "plan": "plus",
+            "storage_bytes": 500_u64 * BYTES_PER_GB,
+            "funding": "credits",
+            "next_charge_unix_day": today + 6,
+        });
+        let plan = plan_from_drive_subscription(&sub, &serde_json::Value::Null).expect("a plan with a storage grant parses");
+
+        assert_eq!(plan.renews_in_days, Some(6));
+        assert_eq!(plan.renewal_unix_day, Some(today + 6));
+    }
+
+    /// A card plan renews itself; there is nothing here to count down to.
+    #[test]
+    fn the_legacy_stripe_plan_reports_no_renewal_countdown() {
+        let active = serde_json::json!({
+            "has_subscription": true,
+            "subscription": { "credits_per_billing": 10.0, "plan_name": "Legacy" },
+        });
+        let plan = plan_from_subscription(&active).expect("a funded legacy subscription parses");
+
+        assert_eq!(plan.renews_in_days, None);
+        assert_eq!(plan.renewal_unix_day, None);
     }
 }

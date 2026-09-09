@@ -13,6 +13,7 @@ import {
 import { renameModalFileAtom } from "@/app/lib/global-atoms/renameAtoms";
 import { canRenameFile, RENAME_DISABLED_TOOLTIP } from "@/app/lib/utils/renameGating";
 import { isCloudOnlyRow } from "@/app/lib/utils/cloudOnly";
+import { arionContentHash, fileTrackerUrl } from "@/lib/utils/arionContentHash";
 import {
   canShareFolder,
   FOLDER_SHARE_DISABLED_TOOLTIP,
@@ -165,8 +166,6 @@ const CardView: FC<CardViewProps> = ({
         <div className="duration-300 delay-300">
           <div className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-4">
             {files.map((file, index) => {
-              const arionHash = file.arionHash;
-
               let cardState: "success" | "pending" | "error" = "success";
               if (file.tempData) {
                 cardState = "pending";
@@ -302,35 +301,33 @@ const CardView: FC<CardViewProps> = ({
                               localHandleShowFileDetails(file);
                             },
                           },
-                          ...(!file.isFolder &&
-                          arionHash &&
-                          arionHash !== "pending"
-                            ? [
-                                {
-                                  icon: (
-                                    <Icons.SendSquare2 className="size-4" />
-                                  ),
-                                  itemTitle: "View on Explorer",
-                                  onItemClick: async (e?: React.MouseEvent) => {
-                                    if (e) {
-                                      e.preventDefault();
-                                      e.stopPropagation();
-                                    }
-                                    setOpenMenuIndex(null);
-                                    try {
-                                      await openUrl(
-                                        `https://hipstats.com/file-tracker/${arionHash}`,
-                                      );
-                                    } catch (error) {
-                                      console.error(
-                                        "Failed to open Explorer:",
-                                        error,
-                                      );
-                                    }
-                                  },
+                          ...(() => {
+                            const contentHash = arionContentHash(file);
+                            if (!contentHash) return [];
+                            return [
+                              {
+                                icon: (
+                                  <Icons.SendSquare2 className="size-4" />
+                                ),
+                                itemTitle: "View on Explorer",
+                                onItemClick: async (e?: React.MouseEvent) => {
+                                  if (e) {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                  }
+                                  setOpenMenuIndex(null);
+                                  try {
+                                    await openUrl(fileTrackerUrl(contentHash));
+                                  } catch (error) {
+                                    console.error(
+                                      "Failed to open Explorer:",
+                                      error,
+                                    );
+                                  }
                                 },
-                              ]
-                            : []),
+                              },
+                            ];
+                          })(),
                           // Share via link — same gating as the right-click
                           // context menu and the table-view 3-dots menu: a file
                           // must be fully uploaded, a folder mints a live

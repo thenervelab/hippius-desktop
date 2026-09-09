@@ -17,6 +17,17 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
+- **File Details now shows the file's Arion hash** (the BLAKE3 content digest)
+  so you can copy it or open it on the file tracker.
+- **Finder shows how each file in your Hippius folders is doing.** Files and
+  folders carry a badge in Finder: synced, syncing, shared by link, or failed.
+- **Hippius tells you when a folder lives inside Google Drive, Dropbox, OneDrive
+  or iCloud Drive, or on Desktop, Documents, Downloads or Applications.** Those
+  folders still sync. Finder badges and "Share with Hippius" cannot appear
+  inside another provider's folder, and syncing waits for that provider to
+  download each file. Finder may also skip badges on Desktop, Documents,
+  Downloads and Applications. The folder row and the add-folder dialog now
+  say so.
 - **Choose a storage plan without leaving Hippius.** A new Subscription Plans page
   under Account lists every plan with what it includes, shows the one you are on,
   and lets you subscribe, upgrade, downgrade or cancel. Pay from your credits, or
@@ -58,6 +69,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **Finder badges on your files are easier to see.** They fill the badge well
+  instead of sitting small inside it.
 - **Your storage is now measured against your plan.** The home page shows how much
   of your plan's storage you have used, and names the plan you are on — including
   the free plan, which every account has. It previously showed how much storage
@@ -148,6 +161,28 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - The information tooltip on the Files page now explains what the page actually holds:
   the folders you sync from this computer, and why your unlock password is needed to
   open them.
+- **Drive now shows your plan and how full it is.** The Drive page header carries
+  the same plan card as the home page — which plan you are on, a bar showing how
+  much of it you have used with the figures and percentage below it, and an
+  Upgrade or Top up Credits button when you need one — in place of the old
+  Subscription Plans button. It stays with you inside every folder.
+- **The plan in the page header says how much storage is left.** On the free plan
+  it showed only the size of the allowance; the header now states what you have
+  used out of it, and what percentage that is. A subscribed account is headed by
+  its plan's name rather than a generic "Active Plan".
+- **You are told before a plan fails to renew.** When your credits will not cover
+  the next cycle, the page header and the billing page say so and count down to the
+  renewal date, and a single notification is raised in the ten days before it —
+  once per billing cycle, not once a day.
+- **A drive with no folders yet explains what to do.** The folder list showed an
+  empty panel; it now says the list is empty and offers to sync your first folder,
+  on both the Drive page and in Settings.
+- **The home page no longer repeats your plan in the header.** The Storage and Plan
+  cards below it already say all of that, with the room to say it properly.
+- **The plan card no longer quotes your monthly price back at you.** It shows the
+  plan and its storage; billing detail is behind Manage.
+- **A plan with room left ends cleanly.** The page header no longer leaves an empty
+  gap where an Upgrade button would have been.
 
 ### Fixed
 
@@ -159,6 +194,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   into a folder that is not synced on this computer now shows a brief confirmation
   that the upload has begun, and the files stay in the sync list until your next
   upload instead of disappearing a few seconds after they finish.
+- **A folder added from Settings gets Finder badges right away**, not after
+  the next launch, and a removed folder stops showing them.
+- **The "Turn on the Hippius Finder extension" notice no longer comes back after
+  you enable it and relaunch.** The app now waits for macOS to confirm the
+  switch before recording that it is on.
 - **"Share with Hippius" in Finder switches itself on.** On a Mac it is turned on
   for you on the first launch and comes back by itself after a macOS or Hippius
   update, instead of asking you to turn it on. If it is ever off, Hippius asks once

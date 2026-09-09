@@ -163,18 +163,22 @@ fn map_search_hit_to_entry(
         created_at_ms
     };
 
+    // Same split as `list_sync_folder` / `append_browse_page`:
+    // `arion_hash` is the path id, `arion_cid` is the Arion content hash
+    // (server `RemoteFileEntry.arion_hash`).
+    let path_hash_hex = hex::encode(hit.file.path_hash);
     Some(UserFileEntry {
         name: display_name,
         actual_file_name,
         size: hit.file.size_bytes,
         created_at: created_at_ms,
-        arion_hash: hit.file.arion_hash.clone().unwrap_or_default(),
-        arion_cid: String::new(),
+        arion_hash: path_hash_hex.clone(),
+        arion_cid: hit.file.arion_hash.clone().unwrap_or_default(),
         // Hex of the 32-byte server path_hash — the file id the download path
         // (`download_remote_file` / `cache_remote_file`) needs to fetch this
         // file when it isn't on disk locally. Matches the console's
         // `id = hex(path_hash)`.
-        file_id: hex::encode(hit.file.path_hash),
+        file_id: path_hash_hex,
         source,
         miner_ids: Vec::new(),
         is_assigned: true,
@@ -576,11 +580,27 @@ mod tests {
         // Seconds → milliseconds.
         assert_eq!(entry.created_at, 1_700_000_000_000);
         assert_eq!(entry.last_charged_at, 1_700_000_005_000);
-        assert_eq!(entry.arion_hash, "Qm123");
+        // Path id (hex of the fixture's all-zero path_hash), NOT the
+        // server content hash — that belongs on `arion_cid`.
+        assert_eq!(entry.arion_hash, "0".repeat(64));
+        assert_eq!(entry.arion_cid, "Qm123");
         assert!(!entry.is_folder);
         // file_id is the hex of the 32-byte path_hash (all zeros in the
         // fixture) — the id the download path needs for a non-synced file.
         assert_eq!(entry.file_id, "0".repeat(64));
+    }
+
+    /// A server row with no content hash yet (chunk-native, or not
+    /// pushed to Arion) must not invent one. File Details shows
+    /// "Not yet synced" off an empty `arion_cid`.
+    #[test]
+    fn maps_missing_server_arion_hash_to_empty_cid() {
+        let map = drive_map(&[("Docs", "/home/me/Docs")]);
+        let mut hit = hit("Docs", Some("Work/report.pdf"), Some("report.pdf"), 1_700_000_000, 0);
+        hit.file.arion_hash = None;
+        let entry = map_search_hit_to_entry(&hit, &map, &on_disk).expect("maps");
+        assert_eq!(entry.arion_cid, "");
+        assert_eq!(entry.arion_hash, "0".repeat(64));
     }
 
     /// A configured drive whose file isn't on disk yet is the ONE genuine

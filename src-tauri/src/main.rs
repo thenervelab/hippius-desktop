@@ -333,6 +333,7 @@ fn main() {
             change_sync_folder,
             auto_init_sync,
             get_sync_folders_with_stats,
+            crate::sync::root_host::sync_root_host,
             // Sync status
             get_sync_activity_rows,
             get_sync_engine_health,

@@ -13,7 +13,9 @@ export type FormattedUserFile = {
   actualFileName?: string;
   size?: number;
   createdAt: number;
+  /** Path id (`blake3(relative_path)` hex). Not the content hash. */
   arionHash: string;
+  /** Arion BLAKE3 content hash. File Details and Hipstats read this. */
   arionCid: string;
   /**
    * Hex of the server-side `path_hash` — the file's id on Arion. Present on

@@ -12,11 +12,13 @@
 //! - **App → extensions**: a `tokio::sync::broadcast`. Every connection
 //!   subscribes; a lagging extension drops intermediate frames, which is
 //!   recoverable because the registered roots are replayed on each new
-//!   connection and badge updates are idempotent.
-//! - **Extension → app**: an **unbounded** `mpsc`. Volume is one message per
-//!   user menu click (rare), and a click is a discrete user intent we must not
-//!   silently drop, so backpressure is unnecessary — the unbounded choice is
-//!   deliberate, not accidental (axiom `rust_quality_172`).
+//!   connection and the extension re-queries the URLs Finder is already
+//!   showing (`REFRESH_ROOT` / `REGISTER_PATH`).
+//! - **Extension → app**: an **unbounded** `mpsc`. `SHARE` is one message
+//!   per user click and must not drop. `BADGE_QUERY` is one per visible
+//!   Finder row; the drain loop handles those serially so a scroll cannot
+//!   spawn unbounded work. The channel stays unbounded so a click queued
+//!   behind queries is not discarded.
 //! - **Shutdown**: a `CancellationToken` observed by the accept loop and every
 //!   connection task, so teardown is cooperative and lets in-flight writes
 //!   finish rather than an abrupt `abort()` (axiom `rust_quality_129`).
@@ -43,7 +45,8 @@ use crate::finder_bridge::protocol::{BadgeState, ClientMessage, ServerMessage};
 
 /// Bounded capacity for the app→extension broadcast. Updates are small; a slow
 /// extension that lags merely misses intermediate frames, recovered by the
-/// on-connect root replay plus the next badge resync.
+/// on-connect root replay and `REFRESH_ROOT` re-queries of already-displayed
+/// paths. Do not bulk-push per-file STATUS through this channel.
 const OUTGOING_CAPACITY: usize = 256;
 
 /// The desktop end of the file-manager-extension channel.
@@ -97,6 +100,11 @@ impl FinderBridge {
     /// no extension connected the broadcast is simply dropped.
     pub fn set_badge(&self, state: BadgeState, path: PathBuf) {
         let _ = self.outgoing.send(ServerMessage::Status { state, path });
+    }
+
+    /// Ask the extension to re-query already-displayed paths under `root`.
+    pub fn refresh_root(&self, path: PathBuf) {
+        let _ = self.outgoing.send(ServerMessage::RefreshRoot(path));
     }
 
     /// Signal the accept loop and every connection task to wind down cleanly.
@@ -405,6 +413,23 @@ mod unix_tests {
 
         let msg = timeout(TIMEOUT, incoming.recv()).await.expect("timeout").expect("closed");
         assert_eq!(msg, ClientMessage::Share(PathBuf::from("/Users/me/x.txt")));
+        bridge.shutdown();
+    }
+
+    /// A badge query must reach the consumer as a query, never as a click —
+    /// the dispatch opens the share chooser for a click.
+    #[tokio::test]
+    async fn badge_query_arrives_on_incoming_as_a_query() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("finder.sock");
+        let (bridge, mut incoming) = FinderBridge::start(unix_endpoint(&sock)).expect("bridge starts");
+
+        let mut client = connect(&sock).await;
+        client.write_all(b"BADGE_QUERY:/Users/me/Hippius/x.txt\n").await.unwrap();
+        client.flush().await.expect("flush");
+
+        let msg = timeout(TIMEOUT, incoming.recv()).await.expect("timeout").expect("closed");
+        assert_eq!(msg, ClientMessage::BadgeQuery(PathBuf::from("/Users/me/Hippius/x.txt")));
         bridge.shutdown();
     }
 

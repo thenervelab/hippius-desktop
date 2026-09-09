@@ -28,6 +28,7 @@ import { getFileIcon } from "@/app/lib/utils/fileTypeUtils";
 import { revealFile } from "@/lib/utils/revealFile";
 import { fileManagerLabel } from "@/lib/utils/isMacPlatform";
 import { tauriErrorMessage } from "@/lib/utils/dispatchTauriError";
+import { arionContentHash, fileTrackerUrl } from "@/lib/utils/arionContentHash";
 
 const PANEL_WIDTH_PX = 305;
 
@@ -63,8 +64,7 @@ interface PanelBodyProps {
 
 const PanelBody: React.FC<PanelBodyProps> = ({ file, onClose }) => {
   const { polkadotAddress } = useWalletAuth();
-  const arionCid = file.arionCid ?? null;
-  const hasCid = Boolean(arionCid && arionCid.length > 0);
+  const arionCid = arionContentHash(file);
 
   const { fileFormat } = getFilePartsFromFileName(file.name);
   const fileType = getFileTypeFromExtension(fileFormat || null);
@@ -85,7 +85,7 @@ const PanelBody: React.FC<PanelBodyProps> = ({ file, onClose }) => {
   const handleViewOnExplorer = async () => {
     try {
       if (!arionCid) return;
-      await openUrl(`https://hipstats.com/file-tracker/${arionCid}`);
+      await openUrl(fileTrackerUrl(arionCid));
     } catch (err) {
       console.error("Failed to open Explorer:", err);
     }
@@ -192,7 +192,7 @@ const PanelBody: React.FC<PanelBodyProps> = ({ file, onClose }) => {
             </p>
           </div>
 
-          {hasCid ? (
+          {arionCid ? (
             <div className="flex flex-col gap-[6px] w-full">
               <Tooltip.Provider delayDuration={200}>
                 <Tooltip.Root>
@@ -201,7 +201,7 @@ const PanelBody: React.FC<PanelBodyProps> = ({ file, onClose }) => {
                       <TableModule.CopyableCell
                         title="Copy Arion Hash"
                         toastMessage="Arion Hash Copied Successfully!"
-                        copyAbleText={arionCid || ""}
+                        copyAbleText={arionCid}
                         isTable={true}
                         textColor="text-grey-20 dark:text-white"
                         className="max-w-full h-full"

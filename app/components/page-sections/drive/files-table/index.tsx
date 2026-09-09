@@ -44,6 +44,7 @@ import {
   RENAME_DISABLED_TOOLTIP,
 } from "@/app/lib/utils/renameGating";
 import { isCloudOnlyRow } from "@/app/lib/utils/cloudOnly";
+import { arionContentHash, fileTrackerUrl } from "@/lib/utils/arionContentHash";
 import {
   canShareFolder,
   FOLDER_SHARE_DISABLED_TOOLTIP,
@@ -828,7 +829,6 @@ const FilesTable: FC<FilesTableProps> = memo(
       (
         file: FormattedUserFile,
         fileType: string | null,
-        arionHash: string,
         canPreview: boolean = true,
         folderExpansion?: { expanded: boolean; onToggle: () => void },
         // Parent path inside the sync drive when the action menu is
@@ -973,24 +973,24 @@ const FilesTable: FC<FilesTableProps> = memo(
             onItemClick: () => localHandleShowFileDetails(file),
             disabled: itemDeleting,
           },
-          ...(!file.isFolder && arionHash && arionHash !== "pending"
-            ? [
-                {
-                  icon: <Icons.SendSquare2 className="size-4" />,
-                  itemTitle: "View on Explorer",
-                  onItemClick: async () => {
-                    try {
-                      await openUrl(
-                        `https://hipstats.com/file-tracker/${arionHash}`,
-                      );
-                    } catch (error) {
-                      console.error("Failed to open Explorer:", error);
-                    }
-                  },
-                  disabled: itemDeleting,
+          ...(() => {
+            const contentHash = arionContentHash(file);
+            if (!contentHash) return [];
+            return [
+              {
+                icon: <Icons.SendSquare2 className="size-4" />,
+                itemTitle: "View on Explorer",
+                onItemClick: async () => {
+                  try {
+                    await openUrl(fileTrackerUrl(contentHash));
+                  } catch (error) {
+                    console.error("Failed to open Explorer:", error);
+                  }
                 },
-              ]
-            : []),
+                disabled: itemDeleting,
+              },
+            ];
+          })(),
           // Share via link — same gating as the right-click context menu in
           // `app/components/ui/context-menu/index.tsx`. A FILE must be fully
           // uploaded so the recipient's anonymous fetch succeeds. A FOLDER
@@ -1330,8 +1330,7 @@ const FilesTable: FC<FilesTableProps> = memo(
               createTableItems,
             } = cellCtxRef.current;
             const file = cell.row.original;
-            const { arionHash, name } = file;
-            const resolvedHash = arionHash;
+            const { name } = file;
             const { fileFormat } = getFilePartsFromFileName(name);
             const fileType = getFileTypeFromExtension(fileFormat || null);
             const folderKey = file.isFolder ? getFolderKey(file) : "";
@@ -1346,7 +1345,6 @@ const FilesTable: FC<FilesTableProps> = memo(
             const menuItems = createTableItems(
               file,
               fileType,
-              resolvedHash,
               true,
               canExpand
                 ? {

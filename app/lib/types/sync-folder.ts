@@ -28,7 +28,17 @@ export interface SyncFolder {
    * (`folderMenuGating.ts`).
    */
   ownerSs58?: string;
+  /**
+   * Why Finder integration will not work as expected on this root, threaded
+   * from Rust (`hostedBy`). Absent for a root Hippius owns outright.
+   */
+  hostedBy?: HostedBy;
 }
+
+/** Tagged by Rust (`sync::root_host::HostedBy`). */
+export type HostedBy =
+  | { kind: "fileProvider"; name: string }
+  | { kind: "specialFolder"; name: string };
 
 /**
  * Why a remote-only folder is not in this device's `sync_paths`.

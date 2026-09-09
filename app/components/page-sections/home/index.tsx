@@ -27,7 +27,10 @@ const Home: React.FC = () => {
     <>
       <DashboardTitleWrapper mainText="Overview">
         <div className="px-3">
-          <PageHeader />
+          {/* No plan card up here: the Storage and Plan cards immediately
+              below already carry the plan, the usage and Manage/Upgrade,
+              with the room to show them properly. */}
+          <PageHeader showPlanCard={false} />
           <div className="mt-3">
             {/* Usage bar + the plan/credits summary. Both render from the same
                 get_storage_overview fetch, so they can't disagree.

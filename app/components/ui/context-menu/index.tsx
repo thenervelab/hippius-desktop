@@ -5,6 +5,7 @@ import { Icons } from "@/components/ui";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { isPreviewableFileName } from "@/app/lib/utils/filePreviewType";
 import { isCloudOnlyRow } from "@/app/lib/utils/cloudOnly";
+import { arionContentHash, fileTrackerUrl } from "@/lib/utils/arionContentHash";
 import {
   canShareFolder,
   FOLDER_SHARE_DISABLED_TOOLTIP,
@@ -194,13 +195,13 @@ export default function FileContextMenu({
           </button>
 
           {!file.isFolder && (() => {
-            const cid = file.arionCid;
-            return cid && cid.length > 0 ? (
+            const cid = arionContentHash(file);
+            return cid ? (
               <button
                 className={menuItemClass}
                 onClick={async () => {
                   try {
-                    await openUrl(`https://hipstats.com/file-tracker/${cid}`);
+                    await openUrl(fileTrackerUrl(cid));
                   } catch (error) {
                     console.error("Failed to open Explorer:", error);
                   }

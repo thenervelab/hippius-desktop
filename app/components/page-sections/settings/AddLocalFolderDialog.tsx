@@ -21,6 +21,9 @@ import { SYNC_FOLDER_LABEL } from "@/app/components/page-sections/drive/uploadAc
 import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
 import { isNotReady } from "@/app/lib/utils/dispatchTauriError";
 import { insufficientCreditsDialogOpenAtom } from "@/app/components/page-sections/drive/atoms/query-atoms";
+import { resolveHostedBy } from "@/app/lib/utils/syncPathUtils";
+import type { HostedBy } from "@/app/lib/types/sync-folder";
+import HostedRootNote from "./multi-folder-sync/HostedRootNote";
 
 interface AddLocalFolderDialogProps {
   open: boolean;
@@ -48,6 +51,10 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
   const setInsufficient = useSetAtom(insufficientCreditsDialogOpenAtom);
   const [selectedPath, setSelectedPath] = useState<string>("");
   const [folderName, setFolderName] = useState<string>("");
+  // The provider whose folder the picked path sits inside, from Rust. Shown
+  // under the path so the user learns BEFORE adding that Finder badges and
+  // "Share with Hippius" will not appear there.
+  const [hostedBy, setHostedBy] = useState<HostedBy | null>(null);
   const [isAdding, setIsAdding] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [showHcfsSetup, setShowHcfsSetup] = useState(false);
@@ -55,7 +62,24 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
   const handleClearSelection = useCallback(() => {
     setSelectedPath("");
     setFolderName("");
+    setHostedBy(null);
   }, []);
+
+  // Classify a freshly picked folder. Keyed on the path so a slow answer for
+  // a folder the user has since replaced cannot label the new one.
+  useEffect(() => {
+    if (!selectedPath) {
+      setHostedBy(null);
+      return;
+    }
+    let cancelled = false;
+    void resolveHostedBy(selectedPath).then((provider) => {
+      if (!cancelled) setHostedBy(provider);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedPath]);
 
   const handleSelectFolder = useCallback(async () => {
     try {
@@ -297,9 +321,12 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
                       className="flex flex-1 min-w-0 items-center gap-3 rounded-md px-2 py-1.5 -mx-2 -my-1.5 text-left transition-colors hover:bg-grey-light-400 dark:hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       <Folder className="size-5 text-primary-50 flex-shrink-0" />
-                      <p className="font-mono text-xs text-grey-40 dark:text-grey-dark-300 break-all">
-                        {selectedPath}
-                      </p>
+                      <span className="flex min-w-0 flex-col gap-1.5">
+                        <p className="font-mono text-xs text-grey-40 dark:text-grey-dark-300 break-all">
+                          {selectedPath}
+                        </p>
+                        {hostedBy && <HostedRootNote host={hostedBy} />}
+                      </span>
                     </button>
                     <button
                       type="button"

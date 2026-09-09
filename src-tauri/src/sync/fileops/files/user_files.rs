@@ -112,7 +112,12 @@ pub struct UserFileEntry {
     pub actual_file_name: String,
     pub size: u64,
     pub created_at: i64,
+    /// Hex-encoded path_hash (file id). Not the content hash — that is
+    /// [`Self::arion_cid`]. Empty if the file is not yet synced.
     pub arion_hash: String,
+    /// Arion BLAKE3 content hash (server `arion_hash`). Empty until the
+    /// storage backend has one. File Details and Hipstats read this field,
+    /// never [`Self::arion_hash`].
     pub arion_cid: String,
     /// Hex of the server-side `path_hash` — the file's unique id on Arion.
     /// Used to download + decrypt a file that isn't synced to this device, via
@@ -672,7 +677,7 @@ enum SearchNeedle {
 /// case-insensitive.
 ///
 /// Other terms keep the historical case-insensitive substring match on
-/// name/hash.
+/// name, path id, and Arion content hash.
 fn compile_search_needle(term: &str) -> Option<SearchNeedle> {
     if term.is_empty() {
         return None;
@@ -690,7 +695,9 @@ fn compile_search_needle(term: &str) -> Option<SearchNeedle> {
 
 fn file_matches_search(file: &UserFileEntry, needle: &SearchNeedle) -> bool {
     match needle {
-        SearchNeedle::Substring(s) => file.name.to_lowercase().contains(s) || file.arion_hash.to_lowercase().contains(s),
+        SearchNeedle::Substring(s) => {
+            file.name.to_lowercase().contains(s) || file.arion_hash.to_lowercase().contains(s) || file.arion_cid.to_lowercase().contains(s)
+        }
         SearchNeedle::Glob(matcher) => matcher.is_match(file.actual_file_name.as_str()),
         SearchNeedle::MatchNothing => false,
     }
@@ -1175,6 +1182,22 @@ mod tests {
 
         let out = search(files, "dead*");
         assert!(out.is_empty(), "a glob is matched against the relative path only, never the hash");
+    }
+
+    /// After search/recent hits put the Arion digest on `arion_cid` (the
+    /// path id lives on `arion_hash`), pasting that digest into the files
+    /// filter must still find the row.
+    #[test]
+    fn filter_search_substring_matches_arion_cid() {
+        let files = vec![
+            UserFileEntry {
+                arion_cid: "abcdef1234".to_string(),
+                ..make_file("photo.jpg", 1, "d", 0, false)
+            },
+            make_file("notes.txt", 1, "d", 0, false),
+        ];
+        let out = search(files, "ABCDEF");
+        assert_eq!(rel_names(&out), vec!["photo.jpg"]);
     }
 
     /// A term containing `/` gets the same unconditional `**/` prefix, so
