@@ -1000,6 +1000,16 @@ pub async fn create_folder_share_inner(
             map_folder_share_error(e)
         })?;
 
+    let owner = account_key(account_id);
+    if let Err(e) = origin::record_folder(pool, &result.share_token, &owner, folder_label, path_prefix).await {
+        warn!(
+            share_token = %result.share_token,
+            error = %e,
+            "Failed to record folder_share_origin (share itself succeeded)"
+        );
+    }
+    crate::finder_bridge::badges::push_from_state(state, folder_label, path_prefix, BadgeState::Shared);
+
     Ok(ShareLink {
         share_token: result.share_token,
         share_url: result.share_url,
@@ -1196,8 +1206,13 @@ pub async fn revoke_folder_share_inner(state: &AppState, account_id: &str, share
     let pool = state.pool()?;
     let client = build_account_client(pool, account_id).await?;
     let keystore = SqliteShareKeystore::new(pool.clone());
+    let owner = account_key(account_id);
+    let origin_row = origin::folder_origin(pool, &owner, share_token).await.ok().flatten();
     match client.revoke_folder_share(share_token, &keystore).await {
-        Ok(()) => Ok(()),
+        Ok(()) => {
+            forget_folder_origin_and_badge(state, pool, &owner, share_token, origin_row).await;
+            Ok(())
+        }
         Err(FolderShareError::NotFound) => {
             // A 404 normally means already-revoked / never-existed, which
             // makes forgetting the local secret safe. But a server ROLLBACK
@@ -1210,9 +1225,20 @@ pub async fn revoke_folder_share_inner(state: &AppState, account_id: &str, share
             if let Err(e) = keystore.forget(share_token) {
                 warn!(error = %e, "folder-share keystore forget failed after 404 revoke (non-fatal)");
             }
+            forget_folder_origin_and_badge(state, pool, &owner, share_token, origin_row).await;
             Ok(())
         }
         Err(e) => Err(AppError::Hcfs(format!("revoke_folder_share: {e}"))),
+    }
+}
+
+async fn forget_folder_origin_and_badge(state: &AppState, pool: &SqlitePool, owner: &str, share_token: &str, origin_row: Option<(String, String)>) {
+    if let Err(e) = origin::forget_folder(pool, owner, share_token).await {
+        warn!(share_token = %share_token, error = %e, "Failed to forget folder_share_origin after revoke");
+    }
+    if let Some((label, prefix)) = origin_row {
+        let badge = crate::finder_bridge::badges::badge_after_unshare(state, &label, &prefix, true);
+        crate::finder_bridge::badges::push_from_state(state, &label, &prefix, badge);
     }
 }
 
@@ -1489,7 +1515,7 @@ pub async fn hcfs_revoke_share(state: tauri::State<'_, AppState>, share_token: S
         );
     }
     if let Some(row) = origin_row {
-        let badge = crate::finder_bridge::badges::badge_after_unshare(&state, &row.folder_label, &row.relative_path);
+        let badge = crate::finder_bridge::badges::badge_after_unshare(&state, &row.folder_label, &row.relative_path, false);
         crate::finder_bridge::badges::push_from_state(&state, &row.folder_label, &row.relative_path, badge);
     }
     Ok(())

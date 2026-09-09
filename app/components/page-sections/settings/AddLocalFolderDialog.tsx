@@ -22,6 +22,7 @@ import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
 import { isNotReady } from "@/app/lib/utils/dispatchTauriError";
 import { insufficientCreditsDialogOpenAtom } from "@/app/components/page-sections/drive/atoms/query-atoms";
 import { resolveHostedBy } from "@/app/lib/utils/syncPathUtils";
+import type { HostedBy } from "@/app/lib/types/sync-folder";
 import HostedRootNote from "./multi-folder-sync/HostedRootNote";
 
 interface AddLocalFolderDialogProps {
@@ -53,7 +54,7 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
   // The provider whose folder the picked path sits inside, from Rust. Shown
   // under the path so the user learns BEFORE adding that Finder badges and
   // "Share with Hippius" will not appear there.
-  const [hostedBy, setHostedBy] = useState<string | null>(null);
+  const [hostedBy, setHostedBy] = useState<HostedBy | null>(null);
   const [isAdding, setIsAdding] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [showHcfsSetup, setShowHcfsSetup] = useState(false);
@@ -324,7 +325,7 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
                         <p className="font-mono text-xs text-grey-40 dark:text-grey-dark-300 break-all">
                           {selectedPath}
                         </p>
-                        {hostedBy && <HostedRootNote provider={hostedBy} />}
+                        {hostedBy && <HostedRootNote host={hostedBy} />}
                       </span>
                     </button>
                     <button

@@ -132,6 +132,10 @@ pub enum ServerMessage {
         /// The path the badge applies to.
         path: PathBuf,
     },
+    /// Re-query every already-displayed path under this drive root. Used
+    /// when a plan starts: a bulk `STATUS` push would overflow the 256-slot
+    /// broadcast, and Finder will not re-ask for items still on screen.
+    RefreshRoot(PathBuf),
 }
 
 impl ServerMessage {
@@ -143,6 +147,7 @@ impl ServerMessage {
             ServerMessage::Status { state, path } => {
                 format!("STATUS:{}:{}", state.token(), encode_path(path))
             }
+            ServerMessage::RefreshRoot(path) => format!("REFRESH_ROOT:{}", encode_path(path)),
         }
     }
 
@@ -161,6 +166,7 @@ impl ServerMessage {
                     path: decode_path(encoded)?,
                 })
             }
+            "REFRESH_ROOT" => Ok(ServerMessage::RefreshRoot(decode_path(rest)?)),
             other => Err(ProtocolError::UnknownVerb(other.to_string())),
         }
     }
@@ -392,6 +398,7 @@ mod tests {
         for m in [
             ServerMessage::RegisterPath(PathBuf::from("/Users/me/Hippius")),
             ServerMessage::UnregisterPath(PathBuf::from("/Users/me/Hippius")),
+            ServerMessage::RefreshRoot(PathBuf::from("/Users/me/Hippius")),
         ] {
             assert_eq!(ServerMessage::parse(&m.to_wire()), Ok(m));
         }
@@ -514,6 +521,14 @@ mod tests {
             let path = PathBuf::from(OsString::from_vec(bytes));
             let m = ClientMessage::BadgeQuery(path);
             prop_assert_eq!(ClientMessage::parse(&m.to_wire()), Ok(m));
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn refresh_root_round_trips(bytes in proptest::collection::vec(1u8..=255, 0..64)) {
+            let path = PathBuf::from(OsString::from_vec(bytes));
+            let m = ServerMessage::RefreshRoot(path);
+            prop_assert_eq!(ServerMessage::parse(&m.to_wire()), Ok(m));
         }
 
         // Encoded output is always single-line printable ASCII — the framing

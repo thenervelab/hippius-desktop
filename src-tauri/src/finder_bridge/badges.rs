@@ -10,17 +10,16 @@
 //!   scales: a drive can hold six-figure file counts, and the app→extension
 //!   channel is a bounded broadcast that drops frames on lag, so pushing every
 //!   synced path would paint a random subset.
-//! - **Push.** [`push`] sends a `STATUS` unprompted for transitions the user is
-//!   watching: a plan puts files in flight, a file lands, a file fails, a share
-//!   is minted or revoked. Pushes for a plan are capped
-//!   ([`MAX_PLAN_BADGE_PUSHES`]) for the same broadcast reason; past the cap the
-//!   pull path covers it, one visible item at a time.
+//! - **Push.** [`push`] sends a `STATUS` unprompted for a single path the user
+//!   is watching: a file lands, a file fails, a share is minted or revoked.
+//!   When a plan starts, [`refresh_root`] sends one `REFRESH_ROOT` line so the
+//!   extension re-queries the URLs Finder is already showing — a per-file
+//!   plan push would overflow the 256-slot broadcast.
 //!
 //! The decision itself is [`resolve_badge`], a pure function over
 //! [`PathFacts`], so the whole priority table is unit-tested on every platform.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use hcfs_client::engine::progress::state::FileStatus;
 use hcfs_client::engine::runner::SyncRunner;
@@ -30,14 +29,6 @@ use tracing::debug;
 use crate::app_state::AppState;
 use crate::finder_bridge::protocol::BadgeState;
 use crate::finder_bridge::resolve::{ShareTarget, resolve_share_target};
-use crate::finder_bridge::socket::FinderBridge;
-
-/// Upper bound on unprompted `STATUS` pushes for one sync plan.
-///
-/// A plan of this size is a migration or a first sync, where per-file
-/// badges are noise anyway and the broadcast channel would drop most of
-/// them. Past it the pull path answers per visible item instead.
-pub const MAX_PLAN_BADGE_PUSHES: usize = 1_000;
 
 /// How the current sync session sees a path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,22 +75,13 @@ pub fn resolve_badge(facts: PathFacts) -> BadgeState {
     }
 }
 
-/// Absolute paths to push `syncing` for when a plan starts, or none when the
-/// plan is too large for pushes to mean anything (see
-/// [`MAX_PLAN_BADGE_PUSHES`]).
-pub fn plan_badge_paths(root: &Path, rel_paths: &[&str], cap: usize) -> Vec<PathBuf> {
-    if rel_paths.len() > cap {
-        return Vec::new();
-    }
-    rel_paths.iter().map(|rel| root.join(rel)).collect()
-}
-
 /// The badge a file-synced callback's `action` maps to, if any. hcfs-client
 /// passes `"uploaded"` / `"downloaded"` / `"deleted"` / `"conflict"`; an
 /// action this table does not know pushes nothing rather than guessing.
 pub fn badge_for_synced_action(action: &str) -> Option<BadgeState> {
     match action {
-        "uploaded" | "downloaded" | "conflict" => Some(BadgeState::Synced),
+        "uploaded" | "downloaded" => Some(BadgeState::Synced),
+        "conflict" => Some(BadgeState::Error),
         "deleted" => Some(BadgeState::Clear),
         _ => None,
     }
@@ -201,7 +183,13 @@ async fn gather_facts(state: &AppState, path: &Path) -> PathFacts {
     let is_dir = tokio::fs::metadata(path).await.is_ok_and(|meta| meta.is_dir());
     let transfer = transfer_state(&state.sync, &label, &relative_path, is_dir);
     let synced = !is_dir && is_synced(&state.sync, &label, &relative_path);
-    let shared = !is_dir && is_shared_on_record(state, &label, &relative_path).await;
+    // `resolve_badge` only consults `shared` when the session is idle, so
+    // skip the SQLite round-trip while a transfer is in flight or failed.
+    let shared = match transfer {
+        Transfer::Active | Transfer::Failed => false,
+        Transfer::Idle if is_dir => is_folder_shared_on_record(state, &label, &relative_path).await,
+        Transfer::Idle => is_shared_on_record(state, &label, &relative_path).await,
+    };
     PathFacts {
         in_drive: true,
         is_dir,
@@ -219,6 +207,16 @@ async fn is_shared_on_record(state: &AppState, label: &str, relative_path: &str)
     };
     let owner = crate::auth::account_key::account_key(&account_id);
     crate::shares::origin::is_shared(pool, &owner, label, relative_path)
+        .await
+        .unwrap_or(false)
+}
+
+async fn is_folder_shared_on_record(state: &AppState, label: &str, relative_path: &str) -> bool {
+    let (Ok(pool), Ok(account_id)) = (state.pool(), state.current_account_id()) else {
+        return false;
+    };
+    let owner = crate::auth::account_key::account_key(&account_id);
+    crate::shares::origin::is_folder_shared(pool, &owner, label, relative_path)
         .await
         .unwrap_or(false)
 }
@@ -246,19 +244,20 @@ pub fn push_from_state(state: &AppState, label: &str, rel: &str, badge: BadgeSta
     bridge.set_badge(badge, root.join(rel));
 }
 
-/// The badge a file returns to once its share is gone: the plain synced mark
-/// if the engine has it, nothing otherwise.
-pub fn badge_after_unshare(state: &AppState, label: &str, rel: &str) -> BadgeState {
-    if is_synced(&state.sync, label, rel) {
-        BadgeState::Synced
-    } else {
-        BadgeState::Clear
-    }
+/// The badge a path returns to once its share is gone.
+pub fn badge_after_unshare(state: &AppState, label: &str, rel: &str, is_dir: bool) -> BadgeState {
+    resolve_badge(PathFacts {
+        in_drive: true,
+        is_dir,
+        transfer: Transfer::Idle,
+        shared: false,
+        synced: !is_dir && is_synced(&state.sync, label, rel),
+    })
 }
 
-/// Push `syncing` for every planned upload and download, subject to the
-/// plan cap.
-pub fn push_plan<R: tauri::Runtime>(app: &tauri::AppHandle<R>, label: &str, rel_paths: &[&str]) {
+/// Tell the extension to re-query the paths Finder is already showing under
+/// this drive. One line, not one per planned file.
+pub fn refresh_root<R: tauri::Runtime>(app: &tauri::AppHandle<R>, label: &str) {
     let Some(state) = app.try_state::<AppState>() else {
         return;
     };
@@ -268,18 +267,13 @@ pub fn push_plan<R: tauri::Runtime>(app: &tauri::AppHandle<R>, label: &str, rel_
     let Some(root) = label_root(&state.sync, label) else {
         return;
     };
-    push_plan_to(bridge, &root, rel_paths);
-}
-
-fn push_plan_to(bridge: &Arc<FinderBridge>, root: &Path, rel_paths: &[&str]) {
-    for path in plan_badge_paths(root, rel_paths, MAX_PLAN_BADGE_PUSHES) {
-        bridge.set_badge(BadgeState::Syncing, path);
-    }
+    bridge.refresh_root(root);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     fn facts(transfer: Transfer, shared: bool, synced: bool) -> PathFacts {
         PathFacts {
@@ -342,26 +336,26 @@ mod tests {
     }
 
     #[test]
-    fn plan_paths_are_joined_under_the_root_and_capped() {
-        let root = Path::new("/Users/me/Hippius");
-        let paths = plan_badge_paths(root, &["a.txt", "sub/b.txt"], 2);
-        assert_eq!(
-            paths,
-            vec![PathBuf::from("/Users/me/Hippius/a.txt"), PathBuf::from("/Users/me/Hippius/sub/b.txt")]
-        );
-        // One over the cap pushes nothing at all — a partial paint would leave
-        // the unpushed files looking idle beside their syncing siblings.
-        assert!(plan_badge_paths(root, &["a", "b", "c"], 2).is_empty());
-        assert!(plan_badge_paths(root, &[], 0).is_empty());
-    }
-
-    #[test]
     fn synced_actions_map_to_a_badge_and_unknown_ones_to_none() {
         assert_eq!(badge_for_synced_action("uploaded"), Some(BadgeState::Synced));
         assert_eq!(badge_for_synced_action("downloaded"), Some(BadgeState::Synced));
-        assert_eq!(badge_for_synced_action("conflict"), Some(BadgeState::Synced));
+        assert_eq!(badge_for_synced_action("conflict"), Some(BadgeState::Error));
         assert_eq!(badge_for_synced_action("deleted"), Some(BadgeState::Clear));
         assert_eq!(badge_for_synced_action("failed"), None);
+    }
+
+    #[test]
+    fn a_folder_returns_to_synced_after_its_share_is_gone() {
+        // No session, not a file in the synced cache: a quiet folder in a
+        // drive still reads as synced (the idle-directory rule).
+        let facts = PathFacts {
+            in_drive: true,
+            is_dir: true,
+            transfer: Transfer::Idle,
+            shared: false,
+            synced: false,
+        };
+        assert_eq!(resolve_badge(facts), BadgeState::Synced);
     }
 
     fn runner() -> Arc<SyncRunner> {

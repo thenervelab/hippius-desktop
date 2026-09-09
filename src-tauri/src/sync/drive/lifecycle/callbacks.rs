@@ -421,10 +421,10 @@ fn build_plan_ready_callback<R: tauri::Runtime>(app: &AppHandle<R>, label: Arc<s
             renames.len()
         );
 
-        // Finder badges: mark the planned transfers as in flight before the
-        // first byte moves. Borrowed refs, dropped before the owned vecs below.
-        let planned: Vec<&str> = uploads.iter().chain(downloads.iter()).map(|f| f.path.as_str()).collect();
-        crate::finder_bridge::badges::push_plan(&app, &label, &planned);
+        // Finder badges: one REFRESH_ROOT so the extension re-queries the
+        // paths Finder is already showing. A per-file STATUS push would
+        // overflow the 256-slot broadcast.
+        crate::finder_bridge::badges::refresh_root(&app, &label);
 
         // Build path vecs once and move them into SessionFileList (no .clone()).
         // The Tauri event payload is built separately by re-iterating the plan

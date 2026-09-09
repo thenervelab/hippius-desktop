@@ -29,13 +29,16 @@ export interface SyncFolder {
    */
   ownerSs58?: string;
   /**
-   * The cloud provider whose folder this root sits inside ("Google Drive",
-   * "iCloud Drive", ...), threaded from Rust (`hostedBy`). Finder badges and
-   * "Share with Hippius" cannot appear inside another provider's folder, so
-   * the row says so; absent for a root Hippius owns outright.
+   * Why Finder integration will not work as expected on this root, threaded
+   * from Rust (`hostedBy`). Absent for a root Hippius owns outright.
    */
-  hostedBy?: string;
+  hostedBy?: HostedBy;
 }
+
+/** Tagged by Rust (`sync::root_host::HostedBy`). */
+export type HostedBy =
+  | { kind: "fileProvider"; name: string }
+  | { kind: "specialFolder"; name: string };
 
 /**
  * Why a remote-only folder is not in this device's `sync_paths`.

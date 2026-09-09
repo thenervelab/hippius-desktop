@@ -11,10 +11,11 @@ describe("resolveHostedBy", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
   });
 
-  it("asks Rust with the picked path and returns the provider it names", async () => {
-    invoke.mockResolvedValueOnce("Google Drive");
-    await expect(resolveHostedBy("/Users/me/Library/CloudStorage/GoogleDrive-x/Work")).resolves.toBe(
-      "Google Drive"
+  it("asks Rust with the picked path and returns the host it names", async () => {
+    const host = { kind: "fileProvider" as const, name: "Google Drive" };
+    invoke.mockResolvedValueOnce(host);
+    await expect(resolveHostedBy("/Users/me/Library/CloudStorage/GoogleDrive-x/Work")).resolves.toEqual(
+      host
     );
     expect(invoke).toHaveBeenCalledWith("sync_root_host", {
       path: "/Users/me/Library/CloudStorage/GoogleDrive-x/Work",

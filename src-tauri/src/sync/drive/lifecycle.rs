@@ -480,8 +480,9 @@ async fn register_drive(app: &AppHandle, sync: &Arc<SyncRunner>, manager: DriveM
     sync.register_label_root(label.to_string(), PathBuf::from(sync_path));
     // Tell the Finder extension about this root now, not at the next
     // launch: `register_drive_roots` runs only at the end of auto-init, so a
-    // drive added from Settings had no "Share with Hippius" menu and no
-    // badges until the app was restarted.
+    // drive added from Settings had no Finder badges (the query gate keys
+    // on registered roots) until the app was restarted. The share menu is
+    // already home-wide; this call is for badges.
     {
         use tauri::Manager;
         if let Some(bridge) = app.state::<crate::app_state::AppState>().finder_bridge() {

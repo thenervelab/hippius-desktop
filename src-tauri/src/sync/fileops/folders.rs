@@ -36,11 +36,10 @@ pub struct SyncFolderInfo {
     /// the wire identity lives on the `sync_paths` row and must never be
     /// inferred in TypeScript.
     pub owner_ss58: Option<String>,
-    /// The cloud provider whose folder this root sits inside (`Google Drive`,
-    /// `iCloud Drive`, …), `None` for a root Hippius owns outright. Finder
-    /// integration is unavailable inside another provider's folder and the
-    /// row says so; see `sync::root_host`.
-    pub hosted_by: Option<String>,
+    /// Why Finder integration will not work as expected on this root
+    /// (`fileProvider` / `specialFolder`), `None` for a root Hippius owns
+    /// outright. See `sync::root_host`.
+    pub hosted_by: Option<crate::sync::root_host::HostedBy>,
 }
 
 /// Why a server folder is absent from this device's `sync_paths`.
@@ -975,6 +974,24 @@ mod tests {
             serde_json::Value::Null,
             "a root Hippius owns serializes hostedBy as null"
         );
+    }
+
+    #[test]
+    fn sync_folder_info_hosted_by_is_the_tagged_shape() {
+        let info = SyncFolderInfo {
+            id: "gd".to_string(),
+            folder_name: "Design".to_string(),
+            local_path: "/Users/me/Library/CloudStorage/GoogleDrive-x/Design".to_string(),
+            status: "syncing".to_string(),
+            file_count: None,
+            total_bytes: None,
+            last_modified: None,
+            owner_ss58: None,
+            hosted_by: Some(crate::sync::root_host::HostedBy::FileProvider { name: "Google Drive".into() }),
+        };
+        let json = serde_json::to_value(&info).expect("serialize");
+        assert_eq!(json["hostedBy"]["kind"], "fileProvider");
+        assert_eq!(json["hostedBy"]["name"], "Google Drive");
     }
 
     // ── sanitize_label ──────────────────────────────────────────────

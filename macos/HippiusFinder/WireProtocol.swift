@@ -13,6 +13,7 @@ enum WireProtocol {
         case registerPath(URL)
         case unregisterPath(URL)
         case status(state: String, path: URL)
+        case refreshRoot(URL)
     }
 
     /// Parse one inbound wire line (without its trailing newline).
@@ -26,6 +27,8 @@ enum WireProtocol {
         case "STATUS":
             guard let (state, encoded) = splitFirst(rest, on: ":"), let url = decodePath(encoded) else { return nil }
             return .status(state: state, path: url)
+        case "REFRESH_ROOT":
+            return decodePath(rest).map(Inbound.refreshRoot)
         default:
             return nil
         }
