@@ -69,6 +69,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **Security and API Token warnings now match the rest of Settings.** They
+  sit in the same card style as the rows around them, instead of a yellow box.
+- **Billing's credits and deposit cards have more room inside**, so the
+  balance, address, and buttons are no longer packed together.
 - **Finder badges on your files are easier to see.** They fill the badge well
   instead of sitting small inside it.
 - **Your storage is now measured against your plan.** The home page shows how much
