@@ -95,6 +95,36 @@ export function getPlanView(input: {
 }
 
 /**
+ * The chip's heading.
+ *
+ * A subscribed account is told WHICH plan it is on — "Starter" says
+ * something, where "Active Plan" only repeats what the presence of a plan
+ * already implies. The generic label survives as the fallback for a plan
+ * the API returned without a name, and for the error branch, where naming
+ * a plan we could not read would be a guess.
+ */
+export function getPlanHeading(
+  view: PlanView,
+  planName: string | null | undefined,
+): string {
+  if (view === "free") return "Free Plan";
+  if (view === "plan" && planName) return planName;
+  return "Active Plan";
+}
+
+/**
+ * Whether the header chip draws its usage bar.
+ *
+ * Only the branches that actually quote a capacity have a number to draw.
+ * On the error/unknown branch `percent` is 0 for want of an answer, and an
+ * empty track there reads as a confident "nothing used" — the same lie the
+ * storage card's own error state exists to avoid.
+ */
+export function shouldShowUsageBar(view: PlanView): boolean {
+  return view === "plan" || view === "free";
+}
+
+/**
  * Integer percent label, with "<1%" for tiny-but-nonzero usage so a
  * near-empty drive doesn't display a flat "0%" while bytes exist.
  */
@@ -103,7 +133,3 @@ export function formatPercentLabel(percent: number): string {
   return `${Math.round(percent)}%`;
 }
 
-/** "12$/mo." style price label, mirroring the PageHeader chip's format. */
-export function formatPlanPrice(amount: number, interval: string): string {
-  return `${amount}$/${interval === "month" ? "mo." : interval}`;
-}

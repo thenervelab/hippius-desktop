@@ -27,6 +27,7 @@ import {
 import { HcfsSetupDialog } from "@/components/page-sections/settings/HcfsSetupDialog";
 import { Button } from "@/components/ui/button";
 import FolderList from "./folder-list/FolderList";
+import FolderListEmptyState from "./folder-list/FolderListEmptyState";
 import AddButton from "./AddFileButton";
 import FolderUploadDialog from "./FolderUploadDialog";
 import { toFolderRows, type FolderRow } from "./folder-list/folderRows";
@@ -622,6 +623,9 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
           }
           onOpenRow={handleOpenRow}
           buildActions={buildRowActions}
+          emptyState={
+            <FolderListEmptyState onSyncFolder={() => setShowAddDialog(true)} />
+          }
         />
 
         {/* Flag-gated; renders nothing unless drives are shared with this

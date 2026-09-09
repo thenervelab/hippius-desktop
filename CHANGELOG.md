@@ -161,6 +161,28 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - The information tooltip on the Files page now explains what the page actually holds:
   the folders you sync from this computer, and why your unlock password is needed to
   open them.
+- **Drive now shows your plan and how full it is.** The Drive page header carries
+  the same plan card as the home page — which plan you are on, a bar showing how
+  much of it you have used with the figures and percentage below it, and an
+  Upgrade or Top up Credits button when you need one — in place of the old
+  Subscription Plans button. It stays with you inside every folder.
+- **The plan in the page header says how much storage is left.** On the free plan
+  it showed only the size of the allowance; the header now states what you have
+  used out of it, and what percentage that is. A subscribed account is headed by
+  its plan's name rather than a generic "Active Plan".
+- **You are told before a plan fails to renew.** When your credits will not cover
+  the next cycle, the page header and the billing page say so and count down to the
+  renewal date, and a single notification is raised in the ten days before it —
+  once per billing cycle, not once a day.
+- **A drive with no folders yet explains what to do.** The folder list showed an
+  empty panel; it now says the list is empty and offers to sync your first folder,
+  on both the Drive page and in Settings.
+- **The home page no longer repeats your plan in the header.** The Storage and Plan
+  cards below it already say all of that, with the room to say it properly.
+- **The plan card no longer quotes your monthly price back at you.** It shows the
+  plan and its storage; billing detail is behind Manage.
+- **A plan with room left ends cleanly.** The page header no longer leaves an empty
+  gap where an Upgrade button would have been.
 
 ### Fixed
 

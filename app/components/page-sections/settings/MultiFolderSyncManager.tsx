@@ -36,6 +36,7 @@ import { appStore } from "@/lib/store/jotaiStore";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import FolderList from "@/components/page-sections/drive/folder-list/FolderList";
+import FolderListEmptyState from "@/components/page-sections/drive/folder-list/FolderListEmptyState";
 import { toFolderRows, type FolderRow } from "@/components/page-sections/drive/folder-list/folderRows";
 import { buildFolderActions } from "@/components/page-sections/drive/folder-list/buildFolderActions";
 import { SYNC_FOLDER_LABEL } from "@/components/page-sections/drive/uploadActions";
@@ -592,6 +593,9 @@ function openTarget(row: FolderRow): string {
                   true,
                 ),
             })
+          }
+          emptyState={
+            <FolderListEmptyState onSyncFolder={() => setShowAddDialog(true)} />
           }
         />
 

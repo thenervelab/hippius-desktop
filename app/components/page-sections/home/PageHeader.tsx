@@ -7,6 +7,7 @@ import { Icons } from "@/components/ui";
 import { Button } from "@/components/ui/button";
 import PlanChip from "@/components/ui/plan-chip";
 import PlanActionButton from "@/components/ui/plan-chip/PlanActionButton";
+import { usePlanActionView } from "@/components/ui/plan-chip/usePlanActionView";
 import { cn } from "@/app/lib/utils";
 import { useStaking } from "@/app/lib/hooks/useStaking";
 import { WALLET_FEATURE_ENABLED } from "@/app/lib/featureFlags";
@@ -31,6 +32,15 @@ interface PageHeaderProps {
   subtitle?: string;
   infoButton?: ReactNode;
   showTopUpCredits?: boolean;
+  /**
+   * Whether the header carries the plan card at all.
+   *
+   * Off on the Overview page: the Storage and Plan cards directly below it
+   * already state the plan, the usage and the way to change it, so a third
+   * copy in the header said nothing new and competed with the two that
+   * have room to say it properly.
+   */
+  showPlanCard?: boolean;
   /** When provided, replaces the default right-side block (Wallet +
    * Active Plan chips + Top-up button) with the supplied node. Used by
    * the wallet page to slot in the ActiveWalletSelector instead. */
@@ -42,6 +52,7 @@ const PageHeader: FC<PageHeaderProps> = ({
   subtitle = "Store. Compute. Own your infrastructure.",
   infoButton,
   showTopUpCredits = true,
+  showPlanCard = true,
   rightSlot,
 }) => {
   // Auth-account stake — see the comment in `useStaking` on why the
@@ -53,6 +64,16 @@ const PageHeader: FC<PageHeaderProps> = ({
     () => formatHipCompact(stakingInfo.bondedHip),
     [stakingInfo.bondedHip],
   );
+
+  // The cell exists only when there is something to put in it. The caller's
+  // `showTopUpCredits` says whether this PAGE wants a CTA at all (Billing
+  // does not — it is where you would act); Rust says whether this ACCOUNT
+  // needs one. A healthy plan used to leave the padded cell behind with the
+  // button gone, ending the card in a strip of empty space.
+  // Called unconditionally — `showTopUpCredits && usePlanActionView()`
+  // would skip the hook on the pages that pass false.
+  const planAction = usePlanActionView();
+  const showAction = showTopUpCredits && planAction !== null;
 
   return (
     // Title and wallet card sit side-by-side (each ~50%) at @4xl+; the card
@@ -90,13 +111,13 @@ const PageHeader: FC<PageHeaderProps> = ({
 
       {rightSlot ? (
         <div className="flex items-center justify-end">{rightSlot}</div>
-      ) : (
+      ) : showPlanCard ? (
       <div
         className={cn(
           "flex items-stretch rounded-[8px]",
           "border border-grey-light-500 bg-grey-light-600",
           "dark:border-black-300 dark:bg-black-primary-bg",
-          showTopUpCredits ? "gap-3.5 px-3.5" : "px-0",
+          showAction ? "gap-3.5 px-3.5" : "px-0",
           // Without the wallet column the card holds only Active Plan +
           // Top-up; stretching it leaves a sea of empty card. In the
           // wallet-off flex-row header the card is simply content-sized
@@ -121,7 +142,7 @@ const PageHeader: FC<PageHeaderProps> = ({
               // than the active-plan column (which has a bigger grow), so they
               // converge instead of the wallet hogging every extra pixel.
               "flex flex-[2_1_240px] min-w-0 items-center justify-between gap-3 border-r border-grey-dark-100 dark:border-black-500 pr-5 py-[11px]",
-              showTopUpCredits ? "" : "pl-3.5",
+              showAction ? "" : "pl-3.5",
             )}
           >
             <div className="flex flex-col items-start justify-center gap-[3px]">
@@ -179,7 +200,7 @@ const PageHeader: FC<PageHeaderProps> = ({
               // and stacking a column padding on top doubled it to 30px (the
               // same double-padding trap the wallet column's pl-3.5 comment
               // describes). px-5 stays for the wide three-column layout.
-              showTopUpCredits
+              showAction
                 ? cn(
                     "border-r border-grey-dark-100",
                     WALLET_FEATURE_ENABLED ? "px-5" : "pr-4",
@@ -193,7 +214,7 @@ const PageHeader: FC<PageHeaderProps> = ({
           </div>
         </div>
 
-        {showTopUpCredits && (
+        {showAction && (
           <div className="flex shrink-0 items-center py-[11px] pr-3.5">
             {/* What this offers depends on the account: Upgrade on the free
                 tier or a plan filling up, Top up Credits only for a
@@ -203,7 +224,7 @@ const PageHeader: FC<PageHeaderProps> = ({
           </div>
         )}
       </div>
-      )}
+      ) : null}
     </div>
   );
 };
