@@ -151,6 +151,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Large files upload to a cloud folder again.** Uploading a big file into a folder
+  that is not synced on this computer failed with a server error at the very end of
+  the transfer. Files of any size now go up the same way they do for a synced
+  folder, still encrypted on your machine before they leave it.
 - **"Share with Hippius" in Finder switches itself on.** On a Mac it is turned on
   for you on the first launch and comes back by itself after a macOS or Hippius
   update, instead of asking you to turn it on. If it is ever off, Hippius asks once

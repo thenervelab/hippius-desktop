@@ -28,6 +28,16 @@ use tauri::Emitter;
 
 use crate::sync::projection::events::REMOTE_UPLOAD_PROGRESS;
 
+/// One transport chunk, mirroring hcfs-client's `UPLOAD_CHUNK_FILE_SIZE`
+/// (which is `pub(super)`, so it cannot be imported).
+///
+/// This is not a tuning knob: hcfs keeps a ciphertext that fits ONE chunk
+/// on the single-shot `POST /upload` and requires a session for anything
+/// larger. Sending a multi-chunk body single-shot is refused by the
+/// server — which is exactly what made a large file fail here while the
+/// same file uploaded fine through a synced drive.
+const UPLOAD_CHUNK_SIZE: u64 = 8 * 1024 * 1024;
+
 /// Smallest gap between two transfer-progress frames for one file.
 ///
 /// Matches the sync engine's own snapshot throttle: the widget cannot
@@ -209,6 +219,95 @@ fn seal_and_describe(req: SealRequest<'_>) -> Result<Manifest> {
     })
 }
 
+/// Upload a ciphertext too large for one request, as a chunked session.
+///
+/// hcfs keeps a single-chunk ciphertext on `POST /upload` and requires a
+/// session above that; there is deliberately no fallback between them, so
+/// picking the wrong one is a hard failure rather than a slow success.
+/// The engine makes the same choice for a synced drive — this is that
+/// decision, for a drive with no local root.
+///
+/// Chunks go up one at a time. The engine uploads them concurrently under
+/// a global slot budget, which is worth having for a whole sync cycle;
+/// here a single user-initiated file does not justify carrying that
+/// machinery, and serial keeps in-flight bytes to one chunk.
+/// How many transport chunks a ciphertext of this size takes.
+///
+/// A zero-length ciphertext still takes one: `div_ceil` gives 0, and a
+/// session that declares no chunks has nothing to finalize.
+fn transport_chunk_count(ciphertext_size: u64) -> Result<u32> {
+    ciphertext_size
+        .div_ceil(UPLOAD_CHUNK_SIZE)
+        .max(1)
+        .try_into()
+        .map_err(|_| AppError::Validation("That file is too large to upload.".into()))
+}
+
+/// Mirrors hcfs-client's own rule: one chunk stays on `POST /upload`,
+/// anything larger MUST use a session.
+///
+/// Sending an oversized body single-shot is refused by the server at the
+/// END of the transfer — which is why a large file failed there while the
+/// same file into a synced drive succeeded: the engine makes this choice
+/// for the drives it owns, and this path was not making it at all.
+fn upload_uses_session(chunk_count: u32) -> bool {
+    chunk_count > 1
+}
+
+async fn send_in_session<F>(
+    client: &hcfs_client::client::HcfsClient,
+    manifest: Manifest,
+    ciphertext_path: &Path,
+    ciphertext_size: u64,
+    chunk_count: u32,
+    progress: Option<&F>,
+) -> Result<()>
+where
+    F: Fn(u64, u64),
+{
+    use std::io::Read;
+
+    let session = client
+        .create_upload_session(&hcfs_shared::network::CreateSessionRequest {
+            manifest,
+            chunk_count,
+            chunk_size: UPLOAD_CHUNK_SIZE,
+            ciphertext_size,
+        })
+        .await
+        .map_err(|e| AppError::Hcfs(format!("Could not start the upload: {e}")))?;
+
+    let mut file = std::io::BufReader::new(std::fs::File::open(ciphertext_path)?);
+    let mut sent = 0u64;
+    for index in 0..chunk_count {
+        let remaining = ciphertext_size - sent;
+        let mut buf = vec![0u8; remaining.min(UPLOAD_CHUNK_SIZE) as usize];
+        file.read_exact(&mut buf)?;
+
+        client
+            .upload_chunk_with_retry(&session.session_id, index, bytes::Bytes::from(buf), CHUNK_UPLOAD_ATTEMPTS)
+            .await
+            .map_err(|e| AppError::Hcfs(format!("Upload failed: {e}")))?;
+
+        sent += remaining.min(UPLOAD_CHUNK_SIZE);
+        if let Some(report) = progress {
+            report(sent, ciphertext_size);
+        }
+    }
+
+    // Only finalize claims the upload succeeded; a session left unfinalized
+    // is discarded server-side rather than becoming a partial file.
+    client
+        .finalize_session(&session.session_id)
+        .await
+        .map_err(|e| AppError::Hcfs(format!("Upload failed: {e}")))?;
+    Ok(())
+}
+
+/// Attempts per chunk before giving up, matching the engine's own retry
+/// posture: transient transport and 5xx/429 are retried, 4xx is not.
+const CHUNK_UPLOAD_ATTEMPTS: u32 = 3;
+
 /// Send one file to a folder this device does not sync.
 ///
 /// `app` is optional so the live lane can drive this without a Tauri
@@ -322,16 +421,26 @@ pub(crate) async fn upload_to_remote_folder_with_progress(
     // owned copies rather than borrowing the closure above.
     let progress = app.map(|app| transfer_progress(app.clone(), &relative_path, &file_name, label, size_bytes));
 
-    let outcome = client
-        .upload(manifest, &ciphertext_path, progress)
-        .await
-        .map_err(|e| AppError::Hcfs(format!("Upload failed: {e}")));
+    let ciphertext_size = std::fs::metadata(&ciphertext_path).map_or(0, |m| m.len());
+    // Not `?`: the ciphertext still has to be cleaned up below, whichever
+    // way this goes.
+    let outcome = match transport_chunk_count(ciphertext_size) {
+        Err(e) => Err(e),
+        Ok(chunks) if upload_uses_session(chunks) => {
+            send_in_session(&client, manifest, &ciphertext_path, ciphertext_size, chunks, progress.as_ref()).await
+        }
+        Ok(_) => client
+            .upload(manifest, &ciphertext_path, progress)
+            .await
+            .map(|_| ())
+            .map_err(|e| AppError::Hcfs(format!("Upload failed: {e}"))),
+    };
     cleanup(&ciphertext_path);
     match &outcome {
-        Ok(_) => emit("completed", size_bytes, None),
+        Ok(()) => emit("completed", size_bytes, None),
         Err(e) => emit("error", 0, Some(e.to_string())),
     }
-    outcome.map(|_| ())
+    outcome
 }
 
 /// Upload files into a folder this device does not sync.
@@ -439,5 +548,43 @@ mod tests {
     #[test]
     fn surrounding_separators_do_not_leak_into_the_path() {
         assert_eq!(wire_relative_path("/Photos/", "a.jpg"), "Photos/a.jpg");
+    }
+
+    /// The bug this boundary fixes: everything above one chunk was posted
+    /// single-shot, and the server refused it at the end of the transfer.
+    #[test]
+    fn anything_past_one_chunk_goes_through_a_session() {
+        let session = |size: u64| upload_uses_session(transport_chunk_count(size).unwrap());
+
+        assert!(!session(0));
+        assert!(!session(1));
+        assert!(!session(UPLOAD_CHUNK_SIZE));
+        assert!(session(UPLOAD_CHUNK_SIZE + 1));
+        assert!(session(UPLOAD_CHUNK_SIZE * 40));
+    }
+
+    /// A partial last chunk is still a chunk; rounding down would leave
+    /// the tail of every file that is not an exact multiple unsent.
+    #[test]
+    fn the_chunk_count_covers_the_whole_ciphertext() {
+        assert_eq!(transport_chunk_count(UPLOAD_CHUNK_SIZE).unwrap(), 1);
+        assert_eq!(transport_chunk_count(UPLOAD_CHUNK_SIZE + 1).unwrap(), 2);
+        assert_eq!(transport_chunk_count(UPLOAD_CHUNK_SIZE * 3).unwrap(), 3);
+        assert_eq!(transport_chunk_count(UPLOAD_CHUNK_SIZE * 3 - 1).unwrap(), 3);
+    }
+
+    /// An empty ciphertext must not declare a zero-chunk session, which
+    /// has nothing to finalize.
+    #[test]
+    fn an_empty_ciphertext_is_still_one_chunk() {
+        assert_eq!(transport_chunk_count(0).unwrap(), 1);
+    }
+
+    /// The count is sent as a u32; a size that cannot be expressed is
+    /// refused with a sentence rather than wrapping to a wrong count.
+    #[test]
+    fn a_size_past_the_wire_type_is_refused() {
+        let too_big = (u64::from(u32::MAX) + 1) * UPLOAD_CHUNK_SIZE;
+        assert!(transport_chunk_count(too_big).is_err());
     }
 }

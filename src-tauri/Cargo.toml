@@ -108,6 +108,10 @@ hex = "0.4"
 # type `crypto::encrypt_stream_with_hash` takes — a second major version
 # in the graph would be a different type with an identical name.
 blake3 = "1.8"
+# Chunk buffers for the session upload path; `Bytes` is what
+# `HcfsClient::upload_chunk_with_retry` takes. Same resolved version
+# hcfs-client uses, so it is the very type that API expects.
+bytes = "1"
 # Same glob engine hcfs-client compiles `.hippius/exclude` with. Two callers,
 # and the difference between them is deliberate: `validate_pattern` refuses a
 # pattern the engine would silently drop (validating with a different parser
