@@ -88,6 +88,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **Uploads into a folder you are browsing show in the sync queue**, alongside
   everything else being synced, instead of a message that sat on screen for the
   whole upload.
+- **Folders expand inside drives that are not synced on this computer.** The arrow
+  next to a folder did nothing there; it now opens the folder in place, the same as
+  it does for folders synced here.
 - **Search works inside folders that are not synced on this computer.** It now
   searches the whole drive, including subfolders you have not opened, the way it
   already did for folders synced here.
