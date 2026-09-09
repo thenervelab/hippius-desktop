@@ -186,6 +186,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Renaming a file inside a folder that is not synced on this computer works.**
+  The option was there but greyed out; only folders could be renamed. The new name
+  now appears straight away instead of after leaving the folder and coming back.
 - **Large files upload to a cloud folder again.** Uploading a big file into a folder
   that is not synced on this computer failed with a server error at the very end of
   the transfer. Files of any size now go up the same way they do for a synced

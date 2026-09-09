@@ -5,7 +5,7 @@ import { useAtomValue } from "jotai";
 import { invoke } from "@tauri-apps/api/core";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { notifyFilesMutated } from "@/app/lib/utils/fileMutationEvents";
-import { remoteLabelFromSource } from "@/app/lib/hooks/use-nested-folder-listing";
+import { remoteDriveLabel } from "@/app/lib/utils/renameGating";
 import { toast } from "sonner";
 
 export interface RenameFileArgs {
@@ -36,9 +36,10 @@ export const useRenameFile = () => {
             if (!polkadotAddress) throw new Error("Wallet not connected");
 
             // A row in a browsed REMOTE drive has nothing on disk to move,
-            // so it renames on the server instead. Its `remote://` source
-            // names the drive; the row's path names the folder within it.
-            const remoteLabel = remoteLabelFromSource(file.source);
+            // so it renames on the server instead. The same resolver the
+            // menu gate uses names the drive; the row's path names the
+            // folder within it.
+            const remoteLabel = remoteDriveLabel(file);
             if (remoteLabel) {
                 const relative = (file.actualFileName || file.name).replace(/\\/g, "/");
                 const cut = relative.lastIndexOf("/");

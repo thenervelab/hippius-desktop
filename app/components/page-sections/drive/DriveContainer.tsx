@@ -340,17 +340,24 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // nested view stays in step with the rest of the app.
   const [nestedRefreshKey, setNestedRefreshKey] = useState(0);
   useEffect(() => {
-    // LOCAL nested only. Remote views deliberately don't subscribe: an
-    // active sync dispatches these events every ~3s, and each bump re-walks
-    // a remote level's server pages for content that local sync events
-    // don't change anyway. Remote listings refresh on navigation and the
-    // manual refresh button.
-    if (!isNested || isRemoteView) return;
+    if (!isNested && !isRemoteView) return;
     const handler = () => setNestedRefreshKey((prev) => prev + 1);
-    window.addEventListener("sync_files_completed_changed", handler);
-    // In-app mutations (rename) change names instantly, long before the
-    // sync cycle completes — refresh on those too.
+
+    // Sync-cycle events are for LOCAL views only. An active sync
+    // dispatches them every ~3s, and each bump would re-walk a remote
+    // level's server pages for content a local sync cycle does not
+    // change anyway.
+    if (!isRemoteView) {
+      window.addEventListener("sync_files_completed_changed", handler);
+    }
+
+    // In-app mutations are a different thing, and remote views DO need
+    // them: a rename here is a server-side write the user just made, so
+    // the listing is stale the moment it returns. Without this the row
+    // kept its old name until the user navigated away and back, which
+    // reads as the rename having silently failed.
     window.addEventListener(FILES_MUTATED_EVENT, handler);
+
     return () => {
       window.removeEventListener("sync_files_completed_changed", handler);
       window.removeEventListener(FILES_MUTATED_EVENT, handler);

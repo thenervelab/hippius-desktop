@@ -265,6 +265,9 @@ export function useNestedFolderListing({
           isErasureCoded: false,
           mainReqHash: "",
           label: label || undefined,
+          // Every row of a browsed remote drive, files included — the
+          // `remote://` source only ever reached folder rows.
+          remoteDriveLabel: remote ? label || undefined : undefined,
           syncStatus:
             (entry.sync_status as FormattedUserFile["syncStatus"]) ??
             "unknown",
