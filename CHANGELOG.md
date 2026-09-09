@@ -17,6 +17,22 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
+- **Finder shows how each file in your Hippius folders is doing.** Files and
+  folders carry a badge in Finder: synced, syncing, shared by link, or failed.
+- **Hippius tells you when a folder lives inside Google Drive, Dropbox, OneDrive
+  or iCloud Drive.** Those folders still sync, but Finder badges and "Share with
+  Hippius" cannot appear inside another provider's folder, and syncing waits for
+  that provider to download each file. The folder row and the add-folder dialog
+  now say so.
+
+### Fixed
+
+- **A folder added from Settings gets "Share with Hippius" in Finder right away**,
+  not after the next launch, and a removed folder loses it.
+- **The "Turn on the Hippius Finder extension" notice no longer comes back after
+  you enable it and relaunch.** The app now waits for macOS to confirm the
+  switch before recording that it is on.
+
 - **Choose a storage plan without leaving Hippius.** A new Subscription Plans page
   under Account lists every plan with what it includes, shows the one you are on,
   and lets you subscribe, upgrade, downgrade or cancel. Pay from your credits, or
