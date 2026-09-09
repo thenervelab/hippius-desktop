@@ -32,6 +32,15 @@ interface PageHeaderProps {
   subtitle?: string;
   infoButton?: ReactNode;
   showTopUpCredits?: boolean;
+  /**
+   * Whether the header carries the plan card at all.
+   *
+   * Off on the Overview page: the Storage and Plan cards directly below it
+   * already state the plan, the usage and the way to change it, so a third
+   * copy in the header said nothing new and competed with the two that
+   * have room to say it properly.
+   */
+  showPlanCard?: boolean;
   /** When provided, replaces the default right-side block (Wallet +
    * Active Plan chips + Top-up button) with the supplied node. Used by
    * the wallet page to slot in the ActiveWalletSelector instead. */
@@ -43,6 +52,7 @@ const PageHeader: FC<PageHeaderProps> = ({
   subtitle = "Store. Compute. Own your infrastructure.",
   infoButton,
   showTopUpCredits = true,
+  showPlanCard = true,
   rightSlot,
 }) => {
   // Auth-account stake — see the comment in `useStaking` on why the
@@ -101,7 +111,7 @@ const PageHeader: FC<PageHeaderProps> = ({
 
       {rightSlot ? (
         <div className="flex items-center justify-end">{rightSlot}</div>
-      ) : (
+      ) : showPlanCard ? (
       <div
         className={cn(
           "flex items-stretch rounded-[8px]",
@@ -214,7 +224,7 @@ const PageHeader: FC<PageHeaderProps> = ({
           </div>
         )}
       </div>
-      )}
+      ) : null}
     </div>
   );
 };

@@ -92,6 +92,22 @@ describe("the header cards drop the action cell, not just its button", () => {
   });
 });
 
+describe("the Overview header carries no plan card", () => {
+  // The Storage and Plan cards sit immediately below it and already state
+  // the plan, the usage and Manage/Upgrade, with room to do it properly.
+  it("the home page turns the header card off", () => {
+    const home = readCode("../../../page-sections/home/index.tsx");
+    expect(home).toMatch(/<PageHeader[^>]*showPlanCard=\{false\}/);
+  });
+
+  // Drive has no cards of its own, so its header card is the only place
+  // the plan appears on that page — and it must survive this change.
+  it("the Drive page keeps its card", () => {
+    const drive = readCode("../../../../(pages)/files/page.tsx");
+    expect(drive).toContain("PlanSummaryCard");
+  });
+});
+
 describe("the home plan card states the plan, not its price", () => {
   const card = readCode("../../../page-sections/home/plan-overview/index.tsx");
 

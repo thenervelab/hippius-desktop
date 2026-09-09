@@ -154,9 +154,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   Upgrade or Top up Credits button when you need one — in place of the old
   Subscription Plans button. It stays with you inside every folder.
 - **The plan in the page header says how much storage is left.** On the free plan
-  it showed only the size of the allowance; every header now states what you have
+  it showed only the size of the allowance; the header now states what you have
   used out of it, and what percentage that is. A subscribed account is headed by
   its plan's name rather than a generic "Active Plan".
+- **The home page no longer repeats your plan in the header.** The Storage and Plan
+  cards below it already say all of that, with the room to say it properly.
 - **The plan card no longer quotes your monthly price back at you.** It shows the
   plan and its storage; billing detail is behind Manage.
 - **A plan with room left ends cleanly.** The page header no longer leaves an empty
