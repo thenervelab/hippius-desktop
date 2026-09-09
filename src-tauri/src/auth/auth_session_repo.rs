@@ -33,6 +33,9 @@ pub struct UpsertSession<'a> {
     pub user_id: Option<i64>,
     pub username: &'a str,
     pub provider: &'a str,
+    /// The sign-in email, for OAuth accounts. `None` leaves whatever is
+    /// stored in place — a token refresh must not blank it.
+    pub email: Option<&'a str>,
     pub logout_time_minutes: Option<i64>,
 }
 
@@ -48,6 +51,7 @@ pub struct AuthSessionRow {
     pub user_id: Option<i64>,
     pub username: Option<String>,
     pub provider: Option<String>,
+    pub email: Option<String>,
     pub substrate_address: Option<String>,
     pub logout_time_minutes: Option<i64>,
     pub last_login_at: Option<String>,
@@ -85,16 +89,17 @@ pub async fn upsert(pool: &SqlitePool, params: UpsertSession<'_>) -> Result<()> 
         r"
         INSERT INTO auth_session (
             owner, auth_token, token_expiry, user_id, username,
-            provider, substrate_address, logout_time_minutes,
+            provider, email, substrate_address, logout_time_minutes,
             last_login_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
         ON CONFLICT(owner) DO UPDATE SET
             auth_token = excluded.auth_token,
             token_expiry = excluded.token_expiry,
             user_id = excluded.user_id,
             username = excluded.username,
             provider = excluded.provider,
+            email = COALESCE(excluded.email, auth_session.email),
             substrate_address = excluded.substrate_address,
             logout_time_minutes = COALESCE(excluded.logout_time_minutes, auth_session.logout_time_minutes),
             last_login_at = excluded.last_login_at,
@@ -107,6 +112,7 @@ pub async fn upsert(pool: &SqlitePool, params: UpsertSession<'_>) -> Result<()> 
     .bind(params.user_id)
     .bind(params.username)
     .bind(params.provider)
+    .bind(params.email)
     .bind(params.substrate_address)
     .bind(params.logout_time_minutes)
     .execute(pool)
@@ -302,13 +308,14 @@ pub async fn get_by_account(pool: &SqlitePool, account_id: &str) -> Result<Optio
             Option<String>,
             Option<String>,
             Option<String>,
+            Option<String>,
             Option<i64>,
             Option<String>,
         ),
     >(
         r"
         SELECT auth_token, token_expiry, user_id, username,
-               provider, substrate_address, logout_time_minutes, last_login_at
+               provider, email, substrate_address, logout_time_minutes, last_login_at
         FROM auth_session
         WHERE owner = ?
         ",
@@ -317,7 +324,7 @@ pub async fn get_by_account(pool: &SqlitePool, account_id: &str) -> Result<Optio
     .fetch_optional(pool)
     .await?;
 
-    let Some((db_token, token_expiry, user_id, username, provider, substrate_address, logout_time_minutes, last_login_at)) = row else {
+    let Some((db_token, token_expiry, user_id, username, provider, email, substrate_address, logout_time_minutes, last_login_at)) = row else {
         return Ok(None);
     };
 
@@ -335,6 +342,7 @@ pub async fn get_by_account(pool: &SqlitePool, account_id: &str) -> Result<Optio
         user_id,
         username,
         provider,
+        email,
         substrate_address,
         logout_time_minutes,
         last_login_at,
@@ -369,13 +377,14 @@ pub async fn get_latest(pool: &SqlitePool) -> Result<Option<AuthSessionRow>> {
             Option<String>,
             Option<String>,
             Option<String>,
+            Option<String>,
             Option<i64>,
             Option<String>,
         ),
     >(
         r"
         SELECT auth_token, token_expiry, user_id, username,
-               provider, substrate_address, logout_time_minutes, last_login_at
+               provider, email, substrate_address, logout_time_minutes, last_login_at
         FROM auth_session
         WHERE substrate_address IS NOT NULL
         ORDER BY updated_at DESC
@@ -385,7 +394,7 @@ pub async fn get_latest(pool: &SqlitePool) -> Result<Option<AuthSessionRow>> {
     .fetch_optional(pool)
     .await?;
 
-    let Some((db_token, token_expiry, user_id, username, provider, substrate_address, logout_time_minutes, last_login_at)) = row else {
+    let Some((db_token, token_expiry, user_id, username, provider, email, substrate_address, logout_time_minutes, last_login_at)) = row else {
         return Ok(None);
     };
 
@@ -406,6 +415,7 @@ pub async fn get_latest(pool: &SqlitePool) -> Result<Option<AuthSessionRow>> {
         user_id,
         username,
         provider,
+        email,
         substrate_address,
         logout_time_minutes,
         last_login_at,
@@ -476,6 +486,7 @@ mod tests {
                 user_id INTEGER,
                 username TEXT,
                 provider TEXT,
+                email TEXT,
                 substrate_address TEXT,
                 logout_time_minutes INTEGER DEFAULT 1440,
                 last_login_at TEXT,
@@ -505,6 +516,7 @@ mod tests {
                 user_id: Some(42),
                 username: "testuser",
                 provider: "mnemonic",
+                email: None,
                 logout_time_minutes: Some(1440),
             },
         )
@@ -537,6 +549,7 @@ mod tests {
                 user_id: None,
                 username: "u",
                 provider: "mnemonic",
+                email: None,
                 logout_time_minutes: Some(60),
             },
         )
@@ -552,6 +565,7 @@ mod tests {
                 user_id: None,
                 username: "u",
                 provider: "mnemonic",
+                email: None,
                 logout_time_minutes: None, // refresh path: don't touch the preference
             },
         )
@@ -576,6 +590,7 @@ mod tests {
                 user_id: None,
                 username: "u",
                 provider: "mnemonic",
+                email: None,
                 logout_time_minutes: Some(60),
             },
         )
@@ -591,6 +606,7 @@ mod tests {
                 user_id: None,
                 username: "u",
                 provider: "mnemonic",
+                email: None,
                 logout_time_minutes: Some(1440),
             },
         )
@@ -614,6 +630,7 @@ mod tests {
                 user_id: Some(1),
                 username: "bob",
                 provider: "mnemonic",
+                email: None,
                 logout_time_minutes: Some(60),
             },
         )
@@ -645,6 +662,7 @@ mod tests {
                 user_id: Some(99),
                 username: "alice",
                 provider: "mnemonic",
+                email: None,
                 logout_time_minutes: Some(1440),
             },
         )
@@ -669,6 +687,7 @@ mod tests {
                 user_id: Some(1),
                 username: "bob",
                 provider: "mnemonic",
+                email: None,
                 logout_time_minutes: Some(60),
             },
         )
@@ -705,6 +724,7 @@ mod tests {
                 user_id: Some(1),
                 username: "u",
                 provider: "mnemonic",
+                email: None,
                 logout_time_minutes: Some(1440),
             },
         )
@@ -805,6 +825,60 @@ mod tests {
         );
     }
 
+    /// The account menu can only say who is signed in if the email
+    /// outlives the launch it was captured on. It used to reach the
+    /// frontend on the OAuth callback and nowhere else, so every restart
+    /// left the menu with a wallet address and nothing more.
+    #[tokio::test]
+    async fn the_sign_in_email_survives_a_restart() {
+        let pool = setup_db().await;
+        upsert(
+            &pool,
+            UpsertSession {
+                substrate_address: ALICE,
+                token: "t",
+                token_expiry_ms: chrono::Utc::now().timestamp_millis() + 86_400_000,
+                user_id: Some(1),
+                username: "ahmad_rao",
+                provider: "google",
+                email: Some("a@b.com"),
+                logout_time_minutes: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let row = get_by_account(&pool, ALICE).await.unwrap().unwrap();
+        assert_eq!(row.email.as_deref(), Some("a@b.com"));
+        // The SPECIFIC provider, not the flattened "oauth" tag — it is
+        // what names the badge in the menu.
+        assert_eq!(row.provider.as_deref(), Some("google"));
+    }
+
+    /// A token refresh re-upserts with no email of its own. Binding that
+    /// `None` straight through would blank the stored address on the
+    /// first refresh, which is worse than never having stored it.
+    #[tokio::test]
+    async fn a_later_upsert_without_an_email_keeps_the_stored_one() {
+        let pool = setup_db().await;
+        let base = |email| UpsertSession {
+            substrate_address: ALICE,
+            token: "t",
+            token_expiry_ms: chrono::Utc::now().timestamp_millis() + 86_400_000,
+            user_id: Some(1),
+            username: "ahmad_rao",
+            provider: "google",
+            email,
+            logout_time_minutes: None,
+        };
+
+        upsert(&pool, base(Some("a@b.com"))).await.unwrap();
+        upsert(&pool, base(None)).await.unwrap();
+
+        let row = get_by_account(&pool, ALICE).await.unwrap().unwrap();
+        assert_eq!(row.email.as_deref(), Some("a@b.com"));
+    }
+
     /// M-1: a row whose token lives ONLY in the keychain (DB column NULL
     /// — the post-migration shape) must report `keychain_unavailable`
     /// when the keychain cannot be read, so restore can fail soft
@@ -823,6 +897,7 @@ mod tests {
                 user_id: Some(1),
                 username: "alice",
                 provider: "oauth",
+                email: None,
                 logout_time_minutes: Some(1440),
             },
         )
@@ -862,6 +937,7 @@ mod tests {
                 user_id: Some(1),
                 username: "alice",
                 provider: "mnemonic",
+                email: None,
                 logout_time_minutes: Some(1440),
             },
         )
@@ -885,6 +961,7 @@ mod tests {
                 user_id: Some(1),
                 username: "alice",
                 provider: "mnemonic",
+                email: None,
                 logout_time_minutes: Some(60),
             },
         )
@@ -900,6 +977,7 @@ mod tests {
                 user_id: Some(2),
                 username: "bob",
                 provider: "oauth",
+                email: None,
                 logout_time_minutes: Some(1440),
             },
         )

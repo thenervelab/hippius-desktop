@@ -210,13 +210,16 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
           <ChevronDown className="size-[12px] shrink-0 text-black-700/60 dark:text-grey-light-300/60 transition-transform duration-200 group-data-[state=open]:rotate-180" />
         )}
       </span>
-      <span className="flex items-center gap-1 mt-1 whitespace-nowrap">
+      {/* The address, under the sign-in identity — the console's layout.
+          It used to carry the chain's block height instead, which said
+          nothing about the account and left the address nowhere on the
+          card. The block height moves into the menu, where it is still
+          one click away without competing with the identity. */}
+      <span className="flex items-center gap-1 mt-1 w-full min-w-0">
         <BoxSimple className="size-[13px] text-black-700 dark:text-grey-light-600 flex-shrink-0" />
-        {isConnected && blockNumber != null && (
-          <span className="text-[10px] font-medium leading-[14px] text-primary-50 dark:text-primary-brand-dark tracking-[-0.2px]">
-            # {blockNumber.toString()}
-          </span>
-        )}
+        <span className="min-w-0 truncate text-[10px] font-medium leading-[14px] text-primary-50 dark:text-primary-brand-dark tracking-[-0.2px]">
+          {truncatedAddress}
+        </span>
       </span>
     </span>
   );
@@ -391,6 +394,18 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
             />
           </span>
         </DropdownMenuItem>
+
+        {/* The chain height, displaced from the card when the address took
+            its line. Not a menu item: there is nothing to click, and
+            making it one would put a dead row in the keyboard order. */}
+        {isConnected && blockNumber != null && (
+          <div className="flex items-center gap-2 px-3 pb-1.5 pt-0.5">
+            <BoxSimple className="size-4 shrink-0 text-black-700/50 dark:text-grey-light-600/50" />
+            <span className="font-geist text-[11px] font-medium leading-4 tracking-[-0.2px] text-[#52525c] dark:text-[#a3a3a3]">
+              Block # {blockNumber.toString()}
+            </span>
+          </div>
+        )}
 
         <DropdownMenuItem
           onSelect={() => void openHipstatsAccount()}

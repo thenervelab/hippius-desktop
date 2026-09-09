@@ -196,9 +196,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 ### Fixed
 
 - **The account menu says who you are signed in as.** It showed only your wallet
-  address; it now leads with the email or handle you signed in with, and the open
-  menu names your account, your email and which provider you used — matching the web
-  console. The address moved to its own row, with a copy button.
+  address; it now leads with the email or handle you signed in with, with your
+  address below it, and the open menu names your account, your email and which
+  service you signed in with — matching the web console. Your email and provider now
+  survive a restart, so the menu no longer forgets who you are after relaunching.
 - **The Excluded filter only appears when you have excluded something.** It used to
   show on every drive, where pressing it could only ever return nothing.
 - **Upload Folder and Sync a Folder are easier to tell apart.** They are separated on
