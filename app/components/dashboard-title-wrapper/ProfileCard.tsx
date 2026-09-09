@@ -4,7 +4,6 @@ import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 
 import { useWalletAuth } from "@/lib/wallet-auth-context";
-import { usePolkadotApi } from "@/lib/polkadot-api-context";
 import dynamic from "next/dynamic";
 import { openAppLink } from "@/app/lib/utils/links";
 import cn from "@/app/lib/utils/cn";
@@ -56,7 +55,6 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
   // so it cannot change while the app runs — a switch installs a different
   // build and restarts.
   const [channel, setChannel] = useState<ReleaseChannel | null>(null);
-  const { blockNumber, isConnected } = usePolkadotApi();
   const router = useRouter();
 
   // Copy-address feedback: the menu item's icon cross-fades into a green check
@@ -211,10 +209,11 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
         )}
       </span>
       {/* The address, under the sign-in identity — the console's layout.
-          It used to carry the chain's block height instead, which said
-          nothing about the account and left the address nowhere on the
-          card. The block height moves into the menu, where it is still
-          one click away without competing with the identity. */}
+          It used to carry the chain's block height, which said nothing
+          about the account and left the address nowhere on the card. The
+          height is gone rather than relocated: it is a node-health
+          reading, not an account fact, and this card answers "who am I
+          signed in as". */}
       <span className="flex items-center gap-1 mt-1 w-full min-w-0">
         <BoxSimple className="size-[13px] text-black-700 dark:text-grey-light-600 flex-shrink-0" />
         <span className="min-w-0 truncate text-[10px] font-medium leading-[14px] text-primary-50 dark:text-primary-brand-dark tracking-[-0.2px]">
@@ -394,18 +393,6 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
             />
           </span>
         </DropdownMenuItem>
-
-        {/* The chain height, displaced from the card when the address took
-            its line. Not a menu item: there is nothing to click, and
-            making it one would put a dead row in the keyboard order. */}
-        {isConnected && blockNumber != null && (
-          <div className="flex items-center gap-2 px-3 pb-1.5 pt-0.5">
-            <BoxSimple className="size-4 shrink-0 text-black-700/50 dark:text-grey-light-600/50" />
-            <span className="font-geist text-[11px] font-medium leading-4 tracking-[-0.2px] text-[#52525c] dark:text-[#a3a3a3]">
-              Block # {blockNumber.toString()}
-            </span>
-          </div>
-        )}
 
         <DropdownMenuItem
           onSelect={() => void openHipstatsAccount()}

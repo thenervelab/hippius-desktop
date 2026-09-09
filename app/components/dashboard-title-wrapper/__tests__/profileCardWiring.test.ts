@@ -43,4 +43,11 @@ describe("the account card matches the console", () => {
     expect(card).toContain("WalletMinimal");
     expect(card).not.toMatch(/>Copy address</);
   });
+
+  // A node-health reading, not an account fact — this card answers "who
+  // am I signed in as", and the chain height competed with the address
+  // for the one line under the identity.
+  it("shows no chain height, on the card or in the menu", () => {
+    expect(card).not.toMatch(/blockNumber|usePolkadotApi/);
+  });
 });
