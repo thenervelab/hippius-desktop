@@ -9,6 +9,7 @@ import { useSetAtom } from "jotai";
 
 import InfoTooltip from "@/components/ui/info-tooltip";
 import { fileDetailsPanelAtom } from "@/app/lib/global-atoms/fileDetailsAtoms";
+import { BILLING_ROUTE } from "@/app/lib/routes";
 
 const DRIVE_DOCS_URL = "https://docs.hippius.com/use/desktop/drive";
 
@@ -48,7 +49,7 @@ const FilesPage: FC = () => {
           // every local or remote drive alike.
           <Button
             asLink
-            href="/drive-plans"
+            href={BILLING_ROUTE}
             variant="raised"
             size="auto"
             className="flex items-center gap-2 px-4 py-2 text-[14px] font-medium leading-[1.109] tracking-[-0.28px]"

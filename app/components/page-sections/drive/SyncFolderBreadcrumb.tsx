@@ -1,7 +1,8 @@
 "use client";
 
 import { FC, Fragment } from "react";
-import { ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
+import { resolveBreadcrumbBack } from "./breadcrumbBack";
 import { cn } from "@/lib/utils";
 
 /**
@@ -22,13 +23,6 @@ interface SyncFolderBreadcrumbProps {
   /** Click handler for the fixed root segment — switches drive to the cards view. */
   onLocalClick: () => void;
   /**
-   * Label of the fixed root segment. "Local" for locally synced drives; the
-   * drive view passes "Remote" when browsing a server-only drive, since
-   * nothing about that drive is local to this machine. Both click through to
-   * the same cards view (which lists both sections).
-   */
-  rootLabel?: string;
-  /**
    * Path segments rendered AFTER "Local". Empty when the user is on the
    * Local cards view. First entry is the top-level sync folder; subsequent
    * entries are nested folders the user has dived into.
@@ -38,14 +32,26 @@ interface SyncFolderBreadcrumbProps {
   className?: string;
 }
 
+/**
+ * The root segment reads "Drive" for every folder, wherever it is synced.
+ *
+ * It used to say "Local" or "Remote" depending on the drive, which named
+ * an implementation detail the user has no reason to hold: both click
+ * through to the SAME place — the full folder list — so two labels for
+ * one destination only invited the question of what the difference was.
+ * Whether a folder is on this machine is now shown on its own row, which
+ * is where it is actually useful.
+ */
+const ROOT_LABEL = "Drive";
+
 const SEGMENT_BASE = cn(
   "font-geist text-[14px] font-medium leading-normal tracking-[-0.28px]",
   "whitespace-nowrap",
 );
 
 const SEGMENT_INACTIVE = cn(
-  "text-black-700 dark:text-grey-light-200 opacity-40",
-  "hover:opacity-100 transition-opacity cursor-pointer",
+  "text-black-700 dark:text-grey-light-200 opacity-70",
+  "hover:opacity-100 hover:underline underline-offset-2 transition-opacity cursor-pointer",
 );
 
 const SEGMENT_ACTIVE = "text-black-700 dark:text-grey-light-200";
@@ -57,9 +63,9 @@ const SyncFolderBreadcrumb: FC<SyncFolderBreadcrumbProps> = ({
   onLocalClick,
   segments,
   className,
-  rootLabel = "Local",
 }) => {
   const hasSegments = segments.length > 0;
+  const back = resolveBreadcrumbBack(segments, onLocalClick);
 
   return (
     <nav
@@ -69,6 +75,25 @@ const SyncFolderBreadcrumb: FC<SyncFolderBreadcrumbProps> = ({
         className,
       )}
     >
+      {/* Up one level. The trail alone was the only way out of a folder,
+          and reading it means working out which word is your parent. This
+          says it plainly and is the first thing in the row, where a back
+          control is looked for. */}
+      {back && (
+        <button
+          type="button"
+          onClick={back.go}
+          aria-label={back.label}
+          title={back.label}
+          className={cn(
+            "mr-1 inline-flex size-[26px] shrink-0 items-center justify-center rounded-[6px]",
+            "border border-grey-80 text-black-700 transition-colors",
+            "hover:bg-grey-90 dark:border-black-300 dark:text-grey-light-200 dark:hover:bg-white/10",
+          )}
+        >
+          <ChevronLeft className="size-4" />
+        </button>
+      )}
       <button
         type="button"
         onClick={onLocalClick}
@@ -78,7 +103,7 @@ const SyncFolderBreadcrumb: FC<SyncFolderBreadcrumbProps> = ({
           "bg-transparent border-0 p-0 m-0",
         )}
       >
-        {rootLabel}
+        {ROOT_LABEL}
       </button>
       {segments.map((segment, index) => {
         const isLast = index === segments.length - 1;

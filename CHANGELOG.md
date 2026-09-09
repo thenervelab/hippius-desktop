@@ -71,6 +71,67 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   and one line underneath explains whichever you have picked. If your balance will
   not cover the plan you can still open the credits option, so you can see how far
   short you are and top up from there.
+- **Every upgrade and top-up prompt now goes to the same place**, the Billing page
+  in Settings. The separate Subscription Plans page is gone — it showed a subset of
+  what Billing shows, so the two prompts used to lead to two different screens.
+- **Billing and plans are one place instead of two.** "Subscription Plans" and
+  "Billing" were separate sidebar entries for the same subject. Your Drive plans
+  now live inside Billing, and Billing has moved into Settings.
+- **The folder path now starts at "Drive"** wherever the folder is synced, instead
+  of "Local" or "Remote". Clicking it returns you to the full folder list.
+- **Getting back out of a folder is obvious now.** There is a back button next to
+  the folder path, and the path itself is easier to read. Before, the faint trail
+  of folder names was the only way out.
+- **You can upload straight from the folder list**, without opening a folder first.
+- **You can sign in with Apple.** The button was there but permanently greyed out;
+  it works now.
+- **Uploads into a folder you are browsing show in the sync queue**, alongside
+  everything else being synced, instead of a message that sat on screen for the
+  whole upload.
+- **The share button is back on files you are only browsing.** Opening a file from
+  a drive that is not synced on this computer showed no share option; it does now,
+  and the link works the same way.
+- **Folders expand inside drives that are not synced on this computer.** The arrow
+  next to a folder did nothing there; it now opens the folder in place, the same as
+  it does for folders synced here.
+- **Search works inside folders that are not synced on this computer.** It now
+  searches the whole drive, including subfolders you have not opened, the way it
+  already did for folders synced here.
+- **You can create folders in drives that are not synced on this computer.**
+- **You can now upload into folders that are not synced on this computer.** Open a
+  folder you are only browsing and add files to it directly; they go straight to
+  your Drive without downloading the folder first.
+- **You can rename files in folders that are not synced on this computer**, from the
+  same menu as anywhere else, without downloading the folder first.
+- **Clicking a folder in Settings opens that folder**, instead of dropping you on
+  the Drive page to find it again.
+- **All your folders are in one list.** The Drive page split them across three
+  headings — folders on this computer, folders from other devices, and folders
+  synced nowhere. They are now a single list, each row showing where that folder
+  actually is: a cloud mark for the ones not on this machine, and a line naming
+  the device that has it.
+- **Drive always opens on your full folder list.** It used to reopen wherever you
+  last were, which left no reliable way back to the top — clicking Drive in the
+  sidebar returned you to a folder rather than the list. This replaces the
+  "reopens where you left off" behaviour added in 0.6.0.
+- **The button in the top corner now offers what your account actually needs.**
+  On the free plan it offers to upgrade instead of topping up credits, which buy
+  no Drive storage. On a plan it shows how much of your storage you have used, and
+  offers an upgrade once you pass 80% — or a top-up only when your credits will not
+  cover the next renewal. A healthy plan is not sold anything. The same cell now
+  behaves this way on the Drive page as well as the overview.
+- **Billing no longer mixes in plans for a different product.** The credit-reload
+  packages and the billing history table have been taken off the page, so it shows
+  the plan that governs your Drive storage and the credits that pay for it.
+- **"Confidential Computing" is gone from the sidebar.** The entry held only
+  Virtual Machines, which is not available yet, so it advertised a section that
+  led nowhere.
+- **The upload buttons say what they do.** "+ New Folder" and "+ Add Files" are now
+  "Upload Folder" and "Upload File", worded the same way everywhere they appear.
+  The old wording suggested you could create a folder in the app, which was never
+  possible — both buttons send something that already exists on your computer.
+- **Setting up a folder to sync reads differently from uploading one**, so the two
+  are no longer easy to confuse.
 - **Shared drives are hidden until they launch.** Sharing a drive with someone and
   the "Shared with me" list are not available in this release, matching what the
   plan cards say. Drives already set up keep syncing as normal.

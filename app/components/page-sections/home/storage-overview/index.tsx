@@ -11,6 +11,7 @@ import { nextSkeletonState } from "@/lib/utils/skeletonGate";
 import { cn } from "@/app/lib/utils";
 
 import GripIcon from "../GripIcon";
+import { BILLING_ROUTE } from "@/app/lib/routes";
 import {
   formatPercentLabel,
   getCapacitySourceLabel,
@@ -166,7 +167,7 @@ const StorageOverviewCard: React.FC<{ className?: string }> = ({
               </div>
               <Button
                 asLink
-                href="/billing"
+                href={BILLING_ROUTE}
                 variant="primaryLight"
                 size="auto"
                 className="px-4 py-2 text-[14px] font-medium leading-[1.109] tracking-[-0.28px]"

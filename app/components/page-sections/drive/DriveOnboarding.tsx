@@ -25,9 +25,14 @@ import {
   saveHcfsConfig,
 } from "@/app/lib/utils/hcfsConfigUtils";
 import { HcfsSetupDialog } from "@/components/page-sections/settings/HcfsSetupDialog";
+import { Button } from "@/components/ui/button";
+import FolderList from "./folder-list/FolderList";
+import AddButton from "./AddFileButton";
+import FolderUploadDialog from "./FolderUploadDialog";
+import { toFolderRows, type FolderRow } from "./folder-list/folderRows";
+import { buildFolderActions } from "./folder-list/buildFolderActions";
+import { SYNC_FOLDER_LABEL, UPLOAD_FOLDER_LABEL } from "./uploadActions";
 import {
-  LocalFoldersSection,
-  RemoteFoldersSection,
   SharedWithMeSection,
   RemoveFolderDialog,
   PauseSyncDialog,
@@ -79,7 +84,7 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
       // `applyDriveStatusToRow` resolver — MultiFolderSyncManager uses the
       // same one, so the two surfaces cannot diverge. An errored drive
       // (init failure, revoked shared drive) renders the error treatment
-      // in LocalFoldersSection instead of being collapsed into "paused".
+      // in the folder list instead of being collapsed into "paused".
       prev.map((f) => applyDriveStatusToRow(driveStatuses.get(f.id), f))
     );
   }, [driveStatuses]);
@@ -102,6 +107,7 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
   // Pause sync dialog state
   // Drive label whose exclusions are being edited, or null when closed.
   const [exclusionsLabel, setExclusionsLabel] = useState<string | null>(null);
+  const [isFolderUploadOpen, setIsFolderUploadOpen] = useState(false);
   const [pauseDialog, setPauseDialog] = useState<{
     open: boolean;
     folder: SyncFolder | null;
@@ -169,7 +175,7 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
 
       // Keep all three stat fields the Rust IPC returns
       // (`get_sync_folders_with_stats` already populates them). The
-      // shared `LocalFoldersSection` renders them inline next to the
+      // shared folder list renders them inline next to the
       // status pill, so dropping them here was the difference between
       // the Files-page card showing "default · Syncing" and the
       // Settings-page card showing "default · Syncing · 229.8 MB ·
@@ -516,68 +522,106 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
     }
   };
 
-  return (
-    <>
-      {/* `px-3` mirrors the 12px gutter the drive page applies to the
-          files view (see DriveContainer), so the Local cards line up
-          with the files table when switching between the breadcrumb's
-          "Local" and folder views. Settings reuses LocalFoldersSection /
-          RemoteFoldersSection directly without this wrapper, so its
-          gutter is unaffected. */}
-      <div className="w-full flex flex-col gap-3 px-3">
-        {/* ──────── Local Sync Folders (shared component) ──────── */}
-        <LocalFoldersSection
-          syncFolders={syncFolders}
-          isLoading={isLoading}
-          onAddFolder={() => setShowAddDialog(true)}
-          onPauseFolder={(folder) => setPauseDialog({ open: true, folder })}
-          onResumeFolder={handleResumeSync}
-          onManageExclusions={(folder) => setExclusionsLabel(folder.id)}
-          onRemoveFolder={(folder) =>
-            setRemoveDialog({
-              open: true,
-              folderId: folder.id,
-              folderName: folder.folderName,
-              mode: "remove",
-            })
-          }
-          onLeaveDrive={(folder) =>
-            setRemoveDialog({
-              open: true,
-              folderId: folder.id,
-              folderName: folder.folderName,
-              mode: "leave",
-            })
-          }
-          onDeleteFromServer={openDeleteServerDialog}
-          onBrowseFolder={(folder) => handleBrowseFolder({
+  // Uploading from the folder list needs a destination, and this view has
+  // no active folder — so both dialogs default to the first local drive
+  // and let the user pick another inside. A folder that is not synced here
+  // cannot receive an upload yet, so an account with none gets no buttons
+  // rather than ones that open onto an empty picker.
+  const firstLocalLabel = syncFolders[0]?.id ?? null;
+  const canUpload = Boolean(firstLocalLabel);
+
+  // One list, built from the two sources the page already loads.
+  const folderRows = toFolderRows(syncFolders, remoteFolders);
+
+  // Opening a row: a local folder selects it, a remote one opens the
+  // browsable server view. Both were row clicks before; they still are.
+  const handleOpenRow = (row: FolderRow) => {
+    if (row.local) {
+      onSelectFolder?.(row.local.id);
+      return;
+    }
+    if (row.remote) {
+      onOpenRemoteFolder?.(row.remote.folderName);
+    }
+  };
+
+  const buildRowActions = (row: FolderRow) =>
+    buildFolderActions(row, {
+      onOpen: handleOpenRow,
+      onPause: (folder) => setPauseDialog({ open: true, folder }),
+      onResume: (folder) => void handleResumeSync(folder),
+      onManageExclusions: (folder) => setExclusionsLabel(folder.id),
+      onRemove: (folder, mode) =>
+        setRemoveDialog({
+          open: true,
+          folderId: folder.id,
+          folderName: folder.folderName,
+          mode,
+        }),
+      onDeleteFromServer: openDeleteServerDialog,
+      onSyncRemote: handleSyncRemoteFolder,
+      onBrowseRemote: (folder) => void handleBrowseFolder(folder),
+      // The selective-sync picker for a LOCAL drive — the synthetic
+      // browse target the old section built, unchanged.
+      onBrowseLocal: (folder) =>
+        void handleBrowseFolder(
+          {
             folderName: folder.folderName,
             deviceName: folder.deviceName ?? "This Device",
             lastModified: folder.lastModified ?? 0,
             fileCount: folder.fileCount ?? 0,
             totalBytes: folder.totalBytes ?? 0,
-          }, true)}
-          onSelectFolder={
-            onSelectFolder
-              ? (folder) => onSelectFolder(folder.id)
-              : undefined
-          }
-        />
+          },
+          true,
+        ),
+    });
 
-        {/* ──────── Sync from Other Devices (shared component) ──────── */}
-        <RemoteFoldersSection
-          remoteFolders={remoteFolders}
+  return (
+    <>
+      {/* `px-3` mirrors the 12px gutter the drive page applies to the
+          files view (see DriveContainer), so the Local cards line up
+          with the files table when switching between the breadcrumb's
+          "Local" and folder views. Settings renders the same FolderList
+          without this wrapper, so its gutter is unaffected. */}
+      <div className="w-full flex flex-col gap-3 px-3">
+        {/* One list for every folder on the account. The three cards
+            this replaces — Local Sync Folders, Sync from Other Devices,
+            Not synced on this computer — split one idea across three
+            headings; what they said now rides on each row as a cloud
+            mark and a short label. */}
+        <FolderList
+          rows={folderRows}
           isLoading={isLoading}
-          onSyncFolder={handleSyncRemoteFolder}
-          onDeleteFromServer={(folderName) =>
-            openDeleteServerDialog(folderName)
+          headerAction={
+            <div className="flex items-center gap-2">
+              {canUpload && (
+                <>
+                  <Button
+                    variant="defaultStable"
+                    size="auto"
+                    onClick={() => setIsFolderUploadOpen(true)}
+                    className="h-[26px] rounded-[6px] px-2.5 text-[12px] font-medium"
+                  >
+                    {UPLOAD_FOLDER_LABEL}
+                  </Button>
+                  <AddButton
+                    defaultFolderLabel={firstLocalLabel}
+                    className="h-[26px] rounded-[6px] px-2.5 text-[12px] font-medium"
+                  />
+                </>
+              )}
+              <Button
+                variant="defaultStable"
+                size="auto"
+                onClick={() => setShowAddDialog(true)}
+                className="h-[26px] rounded-[6px] px-2.5 text-[12px] font-medium"
+              >
+                {SYNC_FOLDER_LABEL}
+              </Button>
+            </div>
           }
-          onBrowseFolder={handleBrowseFolder}
-          onOpenFolder={
-            onOpenRemoteFolder
-              ? (folder) => onOpenRemoteFolder(folder.folderName)
-              : undefined
-          }
+          onOpenRow={handleOpenRow}
+          buildActions={buildRowActions}
         />
 
         {/* Flag-gated; renders nothing unless drives are shared with this
@@ -593,6 +637,13 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
       </div>
 
       {/* ──────── Dialogs ──────── */}
+      <FolderUploadDialog
+        open={isFolderUploadOpen}
+        onClose={() => setIsFolderUploadOpen(false)}
+        onRefresh={loadFolders}
+        defaultFolderLabel={firstLocalLabel}
+      />
+
       <AddLocalFolderDialog
         open={showAddDialog}
         onClose={() => setShowAddDialog(false)}

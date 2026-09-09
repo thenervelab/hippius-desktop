@@ -57,47 +57,10 @@ export async function saveUserPreference<T = unknown>(key: string, value: T): Pr
   }
 }
 
-// ── Active sync folder breadcrumb selection ────────────────────────────────────
-// Persists which sync folder the drive page should land on across sessions,
-// plus whether the user was last viewing the "Local" cards view (the section
-// picker showing Local Sync Folders + Sync From Other Devices) vs. inside a
-// specific folder. Both are restored on next entry to /files so navigating
-// away and back leaves the user where they were.
-
-const ACTIVE_SYNC_FOLDER_KEY = "active_sync_folder_label";
-const DRIVE_ON_LOCAL_VIEW_KEY = "drive_on_local_view";
-
-export async function getActiveSyncFolderLabel(): Promise<string | null> {
-  return (await getUserPreference<string>(ACTIVE_SYNC_FOLDER_KEY)) ?? null;
-}
-
-export async function saveActiveSyncFolderLabel(label: string): Promise<void> {
-  await saveUserPreference(ACTIVE_SYNC_FOLDER_KEY, label);
-}
-
-export async function getDriveOnLocalView(): Promise<boolean> {
-  return (await getUserPreference<boolean>(DRIVE_ON_LOCAL_VIEW_KEY)) ?? false;
-}
-
-export async function saveDriveOnLocalView(onLocalView: boolean): Promise<void> {
-  await saveUserPreference(DRIVE_ON_LOCAL_VIEW_KEY, onLocalView);
-}
-
-// The REMOTE (server-only) drive the user was last browsing, mutually
-// exclusive with the local label above by write discipline: opening a remote
-// drive stores it here, while choosing a local folder or the cards view
-// clears it — so next session reopens exactly one of the three places the
-// user can be (a local drive, a remote drive, or the cards view).
-const ACTIVE_REMOTE_FOLDER_KEY = "active_remote_folder_label";
-
-export async function getActiveRemoteFolderLabel(): Promise<string | null> {
-  const value = await getUserPreference<string>(ACTIVE_REMOTE_FOLDER_KEY);
-  return value ? value : null;
-}
-
-export async function saveActiveRemoteFolderLabel(label: string | null): Promise<void> {
-  await saveUserPreference(ACTIVE_REMOTE_FOLDER_KEY, label ?? "");
-}
+// NOTE: the "resume where the last session ended" preferences that used to
+// live here (active sync label, on-local-view flag, active remote label)
+// were removed on 2026-09-08. The Drive page now always opens on the full
+// folder list, so nothing reads or writes them.
 
 // ── Last browse directory ──────────────────────────────────────────────────────
 // Remembers the last directory the user browsed to in file/folder pickers,

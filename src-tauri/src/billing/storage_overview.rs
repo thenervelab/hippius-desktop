@@ -65,6 +65,77 @@ pub struct PlanInfo {
     /// Marketed SKU label (`format_storage_display`): 999 GB → "1.00 TB".
     /// Chip / plan card render this instead of `formatBytes(storageBytes)`.
     pub storage_display: String,
+    /// How the plan is paid for: `"credits"` or `"card"`, as the drive rail
+    /// reports it. `None` for the legacy Stripe storage subscription, which
+    /// predates the field. Only [`PlanAction`] reads it — the FE must not
+    /// re-derive a prompt from it, or the two disagree.
+    pub funding: Option<String>,
+}
+
+/// What the header should offer this account, decided once here.
+///
+/// Three surfaces show this cell (home header, Files header, and the Drive
+/// page) and they must agree, for the same reason `CapacitySource` is
+/// resolved in Rust: a prompt derived independently per surface is a prompt
+/// that eventually contradicts itself.
+#[derive(Serialize, Debug, PartialEq, Eq, Clone, Copy)]
+#[serde(rename_all = "kebab-case")]
+pub enum PlanAction {
+    /// No plan, or a plan that is filling up. More storage means a bigger
+    /// plan, so credits are not the answer and must not be offered.
+    Upgrade,
+    /// A credits-funded plan whose balance will not cover its next renewal.
+    /// Card-funded plans never get this: the card renews itself and there
+    /// is nothing to top up.
+    TopUpCredits,
+    /// Nothing to prompt — a healthy plan with room left.
+    None,
+}
+
+/// Storage fill at which a plan stops being big enough to recommend
+/// sitting on. Matches the FE's `getUsageTone` amber threshold, so the bar
+/// turning amber and the header asking for an upgrade happen together
+/// rather than at two different numbers.
+const UPGRADE_AT_PERCENT: f64 = 80.0;
+
+/// The rule behind [`PlanAction`], pure so the matrix is testable without a
+/// backend.
+///
+/// Order matters. Running out of SPACE is answered by a bigger plan
+/// whatever funds it, so it is checked first and applies to card accounts
+/// too. Running low on CREDITS is only meaningful for a credits-funded
+/// plan, and is judged against the plan's own price rather than a fixed
+/// number, so it tracks the plan instead of needing a threshold nobody
+/// revisits.
+fn resolve_plan_action(source: CapacitySource, percent: f64, plan: Option<&PlanInfo>) -> PlanAction {
+    if source != CapacitySource::Subscription || plan.is_none() {
+        // The free tier is an allowance, not a plan: the way to more room
+        // is to subscribe.
+        return PlanAction::Upgrade;
+    }
+    if percent >= UPGRADE_AT_PERCENT {
+        return PlanAction::Upgrade;
+    }
+    PlanAction::None
+}
+
+/// Whether a credits-funded plan's balance covers its next renewal.
+///
+/// Split from [`resolve_plan_action`] because the balance arrives as a
+/// pre-formatted display string; parsing it is a separate concern from the
+/// rule that consumes it. An unreadable balance is NOT evidence of being
+/// short — it must not raise a top-up prompt at an account that is fine.
+fn credits_short_for_renewal(plan: &PlanInfo, credits_hip: Option<&str>) -> bool {
+    if plan.funding.as_deref() != Some("credits") {
+        return false;
+    }
+    if plan.amount <= 0.0 {
+        return false;
+    }
+    match credits_hip.and_then(|c| c.parse::<f64>().ok()) {
+        Some(balance) if balance.is_finite() => balance < plan.amount,
+        _ => false,
+    }
 }
 
 /// Wire shape of the home overview. camelCase over IPC.
@@ -100,6 +171,9 @@ pub struct StorageOverview {
     pub used_display: String,
     pub total_display: String,
     pub free_display: String,
+    /// What the header should offer — see [`PlanAction`]. Render this;
+    /// never re-derive it from `source` / `percent` / `plan` on the FE.
+    pub plan_action: PlanAction,
 }
 
 /// Pure composition of the overview from its inputs.
@@ -126,10 +200,17 @@ fn finish_overview(
     credits_hip: Option<String>,
 ) -> StorageOverview {
     let labels = format_overview_labels(used_bytes, total_bytes);
+    let percent = percent_of(used_bytes, total_bytes);
+    // Decide here, where every input is already resolved, so no surface
+    // has to combine source + percent + funding + balance for itself.
+    let plan_action = match resolve_plan_action(source, percent, plan.as_ref()) {
+        PlanAction::None if plan.as_ref().is_some_and(|p| credits_short_for_renewal(p, credits_hip.as_deref())) => PlanAction::TopUpCredits,
+        decided => decided,
+    };
     StorageOverview {
         used_bytes,
         total_bytes,
-        percent: percent_of(used_bytes, total_bytes),
+        percent,
         source,
         plan,
         credits_hip,
@@ -137,6 +218,7 @@ fn finish_overview(
         used_display: labels.used,
         total_display: labels.total,
         free_display: labels.free,
+        plan_action,
     }
 }
 
@@ -384,12 +466,23 @@ fn plan_from_drive_subscription(sub: &serde_json::Value, plans: &serde_json::Val
     let price_key = if annual { "price_credits_annual" } else { "price_credits_monthly" };
     let amount = entry.and_then(|p| p.get(price_key)).and_then(serde_json::Value::as_f64).unwrap_or(0.0);
 
+    // `funding` says what actually pays the renewal; `provider` is the
+    // rail it was bought through. Prefer funding and fall back, since an
+    // older payload may carry only the latter.
+    let funding = sub
+        .get("funding")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| sub.get("provider").and_then(serde_json::Value::as_str))
+        .map(|f| if f == "stripe" { "card" } else { f })
+        .map(str::to_string);
+
     Some(PlanInfo {
         name,
         amount,
         interval: "month".into(),
         storage_bytes,
         storage_display,
+        funding,
     })
 }
 
@@ -409,6 +502,9 @@ fn plan_from_subscription(active: &serde_json::Value) -> Option<PlanInfo> {
         interval: sub.get("interval").and_then(|v| v.as_str()).unwrap_or("month").to_string(),
         storage_bytes: storage_gb.saturating_mul(BYTES_PER_GB),
         storage_display: crate::billing::charts::format_storage_display(storage_gb),
+        // The legacy Stripe storage subscription predates the field; it is
+        // card-billed by definition of the rail it came from.
+        funding: Some("card".into()),
     })
 }
 
@@ -494,7 +590,99 @@ mod tests {
             interval: "month".into(),
             storage_bytes: gb * BYTES_PER_GB,
             storage_display: crate::billing::charts::format_storage_display(gb),
+            funding: None,
         }
+    }
+
+    fn plan_funded(by: &str, amount: f64) -> PlanInfo {
+        PlanInfo {
+            funding: Some(by.into()),
+            amount,
+            ..pro_plan(100)
+        }
+    }
+
+    /// The free tier is an allowance, not a plan — credits buy no Drive
+    /// storage, so the only useful prompt is to subscribe.
+    #[test]
+    fn a_free_account_is_asked_to_upgrade_not_to_top_up() {
+        let o = build_overview(0, None, Some(10 * BYTES_PER_GB), Some("0".into()));
+        assert_eq!(o.plan_action, PlanAction::Upgrade);
+    }
+
+    /// Running out of SPACE is answered by a bigger plan whatever funds it,
+    /// so a card account gets the upgrade prompt too.
+    #[test]
+    fn a_card_plan_near_capacity_is_asked_to_upgrade() {
+        let plan = plan_funded("card", 5.0);
+        let used = (plan.storage_bytes as f64 * 0.85) as u64;
+        let o = build_overview(used, Some(plan), None, Some("999".into()));
+        assert_eq!(o.plan_action, PlanAction::Upgrade);
+    }
+
+    /// A card renews itself, so there is nothing to top up: a card account
+    /// with room left is never prompted, whatever its credit balance.
+    #[test]
+    fn a_card_plan_with_room_is_never_asked_to_top_up() {
+        let plan = plan_funded("card", 5.0);
+        let o = build_overview(1, Some(plan), None, Some("0".into()));
+        assert_eq!(o.plan_action, PlanAction::None);
+    }
+
+    /// Credits-funded and the balance will not cover the next renewal.
+    #[test]
+    fn a_credits_plan_that_cannot_renew_is_asked_to_top_up() {
+        let plan = plan_funded("credits", 4.0);
+        let o = build_overview(1, Some(plan), None, Some("2".into()));
+        assert_eq!(o.plan_action, PlanAction::TopUpCredits);
+    }
+
+    #[test]
+    fn a_credits_plan_that_can_renew_is_left_alone() {
+        let plan = plan_funded("credits", 4.0);
+        let o = build_overview(1, Some(plan), None, Some("9.5".into()));
+        assert_eq!(o.plan_action, PlanAction::None);
+    }
+
+    /// Space beats credits: at 80% the answer is a bigger plan, not more
+    /// credits to renew a plan that is already too small.
+    #[test]
+    fn a_full_credits_plan_is_asked_to_upgrade_not_to_top_up() {
+        let plan = plan_funded("credits", 4.0);
+        let used = (plan.storage_bytes as f64 * 0.9) as u64;
+        let o = build_overview(used, Some(plan), None, Some("0".into()));
+        assert_eq!(o.plan_action, PlanAction::Upgrade);
+    }
+
+    /// An unreadable balance is not evidence of being short — prompting a
+    /// healthy account to top up because a string failed to parse is worse
+    /// than staying quiet.
+    #[test]
+    fn an_unreadable_balance_raises_no_prompt() {
+        let plan = plan_funded("credits", 4.0);
+        for balance in [None, Some(String::new()), Some("n/a".to_string())] {
+            let o = build_overview(1, Some(plan.clone()), None, balance);
+            assert_eq!(o.plan_action, PlanAction::None);
+        }
+    }
+
+    /// The header prompt and the amber bar must fire at the same number,
+    /// or the bar warns while the header stays silent.
+    #[test]
+    fn the_upgrade_threshold_matches_the_amber_bar() {
+        let plan = plan_funded("card", 5.0);
+        let just_under = (plan.storage_bytes as f64 * 0.79) as u64;
+        let at = (plan.storage_bytes as f64 * UPGRADE_AT_PERCENT / 100.0).ceil() as u64;
+        assert_eq!(build_overview(just_under, Some(plan.clone()), None, None).plan_action, PlanAction::None);
+        assert_eq!(build_overview(at, Some(plan), None, None).plan_action, PlanAction::Upgrade);
+    }
+
+    /// The wire value is what the FE switches on.
+    #[test]
+    fn plan_action_serializes_kebab_case() {
+        assert_eq!(serde_json::to_string(&PlanAction::TopUpCredits).unwrap(), "\"top-up-credits\"");
+        assert_eq!(serde_json::to_string(&PlanAction::Upgrade).unwrap(), "\"upgrade\"");
+        assert_eq!(serde_json::to_string(&PlanAction::None).unwrap(), "\"none\"");
     }
 
     #[test]

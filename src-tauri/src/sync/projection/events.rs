@@ -100,6 +100,14 @@ pub const FILE_FAILED: &str = "hcfs_file_failed";
 /// banner while `active = true`. State is owned by
 /// `crate::sync::upload_processing::UploadProcessingState`.
 pub const UPLOAD_PROCESSING: &str = "hcfs_upload_processing";
+/// Live progress for a file being uploaded into a folder this device does
+/// NOT sync. Its own event rather than a `sync_progress_snapshot` field:
+/// that snapshot is the engine's and is rebuilt wholesale on every emit,
+/// so a row written into it would be erased by the engine's next tick. The
+/// frontend merges these into the widget's view instead
+/// (`app/lib/remote-upload/`). Payload:
+/// `crate::sync::remote_upload::RemoteUploadProgress`.
+pub const REMOTE_UPLOAD_PROGRESS: &str = "remote_upload_progress";
 /// Emitted when an `InsufficientBalance` (HTTP 402) per-file failure
 /// arrives at the bridge. Carries the latest `balance_cents` /
 /// `required_cents` from the server response plus a running

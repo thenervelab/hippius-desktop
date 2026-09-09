@@ -21,6 +21,7 @@ import {
 import { useRouter } from "next/navigation";
 import { useInfiniteScroll } from "@/lib/hooks/use-infinite-scroll";
 import { useNestedFolderListing } from "@/app/lib/hooks/use-nested-folder-listing";
+import { resolveFolderExpansion } from "./folderExpansion";
 import { FILES_MUTATED_EVENT } from "@/app/lib/utils/fileMutationEvents";
 import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 import { useFolderAggregateSelection } from "@/app/lib/hooks/use-folder-aggregate-selection";
@@ -237,9 +238,17 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
     return resolveRelativePath(baseSubfolderPath ?? "", name);
   }, [baseSubfolderPath, folder.actualFileName, folder.name]);
 
-  const listingEnabled = Boolean(
-    accountId && syncPath && label && folderRelativePath,
-  );
+  const {
+    enabled: listingEnabled,
+    label: effectiveLabel,
+    remote: isRemote,
+  } = resolveFolderExpansion({
+    accountId,
+    source: folder.source,
+    label,
+    syncPath,
+    relativePath: folderRelativePath,
+  });
 
   // Background-refresh the child rows when a sync cycle lands or an in-app
   // mutation (rename) changes names instantly — same pair of triggers as
@@ -260,9 +269,12 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
     accountId,
     syncPath,
     subfolder: listingEnabled ? folderRelativePath : null,
-    label: label ?? null,
+    label: effectiveLabel ?? null,
     refreshKey,
     enabled: listingEnabled,
+    // Without this the hook lists LOCAL disk, which a browsed drive has
+    // none of, so an enabled listing would still come back empty.
+    remote: isRemote,
   });
 
   const showLoadingSkeleton = useMinimumLoadingTime(

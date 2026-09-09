@@ -79,6 +79,7 @@ import { fileManagerLabel } from "@/lib/utils/isMacPlatform";
 import { tauriErrorMessage } from "@/lib/utils/dispatchTauriError";
 import { macosNameCmp } from "@/lib/utils/fileSort";
 import ExpandedFolderRows from "./ExpandedFolderRows";
+import { canExpandFolderRow } from "./folderExpansion";
 import { NameCellExpander } from "./FolderRail";
 import { preserveClosestScrollPosition } from "./preserveClosestScrollPosition";
 
@@ -1176,12 +1177,13 @@ const FilesTable: FC<FilesTableProps> = memo(
         const isExpanded = file.isFolder
           ? Boolean(expandedFolders[folderKey])
           : false;
-        const canExpand = Boolean(
-          file.isFolder &&
-          enableFolderExpander &&
-          file.label &&
-          drivePaths[file.label],
-        );
+        const canExpand = canExpandFolderRow({
+          enableFolderExpander,
+          isFolder: Boolean(file.isFolder),
+          source: file.source,
+          label: file.label,
+          syncPath: file.label ? drivePaths[file.label] : undefined,
+        });
         return (
           <div className="flex items-center min-w-0 gap-2 py-[5px] pl-2 pr-2">
             {hasAnyFolder ? (
@@ -1850,9 +1852,15 @@ const FilesTable: FC<FilesTableProps> = memo(
           const syncPath = rowData.label
             ? drivePaths[rowData.label]
             : undefined;
-          const canInlineExpand = Boolean(
-            enableFolderExpander && rowData.isFolder && syncPath,
-          );
+          // Same predicate the chevron uses — the control and what it
+          // reveals must agree, or one renders without the other.
+          const canInlineExpand = canExpandFolderRow({
+            enableFolderExpander,
+            isFolder: Boolean(rowData.isFolder),
+            source: rowData.source,
+            label: rowData.label,
+            syncPath,
+          });
           // Annotated copy used everywhere selection/cascade keys are
           // looked up — keeps the row's parent path on the row object
           // so context helpers can build keys without re-deriving it.

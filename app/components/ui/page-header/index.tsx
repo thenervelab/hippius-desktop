@@ -4,7 +4,8 @@ import React from "react";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import PlanChip from "@/components/ui/plan-chip";
-import { PricingCard, WalletMinimal } from "@/components/ui/icons";
+import PlanActionButton from "@/components/ui/plan-chip/PlanActionButton";
+import { WalletMinimal } from "@/components/ui/icons";
 import { useStaking } from "@/app/lib/hooks/useStaking";
 import { WALLET_FEATURE_ENABLED } from "@/app/lib/featureFlags";
 import { cn } from "@/app/lib/utils";
@@ -136,17 +137,11 @@ const PageHeader: React.FC<PageHeaderProps> = ({
                 and the home cards, with a skeleton until it settles. */}
             <PlanChip />
           </div>
+          {/* Was an unconditional "Subscription Plans" button, shown even
+              to accounts already on a plan. Now it offers what the account
+              actually needs, and nothing when it needs nothing. */}
           <div className="flex items-center pr-4">
-            <Button
-              asLink
-              href="/drive-plans"
-              variant="raised"
-              size="auto"
-              className="flex items-center gap-2 px-4 py-2 text-[14px] font-medium leading-[1.109] tracking-[-0.28px]"
-            >
-              <PricingCard className="size-4" />
-              Subscription Plans
-            </Button>
+            <PlanActionButton variant="raised" />
           </div>
         </div>
       )}

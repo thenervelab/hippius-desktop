@@ -98,14 +98,14 @@ const FileDropzone: FC<{
               if (folders.length > 0 && files.length === 0) {
                 // Files-only zone — surface the mismatch.
                 toast.error(
-                  "Folders cannot be uploaded here. Use \"+ New Folder\" instead.",
+                  "Folders cannot be uploaded here. Use \"Upload Folder\" instead.",
                   { duration: 5000 },
                 );
                 return;
               }
               if (folders.length > 0) {
                 toast.info(
-                  "Folders were skipped. Use \"+ New Folder\" to upload a folder.",
+                  "Folders were skipped. Use \"Upload Folder\" to upload a folder.",
                 );
               }
               if (files.length > 0) {

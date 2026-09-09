@@ -299,12 +299,26 @@ fn build_search_query(params: &SearchFilesParams) -> Vec<(&'static str, String)>
 /// `query` is the already-assembled query-string; callers build it — recents
 /// uses a fixed `created_at`/`desc` slice, search uses [`build_search_query`].
 ///
+/// `search_ss58` names WHOSE files are searched; `session_account` supplies
+/// the server config and bearer used to ask. They are the same for an own
+/// drive and DIFFERENT for a member drive, whose files live in the OWNER's
+/// namespace — so the path carries the owner while the credentials stay
+/// ours. Passing one value for both is how a member-drive search silently
+/// returns the wrong account's files, the conflation `DriveIdentity` exists
+/// to prevent.
+///
 /// # Errors
 ///
 /// - [`AppError::Auth`] when the account has no stored bearer token (logged out).
 /// - [`AppError::Hcfs`] on a transport failure, a non-success HTTP status, an
 ///   unparseable body, or a server `Error`/`Conflict` envelope.
-async fn fetch_search_files(state: &AppState, account_id: &str, query: &[(&'static str, String)]) -> Result<Vec<UserFileEntry>> {
+async fn fetch_search_files(
+    state: &AppState,
+    session_account: &str,
+    search_ss58: &str,
+    query: &[(&'static str, String)],
+) -> Result<Vec<UserFileEntry>> {
+    let account_id = session_account;
     let pool = state.pool()?;
 
     // `server_url` is empty in auto-detect mode; `resolve_base_url` collapses
@@ -322,7 +336,7 @@ async fn fetch_search_files(state: &AppState, account_id: &str, query: &[(&'stat
     // (user-supplied) values just like the console's `URLSearchParams`. This
     // reqwest build doesn't expose `RequestBuilder::query`, so we assemble the
     // URL up front — the same approach `auth::oauth` uses.
-    let mut url = reqwest::Url::parse(&format!("{base}/search_files/{account_id}", base = base.trim_end_matches('/')))
+    let mut url = reqwest::Url::parse(&format!("{base}/search_files/{search_ss58}", base = base.trim_end_matches('/')))
         .map_err(|e| AppError::Hcfs(format!("invalid search_files URL: {e}")))?;
     url.query_pairs_mut().extend_pairs(query.iter().map(|(k, v)| (*k, v.as_str())));
 
@@ -414,7 +428,7 @@ pub async fn get_recent_uploads(state: tauri::State<'_, AppState>, account_id: S
         ("offset", "0".to_string()),
         ("limit", limit.to_string()),
     ];
-    fetch_search_files(state.inner(), &account_id, &query).await
+    fetch_search_files(state.inner(), &account_id, &account_id, &query).await
 }
 
 /// Cross-folder, account-wide file search backing the sidebar search palette.
@@ -438,7 +452,42 @@ pub async fn search_files(state: tauri::State<'_, AppState>, account_id: String,
     let account_id = state.require_session_account(&account_id)?;
     debug!(account_id = %account_id, ?params, "Cross-folder file search via HCFS /search_files");
     let query = build_search_query(&params);
-    fetch_search_files(state.inner(), &account_id, &query).await
+    fetch_search_files(state.inner(), &account_id, &account_id, &query).await
+}
+
+/// Search one drive, by its local label.
+///
+/// The drive-page equivalent of [`search_files`], which searches the whole
+/// account. Scoping happens here rather than on the frontend because the
+/// server wants a folder HASH, and the frontend must never derive one from
+/// a label — that is correct only for an own drive, and produces a member
+/// drive's wrong namespace (H-077). `resolve_drive_identity_or_own` is the
+/// funnel that answers both halves.
+///
+/// This is what makes search work in a folder this device does not sync:
+/// the recursive search walks local disk, which such a drive has none of,
+/// so the page could previously only filter the rows already on screen.
+#[tauri::command]
+pub async fn search_files_in_drive(
+    state: tauri::State<'_, AppState>,
+    account_id: String,
+    label: String,
+    params: SearchFilesParams,
+) -> Result<Vec<UserFileEntry>> {
+    let account_id = state.require_session_account(&account_id)?;
+    let pool = state.pool()?;
+    let identity = crate::sync::identity::resolve_drive_identity_or_own(pool, &account_id, &label).await?;
+
+    // The caller states the query; the DRIVE states the scope. Overriding
+    // rather than defaulting, so a stale or hand-made folder_hash from the
+    // frontend can never widen the search past the drive it names.
+    let scoped = SearchFilesParams {
+        folder_hash: Some(identity.wire_folder_hash.clone()),
+        ..params
+    };
+    debug!(account_id = %account_id, label = %label, "Scoped file search via HCFS /search_files");
+    let query = build_search_query(&scoped);
+    fetch_search_files(state.inner(), &account_id, &identity.wire_ss58, &query).await
 }
 
 #[cfg(test)]

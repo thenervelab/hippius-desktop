@@ -5,7 +5,7 @@ interface SettingsCardProps {
   icon?: React.ReactNode;
   /**
    * Optional element rendered to the right of the header label (e.g. an
-   * Edit Name or + Add Folder button). Sits vertically centered in the
+   * Edit Name or Sync a Folder button). Sits vertically centered in the
    * 38px header strip.
    */
   headerAction?: React.ReactNode;

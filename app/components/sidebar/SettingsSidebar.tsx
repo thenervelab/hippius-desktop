@@ -18,7 +18,8 @@ import { BELOW_TITLEBAR_TOP_54 } from "@/app/lib/utils/platformChrome";
 
 const ICON_CLASS = "size-[18px]";
 
-const settingsNavItems = [
+// Exported so the nav-shape tests can assert where Billing lives.
+export const settingsNavItems = [
   {
     label: "Sync & Storage",
     section: "sync",
@@ -38,6 +39,11 @@ const settingsNavItems = [
     label: "Notifications",
     section: "notifications",
     icon: <Icons.Notification className={ICON_CLASS} />,
+  },
+  {
+    label: "Billing",
+    section: "billing",
+    icon: <Icons.CreditCard className={ICON_CLASS} />,
   },
   {
     label: "Appearance",
