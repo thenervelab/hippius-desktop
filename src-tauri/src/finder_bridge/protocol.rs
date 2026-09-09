@@ -24,6 +24,11 @@ use std::path::{Path, PathBuf};
 
 /// Badge a path should display in Finder. The app pushes these to the
 /// extension; `Clear` removes any existing badge.
+///
+/// Every painted state must have a badge image registered on the Swift side
+/// (`HippiusFinderSync.registerBadges`) — an unregistered identifier paints
+/// nothing, silently. `tests/finder_socket_pins.rs` checks the Swift source
+/// against [`BadgeState::PAINTED`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BadgeState {
     /// Fully synced — local and remote agree.
@@ -32,17 +37,25 @@ pub enum BadgeState {
     Syncing,
     /// A share link currently exists for this path.
     Shared,
+    /// The last transfer of this path failed and the engine gave up on it
+    /// for this cycle.
+    Error,
     /// Remove any badge previously set on this path.
     Clear,
 }
 
 impl BadgeState {
-    /// The lowercase wire token for this state.
-    fn token(self) -> &'static str {
+    /// The states that paint something, i.e. every state but `Clear`.
+    pub const PAINTED: [BadgeState; 4] = [BadgeState::Synced, BadgeState::Syncing, BadgeState::Shared, BadgeState::Error];
+
+    /// The lowercase wire token for this state. Also the badge identifier
+    /// the extension registers its image under.
+    pub fn token(self) -> &'static str {
         match self {
             BadgeState::Synced => "synced",
             BadgeState::Syncing => "syncing",
             BadgeState::Shared => "shared",
+            BadgeState::Error => "error",
             BadgeState::Clear => "clear",
         }
     }
@@ -52,13 +65,14 @@ impl BadgeState {
             "synced" => Ok(BadgeState::Synced),
             "syncing" => Ok(BadgeState::Syncing),
             "shared" => Ok(BadgeState::Shared),
+            "error" => Ok(BadgeState::Error),
             "clear" => Ok(BadgeState::Clear),
             other => Err(ProtocolError::UnknownState(other.to_string())),
         }
     }
 }
 
-/// A message the Finder extension sends to the app — always a user menu action.
+/// A message the Finder extension sends to the app.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClientMessage {
     /// "Share with Hippius" on any clicked path. The verb carries only the
@@ -69,6 +83,15 @@ pub enum ClientMessage {
     /// verb covers every target and both visibilities (Google-Drive model — the
     /// decision moved out of Finder).
     Share(PathBuf),
+    /// Finder is about to show `path` and the extension holds no badge for it.
+    /// The app answers with a `STATUS` line (`Clear` when nothing applies).
+    ///
+    /// Badges are pulled per visible item rather than pushed for every synced
+    /// file: a drive can hold six-figure file counts, and the app→extension
+    /// channel is a bounded broadcast that drops frames on lag, so a bulk push
+    /// would paint a random subset. The push path (`STATUS` without a query)
+    /// is reserved for transitions on files the user is watching.
+    BadgeQuery(PathBuf),
 }
 
 impl ClientMessage {
@@ -77,17 +100,19 @@ impl ClientMessage {
     pub fn to_wire(&self) -> String {
         match self {
             ClientMessage::Share(path) => format!("SHARE:{}", encode_path(path)),
+            ClientMessage::BadgeQuery(path) => format!("BADGE_QUERY:{}", encode_path(path)),
         }
     }
 
-    /// Parse one wire line (without its terminating newline). Only `SHARE` is
-    /// recognized now; the retired `UPLOAD_SHARE` / `SHARE_PRIVATE` verbs fall
-    /// through to [`ProtocolError::UnknownVerb`] (a stale extension binary that
-    /// still sends them is safely ignored rather than mis-dispatched).
+    /// Parse one wire line (without its terminating newline). The retired
+    /// `UPLOAD_SHARE` / `SHARE_PRIVATE` verbs fall through to
+    /// [`ProtocolError::UnknownVerb`] (a stale extension binary that still
+    /// sends them is safely ignored rather than mis-dispatched).
     pub fn parse(line: &str) -> Result<Self, ProtocolError> {
         let (verb, rest) = split_verb(line)?;
         match verb {
             "SHARE" => Ok(ClientMessage::Share(decode_path(rest)?)),
+            "BADGE_QUERY" => Ok(ClientMessage::BadgeQuery(decode_path(rest)?)),
             other => Err(ProtocolError::UnknownVerb(other.to_string())),
         }
     }
@@ -107,6 +132,10 @@ pub enum ServerMessage {
         /// The path the badge applies to.
         path: PathBuf,
     },
+    /// Re-query every already-displayed path under this drive root. Used
+    /// when a plan starts: a bulk `STATUS` push would overflow the 256-slot
+    /// broadcast, and Finder will not re-ask for items still on screen.
+    RefreshRoot(PathBuf),
 }
 
 impl ServerMessage {
@@ -118,6 +147,7 @@ impl ServerMessage {
             ServerMessage::Status { state, path } => {
                 format!("STATUS:{}:{}", state.token(), encode_path(path))
             }
+            ServerMessage::RefreshRoot(path) => format!("REFRESH_ROOT:{}", encode_path(path)),
         }
     }
 
@@ -136,6 +166,7 @@ impl ServerMessage {
                     path: decode_path(encoded)?,
                 })
             }
+            "REFRESH_ROOT" => Ok(ServerMessage::RefreshRoot(decode_path(rest)?)),
             other => Err(ProtocolError::UnknownVerb(other.to_string())),
         }
     }
@@ -311,6 +342,33 @@ mod tests {
     }
 
     #[test]
+    fn badge_query_round_trips_and_is_not_a_share() {
+        let m = ClientMessage::BadgeQuery(PathBuf::from("/Users/x/Hippius/a: b.txt"));
+        let wire = m.to_wire();
+        assert!(wire.starts_with("BADGE_QUERY:"), "{wire}");
+        assert_eq!(ClientMessage::parse(&wire), Ok(m));
+        // A query must never be mistaken for a click: the share dispatch would
+        // open the chooser for every file Finder scrolled past.
+        assert_ne!(
+            ClientMessage::parse(&wire),
+            Ok(ClientMessage::Share(PathBuf::from("/Users/x/Hippius/a: b.txt")))
+        );
+    }
+
+    #[test]
+    fn every_painted_state_has_a_distinct_token_that_round_trips() {
+        let mut seen = std::collections::BTreeSet::new();
+        for state in BadgeState::PAINTED.into_iter().chain([BadgeState::Clear]) {
+            assert!(seen.insert(state.token()), "duplicate badge token {}", state.token());
+            assert_eq!(BadgeState::from_token(state.token()), Ok(state));
+            // The token is spliced into `STATUS:<token>:<path>`, so a `:` in it
+            // would shift the path split.
+            assert!(!state.token().contains(':'));
+        }
+        assert!(!BadgeState::PAINTED.contains(&BadgeState::Clear));
+    }
+
+    #[test]
     fn retired_verbs_are_now_unknown() {
         // The public/private + upload distinctions collapsed into the single
         // SHARE verb (the app decides visibility and re-resolves the target). A
@@ -340,6 +398,7 @@ mod tests {
         for m in [
             ServerMessage::RegisterPath(PathBuf::from("/Users/me/Hippius")),
             ServerMessage::UnregisterPath(PathBuf::from("/Users/me/Hippius")),
+            ServerMessage::RefreshRoot(PathBuf::from("/Users/me/Hippius")),
         ] {
             assert_eq!(ServerMessage::parse(&m.to_wire()), Ok(m));
         }
@@ -443,15 +502,32 @@ mod tests {
 
         #[cfg(unix)]
         #[test]
-        fn server_status_round_trips(bytes in proptest::collection::vec(1u8..=255, 0..64), which in 0u8..4) {
+        fn server_status_round_trips(bytes in proptest::collection::vec(1u8..=255, 0..64), which in 0u8..5) {
             let path = PathBuf::from(OsString::from_vec(bytes));
             let state = match which {
                 0 => BadgeState::Synced,
                 1 => BadgeState::Syncing,
                 2 => BadgeState::Shared,
+                3 => BadgeState::Error,
                 _ => BadgeState::Clear,
             };
             let m = ServerMessage::Status { state, path };
+            prop_assert_eq!(ServerMessage::parse(&m.to_wire()), Ok(m));
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn badge_query_round_trips(bytes in proptest::collection::vec(1u8..=255, 0..64)) {
+            let path = PathBuf::from(OsString::from_vec(bytes));
+            let m = ClientMessage::BadgeQuery(path);
+            prop_assert_eq!(ClientMessage::parse(&m.to_wire()), Ok(m));
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn refresh_root_round_trips(bytes in proptest::collection::vec(1u8..=255, 0..64)) {
+            let path = PathBuf::from(OsString::from_vec(bytes));
+            let m = ServerMessage::RefreshRoot(path);
             prop_assert_eq!(ServerMessage::parse(&m.to_wire()), Ok(m));
         }
 

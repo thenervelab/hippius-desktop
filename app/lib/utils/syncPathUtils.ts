@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { errorMessage } from "@/lib/utils/errorUtils";
+import type { HostedBy } from "@/app/lib/types/sync-folder";
 
 export interface SyncPathResult {
     path: string;
@@ -70,6 +71,21 @@ export async function removeSyncPath(
     label: string,
 ): Promise<void> {
     await invoke("remove_sync_path", { accountId, label });
+}
+
+/**
+ * Why Finder integration will not work as expected on `path`, or null for
+ * a folder Hippius would own outright. Rust decides (`sync::root_host`);
+ * the add-folder dialog asks the moment a folder is picked. A failed call
+ * reads as "not hosted": the note is a courtesy, never a gate.
+ */
+export async function resolveHostedBy(path: string): Promise<HostedBy | null> {
+    try {
+        return (await invoke<HostedBy | null>("sync_root_host", { path })) ?? null;
+    } catch (error) {
+        console.warn("Could not classify the sync root:", error);
+        return null;
+    }
 }
 
 /// Expand the Tauri asset protocol scope to include the given directory,

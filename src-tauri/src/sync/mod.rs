@@ -17,7 +17,7 @@ mod migrate;
 mod projection;
 mod shared;
 
-pub use drive::{config, control, device, drive_status, exclude_literal, identity, lifecycle, lifecycle_guard, paths, selective};
+pub use drive::{config, control, device, drive_status, exclude_literal, identity, lifecycle, lifecycle_guard, paths, root_host, selective};
 pub use failure::{credits_exhausted, error_notify, failure_commands, failure_repo, failure_tracking, folder_restore_notify};
 pub use fileops::{files, folders, recent_uploads, remote, remote_rename, remote_upload};
 pub use migrate::{

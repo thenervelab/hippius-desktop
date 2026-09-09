@@ -101,14 +101,24 @@ fn source_stat(path: &Path) -> (Option<u64>, Option<u64>) {
     (size, age)
 }
 
+/// Route one inbound extension message. A badge query is answered from the
+/// engine's in-memory state ([`super::badges`]); a click opens the share
+/// chooser ([`handle_share`]). The two must never be confused: a query fires
+/// for every row Finder scrolls past, a click is a user intent.
+pub async fn handle(app: AppHandle, message: ClientMessage) {
+    match message {
+        ClientMessage::Share(clicked) => handle_share(app, clicked).await,
+        ClientMessage::BadgeQuery(path) => super::badges::answer_badge_query(app, path).await,
+    }
+}
+
 /// Handle a "Share with Hippius" click: resolve the display name, park the path
 /// in [`AppState`] under a fresh id, bring the app forward, and emit
 /// `finder:share-choosing` so the app opens its share chooser. Deliberately does
 /// NOT mint — the public/private decision now happens in the app, and minting is
 /// deferred to [`super::commands::hcfs_finder_confirm_share`] once the user
 /// confirms.
-pub async fn handle(app: AppHandle, message: ClientMessage) {
-    let ClientMessage::Share(clicked) = message;
+async fn handle_share(app: AppHandle, clicked: PathBuf) {
     let name = display_name(&clicked);
     let id = app.state::<AppState>().store_finder_share(PendingFinderShare {
         path: clicked.clone(),
@@ -364,18 +374,33 @@ mod tests {
         assert_eq!(age, None);
     }
 
-    /// Pin the deferred-mint invariant against a silent refactor: `handle` must
-    /// PARK the request (`store_finder_share`) and emit `finder:share-choosing`,
-    /// and must NOT mint — no `share_for_path` / `mint_confirmed` call in its
-    /// body. A refactor that reintroduced eager minting here would put the
-    /// public/private decision back in Finder, defeating the whole redesign.
-    /// Source-text pin scoped to `handle`'s body (bounded at the next `async fn`
-    /// so `mint_confirmed`/`share_for_path` definitions below don't match).
+    /// Pin the deferred-mint invariant against a silent refactor: a click
+    /// (`handle_share`) must PARK the request (`store_finder_share`) and emit
+    /// `finder:share-choosing`, and must NOT mint — no `share_for_path` /
+    /// `mint_confirmed` call in its body. A refactor that reintroduced eager
+    /// minting here would put the public/private decision back in Finder,
+    /// defeating the whole redesign. Source-text pin scoped to
+    /// `handle_share`'s body (bounded at the next `async fn` so
+    /// `mint_confirmed`/`share_for_path` definitions below don't match).
     #[test]
     fn handle_defers_mint_and_emits_choosing() {
         let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/finder_bridge/dispatch.rs")).expect("read dispatch.rs");
-        let handle_at = src.find("pub async fn handle(").expect("handle fn exists");
-        let after_handle = &src[handle_at + "pub async fn handle(".len()..];
+        // The router must send a click to `handle_share` and a badge query to
+        // the badge feed — a query arriving in the share path would open the
+        // chooser for every row Finder scrolls past.
+        let router_at = src.find("pub async fn handle(").expect("handle fn exists");
+        let router = &src[router_at..src[router_at..].find("\n}\n").expect("router closes") + router_at];
+        assert!(
+            router.contains("ClientMessage::Share(clicked) => handle_share("),
+            "handle routes a click to handle_share"
+        );
+        assert!(
+            router.contains("ClientMessage::BadgeQuery(path) => super::badges::answer_badge_query("),
+            "handle routes a query to the badge feed"
+        );
+
+        let handle_at = src.find("async fn handle_share(").expect("handle_share fn exists");
+        let after_handle = &src[handle_at + "async fn handle_share(".len()..];
         let next_fn = after_handle.find("async fn ").map_or(after_handle.len(), |i| i);
         let body = &after_handle[..next_fn];
         assert!(

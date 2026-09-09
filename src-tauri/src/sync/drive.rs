@@ -12,4 +12,5 @@ pub mod identity;
 pub mod lifecycle;
 pub mod lifecycle_guard;
 pub mod paths;
+pub mod root_host;
 pub mod selective;

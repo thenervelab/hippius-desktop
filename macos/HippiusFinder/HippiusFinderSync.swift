@@ -15,6 +15,18 @@ final class HippiusFinderSync: FIFinderSync {
     private var roots: Set<URL> = []
     /// Per-path badge state token (from STATUS), standardized key.
     private var badges: [URL: String] = [:]
+    /// URLs that have already received a `setBadgeIdentifier` call. Finder
+    /// will not re-ask for items still on screen, so this set is what we
+    /// re-query after a reconnect (Apple: record every URL you badge).
+    private var displayed: Set<URL> = []
+    /// Directories Finder has called `beginObservingDirectory` for.
+    private var observedDirectories: Set<URL> = []
+    /// Paths a `BADGE_QUERY` is out for, so a folder Finder redraws several
+    /// times while the app answers costs one line per path, not one per draw.
+    private var pendingQueries: Set<URL> = []
+    /// Bound on `pendingQueries`: an app that never answers (an old build
+    /// without the verb) must not grow the set for the life of the process.
+    private static let maxPendingQueries = 4096
 
     override init() {
         socket = BridgeSocket(path: HippiusFinderSync.socketPath())
@@ -32,6 +44,9 @@ final class HippiusFinderSync: FIFinderSync {
             guard let message = WireProtocol.parse(line) else { return }
             DispatchQueue.main.async { self?.handle(message) }
         }
+        socket.onDisconnect = { [weak self] in
+            DispatchQueue.main.async { self?.forgetBadgePaint() }
+        }
         // BridgeSocket self-heals: connect() retries every second until the app
         // is up, and reconnects automatically if the app later restarts.
         socket.connect()
@@ -42,13 +57,20 @@ final class HippiusFinderSync: FIFinderSync {
     private func handle(_ message: WireProtocol.Inbound) {
         switch message {
         case .registerPath(let url):
-            roots.insert(url.standardizedFileURL)
+            let standardized = url.standardizedFileURL
+            roots.insert(standardized)
+            // Roots replay on every connect, which is when we re-query the
+            // URLs Finder is still showing (it will not call
+            // requestBadgeIdentifier again for them).
+            requeryDisplayed(under: standardized)
         case .unregisterPath(let url):
             let standardized = url.standardizedFileURL
             roots.remove(standardized)
-            badges = badges.filter { !isDescendant($0.key, of: standardized) }
+            clearDisplayed(under: standardized)
         case .status(let state, let url):
             let key = url.standardizedFileURL
+            pendingQueries.remove(key)
+            displayed.insert(key)
             if state == "clear" {
                 badges.removeValue(forKey: key)
                 FIFinderSyncController.default().setBadgeIdentifier("", for: url)
@@ -56,29 +78,138 @@ final class HippiusFinderSync: FIFinderSync {
                 badges[key] = state
                 FIFinderSyncController.default().setBadgeIdentifier(state, for: url)
             }
+        case .refreshRoot(let url):
+            requeryDisplayed(under: url.standardizedFileURL)
         }
     }
 
     // MARK: - Badges
 
+    /// One image per painted `BadgeState` on the Rust side; the identifiers
+    /// are the wire tokens. A state without an image here paints nothing,
+    /// silently — `src-tauri/tests/finder_socket_pins.rs` checks the list
+    /// against the Rust enum.
     private func registerBadges() {
         let controller = FIFinderSyncController.default()
-        let specs: [(id: String, symbol: String)] = [
-            ("synced", "checkmark.circle.fill"),
-            ("syncing", "arrow.triangle.2.circlepath.circle.fill"),
-            ("shared", "link.circle.fill"),
+        let specs: [(id: String, symbol: String, label: String)] = [
+            ("synced", "checkmark.circle.fill", NSLocalizedString("Synced", comment: "Finder badge")),
+            ("syncing", "arrow.triangle.2.circlepath.circle.fill", NSLocalizedString("Syncing", comment: "Finder badge")),
+            ("shared", "link.circle.fill", NSLocalizedString("Shared", comment: "Finder badge")),
+            ("error", "exclamationmark.circle.fill", NSLocalizedString("Failed", comment: "Finder badge")),
         ]
         for spec in specs {
-            if let image = NSImage(systemSymbolName: spec.symbol, accessibilityDescription: spec.id) {
-                controller.setBadgeImage(image, label: spec.id, forBadgeIdentifier: spec.id)
+            if let image = HippiusFinderSync.badgeImage(systemName: spec.symbol) {
+                controller.setBadgeImage(image, label: spec.label, forBadgeIdentifier: spec.id)
             }
         }
     }
 
-    override func requestBadgeIdentifier(for url: URL) {
-        if let state = badges[url.standardizedFileURL] {
-            FIFinderSyncController.default().setBadgeIdentifier(state, for: url)
+    /// 320×320, drawn into the full frame — Apple scales and places the
+    /// overlay and asks that the artwork itself carry no padding.
+    private static func badgeImage(systemName: String) -> NSImage? {
+        guard let symbol = NSImage(systemSymbolName: systemName, accessibilityDescription: nil) else {
+            return nil
         }
+        let size = NSSize(width: 320, height: 320)
+        let image = NSImage(size: size, flipped: false) { rect in
+            symbol.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
+            return true
+        }
+        image.isTemplate = true
+        return image
+    }
+
+    /// Finder is about to show `url`. Apple requires the initial
+    /// `setBadgeIdentifier` from this method before it returns; later STATUS
+    /// lines are updates for URLs that have already received a badge.
+    override func requestBadgeIdentifier(for url: URL) {
+        if Thread.isMainThread {
+            applyBadgeRequest(for: url)
+        } else {
+            DispatchQueue.main.sync { self.applyBadgeRequest(for: url) }
+        }
+    }
+
+    private func applyBadgeRequest(for url: URL) {
+        let key = url.standardizedFileURL
+        displayed.insert(key)
+        let controller = FIFinderSyncController.default()
+        if let state = badges[key] {
+            controller.setBadgeIdentifier(state, for: url)
+            return
+        }
+        controller.setBadgeIdentifier("", for: url)
+        enqueueQuery(for: key)
+    }
+
+    override func beginObservingDirectory(at url: URL) {
+        observedDirectories.insert(url.standardizedFileURL)
+    }
+
+    override func endObservingDirectory(at url: URL) {
+        let dir = url.standardizedFileURL
+        observedDirectories.remove(dir)
+        let stale = displayed.filter { key in
+            isDescendant(key, of: dir) && !isUnderAnyObserved(key)
+        }
+        let controller = FIFinderSyncController.default()
+        for key in stale {
+            displayed.remove(key)
+            badges.removeValue(forKey: key)
+            pendingQueries.remove(key)
+            controller.setBadgeIdentifier("", for: key)
+        }
+    }
+
+    /// Clear Finder's paint for cached badges. Keep `displayed` so a
+    /// reconnect's REGISTER_PATH replay can re-query what is still on screen;
+    /// Finder will not call `requestBadgeIdentifier` again for those items.
+    private func forgetBadgePaint() {
+        let controller = FIFinderSyncController.default()
+        for url in displayed {
+            controller.setBadgeIdentifier("", for: url)
+        }
+        badges.removeAll()
+        pendingQueries.removeAll()
+    }
+
+    private func requeryDisplayed(under root: URL) {
+        let keys = displayed.filter { isDescendant($0, of: root) }
+        for key in keys {
+            pendingQueries.remove(key)
+            enqueueQuery(for: key)
+        }
+    }
+
+    private func clearDisplayed(under root: URL) {
+        let controller = FIFinderSyncController.default()
+        let keys = displayed.filter { isDescendant($0, of: root) }
+        for key in keys {
+            displayed.remove(key)
+            badges.removeValue(forKey: key)
+            pendingQueries.remove(key)
+            controller.setBadgeIdentifier("", for: key)
+        }
+    }
+
+    /// Ask the app for a badge. Does not plant `""` — callers that need an
+    /// initial identifier (the request path) set it first.
+    private func enqueueQuery(for key: URL) {
+        guard socket.isConnected, isInsideRegisteredRoot(key) else { return }
+        guard !pendingQueries.contains(key) else { return }
+        if pendingQueries.count >= HippiusFinderSync.maxPendingQueries {
+            return
+        }
+        pendingQueries.insert(key)
+        socket.send(WireProtocol.badgeQueryLine(for: key))
+    }
+
+    private func isInsideRegisteredRoot(_ url: URL) -> Bool {
+        roots.contains { isDescendant(url, of: $0) }
+    }
+
+    private func isUnderAnyObserved(_ url: URL) -> Bool {
+        observedDirectories.contains { isDescendant(url, of: $0) }
     }
 
     // MARK: - Menu
