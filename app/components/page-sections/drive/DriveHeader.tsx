@@ -33,6 +33,7 @@ import {
 } from "./uploadActions";
 import RemoteUploadButton from "./RemoteUploadButton";
 import RemoteNewFolderButton from "./RemoteNewFolderButton";
+import RemoteFolderUploadButton from "./RemoteFolderUploadButton";
 import { BILLING_ROUTE } from "@/app/lib/routes";
 
 // Figma white pill style shared by Add Folder / View All Files / Shared Links.
@@ -86,8 +87,9 @@ interface DriveHeaderProps {
   hideUploads?: boolean;
   /** Browsing a folder that is not synced here. Files go straight to the
    *  server instead of through a local sync folder, so this view gets its
-   *  own upload button. Folder upload is still hidden: it would mean
-   *  walking a directory and posting each file, which is a separate job. */
+   *  own upload controls — a file, a folder, and a new empty folder. The
+   *  folder upload walks the directory in Rust and posts each file under
+   *  the wire path that reproduces its structure. */
   remoteUpload?: {
     label: string;
     parentPath?: string;
@@ -288,6 +290,11 @@ const DriveHeader: FC<DriveHeaderProps> = ({
             label={remoteUpload.label}
             parentPath={remoteUpload.parentPath}
             onCreated={remoteUpload.onUploaded}
+          />
+          <RemoteFolderUploadButton
+            label={remoteUpload.label}
+            parentPath={remoteUpload.parentPath}
+            onUploaded={remoteUpload.onUploaded}
           />
           <RemoteUploadButton
             label={remoteUpload.label}

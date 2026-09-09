@@ -185,7 +185,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   gap where an Upgrade button would have been.
 - **You can upload straight into a drive that is not synced on this computer.** The
   folder picker in the upload dialogs now lists those drives too, for files and for
-  whole folders, marked so you can tell them apart.
+  whole folders, marked so you can tell them apart. Inside such a folder there is now
+  an Upload Folder button beside Upload File and New Folder.
 - **The Drive page tells you when your plan needs attention** — a renewal that
   failed, a cancelled plan, or one still being set up — reading the same source the
   web console reads, so both say the same thing.
