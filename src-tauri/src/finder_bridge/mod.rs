@@ -12,6 +12,7 @@
 //! active click→share plumbing ([`lifecycle`] / [`dispatch`]) is enabled by the
 //! native shim per platform.
 
+pub mod badges;
 pub mod commands;
 pub mod enablement;
 pub mod endpoint;

@@ -39,6 +39,13 @@ enum WireProtocol {
         return "SHARE:\(encodePath(url))"
     }
 
+    /// Encode a `BADGE_QUERY` line: Finder is about to show `url` and this
+    /// extension holds no badge for it. The app answers with a `STATUS` line
+    /// (mirrors the Rust `ClientMessage::BadgeQuery`).
+    static func badgeQueryLine(for url: URL) -> String {
+        return "BADGE_QUERY:\(encodePath(url))"
+    }
+
     // MARK: - Path codec (mirrors Rust encode_path / decode_path)
 
     /// Percent-encode a file URL's raw filesystem bytes to printable ASCII.

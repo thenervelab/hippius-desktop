@@ -174,6 +174,31 @@ pub async fn prune(pool: &SqlitePool, owner: &str, active_tokens: &[&str]) {
     }
 }
 
+/// Whether a FILE share minted on this device is on record for
+/// `(folder_label, relative_path)`. Backs the Finder "shared" badge.
+///
+/// This is the sidecar's view, not the server's: a share minted on another
+/// device, or a folder share (which records no origin row by design — see the
+/// "Badges key on the LISTING" rule), reads as not shared. The badge is a
+/// hint, and a false "not shared" costs nothing; a lookup that reached the
+/// server per visible Finder row would.
+///
+/// Owner-scoped like every other read here, so one account's share can never
+/// badge another account's file at the same path.
+///
+/// # Errors
+///
+/// Returns `Err` only on a hard SQLite failure.
+pub async fn is_shared(pool: &SqlitePool, owner: &str, folder_label: &str, relative_path: &str) -> Result<bool> {
+    let hit = sqlx::query_scalar::<_, i64>("SELECT 1 FROM share_origin WHERE owner = ? AND folder_label = ? AND relative_path = ? LIMIT 1")
+        .bind(owner)
+        .bind(folder_label)
+        .bind(relative_path)
+        .fetch_optional(pool)
+        .await?;
+    Ok(hit.is_some())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -200,6 +225,23 @@ mod tests {
         let got = map.get("tok-a").expect("present");
         assert_eq!(got.folder_label, "Drive");
         assert_eq!(got.relative_path, "sub/file.txt");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn is_shared_reads_the_exact_owner_label_and_path() {
+        let (_dir, pool) = fresh_pool().await;
+        record(&pool, "tok-a", "owner1", "Drive", "sub/file.txt").await.expect("record");
+
+        assert!(is_shared(&pool, "owner1", "Drive", "sub/file.txt").await.expect("hit"));
+        // Same path in another drive, another account, or a sibling path is
+        // not this share — a badge on any of them would be a lie.
+        assert!(!is_shared(&pool, "owner1", "Other", "sub/file.txt").await.expect("label"));
+        assert!(!is_shared(&pool, "owner2", "Drive", "sub/file.txt").await.expect("owner"));
+        assert!(!is_shared(&pool, "owner1", "Drive", "sub/file.txt.bak").await.expect("path"));
+        assert!(!is_shared(&pool, "owner1", "Drive", "sub").await.expect("parent dir"));
+
+        forget(&pool, "owner1", "tok-a").await.expect("forget");
+        assert!(!is_shared(&pool, "owner1", "Drive", "sub/file.txt").await.expect("after revoke"));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

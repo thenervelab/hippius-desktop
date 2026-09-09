@@ -13,8 +13,17 @@ final class HippiusFinderSync: FIFinderSync {
     private let socket: BridgeSocket
     /// Registered Hippius drive roots (from REGISTER_PATH), standardized.
     private var roots: Set<URL> = []
-    /// Per-path badge state token (from STATUS), standardized key.
+    /// Per-path badge state token (from STATUS), standardized key. Filled by
+    /// the app's pushes and by the answers to this extension's own queries;
+    /// dropped whole when the socket drops, so a restarted app is never
+    /// shadowed by states it no longer holds.
     private var badges: [URL: String] = [:]
+    /// Paths a `BADGE_QUERY` is out for, so a folder Finder redraws several
+    /// times while the app answers costs one line per path, not one per draw.
+    private var pendingQueries: Set<URL> = []
+    /// Bound on `pendingQueries`: an app that never answers (an old build
+    /// without the verb) must not grow the set for the life of the process.
+    private static let maxPendingQueries = 4096
 
     override init() {
         socket = BridgeSocket(path: HippiusFinderSync.socketPath())
@@ -31,6 +40,9 @@ final class HippiusFinderSync: FIFinderSync {
         socket.onLine = { [weak self] line in
             guard let message = WireProtocol.parse(line) else { return }
             DispatchQueue.main.async { self?.handle(message) }
+        }
+        socket.onDisconnect = { [weak self] in
+            DispatchQueue.main.async { self?.forgetBadges() }
         }
         // BridgeSocket self-heals: connect() retries every second until the app
         // is up, and reconnects automatically if the app later restarts.
@@ -49,6 +61,7 @@ final class HippiusFinderSync: FIFinderSync {
             badges = badges.filter { !isDescendant($0.key, of: standardized) }
         case .status(let state, let url):
             let key = url.standardizedFileURL
+            pendingQueries.remove(key)
             if state == "clear" {
                 badges.removeValue(forKey: key)
                 FIFinderSyncController.default().setBadgeIdentifier("", for: url)
@@ -61,12 +74,17 @@ final class HippiusFinderSync: FIFinderSync {
 
     // MARK: - Badges
 
+    /// One image per painted `BadgeState` on the Rust side; the identifiers
+    /// are the wire tokens. A state without an image here paints nothing,
+    /// silently — `src-tauri/tests/finder_socket_pins.rs` checks the list
+    /// against the Rust enum.
     private func registerBadges() {
         let controller = FIFinderSyncController.default()
         let specs: [(id: String, symbol: String)] = [
             ("synced", "checkmark.circle.fill"),
             ("syncing", "arrow.triangle.2.circlepath.circle.fill"),
             ("shared", "link.circle.fill"),
+            ("error", "exclamationmark.circle.fill"),
         ]
         for spec in specs {
             if let image = NSImage(systemSymbolName: spec.symbol, accessibilityDescription: spec.id) {
@@ -75,10 +93,39 @@ final class HippiusFinderSync: FIFinderSync {
         }
     }
 
+    /// Finder is about to show `url`. Answer from the cache, or ask the app
+    /// once — the answer comes back as a STATUS line and lands in `badges`.
+    /// Only paths inside a Hippius drive are asked about: the extension
+    /// monitors the whole home directory for the share menu, and querying
+    /// every file Finder draws there would flood the socket for a `clear`.
     override func requestBadgeIdentifier(for url: URL) {
-        if let state = badges[url.standardizedFileURL] {
+        DispatchQueue.main.async { self.badgeRequested(for: url) }
+    }
+
+    private func badgeRequested(for url: URL) {
+        let key = url.standardizedFileURL
+        if let state = badges[key] {
             FIFinderSyncController.default().setBadgeIdentifier(state, for: url)
+            return
         }
+        guard socket.isConnected, isInsideRegisteredRoot(key), !pendingQueries.contains(key) else { return }
+        if pendingQueries.count >= HippiusFinderSync.maxPendingQueries {
+            pendingQueries.removeAll()
+        }
+        pendingQueries.insert(key)
+        socket.send(WireProtocol.badgeQueryLine(for: url))
+    }
+
+    /// The app that produced every cached state is gone; whatever replaces
+    /// it answers fresh queries. Roots stay — the app replays them on
+    /// connect, and until then the menu is gated on `isConnected` anyway.
+    private func forgetBadges() {
+        badges.removeAll()
+        pendingQueries.removeAll()
+    }
+
+    private func isInsideRegisteredRoot(_ url: URL) -> Bool {
+        roots.contains { isDescendant(url, of: $0) }
     }
 
     // MARK: - Menu

@@ -421,6 +421,11 @@ fn build_plan_ready_callback<R: tauri::Runtime>(app: &AppHandle<R>, label: Arc<s
             renames.len()
         );
 
+        // Finder badges: mark the planned transfers as in flight before the
+        // first byte moves. Borrowed refs, dropped before the owned vecs below.
+        let planned: Vec<&str> = uploads.iter().chain(downloads.iter()).map(|f| f.path.as_str()).collect();
+        crate::finder_bridge::badges::push_plan(&app, &label, &planned);
+
         // Build path vecs once and move them into SessionFileList (no .clone()).
         // The Tauri event payload is built separately by re-iterating the plan
         // slices (which are still alive), so we never hold two full copies of
@@ -621,6 +626,12 @@ pub fn build_file_synced_callback<R: tauri::Runtime>(app: &AppHandle<R>, sync: A
             }
         };
 
+        // Finder badge: the same server-confirmed moment the activity row
+        // below keys on, so a badge never says "synced" before the server has.
+        if let Some(badge) = crate::finder_bridge::badges::badge_for_synced_action(action) {
+            crate::finder_bridge::badges::push(&app, &label, rel_path, badge);
+        }
+
         // Activity items must reflect SERVER-CONFIRMED success, not just
         // "the request body finished sending". hcfs-client's per-file
         // upload/download tasks invoke this callback only after the
@@ -760,7 +771,7 @@ pub fn build_file_synced_callback<R: tauri::Runtime>(app: &AppHandle<R>, sync: A
 /// the existing bridge: bridge → Tauri event emit; this callback →
 /// progress-tracker mutation. hcfs-client guarantees both fire for the
 /// same per-file error, so we don't lose either signal.
-fn build_file_failed_callback(sync: Arc<SyncRunner>, label: Arc<str>) -> hcfs_client::sync::FileFailedFn {
+fn build_file_failed_callback(app: AppHandle, sync: Arc<SyncRunner>, label: Arc<str>) -> hcfs_client::sync::FileFailedFn {
     Arc::new(move |rel_path, file_id_hex, kind, http_status| {
         // Mirror `on_file_synced` shape: empty rel_path means the planner
         // never recorded a path for this file (shouldn't happen, but the
@@ -793,6 +804,7 @@ fn build_file_failed_callback(sync: Arc<SyncRunner>, label: Arc<str>) -> hcfs_cl
                 "failed to mark file failed in progress tracker"
             );
         }
+        crate::finder_bridge::badges::push(&app, &label, rel_path, crate::finder_bridge::protocol::BadgeState::Error);
     })
 }
 
@@ -847,7 +859,7 @@ pub(crate) fn setup_progress_handlers(app: &AppHandle, manager: &mut DriveManage
         // error site. We mutate the in-memory progress tracker here; the
         // bridge's `SyncEvent::FileFailed` arm is the user-visible side (Tauri
         // event emit).
-        on_file_failed: Some(build_file_failed_callback(sync.clone(), Arc::clone(&label))),
+        on_file_failed: Some(build_file_failed_callback(app.clone(), sync.clone(), Arc::clone(&label))),
     });
 }
 

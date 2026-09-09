@@ -408,6 +408,23 @@ mod unix_tests {
         bridge.shutdown();
     }
 
+    /// A badge query must reach the consumer as a query, never as a click —
+    /// the dispatch opens the share chooser for a click.
+    #[tokio::test]
+    async fn badge_query_arrives_on_incoming_as_a_query() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("finder.sock");
+        let (bridge, mut incoming) = FinderBridge::start(unix_endpoint(&sock)).expect("bridge starts");
+
+        let mut client = connect(&sock).await;
+        client.write_all(b"BADGE_QUERY:/Users/me/Hippius/x.txt\n").await.unwrap();
+        client.flush().await.expect("flush");
+
+        let msg = timeout(TIMEOUT, incoming.recv()).await.expect("timeout").expect("closed");
+        assert_eq!(msg, ClientMessage::BadgeQuery(PathBuf::from("/Users/me/Hippius/x.txt")));
+        bridge.shutdown();
+    }
+
     #[tokio::test]
     async fn registered_root_is_replayed_on_connect() {
         let dir = tempfile::tempdir().unwrap();

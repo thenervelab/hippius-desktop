@@ -138,3 +138,42 @@ fn the_socket_rules_do_not_assume_a_home_under_users() {
          elsewhere; use the home-agnostic `^/.*/` form"
     );
 }
+
+/// The extension paints a badge only for an identifier it registered an image
+/// under, and an unregistered one paints nothing without any error. So every
+/// state the Rust side can send must appear in the Swift registration table,
+/// keyed by the exact wire token.
+#[test]
+fn swift_registers_an_image_for_every_painted_badge_state() {
+    use tauri_project_lib::finder_bridge::protocol::BadgeState;
+
+    let swift = swift_code_only(&read("../macos/HippiusFinder/HippiusFinderSync.swift"));
+    for state in BadgeState::PAINTED {
+        let entry = format!("(\"{}\", ", state.token());
+        assert!(
+            swift.contains(&entry),
+            "HippiusFinderSync.registerBadges has no image for the `{}` badge; the app will send \
+             STATUS:{}:<path> and Finder will paint nothing",
+            state.token(),
+            state.token()
+        );
+    }
+}
+
+/// The pull half of the badge feed: the extension asks for a badge with the
+/// same verb the Rust codec parses. A drift here is silent — the app logs
+/// "dropping unparseable line" at warn and every badge stays blank.
+#[test]
+fn swift_asks_for_badges_with_the_verb_the_app_parses() {
+    let swift = swift_code_only(&read("../macos/HippiusFinder/WireProtocol.swift"));
+    assert!(
+        swift.contains("\"BADGE_QUERY:"),
+        "WireProtocol.badgeQueryLine must emit the BADGE_QUERY verb that finder_bridge::protocol parses"
+    );
+    let sync = swift_code_only(&read("../macos/HippiusFinder/HippiusFinderSync.swift"));
+    assert!(
+        sync.contains("badgeQueryLine(for:"),
+        "requestBadgeIdentifier no longer asks the app for a badge it does not hold; only pushed \
+         badges would ever paint"
+    );
+}
