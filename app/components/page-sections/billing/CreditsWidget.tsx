@@ -41,9 +41,8 @@ const CreditsWidget: FC<CreditsWidgetProps> = ({ className }) => {
         </div>
       </div>
 
-      {/* Inner panel — stat + freshness grouped at the top, CTA at the
-          bottom. `gap-4` is the floor so a short card never packs the
-          three lines flush (the previous `p-3` + no-gap stack). */}
+      {/* Stat and freshness stay together so justify-between parks the
+          CTA at the bottom when the billing grid stretches the card. */}
       <div
         className={cn(
           "flex flex-col w-full flex-1 justify-between gap-4",

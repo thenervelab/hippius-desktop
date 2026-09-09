@@ -100,9 +100,8 @@ const TaoDepositWidget: FC<{ className?: string }> = ({ className }) => {
         </div>
       </div>
 
-      {/* Inner panel — identity grouped at the top, copy row at the
-          bottom. `gap-4` + `px-4 py-4` keep this card in step with
-          CreditsWidget so the pair never reads as a packed Figma slice. */}
+      {/* Identity grouped at the top, copy row at the bottom, so this
+          card stays in step with CreditsWidget when the grid stretches. */}
       <div
         className={cn(
           "flex flex-col w-full flex-1 justify-between gap-4",

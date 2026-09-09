@@ -12,12 +12,8 @@ interface SettingsWarningNoticeProps {
 }
 
 /**
- * Standing security notice used on settings pages (API Token, Security).
- *
- * Same card chrome as the settings rows it sits between — full width,
- * 8px radius, grey/dark border — with an amber icon chip so it still
- * reads as a warning. A highlighter-yellow content-hugging box does
- * not belong next to those rows.
+ * Standing security notice on settings pages (API Token, Security).
+ * Same chrome as SecurityRow, with an amber chip so it still reads as a warning.
  */
 export function SettingsWarningNotice({
   title,
