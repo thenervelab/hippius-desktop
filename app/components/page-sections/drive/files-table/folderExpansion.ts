@@ -21,6 +21,36 @@ export interface FolderExpansion {
 }
 
 /**
+ * Whether a folder row offers inline expansion at all.
+ *
+ * THREE places asked this, each spelling it out again, and each requiring
+ * a sync path: the chevron's interactivity, whether the expanded rows
+ * render, and the listing inside them. A folder in a browsed drive has no
+ * sync path, so all three said no — and the chevron rendered inert, which
+ * is why clicking it did nothing rather than showing an error or an empty
+ * folder.
+ *
+ * One predicate now answers it, because a control that renders but cannot
+ * be pressed is the hardest kind of broken to notice.
+ */
+export function canExpandFolderRow(inputs: {
+  /** The table-level switch for inline expansion. */
+  enableFolderExpander: boolean;
+  isFolder: boolean;
+  source: string | null | undefined;
+  label: string | null | undefined;
+  /** The drive's sync root, when this device syncs it. */
+  syncPath: string | null | undefined;
+}): boolean {
+  if (!inputs.enableFolderExpander || !inputs.isFolder) return false;
+  // A browsed drive is addressed by the label in its source; a local one
+  // needs a root on disk to walk.
+  const remoteLabel = remoteLabelFromSource(inputs.source);
+  if (remoteLabel !== null) return true;
+  return Boolean(inputs.label && inputs.syncPath);
+}
+
+/**
  * Whether a folder row can expand, and where its children come from.
  *
  * Expanding used to require a `syncPath`, which a browsed drive does not

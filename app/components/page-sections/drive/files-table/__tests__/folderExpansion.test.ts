@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { resolveFolderExpansion } from "../folderExpansion";
+import { canExpandFolderRow, resolveFolderExpansion } from "../folderExpansion";
 import { REMOTE_SOURCE_PREFIX } from "@/app/lib/hooks/use-nested-folder-listing";
 
 const local = {
@@ -60,5 +60,59 @@ describe("resolveFolderExpansion", () => {
     expect(
       resolveFolderExpansion({ ...remote, source: REMOTE_SOURCE_PREFIX }).enabled,
     ).toBe(false);
+  });
+});
+
+describe("canExpandFolderRow", () => {
+  const localRow = {
+    enableFolderExpander: true,
+    isFolder: true,
+    source: "/Users/a/chains/photos",
+    label: "chains",
+    syncPath: "/Users/a/chains",
+  };
+  const remoteRow = {
+    enableFolderExpander: true,
+    isFolder: true,
+    source: `${REMOTE_SOURCE_PREFIX}Camera Uploads`,
+    label: undefined,
+    syncPath: undefined,
+  };
+
+  it("lets a folder in a locally synced drive expand", () => {
+    expect(canExpandFolderRow(localRow)).toBe(true);
+  });
+
+  // The bug: no sync path meant the chevron rendered INERT — no toggle
+  // handler at all — so clicking it did nothing rather than erroring.
+  it("lets a folder in a browsed drive expand despite having no sync path", () => {
+    expect(canExpandFolderRow(remoteRow)).toBe(true);
+  });
+
+  it("refuses a local folder whose drive has no known root", () => {
+    expect(canExpandFolderRow({ ...localRow, syncPath: undefined })).toBe(false);
+  });
+
+  it("refuses a file", () => {
+    expect(canExpandFolderRow({ ...remoteRow, isFolder: false })).toBe(false);
+  });
+
+  it("respects the table-level switch", () => {
+    expect(canExpandFolderRow({ ...remoteRow, enableFolderExpander: false })).toBe(false);
+  });
+
+  // The chevron and the rows it reveals must agree; two predicates is how
+  // a control renders without the thing it opens.
+  it("agrees with resolveFolderExpansion about a browsed drive", () => {
+    expect(canExpandFolderRow(remoteRow)).toBe(true);
+    expect(
+      resolveFolderExpansion({
+        accountId: "5Test",
+        source: remoteRow.source,
+        label: remoteRow.label,
+        syncPath: remoteRow.syncPath,
+        relativePath: "beach day",
+      }).enabled,
+    ).toBe(true);
   });
 });
