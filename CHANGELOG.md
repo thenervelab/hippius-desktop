@@ -186,6 +186,14 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Large files upload to a cloud folder again.** Uploading a big file into a folder
+  that is not synced on this computer failed with a server error at the very end of
+  the transfer. Files of any size now go up the same way they do for a synced
+  folder, still encrypted on your machine before they leave it.
+- **You can see that a cloud upload started, and it stays in the list.** Uploading
+  into a folder that is not synced on this computer now shows a brief confirmation
+  that the upload has begun, and the files stay in the sync list until your next
+  upload instead of disappearing a few seconds after they finish.
 - **A folder added from Settings gets Finder badges right away**, not after
   the next launch, and a removed folder stops showing them.
 - **The "Turn on the Hippius Finder extension" notice no longer comes back after
