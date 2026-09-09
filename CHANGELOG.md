@@ -88,6 +88,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **Uploads into a folder you are browsing show in the sync queue**, alongside
   everything else being synced, instead of a message that sat on screen for the
   whole upload.
+- **The share button is back on files you are only browsing.** Opening a file from
+  a drive that is not synced on this computer showed no share option; it does now,
+  and the link works the same way.
 - **Folders expand inside drives that are not synced on this computer.** The arrow
   next to a folder did nothing there; it now opens the folder in place, the same as
   it does for folders synced here.
