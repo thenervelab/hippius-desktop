@@ -98,14 +98,14 @@ const FileDropzone: FC<{
               if (folders.length > 0 && files.length === 0) {
                 // Files-only zone — surface the mismatch.
                 toast.error(
-                  "Folders cannot be uploaded here. Use \"Upload Folder\" instead.",
+                  "Folders cannot be added here. Use \"Add Folder\" instead.",
                   { duration: 5000 },
                 );
                 return;
               }
               if (folders.length > 0) {
                 toast.info(
-                  "Folders were skipped. Use \"Upload Folder\" to upload a folder.",
+                  "Folders were skipped. Use \"Add Folder\" to add a folder.",
                 );
               }
               if (files.length > 0) {
@@ -171,10 +171,10 @@ const FileDropzone: FC<{
 
         <div className="flex flex-col items-center gap-1">
           <span className="font-geist text-base font-medium leading-[22px] tracking-[-0.32px] text-grey-10 dark:text-white">
-            Upload a File Here
+            Add a File Here
           </span>
           <span className="font-geist text-sm font-medium leading-5 tracking-[-0.28px] text-center text-grey-60 dark:text-grey-dark-600 max-w-[262px]">
-            Drag and drop or click to add one or more files here to upload
+            Drag and drop or click to add one or more files here
           </span>
         </div>
       </button>

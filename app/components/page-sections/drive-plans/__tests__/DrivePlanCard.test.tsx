@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import React from "react";
 
@@ -6,12 +6,17 @@ import DrivePlanCard from "../DrivePlanCard";
 import type { DrivePlan } from "@/lib/types/drive-plans";
 
 /**
- * Shared drives are sold in the higher plans but are not switched on yet, so
- * the line is greyed and explains itself on hover. Pinned because both halves
- * fail silently: a plan gaining the perk row without the greying reads as
- * available on day one, and a trigger that stops being hoverable leaves a
- * dimmed line with no stated reason at all.
+ * The "Shared team drive" perk line follows `SHARED_DRIVES_ENABLED`: while
+ * the sharing surfaces are hidden the line is greyed and explains itself on
+ * hover, and once they ship it is an ordinary line. Both states are pinned
+ * because each failure is silent: a card selling the perk as usable while
+ * the folder menus hide it (or the reverse) is exactly the contradiction the
+ * flag gate exists to prevent, and a trigger that stops being hoverable
+ * leaves a dimmed line with no stated reason at all.
  */
+const flags = vi.hoisted(() => ({ SHARED_DRIVES_ENABLED: false }));
+vi.mock("@/lib/featureFlags", () => flags);
+
 const plan = (over: Partial<DrivePlan> = {}): DrivePlan =>
   ({
     code: "duo",
@@ -34,7 +39,11 @@ const renderCard = (p: DrivePlan) =>
     />,
   );
 
-describe("DrivePlanCard shared drive perk", () => {
+describe("DrivePlanCard shared drive perk while shared drives are off", () => {
+  beforeEach(() => {
+    flags.SHARED_DRIVES_ENABLED = false;
+  });
+
   it("says coming soon when the greyed line is hovered", async () => {
     renderCard(plan());
 
@@ -62,6 +71,20 @@ describe("DrivePlanCard shared drive perk", () => {
 
     expect(pending.className).toContain("text-grey-70");
     expect(normal.className).not.toContain("text-grey-70");
+  });
+});
+
+describe("DrivePlanCard shared drive perk once shared drives are on", () => {
+  beforeEach(() => {
+    flags.SHARED_DRIVES_ENABLED = true;
+  });
+
+  it("lists the perk as an ordinary line with no coming-soon note", () => {
+    renderCard(plan());
+
+    const line = screen.getByText("Shared team drive");
+    expect(line.className).not.toContain("text-grey-70");
+    expect(screen.queryByText(", coming soon")).toBeNull();
   });
 
   it("shows no perk row on a plan that does not include it", () => {

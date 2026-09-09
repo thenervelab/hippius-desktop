@@ -2,8 +2,8 @@ import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { Upload, FolderPlus, FolderSync } from "lucide-react";
 import {
-  UPLOAD_FILE_LABEL,
-  UPLOAD_FOLDER_LABEL,
+  ADD_FILE_LABEL,
+  ADD_FOLDER_LABEL,
 } from "@/app/components/page-sections/drive/uploadActions";
 
 interface BackgroundContextMenuProps {
@@ -68,7 +68,7 @@ export default function BackgroundContextMenu({
             }}
           >
             <Upload className="size-4" />
-            <span>{UPLOAD_FILE_LABEL}</span>
+            <span>{ADD_FILE_LABEL}</span>
           </button>
 
           <button
@@ -79,7 +79,7 @@ export default function BackgroundContextMenu({
             }}
           >
             <FolderPlus className="size-4" />
-            <span>{UPLOAD_FOLDER_LABEL}</span>
+            <span>{ADD_FOLDER_LABEL}</span>
           </button>
 
           {onAddSyncFolder && (

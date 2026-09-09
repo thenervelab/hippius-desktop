@@ -100,16 +100,16 @@ export const VM_VPN_ENABLED = false;
  * silently anyway (the backend maps the unmounted routes to
  * `NotReady(SHARED_DRIVES_UNAVAILABLE)`, which the FE matches and hides).
  *
- * `false` for the 0.6.1 release: the feature is not launching yet. It was
- * left `true` through 0.6.0 without ever being announced, which left the
- * app contradicting itself — the Drive plan cards grey out the shared team
- * drive perk as "coming soon" while the sharing surfaces were reachable.
- * Flip back to `true` when the launch is on, which needs the hcfs-server
- * fleet on `HCFS_FEATURE_SHARED_DRIVES=1` and the console's
- * `/invite/{token}` accept page live in the same window (desktop invite
+ * The Drive plan cards read this flag too: while it is `false` they grey
+ * out the "Shared team drive" perk as coming soon, so the app cannot
+ * contradict itself by selling a perk whose surfaces are hidden (or the
+ * reverse, which is what 0.6.0 shipped).
+ *
+ * `true` requires the hcfs-server fleet on `HCFS_FEATURE_SHARED_DRIVES=1`
+ * and the console's `/invite/{token}` accept page live (desktop invite
  * links mint at the console, so both sides must ship together).
  */
-export const SHARED_DRIVES_ENABLED = false;
+export const SHARED_DRIVES_ENABLED = true;
 
 /**
  * Referrals page. When `false`, referrals is fully invisible: the sidebar

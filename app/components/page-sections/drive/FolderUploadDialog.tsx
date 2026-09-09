@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from "react";
 import { errorMessage } from "@/lib/utils/errorUtils";
 import { AlertCircle, Folder, X } from "lucide-react";
-import { UPLOAD_FOLDER_LABEL } from "./uploadActions";
+import { ADD_FOLDER_LABEL } from "./uploadActions";
 import { toast } from "sonner";
 import { open as openSelection } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
@@ -283,11 +283,11 @@ export default function FolderUploadDialog({
     <FramedDialog
       open={open}
       onClose={handleClose}
-      title={UPLOAD_FOLDER_LABEL}
+      title={ADD_FOLDER_LABEL}
       icon={<Icons.FolderPlus className="size-5 text-white" />}
       maxWidth="max-w-[653px]"
     >
-      {/* Section label row — mirrors the AddFile dialog's "Upload File" + Private layout. */}
+      {/* Section label row — mirrors the AddFile dialog's "Add File" + Private layout. */}
       <div className="mb-2.5 flex items-center justify-between gap-2">
         <span className="font-geist text-sm font-medium text-grey-60 dark:text-grey-dark-700 tracking-[-0.28px]">
           Folder Location
@@ -429,7 +429,7 @@ export default function FolderUploadDialog({
               "dark:hover:bg-[#2a5ad0] dark:hover:border-[#2a5ad0]",
             )}
           >
-            Upload Folder
+            {ADD_FOLDER_LABEL}
           </Button>
           <Button
             type="button"

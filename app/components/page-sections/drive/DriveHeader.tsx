@@ -28,8 +28,8 @@ import { toast } from "sonner";
 import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
 import {
   resolveUploadAction,
-  UPLOAD_FILE_LABEL,
-  UPLOAD_FOLDER_LABEL,
+  ADD_FILE_LABEL,
+  ADD_FOLDER_LABEL,
 } from "./uploadActions";
 import RemoteUploadButton from "./RemoteUploadButton";
 import RemoteNewFolderButton from "./RemoteNewFolderButton";
@@ -123,10 +123,10 @@ interface DriveHeaderProps {
   breadcrumbSegments?: BreadcrumbSegment[];
   onBreadcrumbLocalClick?: () => void;
   // Nested folder browsing mode. When `isNested` is true:
-  //  - the Upload File and Upload Folder actions target
+  //  - the Add File and Add Folder actions target
   //    `nestedSubfolderPath` instead of the active sync drive's root,
   //  - per-folder stats (StorageStateList) are hidden,
-  //  - a "Download Folder" pill is shown next to Upload Folder.
+  //  - a "Download Folder" pill is shown next to Add Folder.
   isNested?: boolean;
   /** Display name of the folder the user is currently inside. Used as the upload dialog title. */
   nestedFolderName?: string | null;
@@ -223,7 +223,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
   // (Folder Upload eligibility, hasNoSyncPaths disabled fallback, etc.).
   const actionButtons = (
     <>
-      {/* Upload Folder. Both this and Upload File resolve through the
+      {/* Add Folder. Both this and Add File resolve through the
           shared `resolveUploadAction` so they can never disagree about
           whether this view accepts uploads — they used to. */}
       {uploadAction === "enabled" && (
@@ -242,7 +242,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
             }}
             className={SECONDARY_PILL_CLASSES}
           >
-            {UPLOAD_FOLDER_LABEL}
+            {ADD_FOLDER_LABEL}
           </Button>
         )}
       {uploadAction === "disabled" && (
@@ -252,13 +252,13 @@ const DriveHeader: FC<DriveHeaderProps> = ({
           disabled
           className={SECONDARY_PILL_CLASSES}
         >
-          {UPLOAD_FOLDER_LABEL}
+          {ADD_FOLDER_LABEL}
         </Button>
       )}
 
       {/* Download Folder — only when browsing inside a nested folder.
-          Same secondary pill style as Upload Folder so it doesn't compete
-          with the primary Upload File CTA. Saves a store-only .zip
+          Same secondary pill style as Add Folder so it doesn't compete
+          with the primary Add File CTA. Saves a store-only .zip
           (export_folder_zip), not a copied directory tree. */}
       {isNested && onDownloadFolder && (
         <Button
@@ -294,7 +294,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
         </>
       )}
 
-      {/* Upload File — the primary CTA, same gate as Upload Folder above. */}
+      {/* Add File — the primary CTA, same gate as Add Folder above. */}
       {uploadAction === "disabled" ? (
         <Button
           variant="primary"
@@ -302,7 +302,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
           disabled
           className="h-[30px] px-3 py-[10px] gap-[10px] rounded-[6px] font-geist text-[14px] tracking-[-0.28px] leading-[1.109]"
         >
-          + {UPLOAD_FILE_LABEL}
+          + {ADD_FILE_LABEL}
         </Button>
       ) : uploadAction === "enabled" ? (
         <AddButton
@@ -339,7 +339,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
       )}
 
       {/* Shared Links navigation — secondary white pill style so it does
-          not compete with the primary "Upload File" CTA. Hidden when
+          not compete with the primary "Add File" CTA. Hidden when
           the connected hcfs-server doesn't advertise `shares: true`. */}
       {shareEnabled && (
         <Button
@@ -435,7 +435,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
             "dark:shadow-[0px_1px_1.1px_0px_rgba(0,0,0,0.4)]",
           )}
         >
-          {/* Line 1 — Breadcrumb (left) | Refresh + Upload Folder + Upload File + … (right).
+          {/* Line 1 — Breadcrumb (left) | Refresh + Add Folder + Add File + … (right).
               Lives inside the outer grey card's top section (px-2.5 py-2 per Figma).
               The default mt-6/mb-5 from SyncFolderBreadcrumb is overridden so the
               row stays compact and vertically aligned with the buttons. */}
@@ -519,7 +519,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
         </div>
       )}
 
-      {/* Folder Upload Dialog. In nested mode the Upload Folder button
+      {/* Folder Upload Dialog. In nested mode the Add Folder button
           uploads a directory INTO the current nested location, so we use
           the to-folder variant. In root mode it uploads into the sync
           drive's root and we use the existing FolderUploadDialog. */}

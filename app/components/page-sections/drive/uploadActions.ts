@@ -2,10 +2,12 @@
  * The two upload affordances — and the one rule that decides whether they
  * are offered.
  *
- * Both actions upload something that already exists on disk. Neither
- * creates anything, which is why the labels say Upload: "+ New Folder"
- * read as "make me a folder", a feature the desktop app does not have,
- * and "+ Add Files" was a third wording for the same idea.
+ * Both actions add something that already exists on disk to the drive.
+ * Neither creates anything, so the wording must not be "+ New Folder":
+ * that reads as "make me a folder", a feature the desktop app does not
+ * have. "Add" rather than "Upload" is a product decision — the drive is
+ * a synced folder, so from the user's side a file is added to it, not
+ * sent somewhere.
  *
  * Labels live here rather than at each call site because there are five
  * surfaces (page header, header's disabled fallback, right-click menu,
@@ -13,8 +15,8 @@
  * drifted into four different strings.
  */
 
-export const UPLOAD_FILE_LABEL = "Upload File";
-export const UPLOAD_FOLDER_LABEL = "Upload Folder";
+export const ADD_FILE_LABEL = "Add File";
+export const ADD_FOLDER_LABEL = "Add Folder";
 
 /**
  * Registering a local folder for ongoing sync is NOT an upload — it sets

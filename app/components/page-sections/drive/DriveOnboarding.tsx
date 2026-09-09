@@ -32,7 +32,7 @@ import AddButton from "./AddFileButton";
 import FolderUploadDialog from "./FolderUploadDialog";
 import { toFolderRows, type FolderRow } from "./folder-list/folderRows";
 import { buildFolderActions } from "./folder-list/buildFolderActions";
-import { SYNC_FOLDER_LABEL, UPLOAD_FOLDER_LABEL } from "./uploadActions";
+import { SYNC_FOLDER_LABEL, ADD_FOLDER_LABEL } from "./uploadActions";
 import {
   SharedWithMeSection,
   RemoveFolderDialog,
@@ -603,7 +603,7 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
                     onClick={() => setIsFolderUploadOpen(true)}
                     className="h-[26px] rounded-[6px] px-2.5 text-[12px] font-medium"
                   >
-                    {UPLOAD_FOLDER_LABEL}
+                    {ADD_FOLDER_LABEL}
                   </Button>
                   <AddButton
                     defaultFolderLabel={firstLocalLabel}

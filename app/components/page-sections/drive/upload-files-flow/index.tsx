@@ -392,7 +392,7 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
   const handleCancel = isFolder ? props.onCancel : props.reset;
   const uploadLabel = isFolder
     ? `Add ${files.length > 1 ? "Files" : "File"} to Folder`
-    : `Upload File${files.length > 1 ? "s" : ""}`;
+    : `Add File${files.length > 1 ? "s" : ""}`;
   const uploadingLabel = isFolder
     ? "Adding to Folder..."
     : "Preparing Files...";

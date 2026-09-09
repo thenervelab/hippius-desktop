@@ -11,6 +11,7 @@ import {
   type DrivePlan,
 } from "@/lib/types/drive-plans";
 import CustomTooltip2 from "@/components/ui/CustomTooltip2";
+import { SHARED_DRIVES_ENABLED } from "@/lib/featureFlags";
 import { cn } from "@/lib/utils";
 
 /** What the button on a card does, decided by the section and passed down. */
@@ -62,13 +63,14 @@ const DrivePlanCard: FC<DrivePlanCardProps> = ({
   const isInert = action === "current" || action === "none";
   const isCancel = action === "cancel";
   const storage = formatPlanStorage(plan.storage_bytes);
-  // Shared drives are part of these plans but are not switched on yet, so
-  // the line is greyed rather than removed: the plan does include it, it
-  // just cannot be used yet. Drop `pending` when the feature ships.
+  // While shared drives are switched off the line is greyed rather than
+  // removed: the plan does include it, it just cannot be used yet. Keyed
+  // on the same flag that hides the sharing surfaces so the card and the
+  // folder menus can never disagree about whether the perk is usable.
   const features = [
     { label: "Automatic renewal" },
     ...(hasSharedTeamDrive(plan)
-      ? [{ label: "Shared team drive", pending: true }]
+      ? [{ label: "Shared team drive", pending: !SHARED_DRIVES_ENABLED }]
       : []),
     {
       label: plan.is_free

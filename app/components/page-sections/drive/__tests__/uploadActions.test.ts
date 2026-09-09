@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
   resolveUploadAction,
-  UPLOAD_FILE_LABEL,
-  UPLOAD_FOLDER_LABEL,
+  ADD_FILE_LABEL,
+  ADD_FOLDER_LABEL,
   SYNC_FOLDER_LABEL,
   type UploadActionGates,
 } from "../uploadActions";
@@ -64,15 +64,16 @@ describe("resolveUploadAction", () => {
 });
 
 describe("upload action labels", () => {
-  // Neither action creates anything — both send something that already
+  // Neither action creates anything — both add something that already
   // exists on disk. "New Folder" claimed a feature the app does not have.
-  it("names both actions as uploads", () => {
-    expect(UPLOAD_FILE_LABEL).toBe("Upload File");
-    expect(UPLOAD_FOLDER_LABEL).toBe("Upload Folder");
+  it("names both actions as adding, never creating", () => {
+    expect(ADD_FILE_LABEL).toBe("Add File");
+    expect(ADD_FOLDER_LABEL).toBe("Add Folder");
+    expect(ADD_FOLDER_LABEL).not.toMatch(/new/i);
   });
 
-  it("keeps sync-folder setup worded apart from the uploads", () => {
-    expect(SYNC_FOLDER_LABEL).not.toContain("Upload");
-    expect(SYNC_FOLDER_LABEL).not.toBe(UPLOAD_FOLDER_LABEL);
+  it("keeps sync-folder setup worded apart from the add actions", () => {
+    expect(SYNC_FOLDER_LABEL).not.toContain("Add");
+    expect(SYNC_FOLDER_LABEL).not.toBe(ADD_FOLDER_LABEL);
   });
 });

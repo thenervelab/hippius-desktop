@@ -20,7 +20,7 @@ import { cn } from "@/lib/utils";
 import { hasConfiguredDrivesAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import { toast } from "sonner";
 import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
-import { UPLOAD_FILE_LABEL } from "./uploadActions";
+import { ADD_FILE_LABEL } from "./uploadActions";
 
 // Custom event name for file drop communication
 const HIPPIUS_DROP_EVENT = "hippius:file-drop";
@@ -108,7 +108,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
     );
 
     // Memoize title to prevent recalculation
-    const title = useMemo(() => UPLOAD_FILE_LABEL, []);
+    const title = useMemo(() => ADD_FILE_LABEL, []);
 
     // Close and reset everything - use useCallback to prevent re-renders
     const closeDialog = useCallback(() => {
@@ -210,7 +210,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
           {isLoading ? (
             <Loader2 className="animate-spin size-4" />
           ) : (
-            <>+ {UPLOAD_FILE_LABEL}</>
+            <>+ {ADD_FILE_LABEL}</>
           )}
         </Button>
 

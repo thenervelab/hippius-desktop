@@ -16,7 +16,7 @@ describe("FilesNoEntriesFound", () => {
     render(<FilesNoEntriesFound isRemoteView />);
 
     expect(screen.getByText("This Folder Is Empty")).toBeInTheDocument();
-    expect(screen.queryByText("Upload a File")).not.toBeInTheDocument();
+    expect(screen.queryByText("Add a File")).not.toBeInTheDocument();
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
     expect(
       screen.queryByText("No Entries in Your Storage"),
@@ -27,6 +27,6 @@ describe("FilesNoEntriesFound", () => {
     render(<FilesNoEntriesFound />);
 
     expect(screen.getByText("No Entries in Your Storage")).toBeInTheDocument();
-    expect(screen.getByText("Upload a File")).toBeInTheDocument();
+    expect(screen.getByText("Add a File")).toBeInTheDocument();
   });
 });

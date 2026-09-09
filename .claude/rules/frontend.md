@@ -41,7 +41,7 @@ Build-time boolean constants in `app/lib/featureFlags.ts` gate user-visible surf
 - `VM_FEATURE_ENABLED = false` renders the "Virtual Machines" sidebar sub-item disabled with an orange "Coming Soon" tag (`NavItem.tsx`), redirects `/vm`, `/vm/create` and `/vm/instance-details`, and omits the tray context menu's "Open Virtual Machines" item (`useTraySync.ts`, null-safe watcher).
 - `REFERRALS_COMING_SOON = true` keeps the referrals page reachable but behind the blurred `ComingSoon` overlay.
 - `VM_VPN_ENABLED = false` (independent of `VPN_FEATURE_ENABLED`) hides the per-VM "Connect via VPN" surface (`VmVpnConnect.tsx` via `useVpn`); it pairs with the off-by-default `netbird-vpn` Cargo feature.
-- `SHARED_DRIVES_ENABLED = false` — see the shares rules file.
+- `SHARED_DRIVES_ENABLED = true` — also drives the plan cards' "Shared team drive" perk (greyed as coming soon while `false`); see the shares rules file.
 
 ## User preferences
 

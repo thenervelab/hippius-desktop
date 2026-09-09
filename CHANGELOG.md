@@ -17,6 +17,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
+- **Share a drive with your team.** On the Plus, Max and Scale plans, choose
+  "Share drive" on any of your folders to invite someone by link, and see who has
+  access. A drive shared with you appears under "Shared with me" on the Drive page
+  and in Settings, ready to sync to this computer, whatever plan you are on.
 - **File Details now shows the file's Arion hash** (the BLAKE3 content digest)
   so you can copy it or open it on the file tracker.
 - **Finder shows how each file in your Hippius folders is doing.** Files and
@@ -75,9 +79,6 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   of your plan's storage you have used, and names the plan you are on — including
   the free plan, which every account has. It previously showed how much storage
   your credit balance could buy, which is not the same thing as the space you have.
-- **Plan cards no longer suggest shared drives are ready to use.** The shared team
-  drive line is greyed out on the plans that include it, until the feature is
-  switched on.
 - **Choosing how to pay is simpler.** The two ways to pay sit side by side, with
   card first and picked for you, since paying from credits needs a balance you may
   not have yet. The card option shows the cards and wallets the checkout accepts,
@@ -140,14 +141,12 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   Virtual Machines, which is not available yet, so it advertised a section that
   led nowhere.
 - **The upload buttons say what they do.** "+ New Folder" and "+ Add Files" are now
-  "Upload Folder" and "Upload File", worded the same way everywhere they appear.
-  The old wording suggested you could create a folder in the app, which was never
-  possible — both buttons send something that already exists on your computer.
+  "Add Folder" and "Add File", worded the same way on the Drive page, in the
+  right-click menu, and in the dialogs they open. The old wording suggested you
+  could create a folder in the app, which was never possible — both buttons add
+  something that already exists on your computer.
 - **Setting up a folder to sync reads differently from uploading one**, so the two
   are no longer easy to confuse.
-- **Shared drives are hidden until they launch.** Sharing a drive with someone and
-  the "Shared with me" list are not available in this release, matching what the
-  plan cards say. Drives already set up keep syncing as normal.
 - **Uploads are substantially faster**, especially on slower or long-distance
   connections — parts of a file now transfer at the same time instead of one after
   another.

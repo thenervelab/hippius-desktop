@@ -35,7 +35,7 @@ describe("FolderListEmptyState", () => {
   // picker would open on nothing, so syncing is the only offer.
   it("offers syncing a folder, not uploading into one", () => {
     expect(src).toContain("SYNC_FOLDER_LABEL");
-    expect(src).not.toMatch(/UPLOAD_FILE_LABEL|UPLOAD_FOLDER_LABEL/);
+    expect(src).not.toMatch(/ADD_FILE_LABEL|ADD_FOLDER_LABEL/);
   });
 
   // The list card already draws the border and surface; a second one

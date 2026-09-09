@@ -12,7 +12,7 @@ import { isNotReady } from "@/app/lib/utils/dispatchTauriError";
 import { useSetAtom } from "jotai";
 import { insufficientCreditsDialogOpenAtom } from "./atoms/query-atoms";
 import { uploadFilesToRemoteFolder } from "@/app/lib/tauri/remoteUpload";
-import { UPLOAD_FILE_LABEL } from "./uploadActions";
+import { ADD_FILE_LABEL } from "./uploadActions";
 
 /** How long the "upload started" toast stays up, in ms. */
 const REMOTE_UPLOAD_TOAST_MS = 4000;
@@ -117,7 +117,7 @@ const RemoteUploadButton: React.FC<{
         className,
       )}
     >
-      {busy ? <Icons.Loader className="size-4 animate-spin" /> : `+ ${UPLOAD_FILE_LABEL}`}
+      {busy ? <Icons.Loader className="size-4 animate-spin" /> : `+ ${ADD_FILE_LABEL}`}
     </Button>
   );
 };

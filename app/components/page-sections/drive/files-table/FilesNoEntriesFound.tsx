@@ -128,7 +128,7 @@ const FilesNoEntriesFound: React.FC<FilesNoEntriesFoundProps> = ({
     ? "View plans"
     : !isSyncPathConfigured
       ? "Start Syncing"
-      : "Upload a File";
+      : "Add a File";
 
   return (
     <NoEntriesFound
