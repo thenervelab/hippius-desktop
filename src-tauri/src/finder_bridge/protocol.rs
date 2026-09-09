@@ -27,8 +27,10 @@ use std::path::{Path, PathBuf};
 ///
 /// Every painted state must have a badge image registered on the Swift side
 /// (`HippiusFinderSync.registerBadges`) — an unregistered identifier paints
-/// nothing, silently. `tests/finder_socket_pins.rs` checks the Swift source
-/// against [`BadgeState::PAINTED`].
+/// nothing, silently. The image is the template PDF at
+/// `macos/HippiusFinder/Badges/{token}.pdf`. `tests/finder_socket_pins.rs`
+/// checks the Swift source, the PDF, and the xcodegen copy against
+/// [`BadgeState::PAINTED`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BadgeState {
     /// Fully synced — local and remote agree.

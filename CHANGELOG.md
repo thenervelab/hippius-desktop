@@ -67,6 +67,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **Finder badges on your files are easier to see.** They fill the badge well
+  instead of sitting small inside it.
 - **Your storage is now measured against your plan.** The home page shows how much
   of your plan's storage you have used, and names the plan you are on — including
   the free plan, which every account has. It previously showed how much storage

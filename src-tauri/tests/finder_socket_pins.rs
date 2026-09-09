@@ -142,20 +142,53 @@ fn the_socket_rules_do_not_assume_a_home_under_users() {
 /// The extension paints a badge only for an identifier it registered an image
 /// under, and an unregistered one paints nothing without any error. So every
 /// state the Rust side can send must appear in the Swift registration table,
-/// keyed by the exact wire token.
+/// keyed by the exact wire token, and that token must name a 320×320 template
+/// PDF that xcodegen actually copies into the .appex.
 #[test]
 fn swift_registers_an_image_for_every_painted_badge_state() {
     use tauri_project_lib::finder_bridge::protocol::BadgeState;
 
     let swift = swift_code_only(&read("../macos/HippiusFinder/HippiusFinderSync.swift"));
+    assert!(
+        !swift.contains("systemSymbolName"),
+        "SF Symbols carry optical padding, so stretching one into a 320×320 frame \
+         still leaves a small glyph in the well; Apple wants edge-to-edge PDFs"
+    );
+    assert!(
+        swift.contains("isTemplate = true"),
+        "badge PDFs must be template images so Finder can tint them"
+    );
+    assert!(
+        swift.contains("url(forResource: spec.id, withExtension: \"pdf\")"),
+        "registerBadges must load the PDF named after the wire token"
+    );
+
+    let project = read("../macos/HippiusFinder/project.yml");
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     for state in BadgeState::PAINTED {
-        let entry = format!("(\"{}\", ", state.token());
+        let token = state.token();
+        let entry = format!("(\"{token}\", ");
         assert!(
             swift.contains(&entry),
-            "HippiusFinderSync.registerBadges has no image for the `{}` badge; the app will send \
-             STATUS:{}:<path> and Finder will paint nothing",
-            state.token(),
-            state.token()
+            "HippiusFinderSync.registerBadges has no image for the `{token}` badge; the app will send \
+             STATUS:{token}:<path> and Finder will paint nothing"
+        );
+
+        let resource = format!("Badges/{token}.pdf");
+        assert!(
+            project.contains(&resource),
+            "project.yml does not copy {resource} into the .appex; url(forResource:) would be nil"
+        );
+
+        let pdf = manifest.join("../macos/HippiusFinder").join(&resource);
+        let bytes = std::fs::read(&pdf).unwrap_or_else(|e| panic!("read {}: {e}", pdf.display()));
+        assert!(bytes.starts_with(b"%PDF"), "{} is not a PDF", pdf.display());
+        assert!(
+            bytes
+                .windows(b"/MediaBox [0 0 320 320]".len())
+                .any(|window| window == b"/MediaBox [0 0 320 320]"),
+            "{} must be a 320×320 page so it fills Apple's max badge frame",
+            pdf.display()
         );
     }
 }

@@ -88,35 +88,30 @@ final class HippiusFinderSync: FIFinderSync {
     /// One image per painted `BadgeState` on the Rust side; the identifiers
     /// are the wire tokens. A state without an image here paints nothing,
     /// silently — `src-tauri/tests/finder_socket_pins.rs` checks the list
-    /// against the Rust enum.
+    /// against the Rust enum and that `Badges/{token}.pdf` exists.
+    ///
+    /// Apple: fill a frame drawable at up to 320×320, edge to edge, no
+    /// padding. SF Symbols carry optical insets, so they sit small in the
+    /// well even when stretched. The PDFs are template images; Finder tints
+    /// them. Labels are the short localized strings Finder may show instead
+    /// of (or as well as) the image.
     private func registerBadges() {
         let controller = FIFinderSyncController.default()
-        let specs: [(id: String, symbol: String, label: String)] = [
-            ("synced", "checkmark.circle.fill", NSLocalizedString("Synced", comment: "Finder badge")),
-            ("syncing", "arrow.triangle.2.circlepath.circle.fill", NSLocalizedString("Syncing", comment: "Finder badge")),
-            ("shared", "link.circle.fill", NSLocalizedString("Shared", comment: "Finder badge")),
-            ("error", "exclamationmark.circle.fill", NSLocalizedString("Failed", comment: "Finder badge")),
+        let bundle = Bundle(for: HippiusFinderSync.self)
+        let specs: [(id: String, label: String)] = [
+            ("synced", NSLocalizedString("Synced", comment: "Finder badge")),
+            ("syncing", NSLocalizedString("Syncing", comment: "Finder badge")),
+            ("shared", NSLocalizedString("Shared", comment: "Finder badge")),
+            ("error", NSLocalizedString("Failed", comment: "Finder badge")),
         ]
         for spec in specs {
-            if let image = HippiusFinderSync.badgeImage(systemName: spec.symbol) {
-                controller.setBadgeImage(image, label: spec.label, forBadgeIdentifier: spec.id)
-            }
+            // Same load as HippiusMenuIcon.png: xcodegen copies each PDF to the
+            // .appex root under its file name, which is the wire token.
+            guard let url = bundle.url(forResource: spec.id, withExtension: "pdf"),
+                  let image = NSImage(contentsOf: url) else { continue }
+            image.isTemplate = true
+            controller.setBadgeImage(image, label: spec.label, forBadgeIdentifier: spec.id)
         }
-    }
-
-    /// 320×320, drawn into the full frame — Apple scales and places the
-    /// overlay and asks that the artwork itself carry no padding.
-    private static func badgeImage(systemName: String) -> NSImage? {
-        guard let symbol = NSImage(systemSymbolName: systemName, accessibilityDescription: nil) else {
-            return nil
-        }
-        let size = NSSize(width: 320, height: 320)
-        let image = NSImage(size: size, flipped: false) { rect in
-            symbol.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
-            return true
-        }
-        image.isTemplate = true
-        return image
     }
 
     /// Finder is about to show `url`. Apple requires the initial

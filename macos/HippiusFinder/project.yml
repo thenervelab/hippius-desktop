@@ -7,9 +7,10 @@
 name: HippiusFinder
 options:
   bundleIdPrefix: hippius.com
-  # 11.0 for SF Symbol badge images (NSImage(systemSymbolName:)). The main app
-  # targets 10.13, but an app extension may set its own (higher) minimum — it
-  # simply won't load on older macOS, where the rich Finder popover isn't a goal.
+  # 11.0 matches the app floor (`LSMinimumSystemVersion` / tauri.conf.json).
+  # `isExtensionEnabled` is 10.14+ and is sent unguarded; lowering this
+  # without raising that send is a launch abort. An app extension may set
+  # its own minimum — it simply won't load on older macOS.
   deploymentTarget:
     macOS: "11.0"
   createIntermediateGroups: true
@@ -23,8 +24,15 @@ targets:
           - "*.swift"
       # The Hippius logo shown next to each right-click menu item. xcodegen
       # routes a non-source file into the target's Copy Bundle Resources phase,
-      # so it ships inside the .appex and `Bundle(for:).url(forResource:)` finds it.
+      # so it ships inside the .appex and `Bundle(for:).image(forResource:)` finds it.
       - path: HippiusMenuIcon.png
+      # Finder badge templates. Named after the wire token so
+      # `url(forResource:withExtension: "pdf")` matches `BadgeState::token`.
+      # Do not glob the folder — that would also copy generate.py into the .appex.
+      - path: Badges/synced.pdf
+      - path: Badges/syncing.pdf
+      - path: Badges/shared.pdf
+      - path: Badges/error.pdf
     info:
       path: Info.plist
       properties:
