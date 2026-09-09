@@ -28,6 +28,13 @@ export interface SyncFolder {
    * (`folderMenuGating.ts`).
    */
   ownerSs58?: string;
+  /**
+   * The cloud provider whose folder this root sits inside ("Google Drive",
+   * "iCloud Drive", ...), threaded from Rust (`hostedBy`). Finder badges and
+   * "Share with Hippius" cannot appear inside another provider's folder, so
+   * the row says so; absent for a root Hippius owns outright.
+   */
+  hostedBy?: string;
 }
 
 /**
