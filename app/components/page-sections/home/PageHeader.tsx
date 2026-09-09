@@ -7,6 +7,7 @@ import { Icons } from "@/components/ui";
 import { Button } from "@/components/ui/button";
 import PlanChip from "@/components/ui/plan-chip";
 import PlanActionButton from "@/components/ui/plan-chip/PlanActionButton";
+import { usePlanActionView } from "@/components/ui/plan-chip/usePlanActionView";
 import { cn } from "@/app/lib/utils";
 import { useStaking } from "@/app/lib/hooks/useStaking";
 import { WALLET_FEATURE_ENABLED } from "@/app/lib/featureFlags";
@@ -54,6 +55,16 @@ const PageHeader: FC<PageHeaderProps> = ({
     [stakingInfo.bondedHip],
   );
 
+  // The cell exists only when there is something to put in it. The caller's
+  // `showTopUpCredits` says whether this PAGE wants a CTA at all (Billing
+  // does not — it is where you would act); Rust says whether this ACCOUNT
+  // needs one. A healthy plan used to leave the padded cell behind with the
+  // button gone, ending the card in a strip of empty space.
+  // Called unconditionally — `showTopUpCredits && usePlanActionView()`
+  // would skip the hook on the pages that pass false.
+  const planAction = usePlanActionView();
+  const showAction = showTopUpCredits && planAction !== null;
+
   return (
     // Title and wallet card sit side-by-side (each ~50%) at @4xl+; the card
     // fills its half — the three sections are balanced WITHIN it via the
@@ -96,7 +107,7 @@ const PageHeader: FC<PageHeaderProps> = ({
           "flex items-stretch rounded-[8px]",
           "border border-grey-light-500 bg-grey-light-600",
           "dark:border-black-300 dark:bg-black-primary-bg",
-          showTopUpCredits ? "gap-3.5 px-3.5" : "px-0",
+          showAction ? "gap-3.5 px-3.5" : "px-0",
           // Without the wallet column the card holds only Active Plan +
           // Top-up; stretching it leaves a sea of empty card. In the
           // wallet-off flex-row header the card is simply content-sized
@@ -121,7 +132,7 @@ const PageHeader: FC<PageHeaderProps> = ({
               // than the active-plan column (which has a bigger grow), so they
               // converge instead of the wallet hogging every extra pixel.
               "flex flex-[2_1_240px] min-w-0 items-center justify-between gap-3 border-r border-grey-dark-100 dark:border-black-500 pr-5 py-[11px]",
-              showTopUpCredits ? "" : "pl-3.5",
+              showAction ? "" : "pl-3.5",
             )}
           >
             <div className="flex flex-col items-start justify-center gap-[3px]">
@@ -179,7 +190,7 @@ const PageHeader: FC<PageHeaderProps> = ({
               // and stacking a column padding on top doubled it to 30px (the
               // same double-padding trap the wallet column's pl-3.5 comment
               // describes). px-5 stays for the wide three-column layout.
-              showTopUpCredits
+              showAction
                 ? cn(
                     "border-r border-grey-dark-100",
                     WALLET_FEATURE_ENABLED ? "px-5" : "pr-4",
@@ -193,7 +204,7 @@ const PageHeader: FC<PageHeaderProps> = ({
           </div>
         </div>
 
-        {showTopUpCredits && (
+        {showAction && (
           <div className="flex shrink-0 items-center py-[11px] pr-3.5">
             {/* What this offers depends on the account: Upgrade on the free
                 tier or a plan filling up, Top up Credits only for a

@@ -2,12 +2,11 @@
 
 import React from "react";
 
-import { useStorageOverview } from "@/app/lib/hooks/api/useStorageOverview";
 import { cn } from "@/app/lib/utils";
 
 import PlanChip from "./index";
 import PlanActionButton from "./PlanActionButton";
-import { getPlanActionView } from "./planActionView";
+import { usePlanActionView } from "./usePlanActionView";
 
 /**
  * The header's plan card: which plan the account is on, how full it is,
@@ -25,12 +24,10 @@ import { getPlanActionView } from "./planActionView";
  * leave that page with no plan surface at all on a smaller window.
  */
 const PlanSummaryCard: React.FC<{ className?: string }> = ({ className }) => {
-  const { data: overview } = useStorageOverview();
-
   // The action column is dropped entirely when Rust offers nothing, rather
   // than left as an empty padded cell — a healthy plan should read as a
   // finished card, not as one with a button missing.
-  const hasAction = getPlanActionView(overview?.planAction) !== null;
+  const hasAction = usePlanActionView() !== null;
 
   return (
     <div

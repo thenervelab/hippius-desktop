@@ -7,8 +7,8 @@ import {
   USAGE_CRITICAL_PERCENT,
   USAGE_WARN_PERCENT,
   formatPercentLabel,
-  formatPlanPrice,
   getCapacitySourceLabel,
+  getPlanHeading,
   getPlanView,
   shouldShowUsageBar,
   getStorageOverviewView,
@@ -158,12 +158,6 @@ describe("formatPercentLabel", () => {
   });
 });
 
-describe("formatPlanPrice", () => {
-  it("abbreviates month and passes other intervals through", () => {
-    expect(formatPlanPrice(12, "month")).toBe("12$/mo.");
-    expect(formatPlanPrice(99, "year")).toBe("99$/year");
-  });
-});
 
 describe("storage card renders Rust labels (H-109)", () => {
   it("does not formatBytes the raw counts", () => {
@@ -189,5 +183,25 @@ describe("shouldShowUsageBar", () => {
   it("draws no bar when there is no answer to draw", () => {
     expect(shouldShowUsageBar("none")).toBe(false);
     expect(shouldShowUsageBar("skeleton")).toBe(false);
+  });
+});
+
+describe("getPlanHeading", () => {
+  // "Active Plan" only repeats what the presence of a plan already says;
+  // the name is the part the account cannot read off the card otherwise.
+  it("names the plan a subscribed account is on", () => {
+    expect(getPlanHeading("plan", "Starter")).toBe("Starter");
+  });
+
+  it("keeps the free tier's own name", () => {
+    expect(getPlanHeading("free", null)).toBe("Free Plan");
+  });
+
+  // Naming a plan we could not read would be a guess, and a plan with no
+  // name from the API still has to head its card with something.
+  it("falls back to the generic label when there is no name to show", () => {
+    expect(getPlanHeading("plan", null)).toBe("Active Plan");
+    expect(getPlanHeading("plan", "")).toBe("Active Plan");
+    expect(getPlanHeading("none", "Starter")).toBe("Active Plan");
   });
 });

@@ -71,13 +71,49 @@ describe("the header card and the storage card share one usage scale", () => {
   });
 });
 
+describe("the header cards drop the action cell, not just its button", () => {
+  // PlanActionButton renders null when Rust offers nothing, which a
+  // layout cannot see — so the padded cell stayed and a healthy plan's
+  // card ended in a strip of empty space.
+  const headers = [
+    ["ui/page-header", read("../../page-header/index.tsx")],
+    ["home/PageHeader", read("../../../page-sections/home/PageHeader.tsx")],
+  ] as const;
+
+  it.each(headers)("%s gates the cell on the shared hook", (_name, src) => {
+    expect(src).toContain("usePlanActionView");
+  });
+
+  // `showTopUpCredits && usePlanActionView()` would skip the hook on the
+  // pages that pass false.
+  it("never short-circuits the hook behind a prop", () => {
+    const home = readCode("../../../page-sections/home/PageHeader.tsx");
+    expect(home).not.toMatch(/showTopUpCredits\s*&&\s*usePlanActionView/);
+  });
+});
+
+describe("the home plan card states the plan, not its price", () => {
+  const card = readCode("../../../page-sections/home/plan-overview/index.tsx");
+
+  // What a plan costs is settled for the account already on it; Manage is
+  // one click away for the billing detail.
+  it("shows no price", () => {
+    expect(card).not.toMatch(/formatPlanPrice|plan\.amount|plan\.interval/);
+  });
+
+  it("still names the plan and its allowance", () => {
+    expect(card).toContain("plan.name");
+    expect(card).toContain("plan.storageDisplay");
+  });
+});
+
 describe("PlanSummaryCard", () => {
   const card = readCode("../PlanSummaryCard.tsx");
 
   // Rust decides what an account needs; the card must not re-derive it
   // from the plan or the percentage.
   it("asks the shared resolver whether there is anything to offer", () => {
-    expect(card).toContain("getPlanActionView");
+    expect(card).toContain("usePlanActionView");
     expect(card).not.toMatch(/percent|source ===/);
   });
 

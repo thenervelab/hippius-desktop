@@ -8,6 +8,7 @@ import { nextSkeletonState } from "@/lib/utils/skeletonGate";
 import { cn } from "@/app/lib/utils";
 import {
   formatPercentLabel,
+  getPlanHeading,
   getPlanView,
   getUsageTone,
   getUsedBytesDisplay,
@@ -46,9 +47,13 @@ const PERCENT_TONE: Record<UsageTone, string> = {
  * surface. Three lines, in the order the question is asked — which plan,
  * how full, and by how much:
  *
- *   ● FREE PLAN
+ *   ● STARTER
  *   ▓▓▓▓▓░░░░░░░░░░░░░░░
  *   2.82 GB of 10.00 GB used                                          28%
+ *
+ * A subscribed account is headed by its plan's NAME; "Active Plan" only
+ * repeated what the presence of a plan already implied. The free tier
+ * keeps "Free Plan", which is the name of what it is on.
  *
  * The free tier used to state its allowance alone ("≈ 10.00 GB included"),
  * which names the size of the box without saying how much room is left —
@@ -116,7 +121,7 @@ const PlanChip: React.FC<{ className?: string }> = ({ className }) => {
           />
         ) : (
           <span className="font-mono text-[12px] font-medium uppercase leading-[18px] tracking-[-0.24px] text-primary-40 dark:text-primary-brand-dark">
-            {planView === "free" ? "Free Plan" : "Active Plan"}
+            {getPlanHeading(planView, plan?.name)}
           </span>
         )}
       </div>
