@@ -123,6 +123,32 @@ describe("the home plan card states the plan, not its price", () => {
   });
 });
 
+describe("the low-credit warning reads one sentence, from one place", () => {
+  // The header line and the billing strip say the same thing about the
+  // same account; two copies of the wording is how they drift.
+  const surfaces = [
+    ["the header chip", "../index.tsx"],
+    ["the billing strip", "../PlanRenewalNotice.tsx"],
+  ] as const;
+
+  it.each(surfaces)("%s takes its copy from getPlanActionNote", (_name, path) => {
+    expect(readCode(path)).toContain("getPlanActionNote");
+  });
+
+  // Whether the balance is short is Rust's call; neither surface may
+  // decide it from the funding type or the balance itself.
+  it.each(surfaces)("%s decides nothing itself", (_name, path) => {
+    const src = readCode(path);
+    expect(src).not.toMatch(/funding\s*===|creditsHip/);
+  });
+
+  // Billing is where the user acts on it, so the strip must be there.
+  it("the billing plans section shows the strip", () => {
+    const billing = readCode("../../../page-sections/billing/SubscriptionPlansSection.tsx");
+    expect(billing).toContain("PlanRenewalNotice");
+  });
+});
+
 describe("PlanSummaryCard", () => {
   const card = readCode("../PlanSummaryCard.tsx");
 

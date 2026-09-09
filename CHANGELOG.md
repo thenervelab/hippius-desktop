@@ -157,6 +157,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   it showed only the size of the allowance; the header now states what you have
   used out of it, and what percentage that is. A subscribed account is headed by
   its plan's name rather than a generic "Active Plan".
+- **You are told before a plan fails to renew.** When your credits will not cover
+  the next cycle, the page header and the billing page say so and count down to the
+  renewal date, and a single notification is raised in the ten days before it —
+  once per billing cycle, not once a day.
 - **A drive with no folders yet explains what to do.** The folder list showed an
   empty panel; it now says the list is empty and offers to sync your first folder,
   on both the Drive page and in Settings.

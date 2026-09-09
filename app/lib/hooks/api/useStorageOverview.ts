@@ -24,6 +24,12 @@ export interface PlanInfo {
   storageDisplay: string;
   /** `"credits"` or `"card"`; null for the legacy Stripe subscription. */
   funding: string | null;
+  /**
+   * Days until the plan next charges; null when the rail did not say, and
+   * for card plans, which renew themselves. Counted in Rust so every
+   * surface counts down from the same "today".
+   */
+  renewsInDays: number | null;
 }
 
 /** Shape returned by the Rust `get_storage_overview` IPC (camelCase). */

@@ -6,6 +6,7 @@ import { useStorageOverview } from "@/app/lib/hooks/api/useStorageOverview";
 
 import { nextSkeletonState } from "@/lib/utils/skeletonGate";
 import { cn } from "@/app/lib/utils";
+import { getPlanActionNote } from "./planActionView";
 import {
   formatPercentLabel,
   getPlanHeading,
@@ -99,6 +100,9 @@ const PlanChip: React.FC<{ className?: string }> = ({ className }) => {
   // the storage card cannot round the same number differently.
   const capacityLabel =
     planView === "plan" && plan ? plan.storageDisplay : (overview?.totalDisplay ?? "");
+  // Why the Top up Credits button beside this is there. Rust decides that
+  // the balance is short; this only says so.
+  const actionNote = getPlanActionNote(overview?.planAction, plan?.renewsInDays);
 
   return (
     <div
@@ -169,6 +173,12 @@ const PlanChip: React.FC<{ className?: string }> = ({ className }) => {
               {formatPercentLabel(percent)}
             </span>
           </div>
+
+          {actionNote && (
+            <p className="text-[12px] font-medium leading-[16px] tracking-[-0.24px] text-warning-40 dark:text-warning-50">
+              {actionNote}
+            </p>
+          )}
         </>
       ) : (
         <p className="text-[12px] font-medium leading-[18px] tracking-[-0.24px] text-black-700 dark:text-grey-dark-500">
