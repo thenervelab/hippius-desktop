@@ -3,13 +3,11 @@
 import { Drive } from "@/components/page-sections";
 import { FC, useEffect } from "react";
 import PageHeader from "@/components/ui/page-header";
-import { Button } from "@/components/ui/button";
-import { PricingCard } from "@/components/ui/icons";
+import PlanSummaryCard from "@/components/ui/plan-chip/PlanSummaryCard";
 import { useSetAtom } from "jotai";
 
 import InfoTooltip from "@/components/ui/info-tooltip";
 import { fileDetailsPanelAtom } from "@/app/lib/global-atoms/fileDetailsAtoms";
-import { BILLING_ROUTE } from "@/app/lib/routes";
 
 const DRIVE_DOCS_URL = "https://docs.hippius.com/use/desktop/drive";
 
@@ -43,20 +41,16 @@ const FilesPage: FC = () => {
         className="!shadow-none"
         subtitle="All uploaded files are private and securely encrypted."
         actions={
-          // The Drive page hides the header's stats card (and with it the
-          // card's Subscription Plans button), so the plans page gets its own
-          // persistent entry here — visible in the cards view and inside
-          // every local or remote drive alike.
-          <Button
-            asLink
-            href={BILLING_ROUTE}
-            variant="raised"
-            size="auto"
-            className="flex items-center gap-2 px-4 py-2 text-[14px] font-medium leading-[1.109] tracking-[-0.28px]"
-          >
-            <PricingCard className="size-4" />
-            Subscription Plans
-          </Button>
+          // The same plan card the Overview header shows, rather than the
+          // standing plans button that used to sit here: an account already
+          // on a plan was being sold one, and neither the plan nor how full
+          // it is was stated anywhere on this page.
+          //
+          // It goes in `actions`, not the header's own stats card, because
+          // that card is xl-only and this page hides it — and because
+          // `actions` renders at every width, in the cards view, and inside
+          // every folder of every local or remote drive alike.
+          <PlanSummaryCard />
         }
       />
       <Drive />

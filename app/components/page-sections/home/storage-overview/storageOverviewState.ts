@@ -95,6 +95,18 @@ export function getPlanView(input: {
 }
 
 /**
+ * Whether the header chip draws its usage bar.
+ *
+ * Only the branches that actually quote a capacity have a number to draw.
+ * On the error/unknown branch `percent` is 0 for want of an answer, and an
+ * empty track there reads as a confident "nothing used" — the same lie the
+ * storage card's own error state exists to avoid.
+ */
+export function shouldShowUsageBar(view: PlanView): boolean {
+  return view === "plan" || view === "free";
+}
+
+/**
  * Integer percent label, with "<1%" for tiny-but-nonzero usage so a
  * near-empty drive doesn't display a flat "0%" while bytes exist.
  */

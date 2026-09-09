@@ -148,6 +148,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - The information tooltip on the Files page now explains what the page actually holds:
   the folders you sync from this computer, and why your unlock password is needed to
   open them.
+- **Drive now shows your plan and how full it is.** The Drive page header carries
+  the same plan card as the home page — which plan you are on, how much of it you
+  have used, and an Upgrade or Top up Credits button when you need one — in place
+  of the old Subscription Plans button. It stays with you inside every folder.
 
 ### Fixed
 

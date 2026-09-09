@@ -10,6 +10,7 @@ import {
   formatPlanPrice,
   getCapacitySourceLabel,
   getPlanView,
+  shouldShowUsageBar,
   getStorageOverviewView,
   getUsageTone,
   getUsedBytesDisplay,
@@ -174,5 +175,19 @@ describe("storage card renders Rust labels (H-109)", () => {
     expect(src).toContain("overview.usedDisplay");
     expect(src).toContain("overview.totalDisplay");
     expect(src).toContain("overview.freeDisplay");
+  });
+});
+
+describe("shouldShowUsageBar", () => {
+  it("draws the bar wherever a capacity is actually quoted", () => {
+    expect(shouldShowUsageBar("plan")).toBe(true);
+    expect(shouldShowUsageBar("free")).toBe(true);
+  });
+
+  // An empty track on the error branch reads as "nothing used", which is
+  // the confident-zero the storage card's error state exists to avoid.
+  it("draws no bar when there is no answer to draw", () => {
+    expect(shouldShowUsageBar("none")).toBe(false);
+    expect(shouldShowUsageBar("skeleton")).toBe(false);
   });
 });

@@ -6,7 +6,26 @@ import { useStorageOverview } from "@/app/lib/hooks/api/useStorageOverview";
 
 import { nextSkeletonState } from "@/lib/utils/skeletonGate";
 import { cn } from "@/app/lib/utils";
-import { getPlanView } from "@/app/components/page-sections/home/storage-overview/storageOverviewState";
+import {
+  getPlanView,
+  getUsageTone,
+  shouldShowUsageBar,
+  type UsageTone,
+} from "@/app/components/page-sections/home/storage-overview/storageOverviewState";
+
+/**
+ * Bar fill per tone, matching the home storage card's own scale so the two
+ * cannot describe the same account differently.
+ *
+ * The tone comes from the shared `getUsageTone` rather than a second
+ * threshold here: brand under 80%, amber from 80% (where Rust also starts
+ * offering Upgrade), red from 95%.
+ */
+const BAR_TONE: Record<UsageTone, string> = {
+  ok: "bg-primary-50 dark:bg-primary-brand-dark",
+  warn: "bg-warning-50 dark:bg-warning-50",
+  critical: "bg-error-50 dark:bg-error-50",
+};
 
 /**
  * The top-header plan/credits chip, shared by every page header that shows
@@ -24,6 +43,11 @@ import { getPlanView } from "@/app/components/page-sections/home/storage-overvie
  * The heading itself waits for the decision: a skeleton holds BOTH lines
  * until the query settles, so the chip never flashes "No active plan" (or
  * the wrong heading) while loading.
+ *
+ * A slim usage bar sits under the value on both the plan and free-tier
+ * branches. The words alone ("2.82 GB of 10.00 GB used") make the reader
+ * do the arithmetic to find out whether that is comfortable or nearly
+ * full, which is the one thing the header is there to answer.
  */
 const PlanChip: React.FC<{ className?: string }> = ({ className }) => {
   const {
@@ -42,6 +66,10 @@ const PlanChip: React.FC<{ className?: string }> = ({ className }) => {
     source: overview?.source,
   });
   const plan = overview?.plan ?? null;
+
+  const percent = overview?.percent ?? 0;
+  const tone = getUsageTone(percent);
+  const showUsageBar = shouldShowUsageBar(planView);
 
   return (
     <div className={cn("flex flex-col items-start justify-center gap-0.5", className)}>
@@ -86,6 +114,24 @@ const PlanChip: React.FC<{ className?: string }> = ({ className }) => {
         <p className="text-[12px] font-medium leading-[18px] tracking-[-0.24px] text-black-700 dark:text-grey-dark-500">
           No active plan
         </p>
+      )}
+      {showUsageBar && (
+        <div
+          role="progressbar"
+          aria-valuenow={Math.round(percent)}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-label="Storage used"
+          /* self-stretch, so the bar is exactly as wide as the longest
+             line above it rather than needing a width nobody can keep in
+             step with the copy. */
+          className="mt-1 h-[4px] w-full self-stretch overflow-hidden rounded-full bg-grey-light-700 dark:bg-grey-dark-200"
+        >
+          <div
+            className={cn("h-full rounded-full transition-[width] duration-500", BAR_TONE[tone])}
+            style={{ width: `${Math.min(Math.max(percent, 0), 100)}%` }}
+          />
+        </div>
       )}
     </div>
   );
