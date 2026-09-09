@@ -1433,6 +1433,9 @@ mod tests {
             !enable.contains("read_state(&app)"),
             "enable_finder_extension reads the post-election state only through the settle"
         );
+        // The durations only exist on macOS; the source-text pins above run
+        // everywhere.
+        #[cfg(target_os = "macos")]
         assert!(
             super::LAUNCH_CHECK_CAP > super::TOOL_TIMEOUT * 2 + super::DISCOVERY_WAIT + super::ELECTION_SETTLE,
             "the launch-check cap must cover the settle, or the frontend nudges over an election in progress"
