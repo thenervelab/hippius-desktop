@@ -110,6 +110,8 @@ interface DriveHeaderProps {
   onDateRangeChange: (range: DateRange | undefined) => void;
   onFileSizesChange: (sizes: number[]) => void;
   onExcludedOnlyChange?: (excludedOnly: boolean) => void;
+  /** See `shouldOfferExcludedFilter` — hidden on a drive with no rules. */
+  showExcludedFilter?: boolean;
   defaultFolderLabel?: string | null;
   isFolderUploadOpen?: boolean;
   onSetFolderUploadOpen?: (open: boolean) => void;
@@ -178,6 +180,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
   onDateRangeChange,
   onFileSizesChange,
   onExcludedOnlyChange,
+  showExcludedFilter = false,
   defaultFolderLabel,
   isFolderUploadOpen: isFolderUploadOpenProp,
   onSetFolderUploadOpen,
@@ -480,6 +483,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
                   onDateRangeChange={onDateRangeChange}
                   onFileSizesChange={onFileSizesChange}
                   onExcludedOnlyChange={onExcludedOnlyChange}
+                  showExcludedFilter={showExcludedFilter}
                 />
                 <div className="flex items-center gap-3 shrink-0">
                   {/* Stats are hidden inside a nested folder — the totals

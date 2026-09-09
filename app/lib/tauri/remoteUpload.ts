@@ -31,3 +31,26 @@ export async function uploadFilesToRemoteFolder(
     filePaths,
   });
 }
+
+/**
+ * Upload a whole folder into a Drive folder that is not synced here.
+ *
+ * Rust walks the tree and posts each file with the wire path that
+ * reproduces the structure on the server — the walk is business logic and
+ * stays there, so the frontend hands over one folder path.
+ *
+ * Resolves with the files that FAILED, like its single-file sibling.
+ */
+export async function uploadFolderToRemoteFolder(
+  accountId: string,
+  label: string,
+  folderPath: string,
+  parentPath?: string,
+): Promise<RemoteUploadFailure[]> {
+  return invoke<RemoteUploadFailure[]>("upload_folder_to_remote_folder", {
+    accountId,
+    label,
+    parentPath: parentPath ?? null,
+    folderPath,
+  });
+}

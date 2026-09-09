@@ -543,6 +543,151 @@ pub async fn upload_files_to_remote_folder(
     Ok(failures)
 }
 
+/// One file inside a folder being uploaded: where it is, and the wire
+/// folder it belongs in once uploaded.
+struct PlannedUpload {
+    source: std::path::PathBuf,
+    parent: String,
+}
+
+/// Depth cap, mirroring the local add walk's defence against symlink
+/// cycles. It bounds the pending-directory stack, not the file count.
+const REMOTE_FOLDER_WALK_MAX_DEPTH: usize = 64;
+
+/// Flatten a folder into the files to upload and the wire folder each
+/// belongs in.
+///
+/// Pure apart from reading the directory tree, so the path arithmetic —
+/// the part that decides where a file LANDS on the server — is testable
+/// without a server. Hidden names are skipped for the same reason the
+/// engine skips them, so a folder uploaded here and the same folder synced
+/// locally produce the same file set.
+fn plan_folder_upload(root: &Path, wire_parent: &str) -> Vec<PlannedUpload> {
+    let Some(folder_name) = root.file_name().and_then(|n| n.to_str()) else {
+        return Vec::new();
+    };
+    let base = wire_relative_path(wire_parent, folder_name);
+
+    let mut planned = Vec::new();
+    let mut stack = vec![(root.to_path_buf(), base)];
+    while let Some((dir, parent)) = stack.pop() {
+        if stack.len() > REMOTE_FOLDER_WALK_MAX_DEPTH {
+            break;
+        }
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            if super::files::pathops::is_engine_hidden_name(&name) {
+                continue;
+            }
+            let Ok(meta) = entry.metadata() else { continue };
+            let Some(name) = name.to_str() else { continue };
+            if meta.is_dir() {
+                stack.push((entry.path(), wire_relative_path(&parent, name)));
+            } else if meta.is_file() {
+                planned.push(PlannedUpload {
+                    source: entry.path(),
+                    parent: parent.clone(),
+                });
+            }
+        }
+    }
+    planned
+}
+
+/// Upload a whole folder into a drive this device does not sync.
+///
+/// The desktop's other folder upload copies into a local sync root and
+/// lets the engine push it; there is no such root here, so the tree is
+/// walked and each file posted with the wire path that reproduces the
+/// folder structure on the server.
+///
+/// Gated on the total bytes before anything is read, like every other
+/// Drive write, and reports per-file failures rather than one error — the
+/// files are independent and one failure must not discard the rest.
+#[tauri::command]
+pub async fn upload_folder_to_remote_folder(
+    state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
+    account_id: String,
+    label: String,
+    parent_path: Option<String>,
+    folder_path: String,
+) -> Result<Vec<RemoteUploadFailure>> {
+    let account_id = state.require_session_account(&account_id)?;
+    let root = std::path::Path::new(&folder_path);
+    if !root.is_dir() {
+        return Err(AppError::Validation("That is not a folder.".into()));
+    }
+
+    let parent = parent_path.unwrap_or_default();
+    let planned = tokio::task::spawn_blocking({
+        let root = root.to_path_buf();
+        let parent = parent.clone();
+        move || plan_folder_upload(&root, &parent)
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("Could not read that folder: {e}")))?;
+
+    if planned.is_empty() {
+        return Err(AppError::Validation("That folder has no files to upload.".into()));
+    }
+
+    let total_bytes: u64 = planned.iter().filter_map(|p| std::fs::metadata(&p.source).ok()).map(|m| m.len()).sum();
+    crate::billing::eligibility::require_eligible(
+        state.inner(),
+        &account_id,
+        crate::billing::eligibility::InsufficientCreditsAction::FolderUpload,
+        total_bytes,
+    )
+    .await?;
+
+    let pool = state.pool()?;
+    let identity = crate::sync::identity::resolve_drive_identity_or_own(pool, &account_id, &label).await?;
+    let batch = UploadBatch::new(app);
+
+    // The whole batch is announced before any of it moves, so the widget
+    // shows a queue rather than one row replaced per file.
+    for item in &planned {
+        let Some(name) = item.source.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        batch.emit(RemoteUploadProgress {
+            batch_id: batch.id,
+            path: wire_relative_path(&item.parent, name),
+            file_name: name.to_string(),
+            label: label.clone(),
+            bytes_transferred: 0,
+            total_bytes: std::fs::metadata(&item.source).map_or(0, |m| m.len()),
+            status: "pending".into(),
+            error: None,
+        });
+    }
+
+    let mut failures = Vec::new();
+    for item in &planned {
+        let sent = upload_to_remote_folder_with_progress(
+            state.inner(),
+            pool,
+            &account_id,
+            &label,
+            &item.parent,
+            &item.source,
+            &identity,
+            Some(&batch),
+        )
+        .await;
+        if let Err(e) = sent {
+            tracing::warn!(file = %item.source.display(), error = %e, "remote folder upload failed for one file");
+            failures.push(RemoteUploadFailure {
+                name: item.source.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string(),
+                error: e.to_string(),
+            });
+        }
+    }
+    Ok(failures)
+}
+
 /// One file that did not make it, named so the UI can say which.
 #[derive(serde::Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -598,6 +743,55 @@ mod tests {
         assert_eq!(transport_chunk_count(UPLOAD_CHUNK_SIZE + 1).unwrap(), 2);
         assert_eq!(transport_chunk_count(UPLOAD_CHUNK_SIZE * 3).unwrap(), 3);
         assert_eq!(transport_chunk_count(UPLOAD_CHUNK_SIZE * 3 - 1).unwrap(), 3);
+    }
+
+    /// The folder's own name is part of the wire path, so uploading
+    /// `~/Photos` into a drive root puts its files under `Photos/`, not
+    /// loose in the root where they would collide with everything else.
+    #[test]
+    fn a_folder_upload_keeps_its_own_name_and_shape() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = dir.path().join("Photos");
+        std::fs::create_dir_all(root.join("2024")).expect("nested dir");
+        std::fs::write(root.join("a.jpg"), b"a").expect("root file");
+        std::fs::write(root.join("2024").join("b.jpg"), b"b").expect("nested file");
+
+        let mut planned: Vec<String> = plan_folder_upload(&root, "")
+            .into_iter()
+            .map(|p| wire_relative_path(&p.parent, p.source.file_name().unwrap().to_str().unwrap()))
+            .collect();
+        planned.sort();
+
+        assert_eq!(planned, vec!["Photos/2024/b.jpg", "Photos/a.jpg"]);
+    }
+
+    /// Uploading into a subfolder nests under it rather than replacing it.
+    #[test]
+    fn a_folder_upload_nests_under_the_parent_it_was_started_from() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = dir.path().join("Photos");
+        std::fs::create_dir_all(&root).expect("dir");
+        std::fs::write(root.join("a.jpg"), b"a").expect("file");
+
+        let planned = plan_folder_upload(&root, "Archive/2023");
+        assert_eq!(planned.len(), 1);
+        assert_eq!(planned[0].parent, "Archive/2023/Photos");
+    }
+
+    /// The same hidden-name rule the engine uses, so a folder uploaded
+    /// here and the same folder synced locally hold one file set.
+    #[test]
+    fn a_folder_upload_skips_what_the_engine_skips() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = dir.path().join("Photos");
+        std::fs::create_dir_all(root.join(".git")).expect("hidden dir");
+        std::fs::write(root.join(".DS_Store"), b"x").expect("hidden file");
+        std::fs::write(root.join(".git").join("config"), b"x").expect("file in hidden dir");
+        std::fs::write(root.join("a.jpg"), b"a").expect("visible file");
+
+        let planned = plan_folder_upload(&root, "");
+        assert_eq!(planned.len(), 1, "only the visible file is uploaded");
+        assert_eq!(planned[0].source.file_name().unwrap(), "a.jpg");
     }
 
     /// An empty ciphertext must not declare a zero-chunk session, which

@@ -183,9 +183,22 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   plan and its storage; billing detail is behind Manage.
 - **A plan with room left ends cleanly.** The page header no longer leaves an empty
   gap where an Upgrade button would have been.
+- **You can upload straight into a drive that is not synced on this computer.** The
+  folder picker in the upload dialogs now lists those drives too, for files and for
+  whole folders, marked so you can tell them apart.
+- **The Drive page tells you when your plan needs attention** — a renewal that
+  failed, a cancelled plan, or one still being set up — reading the same source the
+  web console reads, so both say the same thing.
+- **A brand-new account is shown the storage plans on the Drive page**, under the
+  empty state, instead of an empty page with nothing to do next.
 
 ### Fixed
 
+- **The Excluded filter only appears when you have excluded something.** It used to
+  show on every drive, where pressing it could only ever return nothing.
+- **Upload Folder and Sync a Folder are easier to tell apart.** They are separated on
+  the toolbar and each says what it does, so a one-time copy is not mistaken for
+  setting up a folder that stays in sync.
 - **Renaming a file inside a folder that is not synced on this computer works.**
   The option was there but greyed out; only folders could be renamed. The new name
   now appears straight away instead of after leaving the folder and coming back.

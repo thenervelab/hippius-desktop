@@ -36,6 +36,8 @@ import {
   shouldUseRecursiveSearch,
 } from "@/lib/utils/filesViewMode";
 import { isExcludedSyncStatus } from "@/lib/utils/syncStatusDisplay";
+import { useHasExclusions } from "@/app/lib/hooks/useDriveExclusions";
+import { shouldOfferExcludedFilter } from "./excludedFilterVisibility";
 import DriveHeader from "./DriveHeader";
 import DriveContent from "./DriveContent";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
@@ -488,6 +490,17 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
         ? (nestedDrive?.label ?? null)
         : activeSyncFolderLabel;
   const recursiveSearchSubfolder = isNested ? (urlSubFolderPath ?? null) : null;
+
+  // The Excluded chip is only worth offering on a drive that actually
+  // excludes something. `recursiveSearchLabel` is already the LOCAL drive
+  // in view (null on a remote drive or Recent Files), which is exactly
+  // where exclusions can exist.
+  const hasExclusions = useHasExclusions(recursiveSearchLabel);
+  const showExcludedFilter = shouldOfferExcludedFilter({
+    driveLabel: recursiveSearchLabel,
+    hasExclusions,
+    excludedOnly: filterState.excludedOnly,
+  });
   const hasActiveSearchOrFilter = filterCriteriaAreActive({
     searchTerm,
     fileExtension: filterState.fileExtension,
@@ -1651,6 +1664,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 onDateRangeChange={handleDateRangeChange}
                 onFileSizesChange={handleFileSizesChange}
                 onExcludedOnlyChange={handleExcludedOnlyChange}
+                showExcludedFilter={showExcludedFilter}
                 defaultFolderLabel={activeSyncFolderLabel}
                 isFolderUploadOpen={isFolderUploadOpen}
                 onSetFolderUploadOpen={handleFolderUploadOpenChange}

@@ -23,6 +23,21 @@ export const UPLOAD_FOLDER_LABEL = "Upload Folder";
  */
 export const SYNC_FOLDER_LABEL = "Sync a Folder";
 
+/**
+ * What each action does, in one line, for the affordance's tooltip.
+ *
+ * The distinction the wording alone did not carry: Upload Folder copies a
+ * folder's contents in ONCE and stops caring about it, while Sync a Folder
+ * sets up a folder that is kept up to date from then on. Two buttons that
+ * both start with a folder picker and read almost alike are easy to pick
+ * wrong, and picking wrong is only discovered later, when the copy silently
+ * fails to track changes.
+ */
+export const UPLOAD_FOLDER_HINT =
+  "Copies a folder's contents into a drive once. Later changes on this computer are not picked up.";
+export const SYNC_FOLDER_HINT =
+  "Sets up a folder on this computer as a drive, kept up to date from now on.";
+
 /** Whether an upload affordance is offered, and in what state. */
 export type UploadActionState = "hidden" | "disabled" | "enabled";
 
