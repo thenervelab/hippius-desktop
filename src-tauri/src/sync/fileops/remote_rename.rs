@@ -146,6 +146,47 @@ pub async fn rename_in_remote_folder(state: &AppState, pool: &SqlitePool, req: R
     Ok(())
 }
 
+/// Create a folder inside a Drive folder this device does not sync.
+///
+/// A local drive gets a folder by making the directory and letting the
+/// engine register it; a browsed folder has no directory to make, so the
+/// entity is registered with the server directly.
+///
+/// `register_folder_entries` is the right call for this and says so: it
+/// touches no sync state — no FileTree, no path_index, no scan or stage —
+/// and the server validates the paths. Nothing here needs a local root.
+#[tauri::command]
+pub async fn create_remote_folder(
+    state: tauri::State<'_, AppState>,
+    account_id: String,
+    label: String,
+    parent_path: Option<String>,
+    name: String,
+) -> Result<String> {
+    let account_id = state.require_session_account(&account_id)?;
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(AppError::Validation("A folder needs a name.".into()));
+    }
+    // The name becomes one path segment, so a separator here would create
+    // a nested tree rather than the folder the user asked for, and `..`
+    // would name somewhere outside the drive entirely.
+    if name.contains('/') || name.contains('\\') || name == "." || name == ".." {
+        return Err(AppError::Validation("A folder name cannot contain a slash.".into()));
+    }
+
+    let pool = state.pool()?;
+    let identity = crate::sync::identity::resolve_drive_identity_or_own(pool, &account_id, &label).await?;
+    let relative_path = super::remote_upload::wire_relative_path(&parent_path.unwrap_or_default(), name);
+
+    let client = super::remote::build_client(pool, &account_id, &identity).await?;
+    client
+        .register_folder_entries(&identity.wire_ss58, &identity.wire_folder_hash, std::slice::from_ref(&relative_path))
+        .await
+        .map_err(|e| AppError::Hcfs(format!("Could not create the folder: {e}")))?;
+    Ok(relative_path)
+}
+
 /// Rename a file in a folder that is not synced on this computer.
 #[tauri::command]
 pub async fn rename_remote_file(

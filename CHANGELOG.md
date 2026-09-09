@@ -88,6 +88,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **Uploads into a folder you are browsing show in the sync queue**, alongside
   everything else being synced, instead of a message that sat on screen for the
   whole upload.
+- **Search works inside folders that are not synced on this computer.** It now
+  searches the whole drive, including subfolders you have not opened, the way it
+  already did for folders synced here.
+- **You can create folders in drives that are not synced on this computer.**
 - **You can now upload into folders that are not synced on this computer.** Open a
   folder you are only browsing and add files to it directly; they go straight to
   your Drive without downloading the folder first.

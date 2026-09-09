@@ -29,8 +29,10 @@ import {
 } from "@/lib/utils/fileFilterUtils";
 import { useFilteredFiles } from "@/app/lib/hooks/useFilteredFiles";
 import { useRecursiveFileSearch } from "@/app/lib/hooks/useRecursiveFileSearch";
+import { useDriveScopedSearch } from "@/app/lib/hooks/useDriveScopedSearch";
 import {
   filterCriteriaAreActive,
+  shouldUseDriveScopedSearch,
   shouldUseRecursiveSearch,
 } from "@/lib/utils/filesViewMode";
 import { isExcludedSyncStatus } from "@/lib/utils/syncStatusDisplay";
@@ -528,6 +530,22 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     ],
   );
 
+  // A browsed drive searches the server instead — see
+  // `shouldUseDriveScopedSearch`.
+  const useRemoteSearch = shouldUseDriveScopedSearch({
+    hasActiveSearchOrFilter,
+    isRemoteView,
+    remoteLabel: remoteUploadLabel,
+    isRecentFiles: Boolean(isRecentFiles),
+  });
+  const { data: remoteSearchResults, isFetching: isRemoteSearching } =
+    useDriveScopedSearch({
+      accountId: polkadotAddress,
+      label: remoteUploadLabel,
+      criteria: recursiveCriteria,
+      enabled: useRemoteSearch,
+    });
+
   const { data: recursiveResults, isFetching: isRecursiveSearching } =
     useRecursiveFileSearch({
       accountId: polkadotAddress,
@@ -542,9 +560,11 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // applied to the current level's listing. This is the console-parity
   // behaviour the user asked for: filters reach across every nested
   // folder instead of stopping at the rows currently loaded in memory.
-  const filteredData = useRecursiveResults
-    ? recursiveResults
-    : inMemoryFilteredData;
+  const filteredData = useRemoteSearch
+    ? remoteSearchResults
+    : useRecursiveResults
+      ? recursiveResults
+      : inMemoryFilteredData;
 
   const statusFilteredData = useMemo(() => {
     if (!filterState.excludedOnly) return filteredData;
@@ -555,7 +575,8 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // swaps — nested→root navigation, switching `activeSyncFolderLabel`
   // from the Local cards — surface the skeleton instead of the previous
   // filter result during the ~150ms debounce + IPC window.
-  // `isRecursiveSearching` covers the cross-folder filter path: the user
+  // `isRecursiveSearching` / `isRemoteSearching` cover the two cross-folder
+  // filter paths (local disk, and the server for a browsed drive): the user
   // typed into search and we're still waiting on the new IPC. Folding it
   // in keeps the loading shell consistent whether the active filter
   // path is in-memory or recursive.
@@ -564,8 +585,8 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     (isRecentFiles
       ? isRecentFilesLoading || isFiltering
       : isNested || isRemoteRoot
-        ? nestedListing.isLoading || isFiltering || isRecursiveSearching
-        : isRegularFilesLoading || isFiltering || isRecursiveSearching);
+        ? nestedListing.isLoading || isFiltering || isRecursiveSearching || isRemoteSearching
+        : isRegularFilesLoading || isFiltering || isRecursiveSearching || isRemoteSearching);
 
   // Infinite scroll state for list and card views. Cheap keyFn (no row
   // serialization) so the source-changed check stays O(1) during sync refetches.

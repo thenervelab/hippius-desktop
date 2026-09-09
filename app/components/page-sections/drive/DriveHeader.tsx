@@ -32,6 +32,7 @@ import {
   UPLOAD_FOLDER_LABEL,
 } from "./uploadActions";
 import RemoteUploadButton from "./RemoteUploadButton";
+import RemoteNewFolderButton from "./RemoteNewFolderButton";
 import { BILLING_ROUTE } from "@/app/lib/routes";
 
 // Figma white pill style shared by Add Folder / View All Files / Shared Links.
@@ -279,11 +280,18 @@ const DriveHeader: FC<DriveHeaderProps> = ({
       {/* A folder that is not synced here uploads straight to the server,
           so it gets its own button rather than the local flow's. */}
       {remoteUpload && (
-        <RemoteUploadButton
-          label={remoteUpload.label}
-          parentPath={remoteUpload.parentPath}
-          onUploaded={remoteUpload.onUploaded}
-        />
+        <>
+          <RemoteNewFolderButton
+            label={remoteUpload.label}
+            parentPath={remoteUpload.parentPath}
+            onCreated={remoteUpload.onUploaded}
+          />
+          <RemoteUploadButton
+            label={remoteUpload.label}
+            parentPath={remoteUpload.parentPath}
+            onUploaded={remoteUpload.onUploaded}
+          />
+        </>
       )}
 
       {/* Upload File — the primary CTA, same gate as Upload Folder above. */}
