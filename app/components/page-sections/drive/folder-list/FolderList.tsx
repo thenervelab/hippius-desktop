@@ -9,6 +9,7 @@ import TableActionMenu, { type ActionItem } from "@/components/ui/alt-table/Tabl
 import { SettingsCard } from "@/components/page-sections/settings/SettingsCard";
 import FolderCardContextMenu from "@/app/components/ui/context-menu/FolderCardContextMenu";
 import FolderRowSkeleton from "@/components/page-sections/settings/multi-folder-sync/FolderRowSkeleton";
+import HostedRootNote from "@/components/page-sections/settings/multi-folder-sync/HostedRootNote";
 import { cn } from "@/lib/utils";
 import { formatBytes } from "@/lib/utils/formatBytes";
 
@@ -203,6 +204,10 @@ const FolderList: React.FC<FolderListProps> = ({
                     ? (row.local?.localPath ?? presenceLabel(row))
                     : presenceLabel(row)}
                 </p>
+
+                {row.local?.hostedBy && (
+                  <HostedRootNote host={row.local.hostedBy} className="mt-1.5 ml-6" />
+                )}
 
                 {row.status === "error" && row.local?.errorMessage && (
                   <p className="ml-6 mt-1 text-xs font-medium text-error-50">

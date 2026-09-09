@@ -26,15 +26,6 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   download each file. Finder may also skip badges on Desktop, Documents,
   Downloads and Applications. The folder row and the add-folder dialog now
   say so.
-
-### Fixed
-
-- **A folder added from Settings gets Finder badges right away**, not after
-  the next launch, and a removed folder stops showing them.
-- **The "Turn on the Hippius Finder extension" notice no longer comes back after
-  you enable it and relaunch.** The app now waits for macOS to confirm the
-  switch before recording that it is on.
-
 - **Choose a storage plan without leaving Hippius.** A new Subscription Plans page
   under Account lists every plan with what it includes, shows the one you are on,
   and lets you subscribe, upgrade, downgrade or cancel. Pay from your credits, or
@@ -169,6 +160,11 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **A folder added from Settings gets Finder badges right away**, not after
+  the next launch, and a removed folder stops showing them.
+- **The "Turn on the Hippius Finder extension" notice no longer comes back after
+  you enable it and relaunch.** The app now waits for macOS to confirm the
+  switch before recording that it is on.
 - **"Share with Hippius" in Finder switches itself on.** On a Mac it is turned on
   for you on the first launch and comes back by itself after a macOS or Hippius
   update, instead of asking you to turn it on. If it is ever off, Hippius asks once
