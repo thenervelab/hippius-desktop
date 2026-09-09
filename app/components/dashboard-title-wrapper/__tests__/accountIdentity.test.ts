@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { resolveAccountIdentity, truncateAddress } from "../accountIdentity";
+import {
+  resolveAccountIdentity,
+  truncateAddress,
+  truncateIdentity,
+} from "../accountIdentity";
 import type { OAuthSession } from "@/app/lib/types/oAuth";
 
 const ADDRESS = "5HHap2Pe1234567890abcdefghijklmnopqrstuvwxyzqFQkYdsT";
@@ -19,6 +23,31 @@ describe("truncateAddress", () => {
 
   it("leaves a short address alone rather than padding it with dots", () => {
     expect(truncateAddress("5HHap2Pe")).toBe("5HHap2Pe");
+  });
+});
+
+describe("truncateIdentity", () => {
+  // CSS `truncate` cuts the END, so a long email lost its domain — and
+  // "…@gmail" and "…@icloud" clip to the same unhelpful thing.
+  it("cuts a long identity from the middle, keeping both ends", () => {
+    const out = truncateIdentity("ahmadraosanawarali@gmail.com");
+    expect(out).toBe("ahmadraosana…i@gmail.com");
+    expect(out.endsWith("@gmail.com")).toBe(true);
+  });
+
+  it("leaves anything that already fits alone", () => {
+    expect(truncateIdentity("a@b.com")).toBe("a@b.com");
+    expect(truncateIdentity("@ahmad_rao")).toBe("@ahmad_rao");
+  });
+
+  it("never exceeds the budget it is given", () => {
+    for (const value of [
+      "ahmadraosanawarali@gmail.com",
+      "verylongusername.with.dots@some-company-domain.co.uk",
+      "@a-github-handle-that-runs-on-and-on",
+    ]) {
+      expect(truncateIdentity(value).length).toBeLessThanOrEqual(24);
+    }
   });
 });
 
@@ -43,6 +72,17 @@ describe("resolveAccountIdentity", () => {
     );
     expect(id.primary).toBe("@ahmad_rao");
     expect(id.providerLabel).toBe("GitHub");
+  });
+
+  // The card's line is shortened to fit the rail; the menu below it
+  // still shows the address in full.
+  it("shortens a long email on the card line", () => {
+    const id = resolveAccountIdentity(
+      session({ provider: "google", email: "ahmadraosanawarali@gmail.com" }),
+      ADDRESS,
+    );
+    expect(id.primary).toBe("ahmadraosana…i@gmail.com");
+    expect(id.menuEmail).toBe("ahmadraosanawarali@gmail.com");
   });
 
   it("names the account and its email separately in the menu", () => {

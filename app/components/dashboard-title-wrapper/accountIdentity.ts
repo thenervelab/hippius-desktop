@@ -6,6 +6,33 @@ export function truncateAddress(address: string): string {
   return `${address.slice(0, 8)}...${address.slice(address.length - 8)}`;
 }
 
+/**
+ * Longest identity the sidebar line shows before it is shortened.
+ *
+ * A character budget rather than CSS: `truncate` cuts the END, which on
+ * an email throws away the domain — the half that says which account it
+ * is. "ahmadraosanawarali@gmail" and "ahmadraosanawarali@icloud" clip to
+ * the same thing.
+ */
+const IDENTITY_MAX_CHARS = 24;
+
+/**
+ * Shorten a long identity from the middle, keeping both ends.
+ *
+ * The same rule the address uses, and for the same reason: the ends are
+ * what identify the value and the middle is the redundant part. On an
+ * email that happens to keep the whole domain, since the domain sits at
+ * the end.
+ */
+export function truncateIdentity(value: string, max = IDENTITY_MAX_CHARS): string {
+  if (value.length <= max) return value;
+  // The ellipsis is one of the `max` characters, and the odd one goes to
+  // the head — the start of a name carries more than its tail.
+  const head = Math.ceil((max - 1) / 2);
+  const tail = Math.floor((max - 1) / 2);
+  return `${value.slice(0, head)}…${value.slice(value.length - tail)}`;
+}
+
 export const PROVIDER_LABELS: Record<string, string> = {
   google: "Google",
   github: "GitHub",
@@ -13,7 +40,10 @@ export const PROVIDER_LABELS: Record<string, string> = {
 };
 
 export interface AccountIdentity {
-  /** What the collapsed card shows as its primary line. */
+  /**
+   * What the sidebar card shows as its primary line, already shortened
+   * to fit — see {@link truncateIdentity}.
+   */
   primary: string;
   /** Name at the top of the open menu. */
   menuName: string;
@@ -60,10 +90,14 @@ export function resolveAccountIdentity(
   const menuName = displayName || signInHandle || truncatedAddress;
   const email = session?.email;
 
+  const primary = isOAuthAccount
+    ? signInHandle || displayName || truncatedAddress
+    : truncatedAddress;
+
   return {
-    primary: isOAuthAccount
-      ? signInHandle || displayName || truncatedAddress
-      : truncatedAddress,
+    // The address arrives pre-shortened; only a sign-in identity can be
+    // long enough to need this.
+    primary: truncateIdentity(primary),
     menuName,
     ...(email && email !== menuName ? { menuEmail: email } : {}),
     ...(provider && PROVIDER_LABELS[provider]
