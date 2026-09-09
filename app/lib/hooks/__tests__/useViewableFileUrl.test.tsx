@@ -74,7 +74,12 @@ describe("useViewableFileUrl", () => {
     await waitFor(() => expect(result.current.url).toBe("asset:///cache/a.jpg"));
     expect(tauri.core.invoke).toHaveBeenCalledWith(
       "cache_remote_file",
-      expect.objectContaining({ accountId: "5auth", label: "photos", fileId: "fid" })
+      expect.objectContaining({
+        accountId: "5auth",
+        label: "photos",
+        fileId: "fid",
+        arionHash: "",
+      }),
     );
   });
 
@@ -92,13 +97,28 @@ describe("useViewableFileUrl", () => {
     state.fileUrl = { isLocal: false, url: "" };
     tauri.onInvoke("cache_remote_file", () => "/cache/remote.jpg");
     const { result } = renderHook(() =>
-      useViewableFileUrl(file({ source: undefined, fileId: "fid", label: "photos" }))
+      useViewableFileUrl(
+        file({
+          source: undefined,
+          fileId: "fid",
+          label: "photos",
+          arionHash: "fid",
+          arionCid: "content-digest",
+        }),
+      ),
     );
 
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     expect(result.current.url).toBe("asset:///cache/remote.jpg");
     expect(result.current.localPath).toBe("/cache/remote.jpg");
     expect(result.current.error).toBeNull();
+    expect(tauri.core.invoke).toHaveBeenCalledWith(
+      "cache_remote_file",
+      expect.objectContaining({
+        fileId: "fid",
+        arionHash: "content-digest",
+      }),
+    );
   });
 
   it("discards a superseded download when the file changes mid-flight (cancel guard)", async () => {

@@ -17,6 +17,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
+- **File Details now shows the file's Arion hash** (the BLAKE3 content digest)
+  so you can copy it or open it on the file tracker.
 - **Finder shows how each file in your Hippius folders is doing.** Files and
   folders carry a badge in Finder: synced, syncing, shared by link, or failed.
 - **Hippius tells you when a folder lives inside Google Drive, Dropbox, OneDrive
