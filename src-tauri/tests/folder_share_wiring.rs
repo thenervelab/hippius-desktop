@@ -116,10 +116,7 @@ fn the_by_hash_pair_gates_on_its_own_capability_before_the_call() {
         let call_at = body
             .find("_by_hash(")
             .unwrap_or_else(|| panic!("{name} must call the by-hash client method"));
-        assert!(
-            probe_at < call_at,
-            "{name} must probe the capability BEFORE calling the by-hash route"
-        );
+        assert!(probe_at < call_at, "{name} must probe the capability BEFORE calling the by-hash route");
     }
 }
 
