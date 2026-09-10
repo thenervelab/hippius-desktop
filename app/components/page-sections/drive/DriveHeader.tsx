@@ -3,6 +3,7 @@
 import { FC, ReactNode, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Button, Icons, RefreshButton, SearchInput } from "@/components/ui";
+import { ArrowUpToLine } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
 import AddButton from "./AddFileButton";
 import StorageStateList from "./storage-stats";
@@ -28,17 +29,22 @@ import { toast } from "sonner";
 import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
 import {
   resolveUploadAction,
+  TOOLBAR_BUTTON_GAP,
+  UPLOAD_FILE_BUTTON_LABEL,
   UPLOAD_FILE_LABEL,
+  UPLOAD_FOLDER_BUTTON_LABEL,
   UPLOAD_FOLDER_LABEL,
 } from "./uploadActions";
 import RemoteUploadButton from "./RemoteUploadButton";
 import RemoteNewFolderButton from "./RemoteNewFolderButton";
+import RemoteFolderUploadButton from "./RemoteFolderUploadButton";
 import { BILLING_ROUTE } from "@/app/lib/routes";
 
 // Figma white pill style shared by Add Folder / View All Files / Shared Links.
 // Mirrors the trigger styling used across the home dashboard cards.
 const SECONDARY_PILL_CLASSES = cn(
-  "h-[30px] px-3 py-2 gap-[7px] rounded-[6px]",
+  "h-[30px] px-3 py-2 rounded-[6px]",
+  TOOLBAR_BUTTON_GAP,
   "bg-white border border-grey-dark-100 text-black-600",
   "shadow-[0px_5px_2.3px_0px_rgba(0,0,0,0.03),0px_1px_1.9px_0px_rgba(0,0,0,0.14),0px_0px_1px_0px_rgba(0,0,0,0.16)]",
   "font-geist text-[14px] font-medium tracking-[-0.28px] leading-[1.109]",
@@ -86,8 +92,9 @@ interface DriveHeaderProps {
   hideUploads?: boolean;
   /** Browsing a folder that is not synced here. Files go straight to the
    *  server instead of through a local sync folder, so this view gets its
-   *  own upload button. Folder upload is still hidden: it would mean
-   *  walking a directory and posting each file, which is a separate job. */
+   *  own upload controls — a file, a folder, and a new empty folder. The
+   *  folder upload walks the directory in Rust and posts each file under
+   *  the wire path that reproduces its structure. */
   remoteUpload?: {
     label: string;
     parentPath?: string;
@@ -110,6 +117,8 @@ interface DriveHeaderProps {
   onDateRangeChange: (range: DateRange | undefined) => void;
   onFileSizesChange: (sizes: number[]) => void;
   onExcludedOnlyChange?: (excludedOnly: boolean) => void;
+  /** See `shouldOfferExcludedFilter` — hidden on a drive with no rules. */
+  showExcludedFilter?: boolean;
   defaultFolderLabel?: string | null;
   isFolderUploadOpen?: boolean;
   onSetFolderUploadOpen?: (open: boolean) => void;
@@ -178,6 +187,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
   onDateRangeChange,
   onFileSizesChange,
   onExcludedOnlyChange,
+  showExcludedFilter = false,
   defaultFolderLabel,
   isFolderUploadOpen: isFolderUploadOpenProp,
   onSetFolderUploadOpen,
@@ -241,8 +251,10 @@ const DriveHeader: FC<DriveHeaderProps> = ({
               setIsFolderUploadOpen(true);
             }}
             className={SECONDARY_PILL_CLASSES}
+            title={UPLOAD_FOLDER_LABEL}
           >
-            {UPLOAD_FOLDER_LABEL}
+            <ArrowUpToLine className="size-4 shrink-0" />
+            {UPLOAD_FOLDER_BUTTON_LABEL}
           </Button>
         )}
       {uploadAction === "disabled" && (
@@ -251,8 +263,10 @@ const DriveHeader: FC<DriveHeaderProps> = ({
           size="auto"
           disabled
           className={SECONDARY_PILL_CLASSES}
+          title={UPLOAD_FOLDER_LABEL}
         >
-          {UPLOAD_FOLDER_LABEL}
+          <ArrowUpToLine className="size-4 shrink-0" />
+          {UPLOAD_FOLDER_BUTTON_LABEL}
         </Button>
       )}
 
@@ -286,6 +300,11 @@ const DriveHeader: FC<DriveHeaderProps> = ({
             parentPath={remoteUpload.parentPath}
             onCreated={remoteUpload.onUploaded}
           />
+          <RemoteFolderUploadButton
+            label={remoteUpload.label}
+            parentPath={remoteUpload.parentPath}
+            onUploaded={remoteUpload.onUploaded}
+          />
           <RemoteUploadButton
             label={remoteUpload.label}
             parentPath={remoteUpload.parentPath}
@@ -300,9 +319,14 @@ const DriveHeader: FC<DriveHeaderProps> = ({
           variant="primary"
           size="auto"
           disabled
-          className="h-[30px] px-3 py-[10px] gap-[10px] rounded-[6px] font-geist text-[14px] tracking-[-0.28px] leading-[1.109]"
+          className={cn(
+            "h-[30px] px-3 py-[10px] rounded-[6px] font-geist text-[14px] tracking-[-0.28px] leading-[1.109]",
+            TOOLBAR_BUTTON_GAP,
+          )}
+          title={UPLOAD_FILE_LABEL}
         >
-          + {UPLOAD_FILE_LABEL}
+          <ArrowUpToLine className="size-4 shrink-0" />
+          {UPLOAD_FILE_BUTTON_LABEL}
         </Button>
       ) : uploadAction === "enabled" ? (
         <AddButton
@@ -480,6 +504,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
                   onDateRangeChange={onDateRangeChange}
                   onFileSizesChange={onFileSizesChange}
                   onExcludedOnlyChange={onExcludedOnlyChange}
+                  showExcludedFilter={showExcludedFilter}
                 />
                 <div className="flex items-center gap-3 shrink-0">
                   {/* Stats are hidden inside a nested folder — the totals

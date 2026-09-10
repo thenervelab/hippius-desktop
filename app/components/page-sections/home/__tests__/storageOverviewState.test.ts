@@ -205,3 +205,26 @@ describe("getPlanHeading", () => {
     expect(getPlanHeading("none", "Starter")).toBe("Active Plan");
   });
 });
+
+describe("an account with no entitlement at all", () => {
+  // An access key gets no included allowance, so there is no bar to draw
+  // and nothing to say about usage — only what to do about it.
+  it("renders the no-plan state rather than a usage bar", () => {
+    expect(
+      getStorageOverviewView({ showSkeleton: false, isError: false, source: "none" }),
+    ).toBe("no-plan");
+  });
+
+  it("names the source honestly rather than calling it free", () => {
+    expect(getCapacitySourceLabel("none", null)).toBe("No storage plan");
+    expect(getCapacitySourceLabel("none", null)).not.toMatch(/free/i);
+  });
+
+  it("draws no usage bar in the header chip", () => {
+    expect(shouldShowUsageBar(getPlanView({
+      showSkeleton: false,
+      isError: false,
+      source: "none",
+    }))).toBe(false);
+  });
+});

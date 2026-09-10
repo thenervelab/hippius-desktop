@@ -235,6 +235,9 @@ pub async fn ensure_billing_auth(state: tauri::State<'_, crate::app_state::AppSt
             user_id: result.user_id.as_i64(),
             username: &result.username,
             provider: "mnemonic",
+            // A mnemonic login has no sign-in email of its own; `None`
+            // leaves any stored one untouched rather than blanking it.
+            email: None,
             logout_time_minutes: None, // billing auth refresh — don't touch the user's preference
         },
     )

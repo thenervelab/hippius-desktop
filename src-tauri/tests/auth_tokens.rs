@@ -43,6 +43,7 @@ async fn setup_db() -> SqlitePool {
             user_id TEXT,
             username TEXT,
             provider TEXT,
+            email TEXT,
             substrate_address TEXT,
             logout_time_minutes INTEGER,
             last_login_at TEXT,

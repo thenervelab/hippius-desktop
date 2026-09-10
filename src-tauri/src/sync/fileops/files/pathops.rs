@@ -27,7 +27,11 @@ use std::path::{Path, PathBuf};
 /// pin it forever (H-063) — the engine never uploads it. Drive lists it
 /// as `hidden` instead, except for internal names
 /// ([`is_internal_hidden_name`]).
-pub(super) fn is_engine_hidden_name(name: &OsStr) -> bool {
+// `pub(in crate::sync::fileops)` rather than `pub(super)`: the remote
+// upload walk is a sibling of `files` and must skip exactly the names the
+// engine skips, so a folder uploaded to the server and the same folder
+// synced locally produce one file set.
+pub(in crate::sync::fileops) fn is_engine_hidden_name(name: &OsStr) -> bool {
     name.to_str().is_some_and(|n| n.starts_with('.'))
 }
 

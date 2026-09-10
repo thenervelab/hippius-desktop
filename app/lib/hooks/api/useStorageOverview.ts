@@ -13,7 +13,12 @@ import { useInvokeQuery } from "./useInvokeQuery";
 export const STORAGE_OVERVIEW_QUERY_KEY = "storage-overview";
 
 /** Which source won the capacity decision (decided once, in Rust). */
-export type CapacitySource = "subscription" | "free";
+/**
+ * `none` is an access-key account with no subscription: it is not
+ * entitled to the included allowance, so it has no capacity at all until
+ * it subscribes. Decided in Rust from how the account signed in.
+ */
+export type CapacitySource = "subscription" | "free" | "none";
 
 export interface PlanInfo {
   name: string;

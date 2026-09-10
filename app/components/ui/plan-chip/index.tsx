@@ -45,12 +45,17 @@ const PERCENT_TONE: Record<UsageTone, string> = {
  *
  * Renders from the SAME `get_storage_overview` fetch as the home cards, so
  * the plan-vs-free-tier decision (made once, in Rust) is identical on every
- * surface. Three lines, in the order the question is asked — which plan,
- * how full, and by how much:
+ * surface. TWO lines — which plan (and anything wrong with it), then how
+ * full it is:
  *
- *   ● STARTER
- *   ▓▓▓▓▓░░░░░░░░░░░░░░░
- *   2.82 GB of 10.00 GB used                                          28%
+ *   ● STARTER   Low credits. Your plan renews in 6 days
+ *   ▓▓▓▓▓░░░░░░░░░░░  2.82 GB of 10.00 GB   28%
+ *
+ * It was four: heading, bar, numbers, warning, each on its own row, which
+ * made a header cell the tallest block on the page as soon as an account
+ * needed credits — the state where the header matters most. The bar and
+ * the numbers describe the SAME fact, so one row carries both; the
+ * warning is a short clause and rides with the plan name.
  *
  * A subscribed account is headed by its plan's NAME; "Active Plan" only
  * repeated what the presence of a plan already implied. The free tier
@@ -110,40 +115,58 @@ const PlanChip: React.FC<{ className?: string }> = ({ className }) => {
         // A floor, not a fixed width: the bar needs a length to be worth
         // reading, and the two lines around it are short enough that the
         // chip would otherwise collapse to the width of "Free Plan".
-        "flex min-w-[188px] flex-col items-stretch justify-center gap-1",
+        "flex min-w-[248px] flex-col items-stretch justify-center gap-1.5",
         className,
       )}
     >
-      <div className="flex items-center gap-1">
-        <span className="inline-flex size-4 shrink-0 items-center justify-center rounded-full bg-primary-40/20">
-          <span className="size-[6.15px] rounded-full bg-primary-40" />
+      {/* Row 1 — which plan, and anything wrong with it.
+          The warning shares this line rather than taking one of its own:
+          it is a short clause, and stacked under the numbers it turned a
+          header chip into the tallest thing on the page. */}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="inline-flex items-center gap-1">
+          <span className="inline-flex size-4 shrink-0 items-center justify-center rounded-full bg-primary-40/20">
+            <span className="size-[6.15px] rounded-full bg-primary-40" />
+          </span>
+          {planView === "skeleton" ? (
+            <span
+              className="h-[18px] w-[72px] rounded bg-grey-light-700 dark:bg-grey-dark-200 animate-pulse"
+              aria-label="Loading plan"
+            />
+          ) : (
+            <span className="font-mono text-[12px] font-medium uppercase leading-[18px] tracking-[-0.24px] text-primary-40 dark:text-primary-brand-dark">
+              {getPlanHeading(planView, plan?.name)}
+            </span>
+          )}
         </span>
-        {planView === "skeleton" ? (
-          <span
-            className="h-[18px] w-[72px] rounded bg-grey-light-700 dark:bg-grey-dark-200 animate-pulse"
-            aria-label="Loading plan"
-          />
-        ) : (
-          <span className="font-mono text-[12px] font-medium uppercase leading-[18px] tracking-[-0.24px] text-primary-40 dark:text-primary-brand-dark">
-            {getPlanHeading(planView, plan?.name)}
+
+        {actionNote && (
+          /* Amber text, no chip or icon: the button beside it already
+             carries the weight, and a second coloured block in a header
+             cell competes with it for the same glance. */
+          <span className="text-[12px] font-medium leading-[16px] tracking-[-0.24px] text-warning-40 dark:text-warning-50">
+            {actionNote}
           </span>
         )}
       </div>
 
+      {/* Row 2 — how full, as a bar and as the numbers behind it, on ONE
+          line. They describe the same fact, so stacking them spent a whole
+          row restating the bar in words. */}
       {planView === "skeleton" ? (
         <span
           className="h-[18px] w-[132px] rounded bg-grey-light-700 dark:bg-grey-dark-200 animate-pulse"
           aria-hidden="true"
         />
       ) : showUsageBar ? (
-        <>
+        <div className="flex items-center gap-2">
           <div
             role="progressbar"
             aria-valuenow={Math.round(percent)}
             aria-valuemin={0}
             aria-valuemax={100}
             aria-label="Storage used"
-            className="h-[4px] w-full overflow-hidden rounded-full bg-grey-light-700 dark:bg-grey-dark-200"
+            className="h-[4px] min-w-[56px] flex-1 overflow-hidden rounded-full bg-grey-light-700 dark:bg-grey-dark-200"
           >
             <div
               className={cn("h-full rounded-full transition-[width] duration-500", BAR_TONE[tone])}
@@ -151,35 +174,22 @@ const PlanChip: React.FC<{ className?: string }> = ({ className }) => {
             />
           </div>
 
-          {/* The numbers under the bar, the way the home storage card
-              states them. The free tier used to read "≈ 10.00 GB
-              included", which names the allowance and says nothing about
-              how much of it is left — the question the header exists to
-              answer, and the one that decides whether Upgrade matters. */}
-          <div className="flex items-baseline justify-between gap-2">
-            <p className="whitespace-pre text-[12px] leading-[18px] tracking-[-0.24px] text-black-700 dark:text-white">
-              <span className="font-bold tracking-[-0.36px] text-primary-50 dark:text-primary-brand-dark">
-                {usedLabel}
-              </span>
-              {" of "}
-              {capacityLabel} used
-            </p>
-            <span
-              className={cn(
-                "shrink-0 font-mono text-[12px] font-medium leading-[18px] tracking-[-0.24px]",
-                PERCENT_TONE[tone],
-              )}
-            >
-              {formatPercentLabel(percent)}
+          <p className="shrink-0 whitespace-pre text-[12px] leading-[18px] tracking-[-0.24px] text-black-700 dark:text-white">
+            <span className="font-bold tracking-[-0.36px] text-primary-50 dark:text-primary-brand-dark">
+              {usedLabel}
             </span>
-          </div>
-
-          {actionNote && (
-            <p className="text-[12px] font-medium leading-[16px] tracking-[-0.24px] text-warning-40 dark:text-warning-50">
-              {actionNote}
-            </p>
-          )}
-        </>
+            {" of "}
+            {capacityLabel}
+          </p>
+          <span
+            className={cn(
+              "shrink-0 font-mono text-[12px] font-medium leading-[18px] tracking-[-0.24px]",
+              PERCENT_TONE[tone],
+            )}
+          >
+            {formatPercentLabel(percent)}
+          </span>
+        </div>
       ) : (
         <p className="text-[12px] font-medium leading-[18px] tracking-[-0.24px] text-black-700 dark:text-grey-dark-500">
           No active plan

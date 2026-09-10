@@ -33,7 +33,23 @@ export default function BillingSections() {
     <>
       {/* Credits stay: a credits-funded Drive plan renews out of this
           balance, so topping up is part of managing the plan below. */}
-      <div className="mt-4 grid grid-cols-1 @md:grid-cols-2 @3xl:grid-cols-3 gap-4">
+      {/* Two cards, two columns. The third column was left over from when
+          a third widget sat here, so each card took a THIRD of the row and
+          the rest went to whitespace — which is why the deposit address had
+          to be center-truncated on a window with room to spare.
+
+          The deposit column is BOUNDED rather than weighted: its content is
+          a fixed 48-character address plus a copy button, so it has a width
+          at which it is complete and past which it only adds empty field.
+          A fraction of the row could not express that — it truncated on a
+          small window and sprawled on a large one.
+
+          The credits column is bounded for the same reason: a balance and
+          one button do not read better across 800px, they just leave the
+          button stranded from the number it belongs to. Neither card
+          absorbs the slack now, so on a very wide window the row ends
+          where its content ends rather than stretching to the edge. */}
+      <div className="mt-4 grid grid-cols-1 gap-4 @md:grid-cols-2 @3xl:grid-cols-[minmax(0,26rem)_minmax(28rem,34rem)]">
         <CreditsWidget />
         <TaoDepositWidget />
       </div>

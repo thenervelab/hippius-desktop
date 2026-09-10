@@ -17,6 +17,10 @@ interface FilterPillsProps {
   onDateRangeChange: (range: DateRange | undefined) => void;
   onFileSizesChange: (sizes: number[]) => void;
   onExcludedOnlyChange?: (excludedOnly: boolean) => void;
+  /** Whether the Excluded chip is worth offering — see
+   *  `shouldOfferExcludedFilter`. A drive that excludes nothing gets a
+   *  filter that can only ever return nothing. */
+  showExcludedFilter?: boolean;
   className?: string;
 }
 
@@ -35,6 +39,7 @@ const FilterPills: React.FC<FilterPillsProps> = ({
   onDateRangeChange,
   onFileSizesChange,
   onExcludedOnlyChange,
+  showExcludedFilter = false,
   className = "",
 }) => {
   return (
@@ -54,7 +59,7 @@ const FilterPills: React.FC<FilterPillsProps> = ({
         onRangeSelect={onDateRangeChange}
       />
 
-      {onExcludedOnlyChange && (
+      {onExcludedOnlyChange && showExcludedFilter && (
         <button
           type="button"
           aria-pressed={excludedOnly}

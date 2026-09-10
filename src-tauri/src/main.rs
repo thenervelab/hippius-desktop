@@ -118,8 +118,8 @@ use crate::sync::paths::{get_sync_path, remove_sync_path, set_sync_path};
 use crate::sync::progress::{sp_clear_all_data, sp_dismiss_sync_widget, sp_get_snapshot};
 use crate::sync::recent_uploads::{get_recent_uploads, search_files, search_files_in_drive};
 use crate::sync::remote::{cache_remote_file, download_remote_file, get_thumbnail, list_remote_folder_files, list_remote_folder_grouped};
-use crate::sync::remote_rename::{create_remote_folder, rename_remote_file};
-use crate::sync::remote_upload::upload_files_to_remote_folder;
+use crate::sync::remote_rename::{create_remote_folder, rename_remote_file, rename_remote_folder};
+use crate::sync::remote_upload::{upload_files_to_remote_folder, upload_folder_to_remote_folder};
 use crate::sync::status::{app_close, get_all_drive_statuses, get_sync_activity_rows, get_sync_engine_health};
 use crate::tray::panel::{hide_tray_panel, toggle_tray_panel};
 use crate::updates::{check_for_update, current_release_channel, install_update, release_channel_status, switch_release_channel};
@@ -403,8 +403,10 @@ fn main() {
             // Remote folder browsing & one-off download
             list_remote_folder_files,
             upload_files_to_remote_folder,
+            upload_folder_to_remote_folder,
             search_files_in_drive,
             rename_remote_file,
+            rename_remote_folder,
             create_remote_folder,
             list_remote_folder_grouped,
             download_remote_file,
@@ -421,6 +423,8 @@ fn main() {
             crate::shares::commands::hcfs_update_share_expiry,
             crate::shares::commands::hcfs_list_folder_shares,
             crate::shares::commands::hcfs_revoke_folder_share,
+            crate::shares::commands::hcfs_revoke_folder_share_by_hash,
+            crate::shares::commands::hcfs_update_folder_share_expiry_by_hash,
             crate::shares::commands::hcfs_update_folder_share_expiry,
             crate::shares::commands::hcfs_generate_share_password,
             crate::shares::commands::hcfs_list_share_history,
@@ -546,6 +550,7 @@ fn main() {
             get_add_credit_events,
             get_drive_storage_stats,
             get_storage_overview,
+            crate::billing::services_status::get_drive_service_status,
             get_drive_storage_chart,
             get_drive_credits_chart,
             get_credit_balance_chart,

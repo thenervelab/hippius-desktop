@@ -1,8 +1,18 @@
-// Single-source feature flags: a literal `boolean` constant every consumer
-// imports, so flipping a release just edits one line.
+// Single-source feature flags: a `boolean` constant every consumer imports,
+// so flipping a release just edits one line.
 //
 // Add new flags here only when they gate user-visible behaviour and a
 // future release is expected to flip them.
+//
+// A flag is either a plain literal — the same on every lane — or
+// `enabledFrom(channel)`, which turns the feature on from that release
+// lane outwards (`"beta"` → beta and staging, never production). Gate on
+// the LANE, never by editing this file differently per branch: `staging →
+// beta` is a merge and `beta → main` a squash, so a per-branch value
+// either conflicts on every promotion or rides into production through a
+// hunk nobody read. See `app/lib/buildChannel.ts`.
+
+import { enabledFrom } from "@/app/lib/buildChannel";
 
 /**
  * Switch the home-page Credit Usage chart and the Total Credit Used
@@ -100,16 +110,19 @@ export const VM_VPN_ENABLED = false;
  * silently anyway (the backend maps the unmounted routes to
  * `NotReady(SHARED_DRIVES_UNAVAILABLE)`, which the FE matches and hides).
  *
- * `false` for the 0.6.1 release: the feature is not launching yet. It was
- * left `true` through 0.6.0 without ever being announced, which left the
- * app contradicting itself — the Drive plan cards grey out the shared team
- * drive perk as "coming soon" while the sharing surfaces were reachable.
- * Flip back to `true` when the launch is on, which needs the hcfs-server
- * fleet on `HCFS_FEATURE_SHARED_DRIVES=1` and the console's
+ * **On in beta and staging, off in production.** The feature needs
+ * testing against a real fleet before it launches, and beta is where that
+ * happens — but a production user must not reach it yet: it was left
+ * `true` through 0.6.0 without ever being announced, which left the app
+ * contradicting itself, with the Drive plan cards greying out the shared
+ * team drive perk as "coming soon" while the sharing surfaces were
+ * reachable. Production launch is `true` here, and it needs the
+ * hcfs-server fleet on `HCFS_FEATURE_SHARED_DRIVES=1` and the console's
  * `/invite/{token}` accept page live in the same window (desktop invite
- * links mint at the console, so both sides must ship together).
+ * links mint at the console, so both sides must ship together) — which is
+ * also what beta is proving.
  */
-export const SHARED_DRIVES_ENABLED = false;
+export const SHARED_DRIVES_ENABLED = enabledFrom("beta");
 
 /**
  * Referrals page. When `false`, referrals is fully invisible: the sidebar

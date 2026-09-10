@@ -100,17 +100,18 @@ const TaoDepositWidget: FC<{ className?: string }> = ({ className }) => {
         </div>
       </div>
 
-      {/* Inner panel */}
+      {/* Identity grouped at the top, copy row at the bottom, so this
+          card stays in step with CreditsWidget when the grid stretches. */}
       <div
         className={cn(
-          "flex flex-col w-full flex-1 justify-between",
+          "flex flex-col w-full flex-1 justify-between gap-4",
           "rounded-tl-[8px] rounded-tr-[8px] border-t border-grey-dark-100",
           "bg-white dark:bg-black-600 dark:border-black-300",
-          "p-3",
+          "px-4 py-4",
         )}
       >
         {/* Top: Tao logo + chain label */}
-        <div className="flex flex-col gap-2.5">
+        <div className="flex flex-col gap-3">
           <div className="flex bg-primary-50 items-center justify-center size-6 rounded-[4.8px] shrink-0">
             <TaoLogo className="size-4 text-white" />
           </div>
@@ -125,7 +126,7 @@ const TaoDepositWidget: FC<{ className?: string }> = ({ className }) => {
           {/* Address text field */}
           <div
             className={cn(
-              "flex flex-1 min-w-0 h-[36px] items-center px-2 overflow-hidden",
+              "flex flex-1 min-w-0 h-10 items-center px-3 overflow-hidden",
               "rounded-[8px] border border-grey-dark-100",
               "bg-grey-light-300 dark:bg-black-primary-bg dark:border-black-300",
             )}
@@ -144,7 +145,7 @@ const TaoDepositWidget: FC<{ className?: string }> = ({ className }) => {
             onClick={handleCopy}
             aria-label="Copy wallet address"
             className={cn(
-              "flex h-[36px] w-[36px] shrink-0 items-center justify-center rounded-[8px] border",
+              "flex h-10 w-10 shrink-0 items-center justify-center rounded-[8px] border",
               "bg-grey-light-300 border-grey-dark-100",
               "dark:bg-black-primary-bg dark:border-black-300",
               "transition-colors hover:bg-grey-light-800 dark:hover:bg-black-300/70",

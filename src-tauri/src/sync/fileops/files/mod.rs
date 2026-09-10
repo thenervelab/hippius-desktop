@@ -21,7 +21,10 @@ mod dir_stats;
 mod exclude_match;
 mod export_zip;
 mod listing;
-mod pathops;
+// `pub(super)` so a sibling in `fileops` can share the hidden-name rule
+// rather than writing a second copy of it — the rule exists precisely so
+// that every walk agrees on which names the engine skips.
+pub(super) mod pathops;
 mod recent;
 mod rename;
 mod resolve;

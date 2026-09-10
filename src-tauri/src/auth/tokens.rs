@@ -278,7 +278,7 @@ mod tests {
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
             "CREATE TABLE IF NOT EXISTS auth_session (
                 owner TEXT PRIMARY KEY, auth_token TEXT, token_expiry INTEGER,
-                user_id INTEGER, username TEXT, provider TEXT, substrate_address TEXT,
+                user_id INTEGER, username TEXT, provider TEXT, email TEXT, substrate_address TEXT,
                 logout_time_minutes INTEGER DEFAULT 1440, last_login_at TEXT,
                 updated_at TEXT NOT NULL DEFAULT (datetime('now')))",
         ] {
@@ -310,6 +310,7 @@ mod tests {
                 user_id: Some(2),
                 username: "bob",
                 provider: "mnemonic",
+                email: None,
                 logout_time_minutes: Some(1440),
             },
         )
@@ -427,6 +428,7 @@ mod tests {
                 user_id: Some(1),
                 username: "alice",
                 provider: "mnemonic",
+                email: None,
                 logout_time_minutes: Some(1440),
             },
         )
@@ -448,6 +450,7 @@ mod tests {
                 user_id: Some(2),
                 username: "bob",
                 provider: "mnemonic",
+                email: None,
                 logout_time_minutes: Some(1440),
             },
         )

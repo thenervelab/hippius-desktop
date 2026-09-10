@@ -279,3 +279,128 @@ async fn a_file_uploaded_to_an_unsynced_folder_round_trips_and_renames() {
         "the old name is still listed — the rename copied instead of moving"
     );
 }
+
+/// Rename a FOLDER in a drive with no local root, and prove its contents
+/// moved with it.
+///
+/// The layer that matters for this one. A folder is not a record on the
+/// server — `/browse` derives folder rows by grouping file rows on their
+/// next path segment — so a rename that only re-keys the folder's own path
+/// is accepted by every hermetic test and by the server, and surfaces as a
+/// folder that renamed itself while its contents stayed under the old
+/// name. Only a real round-trip catches that.
+#[tokio::test]
+#[ignore = "live lane: needs a real hcfs-server (see module docs)"]
+async fn a_folder_renamed_in_an_unsynced_drive_takes_its_contents_with_it() {
+    let Some(env) = live_env() else { return };
+    ensure_master_seal(&env.ss58);
+
+    let work = tempfile::TempDir::new().expect("work dir");
+    let pool = live_pool(work.path()).await;
+    seed_account(&pool, &env).await;
+
+    let label = unique_label("folderrename");
+    seed_unsynced_drive(&pool, &env.ss58, &label).await;
+    let state = make_state(pool.clone(), &env.ss58);
+
+    let identity = tauri_project_lib::sync::identity::resolve_drive_identity_or_own(&pool, &env.ss58, &label)
+        .await
+        .expect("resolve identity");
+
+    // Two levels, so the rename has to re-prefix a nested path and not
+    // merely the immediate children.
+    let source = work.path().join("leaf.bin");
+    std::fs::write(&source, b"folder rename payload").expect("write source");
+    for parent in ["Trip", "Trip/nested"] {
+        tauri_project_lib::sync::remote_upload::upload_to_remote_folder(&state, &pool, &env.ss58, &label, parent, &source, &identity)
+            .await
+            .unwrap_or_else(|e| panic!("upload into {parent}: {e}"));
+    }
+
+    // A sibling whose name STARTS with the folder's name. A prefix match
+    // without the separator would drag this along, renaming a file the
+    // user never selected.
+    tauri_project_lib::sync::remote_upload::upload_to_remote_folder(&state, &pool, &env.ss58, &label, "Trip Photos", &source, &identity)
+        .await
+        .expect("upload into the lookalike sibling");
+
+    // An EMPTY subfolder: no files, so it exists ONLY as a folder_entries
+    // row. Nothing in `/rename_files` can move it.
+    tauri_project_lib::sync::remote_rename::create_remote_folder_inner(&pool, &env.ss58, "Trip", "empty", &identity)
+        .await
+        .expect("register an empty subfolder");
+
+    let moved = tauri_project_lib::sync::remote_rename::rename_folder_in_remote_folder(
+        &state,
+        &pool,
+        tauri_project_lib::sync::remote_rename::RemoteRename {
+            account_id: &env.ss58,
+            label: &label,
+            parent_path: "",
+            old_name: "Trip",
+            new_name: "Holiday",
+            identity: &identity,
+        },
+    )
+    .await
+    .expect("rename a folder in a drive with no local root");
+    assert!(moved >= 2, "expected both files to move, got {moved}");
+
+    let after = tauri_project_lib::sync::remote::list_remote_folder_files_inner(&state, &env.ss58, &label)
+        .await
+        .expect("list after the folder rename");
+    let paths: Vec<&str> = after.iter().map(|f| f.name.as_str()).collect();
+
+    // The whole point: the CONTENTS moved. A rename that only touched the
+    // folder's own row leaves these under `Trip/`.
+    for expected in ["Holiday/leaf.bin", "Holiday/nested/leaf.bin"] {
+        assert!(
+            after.iter().any(|f| f.name.ends_with(expected) || f.name == expected),
+            "{expected} is missing after the rename — the contents did not move; listing = {paths:?}"
+        );
+    }
+    assert!(
+        !after.iter().any(|f| f.name.starts_with("Trip/")),
+        "files are still under the old folder name — the rename copied instead of moving; listing = {paths:?}"
+    );
+    // The lookalike sibling must be untouched.
+    assert!(
+        after.iter().any(|f| f.name.starts_with("Trip Photos/")),
+        "the sibling folder was renamed too; listing = {paths:?}"
+    );
+
+    // The symptom this test exists for: `/browse` UNIONs the file
+    // aggregate with the `folder_entries` rows, and `/rename_files` cannot
+    // touch the second half. A rename that moves only the files leaves the
+    // ORIGINAL folder listed, now empty, beside the renamed one — which is
+    // exactly what the user sees and what no file listing reveals.
+    let client = tauri_project_lib::sync::remote::build_client_for_tests(&pool, &env.ss58, &identity)
+        .await
+        .expect("build client");
+    let root = client
+        .browse(&identity.wire_ss58, &identity.wire_folder_hash, "", 0, 500)
+        .await
+        .expect("browse the drive root after the rename");
+    let listed: Vec<&str> = root.folders.iter().map(|f| f.name.as_str()).collect();
+    assert!(listed.contains(&"Holiday"), "the renamed folder is not listed; folders = {listed:?}");
+    assert!(
+        !listed.contains(&"Trip"),
+        "the OLD folder is still listed beside the renamed one — its folder_entries rows were not unregistered; folders = {listed:?}"
+    );
+    assert!(
+        listed.contains(&"Trip Photos"),
+        "the lookalike sibling folder disappeared; folders = {listed:?}"
+    );
+
+    // An EMPTY subfolder exists only as a folder_entries row, so it is the
+    // one thing a file-only rename cannot carry at all.
+    let inside = client
+        .browse(&identity.wire_ss58, &identity.wire_folder_hash, "Holiday", 0, 500)
+        .await
+        .expect("browse the renamed folder");
+    let inside_names: Vec<&str> = inside.folders.iter().map(|f| f.name.as_str()).collect();
+    assert!(
+        inside_names.contains(&"empty"),
+        "the empty subfolder did not move with the rename; folders = {inside_names:?}"
+    );
+}

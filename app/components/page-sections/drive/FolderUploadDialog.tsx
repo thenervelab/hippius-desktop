@@ -23,6 +23,11 @@ import { getPrivateSyncPath } from "@/lib/utils/syncPathUtils";
 import { DRIVE_STORAGE_STATS_QUERY_KEY } from "@/app/lib/hooks/api/useDriveStorageStats";
 import { GET_USER_IPFS_FILES_QUERY_KEY } from "@/app/lib/hooks/use-user-files";
 import SyncFolderSelect from "@/components/ui/SyncFolderSelect";
+import { uploadFolderToRemoteFolder } from "@/app/lib/tauri/remoteUpload";
+import {
+  reportRemoteFolderUploadStarted,
+  reportRemoteUploadOutcomeForFolder,
+} from "@/app/lib/remote-upload/reportOutcome";
 import { hasConfiguredDrivesAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import {
   getLastBrowseDirectory,
@@ -71,6 +76,9 @@ export default function FolderUploadDialog({
     defaultFolderLabel ?? null,
   );
   const [selectedSyncPath, setSelectedSyncPath] = useState<string | null>(null);
+  // A drive that is not synced here has no sync root to copy into, so the
+  // folder is walked and posted to the server instead.
+  const [selectedIsRemote, setSelectedIsRemote] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -199,7 +207,9 @@ export default function FolderUploadDialog({
       return;
     }
 
-    if (!hasConfiguredDrives) {
+    // A remote destination needs no local drive: the files never touch a
+    // sync root. Only the local path requires one.
+    if (!hasConfiguredDrives && !selectedIsRemote) {
       toast.warning(
         "Set up a sync folder in Settings → Sync & Storage before uploading.",
       );
@@ -210,6 +220,20 @@ export default function FolderUploadDialog({
     handleClose();
 
     try {
+      if (selectedIsRemote && selectedFolderLabel) {
+        // Straight to the server. Rust owns the walk and the wire paths;
+        // the widget shows the batch the same way an in-folder upload does.
+        reportRemoteFolderUploadStarted();
+        const failures = await uploadFolderToRemoteFolder(
+          polkadotAddress || "",
+          selectedFolderLabel,
+          folderPath,
+        );
+        reportRemoteUploadOutcomeForFolder(failures);
+        setIsSubmitting(false);
+        return;
+      }
+
       const syncPath =
         selectedSyncPath ??
         (await getPrivateSyncPath(polkadotAddress || ""))?.path ??
@@ -409,9 +433,14 @@ export default function FolderUploadDialog({
         <SyncFolderSelect
           value={selectedFolderLabel}
           defaultLabel={defaultFolderLabel}
-          onChange={(label, path) => {
+          // A folder can be uploaded into a drive this computer does not
+          // sync: Rust walks the tree and posts each file with the wire
+          // path that reproduces the structure on the server.
+          includeRemote
+          onChange={(label, path, remote) => {
             setSelectedFolderLabel(label);
             setSelectedSyncPath(path);
+            setSelectedIsRemote(remote);
           }}
         />
 

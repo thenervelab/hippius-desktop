@@ -630,3 +630,44 @@ fn no_lane_claims_macos_only() {
         }
     }
 }
+
+/// The frontend must read the SAME channel variable Rust does.
+///
+/// Two independent readers of one env var with nothing connecting them.
+/// The frontend build runs inside `tauri build` (`beforeBuildCommand`), so
+/// the workflow's single env line reaches both — but only while
+/// `next.config.ts` forwards that exact name. Rename it on either side and
+/// nothing fails: the bundle's `process.env.RELEASE_CHANNEL` is simply
+/// undefined, `parseBuildChannel` falls safe to production, and every
+/// channel-gated feature quietly stops appearing on the lane that was
+/// supposed to show it. The build succeeds, the release publishes, and the
+/// only symptom is a feature nobody can find.
+///
+/// Derived from `release_channel.rs` rather than hardcoded, so the pin
+/// cannot be satisfied by editing both sides to the same wrong value.
+#[test]
+fn the_frontend_reads_the_same_channel_variable_rust_does() {
+    let rust = repo_file("src/release_channel.rs");
+    let declaration = rust
+        .lines()
+        .find(|line| line.contains("option_env!"))
+        .expect("release_channel.rs reads the channel through option_env!");
+    let var = declaration
+        .split_once("option_env!(\"")
+        .and_then(|(_, rest)| rest.split_once('"'))
+        .map(|(name, _)| name)
+        .expect("option_env! names a variable");
+
+    let config = repo_file("../next.config.ts");
+    let expected = format!("process.env.{var}");
+    assert!(
+        config.contains(&expected),
+        "release_channel.rs reads {var}, but next.config.ts does not forward `{expected}` — \
+         channel-gated frontend flags would silently fall back to production on every lane"
+    );
+    assert!(
+        config.contains("RELEASE_CHANNEL:"),
+        "next.config.ts must expose the channel to the bundle as RELEASE_CHANNEL, which is the \
+         name app/lib/buildChannel.ts reads"
+    );
+}
