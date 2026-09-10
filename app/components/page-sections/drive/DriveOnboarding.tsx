@@ -633,6 +633,10 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
                   <AddButton
                     defaultFolderLabel={firstLocalLabel}
                     className="h-[26px] rounded-[6px] px-2.5 text-[12px] font-medium"
+                    // Matches the Upload Folder button beside it. This row
+                    // is 12px, so the button's default 16px glyph read as
+                    // oversized next to its own label.
+                    iconClassName="size-3.5"
                   />
                   <span
                     aria-hidden="true"

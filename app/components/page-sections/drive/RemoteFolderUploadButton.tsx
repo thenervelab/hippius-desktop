@@ -17,6 +17,7 @@ import {
   reportRemoteFolderUploadStarted,
 } from "@/app/lib/remote-upload/reportOutcome";
 import {
+  TOOLBAR_BUTTON_GAP,
   UPLOAD_FOLDER_BUTTON_LABEL,
   UPLOAD_FOLDER_HINT,
 } from "./uploadActions";
@@ -86,7 +87,8 @@ const RemoteFolderUploadButton: React.FC<{
       title={UPLOAD_FOLDER_HINT}
       onClick={() => void pickAndUpload()}
       className={cn(
-        "h-[30px] gap-[10px] rounded-[6px] px-3 py-[10px] font-geist text-[14px] leading-[1.109] tracking-[-0.28px]",
+        "h-[30px] rounded-[6px] px-3 py-[10px] font-geist text-[14px] leading-[1.109] tracking-[-0.28px]",
+        TOOLBAR_BUTTON_GAP,
         className,
       )}
     >

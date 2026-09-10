@@ -29,6 +29,7 @@ import { toast } from "sonner";
 import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
 import {
   resolveUploadAction,
+  TOOLBAR_BUTTON_GAP,
   UPLOAD_FILE_BUTTON_LABEL,
   UPLOAD_FILE_LABEL,
   UPLOAD_FOLDER_BUTTON_LABEL,
@@ -42,7 +43,8 @@ import { BILLING_ROUTE } from "@/app/lib/routes";
 // Figma white pill style shared by Add Folder / View All Files / Shared Links.
 // Mirrors the trigger styling used across the home dashboard cards.
 const SECONDARY_PILL_CLASSES = cn(
-  "h-[30px] px-3 py-2 gap-[7px] rounded-[6px]",
+  "h-[30px] px-3 py-2 rounded-[6px]",
+  TOOLBAR_BUTTON_GAP,
   "bg-white border border-grey-dark-100 text-black-600",
   "shadow-[0px_5px_2.3px_0px_rgba(0,0,0,0.03),0px_1px_1.9px_0px_rgba(0,0,0,0.14),0px_0px_1px_0px_rgba(0,0,0,0.16)]",
   "font-geist text-[14px] font-medium tracking-[-0.28px] leading-[1.109]",
@@ -317,7 +319,10 @@ const DriveHeader: FC<DriveHeaderProps> = ({
           variant="primary"
           size="auto"
           disabled
-          className="h-[30px] px-3 py-[10px] gap-[10px] rounded-[6px] font-geist text-[14px] tracking-[-0.28px] leading-[1.109]"
+          className={cn(
+            "h-[30px] px-3 py-[10px] rounded-[6px] font-geist text-[14px] tracking-[-0.28px] leading-[1.109]",
+            TOOLBAR_BUTTON_GAP,
+          )}
           title={UPLOAD_FILE_LABEL}
         >
           <ArrowUpToLine className="size-4 shrink-0" />
