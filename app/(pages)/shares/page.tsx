@@ -91,7 +91,18 @@ const DESTRUCTIVE_BG = "bg-[#fc7d73]";
 
 /** What the revoke-confirmation dialog is about to revoke: the two share
  *  kinds go through different IPCs but share the confirm idiom. */
-type PendingRevoke = { kind: "file" | "folder"; token: string };
+/**
+ * What the confirm dialog is about to revoke.
+ *
+ * A discriminated union rather than one `token` field, because the two carry
+ * DIFFERENT things: a file row's plaintext share token, and a folder row's
+ * token HASH. `revokeFolderShare` takes the former and
+ * `revokeFolderShareByHash` the latter, so a single `string` would let a
+ * future edit hand one to the other and still type-check.
+ */
+type PendingRevoke =
+  | { kind: "file"; shareToken: string }
+  | { kind: "folder"; tokenHash: string };
 
 export default function MySharesPage() {
   const { polkadotAddress } = useWalletAuth();
@@ -150,15 +161,15 @@ export default function MySharesPage() {
         // which the by-hash route cannot do. The Rust layer is the authority
         // on whether by-hash is permitted at all — it refuses outright on a
         // server without those routes rather than trusting their 404.
-        const folderRow = folderData?.find((r) => r.tokenHash === pendingRevoke.token);
+        const folderRow = folderData?.find((r) => r.tokenHash === pendingRevoke.tokenHash);
         if (folderRow?.shareToken) {
           await revokeFolderShare(folderRow.shareToken);
         } else {
-          await revokeFolderShareByHash(pendingRevoke.token);
+          await revokeFolderShareByHash(pendingRevoke.tokenHash);
         }
         queryClient.invalidateQueries({ queryKey: [FOLDER_SHARES_QUERY_KEY, polkadotAddress] });
       } else {
-        await revokeShare(pendingRevoke.token);
+        await revokeShare(pendingRevoke.shareToken);
         queryClient.invalidateQueries({ queryKey: [SHARES_QUERY_KEY, polkadotAddress] });
         queryClient.invalidateQueries({ queryKey: [HISTORY_QUERY_KEY, polkadotAddress] });
       }
@@ -280,7 +291,13 @@ export default function MySharesPage() {
                 <ActiveSharesTable
                   rows={mergedRows}
                   onCopy={onCopy}
-                  onRevoke={(kind, token) => setPendingRevoke({ kind, token })}
+                  onRevoke={(kind, id) =>
+                    setPendingRevoke(
+                      kind === "file"
+                        ? { kind, shareToken: id }
+                        : { kind, tokenHash: id },
+                    )
+                  }
                   onChangeExpiry={onChangeExpiry}
                   onChangeFolderExpiry={onChangeFolderExpiry}
                   busyToken={busyToken}

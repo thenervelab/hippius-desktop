@@ -125,7 +125,7 @@ const FOREIGN_FOLDER_COPY_TOOLTIP =
   "The link can only be copied from the device that created it.";
 
 // Console copy — the honest reason revoke/expiry are dead on a foreign row:
-// both are keyed by the plaintext token, which only the minting device holds.
+// both are keyed by the plaintext token, which only the minting device holds (true only on a server without the by-hash routes; see `canActByHash`).
 export const FOREIGN_FOLDER_REVOKE_TOOLTIP =
   "Created on another device — revoke it from the device where it was created";
 

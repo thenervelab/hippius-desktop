@@ -1283,6 +1283,22 @@ pub async fn update_folder_share_expiry_inner(state: &AppState, account_id: &str
 /// route itself answers a bare 404, which is byte-identical to the
 /// "already revoked" 404, and treating that as success would tell the user
 /// a live, anonymously readable share had been turned off.
+/// True only for the shape the server's `token_hash` takes: 64 lowercase hex
+/// characters, a blake3 digest.
+///
+/// hcfs-client refuses a malformed hash by returning `NotFound` BEFORE any
+/// network call, and both inners below treat `NotFound` as an idempotent
+/// success. Without this check "I refused to send that" and "the server has
+/// no such live share" would produce the same "Share link revoked" toast —
+/// the same false reassurance the capability gate exists to prevent, arriving
+/// through a different door.
+///
+/// Not reachable today, since every hash comes from the server's own listing.
+/// It is the cost of one comparison to keep it that way.
+fn is_folder_share_token_hash(candidate: &str) -> bool {
+    candidate.len() == 64 && candidate.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
 async fn require_revoke_by_hash_supported(state: &AppState, account_id: &str) -> Result<()> {
     let caps = fetch_capabilities(state, account_id).await?;
     if !caps.folder_share_revoke_by_hash {
@@ -1315,6 +1331,9 @@ pub async fn hcfs_revoke_folder_share_by_hash(state: tauri::State<'_, AppState>,
 /// mock-server integration suite can drive it without a `tauri::State`.
 pub async fn revoke_folder_share_by_hash_inner(state: &AppState, account_id: &str, token_hash: &str) -> Result<()> {
     require_revoke_by_hash_supported(state, account_id).await?;
+    if !is_folder_share_token_hash(token_hash) {
+        return Err(AppError::Validation("Not a folder-share link id.".into()));
+    }
 
     let pool = state.pool()?;
     let client = build_account_client(pool, account_id).await?;
@@ -1345,6 +1364,9 @@ pub async fn hcfs_update_folder_share_expiry_by_hash(state: tauri::State<'_, App
 /// Inner of [`hcfs_update_folder_share_expiry_by_hash`].
 pub async fn update_folder_share_expiry_by_hash_inner(state: &AppState, account_id: &str, token_hash: &str, ttl: ShareTtl) -> Result<Option<String>> {
     require_revoke_by_hash_supported(state, account_id).await?;
+    if !is_folder_share_token_hash(token_hash) {
+        return Err(AppError::Validation("Not a folder-share link id.".into()));
+    }
 
     let pool = state.pool()?;
     let client = build_account_client(pool, account_id).await?;
@@ -1642,6 +1664,29 @@ pub async fn hcfs_clear_share_history(state: tauri::State<'_, AppState>) -> Resu
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_a_real_token_hash_shape_is_accepted() {
+        use super::is_folder_share_token_hash;
+
+        assert!(is_folder_share_token_hash(&"a".repeat(64)));
+        assert!(is_folder_share_token_hash(&"0123456789abcdef".repeat(4)));
+
+        // Length boundary.
+        assert!(!is_folder_share_token_hash(&"a".repeat(63)));
+        assert!(!is_folder_share_token_hash(&"a".repeat(65)));
+        assert!(!is_folder_share_token_hash(""));
+
+        // Uppercase is not what the server emits, so it is not a hash we
+        // produced — same strictness as the server-side predicate.
+        assert!(!is_folder_share_token_hash(&"A".repeat(64)));
+        assert!(!is_folder_share_token_hash(&"g".repeat(64)));
+
+        // A folder-share TOKEN is 43 chars of base64url, so it can never be
+        // mistaken for a hash. That is what stops a caller passing the wrong
+        // one and getting a "revoked" toast for a request never sent.
+        assert!(!is_folder_share_token_hash("Zm9vYmFyYmF6cXV4Zm9vYmFyYmF6cXV4Zm9vYmFyYmE"));
+    }
+
     use super::*;
     use proptest::prelude::*;
     use tempfile::TempDir;

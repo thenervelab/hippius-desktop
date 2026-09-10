@@ -16,10 +16,21 @@
 //!    desktop-owned translation enum must serialise to the tagged JSON
 //!    shape the FE consumes. Because the upstream
 //!    `hcfs_client::engine::events::FileFailureKind` does NOT derive
-//!    `Serialize`, this test guards the translation map — adding a
-//!    variant upstream without extending `From<&FileFailureKind>`
-//!    silently maps to `Other`, which this test would catch via the
-//!    `InsufficientBalance` round-trip.
+//!    `Serialize`, this test guards the translation map's OUTPUT shape.
+//!
+//!    It does NOT catch a new upstream variant, and cannot. That claim
+//!    used to be here and was wrong: `FileFailureKind` is
+//!    `#[non_exhaustive]`, so no downstream match can be exhaustive and
+//!    no compile-time guard is available. The `QuotaDenied` variant
+//!    proved it — it arrived with an hcfs bump, fell into the wildcard,
+//!    and this suite stayed green while users saw a raw Rust debug
+//!    string.
+//!
+//!    The floor is now structural rather than a test: the wildcard arm
+//!    logs the debug form and shows `UNMAPPED_FAILURE_MESSAGE`, so an
+//!    unmapped variant degrades to generic copy instead of leaking
+//!    internals. Extending the map is still the right response; that
+//!    just stops the gap being user-visible while it lasts.
 //!
 //! 3. **First-error wins**: calling `mark_file_failed` a second time
 //!    with a different error string for the same path must NOT overwrite

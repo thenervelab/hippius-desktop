@@ -411,7 +411,7 @@ fn accept_drive_invite_response_wire_pinned() {
     assert_eq!(
         keys,
         ["folder_hash", "owner_ss58", "role"].into_iter().collect::<BTreeSet<_>>(),
-        "already_owner must be omitted from a real member accept; role is          unconditional (see the roles note above)"
+        "already_owner must be omitted from a real member accept; role is unconditional"
     );
 
     let owner_self_join = AcceptDriveInviteResponse {

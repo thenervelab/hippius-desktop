@@ -20,6 +20,12 @@ pub const SYNC_PLAN_READY: &str = "hcfs_sync_plan_ready";
 pub const SYNC_RESET: &str = "hcfs_sync_reset";
 /// Emitted when server connectivity status changes.
 pub const CONNECTIVITY_CHANGED: &str = "hcfs_connectivity_changed";
+
+/// Shown when an upstream `FileFailureKind` variant has no entry in the
+/// translation map. Deliberately generic: the variant's debug form is
+/// diagnostic, not user-facing, and goes to the log instead. See the
+/// wildcard arm of `From<&FileFailureKind> for FileFailureKindPayload`.
+pub const UNMAPPED_FAILURE_MESSAGE: &str = "Sync failed. Please try again.";
 /// Emitted after a remote folder is auto-recovered.
 pub const FOLDER_RECOVERED: &str = "hcfs_folder_recovered";
 /// Gated companion to [`FOLDER_RECOVERED`], carrying the same payload.
@@ -423,6 +429,39 @@ mod tests {
             required_cents: 100,
         };
         assert_eq!(kind.display_reason(), "Insufficient credits — needs $1.00, you have $0.12.");
+    }
+
+    /// `QuotaDenied` arrived with the hcfs bump to e66b58f, alongside
+    /// `InsufficientBalance` rather than widening it. `FileFailureKind` is
+    /// `#[non_exhaustive]`, so the desktop compiled unchanged and the new
+    /// variant fell into the wildcard arm that renders `{other:?}` — putting
+    /// the literal Rust debug string `QuotaDenied { error: "zero_balance" }`
+    /// into the Drive table, Recent Files, the tray and the persisted
+    /// failure row. `zero_balance` is a live production body.
+    ///
+    /// Mapped to `ServerError { status: 402 }`, which is exactly where these
+    /// bodies landed BEFORE the bump: they arrived as
+    /// `UploadFailed("Server returned 402 …")` and `classify` re-parsed them
+    /// into that. Restoring prior behaviour is the right call for a
+    /// dependency bump; giving quota denials their own user-facing copy is a
+    /// product change and belongs in its own PR.
+    #[test]
+    fn upstream_quota_denied_reads_as_a_402_not_a_debug_string() {
+        use hcfs_client::engine::events::FileFailureKind as K;
+
+        for body in ["zero_balance", "drive_quota_exceeded", "drive_not_entitled", ""] {
+            let kind = K::QuotaDenied { error: body.to_string() };
+            let payload = FileFailureKindPayload::from(&kind);
+            assert!(
+                matches!(payload, FileFailureKindPayload::ServerError { status: 402 }),
+                "QuotaDenied({body:?}) must not fall through to the debug-string wildcard, got {payload:?}"
+            );
+            assert!(
+                !payload.display_reason().contains("QuotaDenied"),
+                "the raw variant name must never reach the user: {}",
+                payload.display_reason()
+            );
+        }
     }
 
     #[test]
@@ -1265,6 +1304,24 @@ impl From<&hcfs_client::engine::events::FileFailureKind> for FileFailureKindPayl
                 required_cents: *required_cents,
             },
             K::ServerError { status } => Self::ServerError { status: *status },
+            // A 402 whose body names a quota reason rather than carrying
+            // cents (`zero_balance`, `drive_quota_exceeded`,
+            // `drive_not_entitled`, or a 402 with no `error` field).
+            //
+            // Mapped to the 402 it is, which is exactly where these bodies
+            // landed before hcfs split 402 handling: they arrived as
+            // `UploadFailed("Server returned 402 …")` and `classify`
+            // re-parsed them into `ServerError { status: 402 }`. Without
+            // this arm the upstream `#[non_exhaustive]` wildcard below
+            // renders the variant's DEBUG form, putting the literal string
+            // `QuotaDenied { error: "zero_balance" }` in front of the user.
+            //
+            // NOT routed to `InsufficientBalance`: that payload requires the
+            // balance/required cents these bodies do not carry, and it drives
+            // the credits banner. Giving quota denials their own copy would
+            // be better product behaviour and is a deliberate change to make
+            // on its own, not a side effect of a dependency bump.
+            K::QuotaDenied { .. } => Self::ServerError { status: 402 },
             K::Network => Self::Network,
             // Carve the mid-upload-modification case out of the upstream
             // catch-all before it reaches `Other` — it is self-resolving and
@@ -1287,13 +1344,28 @@ impl From<&hcfs_client::engine::events::FileFailureKind> for FileFailureKindPayl
             K::Other(msg) => Self::Other {
                 message: strip_request_url(msg).to_string(),
             },
-            // `#[non_exhaustive]` upstream: future variants render as `Other` with
-            // their debug form. The translation map should be extended when a new
-            // upstream variant ships — until then, the FE's `other` branch
-            // keeps the wire contract intact.
-            other => Self::Other {
-                message: format!("{other:?}"),
-            },
+            // `#[non_exhaustive]` upstream, so this arm is mandatory and a new
+            // variant lands here silently — there is no way to get
+            // compile-time exhaustiveness over a foreign non-exhaustive enum.
+            //
+            // It therefore must not put the variant's DEBUG form in front of
+            // the user. It used to, and `QuotaDenied` proved what that costs:
+            // an hcfs bump added the variant, this arm caught it, and a user
+            // whose credits ran out was shown the literal Rust string
+            // `QuotaDenied { error: "zero_balance" }` in the Drive table, the
+            // tray, and the persisted failure row.
+            //
+            // The debug form is genuinely useful, so it goes to the log where
+            // it can be diagnosed, and the user gets the generic copy the FE
+            // already falls back to. Extending the map above is still the
+            // right response to a new variant; this is the floor when nobody
+            // has yet.
+            other => {
+                tracing::warn!(kind = ?other, "unmapped upstream FileFailureKind; extend the translation map");
+                Self::Other {
+                    message: UNMAPPED_FAILURE_MESSAGE.to_string(),
+                }
+            }
         }
     }
 }
