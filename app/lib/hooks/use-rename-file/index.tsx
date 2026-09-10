@@ -50,7 +50,16 @@ export const useRenameFile = () => {
             if (remoteLabel) {
                 const relative = relativePath.replace(/\\/g, "/");
                 const cut = relative.lastIndexOf("/");
-                await invoke("rename_remote_file", {
+                // A FOLDER is a different operation, not a variant of the
+                // file one. On the server a folder is not a record — it is
+                // a prefix shared by every file under it — so renaming it
+                // means re-keying all of them in one batch. Sending a
+                // folder through the file command moved nothing, or moved
+                // an empty marker and orphaned the contents.
+                const command = file.isFolder
+                    ? "rename_remote_folder"
+                    : "rename_remote_file";
+                await invoke(command, {
                     accountId: polkadotAddress,
                     label: remoteLabel,
                     parentPath: cut > 0 ? relative.slice(0, cut) : null,
