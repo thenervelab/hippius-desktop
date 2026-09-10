@@ -8,6 +8,7 @@ import { notifyFilesMutated } from "@/app/lib/utils/fileMutationEvents";
 import { remoteDriveLabel } from "@/app/lib/utils/renameGating";
 import { driveRelativePathFor } from "@/app/lib/utils/driveRelativePath";
 import { toast } from "sonner";
+import { basenameOf } from "@/app/components/page-sections/drive/renameValidation";
 
 export interface RenameFileArgs {
     file: FormattedUserFile;
@@ -79,21 +80,43 @@ export const useRenameFile = () => {
                 },
             });
         },
-        onSuccess: async (_result, { file, newName }) => {
-            const oldName = file.actualFileName || file.name;
-            toast.success(`Renamed "${oldName.split("/").pop()}" to "${newName}"`);
+        // The dialog closes the moment this is fired, so the toast is the
+        // ONLY thing reporting the rename from here on. It starts as a
+        // loading toast and is replaced in place by the outcome, which is
+        // the same id-reuse the delete and download flows use.
+        //
+        // A rename is not always instant: one inside a browsed remote
+        // drive walks the folder, moves every record in it and rewrites
+        // its directory rows. Without a pending toast that work would
+        // happen behind a screen that shows nothing at all.
+        onMutate: ({ file, newName }) => {
+            const oldName = basenameOf(file.actualFileName || file.name);
+            return {
+                toastId: toast.loading(`Renaming "${oldName}" to "${newName}"\u2026`),
+                oldName,
+            };
+        },
+        onSuccess: async (_result, { newName }, context) => {
+            toast.success(`Renamed "${context?.oldName}" to "${newName}"`, {
+                id: context?.toastId,
+            });
 
             // Wakes the TanStack lists AND the non-cached nested-folder
             // listings (DriveContainer subfolder view, ExpandedFolderRows).
             await notifyFilesMutated(queryClient, polkadotAddress);
         },
-        onError: (error: Error, { file }) => {
-            const name = (file.actualFileName || file.name).split("/").pop();
+        onError: (error: Error, { file }, context) => {
+            const name = basenameOf(file.actualFileName || file.name);
             // AppError serializes to { kind, message }; invoke rejections carry
             // the message through, falling back to String(error) for non-shaped
             // failures (e.g. IPC transport errors).
             const message = error?.message ?? String(error);
-            toast.error(`Failed to rename "${name}": ${message}`);
+            // Replaces the pending toast rather than stacking beside it —
+            // the dialog is already gone, so a leftover "Renaming…" would
+            // sit there forever next to the failure.
+            toast.error(`Failed to rename "${name}": ${message}`, {
+                id: context?.toastId,
+            });
         },
     });
 };
