@@ -107,22 +107,18 @@ const DrivePlanCard: FC<DrivePlanCardProps> = ({
             )}
           </p>
 
-          <div className="flex flex-col gap-1">
-            <p className="text-[12px] font-medium leading-[17.68px] tracking-[-0.24px] text-grey-dark-600">
-              {plan.is_free
-                ? "No monthly charge"
-                : `A charge of ${plan.price_credits_monthly} credits monthly`}
-            </p>
-            <p className="text-[12px] leading-[18px] tracking-[-0.36px]">
-              <span className="font-bold text-primary-50 dark:text-primary-brand-dark">
-                {storage}
-              </span>
-              <span className="font-medium text-black-900 dark:text-white">
-                {" "}
-                storage on Hippius
-              </span>
-            </p>
-          </div>
+          {/* Storage only. The price line above already states the cost —
+              a second line restating it in credits said the same thing
+              twice, in a different unit, directly under the figure. */}
+          <p className="text-[12px] leading-[18px] tracking-[-0.36px]">
+            <span className="font-bold text-primary-50 dark:text-primary-brand-dark">
+              {storage}
+            </span>
+            <span className="font-medium text-black-900 dark:text-white">
+              {" "}
+              storage on Hippius
+            </span>
+          </p>
 
           <div className="flex flex-col gap-1">
             <p className="font-mono text-[12px] font-medium uppercase leading-[19.45px] tracking-[-0.24px] text-grey-dark-800">
