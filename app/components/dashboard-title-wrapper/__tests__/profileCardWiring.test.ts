@@ -50,4 +50,11 @@ describe("the account card matches the console", () => {
   it("shows no chain height, on the card or in the menu", () => {
     expect(card).not.toMatch(/blockNumber|usePolkadotApi/);
   });
+
+  // Without w-full/min-w-0 the row sized to its content, overflowed the
+  // clipping parent, and took the chevron off the right edge with it.
+  it("lets the identity row shrink so the chevron survives", () => {
+    expect(card).toMatch(/flex w-full min-w-0 items-center gap-1\.5/);
+    expect(card).toMatch(/ChevronDown[\s\S]*?shrink-0/);
+  });
 });

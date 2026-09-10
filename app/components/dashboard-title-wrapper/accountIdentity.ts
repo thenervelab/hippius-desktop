@@ -14,7 +14,7 @@ export function truncateAddress(address: string): string {
  * is. "ahmadraosanawarali@gmail" and "ahmadraosanawarali@icloud" clip to
  * the same thing.
  */
-const IDENTITY_MAX_CHARS = 24;
+const IDENTITY_MAX_CHARS = 20;
 
 /**
  * Shorten a long identity from the middle, keeping both ends.
@@ -27,9 +27,11 @@ const IDENTITY_MAX_CHARS = 24;
 export function truncateIdentity(value: string, max = IDENTITY_MAX_CHARS): string {
   if (value.length <= max) return value;
   // The ellipsis is one of the `max` characters, and the odd one goes to
-  // the head — the start of a name carries more than its tail.
-  const head = Math.ceil((max - 1) / 2);
-  const tail = Math.floor((max - 1) / 2);
+  // the TAIL: on an email that is the difference between "…gmail.com" and
+  // "…@gmail.com", and the "@" is what makes the string read as an
+  // address rather than a mangled word.
+  const tail = Math.ceil((max - 1) / 2);
+  const head = max - 1 - tail;
   return `${value.slice(0, head)}…${value.slice(value.length - tail)}`;
 }
 

@@ -196,11 +196,16 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
     // overflow-hidden: the trigger itself must stay overflow-visible (it
     // would clip the hover layer), so text clipping lives here instead.
     <span className="relative flex flex-col items-start min-w-0 flex-1 overflow-hidden">
-      <span className="flex items-center gap-1.5">
+      {/* `w-full min-w-0`, like the address row below: without it this row
+          sizes to its content, overflows the clipping parent, and takes
+          the chevron off the right edge with it — the chevron was simply
+          not visible. With it the TEXT gives way instead, and the chevron
+          (shrink-0) always renders. */}
+      <span className="flex w-full min-w-0 items-center gap-1.5">
         {/* The sign-in identity for an OAuth account, the address for a
-            mnemonic one. `truncate` rather than `whitespace-nowrap` alone:
-            an email is longer than an SS58 and has to be allowed to clip
-            inside the rail. */}
+            mnemonic one. Already middle-truncated to fit; `truncate` is
+            the backstop for a narrow rail or a large zoom, where losing
+            the tail beats pushing the chevron out. */}
         <span className="min-w-0 truncate text-sm font-medium font-inter leading-none text-zinc-800 dark:text-grey-light-600 tracking-[-0.4px] text-left">
           {identity.primary}
         </span>
