@@ -42,6 +42,31 @@ pub enum CapacitySource {
     Subscription,
     /// No active subscription — the account sits on the free tier.
     Free,
+    /// No subscription AND no free tier: an access-key account, which is
+    /// not entitled to the included allowance. It has to subscribe before
+    /// it can store anything.
+    None,
+}
+
+/// Whether this account is entitled to the included free allowance.
+///
+/// The free tier comes with a full Hippius account — one signed in
+/// through Google, GitHub or Apple. An ACCESS-KEY account (a mnemonic /
+/// seed phrase) has no free allowance and must subscribe.
+///
+/// The provider column is the whole of the question, and it is already
+/// the discriminator everything else uses: `auth_type` and the idle-logout
+/// timer both key on `provider == "mnemonic"`. Anything else is an OAuth
+/// account, so a provider this build has not been taught about is treated
+/// as entitled rather than refused — a new sign-in method should not
+/// silently lose someone their storage.
+///
+/// A row that cannot be read at all is treated as entitled for the same
+/// reason: this decides what the UI SAYS, and the server's own
+/// `/can_upload` remains the gate on every write. Guessing "no plan" from
+/// a failed lookup would tell a paying account it has nothing.
+fn free_tier_entitled(provider: Option<&str>) -> bool {
+    !matches!(provider, Some("mnemonic"))
 }
 
 /// Fallback free-tier allowance, used ONLY when the plans catalogue cannot
@@ -120,8 +145,8 @@ const UPGRADE_AT_PERCENT: f64 = 80.0;
 /// revisits.
 fn resolve_plan_action(source: CapacitySource, percent: f64, plan: Option<&PlanInfo>) -> PlanAction {
     if source != CapacitySource::Subscription || plan.is_none() {
-        // The free tier is an allowance, not a plan: the way to more room
-        // is to subscribe.
+        // Neither the free tier nor an unentitled account is a plan: the
+        // way to more room — or to any room at all — is to subscribe.
         return PlanAction::Upgrade;
     }
     if percent >= UPGRADE_AT_PERCENT {
@@ -216,13 +241,26 @@ pub struct StorageOverview {
 /// `free_tier_bytes` is the free SKU's allowance, already mapped to its
 /// marketed size by the caller; `None` when the catalogue could not be
 /// read, which falls back to [`FREE_TIER_FALLBACK_GB`].
-fn build_overview(used_bytes: u64, plan: Option<PlanInfo>, free_tier_bytes: Option<u64>, credits_hip: Option<String>) -> StorageOverview {
+fn build_overview(
+    used_bytes: u64,
+    plan: Option<PlanInfo>,
+    free_tier_bytes: Option<u64>,
+    credits_hip: Option<String>,
+    free_tier_entitled: bool,
+) -> StorageOverview {
     if let Some(plan) = plan {
         let total_bytes = plan.storage_bytes;
         return finish_overview(used_bytes, total_bytes, CapacitySource::Subscription, Some(plan), credits_hip);
     }
-    // No subscription: every account has the free tier, so there is always
-    // a capacity to plot — "No active plan" with an empty card is gone.
+    if !free_tier_entitled {
+        // An access-key account with no subscription has no capacity at
+        // all. Zero rather than the free allowance: the bar, the "N free"
+        // line and the upload prompt all read from this, and a fabricated
+        // 10 GB would promise room the server will refuse to use.
+        return finish_overview(used_bytes, 0, CapacitySource::None, None, credits_hip);
+    }
+    // No subscription, but entitled: the free tier is the floor, so there
+    // is always a capacity to plot.
     let total_bytes = free_tier_bytes.unwrap_or_else(|| FREE_TIER_FALLBACK_GB.saturating_mul(BYTES_PER_GB));
     finish_overview(used_bytes, total_bytes, CapacitySource::Free, None, credits_hip)
 }
@@ -618,7 +656,23 @@ pub async fn get_storage_overview(
     // is 10 GiB, sold as "10 GB").
     let free_tier_bytes = free_plan_bytes(&drive_plans).map(|raw| marketed_plan_size(raw).0);
 
-    let mut overview = build_overview(stats.total_bytes, plan, free_tier_bytes, credits_hip);
+    // How the account signed in decides whether the included allowance
+    // applies at all. Read from the session row, the same column
+    // `auth_type` and the idle-logout timer key on.
+    let provider = crate::auth::auth_session_repo::get_provider(state.pool()?, account_id.as_str())
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "could not read the session provider; assuming the free tier applies");
+            None
+        });
+
+    let mut overview = build_overview(
+        stats.total_bytes,
+        plan,
+        free_tier_bytes,
+        credits_hip,
+        free_tier_entitled(provider.as_deref()),
+    );
     overview.used_pending = used_pending(stats.total_bytes, local_bytes);
 
     // The header states this the moment the balance is short; the
@@ -670,7 +724,7 @@ mod tests {
     /// storage, so the only useful prompt is to subscribe.
     #[test]
     fn a_free_account_is_asked_to_upgrade_not_to_top_up() {
-        let o = build_overview(0, None, Some(10 * BYTES_PER_GB), Some("0".into()));
+        let o = build_overview(0, None, Some(10 * BYTES_PER_GB), Some("0".into()), true);
         assert_eq!(o.plan_action, PlanAction::Upgrade);
     }
 
@@ -680,7 +734,7 @@ mod tests {
     fn a_card_plan_near_capacity_is_asked_to_upgrade() {
         let plan = plan_funded("card", 5.0);
         let used = (plan.storage_bytes as f64 * 0.85) as u64;
-        let o = build_overview(used, Some(plan), None, Some("999".into()));
+        let o = build_overview(used, Some(plan), None, Some("999".into()), true);
         assert_eq!(o.plan_action, PlanAction::Upgrade);
     }
 
@@ -689,7 +743,7 @@ mod tests {
     #[test]
     fn a_card_plan_with_room_is_never_asked_to_top_up() {
         let plan = plan_funded("card", 5.0);
-        let o = build_overview(1, Some(plan), None, Some("0".into()));
+        let o = build_overview(1, Some(plan), None, Some("0".into()), true);
         assert_eq!(o.plan_action, PlanAction::None);
     }
 
@@ -697,14 +751,14 @@ mod tests {
     #[test]
     fn a_credits_plan_that_cannot_renew_is_asked_to_top_up() {
         let plan = plan_funded("credits", 4.0);
-        let o = build_overview(1, Some(plan), None, Some("2".into()));
+        let o = build_overview(1, Some(plan), None, Some("2".into()), true);
         assert_eq!(o.plan_action, PlanAction::TopUpCredits);
     }
 
     #[test]
     fn a_credits_plan_that_can_renew_is_left_alone() {
         let plan = plan_funded("credits", 4.0);
-        let o = build_overview(1, Some(plan), None, Some("9.5".into()));
+        let o = build_overview(1, Some(plan), None, Some("9.5".into()), true);
         assert_eq!(o.plan_action, PlanAction::None);
     }
 
@@ -714,7 +768,7 @@ mod tests {
     fn a_full_credits_plan_is_asked_to_upgrade_not_to_top_up() {
         let plan = plan_funded("credits", 4.0);
         let used = (plan.storage_bytes as f64 * 0.9) as u64;
-        let o = build_overview(used, Some(plan), None, Some("0".into()));
+        let o = build_overview(used, Some(plan), None, Some("0".into()), true);
         assert_eq!(o.plan_action, PlanAction::Upgrade);
     }
 
@@ -725,7 +779,7 @@ mod tests {
     fn an_unreadable_balance_raises_no_prompt() {
         let plan = plan_funded("credits", 4.0);
         for balance in [None, Some(String::new()), Some("n/a".to_string())] {
-            let o = build_overview(1, Some(plan.clone()), None, balance);
+            let o = build_overview(1, Some(plan.clone()), None, balance, true);
             assert_eq!(o.plan_action, PlanAction::None);
         }
     }
@@ -737,8 +791,11 @@ mod tests {
         let plan = plan_funded("card", 5.0);
         let just_under = (plan.storage_bytes as f64 * 0.79) as u64;
         let at = (plan.storage_bytes as f64 * UPGRADE_AT_PERCENT / 100.0).ceil() as u64;
-        assert_eq!(build_overview(just_under, Some(plan.clone()), None, None).plan_action, PlanAction::None);
-        assert_eq!(build_overview(at, Some(plan), None, None).plan_action, PlanAction::Upgrade);
+        assert_eq!(
+            build_overview(just_under, Some(plan.clone()), None, None, true).plan_action,
+            PlanAction::None
+        );
+        assert_eq!(build_overview(at, Some(plan), None, None, true).plan_action, PlanAction::Upgrade);
     }
 
     /// The wire value is what the FE switches on.
@@ -752,7 +809,7 @@ mod tests {
     #[test]
     fn subscription_wins() {
         // 300 GB of a 1000 GB plan → 30%; the balance rides along for display.
-        let overview = build_overview(300 * BYTES_PER_GB, Some(pro_plan(1000)), None, Some("500".into()));
+        let overview = build_overview(300 * BYTES_PER_GB, Some(pro_plan(1000)), None, Some("500".into()), true);
         assert_eq!(overview.source, CapacitySource::Subscription);
         assert_eq!(overview.total_bytes, 1000 * BYTES_PER_GB);
         assert!((overview.percent - 30.0).abs() < 1e-9);
@@ -768,7 +825,7 @@ mod tests {
     /// plotting a zero capacity during an outage.
     #[test]
     fn no_subscription_falls_back_to_the_free_tier() {
-        let overview = build_overview(3 * BYTES_PER_GB, None, None, Some("500".into()));
+        let overview = build_overview(3 * BYTES_PER_GB, None, None, Some("500".into()), true);
         assert_eq!(overview.source, CapacitySource::Free);
         assert_eq!(overview.total_bytes, FREE_TIER_FALLBACK_GB * BYTES_PER_GB);
         assert!((overview.percent - 30.0).abs() < 1e-9);
@@ -810,7 +867,7 @@ mod tests {
         let twenty_gib: u64 = 20 * 1024 * 1024 * 1024;
         let bigger = serde_json::json!({ "results": [{ "is_free": true, "storage_bytes": twenty_gib }] });
         let bumped = free_plan_bytes(&bigger).map(|raw| marketed_plan_size(raw).0);
-        let overview = build_overview(0, None, bumped, None);
+        let overview = build_overview(0, None, bumped, None, true);
         assert_eq!(overview.total_bytes, 20_000_000_000);
         assert_eq!(overview.total_display, "20.00 GB");
         assert_ne!(overview.total_bytes, FREE_TIER_FALLBACK_GB * BYTES_PER_GB);
@@ -818,7 +875,7 @@ mod tests {
 
     #[test]
     fn overview_labels_use_camel_case_on_the_wire() {
-        let overview = build_overview(31_910_000_000, Some(pro_plan(4_999)), None, Some("15".into()));
+        let overview = build_overview(31_910_000_000, Some(pro_plan(4_999)), None, Some("15".into()), true);
         let json = serde_json::to_value(&overview).expect("serialize");
         assert_eq!(json["usedDisplay"], "31.91 GB");
         assert_eq!(json["totalDisplay"], "5.00 TB");
@@ -830,14 +887,14 @@ mod tests {
     /// the free tier behind the resolvers' fallback branch.
     #[test]
     fn free_source_serializes_lowercase() {
-        let overview = build_overview(0, None, None, None);
+        let overview = build_overview(0, None, None, None, true);
         let json = serde_json::to_value(&overview).expect("serialize");
         assert_eq!(json["source"], "free");
     }
 
     #[test]
     fn over_quota_free_is_zero_in_the_total_unit() {
-        let overview = build_overview(6_000 * BYTES_PER_GB, Some(pro_plan(5_000)), None, None);
+        let overview = build_overview(6_000 * BYTES_PER_GB, Some(pro_plan(5_000)), None, None, true);
         assert_eq!(overview.total_display, "5.00 TB");
         assert_eq!(overview.free_display, "0.00 TB");
         assert!((overview.percent - 100.0).abs() < 1e-9);
@@ -848,7 +905,7 @@ mod tests {
     /// free that rounds to 0.00 while bytes remain is "<0.01 TB".
     #[test]
     fn leftover_gb_on_a_tb_plan_does_not_vanish() {
-        let overview = build_overview(4_996 * BYTES_PER_GB, Some(pro_plan(5_000)), None, None);
+        let overview = build_overview(4_996 * BYTES_PER_GB, Some(pro_plan(5_000)), None, None, true);
         assert_eq!(overview.used_display, "5.00 TB");
         assert_eq!(overview.total_display, "5.00 TB");
         assert_eq!(overview.free_display, "<0.01 TB");
@@ -863,7 +920,7 @@ mod tests {
     #[test]
     fn over_quota_clamps_to_100() {
         // Usage above the allowance (downgrade case) must not overflow the bar.
-        let overview = build_overview(2000 * BYTES_PER_GB, Some(pro_plan(1000)), None, None);
+        let overview = build_overview(2000 * BYTES_PER_GB, Some(pro_plan(1000)), None, None, true);
         assert!((overview.percent - 100.0).abs() < 1e-9);
         // Raw byte counts stay honest even while the percent clamps.
         assert_eq!(overview.used_bytes, 2000 * BYTES_PER_GB);
@@ -871,7 +928,7 @@ mod tests {
 
     #[test]
     fn zero_gb_plan_does_not_divide_by_zero() {
-        let overview = build_overview(500, Some(pro_plan(0)), None, None);
+        let overview = build_overview(500, Some(pro_plan(0)), None, None, true);
         assert_eq!(overview.source, CapacitySource::Subscription);
         assert_eq!(overview.total_bytes, 0);
         assert!(overview.percent.abs() < 1e-9);
@@ -905,7 +962,7 @@ mod tests {
         assert_eq!(plan.storage_display, "2 TB");
 
         // And the overview built from it labels the cap the same way.
-        let overview = build_overview(500 * BYTES_PER_GB, Some(plan), None, None);
+        let overview = build_overview(500 * BYTES_PER_GB, Some(plan), None, None, true);
         assert_eq!(overview.total_display, "2.00 TB");
         assert!((overview.percent - 25.0).abs() < 1e-9);
     }
@@ -1008,7 +1065,7 @@ mod tests {
 
     #[test]
     fn used_bytes_stay_the_indexer_row_when_pending() {
-        let mut overview = build_overview(0, None, None, Some("1".into()));
+        let mut overview = build_overview(0, None, None, Some("1".into()), true);
         overview.used_pending = used_pending(overview.used_bytes, 46);
         assert_eq!(overview.used_bytes, 0, "local walk must not be written into used_bytes");
         assert!(overview.used_pending);
@@ -1255,5 +1312,55 @@ mod tests {
 
         assert_eq!(plan.renews_in_days, None);
         assert_eq!(plan.renewal_unix_day, None);
+    }
+
+    /// The free tier comes with a full account. An access key does not
+    /// get it, so there is no capacity to plot and nothing to promise.
+    #[test]
+    fn an_access_key_account_has_no_free_allowance() {
+        let o = build_overview(0, None, Some(10 * BYTES_PER_GB), Some("0".into()), false);
+
+        assert_eq!(o.source, CapacitySource::None);
+        assert_eq!(o.total_bytes, 0, "a fabricated allowance would promise room the server refuses");
+        assert_eq!(o.plan_action, PlanAction::Upgrade, "the way to any room at all is to subscribe");
+    }
+
+    /// A subscription is a subscription however the account signed in —
+    /// entitlement decides the FREE tier, not whether a paid plan counts.
+    #[test]
+    fn an_access_key_account_keeps_the_plan_it_paid_for() {
+        let plan = pro_plan(100);
+        let o = build_overview(0, Some(plan), None, Some("0".into()), false);
+
+        assert_eq!(o.source, CapacitySource::Subscription);
+        assert!(o.total_bytes > 0);
+    }
+
+    /// The provider column is the whole of the question, and it is the
+    /// same discriminator `auth_type` and the idle-logout timer use.
+    #[test]
+    fn only_a_mnemonic_login_loses_the_free_tier() {
+        assert!(!free_tier_entitled(Some("mnemonic")));
+
+        for provider in ["google", "github", "apple", "oauth"] {
+            assert!(free_tier_entitled(Some(provider)), "{provider} should keep the free tier");
+        }
+    }
+
+    /// Two fail-open cases, both deliberate: a sign-in method this build
+    /// predates must not silently cost someone their storage, and an
+    /// unreadable row decides only what the UI SAYS — the server's own
+    /// `/can_upload` still gates every write.
+    #[test]
+    fn an_unknown_or_missing_provider_keeps_the_free_tier() {
+        assert!(free_tier_entitled(Some("some-future-provider")));
+        assert!(free_tier_entitled(None));
+    }
+
+    /// Serialized for the frontend, which switches on it.
+    #[test]
+    fn the_unentitled_source_reaches_the_wire() {
+        let json = serde_json::to_string(&CapacitySource::None).expect("serializes");
+        assert_eq!(json, "\"none\"");
     }
 }

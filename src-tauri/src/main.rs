@@ -118,7 +118,7 @@ use crate::sync::paths::{get_sync_path, remove_sync_path, set_sync_path};
 use crate::sync::progress::{sp_clear_all_data, sp_dismiss_sync_widget, sp_get_snapshot};
 use crate::sync::recent_uploads::{get_recent_uploads, search_files, search_files_in_drive};
 use crate::sync::remote::{cache_remote_file, download_remote_file, get_thumbnail, list_remote_folder_files, list_remote_folder_grouped};
-use crate::sync::remote_rename::{create_remote_folder, rename_remote_file};
+use crate::sync::remote_rename::{create_remote_folder, rename_remote_file, rename_remote_folder};
 use crate::sync::remote_upload::{upload_files_to_remote_folder, upload_folder_to_remote_folder};
 use crate::sync::status::{app_close, get_all_drive_statuses, get_sync_activity_rows, get_sync_engine_health};
 use crate::tray::panel::{hide_tray_panel, toggle_tray_panel};
@@ -406,6 +406,7 @@ fn main() {
             upload_folder_to_remote_folder,
             search_files_in_drive,
             rename_remote_file,
+            rename_remote_folder,
             create_remote_folder,
             list_remote_folder_grouped,
             download_remote_file,

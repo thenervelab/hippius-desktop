@@ -12,7 +12,12 @@ import { isNotReady } from "@/app/lib/utils/dispatchTauriError";
 import { useSetAtom } from "jotai";
 import { insufficientCreditsDialogOpenAtom } from "./atoms/query-atoms";
 import { uploadFilesToRemoteFolder } from "@/app/lib/tauri/remoteUpload";
-import { UPLOAD_FILE_LABEL } from "./uploadActions";
+import {
+  TOOLBAR_BUTTON_GAP,
+  UPLOAD_FILE_BUTTON_LABEL,
+  UPLOAD_FILE_LABEL,
+} from "./uploadActions";
+import { ArrowUpToLine } from "@/components/ui/icons";
 import {
   REMOTE_UPLOAD_TOAST_ID,
   reportRemoteUploadOutcome,
@@ -86,13 +91,22 @@ const RemoteUploadButton: React.FC<{
       variant="primary"
       size="auto"
       disabled={busy}
+      title={UPLOAD_FILE_LABEL}
       onClick={() => void pickAndUpload()}
       className={cn(
-        "h-[30px] gap-[10px] rounded-[6px] px-3 py-[10px] font-geist text-[14px] leading-[1.109] tracking-[-0.28px]",
+        "h-[30px] rounded-[6px] px-3 py-[10px] font-geist text-[14px] leading-[1.109] tracking-[-0.28px]",
+        TOOLBAR_BUTTON_GAP,
         className,
       )}
     >
-      {busy ? <Icons.Loader className="size-4 animate-spin" /> : `+ ${UPLOAD_FILE_LABEL}`}
+      {busy ? (
+        <Icons.Loader className="size-4 animate-spin" />
+      ) : (
+        <>
+          <ArrowUpToLine className="size-4 shrink-0" />
+          {UPLOAD_FILE_BUTTON_LABEL}
+        </>
+      )}
     </Button>
   );
 };

@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { getDriveStatusBanner } from "../driveStatusBannerState";
+import {
+  getDriveStatusBanner,
+  getNoStoragePlanBanner,
+  NO_PLAN_RETENTION_DAYS,
+} from "../driveStatusBannerState";
 import { BILLING_ROUTE } from "@/app/lib/routes";
 
 describe("getDriveStatusBanner", () => {
@@ -67,5 +71,85 @@ describe("getDriveStatusBanner", () => {
     const banner = getDriveStatusBanner({ state: "pending" });
     expect(banner?.tone).toBe("info");
     expect(banner?.description).not.toMatch(/undefined|null/);
+  });
+});
+
+describe("an account with no storage plan at all", () => {
+  const banner = getDriveStatusBanner(undefined, "none");
+
+  // An account that cannot store anything at all outranks any billing
+  // state, so it is the red one.
+  it("is the loudest tone", () => {
+    expect(banner?.tone).toBe("danger");
+  });
+
+  // What the banner is FOR: the account cannot upload, and subscribing
+  // is what fixes it.
+  it("says there is no plan and that a plan is what unblocks uploading", () => {
+    expect(banner?.title).toMatch(/subscription plan/i);
+    expect(banner?.description).toMatch(/subscribe/i);
+    expect(banner?.description).toMatch(/upload/i);
+  });
+
+  // The half with a deadline: files already uploaded go away, and the
+  // user has to be told before they do.
+  it("says stored files are deleted, and by when", () => {
+    expect(banner?.description).toMatch(/permanently deleted/i);
+    expect(banner?.description).toContain(`${NO_PLAN_RETENTION_DAYS} days`);
+  });
+
+  // The window is a server behaviour the app cannot read, so it is
+  // carried in ONE constant. A second copy typed into the copy is how
+  // the banner comes to promise a date the server does not keep.
+  it("quotes the retention window from the constant, not a literal", () => {
+    const digits = banner?.description.match(/\b\d+\b/g) ?? [];
+    expect(digits).toEqual([String(NO_PLAN_RETENTION_DAYS)]);
+  });
+
+  it("offers the plans", () => {
+    expect(banner?.action?.href).toBe(BILLING_ROUTE);
+  });
+
+  // Dismissing does not buy a plan, so putting it away would only hide a
+  // blocker the user still has to clear.
+  it("cannot be dismissed", () => {
+    expect(banner?.dismissKey).toBeUndefined();
+  });
+
+  // It outranks whatever the services endpoint says, including a state
+  // that would otherwise draw its own banner.
+  it("wins over a billing state", () => {
+    expect(getDriveStatusBanner({ state: "canceled" }, "none")?.tone).toBe("danger");
+  });
+
+  // An entitled account must never see it.
+  it("is absent for an account that has capacity", () => {
+    expect(getDriveStatusBanner(undefined, "free")).toBeNull();
+    expect(getDriveStatusBanner(undefined, "subscription")).toBeNull();
+    expect(getDriveStatusBanner(undefined, undefined)).toBeNull();
+  });
+});
+
+// Two pages draw this state — the Drive page and the Overview page's
+// card row. One resolver, so they cannot word it two ways.
+describe("the no-plan banner is shared, not copied", () => {
+  it("is the same content the Drive page's resolver returns", () => {
+    expect(getNoStoragePlanBanner("none")).toEqual(
+      getDriveStatusBanner(undefined, "none"),
+    );
+  });
+
+  it("outranks every billing state the Drive page would otherwise draw", () => {
+    for (const state of ["pending", "past_due", "canceled"]) {
+      expect(getDriveStatusBanner({ state }, "none")).toEqual(
+        getNoStoragePlanBanner("none"),
+      );
+    }
+  });
+
+  it("says nothing for an account that has capacity", () => {
+    expect(getNoStoragePlanBanner("free")).toBeNull();
+    expect(getNoStoragePlanBanner("subscription")).toBeNull();
+    expect(getNoStoragePlanBanner(undefined)).toBeNull();
   });
 });

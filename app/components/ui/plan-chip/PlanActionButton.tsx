@@ -32,22 +32,23 @@ const PlanActionButton: React.FC<{
 
   if (!view) return null;
 
+  // Filled brand, on BOTH shapes. This button is the page's answer to a
+  // problem the page has just stated — no plan, or a balance that will
+  // not cover the next renewal — and it was previously drawn as a white
+  // or grey pill, the same weight as "Shared Links" and "View All Files"
+  // sitting a row below it. A call to action that looks like navigation
+  // gets read as navigation. `variant` now chooses only the SHAPE: the
+  // roomier header slot, or the tighter chip-height one.
   return (
     <Button
       asLink
       href={view.href}
-      variant={variant === "raised" ? "raised" : "defaultStable"}
+      variant="primary"
       size="auto"
       className={cn(
         variant === "raised"
           ? "flex items-center gap-2 px-4 py-2 text-[14px] font-medium leading-[1.109] tracking-[-0.28px]"
-          : cn(
-              "h-[33px] rounded-[7px] px-[14px] text-[14px] font-medium tracking-[-0.28px]",
-              "border border-grey-dark-100 bg-white text-black-600",
-              "shadow-[0px_5px_2.3px_0px_rgba(0,0,0,0.03),0px_1px_1.9px_0px_rgba(0,0,0,0.14),0px_0px_1px_0px_rgba(0,0,0,0.16),0px_1px_0px_0px_white,0px_1px_0px_0px_white]",
-              "dark:border-black-300 dark:bg-black-primary-bg dark:text-grey-dark-400",
-              "dark:shadow-[0px_0px_0px_1px_black]",
-            ),
+          : "h-[33px] rounded-[7px] px-[14px] text-[14px] font-medium tracking-[-0.28px]",
         className,
       )}
     >

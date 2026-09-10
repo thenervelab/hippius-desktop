@@ -26,7 +26,7 @@ export function getUsageTone(percent: number): UsageTone {
 export type StorageOverviewView =
   | "skeleton" // first load not settled yet — never flash a wrong state
   | "error" // query failed — must not read as a confident zero (audit M-16)
-  | "no-plan" // unknown source — unreachable now that the free tier is the floor
+  | "no-plan" // no capacity at all: an access-key account must subscribe first
   | "usage"; // the normal used-of-total bar (plan- or free-tier-backed)
 
 /**
@@ -69,8 +69,25 @@ export function getCapacitySourceLabel(
   if (source === "subscription")
     return planName ? `${planName} plan` : "Active plan";
   if (source === "free") return "Included with the free plan";
+  if (source === "none") return "No storage plan";
   return "";
 }
+
+/**
+ * Copy for an account that has no capacity at all.
+ *
+ * Deliberately short: the card states the fact, and the red banner above
+ * the card row (`getNoStoragePlanBanner`) carries the reason and the
+ * severity. Splitting them that way is what lets the card keep the same
+ * quiet shape it has in every other state — the version that explained
+ * the billing rule inside the card read as an essay wedged into a
+ * dashboard.
+ *
+ * Kept beside the other source labels so the surfaces that render this
+ * state cannot word it three ways.
+ */
+export const NO_PLAN_TITLE = "No storage available";
+export const NO_PLAN_DESCRIPTION = "Subscribe to a plan to start uploading.";
 
 /** View variant for the plan card and the top-bar chip. */
 export type PlanView =

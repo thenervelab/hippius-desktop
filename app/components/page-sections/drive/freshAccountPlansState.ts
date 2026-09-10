@@ -4,7 +4,8 @@ import type { CapacitySource } from "@/app/lib/hooks/api/useStorageOverview";
  * Whether the Drive page should show the plan catalogue under its empty
  * state.
  *
- * Only for an account with nothing at all: no folder synced and no plan.
+ * Only for an account with nothing at all: no folder synced, and either
+ * no plan or no entitlement to one.
  * There is no drive to look at yet, and how much room they get is the next
  * thing they have to decide, so the plans are the most useful thing that
  * can occupy the space.
@@ -29,5 +30,9 @@ export function shouldShowFreshAccountPlans(opts: {
   if (opts.hasFolders) return false;
   // `undefined` is the unsettled/error case: say nothing rather than sell
   // a plan to someone who may already have one.
-  return opts.source === "free";
+  //
+  // `none` is an access-key account, which has no storage at all until it
+  // subscribes — so it is not merely eligible for the plans, it needs
+  // them before the page can do anything.
+  return opts.source === "free" || opts.source === "none";
 }

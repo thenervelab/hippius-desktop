@@ -31,3 +31,17 @@ describe("shouldShowFreshAccountPlans", () => {
     expect(shouldShowFreshAccountPlans(opts({ source: undefined }))).toBe(false);
   });
 });
+
+describe("an account that cannot store anything", () => {
+  // Not merely eligible for the plans — it needs one before the page can
+  // do anything at all.
+  it("is shown the plans", () => {
+    expect(
+      shouldShowFreshAccountPlans({
+        hasFolders: false,
+        source: "none",
+        isLoading: false,
+      }),
+    ).toBe(true);
+  });
+});

@@ -16,7 +16,12 @@ import {
   reportRemoteUploadOutcomeForFolder,
   reportRemoteFolderUploadStarted,
 } from "@/app/lib/remote-upload/reportOutcome";
-import { UPLOAD_FOLDER_LABEL, UPLOAD_FOLDER_HINT } from "./uploadActions";
+import {
+  TOOLBAR_BUTTON_GAP,
+  UPLOAD_FOLDER_BUTTON_LABEL,
+  UPLOAD_FOLDER_HINT,
+} from "./uploadActions";
+import { ArrowUpToLine } from "@/components/ui/icons";
 
 /**
  * Upload a whole folder into a Drive folder that is not synced here.
@@ -82,11 +87,19 @@ const RemoteFolderUploadButton: React.FC<{
       title={UPLOAD_FOLDER_HINT}
       onClick={() => void pickAndUpload()}
       className={cn(
-        "h-[30px] gap-[10px] rounded-[6px] px-3 py-[10px] font-geist text-[14px] leading-[1.109] tracking-[-0.28px]",
+        "h-[30px] rounded-[6px] px-3 py-[10px] font-geist text-[14px] leading-[1.109] tracking-[-0.28px]",
+        TOOLBAR_BUTTON_GAP,
         className,
       )}
     >
-      {busy ? <Icons.Loader className="size-4 animate-spin" /> : UPLOAD_FOLDER_LABEL}
+      {busy ? (
+        <Icons.Loader className="size-4 animate-spin" />
+      ) : (
+        <>
+          <ArrowUpToLine className="size-4 shrink-0" />
+          {UPLOAD_FOLDER_BUTTON_LABEL}
+        </>
+      )}
     </Button>
   );
 };
