@@ -6,19 +6,39 @@ import {
   driveStatusesAtom,
   driveStatusesLoadedAtom,
 } from "@/app/lib/global-atoms/unpinAtoms";
+import { useQuery } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 import { Icons } from "@/components/ui";
+import { listRemoteFolders } from "@/app/lib/utils/restoreUtils";
+import { useWalletAuth } from "@/app/lib/wallet-auth-context";
+
+/** Drives on the account that this computer does not sync. */
+export const REMOTE_UPLOAD_TARGETS_QUERY_KEY = "remoteUploadTargets";
 
 interface SyncFolderSelectProps {
   value: string | null;
-  onChange: (label: string, path: string) => void;
+  /**
+   * `path` is empty for a drive that is not synced on this computer, and
+   * `remote` says so explicitly rather than leaving the caller to infer it
+   * from the empty string — an upload routed to the wrong side either
+   * lands in the wrong drive or fails.
+   */
+  onChange: (label: string, path: string, remote: boolean) => void;
   defaultLabel?: string | null;
   className?: string;
+  /**
+   * Whether drives that are NOT synced on this computer are offered.
+   *
+   * They upload straight to the server, so the destination is real — but
+   * only where the caller can actually route there.
+   */
+  includeRemote?: boolean;
 }
 
 interface SyncFolderOption {
   label: string;
   path: string;
+  remote: boolean;
 }
 
 const SyncFolderSelect: FC<SyncFolderSelectProps> = ({
@@ -26,18 +46,47 @@ const SyncFolderSelect: FC<SyncFolderSelectProps> = ({
   onChange,
   defaultLabel,
   className,
+  includeRemote = false,
 }) => {
   // Read configured drives from the per-drive status atom (single source
   // of truth, hydrated by `useDriveStatuses`). No DB round-trip needed —
   // every entry already carries `label + path`.
   const driveStatuses = useAtomValue(driveStatusesAtom);
   const driveStatusesLoaded = useAtomValue(driveStatusesLoadedAtom);
-  const syncPaths = useMemo<SyncFolderOption[]>(
+  const { polkadotAddress } = useWalletAuth();
+  const localPaths = useMemo<SyncFolderOption[]>(
     () =>
       Array.from(driveStatuses.entries())
         .filter(([, entry]) => !!entry.path)
-        .map(([label, entry]) => ({ label, path: entry.path })),
+        .map(([label, entry]) => ({ label, path: entry.path, remote: false })),
     [driveStatuses]
+  );
+
+  // Drives that exist on the account but are not synced here have no local
+  // path, so they are absent from the drive-status map entirely. They are
+  // still valid upload destinations — the files go straight to the server
+  // — so they are fetched separately and listed under their own heading.
+  const { data: remoteFolders } = useQuery({
+    queryKey: [REMOTE_UPLOAD_TARGETS_QUERY_KEY, polkadotAddress],
+    queryFn: () => listRemoteFolders(polkadotAddress as string),
+    enabled: includeRemote && Boolean(polkadotAddress),
+    staleTime: 60_000,
+  });
+
+  const remotePaths = useMemo<SyncFolderOption[]>(() => {
+    if (!includeRemote || !remoteFolders) return [];
+    const local = new Set(localPaths.map((p) => p.label));
+    return remoteFolders
+      .map((f) => f.label)
+      // A drive synced here appears in the local list already; listing it
+      // twice would offer the same drive by two different routes.
+      .filter((label) => label.length > 0 && !local.has(label))
+      .map((label) => ({ label, path: "", remote: true }));
+  }, [includeRemote, remoteFolders, localPaths]);
+
+  const syncPaths = useMemo<SyncFolderOption[]>(
+    () => [...localPaths, ...remotePaths],
+    [localPaths, remotePaths],
   );
 
   const [open, setOpen] = useState(false);
@@ -51,8 +100,10 @@ const SyncFolderSelect: FC<SyncFolderSelectProps> = ({
     const match = value
       ? syncPaths.find((sp) => sp.label === value)
       : (syncPaths.find((sp) => sp.label === defaultLabel) ?? syncPaths[0]);
-    if (match?.path) {
-      onChange(match.label, match.path);
+    // A remote drive has no path, so `match.path` cannot be the guard —
+    // that is what kept remote destinations from ever being selected.
+    if (match) {
+      onChange(match.label, match.path, match.remote);
     }
     // `onChange` is intentionally excluded — callers commonly pass
     // inline functions and we don't want to thrash the selection on
@@ -107,18 +158,23 @@ const SyncFolderSelect: FC<SyncFolderSelectProps> = ({
                     role="option"
                     aria-selected={isSelected}
                     onClick={() => {
-                      onChange(sp.label, sp.path);
+                      onChange(sp.label, sp.path, sp.remote);
                       setOpen(false);
                     }}
                     className={cn(
-                      "flex items-center px-3 py-2.5 text-sm cursor-pointer text-grey-10 transition-colors duration-150 select-none rounded-md hover:bg-grey-90 truncate dark:text-[#a3a3a3] dark:hover:bg-[#2c2c2c] dark:hover:text-white",
+                      "flex items-center justify-between px-3 py-2.5 text-sm cursor-pointer text-grey-10 transition-colors duration-150 select-none rounded-md hover:bg-grey-90 truncate dark:text-[#a3a3a3] dark:hover:bg-[#2c2c2c] dark:hover:text-white",
                       isSelected
                         ? "bg-grey-80 font-medium dark:bg-[#2c2c2c] dark:text-white"
                         : "",
                     )}
-                    title={sp.label}
+                    title={sp.remote ? `${sp.label} — not synced on this computer` : sp.label}
                   >
-                    {sp.label}
+                    <span className="truncate">{sp.label}</span>
+                    {sp.remote && (
+                      <span className="ml-2 shrink-0 text-[11px] font-medium text-grey-60 dark:text-grey-dark-600">
+                        Not synced here
+                      </span>
+                    )}
                   </div>
                 );
               })}

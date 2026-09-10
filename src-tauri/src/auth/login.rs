@@ -97,6 +97,9 @@ pub async fn login_with_mnemonic(
             user_id: user_id.as_i64(),
             username: &username,
             provider: "mnemonic",
+            // A mnemonic login carries no sign-in email; `None` preserves
+            // any stored one rather than blanking it.
+            email: None,
             // Pass through whatever the caller provided. `None` means
             // "preserve the existing preference" via the repo's COALESCE
             // — defense in depth so a future caller passing `None` can't

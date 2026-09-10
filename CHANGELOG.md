@@ -187,9 +187,31 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   plan and its storage; billing detail is behind Manage.
 - **A plan with room left ends cleanly.** The page header no longer leaves an empty
   gap where an Upgrade button would have been.
+- **You can upload straight into a drive that is not synced on this computer.** The
+  folder picker in the upload dialogs now lists those drives too, for files and for
+  whole folders, marked so you can tell them apart. Inside such a folder there is now
+  an Upload Folder button beside Upload File and New Folder.
+- **The Drive page tells you when your plan needs attention** — a renewal that
+  failed, a cancelled plan, or one still being set up — reading the same source the
+  web console reads, so both say the same thing.
+- **A brand-new account is shown the storage plans on the Drive page**, under the
+  empty state, instead of an empty page with nothing to do next.
 
 ### Fixed
 
+- **The account menu says who you are signed in as.** It showed only your wallet
+  address; it now leads with the email or handle you signed in with, with your
+  address below it, and the open menu names your account, your email and which
+  service you signed in with — matching the web console. Your email and provider now
+  survive a restart, so the menu no longer forgets who you are after relaunching.
+- **The Excluded filter only appears when you have excluded something.** It used to
+  show on every drive, where pressing it could only ever return nothing.
+- **Upload Folder and Sync a Folder are easier to tell apart.** They are separated on
+  the toolbar and each says what it does, so a one-time copy is not mistaken for
+  setting up a folder that stays in sync.
+- **Renaming a file inside a folder that is not synced on this computer works.**
+  The option was there but greyed out; only folders could be renamed. The new name
+  now appears straight away instead of after leaving the folder and coming back.
 - **Large files upload to a cloud folder again.** Uploading a big file into a folder
   that is not synced on this computer failed with a server error at the very end of
   the transfer. Files of any size now go up the same way they do for a synced

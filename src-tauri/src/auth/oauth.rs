@@ -656,10 +656,21 @@ pub async fn complete_oauth_flow(
     };
     let token_expiry_ms = chrono::Utc::now().timestamp_millis() + 30 * 24 * 60 * 60 * 1000;
 
-    // Both OAuth grant paths persist the same provider tag. If per-provider
-    // tagging is ever needed, derive it from the matched PkceState.provider
-    // instead.
-    let provider_name = "oauth".to_string();
+    // The SPECIFIC provider, from the PkceState this callback matched —
+    // "google" / "github" / "apple". It used to be flattened to the
+    // literal "oauth", which threw away the one fact the account menu
+    // needs to show which service the user signed in with.
+    //
+    // Safe to store: every consumer of this column asks whether it equals
+    // "mnemonic" (`check_provider`, and the `auth_type` that decides the
+    // idle-logout timer), so any other value keeps reading as an OAuth
+    // account. The empty fallback preserves that for a callback whose
+    // state carried no provider.
+    let provider_name = if matched_provider.is_empty() {
+        "oauth".to_string()
+    } else {
+        matched_provider.clone()
+    };
 
     // A callback that yields no substrate address is unusable: nothing
     // below would be persisted and no AuthInfo set, yet the old code still
@@ -688,6 +699,10 @@ pub async fn complete_oauth_flow(
             user_id: Some(user_id),
             username: &username,
             provider: &provider_name,
+            // Kept so the account menu can say who is signed in after a
+            // restart; before this it only ever reached the frontend on
+            // the callback itself and was lost on the next launch.
+            email: (!email.is_empty()).then_some(email.as_str()),
             logout_time_minutes: None, // preserve existing preference
         },
     )

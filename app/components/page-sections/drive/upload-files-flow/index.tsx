@@ -17,6 +17,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { formatDisplayName } from "@/lib/utils/fileTypeUtils";
 import SyncFolderSelect from "@/components/ui/SyncFolderSelect";
+import { uploadFilesToRemoteFolder } from "@/app/lib/tauri/remoteUpload";
+import { reportRemoteUploadOutcome } from "@/app/lib/remote-upload/reportOutcome";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { getPrivateSyncPath } from "@/lib/utils/syncPathUtils";
 import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
@@ -75,6 +77,9 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
     !isFolder ? (props.defaultFolderLabel ?? null) : null,
   );
   const [selectedSyncPath, setSelectedSyncPath] = useState<string | null>(null);
+  // A drive that is not synced here has no local folder to drop into, so
+  // the files are posted to the server instead.
+  const [selectedIsRemote, setSelectedIsRemote] = useState(false);
 
   // Root-mode hooks
   const queryClient = useAtomValue(queryClientAtom);
@@ -264,6 +269,22 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
       });
 
       props.reset();
+
+      if (selectedIsRemote && selectedFolderLabel) {
+        // Straight to the server: there is no sync root to copy into, and
+        // the sync widget shows the rows the same way it does for a
+        // remote upload started from inside the folder.
+        toast.dismiss(toastId);
+        const failures = await uploadFilesToRemoteFolder(
+          polkadotAddress as string,
+          selectedFolderLabel,
+          processedPaths,
+        );
+        reportRemoteUploadOutcome(processedPaths.length, failures);
+        setIsUploading(false);
+        return;
+      }
+
       upload(processedPaths, { toastId }, selectedSyncPath ?? undefined);
     } catch (error) {
       console.error("Error preparing files:", error);
@@ -408,9 +429,13 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
         <SyncFolderSelect
           value={selectedFolderLabel}
           defaultLabel={(props as RootUploadProps).defaultFolderLabel}
-          onChange={(label, path) => {
+          // Files can go straight to a drive this computer does not sync,
+          // so those drives are real destinations here.
+          includeRemote
+          onChange={(label, path, remote) => {
             setSelectedFolderLabel(label);
             setSelectedSyncPath(path);
+            setSelectedIsRemote(remote);
           }}
           className="mt-4"
         />
