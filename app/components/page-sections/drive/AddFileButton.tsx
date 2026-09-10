@@ -20,7 +20,8 @@ import { cn } from "@/lib/utils";
 import { hasConfiguredDrivesAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import { toast } from "sonner";
 import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
-import { UPLOAD_FILE_LABEL } from "./uploadActions";
+import { UPLOAD_FILE_BUTTON_LABEL, UPLOAD_FILE_LABEL } from "./uploadActions";
+import { ArrowUpToLine } from "@/components/ui/icons";
 
 // Custom event name for file drop communication
 const HIPPIUS_DROP_EVENT = "hippius:file-drop";
@@ -210,7 +211,10 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
           {isLoading ? (
             <Loader2 className="animate-spin size-4" />
           ) : (
-            <>+ {UPLOAD_FILE_LABEL}</>
+            <>
+              <ArrowUpToLine className="size-4 shrink-0" />
+              {UPLOAD_FILE_BUTTON_LABEL}
+            </>
           )}
         </Button>
 

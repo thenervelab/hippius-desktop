@@ -69,6 +69,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **The upload buttons are shorter and clearer.** They now show an upload arrow with
+  "File" or "Folder" instead of "+ Upload File" — the plus suggested creating
+  something new, when these upload something you already have.
 - **Security and API Token warnings now match the rest of Settings.** They
   sit in the same card style as the rows around them, instead of a yellow box.
 - **Billing's credits and deposit cards have more room inside**, so the

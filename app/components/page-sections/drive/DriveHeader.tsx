@@ -3,6 +3,7 @@
 import { FC, ReactNode, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Button, Icons, RefreshButton, SearchInput } from "@/components/ui";
+import { ArrowUpToLine } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
 import AddButton from "./AddFileButton";
 import StorageStateList from "./storage-stats";
@@ -28,7 +29,9 @@ import { toast } from "sonner";
 import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
 import {
   resolveUploadAction,
+  UPLOAD_FILE_BUTTON_LABEL,
   UPLOAD_FILE_LABEL,
+  UPLOAD_FOLDER_BUTTON_LABEL,
   UPLOAD_FOLDER_LABEL,
 } from "./uploadActions";
 import RemoteUploadButton from "./RemoteUploadButton";
@@ -246,8 +249,10 @@ const DriveHeader: FC<DriveHeaderProps> = ({
               setIsFolderUploadOpen(true);
             }}
             className={SECONDARY_PILL_CLASSES}
+            title={UPLOAD_FOLDER_LABEL}
           >
-            {UPLOAD_FOLDER_LABEL}
+            <ArrowUpToLine className="size-4 shrink-0" />
+            {UPLOAD_FOLDER_BUTTON_LABEL}
           </Button>
         )}
       {uploadAction === "disabled" && (
@@ -256,8 +261,10 @@ const DriveHeader: FC<DriveHeaderProps> = ({
           size="auto"
           disabled
           className={SECONDARY_PILL_CLASSES}
+          title={UPLOAD_FOLDER_LABEL}
         >
-          {UPLOAD_FOLDER_LABEL}
+          <ArrowUpToLine className="size-4 shrink-0" />
+          {UPLOAD_FOLDER_BUTTON_LABEL}
         </Button>
       )}
 
@@ -311,8 +318,10 @@ const DriveHeader: FC<DriveHeaderProps> = ({
           size="auto"
           disabled
           className="h-[30px] px-3 py-[10px] gap-[10px] rounded-[6px] font-geist text-[14px] tracking-[-0.28px] leading-[1.109]"
+          title={UPLOAD_FILE_LABEL}
         >
-          + {UPLOAD_FILE_LABEL}
+          <ArrowUpToLine className="size-4 shrink-0" />
+          {UPLOAD_FILE_BUTTON_LABEL}
         </Button>
       ) : uploadAction === "enabled" ? (
         <AddButton

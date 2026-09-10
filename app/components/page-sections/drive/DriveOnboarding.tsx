@@ -38,9 +38,10 @@ import {
   SYNC_FOLDER_HINT,
   SYNC_FOLDER_LABEL,
   UPLOAD_FOLDER_HINT,
-  UPLOAD_FOLDER_LABEL,
+  UPLOAD_FOLDER_BUTTON_LABEL,
 } from "./uploadActions";
 import { RefreshCw } from "lucide-react";
+import { ArrowUpToLine } from "@/components/ui/icons";
 import {
   SharedWithMeSection,
   RemoveFolderDialog,
@@ -624,9 +625,10 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
                     size="auto"
                     title={UPLOAD_FOLDER_HINT}
                     onClick={() => setIsFolderUploadOpen(true)}
-                    className="h-[26px] rounded-[6px] px-2.5 text-[12px] font-medium"
+                    className="h-[26px] gap-1.5 rounded-[6px] px-2.5 text-[12px] font-medium"
                   >
-                    {UPLOAD_FOLDER_LABEL}
+                    <ArrowUpToLine className="size-3.5 shrink-0" />
+                    {UPLOAD_FOLDER_BUTTON_LABEL}
                   </Button>
                   <AddButton
                     defaultFolderLabel={firstLocalLabel}

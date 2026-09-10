@@ -17,6 +17,21 @@ export const UPLOAD_FILE_LABEL = "Upload File";
 export const UPLOAD_FOLDER_LABEL = "Upload Folder";
 
 /**
+ * The same two actions as BUTTON labels.
+ *
+ * A button carries an upload icon, and the icon is the verb — so repeating
+ * "Upload" in the text says the same thing twice and costs width in a
+ * toolbar that already holds three or four controls. The noun is the half
+ * that distinguishes the two buttons from each other.
+ *
+ * The full phrases above stay for menus, dialog titles and tooltips, where
+ * there is no icon to carry the verb and "File" alone would not say what
+ * pressing it does.
+ */
+export const UPLOAD_FILE_BUTTON_LABEL = "File";
+export const UPLOAD_FOLDER_BUTTON_LABEL = "Folder";
+
+/**
  * Registering a local folder for ongoing sync is NOT an upload — it sets
  * up a two-way relationship rather than sending a copy once. It keeps its
  * own wording so it cannot be mistaken for the buttons above.
