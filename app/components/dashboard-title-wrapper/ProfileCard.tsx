@@ -196,13 +196,27 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
     // overflow-hidden: the trigger itself must stay overflow-visible (it
     // would clip the hover layer), so text clipping lives here instead.
     <span className="relative flex flex-col items-start min-w-0 flex-1 overflow-hidden">
-      <span className="flex items-center gap-1.5">
+      {/* `w-full min-w-0`, like the address row below: without it this row
+          sizes to its content, overflows the clipping parent, and takes
+          the chevron off the right edge with it — the chevron was simply
+          not visible. With it the TEXT gives way instead, and the chevron
+          (shrink-0) always renders. */}
+      <span className="flex w-full min-w-0 items-center gap-1.5">
         {/* The sign-in identity for an OAuth account, the address for a
-            mnemonic one. `truncate` rather than `whitespace-nowrap` alone:
-            an email is longer than an SS58 and has to be allowed to clip
-            inside the rail. */}
-        <span className="min-w-0 truncate text-sm font-medium font-inter leading-none text-zinc-800 dark:text-grey-light-600 tracking-[-0.4px] text-left">
-          {identity.primary}
+            mnemonic one — in TWO spans so the browser does the measuring
+            and this only says where it may cut.
+            
+            The head shrinks and ellipsizes; the tail (an email's TLD)
+            never does. That is what keeps ".com" on screen at any rail
+            width, and it replaces the character budget that kept being
+            wrong — a count cannot know the window, the zoom or the font,
+            so its output was itself clipped from the end, losing exactly
+            what it was protecting. */}
+        <span className="flex min-w-0 items-baseline text-sm font-medium font-inter leading-none text-zinc-800 dark:text-grey-light-600 tracking-[-0.4px] text-left">
+          <span className="min-w-0 truncate">{identity.primary.head}</span>
+          {identity.primary.tail && (
+            <span className="shrink-0">{identity.primary.tail}</span>
+          )}
         </span>
         {withChevron && (
           <ChevronDown className="size-[12px] shrink-0 text-black-700/60 dark:text-grey-light-300/60 transition-transform duration-200 group-data-[state=open]:rotate-180" />

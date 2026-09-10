@@ -50,4 +50,26 @@ describe("the account card matches the console", () => {
   it("shows no chain height, on the card or in the menu", () => {
     expect(card).not.toMatch(/blockNumber|usePolkadotApi/);
   });
+
+  // Without w-full/min-w-0 the row sized to its content, overflowed the
+  // clipping parent, and took the chevron off the right edge with it.
+  it("lets the identity row shrink so the chevron survives", () => {
+    expect(card).toMatch(/flex w-full min-w-0 items-center gap-1\.5/);
+    expect(card).toMatch(/ChevronDown[\s\S]*?shrink-0/);
+  });
+
+  // The head shrinks and ellipsizes, the tail never does. A single
+  // `truncate` over the whole string cuts the END, which is where the
+  // ".com" is — the fault this replaces.
+  it("lets only the head of the identity give way", () => {
+    expect(card).toContain("identity.primary.head");
+    expect(card).toContain("identity.primary.tail");
+    expect(card).toMatch(/min-w-0 truncate">\{identity\.primary\.head\}/);
+    expect(card).toMatch(/shrink-0">\{identity\.primary\.tail\}/);
+  });
+
+  // A character budget cannot know the window, the zoom or the font.
+  it("uses no character budget for the identity", () => {
+    expect(card).not.toMatch(/truncateIdentity/);
+  });
 });

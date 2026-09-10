@@ -6,31 +6,48 @@ export function truncateAddress(address: string): string {
   return `${address.slice(0, 8)}...${address.slice(address.length - 8)}`;
 }
 
-/**
- * Longest identity the sidebar line shows before it is shortened.
- *
- * A character budget rather than CSS: `truncate` cuts the END, which on
- * an email throws away the domain — the half that says which account it
- * is. "ahmadraosanawarali@gmail" and "ahmadraosanawarali@icloud" clip to
- * the same thing.
- */
-const IDENTITY_MAX_CHARS = 24;
+/** An identity split so the shortening can only land in the head. */
+export interface IdentityParts {
+  /** The part allowed to give way. */
+  head: string;
+  /** The part that must always stay legible; empty when there is none. */
+  tail: string;
+}
 
 /**
- * Shorten a long identity from the middle, keeping both ends.
+ * Split an identity into the part that may be shortened and the part that
+ * must not be.
  *
- * The same rule the address uses, and for the same reason: the ends are
- * what identify the value and the middle is the redundant part. On an
- * email that happens to keep the whole domain, since the domain sits at
- * the end.
+ * There is no character budget here on purpose. Every previous attempt
+ * picked a number, and a number cannot be right: the rail's width changes
+ * with the window, the zoom and the font, so a string that fits one
+ * moment is clipped the next — and the clip landed on the END, taking the
+ * ".com" the shortening existed to protect. Two shortenings fighting each
+ * other, one of them blind.
+ *
+ * Instead the browser measures, and this only decides WHERE it is allowed
+ * to cut. For an email the tail is the TLD, so:
+ *
+ *   plenty of room  →  ahmadraosanawarali@gmail.com
+ *   less room       →  ahmadraosanawar….com
+ *   very little     →  ahmad….com
+ *
+ * The host sits at the end of the head, so it is given up before the name
+ * is — "@gmail" says nothing about which account this is, while the name
+ * is the whole of what does.
+ *
+ * Anything with no "@" (a handle, an SS58) has no part worth pinning and
+ * gives way from its end like ordinary text.
  */
-export function truncateIdentity(value: string, max = IDENTITY_MAX_CHARS): string {
-  if (value.length <= max) return value;
-  // The ellipsis is one of the `max` characters, and the odd one goes to
-  // the head — the start of a name carries more than its tail.
-  const head = Math.ceil((max - 1) / 2);
-  const tail = Math.floor((max - 1) / 2);
-  return `${value.slice(0, head)}…${value.slice(value.length - tail)}`;
+export function splitIdentity(value: string): IdentityParts {
+  const at = value.lastIndexOf("@");
+  const dot = value.lastIndexOf(".");
+  // `dot > at + 1` requires a host between the two, so "a@.com" is not
+  // mistaken for a domain and left with an empty head.
+  if (at > 0 && dot > at + 1) {
+    return { head: value.slice(0, dot), tail: value.slice(dot) };
+  }
+  return { head: value, tail: "" };
 }
 
 export const PROVIDER_LABELS: Record<string, string> = {
@@ -41,10 +58,10 @@ export const PROVIDER_LABELS: Record<string, string> = {
 
 export interface AccountIdentity {
   /**
-   * What the sidebar card shows as its primary line, already shortened
-   * to fit — see {@link truncateIdentity}.
+   * What the sidebar card shows as its primary line, split so the rail
+   * can shorten it without losing the end — see {@link splitIdentity}.
    */
-  primary: string;
+  primary: IdentityParts;
   /** Name at the top of the open menu. */
   menuName: string;
   /** Email under that name, when it says something the name does not. */
@@ -95,9 +112,7 @@ export function resolveAccountIdentity(
     : truncatedAddress;
 
   return {
-    // The address arrives pre-shortened; only a sign-in identity can be
-    // long enough to need this.
-    primary: truncateIdentity(primary),
+    primary: splitIdentity(primary),
     menuName,
     ...(email && email !== menuName ? { menuEmail: email } : {}),
     ...(provider && PROVIDER_LABELS[provider]
