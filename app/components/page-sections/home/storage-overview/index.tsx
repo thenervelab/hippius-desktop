@@ -18,6 +18,8 @@ import {
   getStorageOverviewView,
   getUsageTone,
   getUsedBytesDisplay,
+  NO_PLAN_DESCRIPTION,
+  NO_PLAN_TITLE,
   type UsageTone,
 } from "./storageOverviewState";
 
@@ -155,14 +157,27 @@ const StorageOverviewCard: React.FC<{ className?: string }> = ({
             </div>
           )}
 
+          {/* No capacity at all.
+
+              Quiet, and shaped like the Plan card's own empty state
+              beside it — a line, a sentence, a button — because the red
+              banner above the pair already carries the alarm and the
+              reason. Two earlier versions each put the whole message in
+              here instead: first as a paragraph, then as a red "0 B"
+              over a full red bar. The bar was the worse of the two. A
+              full bar means "you have used all of your storage", and
+              this account has none to use, so the one graphic on the
+              card stated something that was not true — and painting the
+              page's only progress bar solid red made a state the user
+              can fix in two clicks read as a fault. */}
           {view === "no-plan" && (
-            <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center justify-between gap-3 w-full">
               <div className="flex flex-col items-start gap-1">
                 <p className="font-mono font-medium text-[16px] leading-[24px] text-grey-10 dark:text-white">
-                  No storage available
+                  {NO_PLAN_TITLE}
                 </p>
                 <p className="text-[13px] font-medium leading-[18px] text-grey-50 dark:text-grey-dark-500">
-                  Subscribe to a plan to get Drive storage.
+                  {NO_PLAN_DESCRIPTION}
                 </p>
               </div>
               <Button

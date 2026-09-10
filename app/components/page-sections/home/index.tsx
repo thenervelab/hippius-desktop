@@ -8,6 +8,7 @@ import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
 import PageHeader from "./PageHeader";
 import StorageOverviewCard from "./storage-overview";
 import PlanOverviewCard from "./plan-overview";
+import NoStoragePlanBanner from "./NoStoragePlanBanner";
 import Drive from "@/app/components/page-sections/drive/DriveContainer";
 
 const Home: React.FC = () => {
@@ -32,17 +33,14 @@ const Home: React.FC = () => {
               with the room to show them properly. */}
           <PageHeader showPlanCard={false} />
           <div className="mt-3">
-            {/* Usage bar + the plan/credits summary. Both render from the same
-                get_storage_overview fetch, so they can't disagree.
+            {/* Above the pair, not inside either one: it is about both
+                of them, and it is the only thing on the page worth
+                interrupting for. Renders nothing for an account that has
+                storage. */}
+            <NoStoragePlanBanner className="mb-3" />
 
-                The row spans the full content width, matching the Recent Files
-                card below it. An earlier `max-w-[960px]` deliberately kept the
-                pair narrow, on the reasoning that stretched cards read as empty
-                banners — but that left a ragged gap to their right on any wide
-                window while every other block on the page went edge to edge,
-                which reads as a layout bug rather than as restraint. Keep the
-                two in step: if this row is ever re-capped, cap Recent Files to
-                the same width. */}
+            {/* Usage bar + the plan/credits summary. Both render from the same
+                get_storage_overview fetch, so they can't disagree. */}
             <div className="mb-3 grid gap-4 grid-cols-1 @xl:grid-cols-2 items-stretch">
               <StorageOverviewCard />
               <PlanOverviewCard />

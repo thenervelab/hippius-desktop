@@ -6,8 +6,12 @@ import Link from "next/link";
 
 import { cn } from "@/app/lib/utils";
 import { useDriveServiceStatus } from "@/app/lib/hooks/useDriveServiceStatus";
+import { useStorageOverview } from "@/app/lib/hooks/api/useStorageOverview";
 
-import { getDriveStatusBanner } from "./driveStatusBannerState";
+import {
+  getDriveStatusBanner,
+  type DriveStatusBanner as DriveStatusBannerContent,
+} from "./driveStatusBannerState";
 
 /**
  * Tone styling, shared with the web console's `ServiceStatusBanner` so a
@@ -35,21 +39,36 @@ const TONE = {
     badge: "bg-warning-50 text-white",
     action: "text-warning-50 hover:text-warning-40",
   },
+  // Reserved for a state that is LOSING the user something, so it does
+  // not look like a plan that is merely setting itself up.
+  danger: {
+    frame:
+      "border-error-50/30 dark:border-error-50/30 bg-gradient-to-r from-error-50/[0.10] via-error-50/[0.04] to-transparent dark:from-error-50/[0.18] dark:via-error-50/[0.06] dark:to-transparent",
+    glow: "bg-error-50/20 dark:bg-error-50/15",
+    badge: "bg-error-50 text-white",
+    action: "text-error-50 hover:text-error-40",
+  },
 } as const;
 
 /**
- * What Drive wants the user to know about their plan, on the Drive page.
- *
- * Scoped to this page on purpose, the way the console scopes it: a Drive
- * problem belongs where the user can act on it and where the rest of the
- * screen gives it context.
+ * The banner itself: tone, badge, copy, optional action, optional
+ * dismissal. Purely presentational and content-agnostic, so any page can
+ * draw the same frame from its own resolver — the Overview page uses it
+ * for the no-plan state without inheriting the Drive page's billing
+ * states.
  *
  * Renders nothing when there is nothing to say, so it can be mounted
  * unconditionally.
+ *
+ * `className` carries the caller's own spacing: this component ships
+ * none, because the Drive page and the Overview page sit in wrappers
+ * with different horizontal padding and a baked-in `mx-3` double-indents
+ * one of them.
  */
-const DriveStatusBanner: React.FC<{ className?: string }> = ({ className }) => {
-  const { data } = useDriveServiceStatus();
-  const banner = getDriveStatusBanner(data);
+export const StatusBanner: React.FC<{
+  banner: DriveStatusBannerContent | null;
+  className?: string;
+}> = ({ banner, className }) => {
   const dismissKey = banner?.dismissKey;
 
   // Read once on mount rather than during render: localStorage is
@@ -88,7 +107,7 @@ const DriveStatusBanner: React.FC<{ className?: string }> = ({ className }) => {
     <div
       role="status"
       className={cn(
-        "relative mx-3 mb-3 overflow-hidden rounded-[10px] border px-4 py-3.5 sm:px-5",
+        "relative overflow-hidden rounded-[10px] border px-4 py-3.5 sm:px-5",
         styles.frame,
         className,
       )}
@@ -150,6 +169,27 @@ const DriveStatusBanner: React.FC<{ className?: string }> = ({ className }) => {
         )}
       </div>
     </div>
+  );
+};
+
+/**
+ * What Drive wants the user to know about their plan, on the Drive page.
+ *
+ * Scoped to this page on purpose, the way the console scopes it: a Drive
+ * problem belongs where the user can act on it and where the rest of the
+ * screen gives it context.
+ */
+const DriveStatusBanner: React.FC<{ className?: string }> = ({ className }) => {
+  const { data } = useDriveServiceStatus();
+  // The capacity decision comes from Rust; an account with none of it
+  // gets the loudest banner here, ahead of any billing state.
+  const { data: overview } = useStorageOverview();
+
+  return (
+    <StatusBanner
+      banner={getDriveStatusBanner(data, overview?.source)}
+      className={cn("mx-3 mb-3", className)}
+    />
   );
 };
 

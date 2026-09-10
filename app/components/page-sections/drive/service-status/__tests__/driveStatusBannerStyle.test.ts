@@ -38,3 +38,17 @@ describe("the drive status banner matches the console's", () => {
     expect(banner).toContain("animate-spin");
   });
 });
+
+describe("the no-plan banner", () => {
+  it("has a danger tone to render in", () => {
+    expect(banner).toMatch(/danger:\s*\{/);
+    expect(banner).toMatch(/badge:\s*"bg-error-50 text-white"/);
+  });
+
+  // The capacity decision is Rust's; the banner must not re-derive it
+  // from the auth type or the plan.
+  it("reads the capacity source rather than deciding it", () => {
+    expect(banner).toContain("overview?.source");
+    expect(banner).not.toMatch(/mnemonic|authType/);
+  });
+});

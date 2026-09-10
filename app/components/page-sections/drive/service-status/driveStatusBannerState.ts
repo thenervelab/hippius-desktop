@@ -15,13 +15,55 @@ export interface DriveServiceStatus {
 }
 
 export interface DriveStatusBanner {
-  tone: "info" | "warning";
+  tone: "info" | "warning" | "danger";
   title: string;
   description: string;
   /** Absent when the plan is managed somewhere this app cannot reach. */
   action?: { label: string; href: string };
   /** Set when the banner may be put away; the key persists the dismissal. */
   dismissKey?: string;
+}
+
+/**
+ * How long files survive on an account with no plan.
+ *
+ * A claim about SERVER behaviour that this app cannot verify — nothing
+ * in the API reports a retention window, so the number is carried here
+ * on product's word. Named rather than inlined for exactly that reason:
+ * if the server's window changes, this is the one line to change, and
+ * anything that quotes a different number is wrong by construction.
+ */
+export const NO_PLAN_RETENTION_DAYS = 30;
+
+/**
+ * The banner for an account with no storage capacity at all — an access
+ * key that is not entitled to the included allowance and has not
+ * subscribed.
+ *
+ * Lives here, and is the ONLY wording of this state, because two
+ * surfaces draw it: the Drive page and the Overview page's card row.
+ * Split copies drift, and this is the one message that has to be
+ * unambiguous — the account is both blocked from uploading and on a
+ * clock to lose what it already has.
+ *
+ * Both halves are said, in that order: the files already stored are
+ * deleted, and nothing new can go up. The deletion leads because it is
+ * the half with a deadline and the half the user cannot undo.
+ */
+export function getNoStoragePlanBanner(
+  capacitySource?: "subscription" | "free" | "none",
+): DriveStatusBanner | null {
+  if (capacitySource !== "none") return null;
+  return {
+    tone: "danger",
+    title: "You don't have a subscription plan",
+    description: `Your account has no storage. Files you have already uploaded are permanently deleted after ${NO_PLAN_RETENTION_DAYS} days without a plan, and nothing new can be uploaded until you subscribe.`,
+    action: { label: "See storage plans", href: BILLING_ROUTE },
+    // No dismiss key: subscribing is the only thing that resolves it, and
+    // dismissing does not stop the deletion — putting it away would hide
+    // the one warning the user cannot afford to miss. The reverse of the
+    // cancelled-plan notice, where cancelling was the user's own act.
+  };
 }
 
 /**
@@ -36,7 +78,14 @@ export interface DriveStatusBanner {
  */
 export function getDriveStatusBanner(
   status: DriveServiceStatus | undefined,
+  capacitySource?: "subscription" | "free" | "none",
 ): DriveStatusBanner | null {
+  // Checked FIRST, and it outranks anything the services endpoint says:
+  // an account with no capacity at all cannot use Drive at all, where a
+  // bad billing state still leaves it readable.
+  const noPlan = getNoStoragePlanBanner(capacitySource);
+  if (noPlan) return noPlan;
+
   const state = status?.state;
   if (!state) return null;
 
