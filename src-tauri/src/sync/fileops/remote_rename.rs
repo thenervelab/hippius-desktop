@@ -607,7 +607,7 @@ mod tests {
 
     fn tree(dirs: &[&str], files: &[RemoteEntry]) -> RemoteFolderTree {
         RemoteFolderTree {
-            directory_paths: dirs.iter().map(|d| d.to_string()).collect(),
+            directory_paths: dirs.iter().map(|d| (*d).to_string()).collect(),
             files: files.to_vec(),
         }
     }
