@@ -27,14 +27,18 @@ describe("truncateAddress", () => {
 });
 
 describe("truncateIdentity", () => {
-  // CSS `truncate` cuts the END, so a long email lost its domain — and
-  // "…@gmail" and "…@icloud" clip to the same unhelpful thing.
-  // The "@" survives because the odd character goes to the tail — it is
-  // what makes the result read as an address rather than a mangled word.
-  it("cuts a long identity from the middle, keeping both ends", () => {
-    const out = truncateIdentity("ahmadraosanawarali@gmail.com");
-    expect(out).toBe("ahmadraos…@gmail.com");
-    expect(out.endsWith("@gmail.com")).toBe(true);
+  // "@gmail" says nothing about which account this is — nearly every
+  // address shares it — so the host is what gives way, not the name.
+  it("drops the mail host and keeps the name and the TLD", () => {
+    expect(truncateIdentity("ahmadraosanawarali@gmail.com")).toBe(
+      "ahmadraosanawar….com",
+    );
+  });
+
+  // A short name against a long host keeps the whole name; there is no
+  // reason to trim what already fits.
+  it("keeps a short local part whole", () => {
+    expect(truncateIdentity("bob@some-really-long-domain.com")).toBe("bob….com");
   });
 
   it("leaves anything that already fits alone", () => {
@@ -42,11 +46,19 @@ describe("truncateIdentity", () => {
     expect(truncateIdentity("@ahmad_rao")).toBe("@ahmad_rao");
   });
 
+  // No "@" to exploit, so there is no uninteresting part to single out.
+  it("falls back to a middle cut for a handle or an address", () => {
+    expect(truncateIdentity("noatsign-but-really-long-name")).toBe(
+      "noatsign-…-long-name",
+    );
+  });
+
   it("never exceeds the budget it is given", () => {
     for (const value of [
       "ahmadraosanawarali@gmail.com",
       "verylongusername.with.dots@some-company-domain.co.uk",
       "@a-github-handle-that-runs-on-and-on",
+      "noatsign-but-really-long-name",
     ]) {
       expect(truncateIdentity(value).length).toBeLessThanOrEqual(20);
     }
@@ -83,7 +95,7 @@ describe("resolveAccountIdentity", () => {
       session({ provider: "google", email: "ahmadraosanawarali@gmail.com" }),
       ADDRESS,
     );
-    expect(id.primary).toBe("ahmadraos…@gmail.com");
+    expect(id.primary).toBe("ahmadraosanawar….com");
     expect(id.menuEmail).toBe("ahmadraosanawarali@gmail.com");
   });
 

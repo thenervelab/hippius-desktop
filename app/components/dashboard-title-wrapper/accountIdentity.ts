@@ -17,19 +17,39 @@ export function truncateAddress(address: string): string {
 const IDENTITY_MAX_CHARS = 20;
 
 /**
- * Shorten a long identity from the middle, keeping both ends.
+ * Shorten a long identity, dropping the least useful part of it.
  *
- * The same rule the address uses, and for the same reason: the ends are
- * what identify the value and the middle is the redundant part. On an
- * email that happens to keep the whole domain, since the domain sits at
- * the end.
+ * On an email that is the mail HOST, not the middle. "@gmail" says
+ * nothing about which account this is — nearly every address shares it —
+ * while the local part is the whole of what distinguishes one account
+ * from another, and the TLD is what makes the result still read as an
+ * address. So the host is what gives way:
+ *
+ *   ahmadraosanawarali@gmail.com  →  ahmadraosanawar….com
+ *
+ * A blind middle cut spent the budget the other way round, keeping
+ * "@gmail.com" in full and eating the name. Anything that is not an
+ * email — a GitHub handle, an SS58 — has no uninteresting part to drop,
+ * so it falls back to the middle cut, which is the same principle with
+ * no structure to exploit.
  */
 export function truncateIdentity(value: string, max = IDENTITY_MAX_CHARS): string {
   if (value.length <= max) return value;
+
+  const at = value.lastIndexOf("@");
+  const dot = value.lastIndexOf(".");
+  if (at > 0 && dot > at + 1) {
+    const tld = value.slice(dot);
+    const localBudget = max - 1 - tld.length;
+    // Below a few characters the local part stops identifying anything,
+    // and "a….com" is worse than a plain middle cut.
+    if (localBudget >= 3) {
+      return `${value.slice(0, Math.min(at, localBudget))}…${tld}`;
+    }
+  }
+
   // The ellipsis is one of the `max` characters, and the odd one goes to
-  // the TAIL: on an email that is the difference between "…gmail.com" and
-  // "…@gmail.com", and the "@" is what makes the string read as an
-  // address rather than a mangled word.
+  // the tail.
   const tail = Math.ceil((max - 1) / 2);
   const head = max - 1 - tail;
   return `${value.slice(0, head)}…${value.slice(value.length - tail)}`;
