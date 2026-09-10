@@ -38,11 +38,15 @@ export default function BillingSections() {
           the rest went to whitespace — which is why the deposit address had
           to be center-truncated on a window with room to spare.
 
-          The deposit card is the wider of the two: a full SS58 is 48
-          characters and it also carries a copy button, where the credits
-          card holds a number and a button. Weighted rather than equal so
-          the address fits without stretching the card beside it. */}
-      <div className="mt-4 grid grid-cols-1 gap-4 @md:grid-cols-2 @3xl:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)]">
+          The deposit column is BOUNDED rather than weighted: its content is
+          a fixed 48-character address plus a copy button, so it has a width
+          at which it is complete and past which it only adds empty field.
+          A fraction of the row could not express that — it truncated on a
+          small window and sprawled on a large one. The floor fits the
+          address, the ceiling stops the sprawl, and the credits card (a
+          number and a full-width button, both of which stretch happily)
+          takes the slack. */}
+      <div className="mt-4 grid grid-cols-1 gap-4 @md:grid-cols-2 @3xl:grid-cols-[minmax(0,1fr)_minmax(28rem,34rem)]">
         <CreditsWidget />
         <TaoDepositWidget />
       </div>

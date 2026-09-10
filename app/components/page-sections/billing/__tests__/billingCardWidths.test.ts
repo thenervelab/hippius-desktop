@@ -19,12 +19,20 @@ describe("the billing top row is sized for the two cards in it", () => {
     expect(sections).not.toMatch(/grid-cols-3/);
   });
 
-  // A full SS58 is 48 characters and the card carries a copy button too,
-  // where the credits card holds a number and a button.
-  it("gives the deposit card the larger share of the row", () => {
-    expect(sections).toMatch(
-      /@3xl:grid-cols-\[minmax\(0,1fr\)_minmax\(0,1\.5fr\)\]/,
-    );
+  // Its content is a fixed 48-character address plus a copy button, so
+  // it has a width at which it is complete and past which it only adds
+  // empty field. A fraction could not express that: it truncated on a
+  // small window and sprawled on a large one.
+  it("bounds the deposit column instead of giving it a fraction of the row", () => {
+    expect(sections).toMatch(/@3xl:grid-cols-\[minmax\(0,1fr\)_minmax\(28rem,34rem\)\]/);
+    expect(sections).not.toMatch(/minmax\(0,1\.5fr\)/);
+  });
+
+  // The floor has to clear a full SS58 plus the copy button, or the
+  // measured truncation kicks in again and the bound achieves nothing.
+  it("sets a floor that fits the address, not just a ceiling", () => {
+    const [, floor] = sections.match(/minmax\((\d+)rem,\s*(\d+)rem\)/) ?? [];
+    expect(Number(floor)).toBeGreaterThanOrEqual(26);
   });
 
   // The address is fitted by measurement, so widening the card is what
