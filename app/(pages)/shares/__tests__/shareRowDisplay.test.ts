@@ -129,13 +129,14 @@ describe("folderShareRowPlan", () => {
     expect(plan.expiryTooltip).toBeUndefined();
   });
 
-  it("foreign row: view-only with the honest device tooltips", () => {
-    // Revoke and expiry are keyed by the plaintext token, which only the
-    // minting device's keystore holds — so both are disabled, with copy the
-    // console uses, rather than silently hidden.
+  it("foreign row on a server without the by-hash routes: view-only with the honest device tooltips", () => {
+    // Without those routes, revoke and expiry are keyed by the plaintext
+    // token, which only the minting device's keystore holds — so both are
+    // disabled, with honest copy, rather than silently hidden.
     const plan = folderShareRowPlan(
       folderRow({ resolvable: false, shareToken: null, shareUrl: null, isPrivate: null }),
       NOW,
+      false,
     );
 
     expect(plan.state).toBe("live");
@@ -145,6 +146,50 @@ describe("folderShareRowPlan", () => {
     expect(plan.revokeTooltip).toBe(FOREIGN_FOLDER_REVOKE_TOOLTIP);
     expect(plan.canChangeExpiry).toBe(false);
     expect(plan.expiryTooltip).toBe(FOREIGN_FOLDER_EXPIRY_TOOLTIP);
+  });
+
+  it("foreign row on a by-hash-capable server: manageable, but still not copyable", () => {
+    // The routes are keyed by the `tokenHash` the listing returns, so a row
+    // this device never minted can be turned off and re-expired. Copy is a
+    // different matter on every server version: the link carries the share
+    // key in its URL fragment and the server never has it, so no capability
+    // can make a foreign row copyable.
+    const plan = folderShareRowPlan(
+      folderRow({ resolvable: false, shareToken: null, shareUrl: null, isPrivate: null }),
+      NOW,
+      true,
+    );
+
+    expect(plan.state).toBe("live");
+    expect(plan.canCopy).toBe(false);
+    expect(plan.copyTooltip).toMatch(/device that created it/i);
+    expect(plan.canRevoke).toBe(true);
+    expect(plan.revokeTooltip).toBeUndefined();
+    expect(plan.canChangeExpiry).toBe(true);
+    expect(plan.expiryTooltip).toBeUndefined();
+  });
+
+  it("the by-hash capability never resurrects a dead row", () => {
+    // Revoked and expired states are the server's, not this device's, so the
+    // capability must not widen them. A revoked share has nothing left to
+    // revoke; an expired one cannot have its expiry changed.
+    const revoked = folderShareRowPlan(
+      folderRow({ resolvable: false, shareToken: null, shareUrl: null, revokedAt: "2026-08-22T10:00:00Z" }),
+      NOW,
+      true,
+    );
+    expect(revoked.canRevoke).toBe(false);
+    expect(revoked.canChangeExpiry).toBe(false);
+
+    const expired = folderShareRowPlan(
+      folderRow({ resolvable: false, shareToken: null, shareUrl: null, expiresAt: "2026-08-20T10:00:00Z" }),
+      NOW,
+      true,
+    );
+    expect(expired.canChangeExpiry).toBe(false);
+    // Revoking an expired-but-unreaped row is still meaningful: it stops the
+    // link for good rather than waiting on the reaper.
+    expect(expired.canRevoke).toBe(true);
   });
 
   it("revoked row: nothing left to copy or manage, even when resolvable", () => {

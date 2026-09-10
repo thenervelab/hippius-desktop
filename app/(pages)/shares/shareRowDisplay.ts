@@ -140,10 +140,21 @@ export const EXPIRED_FOLDER_EXPIRY_TOOLTIP =
 export function folderShareRowPlan(
   row: FolderShareSummary,
   now: number = Date.now(),
+  canActByHash: boolean = false,
 ): FolderShareRowPlan {
   const state = folderShareRowState(row, now);
-  const canRevoke = row.shareToken !== null && state !== "revoked";
-  const canChangeExpiry = row.shareToken !== null && state === "live";
+  // A row this device never minted can still be managed when the server
+  // carries the by-hash routes, which are keyed on the `tokenHash` the
+  // listing already returns. Defaults to `false` so a caller that has not
+  // yet read the capability degrades to the old view-only behaviour rather
+  // than acting against a server that would answer 404.
+  //
+  // The dead-state guards below are unchanged on purpose: `revoked` and
+  // `expired` are the SERVER's states, so no client capability may widen
+  // them.
+  const canManage = row.shareToken !== null || canActByHash;
+  const canRevoke = canManage && state !== "revoked";
+  const canChangeExpiry = canManage && state === "live";
 
   const copyTooltip =
     state === "revoked"

@@ -40,7 +40,7 @@ export function useServerCapabilities(): void {
         // `{ shares: false }`, so this only fires for transport
         // errors — and "hide the feature" is the safe default.
         console.warn("[useServerCapabilities] capability fetch failed:", err);
-        if (!cancelled) setCapabilities({ shares: false, folder_shares: false });
+        if (!cancelled) setCapabilities({ shares: false, folder_shares: false, folder_share_revoke_by_hash: false });
       }
     })();
 

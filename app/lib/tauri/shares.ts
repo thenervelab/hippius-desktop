@@ -21,6 +21,17 @@ export interface ServerCapabilities {
    * which the Rust layer collapses to `false`.
    */
   folder_shares: boolean;
+  /**
+   * `/v1/folder-shares/by-hash/{token_hash}` revoke + re-expire, which let
+   * this device act on a folder share it never minted.
+   *
+   * Separate from {@link folder_shares} because it ships later: a server can
+   * advertise folder shares and still lack these routes, which is what
+   * production looks like between the two deploys. Reading the older flag
+   * instead would let the UI treat a "no such route" 404 as "already
+   * revoked" and report a live share as turned off.
+   */
+  folder_share_revoke_by_hash: boolean;
 }
 
 /**
@@ -314,6 +325,38 @@ export async function updateFolderShareExpiry(
   ttl: ShareTtl,
 ): Promise<string | null> {
   return invoke<string | null>("hcfs_update_folder_share_expiry", { shareToken, ttl });
+}
+
+/**
+ * Revoke a folder share by the `tokenHash` the listing returns, for a row
+ * this device never minted (`resolvable: false`).
+ *
+ * The plaintext token lives only on the device that created the share, so
+ * without this an owner could close a live, anonymously readable view of a
+ * drive subtree from exactly one machine. The hash is not a capability — it
+ * is what the server stores and what the listing already hands out — so the
+ * account bearer remains the only thing authorising the write.
+ *
+ * Gate on `ServerCapabilities.folder_share_revoke_by_hash`. The Rust layer
+ * refuses without it rather than trusting a 404, because a server lacking
+ * these routes answers one that is indistinguishable from "already revoked".
+ *
+ * Prefer {@link revokeFolderShare} whenever the row IS resolvable: that path
+ * also clears the local secret and the folder badge, which this one cannot.
+ */
+export async function revokeFolderShareByHash(tokenHash: string): Promise<void> {
+  await invoke<void>("hcfs_revoke_folder_share_by_hash", { tokenHash });
+}
+
+/**
+ * Change a folder share's expiry by `tokenHash`. The by-hash counterpart to
+ * {@link updateFolderShareExpiry}, with the same capability gate.
+ */
+export async function updateFolderShareExpiryByHash(
+  tokenHash: string,
+  ttl: ShareTtl,
+): Promise<string | null> {
+  return invoke<string | null>("hcfs_update_folder_share_expiry_by_hash", { tokenHash, ttl });
 }
 
 export async function revokeShare(shareToken: string): Promise<void> {

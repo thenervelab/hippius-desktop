@@ -1274,6 +1274,91 @@ pub async fn update_folder_share_expiry_inner(state: &AppState, account_id: &str
     Ok(expires_at.map(|e| e.to_rfc3339()))
 }
 
+/// Capability gate for the by-hash pair, and the reason it must be checked
+/// BEFORE the call rather than only after a 404.
+///
+/// A `token_hash` is not a capability — it is what the server stores and
+/// what the listing already returns — so these routes are safe to expose.
+/// What is not safe is guessing at their 404. On a server without them the
+/// route itself answers a bare 404, which is byte-identical to the
+/// "already revoked" 404, and treating that as success would tell the user
+/// a live, anonymously readable share had been turned off.
+async fn require_revoke_by_hash_supported(state: &AppState, account_id: &str) -> Result<()> {
+    let caps = fetch_capabilities(state, account_id).await?;
+    if !caps.folder_share_revoke_by_hash {
+        return Err(AppError::Validation(
+            "This server cannot revoke a link created on another device yet.".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Revoke a folder share by the `token_hash` the listing returns, for a row
+/// this device never minted.
+///
+/// The plaintext token lives only on the device that created the share, so
+/// without this an owner could close a live, anonymously readable view of a
+/// drive subtree from exactly one machine — and losing that machine meant
+/// never.
+///
+/// Deliberately does NOT touch the keystore. This device holds no secret
+/// for the share, so there is nothing to forget; [`hcfs_revoke_folder_share`]
+/// stays the right call where the plaintext token IS resolvable, because it
+/// also clears the local secret and the folder badge.
+#[tauri::command]
+pub async fn hcfs_revoke_folder_share_by_hash(state: tauri::State<'_, AppState>, token_hash: String) -> Result<()> {
+    let account_id = state.current_account_id()?;
+    revoke_folder_share_by_hash_inner(&state, &account_id, &token_hash).await
+}
+
+/// Inner of [`hcfs_revoke_folder_share_by_hash`], taking `&AppState` so the
+/// mock-server integration suite can drive it without a `tauri::State`.
+pub async fn revoke_folder_share_by_hash_inner(state: &AppState, account_id: &str, token_hash: &str) -> Result<()> {
+    require_revoke_by_hash_supported(state, account_id).await?;
+
+    let pool = state.pool()?;
+    let client = build_account_client(pool, account_id).await?;
+    match client.revoke_folder_share_by_hash(token_hash).await {
+        // Both are success. The gate above already established that the
+        // routes exist, so a 404 here is the server saying "no such live
+        // share" — unknown, someone else's, or already revoked — rather than
+        // "no such route". Idempotent, matching the token path, so a
+        // double-tapped Revoke needs no special-casing.
+        //
+        // Nothing to forget locally either way: this device holds no secret
+        // for a share it did not mint.
+        Ok(()) | Err(FolderShareError::NotFound) => Ok(()),
+        Err(e) => Err(AppError::Hcfs(format!("revoke_folder_share_by_hash: {e}"))),
+    }
+}
+
+/// Change a folder share's expiry by `token_hash`, for a row this device
+/// never minted. The by-hash counterpart to
+/// [`hcfs_update_folder_share_expiry`].
+#[tauri::command]
+pub async fn hcfs_update_folder_share_expiry_by_hash(state: tauri::State<'_, AppState>, token_hash: String, ttl: String) -> Result<Option<String>> {
+    let account_id = state.current_account_id()?;
+    let ttl = parse_ttl(&ttl)?;
+    update_folder_share_expiry_by_hash_inner(&state, &account_id, &token_hash, ttl).await
+}
+
+/// Inner of [`hcfs_update_folder_share_expiry_by_hash`].
+pub async fn update_folder_share_expiry_by_hash_inner(state: &AppState, account_id: &str, token_hash: &str, ttl: ShareTtl) -> Result<Option<String>> {
+    require_revoke_by_hash_supported(state, account_id).await?;
+
+    let pool = state.pool()?;
+    let client = build_account_client(pool, account_id).await?;
+    let expires_at = client.update_folder_share_expiry_by_hash(token_hash, ttl).await.map_err(|e| {
+        warn!(error = %e, "update_folder_share_expiry_by_hash failed");
+        match e {
+            FolderShareError::NotFound => AppError::Validation("This link is no longer active, so its expiry cannot be changed.".into()),
+            other => AppError::Hcfs(format!("update_folder_share_expiry_by_hash: {other}")),
+        }
+    })?;
+
+    Ok(expires_at.map(|e| e.to_rfc3339()))
+}
+
 /// Generate a share password for the modal to pre-fill.
 ///
 /// Exists so the password the user sees is produced by the same CSPRNG and the

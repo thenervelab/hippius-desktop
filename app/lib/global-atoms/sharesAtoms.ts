@@ -53,6 +53,25 @@ export const folderShareFeatureEnabledAtom = atom((get) => {
 });
 
 /**
+ * Whether the server carries `/v1/folder-shares/by-hash/{token_hash}`, which
+ * lets this device revoke and re-expire a folder share it never minted.
+ *
+ * Deliberately separate from {@link folderShareFeatureEnabledAtom}: the
+ * by-hash routes ship after folder shares, so a server can advertise
+ * `folder_shares` and still lack them — which is exactly what production
+ * looks like between the two deploys. Reading the older flag would let the
+ * UI act against routes that answer a bare 404, indistinguishable from
+ * "already revoked", and report a live share as turned off.
+ *
+ * `null` capabilities (not yet fetched) collapse to `false`, so the controls
+ * start disabled and enable once the answer is known — never the reverse.
+ */
+export const folderShareRevokeByHashEnabledAtom = atom((get) => {
+  const caps = get(serverCapabilitiesAtom);
+  return caps?.folder_share_revoke_by_hash === true;
+});
+
+/**
  * What `ShareFileModal` is currently sharing. `null` means closed.
  *
  * Storing the file (rather than just `(label, name)`) lets the modal render
