@@ -1,4 +1,5 @@
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
+import { driveRelativePathFor } from "@/app/lib/utils/driveRelativePath";
 import type { ShareModalTarget } from "@/app/lib/global-atoms/sharesAtoms";
 
 /**
@@ -44,23 +45,10 @@ export function folderShareRelativePath(
   file: Pick<FormattedUserFile, "name" | "actualFileName" | "parentRelativePath">,
   basePath: string | null | undefined,
 ): string {
-  const trim = (value: string) => value.replace(/^\/+|\/+$/g, "");
-
-  const name = trim(file.actualFileName || file.name);
-  const base = trim(file.parentRelativePath ?? basePath ?? "");
-
-  if (!base) return name;
-
-  // Only treat the name as already-qualified when it genuinely carries a path.
-  // A folder row's name is a bare basename, so an unconditional `name === base`
-  // check would collapse `Trips/Trips` to `Trips` and share the PARENT — a
-  // strict superset of what the user selected. Same-named nesting is ordinary
-  // (`src/src`, an archive that re-nests its own directory).
-  const isQualified = name.includes("/");
-  if (isQualified && (name === base || name.startsWith(`${base}/`))) return name;
-  if (isQualified) return name;
-
-  return `${base}/${name}`;
+  // Delegates to the shared resolver: a folder's path is the same
+  // question whether it is being shared or renamed, and the two answering
+  // it differently is how one of them ends up acting on the wrong folder.
+  return driveRelativePathFor({ ...file, isFolder: true }, basePath);
 }
 
 /**

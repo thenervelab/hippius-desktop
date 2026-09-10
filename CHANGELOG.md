@@ -199,6 +199,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Renaming a folder works again.** Renaming a folder inside another folder failed
+  with an error, because the app looked for it at the top of the drive instead of
+  where it actually was.
 - **The billing cards are sized for what they hold.** The deposit address was being
   shortened on a window with room to spare, and on a large screen both cards
   stretched into empty space. They now stop at their natural width, with the address

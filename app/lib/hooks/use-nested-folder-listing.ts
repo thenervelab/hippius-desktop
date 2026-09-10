@@ -265,6 +265,11 @@ export function useNestedFolderListing({
           isErasureCoded: false,
           mainReqHash: "",
           label: label || undefined,
+          // Where a FOLDER row lives. Its `actualFileName` is only the
+          // basename (the line above keeps the path off the name), so
+          // without this a rename or a share addresses a folder of the
+          // same name at the DRIVE ROOT instead of the one on screen.
+          parentRelativePath: entry.is_folder ? subfolder || undefined : undefined,
           // Every row of a browsed remote drive, files included — the
           // `remote://` source only ever reached folder rows.
           remoteDriveLabel: remote ? label || undefined : undefined,

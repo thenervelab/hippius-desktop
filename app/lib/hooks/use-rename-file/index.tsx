@@ -6,6 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { notifyFilesMutated } from "@/app/lib/utils/fileMutationEvents";
 import { remoteDriveLabel } from "@/app/lib/utils/renameGating";
+import { driveRelativePathFor } from "@/app/lib/utils/driveRelativePath";
 import { toast } from "sonner";
 
 export interface RenameFileArgs {
@@ -39,9 +40,15 @@ export const useRenameFile = () => {
             // so it renames on the server instead. The same resolver the
             // menu gate uses names the drive; the row's path names the
             // folder within it.
+            // A folder row shows a basename and keeps its path beside it,
+            // so the path has to be rebuilt — sending the basename renamed
+            // a folder of the same name at the drive root, or more often
+            // nothing at all, which is the error the user saw.
+            const relativePath = driveRelativePathFor(file);
+
             const remoteLabel = remoteDriveLabel(file);
             if (remoteLabel) {
-                const relative = (file.actualFileName || file.name).replace(/\\/g, "/");
+                const relative = relativePath.replace(/\\/g, "/");
                 const cut = relative.lastIndexOf("/");
                 await invoke("rename_remote_file", {
                     accountId: polkadotAddress,
@@ -56,7 +63,7 @@ export const useRenameFile = () => {
             return await invoke<RenameEntryResult>("rename_entry", {
                 accountId: polkadotAddress,
                 file: {
-                    name: file.actualFileName || file.name,
+                    name: relativePath,
                     source: file.source ?? null,
                     label: file.label ?? null,
                     newName,
