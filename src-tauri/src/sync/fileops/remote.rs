@@ -913,6 +913,11 @@ mod tests {
             chunk_hashes: None,
             created_at: created,
             updated_at: updated,
+            // Unattributed, which is what the server sends for rows
+            // predating attribution and for admin-bearer writes. These
+            // fixtures exercise the folder/file grouping, which does not
+            // read the uploader.
+            uploaded_by: None,
         }
     }
 

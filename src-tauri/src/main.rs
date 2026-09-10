@@ -422,6 +422,8 @@ fn main() {
             crate::shares::commands::hcfs_update_share_expiry,
             crate::shares::commands::hcfs_list_folder_shares,
             crate::shares::commands::hcfs_revoke_folder_share,
+            crate::shares::commands::hcfs_revoke_folder_share_by_hash,
+            crate::shares::commands::hcfs_update_folder_share_expiry_by_hash,
             crate::shares::commands::hcfs_update_folder_share_expiry,
             crate::shares::commands::hcfs_generate_share_password,
             crate::shares::commands::hcfs_list_share_history,
