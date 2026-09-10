@@ -40,8 +40,16 @@ const Home: React.FC = () => {
             <NoStoragePlanBanner className="mb-3" />
 
             {/* Usage bar + the plan/credits summary. Both render from the same
-                get_storage_overview fetch, so they can't disagree. */}
-            <div className="mb-3 grid gap-4 grid-cols-1 @xl:grid-cols-2 items-stretch">
+                get_storage_overview fetch, so they can't disagree.
+
+                Capped, and ONLY here — the banner above and Recent Files below
+                stay full-bleed, which is the page's intended shape. These two
+                are the exception because their content does not grow with the
+                window: a card holding a figure and a button reads as an empty
+                banner once it is 700px wide, where the files table genuinely
+                uses every pixel it is given for filenames. A page-wide cap was
+                tried and reverted for exactly that reason. */}
+            <div className="mb-3 grid w-full max-w-[960px] gap-4 grid-cols-1 @xl:grid-cols-2 items-stretch">
               <StorageOverviewCard />
               <PlanOverviewCard />
             </div>
