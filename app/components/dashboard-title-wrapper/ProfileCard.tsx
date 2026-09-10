@@ -203,11 +203,20 @@ const ProfileCard: React.FC<ProfileCardProps> = ({
           (shrink-0) always renders. */}
       <span className="flex w-full min-w-0 items-center gap-1.5">
         {/* The sign-in identity for an OAuth account, the address for a
-            mnemonic one. Already middle-truncated to fit; `truncate` is
-            the backstop for a narrow rail or a large zoom, where losing
-            the tail beats pushing the chevron out. */}
-        <span className="min-w-0 truncate text-sm font-medium font-inter leading-none text-zinc-800 dark:text-grey-light-600 tracking-[-0.4px] text-left">
-          {identity.primary}
+            mnemonic one — in TWO spans so the browser does the measuring
+            and this only says where it may cut.
+            
+            The head shrinks and ellipsizes; the tail (an email's TLD)
+            never does. That is what keeps ".com" on screen at any rail
+            width, and it replaces the character budget that kept being
+            wrong — a count cannot know the window, the zoom or the font,
+            so its output was itself clipped from the end, losing exactly
+            what it was protecting. */}
+        <span className="flex min-w-0 items-baseline text-sm font-medium font-inter leading-none text-zinc-800 dark:text-grey-light-600 tracking-[-0.4px] text-left">
+          <span className="min-w-0 truncate">{identity.primary.head}</span>
+          {identity.primary.tail && (
+            <span className="shrink-0">{identity.primary.tail}</span>
+          )}
         </span>
         {withChevron && (
           <ChevronDown className="size-[12px] shrink-0 text-black-700/60 dark:text-grey-light-300/60 transition-transform duration-200 group-data-[state=open]:rotate-180" />

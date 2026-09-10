@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
   resolveAccountIdentity,
+  splitIdentity,
   truncateAddress,
-  truncateIdentity,
 } from "../accountIdentity";
 import type { OAuthSession } from "@/app/lib/types/oAuth";
 
@@ -26,42 +26,46 @@ describe("truncateAddress", () => {
   });
 });
 
-describe("truncateIdentity", () => {
-  // "@gmail" says nothing about which account this is — nearly every
-  // address shares it — so the host is what gives way, not the name.
-  it("drops the mail host and keeps the name and the TLD", () => {
-    expect(truncateIdentity("ahmadraosanawarali@gmail.com")).toBe(
-      "ahmadraosanawar….com",
-    );
+describe("splitIdentity", () => {
+  // No character budget: a count cannot know the window, the zoom or the
+  // font, so its own output kept being clipped from the end — losing the
+  // ".com" it existed to protect.
+  it("pins an email's TLD so only the head can give way", () => {
+    expect(splitIdentity("ahmadraosanawarali@gmail.com")).toEqual({
+      head: "ahmadraosanawarali@gmail",
+      tail: ".com",
+    });
   });
 
-  // A short name against a long host keeps the whole name; there is no
-  // reason to trim what already fits.
-  it("keeps a short local part whole", () => {
-    expect(truncateIdentity("bob@some-really-long-domain.com")).toBe("bob….com");
-  });
-
-  it("leaves anything that already fits alone", () => {
-    expect(truncateIdentity("a@b.com")).toBe("a@b.com");
-    expect(truncateIdentity("@ahmad_rao")).toBe("@ahmad_rao");
-  });
-
-  // No "@" to exploit, so there is no uninteresting part to single out.
-  it("falls back to a middle cut for a handle or an address", () => {
-    expect(truncateIdentity("noatsign-but-really-long-name")).toBe(
-      "noatsign-…-long-name",
-    );
-  });
-
-  it("never exceeds the budget it is given", () => {
-    for (const value of [
-      "ahmadraosanawarali@gmail.com",
-      "verylongusername.with.dots@some-company-domain.co.uk",
-      "@a-github-handle-that-runs-on-and-on",
-      "noatsign-but-really-long-name",
-    ]) {
-      expect(truncateIdentity(value).length).toBeLessThanOrEqual(20);
+  // Nothing is dropped when there is room — the host is only given up
+  // under pressure, by the browser, not removed up front.
+  it("reassembles to the original address", () => {
+    for (const email of ["a@b.com", "ahmadraosanawarali@gmail.com", "x@y.co.uk"]) {
+      const { head, tail } = splitIdentity(email);
+      expect(head + tail).toBe(email);
     }
+  });
+
+  // The host sits at the END of the head, so it is what the browser eats
+  // first — before the name, which is the part that identifies anything.
+  it("puts the host last in the head, ahead of the name", () => {
+    const { head } = splitIdentity("ahmadraosanawarali@gmail.com");
+    expect(head.endsWith("@gmail")).toBe(true);
+    expect(head.startsWith("ahmadraosanawarali")).toBe(true);
+  });
+
+  // A handle or an address has no part worth pinning.
+  it("pins nothing when there is no domain to pin", () => {
+    expect(splitIdentity("@ahmad_rao")).toEqual({ head: "@ahmad_rao", tail: "" });
+    expect(splitIdentity("5HHap2Pe...qFQkYdsT")).toEqual({
+      head: "5HHap2Pe...qFQkYdsT",
+      tail: "",
+    });
+  });
+
+  // An empty head would render as a bare ".com".
+  it("does not split a malformed address into an empty head", () => {
+    expect(splitIdentity("a@.com")).toEqual({ head: "a@.com", tail: "" });
   });
 });
 
@@ -73,7 +77,7 @@ describe("resolveAccountIdentity", () => {
       session({ provider: "google", email: "a@b.com" }),
       ADDRESS,
     );
-    expect(id.primary).toBe("a@b.com");
+    expect(id.primary).toEqual({ head: "a@b", tail: ".com" });
     expect(id.providerLabel).toBe("Google");
     expect(id.isOAuthAccount).toBe(true);
   });
@@ -84,18 +88,18 @@ describe("resolveAccountIdentity", () => {
       session({ provider: "github", username: "ahmad_rao", email: "a@b.com" }),
       ADDRESS,
     );
-    expect(id.primary).toBe("@ahmad_rao");
+    expect(id.primary).toEqual({ head: "@ahmad_rao", tail: "" });
     expect(id.providerLabel).toBe("GitHub");
   });
 
-  // The card's line is shortened to fit the rail; the menu below it
-  // still shows the address in full.
-  it("shortens a long email on the card line", () => {
+  // The card's line is split so the rail can shorten it; the menu below
+  // it still shows the address in full.
+  it("splits a long email for the card line and leaves the menu whole", () => {
     const id = resolveAccountIdentity(
       session({ provider: "google", email: "ahmadraosanawarali@gmail.com" }),
       ADDRESS,
     );
-    expect(id.primary).toBe("ahmadraosanawar….com");
+    expect(id.primary.tail).toBe(".com");
     expect(id.menuEmail).toBe("ahmadraosanawarali@gmail.com");
   });
 
@@ -121,14 +125,14 @@ describe("resolveAccountIdentity", () => {
   // A mnemonic account has no sign-in identity to show.
   it("keeps the address for a mnemonic account", () => {
     const id = resolveAccountIdentity(session({ provider: "mnemonic" }), ADDRESS);
-    expect(id.primary).toBe(id.truncatedAddress);
+    expect(id.primary.head).toBe(id.truncatedAddress);
     expect(id.isOAuthAccount).toBe(false);
     expect(id.providerLabel).toBeUndefined();
   });
 
   it("keeps the address when there is no session at all", () => {
     const id = resolveAccountIdentity(null, ADDRESS);
-    expect(id.primary).toBe(id.truncatedAddress);
+    expect(id.primary.head).toBe(id.truncatedAddress);
     expect(id.isOAuthAccount).toBe(false);
   });
 
@@ -139,7 +143,7 @@ describe("resolveAccountIdentity", () => {
       { token: "t", userId: 1, username: "", provider: "apple", expiresAt: "" } as OAuthSession,
       ADDRESS,
     );
-    expect(id.primary).toBe(id.truncatedAddress);
+    expect(id.primary.head).toBe(id.truncatedAddress);
     expect(id.menuName).toBe(id.truncatedAddress);
     expect(id.providerLabel).toBe("Apple");
   });
