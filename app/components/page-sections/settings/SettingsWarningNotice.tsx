@@ -1,20 +1,19 @@
 import React from "react";
 import { cn } from "@/lib/utils";
+import { OctagonAlert } from "@/components/ui/icons";
 
 interface SettingsWarningNoticeProps {
   title: string;
   description: React.ReactNode;
-  /** Optional icon rendered before the title (e.g. OctagonAlert). */
+  /** Optional icon rendered in the leading chip. Defaults to OctagonAlert. */
   icon?: React.ReactNode;
-  /** Override outer classes — e.g. swap the default w-fit for w-full inside dialogs. */
+  /** Override outer classes — e.g. extra margin at a call site. */
   className?: string;
 }
 
 /**
- * Yellow warning callout used across settings sections (API Token,
- * Security, Set Unlock Password dialog, etc.). Content-hugging by
- * default; pass `className="w-full"` when used inside a container that
- * should stretch it. Matches Figma 4045:136039.
+ * Standing security notice on settings pages (API Token, Security).
+ * Same chrome as SecurityRow, with an amber chip so it still reads as a warning.
  */
 export function SettingsWarningNotice({
   title,
@@ -24,20 +23,28 @@ export function SettingsWarningNotice({
 }: SettingsWarningNoticeProps) {
   return (
     <div
+      role="note"
       className={cn(
-        "w-fit rounded-[6px] border border-[#feb101] bg-[rgba(254,177,1,0.16)] dark:bg-[rgba(254,177,1,0.10)] p-[8px] flex flex-col gap-[8px]",
+        "w-full rounded-[8px] border border-grey-dark-100 bg-white dark:bg-black-600 dark:border-black-300 px-4 py-3 flex items-start gap-3",
         className
       )}
     >
-      <div className="flex items-center gap-[6px]">
-        {icon && <span className="flex-shrink-0">{icon}</span>}
-        <p className="font-geist text-[14px] leading-[1.109] tracking-[-0.28px] font-medium text-black dark:text-white">
+      <span
+        className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-warning-50/15"
+        aria-hidden="true"
+      >
+        {icon ?? (
+          <OctagonAlert className="size-4 text-warning-40 dark:text-warning-50" />
+        )}
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-medium text-grey-10 dark:text-white">
           {title}
         </p>
+        <p className="text-sm text-[#7D7D7D] dark:text-grey-dark-600 mt-1">
+          {description}
+        </p>
       </div>
-      <p className="font-geist text-[14px] leading-[1.109] tracking-[-0.28px] font-medium text-[#7d7d7d] dark:text-grey-dark-600">
-        {description}
-      </p>
     </div>
   );
 }

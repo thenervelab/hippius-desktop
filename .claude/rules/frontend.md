@@ -47,6 +47,10 @@ Build-time boolean constants in `app/lib/featureFlags.ts` gate user-visible surf
 
 Generic key-value store in SQLite (`user_preferences` table) accessed via `get_user_preference` / `save_user_preference` Rust commands. Frontend wrapper in `app/lib/utils/userPreferencesDb.ts` provides typed helpers including `getLastBrowseDirectory()` / `saveLastBrowseDirectory()` which remember the last directory browsed in file/folder pickers (fallback chain: last browse dir → home dir → OS default). Used by `FileDropzone`, `FolderUploadDialog`, and `FolderToFolderUploadDialog`.
 
+## Settings standing notices
+
+`SettingsWarningNotice` is a **full-width settings card** (same chrome as `SecurityRow` / `SettingsCard`) with an amber icon chip — never a content-hugging highlighter-yellow box. Pinned by `settings/__tests__/SettingsWarningNotice.test.tsx`.
+
 ## In-app file mutations must call `notifyFilesMutated`
 
 `app/lib/utils/fileMutationEvents.ts` is the single invalidation funnel every mutation hook uses on success. Two audiences need waking and they refresh by different mechanisms: the TanStack-cached lists (drive table, recent files) via `refetchQueries`, and the nested folder listings (`useNestedFolderListing` in `DriveContainer`'s subfolder view and in `ExpandedFolderRows`), which are plain `useState` + `invoke("list_sync_folder_grouped")` and only react to the `hippius:files-mutated` window event.
