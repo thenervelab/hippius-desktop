@@ -23,15 +23,21 @@ describe("the billing top row is sized for the two cards in it", () => {
   // it has a width at which it is complete and past which it only adds
   // empty field. A fraction could not express that: it truncated on a
   // small window and sprawled on a large one.
-  it("bounds the deposit column instead of giving it a fraction of the row", () => {
-    expect(sections).toMatch(/@3xl:grid-cols-\[minmax\(0,1fr\)_minmax\(28rem,34rem\)\]/);
-    expect(sections).not.toMatch(/minmax\(0,1\.5fr\)/);
+  it("bounds both columns instead of giving either a fraction of the row", () => {
+    expect(sections).toMatch(
+      /@3xl:grid-cols-\[minmax\(0,26rem\)_minmax\(28rem,34rem\)\]/,
+    );
+    // No `fr` anywhere in the row: a fraction is what made one card
+    // absorb every spare pixel on a wide window.
+    expect(sections).not.toMatch(/@3xl:grid-cols-\[[^\]]*fr[^\]]*\]/);
   });
 
   // The floor has to clear a full SS58 plus the copy button, or the
   // measured truncation kicks in again and the bound achieves nothing.
-  it("sets a floor that fits the address, not just a ceiling", () => {
-    const [, floor] = sections.match(/minmax\((\d+)rem,\s*(\d+)rem\)/) ?? [];
+  // Matched on the DEPOSIT column specifically — the credits column has
+  // no truncation risk and deliberately floors at 0 so it can shrink.
+  it("sets a floor on the deposit column that fits the address", () => {
+    const [, floor] = sections.match(/_minmax\((\d+)rem,\s*\d+rem\)/) ?? [];
     expect(Number(floor)).toBeGreaterThanOrEqual(26);
   });
 

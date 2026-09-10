@@ -199,9 +199,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
-- **Your TAO deposit address is shown in full.** The card was sized for a row that
-  used to hold three widgets, so the address was shortened on a window with room to
-  spare — and it no longer stretches into empty space on a large screen either.
+- **The billing cards are sized for what they hold.** The deposit address was being
+  shortened on a window with room to spare, and on a large screen both cards
+  stretched into empty space. They now stop at their natural width, with the address
+  shown in full.
 - **The Drive plan notice is easier to read.** The cancelled-plan and failed-renewal
   warnings now match the web console's style instead of filling a block of colour.
 - **The account menu says who you are signed in as.** It showed only your wallet

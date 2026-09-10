@@ -42,11 +42,14 @@ export default function BillingSections() {
           a fixed 48-character address plus a copy button, so it has a width
           at which it is complete and past which it only adds empty field.
           A fraction of the row could not express that — it truncated on a
-          small window and sprawled on a large one. The floor fits the
-          address, the ceiling stops the sprawl, and the credits card (a
-          number and a full-width button, both of which stretch happily)
-          takes the slack. */}
-      <div className="mt-4 grid grid-cols-1 gap-4 @md:grid-cols-2 @3xl:grid-cols-[minmax(0,1fr)_minmax(28rem,34rem)]">
+          small window and sprawled on a large one.
+
+          The credits column is bounded for the same reason: a balance and
+          one button do not read better across 800px, they just leave the
+          button stranded from the number it belongs to. Neither card
+          absorbs the slack now, so on a very wide window the row ends
+          where its content ends rather than stretching to the edge. */}
+      <div className="mt-4 grid grid-cols-1 gap-4 @md:grid-cols-2 @3xl:grid-cols-[minmax(0,26rem)_minmax(28rem,34rem)]">
         <CreditsWidget />
         <TaoDepositWidget />
       </div>
