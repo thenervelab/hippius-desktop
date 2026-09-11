@@ -26,7 +26,7 @@ const VERSION: u8 = 1;
 const NONCE_LEN: usize = 24;
 const FLAG_PRIVATE: u8 = 0x01;
 const FLAG_FOLDER_TOKEN: u8 = 0x02;
-const PRIVATE_BLOB_LEN: usize = 89;
+const PRIVATE_BLOB_LEN: usize = hcfs_client::client::share::SHARE_WRAP_BLOB_LEN;
 const MAX_FOLDER_TOKEN_LEN: usize = 64;
 const MAX_BATCH: usize = 64;
 

@@ -30,7 +30,7 @@ use hcfs_client::client::share::{
 };
 use serde::Serialize;
 use sqlx::sqlite::SqlitePool;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use tauri::ipc::Channel;
@@ -676,6 +676,10 @@ pub(crate) async fn share_external_file(
 
     refuse_if_source_moved(&client, &keystore, abs_path, before, &result.share_token).await?;
 
+    if let Ok(Some(secret)) = keystore.get(&result.share_token) {
+        super::owner_wrap::push_for_account(state, account_id, &[(result.share_token.clone(), secret)]).await;
+    }
+
     Ok(ShareLink {
         share_token: result.share_token,
         share_url: result.share_url,
@@ -1188,7 +1192,12 @@ pub async fn list_folder_shares_inner(state: &AppState, account_id: &str) -> Res
 
     let keystore = SqliteShareKeystore::new(pool.clone());
     let mut secrets_by_hash = folder_share_secrets_by_hash(&keystore)?;
-    let wrap_entries: Vec<(String, ShareSecret)> = secrets_by_hash.values().map(|(token, secret)| (token.clone(), secret.clone())).collect();
+    let listing_hashes: HashSet<&str> = rows.iter().map(|row| row.token_hash.as_str()).collect();
+    let wrap_entries: Vec<(String, ShareSecret)> = secrets_by_hash
+        .iter()
+        .filter(|(hash, _)| listing_hashes.contains(hash.as_str()))
+        .map(|(_, (token, secret))| (token.clone(), secret.clone()))
+        .collect();
     super::owner_wrap::push_folder_for_account(state, account_id, &wrap_entries).await;
     let hashes: Vec<String> = rows.iter().map(|row| row.token_hash.clone()).collect();
     super::owner_wrap::hydrate_folder_keystore(state, account_id, &keystore, &mut secrets_by_hash, &hashes).await;

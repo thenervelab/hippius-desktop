@@ -80,6 +80,19 @@ fn the_mint_funnel_uploads_an_owner_wrap() {
 }
 
 #[test]
+fn every_file_mint_path_uploads_an_owner_wrap() {
+    let source = include_str!("../src/shares/commands.rs");
+    for name in [
+        "async fn create_share_inner(",
+        "async fn share_external_file(",
+        "async fn mint_remote_share_at(",
+    ] {
+        let body = fn_body(source, name);
+        assert!(body.contains("push_for_account"), "{name} must PUT a file owner wrap after mint");
+    }
+}
+
+#[test]
 fn the_file_list_opens_owner_wraps() {
     let source = include_str!("../src/shares/commands.rs");
     let body = fn_body(source, "pub async fn hcfs_list_shares(");
