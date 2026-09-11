@@ -250,9 +250,9 @@ jobs:
       - name: Install deps
         run: pnpm install --frozen-lockfile
 
-      # The script fails the build when the secret carries no INDEXER_API_KEY —
-      # without it the app renders indexer-backed screens as zeros rather than
-      # errors, so a broken beta build looks healthy to users.
+      # Required because tauri.conf.json bundles .env as a resource, not because
+      # of anything in it: every value is optional since the indexer moved to
+      # per-user auth and INDEXER_API_KEY stopped being bundled.
       - name: Create src-tauri/.env
         shell: bash
         env:

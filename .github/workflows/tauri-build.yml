@@ -260,13 +260,12 @@ jobs:
       - name: Install deps
         run: pnpm install --frozen-lockfile
 
-      # Same secret the staging and dev channels use. This step used to write
-      # `INDEXER_API_KEY=${{ secrets.INDEXER_API_KEY }}`, and no secret by that
-      # name exists at the repository or organization level — an undefined
-      # secret expands to the empty string, so the release would have bundled an
-      # empty key. The app treats that as "configured" and sends it, the indexer
-      # answers 401, and every indexer-backed screen renders a zero instead of an
-      # error. The script fails the build rather than let that ship again.
+      # Same secret the staging and dev channels use. The file is required
+      # because tauri.conf.json bundles it as a resource; every value it can
+      # carry is optional. It used to carry INDEXER_API_KEY, and this step
+      # briefly wrote that from a secret that did not exist — an undefined
+      # secret expands to the empty string, which the app treated as
+      # "configured", sent, and got a 401 for. No shared key is bundled now.
       - name: Create src-tauri/.env
         shell: bash
         env:

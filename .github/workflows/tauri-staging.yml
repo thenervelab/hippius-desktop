@@ -240,9 +240,9 @@ jobs:
       - name: Install deps
         run: pnpm install --frozen-lockfile
 
-      # The script fails the build when the secret carries no INDEXER_API_KEY —
-      # without it the app renders indexer-backed screens as zeros rather than
-      # errors, so a broken staging build looks healthy to testers.
+      # Required because tauri.conf.json bundles .env as a resource, not because
+      # of anything in it: every value is optional since the indexer moved to
+      # per-user auth and INDEXER_API_KEY stopped being bundled.
       - name: Create src-tauri/.env
         shell: bash
         env:
@@ -311,9 +311,11 @@ jobs:
             # extension. A build like that looks complete and is not — testers
             # spent days in August 2026 concluding "Share with Hippius is
             # broken" from one, because the only trace of the difference was a
-            # log line nobody opens. Same rule as write-tauri-env.sh's missing
-            # INDEXER_API_KEY: a silent degradation that reads as a product bug
-            # has to announce itself. Deliberately NOT a hard failure — staging
+            # log line nobody opens. The rule is that a silent degradation which
+            # reads as a product bug has to announce itself — the same reason
+            # write-tauri-env.sh used to fail a build whose .env carried no
+            # INDEXER_API_KEY, before that key was retired for per-user auth.
+            # Deliberately NOT a hard failure here — staging
             # is also used to test everything unrelated to Finder, so losing the
             # whole build to a lapsed secret costs more than it saves. Swap this
             # for `exit 1` if that trade ever changes.
