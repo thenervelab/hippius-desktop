@@ -39,14 +39,23 @@ pub fn start(app: &AppHandle) {
         }
         info!("finder bridge: listening for the file-manager extension");
 
-        // Dispatch each inbound menu action to the share engine. Each runs on
-        // its own task so a slow share (network) doesn't block the next click.
-        // The loop ends when the bridge handle is dropped (process exit).
+        // SHARE is a user click that may hit the network — spawn so it cannot
+        // stall the next click. BADGE_QUERY is one line per visible Finder
+        // row and is answered from in-memory state; run it on this task so
+        // a scroll cannot spawn unbounded work.
         while let Some(action) = incoming.recv().await {
-            let app = app.clone();
-            tauri::async_runtime::spawn(async move {
-                crate::finder_bridge::dispatch::handle(app, action).await;
-            });
+            let spawn_share = match &action {
+                crate::finder_bridge::protocol::ClientMessage::Share(_) => true,
+                crate::finder_bridge::protocol::ClientMessage::BadgeQuery(_) => false,
+            };
+            if spawn_share {
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    crate::finder_bridge::dispatch::handle(app, action).await;
+                });
+            } else {
+                crate::finder_bridge::dispatch::handle(app.clone(), action).await;
+            }
         }
         info!("finder bridge: inbound channel closed");
     });

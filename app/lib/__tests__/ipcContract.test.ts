@@ -254,6 +254,8 @@ describe("IPC command contract (FE invoke ↔ Rust generate_handler!)", () => {
       "hcfs_create_folder_share",
       "hcfs_list_folder_shares",
       "hcfs_revoke_folder_share",
+      "hcfs_revoke_folder_share_by_hash",
+      "hcfs_update_folder_share_expiry_by_hash",
       "read_preview_bytes",
       "prepare_motion_photo_preview",
       "vpn_status",

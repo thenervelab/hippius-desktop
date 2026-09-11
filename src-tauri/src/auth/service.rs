@@ -261,6 +261,9 @@ pub(crate) async fn refresh_auth_token_internal(pool: &SqlitePool, app: &tauri::
             user_id: user_id.as_i64(),
             username: &username,
             provider: "mnemonic",
+            // Refresh path: `None` preserves the stored email, like the
+            // logout preference beside it.
+            email: None,
             logout_time_minutes: None, // refresh path: don't clobber the user's preference
         },
     )

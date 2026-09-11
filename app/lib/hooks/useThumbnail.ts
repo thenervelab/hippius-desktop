@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { getFileUrl } from "@/app/lib/utils/fileUrlResolver";
+import { previewCacheContentHash } from "@/lib/utils/arionContentHash";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 
 /**
@@ -59,7 +60,7 @@ export function planThumbnail(
     accountId: polkadotAddress,
     label: file.label,
     fileId: file.fileId,
-    arionHash: file.arionHash ?? "",
+    arionHash: previewCacheContentHash(file),
     source: file.source ?? null,
   };
 }
@@ -128,7 +129,16 @@ function isHeicFileName(fileName: string): boolean {
 async function downscaleThumbnail(blob: Blob, maxDim: number): Promise<Blob> {
   if (typeof createImageBitmap !== "function") return blob;
 
-  const bitmap = await createImageBitmap(blob);
+  // `imageOrientation: "from-image"` is NOT the default for
+  // `createImageBitmap` — it is "from-image" only in newer specs and
+  // historically "none", so it is stated rather than assumed. Without it
+  // the bitmap holds the camera's unrotated pixels, the canvas bakes them
+  // into a JPEG with no EXIF to correct it, and the thumbnail sits
+  // sideways next to a viewer that shows the same file upright (an `<img>`
+  // applies the tag by itself).
+  const bitmap = await createImageBitmap(blob, {
+    imageOrientation: "from-image",
+  });
   try {
     const scale = Math.min(1, maxDim / bitmap.width, maxDim / bitmap.height);
     if (scale >= 1) return blob;
@@ -179,14 +189,19 @@ interface RustThumbnailRequest {
  * on-disk copy (no network), decodes off the WebView thread, and disk-caches
  * the small JPEG by content hash, so re-browsing a folder is a cache hit.
  *
- * The gate keys on `arionHash` first, `fileId` as fallback — the same order
- * Rust derives its cache key. LOCAL listing rows NEVER carry a `fileId`
- * (`get_user_files` sets `file_id: ""`; the nested mapper sets it only for
- * remote rows), so requiring one turns this whole path into dead code for
- * the drive surfaces it exists for. A row with neither id (not yet
- * uploaded) returns `null` and keeps the original url. `label` is passed
- * through but not required: Rust only needs it for the cloud fallback when
- * the on-disk copy has vanished.
+ * The gate keys on path id (`arionHash`) first, `fileId` as fallback.
+ * LOCAL listing rows NEVER carry a `fileId` (`get_user_files` sets
+ * `file_id: ""`; the nested mapper sets it only for remote rows), so
+ * requiring one turns this whole path into dead code for the drive
+ * surfaces it exists for. A row with neither id (not yet uploaded)
+ * returns `null` and keeps the original url.
+ *
+ * The IPC `arionHash` is the content digest (`arionCid`). Empty lets
+ * Rust fall back to `file_id`. Local rows have no `fileId`, so the
+ * path id is forwarded there as the fallback cache key — otherwise a
+ * synced jpeg without a digest yet would fail Validation.
+ * `label` is passed through but not required: Rust only needs it for
+ * the cloud fallback when the on-disk copy has vanished.
  */
 function rustThumbnailRequest(
   file: FormattedUserFile,
@@ -200,8 +215,8 @@ function rustThumbnailRequest(
   return {
     accountId: polkadotAddress,
     label: file.label ?? "",
-    fileId: file.fileId ?? "",
-    arionHash: file.arionHash ?? "",
+    fileId: file.fileId || file.arionHash || "",
+    arionHash: previewCacheContentHash(file),
     source: file.source ?? null,
   };
 }
@@ -230,7 +245,13 @@ function resolvedUrlKey(arionHash: string, fileId: string, maxDim: number): stri
  * without eviction the dead url is re-served for the rest of the session.
  */
 export function evictResolvedThumbnailUrl(file: FormattedUserFile, maxDim: number): void {
-  resolvedUrlCache.delete(resolvedUrlKey(file.arionHash ?? "", file.fileId ?? "", maxDim));
+  resolvedUrlCache.delete(
+    resolvedUrlKey(
+      previewCacheContentHash(file),
+      file.fileId || file.arionHash || "",
+      maxDim,
+    ),
+  );
 }
 
 function cacheResolvedUrl(key: string, url: string): void {
@@ -479,6 +500,7 @@ export function useThumbnail(
     maxDim,
     file?.fileId,
     file?.arionHash,
+    file?.arionCid,
     file?.name,
     file?.actualFileName,
     file?.source,

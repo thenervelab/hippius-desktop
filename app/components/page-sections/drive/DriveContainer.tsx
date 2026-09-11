@@ -18,6 +18,8 @@ import * as Typography from "@/components/ui/typography";
 import FilesTableSkeleton from "./files-table/FilesTableSkeleton";
 import CardViewSkeleton from "./card-view/CardViewSkeleton";
 import DriveOnboarding from "./DriveOnboarding";
+import { AddLocalFolderDialog } from "@/components/page-sections/settings/AddLocalFolderDialog";
+import type { AddButtonRef } from "./AddFileButton";
 import { getPrivateSyncPath } from "@/lib/utils/syncPathUtils";
 import { useDriveStorageStats } from "@/app/lib/hooks/api/useDriveStorageStats";
 import { formatBytes } from "@/app/lib/utils/formatBytes";
@@ -29,14 +31,21 @@ import {
 } from "@/lib/utils/fileFilterUtils";
 import { useFilteredFiles } from "@/app/lib/hooks/useFilteredFiles";
 import { useRecursiveFileSearch } from "@/app/lib/hooks/useRecursiveFileSearch";
+import { useDriveScopedSearch } from "@/app/lib/hooks/useDriveScopedSearch";
 import {
   filterCriteriaAreActive,
+  shouldUseDriveScopedSearch,
   shouldUseRecursiveSearch,
 } from "@/lib/utils/filesViewMode";
 import { isExcludedSyncStatus } from "@/lib/utils/syncStatusDisplay";
+import { useHasExclusions } from "@/app/lib/hooks/useDriveExclusions";
+import { shouldOfferExcludedFilter } from "./excludedFilterVisibility";
 import DriveHeader from "./DriveHeader";
 import DriveContent from "./DriveContent";
+import type { NewFolderTarget } from "@/app/lib/global-atoms/contextMenuAtoms";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
+import { navReclickAtom } from "@/app/components/sidebar/sideBarAtoms";
+import { shouldHandleReclick } from "@/app/components/sidebar/navReclick";
 import {
   useNestedFolderListing,
   remoteLabelFromSource,
@@ -50,12 +59,6 @@ import { useAtomValue, useSetAtom } from "jotai";
 import {
   getViewModePreference,
   saveViewModePreference,
-  getActiveSyncFolderLabel,
-  saveActiveSyncFolderLabel,
-  getActiveRemoteFolderLabel,
-  saveActiveRemoteFolderLabel,
-  getDriveOnLocalView,
-  saveDriveOnLocalView,
 } from "@/lib/utils/userPreferencesDb";
 import { useInfiniteScroll } from "@/lib/hooks/use-infinite-scroll";
 import { FILES_MUTATED_EVENT } from "@/app/lib/utils/fileMutationEvents";
@@ -108,11 +111,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // below (so they can branch on `isNested`). See `isLoading` / `isFetching`
   // declarations following the `useNestedFolderListing` call.
 
-  const addButtonRef = useRef<{
-    openWithFiles(files: FileList): Promise<void>;
-    openWithPaths(paths: string[]): Promise<void>;
-    isDialogOpen(): boolean;
-  }>(null);
+  const addButtonRef = useRef<AddButtonRef>(null);
   const [viewMode, setViewMode] = useState<"list" | "card">("list");
 
   // Folder upload dialog state (lifted from DriveHeader so context menus can trigger it)
@@ -146,17 +145,18 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // model where the user navigates back to a "Local" cards view via the
   // breadcrumb (see SyncFolderBreadcrumb / DriveOnboarding).
   //
-  // - `activeSyncFolderLabel`: persisted in user prefs. `null` means we
+  // - `activeSyncFolderLabel`: which folder is open, for the session
+  //   only. `null` means we
   //   haven't picked a folder yet (first launch or saved label removed);
   //   the bootstrap effect below resolves it to the first available label.
-  // - `isOnLocalView`: also persisted in user prefs so leaving Drive and
-  //   coming back restores the same section. True when the user is on the
-  //   "Local" cards view (the section picker showing Local Sync Folders +
-  //   Sync From Other Devices); false when inside a specific folder.
+  // - `isOnLocalView`: true on the main folder list, false inside a
+  //   specific folder. Starts TRUE and is no longer persisted — opening
+  //   the app, or clicking Drive, always lands on the full list rather
+  //   than wherever the last session happened to end.
   const [activeSyncFolderLabel, setActiveSyncFolderLabel] = useState<
     string | null
   >(null);
-  const [isOnLocalView, setIsOnLocalView] = useState(false);
+  const [isOnLocalView, setIsOnLocalView] = useState(true);
   // Tracks whether the saved label has been hydrated, so the bootstrap
   // / fallback effects don't fight each other on first mount.
   const [activeFolderHydrated, setActiveFolderHydrated] = useState(false);
@@ -284,6 +284,10 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   const urlMainFolderActualName = getParam("mainFolderActualName");
   const urlSubFolderPath = getParam("subFolderPath");
   const urlFolderSource = getParam("folderSource");
+  // "Open this folder", handed over from another page (Settings). See
+  // `driveFolderRoute`.
+  const urlOpenLabel = getParam("openLabel");
+  const urlOpenRemote = getParam("openRemote") === "1";
   const urlMainReqHash = getParam("mainReqHash");
   const isNested = !isRecentFiles && Boolean(urlFolderName && urlSubFolderPath);
 
@@ -337,17 +341,24 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // nested view stays in step with the rest of the app.
   const [nestedRefreshKey, setNestedRefreshKey] = useState(0);
   useEffect(() => {
-    // LOCAL nested only. Remote views deliberately don't subscribe: an
-    // active sync dispatches these events every ~3s, and each bump re-walks
-    // a remote level's server pages for content that local sync events
-    // don't change anyway. Remote listings refresh on navigation and the
-    // manual refresh button.
-    if (!isNested || isRemoteView) return;
+    if (!isNested && !isRemoteView) return;
     const handler = () => setNestedRefreshKey((prev) => prev + 1);
-    window.addEventListener("sync_files_completed_changed", handler);
-    // In-app mutations (rename) change names instantly, long before the
-    // sync cycle completes — refresh on those too.
+
+    // Sync-cycle events are for LOCAL views only. An active sync
+    // dispatches them every ~3s, and each bump would re-walk a remote
+    // level's server pages for content a local sync cycle does not
+    // change anyway.
+    if (!isRemoteView) {
+      window.addEventListener("sync_files_completed_changed", handler);
+    }
+
+    // In-app mutations are a different thing, and remote views DO need
+    // them: a rename here is a server-side write the user just made, so
+    // the listing is stale the moment it returns. Without this the row
+    // kept its old name until the user navigated away and back, which
+    // reads as the rename having silently failed.
     window.addEventListener(FILES_MUTATED_EVENT, handler);
+
     return () => {
       window.removeEventListener("sync_files_completed_changed", handler);
       window.removeEventListener(FILES_MUTATED_EVENT, handler);
@@ -356,11 +367,26 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
 
   // One hook serves all three browse shapes: local nested, remote nested,
   // and the remote drive ROOT (state-based, subfolder = drive root).
+  // Which remote drive an upload from this view belongs to — the same
+  // label the listing below reads, so the two cannot point at different
+  // folders.
+  // The LOCAL counterpart of `isRemoteRoot`: a drive the user has opened
+  // from the cards must win over the onboarding/cards screens, exactly as a
+  // remote one does. `isSyncPathConfigured` only tracks whether a PRIVATE
+  // sync path is selected, so an account whose drives are all shared or
+  // browsed sits on the onboarding branch permanently — and opening one of
+  // them re-rendered that same branch, which is what made those rows look
+  // unclickable while remote rows worked.
+  const isLocalDriveOpen =
+    !isRecentFiles && !isNested && !isOnLocalView && Boolean(activeSyncFolderLabel);
+
+  const remoteUploadLabel = nestedDrive?.label ?? (isRemoteRoot ? activeRemoteLabel : null);
+
   const nestedListing = useNestedFolderListing({
     accountId: polkadotAddress,
     syncPath: nestedDrive?.syncPath ?? null,
     subfolder: isNested ? urlSubFolderPath || null : null,
-    label: nestedDrive?.label ?? (isRemoteRoot ? activeRemoteLabel : null),
+    label: remoteUploadLabel,
     refreshKey: nestedRefreshKey,
     enabled: isNested || isRemoteRoot,
     remote: isRemoteView,
@@ -473,6 +499,17 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
         ? (nestedDrive?.label ?? null)
         : activeSyncFolderLabel;
   const recursiveSearchSubfolder = isNested ? (urlSubFolderPath ?? null) : null;
+
+  // The Excluded chip is only worth offering on a drive that actually
+  // excludes something. `recursiveSearchLabel` is already the LOCAL drive
+  // in view (null on a remote drive or Recent Files), which is exactly
+  // where exclusions can exist.
+  const hasExclusions = useHasExclusions(recursiveSearchLabel);
+  const showExcludedFilter = shouldOfferExcludedFilter({
+    driveLabel: recursiveSearchLabel,
+    hasExclusions,
+    excludedOnly: filterState.excludedOnly,
+  });
   const hasActiveSearchOrFilter = filterCriteriaAreActive({
     searchTerm,
     fileExtension: filterState.fileExtension,
@@ -522,6 +559,22 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     ],
   );
 
+  // A browsed drive searches the server instead — see
+  // `shouldUseDriveScopedSearch`.
+  const useRemoteSearch = shouldUseDriveScopedSearch({
+    hasActiveSearchOrFilter,
+    isRemoteView,
+    remoteLabel: remoteUploadLabel,
+    isRecentFiles: Boolean(isRecentFiles),
+  });
+  const { data: remoteSearchResults, isFetching: isRemoteSearching } =
+    useDriveScopedSearch({
+      accountId: polkadotAddress,
+      label: remoteUploadLabel,
+      criteria: recursiveCriteria,
+      enabled: useRemoteSearch,
+    });
+
   const { data: recursiveResults, isFetching: isRecursiveSearching } =
     useRecursiveFileSearch({
       accountId: polkadotAddress,
@@ -536,9 +589,11 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // applied to the current level's listing. This is the console-parity
   // behaviour the user asked for: filters reach across every nested
   // folder instead of stopping at the rows currently loaded in memory.
-  const filteredData = useRecursiveResults
-    ? recursiveResults
-    : inMemoryFilteredData;
+  const filteredData = useRemoteSearch
+    ? remoteSearchResults
+    : useRecursiveResults
+      ? recursiveResults
+      : inMemoryFilteredData;
 
   const statusFilteredData = useMemo(() => {
     if (!filterState.excludedOnly) return filteredData;
@@ -549,7 +604,8 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // swaps — nested→root navigation, switching `activeSyncFolderLabel`
   // from the Local cards — surface the skeleton instead of the previous
   // filter result during the ~150ms debounce + IPC window.
-  // `isRecursiveSearching` covers the cross-folder filter path: the user
+  // `isRecursiveSearching` / `isRemoteSearching` cover the two cross-folder
+  // filter paths (local disk, and the server for a browsed drive): the user
   // typed into search and we're still waiting on the new IPC. Folding it
   // in keeps the loading shell consistent whether the active filter
   // path is in-memory or recursive.
@@ -558,8 +614,8 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     (isRecentFiles
       ? isRecentFilesLoading || isFiltering
       : isNested || isRemoteRoot
-        ? nestedListing.isLoading || isFiltering || isRecursiveSearching
-        : isRegularFilesLoading || isFiltering || isRecursiveSearching);
+        ? nestedListing.isLoading || isFiltering || isRecursiveSearching || isRemoteSearching
+        : isRegularFilesLoading || isFiltering || isRecursiveSearching || isRemoteSearching);
 
   // Infinite scroll state for list and card views. Cheap keyFn (no row
   // serialization) so the source-changed check stays O(1) during sync refetches.
@@ -888,8 +944,6 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
         pendingActiveLabelRef.current = newLabel;
         setActiveSyncFolderLabel(newLabel);
         setIsOnLocalView(false);
-        void saveActiveSyncFolderLabel(newLabel);
-        void saveDriveOnLocalView(false);
       }
       triggerSyncPathRefresh((prev) => prev + 1);
       refetchUserFiles();
@@ -980,9 +1034,16 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     setIsFolderUploadOpen(true);
   }, []);
 
+  // Open the picker here rather than sending the user to Settings.
+  //
+  // This is the same dialog the Drive page's own "Sync a Folder" button
+  // opens; navigating away answered the request by handing the user a
+  // different screen and losing the one they were on. Nothing about
+  // choosing a folder needs the settings page.
+  const [showSyncFolderDialog, setShowSyncFolderDialog] = useState(false);
   const handleContextAddSyncFolder = useCallback(() => {
-    router.push("/settings?section=sync");
-  }, [router]);
+    setShowSyncFolderDialog(true);
+  }, []);
 
   // Breadcrumb / Local-view navigation handlers.
   //
@@ -999,8 +1060,6 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   const handleNavigateToLocalView = useCallback(() => {
     setIsOnLocalView(true);
     setActiveRemoteLabel(null);
-    void saveDriveOnLocalView(true);
-    void saveActiveRemoteFolderLabel(null);
     if (isNested) {
       router.push("/files");
     }
@@ -1013,12 +1072,8 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     (label: string, remote = false) => {
       if (remote) {
         // Back to the REMOTE drive's root: state-based (no nested URL).
-        // Persisted so reopening the app lands back in this drive — the
-        // same "remember me here" the local labels get.
         setActiveRemoteLabel(label);
         setIsOnLocalView(false);
-        void saveActiveRemoteFolderLabel(label);
-        void saveDriveOnLocalView(false);
         router.push("/files");
         return;
       }
@@ -1026,9 +1081,6 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
       setActiveSyncFolderLabel(label);
       setActiveRemoteLabel(null);
       setIsOnLocalView(false);
-      void saveActiveSyncFolderLabel(label);
-      void saveActiveRemoteFolderLabel(null);
-      void saveDriveOnLocalView(false);
       router.push("/files");
     },
     [router],
@@ -1059,25 +1111,91 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     setActiveSyncFolderLabel(label);
     setActiveRemoteLabel(null);
     setIsOnLocalView(false);
-    void saveActiveSyncFolderLabel(label);
-    void saveActiveRemoteFolderLabel(null);
-    void saveDriveOnLocalView(false);
+    // Opening a drive is an answer to "which folder?", so the Start
+    // Syncing selector has served its purpose. Without this the selector
+    // branch re-renders the same cards and the click reads as dead.
+    setShowPrivateStartSyncingSelector(false);
   }, []);
 
   // Open a REMOTE (server-only) drive from its card row — the browsable
   // counterpart of `handleSelectFolderFromCards`, with the same
-  // "remember me here" persistence.
   const handleSelectRemoteFolderFromCards = useCallback((label: string) => {
     setActiveRemoteLabel(label);
     setIsOnLocalView(false);
-    void saveActiveRemoteFolderLabel(label);
-    void saveDriveOnLocalView(false);
   }, []);
+
+  // Clicking "Drive" in the sidebar returns to the folder list from
+  // wherever the user is — a folder, a nested subfolder, a remote drive.
+  //
+  // The Link points at the route this page already occupies, so Next does
+  // not remount it and the view state survives; without this the click
+  // did nothing at all. Reacting to the nonce rather than the pathname is
+  // the point — the pathname has not changed.
+  const navReclick = useAtomValue(navReclickAtom);
+  const lastHandledReclick = useRef(0);
+  useEffect(() => {
+    if (!shouldHandleReclick(navReclick, "/files", lastHandledReclick.current)) return;
+    lastHandledReclick.current = navReclick!.nonce;
+    handleNavigateToLocalView();
+  }, [navReclick, handleNavigateToLocalView]);
+
+  // Open a folder this page was navigated to WITH — the handover from
+  // Settings, where clicking a row used to land on the folder list and
+  // leave the user to find the folder again.
+  //
+  // Runs once and clears the param: without the clear, going back to the
+  // list and refreshing would drop the user into the folder again, which
+  // fights the rule that Drive opens on the list. Explicitly asking for a
+  // folder is the exception to that rule, not a contradiction of it.
+  const openedFromUrlRef = useRef(false);
+  useEffect(() => {
+    if (!urlOpenLabel || openedFromUrlRef.current) return;
+    openedFromUrlRef.current = true;
+    if (urlOpenRemote) {
+      handleSelectRemoteFolderFromCards(urlOpenLabel);
+    } else {
+      handleSelectFolderFromCards(urlOpenLabel);
+    }
+    router.replace("/files");
+  }, [
+    urlOpenLabel,
+    urlOpenRemote,
+    handleSelectFolderFromCards,
+    handleSelectRemoteFolderFromCards,
+    router,
+  ]);
 
   // Build the breadcrumb path that lives in the drive header. Empty when
   // the user is on the Local cards view (DriveOnboarding); otherwise the
   // first segment is the active sync folder display name, followed by one
   // segment per nested directory the user has dived into.
+  // Where the right-click menu's New Folder creates, for whichever view is
+  // on screen. Resolved here because this is the component that knows
+  // which drive is open and whether it is synced or only browsed — a
+  // browsed drive has no directory to make, so it takes the other command.
+  //
+  // `undefined` on Recent Files: there is no folder open there, and the
+  // menu falls back to the main drive's root.
+  const newFolderTarget = useMemo<NewFolderTarget | undefined>(() => {
+    if (isRecentFiles || isOnLocalView) return undefined;
+    const label = isNested ? nestedDrive?.label : (activeRemoteLabel ?? activeSyncFolderLabel);
+    if (!label) return undefined;
+    const remote = isNested ? Boolean(nestedDrive?.remote) : Boolean(activeRemoteLabel);
+    return {
+      kind: remote ? "remote" : "local",
+      label,
+      parentPath: isNested ? (urlSubFolderPath ?? undefined) : undefined,
+    };
+  }, [
+    isRecentFiles,
+    isOnLocalView,
+    isNested,
+    nestedDrive,
+    activeRemoteLabel,
+    activeSyncFolderLabel,
+    urlSubFolderPath,
+  ]);
+
   const breadcrumbSegments = useMemo<BreadcrumbSegment[]>(() => {
     if (isRecentFiles || isOnLocalView) return [];
     const segments: BreadcrumbSegment[] = [];
@@ -1263,46 +1381,17 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     saveViewModePreference(mode);
   }, []);
 
-  // Hydrate active sync folder + Local-view flag from user preferences on
-  // mount. This is the breadcrumb's "remember me here" — picks up where the
-  // user left off in a previous session, including whether they were on the
-  // Local cards view (section picker) vs. inside a specific folder. Runs
-  // once and toggles `activeFolderHydrated` so the fallback effect below
-  // knows when it's safe to fill in a default.
+  // The Drive page always opens on the full folder list.
+  //
+  // This used to restore where the last session ended (active label,
+  // local-view flag, remote label — three preferences kept mutually
+  // exclusive by write discipline). Resuming there made the app hard to
+  // navigate: there was no reliable way back to the list, and clicking
+  // Drive in the sidebar returned to a folder rather than the top. There
+  // is nothing to hydrate now, so this only releases the gate the
+  // fallback effect below waits on.
   useEffect(() => {
-    if (isRecentFiles) {
-      setActiveFolderHydrated(true);
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      try {
-        const [saved, savedOnLocalView, savedRemote] = await Promise.all([
-          getActiveSyncFolderLabel(),
-          getDriveOnLocalView(),
-          getActiveRemoteFolderLabel(),
-        ]);
-        if (cancelled) return;
-        if (saved) {
-          setActiveSyncFolderLabel(saved);
-        }
-        if (savedOnLocalView) {
-          setIsOnLocalView(true);
-        }
-        // Last session ended inside a REMOTE drive — reopen it. The write
-        // discipline keeps this exclusive with the two flags above (opening
-        // a local folder or the cards view clears it), and the render guard
-        // (`isRemoteRoot` requires `!isOnLocalView`) breaks any tie safely.
-        if (savedRemote) {
-          setActiveRemoteLabel(savedRemote);
-        }
-      } finally {
-        if (!cancelled) setActiveFolderHydrated(true);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+    setActiveFolderHydrated(true);
   }, [isRecentFiles]);
 
   // Auto-fill / reconcile the active folder against the live label list.
@@ -1338,7 +1427,6 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     }
     const fallback = syncFolderLabels[0];
     setActiveSyncFolderLabel(fallback);
-    void saveActiveSyncFolderLabel(fallback);
   }, [
     isRecentFiles,
     activeFolderHydrated,
@@ -1449,14 +1537,17 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     isSyncPathConfigured === false &&
     !isRecentFiles &&
     !isNested &&
-    !isRemoteRoot
+    !isRemoteRoot &&
+    !isLocalDriveOpen
   ) {
-    // `!isRemoteRoot` on this and the two branches below: an account with NO
-    // local drives can still browse into a remote (server-only) drive, and
+    // `!isRemoteRoot` / `!isLocalDriveOpen` on this and the branches below:
+    // an account with no PRIVATE sync path can still open a drive — a
+    // browsed one, or a shared one installed from another account — and
     // that view must win over the onboarding/cards screens.
     content = (
       <DriveOnboarding
         onSyncStarted={handleOnboardingSyncStarted}
+        onSelectFolder={handleSelectFolderFromCards}
         onOpenRemoteFolder={handleSelectRemoteFolderFromCards}
       />
     );
@@ -1466,10 +1557,14 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     !isNested &&
     !isRemoteRoot
   ) {
-    // Show onboarding when Start Syncing is clicked
+    // Show onboarding when Start Syncing is clicked. It still takes
+    // `onSelectFolder`: the cards it renders are the same rows, and a row
+    // that opens on one screen and does nothing on another is the bug this
+    // pair of omissions caused.
     content = (
       <DriveOnboarding
         onSyncStarted={handleOnboardingSyncStarted}
+        onSelectFolder={handleSelectFolderFromCards}
         onOpenRemoteFolder={handleSelectRemoteFolderFromCards}
       />
     );
@@ -1477,7 +1572,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     // User clicked the "Local" breadcrumb segment. Reuses DriveOnboarding
     // for the cards view, but here we also pass `onSelectFolder` so a
     // card click switches the active folder instead of just opening the
-    // action menu. Persisted via `saveDriveOnLocalView` so next session
+    // action menu.
     // resumes on the same section the user last viewed.
     content = (
       <DriveOnboarding
@@ -1544,6 +1639,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 isSyncPathEmpty={effectiveSyncPathEmpty}
                 isStorageFull={isStorageFull}
                 isRemoteView={isRemoteView}
+                newFolderTarget={newFolderTarget}
                 onSyncPathConfigured={
                   isRecentFiles ? handleNavigateToSettings : handleStartSyncing
                 }
@@ -1599,6 +1695,18 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 privateFileCount={privateFileCount}
                 isSyncPathEmpty={effectiveSyncPathEmpty}
                 hideUploads={isRemoteView}
+                remoteUpload={
+                  // The label the remote listing itself reads, so the
+                  // upload lands in the folder on screen rather than in
+                  // whichever drive happened to be active before.
+                  isRemoteView && remoteUploadLabel
+                    ? {
+                        label: remoteUploadLabel,
+                        parentPath: isNested ? (urlSubFolderPath || undefined) : undefined,
+                        onUploaded: () => setNestedRefreshKey((k) => k + 1),
+                      }
+                    : undefined
+                }
                 onStartSyncing={handleStartSyncing}
                 hasNoSyncPaths={hasNoSyncPaths}
                 isStorageFull={isStorageFull}
@@ -1611,13 +1719,13 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 onDateRangeChange={handleDateRangeChange}
                 onFileSizesChange={handleFileSizesChange}
                 onExcludedOnlyChange={handleExcludedOnlyChange}
+                showExcludedFilter={showExcludedFilter}
                 defaultFolderLabel={activeSyncFolderLabel}
                 isFolderUploadOpen={isFolderUploadOpen}
                 onSetFolderUploadOpen={handleFolderUploadOpenChange}
                 folderUploadInitialPath={folderUploadInitialPath}
                 breadcrumbSegments={breadcrumbSegments}
                 onBreadcrumbLocalClick={handleNavigateToLocalView}
-                breadcrumbRootLabel={isRemoteView ? "Remote" : undefined}
                 isNested={isNested}
                 nestedFolderName={isNested ? urlFolderName : null}
                 nestedSubfolderPath={isNested ? urlSubFolderPath : null}
@@ -1693,6 +1801,18 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
         mnemonic={mnemonicToBackup || ""}
         onConfirm={handleMnemonicBackupConfirm}
         onClose={handleMnemonicBackupConfirm}
+      />
+
+      {/* The same picker the Drive page opens from its own Sync a Folder
+          button. Mounted here so Recent Files can offer it without
+          navigating to Settings; renders nothing while closed. */}
+      <AddLocalFolderDialog
+        open={showSyncFolderDialog}
+        onClose={() => setShowSyncFolderDialog(false)}
+        onSuccess={() => {
+          setShowSyncFolderDialog(false);
+          refetchUserFiles();
+        }}
       />
     </>
   );

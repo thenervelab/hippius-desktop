@@ -68,6 +68,65 @@ fn the_mint_funnel_builds_a_drive_scoped_client() {
     );
 }
 
+#[test]
+fn the_mint_funnel_uploads_an_owner_wrap() {
+    let body = mint_funnel_body();
+    assert!(
+        body.contains("push_folder_for_account"),
+        "create_folder_share_inner must PUT a mnemonic-sealed wrap after mint so another \
+         unlocked device can rebuild the recipient URL; skipping this leaves folder shares \
+         copyable only on the minting machine"
+    );
+}
+
+#[test]
+fn every_file_mint_path_uploads_an_owner_wrap() {
+    let source = include_str!("../src/shares/commands.rs");
+    for name in [
+        "async fn create_share_inner(",
+        "async fn share_external_file(",
+        "async fn mint_remote_share_at(",
+    ] {
+        let body = fn_body(source, name);
+        assert!(body.contains("push_for_account"), "{name} must PUT a file owner wrap after mint");
+    }
+}
+
+#[test]
+fn the_file_list_reconciles_owner_wraps() {
+    let source = include_str!("../src/shares/commands.rs");
+    let body = fn_body(source, "pub async fn hcfs_list_shares(");
+    assert!(
+        body.contains("sync_file_wraps"),
+        "hcfs_list_shares must open listing wraps into the keystore so a share minted on \
+         another device is copyable here"
+    );
+    // One reconciliation call, not a push followed by a hydrate. The old
+    // shape re-sealed and wrote back every wrap it had just read, and
+    // rewrote every row this device held a key for on every open.
+    assert!(
+        !body.contains("push_for_account"),
+        "hcfs_list_shares must not push wraps separately from sync_file_wraps: the push has \
+         to be filtered by what the listing says is missing, which only the sync sees"
+    );
+}
+
+#[test]
+fn the_folder_list_reconciles_owner_wraps() {
+    let source = include_str!("../src/shares/commands.rs");
+    let body = fn_body(source, "pub async fn list_folder_shares_inner");
+    assert!(
+        body.contains("sync_folder_wraps"),
+        "list_folder_shares_inner must open listing wraps into the keystore so a folder \
+         share minted on another device is copyable here"
+    );
+    assert!(
+        !body.contains("push_folder_for_account"),
+        "list_folder_shares_inner must not push wraps separately from sync_folder_wraps; \
+         see the file-share twin"
+    );
+}
+
 /// The revoke's forget-on-404 must be gated on the capability probe: a server
 /// ROLLBACK to a build without /v1/folder-shares answers the revoke route with
 /// the same bare 404 as "already revoked", and forgetting on that would delete
@@ -85,6 +144,38 @@ fn the_revoke_gates_its_forget_on_the_capability_probe() {
             "hcfs_revoke_folder_share must probe the capability BEFORE forgetting the local token"
         ),
         _ => panic!("hcfs_revoke_folder_share must contain both the capability probe and the forget"),
+    }
+}
+
+/// The by-hash pair must probe its OWN capability before touching the wire.
+///
+/// These routes ship after folder shares, so a server can advertise
+/// `folder_shares` and still lack them — which is what production looks like
+/// between the two deploys. There the routes answer a bare 404,
+/// indistinguishable from "already revoked", and
+/// `revoke_folder_share_by_hash_inner` treats a 404 as success. That
+/// treatment is only sound BECAUSE the gate ran first: without it the
+/// desktop would tell the user a live, anonymously readable share had been
+/// turned off, which is the exact failure these routes exist to prevent.
+///
+/// `folder_shares` is deliberately NOT an acceptable gate here: it is true
+/// on the servers that lack the by-hash pair.
+#[test]
+fn the_by_hash_pair_gates_on_its_own_capability_before_the_call() {
+    let source = include_str!("../src/shares/commands.rs");
+
+    for name in [
+        "pub async fn revoke_folder_share_by_hash_inner",
+        "pub async fn update_folder_share_expiry_by_hash_inner",
+    ] {
+        let body = fn_body(source, name);
+        let probe_at = body
+            .find("require_revoke_by_hash_supported")
+            .unwrap_or_else(|| panic!("{name} must probe the by-hash capability"));
+        let call_at = body
+            .find("_by_hash(")
+            .unwrap_or_else(|| panic!("{name} must call the by-hash client method"));
+        assert!(probe_at < call_at, "{name} must probe the capability BEFORE calling the by-hash route");
     }
 }
 

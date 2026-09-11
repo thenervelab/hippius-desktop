@@ -12,6 +12,7 @@ import type { ReactNode } from "react";
 
 import ShareDriveModal from "../ShareDriveModal";
 import { shareDriveModalAtom } from "@/app/lib/global-atoms/sharesAtoms";
+import { BILLING_ROUTE } from "@/app/lib/routes";
 
 // Flip the flag per test — the modal reads it at render time.
 const flagState = vi.hoisted(() => ({ sharedDrivesEnabled: true }));
@@ -50,7 +51,18 @@ vi.mock("next/dynamic", () => ({
   },
 }));
 
+// The upgrade CTA navigates to the in-app plans page.
+const push = vi.hoisted(() => vi.fn());
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push }),
+}));
+
 const UNAVAILABLE = { kind: "NotReady", subkind: "SHARED_DRIVES_UNAVAILABLE", message: "off" };
+const NOT_ENTITLED = {
+  kind: "NotReady",
+  subkind: "SHARED_DRIVES_NOT_ENTITLED",
+  message: "Shared drives need a Plus, Max, or Scale plan",
+};
 
 function installClipboard() {
   const writeText = vi.fn().mockResolvedValue(undefined);
@@ -127,6 +139,24 @@ describe("invite tab", () => {
 
     await screen.findByText(/aren't available on your server yet/);
     expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
+  });
+
+  it("shows an upgrade prompt when the owner's plan cannot mint — no error, no retry", async () => {
+    installClipboard();
+    createDriveInviteMock.mockRejectedValue(NOT_ENTITLED);
+
+    renderModal();
+    fireEvent.click(screen.getByRole("button", { name: "Create invite link" }));
+
+    await screen.findByText(/Shared drives need Plus, Max, or Scale/);
+    // An upgrade state, not an error: no generic error copy, no retry.
+    expect(screen.queryByText("Couldn't create invite link")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
+
+    // The same in-app destination every other Drive upgrade prompt uses, so
+    // the user is never sent to the console for a plan the app can change.
+    fireEvent.click(screen.getByRole("button", { name: "Upgrade plan" }));
+    expect(push).toHaveBeenCalledWith(BILLING_ROUTE);
   });
 });
 

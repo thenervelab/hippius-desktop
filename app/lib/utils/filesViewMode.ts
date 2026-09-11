@@ -38,3 +38,26 @@ export function shouldRunInMemoryFilter(opts: {
 }): boolean {
   return !shouldUseRecursiveSearch(opts);
 }
+
+/**
+ * When the files page should search the SERVER, scoped to one drive.
+ *
+ * A drive this device does not sync has nothing on local disk, so the
+ * recursive search returns nothing and the page falls back to filtering
+ * the rows already on screen — which misses every subfolder and reads as
+ * broken next to a local drive. The server-side search covers the whole
+ * drive instead.
+ */
+export function shouldUseDriveScopedSearch(opts: {
+  hasActiveSearchOrFilter: boolean;
+  isRemoteView: boolean;
+  remoteLabel: string | null;
+  isRecentFiles: boolean;
+}): boolean {
+  return (
+    opts.hasActiveSearchOrFilter &&
+    opts.isRemoteView &&
+    Boolean(opts.remoteLabel) &&
+    !opts.isRecentFiles
+  );
+}

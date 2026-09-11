@@ -45,7 +45,10 @@ use std::time::Duration;
 
 use serde::Serialize;
 use tauri::AppHandle;
+#[cfg(target_os = "macos")]
+use tauri::Manager;
 
+use crate::app_state::AppState;
 use crate::error::{AppError, Result};
 
 /// Where an app bundle keeps its app extensions.
@@ -80,6 +83,59 @@ const LSREGISTER_BIN: &str = "/System/Library/Frameworks/CoreServices.framework/
 /// How long any one registration helper may run before it is abandoned.
 #[cfg(target_os = "macos")]
 const TOOL_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Pause between registering the extension and electing it on a first run.
+/// PlugInKit discovers the appex asynchronously after `pluginkit -a`, and an
+/// election sent before discovery lands is a silent no-op — every Finder Sync
+/// peer carries this wait (MEGAsync 5 s at runtime, ownCloud and Nextcloud
+/// 10 s in their installers).
+#[cfg(target_os = "macos")]
+const DISCOVERY_WAIT: Duration = Duration::from_secs(5);
+
+/// Pause between un-electing and re-electing after an update, so Finder
+/// tears the old extension host down before it loads the new bundle.
+#[cfg(target_os = "macos")]
+const REELECT_WAIT: Duration = Duration::from_secs(1);
+
+/// How long to keep re-asking the system after an election before concluding
+/// it did not take. PlugInKit applies `-e use` asynchronously and
+/// `isExtensionEnabled` reports what it has applied, so the first read after
+/// the verb can say `false` for an election that lands a moment later. Acting
+/// on that first read is what turned one slow answer into a loop: the
+/// fingerprint went unadopted, every later launch re-elected (switching the
+/// extension OFF for a second on the way), and the frontend, told the check
+/// had settled, read `Disabled` and nudged — after Enable, on every launch.
+#[cfg(target_os = "macos")]
+const ELECTION_SETTLE: Duration = Duration::from_secs(5);
+
+/// Interval between those re-reads.
+#[cfg(target_os = "macos")]
+const ELECTION_POLL: Duration = Duration::from_millis(500);
+
+/// Upper bound on how long `finder_extension_state` waits for the launch
+/// check to finish before answering. Sized to the check's own worst case —
+/// two registration helpers at [`TOOL_TIMEOUT`] each, [`DISCOVERY_WAIT`],
+/// the election, and [`ELECTION_SETTLE`] — with room to spare: a cap below
+/// that lets a fresh install nudge over the election it was told to wait
+/// for, and the notice then sits there until the next window focus clears
+/// it. Past this the answer is given from whatever state the system is in,
+/// so a wedged helper can never hang the IPC; the cap is only ever reached
+/// when the launch check could not run at all.
+#[cfg(target_os = "macos")]
+const LAUNCH_CHECK_CAP: Duration = Duration::from_secs(45);
+
+/// Settings-store key for [`FinderExtensionPreference`].
+const PREFERENCE_KEY: &str = "finder_extension_preference";
+
+/// Settings-store key for the [`ElectionFingerprint`] of the last election
+/// this app performed and saw take.
+const FINGERPRINT_KEY: &str = "finder_extension_election_fingerprint";
+
+/// Where macOS records its own build number. Read for the election
+/// fingerprint; a missing or unparseable file reads as an empty build, which
+/// still fingerprints the app version.
+#[cfg(target_os = "macos")]
+const SYSTEM_VERSION_PLIST: &str = "/System/Library/CoreServices/SystemVersion.plist";
 
 /// Whether this build can host a Finder extension at all — the precondition
 /// that makes [`macos::is_extension_enabled`]'s answer mean anything.
@@ -176,47 +232,245 @@ mod hosting {
 pub enum FinderExtensionState {
     Enabled,
     Disabled,
+    /// Off, and the user has said not to ask: the nudge stays silent, while
+    /// the Settings switch still renders it as off so there is a way back.
+    Muted,
     Unsupported,
 }
 
-/// Report whether the Finder extension is enabled for the current user.
+/// The policy half of enablement: what the user said, what environment the
+/// extension was last elected in, and what the launch check should do about
+/// it. Pure and platform-independent so the decision table is unit-tested in
+/// every CI lane; only the macOS launch/enable paths consult it at runtime.
+#[cfg_attr(
+    not(target_os = "macos"),
+    allow(
+        dead_code,
+        reason = "only the macOS launch/enable paths consult it; kept compiled so its tests run in every CI lane"
+    )
+)]
+mod policy {
+    use serde::{Deserialize, Serialize};
+    use sqlx::SqlitePool;
+
+    #[cfg(target_os = "macos")]
+    use super::SYSTEM_VERSION_PLIST;
+    use super::{FINGERPRINT_KEY, FinderExtensionState, PREFERENCE_KEY};
+    use crate::error::Result;
+    use crate::utils::preferences::{get_user_preference_internal, save_user_preference_internal};
+
+    /// What the user has said about the Finder extension. Absent means never
+    /// asked — a fresh install, or an upgrade from a build that did not record it.
+    ///
+    /// Stored in `user_preferences` under [`PREFERENCE_KEY`]; the wire form of the
+    /// `set_finder_extension_preference` argument is the same lowercase string.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "lowercase")]
+    pub enum FinderExtensionPreference {
+        /// Keep it on: elected on first run and re-elected after updates.
+        Wanted,
+        /// Leave it off and never ask: "Don't ask again", or the Settings switch.
+        Unwanted,
+    }
+
+    impl FinderExtensionPreference {
+        fn as_str(self) -> &'static str {
+            match self {
+                Self::Wanted => "wanted",
+                Self::Unwanted => "unwanted",
+            }
+        }
+
+        fn parse(raw: &str) -> Option<Self> {
+            match raw {
+                "wanted" => Some(Self::Wanted),
+                "unwanted" => Some(Self::Unwanted),
+                other => {
+                    tracing::warn!(value = other, "unrecognized Finder extension preference; treating it as never asked");
+                    None
+                }
+            }
+        }
+    }
+
+    /// The stored preference, or `None` when there is none (or it cannot be read
+    /// — a read failure must not turn into an election the user refused, so it
+    /// reads as "never asked", which elects only on a fresh install).
+    pub(super) async fn load_preference(pool: &SqlitePool) -> Option<FinderExtensionPreference> {
+        match get_user_preference_internal(pool, PREFERENCE_KEY).await {
+            Ok(Some(raw)) => FinderExtensionPreference::parse(&raw),
+            Ok(None) => None,
+            Err(err) => {
+                tracing::warn!(%err, "could not read the Finder extension preference");
+                None
+            }
+        }
+    }
+
+    pub(super) async fn store_preference(pool: &SqlitePool, preference: FinderExtensionPreference) -> Result<()> {
+        save_user_preference_internal(pool, PREFERENCE_KEY, preference.as_str()).await
+    }
+
+    /// The environment the extension was last elected in: `<app version>|<macOS
+    /// build>`. Either half changing is the event that flips or stales the
+    /// election in the field — an app update swaps the bundle Finder loaded, a
+    /// macOS update rebuilds the extension registry — and it is what MEGAsync
+    /// re-elects on after each of its own updates.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(super) struct ElectionFingerprint(String);
+
+    impl ElectionFingerprint {
+        pub(super) fn new(app_version: &str, macos_build: &str) -> Self {
+            Self(format!("{app_version}|{macos_build}"))
+        }
+
+        /// This build, on this macOS. The app version is the crate version,
+        /// which the release invariant keeps equal to `tauri.conf.json`.
+        #[cfg(target_os = "macos")]
+        pub(super) fn current() -> Self {
+            Self::new(env!("CARGO_PKG_VERSION"), &macos_build())
+        }
+
+        pub(super) fn as_str(&self) -> &str {
+            &self.0
+        }
+    }
+
+    /// The running macOS build (`25G83`), or empty when it cannot be read.
+    #[cfg(target_os = "macos")]
+    fn macos_build() -> String {
+        std::fs::read_to_string(SYSTEM_VERSION_PLIST)
+            .ok()
+            .and_then(|plist| product_build_version(&plist))
+            .unwrap_or_default()
+    }
+
+    /// `ProductBuildVersion` out of `SystemVersion.plist`'s XML. A string scan
+    /// rather than a plist parser: the file is Apple's, tiny, and has carried
+    /// this exact `<key>`/`<string>` pair since Mac OS X; a dependency for one
+    /// field is not worth its surface.
+    pub(super) fn product_build_version(plist: &str) -> Option<String> {
+        let key = plist.find("<key>ProductBuildVersion</key>")?;
+        let after_key = &plist[key..];
+        let start = after_key.find("<string>")? + "<string>".len();
+        let end = after_key[start..].find("</string>")? + start;
+        let value = after_key[start..end].trim();
+        (!value.is_empty()).then(|| value.to_owned())
+    }
+
+    pub(super) async fn load_fingerprint(pool: &SqlitePool) -> Option<String> {
+        match get_user_preference_internal(pool, FINGERPRINT_KEY).await {
+            Ok(value) => value,
+            Err(err) => {
+                tracing::warn!(%err, "could not read the Finder extension election fingerprint");
+                None
+            }
+        }
+    }
+
+    /// Record that the extension is on in this environment and that the user
+    /// wants it: the next launch in the same environment does nothing, and the
+    /// next one after an update re-elects.
+    #[cfg(target_os = "macos")]
+    pub(super) async fn adopt_election(pool: &SqlitePool, fingerprint: &ElectionFingerprint) {
+        if let Err(err) = store_preference(pool, FinderExtensionPreference::Wanted).await {
+            tracing::warn!(%err, "could not record the Finder extension preference");
+        }
+        if let Err(err) = save_user_preference_internal(pool, FINGERPRINT_KEY, fingerprint.as_str()).await {
+            tracing::warn!(%err, "could not record the Finder extension election fingerprint");
+        }
+    }
+
+    /// What the launch check should do, given what the user said, what the
+    /// system reports, and whether the environment changed since the last
+    /// election. Pure so the whole table is unit-tested on every platform.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(super) enum LaunchAction {
+        Nothing,
+        /// Register with LaunchServices and PlugInKit so the extension appears in
+        /// the settings pane, but leave the switch alone: the user turned it off
+        /// in steady state, and the nudge is the surface that asks.
+        RegisterOnly,
+        /// First run: register, wait for discovery, elect.
+        RegisterAndElect,
+        /// After an app or macOS update: register, un-elect, re-elect, so Finder
+        /// drops the stale extension host and loads the current bundle.
+        ///
+        /// Applies whether the switch reads on or off, because an update is
+        /// the one event known to flip it off by itself, and the table cannot
+        /// tell that apart from a user who turned it off in System Settings
+        /// and then updated. That user is re-elected once and gets the
+        /// in-app switch to make it stick; the off that is never overridden
+        /// is the one made in Hippius (`Unwanted`).
+        Reelect,
+    }
+
+    #[allow(
+        clippy::match_same_arms,
+        reason = "the `(Some(Wanted), Enabled) => Nothing` arm must stay BELOW the fingerprint guard; folding it into the first arm would match before the guard and skip the post-update re-election"
+    )]
+    pub(super) fn launch_action(
+        preference: Option<FinderExtensionPreference>,
+        state: FinderExtensionState,
+        fingerprint_changed: bool,
+    ) -> LaunchAction {
+        use FinderExtensionPreference::{Unwanted, Wanted};
+        use FinderExtensionState::{Disabled, Enabled, Muted, Unsupported};
+
+        match (preference, state) {
+            // Nothing to act on: no extension to speak of, the user said no,
+            // or never asked and already on (a developer Mac, or a user who
+            // flipped it in Settings before this build) — adopted, untouched.
+            (_, Unsupported | Muted) | (Some(Unwanted), Enabled | Disabled) | (None, Enabled) => LaunchAction::Nothing,
+            (None, Disabled) => LaunchAction::RegisterAndElect,
+            (Some(Wanted), Enabled | Disabled) if fingerprint_changed => LaunchAction::Reelect,
+            (Some(Wanted), Enabled) => LaunchAction::Nothing,
+            (Some(Wanted), Disabled) => LaunchAction::RegisterOnly,
+        }
+    }
+
+    /// The state the frontend is told, given what the system reports and what
+    /// the user said. An off extension the user does not want is `Muted`, which
+    /// the nudge treats as silence and the Settings switch renders as off.
+    pub(super) fn report_state(raw: FinderExtensionState, preference: Option<FinderExtensionPreference>) -> FinderExtensionState {
+        match (raw, preference) {
+            (FinderExtensionState::Disabled, Some(FinderExtensionPreference::Unwanted)) => FinderExtensionState::Muted,
+            (other, _) => other,
+        }
+    }
+}
+
+pub use policy::FinderExtensionPreference;
+// Only the macOS launch/enable paths consult the policy; off macOS the
+// commands answer `Unsupported` before touching it, and an unused import is a
+// build error on the Linux CI lane.
+#[cfg(target_os = "macos")]
+use policy::{ElectionFingerprint, LaunchAction, adopt_election, launch_action, load_fingerprint, load_preference, report_state, store_preference};
+
+/// Report whether the Finder extension is enabled for the current user, as
+/// the frontend should understand it.
 ///
 /// Infallible by design (like `is_app_translocated`): the frontend polls this on
 /// mount and on every window focus, and an error there would only be swallowed.
 /// Anything it cannot determine is [`FinderExtensionState::Unsupported`].
+///
+/// Waits (bounded) for [`ensure_finder_extension_at_launch`] to finish first:
+/// a fresh install is electing the extension during the first seconds of the
+/// first launch, and answering `Disabled` in that window would raise the
+/// nudge over a switch that is about to flip on its own.
 #[tauri::command]
 pub async fn finder_extension_state(app: AppHandle) -> FinderExtensionState {
     #[cfg(target_os = "macos")]
     {
-        // A translocated launch — Hippius opened straight from the mounted DMG,
-        // which is what a first-time user does — is the one case where
-        // `Disabled` is both accurate and useless. macOS never registers an
-        // extension from the randomized read-only `…/AppTranslocation/<UUID>/d/`
-        // path, so it is in NO pane, and [`enable_finder_extension`] refuses to
-        // register it (electing an ephemeral copy by bundle id can strand the
-        // real install as `Disabled` for good). Without this gate the nudge fires
-        // on every window focus, its Enable button cannot succeed, and the
-        // Settings pane it falls back to cannot list us — on top of the
-        // permanent notice `TranslocationGuard` is already showing. Moving the
-        // app is the only thing that helps, and that guard owns saying so.
-        if crate::utils::app_location::is_app_translocated() {
-            tracing::debug!("app is translocated, so its Finder extension is unregistrable; reporting the state as unsupported");
-            return FinderExtensionState::Unsupported;
-        }
+        let app_state = app.state::<AppState>();
+        wait_for_launch_check(&app_state).await;
 
-        // Ask only when the answer can carry meaning. Without this, every build
-        // that embeds no extension reports `Disabled` and nags about a switch
-        // that would not help — see `hosting`.
-        if !hosting::current_build_hosts_finder_extension() {
-            tracing::debug!("this build embeds no Finder extension; reporting the enablement state as unsupported");
-            return FinderExtensionState::Unsupported;
-        }
-
-        let state = match on_main_thread(&app, macos::is_extension_enabled).await {
-            Some(true) => FinderExtensionState::Enabled,
-            Some(false) => FinderExtensionState::Disabled,
-            None => FinderExtensionState::Unsupported,
+        let raw = read_state(&app).await;
+        let preference = match app_state.pool() {
+            Ok(pool) => load_preference(pool).await,
+            Err(_) => None,
         };
+        let state = report_state(raw, preference);
         if state == FinderExtensionState::Disabled {
             // Support bundles: a "the right-click menu is missing" ticket is
             // answered by this one line, without a round-trip asking the user to
@@ -232,6 +486,55 @@ pub async fn finder_extension_state(app: AppHandle) -> FinderExtensionState {
     {
         let _ = app;
         FinderExtensionState::Unsupported
+    }
+}
+
+/// What the system says, before the user's preference is applied.
+///
+/// Never answers `Muted`; that is [`report_state`]'s to add.
+#[cfg(target_os = "macos")]
+async fn read_state(app: &AppHandle) -> FinderExtensionState {
+    // A translocated launch — Hippius opened straight from the mounted DMG,
+    // which is what a first-time user does — is the one case where
+    // `Disabled` is both accurate and useless. macOS never registers an
+    // extension from the randomized read-only `…/AppTranslocation/<UUID>/d/`
+    // path, so it is in NO pane, and [`enable_finder_extension`] refuses to
+    // register it (electing an ephemeral copy by bundle id can strand the
+    // real install as `Disabled` for good). Without this gate the nudge fires
+    // with an Enable button that cannot succeed, and the Settings pane it
+    // falls back to cannot list us — on top of the permanent notice
+    // `TranslocationGuard` is already showing. Moving the app is the only
+    // thing that helps, and that guard owns saying so.
+    if crate::utils::app_location::is_app_translocated() {
+        tracing::debug!("app is translocated, so its Finder extension is unregistrable; reporting the state as unsupported");
+        return FinderExtensionState::Unsupported;
+    }
+
+    // Ask only when the answer can carry meaning. Without this, every build
+    // that embeds no extension reports `Disabled` and nags about a switch
+    // that would not help — see `hosting`.
+    if !hosting::current_build_hosts_finder_extension() {
+        tracing::debug!("this build embeds no Finder extension; reporting the enablement state as unsupported");
+        return FinderExtensionState::Unsupported;
+    }
+
+    match on_main_thread(app, macos::is_extension_enabled).await {
+        Some(true) => FinderExtensionState::Enabled,
+        Some(false) => FinderExtensionState::Disabled,
+        None => FinderExtensionState::Unsupported,
+    }
+}
+
+/// Block until the launch check has run, or [`LAUNCH_CHECK_CAP`] passes.
+///
+/// The check flips `AppState::finder_launch_check` exactly once per process,
+/// on every exit path; a launch that never reaches it (the DB failed to open)
+/// costs each caller the cap once and nothing more.
+#[cfg(target_os = "macos")]
+async fn wait_for_launch_check(app_state: &AppState) {
+    let mut settled = app_state.finder_launch_check.subscribe();
+    if tokio::time::timeout(LAUNCH_CHECK_CAP, settled.wait_for(|done| *done)).await.is_err() {
+        tracing::debug!("finder extension launch check has not settled; answering from the current state");
     }
 }
 
@@ -319,31 +622,114 @@ pub async fn enable_finder_extension(app: AppHandle) -> Result<FinderExtensionSt
         };
 
         let registered = register_with_the_system(&bundle, &appex).await;
-
-        // ELECTION is separate from registration, and only happens here — behind
-        // the user's own button. Registration makes the extension appear in the
-        // pane; election switches it ON, which is the user's decision. The
-        // launch-time path deliberately performs only the first half, or a user
-        // who turned the extension off would find it back on every launch.
-        let elected = run_pluginkit(&[
-            OsStr::new("-e"),
-            OsStr::new("use"),
-            OsStr::new("-i"),
-            OsStr::new(FINDER_EXTENSION_BUNDLE_ID),
-        ])
-        .await;
+        let elected = elect().await;
 
         // Ask the system, rather than trusting either exit status: `-e use` can
         // report success while the elected instance is a different copy of the
-        // app (see the module docs on system election).
-        let state = finder_extension_state(app).await;
+        // app (see the module docs on system election). Keep asking for a
+        // moment — the answer lags the verb (see `ELECTION_SETTLE`).
+        let state = settle_after_election(&app).await;
         tracing::info!(registered, elected, ?state, "attempted to enable the Finder extension");
+        log_registry().await;
+
+        // The user asked for it by name, so this is the preference from here
+        // on — and the environment it took in is what a later launch compares
+        // against to decide whether an update warrants a re-election.
+        if state == FinderExtensionState::Enabled
+            && let Ok(pool) = app.state::<AppState>().pool()
+        {
+            adopt_election(pool, &ElectionFingerprint::current()).await;
+        }
         Ok(state)
     }
     #[cfg(not(target_os = "macos"))]
     {
         let _ = app;
         Err(AppError::Validation("Finder extensions are only available on macOS.".into()))
+    }
+}
+
+/// Record what the user wants and act on it: `wanted` registers and elects
+/// like the Enable button; `unwanted` with `switch_off` also switches the
+/// extension off.
+///
+/// Backs both "Don't ask again" on the nudge (`switch_off: false`) and the
+/// Settings switch (`switch_off: true`). The two differ on purpose: "stop
+/// asking" is about the notice, and the extension it is asking about may be a
+/// working one — with two registered copies of the app, the non-elected copy
+/// reads `Disabled` while sharing works through the other, and `pluginkit -e
+/// ignore` is keyed by bundle id, so running it there would switch off the
+/// copy that works. Only the switch, whose whole meaning is off, gets the
+/// verb. Returns the resulting state so a switch can render the truth rather
+/// than its own optimism.
+#[tauri::command]
+pub async fn set_finder_extension_preference(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+    preference: FinderExtensionPreference,
+    switch_off: bool,
+) -> Result<FinderExtensionState> {
+    #[cfg(target_os = "macos")]
+    {
+        store_preference(state.pool()?, preference).await?;
+        tracing::info!(?preference, switch_off, "finder extension preference recorded");
+
+        match preference {
+            FinderExtensionPreference::Wanted => enable_finder_extension(app).await,
+            FinderExtensionPreference::Unwanted => {
+                if switch_off {
+                    let unelected = unelect().await;
+                    tracing::info!(unelected, "switched the Finder extension off at the user's request");
+                }
+                let raw = read_state(&app).await;
+                Ok(report_state(raw, Some(preference)))
+            }
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, state, preference, switch_off);
+        Err(AppError::Validation("Finder extensions are only available on macOS.".into()))
+    }
+}
+
+/// Switch the extension on: `pluginkit -e use`, keyed by bundle identifier.
+#[cfg(target_os = "macos")]
+async fn elect() -> bool {
+    run_pluginkit(&[
+        OsStr::new("-e"),
+        OsStr::new("use"),
+        OsStr::new("-i"),
+        OsStr::new(FINDER_EXTENSION_BUNDLE_ID),
+    ])
+    .await
+}
+
+/// Switch the extension off: `pluginkit -e ignore`. Only two paths may do
+/// this — the user's own preference, and the post-update re-election that
+/// follows it with [`elect`] a second later.
+#[cfg(target_os = "macos")]
+async fn unelect() -> bool {
+    run_pluginkit(&[
+        OsStr::new("-e"),
+        OsStr::new("ignore"),
+        OsStr::new("-i"),
+        OsStr::new(FINDER_EXTENSION_BUNDLE_ID),
+    ])
+    .await
+}
+
+/// Log what PlugInKit holds for Finder Sync extensions, for the support
+/// bundle: two rows for our identifier is the second-registered-copy case,
+/// a leading `-` an un-elected one, no output an unregistered one. Logged,
+/// never parsed — nothing in the app branches on this text.
+#[cfg(target_os = "macos")]
+async fn log_registry() {
+    let listing = run_tool_capturing(PLUGINKIT_BIN, &[OsStr::new("-m"), OsStr::new("-p"), OsStr::new("com.apple.FinderSync")]).await;
+    if let Some(listing) = listing {
+        tracing::info!(registry = %listing.trim(), "finder sync extensions registered with the system");
+    } else {
+        tracing::info!("finder sync extension registry could not be listed");
     }
 }
 
@@ -386,39 +772,100 @@ async fn register_with_the_system(bundle: &std::path::Path, appex: &std::path::P
     seeded || discovered
 }
 
-/// Register the extension at launch, without electing it.
+/// Keep the Finder extension in the state the user wants, at launch.
 ///
-/// Registration is meant to happen when the containing app first launches. On the
-/// machine described in [`register_with_the_system`] it did not, and nothing
-/// retried for six days — the nudge's button was the only retry, and it only
-/// appears once the user has already noticed something missing.
+/// This is how every Finder Sync peer does it — MEGAsync, ownCloud and
+/// Nextcloud all elect their extension themselves and none of them nag — with
+/// one addition: an "off" chosen in Hippius ("Don't ask again", the Settings
+/// switch) is never overridden. The decision table is [`launch_action`]; in
+/// short, a fresh install is elected once, a wanted extension is re-elected
+/// after an app or macOS update (the events that flip or stale it in the
+/// field — an off made only in System Settings is re-elected there too, see
+/// [`LaunchAction::Reelect`]), and an extension the user switched off in
+/// steady state is only registered so the pane can list it, leaving the nudge
+/// to ask.
 ///
-/// Runs only when the state is `Disabled`, which covers both "switched off" and
-/// "never registered" — the two are indistinguishable through Apple's API, and
-/// re-registering something already registered is a no-op. `Enabled` and
-/// `Unsupported` do nothing at all.
-///
-/// Deliberately does NOT elect. See the comment in [`enable_finder_extension`].
+/// Spawned from `main.rs` once the database is open, because the preference
+/// and the fingerprint live there. Settles `AppState::finder_launch_check` on
+/// every exit path, which is what lets `finder_extension_state` wait for the
+/// verdict instead of nudging over an election in progress.
 #[cfg(target_os = "macos")]
-pub async fn register_finder_extension_at_launch(app: AppHandle) {
+pub async fn ensure_finder_extension_at_launch(app: AppHandle) {
     // Same refusal as the enable path: registering a randomized
     // `…/AppTranslocation/<UUID>/d/` path writes a soon-to-vanish bundle into
     // the LaunchServices database, which is worse than doing nothing.
     if crate::utils::app_location::is_app_translocated() {
-        tracing::debug!("skipping Finder extension registration: the app is translocated");
-        return;
+        tracing::debug!("skipping the Finder extension launch check: the app is translocated");
+    } else if let Err(err) = launch_check(&app).await {
+        tracing::warn!(%err, "finder extension launch check could not run");
     }
 
-    if finder_extension_state(app).await != FinderExtensionState::Disabled {
-        return;
-    }
+    app.state::<AppState>().finder_launch_check.send_replace(true);
+}
 
+#[cfg(target_os = "macos")]
+async fn launch_check(app: &AppHandle) -> Result<()> {
     let Some((bundle, appex)) = hosting::current_build_bundle_and_appex() else {
-        return;
+        tracing::debug!("this build embeds no Finder extension; nothing to elect at launch");
+        return Ok(());
     };
+    let app_state = app.state::<AppState>();
+    let pool = app_state.pool()?;
 
-    let registered = register_with_the_system(&bundle, &appex).await;
-    tracing::info!(registered, "registered the Finder extension at launch; it still needs enabling");
+    let before = read_state(app).await;
+    let preference = load_preference(pool).await;
+    let fingerprint = ElectionFingerprint::current();
+    let fingerprint_changed = load_fingerprint(pool).await.as_deref() != Some(fingerprint.as_str());
+    let action = launch_action(preference, before, fingerprint_changed);
+
+    match action {
+        LaunchAction::Nothing => {}
+        LaunchAction::RegisterOnly => {
+            register_with_the_system(&bundle, &appex).await;
+        }
+        LaunchAction::RegisterAndElect => {
+            register_with_the_system(&bundle, &appex).await;
+            tokio::time::sleep(DISCOVERY_WAIT).await;
+            elect().await;
+        }
+        LaunchAction::Reelect => {
+            register_with_the_system(&bundle, &appex).await;
+            unelect().await;
+            tokio::time::sleep(REELECT_WAIT).await;
+            elect().await;
+        }
+    }
+
+    let after = match action {
+        LaunchAction::RegisterAndElect | LaunchAction::Reelect => settle_after_election(app).await,
+        LaunchAction::Nothing | LaunchAction::RegisterOnly => read_state(app).await,
+    };
+    tracing::info!(?action, ?before, ?after, fingerprint_changed, "finder extension launch check");
+    if action != LaunchAction::Nothing {
+        log_registry().await;
+    }
+    // `Unwanted` never reaches an election above, so adopting here can only
+    // ever record a `None` or `Wanted` preference as `Wanted`.
+    if after == FinderExtensionState::Enabled && preference != Some(FinderExtensionPreference::Unwanted) {
+        adopt_election(pool, &fingerprint).await;
+    }
+    Ok(())
+}
+
+/// The state after an election, re-read until it says `Enabled` or
+/// [`ELECTION_SETTLE`] passes. Returns the last reading either way — a
+/// caller adopts the fingerprint only on `Enabled`, so a slow answer costs a
+/// wait, never a wrong record.
+#[cfg(target_os = "macos")]
+async fn settle_after_election(app: &AppHandle) -> FinderExtensionState {
+    let deadline = tokio::time::Instant::now() + ELECTION_SETTLE;
+    loop {
+        let state = read_state(app).await;
+        if state == FinderExtensionState::Enabled || tokio::time::Instant::now() >= deadline {
+            return state;
+        }
+        tokio::time::sleep(ELECTION_POLL).await;
+    }
 }
 
 /// Run `pluginkit` with `args`, reporting only whether it succeeded.
@@ -431,6 +878,19 @@ pub async fn register_finder_extension_at_launch(app: AppHandle) {
 #[cfg(target_os = "macos")]
 async fn run_pluginkit(args: &[&OsStr]) -> bool {
     run_tool(PLUGINKIT_BIN, args).await
+}
+
+/// Run a helper and hand back its stdout, for logging only.
+///
+/// Same containment as [`run_tool`]; the text is never branched on. `None`
+/// on any failure, so a caller has nothing to log rather than a fragment.
+#[cfg(target_os = "macos")]
+async fn run_tool_capturing(bin: &str, args: &[&OsStr]) -> Option<String> {
+    let output = tokio::process::Command::new(bin).args(args).kill_on_drop(true).output();
+    match tokio::time::timeout(TOOL_TIMEOUT, output).await {
+        Ok(Ok(out)) if out.status.success() => Some(String::from_utf8_lossy(&out.stdout).into_owned()),
+        Ok(Ok(_) | Err(_)) | Err(_) => None,
+    }
 }
 
 /// Run one of the undocumented LaunchServices/PlugInKit helpers.
@@ -567,6 +1027,180 @@ mod macos_tests {
 }
 
 #[cfg(test)]
+mod policy_tests {
+    use super::policy::{
+        ElectionFingerprint, LaunchAction, launch_action, load_fingerprint, load_preference, product_build_version, report_state, store_preference,
+    };
+    use super::{FinderExtensionPreference, FinderExtensionState};
+    use FinderExtensionPreference::{Unwanted, Wanted};
+    use FinderExtensionState::{Disabled, Enabled, Muted, Unsupported};
+
+    // ── The launch decision table ─────────────────────────────────────────
+
+    /// A fresh install switches the extension on by itself, like every
+    /// Finder Sync peer; there is nothing to ask the user before they have
+    /// seen the feature missing.
+    #[test]
+    fn a_fresh_install_is_elected_once() {
+        assert_eq!(launch_action(None, Disabled, true), LaunchAction::RegisterAndElect);
+        assert_eq!(launch_action(None, Disabled, false), LaunchAction::RegisterAndElect);
+    }
+
+    /// Never asked, already on: a developer Mac or a user who flipped it in
+    /// System Settings. Adopt, do nothing.
+    #[test]
+    fn an_already_enabled_extension_is_left_alone_on_first_sight() {
+        assert_eq!(launch_action(None, Enabled, true), LaunchAction::Nothing);
+    }
+
+    /// The one guarantee the peers do not give: an explicit off is never
+    /// overridden — not on an update, not in steady state.
+    #[test]
+    fn an_explicit_off_is_never_touched() {
+        for changed in [true, false] {
+            assert_eq!(launch_action(Some(Unwanted), Disabled, changed), LaunchAction::Nothing);
+            assert_eq!(launch_action(Some(Unwanted), Enabled, changed), LaunchAction::Nothing);
+        }
+    }
+
+    /// After an app or macOS update a wanted extension is re-elected whether
+    /// the system reads it as off (the update flipped it) or on (Finder may
+    /// still be holding the previous bundle's extension host).
+    #[test]
+    fn an_update_reelects_a_wanted_extension() {
+        assert_eq!(launch_action(Some(Wanted), Disabled, true), LaunchAction::Reelect);
+        assert_eq!(launch_action(Some(Wanted), Enabled, true), LaunchAction::Reelect);
+    }
+
+    /// Steady state, wanted, off: the user turned it off in System Settings
+    /// since we last saw it on. Make sure the pane can list it; let the nudge
+    /// ask once rather than flipping it back behind their back.
+    #[test]
+    fn steady_state_off_only_registers() {
+        assert_eq!(launch_action(Some(Wanted), Disabled, false), LaunchAction::RegisterOnly);
+    }
+
+    #[test]
+    fn enabled_and_unchanged_does_nothing() {
+        assert_eq!(launch_action(Some(Wanted), Enabled, false), LaunchAction::Nothing);
+    }
+
+    /// No extension to speak of (dev build, non-macOS, failed hop): nothing
+    /// to register or elect, whatever was stored.
+    #[test]
+    fn unsupported_does_nothing() {
+        for preference in [None, Some(Wanted), Some(Unwanted)] {
+            assert_eq!(launch_action(preference, Unsupported, true), LaunchAction::Nothing);
+            assert_eq!(launch_action(preference, Muted, true), LaunchAction::Nothing);
+        }
+    }
+
+    // ── What the frontend is told ──────────────────────────────────────────
+
+    #[test]
+    fn an_unwanted_off_extension_reports_as_muted() {
+        assert_eq!(report_state(Disabled, Some(Unwanted)), Muted);
+    }
+
+    #[test]
+    fn every_other_reading_passes_through() {
+        assert_eq!(report_state(Disabled, Some(Wanted)), Disabled);
+        assert_eq!(report_state(Disabled, None), Disabled);
+        // The user said no but turned it on in System Settings anyway: the
+        // truth wins, and the Settings switch shows it on.
+        assert_eq!(report_state(Enabled, Some(Unwanted)), Enabled);
+        assert_eq!(report_state(Unsupported, Some(Unwanted)), Unsupported);
+    }
+
+    // ── The fingerprint ────────────────────────────────────────────────────
+
+    #[test]
+    fn the_fingerprint_changes_with_either_half() {
+        let base = ElectionFingerprint::new("0.6.1", "25G83");
+        assert_eq!(base, ElectionFingerprint::new("0.6.1", "25G83"));
+        assert_ne!(base, ElectionFingerprint::new("0.6.2", "25G83"), "an app update must re-elect");
+        assert_ne!(base, ElectionFingerprint::new("0.6.1", "25G90"), "a macOS update must re-elect");
+        assert_eq!(base.as_str(), "0.6.1|25G83");
+    }
+
+    #[test]
+    fn the_macos_build_is_read_out_of_the_system_version_plist() {
+        let plist = r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+	<key>ProductBuildVersion</key>
+	<string>25G83</string>
+	<key>ProductName</key>
+	<string>macOS</string>
+	<key>ProductVersion</key>
+	<string>26.6.2</string>
+</dict>
+</plist>"#;
+        assert_eq!(product_build_version(plist).as_deref(), Some("25G83"));
+        assert_eq!(product_build_version("<plist><dict></dict></plist>"), None);
+        assert_eq!(
+            product_build_version("<key>ProductBuildVersion</key><string></string>"),
+            None,
+            "an empty build is no build"
+        );
+    }
+
+    // ── The settings store ─────────────────────────────────────────────────
+
+    async fn pool() -> sqlx::SqlitePool {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.expect("memory sqlite");
+        sqlx::query(
+            "CREATE TABLE user_preferences (
+                preference_key TEXT PRIMARY KEY,
+                preference_value TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create user_preferences");
+        pool
+    }
+
+    #[tokio::test]
+    async fn a_fresh_install_has_no_preference_and_no_fingerprint() {
+        let pool = pool().await;
+        assert_eq!(load_preference(&pool).await, None);
+        assert_eq!(load_fingerprint(&pool).await, None);
+    }
+
+    #[tokio::test]
+    async fn the_preference_round_trips_and_the_last_write_wins() {
+        let pool = pool().await;
+        store_preference(&pool, Wanted).await.expect("store wanted");
+        assert_eq!(load_preference(&pool).await, Some(Wanted));
+        store_preference(&pool, Unwanted).await.expect("store unwanted");
+        assert_eq!(load_preference(&pool).await, Some(Unwanted));
+    }
+
+    /// A value this build does not recognise reads as "never asked" rather
+    /// than as either answer: guessing `Wanted` could elect over a refusal,
+    /// guessing `Unwanted` could mute a user who never said so.
+    #[tokio::test]
+    async fn an_unrecognized_stored_value_reads_as_never_asked() {
+        let pool = pool().await;
+        crate::utils::preferences::save_user_preference_internal(&pool, "finder_extension_preference", "maybe")
+            .await
+            .expect("seed");
+        assert_eq!(load_preference(&pool).await, None);
+    }
+
+    /// The store cannot be read at all (no table yet): never asked, so the
+    /// worst case is a first-run election, never a muted or overridden user.
+    #[tokio::test]
+    async fn an_unreadable_store_reads_as_never_asked() {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.expect("memory sqlite");
+        assert_eq!(load_preference(&pool).await, None);
+        assert_eq!(load_fingerprint(&pool).await, None);
+    }
+}
+
+#[cfg(test)]
 mod hosting_tests {
     use super::hosting::{app_bundle_root, embedded_appex};
     use std::path::{Path, PathBuf};
@@ -672,7 +1306,18 @@ mod tests {
 
         assert_eq!(json(FinderExtensionState::Enabled), serde_json::json!({"kind": "enabled"}));
         assert_eq!(json(FinderExtensionState::Disabled), serde_json::json!({"kind": "disabled"}));
+        assert_eq!(json(FinderExtensionState::Muted), serde_json::json!({"kind": "muted"}));
         assert_eq!(json(FinderExtensionState::Unsupported), serde_json::json!({"kind": "unsupported"}));
+    }
+
+    /// The `set_finder_extension_preference` argument is the same lowercase
+    /// word the settings store holds, so the frontend sends one string.
+    #[test]
+    fn preference_deserializes_from_its_wire_word() {
+        let parse = |raw: &str| serde_json::from_value::<super::FinderExtensionPreference>(serde_json::Value::String(raw.into()));
+        assert_eq!(parse("wanted").expect("wanted"), super::FinderExtensionPreference::Wanted);
+        assert_eq!(parse("unwanted").expect("unwanted"), super::FinderExtensionPreference::Unwanted);
+        assert!(parse("Wanted").is_err(), "the wire word is lowercase, like the state kinds");
     }
 
     /// The source text of the named `pub async fn`, from its signature to its
@@ -692,12 +1337,20 @@ mod tests {
     /// next `\n///` and fell back to the file end, which would have overrun the
     /// moment a command became the last one with no doc comment after it.
     fn command_body(name: &str) -> String {
+        body_of(&format!("pub async fn {name}"))
+    }
+
+    /// Same bound as [`command_body`], for a private fn named by its full
+    /// declaration prefix (e.g. `async fn launch_check`).
+    fn body_of(declaration: &str) -> String {
         let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/finder_bridge/enablement.rs")).expect("read enablement.rs");
-        let start = src.find(&format!("pub async fn {name}")).unwrap_or_else(|| panic!("{name} is declared"));
+        let start = src.find(declaration).unwrap_or_else(|| panic!("{declaration} is declared"));
         let body = &src[start..];
         // Every brace nested inside the function is indented, so the first
         // `\n}` is the function's own close.
-        let end = body.find("\n}").unwrap_or_else(|| panic!("{name} has a closing brace in column zero"));
+        let end = body
+            .find("\n}")
+            .unwrap_or_else(|| panic!("{declaration} has a closing brace in column zero"));
 
         body[..end].to_string()
     }
@@ -722,49 +1375,124 @@ mod tests {
     #[test]
     fn the_state_check_ignores_a_translocated_bundle() {
         assert!(
-            command_body("finder_extension_state").contains(TRANSLOCATION_GATE),
-            "finder_extension_state must report Unsupported while translocated; otherwise the nudge \
-             nags on every focus with an Enable button that cannot succeed"
+            body_of("async fn read_state(").contains(TRANSLOCATION_GATE),
+            "read_state must report Unsupported while translocated; otherwise the nudge \
+             nags with an Enable button that cannot succeed"
+        );
+        assert!(
+            command_body("finder_extension_state").contains("read_state(&app)"),
+            "finder_extension_state must read through read_state, where the translocation gate lives"
         );
     }
 
-    /// Wiring pin: launch-time registration must NEVER elect the extension.
+    /// Wiring pin: the launch check decides through the tested table, and
+    /// electing is one of that table's outcomes — never a bare verb the table
+    /// did not choose.
     ///
-    /// Registration makes the extension appear in the settings pane; election
-    /// switches it ON. Doing the second at launch would turn the extension back
-    /// on for a user who deliberately switched it off — every single launch,
-    /// with no way to make it stop. Election belongs behind the user's own
-    /// button and nowhere else.
-    ///
-    /// Asserts on the ELECT verb rather than on the whole helper, because the
-    /// registration half legitimately shells out too.
+    /// The table (`launch_action`) is what keeps an explicit off from being
+    /// overridden and a steady-state off from being flipped; a launch path
+    /// that elected on its own initiative would bypass both guarantees while
+    /// every unit test stayed green.
     #[test]
-    fn the_launch_registration_never_elects() {
-        let body = command_body("register_finder_extension_at_launch");
+    fn the_launch_check_decides_through_the_tested_table() {
+        let body = body_of("async fn launch_check(");
 
         assert!(
+            body.contains("launch_action("),
+            "launch_check must route its decision through launch_action"
+        );
+        assert!(
             !body.contains(FINDER_EXTENSION_BUNDLE_ID) && !body.contains("\"use\""),
-            "register_finder_extension_at_launch must not run pluginkit's elect verb; switching the \
-             extension on is the user's decision, and doing it at launch overrides them every time"
+            "launch_check must elect only through elect(), inside a LaunchAction arm"
         );
         assert!(
             body.contains("register_with_the_system"),
-            "register_finder_extension_at_launch must actually register — that is its whole purpose"
+            "launch_check must be able to register — a first run has nothing to elect otherwise"
         );
     }
 
-    /// Wiring pin: launch-time registration must refuse a translocated bundle.
+    /// Wiring pin: an election is followed by a settle, not a single read.
+    ///
+    /// `isExtensionEnabled` lags `pluginkit -e use`; a single read after the
+    /// verb can say `false` for an election that lands a moment later, which
+    /// left the fingerprint unadopted and every later launch re-electing and
+    /// nudging. Both electing paths must read through `settle_after_election`.
+    #[test]
+    fn every_election_is_followed_by_a_settle() {
+        let launch = body_of("async fn launch_check(");
+        assert!(
+            launch.contains("settle_after_election(app)"),
+            "launch_check must settle after electing; a single read can miss an election that lands late"
+        );
+        let enable = command_body("enable_finder_extension");
+        assert!(
+            enable.contains("settle_after_election(&app)"),
+            "enable_finder_extension must settle after electing; a single read can miss an election that lands late"
+        );
+        assert!(
+            !enable.contains("read_state(&app)"),
+            "enable_finder_extension reads the post-election state only through the settle"
+        );
+        // The durations only exist on macOS; the source-text pins above run
+        // everywhere.
+        #[cfg(target_os = "macos")]
+        assert!(
+            super::LAUNCH_CHECK_CAP > super::TOOL_TIMEOUT * 2 + super::DISCOVERY_WAIT + super::ELECTION_SETTLE,
+            "the launch-check cap must cover the settle, or the frontend nudges over an election in progress"
+        );
+    }
+
+    /// Wiring pin: the launch check must refuse a translocated bundle.
     ///
     /// `lsregister -f` on a `…/AppTranslocation/<UUID>/d/` path writes a
     /// bundle record for a directory that is gone by the next launch — worse
     /// than the election hazard the enable path already guards, because it
     /// pollutes the LaunchServices database rather than just the appex one.
     #[test]
-    fn the_launch_registration_ignores_a_translocated_bundle() {
+    fn the_launch_check_ignores_a_translocated_bundle() {
         assert!(
-            command_body("register_finder_extension_at_launch").contains(TRANSLOCATION_GATE),
-            "register_finder_extension_at_launch must skip a translocated bundle; registering an \
+            command_body("ensure_finder_extension_at_launch").contains(TRANSLOCATION_GATE),
+            "ensure_finder_extension_at_launch must skip a translocated bundle; registering an \
              ephemeral path writes a soon-to-vanish record into the LaunchServices database"
+        );
+    }
+
+    /// Wiring pin: the launch check settles the latch on every path, or the
+    /// frontend's first state query waits the full cap for nothing.
+    #[test]
+    fn the_launch_check_always_settles_the_latch() {
+        let body = command_body("ensure_finder_extension_at_launch");
+        let settle = body
+            .rfind("finder_launch_check.send_replace(true)")
+            .expect("the launch check settles the latch");
+        assert!(
+            !body[settle..].contains("return"),
+            "nothing may return after the latch is settled, and nothing before it may return early"
+        );
+        assert!(
+            !body[..settle].contains("return;"),
+            "an early return before the latch strands finder_extension_state on its cap"
+        );
+    }
+
+    /// Wiring pin: switching the extension OFF happens in exactly two places —
+    /// the user's own preference, and the post-update re-election that turns it
+    /// straight back on. A third `ignore` would be a way for the app to switch
+    /// off something the user turned on.
+    #[test]
+    fn only_the_preference_and_the_reelection_may_switch_the_extension_off() {
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/finder_bridge/enablement.rs")).expect("read enablement.rs");
+        let tests_start = src
+            .find("#[cfg(all(test, target_os = \"macos\"))]")
+            .expect("test modules follow the production code");
+        let production = &src[..tests_start];
+
+        let ignore_verbs = production.matches("OsStr::new(\"ignore\")").count();
+        assert_eq!(ignore_verbs, 1, "the ignore verb belongs to unelect() alone");
+        let unelect_calls = production.matches("unelect().await").count();
+        assert_eq!(
+            unelect_calls, 2,
+            "unelect() is called from set_finder_extension_preference and the Reelect arm, nowhere else"
         );
     }
 

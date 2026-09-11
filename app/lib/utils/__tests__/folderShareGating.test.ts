@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import {
+  canShareFile,
   canShareFolder,
   driveFolderHash,
   folderShareRelativePath,
@@ -143,5 +144,39 @@ describe("shareTargetFor", () => {
     const row = folder();
 
     expect(shareTargetFor(row, "").file).toBe(row);
+  });
+});
+
+describe("canShareFile", () => {
+  const file = (over: Partial<FormattedUserFile> = {}): FormattedUserFile =>
+    ({ name: "a.png", syncStatus: "synced", ...over }) as FormattedUserFile;
+
+  it("shares a file synced on this device", () => {
+    expect(canShareFile(file({ source: "/Users/a/drive/a.png" }))).toBe(true);
+  });
+
+  // The regression: the viewer required a local `source`, which no file in
+  // a browsed drive has — so the share button was hidden on all of them,
+  // even though Rust can fetch and re-encrypt them to mint a share.
+  it("shares a file in a drive this device does not sync", () => {
+    expect(canShareFile(file({ fileId: "abc123", label: "Camera Uploads" }))).toBe(true);
+  });
+
+  // Without an id there is nothing to fetch, and without a drive there is
+  // nowhere to fetch it from.
+  it("refuses a cloud-only row missing its id or its drive", () => {
+    expect(canShareFile(file({ label: "Camera Uploads" }))).toBe(false);
+    expect(canShareFile(file({ fileId: "abc123" }))).toBe(false);
+  });
+
+  it("refuses a row that has not finished uploading", () => {
+    expect(
+      canShareFile(file({ source: "/Users/a/drive/a.png", syncStatus: "pending" })),
+    ).toBe(false);
+  });
+
+  // Folders mint a different kind of share, gated by `canShareFolder`.
+  it("refuses a folder", () => {
+    expect(canShareFile(file({ isFolder: true, source: "/Users/a/drive" }))).toBe(false);
   });
 });

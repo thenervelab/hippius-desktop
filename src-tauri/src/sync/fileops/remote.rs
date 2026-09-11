@@ -195,6 +195,26 @@ pub async fn list_remote_folder_files(state: tauri::State<'_, AppState>, account
 /// can drive it without a `tauri::State`. The command wrapper performs the
 /// session-authority check before delegating here (mirrors the `*_inner` split
 /// used by `list_sync_folder_grouped_inner` and friends).
+/// `build_client` for the live lane, which has no `tauri::State`.
+///
+/// A named alias rather than widening `build_client` itself: the wider
+/// visibility exists for one caller, and saying so here keeps the reason
+/// attached to it.
+pub async fn build_client_for_tests(pool: &SqlitePool, account_id: &str, identity: &DriveIdentity) -> Result<hcfs_client::client::HcfsClient> {
+    build_client(pool, account_id, identity).await
+}
+
+/// `encryption_key_for_label` for the live lane — see above.
+pub async fn encryption_key_for_tests(
+    pool: &SqlitePool,
+    account_id: &str,
+    label: &str,
+    mnemonic: &str,
+    identity: &DriveIdentity,
+) -> Result<[u8; 32]> {
+    encryption_key_for_label(pool, account_id, label, mnemonic, identity).await
+}
+
 pub async fn list_remote_folder_files_inner(state: &AppState, account_id: &str, label: &str) -> Result<Vec<RemoteFileInfo>> {
     info!(account_id = %account_id, label = %label, "Listing remote folder files");
     let pool = state.pool()?;
@@ -501,8 +521,19 @@ fn thumbnail_cache_root() -> Result<PathBuf> {
 /// (`file_id`); `max_dim` is folded in so a later request for a different size
 /// can't collide with (or serve a stale) entry. Always `.jpg` — the thumbnail
 /// encoder's output format regardless of the source type.
+/// Bumped whenever the thumbnail PIXELS change for the same source file.
+///
+/// The cache is addressed by content hash and size, so a thumbnail already
+/// on disk is served forever — correct while the only thing that decides
+/// its pixels is the file itself, and wrong the moment the pipeline
+/// changes. `v2` is EXIF orientation being applied: every thumbnail
+/// generated before it is baked sideways for a rotated photo, and without
+/// this bump those files would keep their wrong thumbnail for good while
+/// only newly-seen images looked right.
+const THUMBNAIL_PIPELINE_VERSION: u32 = 2;
+
 fn thumbnail_cache_name(key: &str, max_dim: u32) -> String {
-    format!("{key}_{max_dim}.jpg")
+    format!("{key}_{max_dim}_v{THUMBNAIL_PIPELINE_VERSION}.jpg")
 }
 
 /// Resolve a usable on-disk source path, or `None` when the file isn't present
@@ -580,12 +611,36 @@ fn generate_thumbnail_file(src: &Path, cache_root: &Path, cache_name: &str, targ
     // `image`'s `ImageError` has no `AppError` variant, and the io-typed
     // open/guess steps are grouped with it so a thumbnail failure is ONE kind
     // rather than a confusing Io-vs-Other split mid-pipeline.
-    let img = image::ImageReader::open(src)
+    // `orientation()` is on the `ImageDecoder` trait; scoped to this
+    // function so the trait's other methods do not leak into the module.
+    use image::ImageDecoder as _;
+
+    let mut decoder = image::ImageReader::open(src)
         .map_err(|e| AppError::Other(format!("open image for thumbnail: {e}")))?
         .with_guessed_format()
         .map_err(|e| AppError::Other(format!("guess image format: {e}")))?
-        .decode()
+        .into_decoder()
         .map_err(|e| AppError::Other(format!("decode image for thumbnail: {e}")))?;
+
+    // EXIF orientation, read BEFORE the pixels and applied to them.
+    //
+    // A camera writes the sensor's pixels unrotated and records how to turn
+    // them in an EXIF tag. Decoding gives the unrotated buffer, and the JPEG
+    // written below carries no EXIF at all — so a thumbnail that skips this
+    // step is stored sideways and there is nothing left to say otherwise.
+    //
+    // The full-size viewer does not skip it: an `<img>` honours the tag by
+    // itself (`image-orientation: from-image` is the CSS default). That is
+    // the whole bug — a portrait photo sat rotated in the grid and snapped
+    // upright the moment it was opened, from one file, because only one of
+    // the two paths was reading the tag.
+    //
+    // A missing or unreadable tag is `NoTransforms`, not an error: most
+    // images have none, and refusing to thumbnail those would be far worse
+    // than the rotation this fixes.
+    let orientation = decoder.orientation().unwrap_or(image::metadata::Orientation::NoTransforms);
+    let mut img = image::DynamicImage::from_decoder(decoder).map_err(|e| AppError::Other(format!("decode image for thumbnail: {e}")))?;
+    img.apply_orientation(orientation);
 
     // `thumbnail` is a fast averaging downscale that preserves aspect ratio and
     // never upscales past the source. `to_rgb8` drops any alpha so the JPEG
@@ -893,6 +948,11 @@ mod tests {
             chunk_hashes: None,
             created_at: created,
             updated_at: updated,
+            // Unattributed, which is what the server sends for rows
+            // predating attribution and for admin-bearer writes. These
+            // fixtures exercise the folder/file grouping, which does not
+            // read the uploader.
+            uploaded_by: None,
         }
     }
 
@@ -1183,12 +1243,26 @@ mod tests {
 
     #[test]
     fn thumbnail_cache_name_is_content_and_size_addressed() {
-        assert_eq!(thumbnail_cache_name("abc", 256), "abc_256.jpg");
+        assert_eq!(thumbnail_cache_name("abc", 256), format!("abc_256_v{THUMBNAIL_PIPELINE_VERSION}.jpg"));
         // Different sizes must not collide so a 128px request never serves a
         // cached 256px thumbnail (or vice versa).
         assert_ne!(thumbnail_cache_name("abc", 256), thumbnail_cache_name("abc", 128));
         // Different content hashes must not collide.
         assert_ne!(thumbnail_cache_name("abc", 256), thumbnail_cache_name("xyz", 256));
+    }
+
+    /// A change to the thumbnail PIXELS for an unchanged source file only
+    /// reaches the user if the cache name changes with it — otherwise the
+    /// thumbnail already on disk is served forever. This is what carried
+    /// the EXIF-orientation fix onto images that had been viewed before it.
+    #[test]
+    fn thumbnail_cache_name_is_versioned_by_the_pipeline() {
+        let name = thumbnail_cache_name("abc", 256);
+        assert!(
+            name.contains(&format!("_v{THUMBNAIL_PIPELINE_VERSION}")),
+            "cache name {name} carries no pipeline version, so changing how a \
+             thumbnail is generated cannot invalidate the ones already on disk"
+        );
     }
 
     /// Wire-contract pin for the FOREIGN `hcfs_client::drive::remote::RemoteFileInfo`,
@@ -1246,6 +1320,89 @@ mod tests {
         let f = dir.path().join("pic.png");
         tokio::fs::write(&f, b"bytes").await.expect("write");
         assert_eq!(local_source_path(f.to_str()).await.expect("resolves"), f);
+    }
+
+    /// Splice a minimal EXIF block carrying one Orientation tag into an
+    /// encoded JPEG.
+    ///
+    /// Hand-built because this is the only way to get a file that is stored
+    /// one way round and displayed another — which is the entire condition
+    /// under test, and the one a plain `image` round-trip cannot produce.
+    fn jpeg_with_orientation(pixels: &image::RgbImage, orientation: u16) -> Vec<u8> {
+        let mut encoded = Vec::new();
+        pixels
+            .write_to(&mut std::io::Cursor::new(&mut encoded), image::ImageFormat::Jpeg)
+            .expect("encode jpeg");
+
+        // TIFF header, then one IFD entry: tag 0x0112 (Orientation), type 3
+        // (SHORT), count 1. Little-endian throughout, which "II" declares.
+        let mut tiff: Vec<u8> = vec![b'I', b'I', 0x2A, 0x00, 0x08, 0x00, 0x00, 0x00];
+        tiff.extend_from_slice(&1u16.to_le_bytes()); // entry count
+        tiff.extend_from_slice(&0x0112u16.to_le_bytes()); // Orientation
+        tiff.extend_from_slice(&3u16.to_le_bytes()); // SHORT
+        tiff.extend_from_slice(&1u32.to_le_bytes()); // count
+        tiff.extend_from_slice(&orientation.to_le_bytes());
+        tiff.extend_from_slice(&[0, 0]); // value field padded to 4 bytes
+        tiff.extend_from_slice(&0u32.to_le_bytes()); // no next IFD
+
+        let mut app1: Vec<u8> = b"Exif\0\0".to_vec();
+        app1.extend_from_slice(&tiff);
+        // JPEG segment lengths are big-endian and count themselves.
+        let len = u16::try_from(app1.len() + 2).expect("exif block fits a segment");
+
+        let mut out: Vec<u8> = vec![0xFF, 0xD8]; // SOI
+        out.extend_from_slice(&[0xFF, 0xE1]);
+        out.extend_from_slice(&len.to_be_bytes());
+        out.extend_from_slice(&app1);
+        out.extend_from_slice(&encoded[2..]); // everything after the original SOI
+        out
+    }
+
+    /// The bug: a camera stores the sensor's pixels unrotated and records
+    /// the turn in EXIF. The viewer's `<img>` applies that tag on its own,
+    /// so a portrait photo sat sideways in the grid and snapped upright the
+    /// moment it was opened — one file, two orientations, because only the
+    /// thumbnail path ignored the tag.
+    ///
+    /// Orientation 6 is "rotate 90° clockwise", so a landscape source must
+    /// come back out of the thumbnailer as a portrait.
+    #[test]
+    fn generate_thumbnail_file_applies_exif_orientation() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let src = dir.path().join("rotated.jpg");
+        // Clearly landscape, so the assertion cannot pass by accident.
+        let pixels = image::RgbImage::from_pixel(80, 40, image::Rgb([200, 40, 40]));
+        std::fs::write(&src, jpeg_with_orientation(&pixels, 6)).expect("write exif jpeg");
+
+        let target = dir.path().join("thumb.jpg");
+        generate_thumbnail_file(&src, dir.path(), "thumb.jpg", &target, 64).expect("thumbnail");
+
+        let out = image::ImageReader::open(&target).expect("open thumb").decode().expect("decode thumb");
+        assert!(
+            out.height() > out.width(),
+            "an EXIF-rotated landscape source thumbnailed to {}x{}; the orientation tag was \
+             ignored, so this thumbnail is sideways next to a viewer that shows it upright",
+            out.width(),
+            out.height()
+        );
+    }
+
+    /// Most images carry no EXIF at all. Reading the tag must not become a
+    /// reason to fail those — refusing to thumbnail them would be far worse
+    /// than the rotation the tag fixes.
+    #[test]
+    fn generate_thumbnail_file_handles_an_image_with_no_exif() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let src = dir.path().join("plain.png");
+        image::RgbImage::from_pixel(80, 40, image::Rgb([10, 10, 200]))
+            .save(&src)
+            .expect("write src");
+
+        let target = dir.path().join("thumb.jpg");
+        generate_thumbnail_file(&src, dir.path(), "thumb.jpg", &target, 64).expect("thumbnail");
+
+        let out = image::ImageReader::open(&target).expect("open").decode().expect("decode");
+        assert!(out.width() > out.height(), "an untagged landscape image must stay landscape");
     }
 
     #[test]

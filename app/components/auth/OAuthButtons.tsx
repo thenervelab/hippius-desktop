@@ -203,8 +203,7 @@ export function OAuthButtonsGroup({
     >
       <OAuthButton provider="google" disabled={disabled} />
       <OAuthButton provider="github" disabled={disabled} />
-      {/* Apple login disabled - backend integration not ready */}
-      <OAuthButton provider="apple" disabled={true} />
+      <OAuthButton provider="apple" disabled={disabled} />
 
       {!hideAccessKey && (
         <AccessKeyButton onClick={onAccessKeyClick} disabled={disabled} />

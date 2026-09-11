@@ -174,6 +174,104 @@ pub async fn prune(pool: &SqlitePool, owner: &str, active_tokens: &[&str]) {
     }
 }
 
+/// Whether a FILE share minted on this device is on record for
+/// `(folder_label, relative_path)`. Backs the Finder "shared" badge.
+///
+/// This is the sidecar's view, not the server's: a share minted on another
+/// device reads as not shared. Folder shares live in `folder_share_origin`
+/// (this table is pruned against the file listing). The badge is a hint, and
+/// a false "not shared" costs nothing; a lookup that reached the server per
+/// visible Finder row would.
+///
+/// Owner-scoped like every other read here, so one account's share can never
+/// badge another account's file at the same path.
+///
+/// # Errors
+///
+/// Returns `Err` only on a hard SQLite failure.
+pub async fn is_shared(pool: &SqlitePool, owner: &str, folder_label: &str, relative_path: &str) -> Result<bool> {
+    let hit = sqlx::query_scalar::<_, i64>("SELECT 1 FROM share_origin WHERE owner = ? AND folder_label = ? AND relative_path = ? LIMIT 1")
+        .bind(owner)
+        .bind(folder_label)
+        .bind(relative_path)
+        .fetch_optional(pool)
+        .await?;
+    Ok(hit.is_some())
+}
+
+/// Upsert the origin row for a folder share minted on this device. Separate
+/// from [`share_origin`]: `hcfs_list_shares` prunes that table against the
+/// *file* listing, which would evict a folder-share token on the next
+/// refresh.
+///
+/// # Errors
+///
+/// Returns `Err` if the SQLite write fails. The mint caller logs and
+/// continues — the link is already live.
+pub async fn record_folder(pool: &SqlitePool, share_token: &str, owner: &str, folder_label: &str, path_prefix: &str) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO folder_share_origin (share_token, owner, folder_label, path_prefix) \
+         VALUES (?, ?, ?, ?) \
+         ON CONFLICT(share_token) DO UPDATE SET \
+             owner = excluded.owner, \
+             folder_label = excluded.folder_label, \
+             path_prefix = excluded.path_prefix",
+    )
+    .bind(share_token)
+    .bind(owner)
+    .bind(folder_label)
+    .bind(path_prefix)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// The `(folder_label, path_prefix)` a folder-share token was minted from,
+/// if this device recorded it.
+///
+/// # Errors
+///
+/// Returns `Err` only on a hard SQLite failure.
+pub async fn folder_origin(pool: &SqlitePool, owner: &str, share_token: &str) -> Result<Option<(String, String)>> {
+    let row = sqlx::query_as::<_, (String, String)>("SELECT folder_label, path_prefix FROM folder_share_origin WHERE owner = ? AND share_token = ?")
+        .bind(owner)
+        .bind(share_token)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row)
+}
+
+/// Remove the folder-share origin row. Idempotent.
+///
+/// # Errors
+///
+/// Returns `Err` only on a hard SQLite failure.
+pub async fn forget_folder(pool: &SqlitePool, owner: &str, share_token: &str) -> Result<()> {
+    sqlx::query("DELETE FROM folder_share_origin WHERE owner = ? AND share_token = ?")
+        .bind(owner)
+        .bind(share_token)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Whether a folder share minted on this device is on record for
+/// `(folder_label, path_prefix)`. Backs the Finder "shared" badge on
+/// folders. Owner-scoped like [`is_shared`].
+///
+/// # Errors
+///
+/// Returns `Err` only on a hard SQLite failure.
+pub async fn is_folder_shared(pool: &SqlitePool, owner: &str, folder_label: &str, path_prefix: &str) -> Result<bool> {
+    let hit = sqlx::query_scalar::<_, i64>("SELECT 1 FROM folder_share_origin WHERE owner = ? AND folder_label = ? AND path_prefix = ? LIMIT 1")
+        .bind(owner)
+        .bind(folder_label)
+        .bind(path_prefix)
+        .fetch_optional(pool)
+        .await?;
+    Ok(hit.is_some())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -200,6 +298,39 @@ mod tests {
         let got = map.get("tok-a").expect("present");
         assert_eq!(got.folder_label, "Drive");
         assert_eq!(got.relative_path, "sub/file.txt");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn is_shared_reads_the_exact_owner_label_and_path() {
+        let (_dir, pool) = fresh_pool().await;
+        record(&pool, "tok-a", "owner1", "Drive", "sub/file.txt").await.expect("record");
+
+        assert!(is_shared(&pool, "owner1", "Drive", "sub/file.txt").await.expect("hit"));
+        // Same path in another drive, another account, or a sibling path is
+        // not this share — a badge on any of them would be a lie.
+        assert!(!is_shared(&pool, "owner1", "Other", "sub/file.txt").await.expect("label"));
+        assert!(!is_shared(&pool, "owner2", "Drive", "sub/file.txt").await.expect("owner"));
+        assert!(!is_shared(&pool, "owner1", "Drive", "sub/file.txt.bak").await.expect("path"));
+        assert!(!is_shared(&pool, "owner1", "Drive", "sub").await.expect("parent dir"));
+
+        forget(&pool, "owner1", "tok-a").await.expect("forget");
+        assert!(!is_shared(&pool, "owner1", "Drive", "sub/file.txt").await.expect("after revoke"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn is_folder_shared_reads_the_exact_owner_label_and_prefix() {
+        let (_dir, pool) = fresh_pool().await;
+        record_folder(&pool, "tok-f", "owner1", "Drive", "photos").await.expect("record");
+
+        assert!(is_folder_shared(&pool, "owner1", "Drive", "photos").await.expect("hit"));
+        assert!(!is_folder_shared(&pool, "owner1", "Drive", "").await.expect("root"));
+        assert!(!is_folder_shared(&pool, "owner1", "Other", "photos").await.expect("label"));
+        assert!(!is_folder_shared(&pool, "owner2", "Drive", "photos").await.expect("owner"));
+        // A file share at the same path must not badge the folder, and vice versa.
+        assert!(!is_shared(&pool, "owner1", "Drive", "photos").await.expect("file table"));
+
+        forget_folder(&pool, "owner1", "tok-f").await.expect("forget");
+        assert!(!is_folder_shared(&pool, "owner1", "Drive", "photos").await.expect("after revoke"));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

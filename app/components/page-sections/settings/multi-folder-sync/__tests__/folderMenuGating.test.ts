@@ -27,7 +27,7 @@ describe("resolveFolderMenuPlan", () => {
       showShareDrive: true,
       showExclusions: true,
       showDeleteFromServer: true,
-      removeItemTitle: "Remove from Sync",
+      removeItemTitle: "Stop syncing on this device",
       removeIsLeave: false,
     });
   });
@@ -52,7 +52,7 @@ describe("resolveFolderMenuPlan", () => {
       showShareDrive: false,
       showExclusions: true,
       showDeleteFromServer: true,
-      removeItemTitle: "Remove from Sync",
+      removeItemTitle: "Stop syncing on this device",
       removeIsLeave: false,
     });
   });

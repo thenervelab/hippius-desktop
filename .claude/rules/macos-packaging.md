@@ -38,9 +38,17 @@ Four files must agree and nothing at build time cross-checks them, so `src-tauri
 
 `pnpm tauri:dev` runs the raw debug binary, not a `.app` bundle, so it can't host the Finder Sync extension by itself. **`pnpm finder:dev`** (`macos/dev-finder.sh`) builds the `.appex`, builds + signs a debug `.app`, embeds + inside-out re-signs the extension, and registers it with `pluginkit` — once (auto-detecting the Developer ID identity).
 
-The extension's sandbox exceptions (`macos/FinderSync.entitlements`) are restricted entitlements macOS honours only for a properly signed binary, so a second machine must first import the shared Hippius **Developer ID Application** cert (the CI `APPLE_CERTIFICATE` .p12) into its login keychain — ad-hoc signing can't carry them, and everything except the Finder feature still runs under a plain `pnpm tauri:dev` with no cert. After that, `pnpm tauri:dev` **does** drive the full feature: the app binds `~/.hippius/finder.sock` and creates the directory itself (`finder_bridge::socket::FinderBridge::start`), so the hot-reload dev binary owns the socket the already-registered extension connects to. Re-run `pnpm finder:dev` only after editing `macos/HippiusFinder/*.swift`. See `docs/plans/2026-07-01-finder-release-packaging.md`.
+The extension's sandbox exceptions (`macos/FinderSync.entitlements`) are restricted entitlements macOS honours only for a properly signed binary, so a second machine must first import the shared Hippius **Developer ID Application** cert (the CI `APPLE_CERTIFICATE` .p12) into its login keychain — ad-hoc signing can't carry them, and everything except the Finder feature still runs under a plain `pnpm tauri:dev` with no cert. After that, `pnpm tauri:dev` **does** drive the full feature: the app binds `~/.hippius/finder.sock` and creates the directory itself (`finder_bridge::socket::FinderBridge::start`), so the hot-reload dev binary owns the socket the already-registered extension connects to. Re-run `pnpm finder:dev` after editing `macos/HippiusFinder/*.swift` or `macos/HippiusFinder/Badges/*.pdf`. See `docs/plans/2026-07-01-finder-release-packaging.md`.
 
 **That script is also why the Finder feature can look shipped while being invisible to every new user.** macOS registers a third-party Finder extension but leaves it **switched off**, and until the user enables it Finder never loads the extension — so a fresh install shows no "Share with Hippius" item at all, not even the "Open Hippius to share" fallback that `HippiusFinderSync.swift`'s `menu(for:)` returns unconditionally for anything under `$HOME`. `dev-finder.sh` step 4/4 runs `pluginkit -e use -i hippius.com.FinderSync`, an election keyed by **bundle identifier** that survives replacing the app with a released DMG build, so every developer Mac has had it on since its first `pnpm finder:dev` and the acceptance pass in `docs/release-checklist.md` never had to enable anything. The packaging itself is fine and was verified against a shipped DMG — appex embedded, sandbox entitlements intact, notarized and stapled.
+
+## Finder badges and the CloudStorage limit
+
+**Badges follow Apple's Finder Sync typical use case.** `requestBadgeIdentifier` plants `setBadgeIdentifier` (cache hit, or `""` on a miss) before it returns; later `STATUS` lines are updates for URLs already in that set. `beginObservingDirectory` / `endObservingDirectory` drop displayed URLs when Finder closes a folder. A cache-miss query is `BADGE_QUERY:<path>`; the app answers `STATUS` from `finder_bridge/badges.rs` (`resolve_badge` over `label_roots`, the session, the synced-paths cache, `share_origin` for files and `folder_share_origin` for folders). Plan-ready is one `REFRESH_ROOT` so the extension re-queries what Finder is already showing — a per-file plan push would overflow the 256-slot broadcast. Single-path pushes stay for file synced / failed / share mint/revoke. Socket drop clears Finder's paint with `""` but keeps the displayed set so the next `REGISTER_PATH` replay re-queries still-visible items. `BADGE_QUERY` is handled serially on the drain loop; `SHARE` is still spawned. Every painted `BadgeState` must have an edge-to-edge template PDF at `macos/HippiusFinder/Badges/{token}.pdf` (no SF Symbols — they carry optical padding and sit small in the well). The identifier stays the wire token; the label is a short localized string. Pinned by `swift_registers_an_image_for_every_painted_badge_state`. Drive roots reach the extension from `register_drive` (add) and `remove_drive_for_account` (remove), not only from auto-init.
+
+**Finder Sync never renders on a File Provider path, and may ignore Desktop / Documents / Downloads / Applications.** A Hippius drive rooted under `~/Library/CloudStorage/<Provider-…>` or `~/Library/Mobile Documents` gets no menu item and no badge there (Apple forum 718381). `~/Desktop` / `~/Documents` under iCloud Desktop & Documents canonicalise into Mobile Documents. Quinn (forum 729720): Desktop/Documents/Downloads/Applications may ignore badges even when they are not a File Provider path. `sync::root_host` returns tagged `hostedBy` (`fileProvider` | `specialFolder`); the folder listing and the add-folder dialog say so rather than refusing (existing drives live there today). Support triage: a "no Share with Hippius on these files" report with a CloudStorage or Desktop/Documents path is this, not the extension.
+
+**An election is followed by a settle, not one read.** `isExtensionEnabled` lags `pluginkit -e use`; `settle_after_election` re-reads for up to `ELECTION_SETTLE` and only an `Enabled` reading adopts the fingerprint. One `false` read after the verb used to leave the fingerprint unadopted, so every launch re-elected (switching the extension OFF for a second on the way) and the nudge returned after Enable. Pinned by `every_election_is_followed_by_a_settle`, which also holds `LAUNCH_CHECK_CAP` above the settle.
 
 ## Finder-extension enablement nudge
 
@@ -66,14 +74,41 @@ into the bundle instead of registering it. That `lsregister` re-seeds PlugInKit
 is INFERRED from the upgrade evidence, not proven, so it reports a bool nobody
 must act on and the nudge still works when it does not help.
 
-**Registration and ELECTION are separate, and only election is the user's
-choice.** `register_finder_extension_at_launch` (spawned from `main.rs`'s setup)
-runs the registration half only. Adding `pluginkit -e use` there would switch the
-extension back on at every launch for a user who deliberately turned it off;
-`the_launch_registration_never_elects` pins that. It also skips a translocated
-bundle — `lsregister -f` on a `…/AppTranslocation/<UUID>/d/` path writes a
-soon-to-vanish record into the LaunchServices database, which is worse than the
-appex-database hazard the enable path already guards.
+**The app elects the extension itself, the way every Finder Sync peer does
+(MEGAsync, ownCloud, Nextcloud) — with one guarantee they do not give: an
+off chosen in Hippius (`unwanted`) is never overridden.** An off made only in
+System Settings survives steady state but is re-elected once after the next
+app or macOS update, because the table cannot tell it from an update that
+flipped the switch; the in-app switch is how to make it stick. "Don't ask
+again" on the nudge records `unwanted` WITHOUT running the off verb
+(`switch_off: false`) — with a second registered copy sharing may be working
+through the other copy, and `-e ignore` by bundle id would break it; only the
+Settings switch passes `switch_off: true`. `ensure_finder_extension_at_launch`
+(spawned from `main.rs` once the DB is open, because the preference and the
+election fingerprint live in `user_preferences`) applies the pure, fully
+unit-tested `policy::launch_action` table: never asked + off → register, wait
+`DISCOVERY_WAIT` (5 s, the PlugInKit discovery gap every peer waits out), elect;
+wanted + the `<app version>|<macOS build>` fingerprint changed since the last
+election → re-elect (`-e ignore`, 1 s, `-e use`, so Finder loads the new bundle —
+MEGA's post-update step, and the fix for "updated macOS and it is off again");
+wanted + off in steady state → register only, and the nudge asks ONCE per launch;
+`unwanted` → nothing, ever. The user's answer is `FinderExtensionPreference`
+(`wanted` / `unwanted`), written by a verified Enable, by "Don't ask again" on
+the nudge, and by the Settings › Sync & Storage switch (`set_finder_extension_preference`,
+which also runs `use`/`ignore`). `Disabled` + `unwanted` reports as **`muted`**:
+the nudge treats it as silence, the switch renders it as off so there is a way
+back. `finder_extension_state` waits (≤ `LAUNCH_CHECK_CAP`) on
+`AppState::finder_launch_check` so the frontend cannot nudge over an election
+in progress. The `ignore` verb exists in exactly one helper and is called from
+exactly two places, pinned by `only_the_preference_and_the_reelection_may_switch_the_extension_off`.
+Every election attempt logs `pluginkit -m -p com.apple.FinderSync` verbatim
+(`finder sync extensions registered with the system`) so a support bundle shows
+a second registered copy without a Terminal round-trip. Tahoe 26.6.2 keeps an
+election across `pluginkit -a` and `lsregister -f`, so a nudge that returns after
+Enable is a second copy or a real flip, never launch-time registration. The
+launch check also skips a translocated bundle — `lsregister -f` on a
+`…/AppTranslocation/<UUID>/d/` path writes a soon-to-vanish record into the
+LaunchServices database.
 
 **The app's `LSMinimumSystemVersion` is 11.0**, matching the appex's deployment
 target, and `the_app_floor_is_at_least_the_extension_floor` pins it across
@@ -107,7 +142,7 @@ Both commands hop to the main thread (`run_on_main_thread`); anything unanswerab
 
 **Testing gotcha:** the answer is about the SYSTEM-ELECTED instance, not merely "is this identifier enabled" — with two registered copies of the app (a `pnpm finder:dev` bundle alongside `/Applications/Hippius.app`, which `pluginkit -mADvvv -i hippius.com.FinderSync` shows as two entries), the copy that is not the elected one reports `Disabled` while `pluginkit` shows `+`. Unregister the other instance (`pluginkit -r <appex>`) before concluding the check is broken.
 
-**FE**: `app/components/FinderExtensionGuard.tsx` (mounted in `AppShell`'s full-app branch beside `TranslocationGuard`) raises one persistent sonner notice whose action is **"Enable"** — it calls `enable_finder_extension` and only falls back to `open_finder_extension_settings` when the result is not an explicit `enabled`. `unsupported` deliberately does NOT count as success: it means the backend could not verify the outcome. The notice styling is inherited from `AppShell`'s `ThemedToaster` — per-call `classNames` would make it inconsistent with every other toast. It re-checks on every **window focus** (Apple's documented flow, and what makes the notice clear itself when the user returns from System Settings) and never re-raises a notice the user closed (it returns on the next launch).
+**FE**: `app/components/FinderExtensionGuard.tsx` (mounted in `AppShell`'s full-app branch beside `TranslocationGuard`) raises one persistent sonner notice whose action is **"Enable"** — it calls `enable_finder_extension` and only falls back to `open_finder_extension_settings` when the result is not an explicit `enabled`. `unsupported` deliberately does NOT count as success: it means the backend could not verify the outcome. The notice styling is inherited from `AppShell`'s `ThemedToaster` — per-call `classNames` would make it inconsistent with every other toast. It is raised **at most once per launch**: the re-check on every **window focus** (Apple's documented flow) may only DISMISS it when the user returns from System Settings, never raise it again — the per-focus re-raise was the "it doesn't go away" loop. Its cancel button is "Don't ask again" (`set_finder_extension_preference` → `unwanted`), and a verified Enable latches the session.
 
 The notice copy names **File Providers**, not Finder: on Sequoia 15.2+ / Tahoe the Finder category is Apple's Quick Actions (Rotate Left, Markup, …) and Finder Sync lives under File Providers. The fallback if the pane will not open is `System Settings › General › Login Items & Extensions › File Providers`.
 

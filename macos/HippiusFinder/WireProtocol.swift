@@ -13,6 +13,7 @@ enum WireProtocol {
         case registerPath(URL)
         case unregisterPath(URL)
         case status(state: String, path: URL)
+        case refreshRoot(URL)
     }
 
     /// Parse one inbound wire line (without its trailing newline).
@@ -26,6 +27,8 @@ enum WireProtocol {
         case "STATUS":
             guard let (state, encoded) = splitFirst(rest, on: ":"), let url = decodePath(encoded) else { return nil }
             return .status(state: state, path: url)
+        case "REFRESH_ROOT":
+            return decodePath(rest).map(Inbound.refreshRoot)
         default:
             return nil
         }
@@ -37,6 +40,13 @@ enum WireProtocol {
     /// `ClientMessage::Share`).
     static func shareLine(for url: URL) -> String {
         return "SHARE:\(encodePath(url))"
+    }
+
+    /// Encode a `BADGE_QUERY` line: Finder is about to show `url` and this
+    /// extension holds no badge for it. The app answers with a `STATUS` line
+    /// (mirrors the Rust `ClientMessage::BadgeQuery`).
+    static func badgeQueryLine(for url: URL) -> String {
+        return "BADGE_QUERY:\(encodePath(url))"
     }
 
     // MARK: - Path codec (mirrors Rust encode_path / decode_path)

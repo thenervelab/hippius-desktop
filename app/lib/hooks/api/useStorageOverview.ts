@@ -13,7 +13,12 @@ import { useInvokeQuery } from "./useInvokeQuery";
 export const STORAGE_OVERVIEW_QUERY_KEY = "storage-overview";
 
 /** Which source won the capacity decision (decided once, in Rust). */
-export type CapacitySource = "subscription" | "free";
+/**
+ * `none` is an access-key account with no subscription: it is not
+ * entitled to the included allowance, so it has no capacity at all until
+ * it subscribes. Decided in Rust from how the account signed in.
+ */
+export type CapacitySource = "subscription" | "free" | "none";
 
 export interface PlanInfo {
   name: string;
@@ -22,9 +27,19 @@ export interface PlanInfo {
   storageBytes: number;
   /** Marketed SKU label from Rust (`1.00 TB`, not `999 GB`). */
   storageDisplay: string;
+  /** `"credits"` or `"card"`; null for the legacy Stripe subscription. */
+  funding: string | null;
+  /**
+   * Days until the plan next charges; null when the rail did not say, and
+   * for card plans, which renew themselves. Counted in Rust so every
+   * surface counts down from the same "today".
+   */
+  renewsInDays: number | null;
 }
 
 /** Shape returned by the Rust `get_storage_overview` IPC (camelCase). */
+export type PlanAction = "upgrade" | "top-up-credits" | "none";
+
 export interface StorageOverview {
   usedBytes: number;
   /** Effective capacity in bytes (the free tier when no subscription). */
@@ -36,6 +51,18 @@ export interface StorageOverview {
   plan: PlanInfo | null;
   /** Pre-formatted HIP credit balance; null if the balance fetch failed. */
   creditsHip: string | null;
+  /**
+   * Whether this account may have the included free allowance at all.
+   *
+   * Distinct from `source`, and both are needed: `source` says what the
+   * account lives on right now, so an unentitled account holding a paid
+   * plan reports `"subscription"` and looks identical to an entitled one.
+   * The plans page has to tell them apart, because cancelling drops the
+   * first to nothing and the second to the free tier.
+   *
+   * Decided in Rust from the sign-in provider. Never re-derive it here.
+   */
+  freeTierEntitled: boolean;
   /**
    * Indexer row is 0 but this device already has files. The card shows
    * "Updating…" instead of a confident "0 B". Never inferred on the FE
@@ -50,6 +77,22 @@ export interface StorageOverview {
   usedDisplay: string;
   totalDisplay: string;
   freeDisplay: string;
+  /**
+   * What the header should offer this account, decided in Rust:
+   *
+   *   - `upgrade`         — no plan, or a plan at/over 80% full. More
+   *                         storage means a bigger plan, so credits are
+   *                         not the answer and must not be offered.
+   *   - `top-up-credits`  — a credits-funded plan whose balance will not
+   *                         cover its next renewal. Card plans never get
+   *                         this: the card renews itself.
+   *   - `none`            — a healthy plan with room left.
+   *
+   * Render this. Do NOT re-derive a prompt from source/percent/plan on the
+   * FE: three surfaces show this cell and a locally-derived prompt is one
+   * that eventually contradicts the others.
+   */
+  planAction: PlanAction;
 }
 
 /**

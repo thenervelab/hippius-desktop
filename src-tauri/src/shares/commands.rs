@@ -15,6 +15,7 @@ use crate::app_state::AppState;
 use crate::auth::account_key::account_key;
 use crate::billing::eligibility::{InsufficientCreditsAction, require_eligible};
 use crate::error::{AppError, Result};
+use crate::finder_bridge::protocol::BadgeState;
 use crate::release_channel::ReleaseChannel;
 use crate::shares::SqliteShareKeystore;
 use crate::shares::capabilities::fetch_capabilities;
@@ -204,11 +205,9 @@ pub(crate) fn parse_ttl(ttl: &str) -> Result<ShareTtl> {
 ///    could surface here.
 /// 3. `share_url` re-derived from `(share_token, share_key)` so the
 ///    "My Shares" page can offer a Copy button without a second IPC
-///    round-trip per row. `None` when the keystore on this device
-///    has lost the key (different device, wiped DB). `filename` is
-///    independent: the server now returns plaintext filenames, so
-///    a row can have a real `filename` and `share_url = None` when
-///    the share was minted on another device.
+///    round-trip per row. `None` when this device has no key and the
+///    listing wrap did not open (wiped DB, wrap never uploaded).
+///    `filename` is independent: the server returns plaintext names.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ShareSummary {
@@ -398,12 +397,12 @@ async fn refuse_if_source_moved(
 ///
 /// Caller responsibilities (everything outside the pipeline):
 /// - extract `account_id`,
-/// - run [`require_shares_supported`] and [`require_eligible`],
+/// - run [`require_shares_supported`],
 /// - hand us the `(folder_label, relative_path)` of the source file.
 ///
-/// We do everything else: resolve the plaintext path, run the
-/// streaming share via hcfs-client, persist the origin sidecar, and
-/// return the wire `ShareLink`.
+/// We do everything else: resolve the plaintext path, run the storage
+/// gate on the file's real size, run the streaming share via hcfs-client,
+/// persist the origin sidecar, and return the wire `ShareLink`.
 ///
 /// `progress`, when `Some`, is hcfs-client's per-phase
 /// encrypting→uploading→finalizing callback, so the share modal can render
@@ -431,6 +430,14 @@ async fn create_share_inner(
         return Err(AppError::Validation("Cannot share a directory".into()));
     }
     let plaintext_size = metadata.len();
+    // A share link is not free storage: the file is re-encrypted under a
+    // per-share key and uploaded again, and hcfs-server bills that copy
+    // through the same quota gate as `/upload`. So the pre-flight carries
+    // the real size — an earlier version passed `0` on the theory that a
+    // share only served bytes already paid for, which the server never
+    // agreed with. Sits here rather than in the callers because this is
+    // where the size becomes known.
+    require_eligible(state, account_id, InsufficientCreditsAction::Sharing, plaintext_size).await?;
     // Kept for the post-mint comparison — see `refuse_if_source_moved`.
     let before = stamp(&metadata);
 
@@ -502,6 +509,11 @@ async fn create_share_inner(
             "Failed to record share_origin (share itself succeeded)"
         );
     }
+    crate::finder_bridge::badges::push_from_state(state, folder_label, relative_path, BadgeState::Shared);
+
+    if let Ok(Some(secret)) = keystore.get(&result.share_token) {
+        super::owner_wrap::push_for_account(state, account_id, &[(result.share_token.clone(), secret)]).await;
+    }
 
     Ok(ShareLink {
         share_token: result.share_token,
@@ -567,29 +579,19 @@ pub async fn hcfs_create_share(
     let ttl = parse_ttl(&ttl)?;
     let choice = ShareChoice::parse(&visibility, password)?;
 
-    // Capability + eligibility gates. The capability call is a single
-    // anonymous HTTP request; we accept the round-trip so that an old
-    // server hides the feature instead of failing create_share with a
-    // 404 several KB into a multipart upload.
-    //
-    // Sharing passes `0` bytes because minting a share token serves
-    // anonymous reads from the SAME ciphertext the user already paid to
-    // store, not a new upload. That is NOT the same as a free gate:
-    // `is_drive_storage()` covers every action except VM creation, so
-    // this runs the plan-allowance check with zero incoming bytes, and an
-    // account ALREADY past its allowance is refused a share. Deliberate —
-    // an over-allowance account is frozen out of Drive actions until it
-    // upgrades — but it does mean `thresholds::SHARING` no longer decides
-    // anything here. Pinned by `tests/drive_quota_enforcement.rs`.
+    // Capability gate. A single anonymous HTTP request; we accept the
+    // round-trip so that an old server hides the feature instead of failing
+    // create_share with a 404 several KB into a multipart upload. The
+    // storage gate runs inside `create_share_inner`, once the file's size
+    // is known — see the note there.
     require_shares_supported(&state, &account_id).await?;
-    require_eligible(&state, &account_id, InsufficientCreditsAction::Sharing, 0).await?;
 
     let progress = share_progress_forwarder(on_progress);
     create_share_inner(&state, &account_id, &folder_label, &relative_path, ttl, choice, Some(progress)).await
 }
 
-/// Mint a share for a synced file with the same capability + eligibility
-/// guards as [`hcfs_create_share`]. Entry point for the macOS Finder bridge
+/// Mint a share for a synced file with the same capability guard as
+/// [`hcfs_create_share`]. Entry point for the macOS Finder bridge
 /// dispatcher. `progress` streams the encrypt/upload bar to the confirm modal
 /// (`Some`) — the Finder confirm flow opens a webview `Channel`.
 ///
@@ -606,7 +608,6 @@ pub(crate) async fn share_synced_file(
     progress: Option<ShareProgressFn>,
 ) -> Result<ShareLink> {
     require_shares_supported(state, account_id).await?;
-    require_eligible(state, account_id, InsufficientCreditsAction::Sharing, 0).await?;
     create_share_inner(state, account_id, folder_label, relative_path, ttl, choice, progress).await
 }
 
@@ -627,7 +628,6 @@ pub(crate) async fn share_external_file(
     progress: Option<ShareProgressFn>,
 ) -> Result<ShareLink> {
     require_shares_supported(state, account_id).await?;
-    require_eligible(state, account_id, InsufficientCreditsAction::Sharing, 0).await?;
 
     let pool = state.pool()?;
     let metadata = tokio::fs::metadata(abs_path).await?;
@@ -635,6 +635,8 @@ pub(crate) async fn share_external_file(
         return Err(AppError::Validation("Cannot share a directory".into()));
     }
     let plaintext_size = metadata.len();
+    // The upload the server bills is this file's size — see `create_share_inner`.
+    require_eligible(state, account_id, InsufficientCreditsAction::Sharing, plaintext_size).await?;
     // Kept for the post-mint comparison — see `refuse_if_source_moved`. This
     // is the path a Finder right-click takes, so it is the one that shared a
     // still-downloading zip on 2026-08-31.
@@ -674,6 +676,10 @@ pub(crate) async fn share_external_file(
 
     refuse_if_source_moved(&client, &keystore, abs_path, before, &result.share_token).await?;
 
+    if let Ok(Some(secret)) = keystore.get(&result.share_token) {
+        super::owner_wrap::push_for_account(state, account_id, &[(result.share_token.clone(), secret)]).await;
+    }
+
     Ok(ShareLink {
         share_token: result.share_token,
         share_url: result.share_url,
@@ -711,6 +717,13 @@ async fn create_remote_share_inner(
     progress: Option<ShareProgressFn>,
 ) -> Result<ShareLink> {
     require_shares_supported(state, account_id).await?;
+    // The exact gate runs in `mint_remote_share_at` once the copy is on disk
+    // and its size is known. This zero-byte probe runs BEFORE the download so
+    // an account the server already refuses outright (past its allowance
+    // with nothing to pay the overflow) is told so without first pulling the
+    // whole file down only to delete it. It cannot pass anything the sized
+    // gate would refuse; it only spares the download when the answer is
+    // already no.
     require_eligible(state, account_id, InsufficientCreditsAction::Sharing, 0).await?;
 
     let filename = relative_path
@@ -769,6 +782,10 @@ async fn mint_remote_share_at(
 
     let metadata = tokio::fs::metadata(tmp).await?;
     let plaintext_size = metadata.len();
+    // The size is only known once the copy is on disk, so the storage gate
+    // runs after the download rather than before it; the caller removes
+    // `tmp` on this error like on every other. See `create_share_inner`.
+    require_eligible(state, account_id, InsufficientCreditsAction::Sharing, plaintext_size).await?;
     // No `refuse_if_source_moved` here, deliberately: `tmp` is a per-attempt
     // path this function just wrote and nothing else can reach, so a
     // before/after comparison could only ever agree. The guard belongs on the
@@ -817,6 +834,11 @@ async fn mint_remote_share_at(
             error = %e,
             "Failed to record share_origin (share itself succeeded)"
         );
+    }
+    crate::finder_bridge::badges::push_from_state(state, folder_label, relative_path, BadgeState::Shared);
+
+    if let Ok(Some(secret)) = keystore.get(&result.share_token) {
+        super::owner_wrap::push_for_account(state, account_id, &[(result.share_token.clone(), secret)]).await;
     }
 
     Ok(ShareLink {
@@ -988,6 +1010,20 @@ pub async fn create_folder_share_inner(
             map_folder_share_error(e)
         })?;
 
+    let owner = account_key(account_id);
+    if let Err(e) = origin::record_folder(pool, &result.share_token, &owner, folder_label, path_prefix).await {
+        warn!(
+            share_token = %result.share_token,
+            error = %e,
+            "Failed to record folder_share_origin (share itself succeeded)"
+        );
+    }
+    crate::finder_bridge::badges::push_from_state(state, folder_label, path_prefix, BadgeState::Shared);
+
+    if let Ok(Some(secret)) = keystore.get(&result.share_token) {
+        super::owner_wrap::push_folder_for_account(state, account_id, &[(result.share_token.clone(), secret)]).await;
+    }
+
     Ok(ShareLink {
         share_token: result.share_token,
         share_url: result.share_url,
@@ -1036,13 +1072,13 @@ pub async fn hcfs_create_folder_share(
 /// timestamps as RFC 3339 strings) plus the local resolution.
 ///
 /// The server returns `token_hash` (blake3 hex) only — a folder-share
-/// token is never echoed after create. A row minted on THIS machine
-/// matches a token in the persistent SQLite keystore
-/// (`folder_share_token_hash(stored) == token_hash`), so it comes back
-/// with the plaintext token — the handle `hcfs_revoke_folder_share` and
-/// `hcfs_update_folder_share_expiry` take — and the rebuilt recipient
-/// URL. A row minted elsewhere is view-only: `resolvable: false`, token
-/// and URL `null`.
+/// token is never echoed after create. A row this device can resolve
+/// (local keystore hit, or an `owner_wrap` that opened under the
+/// mnemonic) comes back with the plaintext token — the handle
+/// `hcfs_revoke_folder_share` and `hcfs_update_folder_share_expiry`
+/// take — and the rebuilt recipient URL. A row with no wrap and no
+/// local secret stays view-only: `resolvable: false`, token and URL
+/// `null`.
 ///
 /// Unlike the file-share listing, revoked and expired rows ARE present
 /// (with `revoked_at` set / `expires_at` in the past) until the server's
@@ -1155,7 +1191,9 @@ pub async fn list_folder_shares_inner(state: &AppState, account_id: &str) -> Res
         .map_err(|e| AppError::Hcfs(format!("list_folder_shares: {e}")))?;
 
     let keystore = SqliteShareKeystore::new(pool.clone());
-    let secrets_by_hash = folder_share_secrets_by_hash(&keystore)?;
+    let mut secrets_by_hash = folder_share_secrets_by_hash(&keystore)?;
+    let hashes: Vec<String> = rows.iter().map(|row| row.token_hash.clone()).collect();
+    super::owner_wrap::sync_folder_wraps(state, account_id, &keystore, &mut secrets_by_hash, &hashes).await;
     Ok(resolve_folder_share_rows(rows, &secrets_by_hash, &console_base_url()))
 }
 
@@ -1184,8 +1222,13 @@ pub async fn revoke_folder_share_inner(state: &AppState, account_id: &str, share
     let pool = state.pool()?;
     let client = build_account_client(pool, account_id).await?;
     let keystore = SqliteShareKeystore::new(pool.clone());
+    let owner = account_key(account_id);
+    let origin_row = origin::folder_origin(pool, &owner, share_token).await.ok().flatten();
     match client.revoke_folder_share(share_token, &keystore).await {
-        Ok(()) => Ok(()),
+        Ok(()) => {
+            forget_folder_origin_and_badge(state, pool, &owner, share_token, origin_row).await;
+            Ok(())
+        }
         Err(FolderShareError::NotFound) => {
             // A 404 normally means already-revoked / never-existed, which
             // makes forgetting the local secret safe. But a server ROLLBACK
@@ -1198,9 +1241,20 @@ pub async fn revoke_folder_share_inner(state: &AppState, account_id: &str, share
             if let Err(e) = keystore.forget(share_token) {
                 warn!(error = %e, "folder-share keystore forget failed after 404 revoke (non-fatal)");
             }
+            forget_folder_origin_and_badge(state, pool, &owner, share_token, origin_row).await;
             Ok(())
         }
         Err(e) => Err(AppError::Hcfs(format!("revoke_folder_share: {e}"))),
+    }
+}
+
+async fn forget_folder_origin_and_badge(state: &AppState, pool: &SqlitePool, owner: &str, share_token: &str, origin_row: Option<(String, String)>) {
+    if let Err(e) = origin::forget_folder(pool, owner, share_token).await {
+        warn!(share_token = %share_token, error = %e, "Failed to forget folder_share_origin after revoke");
+    }
+    if let Some((label, prefix)) = origin_row {
+        let badge = crate::finder_bridge::badges::badge_after_unshare(state, &label, &prefix, true);
+        crate::finder_bridge::badges::push_from_state(state, &label, &prefix, badge);
     }
 }
 
@@ -1230,6 +1284,113 @@ pub async fn update_folder_share_expiry_inner(state: &AppState, account_id: &str
         match e {
             FolderShareError::NotFound => AppError::Validation("This link is no longer active, so its expiry cannot be changed.".into()),
             other => AppError::Hcfs(format!("update_folder_share_expiry: {other}")),
+        }
+    })?;
+
+    Ok(expires_at.map(|e| e.to_rfc3339()))
+}
+
+/// Capability gate for the by-hash pair, and the reason it must be checked
+/// BEFORE the call rather than only after a 404.
+///
+/// A `token_hash` is not a capability — it is what the server stores and
+/// what the listing already returns — so these routes are safe to expose.
+/// What is not safe is guessing at their 404. On a server without them the
+/// route itself answers a bare 404, which is byte-identical to the
+/// "already revoked" 404, and treating that as success would tell the user
+/// a live, anonymously readable share had been turned off.
+/// True only for the shape the server's `token_hash` takes: 64 lowercase hex
+/// characters, a blake3 digest.
+///
+/// hcfs-client refuses a malformed hash by returning `NotFound` BEFORE any
+/// network call, and both inners below treat `NotFound` as an idempotent
+/// success. Without this check "I refused to send that" and "the server has
+/// no such live share" would produce the same "Share link revoked" toast —
+/// the same false reassurance the capability gate exists to prevent, arriving
+/// through a different door.
+///
+/// Not reachable today, since every hash comes from the server's own listing.
+/// It is the cost of one comparison to keep it that way.
+fn is_folder_share_token_hash(candidate: &str) -> bool {
+    candidate.len() == 64 && candidate.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+async fn require_revoke_by_hash_supported(state: &AppState, account_id: &str) -> Result<()> {
+    let caps = fetch_capabilities(state, account_id).await?;
+    if !caps.folder_share_revoke_by_hash {
+        return Err(AppError::Validation(
+            "This server cannot revoke a link created on another device yet.".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Revoke a folder share by the `token_hash` the listing returns, for a row
+/// this device never minted.
+///
+/// The plaintext token lives only on the device that created the share, so
+/// without this an owner could close a live, anonymously readable view of a
+/// drive subtree from exactly one machine — and losing that machine meant
+/// never.
+///
+/// Deliberately does NOT touch the keystore. This device holds no secret
+/// for the share, so there is nothing to forget; [`hcfs_revoke_folder_share`]
+/// stays the right call where the plaintext token IS resolvable, because it
+/// also clears the local secret and the folder badge.
+#[tauri::command]
+pub async fn hcfs_revoke_folder_share_by_hash(state: tauri::State<'_, AppState>, token_hash: String) -> Result<()> {
+    let account_id = state.current_account_id()?;
+    revoke_folder_share_by_hash_inner(&state, &account_id, &token_hash).await
+}
+
+/// Inner of [`hcfs_revoke_folder_share_by_hash`], taking `&AppState` so the
+/// mock-server integration suite can drive it without a `tauri::State`.
+pub async fn revoke_folder_share_by_hash_inner(state: &AppState, account_id: &str, token_hash: &str) -> Result<()> {
+    require_revoke_by_hash_supported(state, account_id).await?;
+    if !is_folder_share_token_hash(token_hash) {
+        return Err(AppError::Validation("Not a folder-share link id.".into()));
+    }
+
+    let pool = state.pool()?;
+    let client = build_account_client(pool, account_id).await?;
+    match client.revoke_folder_share_by_hash(token_hash).await {
+        // Both are success. The gate above already established that the
+        // routes exist, so a 404 here is the server saying "no such live
+        // share" — unknown, someone else's, or already revoked — rather than
+        // "no such route". Idempotent, matching the token path, so a
+        // double-tapped Revoke needs no special-casing.
+        //
+        // Nothing to forget locally either way: this device holds no secret
+        // for a share it did not mint.
+        Ok(()) | Err(FolderShareError::NotFound) => Ok(()),
+        Err(e) => Err(AppError::Hcfs(format!("revoke_folder_share_by_hash: {e}"))),
+    }
+}
+
+/// Change a folder share's expiry by `token_hash`, for a row this device
+/// never minted. The by-hash counterpart to
+/// [`hcfs_update_folder_share_expiry`].
+#[tauri::command]
+pub async fn hcfs_update_folder_share_expiry_by_hash(state: tauri::State<'_, AppState>, token_hash: String, ttl: String) -> Result<Option<String>> {
+    let account_id = state.current_account_id()?;
+    let ttl = parse_ttl(&ttl)?;
+    update_folder_share_expiry_by_hash_inner(&state, &account_id, &token_hash, ttl).await
+}
+
+/// Inner of [`hcfs_update_folder_share_expiry_by_hash`].
+pub async fn update_folder_share_expiry_by_hash_inner(state: &AppState, account_id: &str, token_hash: &str, ttl: ShareTtl) -> Result<Option<String>> {
+    require_revoke_by_hash_supported(state, account_id).await?;
+    if !is_folder_share_token_hash(token_hash) {
+        return Err(AppError::Validation("Not a folder-share link id.".into()));
+    }
+
+    let pool = state.pool()?;
+    let client = build_account_client(pool, account_id).await?;
+    let expires_at = client.update_folder_share_expiry_by_hash(token_hash, ttl).await.map_err(|e| {
+        warn!(error = %e, "update_folder_share_expiry_by_hash failed");
+        match e {
+            FolderShareError::NotFound => AppError::Validation("This link is no longer active, so its expiry cannot be changed.".into()),
+            other => AppError::Hcfs(format!("update_folder_share_expiry_by_hash: {other}")),
         }
     })?;
 
@@ -1294,8 +1455,8 @@ pub async fn hcfs_update_share_expiry(state: tauri::State<'_, AppState>, share_t
 /// List all of this caller's currently-active shares, newest first.
 /// The server returns plaintext filenames, so every row has a real
 /// `filename` regardless of whether this device knows the share key.
-/// Only `share_url` is keystore-dependent — a row whose key has been
-/// forgotten (different device, wiped DB) surfaces with
+/// Only `share_url` is keystore-dependent — a row whose key this
+/// device never held and whose listing wrap is missing surfaces with
 /// `share_url = None` and the UI hides the Copy button while still
 /// offering Revoke.
 #[tauri::command]
@@ -1318,7 +1479,8 @@ pub async fn hcfs_list_shares(state: tauri::State<'_, AppState>) -> Result<Vec<S
     // still has a real plaintext `filename` from the server) and
     // still offers Revoke.
     let tokens: Vec<&str> = summaries.iter().map(|s| s.share_token.as_str()).collect();
-    let key_map = keystore.get_many(&tokens).map_err(|e| AppError::Hcfs(format!("keystore lookup: {e}")))?;
+    let mut key_map = keystore.get_many(&tokens).map_err(|e| AppError::Hcfs(format!("keystore lookup: {e}")))?;
+    super::owner_wrap::sync_file_wraps(&state, &account_id, &keystore, &mut key_map, &tokens).await;
     // Same batched-IN trick as the keystore: one round-trip for the
     // whole page so the per-file badge and Reshare button can resolve
     // origin in O(1) per row.
@@ -1460,12 +1622,25 @@ pub async fn hcfs_revoke_share(state: tauri::State<'_, AppState>, share_token: S
     // row is fine — and best-effort: a sidecar leftover after a
     // successful revoke would only show up as a "ghost" badge until
     // the next prune in `hcfs_list_shares`, never as a security issue.
-    if let Err(e) = origin::forget(pool, &account_key(&account_id), &share_token).await {
+    //
+    // The row is read first because it is the only record of which file the
+    // token was minted from, and the Finder badge on that file has to step
+    // back from "shared" once the row is gone.
+    let owner = account_key(&account_id);
+    let origin_row = origin::fetch_for_tokens(pool, &owner, &[share_token.as_str()])
+        .await
+        .ok()
+        .and_then(|mut rows| rows.remove(share_token.as_str()));
+    if let Err(e) = origin::forget(pool, &owner, &share_token).await {
         warn!(
             share_token = %share_token,
             error = %e,
             "Failed to forget share_origin after successful revoke"
         );
+    }
+    if let Some(row) = origin_row {
+        let badge = crate::finder_bridge::badges::badge_after_unshare(&state, &row.folder_label, &row.relative_path, false);
+        crate::finder_bridge::badges::push_from_state(&state, &row.folder_label, &row.relative_path, badge);
     }
     Ok(())
 }
@@ -1506,6 +1681,29 @@ pub async fn hcfs_clear_share_history(state: tauri::State<'_, AppState>) -> Resu
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_a_real_token_hash_shape_is_accepted() {
+        use super::is_folder_share_token_hash;
+
+        assert!(is_folder_share_token_hash(&"a".repeat(64)));
+        assert!(is_folder_share_token_hash(&"0123456789abcdef".repeat(4)));
+
+        // Length boundary.
+        assert!(!is_folder_share_token_hash(&"a".repeat(63)));
+        assert!(!is_folder_share_token_hash(&"a".repeat(65)));
+        assert!(!is_folder_share_token_hash(""));
+
+        // Uppercase is not what the server emits, so it is not a hash we
+        // produced — same strictness as the server-side predicate.
+        assert!(!is_folder_share_token_hash(&"A".repeat(64)));
+        assert!(!is_folder_share_token_hash(&"g".repeat(64)));
+
+        // A folder-share TOKEN is 43 chars of base64url, so it can never be
+        // mistaken for a hash. That is what stops a caller passing the wrong
+        // one and getting a "revoked" toast for a request never sent.
+        assert!(!is_folder_share_token_hash("Zm9vYmFyYmF6cXV4Zm9vYmFyYmF6cXV4Zm9vYmFyYmE"));
+    }
+
     use super::*;
     use proptest::prelude::*;
     use tempfile::TempDir;
@@ -1758,6 +1956,56 @@ mod tests {
             "hcfs_list_shares must NOT call build_share_url directly — that takes a raw \
              key and would emit a password-free #k= link for a password-protected share",
         );
+    }
+
+    /// Every path that uploads a share copy must run the storage gate on the
+    /// copy's real size, after that size is known. A `0` here re-opens the
+    /// bug where a share was judged as free storage the server then billed;
+    /// a gate placed before the stat has no size to pass.
+    #[test]
+    fn every_share_upload_is_gated_on_its_plaintext_size() {
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/shares/commands.rs")).expect("read commands.rs");
+        const GATE: &str = "require_eligible(state, account_id, InsufficientCreditsAction::Sharing, plaintext_size)";
+
+        for sig in [
+            "async fn create_share_inner(",
+            "async fn share_external_file(",
+            "async fn mint_remote_share_at(",
+        ] {
+            let body = fn_body(&src, sig);
+            let size_known = body
+                .find("let plaintext_size = metadata.len();")
+                .unwrap_or_else(|| panic!("{sig} stats its source"));
+            let gated = body.find(GATE).unwrap_or_else(|| panic!("{sig} must gate on the plaintext size"));
+            assert!(size_known < gated, "{sig} must gate AFTER the size is known, not before");
+        }
+    }
+
+    /// A zero-byte gate is never the ONLY gate on a share, and exists in one
+    /// place: the pre-download probe in `create_remote_share_inner`, which
+    /// spares an already-refused account a download the sized gate would
+    /// then throw away. Anywhere else it would judge a share as free storage
+    /// the server then bills.
+    ///
+    /// Scans the production half of the file only: this test names the
+    /// needle it hunts, so an unbounded scan would find itself and fail
+    /// forever (the same trap `enablement.rs`'s pins guard against).
+    #[test]
+    fn a_zero_byte_gate_exists_only_as_the_remote_predownload_probe() {
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/shares/commands.rs")).expect("read commands.rs");
+        let tests_start = src.find("#[cfg(test)]\nmod tests").expect("test module follows the production code");
+        let production = &src[..tests_start];
+        const ZERO_GATE: &str = "InsufficientCreditsAction::Sharing, 0)";
+
+        assert_eq!(
+            production.matches(ZERO_GATE).count(),
+            1,
+            "exactly one zero-byte probe, in create_remote_share_inner"
+        );
+        let body = fn_body(production, "async fn create_remote_share_inner(");
+        let probe = body.find(ZERO_GATE).expect("the probe lives in create_remote_share_inner");
+        let download = body.find("mint_remote_share_at(").expect("the mint follows");
+        assert!(probe < download, "the probe must run before the download it exists to spare");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -11,12 +11,15 @@ import { nextSkeletonState } from "@/lib/utils/skeletonGate";
 import { cn } from "@/app/lib/utils";
 
 import GripIcon from "../GripIcon";
+import { BILLING_ROUTE } from "@/app/lib/routes";
 import {
   formatPercentLabel,
   getCapacitySourceLabel,
   getStorageOverviewView,
   getUsageTone,
   getUsedBytesDisplay,
+  NO_PLAN_DESCRIPTION,
+  NO_PLAN_TITLE,
   type UsageTone,
 } from "./storageOverviewState";
 
@@ -126,16 +129,16 @@ const StorageOverviewCard: React.FC<{ className?: string }> = ({
             <>
               <div className="flex items-center justify-between">
                 <div
-                  className="h-[30px] w-[180px] rounded bg-grey-light-700 dark:bg-grey-dark-200 animate-pulse"
+                  className="h-[30px] w-[180px] rounded bg-grey-80 dark:bg-grey-dark-200 animate-pulse"
                   aria-label="Loading storage"
                 />
                 <div
-                  className="h-[30px] w-[56px] rounded bg-grey-light-700 dark:bg-grey-dark-200 animate-pulse"
+                  className="h-[30px] w-[56px] rounded bg-grey-80 dark:bg-grey-dark-200 animate-pulse"
                   aria-hidden="true"
                 />
               </div>
               <div
-                className="h-[10px] w-full rounded-full bg-grey-light-700 dark:bg-grey-dark-200 animate-pulse"
+                className="h-[10px] w-full rounded-full bg-grey-80 dark:bg-grey-dark-200 animate-pulse"
                 aria-hidden="true"
               />
             </>
@@ -154,19 +157,32 @@ const StorageOverviewCard: React.FC<{ className?: string }> = ({
             </div>
           )}
 
+          {/* No capacity at all.
+
+              Quiet, and shaped like the Plan card's own empty state
+              beside it — a line, a sentence, a button — because the red
+              banner above the pair already carries the alarm and the
+              reason. Two earlier versions each put the whole message in
+              here instead: first as a paragraph, then as a red "0 B"
+              over a full red bar. The bar was the worse of the two. A
+              full bar means "you have used all of your storage", and
+              this account has none to use, so the one graphic on the
+              card stated something that was not true — and painting the
+              page's only progress bar solid red made a state the user
+              can fix in two clicks read as a fault. */}
           {view === "no-plan" && (
-            <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center justify-between gap-3 w-full">
               <div className="flex flex-col items-start gap-1">
                 <p className="font-mono font-medium text-[16px] leading-[24px] text-grey-10 dark:text-white">
-                  No storage available
+                  {NO_PLAN_TITLE}
                 </p>
                 <p className="text-[13px] font-medium leading-[18px] text-grey-50 dark:text-grey-dark-500">
-                  Subscribe to a plan to get Drive storage.
+                  {NO_PLAN_DESCRIPTION}
                 </p>
               </div>
               <Button
                 asLink
-                href="/billing"
+                href={BILLING_ROUTE}
                 variant="primaryLight"
                 size="auto"
                 className="px-4 py-2 text-[14px] font-medium leading-[1.109] tracking-[-0.28px]"
@@ -205,7 +221,10 @@ const StorageOverviewCard: React.FC<{ className?: string }> = ({
                 aria-valuemin={0}
                 aria-valuemax={100}
                 aria-label="Storage used"
-                className="h-[10px] w-full overflow-hidden rounded-full bg-grey-light-700 dark:bg-grey-dark-200"
+                // See the plan chip: the `grey-light-*` family is all
+                // #f0–f3, invisible on this white card, so the groove used
+                // the same token as the card itself.
+                className="h-[10px] w-full overflow-hidden rounded-full bg-grey-80 dark:bg-grey-dark-200"
               >
                 <div
                   className={cn(

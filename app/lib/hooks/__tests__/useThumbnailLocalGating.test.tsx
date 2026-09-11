@@ -13,11 +13,12 @@
 //  - a synced local image goes through the Rust `get_thumbnail` command —
 //    the SAME pipeline cloud thumbnails use, which short-circuits to the
 //    on-disk copy, decodes off the WebView, and disk-caches the small JPEG;
-//  - the gate keys on `arionHash` (fileId as fallback): LOCAL listing rows
-//    NEVER carry a fileId — Rust's `get_user_files` sets `file_id: ""` and
-//    the nested mapper leaves it undefined — so a fileId-only gate silently
-//    turns the whole Rust path into dead code (found in review; the fixture
-//    below is production-shaped on purpose);
+//  - the gate keys on the path id (`arionHash`, fileId as fallback): LOCAL
+//    listing rows NEVER carry a fileId — Rust's `get_user_files` sets
+//    `file_id: ""` and the nested mapper leaves it undefined — so a
+//    fileId-only gate silently turns the whole Rust path into dead code.
+//    The IPC `arionHash` is the content digest (`arionCid`); empty falls
+//    back to file_id, and local rows forward the path id as that fallback;
 //  - formats a JPEG thumbnail would degrade, formats the Rust decoder is
 //    not built with, and rows without ids keep the original url instead;
 //  - a Rust failure degrades to the original url, loudly;
@@ -88,12 +89,36 @@ describe("useThumbnail local-image gating", () => {
     expect(invokeMock).toHaveBeenCalledWith("get_thumbnail", {
       accountId: "5Test",
       label: "Camera Uploads",
-      fileId: "",
-      arionHash: "hash-route",
+      // Local rows have no fileId field; the path id is the Rust file_id
+      // fallback when the content digest is missing.
+      fileId: "hash-route",
+      arionHash: "",
       source: "/Users/me/Hippius/pic.jpg",
       maxDim: 160,
     });
     expect(result.current.error).toBeNull();
+  });
+
+  it("passes the content digest as the IPC cache key, not the path id", async () => {
+    const file = {
+      ...localJpg("path-id"),
+      arionCid: "content-digest",
+    } as FormattedUserFile;
+    const { result } = renderHook(() =>
+      useThumbnail(file, { enabled: true, maxDim: 160 }),
+    );
+
+    await waitFor(() =>
+      expect(result.current.url).toBe(`asset://localhost/${CACHE_PATH}`),
+    );
+    expect(invokeMock).toHaveBeenCalledWith("get_thumbnail", {
+      accountId: "5Test",
+      label: "Camera Uploads",
+      fileId: "path-id",
+      arionHash: "content-digest",
+      source: "/Users/me/Hippius/pic.jpg",
+      maxDim: 160,
+    });
   });
 
   it("keeps the original url for formats a JPEG thumbnail would degrade", () => {

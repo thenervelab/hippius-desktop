@@ -7,9 +7,10 @@ import {
   USAGE_CRITICAL_PERCENT,
   USAGE_WARN_PERCENT,
   formatPercentLabel,
-  formatPlanPrice,
   getCapacitySourceLabel,
+  getPlanHeading,
   getPlanView,
+  shouldShowUsageBar,
   getStorageOverviewView,
   getUsageTone,
   getUsedBytesDisplay,
@@ -157,12 +158,6 @@ describe("formatPercentLabel", () => {
   });
 });
 
-describe("formatPlanPrice", () => {
-  it("abbreviates month and passes other intervals through", () => {
-    expect(formatPlanPrice(12, "month")).toBe("12$/mo.");
-    expect(formatPlanPrice(99, "year")).toBe("99$/year");
-  });
-});
 
 describe("storage card renders Rust labels (H-109)", () => {
   it("does not formatBytes the raw counts", () => {
@@ -174,5 +169,62 @@ describe("storage card renders Rust labels (H-109)", () => {
     expect(src).toContain("overview.usedDisplay");
     expect(src).toContain("overview.totalDisplay");
     expect(src).toContain("overview.freeDisplay");
+  });
+});
+
+describe("shouldShowUsageBar", () => {
+  it("draws the bar wherever a capacity is actually quoted", () => {
+    expect(shouldShowUsageBar("plan")).toBe(true);
+    expect(shouldShowUsageBar("free")).toBe(true);
+  });
+
+  // An empty track on the error branch reads as "nothing used", which is
+  // the confident-zero the storage card's error state exists to avoid.
+  it("draws no bar when there is no answer to draw", () => {
+    expect(shouldShowUsageBar("none")).toBe(false);
+    expect(shouldShowUsageBar("skeleton")).toBe(false);
+  });
+});
+
+describe("getPlanHeading", () => {
+  // "Active Plan" only repeats what the presence of a plan already says;
+  // the name is the part the account cannot read off the card otherwise.
+  it("names the plan a subscribed account is on", () => {
+    expect(getPlanHeading("plan", "Starter")).toBe("Starter");
+  });
+
+  it("keeps the free tier's own name", () => {
+    expect(getPlanHeading("free", null)).toBe("Free Plan");
+  });
+
+  // Naming a plan we could not read would be a guess, and a plan with no
+  // name from the API still has to head its card with something.
+  it("falls back to the generic label when there is no name to show", () => {
+    expect(getPlanHeading("plan", null)).toBe("Active Plan");
+    expect(getPlanHeading("plan", "")).toBe("Active Plan");
+    expect(getPlanHeading("none", "Starter")).toBe("Active Plan");
+  });
+});
+
+describe("an account with no entitlement at all", () => {
+  // An access key gets no included allowance, so there is no bar to draw
+  // and nothing to say about usage — only what to do about it.
+  it("renders the no-plan state rather than a usage bar", () => {
+    expect(
+      getStorageOverviewView({ showSkeleton: false, isError: false, source: "none" }),
+    ).toBe("no-plan");
+  });
+
+  it("names the source honestly rather than calling it free", () => {
+    expect(getCapacitySourceLabel("none", null)).toBe("No storage plan");
+    expect(getCapacitySourceLabel("none", null)).not.toMatch(/free/i);
+  });
+
+  it("draws no usage bar in the header chip", () => {
+    expect(shouldShowUsageBar(getPlanView({
+      showSkeleton: false,
+      isError: false,
+      source: "none",
+    }))).toBe(false);
   });
 });

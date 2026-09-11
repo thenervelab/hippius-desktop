@@ -1,6 +1,6 @@
 "use client";
 
-import { FC, useState, useRef, useEffect, useCallback, memo } from "react";
+import { FC, useState, useRef, useEffect, useCallback, memo, useMemo } from "react";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import FilesTable from "./files-table";
 import FilesTableSkeleton from "./files-table/FilesTableSkeleton";
@@ -23,10 +23,18 @@ import { renameModalFileAtom } from "@/app/lib/global-atoms/renameAtoms";
 import { downloadFile } from "@/app/lib/utils/downloadFile";
 import { CloudUploadIcon, HardDrive } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useQueryClient } from "@tanstack/react-query";
+import { useWalletAuth } from "@/app/lib/wallet-auth-context";
+import { notifyFilesMutated } from "@/app/lib/utils/fileMutationEvents";
+import usePageContextActions from "@/app/lib/hooks/usePageContextActions";
+import {
+  useRemoteFileUpload,
+  useRemoteFolderUpload,
+} from "@/app/lib/hooks/useRemoteUploadActions";
+import type { NewFolderTarget } from "@/app/lib/global-atoms/contextMenuAtoms";
 import { formatDisplayName } from "@/lib/utils/fileTypeUtils";
 import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 import NoMatchingResults from "./NoMatchingResults";
-import BackgroundContextMenu from "@/app/components/ui/context-menu/BackgroundContextMenu";
 
 interface DriveContentProps {
   isRecentFiles?: boolean;
@@ -68,6 +76,8 @@ interface DriveContentProps {
   isFolderUploadOpen?: boolean;
   drivePathsByLabel?: Record<string, string>;
   currentSubfolderPath?: string | null;
+  /** Where the menu's New Folder creates; defaults to the main drive. */
+  newFolderTarget?: NewFolderTarget;
 }
 
 const DriveContent: FC<DriveContentProps> = ({
@@ -94,14 +104,11 @@ const DriveContent: FC<DriveContentProps> = ({
   isFolderUploadOpen = false,
   drivePathsByLabel,
   currentSubfolderPath,
+  newFolderTarget,
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [animateCloud, setAnimateCloud] = useState(false);
   const dragTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const [bgContextMenu, setBgContextMenu] = useState<{
-    x: number;
-    y: number;
-  } | null>(null);
   // Opens `ShareFileModal` (mounted at the layout level) for the
   // selected file. Setting the atom is the only handoff — the modal
   // owns its own lifecycle from there.
@@ -265,7 +272,7 @@ const DriveContent: FC<DriveContentProps> = ({
             if (files.length > 0) {
               if (folders.length > 0) {
                 toast.info(
-                  'Folders were skipped. Use "+ New Folder" to upload a folder.',
+                  'Folders were skipped. Use "Upload Folder" to upload a folder.',
                 );
               }
               addButtonRef.current.openWithPaths(files);
@@ -323,16 +330,67 @@ const DriveContent: FC<DriveContentProps> = ({
     downloadFile(file, polkadotAddress);
   };
 
-  const handleHeaderContextMenu = useCallback(
-    (e: React.MouseEvent) => {
-      if (isSyncPathEmpty || isRecentFiles || !onUploadFile) return;
-      e.preventDefault();
-      e.stopPropagation();
-      window.getSelection()?.removeAllRanges();
-      setBgContextMenu({ x: e.clientX, y: e.clientY });
-    },
-    [isSyncPathEmpty, isRecentFiles, onUploadFile],
+  // What the right-click menu offers while this view is on screen. The
+  // menu is mounted once in the pages layout — registering handlers rather
+  // than rendering a menu here is what gives every surface one, including
+  // those that never had a background menu (Overview, the drive list), and
+  // guarantees the menu and this view's toolbar run the same action
+  // against the same folder.
+  //
+  // Uploads are withheld where they cannot work: a drive with no sync path
+  // has nowhere to put the file. New Folder is not — with no folder open
+  // it falls back to the main drive's root.
+  // Route the refresh through the shared funnel: it wakes the cached
+  // lists AND the nested folder listings, which only react to the window
+  // event.
+  const uploadQueryClient = useQueryClient();
+  const { polkadotAddress: uploadAccount } = useWalletAuth();
+  const refreshAfterRemoteUpload = useCallback(() => {
+    void notifyFilesMutated(uploadQueryClient, uploadAccount);
+  }, [uploadQueryClient, uploadAccount]);
+
+  // A browsed drive has no local sync root, so the local upload handlers
+  // are withheld from this view — which left its menu with nothing but
+  // New Folder. Its uploads go straight to the server instead, through
+  // the same actions the remote toolbar buttons run.
+  const remoteTarget = newFolderTarget?.kind === "remote" ? newFolderTarget : null;
+  const remoteFile = useRemoteFileUpload({
+    label: remoteTarget?.label ?? null,
+    parentPath: remoteTarget?.parentPath,
+    onUploaded: refreshAfterRemoteUpload,
+  });
+  const remoteFolder = useRemoteFolderUpload({
+    label: remoteTarget?.label ?? null,
+    parentPath: remoteTarget?.parentPath,
+    onUploaded: refreshAfterRemoteUpload,
+  });
+
+  const canUpload = !isSyncPathEmpty && Boolean(onUploadFile);
+  const contextActions = useMemo(
+    () => ({
+      onUploadFile: remoteTarget ? remoteFile.start : canUpload ? onUploadFile : undefined,
+      onUploadFolder: remoteTarget ? remoteFolder.start : canUpload ? onAddFolder : undefined,
+      // Only where drives are chosen — the drive list and Recent Files.
+      // Inside a drive, local or remote, "Sync a Folder" answers a
+      // question the user is no longer asking, and registering a NEW sync
+      // folder from inside another one reads as doing something to the
+      // folder they are looking at.
+      onSyncFolder: isRecentFiles ? onAddSyncFolder : undefined,
+      newFolderTarget,
+    }),
+    [
+      remoteTarget,
+      remoteFile.start,
+      remoteFolder.start,
+      canUpload,
+      onUploadFile,
+      onAddFolder,
+      isRecentFiles,
+      onAddSyncFolder,
+      newFolderTarget,
+    ],
   );
+  usePageContextActions(contextActions);
 
   const renderContent = () => {
     // Only show full loading state on initial load (no data yet).
@@ -404,7 +462,6 @@ const DriveContent: FC<DriveContentProps> = ({
             hasMore={hasMore}
             loadMore={loadMore}
             isLoadingMore={isLoadingMore}
-            onHeaderContextMenu={handleHeaderContextMenu}
             drivePathsByLabel={drivePathsByLabel}
             currentSubfolderPath={currentSubfolderPath}
             searchTerm={searchTerm}
@@ -432,12 +489,6 @@ const DriveContent: FC<DriveContentProps> = ({
   return (
     <>
       <div
-        onContextMenu={(e) => {
-          // Only show background context menu if sync path is configured and not on recent files
-          if (isSyncPathEmpty || isRecentFiles || !onUploadFile) return;
-          e.preventDefault();
-          setBgContextMenu({ x: e.clientX, y: e.clientY });
-        }}
         className={cn(
           "w-full relative select-none",
           viewMode === "card" && filteredData.length > 0 && "px-2.5",
@@ -569,17 +620,6 @@ const DriveContent: FC<DriveContentProps> = ({
             setRenameModalFile(file);
             setContextMenu(null);
           }}
-        />
-      )}
-
-      {bgContextMenu && onUploadFile && onAddFolder && (
-        <BackgroundContextMenu
-          x={bgContextMenu.x}
-          y={bgContextMenu.y}
-          onClose={() => setBgContextMenu(null)}
-          onUploadFile={onUploadFile}
-          onAddFolder={onAddFolder}
-          onAddSyncFolder={onAddSyncFolder}
         />
       )}
 

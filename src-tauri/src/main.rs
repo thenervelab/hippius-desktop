@@ -105,8 +105,9 @@ use crate::recovery_binding::{cancel_account_recovery, list_recoverable_accounts
 use crate::sync::control::{reveal_drive_in_finder, trigger_sync_now};
 use crate::sync::device::{get_device_name, set_device_name};
 use crate::sync::files::{
-    add_file, add_files, add_folder, allow_asset_scope, delete_files, export_file, export_folder_zip, filter_file_entries, get_recent_files,
-    get_user_files, list_sync_folder, list_sync_folder_grouped, rename_entry, resolve_file_info, resolve_file_path, search_user_files_recursive,
+    add_file, add_files, add_folder, allow_asset_scope, create_sync_folder, delete_files, export_file, export_folder_zip, filter_file_entries,
+    get_recent_files, get_user_files, list_sync_folder, list_sync_folder_grouped, rename_entry, resolve_file_info, resolve_file_path,
+    search_user_files_recursive,
 };
 use crate::sync::folders::{delete_remote_folder, get_sync_folders_with_stats, list_remote_folders, restore_remote_folders};
 use crate::sync::lifecycle::{
@@ -116,8 +117,10 @@ use crate::sync::lifecycle::{
 use crate::sync::mnemonic::{ensure_sync_mnemonic, get_drive_mnemonic};
 use crate::sync::paths::{get_sync_path, remove_sync_path, set_sync_path};
 use crate::sync::progress::{sp_clear_all_data, sp_dismiss_sync_widget, sp_get_snapshot};
-use crate::sync::recent_uploads::{get_recent_uploads, search_files};
+use crate::sync::recent_uploads::{get_recent_uploads, search_files, search_files_in_drive};
 use crate::sync::remote::{cache_remote_file, download_remote_file, get_thumbnail, list_remote_folder_files, list_remote_folder_grouped};
+use crate::sync::remote_rename::{create_remote_folder, rename_remote_file, rename_remote_folder};
+use crate::sync::remote_upload::{upload_files_to_remote_folder, upload_folder_to_remote_folder};
 use crate::sync::status::{app_close, get_all_drive_statuses, get_sync_activity_rows, get_sync_engine_health};
 use crate::tray::panel::{hide_tray_panel, toggle_tray_panel};
 use crate::updates::{check_for_update, current_release_channel, install_update, release_channel_status, switch_release_channel};
@@ -331,6 +334,7 @@ fn main() {
             change_sync_folder,
             auto_init_sync,
             get_sync_folders_with_stats,
+            crate::sync::root_host::sync_root_host,
             // Sync status
             get_sync_activity_rows,
             get_sync_engine_health,
@@ -341,6 +345,7 @@ fn main() {
             add_folder,
             delete_files,
             rename_entry,
+            create_sync_folder,
             list_sync_folder,
             list_sync_folder_grouped,
             get_recent_files,
@@ -399,6 +404,12 @@ fn main() {
             delete_remote_folder,
             // Remote folder browsing & one-off download
             list_remote_folder_files,
+            upload_files_to_remote_folder,
+            upload_folder_to_remote_folder,
+            search_files_in_drive,
+            rename_remote_file,
+            rename_remote_folder,
+            create_remote_folder,
             list_remote_folder_grouped,
             download_remote_file,
             cache_remote_file,
@@ -414,6 +425,8 @@ fn main() {
             crate::shares::commands::hcfs_update_share_expiry,
             crate::shares::commands::hcfs_list_folder_shares,
             crate::shares::commands::hcfs_revoke_folder_share,
+            crate::shares::commands::hcfs_revoke_folder_share_by_hash,
+            crate::shares::commands::hcfs_update_folder_share_expiry_by_hash,
             crate::shares::commands::hcfs_update_folder_share_expiry,
             crate::shares::commands::hcfs_generate_share_password,
             crate::shares::commands::hcfs_list_share_history,
@@ -539,6 +552,7 @@ fn main() {
             get_add_credit_events,
             get_drive_storage_stats,
             get_storage_overview,
+            crate::billing::services_status::get_drive_service_status,
             get_drive_storage_chart,
             get_drive_credits_chart,
             get_credit_balance_chart,
@@ -583,6 +597,7 @@ fn main() {
             crate::finder_bridge::enablement::finder_extension_state,
             crate::finder_bridge::enablement::open_finder_extension_settings,
             crate::finder_bridge::enablement::enable_finder_extension,
+            crate::finder_bridge::enablement::set_finder_extension_preference,
             // Local DB (notifications, address book, onboarding, preferences, app state)
             add_notification,
             list_notifications,
@@ -859,23 +874,6 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
             );
         }
 
-        // Register the Finder extension with the system, without switching it
-        // on. macOS is supposed to do this when the containing app first
-        // launches; on at least one Mac it never did, and nothing retried for
-        // six days — the extension sat on disk registered nowhere, so it was in
-        // no settings pane and the nudge's advice could not be followed. See
-        // `finder_bridge::enablement::register_with_the_system`.
-        //
-        // Spawned, not awaited: it shells out to two system helpers and must not
-        // sit in front of the window appearing.
-        #[cfg(target_os = "macos")]
-        {
-            let handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                crate::finder_bridge::enablement::register_finder_extension_at_launch(handle).await;
-            });
-        }
-
         if let Ok(env_path) = app.path().resolve(".env", BaseDirectory::Resource) {
             let _ = dotenvy::from_filename(env_path);
         }
@@ -1077,6 +1075,21 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
             // idempotent background migrations below so the user sees the app
             // the moment it is usable, not after the data fixups finish.
             show_main();
+
+            // Keep the Finder extension in the state the user wants: elect it
+            // on a first run, re-elect it after an app or macOS update, leave
+            // it alone when they switched it off. Needs the pool (preference
+            // + election fingerprint), so it sits here and not in `setup`.
+            // Spawned, not awaited: it shells out to system helpers and waits
+            // seconds for PlugInKit discovery, none of which may hold up the
+            // migrations below.
+            #[cfg(target_os = "macos")]
+            {
+                let handle = app_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    crate::finder_bridge::enablement::ensure_finder_extension_at_launch(handle).await;
+                });
+            }
 
             // Migrate account keys from 8-char to 16-char format
             if let Err(e) = crate::utils::schema::migrate_account_keys(&pool).await {

@@ -710,13 +710,14 @@ pub async fn restore_session(app: tauri::AppHandle, state: tauri::State<'_, crat
         }
     }
 
-    // The session object the FE renders. `email` is deliberately absent:
-    // `auth_session` has no column for it, so it has never survived a
-    // restart on this path either.
+    // The session object the FE renders. `email` and the specific
+    // `provider` are what let the account menu say WHO is signed in and
+    // with which service; both are now columns, so both survive a restart.
     let oauth_session = serde_json::json!({
         "token": auth_token,
         "userId": row.user_id.unwrap_or(0),
         "username": row.username.clone().unwrap_or_default(),
+        "email": row.email.clone(),
         "provider": &provider,
         "expiresAt": row.token_expiry.and_then(|e| chrono::DateTime::from_timestamp_millis(e).map(|d| d.to_rfc3339())).unwrap_or_default(),
         "substrateAddress": &addr,

@@ -13,7 +13,9 @@ export type FormattedUserFile = {
   actualFileName?: string;
   size?: number;
   createdAt: number;
+  /** Path id (`blake3(relative_path)` hex). Not the content hash. */
   arionHash: string;
+  /** Arion BLAKE3 content hash. File Details and Hipstats read this. */
   arionCid: string;
   /**
    * Hex of the server-side `path_hash` — the file's id on Arion. Present on
@@ -45,6 +47,21 @@ export type FormattedUserFile = {
   // an in-flight upload so a stuck failure can't keep masquerading as progress.
   syncStatus?: "synced" | "pending" | "uploading" | "downloading" | "failed" | "unknown" | "excluded" | "hidden";
   label?: string;
+  /**
+   * The drive this row was browsed from, when that drive is NOT synced on
+   * this computer.
+   *
+   * `label` alone cannot say this — a local row carries one too — and
+   * `source` cannot either: a remote FILE row deliberately has none, which
+   * is the discriminant `isCloudOnlyRow` and the download/preview routing
+   * key on. Only folder rows carry the `remote://<label>` sentinel, which
+   * is why server-side rename reached folders and not the files inside
+   * them.
+   *
+   * Set for every row of a browsed remote drive, so an action that works
+   * server-side has the drive to work in.
+   */
+  remoteDriveLabel?: string;
   fileCount?: number;
   /**
    * For folder rows whose `actualFileName` is only the basename (the

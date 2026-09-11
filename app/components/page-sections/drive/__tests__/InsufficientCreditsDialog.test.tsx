@@ -5,6 +5,7 @@ import { Provider, createStore } from "jotai";
 import React from "react";
 
 import InsufficientCreditsDialog from "../InsufficientCreditsDialog";
+import { BILLING_ROUTE } from "@/app/lib/routes";
 import {
   insufficientCreditsDialogOpenAtom,
   InsufficientCreditsReason,
@@ -51,7 +52,7 @@ describe("InsufficientCreditsDialog", () => {
   // the way out is a bigger plan, not a topped-up balance. A Drive refusal
   // that offered credits would send the user somewhere that cannot help.
   it.each(DRIVE_REASONS)(
-    "sends a %s refusal to the plans page and never offers credits",
+    "sends a %s refusal to Billing and never offers credits",
     (reason) => {
       renderWithReason(reason);
 
@@ -59,10 +60,20 @@ describe("InsufficientCreditsDialog", () => {
       expect(screen.queryByRole("button", { name: /buy credits/i })).not.toBeInTheDocument();
 
       fireEvent.click(screen.getByRole("button", { name: /view plans/i }));
-      expect(push).toHaveBeenCalledWith("/drive-plans");
+      expect(push).toHaveBeenCalledWith(BILLING_ROUTE);
       expect(openLinkByKey).not.toHaveBeenCalled();
     },
   );
+
+  // A share uploads a re-encrypted copy the server bills, so a refusal is
+  // about THIS share's size — not a Drive-wide freeze. The old copy said
+  // "new share links are paused", which read as a policy, not a full plan.
+  it("explains a share refusal as this share not fitting", () => {
+    renderWithReason("sharing");
+
+    expect(screen.getByText(/sharing this file would go past the storage your plan includes/i)).toBeInTheDocument();
+    expect(screen.queryByText(/paused/i)).not.toBeInTheDocument();
+  });
 
   it("keeps VM creation on the credits route", () => {
     renderWithReason("vm-creation");

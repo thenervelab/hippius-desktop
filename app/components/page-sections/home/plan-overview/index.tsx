@@ -9,10 +9,8 @@ import { nextSkeletonState } from "@/lib/utils/skeletonGate";
 import { cn } from "@/app/lib/utils";
 
 import GripIcon from "../GripIcon";
-import {
-  formatPlanPrice,
-  getPlanView,
-} from "../storage-overview/storageOverviewState";
+import { BILLING_ROUTE } from "@/app/lib/routes";
+import { getPlanView } from "../storage-overview/storageOverviewState";
 
 /**
  * The small plan card beside the storage card (mobile PlanCard's desktop
@@ -20,7 +18,7 @@ import {
  * storage card and the top-bar chip, so all three commit to the same
  * plan-vs-free-tier decision:
  *
- *   - subscription → plan name, price, allowance + Manage CTA
+ *   - subscription → plan name, allowance + Manage CTA
  *   - no plan      → the free plan and its allowance + Upgrade CTA
  */
 const PlanOverviewCard: React.FC<{ className?: string }> = ({ className }) => {
@@ -85,21 +83,20 @@ const PlanOverviewCard: React.FC<{ className?: string }> = ({ className }) => {
           {view === "plan" && plan && (
             <div className="flex flex-wrap items-center justify-between gap-3 w-full">
               <div className="flex flex-col items-start gap-1 min-w-0">
-                <div className="flex items-end gap-1">
-                  <span className="font-mono font-medium text-[24px] leading-[30px] tracking-[-0.96px] text-grey-10 dark:text-white truncate">
-                    {plan.name || "Active plan"}
-                  </span>
-                  <span className="font-mono font-medium text-[12px] leading-[18px] tracking-[-0.48px] text-grey-10/50 dark:text-white/50 pb-[3px] whitespace-nowrap">
-                    {formatPlanPrice(plan.amount, plan.interval)}
-                  </span>
-                </div>
+                {/* Name and allowance only. What the plan COSTS is not
+                    something the owner of it needs reminding of on their
+                    home page — it is settled, and Manage is one click away
+                    for the account that wants the billing detail. */}
+                <span className="font-mono font-medium text-[24px] leading-[30px] tracking-[-0.96px] text-grey-10 dark:text-white truncate">
+                  {plan.name || "Active plan"}
+                </span>
                 <p className="text-[12px] font-medium leading-[18px] text-primary-50 dark:text-primary-brand-dark whitespace-nowrap">
                   ≈ {plan.storageDisplay} storage
                 </p>
               </div>
               <Button
                 asLink
-                href="/drive-plans"
+                href={BILLING_ROUTE}
                 variant="defaultStable"
                 size="auto"
                 className="px-4 py-2 text-[14px] font-medium leading-[1.109] tracking-[-0.28px]"
@@ -123,7 +120,7 @@ const PlanOverviewCard: React.FC<{ className?: string }> = ({ className }) => {
               </div>
               <Button
                 asLink
-                href="/drive-plans"
+                href={BILLING_ROUTE}
                 variant="primaryLight"
                 size="auto"
                 className="px-4 py-2 text-[14px] font-medium leading-[1.109] tracking-[-0.28px]"
@@ -145,7 +142,7 @@ const PlanOverviewCard: React.FC<{ className?: string }> = ({ className }) => {
               </div>
               <Button
                 asLink
-                href="/drive-plans"
+                href={BILLING_ROUTE}
                 variant="primaryLight"
                 size="auto"
                 className="px-4 py-2 text-[14px] font-medium leading-[1.109] tracking-[-0.28px]"

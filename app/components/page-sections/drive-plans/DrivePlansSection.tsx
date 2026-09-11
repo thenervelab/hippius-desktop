@@ -18,6 +18,8 @@ import {
   useSubscribeDrivePlan,
 } from "@/lib/hooks/api/useDriveSubscription";
 import { useUserCredits } from "@/lib/hooks/api/useUserCredits";
+import { useStorageOverview } from "@/lib/hooks/api/useStorageOverview";
+import { isFreeTierEntitled, offeredPlans } from "./planVisibility";
 import {
   chargeAmount,
   currentPlanCode,
@@ -35,6 +37,7 @@ import DrivePlanFlowDialog, { type DrivePlanFlow } from "./DrivePlanFlowDialog";
 import DrivePlansGrid from "./DrivePlansGrid";
 import DriveSubscribeDialog from "./DriveSubscribeDialog";
 import type { PaymentRail } from "./PaymentMethodChoice";
+import { BILLING_ROUTE } from "@/app/lib/routes";
 
 /** How long to wait for the on-chain write to show up in the subscription read. */
 const CONFIRM_TIMEOUT_MS = 60_000;
@@ -80,6 +83,10 @@ const DrivePlansSection: FC<{ className?: string }> = ({ className }) => {
     refetchInterval: pending ? CONFIRM_POLL_MS : false,
   });
   const { data: creditsData } = useUserCredits();
+  // Only for `freeTierEntitled` — whether the free card is an offer this
+  // account could ever take. The plan itself still comes from the
+  // subscription rail.
+  const { data: overview } = useStorageOverview();
   const subscribe = useSubscribeDrivePlan();
   const change = useChangeDrivePlan();
   const cancel = useCancelDriveSubscription();
@@ -189,14 +196,19 @@ const DrivePlansSection: FC<{ className?: string }> = ({ className }) => {
 
   const actionFor = (plan: DrivePlan): DrivePlanAction => {
     if (plan.code === code) return plan.is_free ? "none" : "cancel";
-    if (plan.is_free) return "none";
+    // The free card used to return "none" here for every account, and
+    // "none" is labelled "Current Plan" — so it said so even next to a
+    // paid plan showing "Cancel subscription", two cards claiming to be
+    // the one in use. It is the plan UNDERNEATH a subscription: what
+    // cancelling returns you to, not what you are on.
+    if (plan.is_free) return "default";
     if (!subscription?.active) return "subscribe";
     const current = plans?.find((p) => p.code === code);
     return isUpgrade(current, plan) ? "upgrade" : "downgrade";
   };
 
   const disabledReasonFor = (plan: DrivePlan, action: DrivePlanAction) => {
-    if (action === "current" || action === "none") return undefined;
+    if (action === "current" || action === "none" || action === "default") return undefined;
     if (managedElsewhere) return `Managed in ${managedByLabel(subscription)}`;
     return undefined;
   };
@@ -268,7 +280,10 @@ const DrivePlansSection: FC<{ className?: string }> = ({ className }) => {
     if (!requestedPlan || openedRequestedRef.current) return;
     if (!plans || isSubLoading) return;
     openedRequestedRef.current = true;
-    router.replace("/drive-plans");
+    // Clear ?plan= so a refresh does not reopen the dialog. Replaces with
+    // the page this section now lives on — replacing with the old plans
+    // route would bounce the user out through its redirect and back.
+    router.replace(BILLING_ROUTE);
     const plan = plans.find((p) => p.code === requestedPlan);
     if (!plan) return;
     const action = actionFor(plan);
@@ -282,6 +297,8 @@ const DrivePlansSection: FC<{ className?: string }> = ({ className }) => {
   }, [requestedPlan, plans, isSubLoading]);
 
   const freePlan = plans?.find((p) => p.is_free);
+
+  const visiblePlans = offeredPlans(plans, overview?.freeTierEntitled) ?? [];
 
   return (
     <section
@@ -314,7 +331,7 @@ const DrivePlansSection: FC<{ className?: string }> = ({ className }) => {
           </p>
         ) : (
           <DrivePlansGrid
-            plans={plans}
+            plans={visiblePlans}
             currentCode={code}
             actionFor={actionFor}
             disabledReasonFor={disabledReasonFor}
@@ -357,11 +374,19 @@ const DrivePlansSection: FC<{ className?: string }> = ({ className }) => {
       <ConfirmDialog
         open={confirmCancel}
         title="Cancel subscription"
-        description={`You will go back to the Free plan${
-          freePlan
-            ? ` with ${formatPlanStorage(freePlan.storage_bytes)} of storage`
-            : ""
-        }. If you are storing more than that, uploads pause until you are under the limit again.`}
+        description={
+          // An unentitled account has no free tier to fall back to, so
+          // cancelling leaves it with no storage at all rather than with a
+          // smaller allowance. Promising the Free plan there would be the
+          // one sentence that matters being wrong.
+          !isFreeTierEntitled(overview?.freeTierEntitled)
+            ? "You will be left without a storage plan. Uploads stop, and files already stored are removed after 30 days without a plan."
+            : `You will go back to the Free plan${
+                freePlan
+                  ? ` with ${formatPlanStorage(freePlan.storage_bytes)} of storage`
+                  : ""
+              }. If you are storing more than that, uploads pause until you are under the limit again.`
+        }
         confirmText={
           cancel.isPending || pending?.kind === "cancel"
             ? "Cancelling…"

@@ -14,7 +14,7 @@ const NUDGE_ID = "finder-extension-disabled";
  * Sequoia 15.2+ / Tahoe list Finder Sync under **File Providers**, not Finder.
  * The Finder category is Apple's Quick Actions (Rotate Left, Markup, …), so
  * telling the user "enable Hippius under Finder" sends them to a list that
- * can never contain us (report 2026-08-26, Tahoe 26.3).
+ * can never contain us.
  */
 const NUDGE_DESCRIPTION =
   "macOS leaves it switched off, so “Share with Hippius” is missing when you right-click a file. Choose Enable, or turn Hippius on under File Providers (not Finder) in Extensions settings.";
@@ -24,9 +24,7 @@ const NUDGE_DESCRIPTION =
  * not: macOS registers an extension only after LaunchServices has built a bundle
  * record for the containing app, and when that never happens the extension is in
  * no list, no pane and no `pluginkit` query. Telling that user to "enable
- * Hippius in Settings" is advice they cannot follow, and it reads as the app
- * blaming them for a step that does not exist — which is how it was reported:
- * "the button takes me to the wrong place and I don't see it in the list".
+ * Hippius in Settings" is advice they cannot follow.
  */
 const SETTINGS_FALLBACK_DESCRIPTION =
   "Open System Settings › General › Login Items & Extensions › File Providers, then turn on Hippius. If Hippius is not listed there at all, restart your Mac — macOS sometimes fails to register the extension, and a restart makes it re-scan.";
@@ -36,45 +34,47 @@ const SETTINGS_FALLBACK_DESCRIPTION =
  * newly elected extension on its own schedule — `macos/dev-finder.sh` follows
  * the same two pluginkit verbs with `killall Finder` to force it. We do not do
  * that to a user: relaunching Finder closes every open window and tab, which is
- * a real cost to spare them a short wait. So the copy sets the expectation
- * instead of claiming an immediacy we cannot guarantee.
+ * a real cost to spare them a short wait.
  */
 const ENABLED_DESCRIPTION = "Right-click a file in your Hippius folder to share it. It can take a moment to appear.";
+
+/** Wire value of the "never ask again" preference, matched by Rust. */
+const PREFERENCE_UNWANTED = "unwanted";
 
 /**
  * Surfaces the backend's Finder-extension enablement check.
  *
- * macOS installs a third-party Finder extension switched OFF: `HippiusFinder.appex`
- * ships inside the app and the system lists it, but until the user enables it
- * Finder never loads it, so right-clicking a synced file shows no "Share with
- * Hippius" item at all. Developer machines never saw this — `macos/dev-finder.sh`
- * enabled it once by bundle id, an election that outlives reinstalls — so the
- * feature looked shipped while being invisible to every fresh install.
+ * Rust switches the extension on itself — on first run and again after an
+ * app or macOS update, the way MEGAsync and ownCloud do — so this notice is a
+ * FALLBACK for the cases that election cannot reach: a second registered copy
+ * of the app, an MDM profile, LaunchServices never having recorded the bundle.
  *
  * The decision lives in Rust (`finder_extension_state`, which asks Apple's
- * `FIFinderSyncController` rather than guessing); this component is presentation
- * only. It re-checks whenever the window regains focus, which is how the notice
- * clears itself the moment the user comes back from System Settings — Apple's own
- * documented flow for this API.
+ * `FIFinderSyncController` and honours the user's stored preference); this
+ * component is presentation only.
+ *
+ * It raises the notice AT MOST ONCE PER LAUNCH. The re-check on window focus
+ * exists so the notice clears itself the moment the user comes back from
+ * System Settings (Apple's documented flow) — it never raises it again. The
+ * earlier version re-raised on every focus while the state read `disabled`,
+ * which a user who had just pressed Enable experienced as a notice that
+ * "doesn't go away".
  *
  * Renders nothing. Mounted once in the main-window branch of `AppShell`.
  */
 export default function FinderExtensionGuard() {
-  // Whether our notice is currently on screen, so a focus re-check does not
-  // raise a second one. Only the raise path consults it — the dismiss path
-  // deliberately does not (see below).
+  // Whether our notice is currently on screen, so a stray second mount-check
+  // does not raise a second one. Only the raise path consults it — the dismiss
+  // path deliberately does not (see below).
   const showing = useRef(false);
-  // Set when the user closes the notice. The extension is still off, so without
-  // this the next focus would re-raise the toast they just dismissed; it returns
-  // on the next app launch, the right cadence for a nag.
+  // Set once this launch has had its say: the user closed the notice, chose
+  // "Don't ask again", or an Enable was verified. Nothing raises it again
+  // until the next launch, which is the right cadence for a nag.
   //
-  // Per-instance, so a re-mount forgets it. Kept that way on purpose: this
-  // component does not re-mount in the main window (AppShell's branch changes
-  // only for the tray-panel/e2e routes, which that window never navigates to,
-  // and the guard sits above the auth-gated subtree), and module-level state
-  // would leak between tests. The worst case is one extra nudge, never a
-  // suppressed one — unlike `showing`, where the stale direction stranded a
-  // permanent toast, which is why only that one is remount-proofed.
+  // Per-instance, so a re-mount forgets it. This component does not re-mount
+  // in the main window (AppShell's branch changes only for the tray-panel/e2e
+  // routes), and module-level state would leak between tests. The worst case
+  // is one extra nudge, never a suppressed one.
   const dismissed = useRef(false);
 
   useEffect(() => {
@@ -85,9 +85,7 @@ export default function FinderExtensionGuard() {
      *
      * Rust registers it with the system and elects it (`pluginkit -a` then
      * `-e use`). That covers the case sending the user to Settings never
-     * could: an extension macOS never registered is in no pane at all, so the
-     * list the old button opened could not contain Hippius no matter which
-     * category the user looked under (report 2026-08-26).
+     * could: an extension macOS never registered is in no pane at all.
      *
      * Only an explicit `enabled` counts as success. `unsupported` means the
      * backend could not verify the result — the pluginkit calls may well have
@@ -98,6 +96,10 @@ export default function FinderExtensionGuard() {
       try {
         const state = await invoke<{ kind: string }>("enable_finder_extension");
         if (state.kind === "enabled") {
+          // A verified enable is this launch's answer. If macOS later reads
+          // the switch as off again, the next launch re-elects and, failing
+          // that, asks again — not this session.
+          dismissed.current = true;
           toast.dismiss(NUDGE_ID);
           toast.success("Finder extension enabled", { description: ENABLED_DESCRIPTION });
           return;
@@ -116,15 +118,69 @@ export default function FinderExtensionGuard() {
       }
     };
 
-    const check = () => {
+    /**
+     * Record that the user never wants this notice; Rust reports `muted` from
+     * then on, which the silence branch below covers. `switchOff: false` —
+     * "stop asking" is about the notice, not the extension: with a second
+     * registered copy of the app, sharing may be working through the other
+     * copy, and switching it off by bundle id would break it.
+     */
+    const neverAskAgain = () => {
+      dismissed.current = true;
+      invoke("set_finder_extension_preference", { preference: PREFERENCE_UNWANTED, switchOff: false }).catch(() => {
+        // Storing the preference is best-effort; the session is silenced
+        // regardless, and an unwritten preference costs one nudge next launch.
+      });
+    };
+
+    const raise = () => {
+      showing.current = true;
+      toast.warning("Turn on the Hippius Finder extension", {
+        description: NUDGE_DESCRIPTION,
+        duration: Infinity,
+        id: NUDGE_ID,
+        action: {
+          label: "Enable",
+          onClick: () => {
+            // Sonner removes the toast on an action click and — unlike its
+            // close button — does NOT call `onDismiss` (2.0.7: the action
+            // handler calls `deleteToast()` directly). So clear `showing`
+            // here, or nothing ever does.
+            showing.current = false;
+            void enableThenFallback();
+          },
+        },
+        cancel: {
+          label: "Don't ask again",
+          onClick: () => {
+            showing.current = false;
+            neverAskAgain();
+          },
+        },
+        // Reached by a real dismissal only — the close button, a swipe, or
+        // our own `toast.dismiss` above — never by the two buttons.
+        onDismiss: () => {
+          showing.current = false;
+          dismissed.current = true;
+        },
+      });
+    };
+
+    /**
+     * Ask the backend, then either clear the notice or (on the mount check
+     * only) raise it.
+     */
+    const check = (trigger: "mount" | "focus") => {
       invoke<{ kind: string }>("finder_extension_state")
         .then((state) => {
           if (cancelled) return;
 
           if (state.kind !== "disabled") {
-            // `unsupported` (every non-macOS platform, or a state macOS would not
-            // report) is treated exactly like `enabled`: silence beats nagging on
-            // an answer we can't stand behind.
+            // `unsupported` (every non-macOS platform, or a state macOS would
+            // not report) and `muted` (the user chose "Don't ask again") are
+            // treated exactly like `enabled`: silence beats nagging on an answer
+            // we can't stand behind or one the user declined. Keyed on
+            // "anything but disabled" so a new kind defaults to silence.
             //
             // Dismiss UNCONDITIONALLY rather than only when this instance raised
             // the notice: a re-mount hands the new instance fresh refs, so a
@@ -136,35 +192,11 @@ export default function FinderExtensionGuard() {
             return;
           }
 
+          // A focus re-check only ever clears; raising belongs to the mount
+          // check, so one launch asks once.
+          if (trigger === "focus") return;
           if (dismissed.current || showing.current) return;
-          showing.current = true;
-          toast.warning("Turn on the Hippius Finder extension", {
-            description: NUDGE_DESCRIPTION,
-            duration: Infinity,
-            id: NUDGE_ID,
-            action: {
-              label: "Enable",
-              onClick: () => {
-                // Sonner removes the toast on an action click and — unlike its
-                // close button — does NOT call `onDismiss` (2.0.7: the action
-                // handler calls `deleteToast()` directly). So clear `showing`
-                // here, or nothing ever does, and the `showing` check on the
-                // raise path above suppresses the notice for the rest of the
-                // session — after its own button, on its primary path.
-                // Deliberately NOT `dismissed`: an enable attempt that fails is
-                // not "stop telling me", so if the extension is still off the
-                // next focus check raises the notice again.
-                showing.current = false;
-                void enableThenFallback();
-              },
-            },
-            // Reached by a real dismissal only — the close button, a swipe, or
-            // our own `toast.dismiss` above — never by the action button.
-            onDismiss: () => {
-              showing.current = false;
-              dismissed.current = true;
-            },
-          });
+          raise();
         })
         .catch(() => {
           // A missing command or IPC failure must never block the app; the
@@ -172,14 +204,15 @@ export default function FinderExtensionGuard() {
         });
     };
 
-    check();
+    check("mount");
     // Apple's documented pattern: re-check when the app becomes active again,
     // so enabling the extension in System Settings clears the notice on return.
-    window.addEventListener("focus", check);
+    const onFocus = () => check("focus");
+    window.addEventListener("focus", onFocus);
 
     return () => {
       cancelled = true;
-      window.removeEventListener("focus", check);
+      window.removeEventListener("focus", onFocus);
     };
   }, []);
 

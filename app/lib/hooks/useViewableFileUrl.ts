@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { getFileUrl } from "@/app/lib/utils/fileUrlResolver";
+import { previewCacheContentHash } from "@/lib/utils/arionContentHash";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 
 export interface ViewableFileUrl {
@@ -84,7 +85,7 @@ export function useViewableFileUrl(
       label: file.label,
       fileId: file.fileId,
       fileName: file.actualFileName || file.name,
-      arionHash: file.arionHash ?? "",
+      arionHash: previewCacheContentHash(file),
     })
       .then((path) => {
         if (cancelled) return;
@@ -114,6 +115,7 @@ export function useViewableFileUrl(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     file?.fileId,
+    file?.arionCid,
     file?.source,
     file?.actualFileName,
     file?.label,

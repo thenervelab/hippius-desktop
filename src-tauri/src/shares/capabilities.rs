@@ -38,6 +38,19 @@ pub struct ServerCapabilities {
     /// `hcfs-server::shares::types::Capabilities::folder_shares`; servers
     /// that predate the routes omit the field entirely.
     pub folder_shares: bool,
+    /// `/v1/folder-shares/by-hash/{token_hash}` revoke + re-expire, which
+    /// let this device act on a share whose plaintext token it never held.
+    ///
+    /// Separate from [`Self::folder_shares`] because it ships later: a
+    /// server can advertise folder shares and still lack these routes, which
+    /// is exactly what production looks like between the two deploys. On
+    /// such a server the routes answer a bare 404 — indistinguishable from
+    /// "already revoked" — so acting on the older flag would report a live,
+    /// anonymously readable share as turned off.
+    pub folder_share_revoke_by_hash: bool,
+    /// `PUT /v1/shares/owner-wraps` and `PUT /v1/folder-shares/owner-wraps`,
+    /// plus `owner_wrap` on the owner listings. Absent on older servers.
+    pub share_owner_wrap: bool,
 }
 
 /// Hit `<base>/v1/capabilities` once. 404 collapses to a
@@ -123,17 +136,44 @@ mod tests {
         assert!(!caps.folder_shares);
     }
 
+    /// The by-hash revoke routes ship after folder shares, so a server can
+    /// advertise `folder_shares` without them. That combination is what
+    /// production looks like between the two deploys, and reading the
+    /// by-hash flag as true there would let the desktop treat a "no such
+    /// route" 404 as "already revoked" — telling the user a live,
+    /// anonymously readable share had been turned off.
+    #[test]
+    fn folder_shares_without_by_hash_reads_as_by_hash_unavailable() {
+        let caps: ServerCapabilities = serde_json::from_str(r#"{"shares":true,"folder_shares":true}"#).expect("parse");
+        assert!(caps.folder_shares);
+        assert!(!caps.folder_share_revoke_by_hash);
+    }
+
     #[test]
     fn full_capabilities_shape_round_trips() {
-        let caps: ServerCapabilities = serde_json::from_str(r#"{"shares":true,"folder_shares":true}"#).expect("parse");
+        let caps: ServerCapabilities =
+            serde_json::from_str(r#"{"shares":true,"folder_shares":true,"folder_share_revoke_by_hash":true,"share_owner_wrap":true}"#)
+                .expect("parse");
         assert!(caps.shares);
         assert!(caps.folder_shares);
+        assert!(caps.folder_share_revoke_by_hash);
+        assert!(caps.share_owner_wrap);
 
         // The IPC serializes this struct straight to the FE, which reads the
         // snake_case keys — pin them so a stray rename_all cannot drift the
         // wire silently.
         let json = serde_json::to_value(&caps).expect("serialize");
         let keys: std::collections::BTreeSet<&str> = json.as_object().expect("object").keys().map(String::as_str).collect();
-        assert_eq!(keys, ["folder_shares", "shares"].into_iter().collect(), "capabilities wire keys drifted");
+        assert_eq!(
+            keys,
+            ["folder_share_revoke_by_hash", "folder_shares", "share_owner_wrap", "shares"]
+                .into_iter()
+                .collect(),
+            "capabilities wire keys drifted"
+        );
+
+        let old: ServerCapabilities =
+            serde_json::from_str(r#"{"shares":true,"folder_shares":true,"folder_share_revoke_by_hash":true}"#).expect("parse old");
+        assert!(!old.share_owner_wrap);
     }
 }

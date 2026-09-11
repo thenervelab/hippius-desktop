@@ -11,6 +11,7 @@ import {
 } from "@/components/page-sections/notifications/notificationStore";
 import { usePathname } from "next/navigation";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
+import { BILLING_ROUTE } from "@/app/lib/routes";
 
 
 
@@ -61,7 +62,7 @@ export function useCreditsNotification() {
             notificationTitleText: "You're running low on credits.",
             notificationDescription: `Your credit balance is running low. You've only got ${bal} credit left. Add more credits or buy a subscription plan to continue using all features without interruption.`,
             notificationLinkText: "Add Credits",
-            notificationLink: "/billing",
+            notificationLink: BILLING_ROUTE,
           });
         }
         // Always refresh: a top-up retires existing LowCreditWarning rows as

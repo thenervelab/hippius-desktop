@@ -1,6 +1,6 @@
 // Pure own-vs-member gating for the folder row menus (the 3-dot
 // TableActionMenu and the right-click FolderCardContextMenu in
-// LocalFoldersSection). One resolver feeds both menus so they cannot
+// the shared FolderList). One resolver feeds both menus so they cannot
 // diverge — the sidebar-nav `filterNavSections` / `settingsNavGating`
 // convention. Unit-tested in `__tests__/folderMenuGating.test.ts`.
 
@@ -32,7 +32,7 @@ export interface FolderMenuPlan {
    * routes through `leave_shared_drive`, which also does the local
    * removal), "Remove from Sync" otherwise.
    */
-  removeItemTitle: "Remove from Sync" | "Leave shared drive";
+  removeItemTitle: "Stop syncing on this device" | "Leave shared drive";
   /** True when the remove item must route through `leave_shared_drive`. */
   removeIsLeave: boolean;
 }
@@ -65,7 +65,7 @@ export function isMemberDrive(folder: Pick<SyncFolder, "ownerSs58">): boolean {
  * flag and both parent surfaces wire `onLeaveDrive` unconditionally.
  *
  * The flag gates only the OPT-IN surface: "Share drive…" (and, in
- * LocalFoldersSection, the cosmetic owner badge) stays hidden until the
+ * the folder list, the cosmetic owner badge) stays hidden until the
  * feature ships, since minting invites against a feature-off server is a
  * dead control.
  */
@@ -79,7 +79,7 @@ export function resolveFolderMenuPlan(
     showShareDrive: flags.sharedDrivesEnabled && !member,
     showExclusions: !member,
     showDeleteFromServer: !member,
-    removeItemTitle: member ? "Leave shared drive" : "Remove from Sync",
+    removeItemTitle: member ? "Leave shared drive" : "Stop syncing on this device",
     removeIsLeave: member,
   };
 }

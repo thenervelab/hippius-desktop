@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { FramedDialog } from "@/components/ui/FramedDialog";
 import { ArrowRight, CoinsIcon } from "@/components/ui/icons";
 import {
-  chargeAmount,
+  formatPlanPrice,
   formatPlanStorage,
   type DrivePlan,
 } from "@/lib/types/drive-plans";
@@ -63,7 +63,7 @@ const DriveSubscribeDialog: FC<{
             {lead}
           </span>
           <span className="block">
-            {plan.name} Plan at ${chargeAmount(plan, "monthly")}
+            {plan.name} Plan at {formatPlanPrice(plan)}
             <span className="text-black-700/50 dark:text-grey-dark-700">
               /mo
             </span>
@@ -88,8 +88,8 @@ const DriveSubscribeDialog: FC<{
           />
         ) : (
           <p className="text-center text-base font-medium leading-[22px] tracking-[-0.32px] text-[#4f4f4f] dark:text-grey-dark-700">
-            {chargeAmount(plan, "monthly")} credits for the first month, and the
-            plan gives you {formatPlanStorage(plan.storage_bytes)} of storage.
+            {formatPlanPrice(plan)} for the first month, and the plan gives you{" "}
+            {formatPlanStorage(plan.storage_bytes)} of storage.
             {action === "downgrade"
               ? " A downgrade is refused if you are already storing more than the smaller plan holds."
               : ""}

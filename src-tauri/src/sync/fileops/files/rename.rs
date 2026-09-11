@@ -36,7 +36,7 @@ pub struct RenameEntryResult {
 /// relies on: a basename that cannot contain `/`, `\`, NUL, or be `.`/`..`
 /// cannot move the entry out of its parent directory, so the (not yet
 /// existing) destination never needs its own canonicalize-and-contain check.
-fn validate_new_name(new_name: &str) -> Result<&str> {
+pub(super) fn validate_new_name(new_name: &str) -> Result<&str> {
     let name = new_name.trim();
     // Every reject here is invalid user input → Validation (the FE renders the message).
     if name.is_empty() {
@@ -176,7 +176,7 @@ async fn rename_entry_inner(sync_root: &Path, old_rel: &str, new_name: &str, syn
 /// in its place (PR #15 review finding 3 — `delete_files` still carries the
 /// old fallback; fixing it there is a joint follow-up). Only an entry with
 /// no label at all uses the default drive.
-fn resolve_rename_root<'a>(label: Option<&'a str>, label_to_path: &HashMap<String, String>) -> Result<(String, &'a str)> {
+pub(super) fn resolve_rename_root<'a>(label: Option<&'a str>, label_to_path: &HashMap<String, String>) -> Result<(String, &'a str)> {
     match label {
         Some(l) => match label_to_path.get(l) {
             Some(p) => Ok((p.clone(), l)),

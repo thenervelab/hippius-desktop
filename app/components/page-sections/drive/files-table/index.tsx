@@ -44,6 +44,7 @@ import {
   RENAME_DISABLED_TOOLTIP,
 } from "@/app/lib/utils/renameGating";
 import { isCloudOnlyRow } from "@/app/lib/utils/cloudOnly";
+import { arionContentHash, fileTrackerUrl } from "@/lib/utils/arionContentHash";
 import {
   canShareFolder,
   FOLDER_SHARE_DISABLED_TOOLTIP,
@@ -79,6 +80,7 @@ import { fileManagerLabel } from "@/lib/utils/isMacPlatform";
 import { tauriErrorMessage } from "@/lib/utils/dispatchTauriError";
 import { macosNameCmp } from "@/lib/utils/fileSort";
 import ExpandedFolderRows from "./ExpandedFolderRows";
+import { canExpandFolderRow } from "./folderExpansion";
 import { NameCellExpander } from "./FolderRail";
 import { preserveClosestScrollPosition } from "./preserveClosestScrollPosition";
 
@@ -445,7 +447,6 @@ interface FilesTableProps {
    *  table body so the placeholders share the real colgroup (columns,
    *  striping and the chevron gutter line up by construction). */
   isLoadingMore?: boolean;
-  onHeaderContextMenu?: (e: React.MouseEvent) => void;
   drivePathsByLabel?: Record<string, string>;
   currentSubfolderPath?: string | null;
   searchTerm?: string;
@@ -462,7 +463,6 @@ const FilesTable: FC<FilesTableProps> = memo(
     hasMore,
     loadMore,
     isLoadingMore = false,
-    onHeaderContextMenu,
     drivePathsByLabel,
     currentSubfolderPath,
     searchTerm,
@@ -827,7 +827,6 @@ const FilesTable: FC<FilesTableProps> = memo(
       (
         file: FormattedUserFile,
         fileType: string | null,
-        arionHash: string,
         canPreview: boolean = true,
         folderExpansion?: { expanded: boolean; onToggle: () => void },
         // Parent path inside the sync drive when the action menu is
@@ -972,24 +971,24 @@ const FilesTable: FC<FilesTableProps> = memo(
             onItemClick: () => localHandleShowFileDetails(file),
             disabled: itemDeleting,
           },
-          ...(!file.isFolder && arionHash && arionHash !== "pending"
-            ? [
-                {
-                  icon: <Icons.SendSquare2 className="size-4" />,
-                  itemTitle: "View on Explorer",
-                  onItemClick: async () => {
-                    try {
-                      await openUrl(
-                        `https://hipstats.com/file-tracker/${arionHash}`,
-                      );
-                    } catch (error) {
-                      console.error("Failed to open Explorer:", error);
-                    }
-                  },
-                  disabled: itemDeleting,
+          ...(() => {
+            const contentHash = arionContentHash(file);
+            if (!contentHash) return [];
+            return [
+              {
+                icon: <Icons.SendSquare2 className="size-4" />,
+                itemTitle: "View on Explorer",
+                onItemClick: async () => {
+                  try {
+                    await openUrl(fileTrackerUrl(contentHash));
+                  } catch (error) {
+                    console.error("Failed to open Explorer:", error);
+                  }
                 },
-              ]
-            : []),
+                disabled: itemDeleting,
+              },
+            ];
+          })(),
           // Share via link — same gating as the right-click context menu in
           // `app/components/ui/context-menu/index.tsx`. A FILE must be fully
           // uploaded so the recipient's anonymous fetch succeeds. A FOLDER
@@ -1176,12 +1175,13 @@ const FilesTable: FC<FilesTableProps> = memo(
         const isExpanded = file.isFolder
           ? Boolean(expandedFolders[folderKey])
           : false;
-        const canExpand = Boolean(
-          file.isFolder &&
-          enableFolderExpander &&
-          file.label &&
-          drivePaths[file.label],
-        );
+        const canExpand = canExpandFolderRow({
+          enableFolderExpander,
+          isFolder: Boolean(file.isFolder),
+          source: file.source,
+          label: file.label,
+          syncPath: file.label ? drivePaths[file.label] : undefined,
+        });
         return (
           <div className="flex items-center min-w-0 gap-2 py-[5px] pl-2 pr-2">
             {hasAnyFolder ? (
@@ -1328,8 +1328,7 @@ const FilesTable: FC<FilesTableProps> = memo(
               createTableItems,
             } = cellCtxRef.current;
             const file = cell.row.original;
-            const { arionHash, name } = file;
-            const resolvedHash = arionHash;
+            const { name } = file;
             const { fileFormat } = getFilePartsFromFileName(name);
             const fileType = getFileTypeFromExtension(fileFormat || null);
             const folderKey = file.isFolder ? getFolderKey(file) : "";
@@ -1344,7 +1343,6 @@ const FilesTable: FC<FilesTableProps> = memo(
             const menuItems = createTableItems(
               file,
               fileType,
-              resolvedHash,
               true,
               canExpand
                 ? {
@@ -1850,9 +1848,15 @@ const FilesTable: FC<FilesTableProps> = memo(
           const syncPath = rowData.label
             ? drivePaths[rowData.label]
             : undefined;
-          const canInlineExpand = Boolean(
-            enableFolderExpander && rowData.isFolder && syncPath,
-          );
+          // Same predicate the chevron uses — the control and what it
+          // reveals must agree, or one renders without the other.
+          const canInlineExpand = canExpandFolderRow({
+            enableFolderExpander,
+            isFolder: Boolean(rowData.isFolder),
+            source: rowData.source,
+            label: rowData.label,
+            syncPath,
+          });
           // Annotated copy used everywhere selection/cascade keys are
           // looked up — keeps the row's parent path on the row object
           // so context helpers can build keys without re-deriving it.
@@ -1927,7 +1931,6 @@ const FilesTable: FC<FilesTableProps> = memo(
             >
               {tableColgroup}
               <TableModule.THead
-                onContextMenu={onHeaderContextMenu}
                 className={cn(!isRecentFiles ? "!bg-transparent" : "")}
               >
                 {headerRows}

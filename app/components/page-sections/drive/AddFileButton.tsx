@@ -20,6 +20,12 @@ import { cn } from "@/lib/utils";
 import { hasConfiguredDrivesAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import { toast } from "sonner";
 import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
+import {
+  TOOLBAR_BUTTON_GAP,
+  UPLOAD_FILE_BUTTON_LABEL,
+  UPLOAD_FILE_LABEL,
+} from "./uploadActions";
+import { ArrowUpToLine } from "@/components/ui/icons";
 
 // Custom event name for file drop communication
 const HIPPIUS_DROP_EVENT = "hippius:file-drop";
@@ -27,6 +33,15 @@ const HIPPIUS_OPEN_MODAL_EVENT = "hippius:open-modal";
 
 type AddButtonProps = {
   className?: string;
+  /**
+   * Icon size, so the glyph can be scaled with the row the button sits
+   * in. The default matches this button's own 14px label; the drive
+   * page's folder-list toolbar is a compact 12px row and passes a
+   * smaller one. Left to the caller because the icon has to match its
+   * NEIGHBOURS, which this component cannot see — a fixed `size-4` beside
+   * a 12px sibling is what made the arrow look oversized.
+   */
+  iconClassName?: string;
   disabled?: boolean; // Optional external disabled state
   defaultFolderLabel?: string | null;
   // When set, the dialog opens UploadFilesFlow in `mode="folder"` so files
@@ -50,6 +65,8 @@ type AddButtonProps = {
 // Callers that don't care about the result can fire-and-forget; the
 // hook handles surfacing the insufficient-credits dialog itself.
 export interface AddButtonRef {
+  /** Open the picker with nothing preselected, as clicking the button does. */
+  open: () => Promise<void>;
   openWithFiles: (files: FileList) => Promise<void>;
   openWithPaths: (paths: string[]) => Promise<void>;
   isDialogOpen: () => boolean;
@@ -57,7 +74,13 @@ export interface AddButtonRef {
 
 const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
   (
-    { className, disabled: externalDisabled, defaultFolderLabel, nestedUpload },
+    {
+      className,
+      iconClassName = "size-4",
+      disabled: externalDisabled,
+      defaultFolderLabel,
+      nestedUpload,
+    },
     ref,
   ) => {
     // Keep state simple and isolated
@@ -77,6 +100,21 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
     useImperativeHandle(
       ref,
       () => ({
+        // Same gate order as the button's own click: eligibility first,
+        // then a configured drive, so a surface that opens this by ref
+        // cannot skip a check the button applies.
+        open: async () => {
+          if (!(await checkEligibility("file-upload"))) return;
+          if (!hasConfiguredDrives) {
+            toast.warning(
+              "Set up a sync folder in Settings \u2192 Sync & Storage before uploading.",
+            );
+            return;
+          }
+          setDroppedFiles(null);
+          setDroppedPaths(null);
+          setIsOpen(true);
+        },
         openWithFiles: async (files: FileList) => {
           if (!(await checkEligibility("file-upload"))) return;
           if (!hasConfiguredDrives) {
@@ -107,9 +145,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
     );
 
     // Memoize title to prevent recalculation
-    const title = useMemo(() => {
-      return "Upload File";
-    }, []);
+    const title = useMemo(() => UPLOAD_FILE_LABEL, []);
 
     // Close and reset everything - use useCallback to prevent re-renders
     const closeDialog = useCallback(() => {
@@ -190,7 +226,8 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
           variant="primary"
           size="auto"
           className={cn(
-            "h-[30px] px-3 py-[10px] gap-[10px] rounded-[6px]",
+            "h-[30px] px-3 py-[10px] rounded-[6px]",
+            TOOLBAR_BUTTON_GAP,
             "font-geist text-[14px] tracking-[-0.28px] leading-[1.109]",
             className,
           )}
@@ -209,9 +246,12 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
           disabled={isLoading || externalDisabled}
         >
           {isLoading ? (
-            <Loader2 className="animate-spin size-4" />
+            <Loader2 className={cn("animate-spin", iconClassName)} />
           ) : (
-            <>+ New File</>
+            <>
+              <ArrowUpToLine className={cn("shrink-0", iconClassName)} />
+              {UPLOAD_FILE_BUTTON_LABEL}
+            </>
           )}
         </Button>
 

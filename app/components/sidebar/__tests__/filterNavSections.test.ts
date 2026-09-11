@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { filterNavSections, navSections } from "../NavData";
 import type { NavSection } from "../NavData";
+import { settingsNavItems } from "../SettingsSidebar";
 import {
-  VM_FEATURE_ENABLED,
   WALLET_FEATURE_ENABLED,
   REFERRALS_FEATURE_ENABLED,
 } from "@/app/lib/featureFlags";
@@ -84,38 +84,52 @@ describe("filterNavSections", () => {
   });
 
   // Pins the WIRING (not today's flag values, which are release decisions):
-  // the real nav data must derive Wallet visibility and the Virtual
-  // Machines coming-soon state from the build-time flags, so flipping a
-  // flag in featureFlags.ts is guaranteed to reach the sidebar.
-  it("wires Wallet visibility and VM coming-soon to the feature flags", () => {
+  // the real nav data must derive Wallet and Referrals visibility from the
+  // build-time flags, so flipping a flag in featureFlags.ts is guaranteed
+  // to reach the sidebar.
+  it("wires Wallet and Referrals visibility to the feature flags", () => {
     const out = filterNavSections(navSections, { shareEnabled: true });
     const labels = out.flatMap((s) => s.items.map((i) => i.label));
     expect(labels.includes("Wallet")).toBe(WALLET_FEATURE_ENABLED);
     expect(labels.includes("Referrals")).toBe(REFERRALS_FEATURE_ENABLED);
-
-    const vm = out
-      .flatMap((s) => s.items)
-      .flatMap((i) => i.subMenuItems ?? [])
-      .find((sub) => sub.label === "Virtual Machines");
-    expect(vm?.comingSoon).toBe(!VM_FEATURE_ENABLED);
   });
 
-  // The plans page must be reachable from the sidebar: an ACCOUNT entry
-  // directly above Billing, always visible (no feature flag). The header
-  // stats card that also links there is hidden on the Drive page and below
-  // the xl breakpoint, so this entry is the one path that always exists.
-  it("lists Subscription Plans above Billing under ACCOUNT", () => {
-    const account = navSections.find((s) => s.label === "ACCOUNT");
-    const labels = (account?.items ?? []).map((i) => i.label);
+  // "Confidential Computing" is gone from the product vocabulary. Its group
+  // held one child, Virtual Machines, which is gated off anyway — and a
+  // group whose only child is gated is exactly what collapsed into a
+  // top-level link to a 404. Neither name may come back to the sidebar
+  // without a deliberate decision, so both are pinned absent.
+  it("offers no Confidential Computing or Virtual Machines entry", () => {
+    const out = filterNavSections(navSections, { shareEnabled: true });
+    const every = out.flatMap((s) =>
+      s.items.flatMap((i) => [i.label, ...(i.subMenuItems ?? []).map((x) => x.label)]),
+    );
+    expect(every).not.toContain("Confidential Computing");
+    expect(every).not.toContain("Virtual Machines");
 
-    const plans = labels.indexOf("Subscription Plans");
-    const billing = labels.indexOf("Billing");
-    expect(plans).toBeGreaterThanOrEqual(0);
-    expect(billing).toBeGreaterThanOrEqual(0);
-    expect(plans).toBeLessThan(billing);
+    const paths = out.flatMap((s) =>
+      s.items.flatMap((i) => [i.path, ...(i.subMenuItems ?? []).map((x) => x.path)]),
+    );
+    expect(paths.filter((p) => p === "/vm")).toHaveLength(0);
+  });
 
-    const item = account?.items.find((i) => i.label === "Subscription Plans");
-    expect(item?.path).toBe("/drive-plans");
-    expect(item?.featureFlag).toBeUndefined();
+  // Billing owns plan detail, and Billing lives in Settings. The two used
+  // to sit adjacent in the main sidebar as one subject split by tense —
+  // what you could buy vs what you have paid. Neither may return here
+  // without moving the destination too, or the app offers two routes to
+  // the same thing again.
+  it("keeps Billing and plan detail out of the main sidebar", () => {
+    const labels = filterNavSections(navSections, { shareEnabled: true })
+      .flatMap((s) => s.items.map((i) => i.label));
+    expect(labels).not.toContain("Billing");
+    expect(labels).not.toContain("Subscription Plans");
+  });
+
+  it("offers Billing in the settings nav instead", () => {
+    const labels = settingsNavItems.map((i) => i.label);
+    expect(labels).toContain("Billing");
+    // Not at the top: Settings is opened for the device-scoped items, so
+    // Billing sits with them rather than above them.
+    expect(labels.indexOf("Billing")).toBeGreaterThan(labels.indexOf("Notifications"));
   });
 });

@@ -26,7 +26,7 @@ export function getUsageTone(percent: number): UsageTone {
 export type StorageOverviewView =
   | "skeleton" // first load not settled yet — never flash a wrong state
   | "error" // query failed — must not read as a confident zero (audit M-16)
-  | "no-plan" // unknown source — unreachable now that the free tier is the floor
+  | "no-plan" // no capacity at all: an access-key account must subscribe first
   | "usage"; // the normal used-of-total bar (plan- or free-tier-backed)
 
 /**
@@ -69,8 +69,25 @@ export function getCapacitySourceLabel(
   if (source === "subscription")
     return planName ? `${planName} plan` : "Active plan";
   if (source === "free") return "Included with the free plan";
+  if (source === "none") return "No storage plan";
   return "";
 }
+
+/**
+ * Copy for an account that has no capacity at all.
+ *
+ * Deliberately short: the card states the fact, and the red banner above
+ * the card row (`getNoStoragePlanBanner`) carries the reason and the
+ * severity. Splitting them that way is what lets the card keep the same
+ * quiet shape it has in every other state — the version that explained
+ * the billing rule inside the card read as an essay wedged into a
+ * dashboard.
+ *
+ * Kept beside the other source labels so the surfaces that render this
+ * state cannot word it three ways.
+ */
+export const NO_PLAN_TITLE = "No storage available";
+export const NO_PLAN_DESCRIPTION = "Subscribe to a plan to start uploading.";
 
 /** View variant for the plan card and the top-bar chip. */
 export type PlanView =
@@ -95,6 +112,36 @@ export function getPlanView(input: {
 }
 
 /**
+ * The chip's heading.
+ *
+ * A subscribed account is told WHICH plan it is on — "Starter" says
+ * something, where "Active Plan" only repeats what the presence of a plan
+ * already implies. The generic label survives as the fallback for a plan
+ * the API returned without a name, and for the error branch, where naming
+ * a plan we could not read would be a guess.
+ */
+export function getPlanHeading(
+  view: PlanView,
+  planName: string | null | undefined,
+): string {
+  if (view === "free") return "Free Plan";
+  if (view === "plan" && planName) return planName;
+  return "Active Plan";
+}
+
+/**
+ * Whether the header chip draws its usage bar.
+ *
+ * Only the branches that actually quote a capacity have a number to draw.
+ * On the error/unknown branch `percent` is 0 for want of an answer, and an
+ * empty track there reads as a confident "nothing used" — the same lie the
+ * storage card's own error state exists to avoid.
+ */
+export function shouldShowUsageBar(view: PlanView): boolean {
+  return view === "plan" || view === "free";
+}
+
+/**
  * Integer percent label, with "<1%" for tiny-but-nonzero usage so a
  * near-empty drive doesn't display a flat "0%" while bytes exist.
  */
@@ -103,7 +150,3 @@ export function formatPercentLabel(percent: number): string {
   return `${Math.round(percent)}%`;
 }
 
-/** "12$/mo." style price label, mirroring the PageHeader chip's format. */
-export function formatPlanPrice(amount: number, interval: string): string {
-  return `${amount}$/${interval === "month" ? "mo." : interval}`;
-}

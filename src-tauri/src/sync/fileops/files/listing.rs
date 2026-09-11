@@ -22,9 +22,10 @@ pub struct FileEntry {
     pub modified: Option<u64>,
     /// Sync status: "synced", "pending", "excluded", "hidden", or "unknown"
     pub sync_status: String,
-    /// Hex-encoded path_hash from the synced state (empty if not synced yet)
+    /// Hex-encoded path_hash from the synced state (empty if not synced yet).
+    /// File id, not the content hash — that is [`Self::arion_cid`].
     pub arion_hash: String,
-    /// Arion CID from storage backend (empty if not available)
+    /// Arion BLAKE3 content hash from the storage backend (empty if not available)
     pub arion_cid: String,
     /// For folders: total number of files (not directories) recursively inside.
     /// For files: 0.
