@@ -23,27 +23,33 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-/// Commands intentionally NOT guarded, each a documented exception: public
-/// on-chain / indexer reads keyed by a global indexer API key (not a
-/// per-account bearer token), where `account_id` is a filter over data that is
-/// already public on-chain and the FE legitimately passes the header-selected
-/// `activeWallet` rather than the session account.
-const ALLOWLIST: &[&str] = &[
-    "get_marketplace_credits",
-    "get_drive_storage_stats",
-    "get_system_balance",
-    "get_balance_transfers",
-    "get_add_credit_events",
-];
+/// Commands intentionally NOT guarded, each a documented exception.
+///
+/// Both are the wallet page reading **public on-chain state** —
+/// `/system-account-balance` and `/balance-transfers`, the rows any block explorer serves —
+/// for the wallet selected in the app header rather than for the login identity
+/// (`useSystemBalance`, `useBalanceTransactions`, both `addressSource: "activeWallet"`). A
+/// user legitimately holds local wallets they have never logged in as, so requiring the
+/// session account here would break the balance chart and the transfer table rather than
+/// protect anything.
+///
+/// This list used to hold five commands, justified as "indexer reads keyed by a global
+/// indexer API key (not a per-account bearer token)". That key is gone: the indexer now takes
+/// the user's session token (hippius-indexer
+/// `docs/plans/2026-09-11-indexer-user-token-auth-design.md`), so every indexer call carries
+/// a per-account secret and the other three — whose routes the indexer binds to the token's
+/// SS58, and which the FE already called with the session address — now take `SessionAccount`
+/// instead of sitting here.
+const ALLOWLIST: &[&str] = &["get_system_balance", "get_balance_transfers"];
 
 /// Commands intentionally NOT session-guarded for the BROADER cross-account
 /// surface (`account_scoped_commands_validate_session`), each a documented
 /// exception. Superset of [`ALLOWLIST`] (the public chain/indexer reads are
 /// exempt here too) plus:
 ///
-/// - **indexer/chain reads** keyed by the global indexer API key where the FE
-///   passes the header-selected `activeWallet`, not the session account:
-///   `get_staking_info`, `get_drive_credits_chart/_total`, `get_drive_storage_chart`.
+/// - **chain reads** where the FE passes the header-selected `activeWallet`, not the
+///   session account: `get_staking_info`, which reads the chain over RPC and takes no
+///   per-account secret at all.
 /// - **bootstrap / teardown** where a strict session match would break the very
 ///   flow that establishes or tears down the session:
 ///   - `is_token_valid` runs during session *restore*, BEFORE a session exists,
@@ -55,15 +61,9 @@ const ALLOWLIST: &[&str] = &[
 /// - **validated one level in**: `check_action_eligibility` delegates to
 ///   `check_action_eligibility_inner`, which mints `require_session_account_typed`.
 const BROAD_ALLOWLIST: &[&str] = &[
-    "get_marketplace_credits",
-    "get_drive_storage_stats",
     "get_system_balance",
     "get_balance_transfers",
-    "get_add_credit_events",
     "get_staking_info",
-    "get_drive_credits_chart",
-    "get_drive_credits_total",
-    "get_drive_storage_chart",
     "is_token_valid",
     "logout_full",
     "check_action_eligibility",
@@ -89,6 +89,10 @@ fn touches_account_secret(body: &str) -> bool {
         "get_mnemonic_for_account",
         "fetch_s3_credentials",
         "build_client",
+        // Constructs an IndexerClient, which sends the session account's bearer token on
+        // every indexer call. Listed for the reason the module docs give: the secret is
+        // reached through a differently-named helper, so nothing else here would see it.
+        "IndexerClient::for_session",
     ]
     .iter()
     .any(|needle| body.contains(needle))

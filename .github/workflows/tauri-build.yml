@@ -260,13 +260,13 @@ jobs:
       - name: Install deps
         run: pnpm install --frozen-lockfile
 
-      # Same secret the staging and dev channels use. This step used to write
-      # `INDEXER_API_KEY=${{ secrets.INDEXER_API_KEY }}`, and no secret by that
-      # name exists at the repository or organization level — an undefined
-      # secret expands to the empty string, so the release would have bundled an
-      # empty key. The app treats that as "configured" and sends it, the indexer
-      # answers 401, and every indexer-backed screen renders a zero instead of an
-      # error. The script fails the build rather than let that ship again.
+      # Same secret the staging and dev channels use. The script ALLOWLISTS what
+      # reaches the bundle: only HIPPIUS_INDEXER_URL and HIPPIUS_CONSOLE_BASE_URL
+      # survive. The secret is hand-maintained and still carries INDEXER_API_KEY,
+      # which the app no longer reads but which is still a live operator
+      # credential — and anything written to this file is extractable from the
+      # shipped installer, which is audit finding M-9 itself. Filtering on the way
+      # in means that cannot ship whether or not the secret gets cleaned.
       - name: Create src-tauri/.env
         shell: bash
         env:
