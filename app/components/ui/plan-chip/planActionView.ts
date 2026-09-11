@@ -33,6 +33,59 @@ export function getPlanActionNote(
   return `Low credits. Your plan renews ${describeDaysAway(renewsInDays)}`;
 }
 
+/**
+ * The full low-credit warning for a page with room to explain it.
+ *
+ * `getPlanActionNote` is the one-line version for the header, where
+ * there is space for a clause and no more. "Low credits. Your plan
+ * renews in 22 days" states a fact and a date without saying what
+ * happens, what it costs, or how short the balance actually is — so the
+ * reader has to work out that the plan is about to stop.
+ *
+ * This says all three: what the plan costs, what the balance is, and by
+ * when. The price is in dollars and the balance in credits, which is the
+ * app's rule — a price is always dollars, and credits are named only
+ * where they are the subject.
+ *
+ * Takes the whole overview rather than the balance, so the surfaces stay
+ * unable to decide anything for themselves: whether the balance is short
+ * is Rust's call, carried on `planAction`, and this only reads it.
+ *
+ * `null` whenever Rust is not asking for a top-up, so a caller can render
+ * it unconditionally.
+ */
+export function getRenewalNotice(
+  overview:
+    | {
+        planAction?: PlanAction;
+        creditsHip?: string | null;
+        plan?: { name?: string | null; amount?: number | null; renewsInDays?: number | null } | null;
+      }
+    | undefined,
+): { title: string; description: string } | null {
+  if (overview?.planAction !== "top-up-credits") return null;
+
+  const plan = overview.plan;
+  const planName = plan?.name?.trim();
+  const named = planName ? `Your ${planName} plan` : "Your plan";
+
+  // Each clause is dropped rather than guessed at when its input is
+  // missing: a warning that invents a price is worse than a shorter one.
+  const cost = typeof plan?.amount === "number" ? ` costs $${plan.amount} a month and` : " needs more credits than you have —";
+  const balance = overview.creditsHip ? ` you have ${overview.creditsHip} credits` : " your balance will not cover it";
+
+  const days = plan?.renewsInDays;
+  const when =
+    typeof days === "number" && days >= 0
+      ? ` Top up before it renews ${describeDaysAway(days)}, or it will not renew.`
+      : " Top up to keep it running.";
+
+  return {
+    title: "Not enough credits to renew your plan",
+    description: `${named}${cost}${balance}.${when}`,
+  };
+}
+
 /** "today" / "tomorrow" / "in 6 days", for the renewal countdown. */
 function describeDaysAway(days: number): string {
   if (days === 0) return "today";

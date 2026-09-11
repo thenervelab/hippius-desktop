@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { getPlanActionNote, getPlanActionView } from "../planActionView";
+import {
+  getPlanActionNote,
+  getPlanActionView,
+  getRenewalNotice,
+} from "../planActionView";
 import { BILLING_ROUTE } from "@/app/lib/routes";
 
 describe("getPlanActionView", () => {
@@ -90,3 +94,62 @@ describe("the top-up label stays short", () => {
   });
 });
 
+
+/**
+ * The header's one-liner states a fact and a date — "Low credits. Your
+ * plan renews in 22 days" — without saying what it costs, what the
+ * balance is, or what happens if nothing is done. The billing card has
+ * room to say all three.
+ */
+describe("getRenewalNotice", () => {
+  const overview = (over = {}) => ({
+    planAction: "top-up-credits" as const,
+    creditsHip: "5.39",
+    plan: { name: "Plus", amount: 7, renewsInDays: 22 },
+    ...over,
+  });
+
+  it("says nothing unless Rust is asking for a top-up", () => {
+    expect(getRenewalNotice(overview({ planAction: "none" }))).toBeNull();
+    expect(getRenewalNotice(overview({ planAction: "upgrade" }))).toBeNull();
+    expect(getRenewalNotice(undefined)).toBeNull();
+  });
+
+  it("names the plan, its price and the balance", () => {
+    const notice = getRenewalNotice(overview());
+    expect(notice?.description).toContain("Plus");
+    expect(notice?.description).toContain("$7 a month");
+    expect(notice?.description).toContain("5.39 credits");
+  });
+
+  // A price is always dollars; credits are named only where they are the
+  // subject, which here is the balance.
+  it("prices the plan in dollars, not credits", () => {
+    expect(getRenewalNotice(overview())?.description).not.toMatch(/\$?7 credits/);
+  });
+
+  it("says by when, and what happens otherwise", () => {
+    const notice = getRenewalNotice(overview());
+    expect(notice?.description).toContain("in 22 days");
+    expect(notice?.description).toMatch(/will not renew/);
+  });
+
+  // A warning that invents a price is worse than a shorter one.
+  it("drops a clause rather than guessing at a missing input", () => {
+    const noPrice = getRenewalNotice(overview({ plan: { name: "Plus", renewsInDays: 3 } }));
+    expect(noPrice?.description).not.toMatch(/\$/);
+    expect(noPrice?.description).not.toMatch(/undefined|null|NaN/);
+
+    const noBalance = getRenewalNotice(overview({ creditsHip: null }));
+    expect(noBalance?.description).not.toMatch(/undefined|null|NaN/);
+
+    const noDate = getRenewalNotice(overview({ plan: { name: "Plus", amount: 7 } }));
+    expect(noDate?.description).toContain("Top up to keep it running");
+    expect(noDate?.description).not.toMatch(/undefined|NaN/);
+  });
+
+  it("still reads as a sentence with no plan name", () => {
+    const notice = getRenewalNotice(overview({ plan: { amount: 7, renewsInDays: 5 } }));
+    expect(notice?.description).toMatch(/^Your plan costs \$7 a month/);
+  });
+});
