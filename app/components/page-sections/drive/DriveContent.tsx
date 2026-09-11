@@ -23,7 +23,14 @@ import { renameModalFileAtom } from "@/app/lib/global-atoms/renameAtoms";
 import { downloadFile } from "@/app/lib/utils/downloadFile";
 import { CloudUploadIcon, HardDrive } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useQueryClient } from "@tanstack/react-query";
+import { useWalletAuth } from "@/app/lib/wallet-auth-context";
+import { notifyFilesMutated } from "@/app/lib/utils/fileMutationEvents";
 import usePageContextActions from "@/app/lib/hooks/usePageContextActions";
+import {
+  useRemoteFileUpload,
+  useRemoteFolderUpload,
+} from "@/app/lib/hooks/useRemoteUploadActions";
 import type { NewFolderTarget } from "@/app/lib/global-atoms/contextMenuAtoms";
 import { formatDisplayName } from "@/lib/utils/fileTypeUtils";
 import { useFileSelection } from "@/app/contexts/FileSelectionContext";
@@ -333,15 +340,55 @@ const DriveContent: FC<DriveContentProps> = ({
   // Uploads are withheld where they cannot work: a drive with no sync path
   // has nowhere to put the file. New Folder is not — with no folder open
   // it falls back to the main drive's root.
+  // Route the refresh through the shared funnel: it wakes the cached
+  // lists AND the nested folder listings, which only react to the window
+  // event.
+  const uploadQueryClient = useQueryClient();
+  const { polkadotAddress: uploadAccount } = useWalletAuth();
+  const refreshAfterRemoteUpload = useCallback(() => {
+    void notifyFilesMutated(uploadQueryClient, uploadAccount);
+  }, [uploadQueryClient, uploadAccount]);
+
+  // A browsed drive has no local sync root, so the local upload handlers
+  // are withheld from this view — which left its menu with nothing but
+  // New Folder. Its uploads go straight to the server instead, through
+  // the same actions the remote toolbar buttons run.
+  const remoteTarget = newFolderTarget?.kind === "remote" ? newFolderTarget : null;
+  const remoteFile = useRemoteFileUpload({
+    label: remoteTarget?.label ?? null,
+    parentPath: remoteTarget?.parentPath,
+    onUploaded: refreshAfterRemoteUpload,
+  });
+  const remoteFolder = useRemoteFolderUpload({
+    label: remoteTarget?.label ?? null,
+    parentPath: remoteTarget?.parentPath,
+    onUploaded: refreshAfterRemoteUpload,
+  });
+
   const canUpload = !isSyncPathEmpty && Boolean(onUploadFile);
   const contextActions = useMemo(
     () => ({
-      onUploadFile: canUpload ? onUploadFile : undefined,
-      onUploadFolder: canUpload ? onAddFolder : undefined,
-      onSyncFolder: onAddSyncFolder,
+      onUploadFile: remoteTarget ? remoteFile.start : canUpload ? onUploadFile : undefined,
+      onUploadFolder: remoteTarget ? remoteFolder.start : canUpload ? onAddFolder : undefined,
+      // Only where drives are chosen — the drive list and Recent Files.
+      // Inside a drive, local or remote, "Sync a Folder" answers a
+      // question the user is no longer asking, and registering a NEW sync
+      // folder from inside another one reads as doing something to the
+      // folder they are looking at.
+      onSyncFolder: isRecentFiles ? onAddSyncFolder : undefined,
       newFolderTarget,
     }),
-    [canUpload, onUploadFile, onAddFolder, onAddSyncFolder, newFolderTarget],
+    [
+      remoteTarget,
+      remoteFile.start,
+      remoteFolder.start,
+      canUpload,
+      onUploadFile,
+      onAddFolder,
+      isRecentFiles,
+      onAddSyncFolder,
+      newFolderTarget,
+    ],
   );
   usePageContextActions(contextActions);
 
