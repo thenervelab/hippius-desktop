@@ -205,11 +205,9 @@ pub(crate) fn parse_ttl(ttl: &str) -> Result<ShareTtl> {
 ///    could surface here.
 /// 3. `share_url` re-derived from `(share_token, share_key)` so the
 ///    "My Shares" page can offer a Copy button without a second IPC
-///    round-trip per row. `None` when the keystore on this device
-///    has lost the key (different device, wiped DB). `filename` is
-///    independent: the server now returns plaintext filenames, so
-///    a row can have a real `filename` and `share_url = None` when
-///    the share was minted on another device.
+///    round-trip per row. `None` when this device has no key and the
+///    listing wrap did not open (wiped DB, wrap never uploaded).
+///    `filename` is independent: the server returns plaintext names.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ShareSummary {
@@ -512,6 +510,10 @@ async fn create_share_inner(
         );
     }
     crate::finder_bridge::badges::push_from_state(state, folder_label, relative_path, BadgeState::Shared);
+
+    if let Ok(Some(secret)) = keystore.get(&result.share_token) {
+        super::owner_wrap::push_for_account(state, account_id, &[(result.share_token.clone(), secret)]).await;
+    }
 
     Ok(ShareLink {
         share_token: result.share_token,
@@ -831,6 +833,10 @@ async fn mint_remote_share_at(
     }
     crate::finder_bridge::badges::push_from_state(state, folder_label, relative_path, BadgeState::Shared);
 
+    if let Ok(Some(secret)) = keystore.get(&result.share_token) {
+        super::owner_wrap::push_for_account(state, account_id, &[(result.share_token.clone(), secret)]).await;
+    }
+
     Ok(ShareLink {
         share_token: result.share_token,
         share_url: result.share_url,
@@ -1010,6 +1016,10 @@ pub async fn create_folder_share_inner(
     }
     crate::finder_bridge::badges::push_from_state(state, folder_label, path_prefix, BadgeState::Shared);
 
+    if let Ok(Some(secret)) = keystore.get(&result.share_token) {
+        super::owner_wrap::push_folder_for_account(state, account_id, &[(result.share_token.clone(), secret)]).await;
+    }
+
     Ok(ShareLink {
         share_token: result.share_token,
         share_url: result.share_url,
@@ -1058,13 +1068,13 @@ pub async fn hcfs_create_folder_share(
 /// timestamps as RFC 3339 strings) plus the local resolution.
 ///
 /// The server returns `token_hash` (blake3 hex) only — a folder-share
-/// token is never echoed after create. A row minted on THIS machine
-/// matches a token in the persistent SQLite keystore
-/// (`folder_share_token_hash(stored) == token_hash`), so it comes back
-/// with the plaintext token — the handle `hcfs_revoke_folder_share` and
-/// `hcfs_update_folder_share_expiry` take — and the rebuilt recipient
-/// URL. A row minted elsewhere is view-only: `resolvable: false`, token
-/// and URL `null`.
+/// token is never echoed after create. A row this device can resolve
+/// (local keystore hit, or an `owner_wrap` that opened under the
+/// mnemonic) comes back with the plaintext token — the handle
+/// `hcfs_revoke_folder_share` and `hcfs_update_folder_share_expiry`
+/// take — and the rebuilt recipient URL. A row with no wrap and no
+/// local secret stays view-only: `resolvable: false`, token and URL
+/// `null`.
 ///
 /// Unlike the file-share listing, revoked and expired rows ARE present
 /// (with `revoked_at` set / `expires_at` in the past) until the server's
@@ -1177,7 +1187,11 @@ pub async fn list_folder_shares_inner(state: &AppState, account_id: &str) -> Res
         .map_err(|e| AppError::Hcfs(format!("list_folder_shares: {e}")))?;
 
     let keystore = SqliteShareKeystore::new(pool.clone());
-    let secrets_by_hash = folder_share_secrets_by_hash(&keystore)?;
+    let mut secrets_by_hash = folder_share_secrets_by_hash(&keystore)?;
+    let wrap_entries: Vec<(String, ShareSecret)> = secrets_by_hash.values().map(|(token, secret)| (token.clone(), secret.clone())).collect();
+    super::owner_wrap::push_folder_for_account(state, account_id, &wrap_entries).await;
+    let hashes: Vec<String> = rows.iter().map(|row| row.token_hash.clone()).collect();
+    super::owner_wrap::hydrate_folder_keystore(state, account_id, &keystore, &mut secrets_by_hash, &hashes).await;
     Ok(resolve_folder_share_rows(rows, &secrets_by_hash, &console_base_url()))
 }
 
@@ -1439,8 +1453,8 @@ pub async fn hcfs_update_share_expiry(state: tauri::State<'_, AppState>, share_t
 /// List all of this caller's currently-active shares, newest first.
 /// The server returns plaintext filenames, so every row has a real
 /// `filename` regardless of whether this device knows the share key.
-/// Only `share_url` is keystore-dependent — a row whose key has been
-/// forgotten (different device, wiped DB) surfaces with
+/// Only `share_url` is keystore-dependent — a row whose key this
+/// device never held and whose listing wrap is missing surfaces with
 /// `share_url = None` and the UI hides the Copy button while still
 /// offering Revoke.
 #[tauri::command]
@@ -1463,7 +1477,10 @@ pub async fn hcfs_list_shares(state: tauri::State<'_, AppState>) -> Result<Vec<S
     // still has a real plaintext `filename` from the server) and
     // still offers Revoke.
     let tokens: Vec<&str> = summaries.iter().map(|s| s.share_token.as_str()).collect();
-    let key_map = keystore.get_many(&tokens).map_err(|e| AppError::Hcfs(format!("keystore lookup: {e}")))?;
+    let mut key_map = keystore.get_many(&tokens).map_err(|e| AppError::Hcfs(format!("keystore lookup: {e}")))?;
+    let wrap_entries: Vec<(String, ShareSecret)> = key_map.iter().map(|(token, secret)| (token.clone(), secret.clone())).collect();
+    super::owner_wrap::push_for_account(&state, &account_id, &wrap_entries).await;
+    super::owner_wrap::hydrate_file_keystore(&state, &account_id, &keystore, &mut key_map, &tokens).await;
     // Same batched-IN trick as the keystore: one round-trip for the
     // whole page so the per-file badge and Reshare button can resolve
     // origin in O(1) per row.

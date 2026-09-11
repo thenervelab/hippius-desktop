@@ -68,6 +68,39 @@ fn the_mint_funnel_builds_a_drive_scoped_client() {
     );
 }
 
+#[test]
+fn the_mint_funnel_uploads_an_owner_wrap() {
+    let body = mint_funnel_body();
+    assert!(
+        body.contains("push_folder_for_account"),
+        "create_folder_share_inner must PUT a mnemonic-sealed wrap after mint so another \
+         unlocked device can rebuild the recipient URL; skipping this leaves folder shares \
+         copyable only on the minting machine"
+    );
+}
+
+#[test]
+fn the_file_list_opens_owner_wraps() {
+    let source = include_str!("../src/shares/commands.rs");
+    let body = fn_body(source, "pub async fn hcfs_list_shares(");
+    assert!(
+        body.contains("hydrate_file_keystore"),
+        "hcfs_list_shares must open listing wraps into the keystore so a share minted on \
+         another device is copyable here"
+    );
+}
+
+#[test]
+fn the_folder_list_opens_owner_wraps() {
+    let source = include_str!("../src/shares/commands.rs");
+    let body = fn_body(source, "pub async fn list_folder_shares_inner");
+    assert!(
+        body.contains("hydrate_folder_keystore"),
+        "list_folder_shares_inner must open listing wraps into the keystore so a folder \
+         share minted on another device is copyable here"
+    );
+}
+
 /// The revoke's forget-on-404 must be gated on the capability probe: a server
 /// ROLLBACK to a build without /v1/folder-shares answers the revoke route with
 /// the same bare 404 as "already revoked", and forgetting on that would delete
