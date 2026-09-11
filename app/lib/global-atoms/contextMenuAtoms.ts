@@ -42,4 +42,14 @@ export interface PageContextActions {
   newFolderTarget?: NewFolderTarget;
 }
 
-export const pageContextActionsAtom = atom<PageContextActions>({});
+/**
+ * The registration, or `null` where no surface has made one.
+ *
+ * `null` rather than `{}` because the two mean different things and the
+ * menu has to tell them apart: a drive surface that happens to offer no
+ * uploads still wants the menu (New Folder works there), while Settings,
+ * Security or Notifications want no menu at all. Treating the empty
+ * object as "show the menu anyway" is what put a lone New Folder item on
+ * every page in the app.
+ */
+export const pageContextActionsAtom = atom<PageContextActions | null>(null);

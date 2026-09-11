@@ -29,6 +29,17 @@ const ITEM_CLASS =
   "flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-medium !text-grey-30 hover:!text-grey-40 hover:bg-grey-90 cursor-pointer dark:!text-grey-dark-200 dark:hover:!text-grey-light-100 dark:hover:bg-white/5";
 
 /**
+ * Whether the right-click landed on something the OS menu should handle:
+ * a text field, or a selection the user may want to copy.
+ */
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  if (target.closest("input, textarea, [contenteditable='true']")) return true;
+  return (window.getSelection()?.toString().length ?? 0) > 0;
+}
+
+/**
  * The app's own right-click menu, mounted once in `app/(pages)/layout.tsx`.
  *
  * Replaces the WebView's Back / Reload / Inspect Element menu, which is a
@@ -37,11 +48,21 @@ const ITEM_CLASS =
  * `pageContextActionsAtom`, so the menu and that page's own toolbar always
  * run the same handlers against the same folder.
  *
+ * **Only on surfaces that registered.** Pages that manage files — Overview,
+ * the drive list, and any folder opened inside a drive — register through
+ * that atom; Settings, Security and the rest never do, and get no menu.
+ * Without that check the menu opened everywhere and, with no page actions
+ * to list, showed a lone New Folder item on pages that have no folders.
+ *
  * **It yields to a menu that already handled the event.** File rows and
  * folder cards have their own menus and call `preventDefault`; checking
  * `defaultPrevented` rather than relying on `stopPropagation` means a row
  * menu wins whether or not it stops the event, and a row that forgets to
  * stop it does not get two menus.
+ *
+ * **It yields to editable text.** Right-clicking an input or a selection
+ * should still offer Cut / Copy / Paste — replacing that with folder
+ * actions takes away the only way to copy a wallet address by mouse.
  */
 const AppContextMenu: React.FC = () => {
   const actions = useAtomValue(pageContextActionsAtom);
@@ -51,15 +72,26 @@ const AppContextMenu: React.FC = () => {
   const close = useCallback(() => setPoint(null), []);
 
   useEffect(() => {
+    // No registration means this surface manages no files, so there is
+    // nothing to offer and the event is left alone.
+    if (!actions) return;
+
     const onContextMenu = (e: MouseEvent) => {
       // A row or card menu took it. Ours would otherwise open on top.
       if (e.defaultPrevented) return;
+      if (isEditableTarget(e.target)) return;
       e.preventDefault();
       setPoint({ x: e.clientX, y: e.clientY });
     };
     document.addEventListener("contextmenu", onContextMenu);
     return () => document.removeEventListener("contextmenu", onContextMenu);
-  }, []);
+  }, [actions]);
+
+  // A surface that unregisters while its menu is open — navigating away
+  // with the menu up — must not leave it floating over the next page.
+  useEffect(() => {
+    if (!actions) close();
+  }, [actions, close]);
 
   useEffect(() => {
     if (!point) return;
@@ -81,7 +113,7 @@ const AppContextMenu: React.FC = () => {
     };
   }, [point, close]);
 
-  if (!point) return null;
+  if (!point || !actions) return null;
 
   const items: Array<{ label: string; icon: React.ReactNode; run: () => void }> = [];
   if (actions.onUploadFile) {

@@ -25,7 +25,8 @@ export function usePageContextActions(actions: PageContextActions) {
 
   useEffect(() => {
     setActions(actions);
-    return () => setActions({});
+    // Back to `null`, not `{}`: an empty registration still shows a menu.
+    return () => setActions(null);
   }, [actions, setActions]);
 }
 
