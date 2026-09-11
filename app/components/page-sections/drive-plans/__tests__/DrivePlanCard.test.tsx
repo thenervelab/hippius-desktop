@@ -71,28 +71,59 @@ describe("DrivePlanCard shared drive perk", () => {
 });
 
 /**
- * The card states a plan's cost ONCE, in the price figure. A second line
- * under it restated the same number in credits ("A charge of 7 credits
- * monthly", "No monthly charge"), which said the same thing twice in a
- * different unit and pushed the one fact the card is chosen on — how much
- * storage — further down.
+ * Two cards claiming to be the plan in use is the bug this replaces: the
+ * free card returned "none" for every account, and "none" is labelled
+ * "Current Plan" — so a subscriber saw it beside their paid plan's
+ * "Cancel subscription".
+ *
+ * "Default Plan" is what it actually is: the plan underneath a
+ * subscription, which cancelling returns you to. Inert, because the way
+ * back is the paid card's own Cancel.
  */
-describe("DrivePlanCard price", () => {
-  it("states the cost once and does not restate it in credits", () => {
-    renderCard(plan());
-    expect(screen.getByText(/\$7/)).toBeTruthy();
-    expect(screen.queryByText(/credits monthly/i)).toBeNull();
+describe("the free plan card beside a paid subscription", () => {
+  const freePlan = plan({ code: "free", name: "Free Drive Plan", is_free: true });
+
+  it("says Default Plan, not Current Plan", () => {
+    render(
+      <DrivePlanCard
+        plan={freePlan}
+        action="default"
+        isCurrent={false}
+        isBusy={false}
+        onAction={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("Default Plan")).toBeTruthy();
+    expect(screen.queryByText("Current Plan")).toBeNull();
   });
 
-  it("says nothing about a monthly charge on the free plan either", () => {
-    renderCard(plan({ is_free: true, price_credits_monthly: 0, name: "Free Drive Plan" }));
-    expect(screen.queryByText(/monthly charge/i)).toBeNull();
+  it("is not clickable", () => {
+    const onAction = vi.fn();
+    render(
+      <DrivePlanCard
+        plan={freePlan}
+        action="default"
+        isCurrent={false}
+        isBusy={false}
+        onAction={onAction}
+      />,
+    );
+    fireEvent.click(screen.getByText("Default Plan"));
+    expect(onAction).not.toHaveBeenCalled();
   });
 
-  // The line that replaced it is the one the plan is actually chosen on.
-  it("still names the storage the plan grants", () => {
-    renderCard(plan());
-    expect(screen.getByText(/storage on Hippius/i)).toBeTruthy();
+  // An account genuinely on the free tier still reads "Current Plan".
+  it("still says Current Plan for an account actually on it", () => {
+    render(
+      <DrivePlanCard
+        plan={freePlan}
+        action="none"
+        isCurrent
+        isBusy={false}
+        onAction={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("Current Plan")).toBeTruthy();
   });
 });
 

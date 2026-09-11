@@ -52,6 +52,18 @@ export interface StorageOverview {
   /** Pre-formatted HIP credit balance; null if the balance fetch failed. */
   creditsHip: string | null;
   /**
+   * Whether this account may have the included free allowance at all.
+   *
+   * Distinct from `source`, and both are needed: `source` says what the
+   * account lives on right now, so an unentitled account holding a paid
+   * plan reports `"subscription"` and looks identical to an entitled one.
+   * The plans page has to tell them apart, because cancelling drops the
+   * first to nothing and the second to the free tier.
+   *
+   * Decided in Rust from the sign-in provider. Never re-derive it here.
+   */
+  freeTierEntitled: boolean;
+  /**
    * Indexer row is 0 but this device already has files. The card shows
    * "Updating…" instead of a confident "0 B". Never inferred on the FE
    * from `usedBytes === 0` — that is also the true-empty state.

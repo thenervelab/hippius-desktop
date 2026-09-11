@@ -15,7 +15,19 @@ import { cn } from "@/lib/utils";
 
 /** What the button on a card does, decided by the section and passed down. */
 export type DrivePlanAction =
-  "current" | "subscribe" | "upgrade" | "downgrade" | "cancel" | "none";
+  | "current"
+  | "subscribe"
+  | "upgrade"
+  | "downgrade"
+  | "cancel"
+  /**
+   * The free tier, for an account that is on a PAID plan. Not "current" —
+   * that would put two cards on the page both claiming to be the one in
+   * use — and not an action either: the way back to free is cancelling
+   * the paid plan, on the paid plan's own card.
+   */
+  | "default"
+  | "none";
 
 export interface DrivePlanCardProps {
   plan: DrivePlan;
@@ -34,6 +46,7 @@ const ACTION_LABEL: Record<DrivePlanAction, string> = {
   upgrade: "Upgrade",
   downgrade: "Downgrade",
   cancel: "Cancel subscription",
+  default: "Default Plan",
   none: "Current Plan",
 };
 
@@ -43,6 +56,7 @@ const BUSY_LABEL: Record<DrivePlanAction, string> = {
   upgrade: "Upgrading…",
   downgrade: "Downgrading…",
   cancel: "Cancelling…",
+  default: "Default Plan",
   none: "Current Plan",
 };
 
@@ -59,7 +73,7 @@ const DrivePlanCard: FC<DrivePlanCardProps> = ({
   disabledReason,
   onAction,
 }) => {
-  const isInert = action === "current" || action === "none";
+  const isInert = action === "current" || action === "none" || action === "default";
   const isCancel = action === "cancel";
   const storage = formatPlanStorage(plan.storage_bytes);
   // Shared drives are part of these plans but are not switched on yet, so
