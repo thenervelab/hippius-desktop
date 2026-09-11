@@ -78,4 +78,16 @@ describe("the chip keeps its colour contract", () => {
   it("draws the warning in amber, in both themes", () => {
     expect(chip).toMatch(/text-warning-40 dark:text-warning-50/);
   });
+
+  /**
+   * The `grey-light-*` tokens are all #f0–f3, which is roughly 1.06:1
+   * against the white card — the groove was there and invisible, so a low
+   * percentage looked like no bar had been drawn at all.
+   */
+  it("gives the bar a groove that is visible on a white card", () => {
+    const bar = chip.slice(chip.indexOf('role="progressbar"'));
+    const track = bar.slice(0, bar.indexOf("style="));
+    expect(track).toContain("bg-grey-80");
+    expect(track).not.toMatch(/bg-grey-light-\d/);
+  });
 });
