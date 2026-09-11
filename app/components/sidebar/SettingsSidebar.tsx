@@ -12,6 +12,7 @@ import CustomTooltip2 from "@/components/ui/CustomTooltip2";
 import {
   VPN_FEATURE_ENABLED,
   WALLET_FEATURE_ENABLED,
+  API_TOKEN_FEATURE_ENABLED,
 } from "@/app/lib/featureFlags";
 import { filterSettingsNavItems } from "./settingsNavGating";
 import { BELOW_TITLEBAR_TOP_54 } from "@/app/lib/utils/platformChrome";
@@ -133,11 +134,12 @@ const SettingsSidebar: React.FC = () => {
           )}
 
           <div className="flex flex-col w-full gap-y-0.5">
-            {/* VPN and Wallets are hidden behind feature flags (entries kept
-                in the array). */}
+            {/* VPN, Wallets and API Token are hidden behind feature flags
+                (entries kept in the array). */}
             {filterSettingsNavItems(settingsNavItems, {
               vpnEnabled: VPN_FEATURE_ENABLED,
               walletEnabled: WALLET_FEATURE_ENABLED,
+              apiTokenEnabled: API_TOKEN_FEATURE_ENABLED,
             })
               .map((item) => {
                 const isActive = activeSection === item.section;

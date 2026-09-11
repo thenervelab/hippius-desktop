@@ -19,7 +19,12 @@ import BillingSections from "@/components/page-sections/billing/BillingSections"
 import {
   VPN_FEATURE_ENABLED,
   WALLET_FEATURE_ENABLED,
+  API_TOKEN_FEATURE_ENABLED,
 } from "@/app/lib/featureFlags";
+import {
+  DEFAULT_SETTINGS_SECTION,
+  resolveSettingsSection,
+} from "@/app/components/sidebar/settingsNavGating";
 
 const SECTION_META: Record<
   string,
@@ -101,8 +106,15 @@ const SECTION_META: Record<
 
 function SettingsContent() {
   const searchParams = useSearchParams();
-  const section = searchParams.get("section") ?? "sync";
-  const meta = SECTION_META[section] ?? SECTION_META["sync"];
+  // Resolved against the feature gates, not just read: the section comes
+  // from the query string, so a hidden sidebar entry does not make it
+  // unreachable. See `resolveSettingsSection`.
+  const section = resolveSettingsSection(searchParams.get("section"), {
+    vpnEnabled: VPN_FEATURE_ENABLED,
+    walletEnabled: WALLET_FEATURE_ENABLED,
+    apiTokenEnabled: API_TOKEN_FEATURE_ENABLED,
+  });
+  const meta = SECTION_META[section] ?? SECTION_META[DEFAULT_SETTINGS_SECTION];
 
   return (
     <div className="px-4 py-3">
@@ -148,7 +160,11 @@ function SettingsContent() {
 
         {section === "notifications" && <NotificationSection />}
 
-        {section === "api-key" && <ApiTokenSection />}
+        {/* API Token is hidden behind the same release gate as its sidebar
+            entry (code kept). Gated at the render too, not just in the nav:
+            the section is addressable directly, and a hidden link is not a
+            gate. See featureFlags.ts. */}
+        {API_TOKEN_FEATURE_ENABLED && section === "api-key" && <ApiTokenSection />}
 
         {section === "updates" && <ReleaseChannelSettings />}
 

@@ -125,6 +125,23 @@ export const VM_VPN_ENABLED = false;
 export const SHARED_DRIVES_ENABLED = enabledFrom("beta");
 
 /**
+ * API token settings. When `false`, the surface is fully invisible: the
+ * "API Token" item is filtered out of the settings sidebar
+ * (`filterSettingsNavItems`) and the section does not render even if the
+ * `api-key` section is reached by other means.
+ *
+ * Off because the token is for calling the Hippius API directly, which is
+ * a thing people do from scripts and the console, not from the desktop
+ * app — and showing a full-access credential on a screen nobody came here
+ * for is a disclosure risk with no matching use.
+ *
+ * All the code stays (`ApiTokenSection.tsx` and its cards), same
+ * keep-don't-delete policy as wallet and VPN. Flip to `true` to restore
+ * the entry and the page.
+ */
+export const API_TOKEN_FEATURE_ENABLED = false;
+
+/**
  * Referrals page. When `false`, referrals is fully invisible: the sidebar
  * entry is filtered out (`filterNavSections` in NavData.tsx) and a direct
  * `/referrals` navigation redirects to the overview (`FeatureDisabledRedirect`
