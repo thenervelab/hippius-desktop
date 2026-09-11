@@ -32,6 +32,11 @@ export interface ServerCapabilities {
    * revoked" and report a live share as turned off.
    */
   folder_share_revoke_by_hash: boolean;
+  /**
+   * `PUT /v1/shares/owner-wraps` and `PUT /v1/folder-shares/owner-wraps`.
+   * Absent on older servers; Rust collapses missing to `false`.
+   */
+  share_owner_wrap: boolean;
 }
 
 /**

@@ -12,5 +12,6 @@ pub mod commands;
 pub mod history;
 pub mod keystore;
 pub mod origin;
+pub(crate) mod owner_wrap;
 
 pub use keystore::SqliteShareKeystore;
