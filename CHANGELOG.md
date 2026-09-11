@@ -239,6 +239,12 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Right-clicking outside your files no longer offers New Folder.** The menu
+  appeared on every page — Settings, Security, Notifications — where there are no
+  folders to create one in. It is now limited to Overview, your drives and the
+  folders inside them, and right-clicking a text field offers Cut, Copy and Paste
+  again.
+
 - **Storage bars are visible in light mode again.** The groove behind the bar was
   almost the same colour as the card, so a drive with little used looked like it
   had no bar at all.
