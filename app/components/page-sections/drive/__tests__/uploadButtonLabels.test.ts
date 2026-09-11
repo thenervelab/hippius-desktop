@@ -59,7 +59,7 @@ describe("the context menu keeps its verbs", () => {
   // A menu row has no icon carrying the action and no button beside it to
   // contrast with, so "File" alone would not say what it does.
   it("still reads Upload File and Upload Folder", () => {
-    const menu = readCode("../../../ui/context-menu/BackgroundContextMenu.tsx");
+    const menu = readCode("../../../ui/context-menu/AppContextMenu.tsx");
     expect(menu).toContain("UPLOAD_FILE_LABEL");
     expect(menu).toContain("UPLOAD_FOLDER_LABEL");
     expect(menu).not.toMatch(/BUTTON_LABEL/);

@@ -447,7 +447,6 @@ interface FilesTableProps {
    *  table body so the placeholders share the real colgroup (columns,
    *  striping and the chevron gutter line up by construction). */
   isLoadingMore?: boolean;
-  onHeaderContextMenu?: (e: React.MouseEvent) => void;
   drivePathsByLabel?: Record<string, string>;
   currentSubfolderPath?: string | null;
   searchTerm?: string;
@@ -464,7 +463,6 @@ const FilesTable: FC<FilesTableProps> = memo(
     hasMore,
     loadMore,
     isLoadingMore = false,
-    onHeaderContextMenu,
     drivePathsByLabel,
     currentSubfolderPath,
     searchTerm,
@@ -1933,7 +1931,6 @@ const FilesTable: FC<FilesTableProps> = memo(
             >
               {tableColgroup}
               <TableModule.THead
-                onContextMenu={onHeaderContextMenu}
                 className={cn(!isRecentFiles ? "!bg-transparent" : "")}
               >
                 {headerRows}

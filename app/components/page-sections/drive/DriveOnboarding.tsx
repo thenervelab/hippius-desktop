@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useRefreshWhileSyncing } from "@/app/lib/hooks/useRefreshWhileSyncing";
 import { toast } from "sonner";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
@@ -30,7 +30,8 @@ import FolderList from "./folder-list/FolderList";
 import FolderListEmptyState from "./folder-list/FolderListEmptyState";
 import DriveStatusBanner from "./service-status/DriveStatusBanner";
 import FreshAccountPlans from "./FreshAccountPlans";
-import AddButton from "./AddFileButton";
+import AddButton, { type AddButtonRef } from "./AddFileButton";
+import usePageContextActions from "@/app/lib/hooks/usePageContextActions";
 import FolderUploadDialog from "./FolderUploadDialog";
 import { toFolderRows, type FolderRow } from "./folder-list/folderRows";
 import { buildFolderActions } from "./folder-list/buildFolderActions";
@@ -118,6 +119,20 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
   // Drive label whose exclusions are being edited, or null when closed.
   const [exclusionsLabel, setExclusionsLabel] = useState<string | null>(null);
   const [isFolderUploadOpen, setIsFolderUploadOpen] = useState(false);
+  const addButtonRef = useRef<AddButtonRef>(null);
+
+  // The drive list is the one view with no folder open, so New Folder is
+  // left to its default — the main drive's root — while the three actions
+  // here run exactly what the toolbar buttons above the list run.
+  const contextActions = useMemo(
+    () => ({
+      onUploadFile: () => void addButtonRef.current?.open(),
+      onUploadFolder: () => setIsFolderUploadOpen(true),
+      onSyncFolder: () => setShowAddDialog(true),
+    }),
+    [],
+  );
+  usePageContextActions(contextActions);
   const [pauseDialog, setPauseDialog] = useState<{
     open: boolean;
     folder: SyncFolder | null;
@@ -571,8 +586,6 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
       onDeleteFromServer: openDeleteServerDialog,
       onSyncRemote: handleSyncRemoteFolder,
       onBrowseRemote: (folder) => void handleBrowseFolder(folder),
-      // The selective-sync picker for a LOCAL drive — the synthetic
-      // browse target the old section built, unchanged.
       onBrowseLocal: (folder) =>
         void handleBrowseFolder(
           {
@@ -631,6 +644,7 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
                     {UPLOAD_FOLDER_BUTTON_LABEL}
                   </Button>
                   <AddButton
+                    ref={addButtonRef}
                     defaultFolderLabel={firstLocalLabel}
                     className="h-[26px] rounded-[6px] px-2.5 text-[12px] font-medium"
                     // Matches the Upload Folder button beside it. This row

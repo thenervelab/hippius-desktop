@@ -1,6 +1,8 @@
 "use client";
 
-import { FC, useEffect, useState, useRef, useMemo } from "react";
+import { FC, useCallback, useEffect, useState, useRef, useMemo } from "react";
+import { createPortal } from "react-dom";
+import { Check, Cloud, Folder } from "lucide-react";
 import { useAtomValue } from "jotai";
 import {
   driveStatusesAtom,
@@ -14,6 +16,17 @@ import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 
 /** Drives on the account that this computer does not sync. */
 export const REMOTE_UPLOAD_TARGETS_QUERY_KEY = "remoteUploadTargets";
+
+/**
+ * Hover text for one option. Names what a remote folder IS rather than
+ * what it lacks — the files go straight to the server, which is an
+ * ordinary destination, not a limitation.
+ */
+function optionTitle(sp: { label: string; remote: boolean }): string {
+  return sp.remote
+    ? `${sp.label} — a remote folder, stored on Hippius but not synced to this computer`
+    : sp.label;
+}
 
 interface SyncFolderSelectProps {
   value: string | null;
@@ -33,6 +46,12 @@ interface SyncFolderSelectProps {
    * only where the caller can actually route there.
    */
   includeRemote?: boolean;
+  /**
+   * Field label. Defaults to the upload wording this was written for;
+   * the New Folder dialog picks where to CREATE, not where to upload, and
+   * "Upload to folder" there would describe the wrong action.
+   */
+  label?: string;
 }
 
 interface SyncFolderOption {
@@ -47,6 +66,7 @@ const SyncFolderSelect: FC<SyncFolderSelectProps> = ({
   defaultLabel,
   className,
   includeRemote = false,
+  label = "Upload to folder",
 }) => {
   // Read configured drives from the per-drive status atom (single source
   // of truth, hydrated by `useDriveStatuses`). No DB round-trip needed —
@@ -91,6 +111,38 @@ const SyncFolderSelect: FC<SyncFolderSelectProps> = ({
 
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  // Where to draw the menu, in viewport coordinates.
+  //
+  // The menu is portalled to `<body>` and positioned `fixed` rather than
+  // absolutely inside this component. Every caller is a dialog, and an
+  // absolutely-positioned child still counts toward its scroll
+  // container's overflow — so opening the menu grew the dialog and gave
+  // it a scrollbar instead of drawing over it.
+  const [anchor, setAnchor] = useState<DOMRect | null>(null);
+  // Which element to portal into.
+  //
+  // `document.body` is the obvious answer and the wrong one inside a
+  // dialog: Radix's Dialog runs `react-remove-scroll`, which calls
+  // `preventDefault()` on every wheel event that lands outside the dialog
+  // content. The menu appeared, showed a scrollbar, and refused to
+  // scroll — there is no attribute to opt out of that lock, only a
+  // `shards` prop Radix does not expose.
+  //
+  // Portalling into the dialog itself puts the menu inside the lock, so
+  // the wheel works. Its `fixed` coordinates stay viewport-relative
+  // because the dialog content sets no transform; one there would become
+  // the containing block and shift the menu.
+  const [container, setContainer] = useState<HTMLElement | null>(null);
+
+  const openMenu = useCallback(() => {
+    const trigger = triggerRef.current;
+    const rect = trigger?.getBoundingClientRect();
+    if (rect) setAnchor(rect);
+    setContainer(trigger?.closest<HTMLElement>('[role="dialog"]') ?? document.body);
+    setOpen((prev) => !prev);
+  }, []);
 
   // Resolve initial selection: prefer the controlled `value`, then
   // `defaultLabel`, then the first drive. Runs whenever the drive list
@@ -111,16 +163,43 @@ const SyncFolderSelect: FC<SyncFolderSelectProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [driveStatusesLoaded, syncPaths, value, defaultLabel]);
 
-  // Close on outside click
+  // Close on outside click, Escape, or anything that moves the trigger.
   useEffect(() => {
     if (!open) return;
     const handler = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
+      const target = e.target as Node;
+      // The menu lives in a portal, so it is NOT inside `containerRef`.
+      // Checking only that one closed the menu on `mousedown` before the
+      // option's `click` could fire, and the selection never happened.
+      if (containerRef.current?.contains(target)) return;
+      if (menuRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    // A fixed menu does not follow its trigger, so rather than track the
+    // trigger on every frame it closes — the same choice the app's
+    // right-click menu makes.
+    const close = () => setOpen(false);
+    // ...but NOT when the scroll came from inside the menu. The listener
+    // is capturing, so it also sees the option list scrolling itself,
+    // which closed the menu the moment the user tried to reach an option
+    // below the fold.
+    const onScroll = (e: Event) => {
+      if (menuRef.current?.contains(e.target as Node)) return;
+      setOpen(false);
     };
     document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("resize", close);
+    window.addEventListener("scroll", onScroll, true);
+    return () => {
+      document.removeEventListener("mousedown", handler);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("scroll", onScroll, true);
+    };
   }, [open]);
 
   if (!driveStatusesLoaded || syncPaths.length < 2) return null;
@@ -130,12 +209,13 @@ const SyncFolderSelect: FC<SyncFolderSelectProps> = ({
   return (
     <div className={cn("flex flex-col gap-1.5", className)} ref={containerRef}>
       <label className="text-sm font-medium text-grey-50 dark:text-grey-dark-700">
-        Upload to folder
+        {label}
       </label>
       <div className="relative">
         <button
+          ref={triggerRef}
           type="button"
-          onClick={() => setOpen((prev) => !prev)}
+          onClick={openMenu}
           className="flex w-full justify-between cursor-pointer items-center gap-2 px-4 h-[3rem] text-sm font-medium border border-grey-80 rounded-lg text-grey-10 bg-grey-100 focus:outline-none dark:border-[#494949] dark:bg-[#1f1f1f] dark:text-white dark:hover:bg-[#252525]"
         >
           <span className="truncate">{selectedLabel ?? "Select folder"}</span>
@@ -146,10 +226,26 @@ const SyncFolderSelect: FC<SyncFolderSelectProps> = ({
             )}
           />
         </button>
+      </div>
 
-        {open && (
-          <div className="absolute left-0 right-0 top-full mt-1 overflow-hidden rounded-lg bg-white shadow-lg border border-grey-80 z-[100] dark:bg-[#1f1f1f] dark:border-[#494949]">
-            <div className="p-1.5 max-h-60 overflow-auto flex flex-col gap-0.5">
+      {open &&
+        anchor &&
+        createPortal(
+          <div
+            ref={menuRef}
+            role="listbox"
+            // Fixed and portalled: inside the dialog this would add to the
+            // scroll area instead of drawing over it. `z-[2000]` clears the
+            // dialog's own layer.
+            style={{
+              position: "fixed",
+              left: anchor.left,
+              top: anchor.bottom + 4,
+              width: anchor.width,
+            }}
+            className="z-[2000] overflow-hidden rounded-lg border border-grey-80 bg-white shadow-[0px_12px_32px_8px_rgba(51,51,51,0.12)] dark:border-[#494949] dark:bg-[#1f1f1f] dark:shadow-[0px_12px_32px_8px_rgba(0,0,0,0.4)]"
+          >
+            <div className="custom-scrollbar-thin flex max-h-[288px] flex-col gap-0.5 overflow-y-auto p-1.5">
               {syncPaths.map((sp) => {
                 const isSelected = sp.label === value;
                 return (
@@ -161,27 +257,58 @@ const SyncFolderSelect: FC<SyncFolderSelectProps> = ({
                       onChange(sp.label, sp.path, sp.remote);
                       setOpen(false);
                     }}
+                    title={optionTitle(sp)}
                     className={cn(
-                      "flex items-center justify-between px-3 py-2.5 text-sm cursor-pointer text-grey-10 transition-colors duration-150 select-none rounded-md hover:bg-grey-90 truncate dark:text-[#a3a3a3] dark:hover:bg-[#2c2c2c] dark:hover:text-white",
+                      "group flex cursor-pointer select-none items-center gap-3 rounded-md px-3 py-2.5 transition-colors duration-150",
                       isSelected
-                        ? "bg-grey-80 font-medium dark:bg-[#2c2c2c] dark:text-white"
-                        : "",
+                        ? "bg-primary-50/10 dark:bg-primary-50/15"
+                        : "hover:bg-grey-90 dark:hover:bg-[#2c2c2c]",
                     )}
-                    title={sp.remote ? `${sp.label} — not synced on this computer` : sp.label}
                   >
-                    <span className="truncate">{sp.label}</span>
-                    {sp.remote && (
-                      <span className="ml-2 shrink-0 text-[11px] font-medium text-grey-60 dark:text-grey-dark-600">
-                        Not synced here
+                    {/* The icon says which KIND of drive this is at a
+                        glance, which the old badge said only in words and
+                        only for one of the two. */}
+                    <span
+                      className={cn(
+                        "flex size-8 shrink-0 items-center justify-center rounded-[7px] transition-colors",
+                        isSelected
+                          ? "bg-primary-50 text-white"
+                          : "bg-grey-90 text-grey-50 group-hover:bg-grey-80 dark:bg-[#2c2c2c] dark:text-grey-dark-600 dark:group-hover:bg-[#353535]",
+                      )}
+                    >
+                      {sp.remote ? (
+                        <Cloud className="size-4" />
+                      ) : (
+                        <Folder className="size-4" />
+                      )}
+                    </span>
+
+                    <span className="flex min-w-0 flex-1 flex-col">
+                      <span
+                        className={cn(
+                          "truncate text-[15px] leading-5 tracking-[-0.3px]",
+                          isSelected
+                            ? "font-semibold text-primary-50 dark:text-primary-brand-dark"
+                            : "font-medium text-grey-10 dark:text-white",
+                        )}
+                      >
+                        {sp.label}
                       </span>
+                      <span className="truncate text-[12px] leading-4 text-grey-50 dark:text-grey-dark-600">
+                        {sp.remote ? "Remote folder" : "On this computer"}
+                      </span>
+                    </span>
+
+                    {isSelected && (
+                      <Check className="size-4 shrink-0 text-primary-50 dark:text-primary-brand-dark" />
                     )}
                   </div>
                 );
               })}
             </div>
-          </div>
+          </div>,
+          container ?? document.body,
         )}
-      </div>
     </div>
   );
 };

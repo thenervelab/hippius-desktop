@@ -1,6 +1,6 @@
 "use client";
 
-import { FC, useState, useRef, useEffect, useCallback, memo } from "react";
+import { FC, useState, useRef, useEffect, useCallback, memo, useMemo } from "react";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import FilesTable from "./files-table";
 import FilesTableSkeleton from "./files-table/FilesTableSkeleton";
@@ -23,10 +23,11 @@ import { renameModalFileAtom } from "@/app/lib/global-atoms/renameAtoms";
 import { downloadFile } from "@/app/lib/utils/downloadFile";
 import { CloudUploadIcon, HardDrive } from "lucide-react";
 import { cn } from "@/lib/utils";
+import usePageContextActions from "@/app/lib/hooks/usePageContextActions";
+import type { NewFolderTarget } from "@/app/lib/global-atoms/contextMenuAtoms";
 import { formatDisplayName } from "@/lib/utils/fileTypeUtils";
 import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 import NoMatchingResults from "./NoMatchingResults";
-import BackgroundContextMenu from "@/app/components/ui/context-menu/BackgroundContextMenu";
 
 interface DriveContentProps {
   isRecentFiles?: boolean;
@@ -68,6 +69,8 @@ interface DriveContentProps {
   isFolderUploadOpen?: boolean;
   drivePathsByLabel?: Record<string, string>;
   currentSubfolderPath?: string | null;
+  /** Where the menu's New Folder creates; defaults to the main drive. */
+  newFolderTarget?: NewFolderTarget;
 }
 
 const DriveContent: FC<DriveContentProps> = ({
@@ -94,14 +97,11 @@ const DriveContent: FC<DriveContentProps> = ({
   isFolderUploadOpen = false,
   drivePathsByLabel,
   currentSubfolderPath,
+  newFolderTarget,
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [animateCloud, setAnimateCloud] = useState(false);
   const dragTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const [bgContextMenu, setBgContextMenu] = useState<{
-    x: number;
-    y: number;
-  } | null>(null);
   // Opens `ShareFileModal` (mounted at the layout level) for the
   // selected file. Setting the atom is the only handoff — the modal
   // owns its own lifecycle from there.
@@ -323,16 +323,27 @@ const DriveContent: FC<DriveContentProps> = ({
     downloadFile(file, polkadotAddress);
   };
 
-  const handleHeaderContextMenu = useCallback(
-    (e: React.MouseEvent) => {
-      if (isSyncPathEmpty || isRecentFiles || !onUploadFile) return;
-      e.preventDefault();
-      e.stopPropagation();
-      window.getSelection()?.removeAllRanges();
-      setBgContextMenu({ x: e.clientX, y: e.clientY });
-    },
-    [isSyncPathEmpty, isRecentFiles, onUploadFile],
+  // What the right-click menu offers while this view is on screen. The
+  // menu is mounted once in the pages layout — registering handlers rather
+  // than rendering a menu here is what gives every surface one, including
+  // those that never had a background menu (Overview, the drive list), and
+  // guarantees the menu and this view's toolbar run the same action
+  // against the same folder.
+  //
+  // Uploads are withheld where they cannot work: a drive with no sync path
+  // has nowhere to put the file. New Folder is not — with no folder open
+  // it falls back to the main drive's root.
+  const canUpload = !isSyncPathEmpty && Boolean(onUploadFile);
+  const contextActions = useMemo(
+    () => ({
+      onUploadFile: canUpload ? onUploadFile : undefined,
+      onUploadFolder: canUpload ? onAddFolder : undefined,
+      onSyncFolder: onAddSyncFolder,
+      newFolderTarget,
+    }),
+    [canUpload, onUploadFile, onAddFolder, onAddSyncFolder, newFolderTarget],
   );
+  usePageContextActions(contextActions);
 
   const renderContent = () => {
     // Only show full loading state on initial load (no data yet).
@@ -404,7 +415,6 @@ const DriveContent: FC<DriveContentProps> = ({
             hasMore={hasMore}
             loadMore={loadMore}
             isLoadingMore={isLoadingMore}
-            onHeaderContextMenu={handleHeaderContextMenu}
             drivePathsByLabel={drivePathsByLabel}
             currentSubfolderPath={currentSubfolderPath}
             searchTerm={searchTerm}
@@ -432,12 +442,6 @@ const DriveContent: FC<DriveContentProps> = ({
   return (
     <>
       <div
-        onContextMenu={(e) => {
-          // Only show background context menu if sync path is configured and not on recent files
-          if (isSyncPathEmpty || isRecentFiles || !onUploadFile) return;
-          e.preventDefault();
-          setBgContextMenu({ x: e.clientX, y: e.clientY });
-        }}
         className={cn(
           "w-full relative select-none",
           viewMode === "card" && filteredData.length > 0 && "px-2.5",
@@ -569,17 +573,6 @@ const DriveContent: FC<DriveContentProps> = ({
             setRenameModalFile(file);
             setContextMenu(null);
           }}
-        />
-      )}
-
-      {bgContextMenu && onUploadFile && onAddFolder && (
-        <BackgroundContextMenu
-          x={bgContextMenu.x}
-          y={bgContextMenu.y}
-          onClose={() => setBgContextMenu(null)}
-          onUploadFile={onUploadFile}
-          onAddFolder={onAddFolder}
-          onAddSyncFolder={onAddSyncFolder}
         />
       )}
 
