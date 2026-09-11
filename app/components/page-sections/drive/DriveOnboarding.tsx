@@ -28,11 +28,20 @@ import { HcfsSetupDialog } from "@/components/page-sections/settings/HcfsSetupDi
 import { Button } from "@/components/ui/button";
 import FolderList from "./folder-list/FolderList";
 import FolderListEmptyState from "./folder-list/FolderListEmptyState";
+import DriveStatusBanner from "./service-status/DriveStatusBanner";
+import FreshAccountPlans from "./FreshAccountPlans";
 import AddButton from "./AddFileButton";
 import FolderUploadDialog from "./FolderUploadDialog";
 import { toFolderRows, type FolderRow } from "./folder-list/folderRows";
 import { buildFolderActions } from "./folder-list/buildFolderActions";
-import { SYNC_FOLDER_LABEL, UPLOAD_FOLDER_LABEL } from "./uploadActions";
+import {
+  SYNC_FOLDER_HINT,
+  SYNC_FOLDER_LABEL,
+  UPLOAD_FOLDER_HINT,
+  UPLOAD_FOLDER_BUTTON_LABEL,
+} from "./uploadActions";
+import { RefreshCw } from "lucide-react";
+import { ArrowUpToLine } from "@/components/ui/icons";
 import {
   SharedWithMeSection,
   RemoveFolderDialog,
@@ -584,6 +593,13 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
           with the files table when switching between the breadcrumb's
           "Local" and folder views. Settings renders the same FolderList
           without this wrapper, so its gutter is unaffected. */}
+      {/* What Drive says about the plan itself — a renewal that failed, a
+          cancellation, a plan still provisioning. Read from the same
+          `/api/services/status/` the console reads, so one account is not
+          told two different stories by two clients. Renders nothing when
+          there is nothing to say. */}
+      <DriveStatusBanner />
+
       <div className="w-full flex flex-col gap-3 px-3">
         {/* One list for every folder on the account. The three cards
             this replaces — Local Sync Folders, Sync from Other Devices,
@@ -594,29 +610,48 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
           rows={folderRows}
           isLoading={isLoading}
           headerAction={
+            /* Two kinds of action, told apart by where they sit rather
+               than by wording alone. Left of the divider adds CONTENT to a
+               drive that exists; right of it sets a drive UP. They used to
+               sit in one undifferentiated row, and "Upload Folder" beside
+               "Sync a Folder" is easy to pick wrong — a mistake only
+               discovered later, when the copy silently fails to track
+               changes. */
             <div className="flex items-center gap-2">
               {canUpload && (
                 <>
                   <Button
                     variant="defaultStable"
                     size="auto"
+                    title={UPLOAD_FOLDER_HINT}
                     onClick={() => setIsFolderUploadOpen(true)}
-                    className="h-[26px] rounded-[6px] px-2.5 text-[12px] font-medium"
+                    className="h-[26px] gap-1.5 rounded-[6px] px-2.5 text-[12px] font-medium"
                   >
-                    {UPLOAD_FOLDER_LABEL}
+                    <ArrowUpToLine className="size-3.5 shrink-0" />
+                    {UPLOAD_FOLDER_BUTTON_LABEL}
                   </Button>
                   <AddButton
                     defaultFolderLabel={firstLocalLabel}
                     className="h-[26px] rounded-[6px] px-2.5 text-[12px] font-medium"
+                    // Matches the Upload Folder button beside it. This row
+                    // is 12px, so the button's default 16px glyph read as
+                    // oversized next to its own label.
+                    iconClassName="size-3.5"
+                  />
+                  <span
+                    aria-hidden="true"
+                    className="mx-1 h-4 w-px shrink-0 bg-grey-80 dark:bg-black-300"
                   />
                 </>
               )}
               <Button
-                variant="defaultStable"
+                variant="primary"
                 size="auto"
+                title={SYNC_FOLDER_HINT}
                 onClick={() => setShowAddDialog(true)}
-                className="h-[26px] rounded-[6px] px-2.5 text-[12px] font-medium"
+                className="h-[26px] gap-1.5 rounded-[6px] px-2.5 text-[12px] font-medium"
               >
+                <RefreshCw className="size-3" strokeWidth={2} />
                 {SYNC_FOLDER_LABEL}
               </Button>
             </div>
@@ -627,6 +662,13 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
             <FolderListEmptyState onSyncFolder={() => setShowAddDialog(true)} />
           }
         />
+
+        {/* A brand-new account — nothing synced, no plan — is the one
+            place the plans belong on this page: there is no drive to look
+            at yet, and how much room they get is the next thing they need
+            to decide. An account with folders, or one already on a plan,
+            sees nothing here; the header card covers them. */}
+        <FreshAccountPlans hasFolders={folderRows.length > 0} isLoading={isLoading} />
 
         {/* Flag-gated; renders nothing unless drives are shared with this
             account. onDriveAdded routes the new label to the breadcrumb

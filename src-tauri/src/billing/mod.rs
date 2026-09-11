@@ -10,5 +10,6 @@ pub mod drive_quota;
 pub mod drive_storage;
 pub mod eligibility;
 pub mod queries;
+pub mod services_status;
 pub mod storage_overview;
 pub mod subscriptions;

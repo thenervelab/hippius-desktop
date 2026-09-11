@@ -25,7 +25,7 @@ export default function RenameDialog() {
   const [file, setFile] = useAtom(renameModalFileAtom);
   const [newName, setNewName] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
-  const { mutate: renameFile, isPending } = useRenameFile();
+  const { mutate: renameFile } = useRenameFile();
 
   const open = file !== null;
   const isFolder = Boolean(file?.isFolder);
@@ -33,8 +33,15 @@ export default function RenameDialog() {
 
   // Prefill with the current basename and select the stem (Finder-style:
   // extension stays selected-out so typing replaces only the name part).
+  // Latched synchronously by `confirm`, cleared when the dialog reopens.
+  // `open` only flips on the next render, so keyboard autorepeat on Enter
+  // could otherwise fire two renames from one dialog — the second failing
+  // post-rename with a confusing "no longer available" toast.
+  const submittedRef = useRef(false);
+
   useEffect(() => {
     if (!file) return;
+    submittedRef.current = false;
     const base = basenameOf(file.actualFileName || file.name);
     setNewName(base);
     requestAnimationFrame(() => {
@@ -49,31 +56,32 @@ export default function RenameDialog() {
   const validationError = getRenameValidationError(newName);
   const unchanged = isUnchangedName(newName, currentBasename);
   const extensionChanges = !validationError && !unchanged && wouldChangeExtension(newName, currentBasename, isFolder);
-  const canConfirm = open && !isPending && !validationError && !unchanged;
+  const canConfirm = open && !validationError && !unchanged;
 
-  const close = () => {
-    if (isPending) return;
-    setFile(null);
-  };
+  const close = () => setFile(null);
 
-  // `isPending` only flips on the next render, so keyboard autorepeat on
-  // Enter could fire the mutation twice (the second invoke fails post-rename
-  // with a confusing "not available on this device" toast). The ref latches
-  // synchronously.
-  const inFlightRef = useRef(false);
-
+  /**
+   * Fire the rename and close, in that order and without waiting.
+   *
+   * The dialog used to stay up until the mutation resolved, so it sat on
+   * "Renaming…" and then vanished at the same moment the toast arrived —
+   * which reads as the dialog being stuck until the toast dismisses it.
+   * A rename inside a browsed remote drive made that seconds long: it
+   * walks the folder, moves every record under it and rewrites its
+   * directory rows.
+   *
+   * Nothing is lost by closing early. The outcome is a toast either way
+   * (`useRenameFile` opens a pending one here and replaces it in place),
+   * and the listings refresh from the same place they always did. The
+   * dialog no longer reads `isPending` at all, which also means a second
+   * rename can be started while the first is still in flight rather than
+   * finding the button disabled with no explanation.
+   */
   const confirm = () => {
-    if (!file || !canConfirm || inFlightRef.current) return;
-    inFlightRef.current = true;
-    renameFile(
-      { file, newName: newName.trim() },
-      {
-        onSuccess: () => setFile(null),
-        onSettled: () => {
-          inFlightRef.current = false;
-        },
-      },
-    );
+    if (!file || !canConfirm || submittedRef.current) return;
+    submittedRef.current = true;
+    renameFile({ file, newName: newName.trim() });
+    setFile(null);
   };
 
   return (
@@ -89,10 +97,9 @@ export default function RenameDialog() {
           <span className="break-all font-semibold">{currentBasename}</span>
         </>
       }
-      button={isPending ? "Renaming..." : "Rename"}
+      button="Rename"
       icon={<Pencil className="size-[18px] text-white" strokeWidth={2.5} />}
       disableButton={!canConfirm}
-      disableBackButton={isPending}
     >
       <div className="mb-6">
         <input
@@ -105,7 +112,6 @@ export default function RenameDialog() {
               confirm();
             }
           }}
-          disabled={isPending}
           spellCheck={false}
           autoComplete="off"
           aria-label="New name"

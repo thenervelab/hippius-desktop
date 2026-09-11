@@ -88,6 +88,38 @@ fn the_revoke_gates_its_forget_on_the_capability_probe() {
     }
 }
 
+/// The by-hash pair must probe its OWN capability before touching the wire.
+///
+/// These routes ship after folder shares, so a server can advertise
+/// `folder_shares` and still lack them — which is what production looks like
+/// between the two deploys. There the routes answer a bare 404,
+/// indistinguishable from "already revoked", and
+/// `revoke_folder_share_by_hash_inner` treats a 404 as success. That
+/// treatment is only sound BECAUSE the gate ran first: without it the
+/// desktop would tell the user a live, anonymously readable share had been
+/// turned off, which is the exact failure these routes exist to prevent.
+///
+/// `folder_shares` is deliberately NOT an acceptable gate here: it is true
+/// on the servers that lack the by-hash pair.
+#[test]
+fn the_by_hash_pair_gates_on_its_own_capability_before_the_call() {
+    let source = include_str!("../src/shares/commands.rs");
+
+    for name in [
+        "pub async fn revoke_folder_share_by_hash_inner",
+        "pub async fn update_folder_share_expiry_by_hash_inner",
+    ] {
+        let body = fn_body(source, name);
+        let probe_at = body
+            .find("require_revoke_by_hash_supported")
+            .unwrap_or_else(|| panic!("{name} must probe the by-hash capability"));
+        let call_at = body
+            .find("_by_hash(")
+            .unwrap_or_else(|| panic!("{name} must call the by-hash client method"));
+        assert!(probe_at < call_at, "{name} must probe the capability BEFORE calling the by-hash route");
+    }
+}
+
 /// The Finder right-click's directory branch must route into the SAME funnel
 /// as the in-app IPC, so the two entry points cannot drift on gates or key
 /// handling — the invariant the zip funnel enforced for its era.

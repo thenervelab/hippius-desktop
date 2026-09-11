@@ -69,6 +69,37 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **If your account has no storage plan, the Overview page now says so plainly.**
+  A red notice above the Storage and Plan cards warns that files you have already
+  uploaded are permanently deleted after 30 days without a plan, and that you
+  cannot upload anything new until you subscribe, with a link to the plans. The
+  Storage card itself no longer shows a full red bar, which looked like your
+  storage was full rather than absent.
+- **The Storage and Plan cards no longer stretch across very wide windows.** They
+  keep a comfortable maximum width instead of spreading into empty banners. The
+  rest of the page still uses the full width.
+- **The upload buttons are tidier.** The icon sits closer to its label, and on the
+  Drive page the icon now matches the size of the text beside it instead of
+  looking oversized.
+- **Shared drives are available to beta testers.** Team drive sharing is switched
+  on in beta builds while it is proven against a live fleet; production builds are
+  unchanged and do not show it yet.
+- **Subscription plan cards are less cluttered.** Each plan states its price once
+  instead of repeating it underneath as a credits charge.
+- **The plan card in the page header is much smaller.** It used to grow to four
+  stacked lines when an account was low on credits — the moment it was most in the
+  way. The usage bar and its numbers now share a line, the low-credits warning sits
+  beside the plan name, and the button reads "Top up".
+- **The Upgrade and Top up buttons now look like the actions they are.** They are
+  filled brand buttons rather than plain pills, so they stand out from the
+  navigation buttons around them.
+- **The upload buttons are shorter and clearer.** They now show an upload arrow with
+  "File" or "Folder" instead of "+ Upload File" — the plus suggested creating
+  something new, when these upload something you already have.
+- **Security and API Token warnings now match the rest of Settings.** They
+  sit in the same card style as the rows around them, instead of a yellow box.
+- **Billing's credits and deposit cards have more room inside**, so the
+  balance, address, and buttons are no longer packed together.
 - **Finder badges on your files are easier to see.** They fill the badge well
   instead of sitting small inside it.
 - **Your storage is now measured against your plan.** The home page shows how much
@@ -183,9 +214,47 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   plan and its storage; billing detail is behind Manage.
 - **A plan with room left ends cleanly.** The page header no longer leaves an empty
   gap where an Upgrade button would have been.
+- **You can upload straight into a drive that is not synced on this computer.** The
+  folder picker in the upload dialogs now lists those drives too, for files and for
+  whole folders, marked so you can tell them apart. Inside such a folder there is now
+  an Upload Folder button beside Upload File and New Folder.
+- **The Drive page tells you when your plan needs attention** — a renewal that
+  failed, a cancelled plan, or one still being set up — reading the same source the
+  web console reads, so both say the same thing.
+- **A brand-new account is shown the storage plans on the Drive page**, under the
+  empty state, instead of an empty page with nothing to do next.
 
 ### Fixed
 
+- **The rename dialog closes as soon as you confirm.** It used to stay on screen
+  until the rename finished, which on a cloud folder could take several seconds;
+  progress now shows in the notification instead.
+- **Renaming a folder in a cloud drive now works, and takes its contents with it.**
+  Renaming a folder you are browsing but not syncing either failed outright or
+  moved the folder while leaving every file inside it under the old name.
+
+- **Renaming a folder works again.** Renaming a folder inside another folder failed
+  with an error, because the app looked for it at the top of the drive instead of
+  where it actually was.
+- **The billing cards are sized for what they hold.** The deposit address was being
+  shortened on a window with room to spare, and on a large screen both cards
+  stretched into empty space. They now stop at their natural width, with the address
+  shown in full.
+- **The Drive plan notice is easier to read.** The cancelled-plan and failed-renewal
+  warnings now match the web console's style instead of filling a block of colour.
+- **The account menu says who you are signed in as.** It showed only your wallet
+  address; it now leads with the email or handle you signed in with, with your
+  address below it, and the open menu names your account, your email and which
+  service you signed in with — matching the web console. Your email and provider now
+  survive a restart, so the menu no longer forgets who you are after relaunching.
+- **The Excluded filter only appears when you have excluded something.** It used to
+  show on every drive, where pressing it could only ever return nothing.
+- **Upload Folder and Sync a Folder are easier to tell apart.** They are separated on
+  the toolbar and each says what it does, so a one-time copy is not mistaken for
+  setting up a folder that stays in sync.
+- **Renaming a file inside a folder that is not synced on this computer works.**
+  The option was there but greyed out; only folders could be renamed. The new name
+  now appears straight away instead of after leaving the folder and coming back.
 - **Large files upload to a cloud folder again.** Uploading a big file into a folder
   that is not synced on this computer failed with a server error at the very end of
   the transfer. Files of any size now go up the same way they do for a synced

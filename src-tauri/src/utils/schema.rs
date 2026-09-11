@@ -524,6 +524,14 @@ async fn ensure_auth_session(conn: &mut SqliteConnection) -> Result<(), sqlx::Er
     .execute(&mut *conn)
     .await?;
 
+    // Migration: the sign-in email. Absent before this, so an OAuth
+    // account's email did not survive a restart and the account menu had
+    // only the wallet address to show for who was signed in.
+    if !table_columns(&mut *conn, "auth_session").await?.contains("email") {
+        info!("Adding email column to auth_session");
+        sqlx::query("ALTER TABLE auth_session ADD COLUMN email TEXT").execute(&mut *conn).await?;
+    }
+
     // Pending OAuth flows (CSRF `state` → provider), persisted so an app
     // restart mid-login (auto-update on launch, crash, quit while the
     // browser tab is open) doesn't strand the callback: the in-memory

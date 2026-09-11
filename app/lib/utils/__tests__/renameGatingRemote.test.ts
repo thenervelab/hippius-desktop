@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { canRenameFile } from "../renameGating";
+import { canRenameFile, remoteDriveLabel } from "../renameGating";
 import { REMOTE_SOURCE_PREFIX } from "@/app/lib/hooks/use-nested-folder-listing";
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 
@@ -13,6 +13,18 @@ describe("canRenameFile — cloud-only rows", () => {
   it("allows a row inside a browsed remote drive", () => {
     expect(
       canRenameFile(row({ source: `${REMOTE_SOURCE_PREFIX}Camera Uploads` })),
+    ).toBe(true);
+  });
+
+  // The bug this fixes: a remote FILE row deliberately carries NO source
+  // (that absence is what marks it cloud-only for download and preview
+  // routing), so a gate reading the `remote://` sentinel enabled rename on
+  // a remote folder while every file inside it stayed disabled.
+  it("allows a FILE inside a browsed remote drive, which carries no source", () => {
+    expect(
+      canRenameFile(
+        row({ fileId: "abc", source: undefined, remoteDriveLabel: "Camera Uploads" }),
+      ),
     ).toBe(true);
   });
 
@@ -41,5 +53,23 @@ describe("canRenameFile — cloud-only rows", () => {
 
   it("leaves an ordinary local row renameable", () => {
     expect(canRenameFile(row({ source: "/Users/a/Drive/a.jpg" }))).toBe(true);
+  });
+});
+
+describe("remoteDriveLabel", () => {
+  // The gate and the rename itself must resolve the drive identically, or
+  // a row offers Rename and then fails on the way to the server.
+  it("names the drive for both row shapes", () => {
+    expect(remoteDriveLabel(row({ remoteDriveLabel: "Camera Uploads" }))).toBe(
+      "Camera Uploads",
+    );
+    expect(
+      remoteDriveLabel(row({ source: `${REMOTE_SOURCE_PREFIX}Camera Uploads` })),
+    ).toBe("Camera Uploads");
+  });
+
+  it("names no drive for a local row or a bare search hit", () => {
+    expect(remoteDriveLabel(row({ source: "/Users/a/Drive/a.jpg" }))).toBeNull();
+    expect(remoteDriveLabel(row({ fileId: "abc" }))).toBeNull();
   });
 });

@@ -12,13 +12,17 @@ import { isNotReady } from "@/app/lib/utils/dispatchTauriError";
 import { useSetAtom } from "jotai";
 import { insufficientCreditsDialogOpenAtom } from "./atoms/query-atoms";
 import { uploadFilesToRemoteFolder } from "@/app/lib/tauri/remoteUpload";
-import { UPLOAD_FILE_LABEL } from "./uploadActions";
-
-/** How long the "upload started" toast stays up, in ms. */
-const REMOTE_UPLOAD_TOAST_MS = 4000;
-
-/** Shared id so repeated picks replace the notice instead of stacking. */
-const REMOTE_UPLOAD_TOAST_ID = "remote-upload-started";
+import {
+  TOOLBAR_BUTTON_GAP,
+  UPLOAD_FILE_BUTTON_LABEL,
+  UPLOAD_FILE_LABEL,
+} from "./uploadActions";
+import { ArrowUpToLine } from "@/components/ui/icons";
+import {
+  REMOTE_UPLOAD_TOAST_ID,
+  reportRemoteUploadOutcome,
+  reportRemoteUploadStarted,
+} from "@/app/lib/remote-upload/reportOutcome";
 
 /**
  * Upload into a folder that is not synced on this computer.
@@ -56,12 +60,7 @@ const RemoteUploadButton: React.FC<{
     // that STAYS for the length of a large upload is the opposite
     // problem, covering the thing the user is trying to watch. Fixed id
     // so a second pick replaces the first rather than stacking.
-    toast.info(
-      paths.length === 1
-        ? "Your file is being uploaded"
-        : "Your files are being uploaded",
-      { id: REMOTE_UPLOAD_TOAST_ID, duration: REMOTE_UPLOAD_TOAST_MS },
-    );
+    reportRemoteUploadStarted(paths.length);
     try {
       const failures = await uploadFilesToRemoteFolder(
         polkadotAddress,
@@ -69,27 +68,8 @@ const RemoteUploadButton: React.FC<{
         paths,
         parentPath,
       );
+      reportRemoteUploadOutcome(paths.length, failures);
       const uploaded = paths.length - failures.length;
-
-      if (failures.length === 0) {
-        // The widget already showed each row completing, so this is a
-        // brief confirmation rather than the only signal.
-        toast.success(uploaded === 1 ? "1 file uploaded" : `${uploaded} files uploaded`, {
-          id: REMOTE_UPLOAD_TOAST_ID,
-        });
-      } else if (uploaded === 0) {
-        // Rust owns the sentence; it already explains why.
-        toast.error(failures[0].error, { id: REMOTE_UPLOAD_TOAST_ID });
-      } else {
-        // Partial success is a real outcome here, so say both halves
-        // rather than picking one and hiding the other.
-        toast.warning(
-          `${uploaded} uploaded, ${failures.length} failed: ${failures
-            .map((f) => f.name)
-            .join(", ")}`,
-          { id: REMOTE_UPLOAD_TOAST_ID, duration: 6000 },
-        );
-      }
       if (uploaded > 0) onUploaded?.();
     } catch (err) {
       // The plan gate refuses before any encryption happens, and the way
@@ -111,13 +91,22 @@ const RemoteUploadButton: React.FC<{
       variant="primary"
       size="auto"
       disabled={busy}
+      title={UPLOAD_FILE_LABEL}
       onClick={() => void pickAndUpload()}
       className={cn(
-        "h-[30px] gap-[10px] rounded-[6px] px-3 py-[10px] font-geist text-[14px] leading-[1.109] tracking-[-0.28px]",
+        "h-[30px] rounded-[6px] px-3 py-[10px] font-geist text-[14px] leading-[1.109] tracking-[-0.28px]",
+        TOOLBAR_BUTTON_GAP,
         className,
       )}
     >
-      {busy ? <Icons.Loader className="size-4 animate-spin" /> : `+ ${UPLOAD_FILE_LABEL}`}
+      {busy ? (
+        <Icons.Loader className="size-4 animate-spin" />
+      ) : (
+        <>
+          <ArrowUpToLine className="size-4 shrink-0" />
+          {UPLOAD_FILE_BUTTON_LABEL}
+        </>
+      )}
     </Button>
   );
 };

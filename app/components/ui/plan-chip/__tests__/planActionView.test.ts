@@ -11,7 +11,7 @@ describe("getPlanActionView", () => {
   it("sends both prompts to the same Billing page", () => {
     expect(getPlanActionView("upgrade")?.label).toBe("Upgrade");
     expect(getPlanActionView("upgrade")?.href).toBe(BILLING_ROUTE);
-    expect(getPlanActionView("top-up-credits")?.label).toBe("+ Top up Credits");
+    expect(getPlanActionView("top-up-credits")?.label).toBe("Top up");
     expect(getPlanActionView("top-up-credits")?.href).toBe(BILLING_ROUTE);
   });
 
@@ -34,7 +34,7 @@ describe("getPlanActionView", () => {
 });
 
 describe("getPlanActionNote", () => {
-  // A bare "+ Top up Credits" button does not say why it is there; the
+  // A bare "Top up" button does not say why it is there; the
   // consequence — the plan not renewing — is the part worth reading.
   it("explains a top-up prompt, and counts down when Rust supplies a date", () => {
     expect(getPlanActionNote("top-up-credits", 6)).toBe(
@@ -65,3 +65,28 @@ describe("getPlanActionNote", () => {
     expect(getPlanActionNote(undefined, 2)).toBeNull();
   });
 });
+
+/**
+ * The label is the widest thing in the header's plan cell, and the cell's
+ * size was the complaint. "+ Top up Credits" also led with a plus, which
+ * reads as "create new" — the same thing it got wrong on the upload
+ * buttons — while "Credits" was already said by the amber note beside it.
+ */
+describe("the top-up label stays short", () => {
+  const label = getPlanActionView("top-up-credits")?.label ?? "";
+
+  it("does not lead with a plus", () => {
+    expect(label.startsWith("+")).toBe(false);
+  });
+
+  it("matches the wording the credits banner already uses", () => {
+    expect(label).toBe("Top up");
+  });
+
+  // The note carries the "why"; the button carries the "what".
+  it("leaves the explanation to the note", () => {
+    expect(label).not.toMatch(/credit/i);
+    expect(getPlanActionNote("top-up-credits", 6)).toMatch(/credits/i);
+  });
+});
+

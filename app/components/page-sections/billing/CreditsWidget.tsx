@@ -41,70 +41,72 @@ const CreditsWidget: FC<CreditsWidgetProps> = ({ className }) => {
         </div>
       </div>
 
-      {/* Inner panel — 3 direct children with justify-between matching Figma layout */}
+      {/* Stat and freshness stay together so justify-between parks the
+          CTA at the bottom when the billing grid stretches the card. */}
       <div
         className={cn(
-          "flex flex-col w-full flex-1 justify-between",
+          "flex flex-col w-full flex-1 justify-between gap-4",
           "rounded-tl-[8px] rounded-tr-[8px] border-t border-grey-dark-100",
           "bg-white dark:bg-black-600 dark:border-black-300",
-          "p-3",
+          "px-4 py-4",
         )}
       >
-        {/* 1. Headline stat — fresh / unfunded accounts read as 0
-            credits even when the underlying RPC call errored (the
-            backend has no row for the account yet, so there's nothing
-            to surface beyond "no credits yet"). A transient indexer
-            failure is communicated through the status row below
-            (amber warning + retry) instead of a blocky red ERROR. */}
-        <div className="flex items-end justify-start gap-1">
-          {isLoading ? (
-            <div className="h-[30px] w-[140px] rounded bg-grey-light-700 dark:bg-grey-dark-200 animate-pulse" />
-          ) : (
-            <>
-              <span className="font-mono font-medium text-[24px] leading-[30px] tracking-[-0.96px] text-grey-10 dark:text-white">
-                {credits?.hip ?? "0"}
-              </span>
-              <span className="font-mono font-medium text-[12px] leading-[18px] tracking-[-0.48px] text-grey-10/50 dark:text-white/50 pb-[3px]">
-                Credits
-              </span>
-            </>
-          )}
+        <div className="flex flex-col gap-3">
+          {/* Headline stat — fresh / unfunded accounts read as 0
+              credits even when the underlying RPC call errored (the
+              backend has no row for the account yet, so there's nothing
+              to surface beyond "no credits yet"). A transient indexer
+              failure is communicated through the status row below
+              (amber warning + retry) instead of a blocky red ERROR. */}
+          <div className="flex items-end justify-start gap-1">
+            {isLoading ? (
+              <div className="h-[30px] w-[140px] rounded bg-grey-light-700 dark:bg-grey-dark-200 animate-pulse" />
+            ) : (
+              <>
+                <span className="font-mono font-medium text-[24px] leading-[30px] tracking-[-0.96px] text-grey-10 dark:text-white">
+                  {credits?.hip ?? "0"}
+                </span>
+                <span className="font-mono font-medium text-[12px] leading-[18px] tracking-[-0.48px] text-grey-10/50 dark:text-white/50 pb-[3px]">
+                  Credits
+                </span>
+              </>
+            )}
+          </div>
+
+          {/* Refresh row — the credits IPC returns 0 for accounts that
+              haven't set up billing yet, but historically threw on
+              unrelated transient failures (OAuth refresh, indexer blip)
+              that left the user reading "0 Credits" next to a red-tinted
+              "Couldn't refresh credits" warning. Net effect was noise:
+              the displayed value already handles the missing-data case,
+              so we just always show "Last updated" + the refresh button
+              and trust the user to retry if they think the number is off. */}
+          <div className="flex items-center gap-2">
+            {isLoading ? (
+              <div className="h-4 w-36 rounded bg-grey-light-700 dark:bg-grey-dark-200 animate-pulse" />
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={() => refetch()}
+                  aria-label="Refresh credits"
+                  className={cn(
+                    "flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-[6px] border",
+                    "bg-grey-light-700 border-grey-dark-100",
+                    "dark:bg-black-primary-bg dark:border-black-300",
+                    "transition-colors hover:bg-grey-light-800 dark:hover:bg-black-300/70",
+                  )}
+                >
+                  <RefreshCcwDot className="size-3 text-black-700 dark:text-white opacity-40" />
+                </button>
+                <span className="font-mono font-medium text-[12px] tracking-[-0.48px] text-grey-10/50 dark:text-white/50 whitespace-nowrap">
+                  Last updated <TimeAgo date={dataUpdatedAt} />
+                </span>
+              </>
+            )}
+          </div>
         </div>
 
-        {/* 2. Refresh row — the credits IPC returns 0 for accounts that
-            haven't set up billing yet, but historically threw on
-            unrelated transient failures (OAuth refresh, indexer blip)
-            that left the user reading "0 Credits" next to a red-tinted
-            "Couldn't refresh credits" warning. Net effect was noise:
-            the displayed value already handles the missing-data case,
-            so we just always show "Last updated" + the refresh button
-            and trust the user to retry if they think the number is off. */}
-        <div className="flex items-center gap-2">
-          {isLoading ? (
-            <div className="h-4 w-36 rounded bg-grey-light-700 dark:bg-grey-dark-200 animate-pulse" />
-          ) : (
-            <>
-              <button
-                type="button"
-                onClick={() => refetch()}
-                aria-label="Refresh credits"
-                className={cn(
-                  "flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-[6px] border",
-                  "bg-grey-light-700 border-grey-dark-100",
-                  "dark:bg-black-primary-bg dark:border-black-300",
-                  "transition-colors hover:bg-grey-light-800 dark:hover:bg-black-300/70",
-                )}
-              >
-                <RefreshCcwDot className="size-3 text-black-700 dark:text-white opacity-40" />
-              </button>
-              <span className="font-mono font-medium text-[12px] tracking-[-0.48px] text-grey-10/50 dark:text-white/50 whitespace-nowrap">
-                Last updated <TimeAgo date={dataUpdatedAt} />
-              </span>
-            </>
-          )}
-        </div>
-
-        {/* 3. Add Credits button */}
         <Button
           variant="primary"
           size="auto"

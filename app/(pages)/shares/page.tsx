@@ -44,8 +44,10 @@ import {
   listFolderShares,
   listShares,
   revokeFolderShare,
+  revokeFolderShareByHash,
   revokeShare,
   updateFolderShareExpiry,
+  updateFolderShareExpiryByHash,
   updateShareExpiry,
   type FolderShareSummary,
   type ShareSummary,
@@ -61,6 +63,7 @@ import {
 } from "@/app/lib/tauri/shareHistory";
 import {
   folderShareFeatureEnabledAtom,
+  folderShareRevokeByHashEnabledAtom,
   shareFeatureEnabledAtom,
 } from "@/app/lib/global-atoms/sharesAtoms";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
@@ -88,7 +91,18 @@ const DESTRUCTIVE_BG = "bg-[#fc7d73]";
 
 /** What the revoke-confirmation dialog is about to revoke: the two share
  *  kinds go through different IPCs but share the confirm idiom. */
-type PendingRevoke = { kind: "file" | "folder"; token: string };
+/**
+ * What the confirm dialog is about to revoke.
+ *
+ * A discriminated union rather than one `token` field, because the two carry
+ * DIFFERENT things: a file row's plaintext share token, and a folder row's
+ * token HASH. `revokeFolderShare` takes the former and
+ * `revokeFolderShareByHash` the latter, so a single `string` would let a
+ * future edit hand one to the other and still type-check.
+ */
+type PendingRevoke =
+  | { kind: "file"; shareToken: string }
+  | { kind: "folder"; tokenHash: string };
 
 export default function MySharesPage() {
   const { polkadotAddress } = useWalletAuth();
@@ -141,10 +155,21 @@ export default function MySharesPage() {
     setRevokeBusy(true);
     try {
       if (pendingRevoke.kind === "folder") {
-        await revokeFolderShare(pendingRevoke.token);
+        // Folder actions are keyed by `tokenHash`, the one id every row has.
+        // Prefer the plaintext token when this device minted the share: that
+        // path also forgets the local secret and clears the folder badge,
+        // which the by-hash route cannot do. The Rust layer is the authority
+        // on whether by-hash is permitted at all — it refuses outright on a
+        // server without those routes rather than trusting their 404.
+        const folderRow = folderData?.find((r) => r.tokenHash === pendingRevoke.tokenHash);
+        if (folderRow?.shareToken) {
+          await revokeFolderShare(folderRow.shareToken);
+        } else {
+          await revokeFolderShareByHash(pendingRevoke.tokenHash);
+        }
         queryClient.invalidateQueries({ queryKey: [FOLDER_SHARES_QUERY_KEY, polkadotAddress] });
       } else {
-        await revokeShare(pendingRevoke.token);
+        await revokeShare(pendingRevoke.shareToken);
         queryClient.invalidateQueries({ queryKey: [SHARES_QUERY_KEY, polkadotAddress] });
         queryClient.invalidateQueries({ queryKey: [HISTORY_QUERY_KEY, polkadotAddress] });
       }
@@ -187,10 +212,14 @@ export default function MySharesPage() {
 
   // Folder twin of `onChangeExpiry` — same flat expiry presets, different IPC
   // and cache key.
-  const onChangeFolderExpiry = async (token: string, ttl: ShareTtl) => {
-    setBusyToken(token);
+  const onChangeFolderExpiry = async (tokenHash: string, ttl: ShareTtl) => {
+    setBusyToken(tokenHash);
     try {
-      const expiresAt = await updateFolderShareExpiry(token, ttl);
+      // Same token-preferred routing as revoke; see `confirmRevoke`.
+      const folderRow = folderData?.find((r) => r.tokenHash === tokenHash);
+      const expiresAt = folderRow?.shareToken
+        ? await updateFolderShareExpiry(folderRow.shareToken, ttl)
+        : await updateFolderShareExpiryByHash(tokenHash, ttl);
       toast.success(
         expiresAt === null
           ? "Link will stay active until you revoke it"
@@ -262,7 +291,13 @@ export default function MySharesPage() {
                 <ActiveSharesTable
                   rows={mergedRows}
                   onCopy={onCopy}
-                  onRevoke={(kind, token) => setPendingRevoke({ kind, token })}
+                  onRevoke={(kind, id) =>
+                    setPendingRevoke(
+                      kind === "file"
+                        ? { kind, shareToken: id }
+                        : { kind, tokenHash: id },
+                    )
+                  }
                   onChangeExpiry={onChangeExpiry}
                   onChangeFolderExpiry={onChangeFolderExpiry}
                   busyToken={busyToken}
@@ -473,6 +508,10 @@ function ActiveSharesTable({
   busyToken,
 }: ActiveSharesTableProps) {
   const [sorting, setSorting] = React.useState<SortingState>([]);
+  // A server can carry folder shares without the by-hash pair, so this is a
+  // separate flag. Unfetched capabilities read as false, which keeps the
+  // controls disabled until the answer is known rather than the reverse.
+  const revokeByHashEnabled = useAtomValue(folderShareRevokeByHashEnabledAtom);
 
   const columns = React.useMemo(
     () => [
@@ -611,15 +650,16 @@ function ActiveSharesTable({
             <FolderActionsCell
               row={original.folder}
               onCopy={onCopy}
-              onRevoke={(token) => onRevoke("folder", token)}
+              onRevoke={(tokenHash) => onRevoke("folder", tokenHash)}
               onChangeExpiry={onChangeFolderExpiry}
-              isBusy={original.folder.shareToken !== null && original.folder.shareToken === busyToken}
+              canActByHash={revokeByHashEnabled}
+              isBusy={original.folder.tokenHash === busyToken}
             />
           );
         },
       }),
     ],
-    [onCopy, onRevoke, onChangeExpiry, onChangeFolderExpiry, busyToken],
+    [onCopy, onRevoke, onChangeExpiry, onChangeFolderExpiry, busyToken, revokeByHashEnabled],
   );
 
   const table = useReactTable({
@@ -804,12 +844,16 @@ function FolderActionsCell({
   onRevoke,
   onChangeExpiry,
   isBusy,
+  canActByHash,
 }: {
   row: FolderShareSummary;
   onCopy: (url: string | null) => void;
-  onRevoke: (token: string) => void;
-  onChangeExpiry: (token: string, ttl: ShareTtl) => void;
+  /** Keyed by `tokenHash`, which every row has — `shareToken` is null for a
+   *  row this device did not mint, and those are now actionable too. */
+  onRevoke: (tokenHash: string) => void;
+  onChangeExpiry: (tokenHash: string, ttl: ShareTtl) => void;
   isBusy: boolean;
+  canActByHash: boolean;
 }) {
   if (isBusy) {
     return (
@@ -819,7 +863,7 @@ function FolderActionsCell({
     );
   }
 
-  const plan = folderShareRowPlan(row);
+  const plan = folderShareRowPlan(row, undefined, canActByHash);
 
   const items: ActionItem[] = [
     {
@@ -839,7 +883,7 @@ function FolderActionsCell({
       icon: <RefreshCcw className="size-4" />,
       itemTitle: label,
       onItemClick: () => {
-        if (plan.canChangeExpiry && row.shareToken) onChangeExpiry(row.shareToken, ttl);
+        if (plan.canChangeExpiry) onChangeExpiry(row.tokenHash, ttl);
       },
       disabled: !plan.canChangeExpiry,
       tooltip: plan.expiryTooltip,
@@ -848,7 +892,7 @@ function FolderActionsCell({
       icon: <Trash2 className="size-4" />,
       itemTitle: "Revoke",
       onItemClick: () => {
-        if (plan.canRevoke && row.shareToken) onRevoke(row.shareToken);
+        if (plan.canRevoke) onRevoke(row.tokenHash);
       },
       disabled: !plan.canRevoke,
       tooltip: plan.revokeTooltip,

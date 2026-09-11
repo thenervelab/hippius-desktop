@@ -92,6 +92,7 @@ async fn setup_pool_with_token(account_id: &str) -> SqlitePool {
             user_id INTEGER,
             username TEXT,
             provider TEXT,
+            email TEXT,
             substrate_address TEXT,
             logout_time_minutes INTEGER,
             last_login_at TEXT,
@@ -111,6 +112,7 @@ async fn setup_pool_with_token(account_id: &str) -> SqlitePool {
             user_id: Some(1),
             username: "tester",
             provider: "test",
+            email: None,
             logout_time_minutes: None,
         },
     )

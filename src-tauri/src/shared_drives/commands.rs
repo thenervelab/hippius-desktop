@@ -187,6 +187,17 @@ pub async fn http_create_invite(
         folder_hash: folder_hash.to_string(),
         expires_in_secs: Some(expires_in_secs),
         max_uses: Some(max_uses),
+        // Both fields arrived with drive-invite roles and are `Option` with
+        // documented client-side defaults, so `None` preserves exactly what
+        // this call did before the bump rather than choosing new behaviour:
+        //   role: omitted means `writer`, which is what every shipped
+        //     desktop build already mints. Offering the choice in the UI is
+        //     a separate piece of work.
+        //   owner_ss58: omitted means caller-as-owner, and this path only
+        //     mints for a drive the caller owns. A manager minting for
+        //     someone else's drive is what that field exists for.
+        role: None,
+        owner_ss58: None,
     };
     let resp = http
         .post(format!("{}/v1/drive-invites", base_url.trim_end_matches('/')))

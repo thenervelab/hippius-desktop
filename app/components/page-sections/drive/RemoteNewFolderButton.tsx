@@ -5,6 +5,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { FolderPlus } from "lucide-react";
 
+import { TOOLBAR_BUTTON_GAP } from "./uploadActions";
+
 import { Button } from "@/components/ui/button";
 import { FramedDialog } from "@/components/ui/FramedDialog";
 import { Input } from "@/components/ui/input";
@@ -67,7 +69,8 @@ const RemoteNewFolderButton: React.FC<{
         size="auto"
         onClick={() => setOpen(true)}
         className={cn(
-          "h-[30px] gap-2 rounded-[6px] px-3 py-[10px] font-geist text-[14px] leading-[1.109] tracking-[-0.28px]",
+          "h-[30px] rounded-[6px] px-3 py-[10px] font-geist text-[14px] leading-[1.109] tracking-[-0.28px]",
+        TOOLBAR_BUTTON_GAP,
           className,
         )}
       >

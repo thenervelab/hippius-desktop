@@ -17,11 +17,51 @@ export const UPLOAD_FILE_LABEL = "Upload File";
 export const UPLOAD_FOLDER_LABEL = "Upload Folder";
 
 /**
+ * The same two actions as BUTTON labels.
+ *
+ * A button carries an upload icon, and the icon is the verb — so repeating
+ * "Upload" in the text says the same thing twice and costs width in a
+ * toolbar that already holds three or four controls. The noun is the half
+ * that distinguishes the two buttons from each other.
+ *
+ * The full phrases above stay for menus, dialog titles and tooltips, where
+ * there is no icon to carry the verb and "File" alone would not say what
+ * pressing it does.
+ */
+export const UPLOAD_FILE_BUTTON_LABEL = "File";
+export const UPLOAD_FOLDER_BUTTON_LABEL = "Folder";
+
+/**
+ * Gap between the icon and the label on every upload/sync toolbar button.
+ *
+ * One constant because these buttons sit side by side in the same row and
+ * a per-button value drifts: the family had 10px, 8px and 7px at once,
+ * and the widest of them read as a gap rather than as spacing. Shared by
+ * the drive header, the folder-list toolbar, and the remote buttons.
+ */
+export const TOOLBAR_BUTTON_GAP = "gap-1.5";
+
+/**
  * Registering a local folder for ongoing sync is NOT an upload — it sets
  * up a two-way relationship rather than sending a copy once. It keeps its
  * own wording so it cannot be mistaken for the buttons above.
  */
 export const SYNC_FOLDER_LABEL = "Sync a Folder";
+
+/**
+ * What each action does, in one line, for the affordance's tooltip.
+ *
+ * The distinction the wording alone did not carry: Upload Folder copies a
+ * folder's contents in ONCE and stops caring about it, while Sync a Folder
+ * sets up a folder that is kept up to date from then on. Two buttons that
+ * both start with a folder picker and read almost alike are easy to pick
+ * wrong, and picking wrong is only discovered later, when the copy silently
+ * fails to track changes.
+ */
+export const UPLOAD_FOLDER_HINT =
+  "Copies a folder's contents into a drive once. Later changes on this computer are not picked up.";
+export const SYNC_FOLDER_HINT =
+  "Sets up a folder on this computer as a drive, kept up to date from now on.";
 
 /** Whether an upload affordance is offered, and in what state. */
 export type UploadActionState = "hidden" | "disabled" | "enabled";

@@ -12,7 +12,7 @@ export interface PlanActionView {
  * The sentence shown beside a top-up prompt, or `null` for the actions
  * that need no explanation.
  *
- * A bare "+ Top up Credits" button does not say why it is there, and the
+ * A bare "Top up" button does not say why it is there, and the
  * consequence — the plan not renewing — is the part worth reading. The
  * countdown is included when Rust supplies one, because "in 6 days" is
  * what makes it actionable rather than a standing nag.
@@ -57,7 +57,13 @@ export function getPlanActionView(action: PlanAction | undefined): PlanActionVie
       // never sent to the credits flow — only to a bigger plan.
       return { label: "Upgrade", href: BILLING_ROUTE, withPlanIcon: true };
     case "top-up-credits":
-      return { label: "+ Top up Credits", href: BILLING_ROUTE, withPlanIcon: false };
+      // "Top up", not "+ Top up Credits". The leading plus reads as
+      // "create new", which is the same thing it got wrong on the upload
+      // buttons, and "Credits" is already said by the amber note sitting
+      // beside it in the chip. It was also the widest element in a header
+      // cell whose size was the complaint. Matches
+      // `CreditsExhaustedBanner`, which has always said "Top up".
+      return { label: "Top up", href: BILLING_ROUTE, withPlanIcon: false };
     default:
       // Includes `undefined`: while the decision is still loading there is
       // nothing to offer, and guessing would flash the wrong prompt.

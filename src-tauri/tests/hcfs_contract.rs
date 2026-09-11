@@ -292,19 +292,33 @@ fn list_folder_entries_result_wire_pinned() {
 // cross the desktop↔hcfs DEPENDENCY boundary, so a reshaping bump must fail
 // desktop CI here rather than at runtime.
 
+/// `role` and `owner_ss58` arrived with drive-invite roles. Neither carries
+/// `skip_serializing_if`, so desktop now sends them explicitly as `null`
+/// rather than omitting them. That is a wire change but not a behaviour
+/// change: the server's `#[serde(default)]` reads `null` and absent
+/// identically, meaning "writer" and "caller-as-owner" — exactly what this
+/// request meant before the fields existed.
+///
+/// Pinned with the nulls present on purpose. If hcfs later adds
+/// `skip_serializing_if` the keys disappear again, and this test should fail
+/// and be updated deliberately rather than drifting.
 #[test]
 fn create_drive_invite_request_wire_pinned() {
     let req = CreateDriveInviteRequest {
         folder_hash: "0123456789abcdef".to_string(),
         expires_in_secs: Some(3600),
         max_uses: Some(5),
+        role: None,
+        owner_ss58: None,
     };
 
     let json = serde_json::to_value(&req).expect("serialize");
     let keys: BTreeSet<&str> = json.as_object().expect("object").keys().map(String::as_str).collect();
     assert_eq!(
         keys,
-        ["expires_in_secs", "folder_hash", "max_uses"].into_iter().collect::<BTreeSet<_>>(),
+        ["expires_in_secs", "folder_hash", "max_uses", "owner_ss58", "role"]
+            .into_iter()
+            .collect::<BTreeSet<_>>(),
         "CreateDriveInviteRequest wire keys must stay exactly these snake_case names"
     );
 
@@ -356,7 +370,7 @@ fn drive_invite_meta_response_wire_pinned() {
     let keys: BTreeSet<&str> = json.as_object().expect("object").keys().map(String::as_str).collect();
     assert_eq!(
         keys,
-        ["display_label", "expires_at", "folder_hash", "owner_ss58", "valid"]
+        ["display_label", "expires_at", "folder_hash", "owner_ss58", "role", "valid"]
             .into_iter()
             .collect::<BTreeSet<_>>(),
         "DriveInviteMetaResponse wire keys must stay exactly these snake_case names"
@@ -390,13 +404,14 @@ fn accept_drive_invite_response_wire_pinned() {
         owner_ss58: "5Owner".to_string(),
         folder_hash: "0123456789abcdef".to_string(),
         already_owner: false,
+        role: "writer".to_string(),
     };
     let json = serde_json::to_value(&member_accept).expect("serialize");
     let keys: BTreeSet<&str> = json.as_object().expect("object").keys().map(String::as_str).collect();
     assert_eq!(
         keys,
-        ["folder_hash", "owner_ss58"].into_iter().collect::<BTreeSet<_>>(),
-        "already_owner must be omitted from a real member accept"
+        ["folder_hash", "owner_ss58", "role"].into_iter().collect::<BTreeSet<_>>(),
+        "already_owner must be omitted from a real member accept; role is unconditional"
     );
 
     let owner_self_join = AcceptDriveInviteResponse {

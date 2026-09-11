@@ -36,6 +36,8 @@ import {
   shouldUseRecursiveSearch,
 } from "@/lib/utils/filesViewMode";
 import { isExcludedSyncStatus } from "@/lib/utils/syncStatusDisplay";
+import { useHasExclusions } from "@/app/lib/hooks/useDriveExclusions";
+import { shouldOfferExcludedFilter } from "./excludedFilterVisibility";
 import DriveHeader from "./DriveHeader";
 import DriveContent from "./DriveContent";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
@@ -340,17 +342,24 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // nested view stays in step with the rest of the app.
   const [nestedRefreshKey, setNestedRefreshKey] = useState(0);
   useEffect(() => {
-    // LOCAL nested only. Remote views deliberately don't subscribe: an
-    // active sync dispatches these events every ~3s, and each bump re-walks
-    // a remote level's server pages for content that local sync events
-    // don't change anyway. Remote listings refresh on navigation and the
-    // manual refresh button.
-    if (!isNested || isRemoteView) return;
+    if (!isNested && !isRemoteView) return;
     const handler = () => setNestedRefreshKey((prev) => prev + 1);
-    window.addEventListener("sync_files_completed_changed", handler);
-    // In-app mutations (rename) change names instantly, long before the
-    // sync cycle completes — refresh on those too.
+
+    // Sync-cycle events are for LOCAL views only. An active sync
+    // dispatches them every ~3s, and each bump would re-walk a remote
+    // level's server pages for content a local sync cycle does not
+    // change anyway.
+    if (!isRemoteView) {
+      window.addEventListener("sync_files_completed_changed", handler);
+    }
+
+    // In-app mutations are a different thing, and remote views DO need
+    // them: a rename here is a server-side write the user just made, so
+    // the listing is stale the moment it returns. Without this the row
+    // kept its old name until the user navigated away and back, which
+    // reads as the rename having silently failed.
     window.addEventListener(FILES_MUTATED_EVENT, handler);
+
     return () => {
       window.removeEventListener("sync_files_completed_changed", handler);
       window.removeEventListener(FILES_MUTATED_EVENT, handler);
@@ -481,6 +490,17 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
         ? (nestedDrive?.label ?? null)
         : activeSyncFolderLabel;
   const recursiveSearchSubfolder = isNested ? (urlSubFolderPath ?? null) : null;
+
+  // The Excluded chip is only worth offering on a drive that actually
+  // excludes something. `recursiveSearchLabel` is already the LOCAL drive
+  // in view (null on a remote drive or Recent Files), which is exactly
+  // where exclusions can exist.
+  const hasExclusions = useHasExclusions(recursiveSearchLabel);
+  const showExcludedFilter = shouldOfferExcludedFilter({
+    driveLabel: recursiveSearchLabel,
+    hasExclusions,
+    excludedOnly: filterState.excludedOnly,
+  });
   const hasActiveSearchOrFilter = filterCriteriaAreActive({
     searchTerm,
     fileExtension: filterState.fileExtension,
@@ -1644,6 +1664,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 onDateRangeChange={handleDateRangeChange}
                 onFileSizesChange={handleFileSizesChange}
                 onExcludedOnlyChange={handleExcludedOnlyChange}
+                showExcludedFilter={showExcludedFilter}
                 defaultFolderLabel={activeSyncFolderLabel}
                 isFolderUploadOpen={isFolderUploadOpen}
                 onSetFolderUploadOpen={handleFolderUploadOpenChange}
